@@ -268,28 +268,32 @@ pub fn list_requests(
             clauses.push(served);
         }
     }
-    if let Some(agent) = filter.user_agent.as_deref().filter(|a| !a.is_empty()) {
-        let (like, escape) = crate::pattern::to_like(agent);
-        args.push(Box::new(like));
-        let at_like = args.len();
-        args.push(Box::new(escape.to_string()));
-        // The rollups and the console's fold already read an absent agent as `-`; without the coalesce a
-        // nullable column excludes such a row from both the wildcard and the exact marker.
-        clauses.push(format!(
-            "COALESCE(user_agent, '-') LIKE ?{at_like} ESCAPE ?{}",
-            at_like + 1
-        ));
-    }
-    if let Some(client) = filter.client.as_deref().filter(|c| !c.is_empty()) {
-        let (like, escape) = crate::pattern::to_like(client);
-        args.push(Box::new(like));
-        let at_like = args.len();
-        args.push(Box::new(escape.to_string()));
-        clauses.push(format!(
-            "COALESCE(client, '-') LIKE ?{at_like} ESCAPE ?{}",
-            at_like + 1
-        ));
-    }
+    // The rollups and the console's fold already read an absent agent or client as `-`; `pattern_any`'s
+    // coalesce keeps a nullable column from excluding such a row from both the wildcard and the exact marker.
+    pattern_any(
+        "user_agent",
+        &Vec::from_iter(
+            filter
+                .user_agent
+                .as_deref()
+                .filter(|a| !a.is_empty())
+                .map(String::from),
+        ),
+        &mut args,
+        &mut clauses,
+    );
+    pattern_any(
+        "client",
+        &Vec::from_iter(
+            filter
+                .client
+                .as_deref()
+                .filter(|c| !c.is_empty())
+                .map(String::from),
+        ),
+        &mut args,
+        &mut clauses,
+    );
     in_list("agent_type", &filter.agent_types, &mut args, &mut clauses);
     in_list("turn_origin", &filter.turn_origins, &mut args, &mut clauses);
     if !filter.include_probes && !filter.kinds.iter().any(|k| k == "probe") {
@@ -1162,9 +1166,9 @@ pub struct SessionIdentity {
     pub fork_depth: Option<u32>,
 }
 
-/// The bundled SQLite's default parameter cap (32,766) divided by the three parameters each named session
-/// binds, rounded down to a plain figure: a call over more sessions than this chunks and merges rather than
-/// tripping the cap.
+/// At three bound parameters per named session, 900 sessions bind 2,700 parameters, a wide margin under the
+/// bundled SQLite's 32,766-parameter default cap: a call over more sessions than this chunks and merges rather
+/// than tripping the cap.
 const SESSION_IDENTITY_CHUNK: usize = 900;
 
 /// For each (key id, key generation, session id) named, with no time bound: a pin-only session (one whose
@@ -1258,9 +1262,9 @@ fn period_bounds(period: BudgetPeriod, now: i64) -> (i64, i64) {
 
 /// One budgeted member's spend in its current period, summed from the hourly rollups and priced at read time,
 /// a keepalive probe's cost included since it draws real money from an API-key member's budget the same as any
-/// other write; the row names the period kind and its UTC bounds in ms (`period_end` is the next day or month
-/// boundary). The rollup's own stored price is not read, since a budget must move with the table an operator
-/// confirms, not the price an attempt happened to be booked at.
+/// other request's; the row names the period kind and its UTC bounds in ms (`period_end` is the next day or
+/// month boundary). The rollup's own stored price is not read, since a budget must move with the table an
+/// operator confirms, not the price an attempt happened to be booked at.
 pub fn member_spends(
     conn: &Connection,
     members: &[(String, String, BudgetPeriod)],

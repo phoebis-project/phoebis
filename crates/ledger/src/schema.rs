@@ -253,7 +253,7 @@ CREATE INDEX IF NOT EXISTS events_at ON events (at);
 ///
 /// Version 19: the request row records how the climb identified it, the conversation's root and, for a
 /// continuation, the matched depth, and for a session that branched from another conversation, that
-/// conversation's root and depth.
+/// conversation's root and depth; a `(pool_id, account_id, hour)` index speeds a budgeted member's spend read.
 pub const MIGRATIONS: &[(u32, &str)] = &[
     (
         2,
@@ -634,6 +634,7 @@ ALTER TABLE attempts ADD COLUMN selection TEXT;",
 ALTER TABLE requests ADD COLUMN identity_root TEXT;
 ALTER TABLE requests ADD COLUMN identity_depth INTEGER;
 ALTER TABLE requests ADD COLUMN forked_from TEXT;
-ALTER TABLE requests ADD COLUMN fork_depth INTEGER;",
+ALTER TABLE requests ADD COLUMN fork_depth INTEGER;
+CREATE INDEX IF NOT EXISTS rollups_hourly_member ON rollups_hourly (pool_id, account_id, hour);",
     ),
 ];

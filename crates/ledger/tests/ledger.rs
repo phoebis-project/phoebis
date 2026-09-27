@@ -1724,6 +1724,26 @@ async fn migration_nineteen_adds_the_identity_columns_to_a_version_eighteen_file
         (None, None),
         "a row from before the identity columns reads both fork members null"
     );
+    let has_member_index = |ledger: &phoebis_ledger::LedgerDb| {
+        ledger
+            .read_blocking(|c| {
+                Ok(c.query_row(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'rollups_hourly_member'",
+                    [],
+                    |_| Ok(()),
+                )
+                .is_ok())
+            })
+            .unwrap()
+    };
+    assert!(
+        has_member_index(&db),
+        "the migrated database carries the member-spend index"
+    );
+    assert!(
+        has_member_index(&phoebis_ledger::LedgerDb::open_in_memory().unwrap()),
+        "a fresh database carries the same index"
+    );
 }
 
 #[test]
@@ -2227,6 +2247,34 @@ async fn the_period_boundary_tick_refreshes_the_spend_without_traffic() {
     )
     .await;
     h.clock.store(ms(2026, 1, 15, 12, 0), Ordering::SeqCst);
+    // Planted directly rather than relayed: priced usage past the budget, inside the day the tick will close.
+    h.db.insert_request(
+        &RequestRecord {
+            id: "seed".into(),
+            received_at: ms(2026, 1, 15, 1, 0),
+            finished_at: Some(ms(2026, 1, 15, 1, 0) + 500),
+            key_id: Some("desktop".into()),
+            pool_id: Some("main".into()),
+            canonical_model: "claude-sonnet-5".into(),
+            model: "claude-sonnet-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            outcome: "succeeded".into(),
+            attempts: 1,
+            ..Default::default()
+        },
+        &[AttemptRecord {
+            request_id: "seed".into(),
+            attempt: 1,
+            account_id: "a".into(),
+            account_kind: "oauth".into(),
+            outcome: "succeeded".into(),
+            input_tokens: Some(51_000_000),
+            ..Default::default()
+        }],
+        None,
+    )
+    .unwrap();
     h.store
         .set_pool_members(
             "main",
@@ -2247,10 +2295,31 @@ async fn the_period_boundary_tick_refreshes_the_spend_without_traffic() {
             .unwrap()
             .into_iter()
             .find(|r| {
-                r.pool_id == "main" && r.account_id == "a" && r.period_end == ms(2026, 1, 16, 0, 0)
+                r.pool_id == "main"
+                    && r.account_id == "a"
+                    && r.period_end == ms(2026, 1, 16, 0, 0)
+                    && r.spent_usd >= 100.0
             })
     })
     .await;
+
+    // The member is genuinely excluded before the tick: the documented 429 with the overage claim, so the 200
+    // after the boundary below actually shows the tick's own refresh rather than a refusal that never happened.
+    let refused = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-5[1m]", "s2"))
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), 429);
+    assert_eq!(
+        refused
+            .headers()
+            .get("anthropic-ratelimit-unified-representative-claim")
+            .map(|v| v.to_str().unwrap()),
+        Some("overage")
+    );
+
     // The clock alone steps past the period's end; no request and no registry edit follows.
     h.clock.store(ms(2026, 1, 16, 0, 5), Ordering::SeqCst);
     wait_for_async(Duration::from_secs(5), || async {

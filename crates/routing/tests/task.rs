@@ -3470,3 +3470,62 @@ async fn a_members_spend_read_after_a_period_edit_answers_none_until_the_next_re
         "the read applies the current period, not the one the stored row was summed under"
     );
 }
+
+#[tokio::test]
+async fn the_handle_answers_no_row_for_a_member_whose_period_the_report_predates() {
+    let store = seeded(&["a"]);
+    store
+        .set_pool_members(
+            "p",
+            &[MemberWrite {
+                account_id: "a".into(),
+                priority: 0,
+                budget_usd: Some(10.0),
+                budget_period: phoebis_store::BudgetPeriod::Month,
+            }],
+            "test",
+        )
+        .unwrap();
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
+    handle.report(Report::MemberSpend(vec![MemberSpend {
+        pool_id: "p".into(),
+        account_id: "a".into(),
+        period: phoebis_store::BudgetPeriod::Month,
+        period_start: 0,
+        period_end: 100_000,
+        spent_usd: 5.0,
+        observed_at: 1_000,
+    }]));
+    wait_for_async(WRITTEN, || async {
+        handle
+            .member_spends()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|r| r.pool_id == "p" && r.account_id == "a")
+    })
+    .await;
+
+    // The member's period changes with no report following: the analytics surface must never show the old
+    // period's spend once the edit has taken effect.
+    store
+        .set_pool_members(
+            "p",
+            &[MemberWrite {
+                account_id: "a".into(),
+                priority: 0,
+                budget_usd: Some(10.0),
+                budget_period: phoebis_store::BudgetPeriod::Day,
+            }],
+            "test",
+        )
+        .unwrap();
+    handle.reload().await.unwrap();
+    let rows = handle.member_spends().await.unwrap();
+    assert!(
+        rows.iter()
+            .all(|r| !(r.pool_id == "p" && r.account_id == "a")),
+        "a stale Month row is not answered for a member now configured on Day: {rows:?}"
+    );
+}

@@ -315,14 +315,23 @@ async fn writer(
         persisted_fits(store).await,
     );
     let mut member_revision = router.snapshot().revision;
-    let mut spend_due = refresh_member_spends(&db, &pricing, &router, clock(), None).await;
+    let mut spend_due =
+        refresh_member_spends(&db, &pricing, &router, clock(), None, config.event_poll).await;
     loop {
         // Checked on every round, whatever woke it: a member's budget or period edited under the writer,
         // with no flush of its own, still recomputes without waiting on the next request or period boundary.
         let revision = router.snapshot().revision;
         if revision != member_revision {
             member_revision = revision;
-            spend_due = refresh_member_spends(&db, &pricing, &router, clock(), spend_due).await;
+            spend_due = refresh_member_spends(
+                &db,
+                &pricing,
+                &router,
+                clock(),
+                spend_due,
+                config.event_poll,
+            )
+            .await;
         }
         let first = tokio::select! {
             // `recv` on a closed channel still yields what was queued before the close, then `None`.
@@ -345,7 +354,8 @@ async fn writer(
             // Re-armed after every run: the boundary a budgeted member's period ends on, so a pool whose
             // traffic never touches this writer still turns over its spend at the period's edge.
             _ = sleep_until(spend_due, &clock) => {
-                spend_due = refresh_member_spends(&db, &pricing, &router, clock(), spend_due).await;
+                spend_due =
+                    refresh_member_spends(&db, &pricing, &router, clock(), spend_due, config.event_poll).await;
                 continue;
             }
         };
@@ -361,7 +371,15 @@ async fn writer(
         let landed = land(&db, &pricing, &stats, &metrics, batch).await;
         if landed && priced {
             member_revision = router.snapshot().revision;
-            spend_due = refresh_member_spends(&db, &pricing, &router, clock(), spend_due).await;
+            spend_due = refresh_member_spends(
+                &db,
+                &pricing,
+                &router,
+                clock(),
+                spend_due,
+                config.event_poll,
+            )
+            .await;
         }
         // The channel is empty: whatever was dropped since the last report is one gap.
         if rx.is_empty() {
@@ -408,16 +426,19 @@ fn budgeted_members(snapshot: &RegistrySnapshot) -> Vec<(String, String, BudgetP
 }
 
 /// Re-reads every budgeted member's spend and reports it to the router. Answers the earliest `period_end`
-/// among the rows read, to arm the next boundary tick; `current` on a read error, so a transient failure leaves
-/// the boundary tick armed where it was rather than disarming it; `None` while no member carries a budget, since
-/// a pool whose every member is excluded still refreshes on the revision and boundary arms alone, without
-/// traffic, and there is truly nothing to arm a tick for.
+/// among the rows read, to arm the next boundary tick; `None` while no member carries a budget, since a pool
+/// whose every member is excluded still refreshes on the revision and boundary arms alone, without traffic, and
+/// there is truly nothing to arm a tick for. On a read error, keeps `current` while it is still ahead of `now`
+/// (a transient failure leaves an armed tick where it was rather than disarming it), otherwise arms a retry at
+/// `now + event_poll`: a tick that had already reached its deadline would otherwise re-fire at once on every
+/// following timer tick, repeating the failing read and its warning for as long as the error lasts.
 async fn refresh_member_spends(
     db: &Arc<LedgerDb>,
     pricing: &Arc<Pricing>,
     router: &RouterHandle,
     now: i64,
     current: Option<i64>,
+    event_poll: Duration,
 ) -> Option<i64> {
     let members = budgeted_members(&router.snapshot());
     if members.is_empty() {
@@ -435,7 +456,10 @@ async fn refresh_member_spends(
         }
         Err(error) => {
             tracing::warn!(%error, "a member's spend could not be read; the last report stands");
-            current
+            match current {
+                Some(at) if at > now => current,
+                _ => Some(now + event_poll.as_millis() as i64),
+            }
         }
     }
 }
@@ -809,8 +833,9 @@ mod tests {
         let router = budgeted_router();
         let db = Arc::new(LedgerDb::open_in_memory().unwrap());
         let pricing = Arc::new(Pricing::new(PriceTable::shipped()));
+        let event_poll = Duration::from_secs(5);
 
-        let due = refresh_member_spends(&db, &pricing, &router, 1_000, None).await;
+        let due = refresh_member_spends(&db, &pricing, &router, 1_000, None, event_poll).await;
         assert!(due.is_some(), "a working read arms the boundary tick");
 
         db.write(|c| {
@@ -819,10 +844,37 @@ mod tests {
         })
         .unwrap();
 
-        let after_failure = refresh_member_spends(&db, &pricing, &router, 2_000, due).await;
+        let after_failure =
+            refresh_member_spends(&db, &pricing, &router, 2_000, due, event_poll).await;
         assert_eq!(
             after_failure, due,
             "a failed read keeps the previous boundary armed rather than disarming it"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_spend_refresh_past_its_deadline_retries_at_the_poll_cadence() {
+        let router = budgeted_router();
+        let db = Arc::new(LedgerDb::open_in_memory().unwrap());
+        let pricing = Arc::new(Pricing::new(PriceTable::shipped()));
+        let event_poll = Duration::from_secs(5);
+
+        db.write(|c| {
+            c.execute("DROP TABLE rollups_hourly", [])?;
+            Ok(())
+        })
+        .unwrap();
+
+        // The boundary tick's own deadline already passed: keeping it would fire again at once on every
+        // following timer tick, so the retry arms one poll interval out instead.
+        let past_due = Some(500);
+        let now = 1_000;
+        let after_failure =
+            refresh_member_spends(&db, &pricing, &router, now, past_due, event_poll).await;
+        assert_eq!(
+            after_failure,
+            Some(now + event_poll.as_millis() as i64),
+            "a past deadline retries at the poll cadence rather than at once"
         );
     }
 }

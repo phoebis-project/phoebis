@@ -1238,7 +1238,7 @@ fn a_members_spend_is_the_priced_rollups_of_its_utc_period_alone() {
     let db = LedgerDb::open_in_memory().unwrap();
     let table = priced_table("claude-sonnet-5", 1.0);
 
-    // The day bound: a row from the day before and a probe inside the day are both left out.
+    // The day bound: a row from the day before is left out; a probe inside the day counts like any other write.
     plant_spend(
         &db,
         "d0",
