@@ -32,6 +32,8 @@ type, the compaction and context-compacted markers, and the summed tool duration
 origin off its attribution line, and the request's shape: the effort, the thinking mode and budget, the output
 limit, the tool, system-block, and message counts, the context edits, the temperature, and the requested speed
 and service tier.
+A session that branched from another
+conversation carries that conversation's root and the matched depth as well.
 The attempt row names the account and its kind; the upstream status and request id; the outcome; the
 cooldown the attempt set; the stop reason, the model the answer names when it differs from the one the router
 resolved, the speed, the region inference ran in, the tokens a context edit cleared, and a refusal's category
@@ -39,6 +41,10 @@ and recommended model; the five token counts, with the thinking share of the out
 fetch calls the answer made;
 the cache miss reason the diagnostics beta reports; the unified rate-limit window readings; overage; the cost
 split across input, cache read, cache write, and output; and the pricing version the estimate used.
+
+Placements are counted by rung, with a hit share from the trace and the response's cache-read tokens: a
+placement by the conversation's own messages is a hit when the response read the prefix the entry promised;
+one by the static prefix is a hit when it read at all.
 
 A model an upstream rejected leaves two events in the log: `model_rejected` names the refusing account and the
 spelling the request carried, `model_permitted` the account that served the same request afterwards; the request

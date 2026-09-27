@@ -42,10 +42,11 @@ pub use pricing::{
 pub use query::{
     apply_filter, breakdown, bucket_seconds, burn_rows, burn_series, burn_series_over, dashboard,
     group_of, hour_ceil, key_request_totals, latest_extra_usage, latest_quota, list_requests,
-    moves_by_reason, parse_range, pin_migrations_by_reason, pool_traffic, recent_events_of_kind,
-    request_by_id, request_events, request_totals, rewrite_series, series, session_activity,
-    session_burn_series, BurnPoint, Dashboard, GroupRow, LiveKeys, ProbeCounts, RequestFilter,
-    RollupFilter, SeriesFilter, SeriesPoint, SessionActivity, Totals, TrafficBucket, GROUP_BYS,
+    member_spends, moves_by_reason, parse_range, pin_migrations_by_reason, placements,
+    pool_traffic, recent_events_of_kind, request_by_id, request_events, request_totals,
+    rewrite_series, series, session_activity, session_burn_series, session_identities, BurnPoint,
+    Dashboard, GroupRow, LiveKeys, PlacementRow, ProbeCounts, RequestFilter, RollupFilter,
+    SeriesFilter, SeriesPoint, SessionActivity, SessionIdentity, Totals, TrafficBucket, GROUP_BYS,
     MAX_POINTS, MAX_RANGE_MS,
 };
 pub use quota::{samples_from_head, samples_from_poll, QuotaPoll, Sampled};

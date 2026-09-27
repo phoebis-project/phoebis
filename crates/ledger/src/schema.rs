@@ -250,6 +250,10 @@ CREATE INDEX IF NOT EXISTS events_at ON events (at);
 /// hourly rollup, so it joins the primary key after the effort and the table is rebuilt as version 16 rebuilt
 /// it, every existing row filed under `-`; the account rollup gains the rewrite tokens and the moves by reason;
 /// an attempt keeps its selection trace.
+///
+/// Version 19: the request row records how the climb identified it, the conversation's root and, for a
+/// continuation, the matched depth, and for a session that branched from another conversation, that
+/// conversation's root and depth.
 pub const MIGRATIONS: &[(u32, &str)] = &[
     (
         2,
@@ -623,5 +627,13 @@ CREATE INDEX IF NOT EXISTS rollups_hourly_key ON rollups_hourly (key_id, key_gen
 ALTER TABLE account_rollups_hourly ADD COLUMN rewrite_tokens INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE account_rollups_hourly ADD COLUMN migrations_json TEXT NOT NULL DEFAULT '{}';
 ALTER TABLE attempts ADD COLUMN selection TEXT;",
+    ),
+    (
+        19,
+        "ALTER TABLE requests ADD COLUMN identified_by TEXT;
+ALTER TABLE requests ADD COLUMN identity_root TEXT;
+ALTER TABLE requests ADD COLUMN identity_depth INTEGER;
+ALTER TABLE requests ADD COLUMN forked_from TEXT;
+ALTER TABLE requests ADD COLUMN fork_depth INTEGER;",
     ),
 ];

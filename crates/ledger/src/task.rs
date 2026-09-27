@@ -7,8 +7,8 @@ use std::time::Duration;
 
 use phoebis_bus::{spawn_subscriber, Bus, Subscriber};
 use phoebis_oauth::{Clock, UsageService};
-use phoebis_routing::{Report, RouterHandle};
-use phoebis_store::{AccountKind, Store};
+use phoebis_routing::{RegistrySnapshot, Report, RouterHandle};
+use phoebis_store::{AccountKind, BudgetPeriod, Store};
 use tokio::sync::{mpsc, oneshot, watch, Mutex};
 
 use crate::assemble::{Assembler, Record};
@@ -19,6 +19,7 @@ use crate::fit::Fitter;
 use crate::metrics::Metrics;
 use crate::plan::{PlanFactors, PlanWindows};
 use crate::pricing::{price_attempts, PriceTable, Pricing};
+use crate::query::member_spends;
 use crate::quota::QuotaPoll;
 use crate::record::{AttemptRecord, EventRecord, QuotaSampleRecord, RequestRecord};
 use crate::{LedgerDb, LedgerError};
@@ -313,7 +314,16 @@ async fn writer(
         Arc::new(PlanWindows::shipped()),
         persisted_fits(store).await,
     );
+    let mut member_revision = router.snapshot().revision;
+    let mut spend_due = refresh_member_spends(&db, &pricing, &router, clock()).await;
     loop {
+        // Checked on every round, whatever woke it: a member's budget or period edited under the writer,
+        // with no flush of its own, still recomputes without waiting on the next request or period boundary.
+        let revision = router.snapshot().revision;
+        if revision != member_revision {
+            member_revision = revision;
+            spend_due = refresh_member_spends(&db, &pricing, &router, clock()).await;
+        }
         let first = tokio::select! {
             // `recv` on a closed channel still yields what was queued before the close, then `None`.
             record = rx.recv() => match record { Some(record) => record, None => break },
@@ -332,6 +342,12 @@ async fn writer(
                 run_purge(&db, &config, clock()).await;
                 continue;
             }
+            // Re-armed after every run: the boundary a budgeted member's period ends on, so a pool whose
+            // traffic never touches this writer still turns over its spend at the period's edge.
+            _ = sleep_until(spend_due, &clock) => {
+                spend_due = refresh_member_spends(&db, &pricing, &router, clock()).await;
+                continue;
+            }
         };
         let mut batch = vec![first];
         while batch.len() < BATCH {
@@ -341,7 +357,12 @@ async fn writer(
             }
         }
         fit_batch(&mut fitter, &router, &clock, &batch);
-        land(&db, &pricing, &stats, &metrics, batch).await;
+        let priced = wrote_priced_attempt(&batch);
+        let landed = land(&db, &pricing, &stats, &metrics, batch).await;
+        if landed && priced {
+            member_revision = router.snapshot().revision;
+            spend_due = refresh_member_spends(&db, &pricing, &router, clock()).await;
+        }
         // The channel is empty: whatever was dropped since the last report is one gap.
         if rx.is_empty() {
             let dropped = stats.dropped.load(Ordering::Relaxed);
@@ -376,6 +397,72 @@ async fn persisted_fits(store: Arc<Store>) -> Vec<phoebis_store::FitRow> {
             Vec::new()
         }
     }
+}
+
+/// Every pool member with a spend budget, from the snapshot: its pool, account, and configured period.
+fn budgeted_members(snapshot: &RegistrySnapshot) -> Vec<(String, String, BudgetPeriod)> {
+    snapshot
+        .pools()
+        .flat_map(|pool| snapshot.members(&pool.id))
+        .filter_map(|m| {
+            m.budget_usd
+                .map(|_| (m.pool_id.clone(), m.account_id.clone(), m.budget_period))
+        })
+        .collect()
+}
+
+/// Re-reads every budgeted member's spend and reports it to the router. Answers the earliest `period_end`
+/// among the rows read, to arm the next boundary tick, or `None` while no member carries a budget: a pool whose
+/// every member is excluded still refreshes on the revision and boundary arms alone, without traffic.
+async fn refresh_member_spends(
+    db: &Arc<LedgerDb>,
+    pricing: &Arc<Pricing>,
+    router: &RouterHandle,
+    now: i64,
+) -> Option<i64> {
+    let members = budgeted_members(&router.snapshot());
+    if members.is_empty() {
+        return None;
+    }
+    let table = pricing.current();
+    let rows = db
+        .read(move |conn| member_spends(conn, &members, now, &table))
+        .await;
+    match rows {
+        Ok(rows) => {
+            let earliest = rows.iter().map(|r| r.period_end).min();
+            router.report(Report::MemberSpend(rows));
+            earliest
+        }
+        Err(error) => {
+            tracing::warn!(%error, "a member's spend could not be read; the last report stands");
+            None
+        }
+    }
+}
+
+/// The duration until `deadline`, zero rather than negative for one already past; `None` sleeps forever, so the
+/// select arm this backs never fires while no member carries a budget.
+async fn sleep_until(deadline: Option<i64>, clock: &Clock) {
+    match deadline {
+        Some(at) => tokio::time::sleep(Duration::from_millis((at - clock()).max(0) as u64)).await,
+        None => std::future::pending().await,
+    }
+}
+
+/// Whether the batch landed a request whose attempt carried usage: what `price_attempts` would have priced,
+/// the signal the member spend refresh reacts to.
+fn wrote_priced_attempt(batch: &[Record]) -> bool {
+    batch.iter().any(|record| match record {
+        Record::Request { attempts, .. } => attempts.iter().any(|a| {
+            a.input_tokens.is_some()
+                || a.output_tokens.is_some()
+                || a.cache_read_tokens.is_some()
+                || a.cache_write_5m_tokens.is_some()
+                || a.cache_write_1h_tokens.is_some()
+        }),
+        _ => false,
+    })
 }
 
 /// Walks a batch through the fitter in the order it arrived, reporting every row it answers to the router,

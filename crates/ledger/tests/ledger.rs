@@ -11,10 +11,11 @@ use phoebis_bus::{
     Usage,
 };
 use phoebis_ledger::{
-    bucket_of, list_requests, Assembler, EventRecord, LedgerConfig, LiveKeys, QuotaSampleRecord,
-    Record, RequestFilter, RequestRecord, IN_FLIGHT_TTL_MS,
+    bucket_of, list_requests, Assembler, AttemptRecord, EventRecord, LedgerConfig, LiveKeys,
+    QuotaSampleRecord, Record, RequestFilter, RequestRecord, IN_FLIGHT_TTL_MS,
 };
 use phoebis_profile::fixtures::BodyFixture;
+use phoebis_store::{BudgetPeriod, MemberWrite};
 use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
 use http_body_util::BodyExt;
@@ -1580,13 +1581,18 @@ async fn a_rollup_row_from_before_the_class_dimension_reads_under_the_reserved_c
     let path = dir.path().join("ledger.sqlite");
     {
         let db = phoebis_ledger::LedgerDb::open(&path).unwrap();
-        // The four columns this migration adds, each dropped back out so the replay below has to add them
-        // again; `rollups_hourly` keeps the shape the class dimension joins, since a primary-key column
-        // cannot be dropped in place and the rebuild names its own columns regardless of what the source
-        // table still carries.
+        // The four columns migration 18 adds and the five migration 19 adds, each dropped back out so the
+        // replay below has to add them again; `rollups_hourly` keeps the shape the class dimension joins,
+        // since a primary-key column cannot be dropped in place and the rebuild names its own columns
+        // regardless of what the source table still carries.
         db.write(|c| {
             c.execute_batch(
                 "ALTER TABLE requests DROP COLUMN request_class; \
+                 ALTER TABLE requests DROP COLUMN identified_by; \
+                 ALTER TABLE requests DROP COLUMN identity_root; \
+                 ALTER TABLE requests DROP COLUMN identity_depth; \
+                 ALTER TABLE requests DROP COLUMN forked_from; \
+                 ALTER TABLE requests DROP COLUMN fork_depth; \
                  ALTER TABLE account_rollups_hourly DROP COLUMN rewrite_tokens; \
                  ALTER TABLE account_rollups_hourly DROP COLUMN migrations_json; \
                  ALTER TABLE attempts DROP COLUMN selection;",
@@ -1614,7 +1620,7 @@ async fn a_rollup_row_from_before_the_class_dimension_reads_under_the_reserved_c
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 18);
+    assert_eq!(db.schema_version().await.unwrap(), 19);
     let rows = db
         .read_blocking(|c| phoebis_ledger::read_rollups(c, 0, i64::MAX))
         .unwrap();
@@ -1668,6 +1674,56 @@ async fn a_rollup_row_from_before_the_class_dimension_reads_under_the_reserved_c
         "a fresh classless fold lands on the same reserved-class row"
     );
     assert_eq!((rows[0].requests, rows[0].output_tokens), (6, 7));
+}
+
+#[tokio::test]
+async fn migration_nineteen_adds_the_identity_columns_to_a_version_eighteen_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ledger.sqlite");
+    {
+        let db = phoebis_ledger::LedgerDb::open(&path).unwrap();
+        db.insert_request(
+            &RequestRecord {
+                id: "r0".into(),
+                received_at: 0,
+                key_id: Some("desktop".into()),
+                pool_id: Some("main".into()),
+                canonical_model: "claude-sonnet-5".into(),
+                model: "claude-sonnet-5".into(),
+                kind: "inference".into(),
+                origin: "client".into(),
+                outcome: "succeeded".into(),
+                attempts: 1,
+                ..Default::default()
+            },
+            &[],
+            None,
+        )
+        .unwrap();
+        db.write(|c| {
+            c.execute_batch(
+                "ALTER TABLE requests DROP COLUMN identified_by; \
+                 ALTER TABLE requests DROP COLUMN identity_root; \
+                 ALTER TABLE requests DROP COLUMN identity_depth; \
+                 ALTER TABLE requests DROP COLUMN forked_from; \
+                 ALTER TABLE requests DROP COLUMN fork_depth; \
+                 UPDATE meta SET value = '18' WHERE key = 'schema_version';",
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    }
+    let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
+    assert_eq!(db.schema_version().await.unwrap(), 19);
+    let (row, _) = db.request("r0").await.unwrap().unwrap();
+    assert_eq!(
+        (
+            row.forked_from,
+            row.fork_depth
+        ),
+        (None, None),
+        "a row from before the identity columns reads both fork members null"
+    );
 }
 
 #[test]
@@ -1951,4 +2007,242 @@ fn a_rate_limit_fail_over_whose_destination_writes_cache_books_its_rewrite_token
         0,
         "the double move books only the serving leg's write; the earlier account gets nothing"
     );
+}
+
+/// A UTC instant, for the member-spend writer-loop tests below.
+fn ms(y: i16, m: i8, d: i8, h: i8, mi: i8) -> i64 {
+    jiff::civil::date(y, m, d)
+        .at(h, mi, 0, 0)
+        .to_zoned(jiff::tz::TimeZone::UTC)
+        .unwrap()
+        .timestamp()
+        .as_millisecond()
+}
+
+#[tokio::test]
+async fn the_ledger_reports_every_budgeted_members_spend_after_a_flush() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    h.store
+        .set_pool_members(
+            "main",
+            &[MemberWrite {
+                account_id: "a".into(),
+                priority: 0,
+                budget_usd: Some(100.0),
+                budget_period: BudgetPeriod::Month,
+            }],
+            "test",
+        )
+        .unwrap();
+    h.router.reload().await.unwrap();
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-5[1m]", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let _ = resp.into_body().collect().await.unwrap();
+    // Polled for a positive spend rather than a mere non-empty row: a revision-driven refresh can run before
+    // the priced request's own flush lands, reporting a correct-but-premature zero the flush then supersedes.
+    let rows = wait_for_async(Duration::from_secs(5), || async {
+        let rows = h.router.member_spends().await.unwrap();
+        rows.iter().any(|r| r.spent_usd > 0.0).then_some(rows)
+    })
+    .await;
+    assert_eq!(
+        (rows[0].pool_id.as_str(), rows[0].account_id.as_str()),
+        ("main", "a")
+    );
+    assert!(
+        rows[0].spent_usd > 0.0,
+        "the flush that wrote the priced attempt reached the member's spend"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn an_exhausted_monthly_member_changed_to_daily_is_admitted_while_no_member_can_serve() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let h = harness(
+        &up,
+        &[oauth("a", A, 0)],
+        (0, None),
+        LedgerConfig {
+            purge_interval: Duration::from_millis(20),
+            ..LedgerConfig::default()
+        },
+    )
+    .await;
+    // Planted directly rather than relayed: an earlier day of the same month, so the monthly sum is exhausted
+    // while the day it falls in has already passed.
+    h.db.insert_request(
+        &RequestRecord {
+            id: "seed".into(),
+            received_at: ms(2026, 1, 5, 0, 0),
+            finished_at: Some(ms(2026, 1, 5, 0, 0) + 500),
+            key_id: Some("desktop".into()),
+            pool_id: Some("main".into()),
+            canonical_model: "claude-sonnet-5".into(),
+            model: "claude-sonnet-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            outcome: "succeeded".into(),
+            attempts: 1,
+            ..Default::default()
+        },
+        &[AttemptRecord {
+            request_id: "seed".into(),
+            attempt: 1,
+            account_id: "a".into(),
+            account_kind: "oauth".into(),
+            outcome: "succeeded".into(),
+            input_tokens: Some(1_000_000),
+            ..Default::default()
+        }],
+        None,
+    )
+    .unwrap();
+    h.clock.store(ms(2026, 1, 20, 12, 0), Ordering::SeqCst);
+    h.store
+        .set_pool_members(
+            "main",
+            &[MemberWrite {
+                account_id: "a".into(),
+                priority: 0,
+                budget_usd: Some(0.01),
+                budget_period: BudgetPeriod::Month,
+            }],
+            "test",
+        )
+        .unwrap();
+    h.router.reload().await.unwrap();
+    let exhausted = wait_for_async(Duration::from_secs(5), || async {
+        h.router
+            .member_spends()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|r| r.pool_id == "main" && r.account_id == "a" && r.spent_usd >= 0.01)
+    })
+    .await;
+    assert_eq!(exhausted.period, BudgetPeriod::Month);
+
+    // The registry's period changes with no request flowing; the revision alone drives the ledger's next read.
+    h.store
+        .set_pool_members(
+            "main",
+            &[MemberWrite {
+                account_id: "a".into(),
+                priority: 0,
+                budget_usd: Some(0.01),
+                budget_period: BudgetPeriod::Day,
+            }],
+            "test",
+        )
+        .unwrap();
+    h.router.reload().await.unwrap();
+    let admitted = wait_for_async(Duration::from_secs(5), || async {
+        h.router
+            .member_spends()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|r| r.pool_id == "main" && r.account_id == "a" && r.period == BudgetPeriod::Day)
+    })
+    .await;
+    assert!(
+        admitted.spent_usd < 0.01,
+        "today carries none of the earlier day's spend"
+    );
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-5[1m]", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        200,
+        "the day row below the budget lets a select admit the member"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn the_period_boundary_tick_refreshes_the_spend_without_traffic() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let h = harness(
+        &up,
+        &[oauth("a", A, 0)],
+        (0, None),
+        LedgerConfig {
+            purge_interval: Duration::from_millis(20),
+            ..LedgerConfig::default()
+        },
+    )
+    .await;
+    h.clock.store(ms(2026, 1, 15, 12, 0), Ordering::SeqCst);
+    h.store
+        .set_pool_members(
+            "main",
+            &[MemberWrite {
+                account_id: "a".into(),
+                priority: 0,
+                budget_usd: Some(100.0),
+                budget_period: BudgetPeriod::Day,
+            }],
+            "test",
+        )
+        .unwrap();
+    h.router.reload().await.unwrap();
+    wait_for_async(Duration::from_secs(5), || async {
+        h.router
+            .member_spends()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|r| {
+                r.pool_id == "main" && r.account_id == "a" && r.period_end == ms(2026, 1, 16, 0, 0)
+            })
+    })
+    .await;
+    // The clock alone steps past the period's end; no request and no registry edit follows.
+    h.clock.store(ms(2026, 1, 16, 0, 5), Ordering::SeqCst);
+    wait_for_async(Duration::from_secs(5), || async {
+        h.router
+            .member_spends()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|r| {
+                r.pool_id == "main" && r.account_id == "a" && r.period_end == ms(2026, 1, 17, 0, 0)
+            })
+    })
+    .await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-5[1m]", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        200,
+        "the new period's row still admits the member"
+    );
+    up.shutdown().await;
 }

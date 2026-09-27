@@ -276,6 +276,9 @@ enum Command {
     Fits {
         reply: oneshot::Sender<Vec<FitRow>>,
     },
+    MemberSpends {
+        reply: oneshot::Sender<Vec<MemberSpend>>,
+    },
     Overage {
         account_id: String,
         reply: oneshot::Sender<Option<OverageEvidence>>,
@@ -467,6 +470,11 @@ impl RouterHandle {
     /// selection.
     pub async fn fits(&self) -> Result<Vec<FitRow>, RouterGone> {
         self.ask(|reply| Command::Fits { reply }).await
+    }
+    /// Every budgeted member's spend as the ledger last reported it, from the state's table alone: the
+    /// analytics route reads this rather than querying the ledger a second time.
+    pub async fn member_spends(&self) -> Result<Vec<MemberSpend>, RouterGone> {
+        self.ask(|reply| Command::MemberSpends { reply }).await
     }
     /// One ask for the whole map: a scrape must not queue one command per account in front of selection.
     pub async fn overages(&self) -> Result<Vec<(String, OverageEvidence)>, RouterGone> {
@@ -1072,6 +1080,20 @@ impl Task {
             }
             Command::Fits { reply } => {
                 let _ = reply.send(self.state.fits());
+            }
+            Command::MemberSpends { reply } => {
+                let snapshot = self
+                    .snapshot
+                    .read()
+                    .expect("snapshot lock poisoned")
+                    .clone();
+                let rows = snapshot
+                    .pools()
+                    .flat_map(|pool| snapshot.members(&pool.id))
+                    .filter(|m| m.budget_usd.is_some())
+                    .filter_map(|m| self.state.member_spend(&m.pool_id, &m.account_id).cloned())
+                    .collect();
+                let _ = reply.send(rows);
             }
             Command::Overages { reply } => {
                 let _ = reply.send(self.state.overages());

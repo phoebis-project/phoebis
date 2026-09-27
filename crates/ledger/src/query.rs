@@ -3,8 +3,8 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use phoebis_routing::FIVE_HOUR;
-use phoebis_store::AccountKind;
+use phoebis_routing::{MemberSpend, FIVE_HOUR};
+use phoebis_store::{AccountKind, BudgetPeriod};
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension, ToSql};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -12,6 +12,7 @@ use serde_json::Value;
 use crate::db::{row_to_attempt, row_to_request, ATTEMPT_SELECT, REQUEST_SELECT};
 use crate::histogram::Histogram;
 use crate::plan::{PlanFactors, PlanWindows};
+use crate::pricing::PriceTable;
 use crate::record::{
     AttemptRecord, EventRecord, ExtraUsageSampleRecord, QuotaSampleRecord, RequestRecord,
 };
@@ -1118,6 +1119,208 @@ pub fn session_activity(
             account_id: r.get(7)?,
             on_retired_secret: r.get(8)?,
             rotation_at: r.get(9)?,
+        })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// A session's fork facts, read off its first client request. A session the ledger holds no client request for is
+/// absent from the answer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionIdentity {
+    pub key_id: String,
+    pub key_generation: i64,
+    pub session_id: String,
+    pub forked_from: Option<String>,
+    pub fork_depth: Option<u32>,
+}
+
+/// For each (key id, key generation, session id) named, with no time bound: a pin-only session (one whose
+/// requests, if any, are all older than any activity window a caller applies elsewhere) is answered the same
+/// as a fresh one, since this query reads no `since` bound of its own.
+pub fn session_identities(
+    conn: &Connection,
+    sessions: &[(String, i64, String)],
+) -> Result<Vec<SessionIdentity>, LedgerError> {
+    if sessions.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut args: Vec<Box<dyn ToSql>> = Vec::with_capacity(sessions.len() * 3);
+    let values: Vec<String> = sessions
+        .iter()
+        .map(|(key_id, key_generation, session_id)| {
+            args.push(Box::new(key_id.clone()));
+            args.push(Box::new(*key_generation));
+            args.push(Box::new(session_id.clone()));
+            let n = args.len();
+            format!("(?{}, ?{}, ?{n})", n - 2, n - 1)
+        })
+        .collect();
+    let sql = format!(
+        "WITH named(key_id, key_generation, session_id) AS (VALUES {}) \
+         SELECT n.key_id, n.key_generation, n.session_id, \
+         (SELECT r.forked_from FROM requests r WHERE r.key_id = n.key_id AND r.key_generation = n.key_generation AND r.session_id = n.session_id AND r.kind != 'probe' ORDER BY r.received_at ASC, r.id ASC LIMIT 1), \
+         (SELECT r.fork_depth FROM requests r WHERE r.key_id = n.key_id AND r.key_generation = n.key_generation AND r.session_id = n.session_id AND r.kind != 'probe' ORDER BY r.received_at ASC, r.id ASC LIMIT 1) \
+         FROM named n \
+         WHERE EXISTS (SELECT 1 FROM requests r WHERE r.key_id = n.key_id AND r.key_generation = n.key_generation AND r.session_id = n.session_id AND r.kind != 'probe')",
+        values.join(", ")
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(params_from_iter(args.iter().map(|a| a.as_ref())), |r| {
+        Ok(SessionIdentity {
+            key_id: r.get(0)?,
+            key_generation: r.get(1)?,
+            session_id: r.get(2)?,
+            forked_from: r.get(3)?,
+            fork_depth: r.get::<_, Option<i64>>(4)?.map(|n| n as u32),
+        })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// The UTC bounds of the budget period containing `now`, in milliseconds: a day is its own midnight to the
+/// next, a month its first to the next month's first.
+fn period_bounds(period: BudgetPeriod, now: i64) -> (i64, i64) {
+    let midnight = |date: jiff::civil::Date| {
+        date.to_zoned(jiff::tz::TimeZone::UTC)
+            .expect("every civil midnight exists in UTC")
+            .timestamp()
+            .as_millisecond()
+    };
+    let date = jiff::Timestamp::from_millisecond(now)
+        .expect("a routed clock value stays in jiff's timestamp range")
+        .to_zoned(jiff::tz::TimeZone::UTC)
+        .date();
+    match period {
+        BudgetPeriod::Day => (
+            midnight(date),
+            midnight(
+                date.checked_add(jiff::Span::new().days(1))
+                    .expect("a day past any date stays in jiff's date range"),
+            ),
+        ),
+        BudgetPeriod::Month => {
+            let first = date.first_of_month();
+            (
+                midnight(first),
+                midnight(
+                    first.checked_add(jiff::Span::new().months(1)).expect(
+                        "one month past any first-of-month date stays in jiff's date range",
+                    ),
+                ),
+            )
+        }
+    }
+}
+
+/// One budgeted member's spend in its current period, summed from the hourly rollups and priced at read time;
+/// the row names the period kind and its UTC bounds in ms (`period_end` is the next day or month boundary). The
+/// rollup's own stored price is not read, since a budget must move with the table an operator confirms, not the
+/// price an attempt happened to be booked at.
+pub fn member_spends(
+    conn: &Connection,
+    members: &[(String, String, BudgetPeriod)],
+    now: i64,
+    table: &PriceTable,
+) -> Result<Vec<MemberSpend>, LedgerError> {
+    let mut out = Vec::with_capacity(members.len());
+    for (pool_id, account_id, period) in members {
+        let (period_start, period_end) = period_bounds(*period, now);
+        let mut stmt = conn.prepare(
+            "SELECT canonical_model, SUM(input_tokens), SUM(cache_read_tokens), SUM(cache_write_5m_tokens), \
+             SUM(cache_write_1h_tokens), SUM(output_tokens) FROM rollups_hourly \
+             WHERE pool_id = ?1 AND account_id = ?2 AND kind != 'probe' AND hour >= ?3 AND hour < ?4 \
+             GROUP BY canonical_model",
+        )?;
+        let rows = stmt.query_map(
+            params![
+                pool_id,
+                account_id,
+                period_start / 1_000,
+                period_end / 1_000
+            ],
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, i64>(1)? as u64,
+                    r.get::<_, i64>(2)? as u64,
+                    r.get::<_, i64>(3)? as u64,
+                    r.get::<_, i64>(4)? as u64,
+                    r.get::<_, i64>(5)? as u64,
+                ))
+            },
+        )?;
+        let mut spent_usd = 0.0;
+        for row in rows {
+            let (model, input, cache_read, write_5m, write_1h, output) = row?;
+            // A model the table cannot price contributes nothing: the analytics already read such a row as
+            // unpriced, and a budget must not be tripped by a sum it cannot itself account for.
+            if let Some((usd, _)) =
+                table.estimate(&model, input, cache_read, write_5m, write_1h, output)
+            {
+                spent_usd += usd;
+            }
+        }
+        out.push(MemberSpend {
+            pool_id: pool_id.clone(),
+            account_id: account_id.clone(),
+            period: *period,
+            period_start,
+            period_end,
+            spent_usd,
+            observed_at: now,
+        });
+    }
+    Ok(out)
+}
+
+/// Placements by rung over `[since, until)`: `rung`, `placements`, `hits`, `cache_read_tokens`, `promised_tokens`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PlacementRow {
+    pub rung: String,
+    pub placements: u64,
+    pub hits: u64,
+    pub cache_read_tokens: u64,
+    pub promised_tokens: u64,
+}
+
+/// A `content` placement is a hit when the response's cache-read tokens reach the entry's promised
+/// `prefix_tokens`; a `static` or `with_main` one is a hit when the response read anything, since the static
+/// tier's own size is not on the usage and a read is the only fact the upstream gives.
+pub fn placements(
+    conn: &Connection,
+    filter: &RollupFilter,
+    live: &LiveKeys,
+    since: i64,
+    until: i64,
+) -> Result<Vec<PlacementRow>, LedgerError> {
+    let mut args: Vec<Box<dyn ToSql>> = vec![Box::new(since), Box::new(until)];
+    let mut clauses: Vec<String> = Vec::new();
+    key_lifetimes(&filter.keys, live, &mut args, &mut clauses);
+    in_list_or_null("pool_id", &filter.pools, &mut args, &mut clauses);
+    let extra = if clauses.is_empty() {
+        String::new()
+    } else {
+        format!(" AND {}", clauses.join(" AND "))
+    };
+    let sql = format!(
+        "SELECT json_extract(a.selection, '$.placement.rung'), COUNT(*), \
+         SUM(CASE WHEN json_extract(a.selection, '$.placement.rung') = 'content' \
+                  THEN CASE WHEN COALESCE(a.cache_read_tokens, 0) >= COALESCE(json_extract(a.selection, '$.placement.prefix_tokens'), 0) THEN 1 ELSE 0 END \
+                  ELSE CASE WHEN COALESCE(a.cache_read_tokens, 0) > 0 THEN 1 ELSE 0 END END), \
+         SUM(COALESCE(a.cache_read_tokens, 0)), SUM(COALESCE(json_extract(a.selection, '$.placement.prefix_tokens'), 0)) \
+         FROM attempts a JOIN requests r ON r.id = a.request_id \
+         WHERE json_extract(a.selection, '$.placement') IS NOT NULL AND r.kind != 'probe' \
+         AND r.received_at >= ?1 AND r.received_at < ?2{extra} GROUP BY 1 ORDER BY 1"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(params_from_iter(args.iter().map(|a| a.as_ref())), |r| {
+        Ok(PlacementRow {
+            rung: r.get(0)?,
+            placements: r.get::<_, i64>(1)? as u64,
+            hits: r.get::<_, i64>(2)? as u64,
+            cache_read_tokens: r.get::<_, i64>(3)? as u64,
+            promised_tokens: r.get::<_, i64>(4)? as u64,
         })
     })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)

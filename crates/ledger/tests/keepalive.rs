@@ -457,6 +457,11 @@ async fn migration_five_adds_the_skipped_column_and_the_marks_table_to_a_version
             "context_compacted",
             "context_edits",
             "effort",
+            "fork_depth",
+            "forked_from",
+            "identified_by",
+            "identity_depth",
+            "identity_root",
             "max_tokens",
             "message_count",
             "presented_retired",
@@ -484,7 +489,7 @@ async fn migration_five_adds_the_skipped_column_and_the_marks_table_to_a_version
         .unwrap();
     }
     let db = std::sync::Arc::new(LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 18);
+    assert_eq!(db.schema_version().await.unwrap(), 19);
     let (_, attempts) = db.request("r0").await.unwrap().unwrap();
     assert_eq!(
         attempts.len(),

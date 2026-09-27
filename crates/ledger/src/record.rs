@@ -70,6 +70,9 @@ pub struct RequestRecord {
     pub turn_origin: Option<String>,
     /// The class the client named on `x-claude-code-request-class`, `None` when it sent none.
     pub request_class: Option<String>,
+    /// A request that continued another conversation: that conversation's root and the matched depth.
+    pub forked_from: Option<String>,
+    pub fork_depth: Option<u32>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

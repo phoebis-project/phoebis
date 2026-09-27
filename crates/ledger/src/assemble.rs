@@ -659,6 +659,8 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
         prev_tool_ms: observed.client.prev_tool_ms,
         turn_origin: observed.client.turn_origin.clone(),
         request_class: observed.client.request_class.clone(),
+        forked_from: observed.fork.forked_from.clone(),
+        fork_depth: observed.fork.fork_depth,
     };
     records.push(Record::Request {
         request,
@@ -1428,6 +1430,29 @@ mod tests {
         let user_agent = request.user_agent.expect("a user agent was observed");
         assert_eq!(user_agent.len(), USER_AGENT_MAX_BYTES);
         assert!(user_agent.chars().all(|c| c == 'a'));
+    }
+
+    #[test]
+    fn a_forked_sessions_identity_lands_its_base_and_depth_on_the_request_row() {
+        let mut a = Assembler::new(clock());
+        let Event::RequestObserved(mut request) = observed("r16", None) else {
+            unreachable!()
+        };
+        request.fork = Fork {
+            forked_from: Some("s1".into()),
+            fork_depth: Some(3),
+        };
+        assert!(a.observe(Event::RequestObserved(request)).is_empty());
+        let Some(Record::Request { request, .. }) = a
+            .observe(complete("r16", 0, None, Outcome::Succeeded, 200, None))
+            .pop()
+        else {
+            panic!()
+        };
+        assert_eq!(
+            (request.forked_from.as_deref(), request.fork_depth),
+            (Some("s1"), Some(3))
+        );
     }
 
     #[test]
