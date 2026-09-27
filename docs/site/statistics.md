@@ -44,8 +44,8 @@ split across input, cache read, cache write, and output; and the pricing version
 
 Placements are counted by rung, with a hit share from the trace and the response's cache-read tokens: a
 placement by the conversation's own messages is a hit when the response read the prefix the entry promised; one
-by the static prefix, or by a subagent's fallback to its parent agent's pin (or to another agent's pin of the
-session when every account was at its cap), is a hit when it read at all.
+by the static prefix, by a subagent's fallback to its parent agent's pin, or, with every account at its cap, by
+any request's landing on another agent's pin of its session, is a hit when it read at all.
 
 A budgeted pool member's spend for its current period sums the priced hourly rollups; a keepalive probe's cost
 counts toward it the same as any other request's, since a probe on an API-key member still draws real money.

@@ -307,6 +307,14 @@ async fn writer(
     let mut purge = tokio::time::interval(config.purge_interval);
     purge.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     purge.tick().await;
+    // A registry change wakes the writer through the mirror's own `registry_changed` record; when that record
+    // lands ahead of `router.reload()` publishing the new revision, the top-of-loop check sees the old one and
+    // nothing else wakes the loop again until the next record, the hourly purge, or a boundary tick days out.
+    // This arm re-checks the revision at the mirror's own cadence regardless, at the cost of one extra
+    // `router.snapshot()` per poll.
+    let mut revision_poll = tokio::time::interval(config.event_poll);
+    revision_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    revision_poll.tick().await;
     // Drops the writer has not yet reported: the channel's, read from the counter each round, and its own.
     let mut reported: u64 = 0;
     let mut fitter = Fitter::new(
@@ -351,6 +359,8 @@ async fn writer(
                 run_purge(&db, &config, clock()).await;
                 continue;
             }
+            // Nothing but the top-of-loop check runs here; see the arm's own comment above.
+            _ = revision_poll.tick() => continue,
             // Re-armed after every run: the boundary a budgeted member's period ends on, so a pool whose
             // traffic never touches this writer still turns over its spend at the period's edge.
             _ = sleep_until(spend_due, &clock) => {

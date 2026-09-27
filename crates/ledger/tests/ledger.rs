@@ -2303,8 +2303,7 @@ async fn the_period_boundary_tick_refreshes_the_spend_without_traffic() {
     })
     .await;
 
-    // The member is genuinely excluded before the tick: the documented 429 with the overage claim, so the 200
-    // after the boundary below actually shows the tick's own refresh rather than a refusal that never happened.
+    // The member is genuinely excluded before the tick: the documented 429 with the overage claim.
     let refused = h
         .app
         .clone()
@@ -2320,7 +2319,10 @@ async fn the_period_boundary_tick_refreshes_the_spend_without_traffic() {
         Some("overage")
     );
 
-    // The clock alone steps past the period's end; no request and no registry edit follows.
+    // The clock alone steps past the period's end; no request and no registry edit follows. The wait below is
+    // what proves the tick fired: `budget_exhausted` stops blocking once the clock passes `period_end` on its
+    // own, so the request's 200 that follows would hold with or without a refresh, but this wait only ends once
+    // the tick has actually reported the new period's row.
     h.clock.store(ms(2026, 1, 16, 0, 5), Ordering::SeqCst);
     wait_for_async(Duration::from_secs(5), || async {
         h.router
@@ -2342,7 +2344,63 @@ async fn the_period_boundary_tick_refreshes_the_spend_without_traffic() {
     assert_eq!(
         resp.status(),
         200,
-        "the new period's row still admits the member"
+        "the member is admitted again once the new period's row lands"
     );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_registry_change_recorded_ahead_of_the_reload_still_reaches_the_writer() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let h = harness(
+        &up,
+        &[oauth("a", A, 0)],
+        (0, None),
+        LedgerConfig {
+            event_poll: Duration::from_millis(20),
+            ..LedgerConfig::default()
+        },
+    )
+    .await;
+    h.store
+        .set_pool_members(
+            "main",
+            &[MemberWrite {
+                account_id: "a".into(),
+                priority: 0,
+                budget_usd: Some(100.0),
+                budget_period: BudgetPeriod::Month,
+            }],
+            "test",
+        )
+        .unwrap();
+    // Waits for the mirror to have already recorded the change before the router learns of it: the writer
+    // wakes on this very record while its own revision check still reads the snapshot from before the edit,
+    // the ordering that starves the check without a periodic re-check of its own.
+    wait_for_async(Duration::from_secs(5), || async {
+        h.db.read_blocking(|c| phoebis_ledger::recent_events_of_kind(c, "registry_changed", 5))
+            .unwrap()
+            .into_iter()
+            .find(|e| {
+                e.detail
+                    .as_deref()
+                    .is_some_and(|d| d.contains("pool_members_set"))
+            })
+    })
+    .await;
+    h.router.reload().await.unwrap();
+    wait_for_async(Duration::from_secs(5), || async {
+        h.router
+            .member_spends()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|r| r.pool_id == "main" && r.account_id == "a")
+    })
+    .await;
     up.shutdown().await;
 }
