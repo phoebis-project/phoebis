@@ -59,6 +59,7 @@ pub enum RouterEvent {
     PinCreated {
         key_id: String,
         session_id: String,
+        agent_id: String,
         model: String,
         account_id: String,
         epoch: u64,
@@ -67,6 +68,7 @@ pub enum RouterEvent {
     PinExpired {
         key_id: String,
         session_id: String,
+        agent_id: String,
         model: String,
         account_id: String,
         /// What the selection found against the account, in its own order (see `release_reasons`), or
@@ -77,6 +79,7 @@ pub enum RouterEvent {
     PinMigrated {
         key_id: String,
         session_id: String,
+        agent_id: String,
         model: String,
         from_account: String,
         to_account: String,
@@ -87,6 +90,7 @@ pub enum RouterEvent {
     PinReleased {
         key_id: String,
         session_id: String,
+        agent_id: String,
         model: String,
         account_id: String,
         at: i64,
@@ -493,9 +497,9 @@ struct Task {
     clock: Clock,
     config: RouterConfig,
     events: broadcast::Sender<RouterEvent>,
-    /// The account a triple's pin was invalidated from, why, and when. The next select for that triple
+    /// The account a pin was invalidated from, why, and when. The next select for that same key
     /// within `MIGRATION_WINDOW_MS` reports a migration rather than a fresh pin; older entries go on purge.
-    invalidated: HashMap<(String, String, String), (String, &'static str, i64)>,
+    invalidated: HashMap<PinKey, (String, &'static str, i64)>,
     revision: u64,
     sampling: Sampling,
     snapshot: Arc<RwLock<Arc<RegistrySnapshot>>>,
@@ -804,7 +808,7 @@ impl Task {
                     select(&mut self.state, &snapshot, &request, &mut rand::rng());
                 self.write(writes);
                 if let Some(key) = &pin_key {
-                    let (k, s, m) = (&key.key_id, &key.session_id, &key.model);
+                    let (k, s, ag, m) = (&key.key_id, &key.session_id, &key.agent_id, &key.model);
                     let after = self.state.pin(key).cloned();
                     let now = request.now;
                     let selected = matches!(result, SelectResult::Selected(_));
@@ -812,7 +816,7 @@ impl Task {
                         (None, Some(new)) if selected => {
                             match self
                                 .invalidated
-                                .remove(&(k.clone(), s.clone(), m.clone()))
+                                .remove(key)
                                 .filter(|(_, _, at)| now - at <= MIGRATION_WINDOW_MS)
                             {
                                 Some((from, reason, _)) => {
@@ -824,6 +828,7 @@ impl Task {
                                     self.emit(RouterEvent::PinMigrated {
                                         key_id: k.clone(),
                                         session_id: s.clone(),
+                                        agent_id: ag.clone(),
                                         model: m.clone(),
                                         from_account: from,
                                         to_account: new.account_id.clone(),
@@ -835,6 +840,7 @@ impl Task {
                                 None => self.emit(RouterEvent::PinCreated {
                                     key_id: k.clone(),
                                     session_id: s.clone(),
+                                    agent_id: ag.clone(),
                                     model: m.clone(),
                                     account_id: new.account_id.clone(),
                                     epoch: new.epoch,
@@ -852,6 +858,7 @@ impl Task {
                                     self.emit(RouterEvent::PinExpired {
                                         key_id: k.clone(),
                                         session_id: s.clone(),
+                                        agent_id: ag.clone(),
                                         model: m.clone(),
                                         account_id: old.account_id.clone(),
                                         reasons: released.clone(),
@@ -860,6 +867,7 @@ impl Task {
                                     self.emit(RouterEvent::PinCreated {
                                         key_id: k.clone(),
                                         session_id: s.clone(),
+                                        agent_id: ag.clone(),
                                         model: m.clone(),
                                         account_id: new.account_id.clone(),
                                         epoch: new.epoch,
@@ -869,6 +877,7 @@ impl Task {
                                     self.emit(RouterEvent::PinMigrated {
                                         key_id: k.clone(),
                                         session_id: s.clone(),
+                                        agent_id: ag.clone(),
                                         model: m.clone(),
                                         from_account: old.account_id.clone(),
                                         to_account: new.account_id.clone(),
@@ -882,6 +891,7 @@ impl Task {
                         (Some(old), None) => self.emit(RouterEvent::PinExpired {
                             key_id: k.clone(),
                             session_id: s.clone(),
+                            agent_id: ag.clone(),
                             model: m.clone(),
                             account_id: old.account_id.clone(),
                             reasons: released,
@@ -968,6 +978,7 @@ impl Task {
                         self.emit(RouterEvent::PinReleased {
                             key_id: key.key_id.clone(),
                             session_id: key.session_id.clone(),
+                            agent_id: key.agent_id.clone(),
                             model: key.model.clone(),
                             account_id: account_id.clone(),
                             at: now,
@@ -1086,20 +1097,17 @@ impl Task {
                 if let Some(mut pin) = pin {
                     pin.model = self.state.canonical(&pin.model).to_string();
                     if self.state.invalidate_pin(&pin, &account_id) {
-                        self.invalidated.insert(
-                            (
-                                pin.key_id.clone(),
-                                pin.session_id.clone(),
-                                pin.model.clone(),
-                            ),
-                            (account_id.clone(), "cooldown", (self.clock)()),
-                        );
-                        writes.push(StateWrite::DeletePin(PinKey {
+                        let key = PinKey {
                             key_id: pin.key_id,
                             session_id: pin.session_id,
                             agent_id: pin.agent_id,
                             model: pin.model,
-                        }));
+                        };
+                        self.invalidated.insert(
+                            key.clone(),
+                            (account_id.clone(), "cooldown", (self.clock)()),
+                        );
+                        writes.push(StateWrite::DeletePin(key));
                     }
                 }
                 self.write(writes);
@@ -1166,20 +1174,15 @@ impl Task {
                 }
                 pin.model = self.state.canonical(&pin.model).to_string();
                 if self.state.invalidate_pin(&pin, &account_id) {
-                    self.invalidated.insert(
-                        (
-                            pin.key_id.clone(),
-                            pin.session_id.clone(),
-                            pin.model.clone(),
-                        ),
-                        (account_id.clone(), "mark", (self.clock)()),
-                    );
-                    self.write(vec![StateWrite::DeletePin(PinKey {
+                    let key = PinKey {
                         key_id: pin.key_id,
                         session_id: pin.session_id,
                         agent_id: pin.agent_id,
                         model: pin.model,
-                    })]);
+                    };
+                    self.invalidated
+                        .insert(key.clone(), (account_id.clone(), "mark", (self.clock)()));
+                    self.write(vec![StateWrite::DeletePin(key)]);
                 }
             }
             Report::PinReleased {
@@ -1224,6 +1227,7 @@ impl Task {
                 self.emit(RouterEvent::PinExpired {
                     key_id: key.key_id.clone(),
                     session_id: key.session_id.clone(),
+                    agent_id: key.agent_id.clone(),
                     model: key.model.clone(),
                     account_id,
                     reasons: vec!["client_error"],
@@ -1356,19 +1360,21 @@ impl Task {
         let rekey = self.state.apply_resolution(spelling, dated_id, at);
         // A late invalidation from a request admitted under the retiring spelling must still land beside the
         // moved pin rather than starting a fresh migration window under a key nothing selects on any more.
-        let keys: Vec<(String, String, String)> = self
+        let keys: Vec<PinKey> = self
             .invalidated
             .keys()
-            .filter(|(_, _, model)| model == spelling)
+            .filter(|key| key.model == spelling)
             .cloned()
             .collect();
-        for (key_id, session_id, model) in keys {
-            if let Some(value) =
-                self.invalidated
-                    .remove(&(key_id.clone(), session_id.clone(), model))
-            {
-                self.invalidated
-                    .insert((key_id, session_id, dated_id.to_string()), value);
+        for key in keys {
+            if let Some(value) = self.invalidated.remove(&key) {
+                self.invalidated.insert(
+                    PinKey {
+                        model: dated_id.to_string(),
+                        ..key
+                    },
+                    value,
+                );
             }
         }
         self.write(vec![StateWrite::Rekey(rekey)]);
@@ -1558,6 +1564,7 @@ impl Task {
                 self.emit(RouterEvent::PinExpired {
                     key_id: key.key_id.clone(),
                     session_id: key.session_id.clone(),
+                    agent_id: key.agent_id.clone(),
                     model: key.model.clone(),
                     account_id: account_id.clone(),
                     reasons: vec![*reason],

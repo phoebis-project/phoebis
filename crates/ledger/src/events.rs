@@ -74,6 +74,7 @@ pub fn event_of(event: &RouterEvent) -> EventRecord {
         RouterEvent::PinCreated {
             key_id,
             session_id,
+            agent_id,
             model,
             account_id,
             epoch,
@@ -85,12 +86,13 @@ pub fn event_of(event: &RouterEvent) -> EventRecord {
             key_id: Some(key_id.clone()),
             session_id: Some(session_id.clone()),
             model: Some(model.clone()),
-            detail: Some(json!({ "epoch": epoch }).to_string()),
+            detail: Some(json!({ "agent_id": agent_id, "epoch": epoch }).to_string()),
             ..Default::default()
         },
         RouterEvent::PinExpired {
             key_id,
             session_id,
+            agent_id,
             model,
             account_id,
             reasons,
@@ -102,12 +104,13 @@ pub fn event_of(event: &RouterEvent) -> EventRecord {
             key_id: Some(key_id.clone()),
             session_id: Some(session_id.clone()),
             model: Some(model.clone()),
-            detail: Some(json!({ "reasons": reasons }).to_string()),
+            detail: Some(json!({ "agent_id": agent_id, "reasons": reasons }).to_string()),
             ..Default::default()
         },
         RouterEvent::PinMigrated {
             key_id,
             session_id,
+            agent_id,
             model,
             from_account,
             to_account,
@@ -122,7 +125,7 @@ pub fn event_of(event: &RouterEvent) -> EventRecord {
             session_id: Some(session_id.clone()),
             model: Some(model.clone()),
             detail: Some(
-                json!({ "from_account": from_account, "epoch": epoch, "reason": reason })
+                json!({ "agent_id": agent_id, "from_account": from_account, "epoch": epoch, "reason": reason })
                     .to_string(),
             ),
             ..Default::default()
@@ -130,6 +133,7 @@ pub fn event_of(event: &RouterEvent) -> EventRecord {
         RouterEvent::PinReleased {
             key_id,
             session_id,
+            agent_id,
             model,
             account_id,
             at,
@@ -140,6 +144,7 @@ pub fn event_of(event: &RouterEvent) -> EventRecord {
             key_id: Some(key_id.clone()),
             session_id: Some(session_id.clone()),
             model: Some(model.clone()),
+            detail: Some(json!({ "agent_id": agent_id }).to_string()),
             ..Default::default()
         },
     }
@@ -249,6 +254,7 @@ mod tests {
         let e = event_of(&RouterEvent::PinMigrated {
             key_id: "k".into(),
             session_id: "s".into(),
+            agent_id: "main".into(),
             model: "m".into(),
             from_account: "a".into(),
             to_account: "b".into(),
@@ -277,11 +283,12 @@ mod tests {
         let detail: serde_json::Value = serde_json::from_str(e.detail.as_deref().unwrap()).unwrap();
         assert_eq!(
             (
+                detail["agent_id"].as_str(),
                 detail["from_account"].as_str(),
                 detail["epoch"].as_u64(),
                 detail["reason"].as_str()
             ),
-            (Some("a"), Some(7), Some("cooldown"))
+            (Some("main"), Some("a"), Some(7), Some("cooldown"))
         );
         let e = event_of(&RouterEvent::CooldownSet {
             account_id: "a".into(),
@@ -341,6 +348,7 @@ mod tests {
                 RouterEvent::PinCreated {
                     key_id: "k".into(),
                     session_id: "s".into(),
+                    agent_id: "main".into(),
                     model: "m".into(),
                     account_id: "a".into(),
                     epoch: 1,
@@ -352,6 +360,7 @@ mod tests {
                 RouterEvent::PinExpired {
                     key_id: "k".into(),
                     session_id: "s".into(),
+                    agent_id: "main".into(),
                     model: "m".into(),
                     account_id: "a".into(),
                     reasons: vec!["expired"],
@@ -363,6 +372,7 @@ mod tests {
                 RouterEvent::PinReleased {
                     key_id: "k".into(),
                     session_id: "s".into(),
+                    agent_id: "main".into(),
                     model: "m".into(),
                     account_id: "a".into(),
                     at: 1,
@@ -375,6 +385,7 @@ mod tests {
         let row = event_of(&RouterEvent::PinExpired {
             key_id: "k".into(),
             session_id: "s".into(),
+            agent_id: "main".into(),
             model: "m".into(),
             account_id: "a".into(),
             reasons: vec!["cooldown", "spent"],
@@ -382,7 +393,7 @@ mod tests {
         });
         assert_eq!(
             row.detail.as_deref(),
-            Some(r#"{"reasons":["cooldown","spent"]}"#),
+            Some(r#"{"agent_id":"main","reasons":["cooldown","spent"]}"#),
             "the facts travel in the selection's order"
         );
     }

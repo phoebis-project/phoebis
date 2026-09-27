@@ -494,6 +494,15 @@ fn a_pin_a_pool_a_member_and_a_key_from_before_the_affinity_columns_read_the_def
         },
         "the override's TTL throughout, no per-model rule"
     );
+    assert!(
+        pools
+            .iter()
+            .find(|p| p.id == "full")
+            .unwrap()
+            .cache_ttl_json
+            .contains(r#""metered":{"keepalive":"5m","main":"5m","models":[],"subagent":"5m"}"#),
+        "the migration itself wrote the metered set, not a reader's default standing in for a missing one"
+    );
     assert_eq!(
         full.plan,
         phoebis_relay::TtlRules {

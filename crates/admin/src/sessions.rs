@@ -58,9 +58,9 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
     };
     let mut rows: std::collections::BTreeMap<(String, i64, String), serde_json::Value> =
         std::collections::BTreeMap::new();
-    // Whether the pin currently held for a session is its main agent's, so a subagent's pin (however recently
-    // used) never displaces it; the keepalive's own agent count answers `agents` when a session has no engine
-    // view, so every agent a pin names is counted here regardless of which one the row displays.
+    // Whether the pin currently held for a session is its main agent's, so a subagent's pin never displaces it
+    // and only a newer main pin can; the keepalive's own agent count answers `agents` when a session has an
+    // engine view, so every agent a pin names is counted here as the fallback where it does not.
     let mut held_is_main: std::collections::BTreeMap<(String, i64, String), bool> =
         std::collections::BTreeMap::new();
     let mut agents_by_session: std::collections::BTreeMap<
@@ -78,10 +78,12 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
             .or_default()
             .insert(p.agent_id.clone());
         let is_main = p.agent_id == "main";
-        // A session holds a pin per agent and the row shows one of them: the main agent's pin once one exists,
-        // else whichever the caller used last.
+        // A session holds a pin per agent and the row shows one of them: the main agent's pin once one exists
+        // (replaced only by a newer pin of its own), else whichever the caller used last.
         let keep = match (held_is_main.get(&key).copied(), rows.get(&key)) {
-            (Some(true), _) => false,
+            (Some(true), Some(held)) => {
+                is_main && held["last_used_at"].as_i64().unwrap_or(0) < p.last_used_at
+            }
             (Some(false), Some(held)) => {
                 is_main || held["last_used_at"].as_i64().unwrap_or(0) < p.last_used_at
             }

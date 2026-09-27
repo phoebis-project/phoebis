@@ -2,7 +2,8 @@
 mod common;
 use std::time::Duration;
 
-use phoebis_ledger::{recent_events_of_kind, EventRecord, LedgerConfig, LedgerDb};
+use phoebis_ledger::{event_of, recent_events_of_kind, EventRecord, LedgerConfig, LedgerDb};
+use phoebis_routing::RouterEvent;
 use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule};
 use http_body_util::BodyExt;
@@ -302,5 +303,34 @@ fn a_pin_migrated_event_counts_under_its_reason_on_the_destination() {
         from.migrations.get("overage"),
         None,
         "the source row counts pins_migrated_out, not a reason of its own"
+    );
+}
+
+#[test]
+fn two_agents_pin_created_rows_differ_in_their_detail() {
+    let pin_created = |agent_id: &str| RouterEvent::PinCreated {
+        key_id: "k".into(),
+        session_id: "s".into(),
+        agent_id: agent_id.into(),
+        model: "m".into(),
+        account_id: "a".into(),
+        epoch: 1,
+        at: 1,
+    };
+    let (main_row, sibling_row) = (
+        event_of(&pin_created("main")),
+        event_of(&pin_created("worker")),
+    );
+    assert_ne!(main_row.detail, sibling_row.detail);
+    let main_detail: serde_json::Value =
+        serde_json::from_str(main_row.detail.as_deref().unwrap()).unwrap();
+    let sibling_detail: serde_json::Value =
+        serde_json::from_str(sibling_row.detail.as_deref().unwrap()).unwrap();
+    assert_eq!(
+        (
+            main_detail["agent_id"].as_str(),
+            sibling_detail["agent_id"].as_str()
+        ),
+        (Some("main"), Some("worker"))
     );
 }

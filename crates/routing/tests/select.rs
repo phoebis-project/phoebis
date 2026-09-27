@@ -356,8 +356,11 @@ fn a_subagent_and_the_main_agent_of_one_session_pin_separately() {
     let renewal = request(&s, Some("s1"), "claude-sonnet-5", true, &[], 2_000);
     select(&mut st, &s, &renewal, &mut rng());
     assert_eq!(
-        st.pin(&main_key).unwrap().epoch,
-        main_epoch,
+        (
+            st.pin(&main_key).unwrap().epoch,
+            st.pin(&main_key).unwrap().last_used_at
+        ),
+        (main_epoch, 2_000),
         "the third select renews the main agent's pin alone"
     );
     assert_eq!(

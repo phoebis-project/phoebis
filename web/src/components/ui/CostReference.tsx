@@ -30,8 +30,8 @@ const NOTES: { body: ReactNode; term: string }[] = [
     body: (
       <>
         One plain Opus input token on the 5-hour meter is the unit; a 1-hour write costs a subscription upstream the same as a 5-minute one, so on plan-funded traffic the long TTL is free and the
-        pool's cache TTL policy keeps <code>1h</code> for the main conversation and subagents alike; while a write costs money a 1-hour write is 2x against 1.25x, so the in-overage default is{' '}
-        <code>5m</code>.
+        pool's plan rule set keeps <code>1h</code> for the main conversation and subagents alike; while a write costs money a 1-hour write is 2x against 1.25x, so the metered rule set's{' '}
+        <code>keepalive</code> TTL defaults to <code>5m</code>.
       </>
     ),
   },

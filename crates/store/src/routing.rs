@@ -340,16 +340,16 @@ impl Store {
     pub fn upsert_affinity(&self, rows: &[AffinityRow]) -> Result<(), StoreError> {
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        for row in rows {
-            tx.execute(
-                &format!(
-                    "INSERT INTO affinity ({AFFINITY_COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11) \
-                     ON CONFLICT(model, hash) DO UPDATE SET \
-                       chain = excluded.chain, account_id = excluded.account_id, incarnation = excluded.incarnation, \
-                       written_at = excluded.written_at, ttl_ms = excluded.ttl_ms, prefix_tokens = excluded.prefix_tokens, \
-                       key_id = excluded.key_id, key_generation = excluded.key_generation, root = excluded.root"
-                ),
-                params![
+        {
+            let mut stmt = tx.prepare(&format!(
+                "INSERT INTO affinity ({AFFINITY_COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11) \
+                 ON CONFLICT(model, hash) DO UPDATE SET \
+                   chain = excluded.chain, account_id = excluded.account_id, incarnation = excluded.incarnation, \
+                   written_at = excluded.written_at, ttl_ms = excluded.ttl_ms, prefix_tokens = excluded.prefix_tokens, \
+                   key_id = excluded.key_id, key_generation = excluded.key_generation, root = excluded.root"
+            ))?;
+            for row in rows {
+                stmt.execute(params![
                     row.model,
                     row.hash,
                     row.chain,
@@ -361,8 +361,8 @@ impl Store {
                     row.key_id,
                     row.key_generation,
                     row.root
-                ],
-            )?;
+                ])?;
+            }
         }
         tx.commit()?;
         Ok(())

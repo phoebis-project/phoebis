@@ -557,6 +557,47 @@ async fn two_agents_of_one_session_pinned_to_two_accounts_each_probe_their_own_a
 }
 
 #[tokio::test]
+async fn a_pin_the_router_moved_on_the_agents_own_request_moves_the_next_probe() {
+    let mut r = armed(RigSpec {
+        accounts: vec![api_key("a", A, 0), api_key("b", B, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    let first = r.status("main").account_id.clone().unwrap();
+    let (mine, other) = if first == "a" { (A, B) } else { (B, A) };
+    let other_id = if first == "a" { "b" } else { "a" };
+    // The agent's own real request meets a 429 on the pinned account and migrates its pin.
+    r.up.push_credential_rule(
+        mine,
+        "/v1/messages",
+        relay_common::json_429_unified(4_600, "five_hour"),
+    );
+    r.observe("main").await;
+    r.h.router.clear_cooldown(&first, "account").await.unwrap();
+    r.advance(270_000);
+    r.step().await;
+    let probes: Vec<_> =
+        r.up.requests()
+            .into_iter()
+            .filter(|q| q.body.windows(14).any(|w| w == b"\"max_tokens\":0"))
+            .collect();
+    assert_eq!(probes.len(), 1);
+    assert_eq!(
+        probes[0].credential(),
+        Some(other),
+        "the probe followed the pin to the new account"
+    );
+    assert_eq!(
+        (
+            r.status("main").account_id.as_deref(),
+            r.status("main").migrations
+        ),
+        (Some(other_id), 0),
+        "the account moved with the pin, which is not a probe migration"
+    );
+}
+
+#[tokio::test]
 async fn the_due_time_follows_the_pools_lead_and_jitter() {
     let mut r = armed(RigSpec {
         policy: KeepalivePolicy {

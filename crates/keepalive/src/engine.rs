@@ -1931,8 +1931,8 @@ pub(crate) fn gate(
     if agent.id != MAIN_AGENT && !policy.warm_subagents {
         return Some(Gate::Drop(Reason::SubagentsOff, Wasted::Released));
     }
-    // The pin is what the probe will follow, so the pin's account is the one to gate: a sibling agent's real
-    // request may have moved it since this recipe last ran.
+    // The pin is what the probe will follow, so the pin's account is the one to gate: the router may have moved
+    // the agent's own pin between this recipe's last observation and the probe.
     let pinned = view.pins.get(&(
         key_id.clone(),
         session_id.to_string(),

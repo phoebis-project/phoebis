@@ -1409,9 +1409,7 @@ impl Relay {
             let mut edited = admitted.raw.to_vec();
             let mut body_injected = Vec::new();
             let mut inject_betas: Vec<Injected> = Vec::new();
-            // Money, not the account's mood: an api_key account pays for every write, so the in-overage TTL is
-            // the right one there whatever the overage evidence says, and an oauth account pays only while in
-            // overage.
+            // An api_key account, or an account in overage, pays for the write, so the metered set applies.
             let writes_cost_money = selection.in_overage || account.kind == AccountKind::ApiKey;
             // Priced per attempt: a migrated attempt reads its destination's overage, and a same-account
             // retry reuses this body rather than pricing again. A count is priced too: the markers it

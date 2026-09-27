@@ -2698,6 +2698,79 @@ async fn a_fail_over_after_a_cooldown_names_cooldown_in_the_trace() {
 }
 
 #[tokio::test]
+async fn a_siblings_fresh_placement_inside_the_migration_window_reports_its_own_creation_and_the_invalidated_agent_still_reports_its_move(
+) {
+    use phoebis_routing::RouterEvent;
+    let store = seeded(&["a", "b"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store, None, clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    let main = handle
+        .select(request(&handle, Some("s1"), 1_000))
+        .await
+        .unwrap();
+    let a = match &main.result {
+        SelectResult::Selected(s) => s.account.id.clone(),
+        other => panic!("{other:?}"),
+    };
+    assert!(matches!(
+        next_event(&mut events).await,
+        RouterEvent::PinCreated { .. }
+    ));
+    let pin = match &main.result {
+        SelectResult::Selected(s) => s.pin.clone().unwrap(),
+        _ => unreachable!(),
+    };
+    handle.report(Report::Cooldown {
+        account_id: a.clone(),
+        row: CooldownRow {
+            account_id: a.clone(),
+            scope: "account".into(),
+            until: 1_000 + HOUR,
+            set_at: 0,
+            reason: "rate_limit".into(),
+            window: "five_hour".into(),
+            source_request_id: None,
+            incarnation: 1,
+        },
+        pin: Some(pin),
+        lifecycle_generation: 1,
+        credential_generation: 1,
+        incarnation: 1,
+    });
+    assert!(matches!(
+        next_event(&mut events).await,
+        RouterEvent::CooldownSet { .. }
+    ));
+    // A sibling that never held a pin places fresh inside the window the main agent's invalidation opened;
+    // the two agents' entries must not share one slot in the migration-window cache.
+    let sibling = handle
+        .select(SelectRequest {
+            agent_id: "worker".into(),
+            ..request(&handle, Some("s1"), 1_050)
+        })
+        .await
+        .unwrap();
+    assert!(matches!(&sibling.result, SelectResult::Selected(_)));
+    assert!(matches!(
+        next_event(&mut events).await,
+        RouterEvent::PinCreated { agent_id, .. } if agent_id == "worker"
+    ));
+    let main_next = handle
+        .select(request(&handle, Some("s1"), 1_100))
+        .await
+        .unwrap();
+    let SelectResult::Selected(sel) = &main_next.result else {
+        panic!("{:?}", main_next.result)
+    };
+    assert_eq!(sel.trace.moved, Some("cooldown"));
+    assert!(matches!(
+        next_event(&mut events).await,
+        RouterEvent::PinMigrated { agent_id, reason, .. } if agent_id == "main" && reason == "cooldown"
+    ));
+}
+
+#[tokio::test]
 async fn a_probe_after_a_compacted_request_refreshes_warmth() {
     use phoebis_routing::{warm, Report};
     let store = seeded(&["a"]);

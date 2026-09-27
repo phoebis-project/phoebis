@@ -1150,6 +1150,7 @@ export function PoolDialog({
                 </div>
                 <p className="field__hint">A 1-hour entry costs 2 times the input price on every write, a 5-minute entry 1.25 times; reads cost the same either way.</p>
                 <CacheTtlRuleSet
+                  key={`plan-${open}-${pool?.id ?? 'new'}`}
                   name="plan"
                   label="Plan writes"
                   rules={form.cacheTtl.plan}
@@ -1157,6 +1158,7 @@ export function PoolDialog({
                   models={models}
                 />
                 <CacheTtlRuleSet
+                  key={`metered-${open}-${pool?.id ?? 'new'}`}
                   name="metered"
                   label="Metered writes"
                   hint="An api_key upstream, or a subscription upstream in overage, where writes cost money rather than plan quota."

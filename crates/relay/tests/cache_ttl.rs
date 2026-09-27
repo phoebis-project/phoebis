@@ -245,7 +245,7 @@ async fn a_body_with_no_marker_gets_the_top_level_member_and_a_body_with_any_mar
 }
 
 #[tokio::test]
-async fn the_per_model_override_and_the_in_overage_value_apply_and_overage_is_read_per_attempt() {
+async fn the_per_model_override_and_the_metered_value_apply_and_overage_is_read_per_attempt() {
     const HAIKU: &str = "claude-haiku-4-5-20251001";
     let up = FakeUpstream::start(vec![]).await;
     up.add_credential_rule(
@@ -294,7 +294,7 @@ async fn the_per_model_override_and_the_in_overage_value_apply_and_overage_is_re
     );
 
     // Second request, same session: `allow` keeps the pin on `a`, whose first response reported overage, so
-    // this attempt reads the in-overage value instead.
+    // this attempt reads the metered value instead.
     let resp = h
         .app
         .clone()
@@ -445,7 +445,7 @@ async fn a_refused_extended_ttl_beta_reverts_the_body_to_five_minutes_and_stays_
 }
 
 #[tokio::test]
-async fn the_in_overage_value_applies_on_an_api_key_account_whatever_its_overage_state() {
+async fn the_metered_value_applies_on_an_api_key_account_whatever_its_overage_state() {
     const POLICY: &str = r#"{"enabled":true,"metered":{"main":"5m"},"plan":{"main":"1h"}}"#;
 
     let up = FakeUpstream::start(vec![Rule {
@@ -464,7 +464,7 @@ async fn the_in_overage_value_applies_on_an_api_key_account_whatever_its_overage
     assert_eq!(
         markers(&up.requests()[0].body),
         vec![r#"{"type":"ephemeral"}"#.to_string(); 3],
-        "an api_key account pays for every write, so in_overage applies with no overage evidence"
+        "an api_key account pays for every write, so the metered set applies with no overage evidence"
     );
 
     let oh = harness(&up, &[oauth("o", OA, 0)], policy(POLICY)).await;

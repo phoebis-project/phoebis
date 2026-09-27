@@ -691,6 +691,142 @@ async fn a_session_with_pins_on_two_models_shows_the_one_it_used_last() {
     );
 }
 
+/// The main agent's two pins are considered in the four-part key's sort order, model last; whichever pin the
+/// caller used most recently still wins even when it is the one that sorts first.
+#[tokio::test]
+async fn a_main_agents_two_pins_show_whichever_it_used_last_even_when_the_older_pin_sorts_first() {
+    let (first, _up, store, _router) = common::admin_parts().await;
+    let cookie = login(&first, "admin-secret").await;
+    post(
+        &first,
+        "/admin/pools",
+        r#"{"id":"main","label":"Main","strategy":"priority"}"#,
+        Some(&cookie),
+    )
+    .await;
+    post(
+        &first,
+        "/admin/keys",
+        r#"{"id":"k","label":"k","pool_id":"main"}"#,
+        Some(&cookie),
+    )
+    .await;
+    for (model, account, epoch, last_used_at) in [
+        ("claude-opus-5", "direct", 4, common::NOW - 5_000),
+        ("claude-sonnet-4-5", "business", 3, common::NOW - 5),
+    ] {
+        store
+            .upsert_pin(&phoebis_store::PinRow {
+                key_id: "k".into(),
+                session_id: "s1".into(),
+                agent_id: "main".into(),
+                model: model.into(),
+                account_id: account.into(),
+                epoch,
+                created_at: common::NOW - 10_000,
+                last_used_at,
+                key_generation: common::generation(&store, "k"),
+                incarnation: 1,
+                burn: 0.0,
+                burn_at: None,
+                burn_usd: 0.0,
+                last_input_tokens: 0,
+                last_refresh_at: 0,
+                cache_ttl_ms: 300_000,
+                shed_from: None,
+                shed_at: None,
+                static_hash: None,
+                tail_hash: None,
+            })
+            .unwrap();
+    }
+    let (app, _up2, _store, _router2) = common::admin_parts_on(store.clone()).await;
+    let cookie = login(&app, "admin-secret").await;
+    let listed = json(get(&app, "/admin/sessions", Some(&cookie)).await).await;
+    let sessions = listed["sessions"].as_array().unwrap();
+    assert_eq!(sessions.len(), 1, "one row for the session");
+    assert_eq!(
+        (
+            sessions[0]["model"].as_str(),
+            sessions[0]["account_id"].as_str(),
+            sessions[0]["epoch"].as_u64()
+        ),
+        (Some("claude-sonnet-4-5"), Some("business"), Some(3)),
+        "the row is the most recently used pin, even though its model sorts after the older pin's"
+    );
+}
+
+/// A subagent's pin never displaces the main agent's, however recently the subagent's was used; both still
+/// count toward the row's agent total.
+#[tokio::test]
+async fn a_main_pin_beside_a_newer_subagent_pin_still_shows_the_main_pin_and_counts_both_agents() {
+    let (first, _up, store, _router) = common::admin_parts().await;
+    let cookie = login(&first, "admin-secret").await;
+    post(
+        &first,
+        "/admin/pools",
+        r#"{"id":"main","label":"Main","strategy":"priority"}"#,
+        Some(&cookie),
+    )
+    .await;
+    post(
+        &first,
+        "/admin/keys",
+        r#"{"id":"k","label":"k","pool_id":"main"}"#,
+        Some(&cookie),
+    )
+    .await;
+    for (agent_id, model, account, epoch, last_used_at) in [
+        ("main", "claude-opus-5", "direct", 4, common::NOW - 5_000),
+        (
+            "worker",
+            "claude-sonnet-4-5",
+            "business",
+            3,
+            common::NOW - 5,
+        ),
+    ] {
+        store
+            .upsert_pin(&phoebis_store::PinRow {
+                key_id: "k".into(),
+                session_id: "s1".into(),
+                agent_id: agent_id.into(),
+                model: model.into(),
+                account_id: account.into(),
+                epoch,
+                created_at: common::NOW - 10_000,
+                last_used_at,
+                key_generation: common::generation(&store, "k"),
+                incarnation: 1,
+                burn: 0.0,
+                burn_at: None,
+                burn_usd: 0.0,
+                last_input_tokens: 0,
+                last_refresh_at: 0,
+                cache_ttl_ms: 300_000,
+                shed_from: None,
+                shed_at: None,
+                static_hash: None,
+                tail_hash: None,
+            })
+            .unwrap();
+    }
+    let (app, _up2, _store, _router2) = common::admin_parts_on(store.clone()).await;
+    let cookie = login(&app, "admin-secret").await;
+    let listed = json(get(&app, "/admin/sessions", Some(&cookie)).await).await;
+    let sessions = listed["sessions"].as_array().unwrap();
+    assert_eq!(sessions.len(), 1, "one row for the session");
+    assert_eq!(
+        (
+            sessions[0]["model"].as_str(),
+            sessions[0]["account_id"].as_str(),
+            sessions[0]["agents"].as_u64()
+        ),
+        (Some("claude-opus-5"), Some("direct"), Some(2)),
+        "the main agent's own pin shows, and both agents count toward the row"
+    );
+}
+
 #[tokio::test]
 async fn sessions_list_live_pins_and_a_release_expires_them() {
     let (_first, _up, store, _router) = common::admin_parts().await;

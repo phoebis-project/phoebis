@@ -1196,6 +1196,31 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
     });
   }
 
+  {
+    // A model picked in the picker but never added must not carry into the dialog's next opening. `PoolDialog`
+    // never unmounts (it renders unconditionally beside the pool grid), so closing and reopening it exercises
+    // the same component instance the bug lived in.
+    const picker = () => dlg?.querySelector('[data-rule-set="plan"] select[aria-label^="Model to add"]');
+    const options = [...(picker()?.querySelectorAll('option') ?? [])].map((o) => o.value).filter(Boolean);
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
+    setter.call(picker(), options[0]);
+    picker()?.dispatchEvent(new window.Event('change', { bubbles: true }));
+    await m.settle(120);
+    const pickedBeforeClose = picker()?.value;
+    [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
+    await m.settle(200);
+    [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool all')?.click();
+    await m.settle(300);
+    [...(dlg?.querySelectorAll('.dialog-nav__link') ?? [])].find((b) => b.textContent?.trim() === 'Caching')?.click();
+    await m.settle(120);
+    const pickedAfterReopen = picker()?.value;
+    results.push({
+      name: '/pools a model picked but not added does not carry into the dialog reopened for the same pool',
+      ok: pickedBeforeClose === options[0] && pickedAfterReopen === '',
+      missing: [pickedBeforeClose ?? 'nothing picked', pickedAfterReopen ?? 'no picker found'],
+    });
+  }
+
   // The gateway dials one host, so the hint no longer distinguishes Anthropic upstreams from custom ones.
   const cacheTtlLabel = [...(dlg?.querySelectorAll('.field__label') ?? [])].find((el) => el.textContent?.trim() === 'Set the cache TTL for this pool');
   const cacheTtlHint = cacheTtlLabel?.nextElementSibling?.textContent?.trim();
@@ -3090,7 +3115,7 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
     'On Fable 5.1, where a cache read costs 0.025x, a 5-minute entry kept warm by probes stays cheaper than a 1-hour entry for any idle span; a session with cache warming on may set CLAUDE_CODE_PROMPT_CACHE_TTL=5m on the client.',
     'Without warming, the 1-hour entry wins after a 5-minute pause.',
     'One plain Opus input token on the 5-hour meter is the unit; a 1-hour write costs a subscription upstream the same as a 5-minute one, so on plan-funded traffic the long TTL is free',
-    "the pool's cache TTL policy keeps 1h for the main conversation and subagents alike; while a write costs money a 1-hour write is 2x against 1.25x, so the in-overage default is 5m.",
+    "the pool's plan rule set keeps 1h for the main conversation and subagents alike; while a write costs money a 1-hour write is 2x against 1.25x, so the metered rule set's keepalive TTL defaults to 5m.",
     'claude-fable-5-1',
     'claude-fable-5',
     'claude-opus-4-8',

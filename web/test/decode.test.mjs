@@ -749,6 +749,8 @@ test('the dashboard, sessions, recipes, and overview decode', () => {
   const sessions = fixture('sessions').sessions.map(d.decodeSession);
   const s1 = sessions.find((s) => s.sessionId === 's1');
   assert.ok(sessions.every((s) => typeof s.keyGeneration === 'number' && typeof s.historical === 'boolean'), 'every session says which generation of its key owns it and whether that holder is gone');
+  assert.equal(s1.agentId, null, 'an unpinned row names no agent');
+  assert.equal(sessions.find((s) => s.sessionId === 's-fixture').agentId, 'main', 'a pinned row names the pin\'s own agent');
   assert.equal(sessions.find((s) => s.sessionId === 's0').historical, true, 'the row of an earlier holder of the same key id reads historical');
   assert.equal(s1.keyGeneration, fixture('sessions').sessions.find((s) => s.session_id === 's1').key_generation, 'the live holder names the generation its key row carries');
   assert.equal(s1.companion, 'reporting');
