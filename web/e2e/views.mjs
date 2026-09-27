@@ -192,10 +192,11 @@ async function poolChips(theme) {
 }
 
 /**
- * The caching tab of a served pool: its TTL policy toggle, the diagnostics override, and the subagent switch
- * the keepalive block carries, each reached the way an operator reaches it. The diagnostics select is measured
- * against the metered rule set's own "Main conversation" select beside it, since a control that reads a size
- * smaller than its neighbours is the defect this dialog would show first.
+ * The caching tab of a served pool: its TTL policy toggle, the marker toggle under it, the diagnostics override,
+ * and the subagent switch the keepalive block carries, each reached the way an operator reaches it. The diagnostics
+ * select is measured against the metered rule set's own "Main conversation" select beside it, that select against
+ * the plan rule set's, and the marker toggle against the policy toggle, since a control that reads a size smaller
+ * than its neighbours is the defect this dialog would show first.
  */
 async function poolCachingControls(theme) {
   const say = (what) => failures.push(`${theme} /pools: ${what}`);
@@ -224,7 +225,7 @@ async function poolCachingControls(theme) {
     }
   }
   if ((await toggle('Also warm subagent caches').count()) !== 1) say('no subagent warming toggle, with keepalive on');
-  // The metered rule set's selects are drawn only while the policy is on, which is also the state the two are compared in.
+  // The rule sets and the marker toggle are drawn only while the policy is on, which is also the state they are compared in.
   if ((await policy.count()) === 1 && (await policy.getAttribute('aria-checked')) === 'false') await policy.click();
   const pair = await dialog.evaluate((el) => {
     const read = (select) => {
@@ -236,20 +237,41 @@ async function poolCachingControls(theme) {
         padding: `${style.paddingTop} ${style.paddingRight} ${style.paddingBottom} ${style.paddingLeft}`,
       };
     };
+    // A switch's track colour follows its state and the two may differ, so only its shape is compared.
+    const readSwitch = (button) => {
+      const style = getComputedStyle(button);
+      const box = button.getBoundingClientRect();
+      return { border: `${style.borderWidth} ${style.borderStyle}`, height: box.height, radius: style.borderRadius, width: box.width };
+    };
     const labelled = (scope, text) => [...scope.querySelectorAll('.field')].find((f) => f.querySelector('.field__label')?.textContent?.trim() === text)?.querySelector('select');
     const metered = el.querySelector('[data-rule-set="metered"]');
+    const plan = el.querySelector('[data-rule-set="plan"]');
     const main = metered && labelled(metered, 'Main conversation');
+    const planMain = plan && labelled(plan, 'Main conversation');
     const diagnostics = labelled(el, 'Cache diagnostics');
-    return main && diagnostics ? { diagnostics: read(diagnostics), main: read(main) } : null;
+    const policy = el.querySelector('button[role="switch"][aria-label="Set the cache TTL for this pool"]');
+    const marker = el.querySelector('button[role="switch"][aria-label="Add a cache marker to a request without one"]');
+    return {
+      diagnostics: diagnostics ? read(diagnostics) : null,
+      main: main ? read(main) : null,
+      marker: marker ? readSwitch(marker) : null,
+      planMain: planMain ? read(planMain) : null,
+      policy: policy ? readSwitch(policy) : null,
+    };
   });
-  if (!pair) {
-    say('the diagnostics select and the metered rule set\'s main select are not both drawn to compare');
-  } else {
-    measurements.push(`${theme} /pools cache diagnostics ${JSON.stringify(pair.diagnostics)}`);
-    measurements.push(`${theme} /pools metered main ${JSON.stringify(pair.main)}`);
-    const differs = ['border', 'font', 'height', 'padding'].filter((key) => String(pair.diagnostics[key]) !== String(pair.main[key]));
-    if (differs.length) say(`the cache diagnostics select's ${differs.join(', ')} differs from the metered rule set's main select's`);
-  }
+  const names = { diagnostics: 'cache diagnostics', main: 'metered main', marker: 'marker toggle', planMain: 'plan main', policy: 'policy toggle' };
+  for (const [key, name] of Object.entries(names)) if (pair[key]) measurements.push(`${theme} /pools ${name} ${JSON.stringify(pair[key])}`);
+  const compare = (a, b, keys) => {
+    if (!pair[a] || !pair[b]) {
+      say(`the ${names[a]} and the ${names[b]} are not both drawn to compare`);
+      return;
+    }
+    const differs = keys.filter((key) => String(pair[a][key]) !== String(pair[b][key]));
+    if (differs.length) say(`the ${names[a]}'s ${differs.join(', ')} differs from the ${names[b]}'s`);
+  };
+  compare('diagnostics', 'main', ['border', 'font', 'height', 'padding']);
+  compare('main', 'planMain', ['border', 'font', 'height', 'padding']);
+  compare('marker', 'policy', ['border', 'height', 'radius', 'width']);
   await page.keyboard.press('Escape');
   await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => say('the dialog stayed open after Escape'));
 }

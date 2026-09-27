@@ -1,11 +1,11 @@
 import type {
-  Account, AccountCatalog, AccountRollup, AlertEvent, AlertRule, AlertRuleInput, AnalyticsGroup, AnalyticsPoint, ApiKey, AttemptOutcome, AttemptResponse, BurnPoint, BurnUnit, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
+  Account, AccountCatalog, AccountRollup, AffinityMode, AlertEvent, AlertRule, AlertRuleInput, AnalyticsGroup, AnalyticsPoint, ApiKey, AttemptOutcome, AttemptResponse, BudgetPeriod, BurnPoint, BurnUnit, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
   Delivery, GuardVerdict, KeepaliveOverview, KeepaliveRecipe, KeyModels, LifecycleDelivery, LiveAttempt, LiveDelta, LiveMetric, LiveRequest, LiveSnapshot, LiveTick, MemberEligibility, ModelEvent, ModelPrice, ModelRule, ModelRulesMode,
-  ModelsState, Overview, PairingSession, PinMigrationReason, PlanFactor, PlanFactors, Pool, PoolCacheTtl, PriceImportPreview, QuotaHistory, QuotaSnapshot, RateLimitWindow, RequestEvent, RequestLog, RequestPage, RequestShape, RewritePoint,
-  RuleCooldown, SelectionTrace, Session, SessionLifecycleDetail, Settings, Subscription, TtlRules, WarmSessions, WindowFit, WindowId,
+  ModelsState, Overview, PairingSession, PinMigrationReason, PlanFactor, PlanFactors, Pool, PoolCacheTtl, PriceImportPreview, QuotaHeaders, QuotaHistory, QuotaSnapshot, RateLimitWindow, RequestEvent, RequestLog, RequestPage, RequestShape, RewritePoint,
+  RuleCooldown, SelectionTrace, Session, SessionLifecycleDetail, SessionPlacement, Settings, SubagentPlacement, Subscription, TtlRules, WarmSessions, WindowFit, WindowId,
 } from './types';
 import { ACCOUNT_KIND_VALUES } from './types';
-import { CACHE_TTL_DEFAULTS, METERED_TTL_DEFAULTS, PLAN_TTL_DEFAULTS, POOL_ENGINE_DEFAULTS, type AccountPatch, type KeyInput, type PoolInput } from './client';
+import { CACHE_TTL_DEFAULTS, METERED_TTL_DEFAULTS, PLAN_TTL_DEFAULTS, POOL_AFFINITY_DEFAULTS, POOL_ENGINE_DEFAULTS, type AccountPatch, type KeyInput, type PoolInput } from './client';
 import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons } from '@/lib/cache';
 import { emptyCounts } from '@/lib/counts';
 import { BUCKET_COUNT, emptyHistogram } from '@/lib/histogram';
@@ -231,7 +231,12 @@ export function decodeKey(v: unknown): ApiKey {
   };
 }
 
-export const ELIGIBILITY_VALUES = ['cooldown', 'eligible', 'overage', 'unavailable'] as const satisfies readonly MemberEligibility[];
+export const AFFINITY_MODE_VALUES = ['always', 'when_cached'] as const satisfies readonly AffinityMode[];
+export const BUDGET_PERIOD_VALUES = ['day', 'month'] as const satisfies readonly BudgetPeriod[];
+export const ELIGIBILITY_VALUES = ['budget', 'cooldown', 'eligible', 'overage', 'unavailable'] as const satisfies readonly MemberEligibility[];
+export const QUOTA_HEADERS_VALUES = ['hide', 'pass'] as const satisfies readonly QuotaHeaders[];
+export const SESSION_PLACEMENT_VALUES = ['by_strategy', 'by_warm_prefix'] as const satisfies readonly SessionPlacement[];
+export const SUBAGENT_PLACEMENT_VALUES = ['by_cohort', 'by_strategy', 'with_main'] as const satisfies readonly SubagentPlacement[];
 export const MODEL_RULES_MODE_VALUES = ['extend', 'replace'] as const satisfies readonly ModelRulesMode[];
 export const OVERAGE_POLICY_VALUES = ['allow', 'never', 'prefer_plan'] as const;
 export const POOL_STATUS_VALUES = ['active', 'degraded', 'disabled', 'exhausted'] as const;
@@ -265,6 +270,7 @@ export function decodePool(v: unknown): Pool {
   const k = rec(p.keepalive);
   return {
     activePins: num(p.active_pins),
+    affinityMode: AFFINITY_MODE_VALUES.find((x) => x === str(p.affinity_mode)) ?? POOL_AFFINITY_DEFAULTS.affinityMode,
     affinityTtlSeconds: num(p.affinity_ttl_seconds),
     bodyCaptureHours: num(p.body_capture_hours),
     burnWindowSeconds: num(p.burn_window_seconds, POOL_ENGINE_DEFAULTS.burnWindowSeconds),
@@ -278,10 +284,23 @@ export function decodePool(v: unknown): Pool {
       leadSeconds1h: num(k.lead_seconds_1h), leadSeconds5m: num(k.lead_seconds_5m), maxIdleSeconds: num(k.max_idle_seconds), maxIdleTicks: num(k.max_idle_ticks), netNegativeGraceProbes: num(k.net_negative_grace_probes),
       retryMaxSeconds: num(k.retry_max_seconds), retrySeconds: num(k.retry_seconds), stopWhenNetNegative: bool(k.stop_when_net_negative), warmSubagents: bool(k.warm_subagents, true),
     },
-    // A row from before the router reported eligibility reads as not servable rather than as servable.
-    members: list(p.members).map(rec).map((m) => ({ accountId: str(m.account_id), eligible: ELIGIBILITY_VALUES.find((e) => e === str(m.eligible)) ?? 'unavailable', priority: num(m.priority) })),
+    // A row without the key fields reads as the store's defaults.
+    keys: list(p.keys).map(rec).map((k) => ({ enabled: bool(k.enabled, true), id: str(k.id), label: str(k.label), prefix: str(k.prefix) })),
+    members: list(p.members).map(rec).map((m) => ({
+      accountId: str(m.account_id),
+      budgetPeriod: BUDGET_PERIOD_VALUES.find((x) => x === str(m.budget_period)) ?? 'month',
+      budgetUsd: numOrNull(m.budget_usd),
+      // A row from before the router reported eligibility reads as not servable rather than as servable.
+      eligible: ELIGIBILITY_VALUES.find((e) => e === str(m.eligible)) ?? 'unavailable',
+      // The route answers null for an account it cannot find, which is no API-key upstream either.
+      kind: ACCOUNT_KIND_VALUES.find((x) => x === str(m.kind)) ?? 'oauth',
+      periodEnd: isoOrNull(m.period_end),
+      priority: num(m.priority),
+      spentUsd: numOrNull(m.spent_usd),
+    })),
     migrateAboveUtilization: numOrNull(p.migrate_above_utilization),
     migrateWhenSpent: bool(p.migrate_when_spent, POOL_ENGINE_DEFAULTS.migrateWhenSpent),
+    minSharedPrefixTokens: num(p.min_shared_prefix_tokens, POOL_AFFINITY_DEFAULTS.minSharedPrefixTokens),
     modelRules: list(p.model_rules).map(decodeModelRule),
     movesPerHour: Object.fromEntries(Object.entries(rec(p.moves_per_hour)).filter((e): e is [string, number] => numOrNull(e[1]) !== null)),
     name: str(p.label),
@@ -289,13 +308,16 @@ export function decodePool(v: unknown): Pool {
     overagePolicy: OVERAGE_POLICY_VALUES.find((x) => x === str(p.overage_policy)) ?? 'prefer_plan',
     paceFloor: num(p.pace_floor, POOL_ENGINE_DEFAULTS.paceFloor),
     preferSubscription: bool(p.prefer_subscription),
+    quotaHeaders: QUOTA_HEADERS_VALUES.find((x) => x === str(p.quota_headers)) ?? POOL_AFFINITY_DEFAULTS.quotaHeaders,
     requests24h: num(p.requests_24h),
     retryInPlaceSeconds: num(p.retry_in_place_seconds, POOL_ENGINE_DEFAULTS.retryInPlaceSeconds),
     selectBelowUtilization: numOrNull(p.select_below_utilization),
+    sessionPlacement: SESSION_PLACEMENT_VALUES.find((x) => x === str(p.session_placement)) ?? POOL_AFFINITY_DEFAULTS.sessionPlacement,
     shedShare: num(p.shed_share, POOL_ENGINE_DEFAULTS.shedShare),
     sourceDwellSeconds: num(p.source_dwell_seconds, POOL_ENGINE_DEFAULTS.sourceDwellSeconds),
     status: POOL_STATUS_VALUES.find((x) => x === str(p.status)) ?? 'active',
     strategy: POOL_STRATEGY_VALUES.find((x) => x === str(p.strategy)) ?? 'pace',
+    subagentPlacement: SUBAGENT_PLACEMENT_VALUES.find((x) => x === str(p.subagent_placement)) ?? POOL_AFFINITY_DEFAULTS.subagentPlacement,
     traffic24h: list(p.traffic_24h).map(rec).map((b) => ({ at: isoOr(b.at, epoch), costUsd: num(b.cost_usd), failed: num(b.failed), requests: num(b.requests), tokens: num(b.tokens) })),
     warmSessions: WARM_SESSIONS_VALUES.find((x) => x === str(p.warm_sessions)) ?? POOL_ENGINE_DEFAULTS.warmSessions,
     windDownMinutes: num(p.wind_down_minutes, POOL_ENGINE_DEFAULTS.windDownMinutes),
@@ -551,12 +573,13 @@ export const encodeKey = (i: KeyInput) => ({
   model_rules: encodeModelRules(i.modelRules), model_rules_mode: i.modelRulesMode, notes: i.notes, pool_id: i.poolId,
 });
 export const encodePool = (i: PoolInput) => ({
-  affinity_ttl_seconds: i.affinityTtlSeconds, body_capture_hours: i.bodyCaptureHours, cache_diagnostics: i.cacheDiagnostics,
+  affinity_mode: i.affinityMode, affinity_ttl_seconds: i.affinityTtlSeconds, body_capture_hours: i.bodyCaptureHours, cache_diagnostics: i.cacheDiagnostics,
   cache_ttl: { enabled: i.cacheTtl.enabled, inject_when_absent: i.cacheTtl.injectWhenAbsent, metered: encodeTtlRules(i.cacheTtl.metered), plan: encodeTtlRules(i.cacheTtl.plan) },
   enabled: i.status === 'active', model_rules: encodeModelRules(i.modelRules),
   keepalive: { cold_probe_limit: i.keepalive.coldProbeLimit, enabled: i.keepalive.enabled, jitter_seconds_1h: i.keepalive.jitterSeconds1h, jitter_seconds_5m: i.keepalive.jitterSeconds5m, lead_seconds_1h: i.keepalive.leadSeconds1h, lead_seconds_5m: i.keepalive.leadSeconds5m, max_idle_seconds: i.keepalive.maxIdleSeconds, max_idle_ticks: i.keepalive.maxIdleTicks, net_negative_grace_probes: i.keepalive.netNegativeGraceProbes, probe_cap_window_share_per_day: i.keepalive.capWindowSharePerDay, probe_cost_cap_usd_per_day: i.keepalive.costCapUsdPerDay, retry_max_seconds: i.keepalive.retryMaxSeconds, retry_seconds: i.keepalive.retrySeconds, stop_when_net_negative: i.keepalive.stopWhenNetNegative, warm_subagents: i.keepalive.warmSubagents },
-  label: i.name, members: i.members.map((m) => ({ account_id: m.accountId, priority: m.priority })), migrate_above_utilization: i.migrateAboveUtilization, overage_policy: i.overagePolicy,
-  prefer_subscription: i.preferSubscription, select_below_utilization: i.selectBelowUtilization, strategy: i.strategy,
+  label: i.name, members: i.members.map((m) => ({ account_id: m.accountId, budget_period: m.budgetPeriod, budget_usd: m.budgetUsd, priority: m.priority })), migrate_above_utilization: i.migrateAboveUtilization,
+  min_shared_prefix_tokens: i.minSharedPrefixTokens, overage_policy: i.overagePolicy, prefer_subscription: i.preferSubscription, quota_headers: i.quotaHeaders, select_below_utilization: i.selectBelowUtilization,
+  session_placement: i.sessionPlacement, strategy: i.strategy, subagent_placement: i.subagentPlacement,
   burn_window_seconds: i.burnWindowSeconds, in_flight_cap: i.inFlightCap, migrate_when_spent: i.migrateWhenSpent, overage_move_grace_minutes: i.overageMoveGraceMinutes, pace_floor: i.paceFloor,
   retry_in_place_seconds: i.retryInPlaceSeconds, shed_share: i.shedShare, source_dwell_seconds: i.sourceDwellSeconds, warm_sessions: i.warmSessions, wind_down_minutes: i.windDownMinutes,
 });

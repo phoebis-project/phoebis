@@ -27,7 +27,10 @@ export const ACCOUNTS: Account[] = ([
     email: 'business@example.com',
     status: 'cooldown',
     routingEnabled: true,
-    pools: [{ poolId: 'all', priority: 0 }],
+    pools: [
+      { poolId: 'all', priority: 0 },
+      { poolId: 'studio', priority: 0 },
+    ],
     windows: [win('5h', 0.62, 2 * HOUR + 14 * MINUTE), win('7d', 0.41, 3 * DAY + 5 * HOUR + 40 * MINUTE)],
     fableWindow: win('7d_fable', 0.12, 3 * DAY + 5 * HOUR + 40 * MINUTE),
     extraUsage: { disabledReason: null, enabled: true, inUse: false, monthlyLimitCredits: 5000, usedCredits: 1234 },

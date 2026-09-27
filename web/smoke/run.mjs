@@ -133,7 +133,7 @@ let m = await mount('/');
 expect('/ dashboard', m.text(), ['Requests, 24h', 'Tokens, 24h', 'Estimated cost, 24h', 'Error rate, 24h', '5h remaining', '7d remaining', 'remaining', 'business', 'personal', 'Cooling down', 'Overage active', 'Needs re-auth', 'Recent requests', 'Sticky pins and cache-warming agents', 'active pins', 'admin', 'Fable', 'n/a']);
 results.push({ name: 'data-theme set', ok: document.documentElement.getAttribute('data-theme') === 'light', missing: [document.documentElement.getAttribute('data-theme')] });
 {
-  // The story's two pools hold 10 and 2 pins, all of the pinned sessions sit on business or personal, and the
+  // The story's pools hold 10, 2 and no pins, all of the pinned sessions sit on business or personal, and the
   // sessions route answers 17 rows, so a hero counting rows or a note counting every row's upstream reads otherwise.
   const hero = m.container.querySelector('.sess-summary__hero');
   results.push({ name: "/ the sessions card counts the router's live pins over the pinned rows' upstreams", ok: hero?.querySelector('.stat__value')?.textContent === '12' && hero?.querySelector('.stat__note')?.textContent === 'active pins across 2 upstreams', missing: [hero?.textContent ?? 'absent'] });
@@ -790,6 +790,50 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
   expect('/pools the card states the strategy rule', order?.textContent ?? '', ['Within the first tier that has an eligible upstream, the one with the most remaining weekly allowance per hour until its window resets or its subscription ends, whichever comes first; an unsampled upstream counts as untouched; ties are random.']);
 }
 {
+  // The card reads the pin mode beside the affinity, both placements, the quota header setting when it hides, and
+  // the marker toggle; a pool with affinity off has no pin mode to read.
+  const cards = new Map([...m.container.querySelectorAll('.pool')].map((c) => [c.querySelector('.card__title')?.textContent?.trim(), c]));
+  const dd = (pool, label) => [...(cards.get(pool)?.querySelectorAll('.pool__policy > div') ?? [])].find((d) => d.querySelector('dt')?.textContent?.trim() === label)?.querySelector('dd');
+  const row = (pool, label) => dd(pool, label)?.textContent?.replace(/\s+/g, ' ').trim() ?? null;
+  const rows = [row('all', 'Sessions'), row('all', 'Placement'), row('all', 'Quota headers'), row('codex', 'Sessions'), row('codex', 'Placement'), row('codex', 'Quota headers')];
+  results.push({
+    name: '/pools the card reads the pin mode, both placements and a hidden quota header family',
+    ok: JSON.stringify(rows) === JSON.stringify(['Affinity 10m, when cached', 'subagents by cohort, sessions by warm prefix from 20k tokens', 'hidden', 'Affinity off', 'subagents by cohort, sessions by strategy', null]),
+    missing: rows.map(String),
+  });
+  const ttl = dd('all', 'Cache TTL');
+  const ttlBadges = [...(ttl?.querySelectorAll('.badge') ?? [])].map((b) => b.textContent?.trim());
+  results.push({
+    name: '/pools the card reads both cache TTL rule sets and badges a pool that adds markers',
+    ok: (ttl?.textContent ?? '').startsWith('plan 1h / 5m, metered 5m / 5m') && ttlBadges.includes('adds markers') && !(dd('codex', 'Cache TTL')?.textContent ?? '').includes('adds markers'),
+    missing: [ttl?.textContent ?? 'no Cache TTL row', ...ttlBadges],
+  });
+  // Each member reads its spend against its budget; the route's budget verdict is the label beside the spend, and
+  // the selection order names it as the reason the member is skipped.
+  const member = (pool, label) => {
+    const li = [...(cards.get(pool)?.querySelectorAll('.pool__members ul li') ?? [])].find((x) => x.children[1]?.textContent?.trim() === label);
+    const cell = li?.querySelector('.pool__eligibility');
+    return { badges: [...(cell?.querySelectorAll('.badge') ?? [])].map((b) => `${b.textContent?.trim()}|${b.className}`), text: cell?.textContent?.replace(/\s+/g, ' ').trim() ?? 'absent' };
+  };
+  const origin = new Date(CLOCK_ORIGIN);
+  const dayEnd = new Date(Date.UTC(origin.getUTCFullYear(), origin.getUTCMonth(), origin.getUTCDate() + 1)).toLocaleString('en-US', { day: '2-digit', hour: '2-digit', hourCycle: 'h23', minute: '2-digit', month: 'short' });
+  const half = member('all', 'Console workspace');
+  const none = member('all', 'business');
+  const spent = member('codex', 'Evals workspace');
+  results.push({
+    name: '/pools a budgeted member reads its spend against its budget, and a member without one says so',
+    ok: half.text.startsWith('$25.00 of $50.00 this month') && JSON.stringify(half.badges) === '["eligible|badge badge--good"]' && none.text.startsWith('no budget'),
+    missing: [half.text, ...half.badges, none.text],
+  });
+  results.push({
+    name: "/pools a member at its budget reads the route's verdict beside its spend, until the day ends",
+    ok: spent.text.startsWith('$20.40 of $20.00 today') && JSON.stringify(spent.badges) === JSON.stringify([`at budget until ${dayEnd}|badge badge--warning`]),
+    missing: [spent.text, ...spent.badges, dayEnd],
+  });
+  const codexOrder = cards.get('codex')?.querySelector('.selection-order')?.textContent ?? '';
+  results.push({ name: '/pools the selection order names the budget as the reason a member is skipped', ok: codexOrder.includes('Evals workspace (at budget)'), missing: [codexOrder.slice(0, 160)] });
+}
+{
   const del = [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Delete pool all');
   del?.click();
   await m.settle(250);
@@ -1176,7 +1220,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
   const moveDlg = [...m.container.querySelectorAll('dialog[open]')].pop();
   const moveSelect = moveDlg?.querySelector('select[aria-label="Destination pool"]');
   expect('/pools move dialog', moveDlg?.textContent ?? '', ['Move key laptop', 'ends its current session pins', 'Move key']);
-  results.push({ name: '/pools move dialog lists the other pools only', ok: [...(moveSelect?.options ?? [])].map((o) => o.value).join(',') === 'codex', missing: [...(moveSelect?.options ?? [])].map((o) => o.value) });
+  results.push({ name: '/pools move dialog lists the other pools only', ok: [...(moveSelect?.options ?? [])].map((o) => o.value).join(',') === 'codex,studio', missing: [...(moveSelect?.options ?? [])].map((o) => o.value) });
   [...(moveDlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Move key')?.click();
   await m.settle(600);
   results.push({ name: '/pools moved key leaves the list', ok: !keyRows().some((li) => li.children[0]?.textContent?.trim() === 'laptop'), missing: keyRows().map((li) => li.children[0]?.textContent?.trim()) });
@@ -1187,12 +1231,126 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
   {
     const ruleSets = [...(dlg?.querySelectorAll('[data-rule-set]') ?? [])];
     const names = ruleSets.map((el) => el.getAttribute('data-rule-set')).sort();
+    const labels = ruleSets.map((el) => `${el.getAttribute('data-rule-set')}=${el.querySelector(':scope > .field__label')?.textContent?.trim()}`).sort();
     results.push({
-      name: '/pools the caching section renders one root per rule set, plan and metered, each with its own Main and Subagents selects',
+      name: '/pools the caching section renders one root per rule set, plan and metered, each with its own Main, Subagents and Keepalive selects and its own override picker',
       ok:
         names.join(',') === 'metered,plan' &&
-        ruleSets.every((el) => el.querySelector('select[aria-label$="main conversation TTL"]') && el.querySelector('select[aria-label$="subagent TTL"]')),
-      missing: names,
+        labels.join(',') === 'metered=Metered writes,plan=Plan writes' &&
+        ruleSets.every(
+          (el) =>
+            el.querySelectorAll('select[aria-label$="main conversation TTL"]').length === 1 &&
+            el.querySelectorAll('select[aria-label$="subagent TTL"]').length === 1 &&
+            el.querySelectorAll('select[aria-label$="keepalive TTL"]').length === 1 &&
+            el.querySelectorAll('select[aria-label^="Model to add"]').length === 1,
+        ),
+      missing: [...names, ...labels],
+    });
+    const metered = dlg?.querySelector('[data-rule-set="metered"]');
+    const keepalive = [...(metered?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === 'Keepalive');
+    results.push({
+      name: '/pools the metered rule set says what metered means, and the keepalive TTL says which write the next probe follows',
+      ok:
+        (metered?.querySelector(':scope > .field__hint')?.textContent ?? '') === 'Metered: an API-key upstream, or a subscription upstream in overage; a one-hour write costs 2x base input there against 1.25x for five minutes.' &&
+        (keepalive?.querySelector('.field__hint')?.textContent ?? '') === "The first probe after a turn follows that turn's TTL; the probe itself writes with this TTL, which the next probe follows." &&
+        keepalive?.querySelector('select')?.value === '5m',
+      missing: [metered?.querySelector(':scope > .field__hint')?.textContent ?? 'no metered hint', keepalive?.querySelector('.field__hint')?.textContent ?? 'no keepalive hint', keepalive?.querySelector('select')?.value ?? 'no keepalive select'],
+    });
+    // The marker toggle sits under the policy toggle, bound to the pool's injection flag.
+    const marker = () => dlg?.querySelector('button[role="switch"][aria-label="Add a cache marker to a request without one"]');
+    const markerHint = [...(dlg?.querySelectorAll('.field__label') ?? [])].find((el) => el.textContent?.trim() === 'Add a cache marker to a request without one')?.nextElementSibling?.textContent?.trim();
+    const before = marker()?.getAttribute('aria-checked');
+    marker()?.click();
+    await m.settle(120);
+    const after = marker()?.getAttribute('aria-checked');
+    marker()?.click();
+    await m.settle(120);
+    results.push({
+      name: '/pools the caching section carries the marker toggle with the stored flag, and it flips',
+      ok: before === 'true' && after === 'false' && marker()?.getAttribute('aria-checked') === 'true' && markerHint === 'Off rewrites the markers a request carries and leaves a marker-less body as sent.',
+      missing: [String(before), String(after), markerHint ?? 'no hint'],
+    });
+  }
+
+  {
+    // The pin mode and the two placements follow the session affinity, and a warm-prefix placement opens its threshold.
+    const section = (label) => [...(dlg?.querySelectorAll('.dialog-section') ?? [])].find((el) => el.getAttribute('aria-label') === label);
+    const routing = section('Routing');
+    const options = (select) => [...(select?.options ?? [])].map((o) => o.textContent?.trim());
+    const select = (label) => dlg?.querySelector(`select[aria-label="${label}"]`);
+    const pick = async (label, value) => {
+      const el = select(label);
+      if (!el) return;
+      el.value = value;
+      el.dispatchEvent(new window.Event('change', { bubbles: true }));
+      await m.settle(120);
+    };
+    const drawn = [options(select('Pin sessions')), options(select('Subagent placement')), options(select('Session placement'))];
+    const chosen = [select('Pin sessions')?.value, select('Subagent placement')?.value, select('Session placement')?.value];
+    results.push({
+      name: '/pools the routing section offers the pin mode and both placements, each at the stored choice',
+      ok:
+        JSON.stringify(drawn) === JSON.stringify([['Always', 'Only when the request caches'], ['By cohort', 'By strategy', 'With the main conversation'], ['By strategy', 'By warm prefix']]) &&
+        JSON.stringify(chosen) === '["when_cached","by_cohort","by_warm_prefix"]' &&
+        [...(routing?.querySelectorAll('.field__label') ?? [])].map((l) => l.textContent?.trim()).join('|').includes('Session affinity|Pin sessions|Subagent placement|Session placement|Minimum shared prefix, tokens'),
+      missing: [JSON.stringify(drawn), JSON.stringify(chosen)],
+    });
+    expect('/pools the pin and placement hints say what each choice does', routing?.textContent ?? '', [
+      "Under 'only when the request caches' a request with no cache marker that receives none from the TTL policy creates no pin and lands by the strategy; a request bound to its upstream keeps its pin either way.",
+      'By cohort lands subagents that share a static prefix together; with the main conversation lands them on its upstream; by strategy looks nothing up.',
+      'A fresh session lands where its static prefix is warm only when that prefix is at least this large, so a small shared prefix never overrides Pace.',
+      "The size is an estimate from the request's bytes, not a token count the upstream reported.",
+    ]);
+    const threshold = () => dlg?.querySelector('input[aria-label="Minimum shared prefix, tokens"]');
+    const save = () => [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Save pool');
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+    // A field that never drew leaves nothing to type into, which the checks below then fail by name.
+    const type = async (input, value) => {
+      if (!input) return;
+      setter.call(input, value);
+      input.dispatchEvent(new window.Event('input', { bubbles: true }));
+      await m.settle(120);
+    };
+    const stored = threshold()?.value;
+    await type(threshold(), '1.5');
+    const refused = [save()?.disabled, routing?.querySelector('.callout--critical')?.textContent ?? ''];
+    await pick('Session placement', 'by_strategy');
+    const hidden = [threshold() === null, save()?.disabled];
+    await pick('Session placement', 'by_warm_prefix');
+    await type(threshold(), '20000');
+    results.push({
+      name: '/pools a threshold that is not a whole number holds the save, and the strategy placement hides it and frees the save',
+      ok: stored === '20000' && refused[0] === true && refused[1] === 'The minimum shared prefix is a whole number of tokens, 0 or more.' && hidden[0] && hidden[1] === false && save()?.disabled === false,
+      missing: [String(stored), ...refused.map(String), ...hidden.map(String)],
+    });
+    const quota = select('Quota headers');
+    results.push({
+      name: '/pools the general section offers the quota headers, at the stored setting',
+      ok:
+        JSON.stringify(options(quota)) === '["Pass through","Hide on committed answers"]' &&
+        quota?.value === 'hide' &&
+        (section('General')?.textContent ?? '').includes(
+          'Hide drops the anthropic-ratelimit-unified-* family from every answer but a 429, so an organization-wide quota never reaches a key holder as its own; request-id passes, and the client shows no notice either way.',
+        ),
+      missing: [JSON.stringify(options(quota)), String(quota?.value)],
+    });
+    // Each member row carries its budget and its period; a budget the member write refuses holds the save.
+    const budget = (label) => dlg?.querySelector(`input[aria-label="Budget for ${label}, USD"]`);
+    const period = (label) => dlg?.querySelector(`select[aria-label="Budget period for ${label}"]`);
+    const rows = [budget('Console workspace')?.value, period('Console workspace')?.value, budget('business')?.value, budget('business')?.getAttribute('placeholder'), period('business')?.value];
+    results.push({
+      name: '/pools a member row carries a budget field and a period select, empty for a member without a budget',
+      ok: JSON.stringify(rows) === '["50","month","","none","month"]' && JSON.stringify(options(period('Console workspace'))) === '["per day","per month"]' && budget('team') === null,
+      missing: rows.map(String),
+    });
+    await type(budget('Console workspace'), '0');
+    const members = section('Members');
+    const held = [save()?.disabled, members?.querySelector('.callout--critical')?.textContent ?? '', budget('Console workspace')?.getAttribute('aria-invalid')];
+    await type(budget('Console workspace'), '50');
+    results.push({
+      name: '/pools a budget of 0 holds the save and names the member',
+      ok: held[0] === true && held[1] === 'Console workspace: A budget is a dollar amount above 0; leave it empty for no budget.' && held[2] === 'true' && save()?.disabled === false,
+      missing: held.map(String),
     });
   }
 
@@ -1226,7 +1384,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
   const cacheTtlHint = cacheTtlLabel?.nextElementSibling?.textContent?.trim();
   results.push({
     name: '/pools cache TTL hint applies to every upstream in the pool',
-    ok: cacheTtlHint === "Every breakpoint the client sends is rewritten to the TTL chosen here. The client's own TTL setting then has no effect through this pool. Applies to every upstream in this pool. A request that carries no breakpoints is left alone.",
+    ok: cacheTtlHint === "Every breakpoint the client sends is rewritten to the TTL chosen here. The client's own TTL setting then has no effect through this pool. Applies to every upstream in this pool.",
     missing: [cacheTtlHint ?? 'no hint found'],
   });
 
@@ -1305,7 +1463,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
     missing: [String(freed), JSON.stringify(stored)],
   });
   // The story's own pool back, status and list, so the key dialogs below read the pool the fixture holds.
-  await api.updatePool('all', { ...story, members: story.members.map((x) => ({ accountId: x.accountId, priority: x.priority })) });
+  await api.updatePool('all', { ...story, members: story.members.map((x) => ({ accountId: x.accountId, budgetPeriod: x.budgetPeriod, budgetUsd: x.budgetUsd, priority: x.priority })) });
 }
 {
   // A key is posted against a pool id, so the create dialog offers none until the pool has been saved.

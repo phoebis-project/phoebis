@@ -10,7 +10,7 @@ const as = async (role) => {
 };
 
 /** The pool as the dialog would send it back unchanged, so a case edits only the fields it is about. */
-const poolInputOf = (p) => ({ ...p, members: p.members.map((m) => ({ accountId: m.accountId, priority: m.priority })) });
+const poolInputOf = (p) => ({ ...p, members: p.members.map((m) => ({ accountId: m.accountId, budgetPeriod: m.budgetPeriod, budgetUsd: m.budgetUsd, priority: m.priority })) });
 const storyPool = async (api) => poolInputOf((await api.listPools()).find((p) => p.id === 'all'));
 const keyInput = { bodyCaptureHours: null, enabled: true, expiresInDays: null, keepaliveOptOut: false, longContextTwins: true, modelRules: [], modelRulesMode: 'extend', name: 'fresh', notes: null, poolId: 'all' };
 const ruleInputOf = (r) => ({ enabled: r.enabled, kind: r.kind, scope: r.scope, threshold: r.threshold, webhookUrl: r.webhookUrl, windowId: r.windowId });
@@ -164,6 +164,84 @@ test('a new pool reads each member the way the pool route does', async () => {
   const second = await verdicts('second', 'never');
   assert.deepEqual([second.personal, second.business], ['overage', 'unavailable'], 'a paused upstream is unavailable like a flagged one');
   assert.equal((await verdicts('third', 'prefer_plan')).personal, 'eligible');
+});
+
+test('a pool write round-trips the pin, placement and quota fields and the members\' budgets', async () => {
+  const api = await as('admin');
+  const all = await storyPool(api);
+  const console_ = all.members.find((m) => m.accountId === 'console');
+  assert.deepEqual([console_.budgetUsd, console_.budgetPeriod], [50, 'month'], 'the story budgets its API-key member');
+  const edit = {
+    ...all,
+    affinityMode: 'always',
+    members: all.members.map((m) => (m.accountId === 'console' ? { ...m, budgetPeriod: 'day', budgetUsd: 7.5 } : m)),
+    minSharedPrefixTokens: 30_000,
+    quotaHeaders: 'pass',
+    sessionPlacement: 'by_strategy',
+    subagentPlacement: 'with_main',
+  };
+  const saved = await api.updatePool('all', edit);
+  const stored = (await api.listPools()).find((p) => p.id === 'all');
+  for (const pool of [saved, stored]) {
+    assert.deepEqual([pool.affinityMode, pool.minSharedPrefixTokens, pool.quotaHeaders, pool.sessionPlacement, pool.subagentPlacement], ['always', 30_000, 'pass', 'by_strategy', 'with_main']);
+    const member = pool.members.find((m) => m.accountId === 'console');
+    assert.deepEqual([member.budgetUsd, member.budgetPeriod, member.kind, member.spentUsd, member.periodEnd], [7.5, 'day', 'api_key', null, null], 'the mock keeps no ledger, so a write answers no spend');
+  }
+  assert.deepEqual(poolInputOf(stored).members, edit.members, 'the members read back as they were written');
+  const created = await api.createPool({ ...edit, name: 'budgeted' });
+  assert.deepEqual(
+    created.members.map((m) => [m.accountId, m.kind, m.budgetUsd, m.budgetPeriod]),
+    edit.members.map((m) => [m.accountId, m.accountId === 'console' ? 'api_key' : 'oauth', m.budgetUsd, m.budgetPeriod]),
+    'a create derives each member\'s kind from its account',
+  );
+  const bare = await api.createPool({ ...edit, members: [{ accountId: 'console', priority: 0 }], name: 'bare' });
+  assert.deepEqual([bare.members[0].budgetUsd, bare.members[0].budgetPeriod], [null, 'month'], 'a member written without a budget has none, and its period reads a month');
+});
+
+test('the story reads a member at its budget as the route does, and a member half way as eligible', async () => {
+  const api = await as('viewer');
+  const pools = await api.listPools();
+  const member = (poolId, accountId) => pools.find((p) => p.id === poolId).members.find((m) => m.accountId === accountId);
+  const half = member('all', 'console');
+  assert.deepEqual([half.spentUsd, half.budgetUsd, half.eligible], [25, 50, 'eligible']);
+  const spent = member('codex', 'evals');
+  assert.ok(spent.spentUsd >= spent.budgetUsd && Date.parse(spent.periodEnd) > Date.now(), 'the story spends one member past its budget inside the period');
+  assert.equal(spent.eligible, 'budget');
+  assert.equal(pools.find((p) => p.id === 'codex').status, 'exhausted', 'its only member at its budget leaves the pool nothing to route to');
+});
+
+test('a pool answers its keys from the key registry', async () => {
+  const api = await as('admin');
+  const keysOf = async (poolId) => (await api.listPools()).find((p) => p.id === poolId).keys.map((k) => [k.id, k.enabled]);
+  assert.deepEqual(await keysOf('studio'), [['notebook', true]]);
+  await api.createKey({ ...keyInput, name: 'scratch', poolId: 'studio' });
+  await api.revokeKey('notebook');
+  assert.deepEqual(await keysOf('studio'), [['scratch', true], ['notebook', false]], 'a revocation switches the key off in the pool\'s list too');
+  const laptop = (await api.listKeys()).find((k) => k.id === 'laptop');
+  await api.updateKey('laptop', { ...keyInput, name: laptop.name, poolId: 'studio', expiresAt: undefined });
+  assert.ok((await keysOf('studio')).some(([id]) => id === 'laptop') && !(await keysOf('all')).some(([id]) => id === 'laptop'), 'a moved key answers under its new pool alone');
+});
+
+test('a pool write with an unknown spelling or a budget the route refuses is refused with the route\'s text', async () => {
+  const api = await as('admin');
+  const all = await storyPool(api);
+  const before = await api.listPools();
+  const refusals = [
+    [{ affinityMode: 'sometimes' }, 'affinity_mode must be always or when_cached'],
+    [{ subagentPlacement: 'alone' }, 'subagent_placement must be by_cohort, by_strategy, or with_main'],
+    [{ sessionPlacement: 'by_luck' }, 'session_placement must be by_strategy or by_warm_prefix'],
+    [{ quotaHeaders: 'strip' }, 'quota_headers must be hide or pass'],
+    // The route reads the threshold as an unsigned whole number, so any other value fails the body's parse.
+    [{ minSharedPrefixTokens: -1 }, 'body must be a JSON object'],
+    [{ minSharedPrefixTokens: 1.5 }, 'body must be a JSON object'],
+    [{ members: [{ accountId: 'console', budgetPeriod: 'month', budgetUsd: 0, priority: 0 }] }, 'budget_usd is above 0'],
+    [{ members: [{ accountId: 'console', budgetPeriod: 'week', budgetUsd: 5, priority: 0 }] }, 'budget_period must be day or month'],
+  ];
+  for (const [patch, message] of refusals) {
+    await assert.rejects(() => api.updatePool('all', { ...all, ...patch }), refusedAs(400, message), message);
+    await assert.rejects(() => api.createPool({ ...all, ...patch, name: 'refused' }), refusedAs(400, message), `${message} on create`);
+  }
+  assert.deepEqual(await api.listPools(), before, 'a refused write stores nothing');
 });
 
 test('a model rule list the route refuses is refused on every pool and key write, with the route\'s text', async () => {

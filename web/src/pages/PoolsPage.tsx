@@ -2,8 +2,11 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Bar, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { api, ApiError, CACHE_TTL_DEFAULTS, KEEPALIVE_TUNING_DEFAULTS, type PoolInput } from '@/api';
-import { POOL_ENGINE_DEFAULTS, type PoolEngineFields } from '@/api/client';
-import type { Account, ApiKey, CacheTtl, CreatedApiKey, KeyStatus, MemberEligibility, ModelRule, OveragePolicy, Pool, PoolCacheTtl, PoolKeepalive, PoolStrategy, Session, TtlRules, WarmSessions } from '@/api/types';
+import { POOL_AFFINITY_DEFAULTS, POOL_ENGINE_DEFAULTS, type PoolEngineFields } from '@/api/client';
+import type {
+  Account, AffinityMode, ApiKey, BudgetPeriod, CacheTtl, CreatedApiKey, KeyStatus, MemberEligibility, ModelRule, OveragePolicy, Pool, PoolCacheTtl, PoolKeepalive, PoolMember, PoolStrategy, QuotaHeaders, Session, SessionPlacement,
+  SubagentPlacement, TtlRules, WarmSessions,
+} from '@/api/types';
 import { useAppSettings } from '@/app/settings';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { ChartTooltip, Legend } from '@/components/charts/Tooltip';
@@ -13,8 +16,8 @@ import { SelectionOrder } from '@/components/ui/SelectionOrder';
 import { UtilizationBar } from '@/components/UtilizationBar';
 import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
 import { Badge, Button, Card, Collapsible, ConfirmDialog, CopyButton, Dialog, ErrorState, Field, Input, Menu, SectionedDialog, Select, Skeleton, Toast, Toggle, type DialogSection } from '@/components/ui/primitives';
-import { fmtAbsolute, fmtCompact, fmtHourTick, fmtInt, fmtPct, fmtRelative, fmtUsd } from '@/lib/format';
-import { ENGINE_BOUNDS, KEEPALIVE_BOUNDS, bandRefusal, modelRulesRefusal, validatePoolInput } from '@/lib/forms';
+import { fmtAbsolute, fmtCompact, fmtHourTick, fmtInt, fmtPct, fmtRelative, fmtUsd, getTimeFormat } from '@/lib/format';
+import { ENGINE_BOUNDS, KEEPALIVE_BOUNDS, bandRefusal, budgetRefusal, modelRulesRefusal, prefixThresholdRefusal, validatePoolInput } from '@/lib/forms';
 import { useAsync, useNow } from '@/lib/hooks';
 import { FAILOVER_PRESETS, SHEDDING_PRESETS, failoverPresetOf, sheddingPresetOf, shedPreview, shedPreviewLine, type FailoverPreset, type SheddingPreset } from '@/lib/presets';
 import { windowOf } from '@/lib/quota';
@@ -125,6 +128,21 @@ function PresetPills({ label, value, onPick, hints }: { hints: Record<SheddingPr
 }
 const KEEPALIVE_GATE = "Requires session affinity of at least 5 minutes. A probe follows the session's pin; a shorter pin cannot keep the session on the upstream it warmed.";
 const KEEPALIVE_WARNING = 'Session affinity is shorter than one hour. One-hour cache entries outlive the pin, so a session can migrate away from a warmed cache.';
+const AFFINITY_MODE_LABEL: Record<AffinityMode, string> = { always: 'always', when_cached: 'when cached' };
+const PIN_HINT = "Under 'only when the request caches' a request with no cache marker that receives none from the TTL policy creates no pin and lands by the strategy; a request bound to its upstream keeps its pin either way.";
+const SUBAGENT_PLACEMENT_LABEL: Record<SubagentPlacement, string> = { by_cohort: 'by cohort', by_strategy: 'by strategy', with_main: 'with the main conversation' };
+const SUBAGENT_PLACEMENT_HINT = 'By cohort lands subagents that share a static prefix together; with the main conversation lands them on its upstream; by strategy looks nothing up.';
+const PREFIX_HINT =
+  "A fresh session lands where its static prefix is warm only when that prefix is at least this large, so a small shared prefix never overrides Pace. The size is an estimate from the request's bytes, not a token count the upstream reported.";
+const QUOTA_HEADERS_HINT =
+  'Hide drops the anthropic-ratelimit-unified-* family from every answer but a 429, so an organization-wide quota never reaches a key holder as its own; request-id passes, and the client shows no notice either way.';
+const MARKER_HINT = 'Off rewrites the markers a request carries and leaves a marker-less body as sent.';
+const METERED_HINT = 'Metered: an API-key upstream, or a subscription upstream in overage; a one-hour write costs 2x base input there against 1.25x for five minutes.';
+const KEEPALIVE_TTL_HINT = "The first probe after a turn follows that turn's TTL; the probe itself writes with this TTL, which the next probe follows.";
+const BUDGET_HINT = 'A member whose spend reaches its budget is skipped until the UTC day or month ends; spend is priced at API list rates.';
+const fmtTokens = (n: number) => fmtCompact(n).toLowerCase();
+// A period ends at the start of a UTC day, which `hour12: false` prints as 24:00, the end of that same day.
+const fmtPeriodEnd = (at: string) => new Date(at).toLocaleString('en-US', { day: '2-digit', hour: '2-digit', hourCycle: getTimeFormat() === '12h' ? 'h12' : 'h23', minute: '2-digit', month: 'short' });
 
 export function PoolsPage() {
   const pools = useAsync(() => api.listPools(), []);
@@ -229,7 +247,11 @@ export function PoolsPage() {
           keys.reload();
         }}
         onKeyCreated={() => keys.reload()}
-        onKeysChanged={() => keys.reload()}
+        // The pool route lists its keys, so a key moved or revoked from the dialog changes the card's warning too.
+        onKeysChanged={() => {
+          keys.reload();
+          pools.reload();
+        }}
       />
       <ConfirmDialog
         open={deleting !== null}
@@ -274,7 +296,7 @@ function CacheTtlRuleSet({
   rules: TtlRules;
 }) {
   const [addModelId, setAddModelId] = useState('');
-  const setField = (key: 'main' | 'subagent', value: CacheTtl) => onChange({ ...rules, [key]: value });
+  const setField = (key: 'keepalive' | 'main' | 'subagent', value: CacheTtl) => onChange({ ...rules, [key]: value });
   const setModelOverride = (model: string, key: 'main' | 'subagent', value: CacheTtl) =>
     onChange({ ...rules, models: rules.models.map((m) => (m.model === model ? { ...m, [key]: value } : m)) });
   const removeModelOverride = (model: string) => onChange({ ...rules, models: rules.models.filter((m) => m.model !== model) });
@@ -287,7 +309,7 @@ function CacheTtlRuleSet({
     <div data-rule-set={name} className="field">
       <span className="field__label">{label}</span>
       {hint && <p className="field__hint">{hint}</p>}
-      <div className="form-row">
+      <div className="form-row form-row--3">
         <Field label="Main conversation">
           <Select value={rules.main} onChange={(e) => setField('main', e.target.value as CacheTtl)} aria-label={`${label} main conversation TTL`}>
             <option value="5m">5 minutes</option>
@@ -296,6 +318,12 @@ function CacheTtlRuleSet({
         </Field>
         <Field label="Subagents">
           <Select value={rules.subagent} onChange={(e) => setField('subagent', e.target.value as CacheTtl)} aria-label={`${label} subagent TTL`}>
+            <option value="5m">5 minutes</option>
+            <option value="1h">1 hour</option>
+          </Select>
+        </Field>
+        <Field label="Keepalive" hint={KEEPALIVE_TTL_HINT}>
+          <Select value={rules.keepalive} onChange={(e) => setField('keepalive', e.target.value as CacheTtl)} aria-label={`${label} keepalive TTL`}>
             <option value="5m">5 minutes</option>
             <option value="1h">1 hour</option>
           </Select>
@@ -423,6 +451,7 @@ function PoolCard({
             <dt>Sessions</dt>
             <dd className="num" title={AFFINITY_HINT}>
               Affinity {fmtAffinity(pool.affinityTtlSeconds)}
+              {pool.affinityTtlSeconds > 0 && `, ${AFFINITY_MODE_LABEL[pool.affinityMode]}`}
             </dd>
           </div>
           <div>
@@ -442,6 +471,19 @@ function PoolCard({
           <div>
             <dt>Failover</dt>
             <dd title={`In flight ${pool.inFlightCap}, retry in place ${pool.retryInPlaceSeconds} s, Pace floor ${fmtPct(pool.paceFloor)}`}>{failoverPresetOf(pool)}</dd>
+          </div>
+          {pool.quotaHeaders === 'hide' && (
+            <div>
+              <dt>Quota headers</dt>
+              <dd title={QUOTA_HEADERS_HINT}>hidden</dd>
+            </div>
+          )}
+          <div className="pool__policy-wide">
+            <dt>Placement</dt>
+            <dd>
+              subagents {SUBAGENT_PLACEMENT_LABEL[pool.subagentPlacement]}, sessions{' '}
+              {pool.sessionPlacement === 'by_warm_prefix' ? `by warm prefix from ${fmtTokens(pool.minSharedPrefixTokens)} tokens` : 'by strategy'}
+            </dd>
           </div>
           {/* A list of rates, one per reason, so it takes a row of its own rather than wrapping in a column. */}
           <div className="pool__policy-wide">
@@ -470,12 +512,10 @@ function PoolCard({
               <span className="chips">
                 {pool.cacheTtl.enabled ? (
                   <>
-                    <Badge tone="neutral">
-                      Plan <span className="mono">{pool.cacheTtl.plan.main} / {pool.cacheTtl.plan.subagent}</span>
-                    </Badge>
-                    <Badge tone="neutral">
-                      Metered <span className="mono">{pool.cacheTtl.metered.main} / {pool.cacheTtl.metered.subagent}</span>
-                    </Badge>
+                    <span className="mono">
+                      plan {pool.cacheTtl.plan.main} / {pool.cacheTtl.plan.subagent}, metered {pool.cacheTtl.metered.main} / {pool.cacheTtl.metered.subagent}
+                    </span>
+                    {pool.cacheTtl.injectWhenAbsent && <Badge tone="neutral">adds markers</Badge>}
                     {(pool.cacheTtl.plan.models.length + pool.cacheTtl.metered.models.length) > 0 && (
                       <Badge tone="neutral">
                         {pool.cacheTtl.plan.models.length + pool.cacheTtl.metered.models.length} model override
@@ -577,8 +617,10 @@ function PoolCard({
                     P{m.priority}
                   </span>
                   <Link to={`/upstreams/${m.accountId}`}>{a?.label ?? m.accountId}</Link>
-                  <span className="pool__eligibility">
-                    <Eligibility verdict={m.eligible} account={a} now={now} />
+                  {/* Wraps the badge under the spend on a narrow card rather than breaking the spend across lines. */}
+                  <span className="pool__eligibility" style={{ alignItems: 'center', display: 'inline-flex', flexWrap: 'wrap', gap: 6, justifyContent: 'flex-end' }}>
+                    <MemberBudget member={m} now={now} />
+                    <Eligibility verdict={m.eligible} account={a} now={now} periodEnd={m.periodEnd} />
                   </span>
                 </li>
               );
@@ -604,9 +646,30 @@ function PoolCard({
   );
 }
 
+/** A member's spend against its budget for the period, or that it has none. */
+function MemberBudget({ member, now }: { member: PoolMember; now: number }) {
+  if (member.budgetUsd === null) return <span className="muted">no budget</span>;
+  const { budgetUsd: budget, periodEnd, spentUsd: spent } = member;
+  const reached = spent !== null && spent >= budget && periodEnd !== null && Date.parse(periodEnd) > now;
+  return (
+    <>
+      <span className="num">
+        {spent === null ? '-' : fmtUsd(spent)} of {fmtUsd(budget)} {member.budgetPeriod === 'day' ? 'today' : 'this month'}
+      </span>
+      {/* The route's budget verdict says this itself; the badge stands for a member the route names an earlier obstacle for. */}
+      {reached && member.eligible !== 'budget' && <AtBudget periodEnd={periodEnd} />}
+    </>
+  );
+}
+
+function AtBudget({ periodEnd }: { periodEnd: string | null }) {
+  return <Badge tone="warning">{periodEnd ? `at budget until ${fmtPeriodEnd(periodEnd)}` : 'at budget'}</Badge>;
+}
+
 /** The route's verdict, the one the selection-order strip reads; the account only adds when and why. */
-function Eligibility({ verdict, account, now }: { account: Account | undefined; now: number; verdict: MemberEligibility }) {
+function Eligibility({ verdict, account, now, periodEnd }: { account: Account | undefined; now: number; periodEnd: string | null; verdict: MemberEligibility }) {
   if (verdict === 'eligible') return <Badge tone="good">eligible</Badge>;
+  if (verdict === 'budget') return <AtBudget periodEnd={periodEnd} />;
   if (verdict === 'overage') return <Badge tone="serious">overage</Badge>;
   if (verdict === 'unavailable') return <Badge tone="critical" title={account ? account.status.replace(/_/g, ' ') : 'not a known upstream'}>unavailable</Badge>;
   const until = account?.cooldowns.find((c) => c.scope === 'account')?.until;
@@ -624,6 +687,9 @@ type NumericTuningKey = { [K in keyof ProbeTuning]-?: ProbeTuning[K] extends num
 
 interface PoolForm {
   affinity: number;
+  affinityMode: AffinityMode;
+  /** Each member's budget field as typed, empty for none, beside its period; kept for an unticked member too. */
+  budgets: Record<string, { period: BudgetPeriod; usd: string }>;
   cacheDiagnostics: boolean | null;
   cacheTtl: PoolCacheTtl;
   capEnabled: boolean;
@@ -642,11 +708,16 @@ interface PoolForm {
   name: string;
   overage: OveragePolicy;
   preferSubscription: boolean;
+  /** The threshold field as typed. */
+  prefixTokens: string;
+  quotaHeaders: QuotaHeaders;
   selectBelow: number;
   selectBelowOn: boolean;
+  sessionPlacement: SessionPlacement;
   sheddingCustom: boolean;
   status: 'active' | 'disabled';
   strategy: PoolStrategy;
+  subagentPlacement: SubagentPlacement;
   tuning: ProbeTuning;
   warmSubagents: boolean;
 }
@@ -655,6 +726,8 @@ const isPreset = (seconds: number) => AFFINITY_PICKS.some((p) => p.seconds === s
 
 const blankForm = (): PoolForm => ({
   affinity: 3_600,
+  affinityMode: POOL_AFFINITY_DEFAULTS.affinityMode,
+  budgets: {},
   cacheDiagnostics: null,
   cacheTtl: { ...CACHE_TTL_DEFAULTS },
   capEnabled: false,
@@ -672,17 +745,23 @@ const blankForm = (): PoolForm => ({
   name: '',
   overage: 'prefer_plan',
   preferSubscription: true,
+  prefixTokens: String(POOL_AFFINITY_DEFAULTS.minSharedPrefixTokens),
+  quotaHeaders: POOL_AFFINITY_DEFAULTS.quotaHeaders,
   selectBelow: 80,
   selectBelowOn: false,
+  sessionPlacement: POOL_AFFINITY_DEFAULTS.sessionPlacement,
   sheddingCustom: false,
   status: 'active',
   strategy: 'pace',
+  subagentPlacement: POOL_AFFINITY_DEFAULTS.subagentPlacement,
   tuning: { ...KEEPALIVE_TUNING_DEFAULTS },
   warmSubagents: true,
 });
 
 const formFrom = (pool: Pool): PoolForm => ({
   affinity: pool.affinityTtlSeconds,
+  affinityMode: pool.affinityMode,
+  budgets: Object.fromEntries(pool.members.map((m) => [m.accountId, { period: m.budgetPeriod, usd: m.budgetUsd === null ? '' : String(m.budgetUsd) }])),
   cacheDiagnostics: pool.cacheDiagnostics,
   cacheTtl: {
     ...pool.cacheTtl,
@@ -716,13 +795,17 @@ const formFrom = (pool: Pool): PoolForm => ({
   overage: pool.overagePolicy,
   // The stored answer, never the effective one, so reopening a pool shows what the operator chose.
   preferSubscription: pool.preferSubscription,
+  prefixTokens: String(pool.minSharedPrefixTokens),
+  quotaHeaders: pool.quotaHeaders,
   // Two decimals, so a threshold the API set finer than a percent survives an unrelated edit.
   selectBelow: pool.selectBelowUtilization === null ? 80 : Math.round(pool.selectBelowUtilization * 10_000) / 100,
   selectBelowOn: pool.selectBelowUtilization !== null,
+  sessionPlacement: pool.sessionPlacement,
   sheddingCustom: sheddingPresetOf(pool) === 'custom',
   // Only the two settable states reach the form; a degraded or exhausted pool is still routing.
   status: pool.status === 'disabled' ? 'disabled' : 'active',
   strategy: pool.strategy,
+  subagentPlacement: pool.subagentPlacement,
   tuning: {
     capWindowSharePerDay: pool.keepalive.capWindowSharePerDay,
     coldProbeLimit: pool.keepalive.coldProbeLimit,
@@ -826,8 +909,10 @@ export function PoolDialog({
   const keepaliveBlocked = form.affinity < 300;
   const shortAffinity = form.affinity >= 300 && form.affinity < 3_600;
   const warming = form.keepalive && !keepaliveBlocked;
+  const budgetOf = (accountId: string) => form.budgets[accountId] ?? { period: 'month' as const, usd: '' };
   const input: PoolInput = {
     ...form.engine,
+    affinityMode: form.affinityMode,
     affinityTtlSeconds: form.affinity,
     bodyCaptureHours: form.capture ? form.captureHours : 0,
     cacheDiagnostics: form.cacheDiagnostics,
@@ -837,15 +922,27 @@ export function PoolDialog({
     keepalive: warming
       ? { ...form.tuning, costCapUsdPerDay: form.capEnabled ? form.capUsd : null, enabled: true, warmSubagents: form.warmSubagents }
       : { ...(pool?.keepalive ?? { ...KEEPALIVE_TUNING_DEFAULTS, costCapUsdPerDay: null }), enabled: false },
-    members: Object.entries(form.members).map(([accountId, priority]) => ({ accountId, priority })),
+    members: Object.entries(form.members).map(([accountId, priority]) => {
+      const budget = budgetOf(accountId);
+      // A field that reads no number goes on as NaN, which the validation below holds the save for.
+      return { accountId, budgetPeriod: budget.period, budgetUsd: budget.usd.trim() === '' ? null : Number(budget.usd), priority };
+    }),
     migrateAboveUtilization: form.migrateOn ? form.migrate / 100 : null,
+    // Hidden under the strategy placement, the threshold goes back as stored, so an edit left in it holds nothing.
+    minSharedPrefixTokens:
+      form.sessionPlacement === 'by_warm_prefix'
+        ? form.prefixTokens.trim() === '' ? Number.NaN : Number(form.prefixTokens)
+        : (pool?.minSharedPrefixTokens ?? POOL_AFFINITY_DEFAULTS.minSharedPrefixTokens),
     modelRules: form.modelRules,
     name: form.name.trim(),
     overagePolicy: form.overage,
     preferSubscription: form.preferSubscription,
+    quotaHeaders: form.quotaHeaders,
     selectBelowUtilization: form.selectBelowOn ? form.selectBelow / 100 : null,
+    sessionPlacement: form.sessionPlacement,
     status: form.status,
     strategy: form.strategy,
+    subagentPlacement: form.subagentPlacement,
   };
   const valid = validatePoolInput(input, new Set(accounts.map((a) => a.id)));
 
@@ -862,6 +959,10 @@ export function PoolDialog({
     setForm((f) => (name === 'custom' ? { ...f, failoverCustom: true } : { ...f, engine: { ...f.engine, ...FAILOVER_PRESETS[name] }, failoverCustom: false }));
   const band = bandRefusal(input);
   const memberAccounts = accounts.filter((a) => a.id in form.members);
+  const prefixRefusal = form.sessionPlacement === 'by_warm_prefix' ? prefixThresholdRefusal(form.prefixTokens) : null;
+  const budgetRefused = memberAccounts.map((a) => ({ label: a.label, refusal: budgetRefusal(budgetOf(a.id).usd) })).find((b) => b.refusal !== null);
+  const setBudget = (accountId: string, patch: Partial<{ period: BudgetPeriod; usd: string }>) =>
+    setForm((f) => ({ ...f, budgets: { ...f.budgets, [accountId]: { ...(f.budgets[accountId] ?? { period: 'month', usd: '' }), ...patch } } }));
   const readings = memberAccounts.map((a) => ({ fiveHour: windowOf(a, '5h')?.utilization ?? null, id: a.id, label: a.label, sevenDay: windowOf(a, '7d')?.utilization ?? null }));
   // The route's verdict per stored member, so a member in cooldown is no destination for a shed session.
   const verdict = new Map((pool?.members ?? []).map((m) => [m.accountId, m.eligible]));
@@ -930,6 +1031,12 @@ export function PoolDialog({
               <option value="disabled">Disabled</option>
             </Select>
           </Field>
+          <Field label="Quota headers" hint={QUOTA_HEADERS_HINT}>
+            <Select value={form.quotaHeaders} onChange={(e) => set('quotaHeaders', e.target.value as QuotaHeaders)} aria-label="Quota headers">
+              <option value="pass">Pass through</option>
+              <option value="hide">Hide on committed answers</option>
+            </Select>
+          </Field>
         </>
       ),
     },
@@ -972,6 +1079,45 @@ export function PoolDialog({
             </span>
             {form.customAffinity && <Input type="number" min={60} step={30} value={form.affinity} onChange={(e) => set('affinity', Math.max(0, Number(e.target.value)))} style={{ width: 120 }} aria-label="Session affinity in seconds" />}
           </Field>
+          <Field label="Pin sessions" hint={PIN_HINT}>
+            <Select value={form.affinityMode} onChange={(e) => set('affinityMode', e.target.value as AffinityMode)} aria-label="Pin sessions">
+              <option value="always">Always</option>
+              <option value="when_cached">Only when the request caches</option>
+            </Select>
+          </Field>
+          <Field label="Subagent placement" hint={SUBAGENT_PLACEMENT_HINT}>
+            <Select value={form.subagentPlacement} onChange={(e) => set('subagentPlacement', e.target.value as SubagentPlacement)} aria-label="Subagent placement">
+              <option value="by_cohort">By cohort</option>
+              <option value="by_strategy">By strategy</option>
+              <option value="with_main">With the main conversation</option>
+            </Select>
+          </Field>
+          <Field label="Session placement">
+            <Select value={form.sessionPlacement} onChange={(e) => set('sessionPlacement', e.target.value as SessionPlacement)} aria-label="Session placement">
+              <option value="by_strategy">By strategy</option>
+              <option value="by_warm_prefix">By warm prefix</option>
+            </Select>
+          </Field>
+          {form.sessionPlacement === 'by_warm_prefix' && (
+            <Field label="Minimum shared prefix, tokens" hint={PREFIX_HINT}>
+              <Input
+                type="number"
+                min={0}
+                step={1_000}
+                value={form.prefixTokens}
+                onChange={(e) => set('prefixTokens', e.target.value)}
+                style={{ width: 120 }}
+                aria-label="Minimum shared prefix, tokens"
+                aria-invalid={prefixRefusal ? true : undefined}
+              />
+            </Field>
+          )}
+          {prefixRefusal && (
+            <div className="callout callout--critical" role="alert">
+              <IconWarning size={16} />
+              <div>{prefixRefusal}</div>
+            </div>
+          )}
           <div className="capture">
             <label className="row">
               <input type="checkbox" checked={form.migrateOn} onChange={(e) => set('migrateOn', e.target.checked)} />
@@ -1137,13 +1283,19 @@ export function PoolDialog({
                 <span className="field__label">Set the cache TTL for this pool</span>
                 <p className="field__hint">
                   Every breakpoint the client sends is rewritten to the TTL chosen here. The client's own TTL setting then has no effect through this pool. Applies to every upstream in this pool.
-                  A request that carries no breakpoints is left alone.
                 </p>
               </span>
               <Toggle checked={form.cacheTtl.enabled} onChange={(v) => setCacheTtl('enabled', v)} label="Set the cache TTL for this pool" />
             </div>
             {form.cacheTtl.enabled && (
               <>
+                <div className="field--inline field">
+                  <span className="field__text">
+                    <span className="field__label">Add a cache marker to a request without one</span>
+                    <p className="field__hint">{MARKER_HINT}</p>
+                  </span>
+                  <Toggle checked={form.cacheTtl.injectWhenAbsent} onChange={(v) => setCacheTtl('injectWhenAbsent', v)} label="Add a cache marker to a request without one" />
+                </div>
                 <div className="row" style={{ justifyContent: 'space-between' }}>
                   <span className="field__label">Write cost</span>
                   <CostReferenceLink />
@@ -1161,7 +1313,7 @@ export function PoolDialog({
                   key={`metered-${open}-${pool?.id ?? 'new'}`}
                   name="metered"
                   label="Metered writes"
-                  hint="An api_key upstream, or a subscription upstream in overage, where writes cost money rather than plan quota."
+                  hint={METERED_HINT}
                   rules={form.cacheTtl.metered}
                   onChange={(rules) => setCacheTtl('metered', rules)}
                   models={models}
@@ -1288,11 +1440,12 @@ export function PoolDialog({
         <div className="field">
           <span className="field__label">Members</span>
           <p className="field__hint">Lower priority numbers are tried first, so the list reads in the order the router walks it.</p>
+          <p className="field__hint">{BUDGET_HINT}</p>
           <ul className="member-picker">
             {orderedAccounts.map((a) => {
               const on = a.id in form.members;
               return (
-                <li key={a.id}>
+                <li key={a.id} style={{ flexWrap: 'wrap' }}>
                   <label>
                     <input
                       type="checkbox"
@@ -1326,10 +1479,39 @@ export function PoolDialog({
                       />
                     </span>
                   )}
+                  {/* A line of its own under the member, since beside an email and the priority it would not fit. */}
+                  {on && (
+                    <span className="member-picker__prio" style={{ flexBasis: '100%', justifyContent: 'flex-end' }}>
+                      <span className="muted">Budget, USD</span>
+                      <Input
+                        type="number"
+                        min={0}
+                        step={1}
+                        value={budgetOf(a.id).usd}
+                        onChange={(e) => setBudget(a.id, { usd: e.target.value })}
+                        placeholder="none"
+                        style={{ width: 90 }}
+                        aria-label={`Budget for ${a.label}, USD`}
+                        aria-invalid={budgetRefusal(budgetOf(a.id).usd) ? true : undefined}
+                      />
+                      <Select value={budgetOf(a.id).period} onChange={(e) => setBudget(a.id, { period: e.target.value as BudgetPeriod })} aria-label={`Budget period for ${a.label}`}>
+                        <option value="day">per day</option>
+                        <option value="month">per month</option>
+                      </Select>
+                    </span>
+                  )}
                 </li>
               );
             })}
           </ul>
+          {budgetRefused && (
+            <div className="callout callout--critical" role="alert">
+              <IconWarning size={16} />
+              <div>
+                {budgetRefused.label}: {budgetRefused.refusal}
+              </div>
+            </div>
+          )}
         </div>
       ),
     },

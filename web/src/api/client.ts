@@ -12,6 +12,7 @@ import type {
   AnalyticsPoint,
   AnalyticsQuery,
   ApiKey,
+  BudgetPeriod,
   BurnGroup,
   BurnPoint,
   CapturedBodies,
@@ -116,13 +117,25 @@ export const POOL_ENGINE_DEFAULTS: PoolEngineFields = {
   windDownMinutes: 30,
 };
 
-export interface PoolInput extends PoolEngineFields {
+export type PoolAffinityFields = Pick<Pool, 'affinityMode' | 'minSharedPrefixTokens' | 'quotaHeaders' | 'sessionPlacement' | 'subagentPlacement'>;
+
+/** The store's pin, placement and quota header defaults, which a new pool starts with. */
+export const POOL_AFFINITY_DEFAULTS: PoolAffinityFields = {
+  affinityMode: 'always',
+  minSharedPrefixTokens: 20_000,
+  quotaHeaders: 'pass',
+  sessionPlacement: 'by_strategy',
+  subagentPlacement: 'by_cohort',
+};
+
+export interface PoolInput extends PoolEngineFields, PoolAffinityFields {
   affinityTtlSeconds: number;
   bodyCaptureHours: number;
   cacheDiagnostics: boolean | null;
   cacheTtl: PoolCacheTtl;
   keepalive: PoolKeepalive;
-  members: { accountId: string; priority: number }[];
+  /** A member list replaces the pool's whole membership, so a member sent without a budget clears its budget. */
+  members: { accountId: string; budgetPeriod: BudgetPeriod; budgetUsd: number | null; priority: number }[];
   migrateAboveUtilization: number | null;
   modelRules: ModelRule[];
   name: string;

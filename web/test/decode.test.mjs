@@ -344,6 +344,59 @@ test('a pool the route answers without a cache TTL policy decodes to the default
   assert.equal(d.decodePool({ ...wire, keepalive }).keepalive.warmSubagents, true, 'a keepalive block without the flag warms subagents');
 });
 
+test('a pool decodes the pin, placement and quota fields and its members\' budgets, and encodes them back', () => {
+  const row = fixture('pools').pools[0];
+  const p = d.decodePool(row);
+  assert.deepEqual(
+    [p.affinityMode, p.subagentPlacement, p.sessionPlacement, p.minSharedPrefixTokens, p.quotaHeaders],
+    ['always', 'by_cohort', 'by_strategy', 20_000, 'pass'],
+    'the captured pool holds the store defaults',
+  );
+  const direct = p.members.find((m) => m.accountId === 'direct');
+  assert.deepEqual(
+    [direct.kind, direct.budgetUsd, direct.budgetPeriod, direct.spentUsd, direct.periodEnd],
+    ['api_key', 50, 'month', row.members[1].spent_usd, new Date(row.members[1].period_end).toISOString()],
+    'the budgeted API-key member reads its budget and the spend the ledger reported against it',
+  );
+  const business = p.members.find((m) => m.accountId === 'business');
+  assert.deepEqual([business.kind, business.budgetUsd, business.spentUsd, business.periodEnd], ['oauth', null, null, null], 'a member without a budget reads no spend');
+  assert.deepEqual(p.keys, [{ enabled: true, id: 'desktop', label: 'Desktop', prefix: row.keys[0].prefix }]);
+
+  const wire = {
+    ...row,
+    affinity_mode: 'when_cached',
+    subagent_placement: 'with_main',
+    session_placement: 'by_warm_prefix',
+    min_shared_prefix_tokens: 30_000,
+    quota_headers: 'hide',
+    members: [{ ...row.members[1], budget_usd: 12.5, budget_period: 'day', eligible: 'budget' }],
+    keys: [{ ...row.keys[0], enabled: false }],
+  };
+  const q = d.decodePool(wire);
+  assert.deepEqual([q.affinityMode, q.subagentPlacement, q.sessionPlacement, q.minSharedPrefixTokens, q.quotaHeaders], ['when_cached', 'with_main', 'by_warm_prefix', 30_000, 'hide']);
+  assert.deepEqual([q.members[0].budgetUsd, q.members[0].budgetPeriod, q.members[0].eligible], [12.5, 'day', 'budget'], 'a member at its budget reads the verdict the route names');
+  assert.equal(q.keys[0].enabled, false);
+  const back = d.encodePool({ ...q, name: q.name, status: 'active' });
+  assert.deepEqual(
+    [back.affinity_mode, back.subagent_placement, back.session_placement, back.min_shared_prefix_tokens, back.quota_headers],
+    ['when_cached', 'with_main', 'by_warm_prefix', 30_000, 'hide'],
+  );
+  assert.deepEqual(back.members, [{ account_id: 'direct', budget_period: 'day', budget_usd: 12.5, priority: 1 }], 'a member goes back with its budget and nothing the route reports');
+  assert.equal('keys' in back, false, 'the keys are the registry\'s, never a pool setting');
+
+  const bare = { ...row, members: [{ account_id: 'direct', priority: 0, eligible: 'eligible' }], keys: [{ id: 'k', label: 'K', prefix: 'p' }] };
+  for (const field of ['affinity_mode', 'subagent_placement', 'session_placement', 'min_shared_prefix_tokens', 'quota_headers']) delete bare[field];
+  const defaults = d.decodePool(bare);
+  assert.deepEqual(
+    [defaults.affinityMode, defaults.subagentPlacement, defaults.sessionPlacement, defaults.minSharedPrefixTokens, defaults.quotaHeaders],
+    ['always', 'by_cohort', 'by_strategy', 20_000, 'pass'],
+    'a field the route leaves out reads the store default',
+  );
+  assert.deepEqual([defaults.members[0].budgetUsd, defaults.members[0].budgetPeriod, defaults.members[0].kind], [null, 'month', 'oauth'], 'a member row without the fields reads no budget and no API key');
+  assert.equal(defaults.keys[0].enabled, true, 'a key row without the fields reads the store defaults');
+  assert.equal(d.decodePool({ ...wire, affinity_mode: 'sometimes', quota_headers: 'strip' }).affinityMode, 'always', 'an unknown spelling reads the default');
+});
+
 test('a request page carries the trail with zero-based attempt indexes and the cursor', () => {
   const page = d.decodeRequestPage(fixture('requests'));
   assert.equal(page.nextCursor, null);
@@ -448,9 +501,14 @@ test('the burn series decodes each point with its instant, both token sides, and
   const burn = d.decodeBurn(body);
   assert.equal(burn.bucketSeconds, 3_600);
   assert.equal(burn.points.length, body.points.length);
-  const last = burn.points[burn.points.length - 1];
-  const wire = body.points[body.points.length - 1];
-  assert.deepEqual(last, { at: new Date(wire.at).toISOString(), cachedTokens: 500, group: 'direct', meterTokens: 0, planPercent: wire.plan_percent, uncachedTokens: 1_000, usd: 0.0036 });
+  // The last point the fit shares a plan window for, so every field it is read against holds a value a misnamed field
+  // could not stand in for.
+  const at = body.points.findLastIndex((p) => p.plan_percent !== null);
+  const [last, wire] = [burn.points[at], body.points[at]];
+  assert.ok(wire.meter_tokens > 0 && wire.plan_percent > 0 && wire.cached_tokens > 0 && wire.uncached_tokens > 0, 'the fixture reports a plan point that burned');
+  assert.deepEqual(last, { at: new Date(wire.at).toISOString(), cachedTokens: wire.cached_tokens, group: 'business', meterTokens: wire.meter_tokens, planPercent: wire.plan_percent, uncachedTokens: wire.uncached_tokens, usd: wire.usd });
+  const direct = burn.points[burn.points.length - 1];
+  assert.deepEqual([direct.group, direct.planPercent, direct.usd], ['direct', null, body.points.at(-1).usd], 'an API-key point spends dollars and shares no plan window');
   assert.ok(burn.points.every((p) => isIso(p.at)));
   // Every grouping but the upstream one answers the share as null, which is no fit rather than an idle window.
   const [keyed] = d.decodeBurn({ bucket_seconds: 21_600, points: [{ ...wire, group: 'desktop', plan_percent: null }] }).points;

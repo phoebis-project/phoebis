@@ -1,8 +1,21 @@
-import { CACHE_TTL_DEFAULTS, KEEPALIVE_TUNING_DEFAULTS } from '@/api/client';
-import type { ApiKey, Pool, TrafficBucket } from '@/api/types';
+import { CACHE_TTL_DEFAULTS, KEEPALIVE_TUNING_DEFAULTS, POOL_AFFINITY_DEFAULTS } from '@/api/client';
+import type { ApiKey, BudgetPeriod, Pool, PoolMember, TrafficBucket } from '@/api/types';
 import { createRng } from './rng';
 import { KEY_SAMPLE, POOL_SAMPLE } from './samples';
 import { DAY, HOUR, MINUTE, NOW, ago, ahead, daysAgo, iso, startOfHour } from './time';
+
+/** A member as the story seeds it; the mock reads its kind and its eligibility off the account, as the route does. */
+type MemberSeed = Omit<PoolMember, 'eligible' | 'kind'>;
+/** The route lists a pool's keys from the key registry, so the story seeds none on the pool itself. */
+export type PoolSeed = Omit<Pool, 'keys' | 'members'> & { members: MemberSeed[] };
+
+const unbudgeted = (accountId: string, priority: number): MemberSeed => ({ accountId, budgetPeriod: 'month', budgetUsd: null, periodEnd: null, priority, spentUsd: null });
+
+/** The next UTC calendar boundary after `now`, which is where the ledger's spend period ends. */
+function periodEndAfter(period: BudgetPeriod, now: number): string {
+  const d = new Date(now);
+  return iso(period === 'day' ? Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1) : Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1));
+}
 
 function traffic(seed: number, scale: number): TrafficBucket[] {
   const rng = createRng(seed);
@@ -21,7 +34,7 @@ function traffic(seed: number, scale: number): TrafficBucket[] {
 const ALL_TRAFFIC = traffic(41, 62);
 const CODEX_TRAFFIC = traffic(42, 7);
 
-const POOL_ROWS: Pool[] = [
+const POOL_ROWS: PoolSeed[] = [
   {
     ...POOL_SAMPLE,
     id: 'all',
@@ -33,11 +46,17 @@ const POOL_ROWS: Pool[] = [
     migrateAboveUtilization: null,
     selectBelowUtilization: null,
     affinityTtlSeconds: 600,
+    // Pins only for a request that caches, and a fresh session placed where its static prefix is warm.
+    affinityMode: 'when_cached',
+    minSharedPrefixTokens: POOL_AFFINITY_DEFAULTS.minSharedPrefixTokens,
+    quotaHeaders: 'hide',
+    sessionPlacement: 'by_warm_prefix',
+    subagentPlacement: 'by_cohort',
     keepalive: { ...KEEPALIVE_TUNING_DEFAULTS, enabled: true, costCapUsdPerDay: 4, warmSubagents: true },
     cacheDiagnostics: true,
     cacheTtl: {
       enabled: true,
-      injectWhenAbsent: false,
+      injectWhenAbsent: true,
       plan: {
         keepalive: '1h',
         main: '1h',
@@ -49,10 +68,11 @@ const POOL_ROWS: Pool[] = [
     bodyCaptureHours: 24,
     modelRules: [{ not: true, pattern: 'claude-3*' }],
     members: [
-      { accountId: 'business', eligible: 'eligible', priority: 0 },
-      { accountId: 'mail', eligible: 'cooldown', priority: 0 },
-      { accountId: 'personal', eligible: 'unavailable', priority: 0 },
-      { accountId: 'console', eligible: 'eligible', priority: 1 },
+      unbudgeted('business', 0),
+      unbudgeted('mail', 0),
+      unbudgeted('personal', 0),
+      // Half its monthly budget spent, so the card has a spend line that holds nothing back.
+      { accountId: 'console', budgetPeriod: 'month', budgetUsd: 50, periodEnd: periodEndAfter('month', NOW), priority: 1, spentUsd: 25 },
     ],
     traffic24h: ALL_TRAFFIC,
     requests24h: ALL_TRAFFIC.reduce((s, b) => s + b.requests, 0),
@@ -66,7 +86,8 @@ const POOL_ROWS: Pool[] = [
     ...POOL_SAMPLE,
     id: 'codex',
     name: 'codex',
-    status: 'active',
+    // Its one member has spent its daily budget, which leaves the pool nothing to route to until the day ends.
+    status: 'exhausted',
     strategy: 'round_robin',
     preferSubscription: false,
     overagePolicy: 'allow',
@@ -93,15 +114,38 @@ const POOL_ROWS: Pool[] = [
       { not: false, pattern: 'claude-haiku-4-5*' },
       { not: true, pattern: '*' },
     ],
-    members: [{ accountId: 'evals', eligible: 'eligible', priority: 0 }],
+    members: [{ accountId: 'evals', budgetPeriod: 'day', budgetUsd: 20, periodEnd: periodEndAfter('day', NOW), priority: 0, spentUsd: 20.4 }],
     traffic24h: CODEX_TRAFFIC,
     requests24h: CODEX_TRAFFIC.reduce((s, b) => s + b.requests, 0),
     cost24h: 2.14,
     activePins: 2,
   },
+  {
+    ...POOL_SAMPLE,
+    id: 'studio',
+    name: 'studio',
+    status: 'active',
+    strategy: 'priority',
+    preferSubscription: true,
+    overagePolicy: 'prefer_plan',
+    migrateAboveUtilization: null,
+    selectBelowUtilization: null,
+    affinityTtlSeconds: 3_600,
+    movesPerHour: {},
+    keepalive: { ...KEEPALIVE_TUNING_DEFAULTS, enabled: false, costCapUsdPerDay: null },
+    cacheDiagnostics: null,
+    cacheTtl: { ...CACHE_TTL_DEFAULTS },
+    bodyCaptureHours: 0,
+    modelRules: [],
+    members: [unbudgeted('business', 0)],
+    traffic24h: [],
+    requests24h: 0,
+    cost24h: 0,
+    activePins: 0,
+  },
 ];
 
-export const POOLS: Pool[] = POOL_ROWS;
+export const POOLS: PoolSeed[] = POOL_ROWS;
 
 export const poolById = new Map(POOLS.map((p) => [p.id, p]));
 
@@ -205,6 +249,28 @@ export const KEYS: ApiKey[] = [
     keepaliveOptOut: true,
     usage7d: { cost: 6.2, requests: 402, tokens: 3_900_000 },
     lifetime: { cost: 96.3, requests: 8_140 },
+  },
+  {
+    ...KEY_SAMPLE,
+    id: 'notebook',
+    name: 'notebook',
+    prefix: 'phoebis-a07c',
+    poolId: 'studio',
+    modelRules: [],
+    modelRulesMode: 'extend',
+    longContextTwins: true,
+    enabled: true,
+    status: 'active',
+    createdAt: daysAgo(3),
+    expiresAt: null,
+    lastUsedAt: null,
+    retiredSecretLastUsedAt: null,
+    sessionsOnRetiredSecret: 0,
+    notes: 'Handed out for the data notebooks, which call the Messages API through the SDK.',
+    bodyCaptureHours: null,
+    keepaliveOptOut: false,
+    usage7d: { cost: 0, requests: 0, tokens: 0 },
+    lifetime: { cost: 0, requests: 0 },
   },
 ];
 

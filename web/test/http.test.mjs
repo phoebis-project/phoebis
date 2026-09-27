@@ -133,7 +133,13 @@ test('the burn, rewrite and fit reads send the range and the grouping and answer
   assert.deepEqual([burnUrl.pathname, burnUrl.searchParams.get('range'), burnUrl.searchParams.get('group_by')], ['/admin/analytics/burn', '0,86400000', 'request_class']);
   assert.deepEqual([rewritesUrl.pathname, [...rewritesUrl.searchParams.keys()], rewritesUrl.searchParams.get('range')], ['/admin/analytics/rewrites', ['range'], '0,86400000']);
   assert.deepEqual([fitsUrl.pathname, fitsUrl.search], ['/admin/analytics/fits', ''], 'the fits route reads no query');
-  assert.deepEqual([burn.bucketSeconds, burn.points.length, burn.points.at(-1).meterTokens], [3_600, bodies['/admin/analytics/burn'].points.length, 0]);
+  // A plan point that burned, whose meter tokens and share a misnamed field would read as 0 and null.
+  const planned = bodies['/admin/analytics/burn'].points.findLastIndex((p) => p.plan_percent !== null && p.meter_tokens > 0);
+  assert.ok(planned >= 0, 'the fixture reports a plan point that burned');
+  assert.deepEqual(
+    [burn.bucketSeconds, burn.points.length, burn.points[planned].meterTokens, burn.points[planned].planPercent],
+    [3_600, bodies['/admin/analytics/burn'].points.length, bodies['/admin/analytics/burn'].points[planned].meter_tokens, bodies['/admin/analytics/burn'].points[planned].plan_percent],
+  );
   assert.deepEqual([rewrites.moves, rewrites.points.length], [{ spent: 1 }, bodies['/admin/analytics/rewrites'].points.length]);
   assert.deepEqual(fits.map((f) => [f.accountId, f.window, f.drift]), [['business', 'five_hour', 0.5]]);
 });
@@ -233,20 +239,32 @@ test('a pool save is one PATCH that carries the members with the settings', asyn
     cacheDiagnostics: null,
     cacheTtl: { enabled: false, injectWhenAbsent: false, metered: { keepalive: '5m', main: '5m', models: [], subagent: '5m' }, plan: { keepalive: '1h', main: '1h', models: [], subagent: '5m' } },
     keepalive: { coldProbeLimit: 2, costCapUsdPerDay: null, enabled: false, jitterSeconds1h: 30, jitterSeconds5m: 5, leadSeconds1h: 360, leadSeconds5m: 60, maxIdleSeconds: 3_600, maxIdleTicks: 0, netNegativeGraceProbes: 2, retryMaxSeconds: 300, retrySeconds: 30, stopWhenNetNegative: true, warmSubagents: true },
-    members: [{ accountId: 'business', priority: 0 }, { accountId: 'direct', priority: 1 }],
+    affinityMode: 'when_cached',
+    members: [{ accountId: 'business', budgetPeriod: 'month', budgetUsd: null, priority: 0 }, { accountId: 'direct', budgetPeriod: 'day', budgetUsd: 12.5, priority: 1 }],
     migrateAboveUtilization: null,
+    minSharedPrefixTokens: 30_000,
     modelRules: [],
     name: row.label,
     overagePolicy: 'prefer_plan',
     preferSubscription: false,
+    quotaHeaders: 'hide',
     selectBelowUtilization: 0.4,
+    sessionPlacement: 'by_warm_prefix',
     status: 'active',
     strategy: 'pace',
+    subagentPlacement: 'with_main',
   });
   assert.deepEqual(calls.map((c) => [c.init.method, c.url]), [['PATCH', '/admin/pools/main']], 'a second write could fail after the first landed');
   const body = JSON.parse(calls[0].init.body);
-  assert.deepEqual(body.members, [{ account_id: 'business', priority: 0 }, { account_id: 'direct', priority: 1 }]);
+  assert.deepEqual(body.members, [
+    { account_id: 'business', budget_period: 'month', budget_usd: null, priority: 0 },
+    { account_id: 'direct', budget_period: 'day', budget_usd: 12.5, priority: 1 },
+  ], 'a member without a budget sends null, which clears a stored one');
   assert.equal(body.select_below_utilization, 0.4);
+  assert.deepEqual(
+    [body.affinity_mode, body.subagent_placement, body.session_placement, body.min_shared_prefix_tokens, body.quota_headers],
+    ['when_cached', 'with_main', 'by_warm_prefix', 30_000, 'hide'],
+  );
 });
 
 test('deleting an upstream calls the account route, and a disconnect keeps to the credentials route', async () => {

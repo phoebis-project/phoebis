@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { selectionOrder } from './dist/api.js';
+import { INELIGIBLE_LABEL, selectionOrder } from './dist/api.js';
 
 const HOUR = 3_600_000;
 const MINUTE = 60_000;
@@ -262,4 +262,11 @@ test('pace places the floor group and a winding-down member last', () => {
     ],
     'an API-key member reads its worst reported window against the floor',
   );
+});
+
+test('a member at its budget is skipped with the reason the strip names', () => {
+  const tiers = selectionOrder(pool('priority', 'allow', [member('plan', 0, 'budget'), member('over', 0)]), accounts, [], NOW);
+  assert.deepEqual(tiers[0].next, ['over'], 'the router passes over a member whose spend reached its budget');
+  const skipped = tiers[0].placements.find((p) => p.account.id === 'plan');
+  assert.deepEqual([skipped.ineligible, skipped.rank, INELIGIBLE_LABEL[skipped.ineligible]], ['budget', null, 'at budget']);
 });

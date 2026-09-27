@@ -261,13 +261,46 @@ export interface TrafficBucket {
 }
 
 /** Why routing would refuse a pool member, or `eligible` when it would not. */
-export type MemberEligibility = 'cooldown' | 'eligible' | 'overage' | 'unavailable';
+export type MemberEligibility = 'budget' | 'cooldown' | 'eligible' | 'overage' | 'unavailable';
+
+/** Whether a session's pin is made for every request, or only for one whose body carries a cache marker. */
+export type AffinityMode = 'always' | 'when_cached';
+export type BudgetPeriod = 'day' | 'month';
+/** Whether the upstream's quota headers reach the client on a committed answer. */
+export type QuotaHeaders = 'hide' | 'pass';
+/** Where a fresh session with no pin lands: by the strategy, or where its static prefix is warm. */
+export type SessionPlacement = 'by_strategy' | 'by_warm_prefix';
+/** Where a subagent with no pin of its own lands. */
+export type SubagentPlacement = 'by_cohort' | 'by_strategy' | 'with_main';
+
+export interface PoolMember {
+  accountId: string;
+  budgetPeriod: BudgetPeriod;
+  /** Null is no budget. */
+  budgetUsd: number | null;
+  eligible: MemberEligibility;
+  kind: AccountKind;
+  /** The next UTC day or month boundary, null until the ledger reports. */
+  periodEnd: string | null;
+  priority: number;
+  /** The member's spend in the current period, null until the ledger reports or while it has no budget. */
+  spentUsd: number | null;
+}
+
+/** A key on the pool, as the pool route lists it beside the pool. */
+export interface PoolKey {
+  enabled: boolean;
+  id: string;
+  label: string;
+  prefix: string;
+}
 
 /** Whether a shedding round may mark a warm session: never, only once the cold ones fall short, or by burn alone. */
 export type WarmSessions = 'always' | 'never' | 'when_needed';
 
 export interface Pool {
   activePins: number;
+  affinityMode: AffinityMode;
   /** Idle seconds before a session's pin to an account expires; 0 disables affinity. */
   affinityTtlSeconds: number;
   /** Hours of captured request and response bodies for keys with no override; 0 is off. */
@@ -283,11 +316,14 @@ export interface Pool {
   /** Requests in flight one member may hold before a fresh session skips it. */
   inFlightCap: number;
   keepalive: PoolKeepalive;
-  members: { accountId: string; eligible: MemberEligibility; priority: number }[];
+  keys: PoolKey[];
+  members: PoolMember[];
   /** Null disables the shedding round. */
   migrateAboveUtilization: number | null;
   /** Whether a pin moves off a member whose window for its model is spent while a sibling has allowance left. */
   migrateWhenSpent: boolean;
+  /** Under `by_warm_prefix`, the smallest estimated static prefix, in tokens, that places a fresh session. */
+  minSharedPrefixTokens: number;
   modelRules: ModelRule[];
   /** Moves that landed on the pool's members in the last hour, by reason. */
   movesPerHour: Record<string, number>;
@@ -299,11 +335,13 @@ export interface Pool {
   paceFloor: number;
   /** Order the selection set by account kind before priority; the operator's answer alone. */
   preferSubscription: boolean;
+  quotaHeaders: QuotaHeaders;
   requests24h: number;
   /** The longest throttle a request waits out on its own member before it fails over. */
   retryInPlaceSeconds: number;
   /** Null lets selection pick among every eligible member; otherwise it prefers those under this 5-hour utilization. */
   selectBelowUtilization: number | null;
+  sessionPlacement: SessionPlacement;
   /** The share of a hot member's burn one shedding round moves. */
   shedShare: number;
   /** Seconds a member that shed waits before its next round, and a session shed off it stays away. */
@@ -311,6 +349,7 @@ export interface Pool {
   /** `active` and `disabled` are set by hand; the rest are observed. */
   status: 'active' | 'degraded' | 'disabled' | 'exhausted';
   strategy: PoolStrategy;
+  subagentPlacement: SubagentPlacement;
   traffic24h: TrafficBucket[];
   warmSessions: WarmSessions;
   /** Minutes before an upstream's subscription end from which it takes a fresh session only as the last resort. */

@@ -9,6 +9,7 @@ const pool = d.decodePool(fixture('pools').pools[0]);
 const accounts = new Set(pool.members.map((m) => m.accountId));
 // The captured pool holds the store's defaults, the balanced presets, for every engine field.
 const input = {
+  affinityMode: pool.affinityMode,
   affinityTtlSeconds: pool.affinityTtlSeconds,
   bodyCaptureHours: pool.bodyCaptureHours,
   burnWindowSeconds: pool.burnWindowSeconds,
@@ -16,21 +17,25 @@ const input = {
   cacheTtl: pool.cacheTtl,
   inFlightCap: pool.inFlightCap,
   keepalive: pool.keepalive,
-  members: pool.members.map((m) => ({ accountId: m.accountId, priority: m.priority })),
+  members: pool.members.map((m) => ({ accountId: m.accountId, budgetPeriod: m.budgetPeriod, budgetUsd: m.budgetUsd, priority: m.priority })),
   migrateAboveUtilization: pool.migrateAboveUtilization,
   migrateWhenSpent: pool.migrateWhenSpent,
+  minSharedPrefixTokens: pool.minSharedPrefixTokens,
   modelRules: pool.modelRules,
   name: pool.name,
   overageMoveGraceMinutes: pool.overageMoveGraceMinutes,
   overagePolicy: pool.overagePolicy,
   paceFloor: pool.paceFloor,
   preferSubscription: pool.preferSubscription,
+  quotaHeaders: pool.quotaHeaders,
   retryInPlaceSeconds: pool.retryInPlaceSeconds,
   selectBelowUtilization: pool.selectBelowUtilization,
+  sessionPlacement: pool.sessionPlacement,
   shedShare: pool.shedShare,
   sourceDwellSeconds: pool.sourceDwellSeconds,
   status: 'active',
   strategy: pool.strategy,
+  subagentPlacement: pool.subagentPlacement,
   warmSessions: pool.warmSessions,
   windDownMinutes: pool.windDownMinutes,
 };
@@ -132,6 +137,42 @@ test('a pool input with select-below inside the band is refused and every engine
   for (const mode of ['always', 'never', 'when_needed']) assert.equal(d.validatePoolInput({ ...input, warmSessions: mode }, accounts), true);
   assert.equal(d.validatePoolInput({ ...input, warmSessions: 'sometimes' }, accounts), false);
   assert.equal(d.validatePoolInput({ ...input, migrateWhenSpent: false }, accounts), true);
+});
+
+test('a pool input carries the store defaults for the pin, placement and quota fields, and each unknown spelling is refused', () => {
+  assert.deepEqual(
+    [input.affinityMode, input.subagentPlacement, input.sessionPlacement, input.minSharedPrefixTokens, input.quotaHeaders],
+    ['always', 'by_cohort', 'by_strategy', 20_000, 'pass'],
+  );
+  const spellings = {
+    affinityMode: [['always', 'when_cached'], 'sometimes'],
+    quotaHeaders: [['hide', 'pass'], 'strip'],
+    sessionPlacement: [['by_strategy', 'by_warm_prefix'], 'by_luck'],
+    subagentPlacement: [['by_cohort', 'by_strategy', 'with_main'], 'alone'],
+  };
+  for (const [field, [taken, unknown]] of Object.entries(spellings)) {
+    for (const value of taken) assert.equal(d.validatePoolInput({ ...input, [field]: value }, accounts), true, `${field} ${value} is taken`);
+    assert.equal(d.validatePoolInput({ ...input, [field]: unknown }, accounts), false, `${field} ${unknown} is refused`);
+  }
+  for (const tokens of [0, 20_000, 1_000_000]) assert.equal(d.validatePoolInput({ ...input, minSharedPrefixTokens: tokens }, accounts), true, `${tokens} tokens is taken`);
+  for (const tokens of [-1, 1.5, Number.NaN]) assert.equal(d.validatePoolInput({ ...input, minSharedPrefixTokens: tokens }, accounts), false, `${tokens} tokens is refused`);
+});
+
+test('a member budget is a dollar amount above 0 or none, per day or per month', () => {
+  for (const v of ['', '  ', '0.01', '12.5', '50', '1e3']) assert.equal(d.budgetRefusal(v), null, `${JSON.stringify(v)} is taken`);
+  for (const v of ['0', '-1', 'x', 'Infinity', '12,50']) assert.equal(d.budgetRefusal(v), 'A budget is a dollar amount above 0; leave it empty for no budget.', `${JSON.stringify(v)} is refused`);
+  const [first] = input.members;
+  const withBudget = (budget) => d.validatePoolInput({ ...input, members: [{ ...first, ...budget }] }, accounts);
+  assert.equal(withBudget({ budgetPeriod: 'day', budgetUsd: 12.5 }), true);
+  assert.equal(withBudget({ budgetPeriod: 'month', budgetUsd: null }), true, 'no budget');
+  assert.equal(withBudget({ budgetPeriod: 'month', budgetUsd: 0 }), false, 'the member write refuses a budget of 0');
+  assert.equal(withBudget({ budgetPeriod: 'month', budgetUsd: Number.NaN }), false, 'a field that read no number');
+  assert.equal(withBudget({ budgetPeriod: 'week', budgetUsd: 5 }), false, 'the member write knows a day and a month');
+});
+
+test('the prefix threshold is a whole number of tokens at or above 0', () => {
+  for (const v of ['0', '20000', ' 512 ']) assert.equal(d.prefixThresholdRefusal(v), null, `${JSON.stringify(v)} is taken`);
+  for (const v of ['', '-1', '1.5', 'x', '9007199254740993']) assert.equal(d.prefixThresholdRefusal(v), 'The minimum shared prefix is a whole number of tokens, 0 or more.', `${JSON.stringify(v)} is refused`);
 });
 
 const key = d.decodeKey(fixture('keys').keys[0]);

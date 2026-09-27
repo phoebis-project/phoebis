@@ -1,9 +1,9 @@
 import type { AccountPatch, Api, CreateKeyInput, KeyInput, PoolInput } from '@/api/client';
-import { WARM_SESSIONS_VALUES, decodeLiveDelta, decodeLiveSnapshot } from '@/api/decode';
+import { AFFINITY_MODE_VALUES, BUDGET_PERIOD_VALUES, QUOTA_HEADERS_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES, decodeLiveDelta, decodeLiveSnapshot } from '@/api/decode';
 import { ApiError, catalogUnion, slug } from '@/api/http';
 import type {
   Account, AccountCatalog, AccountInput, AlertDeliveryTest, AlertEvent, AlertKind, AlertRule, AlertRuleInput, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, Delivery, KeyModels, LifecycleDelivery, LiveEvent, MemberEligibility, ModelEvent, ModelPrice,
-  ModelRule, ModelsState, PairingInput, PairingPreview, PairingSession, Pool, RequestDetail, RequestLog, RequestPage, RequestQuery, Role, RuleCooldown, Session, SessionInfo, Settings, Subscription,
+  ModelRule, ModelsState, PairingInput, PairingPreview, PairingSession, Pool, PoolMember, RequestDetail, RequestLog, RequestPage, RequestQuery, Role, RuleCooldown, Session, SessionInfo, Settings, Subscription,
 } from '@/api/types';
 import { urlHost } from '@/lib/format';
 import { modelRulesRefusal, type NumericKeepaliveKey } from '@/lib/forms';
@@ -86,8 +86,29 @@ const engineRefusal = (input: PoolInput): string | null => {
   return null;
 };
 
+/** The pin, placement and quota header spellings, in the order and words of the pool routes; an absent field is kept. */
+const affinityRefusal = (input: Partial<PoolInput>): string | null => {
+  if (input.affinityMode !== undefined && !AFFINITY_MODE_VALUES.some((mode) => mode === input.affinityMode)) return 'affinity_mode must be always or when_cached';
+  if (input.subagentPlacement !== undefined && !SUBAGENT_PLACEMENT_VALUES.some((p) => p === input.subagentPlacement)) return 'subagent_placement must be by_cohort, by_strategy, or with_main';
+  if (input.sessionPlacement !== undefined && !SESSION_PLACEMENT_VALUES.some((p) => p === input.sessionPlacement)) return 'session_placement must be by_strategy or by_warm_prefix';
+  if (input.quotaHeaders !== undefined && !QUOTA_HEADERS_VALUES.some((h) => h === input.quotaHeaders)) return 'quota_headers must be hide or pass';
+  return null;
+};
+
+/** The member write's refusals, which the routes read once the pool's own fields have passed. */
+const memberRefusal = (members: PoolInput['members']): string | null => {
+  for (const m of members) {
+    if (m.budgetUsd != null && !(m.budgetUsd > 0)) return 'budget_usd is above 0';
+    if (m.budgetPeriod !== undefined && !BUDGET_PERIOD_VALUES.some((p) => p === m.budgetPeriod)) return 'budget_period must be day or month';
+  }
+  return null;
+};
+
 /** The affinity floor, the rule list, the keepalive policy's and the engine's refusals, first one first, as the pool routes answer them. */
 const poolRefusal = (input: PoolInput): string | null => {
+  // The route reads the threshold as an unsigned whole number while it parses the body, before any other check.
+  const tokens = input.minSharedPrefixTokens;
+  if (tokens !== undefined && !(Number.isSafeInteger(tokens) && tokens >= 0)) return 'body must be a JSON object';
   const affinity = input.affinityTtlSeconds;
   if (affinity !== 0 && affinity < 60) return 'affinity_ttl_seconds is 0 or at least 60';
   const rules = rulesRefusal(input.modelRules);
@@ -100,12 +121,12 @@ const poolRefusal = (input: PoolInput): string | null => {
   }
   if (k.costCapUsdPerDay !== null && !(k.costCapUsdPerDay > 0 && Number.isFinite(k.costCapUsdPerDay))) return 'keepalive.probe_cost_cap_usd_per_day must be null or a positive number';
   if (k.capWindowSharePerDay !== null && !(k.capWindowSharePerDay >= 0 && k.capWindowSharePerDay <= 1)) return 'keepalive.probe_cap_window_share_per_day must be null or between 0 and 1';
-  const engine = engineRefusal(input);
+  const engine = engineRefusal(input) ?? affinityRefusal(input);
   if (engine) return engine;
   if (k.enabled && affinity < 300) {
     return 'keepalive.enabled requires affinity_ttl_seconds of at least 300: a probe follows the session pin, and a pin shorter than the shortest cache TTL cannot keep the session on the account it warmed';
   }
-  return null;
+  return memberRefusal(input.members);
 };
 
 // The registered redirect is a loopback port on the machine running Claude Code,
@@ -216,13 +237,25 @@ const statusOf = (a: Account, enabled: boolean): Account['status'] => {
 
 /**
  * The pool route's reading of a member, in its order: paused or not ready is unavailable, then an account-wide
- * cooldown, then overage the router observed under a policy that admits none.
+ * cooldown, then a spend at or past the member's budget inside the period it was reported for, then overage the
+ * router observed under a policy that admits none.
  */
-const eligibilityOf = (a: Account | undefined, policy: PoolInput['overagePolicy']): MemberEligibility => {
+const eligibilityOf = (a: Account | undefined, policy: PoolInput['overagePolicy'], member: Pick<PoolMember, 'budgetUsd' | 'periodEnd' | 'spentUsd'>): MemberEligibility => {
   if (!a || !a.routingEnabled || FLAGGED.includes(a.status)) return 'unavailable';
   if (a.cooldowns.some((c) => c.scope === 'account' && Date.parse(c.until) > Date.now())) return 'cooldown';
+  const { budgetUsd: budget, periodEnd, spentUsd: spent } = member;
+  if (budget !== null && spent !== null && spent >= budget && periodEnd !== null && Date.parse(periodEnd) > Date.now()) return 'budget';
   if (policy === 'never' && a.overage?.inUse) return 'overage';
   return 'eligible';
+};
+
+/**
+ * A written member as the route answers it: the kind read off the account, and no spend, since the mock keeps no
+ * ledger to price one from. A member sent without a budget has none, and without a period reads a month.
+ */
+const writtenMember = (m: PoolInput['members'][number], account: Account | undefined, eligible: (member: Omit<PoolMember, 'eligible'>) => MemberEligibility): PoolMember => {
+  const member = { accountId: m.accountId, budgetPeriod: m.budgetPeriod ?? 'month', budgetUsd: m.budgetUsd ?? null, kind: account?.kind ?? 'oauth', periodEnd: null, priority: m.priority, spentUsd: null };
+  return { ...member, eligible: eligible(member) };
 };
 
 /**
@@ -275,7 +308,14 @@ export class MockApi implements Api {
   private keys: ApiKey[] = [...KEYS];
   private lifecycle: LifecycleDelivery[] = LIFECYCLE_DELIVERIES.map((d) => ({ ...d }));
   private pairings = new Map<string, { accountId: string; state: string }>();
-  private pools: Pool[] = POOLS.map((p) => ({ ...p }));
+  // The route reads every member's kind and verdict afresh on each answer; the story's are read once, at load.
+  private pools: Omit<Pool, 'keys'>[] = POOLS.map((p) => ({
+    ...p,
+    members: p.members.map((m) => {
+      const account = this.accounts.find((a) => a.id === m.accountId);
+      return { ...m, eligible: eligibilityOf(account, p.overagePolicy, m), kind: account?.kind ?? 'oauth' };
+    }),
+  }));
   /** What the last preview minted, held beside the URL it read, so a confirm writes the rows that were shown. */
   private pricePreview: { models: ModelPrice[]; token: string; url: string } | null = null;
   private rules: AlertRule[] = ALERT_RULES.map((r) => ({ ...r }));
@@ -296,6 +336,12 @@ export class MockApi implements Api {
 
   private token(n: number) {
     return Array.from({ length: n }, () => 'abcdefghijklmnopqrstuvwxyz0123456789'[this.secretRng.int(0, 35)]).join('');
+  }
+
+  /** The pool as the route answers it, with its keys listed from the key registry at the time of the read. */
+  private poolView(p: Omit<Pool, 'keys'>): Pool {
+    const keys = this.keys.filter((k) => k.poolId === p.id).map((k) => ({ enabled: k.enabled, id: k.id, label: k.name, prefix: k.prefix }));
+    return { ...p, keys };
   }
 
   private account(accountId: string): Account {
@@ -433,13 +479,16 @@ export class MockApi implements Api {
     const refusal = poolRefusal(input);
     if (refusal) throw new ApiError(400, refusal, null);
     if (input.bodyCaptureHours > this.settings.retention.bodyCaptureMaxHours) throw new ApiError(400, 'body_capture_hours exceeds stats.body_capture_max_hours', null);
-    const pool: Pool = {
+    const pool: Omit<Pool, 'keys'> = {
       ...POOL_SAMPLE,
       ...input,
       activePins: 0,
       cost24h: 0,
       id,
-      members: input.members.map((m) => ({ ...m, eligible: eligibilityOf(this.accounts.find((a) => a.id === m.accountId), input.overagePolicy) })),
+      members: input.members.map((m) => {
+        const account = this.accounts.find((a) => a.id === m.accountId);
+        return writtenMember(m, account, (member) => eligibilityOf(account, input.overagePolicy, member));
+      }),
       // The route starts a pool with no list when the body leaves it out, whatever the sample row holds.
       modelRules: input.modelRules ?? [],
       movesPerHour: {},
@@ -447,7 +496,7 @@ export class MockApi implements Api {
       traffic24h: [],
     };
     this.pools = [...this.pools, pool];
-    return latency(pool, 300);
+    return latency(this.poolView(pool), 300);
   }
 
   async deleteAccount(accountId: string) {
@@ -679,7 +728,7 @@ export class MockApi implements Api {
   }
 
   listPools() {
-    return latency(this.pools);
+    return latency(this.pools.map((p) => this.poolView(p)));
   }
 
   listQuotaSnapshots() {
@@ -867,14 +916,19 @@ export class MockApi implements Api {
     }
     const current = this.pools[idx];
     const verdict = new Map(current.members.map((m) => [m.accountId, m.eligible]));
-    const next: Pool = {
+    const next: Omit<Pool, 'keys'> = {
       ...current,
       ...input,
-      // Eligibility is the router's reading of live cooldowns and overages, not something a save can set.
-      members: input.members.map((m) => ({ ...m, eligible: verdict.get(m.accountId) ?? 'eligible' })),
+      // Eligibility is the router's reading of live cooldowns and overages, not something a save can set. A save
+      // does rewrite the budget, and a write answers no spend here, so a budget verdict is read again.
+      members: input.members.map((m) => {
+        const account = this.accounts.find((a) => a.id === m.accountId);
+        const kept = verdict.get(m.accountId) ?? 'eligible';
+        return writtenMember(m, account, (member) => (kept === 'budget' ? eligibilityOf(account, input.overagePolicy, member) : kept));
+      }),
     };
     this.pools = this.pools.map((p, i) => (i === idx ? next : p));
-    return latency(next, 250);
+    return latency(this.poolView(next), 250);
   }
 
   async verifyAccount(accountId: string) {

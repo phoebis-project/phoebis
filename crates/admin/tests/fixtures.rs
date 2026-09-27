@@ -339,6 +339,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
         },
         attempts: vec![
             AttemptRecord {
+                account_kind: "api_key".into(),
                 cooldown_scope: Some("account".into()),
                 cooldown_until: Some(now + 1_800_000),
                 ..attempt("r-failover", 1, "direct", 429, "rate_limited", hour_ago)
@@ -492,15 +493,17 @@ async fn every_route_is_captured_and_holds_its_shape() {
     // A row whose serving attempt carries a placement, so the placements route has a rung to answer rather
     // than an empty list.
     parts.ledger.record(Record::Request {
-        request: request(
-            key_generation,
-            "r-placed",
-            now - 30_000,
-            "desktop",
-            "s3",
-            200,
-            "succeeded",
-        ),
+        request: RequestRecord {
+            ..request(
+                key_generation,
+                "r-placed",
+                now - 30_000,
+                "desktop",
+                "s3",
+                200,
+                "succeeded",
+            )
+        },
         attempts: vec![AttemptRecord {
             account_kind: "api_key".into(),
             selection: Some(

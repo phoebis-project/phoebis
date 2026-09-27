@@ -1,5 +1,5 @@
 import type { AccountPatch, KeyInput, PoolEngineFields, PoolInput } from '@/api/client';
-import { WARM_SESSIONS_VALUES } from '@/api/decode';
+import { AFFINITY_MODE_VALUES, BUDGET_PERIOD_VALUES, QUOTA_HEADERS_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES } from '@/api/decode';
 import type { Account, ApiKey, ModelRule, ModelRulesMode, PoolKeepalive } from '@/api/types';
 import { toLocalInput } from './format';
 import { checkPattern } from './patterns';
@@ -67,15 +67,30 @@ export function bandRefusal(input: Pick<PoolInput, 'migrateAboveUtilization' | '
   return `Select below must sit at or under migrate above minus ${Math.round(MIGRATE_BAND * 100)}%, the band a shed session lands under.`;
 }
 
+/** Why the member write would refuse a budget field as it stands, or null; empty is no budget. */
+export function budgetRefusal(value: string): string | null {
+  if (value.trim() === '') return null;
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? null : 'A budget is a dollar amount above 0; leave it empty for no budget.';
+}
+
+/** Why the pool routes would refuse the prefix threshold field as it stands, or null. */
+export function prefixThresholdRefusal(value: string): string | null {
+  return value.trim() !== '' && whole(Number(value), 0, Number.MAX_SAFE_INTEGER) ? null : 'The minimum shared prefix is a whole number of tokens, 0 or more.';
+}
+
 /** Whether the pool routes would take `input` as it stands, with every member one of `accountIds`. */
 export function validatePoolInput(input: PoolInput, accountIds: ReadonlySet<string>): boolean {
   const k = input.keepalive;
   const tuned = (Object.keys(KEEPALIVE_BOUNDS) as NumericKeepaliveKey[]).every((key) => whole(k[key], KEEPALIVE_BOUNDS[key].min, KEEPALIVE_BOUNDS[key].max));
   const affinity = input.affinityTtlSeconds;
+  // A member written without the budget fields has no budget and a month, as the member write reads it.
+  const budgeted = (m: PoolInput['members'][number]) =>
+    (m.budgetUsd == null || budgetRefusal(String(m.budgetUsd)) === null) && BUDGET_PERIOD_VALUES.some((period) => period === (m.budgetPeriod ?? 'month'));
   return (
     input.name.length > 0 &&
     input.members.length > 0 &&
-    input.members.every((m) => accountIds.has(m.accountId) && whole(m.priority, 0, Number.MAX_SAFE_INTEGER)) &&
+    input.members.every((m) => accountIds.has(m.accountId) && whole(m.priority, 0, Number.MAX_SAFE_INTEGER) && budgeted(m)) &&
     whole(affinity, 0, Number.MAX_SAFE_INTEGER) &&
     (affinity === 0 || affinity >= 60) &&
     // Migration keeps the form's floor of 50 %, above the route's 0.
@@ -86,6 +101,11 @@ export function validatePoolInput(input: PoolInput, accountIds: ReadonlySet<stri
     ratio(input.paceFloor, 0) &&
     (Object.keys(ENGINE_BOUNDS) as (keyof typeof ENGINE_BOUNDS)[]).every((key) => whole(input[key], ENGINE_BOUNDS[key].min, ENGINE_BOUNDS[key].max)) &&
     WARM_SESSIONS_VALUES.some((mode) => mode === input.warmSessions) &&
+    AFFINITY_MODE_VALUES.some((mode) => mode === input.affinityMode) &&
+    SUBAGENT_PLACEMENT_VALUES.some((placement) => placement === input.subagentPlacement) &&
+    SESSION_PLACEMENT_VALUES.some((placement) => placement === input.sessionPlacement) &&
+    prefixThresholdRefusal(String(input.minSharedPrefixTokens)) === null &&
+    QUOTA_HEADERS_VALUES.some((headers) => headers === input.quotaHeaders) &&
     tuned &&
     k.retryMaxSeconds >= k.retrySeconds &&
     (k.costCapUsdPerDay === null || (Number.isFinite(k.costCapUsdPerDay) && k.costCapUsdPerDay > 0)) &&
