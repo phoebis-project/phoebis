@@ -221,7 +221,7 @@ pub const MIGRATE_BAND: f64 = 0.05;
 pub struct SelectionTrace {
     pub strategy: &'static str,
     /// The tier the choice was made in (group, priority, overage bit) as a three-element array; `None` for a
-    /// renewed pin.
+    /// renewed pin or a fresh placement, since neither ran the ranking `choose` does.
     pub tier: Option<Tier>,
     pub renewed: bool,
     pub moved: Option<&'static str>,
@@ -238,8 +238,8 @@ pub struct SelectionTrace {
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct Skipped {
     pub account_id: String,
-    /// A step-2 obstacle (`attempted`, `cooldown`, `operator`, `overage`, `subscription_ended`), or a
-    /// partition's name: `above_ceiling`, `at_cap`, `floor`, `spent`, `winding_down`, or `ranked` for an
+    /// A step-2 obstacle (`attempted`, `budget`, `cooldown`, `operator`, `overage`, `subscription_ended`), or
+    /// a partition's name: `above_ceiling`, `at_cap`, `floor`, `spent`, `winding_down`, or `ranked` for an
     /// eligible sibling the strategy did not pick.
     pub obstacle: &'static str,
 }
@@ -742,7 +742,7 @@ pub fn select(
         &allowed,
         window,
     );
-    let (chosen, tier, placement) = if let Some((candidate, placement, _bypasses_cap)) = placed {
+    let (chosen, tier, placement) = if let Some((candidate, placement)) = placed {
         (candidate, None, Some(placement))
     } else {
         let Some((strategy_choice, tier)) = choose(
@@ -765,9 +765,9 @@ pub fn select(
         };
         if held {
             // The cohort-aware hold is a cap exemption and nothing more: a session already on an account under
-            // any agent lands there rather than waiting, and a still-held subagent
-            // waits where its own cohort is rather than on the strategy's unrelated choice.
-            if let Some(candidate) = any_agent_pin(state, request, &allowed, window) {
+            // any agent lands there rather than waiting, and a still-held subagent waits where its own cohort
+            // is rather than on the strategy's unrelated choice.
+            if let Some(candidate) = any_agent_pin(state, request, &allowed, window, ttl_ms) {
                 (
                     candidate,
                     None,
@@ -778,8 +778,15 @@ pub fn select(
                     }),
                 )
             } else {
-                let cohort =
-                    subagent_cohort(state, snapshot, request, &affinity_guard, &allowed, window);
+                let cohort = subagent_cohort(
+                    state,
+                    snapshot,
+                    pool,
+                    request,
+                    &affinity_guard,
+                    &allowed,
+                    window,
+                );
                 let hold = match cohort {
                     Some(c) => HoldFacts {
                         account_id: c.account_id.clone(),
@@ -865,6 +872,11 @@ pub fn select(
         })
         .collect();
     trace_skipped.extend(skipped);
+    if placement.is_some() {
+        // Rung 3 and `with_main` choose from `allowed`, ahead of step 6's own partitions, so the account they
+        // land on can already carry a partition's label here; the placement itself is proof enough that it serves.
+        trace_skipped.retain(|s| s.account_id != chosen.account_id);
+    }
     (
         SelectResult::Selected(Selection {
             account: selected_row(snapshot, &chosen.account_id),
@@ -1367,7 +1379,7 @@ fn blocked(
 /// since the cohort's own account outweighs it) or the deepest static boundary past the size gate, the cache
 /// gate and the blocker (rung 4, already under the cap by construction). `allowed` is the selection set before
 /// step 6's own partitions, so the source of a move or an account a preference narrowed around can never win a
-/// placement it would not have won on its own account. The bool answers whether the placement bypasses the cap.
+/// placement it would not have won on its own account.
 #[allow(clippy::too_many_arguments)]
 fn placement_of<'a>(
     state: &RoutingState,
@@ -1377,7 +1389,7 @@ fn placement_of<'a>(
     affinity: &AffinityMap,
     allowed: &[&'a Candidate],
     window: &str,
-) -> Option<(&'a Candidate, Placement, bool)> {
+) -> Option<(&'a Candidate, Placement)> {
     let now = request.now;
     let candidate_of =
         |account_id: &str| allowed.iter().copied().find(|c| c.account_id == account_id);
@@ -1395,7 +1407,6 @@ fn placement_of<'a>(
                     depth,
                     prefix_tokens: entry.prefix_tokens,
                 },
-                true,
             ));
         }
     }
@@ -1413,7 +1424,9 @@ fn placement_of<'a>(
             model: request.canonical_model.clone(),
         };
         let pin = state.pin(&key)?;
-        if !admits(state, allowed, window, &pin.account_id, now) {
+        if now - pin.last_used_at > affinity_ttl_ms(pool)
+            || !admits(state, allowed, window, &pin.account_id, now)
+        {
             return None;
         }
         let candidate = candidate_of(&pin.account_id)?;
@@ -1424,7 +1437,6 @@ fn placement_of<'a>(
                 depth: 0,
                 prefix_tokens: 0,
             },
-            true,
         ));
     }
     let by_warm_prefix = if is_subagent {
@@ -1456,50 +1468,53 @@ fn placement_of<'a>(
             depth,
             prefix_tokens: entry.prefix_tokens,
         },
-        false,
     ))
 }
 
 /// The cohort-aware hold's first override: a session already on an account under any agent is never truly
-/// held, whichever agent's turn this is.
+/// held, whichever agent's turn this is. A stale pin of the request's own agent can sort before an admissible
+/// one of another, so every pin of the session is checked rather than just the first the sort finds.
 fn any_agent_pin<'a>(
     state: &RoutingState,
     request: &SelectRequest,
     allowed: &[&'a Candidate],
     window: &str,
+    idle_ms: i64,
 ) -> Option<&'a Candidate> {
     let session_id = request.session_id.as_deref()?;
-    let pin = state.pins().into_iter().find(|p| {
-        p.key_id == request.key_id
-            && p.session_id == session_id
-            && p.model == request.canonical_model
-    })?;
-    if admits(state, allowed, window, &pin.account_id, request.now) {
-        allowed
-            .iter()
-            .copied()
-            .find(|c| c.account_id == pin.account_id)
-    } else {
-        None
-    }
+    let account_id = state
+        .session_pins(&request.key_id, session_id, &request.canonical_model)
+        .find(|p| {
+            request.now - p.last_used_at <= idle_ms
+                && admits(state, allowed, window, &p.account_id, request.now)
+        })?
+        .account_id
+        .clone();
+    allowed.iter().copied().find(|c| c.account_id == account_id)
 }
 
 /// The cohort-aware hold's second override: a subagent still held after the first waits where its own cohort
-/// is, so the wait frees a slot there rather than on the strategy's unrelated choice.
+/// is, so the wait frees a slot there rather than on the strategy's unrelated choice. Gated as rung 4 is (the
+/// zero-size entry, the class knob, the cache gate), so an empty-tools boundary or a strategy-only pool never
+/// names a false cohort.
 fn subagent_cohort<'a>(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
+    pool: &PoolRow,
     request: &SelectRequest,
     affinity: &AffinityMap,
     allowed: &[&'a Candidate],
     window: &str,
 ) -> Option<&'a Candidate> {
-    if request.agent_id == "main" {
+    if request.agent_id == "main"
+        || pool.affinity.subagent_placement != SubagentPlacement::ByCohort
+        || (!request.marker && request.portable)
+    {
         return None;
     }
     let (_, entry) =
         affinity.deepest(&request.canonical_model, &request.static_boundaries, |e| {
-            account_ok(state, snapshot, allowed, window, request.now, e)
+            e.prefix_tokens > 0 && account_ok(state, snapshot, allowed, window, request.now, e)
         })?;
     allowed
         .iter()

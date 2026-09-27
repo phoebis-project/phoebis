@@ -1182,6 +1182,19 @@ impl RoutingState {
         v
     }
 
+    /// Every pin of one key, session and model, under any agent: the cohort-aware hold's own lookup, which
+    /// runs per held selection and so skips the clone and sort a listing pays for in `pins()`.
+    pub(crate) fn session_pins<'a>(
+        &'a self,
+        key_id: &'a str,
+        session_id: &'a str,
+        model: &'a str,
+    ) -> impl Iterator<Item = &'a PinRow> {
+        self.pins
+            .values()
+            .filter(move |p| p.key_id == key_id && p.session_id == session_id && p.model == model)
+    }
+
     /// Expired cooldowns, pins past their pool's idle TTL, pins whose key or pool is gone, and everything
     /// held against an account the registry no longer has. An id is reusable, so state the deleted account
     /// left behind would otherwise be inherited by whatever is created under that id next: a two-day cooldown

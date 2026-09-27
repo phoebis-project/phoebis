@@ -241,13 +241,15 @@ Selection keys every request by `(key id, root session, canonical model)`. The r
 and answers every request over a channel, so two concurrent first requests of the same session cannot claim
 different accounts. The identity a pin is held under is the session header [Clients](#clients) names.
 
-A fresh request with no live pin lands where its prefix is already warm: the deepest message boundary any
-account still holds always wins first, and failing that, the deepest static boundary for a subagent under
-`by_cohort` or a main conversation under `by_warm_prefix`, when the shared prefix is at least
-`min_shared_prefix_tokens`, the request carries or receives a cache marker, and the account is not hot, at its
-cap, winding down, under the Pace floor, spent, or cooling from a shed; anything else lands by the strategy. A
-held request of a subagent cohort waits where its cohort already is rather than on the strategy's own pick; a
-session already on an account, under any of its agents, is never held.
+A fresh request with no live pin lands where its prefix is already warm: the deepest message boundary any account
+still holds always wins first, and failing that, the deepest static boundary for a subagent under `by_cohort`
+or a main conversation under `by_warm_prefix`, when the shared prefix is at least `min_shared_prefix_tokens`,
+the request carries or receives a cache marker, and the account is not at its cap, hot, under the Pace floor, or
+winding down; a cooling or spent account never reaches this check, since the eligible set already excludes it. A
+subagent under `with_main` lands its first request on its parent agent's pin instead of this walk, and one under
+`by_strategy` skips the walk and lands by the strategy alone; every other case that finds no live match also lands
+by the strategy. A held request of a subagent cohort waits where its cohort already is rather than on the strategy's
+own pick; a session already on an account, under any of its agents, is never held while that account can still serve.
 
 The eligible set starts from every account that can serve the canonical model: enabled, paired or keyed, not
 `reauth_required` or `funding_required`, off cooldown, and not already tried by this request.
@@ -352,10 +354,9 @@ conversations, a request that extends any
 conversation the pin has served refreshes it.
 A request that carries `x-claude-code-context-compacted` reads cold whatever else it
 says, so a compacted session goes first in the round's order on the request that carries the fact. A body the router
-cannot read refreshes the pin on every request. A
-keepalive probe replays another request's headers and body, so the router judges none of them: a probe never colds a
-session, and its renewal counts as a refresh. A `count_tokens` request creates no cache entry, so it neither refreshes
-nor colds the pin and leaves its cache TTL as it was.
+cannot read refreshes the pin on every request. A keepalive probe replays another request's headers and body, so
+the router judges none of them: a probe never colds a session, and its renewal counts as a refresh. A `count_tokens`
+request creates no cache entry, so it neither refreshes nor colds the pin and leaves its cache TTL as it was.
 
 **Burn** Each pin keeps a moving average of its priced usage over `burn_window_seconds` twice, in plan-meter
 tokens and in dollars, and the round reads the one the account's funding selects: plan-meter tokens while a
