@@ -194,6 +194,26 @@ test('a key edit sends enabled every time and expires_at only when the dialog ch
   assert.equal(d.encodeKey({ ...input, enabled: true, expiresAt: undefined }).enabled, true);
 });
 
+test("a key decodes its affinity source, or the store's default, and a write sends it as the route spells it", () => {
+  const row = fixture('keys').keys[0];
+  const stored = d.decodeKey(row);
+  assert.deepEqual([stored.affinitySource], [row.affinity_source], 'the captured key answers it');
+  const strict = d.decodeKey({ ...row, affinity_source: 'user_id' });
+  assert.deepEqual([strict.affinitySource], ['user_id']);
+  const bare = { ...row };
+  delete bare.affinity_source;
+  const defaults = d.decodeKey(bare);
+  assert.deepEqual([defaults.affinitySource], ['auto'], 'a row without the field reads the store default');
+  const odd = d.decodeKey({ ...row, affinity_source: 'hash' });
+  assert.deepEqual([odd.affinitySource], ['auto'], 'a spelling the console does not know reads the default rather than a value no control offers');
+  assert.deepEqual([...d.AFFINITY_SOURCE_VALUES], ['auto', 'content', 'session', 'user_id', 'whole_key']);
+  const input = { affinitySource: 'content', bodyCaptureHours: null, enabled: true, keepaliveOptOut: false, longContextTwins: true, modelRules: [], modelRulesMode: 'extend', name: 'strict', notes: null, poolId: 'main' };
+  const body = d.encodeKey(input);
+  assert.deepEqual([body.affinity_source], ['content']);
+  const back = d.decodeKey({ ...row, ...body });
+  assert.deepEqual([back.affinitySource], ['content'], 'the route answers the body back as it was sent');
+});
+
 test('a key\'s processed rule list decodes with the level, the rule, and the cooldowns each entry covers', () => {
   const km = d.decodeKeyModels(fixture('key_models'));
   assert.equal(km.keyId, 'desktop');
@@ -562,9 +582,10 @@ test('a window fit decodes the scale against the prediction and the band pair', 
 
 test('an attempt carries the selection trace with its skipped members as named objects', () => {
   const detail = d.decodeRequest(fixture('request').request);
-  assert.equal(detail.attempts[0].selection, null, 'an attempt stored without a trace reads as none');
+  const [bare] = d.decodeRequest({ attempts: [{ index: 1, selection: null }] }).attempts;
+  assert.equal(bare.selection, null, 'an attempt stored without a trace reads as none');
   // The fixture's trace has not had its cache read folded in, so the member reads as absent.
-  assert.deepEqual(detail.attempts[1].selection, { cacheRead: null, moved: null, renewed: false, skipped: [{ accountId: 'direct', obstacle: 'ranked' }], strategy: 'pace', tier: [0, 0, 0] });
+  assert.deepEqual(detail.attempts[1].selection, { cacheRead: null, cohortHold: null, moved: null, placement: null, renewed: false, skipped: [{ accountId: 'direct', obstacle: 'ranked' }], strategy: 'pace', tier: [0, 0, 0] });
   assert.equal(detail.requestClass, null, 'the fixture request sent no class header');
   // No captured request carries a folded cache read, a move, a renewal or a class yet, so this row is built from
   // the backend's serde names: `SelectionTrace` and `Skipped` in the routing crate, `cache_read` from the ledger.
@@ -574,10 +595,45 @@ test('an attempt carries the selection trace with its skipped members as named o
     request_class: 'subagent',
   });
   assert.equal(row.requestClass, 'subagent');
-  assert.deepEqual(row.attempts[0].selection, { cacheRead: 4_200, moved: 'shed', renewed: false, skipped: [{ accountId: 'direct', obstacle: 'above_ceiling' }, { accountId: 'mail', obstacle: 'subscription_ended' }], strategy: 'round_robin', tier: [1, 2, 1] });
-  assert.deepEqual(row.attempts[1].selection, { cacheRead: null, moved: null, renewed: true, skipped: [], strategy: 'pace', tier: null }, 'a renewed pin answers no tier');
+  assert.deepEqual(row.attempts[0].selection, { cacheRead: 4_200, cohortHold: null, moved: 'shed', placement: null, renewed: false, skipped: [{ accountId: 'direct', obstacle: 'above_ceiling' }, { accountId: 'mail', obstacle: 'subscription_ended' }], strategy: 'round_robin', tier: [1, 2, 1] });
+  assert.deepEqual(row.attempts[1].selection, { cacheRead: null, cohortHold: null, moved: null, placement: null, renewed: true, skipped: [], strategy: 'pace', tier: null }, 'a renewed pin answers no tier');
   const [odd] = d.decodeRequest({ attempts: [{ index: 1, selection: { renewed: false, skipped: [], strategy: 'pace', tier: [0, 1] } }] }).attempts;
   assert.equal(odd.selection.tier, null, 'a tier that is not three numbers reads as none rather than as a partial one');
+});
+
+test('a selection trace decodes its placement', () => {
+  // The fixture's first attempt was placed through the router's own selection, after a hold on its cohort.
+  const wire = fixture('request').request.attempts[0].selection;
+  const placed = d.decodeRequest(fixture('request').request).attempts[0].selection;
+  assert.ok(wire?.placement && wire?.cohort_hold, 'the captured trace carries a placement and a hold');
+  assert.deepEqual(placed.placement, { depth: wire.placement.depth, prefixTokens: wire.placement.prefix_tokens, rung: wire.placement.rung });
+  assert.deepEqual(placed.cohortHold, { cohort: wire.cohort_hold.cohort, waitedOn: wire.cohort_hold.waited_on });
+  assert.deepEqual([placed.placement.rung, placed.placement.depth, placed.placement.prefixTokens > 0], ['content', 2, true]);
+  const trace = (placement, cohort_hold) => d.decodeSelection({ cohort_hold, placement, renewed: false, skipped: [], strategy: 'pace', tier: null });
+  for (const rung of ['content', 'static', 'with_main']) assert.equal(trace({ depth: 1, prefix_tokens: 10, rung }, null).placement.rung, rung);
+  assert.deepEqual([...d.PLACEMENT_RUNG_VALUES], ['content', 'static', 'with_main']);
+  assert.equal(trace({ depth: 1, prefix_tokens: 10, rung: 'guess' }, null).placement, null, 'a rung the console cannot word reads as no placement');
+  assert.equal(trace(null, null).placement, null);
+  assert.deepEqual(trace(null, { cohort: null, waited_on: ['business', 'direct'] }).cohortHold, { cohort: null, waitedOn: ['business', 'direct'] }, "a hold on the strategy's choice names no cohort");
+  const older = d.decodeSelection({ renewed: true, skipped: [], strategy: 'pace', tier: null });
+  assert.deepEqual([older.placement, older.cohortHold], [null, null], 'a trace without either member reads as neither');
+});
+
+test('a request decodes its fork', () => {
+  const wire = fixture('request').request;
+  const detail = d.decodeRequest(wire);
+  assert.deepEqual([detail.forkedFrom, detail.forkDepth], [wire.forked_from, wire.fork_depth]);
+  assert.deepEqual([detail.sessionId, detail.forkedFrom, detail.forkDepth], ['s1', 's0', 2], 'the captured session branched from another at depth 2');
+  const plain = d.decodeRequestPage(fixture('requests')).requests.find((r) => r.id === 'r-failed');
+  assert.deepEqual([plain.forkedFrom, plain.forkDepth], [null, null], 'a request that branched from no other reads no fork');
+});
+
+test('a budget reads as a skip obstacle and as a pin release reason', () => {
+  assert.ok(d.SKIP_OBSTACLE_VALUES.includes('budget'), 'the trace labels a member passed over at its budget');
+  assert.deepEqual(d.decodeSelection({ renewed: false, skipped: [{ account_id: 'direct', obstacle: 'budget' }], strategy: 'pace', tier: [0, 0, 0] }).skipped, [{ accountId: 'direct', obstacle: 'budget' }]);
+  assert.ok(d.PIN_RELEASE_REASON_VALUES?.includes('budget'), 'the drawer words a pin released for a member at its budget');
+  const released = d.decodeRequestEvent({ at: 1_000, detail: { agent_id: 'main', reasons: ['budget', 'spent'] }, kind: 'pin_expired' });
+  assert.deepEqual(released.detail.reasons, ['budget', 'spent']);
 });
 
 test('request rows fold into analytics groups with the same sums the routes answer', () => {

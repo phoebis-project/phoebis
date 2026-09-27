@@ -1,6 +1,38 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { fmtEndsIn, fmtUsd } from './dist/api.js';
+import { fmtAbsolute, fmtEndsIn, fmtHourTick, fmtShortTime, fmtTime, fmtUsd, placementHit, setTimeFormat } from './dist/api.js';
+
+test('a placement is a hit when the cache read what it promised: a content one its prefix, any other one anything', () => {
+  const content = { depth: 3, prefixTokens: 130_000, rung: 'content' };
+  assert.equal(placementHit(content, 120_000), false, 'below the promise is a miss');
+  assert.equal(placementHit(content, 130_000), true, 'at the promise is a hit');
+  assert.equal(placementHit(content, 140_000), true);
+  assert.equal(placementHit(content, null), null, 'no read, no verdict');
+  const fixed = { depth: 2, prefixTokens: 30_000, rung: 'static' };
+  assert.equal(placementHit(fixed, 1), true, 'a static placement with any read is a hit');
+  assert.equal(placementHit(fixed, 0), false);
+  assert.equal(placementHit(fixed, null), null);
+  const main = { depth: 0, prefixTokens: 0, rung: 'with_main' };
+  assert.equal(placementHit(main, 5), true);
+  assert.equal(placementHit(main, 0), false);
+});
+
+test('an instant in the first hour of a day reads 00 on the 24-hour clock and 12 AM on the 12-hour one, never 24', () => {
+  // Local midnight, since every formatter prints in the browser's zone.
+  const midnight = new Date(2026, 8, 17, 0, 5, 9).toISOString();
+  assert.match(fmtAbsolute(midnight), /, 00:05:09$/);
+  assert.equal(fmtTime(midnight), '00:05:09');
+  assert.equal(fmtShortTime(midnight), '00:05');
+  assert.equal(fmtHourTick(Date.parse(midnight)), '00:05');
+  setTimeFormat('12h');
+  try {
+    assert.match(fmtAbsolute(midnight), /, 12:05:09\sAM$/);
+    assert.match(fmtTime(midnight), /^12:05:09\sAM$/);
+    assert.match(fmtShortTime(new Date(2026, 8, 17, 13, 5).toISOString()), /^01:05\sPM$/);
+  } finally {
+    setTimeFormat('24h');
+  }
+});
 
 test('a zero cost never carries a sign, whatever the wire sent', () => {
   assert.equal(fmtUsd(-0), '$0.00', 'an empty sum of f64 costs reaches the decoder as -0');

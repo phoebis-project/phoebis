@@ -204,6 +204,16 @@ test('the key dialog starts from the stored key and builds the edit from it', ()
   assert.deepEqual([fresh.enabled, fresh.expiry, fresh.poolId, fresh.captureMode], [true, 'never', 'all', 'inherit'], 'a new key starts on, with no expiry, in the pool it was opened from');
 });
 
+test('the key dialog carries the affinity source from the stored key to the body', () => {
+  const stored = d.decodeKey({ ...fixture('keys').keys[0], affinity_source: 'session' });
+  const form = d.keyFormOf(stored, 'unused');
+  assert.deepEqual([form.affinitySource], ['session']);
+  const body = d.encodeKey(d.keyInputOf({ ...form, affinitySource: 'user_id' }, NOW));
+  assert.deepEqual([body.affinity_source], ['user_id']);
+  const fresh = d.keyInputOf(d.keyFormOf(null, 'all'), NOW);
+  assert.deepEqual([fresh.affinitySource], ['auto'], 'a new key starts where the store defaults one');
+});
+
 test('a key form carries the in-flight cap and null clears it', () => {
   const row = fixture('keys').keys[0];
   const form = d.keyFormOf(d.decodeKey({ ...row, in_flight_cap: 4 }), 'unused');

@@ -12,7 +12,7 @@ const as = async (role) => {
 /** The pool as the dialog would send it back unchanged, so a case edits only the fields it is about. */
 const poolInputOf = (p) => ({ ...p, members: p.members.map((m) => ({ accountId: m.accountId, budgetPeriod: m.budgetPeriod, budgetUsd: m.budgetUsd, priority: m.priority })) });
 const storyPool = async (api) => poolInputOf((await api.listPools()).find((p) => p.id === 'all'));
-const keyInput = { bodyCaptureHours: null, enabled: true, expiresInDays: null, keepaliveOptOut: false, longContextTwins: true, modelRules: [], modelRulesMode: 'extend', name: 'fresh', notes: null, poolId: 'all' };
+const keyInput = { affinitySource: 'auto', bodyCaptureHours: null, enabled: true, expiresInDays: null, keepaliveOptOut: false, longContextTwins: true, modelRules: [], modelRulesMode: 'extend', name: 'fresh', notes: null, poolId: 'all' };
 const ruleInputOf = (r) => ({ enabled: r.enabled, kind: r.kind, scope: r.scope, threshold: r.threshold, webhookUrl: r.webhookUrl, windowId: r.windowId });
 const newRule = { enabled: true, kind: 'utilization_above', scope: { id: 'all', type: 'pool' }, threshold: 0.8, webhookUrl: 'https://hooks.example.com/phoebis/new', windowId: '5h' };
 
@@ -220,6 +220,31 @@ test('a pool answers its keys from the key registry', async () => {
   const laptop = (await api.listKeys()).find((k) => k.id === 'laptop');
   await api.updateKey('laptop', { ...keyInput, name: laptop.name, poolId: 'studio', expiresAt: undefined });
   assert.ok((await keysOf('studio')).some(([id]) => id === 'laptop') && !(await keysOf('all')).some(([id]) => id === 'laptop'), 'a moved key answers under its new pool alone');
+});
+
+test("a key write stores the affinity source", async () => {
+  const api = await as('admin');
+  const { key } = await api.createKey({ ...keyInput, affinitySource: 'content', name: 'strict' });
+  assert.deepEqual([key.affinitySource], ['content']);
+  const edited = await api.updateKey('strict', { ...keyInput, affinitySource: 'whole_key', expiresAt: undefined, name: 'strict' });
+  assert.deepEqual([edited.affinitySource], ['whole_key']);
+  const plain = { ...keyInput, name: 'plain' };
+  delete plain.affinitySource;
+  const { key: bare } = await api.createKey(plain);
+  assert.deepEqual([bare.affinitySource], ['auto'], "a body without the field takes the route's default");
+});
+
+test("a key write with an unknown affinity source is refused with the route's text", async () => {
+  const api = await as('admin');
+  const before = await api.listKeys();
+  const refusals = [
+    [{ affinitySource: 'hash' }, 'affinity_source must be auto, session, user_id, content, or whole_key'],
+  ];
+  for (const [patch, message] of refusals) {
+    await assert.rejects(() => api.createKey({ ...keyInput, ...patch, name: 'refused' }), refusedAs(400, message), `${message} on create`);
+    await assert.rejects(() => api.updateKey('laptop', { ...keyInput, ...patch, expiresAt: undefined, name: 'laptop' }), refusedAs(400, message), message);
+  }
+  assert.deepEqual(await api.listKeys(), before, 'a refused write stores nothing');
 });
 
 test('a pool write with an unknown spelling or a budget the route refuses is refused with the route\'s text', async () => {

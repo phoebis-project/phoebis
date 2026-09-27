@@ -265,6 +265,8 @@ export type MemberEligibility = 'budget' | 'cooldown' | 'eligible' | 'overage' |
 
 /** Whether a session's pin is made for every request, or only for one whose body carries a cache marker. */
 export type AffinityMode = 'always' | 'when_cached';
+/** What a key identifies a conversation by: the climb's first source that answers, or one source alone. */
+export type AffinitySource = 'auto' | 'content' | 'session' | 'user_id' | 'whole_key';
 export type BudgetPeriod = 'day' | 'month';
 /** Whether the upstream's quota headers reach the client on a committed answer. */
 export type QuotaHeaders = 'hide' | 'pass';
@@ -359,6 +361,7 @@ export interface Pool {
 export type KeyStatus = 'active' | 'disabled' | 'expired' | 'revoked';
 
 export interface ApiKey {
+  affinitySource: AffinitySource;
   /** Hours of captured bodies for this key; null inherits the pool, 0 turns capture off here. */
   bodyCaptureHours: number | null;
   createdAt: string;
@@ -429,12 +432,34 @@ export interface SkippedCandidate {
   obstacle: string;
 }
 
+/**
+ * Where a fresh placement's account came from: `content` the deepest warm message boundary, `static` the deepest
+ * warm static boundary, `with_main` the parent agent's pin or another agent's pin of the session.
+ */
+export interface Placement {
+  /** The matched boundary's depth; 0 for `with_main`. */
+  depth: number;
+  /** The prefix the entry promised, in tokens, which a hit reads up to; 0 for `with_main`. */
+  prefixTokens: number;
+  rung: 'content' | 'static' | 'with_main';
+}
+
+/** The holds a request waited through before this attempt was placed. */
+export interface CohortHold {
+  /** The cohort's account the last hold was placed by; null for a hold on the strategy's choice. */
+  cohort: string | null;
+  waitedOn: string[];
+}
+
 /** Why a selection landed where it did, as the router stored it on the attempt. */
 export interface SelectionTrace {
   /** The cache-read tokens the response reported, folded in at completion; null until then or without a response. */
   cacheRead: number | null;
+  cohortHold: CohortHold | null;
   /** The move reason when a fail-over or a move placed the attempt, null otherwise. */
   moved: string | null;
+  /** Null for a renewal or a choice the strategy made. */
+  placement: Placement | null;
   renewed: boolean;
   skipped: SkippedCandidate[];
   strategy: string;
@@ -506,6 +531,9 @@ export interface RequestLog {
   costUsd: number;
   durationMs: number | null;
   errorCode: string | null;
+  /** A request whose session branched from another: the depth where the two part, and the session it branched from. */
+  forkDepth: number | null;
+  forkedFrom: string | null;
   id: string;
   /** The `created_at` of the key the request was read under, 0 for none; a key id created again is another holder. */
   keyGeneration: number;
@@ -555,6 +583,7 @@ export type PinMigrationReason = 'cooldown' | 'drain' | 'mark' | 'overage' | 're
  * order the selection found them. */
 export type PinReleaseReason =
   | 'attempted'
+  | 'budget'
   | 'client_error'
   | 'cooldown'
   | 'deleted'

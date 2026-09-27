@@ -1,7 +1,7 @@
 import type {
-  Account, AccountCatalog, AccountRollup, AffinityMode, AlertEvent, AlertRule, AlertRuleInput, AnalyticsGroup, AnalyticsPoint, ApiKey, AttemptOutcome, AttemptResponse, BudgetPeriod, BurnPoint, BurnUnit, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
-  Delivery, GuardVerdict, KeepaliveOverview, KeepaliveRecipe, KeyModels, LifecycleDelivery, LiveAttempt, LiveDelta, LiveMetric, LiveRequest, LiveSnapshot, LiveTick, MemberEligibility, ModelEvent, ModelPrice, ModelRule, ModelRulesMode,
-  ModelsState, Overview, PairingSession, PinMigrationReason, PlanFactor, PlanFactors, Pool, PoolCacheTtl, PriceImportPreview, QuotaHeaders, QuotaHistory, QuotaSnapshot, RateLimitWindow, RequestEvent, RequestLog, RequestPage, RequestShape, RewritePoint,
+  Account, AccountCatalog, AccountRollup, AffinityMode, AffinitySource, AlertEvent, AlertRule, AlertRuleInput, AnalyticsGroup, AnalyticsPoint, ApiKey, AttemptOutcome, AttemptResponse, BudgetPeriod, BurnPoint, BurnUnit, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
+  CohortHold, Delivery, GuardVerdict, KeepaliveOverview, KeepaliveRecipe, KeyModels, LifecycleDelivery, LiveAttempt, LiveDelta, LiveMetric, LiveRequest, LiveSnapshot, LiveTick, MemberEligibility, ModelEvent, ModelPrice, ModelRule, ModelRulesMode,
+  ModelsState, Overview, PairingSession, PinMigrationReason, PinReleaseReason, Placement, PlanFactor, PlanFactors, Pool, PoolCacheTtl, PriceImportPreview, QuotaHeaders, QuotaHistory, QuotaSnapshot, RateLimitWindow, RequestEvent, RequestLog, RequestPage, RequestShape, RewritePoint,
   RuleCooldown, SelectionTrace, Session, SessionLifecycleDetail, SessionPlacement, Settings, SubagentPlacement, Subscription, TtlRules, WarmSessions, WindowFit, WindowId,
 } from './types';
 import { ACCOUNT_KIND_VALUES } from './types';
@@ -207,6 +207,7 @@ export function decodeKey(v: unknown): ApiKey {
   // A row from a route that reports no `enabled` is taken as on rather than off.
   const enabled = bool(k.enabled, true);
   return {
+    affinitySource: AFFINITY_SOURCE_VALUES.find((s) => s === str(k.affinity_source)) ?? 'auto',
     bodyCaptureHours: numOrNull(k.body_capture_hours),
     createdAt: isoOr(k.created_at, epoch),
     enabled,
@@ -232,6 +233,7 @@ export function decodeKey(v: unknown): ApiKey {
 }
 
 export const AFFINITY_MODE_VALUES = ['always', 'when_cached'] as const satisfies readonly AffinityMode[];
+export const AFFINITY_SOURCE_VALUES = ['auto', 'content', 'session', 'user_id', 'whole_key'] as const satisfies readonly AffinitySource[];
 export const BUDGET_PERIOD_VALUES = ['day', 'month'] as const satisfies readonly BudgetPeriod[];
 export const ELIGIBILITY_VALUES = ['budget', 'cooldown', 'eligible', 'overage', 'unavailable'] as const satisfies readonly MemberEligibility[];
 export const QUOTA_HEADERS_VALUES = ['hide', 'pass'] as const satisfies readonly QuotaHeaders[];
@@ -336,20 +338,36 @@ const responseOf = (v: unknown): AttemptResponse => { const r = rec(v); return {
 
 /** The move reasons a `pin_migrated` event and a trace's `moved` carry. */
 export const PIN_MIGRATION_REASON_VALUES = ['cooldown', 'drain', 'mark', 'overage', 'return_to_plan', 'shed', 'spent'] as const satisfies readonly PinMigrationReason[];
+/** The reasons a `pin_expired` event carries; the drawer words any other name as sent. */
+export const PIN_RELEASE_REASON_VALUES = [
+  'attempted', 'budget', 'client_error', 'cooldown', 'deleted', 'disconnected', 'expired', 'funding_required', 'overage', 'paused', 'reauth_required', 'released', 'spent', 'subscription_ended', 'unpaired', 'unserved',
+] as const satisfies readonly PinReleaseReason[];
 /**
- * The obstacles the router names for a candidate it passed over: the eligibility checks (`attempted`, `cooldown`,
- * `operator`, `overage`, `subscription_ended`) and the partitions (`above_ceiling`, `at_cap`, `floor`, `ranked`,
- * `spent`, `winding_down`). The trace keeps any other name as sent.
+ * The obstacles the router names for a candidate it passed over: the eligibility checks (`attempted`, `budget`,
+ * `cooldown`, `operator`, `overage`, `subscription_ended`) and the partitions (`above_ceiling`, `at_cap`, `floor`,
+ * `ranked`, `spent`, `winding_down`). The trace keeps any other name as sent.
  */
-export const SKIP_OBSTACLE_VALUES = ['above_ceiling', 'at_cap', 'attempted', 'cooldown', 'floor', 'operator', 'overage', 'ranked', 'spent', 'subscription_ended', 'winding_down'] as const;
+export const SKIP_OBSTACLE_VALUES = ['above_ceiling', 'at_cap', 'attempted', 'budget', 'cooldown', 'floor', 'operator', 'overage', 'ranked', 'spent', 'subscription_ended', 'winding_down'] as const;
+export const PLACEMENT_RUNG_VALUES = ['content', 'static', 'with_main'] as const satisfies readonly Placement['rung'][];
 const tierOf = (v: unknown): SelectionTrace['tier'] => {
   const t = list(v);
   return t.length === 3 && t.every((x) => numOrNull(x) !== null) ? [num(t[0]), num(t[1]), num(t[2])] : null;
 };
+/** A rung the drawer has no words for reads as no placement rather than as a verdict it cannot explain. */
+const placementOf = (v: unknown): Placement | null => {
+  if (v === null || typeof v !== 'object') return null;
+  const p = rec(v);
+  const rung = PLACEMENT_RUNG_VALUES.find((r) => r === str(p.rung));
+  return rung === undefined ? null : { depth: num(p.depth), prefixTokens: num(p.prefix_tokens), rung };
+};
+const cohortHoldOf = (v: unknown): CohortHold | null => (v === null || typeof v !== 'object' ? null : { cohort: strOrNull(rec(v).cohort), waitedOn: strings(rec(v).waited_on) });
 export function decodeSelection(v: unknown): SelectionTrace | null {
   if (v === null || typeof v !== 'object') return null;
   const s = rec(v);
-  return { cacheRead: numOrNull(s.cache_read), moved: strOrNull(s.moved), renewed: bool(s.renewed), skipped: list(s.skipped).map(rec).map((k) => ({ accountId: str(k.account_id), obstacle: str(k.obstacle) })), strategy: str(s.strategy), tier: tierOf(s.tier) };
+  return {
+    cacheRead: numOrNull(s.cache_read), cohortHold: cohortHoldOf(s.cohort_hold), moved: strOrNull(s.moved), placement: placementOf(s.placement), renewed: bool(s.renewed),
+    skipped: list(s.skipped).map(rec).map((k) => ({ accountId: str(k.account_id), obstacle: str(k.obstacle) })), strategy: str(s.strategy), tier: tierOf(s.tier),
+  };
 }
 
 export function decodeRequest(v: unknown): RequestLog {
@@ -357,7 +375,9 @@ export function decodeRequest(v: unknown): RequestLog {
   return {
     accountId: strOrNull(r.account_id), agentId: strOrNull(r.agent_id), agentType: strOrNull(r.agent_type), at: isoOr(r.at, epoch),
     attempts: list(r.attempts).map(rec).map((a) => ({ accountId: str(a.account_id), cacheMissReason: missReason(a.cache_miss_reason), cooldownSet: a.cooldown_set ? { reason: str(rec(a.cooldown_set).reason), until: isoOr(rec(a.cooldown_set).until, epoch) } : null, durationMs: numOrNull(a.duration_ms), index: num(a.index) - 1, outcome: outcomeOf(a.outcome), response: responseOf(a.response), selection: decodeSelection(a.selection), startedAt: isoOr(a.started_at, epoch), upstreamStatus: numOrNull(a.upstream_status), windows: attemptWindows(a.windows) })),
-    canonicalModel: str(r.canonical_model), capturedBodies: bool(r.captured_bodies), client: strOrNull(r.client), clientDrift: strOrNull(r.client_drift), compaction: strOrNull(r.compaction), contextCompacted: strOrNull(r.context_compacted), costUsd: num(r.cost_usd), durationMs: numOrNull(r.duration_ms), errorCode: strOrNull(r.error_code), id: str(r.id), keyGeneration: num(r.key_generation), keyId: strOrNull(r.key_id),
+    canonicalModel: str(r.canonical_model), capturedBodies: bool(r.captured_bodies), client: strOrNull(r.client), clientDrift: strOrNull(r.client_drift), compaction: strOrNull(r.compaction), contextCompacted: strOrNull(r.context_compacted), costUsd: num(r.cost_usd), durationMs: numOrNull(r.duration_ms), errorCode: strOrNull(r.error_code),
+    forkDepth: numOrNull(r.fork_depth), forkedFrom: strOrNull(r.forked_from), id: str(r.id),
+    keyGeneration: num(r.key_generation), keyId: strOrNull(r.key_id),
     kind: REQUEST_KIND_VALUES.find((k) => k === str(r.kind)) ?? 'inference', model: str(r.model),
     outcome: REQUEST_OUTCOME_VALUES.find((o) => o === str(r.outcome)) ?? 'failed',
     poolId: strOrNull(r.pool_id), prevToolMs: numOrNull(r.prev_tool_ms), requestClass: strOrNull(r.request_class), requestTruncated: bool(r.request_truncated), responseTruncated: bool(r.response_truncated), sessionId: strOrNull(r.session_id), shape: shapeOf(r.shape),
@@ -566,7 +586,7 @@ const encodeTtlRules = (r: TtlRules) => ({ keepalive: r.keepalive, main: r.main,
 
 export const encodeAccountPatch = (p: AccountPatch) => ({ cancelled: p.cancelled, subscription_ends_at: p.subscriptionEndsAt === null ? null : Date.parse(p.subscriptionEndsAt) });
 export const encodeKey = (i: KeyInput) => ({
-  body_capture_hours: i.bodyCaptureHours, enabled: i.enabled,
+  affinity_source: i.affinitySource, body_capture_hours: i.bodyCaptureHours, enabled: i.enabled,
   ...(i.expiresAt === undefined ? {} : { expires_at: i.expiresAt === null ? null : Date.parse(i.expiresAt) }),
   ...(i.inFlightCap === undefined ? {} : { in_flight_cap: i.inFlightCap }),
   keepalive_opt_out: i.keepaliveOptOut, label: i.name, long_context_twins: i.longContextTwins,

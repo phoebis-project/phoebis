@@ -1,3 +1,5 @@
+import type { Placement } from '@/api/types';
+
 export type TimeFormat = '12h' | '24h';
 
 let timeFormat: TimeFormat = '24h';
@@ -5,6 +7,9 @@ export const setTimeFormat = (f: TimeFormat) => {
   timeFormat = f;
 };
 export const getTimeFormat = () => timeFormat;
+// `hour12: false` prints the first hour of a day as 24 in en-US (`24:05`, which reads as the day before); the h23
+// cycle prints it as 00.
+const hourCycle = () => (timeFormat === '12h' ? 'h12' : 'h23');
 
 const compact = new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 });
 const compact2 = new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 2 });
@@ -80,7 +85,7 @@ export function fmtAbsolute(isoTime: string | null): string {
   return d.toLocaleString('en-US', {
     day: '2-digit',
     hour: '2-digit',
-    hour12: timeFormat === '12h',
+    hourCycle: hourCycle(),
     minute: '2-digit',
     month: 'short',
     second: '2-digit',
@@ -88,12 +93,17 @@ export function fmtAbsolute(isoTime: string | null): string {
   });
 }
 
+/** A budget period ends on a UTC day boundary, so its end drops the seconds and the year `fmtAbsolute` prints. */
+export function fmtPeriodEnd(isoTime: string): string {
+  return new Date(isoTime).toLocaleString('en-US', { day: '2-digit', hour: '2-digit', hourCycle: hourCycle(), minute: '2-digit', month: 'short' });
+}
+
 export function fmtTime(isoTime: string): string {
-  return new Date(isoTime).toLocaleTimeString('en-US', { hour: '2-digit', hour12: timeFormat === '12h', minute: '2-digit', second: '2-digit' });
+  return new Date(isoTime).toLocaleTimeString('en-US', { hour: '2-digit', hourCycle: hourCycle(), minute: '2-digit', second: '2-digit' });
 }
 
 export function fmtShortTime(isoTime: string): string {
-  return new Date(isoTime).toLocaleTimeString('en-US', { hour: '2-digit', hour12: timeFormat === '12h', minute: '2-digit' });
+  return new Date(isoTime).toLocaleTimeString('en-US', { hour: '2-digit', hourCycle: hourCycle(), minute: '2-digit' });
 }
 
 export function fmtDate(isoTime: string): string {
@@ -105,11 +115,21 @@ export function fmtDayShort(ms: number): string {
 }
 
 export function fmtHourTick(ms: number): string {
-  return new Date(ms).toLocaleTimeString('en-US', { hour: '2-digit', hour12: timeFormat === '12h', minute: '2-digit' });
+  return new Date(ms).toLocaleTimeString('en-US', { hour: '2-digit', hourCycle: hourCycle(), minute: '2-digit' });
 }
 
 /** A client names itself in full, which is wider than any table cell affords; the whole string rides the title. */
 export const shortAgent = (ua: string) => (ua.length > 28 ? `${ua.slice(0, 28)}…` : ua);
 export const shortId = (id: string, n = 8) => (id.length > n ? `${id.slice(0, n)}…` : id);
+
+/**
+ * A placement's verdict against the response's cache read, the rule the placements route counts hits by: a
+ * `content` placement wants the whole prefix it was promised, the others any read at all. Null without a read.
+ */
+export function placementHit(placement: Placement, cacheRead: number | null): boolean | null {
+  if (cacheRead === null) return null;
+  return placement.rung === 'content' ? cacheRead >= placement.prefixTokens : cacheRead > 0;
+}
+
 export const tokensTotal = (u: { cacheRead: number; cacheWrite1h: number; cacheWrite5m: number; input: number; output: number }) =>
   u.input + u.cacheRead + u.cacheWrite5m + u.cacheWrite1h + u.output;

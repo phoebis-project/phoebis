@@ -1,6 +1,6 @@
 import type { AccountPatch, KeyInput, PoolEngineFields, PoolInput } from '@/api/client';
 import { AFFINITY_MODE_VALUES, BUDGET_PERIOD_VALUES, QUOTA_HEADERS_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES } from '@/api/decode';
-import type { Account, ApiKey, ModelRule, ModelRulesMode, PoolKeepalive } from '@/api/types';
+import type { Account, AffinitySource, ApiKey, ModelRule, ModelRulesMode, PoolKeepalive } from '@/api/types';
 import { toLocalInput } from './format';
 import { checkPattern } from './patterns';
 import { MIGRATE_BAND } from './presets';
@@ -118,6 +118,7 @@ export type CaptureMode = 'inherit' | 'off' | 'override';
 
 /** The key dialog's fields as the operator leaves them. */
 export interface KeyForm {
+  affinitySource: AffinitySource;
   captureHours: number;
   captureMode: CaptureMode;
   enabled: boolean;
@@ -137,6 +138,7 @@ export interface KeyForm {
 /** The dialog's starting fields: the stored key's, or a new key's in `poolId`. */
 export function keyFormOf(existing: ApiKey | null, poolId: string): KeyForm {
   return {
+    affinitySource: existing?.affinitySource ?? 'auto',
     captureHours: existing?.bodyCaptureHours || 6,
     captureMode: existing ? (existing.bodyCaptureHours === null ? 'inherit' : existing.bodyCaptureHours === 0 ? 'off' : 'override') : 'inherit',
     // The stored switch rather than `status`: every edit sends it, and an expired or revoked key's status would
@@ -156,6 +158,7 @@ export function keyFormOf(existing: ApiKey | null, poolId: string): KeyForm {
 
 export function keyInputOf(form: KeyForm, now: number): KeyInput {
   return {
+    affinitySource: form.affinitySource,
     bodyCaptureHours: form.captureMode === 'inherit' ? null : form.captureMode === 'off' ? 0 : form.captureHours,
     enabled: form.enabled,
     expiresAt: form.expiry === 'keep' ? undefined : form.expiry === 'never' ? null : new Date(now + Number(form.expiry) * 86_400_000).toISOString(),

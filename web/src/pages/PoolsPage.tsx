@@ -16,7 +16,7 @@ import { SelectionOrder } from '@/components/ui/SelectionOrder';
 import { UtilizationBar } from '@/components/UtilizationBar';
 import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
 import { Badge, Button, Card, Collapsible, ConfirmDialog, CopyButton, Dialog, ErrorState, Field, Input, Menu, SectionedDialog, Select, Skeleton, Toast, Toggle, type DialogSection } from '@/components/ui/primitives';
-import { fmtAbsolute, fmtCompact, fmtHourTick, fmtInt, fmtPct, fmtRelative, fmtUsd, getTimeFormat } from '@/lib/format';
+import { fmtAbsolute, fmtCompact, fmtHourTick, fmtInt, fmtPct, fmtPeriodEnd, fmtRelative, fmtUsd } from '@/lib/format';
 import { ENGINE_BOUNDS, KEEPALIVE_BOUNDS, bandRefusal, budgetRefusal, modelRulesRefusal, prefixThresholdRefusal, validatePoolInput } from '@/lib/forms';
 import { useAsync, useNow } from '@/lib/hooks';
 import { FAILOVER_PRESETS, SHEDDING_PRESETS, failoverPresetOf, sheddingPresetOf, shedPreview, shedPreviewLine, type FailoverPreset, type SheddingPreset } from '@/lib/presets';
@@ -141,8 +141,6 @@ const METERED_HINT = 'Metered: an API-key upstream, or a subscription upstream i
 const KEEPALIVE_TTL_HINT = "The first probe after a turn follows that turn's TTL; the probe itself writes with this TTL, which the next probe follows.";
 const BUDGET_HINT = 'An API-key member whose spend reaches its budget is skipped until the UTC day or month ends; spend is priced at API list rates.';
 const fmtTokens = (n: number) => fmtCompact(n).toLowerCase();
-// A period ends at the start of a UTC day, which `hour12: false` prints as 24:00, the end of that same day.
-const fmtPeriodEnd = (at: string) => new Date(at).toLocaleString('en-US', { day: '2-digit', hour: '2-digit', hourCycle: getTimeFormat() === '12h' ? 'h12' : 'h23', minute: '2-digit', month: 'short' });
 
 export function PoolsPage() {
   const pools = useAsync(() => api.listPools(), []);
@@ -246,7 +244,8 @@ export function PoolsPage() {
           pools.reload();
           keys.reload();
         }}
-        // The pool route lists its keys, so a key created, moved or revoked from the dialog changes the card's warning too.
+        // The pool route lists its keys, so a key created, moved or revoked from the dialog changes the card's
+        // warning too.
         onKeyCreated={() => {
           keys.reload();
           pools.reload();
@@ -649,7 +648,10 @@ function PoolCard({
   );
 }
 
-/** An API-key member's spend against its budget for the period, or that it has none; a subscription member has no budget. */
+/**
+ * An API-key member's spend against its budget for the period, or that it has none; a subscription member has no
+ * budget.
+ */
 function MemberBudget({ member, now }: { member: PoolMember; now: number }) {
   if (member.kind !== 'api_key') return null;
   if (member.budgetUsd === null) return <span className="muted">no budget</span>;
@@ -660,7 +662,8 @@ function MemberBudget({ member, now }: { member: PoolMember; now: number }) {
       <span className="num">
         {spent === null ? '-' : fmtUsd(spent)} of {fmtUsd(budget)} {member.budgetPeriod === 'day' ? 'today' : 'this month'}
       </span>
-      {/* The route's budget verdict says this itself; the badge stands for a member the route names an earlier obstacle for. */}
+      {/* The route's budget verdict says this itself; the badge stands for a member the route names an earlier
+          obstacle for. */}
       {reached && member.eligible !== 'budget' && <AtBudget periodEnd={periodEnd} />}
     </>
   );
@@ -988,7 +991,18 @@ export function PoolDialog({
 
   const moveKey = async () => {
     if (!moving || !moveTo) return;
-    await api.updateKey(moving.id, { bodyCaptureHours: moving.bodyCaptureHours, enabled: moving.enabled, keepaliveOptOut: moving.keepaliveOptOut, longContextTwins: moving.longContextTwins, modelRules: moving.modelRules, modelRulesMode: moving.modelRulesMode, name: moving.name, notes: moving.notes, poolId: moveTo });
+    await api.updateKey(moving.id, {
+      affinitySource: moving.affinitySource,
+      bodyCaptureHours: moving.bodyCaptureHours,
+      enabled: moving.enabled,
+      keepaliveOptOut: moving.keepaliveOptOut,
+      longContextTwins: moving.longContextTwins,
+      modelRules: moving.modelRules,
+      modelRulesMode: moving.modelRulesMode,
+      name: moving.name,
+      notes: moving.notes,
+      poolId: moveTo,
+    });
     setMoved((prev) => new Set(prev).add(moving.id));
     setMoving(null);
     onKeysChanged();

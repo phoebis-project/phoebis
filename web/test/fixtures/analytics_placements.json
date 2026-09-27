@@ -6,11 +6,11 @@
     "rows": [
       {
         "rung": "content",
-        "placements": 1,
-        "hits": 1,
+        "placements": 2,
+        "hits": 2,
         "hit_share": 1.0,
-        "cache_read_tokens": 500,
-        "promised_tokens": 500
+        "cache_read_tokens": 1000,
+        "promised_tokens": 1000
       }
     ]
   }

@@ -1,4 +1,7 @@
-import type { AccountRollup, Attempt, AttemptOutcome, AttemptWindow, CacheMissReason, CapturedBodies, CostSplit, LatencyHistograms, PinMigrationReason, RateLimitWindow, RequestEvent, RequestKind, RequestLog, Usage, WastedProbeReason } from '@/api/types';
+import type {
+  AccountRollup, Attempt, AttemptOutcome, AttemptWindow, CacheMissReason, CapturedBodies, CohortHold, CostSplit, LatencyHistograms, PinMigrationReason, Placement,
+  RateLimitWindow, RequestEvent, RequestKind, RequestLog, Usage, WastedProbeReason,
+} from '@/api/types';
 import { emptyCacheMissReasons, emptyWastedProbeReasons, missCount } from '@/lib/cache';
 import { AGENT_TYPES } from '@/lib/client';
 import { emptyHistogram, histogramOf } from '@/lib/histogram';
@@ -454,6 +457,27 @@ const OBSTACLE_DRAWS: { value: string; weight: number }[] = [
 const pinOf = (r: RequestLog) => `${r.keyId}|${r.sessionId}|${r.canonicalModel}`;
 
 /**
+ * A share of the fresh placements land where a prefix is warm: a main conversation by its messages or its static
+ * prefix, a subagent beside the main conversation as well. The promised size sits near what the answer read, so
+ * some placements by messages read all they were promised and some fall short.
+ */
+function placementOf(p: Rng, r: RequestLog): Placement | null {
+  if (r.kind !== 'inference' || !p.chance(0.4)) return null;
+  const rung = p.weighted<Placement['rung']>(
+    r.agentId === 'main'
+      ? [{ value: 'content', weight: 3 }, { value: 'static', weight: 1 }]
+      : [{ value: 'content', weight: 2 }, { value: 'static', weight: 2 }, { value: 'with_main', weight: 1 }],
+  );
+  if (rung === 'with_main') return { depth: 0, prefixTokens: 0, rung };
+  const read = r.usage.cacheRead > 0 ? r.usage.cacheRead : p.int(20_000, 140_000);
+  return { depth: rung === 'content' ? p.int(2, 9) : p.int(1, 3), prefixTokens: Math.round(read * p.float(0.85, 1.12)), rung };
+}
+
+/** Half the subagents placed afresh first waited on their cohort's account, every upstream at its cap. */
+const cohortHoldOf = (p: Rng, r: RequestLog, placement: Placement | null, accountId: string): CohortHold | null =>
+  placement !== null && r.agentId !== 'main' && p.chance(0.5) ? { cohort: placement.rung === 'with_main' ? null : accountId, waitedOn: [accountId] } : null;
+
+/**
  * The drawer's shed move and the two newer release reasons, each on a pin no other event touches, so the checks
  * that look for an unmoved request beside a moved one still find one.
  */
@@ -484,6 +508,8 @@ function addStoryEvents() {
  */
 function traceRequests() {
   const h = createRng(2_909);
+  // The placements draw from a stream of their own, so every trace drawn before them keeps its values.
+  const p = createRng(4_111);
   const accountOf = new Map(ACCOUNTS.map((a) => [a.id, a]));
   for (const r of REQUESTS) {
     const pool = poolById.get(r.poolId ?? '');
@@ -495,7 +521,9 @@ function traceRequests() {
       // The ledger folds the cache read into the trace of the attempt that answered, and only once it did.
       const cacheRead = i === all.length - 1 && r.status === 200 ? r.usage.cacheRead : null;
       const strategy = pool?.strategy ?? 'pace';
-      if (i === 0 && moved === undefined && h.chance(0.55)) return { ...a, selection: { cacheRead, moved: null, renewed: true, skipped: [], strategy, tier: null } };
+      if (i === 0 && moved === undefined && h.chance(0.55)) {
+        return { ...a, selection: { cacheRead, cohortHold: null, moved: null, placement: null, renewed: true, skipped: [], strategy, tier: null } };
+      }
       const account = accountOf.get(a.accountId);
       const overage = account?.overage?.inUse === true ? 1 : 0;
       // The kind order walks the plan-funded subscriptions, the ones in overage, then the API keys.
@@ -503,13 +531,38 @@ function traceRequests() {
       const priority = pool?.members.find((m) => m.accountId === a.accountId)?.priority ?? 0;
       const tried = new Set(all.slice(0, i).map((x) => x.accountId));
       const skipped = members.filter((id) => id !== a.accountId).map((accountId) => ({ accountId, obstacle: tried.has(accountId) ? 'attempted' : h.weighted(OBSTACLE_DRAWS) }));
-      return { ...a, selection: { cacheRead, moved: typeof moved === 'string' ? moved : null, renewed: false, skipped, strategy, tier: [group, priority, overage] } };
+      const placement = moved === undefined ? placementOf(p, r) : null;
+      const cohortHold = cohortHoldOf(p, r, placement, a.accountId);
+      if (placement !== null) {
+        // A placement runs no ranking, so it names no tier and passes nobody over as ranked.
+        const passed = skipped.filter((s) => s.obstacle !== 'ranked');
+        return { ...a, selection: { cacheRead, cohortHold, moved: null, placement, renewed: false, skipped: passed, strategy, tier: null } };
+      }
+      const traced = { cacheRead, cohortHold, moved: typeof moved === 'string' ? moved : null, placement, renewed: false, skipped, strategy };
+      return { ...a, selection: { ...traced, tier: [group, priority, overage] } };
     });
   }
 }
 
+/**
+ * One Claude Code session's first request branched from another seeded session.
+ */
+function identifyRequests() {
+  for (const r of REQUESTS) {
+    Object.assign(r, { forkDepth: null, forkedFrom: null });
+  }
+  // A session's oldest row is its first request, and the rows run newest first, so the last one set per session
+  // stays. The fork is a turn the log lists, never a probe, and its base another session the story seeds.
+  const base = SESSION_IDS[1];
+  const oldest = new Map<string, RequestLog>();
+  for (const r of REQUESTS) if (r.sessionId !== null) oldest.set(r.sessionId, r);
+  const first = [...oldest.values()].find((r) => r.kind === 'inference' && r.sessionId !== SESSION_IDS[0] && r.sessionId !== base);
+  if (first) Object.assign(first, { forkDepth: 3, forkedFrom: base });
+}
+
 addStoryEvents();
 traceRequests();
+identifyRequests();
 
 const outputTps = (r: RequestLog): number | null => {
   if (r.status !== 200 || r.kind !== 'inference' || r.ttftMs === null) return null;

@@ -183,7 +183,7 @@
         "at": 970000,
         "finished_at": 970900,
         "key_id": "desktop",
-        "key_generation": 1790541769800,
+        "key_generation": 1790546577776,
         "pool_id": "main",
         "account_id": "direct",
         "session_id": "s3",
@@ -294,7 +294,7 @@
         "at": 940000,
         "finished_at": 940900,
         "key_id": "desktop",
-        "key_generation": 1790541769800,
+        "key_generation": 1790546577776,
         "pool_id": "main",
         "account_id": "business",
         "session_id": "s1",
@@ -399,7 +399,7 @@
         "at": 880000,
         "finished_at": 880900,
         "key_id": "desktop",
-        "key_generation": 1790541769800,
+        "key_generation": 1790546577776,
         "pool_id": "main",
         "account_id": "business",
         "session_id": "s2",
@@ -609,7 +609,7 @@
         "at": -2600000,
         "finished_at": -2599100,
         "key_id": "desktop",
-        "key_generation": 1790541769800,
+        "key_generation": 1790546577776,
         "pool_id": "main",
         "account_id": "business",
         "session_id": "s1",
@@ -698,7 +698,24 @@
             "overage_in_use": null,
             "estimated_usd": 0.0036,
             "pricing_version": "2026-09-08",
-            "selection": null,
+            "selection": {
+              "strategy": "pace",
+              "tier": null,
+              "renewed": false,
+              "moved": null,
+              "skipped": [],
+              "placement": {
+                "rung": "content",
+                "depth": 2,
+                "prefix_tokens": 500
+              },
+              "cohort_hold": {
+                "waited_on": [
+                  "direct"
+                ],
+                "cohort": "direct"
+              }
+            },
             "response": {
               "cleared_input_tokens": null,
               "inference_geo": "us",

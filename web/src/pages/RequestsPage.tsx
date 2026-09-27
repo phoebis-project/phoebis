@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api } from '@/api';
 import type { Attempt, CapturedBodies, PinReleaseReason, RequestKind, RequestLog, RequestQuery, Usage, WindowId } from '@/api/types';
+import { PIN_RELEASE_REASON_VALUES } from '@/api/decode';
 import { useAppSettings } from '@/app/settings';
 import { SelectionTrace } from '@/components/SelectionTrace';
 import { AttemptTrail } from '@/components/ui/AttemptTrail';
@@ -50,6 +51,7 @@ const OUTCOME_LABEL: Record<Attempt['outcome'], string> = {
 
 const PIN_RELEASE_LABEL: Record<PinReleaseReason, string> = {
   attempted: 'already tried by this request',
+  budget: 'upstream at its budget',
   client_error: 'client error',
   cooldown: 'account cooled',
   deleted: 'upstream deleted',
@@ -65,7 +67,13 @@ const PIN_RELEASE_LABEL: Record<PinReleaseReason, string> = {
   unpaired: 'upstream unpaired',
   unserved: 'model no longer served here',
 };
-const releaseLabel = (reasons: unknown): string => (Array.isArray(reasons) ? reasons : []).map((r) => PIN_RELEASE_LABEL[r as PinReleaseReason] ?? String(r)).join(', ');
+const releaseLabel = (reasons: unknown): string =>
+  (Array.isArray(reasons) ? reasons : [])
+    .map((r) => {
+      const reason = PIN_RELEASE_REASON_VALUES.find((v) => v === r);
+      return reason === undefined ? String(r) : PIN_RELEASE_LABEL[reason];
+    })
+    .join(', ');
 
 // A fixed three-slot readout: a plan that serves no Fable reports two windows in
 // its headers, and the empty third slot is the point rather than a gap to hide.

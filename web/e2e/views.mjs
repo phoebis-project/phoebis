@@ -935,9 +935,27 @@ async function subscriptionEndForm(theme) {
   await settle();
 }
 
+/** A select's box in the open dialog, found by its field's label, in the terms `measureInput` reads an input. */
+const measureSelect = (label) =>
+  page.locator('dialog[open]').evaluate((el, text) => {
+    const field = [...el.querySelectorAll('.field')].find((f) => f.querySelector('.field__label')?.textContent?.trim() === text);
+    const select = field?.querySelector('select');
+    if (!select) return null;
+    const style = getComputedStyle(select);
+    return {
+      background: style.backgroundColor,
+      border: `${style.borderWidth} ${style.borderStyle} ${style.borderTopColor}`,
+      font: style.fontSize,
+      height: select.getBoundingClientRect().height,
+      padding: `${style.paddingTop} ${style.paddingRight} ${style.paddingBottom} ${style.paddingLeft}`,
+      width: select.getBoundingClientRect().width,
+    };
+  }, label);
+
 /**
  * The key dialog's Requests in flight field against the Name field in the same section: the same input box and the
- * same hint type as the Pool field's. A cap of 0 raises the refusal and holds the Create button.
+ * same hint type as the Pool field's. A cap of 0 raises the refusal and holds the Create button. The
+ * Affinity source select below it is the Expiry select's box, and its hint the Pool hint's type.
  */
 async function keyCapField(theme) {
   const say = (what) => failures.push(`${theme} /keys: ${what}`);
@@ -961,6 +979,22 @@ async function keyCapField(theme) {
   measurements.push(`${theme} /keys cap field ${JSON.stringify({ cap, hints, name })}`);
   for (const finding of compare(cap, name, ['background', 'border', 'font', 'height', 'padding'], 'the Requests in flight input against the Name input')) say(finding);
   if (!hints.cap || hints.cap !== hints.pool) say(`the cap's hint reads ${hints.cap} against the Pool hint's ${hints.pool}`);
+  const expiry = await measureSelect('Expiry');
+  const selectHints = await dialog.evaluate((el) => {
+    const hint = (text) => {
+      const node = [...el.querySelectorAll('.field')].find((f) => f.querySelector('.field__label')?.textContent?.trim() === text)?.querySelector('.field__hint');
+      return node ? `${getComputedStyle(node).fontSize} ${getComputedStyle(node).color} ${getComputedStyle(node).lineHeight}` : null;
+    };
+    return { source: hint('Affinity source') };
+  });
+  for (const label of ['Affinity source']) {
+    const select = await measureSelect(label);
+    measurements.push(`${theme} /keys ${label} select ${JSON.stringify({ expiry, select })}`);
+    for (const finding of compare(select, expiry, ['background', 'border', 'font', 'height', 'padding', 'width'], `the ${label} select against the Expiry select`)) say(finding);
+  }
+  for (const [label, read] of [['Affinity source', selectHints.source]]) {
+    if (!read || read !== hints.pool) say(`the ${label} hint reads ${read} against the Pool hint's ${hints.pool}`);
+  }
   await dialog.locator('input[aria-label="Requests in flight"]').fill('0');
   await settle();
   const refused = await dialog.locator('[role="alert"]', { hasText: 'Requests in flight' }).count();

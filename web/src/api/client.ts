@@ -3,6 +3,7 @@ import type {
   AccountCatalog,
   AccountInput,
   AccountRollup,
+  AffinitySource,
   AlertDeliveryTest,
   AlertEvent,
   AlertKind,
@@ -61,6 +62,7 @@ export interface AccountPatch {
 }
 
 export interface KeyInput {
+  affinitySource: AffinitySource;
   bodyCaptureHours: number | null;
   enabled: boolean;
   /** An ISO instant, or null for no expiry; undefined leaves the stored expiry alone. */

@@ -153,6 +153,7 @@ export const KEYS: ApiKey[] = [
   {
     ...KEY_SAMPLE,
     id: 'desktop',
+    affinitySource: 'auto',
     name: 'desktop',
     prefix: 'phoebis-8f2a',
     poolId: 'all',
@@ -177,6 +178,9 @@ export const KEYS: ApiKey[] = [
   {
     ...KEY_SAMPLE,
     id: 'laptop',
+    // A Claude Code install on a shared machine: the
+    // session id alone keeps its conversations apart.
+    affinitySource: 'session',
     name: 'laptop',
     prefix: 'phoebis-c41d',
     poolId: 'all',
@@ -205,6 +209,7 @@ export const KEYS: ApiKey[] = [
   {
     ...KEY_SAMPLE,
     id: 'batch',
+    affinitySource: 'auto',
     name: 'batch',
     prefix: 'phoebis-5b70',
     poolId: 'codex',
@@ -227,6 +232,7 @@ export const KEYS: ApiKey[] = [
   {
     ...KEY_SAMPLE,
     id: 'ci',
+    affinitySource: 'auto',
     name: 'ci',
     prefix: 'phoebis-19e7',
     poolId: 'codex',
@@ -253,6 +259,7 @@ export const KEYS: ApiKey[] = [
   {
     ...KEY_SAMPLE,
     id: 'notebook',
+    affinitySource: 'auto',
     name: 'notebook',
     prefix: 'phoebis-a07c',
     poolId: 'studio',

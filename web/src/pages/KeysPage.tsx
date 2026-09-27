@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '@/api';
-import type { ApiKey, CreatedApiKey, KeyModels, KeyStatus, ModelRule, ModelRulesMode, Pool } from '@/api/types';
+import type { AffinitySource, ApiKey, CreatedApiKey, KeyModels, KeyStatus, ModelRule, ModelRulesMode, Pool } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { PatternEditor, useCatalogSuggestions } from '@/components/PatternEditor';
@@ -21,6 +21,16 @@ const MODES: { label: string; value: ModelRulesMode }[] = [
 ];
 const RETIRED_SECRET_HINT = 'Sessions whose newest request presented the previous secret; a session that registered a companion and sent no request since counts as switched.';
 const IN_FLIGHT_CAP_HINT = 'Past this many requests in flight the key is refused with a 429 and a Retry-After until one finishes.';
+const AFFINITY_SOURCE_HINT =
+  'Automatic takes the first of: the session id, a parent id the client sends back, its user id, its own messages, the key. A fixed source uses that alone.';
+// The climb's own order, which Automatic runs.
+const AFFINITY_SOURCES: { label: string; value: AffinitySource }[] = [
+  { label: 'Automatic', value: 'auto' },
+  { label: 'Session id', value: 'session' },
+  { label: 'User id', value: 'user_id' },
+  { label: 'Conversation content', value: 'content' },
+  { label: 'Whole key', value: 'whole_key' },
+];
 
 export function KeysPage() {
   const keys = useAsync(() => api.listKeys(), []);
@@ -324,6 +334,7 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing
   const [modelRulesMode, setModelRulesMode] = useState<ModelRulesMode>('extend');
   const [expiry, setExpiry] = useState('never');
   const [inFlightCap, setInFlightCap] = useState('');
+  const [affinitySource, setAffinitySource] = useState<AffinitySource>('auto');
   const [notes, setNotes] = useState('');
   const [captureMode, setCaptureMode] = useState<CaptureMode>('inherit');
   const [captureHours, setCaptureHours] = useState(6);
@@ -354,6 +365,7 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing
     setModelRulesMode(form.modelRulesMode);
     setExpiry(form.expiry);
     setInFlightCap(form.inFlightCap);
+    setAffinitySource(form.affinitySource);
     setNotes(form.notes);
     setCaptureMode(form.captureMode);
     setCaptureHours(form.captureHours);
@@ -374,7 +386,8 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing
   const submit = async () => {
     setBusy(true);
     setError(null);
-    const input = keyInputOf({ captureHours, captureMode, enabled, expiry, inFlightCap, longContextTwins, modelRules, modelRulesMode, name, notes, optOut, poolId }, Date.now());
+    const form = { affinitySource, captureHours, captureMode, enabled, expiry, inFlightCap, longContextTwins, modelRules, modelRulesMode, name, notes, optOut, poolId };
+    const input = keyInputOf(form, Date.now());
     try {
       if (existing) {
         const updated = await api.updateKey(existing.id, input);
@@ -457,6 +470,15 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing
               <div>{capRefusal}</div>
             </div>
           )}
+          <Field label="Affinity source" hint={AFFINITY_SOURCE_HINT}>
+            <Select value={affinitySource} onChange={(e) => setAffinitySource(e.target.value as AffinitySource)} style={{ width: 220 }} aria-label="Affinity source">
+              {AFFINITY_SOURCES.map((s) => (
+                <option key={s.value} value={s.value}>
+                  {s.label}
+                </option>
+              ))}
+            </Select>
+          </Field>
           <Field label="Notes">
             <textarea className="input" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Where this key lives and who holds it" />
           </Field>

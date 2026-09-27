@@ -239,29 +239,34 @@ model-scoped cooldown grouped by model with a clear button per row, and the newe
 
 ### Requests
 
-The table lists thirteen columns: time, key, pool, upstream, model, client, kind, transport, status, attempts,
-TTFB, tokens, and cost. The client column shows the class the router derived from the user agent
-(`claude-code/<entrypoint>` or `other`), with the agent type beneath it on a subagent's turn. One row
-is one client request however many attempts it took, and the attempt trail reads as "mail 429, business 200" when a
-429 on the first account failed over to a 200 on the second. Filters narrow the table: the user agent filter takes a
-pattern (`claude-cli/2.1.*`, `*sdk-cli*`; `*` for any run of characters, `?` for one, a backslash quoting either, and
-a value with no wildcard matching in full), the client filter takes a pattern over the class (`claude-code/*`), and
-the agent type and turn origin filters pick from the values the client's hint headers and attribution line carry.
-Selecting a row opens a drawer with the request's detail, which shows the user agent, the model as the client spelled it
-and, when it differs, the canonical id the router recorded, and the client hints: the agent type, the compaction and
+The table lists thirteen columns: time, key, pool, upstream, model, client, kind, transport, status,
+attempts, TTFB, tokens, and cost. The client column shows the class the router derived from the user agent
+(`claude-code/<entrypoint>` or `other`), with the agent type beneath it on a subagent's turn.
+One row is one client request however many attempts it took, and
+the attempt trail reads as "mail 429, business 200" when a 429 on the first account failed over to a 200 on the second.
+Filters narrow the table: the user agent filter takes a pattern (`claude-cli/2.1.*`, `*sdk-cli*`; `*` for any run of
+characters, `?` for one, a backslash quoting either, and a value with no wildcard matching in full), the client filter
+takes a pattern over the class (`claude-code/*`), and the agent type and turn origin filters pick from the values the
+client's hint headers and attribution line carry. Selecting a row opens a drawer with the request's detail, which shows
+the user agent, the model as the client spelled it and, when it
+differs, the canonical id the router recorded, and the client hints: the agent type, the compaction and
 context-compacted markers, the turn origin, and the tool time before the turn; the trail names an upstream that rejected
 the model and the one that served it. The table holds the requests up to the moment you opened it, so paging does not
 shift as new ones arrive; Refresh brings it up to now. When the session moved during the request, the drawer says from
 which upstream to which and why: rate limited, wound down, upstream marked, over its plan, back to plan, load shed, or
-window spent. When its pin was released without a move, the drawer says from which upstream and every reason the
-router found, among: already tried this request, the creating request's own client error, an account cooldown, the
-account deleted, disconnected, idle past the affinity window, funding required, in overage, paused, needing
-reauthorization, released outright, window spent, the subscription ended, never paired, or no longer serving the
-model. The drawer also shows the strategy the selection used, the tier it drew from, whether the pin continued and
-was renewed, moved (naming the rule), or was placed afresh, whether the cache answered the request and by how many
-of its input tokens, and every candidate the selection passed over with the obstacle in its way: already tried,
-above the ceiling, at its in-flight cap, an account cooldown, at the pace floor, an operator hold, in overage,
-ranked behind another candidate, its subscription ended, its window spent, or winding down.
+window spent. When its pin was released without a move, the drawer says from which upstream and every reason the router
+found, among: already tried this request, the upstream at its spend budget, the creating request's own client error, an
+account cooldown, the account deleted, disconnected, idle past the affinity window, funding required, in overage,
+paused, needing reauthorization, released outright, window spent, the subscription ended, never paired, or no longer
+serving the model. The drawer also shows the strategy the selection used, the tier it drew from, whether the pin
+continued and was renewed, moved (naming the rule), or was placed afresh, whether the cache answered the request and by
+how many of its input tokens, and every candidate the selection passed over with the obstacle in its way: already tried,
+above the ceiling, at its in-flight cap, at its spend budget, an account cooldown, at the pace floor, an operator hold,
+in overage, ranked behind another candidate, its subscription ended, its window spent, or winding down. A placement
+names where it landed: by its messages or by its static prefix at the depth that matched, or with the main conversation,
+and the upstream it waited on first when every upstream was at its cap. Its cache line reads the placement as a hit or a
+miss against the prefix it was promised: a placement by its messages is a hit when the response read at least that
+prefix, one by its static prefix when it read anything, and one with the main conversation keeps the plain cache line.
 
 ![The Requests view: the filterable table with its client column](assets/requests-light.png#only-light)
 ![The Requests view: the filterable table with its client column](assets/requests-dark.png#only-dark)

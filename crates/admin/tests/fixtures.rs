@@ -269,6 +269,84 @@ async fn every_route_is_captured_and_holds_its_shape() {
         other => panic!("the pool's two eligible members answer a selection, not {other:?}"),
     };
     let trace_json = serde_json::to_string(&selection.trace).unwrap();
+    // The failover request's first attempt lands where its messages' prefix is warm, after one hold on its
+    // cohort's account, so `request.json` captures a placement and a hold as `select` serializes them on the
+    // attempt the shape check reads. The boundaries stand for the conversation `s1` forked from.
+    let boundaries: Vec<String> = vec!["b-fixture-1".into(), "b-fixture-2".into()];
+    parts
+        .router
+        .report(phoebis_routing::Report::Affinity(phoebis_routing::AffinityReport {
+            account_id: "direct".into(),
+            incarnation: snapshot
+                .account("direct")
+                .expect("the direct account is in the snapshot")
+                .incarnation,
+            key_id: "desktop".into(),
+            key_generation,
+            canonical_model: "claude-sonnet-5".into(),
+            root: Some("s0".into()),
+            static_boundaries: Vec::new(),
+            message_boundaries: boundaries.clone(),
+            static_sizes: Vec::new(),
+            message_id: None,
+            request_id: None,
+            static_ttl_ms: None,
+            message_ttl_ms: Some(300_000),
+            cache_touched: true,
+            prefix_tokens: 500,
+            now,
+        }));
+    let placed = parts
+        .router
+        .select(phoebis_routing::SelectRequest {
+            key_id: "desktop".into(),
+            key_generation,
+            agent_id: "main".into(),
+            // No session, so the placement writes no pin and `sessions.json` keeps the one pinned row above.
+            session_id: None,
+            canonical_model: "claude-sonnet-5".into(),
+            candidates: phoebis_routing::resolve(
+                &snapshot,
+                &key_row,
+                "claude-sonnet-5",
+                "claude-sonnet-5",
+            )
+            .expect("the pool's model rules allow claude-sonnet-5"),
+            portable: true,
+            attempted: Vec::new(),
+            now,
+            fallback_ms: 60_000,
+            revision: snapshot.revision,
+            probe: false,
+            count: false,
+            request_class: None,
+            context_compacted: false,
+            static_hash: None,
+            boundaries: [boundaries.as_slice(), &["b-fixture-3".to_string()]].concat(),
+            client: ClientClass::ClaudeCode,
+            static_boundaries: Vec::new(),
+            marker: false,
+            parent_agent_id: None,
+            holds: vec![phoebis_routing::HoldFacts {
+                account_id: "direct".into(),
+                cohort: Some("direct".into()),
+            }],
+        })
+        .await
+        .unwrap();
+    let placed_json = match &placed.result {
+        phoebis_routing::SelectResult::Selected(selection) => {
+            assert!(
+                selection.trace.placement.is_some() && selection.trace.cohort_hold.is_some(),
+                "the warm prefix places the request and the hold is on its trace, not {:?}",
+                selection.trace
+            );
+            serde_json::to_string(&selection.trace).unwrap()
+        }
+        other => panic!("the warm prefix's account answers a selection, not {other:?}"),
+    };
+    // Its in-flight slot goes back now, so no later capture reads the account as busy.
+    drop(placed);
     let bucket = phoebis_ledger::bucket_of(now - 60_000);
     parts
         .db
@@ -342,6 +420,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 account_kind: "api_key".into(),
                 cooldown_scope: Some("account".into()),
                 cooldown_until: Some(now + 1_800_000),
+                selection: Some(placed_json),
                 ..attempt("r-failover", 1, "direct", 429, "rate_limited", hour_ago)
             },
             AttemptRecord {

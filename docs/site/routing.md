@@ -178,6 +178,10 @@ key cannot be re-enabled (`409`). Delete removes the key outright. The console's
 for a key: "Bodies contain the prompts, file contents, and tool results of every session using this key. Only
 the admin secret can read them."
 
+The key form sets `affinity_source` as
+**Affinity source** (Automatic, Session id, User id, Conversation content, or Whole key) in its General
+section after Requests in flight.
+
 ![The API keys view: stat tiles and the table of keys with prefix, pool, usage, and actions][kl]
 ![The API keys view: stat tiles and the table of keys with prefix, pool, usage, and actions][kd]
 

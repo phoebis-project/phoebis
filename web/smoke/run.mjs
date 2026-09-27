@@ -1620,8 +1620,9 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
 {
   // A key an operator switched off is refused at routing, so the table may not draw it as active.
   const rowOf = (name) => [...m.container.querySelectorAll('.card--table tbody tr')].find((row) => row.children[0]?.querySelector('b')?.textContent?.trim() === name);
-  const badgeOf = (name) => rowOf(name)?.querySelector('.badge')?.textContent?.trim() ?? 'absent';
-  const rows = [...m.container.querySelectorAll('.card--table tbody tr')].map((row) => [row.children[0]?.querySelector('b')?.textContent?.trim(), row.querySelector('.badge')?.textContent?.trim()]);
+  const statusOf = (row) => row?.querySelector('td:nth-child(7) .badge')?.textContent?.trim();
+  const badgeOf = (name) => statusOf(rowOf(name)) ?? 'absent';
+  const rows = [...m.container.querySelectorAll('.card--table tbody tr')].map((row) => [row.children[0]?.querySelector('b')?.textContent?.trim(), statusOf(row)]);
   const active = [...m.container.querySelectorAll('.stat-grid .stat')].find((t) => t.querySelector('.stat__label')?.textContent === 'Active')?.querySelector('.stat__value')?.textContent ?? '';
   results.push({
     name: '/keys a disabled key reads disabled and is out of the Active count',
@@ -1660,6 +1661,20 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
     const general = [...(dlg?.querySelectorAll('.dialog-section') ?? [])].find((sec) => sec.getAttribute('aria-label') === 'General');
     const labels = [...(general?.querySelectorAll('.field__label') ?? [])].map((l) => l.textContent?.trim());
     results.push({ name: '/keys the in-flight cap follows the expiry in the General section', ok: labels.indexOf('Requests in flight') === labels.indexOf('Expiry') + 1 && labels.includes('Expiry'), missing: labels });
+    // What the key identifies a conversation by follows the cap, a select at its default.
+    const optionsOf = (label) => [...(general?.querySelector(`select[aria-label="${label}"]`)?.options ?? [])].map((o) => `${o.value}:${o.textContent?.trim()}`);
+    const valueOf = (label) => general?.querySelector(`select[aria-label="${label}"]`)?.value;
+    results.push({
+      name: '/keys the Affinity source select follows the cap with its options and the default',
+      ok:
+        labels.indexOf('Affinity source') === labels.indexOf('Requests in flight') + 1 &&
+        JSON.stringify(optionsOf('Affinity source')) === JSON.stringify(['auto:Automatic', 'session:Session id', 'user_id:User id', 'content:Conversation content', 'whole_key:Whole key']) &&
+        valueOf('Affinity source') === 'auto',
+      missing: [JSON.stringify(labels), JSON.stringify(optionsOf('Affinity source')), String(valueOf('Affinity source'))],
+    });
+    expect('/keys the Affinity source select carries its hint', general?.textContent ?? '', [
+      'Automatic takes the first of: the session id, a parent id the client sends back, its user id, its own messages, the key. A fixed source uses that alone.',
+    ]);
     const cap = general?.querySelector('input[aria-label="Requests in flight"]');
     const set = (v) => {
       Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(cap, v);
@@ -1819,8 +1834,8 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
   const saved = !(([...m.container.querySelectorAll('dialog[open]')].pop()?.textContent ?? '').includes('Edit batch'));
   results.push({
     name: '/keys saving a disabled key unchanged keeps it disabled',
-    ok: off === 'false' && saved && rowOf('batch')?.querySelector('.badge')?.textContent?.trim() === 'disabled',
-    missing: [String(off), saved ? '' : 'the dialog stayed open', rowOf('batch')?.querySelector('.badge')?.textContent?.trim() ?? 'no batch row'],
+    ok: off === 'false' && saved && rowOf('batch')?.querySelector('td:nth-child(7) .badge')?.textContent?.trim() === 'disabled',
+    missing: [String(off), saved ? '' : 'the dialog stayed open', rowOf('batch')?.querySelector('td:nth-child(7) .badge')?.textContent?.trim() ?? 'no batch row'],
   });
   const laptopDlg = await editOf('laptop');
   const laptopCap = laptopDlg?.querySelector('input[aria-label="Requests in flight"]')?.value;
@@ -2167,7 +2182,7 @@ expect('/requests', m.text(), ['Columns (13)', 'Rows', 'SSE', 'Details', 'Client
   const printed = first?.querySelector('.sub.mono')?.textContent?.replace(/…$/, '') ?? '';
   const row = printed ? requests.find((r) => r.id.startsWith(printed)) : undefined;
   const age = row ? CLOCK_ORIGIN - Date.parse(row.at) : Number.NaN;
-  const needle = new Date(CLOCK_ORIGIN - age).toLocaleString('en-US', { day: '2-digit', hour: '2-digit', hour12: false, minute: '2-digit', month: 'short', second: '2-digit', year: 'numeric' });
+  const needle = new Date(CLOCK_ORIGIN - age).toLocaleString('en-US', { day: '2-digit', hour: '2-digit', hourCycle: 'h23', minute: '2-digit', month: 'short', second: '2-digit', year: 'numeric' });
   const title = first?.querySelector('td[title]')?.getAttribute('title') ?? '';
   // The story spans the day before its anchor, and every row sits at least a second before it.
   results.push({ name: '/requests renders an absolute time from the pinned clock', ok: age > 0 && age <= 86_460_000 && title === needle, missing: [`age ${age} ms`, `title ${title}`, `needle ${needle}`] });
@@ -2344,13 +2359,41 @@ if (failoverRow) {
     results.push({ name: '/requests drawer reads a renewed pin as continued, with no tier and nothing passed over', ok: drawn.head.includes('continued, pin renewed') && !drawn.head.includes('group ') && drawn.skipped.length === 0, missing: [drawn.head, ...drawn.skipped] });
     expect('/requests drawer needles for the trace', m.text(), ['Selection', 'renewed']);
   }
-  const fresh = requests.find((r) => r.attempts.length === 1 && r.attempts[0].selection && !r.attempts[0].selection.renewed && r.attempts[0].selection.moved === null && r.attempts[0].selection.skipped.length > 0);
+  const fresh = requests.find((r) => r.attempts.length === 1 && r.attempts[0].selection && !r.attempts[0].selection.renewed && r.attempts[0].selection.moved === null && r.attempts[0].selection.placement === null && r.attempts[0].selection.skipped.length > 0);
   results.push({ name: 'fixture: a request placed afresh past other members', ok: fresh !== undefined, missing: [] });
   if (fresh) {
     await m.navigate(`/requests/${fresh.id}`);
     await m.settle(300);
     const drawn = traceOf(m.container.querySelector('.drawer .selection-trace'));
     results.push({ name: '/requests drawer reads a fresh placement', ok: drawn.head.includes('fresh placement') && drawn.skipped.length === fresh.attempts[0].selection.skipped.length, missing: [drawn.head, ...drawn.skipped] });
+  }
+  // A placement by a warm prefix reads its rung and depth, and the cache read against the prefix it was promised.
+  const placedBy = (verdict) =>
+    requests.find((r) => {
+      const s = r.attempts.length === 1 ? r.attempts[0].selection : null;
+      return s?.placement?.rung === 'content' && s.cacheRead !== null && (s.cacheRead >= s.placement.prefixTokens) === verdict;
+    });
+  for (const [verdict, word] of [[true, 'hit'], [false, 'miss']]) {
+    const placed = placedBy(verdict);
+    results.push({ name: `fixture: a request placed by its messages whose cache read is a ${word}`, ok: placed !== undefined, missing: [] });
+    if (!placed) continue;
+    await m.navigate(`/requests/${placed.id}`);
+    await m.settle(300);
+    const drawn = traceOf(m.container.querySelector('.drawer .selection-trace'));
+    const depth = placed.attempts[0].selection.placement.depth;
+    results.push({
+      name: `/requests drawer reads a placement by its messages as a ${word} against the prefix it was promised`,
+      ok: drawn.head.includes(`placed by its messages, depth ${depth}`) && new RegExp(`${word}, [0-9.]+[KM]? of [0-9.]+[KM]? promised tokens read`).test(drawn.head) && !drawn.head.includes('group ') && !drawn.head.includes('fresh placement'),
+      missing: [placed.id, drawn.head],
+    });
+  }
+  const held = requests.find((r) => r.attempts.length === 1 && r.attempts[0].selection?.cohortHold?.cohort);
+  results.push({ name: 'fixture: a subagent placed after a hold on its cohort', ok: held !== undefined, missing: [] });
+  if (held) {
+    await m.navigate(`/requests/${held.id}`);
+    await m.settle(300);
+    const drawn = traceOf(m.container.querySelector('.drawer .selection-trace'));
+    results.push({ name: '/requests drawer names the account a hold waited on', ok: drawn.head.includes(`held on ${held.attempts[0].selection.cohortHold.cohort} before placing`), missing: [drawn.head] });
   }
 }
 {

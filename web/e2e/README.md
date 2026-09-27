@@ -1,17 +1,17 @@
 # Browser pass
 
 `views.mjs` drives a headless Chromium over every view of the console in the light and the dark theme. It logs in
-through the login screen, then for each theme visits the dashboard, observe, quota, upstreams (which lands on the
-first upstream through a client-side redirect, since `/upstreams` carries no account id), pools, API keys, request
-logs, analytics, sessions, alerts, and settings. Per view it waits for one element, asserts the document title,
-records every console error and page error, and writes a full-page screenshot to
-`$PHOEBIS_SCREENSHOT_DIR/<theme>/<view>.png`. Further layout assertions ride along, one function each in `views.mjs`, in
-the order the file defines them (pool chips, the caching controls, the select-below threshold, the routing cards, the
-compatibility card, the bootstrap cards, the Delete upstream button, the upstream lines, the alert rule dialog, the
-remaining cards, the error state, the cost-cap rows, the live feed, the wasted-probe rows, the burn cards, the request
-drawer, which opens once the request list's shot is taken, the subscription end editor, the key dialog's cap field, the
-cost reference, the agent lines). A check that opens an editor, a dialog or a row closes it again before the view's
-shot. The script exits non-zero with the list of failures when any of that does not hold.
+through the login screen, then for each theme visits the dashboard, observe, quota, upstreams (which lands on the first
+upstream through a client-side redirect, since `/upstreams` carries no account id), pools, API keys, request logs,
+analytics, sessions, alerts, and settings. Per view it waits for one element, asserts the document title, records every
+console error and page error, and writes a full-page screenshot to `$PHOEBIS_SCREENSHOT_DIR/<theme>/<view>.png`. Further
+layout assertions ride along, one function each in `views.mjs`, in the order the file defines them (pool chips, the
+caching controls, the select-below threshold, the routing cards, the compatibility card, the bootstrap cards, the Delete
+upstream button, the upstream lines, the alert rule dialog, the remaining cards, the error state, the cost-cap rows, the
+live feed, the wasted-probe rows, the burn cards, the request drawer, which opens once the request
+list's shot is taken, the subscription end editor, the key dialog's cap field and selects, the cost reference, the agent
+lines). A check that opens an editor, a dialog or a row closes it again before the view's shot. The script exits
+non-zero with the list of failures when any of that does not hold.
 
 The screenshot directory has to lie outside the repository, which the script enforces against every worktree `git
 worktree list` reports, and against the tree holding the nearest `Cargo.toml` when git cannot answer.
