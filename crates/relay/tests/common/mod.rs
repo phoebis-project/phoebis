@@ -104,6 +104,7 @@ pub struct PoolSpec {
     pub migrate_above_utilization: Option<f64>,
     pub model_rules: Vec<ModelRule>,
     pub overage_policy: OveragePolicy,
+    pub quota_headers: QuotaHeaders,
     pub strategy: Strategy,
 }
 
@@ -118,6 +119,7 @@ impl Default for PoolSpec {
             migrate_above_utilization: None,
             model_rules: Vec::new(),
             overage_policy: OveragePolicy::PreferPlan,
+            quota_headers: QuotaHeaders::Pass,
             strategy: Strategy::Priority,
         }
     }
@@ -622,7 +624,7 @@ async fn build(
                     cache_ttl_json: pool.cache_ttl.into(),
                     cache_diagnostics: pool.cache_diagnostics,
                     affinity: Affinity::default(),
-                    quota_headers: QuotaHeaders::Pass,
+                    quota_headers: pool.quota_headers,
                     created_at: NOW,
                     updated_at: NOW,
                 },
@@ -940,17 +942,23 @@ pub fn json_200() -> Respond {
     }
 }
 
-/// A 200 JSON answer carrying the given headers, for a test that scripts the rate-limit bucket or the unified
-/// windows on a response the relay still commits.
-pub fn json_200_with_headers(headers: &[(&str, &str)]) -> Respond {
+/// A JSON answer at `status` carrying the given headers, for a test that scripts the rate-limit bucket, the
+/// unified windows, or the upstream's own identity and cookie headers on a response the relay forwards.
+pub fn json_with_headers(status: u16, headers: &[(&str, &str)]) -> Respond {
     Respond::Json {
-        status: 200,
+        status,
         headers: headers
             .iter()
             .map(|(n, v)| (n.to_string(), v.to_string()))
             .collect(),
         body: b"{\"ok\":true}".to_vec(),
     }
+}
+
+/// A 200 JSON answer carrying the given headers, for a test that scripts the rate-limit bucket or the unified
+/// windows on a response the relay still commits.
+pub fn json_200_with_headers(headers: &[(&str, &str)]) -> Respond {
+    json_with_headers(200, headers)
 }
 
 /// The headers a real Anthropic JSON error carries, so the pass-through test has something of the upstream's

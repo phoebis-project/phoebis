@@ -25,7 +25,8 @@ use phoebis_routing::{
     SelectRequest, SelectResult, Selection, SelectionTrace, MODEL_REJECTED_REASON,
 };
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, MemoryStore, Store,
+    AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, MemoryStore,
+    QuotaHeaders, Store,
 };
 use phoebis_transport::control::Resolver;
 use phoebis_transport::decode::{decoder, encoding, Decoder, Encoding};
@@ -76,19 +77,24 @@ use crate::{
 /// shutdown flushes the rest.
 pub const MEMORY_FLUSH_INTERVAL: Duration = Duration::from_secs(5);
 
-/// Upstream response headers the relay keeps to itself: they describe the upstream connection rather than the
-/// payload, and the framing ones no longer match the body the caller is sent.
+/// Upstream response headers the relay keeps to itself: the connection and framing ones as before, and the
+/// upstream's own identity and cookies, which name the account behind the key and never the key holder.
 const NOT_FORWARDED: &[&str] = &[
+    "anthropic-organization-id",
     "connection",
     "content-length",
     "keep-alive",
     "proxy-authenticate",
     "proxy-authorization",
+    "set-cookie",
     "te",
     "trailer",
     "transfer-encoding",
     "upgrade",
 ];
+
+/// The family `quota_headers = hide` drops from a committed answer.
+const QUOTA_FAMILY_PREFIX: &str = "anthropic-ratelimit-unified-";
 
 #[derive(Clone, Copy, Debug)]
 pub struct Limits {
@@ -1140,6 +1146,10 @@ impl Relay {
             .pool(&key.pool_id)
             .map(|p| CacheTtlPolicy::from_json(&p.cache_ttl_json))
             .unwrap_or_default();
+        let quota_headers = snapshot
+            .pool(&key.pool_id)
+            .map(|p| p.quota_headers)
+            .unwrap_or_default();
         let portable = is_portable(&raw);
         let target = parts
             .uri
@@ -1169,6 +1179,7 @@ impl Relay {
             memory_key,
             original,
             portable,
+            quota_headers,
             raw: &raw,
             request_id: &trace.request_id,
             restore,
@@ -1435,14 +1446,16 @@ impl Relay {
         // The body for this leg and what the editor added to it; the head is built per pass and reports its own.
         let build = |skip: &BTreeSet<Injected>| -> Built {
             let mut edited = admitted.raw.to_vec();
+            // Read ahead of every other edit, none of which add or remove a `cache_control` member, so this
+            // matches what the cache TTL rewrite itself will find.
+            let carries_a_marker =
+                phoebis_cch::cache_control_spans(&edited).is_ok_and(|spans| !spans.is_empty());
             let mut body_injected = Vec::new();
             let mut inject_betas: Vec<Injected> = Vec::new();
             // An api_key account, or an account in overage, pays for the write, so the metered set applies.
             let writes_cost_money = selection.in_overage || account.kind == AccountKind::ApiKey;
             // Priced per attempt: a migrated attempt reads its destination's overage, and a same-account
-            // retry reuses this body rather than pricing again. A count is priced too: the markers it
-            // carries follow the inference request's under the same policy, or the count would read an
-            // entry the inference request wrote under another TTL.
+            // retry reuses this body rather than pricing again.
             // A probe replays another turn's markers under its own keepalive TTL; otherwise the branch follows
             // the agent, so a subagent's rewrite never reads the main turn's per-model override.
             let branch = if admitted.trace.kind == Kind::Probe {
@@ -1452,15 +1465,26 @@ impl Relay {
             } else {
                 TtlBranch::Subagent
             };
-            let priced =
-                admitted
-                    .cache_ttl_policy
-                    .ttl_for(canonical_model, branch, writes_cost_money);
-            // Only the markers a count already carries: the `count_tokens` schema is not documented to
-            // accept a top-level member the client never sent, and a 400 naming one has no strip path.
+            // A client that sends no marker asked for no cache, and the policy adds one only where the
+            // operator said so; a count is not the request whose cache it measures, so its markers travel as
+            // the client wrote them.
+            let priced = match admitted.trace.kind {
+                Kind::CountTokens => None,
+                Kind::Inference | Kind::Probe => {
+                    admitted
+                        .cache_ttl_policy
+                        .ttl_for(canonical_model, branch, writes_cost_money)
+                }
+            };
             let markerless = match admitted.trace.kind {
                 Kind::CountTokens => Markerless::GoesAsSent,
-                Kind::Inference | Kind::Probe => Markerless::TakesTheMember,
+                Kind::Inference | Kind::Probe => {
+                    if admitted.cache_ttl_policy.inject_when_absent {
+                        Markerless::TakesTheMember
+                    } else {
+                        Markerless::GoesAsSent
+                    }
+                }
             };
             // The one-hour body and its beta stand or fall together: a host that refused the beta cannot
             // serve the hour, so a leg that stripped it, or an account latched against it, dispatches five
@@ -1472,13 +1496,13 @@ impl Relay {
                     t
                 }
             });
-            // A body whose markers the rewrite could not reach went as it arrived, and so did a count the
-            // rewrite found nothing to edit in, so neither leg claims a TTL: no beta for it, none dropped
-            // for it, and none reported. A beta naming an hour the body does not carry would be the
-            // relay's to answer for on a 400.
+            // A marker-less body that went as sent claims no TTL, whether because it is a count or because
+            // the toggle left it alone: no beta for it, none dropped for it, and none reported. A body that
+            // already carried a marker claims the rewrite's TTL even where the marker already read that way,
+            // so a leg does not lose its report to a rewrite that had nothing left to change. A beta naming an
+            // hour the body does not carry would be the relay's to answer for on a 400.
             let claims_its_ttl = |edits: &BodyEdits| {
-                !edits.cache_ttl_refused
-                    && (markerless == Markerless::TakesTheMember || edits.cache_ttl_edited)
+                !edits.cache_ttl_refused && (carries_a_marker || edits.cache_ttl_edited)
             };
             // Isolated per account, so a failover never carries one account's previous request id, or the
             // previous message id a diagnostics member names, into another account's memory.
@@ -1674,6 +1698,7 @@ impl Relay {
                 pin: selection.pin.as_ref(),
                 pin_epoch,
                 portable: admitted.portable,
+                quota_headers: admitted.quota_headers,
                 replayed,
                 request_id: admitted.request_id,
                 retry_in_place: admitted.retry_in_place,
@@ -1925,6 +1950,8 @@ impl Relay {
                             checkin,
                             guards: ctx.guards(),
                             head: &head,
+                            hide_quota: ctx.quota_headers == QuotaHeaders::Hide
+                                && head.status != 429,
                             keep_alive: reusable,
                             observer: None,
                             on_message_id: None,
@@ -2082,6 +2109,8 @@ impl Relay {
                         let release = (!marked)
                             .then(|| self.release_on(&ctx, head.status))
                             .flatten();
+                        let hide_quota =
+                            ctx.quota_headers == QuotaHeaders::Hide && head.status != 429;
                         return Next::Respond(
                             self.forward_buffered(
                                 ctx.trace,
@@ -2091,6 +2120,7 @@ impl Relay {
                                 outcome,
                                 release,
                                 None,
+                                hide_quota,
                             )
                             .await,
                         );
@@ -2101,6 +2131,7 @@ impl Relay {
             // is forwarded as it came and the account keeps its state and a pin that already served.
             Verdict::Refresh => {
                 let release = self.release_on(&ctx, head.status);
+                let hide_quota = ctx.quota_headers == QuotaHeaders::Hide && head.status != 429;
                 return Next::Respond(
                     self.forward_buffered(
                         ctx.trace,
@@ -2110,6 +2141,7 @@ impl Relay {
                         outcome,
                         release,
                         None,
+                        hide_quota,
                     )
                     .await,
                 );
@@ -2238,10 +2270,12 @@ impl Relay {
                         (bytes, Some(PostCommit { inspect, on_error }))
                     }
                 };
+                let hide_quota = ctx.quota_headers == QuotaHeaders::Hide && head.status != 429;
                 let responded = match buffered {
                     Some(buffered) => {
                         self.forward_buffered(
                             ctx.trace, &head, buffered, ctx.caller, outcome, renewal, affinity,
+                            hide_quota,
                         )
                         .await
                     }
@@ -2254,6 +2288,7 @@ impl Relay {
                             checkin,
                             guards,
                             head: &head,
+                            hide_quota,
                             keep_alive: reusable,
                             observer,
                             on_message_id,
@@ -2313,6 +2348,7 @@ impl Relay {
                     checkin,
                     guards,
                     head: &head,
+                    hide_quota: ctx.quota_headers == QuotaHeaders::Hide && head.status != 429,
                     keep_alive: false,
                     observer: None,
                     on_message_id: None,
@@ -2351,8 +2387,17 @@ impl Relay {
             );
         }
         Next::Respond(
-            self.forward_buffered(ctx.trace, &head, buffered, ctx.caller, outcome, None, None)
-                .await,
+            self.forward_buffered(
+                ctx.trace,
+                &head,
+                buffered,
+                ctx.caller,
+                outcome,
+                None,
+                None,
+                ctx.quota_headers == QuotaHeaders::Hide && head.status != 429,
+            )
+            .await,
         )
     }
 
@@ -2709,6 +2754,7 @@ impl Relay {
             checkin,
             guards,
             head,
+            hide_quota,
             keep_alive,
             observer,
             on_message_id,
@@ -2718,7 +2764,7 @@ impl Relay {
             renewal,
             trace,
         } = forward;
-        let (builder, decoder) = match forward_head(head, caller) {
+        let (builder, decoder) = match forward_head(head, caller, hide_quota) {
             Ok(parts) => parts,
             Err(error) => {
                 tracing::warn!(%error, "the upstream response cannot be forwarded");
@@ -2808,8 +2854,9 @@ impl Relay {
         outcome: RelayOutcome,
         renewal: Option<Renewal>,
         affinity: Option<AffinityFacts>,
+        hide_quota: bool,
     ) -> Response {
-        let (builder, decoder) = match forward_head(head, caller) {
+        let (builder, decoder) = match forward_head(head, caller, hide_quota) {
             Ok(parts) => parts,
             Err(error) => {
                 tracing::warn!(%error, "the upstream response cannot be forwarded");
@@ -2915,6 +2962,8 @@ struct Forward<'a, C> {
     /// The response's in-flight counts, which ride the body to its end.
     guards: Guards,
     head: &'a ResponseHead,
+    /// Whether the quota family is dropped from this answer: `quota_headers = hide` and a status other than 429.
+    hide_quota: bool,
     keep_alive: bool,
     /// Set for a committed stream, which is watched for a rate-limit error arriving after the commit.
     observer: Option<PostCommit>,
@@ -2969,6 +3018,8 @@ struct Responding<'a> {
     pin: Option<&'a PinRef>,
     pin_epoch: Option<u64>,
     portable: bool,
+    /// Whether a member's own identity and quota headers reach the caller on this pool's responses.
+    quota_headers: QuotaHeaders,
     replayed: bool,
     request_id: &'a str,
     retry_in_place: Duration,
@@ -3047,6 +3098,9 @@ struct Admitted<'a> {
     /// gave up on.
     original: Option<&'a OriginalHead>,
     portable: bool,
+    /// Whether a member's own identity and quota headers reach the caller on this pool's responses, read once
+    /// at admission alongside `cache_ttl_policy`.
+    quota_headers: QuotaHeaders,
     raw: &'a Bytes,
     request_id: &'a str,
     /// The first-party fields to restore, absent for anything but a `claude-cli/` inference request.
@@ -3156,6 +3210,7 @@ fn decode_all(decoder: &mut dyn Decoder, raw: &[u8]) -> Result<Bytes, TransportE
 fn forward_head(
     head: &ResponseHead,
     caller: &HeaderMap,
+    hide_quota: bool,
 ) -> Result<(Builder, Option<Box<dyn Decoder>>), TransportError> {
     let upstream = encoding(head)?;
     let coding = head.get("content-encoding").unwrap_or("identity");
@@ -3164,6 +3219,11 @@ fn forward_head(
         .status(StatusCode::from_u16(head.status).unwrap_or(StatusCode::BAD_GATEWAY));
     for (name, value) in &head.headers {
         if NOT_FORWARDED.iter().any(|n| name.eq_ignore_ascii_case(n)) {
+            continue;
+        }
+        // The relay's own read of this family (`ratelimit.rs`) already ran on the upstream head; hiding it
+        // from the caller changes nothing it saw.
+        if hide_quota && name.to_ascii_lowercase().starts_with(QUOTA_FAMILY_PREFIX) {
             continue;
         }
         if !passthrough && name.eq_ignore_ascii_case("content-encoding") {

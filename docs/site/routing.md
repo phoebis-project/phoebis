@@ -72,6 +72,7 @@ Every field, in the order the request body takes them:
 | `keepalive` | disabled | a policy object; its defaults are on the [Keepalive page](keepalive.md) |
 | `cache_ttl` | off | a policy object; see below |
 | `cache_diagnostics` | unset (inherits) | `true`, `false`, or `null` |
+| `quota_headers` | `pass` | `pass` or `hide`; see below |
 | `body_capture_hours` | `0` (off) | `body_capture_hours exceeds stats.body_capture_max_hours` |
 | `wind_down_minutes` | `30` | 0 to 10,080 (a week) |
 | `members` | none | create only; replaced wholesale by `PUT /admin/pools/{id}/members` |
@@ -79,6 +80,11 @@ Every field, in the order the request body takes them:
 `cache_diagnostics` forces the cache-diagnosis beta and the `previous_message_id` member toward
 `api.anthropic.com` for this pool's requests, whatever the [bootstrap option](installation.md#compatibility)
 says; `null` inherits it.
+
+On `hide` a committed answer loses the `anthropic-ratelimit-unified-*` family, so an organization-wide quota
+never reaches a key holder as its own; a 429 keeps the family so the client's continue-when-reset arms;
+`request-id` passes either way, and the client shows no notice for the hidden family. The upstream's own
+`anthropic-organization-id` and `set-cookie` are never forwarded to a key holder.
 
 Under `when_cached` a request that carries no `cache_control` marker, and receives none from the cache TTL
 policy, creates no pin and lands by the strategy instead of pinning; a non-portable request keeps its pin
@@ -117,8 +123,9 @@ request's set and branch choose, the ones inside a tool result's own content inc
 a body the fail-closed guard refuses to edit, which goes as sent with its own markers and beta. The guard refuses when
 a JSON decoder counts a different number of markers than the rewrite reached, as with a `cache_control` key spelled
 with escapes or repeated in one object. On every other body the client's own `CLAUDE_CODE_PROMPT_CACHE_TTL` has no
-effect through the pool. A request that carries no marker at all gets the API's top-level `cache_control` member with
-the TTL instead, and a request with any marker keeps its count. The metered set applies while the write costs money:
+effect through the pool. A body that carries no marker is left as it came unless `inject_when_absent` is on, in which
+case the top-level `cache_control` member is added with the TTL, before `stream`; a token count is never edited: its
+markers travel as the client sent them and no beta follows it. The metered set applies while the write costs money:
 the serving upstream is in overage, or is an API-key upstream. A keepalive probe's replay writes with the chosen set's
 `keepalive` TTL; any other request reads `main` or `subagent` by its agent, and one without an agent id reads as the
 main conversation. The TTL is priced per attempt, so a request that fails over reads its destination's state. Mixed

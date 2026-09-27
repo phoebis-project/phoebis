@@ -22,7 +22,8 @@ against that cost, per pool and per hour, and `GET /admin/keepalive/overview` re
 can go negative when probes outspend what they save.
 
 A pool's cache TTL policy applies to a probe the way it applies to the request it replays, because the probe goes
-through the same edit path; the engine learns the TTL an entry was written with from the response's usage and
+through the same edit path: a marker-less recipe body takes the top-level member only where the policy's
+`inject_when_absent` is on. The engine learns the TTL an entry was written with from the response's usage and
 from what the router sent, never from the marker the client wrote.
 
 Cache diagnostics apply to a probe the same way: with the option on for the pool, a probe carries the

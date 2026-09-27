@@ -105,7 +105,7 @@ the settings file's environment block holds only static values.
 | --- | --- | --- | --- |
 | HEAD | `/api/hello` | none | `200 OK` |
 | POST | `/v1/messages` | router key | relayed to the selected account |
-| POST | `/v1/messages/count_tokens` | router key | relayed, same failover loop; its markers take the pool's TTL |
+| POST | `/v1/messages/count_tokens` | router key | relayed, same failover loop; travels as sent |
 | GET | `/v1/usage` | router key | that key's own usage for the last 24 hours and 7 days, JSON or HTML by `Accept` |
 | GET | `/v1/models` | router key | the models the key may route to, with a `[1m]` twin per long-context model |
 | GET | `/v1/models/{*id}` | router key | one row of that listing, or `404` |
@@ -121,12 +121,9 @@ the [Keepalive](keepalive.md) page; each session they report belongs to the key 
 so a key id created again reaches none of the sessions its previous holder left behind.
 
 A token count (`POST /v1/messages/count_tokens`) is relayed through the same selection and failover loop as a
-message, and the `cache_control` markers it carries take the pool's cache TTL policy the way a message's do:
-each one is rewritten to the policy's TTL, the extended-TTL beta travels with a body the rewrite made an hour,
-and the `cch` stamp is recomputed where one is present. A count that carries no marker travels as sent, and the
-top-level member a message with no marker is given is not added to it. Nothing else in the body is added to a
-count either: the client sends no billing line or account metadata on one, and the cache-diagnosis member has
-no place in it.
+message and travels as the client sent it under every policy: the markers it carries keep their TTLs, no
+member is added to a marker-less one, no beta follows it, and nothing else in the body is added (the client
+sends no billing line or account metadata on one, and the cache-diagnosis member has no place in it).
 
 The key is presented as exactly one of `Authorization: Bearer <secret>` or `x-api-key: <secret>`. None, more
 than one, or a malformed header is refused, each in an Anthropic-shaped error body:

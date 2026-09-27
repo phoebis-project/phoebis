@@ -198,14 +198,57 @@ async fn every_marker_is_rewritten_to_the_policys_ttl_and_the_beta_follows_the_b
 }
 
 #[tokio::test]
-async fn a_body_with_no_marker_gets_the_top_level_member_and_a_body_with_any_marker_keeps_its_count(
-) {
+async fn with_the_toggle_off_a_marker_less_body_goes_as_sent_and_asks_for_no_beta() {
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
         respond: json_200(),
     }])
     .await;
-    let h = harness(&up, &[oauth("o", OA, 0)], policy(r#"{"enabled":true}"#)).await;
+    // An api_key account has no identity to splice, and a body carrying no attribution line and no `system`
+    // gives the restoration and diagnostics edits nothing to touch either, so a marker-less body's only
+    // possible edit is the one this test is proving does not run.
+    let h = harness(
+        &up,
+        &[api_key("acct", A, 0)],
+        policy(r#"{"enabled":true,"metered":{"main":"1h"}}"#),
+    )
+    .await;
+
+    let native: &[u8] =
+        br#"{"model":"claude-sonnet-4-5","max_tokens":8,"messages":[{"role":"user","content":"hi"}]}"#;
+    let req = request_from_fixture(inference_head(FixtureKind::ApiKey), native, KEY);
+    let resp = h.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let sent = &up.requests()[0];
+    assert!(
+        sent.body == native,
+        "no marker anywhere and the toggle off: the body reaches the upstream byte-identical"
+    );
+    assert!(
+        !beta_list(sent).iter().any(|b| b == EXTENDED_TTL_BETA),
+        "no beta for a TTL the body never claims"
+    );
+    assert_eq!(
+        outcome(&resp).cache_ttl_ms,
+        None,
+        "the attempt reports no TTL"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn with_the_toggle_on_a_marker_less_body_takes_the_member() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let h = harness(
+        &up,
+        &[oauth("o", OA, 0)],
+        policy(r#"{"enabled":true,"inject_when_absent":true,"plan":{"main":"1h"}}"#),
+    )
+    .await;
 
     let stripped = without_markers(body(BodyFixture::Oauth));
     let req = request_from_fixture(
@@ -227,20 +270,118 @@ async fn a_body_with_no_marker_gets_the_top_level_member_and_a_body_with_any_mar
         .expect("the member is present");
     let stream_at = text.find("\"stream\"").expect("the fixture body streams");
     assert!(cache_at < stream_at, "the top-level member precedes stream");
+    assert!(
+        beta_list(sent).iter().any(|b| b == EXTENDED_TTL_BETA),
+        "the hour's beta follows the injected member"
+    );
+    up.shutdown().await;
+}
 
+#[tokio::test]
+async fn a_token_count_never_takes_the_member() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages/count_tokens".into(),
+        respond: Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: br#"{"input_tokens":7}"#.to_vec(),
+        },
+    }])
+    .await;
+    let h = harness(
+        &up,
+        &[api_key("acct", A, 0)],
+        policy(r#"{"enabled":true,"inject_when_absent":true,"metered":{"main":"1h"}}"#),
+    )
+    .await;
+    let count = request_from_fixture(
+        inference_head(FixtureKind::CountApiKey),
+        body(BodyFixture::CountApiKey),
+        KEY,
+    );
+    let resp = h.app.clone().oneshot(count).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let sent = &up.requests()[0];
+    assert!(
+        sent.body == body(BodyFixture::CountApiKey),
+        "the toggle never reaches a count, which carries no marker of its own and travels as sent"
+    );
+    assert!(
+        markers(&sent.body).is_empty(),
+        "no top-level member was added"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_metered_write_takes_the_metered_set_and_a_plan_write_the_plan_set() {
+    const POLICY: &str = r#"{"enabled":true,"plan":{"main":"1h"},"metered":{"main":"5m"}}"#;
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let h = harness(&up, &[api_key("acct", A, 0)], policy(POLICY)).await;
     let req = request_from_fixture(
-        inference_head(FixtureKind::OauthNonFirstParty),
-        body(BodyFixture::Oauth),
+        inference_head(FixtureKind::ApiKey),
+        body(BodyFixture::ApiKey),
         KEY,
     );
     let resp = h.app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), 200);
     assert_eq!(
-        markers(&up.requests()[1].body).len(),
-        3,
-        "a body with markers keeps its count"
+        markers(&up.requests()[0].body),
+        vec![r#"{"type":"ephemeral"}"#.to_string(); 3],
+        "an api_key write pays, so the metered set's five minutes applies"
     );
 
+    let oh = harness(&up, &[oauth("o", OA, 0)], policy(POLICY)).await;
+    let req = request_from_fixture(
+        inference_head(FixtureKind::OauthNonFirstParty),
+        body(BodyFixture::Oauth),
+        KEY,
+    );
+    let resp = oh.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        markers(&up.requests()[1].body),
+        vec![r#"{"type":"ephemeral","ttl":"1h"}"#.to_string(); 3],
+        "an oauth account on plan quota reads the plan set's hour"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_probe_writes_with_the_sets_keepalive_ttl() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let h = harness(
+        &up,
+        &[oauth("a", OA, 0)],
+        policy(r#"{"enabled":true,"plan":{"keepalive":"5m","main":"1h"}}"#),
+    )
+    .await;
+    let req = request_for(KEY, "claude-sonnet-4-5", "s1");
+    let resp = h
+        .relay
+        .probe(
+            phoebis_relay::Probe {
+                key_id: "desktop".into(),
+                key_generation: h.store.api_key("desktop").unwrap().unwrap().created_at,
+                allow_oauth: true,
+            },
+            req,
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        markers(&up.requests()[0].body),
+        vec![r#"{"type":"ephemeral"}"#.to_string(); 3],
+        "the probe's replay reads the set's keepalive TTL, not main's hour"
+    );
     up.shutdown().await;
 }
 

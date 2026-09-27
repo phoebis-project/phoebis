@@ -1,5 +1,6 @@
-//! A token count's own cache markers take the cache TTL rewrite and the restamp an inference request's do,
-//! and nothing else about its body changes. A count writes no cache, so a pin it lands on keeps its warmth.
+//! A token count travels to the upstream exactly as the client sent it: its own cache markers are never
+//! rewritten, and nothing else about its body changes. A count writes no cache, so a pin it lands on keeps its
+//! warmth.
 mod common;
 use common::*;
 
@@ -17,8 +18,6 @@ const OA: &str = "sk-ant-oat01-AAAA0001";
 
 const COUNT_OK: &[u8] = br#"{"input_tokens":7}"#;
 
-const REFUSED_TTL_BETA: &str = r#"{"type":"error","error":{"type":"invalid_request_error","message":"Unexpected value(s) `extended-cache-ttl-2025-04-11` for the `anthropic-beta` header."}}"#;
-
 /// Ahead of any `/v1/messages` rule in a test that serves both, since the count path matches that prefix too.
 fn count_rule() -> Rule {
     Rule {
@@ -28,14 +27,6 @@ fn count_rule() -> Rule {
             headers: vec![],
             body: COUNT_OK.to_vec(),
         },
-    }
-}
-
-fn json_400(message: &str) -> Respond {
-    Respond::Json {
-        status: 400,
-        headers: vec![],
-        body: message.as_bytes().to_vec(),
     }
 }
 
@@ -76,17 +67,6 @@ fn marked_count(fixture: BodyFixture) -> Vec<u8> {
         {"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}
     ]);
     serde_json::to_vec(&value).unwrap()
-}
-
-/// The same body with its five-minute marker read as the hour, which is the whole edit the policy owes a count.
-fn hour_marked(body: &[u8]) -> Vec<u8> {
-    String::from_utf8(body.to_vec())
-        .unwrap()
-        .replace(
-            r#"{"type":"ephemeral"}"#,
-            r#"{"type":"ephemeral","ttl":"1h"}"#,
-        )
-        .into_bytes()
 }
 
 /// The recorded count as the client sent it, under the router's key.
@@ -172,7 +152,7 @@ async fn under_the_policy_the_recorded_count_travels_as_sent_since_it_carries_no
 }
 
 #[tokio::test]
-async fn a_marked_counts_marker_takes_the_ttl_and_the_beta_follows_as_on_an_inference_request() {
+async fn a_marked_count_travels_as_sent_and_no_beta_follows_under_the_policy() {
     let up = FakeUpstream::start(vec![
         count_rule(),
         Rule {
@@ -197,18 +177,18 @@ async fn a_marked_counts_marker_takes_the_ttl_and_the_beta_follows_as_on_an_infe
         .unwrap();
     assert_eq!(resp.status(), 200);
     let sent = &up.requests()[0];
+    assert!(
+        sent.body == marked,
+        "a count is not the request the policy prices, so its own marker travels untouched"
+    );
     assert_eq!(
         markers(&sent.body),
-        vec![r#"{"type":"ephemeral","ttl":"1h"}"#.to_string()],
-        "the marker the count carries reads the policy's hour"
-    );
-    assert_eq!(
-        beta_list(sent).last().map(String::as_str),
-        Some(EXTENDED_TTL_BETA)
+        vec![r#"{"type":"ephemeral"}"#.to_string()],
+        "the client's own marker keeps the TTL it was sent with"
     );
     assert!(
-        sent.body == hour_marked(&marked),
-        "the marker is the whole edit: a count carries no cch to restamp"
+        !beta_list(sent).iter().any(|b| b == EXTENDED_TTL_BETA),
+        "no beta for an edit that never ran"
     );
     assert!(
         phoebis_cch::object_member_span(&sent.body, &["diagnostics"]).is_none(),
@@ -219,7 +199,7 @@ async fn a_marked_counts_marker_takes_the_ttl_and_the_beta_follows_as_on_an_infe
         "no identity slot on a count"
     );
 
-    // The inference request under the same policy reads the same TTL, so the two hashes stay in step.
+    // The inference request under the same policy still reads the hour, unaffected by the count.
     let resp = h
         .app
         .clone()
@@ -240,7 +220,7 @@ async fn a_marked_counts_marker_takes_the_ttl_and_the_beta_follows_as_on_an_infe
 }
 
 #[tokio::test]
-async fn a_marked_count_under_an_oauth_key_takes_the_same_rule_and_no_restoration() {
+async fn a_marked_count_under_an_oauth_key_travels_as_sent_and_gets_no_restoration() {
     let up = FakeUpstream::start(vec![count_rule()]).await;
     let h = harness(
         &up,
@@ -248,34 +228,31 @@ async fn a_marked_count_under_an_oauth_key_takes_the_same_rule_and_no_restoratio
         policy(r#"{"enabled":true,"plan":{"main":"1h"}}"#),
     )
     .await;
-    for (kind, fixture) in [
-        (
-            FixtureKind::CountOauthNonFirstParty,
-            BodyFixture::CountOauth,
-        ),
-        (
-            FixtureKind::CountOauthFirstParty,
-            BodyFixture::CountOauthFirstParty,
-        ),
+    let marked: Vec<Vec<u8>> = vec![
+        marked_count(BodyFixture::CountOauth),
+        marked_count(BodyFixture::CountOauthFirstParty),
+    ];
+    for (kind, body) in [
+        (FixtureKind::CountOauthNonFirstParty, &marked[0]),
+        (FixtureKind::CountOauthFirstParty, &marked[1]),
     ] {
         let resp = h
             .app
             .clone()
-            .oneshot(count_request_with(kind, &marked_count(fixture)))
+            .oneshot(count_request_with(kind, body))
             .await
             .unwrap();
         assert_eq!(resp.status(), 200);
     }
     assert_eq!(up.requests().len(), 2);
-    for sent in up.requests().iter() {
-        assert_eq!(
-            markers(&sent.body),
-            vec![r#"{"type":"ephemeral","ttl":"1h"}"#.to_string()],
-            "the hour reaches an oauth count as it reaches an api-key one"
+    for (sent, marked) in up.requests().iter().zip(marked.iter()) {
+        assert!(
+            sent.body == *marked,
+            "an oauth count travels as sent under the policy, as an api-key one does"
         );
-        assert_eq!(
-            beta_list(sent).last().map(String::as_str),
-            Some(EXTENDED_TTL_BETA)
+        assert!(
+            !beta_list(sent).iter().any(|b| b == EXTENDED_TTL_BETA),
+            "no beta for an edit that never ran"
         );
         assert!(
             phoebis_cch::string_member_span(&sent.body, &["system", "0", "text"]).is_none(),
@@ -287,73 +264,6 @@ async fn a_marked_count_under_an_oauth_key_takes_the_same_rule_and_no_restoratio
             "no identity slot on a count"
         );
     }
-    up.shutdown().await;
-}
-
-#[tokio::test]
-async fn a_400_on_a_count_strips_the_beta_for_that_leg_and_leaves_the_account_unlatched() {
-    let up = FakeUpstream::start(vec![]).await;
-    up.push_credential_rule(A, "/v1/messages", json_400(REFUSED_TTL_BETA));
-    up.push_credential_rule(A, "/v1/messages", json_200());
-    let h = harness(
-        &up,
-        &[api_key("acct", A, 0)],
-        // An api_key account always pays, so its writes take the metered set's own `main` here.
-        policy(r#"{"enabled":true,"metered":{"main":"1h"}}"#),
-    )
-    .await;
-    let resp = h
-        .app
-        .clone()
-        .oneshot(count_request_with(
-            FixtureKind::CountApiKey,
-            &marked_count(BodyFixture::CountApiKey),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), 200);
-    assert_eq!(
-        up.requests().len(),
-        2,
-        "the strip retry corrects the count's own edit on the same leg"
-    );
-    assert!(beta_list(&up.requests()[0])
-        .iter()
-        .any(|b| b == EXTENDED_TTL_BETA));
-    assert_eq!(
-        markers(&up.requests()[1].body),
-        vec![r#"{"type":"ephemeral"}"#.to_string()],
-        "the retry rewrites the count's marker to five minutes"
-    );
-    assert!(!beta_list(&up.requests()[1])
-        .iter()
-        .any(|b| b == EXTENDED_TTL_BETA));
-
-    // What the count endpoint refused says nothing about the inference requests the account serves.
-    up.push_credential_rule(A, "/v1/messages", json_200());
-    let resp = h
-        .app
-        .clone()
-        .oneshot(request_from_fixture(
-            inference_head(FixtureKind::ApiKey),
-            body(BodyFixture::ApiKey),
-            KEY,
-        ))
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), 200);
-    assert_eq!(up.requests().len(), 3);
-    let inference = &up.requests()[2];
-    assert!(
-        markers(&inference.body)
-            .iter()
-            .all(|m| m.contains(r#""ttl":"1h""#)),
-        "the account was never latched, so the hour still reaches an inference body"
-    );
-    assert!(
-        beta_list(inference).iter().any(|b| b == EXTENDED_TTL_BETA),
-        "and its beta with it"
-    );
     up.shutdown().await;
 }
 

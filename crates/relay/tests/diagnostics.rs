@@ -756,21 +756,26 @@ async fn count_tokens_gets_neither_the_member_nor_the_beta_under_the_option() {
         },
     )
     .await;
+    const COUNT_BODY: &str =
+        r#"{"model":"claude-sonnet-4-5[1m]","messages":[{"role":"user","content":"hi"}]}"#;
     let request = Request::builder()
         .method("POST")
         .uri("/v1/messages/count_tokens")
         .header("Authorization", "Bearer phoebis-testkey")
         .header("User-Agent", CLAUDE_CLI_USER_AGENT)
         .header("x-claude-code-session-id", "s1")
-        .body(Body::from(
-            r#"{"model":"claude-sonnet-4-5[1m]","messages":[{"role":"user","content":"hi"}]}"#,
-        ))
+        .body(Body::from(COUNT_BODY))
         .unwrap();
     let resp = h.app.clone().oneshot(request).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let sent = &up.requests()[0];
     assert!(!has_diagnostics(&sent.body));
     assert!(beta_header(sent).is_none());
+    assert_eq!(
+        String::from_utf8_lossy(&sent.body),
+        COUNT_BODY.replace("claude-sonnet-4-5[1m]", "claude-sonnet-4-5"),
+        "a count's markers are never touched; only the model spelling the fold resolves changes"
+    );
 
     let resp2 = h
         .app
