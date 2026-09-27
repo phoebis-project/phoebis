@@ -2,10 +2,11 @@
 
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, AffinityMode, OveragePolicy, PinKey, PinRow, PoolRow,
-    Strategy, WarmSessions,
+    SessionPlacement, Strategy, SubagentPlacement, WarmSessions,
 };
 use rand::{Rng, RngExt};
 
+use crate::affinity::{AffinityEntry, AffinityMap};
 use crate::state::{
     shed_marks, warm, BurnUnit, PinRef, RoutingState, StateWrite, Tier, FIVE_HOUR, SEVEN_DAY,
     SEVEN_DAY_FABLE,
@@ -66,6 +67,41 @@ pub struct SelectRequest {
     pub static_boundaries: Vec<String>,
     /// The body carries a `cache_control` marker, or the TTL policy will add one: the cache gate.
     pub marker: bool,
+    /// `x-claude-code-parent-agent-id` as sent; `with_main` reads it, `main` when absent.
+    pub parent_agent_id: Option<String>,
+    /// The holds this request already waited through, oldest first: the relay carries each `Held` answer's
+    /// facts into the next selection, so the attempt that follows a hold names it.
+    pub holds: Vec<HoldFacts>,
+}
+
+/// Where a fresh placement's account came from, for the trace and the console's hit-or-miss reading.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct Placement {
+    /// `content` (the deepest message boundary), `static` (the deepest static boundary), `with_main` (the
+    /// parent agent's pin, or another agent's pin of the session when every account was at its cap).
+    pub rung: &'static str,
+    /// The matched boundary's depth (index plus one); 0 for `with_main`.
+    pub depth: u32,
+    /// The prefix size the entry promised, in tokens; what a hit should read up to. 0 for `with_main`, which
+    /// names no entry.
+    pub prefix_tokens: u64,
+}
+
+/// What a hold decided, carried across the wait by the relay.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct HoldFacts {
+    /// The account the request waited on.
+    pub account_id: String,
+    /// The cohort's account the hold was placed by (a subagent's deepest live static entry); `None` for a hold
+    /// on the strategy's choice.
+    pub cohort: Option<String>,
+}
+
+/// The holds before this attempt, as the trace records them.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct CohortHold {
+    pub waited_on: Vec<String>,
+    pub cohort: Option<String>,
 }
 
 /// Why a pin moved, in the order the rules run: the first rule with a destination moves it.
@@ -108,13 +144,16 @@ pub enum Warmth {
 }
 
 /// The verdict of `request` on the pin it arrives for. The compacted flag is cold whatever else the request
-/// says; the class decides when present; without it, a request whose boundaries contain the pin's tail
-/// continues the conversation, one that matches the static prefix without the tail restarted it, and one
-/// matching neither is foreign. A body without a chain refreshes, the fallback for a request that carries no
-/// fact. A keepalive probe replays the recipe's headers and body verbatim, the re-arming request's rather than
-/// its own, so it is judged by none of this: its renewal report stamps the refresh instead. A token count is
-/// judged by none of it either, since it creates no cache entry to be warm about.
-pub fn warmth_of(current: &PinRow, request: &SelectRequest) -> Warmth {
+/// says; the class decides when present; without it, a request whose boundaries contain the pin's tail or name
+/// an entry the pin's key and generation wrote on the pin's account and incarnation continues the conversation
+/// (so where one session holds several conversations, a continuation of any of them refreshes the pin), one
+/// that matches the static prefix without such a boundary restarted it,
+/// and one matching neither is foreign. A body without a chain refreshes, the
+/// fallback for a request that carries no fact. A keepalive probe replays the recipe's headers and body
+/// verbatim, the re-arming request's rather than its own, so it is judged by none of this: its renewal report
+/// stamps the refresh instead. A token count is judged by none of it either, since it creates no cache entry to
+/// be warm about.
+pub fn warmth_of(current: &PinRow, request: &SelectRequest, affinity: &AffinityMap) -> Warmth {
     if request.probe || request.count {
         return Warmth::Untouched;
     }
@@ -131,11 +170,20 @@ pub fn warmth_of(current: &PinRow, request: &SelectRequest) -> Warmth {
     if request.static_hash.is_none() && request.boundaries.is_empty() {
         return Warmth::Refresh;
     }
-    if request
-        .boundaries
-        .iter()
-        .any(|b| Some(b) == current.tail_hash.as_ref())
-    {
+    // The pin's tail stays an anchor beside the map: the affinity report lands when the previous answer ends,
+    // and a quick continuation can select before it does.
+    let on_pin = |entry: &AffinityEntry| {
+        entry.account_id == current.account_id
+            && entry.incarnation == current.incarnation
+            && entry.key_id == current.key_id
+            && entry.key_generation == current.key_generation
+    };
+    if request.boundaries.iter().any(|b| {
+        Some(b) == current.tail_hash.as_ref()
+            || affinity
+                .entry(&request.canonical_model, b)
+                .is_some_and(on_pin)
+    }) {
         return Warmth::Refresh;
     }
     if request.static_hash.is_some() && request.static_hash == current.static_hash {
@@ -145,8 +193,8 @@ pub fn warmth_of(current: &PinRow, request: &SelectRequest) -> Warmth {
 }
 
 /// The pin's warmth on this request: `Refresh` is warm, `Cold` is cold, `Untouched` reads `warm(current, now)`.
-pub fn effective_warm(current: &PinRow, request: &SelectRequest) -> bool {
-    warm_on(current, warmth_of(current, request), request.now)
+pub fn effective_warm(current: &PinRow, request: &SelectRequest, affinity: &AffinityMap) -> bool {
+    warm_on(current, warmth_of(current, request, affinity), request.now)
 }
 
 fn warm_on(current: &PinRow, verdict: Warmth, now: i64) -> bool {
@@ -179,6 +227,10 @@ pub struct SelectionTrace {
     pub moved: Option<&'static str>,
     /// Every candidate the choice passed over.
     pub skipped: Vec<Skipped>,
+    /// Where a fresh placement's account came from; `None` for a renewal or a choice the strategy made.
+    pub placement: Option<Placement>,
+    /// The holds this attempt's request already waited through; `None` for one that never held.
+    pub cohort_hold: Option<CohortHold>,
 }
 
 /// One candidate a choice passed over, and why; serializes as `{"account_id": ..., "obstacle": ...}` so the
@@ -229,14 +281,20 @@ pub enum SelectResult {
     /// Every account the selection could place on holds its cap; `account_id` is the one it would have chosen.
     Held {
         account_id: String,
+        hold: HoldFacts,
     },
     Refused(ResolveError),
     Selected(Selection),
 }
 
-/// Why a candidate is out of the eligible set. Only a cooldown carries a deadline the caller can wait for.
+/// Why a candidate is out of the eligible set. Only a cooldown or a budget carries a deadline the caller can
+/// wait for.
 enum Obstacle {
     Attempted,
+    /// The member's spend reached its configured budget; `until` is the period's end.
+    Budget {
+        until: i64,
+    },
     Cooldown {
         reason: String,
         until: i64,
@@ -247,16 +305,40 @@ enum Obstacle {
     Operator,
 }
 
-/// The step-2 name `release_reasons` and the trace report for an obstacle: `attempted`, `cooldown`, `operator`,
-/// `overage`, or `subscription_ended`.
+/// The step-2 name `release_reasons` and the trace report for an obstacle: `attempted`, `budget`, `cooldown`,
+/// `operator`, `overage`, or `subscription_ended`.
 fn obstacle_name(obstacle: &Obstacle) -> &'static str {
     match obstacle {
         Obstacle::Attempted => "attempted",
+        Obstacle::Budget { .. } => "budget",
         Obstacle::Cooldown { reason, .. } if reason == "overage" => "overage",
         Obstacle::Cooldown { .. } => "cooldown",
         Obstacle::Ended => "subscription_ended",
         Obstacle::Operator => "operator",
     }
+}
+
+/// The member's spend at or above its configured budget, still inside the bounds the ledger reported it for:
+/// answers the period's end. A row from another period than the member's configured one, or whose bounds do not
+/// hold `now`, is no obstacle, and neither is a member with no budget configured.
+fn budget_exhausted(
+    state: &RoutingState,
+    snapshot: &RegistrySnapshot,
+    pool_id: &str,
+    account_id: &str,
+    now: i64,
+) -> Option<i64> {
+    let member = snapshot
+        .members(pool_id)
+        .iter()
+        .find(|m| m.account_id == account_id)?;
+    let budget = member.budget_usd?;
+    let spend = state.member_spend(pool_id, account_id)?;
+    (spend.period == member.budget_period
+        && spend.period_start <= now
+        && now < spend.period_end
+        && spend.spent_usd >= budget)
+        .then_some(spend.period_end)
 }
 
 /// Whether an account can still serve a request whose allowance is judged in `window`: the model's own weekly
@@ -305,9 +387,10 @@ fn state_name(state: AccountState) -> Option<&'static str> {
 /// key or the pool is gone), `deleted` (the account left the registry), `paused` (`enabled` is off), the
 /// account's state when it cannot serve (`disconnected`, `funding_required`, `reauth_required`, `unpaired`),
 /// `subscription_ended` (cancelled and past its saved end), `cooldown` (a live row blocks the model on the
-/// account), `overage` (in overage under a policy other than `allow`), `attempted` (this request already tried
-/// it), and `spent` (no allowance left in the request's window). Never empty: a pin released by a move whose
-/// destination then answered nothing carries `released`, the one fact the list above does not evaluate.
+/// account), `budget` (the member's spend is at or above its configured budget), `overage` (in overage under a
+/// policy other than `allow`), `attempted` (this request already tried it), and `spent` (no allowance left in
+/// the request's window). Never empty: a pin released by a move whose destination then answered nothing carries
+/// `released`, the one fact the list above does not evaluate.
 pub fn release_reasons(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
@@ -350,6 +433,11 @@ pub fn release_reasons(
         .is_some()
     {
         reasons.push("cooldown");
+    }
+    if pool.is_some_and(|p| {
+        budget_exhausted(state, snapshot, &p.id, &pin.account_id, request.now).is_some()
+    }) {
+        reasons.push("budget");
     }
     if pool.is_some_and(|p| p.overage_policy != OveragePolicy::Allow)
         && state.in_overage(&pin.account_id, request.now, request.fallback_ms)
@@ -422,9 +510,13 @@ pub fn select(
 
     // What the request says about the pin's cache, judged once where the pin is: every rule below that reads
     // warmth reads this, so a compacted or restarted request is cold on the request that carries the fact.
-    let verdict = pin
-        .as_ref()
-        .map_or(Warmth::Untouched, |current| warmth_of(current, request));
+    let verdict = pin.as_ref().map_or(Warmth::Untouched, |current| {
+        warmth_of(
+            current,
+            request,
+            &state.affinity().read().expect("affinity lock poisoned"),
+        )
+    });
 
     // Step 2: the eligible set and the obstacle of everything outside it, each kept with its account id for
     // the release event and the trace.
@@ -434,7 +526,7 @@ pub fn select(
         match obstacle(
             state,
             snapshot,
-            pool.overage_policy,
+            pool,
             candidate,
             &request.canonical_model,
             &request.attempted,
@@ -466,7 +558,7 @@ pub fn select(
         let own = obstacle(
             state,
             snapshot,
-            pool.overage_policy,
+            pool,
             &Candidate {
                 account_id: current.account_id.clone(),
                 incarnation: current.incarnation,
@@ -485,6 +577,10 @@ pub fn select(
             Some(Obstacle::Cooldown { until, window, .. }) => Exhaustion::Timed {
                 deadline: until,
                 window,
+            },
+            Some(Obstacle::Budget { until }) => Exhaustion::Timed {
+                deadline: until,
+                window: "overage".into(),
             },
             _ => Exhaustion::Untimed,
         };
@@ -552,6 +648,9 @@ pub fn select(
     // `exhaustion_of` when nothing is left to choose from, but every dropped candidate joins the trace as
     // `spent` whether or not its reading names a reset, so the deadline never doubles as its own trace label.
     let mut spent_deadlines: Vec<(String, Obstacle)> = Vec::new();
+    // The candidates placement may choose among, before any of step 6's own partitions: judged on the account
+    // itself, never on whether a preference below narrowed the wider set around it.
+    let allowed: Vec<&Candidate> = selection_set.clone();
     if window == SEVEN_DAY_FABLE {
         let (left, spent): (Vec<&Candidate>, Vec<&Candidate>) = selection_set
             .iter()
@@ -632,40 +731,89 @@ pub fn select(
             .collect();
         narrow(&mut selection_set, &mut skipped, above_floor, "floor");
     }
-    let Some((chosen, tier)) = choose(
+    let affinity_handle = state.affinity();
+    let affinity_guard = affinity_handle.read().expect("affinity lock poisoned");
+    let placed = placement_of(
         state,
         snapshot,
         pool,
+        request,
+        &affinity_guard,
+        &allowed,
         window,
-        &selection_set,
-        request.now,
-        request.fallback_ms,
-        !held,
-        rng,
-    ) else {
-        let obstacles = obstacles
-            .into_iter()
-            .chain(spent_deadlines)
-            .map(|(_, o)| o)
-            .collect();
-        return (SelectResult::Exhausted(exhaustion_of(obstacles)), writes);
-    };
-    if held {
-        return (
-            SelectResult::Held {
-                account_id: chosen.account_id.clone(),
-            },
-            writes,
-        );
-    }
-    for c in &selection_set {
-        if c.account_id != chosen.account_id {
-            skipped.push(Skipped {
-                account_id: c.account_id.clone(),
-                obstacle: "ranked",
-            });
+    );
+    let (chosen, tier, placement) = if let Some((candidate, placement, _bypasses_cap)) = placed {
+        (candidate, None, Some(placement))
+    } else {
+        let Some((strategy_choice, tier)) = choose(
+            state,
+            snapshot,
+            pool,
+            window,
+            &selection_set,
+            request.now,
+            request.fallback_ms,
+            !held,
+            rng,
+        ) else {
+            let obstacles = obstacles
+                .into_iter()
+                .chain(spent_deadlines)
+                .map(|(_, o)| o)
+                .collect();
+            return (SelectResult::Exhausted(exhaustion_of(obstacles)), writes);
+        };
+        if held {
+            // The cohort-aware hold is a cap exemption and nothing more: a session already on an account under
+            // any agent lands there rather than waiting, and a still-held subagent
+            // waits where its own cohort is rather than on the strategy's unrelated choice.
+            if let Some(candidate) = any_agent_pin(state, request, &allowed, window) {
+                (
+                    candidate,
+                    None,
+                    Some(Placement {
+                        rung: "with_main",
+                        depth: 0,
+                        prefix_tokens: 0,
+                    }),
+                )
+            } else {
+                let cohort =
+                    subagent_cohort(state, snapshot, request, &affinity_guard, &allowed, window);
+                let hold = match cohort {
+                    Some(c) => HoldFacts {
+                        account_id: c.account_id.clone(),
+                        cohort: Some(c.account_id.clone()),
+                    },
+                    None => HoldFacts {
+                        account_id: strategy_choice.account_id.clone(),
+                        cohort: None,
+                    },
+                };
+                return (
+                    SelectResult::Held {
+                        account_id: hold.account_id.clone(),
+                        hold,
+                    },
+                    writes,
+                );
+            }
+        } else {
+            for c in &selection_set {
+                if c.account_id != strategy_choice.account_id {
+                    skipped.push(Skipped {
+                        account_id: c.account_id.clone(),
+                        obstacle: "ranked",
+                    });
+                }
+            }
+            (strategy_choice, Some(tier), None)
         }
-    }
+    };
+    let cohort_hold = (!request.holds.is_empty()).then(|| CohortHold {
+        waited_on: request.holds.iter().map(|h| h.account_id.clone()).collect(),
+        cohort: request.holds.last().and_then(|h| h.cohort.clone()),
+    });
 
     // Step 7: a fresh pin with a fresh epoch.
     let pin_ref = session.map(|session| {
@@ -726,10 +874,12 @@ pub fn select(
             in_overage: state.in_overage(&chosen.account_id, request.now, request.fallback_ms),
             trace: SelectionTrace {
                 strategy: pool.strategy.as_str(),
-                tier: Some(tier),
+                tier,
                 renewed: false,
                 moved: migrated.map(MigrateReason::as_str),
                 skipped: trace_skipped,
+                placement,
+                cohort_hold,
             },
         }),
         writes,
@@ -756,6 +906,33 @@ fn reading_under(state: &RoutingState, account_id: &str, name: &str, threshold: 
         .sample(account_id)
         .and_then(|s| s.reading(name))
         .is_none_or(|r| r.utilization < threshold)
+}
+
+/// Whether `account_id` reads under `migrate_above_utilization` minus the hysteresis band: the shared plan
+/// windows for a subscription account, the worst live bucket for an api_key one. No threshold configured, or
+/// no live reading, counts as under. The same reading `move_of`'s `cool` predicate takes for a migration
+/// destination, so the arithmetic lives once.
+fn under_band(
+    state: &RoutingState,
+    snapshot: &RegistrySnapshot,
+    pool: &PoolRow,
+    account_id: &str,
+    now: i64,
+) -> bool {
+    let Some(threshold) = pool.migrate_above_utilization else {
+        return true;
+    };
+    let band = threshold - MIGRATE_BAND;
+    match snapshot.account(account_id).map(|a| a.kind) {
+        Some(AccountKind::ApiKey) => state
+            .sample(account_id)
+            .and_then(|s| s.worst_bucket(now, state.sample_ttl_ms()))
+            .is_none_or(|r| r.utilization < band),
+        _ => {
+            reading_under(state, account_id, FIVE_HOUR, band)
+                && reading_under(state, account_id, SEVEN_DAY, band)
+        }
+    }
 }
 
 /// Whether the account's allowance is known: an api_key account has no plan window to read, and anything else
@@ -794,19 +971,8 @@ fn move_of<'a>(
     // account reads as under), no round of its own within the dwell, and room under the cap. A full sibling
     // counts as hot, so a move whose cool siblings are all full falls through to a free one rather than being
     // dropped at the cap.
-    let cool = |state: &RoutingState, c: &Candidate, threshold: f64| -> bool {
-        let band = threshold - MIGRATE_BAND;
-        let under = match kind(&c.account_id) {
-            Some(AccountKind::ApiKey) => state
-                .sample(&c.account_id)
-                .and_then(|s| s.worst_bucket(now, state.sample_ttl_ms()))
-                .is_none_or(|r| r.utilization < band),
-            _ => {
-                reading_under(state, &c.account_id, FIVE_HOUR, band)
-                    && reading_under(state, &c.account_id, SEVEN_DAY, band)
-            }
-        };
-        under
+    let cool = |state: &RoutingState, c: &Candidate| -> bool {
+        under_band(state, snapshot, pool, &c.account_id, now)
             && state
                 .last_shed(&c.account_id)
                 .is_none_or(|at| now - at >= dwell_ms)
@@ -827,14 +993,11 @@ fn move_of<'a>(
             // A hot destination would shed the session again at its next round, so every move prefers a cool
             // one. The preference falls through to the rule's own set: each rule moves the pin for a reason a
             // hot sibling still answers, which staying put does not.
-            let Some(threshold) = pool.migrate_above_utilization else {
+            if pool.migrate_above_utilization.is_none() {
                 return set;
-            };
-            let preferred: Vec<&'a Candidate> = set
-                .iter()
-                .copied()
-                .filter(|c| cool(state, c, threshold))
-                .collect();
+            }
+            let preferred: Vec<&'a Candidate> =
+                set.iter().copied().filter(|c| cool(state, c)).collect();
             if preferred.is_empty() {
                 set
             } else {
@@ -944,7 +1107,7 @@ fn move_of<'a>(
     let set = destinations(state, &|c| {
         let shed_it_here = current.shed_from.as_deref() == Some(c.account_id.as_str())
             && current.shed_at.is_some_and(|at| now - at < dwell_ms);
-        cool(state, c, threshold) && !shed_it_here
+        cool(state, c) && !shed_it_here
     });
     (!set.is_empty()).then_some((MigrateReason::Shed, set))
 }
@@ -1006,7 +1169,7 @@ fn shed_round(
 fn obstacle(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
-    policy: OveragePolicy,
+    pool: &PoolRow,
     candidate: &Candidate,
     model: &str,
     attempted: &[String],
@@ -1035,7 +1198,10 @@ fn obstacle(
             window: cooldown.window.clone(),
         });
     }
-    if policy == OveragePolicy::Never {
+    if let Some(until) = budget_exhausted(state, snapshot, &pool.id, &candidate.account_id, now) {
+        return Some(Obstacle::Budget { until });
+    }
+    if pool.overage_policy == OveragePolicy::Never {
         if let Some(deadline) = state
             .overage_deadline(&candidate.account_id, fallback_ms)
             .filter(|d| *d > now)
@@ -1140,6 +1306,205 @@ fn narrow<'a>(
         }
     }
     *selection_set = kept;
+}
+
+/// Whether `account_id` may take a fresh placement: it is among the candidates placement chooses among
+/// (`allowed`, the selection set before step 6's own partitions) and still holds allowance in the request's
+/// window.
+fn admits(
+    state: &RoutingState,
+    allowed: &[&Candidate],
+    window: &str,
+    account_id: &str,
+    now: i64,
+) -> bool {
+    allowed.iter().any(|c| c.account_id == account_id)
+        && holds_allowance(state, account_id, window, now)
+}
+
+/// An affinity entry placement may land on: live, under the snapshot's incarnation for its account, and the
+/// account itself admits a fresh placement. Shared by every rung; rung 4 adds its own blocker on top.
+fn account_ok(
+    state: &RoutingState,
+    snapshot: &RegistrySnapshot,
+    allowed: &[&Candidate],
+    window: &str,
+    now: i64,
+    entry: &AffinityEntry,
+) -> bool {
+    entry.live(now)
+        && snapshot.account(&entry.account_id).map(|a| a.incarnation) == Some(entry.incarnation)
+        && admits(state, allowed, window, &entry.account_id, now)
+}
+
+/// Rung 4's own gate on a candidate account, evaluated per candidate rather than inferred from the
+/// post-partition selection set: under the cap, below `select_below_utilization` on the 5-hour window when the
+/// pool sets one, not winding down, above the Pace floor under Pace, and under the band `move_of`'s `cool` reads
+/// for a migration destination.
+fn blocked(
+    state: &RoutingState,
+    snapshot: &RegistrySnapshot,
+    pool: &PoolRow,
+    window: &str,
+    now: i64,
+    account_id: &str,
+) -> bool {
+    state.in_flight().account(account_id) >= pool.failover.in_flight_cap
+        || pool
+            .select_below_utilization
+            .is_some_and(|threshold| reading_at_least(state, account_id, FIVE_HOUR, threshold))
+        || snapshot
+            .term(account_id)
+            .is_some_and(|term| term::winding_down(term, now, pool.failover.wind_down_minutes))
+        || (pool.strategy == Strategy::Pace
+            && remaining(state, account_id, window, now).0 <= pool.failover.pace_floor)
+        || !under_band(state, snapshot, pool, account_id, now)
+}
+
+/// A fresh request with no live pin lands where its prefix is already warm: the deepest message boundary
+/// (rung 3, always, bypassing the cap as a pin renewal does, since a tail match is the conversation's own
+/// account); else, behind the class knob, the parent agent's pin (`with_main`, bypassing the cap the same way,
+/// since the cohort's own account outweighs it) or the deepest static boundary past the size gate, the cache
+/// gate and the blocker (rung 4, already under the cap by construction). `allowed` is the selection set before
+/// step 6's own partitions, so the source of a move or an account a preference narrowed around can never win a
+/// placement it would not have won on its own account. The bool answers whether the placement bypasses the cap.
+#[allow(clippy::too_many_arguments)]
+fn placement_of<'a>(
+    state: &RoutingState,
+    snapshot: &RegistrySnapshot,
+    pool: &PoolRow,
+    request: &SelectRequest,
+    affinity: &AffinityMap,
+    allowed: &[&'a Candidate],
+    window: &str,
+) -> Option<(&'a Candidate, Placement, bool)> {
+    let now = request.now;
+    let candidate_of =
+        |account_id: &str| allowed.iter().copied().find(|c| c.account_id == account_id);
+
+    if let Some((depth, entry)) =
+        affinity.deepest(&request.canonical_model, &request.boundaries, |e| {
+            account_ok(state, snapshot, allowed, window, now, e)
+        })
+    {
+        if let Some(candidate) = candidate_of(&entry.account_id) {
+            return Some((
+                candidate,
+                Placement {
+                    rung: "content",
+                    depth,
+                    prefix_tokens: entry.prefix_tokens,
+                },
+                true,
+            ));
+        }
+    }
+
+    let is_subagent = request.agent_id != "main";
+    if is_subagent && pool.affinity.subagent_placement == SubagentPlacement::WithMain {
+        let session_id = request.session_id.as_deref()?;
+        let key = PinKey {
+            key_id: request.key_id.clone(),
+            session_id: session_id.to_string(),
+            agent_id: request
+                .parent_agent_id
+                .clone()
+                .unwrap_or_else(|| "main".to_string()),
+            model: request.canonical_model.clone(),
+        };
+        let pin = state.pin(&key)?;
+        if !admits(state, allowed, window, &pin.account_id, now) {
+            return None;
+        }
+        let candidate = candidate_of(&pin.account_id)?;
+        return Some((
+            candidate,
+            Placement {
+                rung: "with_main",
+                depth: 0,
+                prefix_tokens: 0,
+            },
+            true,
+        ));
+    }
+    let by_warm_prefix = if is_subagent {
+        pool.affinity.subagent_placement == SubagentPlacement::ByCohort
+    } else {
+        pool.affinity.session_placement == SessionPlacement::ByWarmPrefix
+    };
+    if !by_warm_prefix || (!request.marker && request.portable) {
+        return None;
+    }
+    // An entry whose estimate is zero (the empty-tools boundary of a request without tools) never places for
+    // any class; the threshold itself binds a main conversation only, since a subagent cohort lands together on
+    // any shared prefix.
+    let size_gate = |entry: &AffinityEntry| {
+        entry.prefix_tokens > 0
+            && (is_subagent || entry.prefix_tokens >= pool.affinity.min_shared_prefix_tokens)
+    };
+    let (depth, entry) =
+        affinity.deepest(&request.canonical_model, &request.static_boundaries, |e| {
+            account_ok(state, snapshot, allowed, window, now, e)
+                && size_gate(e)
+                && !blocked(state, snapshot, pool, window, now, &e.account_id)
+        })?;
+    let candidate = candidate_of(&entry.account_id)?;
+    Some((
+        candidate,
+        Placement {
+            rung: "static",
+            depth,
+            prefix_tokens: entry.prefix_tokens,
+        },
+        false,
+    ))
+}
+
+/// The cohort-aware hold's first override: a session already on an account under any agent is never truly
+/// held, whichever agent's turn this is.
+fn any_agent_pin<'a>(
+    state: &RoutingState,
+    request: &SelectRequest,
+    allowed: &[&'a Candidate],
+    window: &str,
+) -> Option<&'a Candidate> {
+    let session_id = request.session_id.as_deref()?;
+    let pin = state.pins().into_iter().find(|p| {
+        p.key_id == request.key_id
+            && p.session_id == session_id
+            && p.model == request.canonical_model
+    })?;
+    if admits(state, allowed, window, &pin.account_id, request.now) {
+        allowed
+            .iter()
+            .copied()
+            .find(|c| c.account_id == pin.account_id)
+    } else {
+        None
+    }
+}
+
+/// The cohort-aware hold's second override: a subagent still held after the first waits where its own cohort
+/// is, so the wait frees a slot there rather than on the strategy's unrelated choice.
+fn subagent_cohort<'a>(
+    state: &RoutingState,
+    snapshot: &RegistrySnapshot,
+    request: &SelectRequest,
+    affinity: &AffinityMap,
+    allowed: &[&'a Candidate],
+    window: &str,
+) -> Option<&'a Candidate> {
+    if request.agent_id == "main" {
+        return None;
+    }
+    let (_, entry) =
+        affinity.deepest(&request.canonical_model, &request.static_boundaries, |e| {
+            account_ok(state, snapshot, allowed, window, request.now, e)
+        })?;
+    allowed
+        .iter()
+        .copied()
+        .find(|c| c.account_id == entry.account_id)
 }
 
 const WEEK_HOURS: f64 = 168.0;
@@ -1254,6 +1619,7 @@ fn exhaustion_of(obstacles: Vec<Obstacle>) -> Exhaustion {
     let cooldowns: Vec<(i64, String, String)> = obstacles
         .into_iter()
         .filter_map(|o| match o {
+            Obstacle::Budget { until } => Some((until, "overage".into(), "budget".into())),
             Obstacle::Cooldown {
                 until,
                 window,

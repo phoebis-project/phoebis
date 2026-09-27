@@ -56,6 +56,9 @@ Every field, in the order the request body takes them:
 | `prefer_subscription` | `true` | see below |
 | `affinity_ttl_seconds` | `3600` | `0` or at least 60: `affinity_ttl_seconds is 0 or at least 60` |
 | `affinity_mode` | `always` | `always` or `when_cached`; see below |
+| `subagent_placement` | `by_cohort` | `by_cohort`, `by_strategy`, or `with_main`; see Selection |
+| `session_placement` | `by_strategy` | `by_strategy` or `by_warm_prefix`; see Selection |
+| `min_shared_prefix_tokens` | `20000` | at least 0; see Selection |
 | `overage_policy` | `prefer_plan` | `prefer_plan`, `allow`, or `never` |
 | `overage_move_grace_minutes` | `30` | 0 to 300; see Moves |
 | `migrate_above_utilization` | unset | 0 to 1: `migrate_above_utilization is between 0 and 1`; starts shedding |
@@ -92,6 +95,11 @@ either way.
 
 A member's `priority` is a number; lower sorts first. Naming an unknown account in `members` answers `404
 account {id} not found`, and the pool is not created.
+
+A member carries a spend `budget_usd`, unset by default (no cap), and a `budget_period` of `day` or `month`
+(default `month`, the UTC calendar day or month). A member whose spend for the current period reaches its
+budget is skipped until the period ends; a pool whose every member is at its budget answers `429` with the
+`overage` claim, the same one an account in overage carries.
 
 `prefer_subscription` orders the set by kind (subscription accounts with plan quota, then those in overage, then
 API keys) before priority; it is the operator's answer alone, on by default, and no strategy overrides it. A pool
@@ -233,6 +241,14 @@ Selection keys every request by `(key id, root session, canonical model)`. The r
 and answers every request over a channel, so two concurrent first requests of the same session cannot claim
 different accounts. The identity a pin is held under is the session header [Clients](#clients) names.
 
+A fresh request with no live pin lands where its prefix is already warm: the deepest message boundary any
+account still holds always wins first, and failing that, the deepest static boundary for a subagent under
+`by_cohort` or a main conversation under `by_warm_prefix`, when the shared prefix is at least
+`min_shared_prefix_tokens`, the request carries or receives a cache marker, and the account is not hot, at its
+cap, winding down, under the Pace floor, spent, or cooling from a shed; anything else lands by the strategy. A
+held request of a subagent cohort waits where its cohort already is rather than on the strategy's own pick; a
+session already on an account, under any of its agents, is never held.
+
 The eligible set starts from every account that can serve the canonical model: enabled, paired or keyed, not
 `reauth_required` or `funding_required`, off cooldown, and not already tried by this request.
 
@@ -331,9 +347,12 @@ so the next request after it may start a fresh round.
 or `compaction` request ([`x-claude-code-request-class`](client.md#claude_code_gateway_hint_headers)) refreshes it, and
 any other class leaves it alone. Without the class header, a request whose messages extend the session's conversation
 refreshes the pin; one that repeats the session's static prefix (tools and system prompt) without extending its messages
-restarted the conversation and reads cold; one that matches neither changes nothing. A request that carries
-`x-claude-code-context-compacted` reads cold whatever else it says, so a compacted session goes first in the round's
-order on the request that carries the fact. A body the router cannot read refreshes the pin on every request. A
+restarted the conversation and reads cold; one that matches neither changes nothing. Where one session holds several
+conversations, a request that extends any
+conversation the pin has served refreshes it.
+A request that carries `x-claude-code-context-compacted` reads cold whatever else it
+says, so a compacted session goes first in the round's order on the request that carries the fact. A body the router
+cannot read refreshes the pin on every request. A
 keepalive probe replays another request's headers and body, so the router judges none of them: a probe never colds a
 session, and its renewal counts as a refresh. A `count_tokens` request creates no cache entry, so it neither refreshes
 nor colds the pin and leaves its cache TTL as it was.

@@ -20,9 +20,9 @@ use phoebis_bus::{
 };
 use phoebis_oauth::{AccessToken, AcquireError, Clock, CredentialManager};
 use phoebis_routing::{
-    resolve, AccountTicket, ClientClass, EvidenceSource, Exhaustion, KeyPermit,
-    KeyRefusal, OverageEvidence, PinRef, Presented, Report, ResolveError, RouterHandle,
-    SelectRequest, SelectResult, Selection, SelectionTrace, MODEL_REJECTED_REASON,
+    resolve, AccountTicket, ClientClass, EvidenceSource, Exhaustion, HoldFacts,
+    KeyPermit, KeyRefusal, OverageEvidence, PinRef, Presented, Report, ResolveError,
+    RouterHandle, SelectRequest, SelectResult, Selection, SelectionTrace, MODEL_REJECTED_REASON,
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, MemoryStore,
@@ -1189,6 +1189,9 @@ impl Relay {
             trace: &trace,
         };
         let mut attempted: Vec<String> = Vec::new();
+        // Every hold this request waited through, oldest first: carried onto the next selection so the
+        // attempt that follows names the wait on its trace.
+        let mut holds: Vec<HoldFacts> = Vec::new();
         let mut attempt: u8 = 0;
         let mut spent: u8 = 0;
         // Whether a hold ran out, and whether any leg dialled: an untimed exhaustion reached through holds alone
@@ -1251,6 +1254,8 @@ impl Relay {
                         || (matches!(admitted.trace.kind, Kind::Inference | Kind::Probe)
                             && admitted.cache_ttl_policy.enabled
                             && admitted.cache_ttl_policy.inject_when_absent),
+                    parent_agent_id: identity.parent_agent_id.clone(),
+                    holds: holds.clone(),
                 })
                 .await
             {
@@ -1289,7 +1294,7 @@ impl Relay {
                 }
                 // A hold spends a slot of the budget like an attempt. A slot freed within the bound lets the next
                 // selection place there; past it the account is attempted and the next selection looks elsewhere.
-                SelectResult::Held { account_id } => {
+                SelectResult::Held { account_id, hold } => {
                     // With no slot left for a dial after this one, the wait could only end in the budget's refusal,
                     // so the pool answers as the exhausted one it is, at once: at its cap, unless a leg dialled.
                     if spent + 1 >= self.limits.max_attempts {
@@ -1298,6 +1303,7 @@ impl Relay {
                             .await;
                     }
                     spent += 1;
+                    holds.push(hold);
                     let deadline = tokio::time::Instant::now() + admitted.retry_in_place;
                     if !self
                         .router

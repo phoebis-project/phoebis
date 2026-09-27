@@ -86,6 +86,8 @@ async fn next_trace(h: &Harness, session: &str) -> SelectionTrace {
             client: ClientClass::ClaudeCode,
             static_boundaries: Vec::new(),
             marker: false,
+            parent_agent_id: None,
+            holds: Vec::new(),
         })
         .await
         .unwrap();

@@ -158,6 +158,8 @@ fn request(handle: &phoebis_routing::RouterHandle, session: Option<&str>, now: i
         client: ClientClass::ClaudeCode,
         static_boundaries: Vec::new(),
         marker: false,
+        parent_agent_id: None,
+        holds: Vec::new(),
     }
 }
 
@@ -575,6 +577,8 @@ async fn a_persisted_resolution_keys_the_dated_pin_after_a_restart_before_any_re
             client: ClientClass::ClaudeCode,
             static_boundaries: Vec::new(),
             marker: false,
+            parent_agent_id: None,
+            holds: Vec::new(),
         }
     };
     let epoch;
@@ -698,6 +702,8 @@ async fn resolve_answers_once_the_state_holds_the_spellings_pins_and_cooldowns_u
             client: ClientClass::ClaudeCode,
             static_boundaries: Vec::new(),
             marker: false,
+            parent_agent_id: None,
+            holds: Vec::new(),
         })
         .await
         .unwrap();
@@ -2648,7 +2654,7 @@ async fn two_selections_answered_together_read_the_slot_the_first_one_charged() 
         .count();
     let held = [&one, &two]
         .iter()
-        .filter(|answer| matches!(&answer.result, SelectResult::Held { account_id } if account_id == "a"))
+        .filter(|answer| matches!(&answer.result, SelectResult::Held { account_id, .. } if account_id == "a"))
         .count();
     assert_eq!(
         (landed, held),

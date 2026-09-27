@@ -140,6 +140,63 @@ async fn a_third_request_on_an_account_at_a_cap_of_two_waits_for_a_slot_and_then
 }
 
 #[tokio::test]
+async fn a_hold_followed_by_a_dispatch_names_the_hold_in_the_attempts_trace() {
+    let up = FakeUpstream::start(messages(held_stream())).await;
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test");
+    let h = harness_with_bus(
+        &up,
+        &[oauth("a", A, 0)],
+        PoolSpec {
+            failover: account_cap(1, 10),
+            ..PoolSpec::default()
+        },
+        bus,
+    )
+    .await;
+    let first = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, MODEL, "s1"))
+        .await
+        .unwrap();
+    assert_eq!(h.router.in_flight().account("a"), 1, "a is at its cap");
+    let app = h.app.clone();
+    let held =
+        tokio::spawn(async move { app.oneshot(request_for(KEY, MODEL, "s2")).await.unwrap() });
+    stays_for(HELD_FOR, || posts(&up) == 1).await;
+    assert!(!held.is_finished(), "the second selection is held");
+    up.release_one().await;
+    let held = tokio::time::timeout(Duration::from_secs(5), held)
+        .await
+        .expect("a freed slot ends the hold")
+        .unwrap();
+    assert_eq!(held.status().as_u16(), 200);
+    let held_id = outcome(&held).request_id;
+    let mut events = Vec::new();
+    let selected = wait_for(Duration::from_secs(5), || {
+        while let Ok(e) = sub.events.try_recv() {
+            events.push(e);
+        }
+        events.iter().find_map(|e| match e {
+            Event::AccountSelected(a) if a.request_id == held_id => Some(a.clone()),
+            _ => None,
+        })
+    })
+    .await;
+    let selection: serde_json::Value =
+        serde_json::from_str(&selected.selection.expect("a selection was made")).unwrap();
+    assert_eq!(
+        selection["cohort_hold"]["waited_on"],
+        serde_json::json!(["a"]),
+        "the attempt that follows the hold names the account it waited on: {selection}"
+    );
+    drop(first);
+    up.release();
+    up.shutdown().await;
+}
+
+#[tokio::test]
 async fn a_pinned_sessions_request_lands_on_its_account_at_the_cap_while_a_fresh_session_is_held() {
     let up = FakeUpstream::start(messages(held_stream())).await;
     let h = harness(

@@ -398,15 +398,19 @@ async fn a_second_session_id_sharing_the_firsts_prefix_and_diverging_is_a_fork_o
     .await;
     let (h, mut sub) = setup(&up, &two()).await;
 
+    // A marker on s1's own last turn, so its answer's cache write confirms a live entry at the shared prefix
+    // for the fork's placement to find; it sits past the three shared messages, so the shared boundaries
+    // (and the fork's own identity) hash exactly as they would without it.
     let four = vec![
         user("one"),
         assistant("two"),
         user("three"),
-        assistant("four"),
+        json!({"role": "assistant", "content": [
+            {"type": "text", "text": "four", "cache_control": {"type": "ephemeral"}},
+        ]}),
     ];
-    // s1's own conversation is served by account "b" alone, so the fork's own placement below tells apart
-    // from a repeat of the base's account: a fork holds its own pin, placed by the strategy with no regard
-    // for the base's account; landing with the base's own account is a later placement concern.
+    // s1's own conversation is served by account "b" alone, so the fork's own pin below (on "a" once it joins
+    // the pool) would show up plainly if placement ever ignored the shared prefix: a fork lands with its base.
     h.store
         .set_pool_members("main", &[member("b", 1)], "test")
         .unwrap();
@@ -440,8 +444,8 @@ async fn a_second_session_id_sharing_the_firsts_prefix_and_diverging_is_a_fork_o
         .find(|p| p.session_id == "s2")
         .expect("s2 pins under its own id");
     assert_eq!(
-        fork_pin.account_id, "a",
-        "the fork's own pin is the strategy's fresh placement, not a repeat of the base's account \"b\""
+        fork_pin.account_id, "b",
+        "a fork lands with its base: rung 3 places it on the account serving s1's shared prefix"
     );
 
     let mut s2_extended = s2_messages;

@@ -1,14 +1,15 @@
 use phoebis_routing::{
-    effective_warm, release_reasons, resolve, select, warm, ClientClass, EvidenceSource,
-    Exhaustion, MigrateReason, OverageEvidence, PinRef, RegistrySnapshot, RoutingState,
-    SelectRequest, SelectResult, StateWrite, UtilizationSample, WindowReading, FIVE_HOUR,
-    MODEL_REJECTED_REASON, SEVEN_DAY, SEVEN_DAY_FABLE,
+    effective_warm, release_reasons, resolve, select, warm, AffinityChain, AffinityMap,
+    AffinityRow, ClientClass, CohortHold, EvidenceSource, Exhaustion, HoldFacts,
+    MemberSpend, MigrateReason, OverageEvidence, PinRef, Placement, RegistrySnapshot,
+    RoutingState, SelectRequest, SelectResult, StateWrite, UtilizationSample, WindowReading,
+    FIVE_HOUR, MODEL_REJECTED_REASON, SEVEN_DAY, SEVEN_DAY_FABLE,
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, Affinity, AffinityMode, AffinitySource, ApiKeyRow,
     BudgetPeriod, CooldownRow, Failover, OveragePolicy, PinKey, PinRow, PoolMember,
-    PoolRow, QuotaHeaders, RegistryLoad, RoutingLoad, RulesMode, Shedding, Strategy,
-    SubscriptionTerm, WarmSessions,
+    PoolRow, QuotaHeaders, RegistryLoad, RoutingLoad, RulesMode, SessionPlacement, Shedding,
+    Strategy, SubagentPlacement, SubscriptionTerm, WarmSessions,
 };
 use rand::rngs::StdRng;
 use rand::SeedableRng;
@@ -25,6 +26,9 @@ struct Pool {
     strategy: Strategy,
     affinity: u64,
     mode: AffinityMode,
+    subagent_placement: SubagentPlacement,
+    session_placement: SessionPlacement,
+    min_shared_prefix_tokens: u64,
     migrate: Option<f64>,
     select_below: Option<f64>,
     members: Vec<(&'static str, u32)>,
@@ -41,6 +45,9 @@ impl Default for Pool {
             strategy: Strategy::Priority,
             affinity: 3600,
             mode: AffinityMode::Always,
+            subagent_placement: SubagentPlacement::ByCohort,
+            session_placement: SessionPlacement::ByStrategy,
+            min_shared_prefix_tokens: 20_000,
             migrate: None,
             select_below: None,
             members: vec![("a", 0), ("b", 0), ("c", 0)],
@@ -149,7 +156,9 @@ fn load_of(pool: Pool, unavailable: &[(&str, bool, AccountState)]) -> RegistryLo
             cache_diagnostics: None,
             affinity: Affinity {
                 mode: pool.mode,
-                ..Affinity::default()
+                subagent_placement: pool.subagent_placement,
+                session_placement: pool.session_placement,
+                min_shared_prefix_tokens: pool.min_shared_prefix_tokens,
             },
             quota_headers: QuotaHeaders::Pass,
             created_at: 0,
@@ -179,6 +188,92 @@ fn without_account(s: &RegistrySnapshot, id: &str) -> RegistrySnapshot {
         terms: Vec::new(),
     };
     RegistrySnapshot::from_load(load, [0; 32], 0, 1)
+}
+
+/// `s` rebuilt with `account_id`'s pool membership carrying `budget_usd` and `budget_period`, the way the admin
+/// route's `set_pool_members` would leave it.
+fn with_member_budget(
+    s: &RegistrySnapshot,
+    account_id: &str,
+    budget_usd: Option<f64>,
+    budget_period: BudgetPeriod,
+) -> RegistrySnapshot {
+    let load = RegistryLoad {
+        accounts: s.accounts().cloned().collect(),
+        credential_generations: Vec::new(),
+        keys: s.keys().cloned().collect(),
+        members: s
+            .pools()
+            .flat_map(|p| s.members(&p.id).to_vec())
+            .map(|mut m| {
+                if m.account_id == account_id {
+                    m.budget_usd = budget_usd;
+                    m.budget_period = budget_period;
+                }
+                m
+            })
+            .collect(),
+        pools: s.pools().cloned().collect(),
+        retired_secrets: Vec::new(),
+        reused_key_ids: Vec::new(),
+        terms: Vec::new(),
+    };
+    RegistrySnapshot::from_load(load, [0; 32], 0, 1)
+}
+
+/// One affinity row under key "k" at its current generation and account `account` under incarnation 1, for
+/// `state.affinity().write()` to seed directly.
+#[allow(clippy::too_many_arguments)]
+fn affinity_row(
+    s: &RegistrySnapshot,
+    model: &str,
+    hash: &str,
+    chain: AffinityChain,
+    account: &str,
+    written_at: i64,
+    ttl_ms: i64,
+    prefix_tokens: u64,
+    root: &str,
+) -> AffinityRow {
+    AffinityRow {
+        model: model.into(),
+        hash: hash.into(),
+        chain,
+        account_id: account.into(),
+        incarnation: 1,
+        written_at,
+        ttl_ms,
+        prefix_tokens,
+        key_id: "k".into(),
+        key_generation: s.key("k").unwrap().created_at,
+        root: root.into(),
+    }
+}
+
+/// Replaces the state's affinity map whole, the way a placement test seeds exact entries without going through
+/// a report's own upsert rules.
+fn seed_affinity(st: &RoutingState, rows: Vec<AffinityRow>) {
+    *st.affinity().write().unwrap() = AffinityMap::from_rows(rows);
+}
+
+/// `req` carrying its full message and static chains and the cache-gate marker fact, for a placement test.
+fn placement_req(
+    mut req: SelectRequest,
+    boundaries: &[&str],
+    static_boundaries: &[&str],
+    marker: bool,
+) -> SelectRequest {
+    req.boundaries = boundaries.iter().map(|b| b.to_string()).collect();
+    req.static_boundaries = static_boundaries.iter().map(|b| b.to_string()).collect();
+    req.static_hash = static_boundaries.last().map(|b| b.to_string());
+    req.marker = marker;
+    req
+}
+
+/// `req` under a subagent's own id, for a placement test.
+fn subagent(mut req: SelectRequest, agent_id: &str) -> SelectRequest {
+    req.agent_id = agent_id.into();
+    req
 }
 
 /// `s` rebuilt with key "k" carrying a different `created_at`, the generation a delete and a recreate under
@@ -235,6 +330,8 @@ fn request(
         client: ClientClass::ClaudeCode,
         static_boundaries: Vec::new(),
         marker: false,
+        parent_agent_id: None,
+        holds: Vec::new(),
     }
 }
 
@@ -2202,6 +2299,1561 @@ fn the_release_reasons_name_every_fact_against_the_pinned_account_in_the_selecti
 }
 
 #[test]
+fn a_member_at_its_budget_is_skipped_until_the_periods_end_and_serves_again_after_it() {
+    let s = with_member_budget(
+        &snapshot(Pool {
+            members: vec![("a", 0), ("b", 1)],
+            ..Pool::default()
+        }),
+        "a",
+        Some(5.0),
+        BudgetPeriod::Month,
+    );
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.record_member_spend(
+        &s,
+        vec![MemberSpend {
+            pool_id: "p".into(),
+            account_id: "a".into(),
+            period: BudgetPeriod::Month,
+            period_start: 0,
+            period_end: 10_000,
+            spent_usd: 5.0,
+            observed_at: 1_000,
+        }],
+    );
+    let SelectResult::Selected(sel) = select(
+        &mut st,
+        &s,
+        &request(&s, Some("s1"), "claude-sonnet-5", true, &[], 1_000),
+        &mut rng(),
+    )
+    .0
+    else {
+        panic!("a sibling serves the request")
+    };
+    assert_eq!(
+        sel.account.id, "b",
+        "a is at its budget, so the sibling takes the request"
+    );
+    assert!(
+        sel.trace
+            .skipped
+            .iter()
+            .any(|sk| sk.account_id == "a" && sk.obstacle == "budget"),
+        "{:?}",
+        sel.trace.skipped
+    );
+    let SelectResult::Selected(sel) = select(
+        &mut st,
+        &s,
+        &request(&s, Some("s2"), "claude-sonnet-5", true, &[], 10_000),
+        &mut rng(),
+    )
+    .0
+    else {
+        panic!("a serves once the period has ended")
+    };
+    assert_eq!(sel.account.id, "a", "the period ended, so a serves again");
+    st.record_member_spend(
+        &s,
+        vec![MemberSpend {
+            pool_id: "p".into(),
+            account_id: "a".into(),
+            period: BudgetPeriod::Month,
+            period_start: 10_000,
+            period_end: 20_000,
+            spent_usd: 4.0,
+            observed_at: 15_000,
+        }],
+    );
+    let SelectResult::Selected(sel) = select(
+        &mut st,
+        &s,
+        &request(&s, Some("s3"), "claude-sonnet-5", true, &[], 15_000),
+        &mut rng(),
+    )
+    .0
+    else {
+        panic!("a serves under its budget")
+    };
+    assert_eq!(
+        sel.account.id, "a",
+        "a report below the budget never excludes"
+    );
+}
+
+#[test]
+fn every_member_at_its_budget_answers_a_timed_exhaustion_under_the_overage_window() {
+    let s = with_member_budget(
+        &with_member_budget(
+            &snapshot(Pool {
+                members: vec![("a", 0), ("b", 1)],
+                ..Pool::default()
+            }),
+            "a",
+            Some(5.0),
+            BudgetPeriod::Month,
+        ),
+        "b",
+        Some(5.0),
+        BudgetPeriod::Month,
+    );
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.record_member_spend(
+        &s,
+        vec![
+            MemberSpend {
+                pool_id: "p".into(),
+                account_id: "a".into(),
+                period: BudgetPeriod::Month,
+                period_start: 0,
+                period_end: 10_000,
+                spent_usd: 5.0,
+                observed_at: 1_000,
+            },
+            MemberSpend {
+                pool_id: "p".into(),
+                account_id: "b".into(),
+                period: BudgetPeriod::Month,
+                period_start: 0,
+                period_end: 8_000,
+                spent_usd: 5.0,
+                observed_at: 1_000,
+            },
+        ],
+    );
+    assert_eq!(
+        select(
+            &mut st,
+            &s,
+            &request(&s, Some("s1"), "claude-sonnet-5", true, &[], 1_000),
+            &mut rng(),
+        )
+        .0,
+        SelectResult::Exhausted(Exhaustion::Timed {
+            deadline: 8_000,
+            window: "overage".into(),
+        }),
+        "every member is at its budget, so the pool answers the earlier period's end"
+    );
+}
+
+#[test]
+fn a_pin_on_a_member_at_its_budget_is_released_with_reason_budget() {
+    let s = with_member_budget(
+        &snapshot(Pool {
+            members: vec![("a", 0), ("b", 1)],
+            ..Pool::default()
+        }),
+        "a",
+        Some(5.0),
+        BudgetPeriod::Month,
+    );
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    assert_eq!(
+        picked(
+            &select(
+                &mut st,
+                &s,
+                &request(&s, Some("s1"), "claude-sonnet-5", true, &[], 1_000),
+                &mut rng(),
+            )
+            .0
+        ),
+        "a",
+        "a serves before its spend reaches the budget"
+    );
+    let pin = st
+        .pin(&pin_key("s1"))
+        .cloned()
+        .expect("the first select pinned a");
+    st.record_member_spend(
+        &s,
+        vec![MemberSpend {
+            pool_id: "p".into(),
+            account_id: "a".into(),
+            period: BudgetPeriod::Month,
+            period_start: 0,
+            period_end: 10_000,
+            spent_usd: 5.0,
+            observed_at: 2_000,
+        }],
+    );
+    let at_budget = request(&s, Some("s1"), "claude-sonnet-5", true, &[], 2_000);
+    assert!(
+        release_reasons(&st, &s, &pin, &at_budget).contains(&"budget"),
+        "the member's spend reached its budget, so the pin releases as budget"
+    );
+}
+
+#[test]
+fn a_non_portable_request_bound_to_a_member_at_its_budget_answers_the_timed_exhaustion_with_the_overage_claim(
+) {
+    let s = with_member_budget(
+        &snapshot(Pool {
+            members: vec![("a", 0)],
+            ..Pool::default()
+        }),
+        "a",
+        Some(5.0),
+        BudgetPeriod::Month,
+    );
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    select(
+        &mut st,
+        &s,
+        &request(&s, Some("s1"), "claude-sonnet-5", true, &[], 1_000),
+        &mut rng(),
+    );
+    st.record_member_spend(
+        &s,
+        vec![MemberSpend {
+            pool_id: "p".into(),
+            account_id: "a".into(),
+            period: BudgetPeriod::Month,
+            period_start: 0,
+            period_end: 10_000,
+            spent_usd: 5.0,
+            observed_at: 2_000,
+        }],
+    );
+    let bound = request(&s, Some("s1"), "claude-sonnet-5", false, &[], 2_000);
+    assert_eq!(
+        select(&mut st, &s, &bound, &mut rng()).0,
+        SelectResult::Exhausted(Exhaustion::Timed {
+            deadline: 10_000,
+            window: "overage".into(),
+        }),
+        "bound to a member at its budget, the request answers the timed overage claim"
+    );
+}
+
+#[test]
+fn a_spend_row_of_another_period_than_the_members_is_no_obstacle() {
+    let s = with_member_budget(
+        &snapshot(Pool {
+            members: vec![("a", 0)],
+            ..Pool::default()
+        }),
+        "a",
+        Some(5.0),
+        BudgetPeriod::Day,
+    );
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.record_member_spend(
+        &s,
+        vec![MemberSpend {
+            pool_id: "p".into(),
+            account_id: "a".into(),
+            period: BudgetPeriod::Month,
+            period_start: 0,
+            period_end: 100_000,
+            spent_usd: 5.0,
+            observed_at: 1_000,
+        }],
+    );
+    assert_eq!(
+        picked(
+            &select(
+                &mut st,
+                &s,
+                &request(&s, Some("s1"), "claude-sonnet-5", true, &[], 1_000),
+                &mut rng(),
+            )
+            .0
+        ),
+        "a",
+        "a Month row is no obstacle for a member configured on Day"
+    );
+    st.record_member_spend(
+        &s,
+        vec![MemberSpend {
+            pool_id: "p".into(),
+            account_id: "a".into(),
+            period: BudgetPeriod::Day,
+            period_start: -48 * HOUR,
+            period_end: -24 * HOUR,
+            spent_usd: 5.0,
+            observed_at: 1_000,
+        }],
+    );
+    assert_eq!(
+        picked(
+            &select(
+                &mut st,
+                &s,
+                &request(&s, Some("s2"), "claude-sonnet-5", true, &[], 1_000),
+                &mut rng(),
+            )
+            .0
+        ),
+        "a",
+        "a Day row whose bounds are yesterday's is no obstacle"
+    );
+}
+
+#[test]
+fn a_tail_match_places_on_the_entrys_account_inside_its_ttl_and_the_strategy_places_past_it() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    seed_affinity(
+        &st,
+        vec![affinity_row(
+            &s,
+            "claude-sonnet-5",
+            "m1",
+            AffinityChain::Message,
+            "a",
+            1_000,
+            5_000,
+            800,
+            "root",
+        )],
+    );
+    let req = placement_req(
+        request(&s, Some("s1"), "claude-sonnet-5", true, &[], 2_000),
+        &["m1"],
+        &[],
+        false,
+    );
+    let SelectResult::Selected(sel) = select(&mut st, &s, &req, &mut rng()).0 else {
+        panic!("a tail match places the request")
+    };
+    assert_eq!(sel.account.id, "a");
+    assert_eq!(
+        sel.trace.placement,
+        Some(Placement {
+            rung: "content",
+            depth: 1,
+            prefix_tokens: 800,
+        }),
+    );
+    let past_ttl = placement_req(
+        request(&s, Some("s2"), "claude-sonnet-5", true, &[], 7_000),
+        &["m1"],
+        &[],
+        false,
+    );
+    let SelectResult::Selected(sel) = select(&mut st, &s, &past_ttl, &mut rng()).0 else {
+        panic!("the strategy places past the ttl")
+    };
+    assert_eq!(
+        sel.trace.placement, None,
+        "the entry is no longer live, so the strategy chose instead"
+    );
+}
+
+#[test]
+fn a_static_match_places_a_subagent_under_by_cohort_and_a_main_conversation_only_under_by_warm_prefix(
+) {
+    let by_cohort = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    seed_affinity(
+        &st,
+        vec![affinity_row(
+            &by_cohort,
+            "claude-sonnet-5",
+            "s1",
+            AffinityChain::Static,
+            "a",
+            1_000,
+            3_600_000,
+            20_000,
+            "root",
+        )],
+    );
+    let sub_req = subagent(
+        placement_req(
+            request(
+                &by_cohort,
+                Some("session"),
+                "claude-sonnet-5",
+                true,
+                &[],
+                2_000,
+            ),
+            &[],
+            &["s1"],
+            true,
+        ),
+        "worker",
+    );
+    let SelectResult::Selected(sel) = select(&mut st, &by_cohort, &sub_req, &mut rng()).0 else {
+        panic!("a subagent places under by_cohort")
+    };
+    assert_eq!(sel.account.id, "a");
+    assert_eq!(
+        sel.trace.placement,
+        Some(Placement {
+            rung: "static",
+            depth: 1,
+            prefix_tokens: 20_000,
+        }),
+    );
+
+    let by_strategy_main = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st2 = RoutingState::from_load(RoutingLoad::default());
+    seed_affinity(
+        &st2,
+        vec![affinity_row(
+            &by_strategy_main,
+            "claude-sonnet-5",
+            "s1",
+            AffinityChain::Static,
+            "a",
+            1_000,
+            3_600_000,
+            20_000,
+            "root",
+        )],
+    );
+    let main_req = placement_req(
+        request(
+            &by_strategy_main,
+            Some("session"),
+            "claude-sonnet-5",
+            true,
+            &[],
+            2_000,
+        ),
+        &[],
+        &["s1"],
+        true,
+    );
+    let SelectResult::Selected(sel) = select(&mut st2, &by_strategy_main, &main_req, &mut rng()).0
+    else {
+        panic!("a main conversation still lands somewhere")
+    };
+    assert_eq!(
+        sel.trace.placement, None,
+        "session_placement defaults to by_strategy, so a main conversation ignores the static tier"
+    );
+
+    let by_warm_prefix = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        session_placement: SessionPlacement::ByWarmPrefix,
+        ..Pool::default()
+    });
+    let mut st3 = RoutingState::from_load(RoutingLoad::default());
+    seed_affinity(
+        &st3,
+        vec![affinity_row(
+            &by_warm_prefix,
+            "claude-sonnet-5",
+            "s1",
+            AffinityChain::Static,
+            "a",
+            1_000,
+            3_600_000,
+            20_000,
+            "root",
+        )],
+    );
+    let main_req2 = placement_req(
+        request(
+            &by_warm_prefix,
+            Some("session"),
+            "claude-sonnet-5",
+            true,
+            &[],
+            2_000,
+        ),
+        &[],
+        &["s1"],
+        true,
+    );
+    let SelectResult::Selected(sel) = select(&mut st3, &by_warm_prefix, &main_req2, &mut rng()).0
+    else {
+        panic!("a main conversation places under by_warm_prefix")
+    };
+    assert_eq!(sel.account.id, "a");
+    assert_eq!(
+        sel.trace.placement,
+        Some(Placement {
+            rung: "static",
+            depth: 1,
+            prefix_tokens: 20_000,
+        }),
+    );
+}
+
+#[test]
+fn an_entry_another_key_wrote_places_the_request() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let mut row = affinity_row(
+        &s,
+        "claude-sonnet-5",
+        "m1",
+        AffinityChain::Message,
+        "a",
+        1_000,
+        300_000,
+        900,
+        "root",
+    );
+    row.key_id = "other".into();
+    row.key_generation = 0;
+    seed_affinity(&st, vec![row]);
+    let req = placement_req(
+        request(&s, Some("s1"), "claude-sonnet-5", true, &[], 1_500),
+        &["m1"],
+        &[],
+        false,
+    );
+    let SelectResult::Selected(sel) = select(&mut st, &s, &req, &mut rng()).0 else {
+        panic!("an entry from another key still places the request")
+    };
+    assert_eq!(sel.account.id, "a");
+    assert_eq!(
+        pinned(&st, "s1").key_id,
+        "k",
+        "the pin is made under the request's own key, not the entry's"
+    );
+}
+
+#[test]
+fn two_pools_sharing_an_account_share_its_entries() {
+    let account = |id: &str| AccountRow {
+        id: id.into(),
+        kind: AccountKind::Oauth,
+        label: id.into(),
+        enabled: true,
+        identity: None,
+        lifecycle_generation: 1,
+        incarnation: 1,
+        revision: 1,
+        state: AccountState::Ready,
+    };
+    let key = |id: &str, pool_id: &str| ApiKeyRow {
+        id: id.into(),
+        label: id.into(),
+        notes: None,
+        pool_id: pool_id.into(),
+        enabled: true,
+        revoked_at: None,
+        expires_at: None,
+        model_rules: Vec::new(),
+        model_rules_mode: RulesMode::Extend,
+        long_context_twins: true,
+        keepalive_opt_out: false,
+        body_capture_hours: None,
+        secret_digest: vec![0; 32],
+        prefix: "00000000".into(),
+        created_at: 0,
+        rotated_at: None,
+        last_used_at: None,
+        retired_secret_last_used_at: None,
+        in_flight_cap: None,
+        affinity_source: AffinitySource::Auto,
+    };
+    let pool = |id: &str| PoolRow {
+        id: id.into(),
+        label: id.into(),
+        enabled: true,
+        strategy: Strategy::Priority,
+        affinity_ttl_seconds: 3_600,
+        overage_policy: OveragePolicy::PreferPlan,
+        migrate_above_utilization: None,
+        select_below_utilization: None,
+        model_rules: Vec::new(),
+        keepalive_json: "{}".into(),
+        body_capture_hours: 0,
+        prefer_subscription: false,
+        shedding: Shedding::default(),
+        failover: Failover::default(),
+        cache_ttl_json: "{}".into(),
+        cache_diagnostics: None,
+        affinity: Affinity::default(),
+        quota_headers: QuotaHeaders::Pass,
+        created_at: 0,
+        updated_at: 0,
+    };
+    let member = |pool_id: &str, account_id: &str, priority: u32| PoolMember {
+        pool_id: pool_id.into(),
+        account_id: account_id.into(),
+        priority,
+        budget_usd: None,
+        budget_period: BudgetPeriod::Month,
+    };
+    let load = RegistryLoad {
+        accounts: vec![account("a"), account("b"), account("c")],
+        credential_generations: Vec::new(),
+        keys: vec![key("k1", "p1"), key("k2", "p2")],
+        members: vec![
+            member("p1", "a", 0),
+            member("p1", "b", 1),
+            member("p2", "a", 0),
+            member("p2", "c", 1),
+        ],
+        pools: vec![pool("p1"), pool("p2")],
+        retired_secrets: Vec::new(),
+        reused_key_ids: Vec::new(),
+        terms: Vec::new(),
+    };
+    let s = RegistrySnapshot::from_load(load, [0; 32], 0, 1);
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let row = AffinityRow {
+        model: "claude-sonnet-5".into(),
+        hash: "m1".into(),
+        chain: AffinityChain::Message,
+        account_id: "a".into(),
+        incarnation: 1,
+        written_at: 1_000,
+        ttl_ms: 300_000,
+        prefix_tokens: 900,
+        key_id: "k1".into(),
+        key_generation: s.key("k1").unwrap().created_at,
+        root: "root".into(),
+    };
+    seed_affinity(&st, vec![row]);
+    let req_for = |key_id: &str, session: &str, now: i64| SelectRequest {
+        key_id: key_id.into(),
+        key_generation: s.key(key_id).unwrap().created_at,
+        agent_id: "main".into(),
+        session_id: Some(session.into()),
+        canonical_model: "claude-sonnet-5".into(),
+        candidates: resolve(
+            &s,
+            s.key(key_id).unwrap(),
+            "claude-sonnet-5",
+            "claude-sonnet-5",
+        )
+        .unwrap(),
+        portable: true,
+        attempted: Vec::new(),
+        now,
+        fallback_ms: 60_000,
+        revision: s.revision,
+        probe: false,
+        count: false,
+        request_class: None,
+        context_compacted: false,
+        static_hash: None,
+        boundaries: vec!["m1".into()],
+        client: ClientClass::ClaudeCode,
+        static_boundaries: Vec::new(),
+        marker: false,
+        parent_agent_id: None,
+        holds: Vec::new(),
+    };
+    let SelectResult::Selected(sel1) =
+        select(&mut st, &s, &req_for("k1", "s1", 1_500), &mut rng()).0
+    else {
+        panic!("pool p1's request lands on the shared entry")
+    };
+    assert_eq!(
+        sel1.account.id, "a",
+        "pool p1's request lands on a via the shared entry"
+    );
+    let SelectResult::Selected(sel2) =
+        select(&mut st, &s, &req_for("k2", "s2", 1_500), &mut rng()).0
+    else {
+        panic!("pool p2's request lands on the shared entry")
+    };
+    assert_eq!(
+        sel2.account.id, "a",
+        "pool p2's request lands on the same entry"
+    );
+}
+
+#[test]
+fn the_blocker_refuses_a_hot_account_and_the_request_lands_by_the_strategy() {
+    let scenario = |pool: Pool, seed: &dyn Fn(&mut RoutingState)| {
+        let s = snapshot(pool);
+        let mut st = RoutingState::from_load(RoutingLoad::default());
+        seed_affinity(
+            &st,
+            vec![affinity_row(
+                &s,
+                "claude-sonnet-5",
+                "s1",
+                AffinityChain::Static,
+                "a",
+                1_000,
+                3_600_000,
+                20_000,
+                "root",
+            )],
+        );
+        seed(&mut st);
+        let req = subagent(
+            placement_req(
+                request(&s, Some("session"), "claude-sonnet-5", true, &[], 2_000),
+                &[],
+                &["s1"],
+                true,
+            ),
+            "worker",
+        );
+        let SelectResult::Selected(sel) = select(&mut st, &s, &req, &mut rng()).0 else {
+            panic!("the strategy still lands the request")
+        };
+        assert_eq!(
+            sel.account.id, "b",
+            "b takes it since a is refused by the blocker"
+        );
+        assert_eq!(sel.trace.placement, None);
+    };
+    // At or above `migrate_above_utilization` minus the band on the 5-hour window.
+    scenario(
+        Pool {
+            members: vec![("a", 1), ("b", 0)],
+            migrate: Some(0.8),
+            ..Pool::default()
+        },
+        &|st| {
+            st.record_sample("a", sample(0.8, 0.0, 1_000));
+        },
+    );
+    // At or above the ceiling.
+    scenario(
+        Pool {
+            members: vec![("a", 1), ("b", 0)],
+            select_below: Some(0.5),
+            ..Pool::default()
+        },
+        &|st| {
+            st.record_sample("a", sample(0.5, 0.0, 1_000));
+        },
+    );
+    // At or under the Pace floor: `window_for` reads the seven-day window for this model.
+    scenario(
+        Pool {
+            members: vec![("a", 1), ("b", 0)],
+            strategy: Strategy::Pace,
+            ..Pool::default()
+        },
+        &|st| {
+            st.record_sample("a", sample(0.0, 0.96, 1_000));
+        },
+    );
+    // Spent: no allowance left in the request's window.
+    scenario(
+        Pool {
+            members: vec![("a", 1), ("b", 0)],
+            ..Pool::default()
+        },
+        &|st| {
+            st.record_sample("a", sample(1.0, 1.0, 1_000));
+        },
+    );
+    // Cooling: a cooldown makes the account ineligible, so it never joins the candidates placement chooses among.
+    scenario(
+        Pool {
+            members: vec![("a", 1), ("b", 0)],
+            ..Pool::default()
+        },
+        &|st| {
+            st.record_cooldown(cooled("a", "account", 10_000, "five_hour", "rate_limit"));
+        },
+    );
+}
+
+#[test]
+fn the_blocker_reads_each_candidate_itself_when_narrow_kept_the_wider_set() {
+    let s = snapshot(Pool {
+        members: vec![("a", 1), ("b", 0)],
+        select_below: Some(0.3),
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.record_sample("a", sample(0.9, 0.0, 1_000));
+    st.record_sample("b", sample(0.9, 0.0, 1_000));
+    seed_affinity(
+        &st,
+        vec![affinity_row(
+            &s,
+            "claude-sonnet-5",
+            "s1",
+            AffinityChain::Static,
+            "a",
+            1_000,
+            3_600_000,
+            20_000,
+            "root",
+        )],
+    );
+    let req = subagent(
+        placement_req(
+            request(&s, Some("session"), "claude-sonnet-5", true, &[], 2_000),
+            &[],
+            &["s1"],
+            true,
+        ),
+        "worker",
+    );
+    let SelectResult::Selected(sel) = select(&mut st, &s, &req, &mut rng()).0 else {
+        panic!("the strategy lands the request")
+    };
+    assert_eq!(
+        sel.account.id, "b",
+        "the strategy lands it since a's own reading refuses rung 4 even though narrow kept the wider set"
+    );
+    assert_eq!(sel.trace.placement, None);
+    assert!(
+        !sel.trace
+            .skipped
+            .iter()
+            .any(|sk| sk.account_id == "a" && sk.obstacle == "above_ceiling"),
+        "narrow left both accounts in the set: a is not skipped as above_ceiling, {:?}",
+        sel.trace.skipped
+    );
+}
+
+#[test]
+fn the_size_gate_refuses_a_small_prefix_for_a_main_conversation_and_not_for_a_subagent() {
+    let s = snapshot(Pool {
+        members: vec![("a", 1), ("b", 0)],
+        session_placement: SessionPlacement::ByWarmPrefix,
+        min_shared_prefix_tokens: 20_000,
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    seed_affinity(
+        &st,
+        vec![affinity_row(
+            &s,
+            "claude-sonnet-5",
+            "s1",
+            AffinityChain::Static,
+            "a",
+            1_000,
+            3_600_000,
+            500,
+            "root",
+        )],
+    );
+    let main_req = placement_req(
+        request(&s, Some("session"), "claude-sonnet-5", true, &[], 2_000),
+        &[],
+        &["s1"],
+        true,
+    );
+    let SelectResult::Selected(sel) = select(&mut st, &s, &main_req, &mut rng()).0 else {
+        panic!("b lands the main conversation")
+    };
+    assert_eq!(
+        sel.trace.placement, None,
+        "a small prefix never places a main conversation"
+    );
+    assert_eq!(sel.account.id, "b");
+
+    let sub_req = subagent(
+        placement_req(
+            request(&s, Some("session2"), "claude-sonnet-5", true, &[], 2_000),
+            &[],
+            &["s1"],
+            true,
+        ),
+        "worker",
+    );
+    let SelectResult::Selected(sel) = select(&mut st, &s, &sub_req, &mut rng()).0 else {
+        panic!("a places the subagent")
+    };
+    assert_eq!(sel.account.id, "a", "any positive prefix places a subagent");
+    assert_eq!(
+        sel.trace.placement,
+        Some(Placement {
+            rung: "static",
+            depth: 1,
+            prefix_tokens: 500,
+        }),
+    );
+}
+
+#[test]
+fn two_large_cached_requests_sharing_only_the_absent_tools_boundary_never_place_on_each_other() {
+    let by_cohort = snapshot(Pool {
+        members: vec![("a", 1), ("b", 0)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    seed_affinity(
+        &st,
+        vec![affinity_row(
+            &by_cohort,
+            "claude-sonnet-5",
+            "t0",
+            AffinityChain::Static,
+            "a",
+            1_000,
+            3_600_000,
+            0,
+            "root",
+        )],
+    );
+    let sub_req = subagent(
+        placement_req(
+            request(
+                &by_cohort,
+                Some("session"),
+                "claude-sonnet-5",
+                true,
+                &[],
+                2_000,
+            ),
+            &[],
+            &["t0"],
+            true,
+        ),
+        "worker",
+    );
+    let SelectResult::Selected(sel) = select(&mut st, &by_cohort, &sub_req, &mut rng()).0 else {
+        panic!("b lands the subagent")
+    };
+    assert_eq!(
+        sel.trace.placement, None,
+        "the shared boundary carries no promised prefix, so a subagent does not place on it"
+    );
+    assert_eq!(sel.account.id, "b");
+
+    let by_warm_prefix = snapshot(Pool {
+        members: vec![("a", 1), ("b", 0)],
+        session_placement: SessionPlacement::ByWarmPrefix,
+        ..Pool::default()
+    });
+    let mut st2 = RoutingState::from_load(RoutingLoad::default());
+    seed_affinity(
+        &st2,
+        vec![affinity_row(
+            &by_warm_prefix,
+            "claude-sonnet-5",
+            "t0",
+            AffinityChain::Static,
+            "a",
+            1_000,
+            3_600_000,
+            0,
+            "root",
+        )],
+    );
+    let main_req = placement_req(
+        request(
+            &by_warm_prefix,
+            Some("session2"),
+            "claude-sonnet-5",
+            true,
+            &[],
+            2_000,
+        ),
+        &[],
+        &["t0"],
+        true,
+    );
+    let SelectResult::Selected(sel) = select(&mut st2, &by_warm_prefix, &main_req, &mut rng()).0
+    else {
+        panic!("b lands the main conversation")
+    };
+    assert_eq!(
+        sel.trace.placement, None,
+        "a main conversation does not place on the zero-token boundary either"
+    );
+    assert_eq!(sel.account.id, "b");
+}
+
+#[test]
+fn a_marker_less_portable_request_is_never_placed_by_the_static_tier() {
+    let s = snapshot(Pool {
+        members: vec![("a", 1), ("b", 0)],
+        session_placement: SessionPlacement::ByWarmPrefix,
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    seed_affinity(
+        &st,
+        vec![affinity_row(
+            &s,
+            "claude-sonnet-5",
+            "s1",
+            AffinityChain::Static,
+            "a",
+            1_000,
+            3_600_000,
+            20_000,
+            "root",
+        )],
+    );
+    let req = placement_req(
+        request(&s, Some("session"), "claude-sonnet-5", true, &[], 2_000),
+        &[],
+        &["s1"],
+        false,
+    );
+    let SelectResult::Selected(sel) = select(&mut st, &s, &req, &mut rng()).0 else {
+        panic!("b lands the marker-less request")
+    };
+    assert_eq!(sel.trace.placement, None);
+    assert_eq!(sel.account.id, "b");
+}
+
+#[test]
+fn with_main_places_a_subagents_first_request_on_the_parents_account_and_by_strategy_skips_the_lookup(
+) {
+    let with_main_pool = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        subagent_placement: SubagentPlacement::WithMain,
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    select(
+        &mut st,
+        &with_main_pool,
+        &request(
+            &with_main_pool,
+            Some("session"),
+            "claude-sonnet-5",
+            true,
+            &["a"],
+            1_000,
+        ),
+        &mut rng(),
+    );
+    assert_eq!(pinned(&st, "session").account_id, "b");
+    let sub_req = subagent(
+        request(
+            &with_main_pool,
+            Some("session"),
+            "claude-sonnet-5",
+            true,
+            &[],
+            1_500,
+        ),
+        "worker",
+    );
+    let SelectResult::Selected(sel) = select(&mut st, &with_main_pool, &sub_req, &mut rng()).0
+    else {
+        panic!("the subagent lands with its parent")
+    };
+    assert_eq!(
+        sel.account.id, "b",
+        "the subagent lands on its parent's account"
+    );
+    assert_eq!(
+        sel.trace.placement,
+        Some(Placement {
+            rung: "with_main",
+            depth: 0,
+            prefix_tokens: 0,
+        }),
+    );
+
+    let by_strategy_pool = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        subagent_placement: SubagentPlacement::ByStrategy,
+        ..Pool::default()
+    });
+    let mut st2 = RoutingState::from_load(RoutingLoad::default());
+    select(
+        &mut st2,
+        &by_strategy_pool,
+        &request(
+            &by_strategy_pool,
+            Some("session"),
+            "claude-sonnet-5",
+            true,
+            &["a"],
+            1_000,
+        ),
+        &mut rng(),
+    );
+    assert_eq!(pinned(&st2, "session").account_id, "b");
+    let sub_req2 = subagent(
+        request(
+            &by_strategy_pool,
+            Some("session"),
+            "claude-sonnet-5",
+            true,
+            &[],
+            1_500,
+        ),
+        "worker",
+    );
+    let SelectResult::Selected(sel) = select(&mut st2, &by_strategy_pool, &sub_req2, &mut rng()).0
+    else {
+        panic!("the strategy lands the subagent")
+    };
+    assert_eq!(
+        sel.account.id, "a",
+        "by_strategy skips the lookup, so priority picks a instead"
+    );
+    assert_eq!(sel.trace.placement, None);
+}
+
+#[test]
+fn a_tail_match_bypasses_the_cap_and_the_static_tier_does_not() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        session_placement: SessionPlacement::ByWarmPrefix,
+        failover: Failover {
+            in_flight_cap: 1,
+            ..Failover::default()
+        },
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let ticket = st.in_flight().dispatched("a", 1_000);
+    seed_affinity(
+        &st,
+        vec![affinity_row(
+            &s,
+            "claude-sonnet-5",
+            "m1",
+            AffinityChain::Message,
+            "a",
+            1_000,
+            300_000,
+            900,
+            "root",
+        )],
+    );
+    let content_req = placement_req(
+        request(&s, Some("s1"), "claude-sonnet-5", true, &[], 2_000),
+        &["m1"],
+        &[],
+        false,
+    );
+    let SelectResult::Selected(sel) = select(&mut st, &s, &content_req, &mut rng()).0 else {
+        panic!("a tail match still places on a")
+    };
+    assert_eq!(sel.account.id, "a", "a tail match bypasses the cap");
+    assert_eq!(
+        sel.trace.placement,
+        Some(Placement {
+            rung: "content",
+            depth: 1,
+            prefix_tokens: 900,
+        }),
+    );
+
+    seed_affinity(
+        &st,
+        vec![affinity_row(
+            &s,
+            "claude-sonnet-5",
+            "s1",
+            AffinityChain::Static,
+            "a",
+            1_000,
+            3_600_000,
+            20_000,
+            "root",
+        )],
+    );
+    let static_req = placement_req(
+        request(&s, Some("s2"), "claude-sonnet-5", true, &[], 2_500),
+        &[],
+        &["s1"],
+        true,
+    );
+    let SelectResult::Selected(sel) = select(&mut st, &s, &static_req, &mut rng()).0 else {
+        panic!("b lands the static-tier request")
+    };
+    assert_eq!(
+        sel.account.id, "b",
+        "the static tier respects the cap, so b takes it"
+    );
+    assert_eq!(sel.trace.placement, None);
+    drop(ticket);
+}
+
+#[test]
+fn after_a_return_to_plan_move_a_warm_entry_on_the_source_cannot_place_the_request() {
+    let s = snapshot(cool_preference_pool(vec![("a", AccountKind::ApiKey)]));
+    let mut st = loaded(vec![PinRow {
+        created_at: T - MINUTE,
+        ..burning("cold", "a", 0.0, false, T)
+    }]);
+    hot_b_cool_c(&mut st, T - 500);
+    seed_affinity(
+        &st,
+        vec![affinity_row(
+            &s,
+            "claude-sonnet-5",
+            "m1",
+            AffinityChain::Message,
+            "a",
+            T - 500,
+            3_600_000,
+            900,
+            "root",
+        )],
+    );
+    let req = placement_req(auxiliary(&s, "cold", T), &["m1"], &[], false);
+    let SelectResult::Selected(sel) = select(&mut st, &s, &req, &mut rng()).0 else {
+        panic!("the move's destination lands the request")
+    };
+    assert_eq!(
+        sel.account.id, "c",
+        "the move's destination takes it; the source's own warm entry cannot win it back"
+    );
+    assert_eq!(sel.migrated, Some(MigrateReason::ReturnToPlan));
+    assert_eq!(
+        sel.trace.placement, None,
+        "a is not among the move's destinations, so rung 3 never considers its entry"
+    );
+}
+
+#[test]
+fn after_a_shed_a_warm_entry_on_the_source_cannot_place_the_request() {
+    let s = snapshot(shedding_pool(Shedding::default()));
+    // A shed round never takes every pin on an account, so a second (unmarked) pin sits beside the one under
+    // test: cold and heavier, "s1" sorts first and is the one the round marks.
+    let mut st = loaded(vec![
+        burning("s1", "a", 5.0, false, T),
+        burning("s0", "a", 1.0, true, T),
+    ]);
+    hot_a_cool_b(&mut st, T - 500);
+    seed_affinity(
+        &st,
+        vec![affinity_row(
+            &s,
+            "claude-sonnet-5",
+            "m1",
+            AffinityChain::Message,
+            "a",
+            T - 500,
+            3_600_000,
+            900,
+            "root",
+        )],
+    );
+    let req = placement_req(auxiliary(&s, "s1", T), &["m1"], &[], false);
+    let SelectResult::Selected(sel) = select(&mut st, &s, &req, &mut rng()).0 else {
+        panic!("the shed's destination lands the request")
+    };
+    assert_eq!(sel.account.id, "b");
+    assert_eq!(sel.migrated, Some(MigrateReason::Shed));
+    assert_eq!(
+        sel.trace.placement, None,
+        "a is the shed source and is not among the destinations rung 3 may choose"
+    );
+}
+
+#[test]
+fn an_expired_or_ineligible_deeper_entry_is_stepped_over_for_a_live_shared_prefix() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    seed_affinity(
+        &st,
+        vec![
+            affinity_row(
+                &s,
+                "claude-sonnet-5",
+                "m3",
+                AffinityChain::Message,
+                "a",
+                1_000,
+                300_000,
+                900,
+                "root",
+            ),
+            affinity_row(
+                &s,
+                "claude-sonnet-5",
+                "m4",
+                AffinityChain::Message,
+                "a",
+                1_000,
+                1,
+                900,
+                "root",
+            ),
+        ],
+    );
+    let req = placement_req(
+        request(&s, Some("s1"), "claude-sonnet-5", true, &[], 2_000),
+        &["m1", "m2", "m3", "m4"],
+        &[],
+        false,
+    );
+    let SelectResult::Selected(sel) = select(&mut st, &s, &req, &mut rng()).0 else {
+        panic!("a lands the request at the third boundary")
+    };
+    assert_eq!(sel.account.id, "a");
+    assert_eq!(
+        sel.trace.placement.as_ref().map(|p| p.depth),
+        Some(3),
+        "the fourth boundary's entry expired, so the third's live and shared match wins"
+    );
+
+    seed_affinity(
+        &st,
+        vec![
+            affinity_row(
+                &s,
+                "claude-sonnet-5",
+                "m3",
+                AffinityChain::Message,
+                "a",
+                1_000,
+                300_000,
+                900,
+                "root",
+            ),
+            affinity_row(
+                &s,
+                "claude-sonnet-5",
+                "m4",
+                AffinityChain::Message,
+                "b",
+                1_000,
+                300_000,
+                900,
+                "root",
+            ),
+        ],
+    );
+    st.record_cooldown(cooled("b", "account", 10_000, "five_hour", "rate_limit"));
+    let req2 = placement_req(
+        request(&s, Some("s2"), "claude-sonnet-5", true, &[], 2_000),
+        &["m1", "m2", "m3", "m4"],
+        &[],
+        false,
+    );
+    let SelectResult::Selected(sel2) = select(&mut st, &s, &req2, &mut rng()).0 else {
+        panic!("a lands the request at the third boundary again")
+    };
+    assert_eq!(sel2.account.id, "a");
+    assert_eq!(
+        sel2.trace.placement.as_ref().map(|p| p.depth),
+        Some(3),
+        "the fourth's account is ineligible, so the walk steps over it to the third"
+    );
+}
+
+#[test]
+fn a_request_whose_session_holds_a_pin_under_another_agent_is_never_held() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        failover: Failover {
+            in_flight_cap: 1,
+            ..Failover::default()
+        },
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    select(
+        &mut st,
+        &s,
+        &request(&s, Some("session"), "claude-sonnet-5", true, &["a"], 1_000),
+        &mut rng(),
+    );
+    assert_eq!(pinned(&st, "session").account_id, "b");
+    let _a = st.in_flight().dispatched("a", 1_000);
+    let _b = st.in_flight().dispatched("b", 1_000);
+    let sub_req = subagent(
+        request(&s, Some("session"), "claude-sonnet-5", true, &[], 1_500),
+        "worker",
+    );
+    let SelectResult::Selected(sel) = select(&mut st, &s, &sub_req, &mut rng()).0 else {
+        panic!("the session's own pin is never held")
+    };
+    assert_eq!(sel.account.id, "b");
+    assert_eq!(
+        sel.trace.placement,
+        Some(Placement {
+            rung: "with_main",
+            depth: 0,
+            prefix_tokens: 0,
+        }),
+    );
+}
+
+#[test]
+fn a_budget_blocked_parents_pin_never_lands_a_capped_sibling() {
+    let s = with_member_budget(
+        &snapshot(Pool {
+            members: vec![("a", 0), ("b", 1)],
+            failover: Failover {
+                in_flight_cap: 1,
+                ..Failover::default()
+            },
+            ..Pool::default()
+        }),
+        "a",
+        Some(5.0),
+        BudgetPeriod::Month,
+    );
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    select(
+        &mut st,
+        &s,
+        &request(&s, Some("session"), "claude-sonnet-5", true, &[], 1_000),
+        &mut rng(),
+    );
+    assert_eq!(pinned(&st, "session").account_id, "a");
+    st.record_member_spend(
+        &s,
+        vec![MemberSpend {
+            pool_id: "p".into(),
+            account_id: "a".into(),
+            period: BudgetPeriod::Month,
+            period_start: 0,
+            period_end: 10_000,
+            spent_usd: 5.0,
+            observed_at: 1_500,
+        }],
+    );
+    let _a = st.in_flight().dispatched("a", 1_500);
+    let _b = st.in_flight().dispatched("b", 1_500);
+    let sub_req = subagent(
+        request(&s, Some("session"), "claude-sonnet-5", true, &[], 2_000),
+        "worker",
+    );
+    let SelectResult::Held { account_id, hold } = select(&mut st, &s, &sub_req, &mut rng()).0
+    else {
+        panic!("held on the strategy's choice")
+    };
+    assert_eq!(
+        account_id, "b",
+        "the parent's pin is on a member at its budget, so the request never lands there"
+    );
+    assert_eq!(hold.cohort, None);
+}
+
+#[test]
+fn a_held_subagent_is_held_on_its_cohorts_account() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        failover: Failover {
+            in_flight_cap: 1,
+            ..Failover::default()
+        },
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    seed_affinity(
+        &st,
+        vec![affinity_row(
+            &s,
+            "claude-sonnet-5",
+            "s1",
+            AffinityChain::Static,
+            "a",
+            1_000,
+            3_600_000,
+            500,
+            "root",
+        )],
+    );
+    let _a = st.in_flight().dispatched("a", 1_000);
+    let _b = st.in_flight().dispatched("b", 1_000);
+    let sub_req = subagent(
+        placement_req(
+            request(&s, Some("session"), "claude-sonnet-5", true, &[], 1_500),
+            &[],
+            &["s1"],
+            true,
+        ),
+        "worker",
+    );
+    let SelectResult::Held { account_id, hold } = select(&mut st, &s, &sub_req, &mut rng()).0
+    else {
+        panic!("held on the cohort's account")
+    };
+    assert_eq!(account_id, "a");
+    assert_eq!(
+        hold,
+        HoldFacts {
+            account_id: "a".into(),
+            cohort: Some("a".into()),
+        },
+    );
+}
+
+#[test]
+fn a_cohort_hold_that_times_out_lands_the_next_member_elsewhere() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        failover: Failover {
+            in_flight_cap: 1,
+            ..Failover::default()
+        },
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let _a = st.in_flight().dispatched("a", 1_000);
+    let sub_req = SelectRequest {
+        holds: vec![HoldFacts {
+            account_id: "a".into(),
+            cohort: Some("a".into()),
+        }],
+        ..subagent(
+            request(&s, Some("session"), "claude-sonnet-5", true, &["a"], 1_500),
+            "worker",
+        )
+    };
+    let SelectResult::Selected(sel) = select(&mut st, &s, &sub_req, &mut rng()).0 else {
+        panic!("b lands the request once the cohort's account is attempted")
+    };
+    assert_eq!(sel.account.id, "b");
+    assert_eq!(
+        sel.trace.cohort_hold,
+        Some(CohortHold {
+            waited_on: vec!["a".into()],
+            cohort: Some("a".into()),
+        }),
+    );
+}
+
+#[test]
+fn the_trace_carries_the_placement_rung_depth_and_prefix() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    seed_affinity(
+        &st,
+        vec![affinity_row(
+            &s,
+            "claude-sonnet-5",
+            "m1",
+            AffinityChain::Message,
+            "a",
+            1_000,
+            300_000,
+            12_345,
+            "root",
+        )],
+    );
+    let req = placement_req(
+        request(&s, Some("s1"), "claude-sonnet-5", true, &[], 1_500),
+        &["m1"],
+        &[],
+        false,
+    );
+    let SelectResult::Selected(sel) = select(&mut st, &s, &req, &mut rng()).0 else {
+        panic!("a lands the request")
+    };
+    assert_eq!(
+        sel.trace.placement,
+        Some(Placement {
+            rung: "content",
+            depth: 1,
+            prefix_tokens: 12_345,
+        }),
+    );
+}
+
+#[test]
 fn a_pin_both_in_overage_and_spent_records_spent_and_lands_where_both_allow() {
     let s = snapshot(Pool {
         members: vec![("a", 0), ("b", 1), ("c", 1)],
@@ -3546,7 +5198,11 @@ fn every_candidate_at_its_cap_answers_held_with_the_best_of_them() {
     assert_eq!(
         result,
         SelectResult::Held {
-            account_id: "b".into()
+            account_id: "b".into(),
+            hold: HoldFacts {
+                account_id: "b".into(),
+                cohort: None,
+            },
         },
         "b is the one priority would have chosen"
     );
@@ -3586,7 +5242,11 @@ fn a_held_round_robin_selection_leaves_the_turn_with_the_account_it_named() {
     assert_eq!(
         select(&mut st, &s, &req, &mut rng()).0,
         SelectResult::Held {
-            account_id: "a".into()
+            account_id: "a".into(),
+            hold: HoldFacts {
+                account_id: "a".into(),
+                cohort: None,
+            },
         },
         "the round starts at a"
     );
@@ -3638,7 +5298,11 @@ fn the_cap_binds_before_the_ceiling_so_a_free_account_above_it_takes_the_placeme
     assert_eq!(
         select(&mut st, &s, &req, &mut rng()).0,
         SelectResult::Held {
-            account_id: "a".into()
+            account_id: "a".into(),
+            hold: HoldFacts {
+                account_id: "a".into(),
+                cohort: None,
+            },
         },
         "with both at their cap the request is held on the one the ceiling prefers"
     );
@@ -4011,7 +5675,7 @@ fn a_probe_never_colds_a_pin() {
         };
         let before = pinned(&st, "s1");
         assert!(
-            effective_warm(&before, &probe),
+            effective_warm(&before, &probe, &st.affinity().read().unwrap()),
             "{shape}: the round's order reads the pin warm on the probe"
         );
         select(&mut st, &s, &probe, &mut rng());
@@ -4027,6 +5691,776 @@ fn a_probe_never_colds_a_pin() {
             "{shape}: still warm after the probe"
         );
     }
+}
+
+/// A state whose session "s1" already holds a pin on "a", made by a real selection with static prefix "s0" and
+/// tail "old-tail": the fixture the warmth tests below build on.
+fn pinned_state(s: &RegistrySnapshot, now: i64) -> RoutingState {
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let first = placement_req(
+        request(s, Some("s1"), "claude-sonnet-5", true, &[], now),
+        &["old-tail"],
+        &["s0"],
+        false,
+    );
+    select(&mut st, s, &first, &mut rng());
+    st
+}
+
+#[test]
+fn a_restart_under_a_session_id_reads_cold() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0)],
+        ..Pool::default()
+    });
+    let mut st = pinned_state(&s, 1_000);
+    let restarted = placement_req(
+        request(&s, Some("s1"), "claude-sonnet-5", true, &[], 2_000),
+        &["y1"],
+        &["s0"],
+        false,
+    );
+    select(&mut st, &s, &restarted, &mut rng());
+    assert_eq!(
+        pinned(&st, "s1").last_refresh_at,
+        0,
+        "the same static prefix with fresh messages under a session identity is cold"
+    );
+}
+
+#[test]
+fn two_conversations_alternating_on_one_pin_each_refresh_it() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0)],
+        ..Pool::default()
+    });
+    let mut st = pinned_state(&s, 1_000);
+    seed_affinity(
+        &st,
+        vec![
+            affinity_row(
+                &s,
+                "claude-sonnet-5",
+                "a1",
+                AffinityChain::Message,
+                "a",
+                1_000,
+                300_000,
+                900,
+                "rootA",
+            ),
+            affinity_row(
+                &s,
+                "claude-sonnet-5",
+                "b1",
+                AffinityChain::Message,
+                "a",
+                1_000,
+                300_000,
+                900,
+                "rootB",
+            ),
+        ],
+    );
+    let mut b_continues = placement_req(
+        request(&s, Some("s1"), "claude-sonnet-5", true, &[], 2_000),
+        &["b1", "b2"],
+        &[],
+        false,
+    );
+    select(&mut st, &s, &b_continues, &mut rng());
+    assert_eq!(
+        pinned(&st, "s1").last_refresh_at,
+        2_000,
+        "b's continuation refreshes though the pin's tail is a's own boundary"
+    );
+
+    let mut a_continues = placement_req(
+        request(&s, Some("s1"), "claude-sonnet-5", true, &[], 3_000),
+        &["a1", "a2"],
+        &[],
+        false,
+    );
+    select(&mut st, &s, &a_continues, &mut rng());
+    assert_eq!(
+        pinned(&st, "s1").last_refresh_at,
+        3_000,
+        "a's continuation refreshes though the tail is now b's"
+    );
+}
+
+#[test]
+fn a_map_entry_on_another_account_key_or_incarnation_does_not_refresh_the_pin() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    // A static-only match reads cold once the map's entry is ruled out, so a refresh here would show the map
+    // wrongly counted.
+    let followup = |st: &mut RoutingState| -> i64 {
+        let req = placement_req(
+            request(&s, Some("s1"), "claude-sonnet-5", true, &[], 2_000),
+            &["m1"],
+            &["s0"],
+            false,
+        );
+        select(st, &s, &req, &mut rng());
+        pinned(st, "s1").last_refresh_at
+    };
+
+    let mut under_sibling = pinned_state(&s, 1_000);
+    seed_affinity(
+        &under_sibling,
+        vec![affinity_row(
+            &s,
+            "claude-sonnet-5",
+            "m1",
+            AffinityChain::Message,
+            "b",
+            1_000,
+            300_000,
+            900,
+            "root",
+        )],
+    );
+    assert_eq!(
+        followup(&mut under_sibling), 0,
+        "the sibling's entry does not refresh the pin, so the static-only match reads cold under a session identity"
+    );
+
+    let mut under_other_key = pinned_state(&s, 1_000);
+    let mut row = affinity_row(
+        &s,
+        "claude-sonnet-5",
+        "m1",
+        AffinityChain::Message,
+        "a",
+        1_000,
+        300_000,
+        900,
+        "root",
+    );
+    row.key_id = "other".into();
+    seed_affinity(&under_other_key, vec![row]);
+    assert_eq!(
+        followup(&mut under_other_key),
+        0,
+        "an entry another key wrote does not refresh the pin either"
+    );
+
+    let mut under_old_incarnation = pinned_state(&s, 1_000);
+    let mut row = affinity_row(
+        &s,
+        "claude-sonnet-5",
+        "m1",
+        AffinityChain::Message,
+        "a",
+        1_000,
+        300_000,
+        900,
+        "root",
+    );
+    row.incarnation = 0;
+    seed_affinity(&under_old_incarnation, vec![row]);
+    assert_eq!(
+        followup(&mut under_old_incarnation),
+        0,
+        "an entry under an older incarnation does not refresh the pin either"
+    );
+}
+
+#[test]
+fn a_continuation_refreshes_its_pin_and_places_by_content_at_the_previous_tails_depth() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    seed_affinity(
+        &st,
+        vec![
+            affinity_row(
+                &s,
+                "claude-sonnet-5",
+                "b1",
+                AffinityChain::Message,
+                "a",
+                1_000,
+                300_000,
+                900,
+                "root",
+            ),
+            affinity_row(
+                &s,
+                "claude-sonnet-5",
+                "b2",
+                AffinityChain::Message,
+                "a",
+                1_000,
+                300_000,
+                900,
+                "root",
+            ),
+            affinity_row(
+                &s,
+                "claude-sonnet-5",
+                "b3",
+                AffinityChain::Message,
+                "a",
+                1_000,
+                300_000,
+                900,
+                "root",
+            ),
+        ],
+    );
+    let continuation = placement_req(
+        request(&s, Some("s1"), "claude-sonnet-5", true, &[], 2_000),
+        &["b1", "b2", "b3", "b4"],
+        &[],
+        false,
+    );
+    select(&mut st, &s, &continuation, &mut rng());
+    assert_eq!(
+        pinned(&st, "s1").last_refresh_at,
+        2_000,
+        "the continuation refreshes the pin"
+    );
+
+    let fresh = placement_req(
+        request(&s, Some("s2"), "claude-sonnet-5", true, &[], 2_000),
+        &["b1", "b2", "b3", "b4"],
+        &[],
+        false,
+    );
+    let SelectResult::Selected(sel) = select(&mut st, &s, &fresh, &mut rng()).0 else {
+        panic!("a lands the fresh request at the previous tail's depth")
+    };
+    assert_eq!(sel.account.id, "a");
+    assert_eq!(
+        sel.trace.placement,
+        Some(Placement {
+            rung: "content",
+            depth: 3,
+            prefix_tokens: 900
+        }),
+    );
+}
+
+#[test]
+fn a_fork_refreshes_its_pin_and_places_by_content_at_the_last_shared_boundary() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = loaded(vec![PinRow {
+        tail_hash: Some("b4".into()),
+        last_refresh_at: 0,
+        ..seeded_pin("s1", "a", 1_000)
+    }]);
+    seed_affinity(
+        &st,
+        vec![
+            affinity_row(
+                &s,
+                "claude-sonnet-5",
+                "b1",
+                AffinityChain::Message,
+                "a",
+                1_000,
+                300_000,
+                900,
+                "root",
+            ),
+            affinity_row(
+                &s,
+                "claude-sonnet-5",
+                "b2",
+                AffinityChain::Message,
+                "a",
+                1_000,
+                300_000,
+                900,
+                "root",
+            ),
+            affinity_row(
+                &s,
+                "claude-sonnet-5",
+                "b3",
+                AffinityChain::Message,
+                "a",
+                1_000,
+                300_000,
+                900,
+                "root",
+            ),
+        ],
+    );
+    let fork = placement_req(
+        request(&s, Some("s1"), "claude-sonnet-5", true, &[], 2_000),
+        &["b1", "b2", "b3", "x4"],
+        &[],
+        false,
+    );
+    select(&mut st, &s, &fork, &mut rng());
+    assert_eq!(
+        pinned(&st, "s1").last_refresh_at,
+        2_000,
+        "the map's b3 entry refreshes the pin though its own tail (b4) is absent from the fork"
+    );
+
+    let fresh = placement_req(
+        request(&s, Some("s2"), "claude-sonnet-5", true, &[], 2_000),
+        &["b1", "b2", "b3", "x4"],
+        &[],
+        false,
+    );
+    let SelectResult::Selected(sel) = select(&mut st, &s, &fresh, &mut rng()).0 else {
+        panic!("a lands the fresh request at the last shared boundary")
+    };
+    assert_eq!(sel.account.id, "a");
+    assert_eq!(
+        sel.trace.placement,
+        Some(Placement {
+            rung: "content",
+            depth: 3,
+            prefix_tokens: 900
+        }),
+    );
+}
+
+#[test]
+fn an_edited_last_message_refreshes_its_pin_and_places_by_content_one_boundary_shallower() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = loaded(vec![PinRow {
+        tail_hash: Some("b4".into()),
+        last_refresh_at: 0,
+        ..seeded_pin("s1", "a", 1_000)
+    }]);
+    seed_affinity(
+        &st,
+        vec![
+            affinity_row(
+                &s,
+                "claude-sonnet-5",
+                "b1",
+                AffinityChain::Message,
+                "a",
+                1_000,
+                300_000,
+                900,
+                "root",
+            ),
+            affinity_row(
+                &s,
+                "claude-sonnet-5",
+                "b2",
+                AffinityChain::Message,
+                "a",
+                1_000,
+                300_000,
+                900,
+                "root",
+            ),
+            affinity_row(
+                &s,
+                "claude-sonnet-5",
+                "b3",
+                AffinityChain::Message,
+                "a",
+                1_000,
+                300_000,
+                900,
+                "root",
+            ),
+        ],
+    );
+    let retry = placement_req(
+        request(&s, Some("s1"), "claude-sonnet-5", true, &[], 2_000),
+        &["b1", "b2", "b3", "b4-edited"],
+        &[],
+        false,
+    );
+    select(&mut st, &s, &retry, &mut rng());
+    assert_eq!(
+        pinned(&st, "s1").last_refresh_at,
+        2_000,
+        "the map's b3 entry refreshes the pin though the edited last message is not b4"
+    );
+
+    let fresh = placement_req(
+        request(&s, Some("s2"), "claude-sonnet-5", true, &[], 2_000),
+        &["b1", "b2", "b3", "b4-edited"],
+        &[],
+        false,
+    );
+    let SelectResult::Selected(sel) = select(&mut st, &s, &fresh, &mut rng()).0 else {
+        panic!("a lands the fresh request one boundary shallower")
+    };
+    assert_eq!(sel.account.id, "a");
+    assert_eq!(
+        sel.trace.placement,
+        Some(Placement {
+            rung: "content",
+            depth: 3,
+            prefix_tokens: 900
+        }),
+    );
+}
+
+#[test]
+fn the_same_static_prefix_with_fresh_messages_is_cold_on_its_pin_and_places_by_static_only_under_the_knob(
+) {
+    let by_strategy = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = loaded(vec![PinRow {
+        static_hash: Some("s2".into()),
+        tail_hash: Some("m1".into()),
+        last_refresh_at: 500,
+        ..seeded_pin("s1", "a", 1_000)
+    }]);
+    seed_affinity(
+        &st,
+        vec![
+            affinity_row(
+                &by_strategy,
+                "claude-sonnet-5",
+                "s1",
+                AffinityChain::Static,
+                "a",
+                1_000,
+                3_600_000,
+                20_000,
+                "root",
+            ),
+            affinity_row(
+                &by_strategy,
+                "claude-sonnet-5",
+                "s2",
+                AffinityChain::Static,
+                "a",
+                1_000,
+                3_600_000,
+                20_000,
+                "root",
+            ),
+        ],
+    );
+    let restarted = placement_req(
+        request(
+            &by_strategy,
+            Some("s1"),
+            "claude-sonnet-5",
+            true,
+            &[],
+            2_000,
+        ),
+        &["y1"],
+        &["s1", "s2"],
+        true,
+    );
+    select(&mut st, &by_strategy, &restarted, &mut rng());
+    assert_eq!(
+        pinned(&st, "s1").last_refresh_at,
+        0,
+        "the same static prefix with fresh messages is cold on its pin"
+    );
+
+    let fresh = placement_req(
+        request(
+            &by_strategy,
+            Some("s2"),
+            "claude-sonnet-5",
+            true,
+            &[],
+            2_000,
+        ),
+        &["y1"],
+        &["s1", "s2"],
+        true,
+    );
+    let SelectResult::Selected(sel) = select(&mut st, &by_strategy, &fresh, &mut rng()).0 else {
+        panic!("b lands the fresh request under by_strategy")
+    };
+    assert_eq!(
+        sel.trace.placement, None,
+        "by_strategy does not use the static tier for a main conversation"
+    );
+
+    let by_warm_prefix = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        session_placement: SessionPlacement::ByWarmPrefix,
+        ..Pool::default()
+    });
+    let mut st2 = RoutingState::from_load(RoutingLoad::default());
+    seed_affinity(
+        &st2,
+        vec![
+            affinity_row(
+                &by_warm_prefix,
+                "claude-sonnet-5",
+                "s1",
+                AffinityChain::Static,
+                "a",
+                1_000,
+                3_600_000,
+                20_000,
+                "root",
+            ),
+            affinity_row(
+                &by_warm_prefix,
+                "claude-sonnet-5",
+                "s2",
+                AffinityChain::Static,
+                "a",
+                1_000,
+                3_600_000,
+                20_000,
+                "root",
+            ),
+        ],
+    );
+    let fresh2 = placement_req(
+        request(
+            &by_warm_prefix,
+            Some("s3"),
+            "claude-sonnet-5",
+            true,
+            &[],
+            2_000,
+        ),
+        &["y1"],
+        &["s1", "s2"],
+        true,
+    );
+    let SelectResult::Selected(sel2) = select(&mut st2, &by_warm_prefix, &fresh2, &mut rng()).0
+    else {
+        panic!("a lands the fresh request under by_warm_prefix")
+    };
+    assert_eq!(sel2.account.id, "a");
+    assert_eq!(
+        sel2.trace.placement,
+        Some(Placement {
+            rung: "static",
+            depth: 2,
+            prefix_tokens: 20_000
+        }),
+    );
+}
+
+#[test]
+fn a_tools_change_mid_session_refreshes_by_the_message_chain_and_places_by_content() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = loaded(vec![PinRow {
+        tail_hash: Some("b3".into()),
+        static_hash: Some("s-old".into()),
+        last_refresh_at: 0,
+        ..seeded_pin("s1", "a", 1_000)
+    }]);
+    seed_affinity(
+        &st,
+        vec![
+            affinity_row(
+                &s,
+                "claude-sonnet-5",
+                "b1",
+                AffinityChain::Message,
+                "a",
+                1_000,
+                300_000,
+                900,
+                "root",
+            ),
+            affinity_row(
+                &s,
+                "claude-sonnet-5",
+                "b2",
+                AffinityChain::Message,
+                "a",
+                1_000,
+                300_000,
+                900,
+                "root",
+            ),
+            affinity_row(
+                &s,
+                "claude-sonnet-5",
+                "b3",
+                AffinityChain::Message,
+                "a",
+                1_000,
+                300_000,
+                900,
+                "root",
+            ),
+        ],
+    );
+    let changed = placement_req(
+        request(&s, Some("s1"), "claude-sonnet-5", true, &[], 2_000),
+        &["b1", "b2", "b3", "b4"],
+        &["s3"],
+        true,
+    );
+    select(&mut st, &s, &changed, &mut rng());
+    assert_eq!(
+        pinned(&st, "s1").last_refresh_at,
+        2_000,
+        "the message chain still refreshes the pin though the static chain moved"
+    );
+
+    let fresh = placement_req(
+        request(&s, Some("s2"), "claude-sonnet-5", true, &[], 2_000),
+        &["b1", "b2", "b3", "b4"],
+        &["s3"],
+        true,
+    );
+    let SelectResult::Selected(sel) = select(&mut st, &s, &fresh, &mut rng()).0 else {
+        panic!("a lands the fresh request by content")
+    };
+    assert_eq!(sel.account.id, "a");
+    assert_eq!(
+        sel.trace.placement,
+        Some(Placement {
+            rung: "content",
+            depth: 3,
+            prefix_tokens: 900
+        }),
+        "the moved static chain (s3) has no entry, so only the message chain places it"
+    );
+}
+
+#[test]
+fn a_marker_less_conversation_refreshes_its_pin_under_always_and_places_by_the_strategy_under_both_modes(
+) {
+    let always = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        mode: AffinityMode::Always,
+        ..Pool::default()
+    });
+    let mut st = loaded(vec![PinRow {
+        tail_hash: Some("b3".into()),
+        last_refresh_at: 0,
+        ..seeded_pin("s1", "a", 1_000)
+    }]);
+    seed_affinity(
+        &st,
+        vec![
+            affinity_row(
+                &always,
+                "claude-sonnet-5",
+                "b1",
+                AffinityChain::Message,
+                "a",
+                1_000,
+                0,
+                0,
+                "root",
+            ),
+            affinity_row(
+                &always,
+                "claude-sonnet-5",
+                "b2",
+                AffinityChain::Message,
+                "a",
+                1_000,
+                0,
+                0,
+                "root",
+            ),
+            affinity_row(
+                &always,
+                "claude-sonnet-5",
+                "b3",
+                AffinityChain::Message,
+                "a",
+                1_000,
+                0,
+                0,
+                "root",
+            ),
+        ],
+    );
+    let continuation = placement_req(
+        request(&always, Some("s1"), "claude-sonnet-5", true, &[], 2_000),
+        &["b1", "b2", "b3", "b4"],
+        &[],
+        false,
+    );
+    select(&mut st, &always, &continuation, &mut rng());
+    assert_eq!(
+        pinned(&st, "s1").last_refresh_at,
+        2_000,
+        "the marker-less continuation still refreshes the pinned conversation under always"
+    );
+
+    let fresh = placement_req(
+        request(&always, Some("s2"), "claude-sonnet-5", true, &[], 2_000),
+        &["b1", "b2", "b3", "b4"],
+        &[],
+        false,
+    );
+    let SelectResult::Selected(sel) = select(&mut st, &always, &fresh, &mut rng()).0 else {
+        panic!("b lands the fresh request by the strategy")
+    };
+    assert_eq!(
+        sel.trace.placement, None,
+        "the entries never confirmed a cache write, so none is live"
+    );
+
+    let when_cached = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        mode: AffinityMode::WhenCached,
+        ..Pool::default()
+    });
+    let mut st2 = RoutingState::from_load(RoutingLoad::default());
+    seed_affinity(
+        &st2,
+        vec![affinity_row(
+            &when_cached,
+            "claude-sonnet-5",
+            "b1",
+            AffinityChain::Message,
+            "a",
+            1_000,
+            0,
+            0,
+            "root",
+        )],
+    );
+    let portable_req = placement_req(
+        request(
+            &when_cached,
+            Some("s1"),
+            "claude-sonnet-5",
+            true,
+            &[],
+            2_000,
+        ),
+        &["b1"],
+        &[],
+        false,
+    );
+    let (result, writes) = select(&mut st2, &when_cached, &portable_req, &mut rng());
+    assert!(
+        writes.is_empty(),
+        "when_cached never pins a marker-less request"
+    );
+    let SelectResult::Selected(sel2) = result else {
+        panic!("the strategy still lands it")
+    };
+    assert_eq!(sel2.pin, None, "no pin is read or created");
+    assert_eq!(
+        sel2.trace.placement, None,
+        "the entry is never live, so the strategy lands it"
+    );
 }
 
 /// A pin of session `session` on `account` as a load seeds it at `now`: created an hour ago, used a second ago,

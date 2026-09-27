@@ -223,6 +223,8 @@ async fn select_main(r: &Rig) -> SelectResult {
             client: ClientClass::ClaudeCode,
             static_boundaries: Vec::new(),
             marker: false,
+            parent_agent_id: None,
+            holds: Vec::new(),
         })
         .await
         .unwrap()
@@ -484,6 +486,12 @@ async fn two_agents_of_one_session_pinned_to_two_accounts_each_probe_their_own_a
         ..RigSpec::default()
     })
     .await;
+    // This test is about the per-agent gate, not the cohort placement default: both agents observe the same
+    // fixture body, so a shared static or content boundary would otherwise land them on one account.
+    let mut pool = r.h.store.pool("main").unwrap().unwrap();
+    pool.affinity.subagent_placement = phoebis_store::SubagentPlacement::ByStrategy;
+    r.h.store.update_pool(&pool, "test").unwrap();
+    r.h.router.reload().await.unwrap();
     r.observe("main").await;
     r.event(Event {
         event: "agent_start".into(),
@@ -640,6 +648,8 @@ async fn a_pin_the_router_moved_on_the_agents_own_request_moves_the_next_probe()
                 client: ClientClass::ClaudeCode,
                 static_boundaries: Vec::new(),
                 marker: false,
+                parent_agent_id: None,
+                holds: Vec::new(),
             })
             .await
             .unwrap();

@@ -259,6 +259,8 @@ async fn every_route_is_captured_and_holds_its_shape() {
             client: ClientClass::ClaudeCode,
             static_boundaries: Vec::new(),
             marker: false,
+            parent_agent_id: None,
+            holds: Vec::new(),
         })
         .await
         .unwrap();
