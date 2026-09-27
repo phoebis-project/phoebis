@@ -394,7 +394,19 @@ test('a pool decodes the pin, placement and quota fields and its members\' budge
   );
   assert.deepEqual([defaults.members[0].budgetUsd, defaults.members[0].budgetPeriod, defaults.members[0].kind], [null, 'month', 'oauth'], 'a member row without the fields reads no budget and no API key');
   assert.equal(defaults.keys[0].enabled, true, 'a key row without the fields reads the store defaults');
-  assert.equal(d.decodePool({ ...wire, affinity_mode: 'sometimes', quota_headers: 'strip' }).affinityMode, 'always', 'an unknown spelling reads the default');
+  const odd = d.decodePool({
+    ...wire,
+    affinity_mode: 'sometimes',
+    members: [{ ...wire.members[0], budget_period: 'week', eligible: 'maybe', kind: 'robot' }],
+    quota_headers: 'strip',
+    session_placement: 'by_luck',
+    subagent_placement: 'alone',
+  });
+  assert.deepEqual(
+    [odd.affinityMode, odd.quotaHeaders, odd.sessionPlacement, odd.subagentPlacement, odd.members[0].budgetPeriod, odd.members[0].eligible, odd.members[0].kind],
+    ['always', 'pass', 'by_strategy', 'by_cohort', 'month', 'unavailable', 'oauth'],
+    'every unknown spelling reads its default',
+  );
 });
 
 test('a request page carries the trail with zero-based attempt indexes and the cursor', () => {

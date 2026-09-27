@@ -139,7 +139,7 @@ const QUOTA_HEADERS_HINT =
 const MARKER_HINT = 'Off rewrites the markers a request carries and leaves a marker-less body as sent.';
 const METERED_HINT = 'Metered: an API-key upstream, or a subscription upstream in overage; a one-hour write costs 2x base input there against 1.25x for five minutes.';
 const KEEPALIVE_TTL_HINT = "The first probe after a turn follows that turn's TTL; the probe itself writes with this TTL, which the next probe follows.";
-const BUDGET_HINT = 'A member whose spend reaches its budget is skipped until the UTC day or month ends; spend is priced at API list rates.';
+const BUDGET_HINT = 'An API-key member whose spend reaches its budget is skipped until the UTC day or month ends; spend is priced at API list rates.';
 const fmtTokens = (n: number) => fmtCompact(n).toLowerCase();
 // A period ends at the start of a UTC day, which `hour12: false` prints as 24:00, the end of that same day.
 const fmtPeriodEnd = (at: string) => new Date(at).toLocaleString('en-US', { day: '2-digit', hour: '2-digit', hourCycle: getTimeFormat() === '12h' ? 'h12' : 'h23', minute: '2-digit', month: 'short' });
@@ -246,8 +246,11 @@ export function PoolsPage() {
           pools.reload();
           keys.reload();
         }}
-        onKeyCreated={() => keys.reload()}
-        // The pool route lists its keys, so a key moved or revoked from the dialog changes the card's warning too.
+        // The pool route lists its keys, so a key created, moved or revoked from the dialog changes the card's warning too.
+        onKeyCreated={() => {
+          keys.reload();
+          pools.reload();
+        }}
         onKeysChanged={() => {
           keys.reload();
           pools.reload();
@@ -646,8 +649,9 @@ function PoolCard({
   );
 }
 
-/** A member's spend against its budget for the period, or that it has none. */
+/** An API-key member's spend against its budget for the period, or that it has none; a subscription member has no budget. */
 function MemberBudget({ member, now }: { member: PoolMember; now: number }) {
+  if (member.kind !== 'api_key') return null;
   if (member.budgetUsd === null) return <span className="muted">no budget</span>;
   const { budgetUsd: budget, periodEnd, spentUsd: spent } = member;
   const reached = spent !== null && spent >= budget && periodEnd !== null && Date.parse(periodEnd) > now;
@@ -910,6 +914,7 @@ export function PoolDialog({
   const shortAffinity = form.affinity >= 300 && form.affinity < 3_600;
   const warming = form.keepalive && !keepaliveBlocked;
   const budgetOf = (accountId: string) => form.budgets[accountId] ?? { period: 'month' as const, usd: '' };
+  const apiKeyIds = new Set(accounts.filter((a) => a.kind === 'api_key').map((a) => a.id));
   const input: PoolInput = {
     ...form.engine,
     affinityMode: form.affinityMode,
@@ -923,6 +928,9 @@ export function PoolDialog({
       ? { ...form.tuning, costCapUsdPerDay: form.capEnabled ? form.capUsd : null, enabled: true, warmSubagents: form.warmSubagents }
       : { ...(pool?.keepalive ?? { ...KEEPALIVE_TUNING_DEFAULTS, costCapUsdPerDay: null }), enabled: false },
     members: Object.entries(form.members).map(([accountId, priority]) => {
+      // A budget belongs to an API-key member, so one left from an earlier tick or stored through the API on any other
+      // member goes back as none, which clears it.
+      if (!apiKeyIds.has(accountId)) return { accountId, budgetPeriod: 'month' as const, budgetUsd: null, priority };
       const budget = budgetOf(accountId);
       // A field that reads no number goes on as NaN, which the validation below holds the save for.
       return { accountId, budgetPeriod: budget.period, budgetUsd: budget.usd.trim() === '' ? null : Number(budget.usd), priority };
@@ -960,7 +968,10 @@ export function PoolDialog({
   const band = bandRefusal(input);
   const memberAccounts = accounts.filter((a) => a.id in form.members);
   const prefixRefusal = form.sessionPlacement === 'by_warm_prefix' ? prefixThresholdRefusal(form.prefixTokens) : null;
-  const budgetRefused = memberAccounts.map((a) => ({ label: a.label, refusal: budgetRefusal(budgetOf(a.id).usd) })).find((b) => b.refusal !== null);
+  const budgetRefused = memberAccounts
+    .filter((a) => a.kind === 'api_key')
+    .map((a) => ({ label: a.label, refusal: budgetRefusal(budgetOf(a.id).usd) }))
+    .find((b) => b.refusal !== null);
   const setBudget = (accountId: string, patch: Partial<{ period: BudgetPeriod; usd: string }>) =>
     setForm((f) => ({ ...f, budgets: { ...f.budgets, [accountId]: { ...(f.budgets[accountId] ?? { period: 'month', usd: '' }), ...patch } } }));
   const readings = memberAccounts.map((a) => ({ fiveHour: windowOf(a, '5h')?.utilization ?? null, id: a.id, label: a.label, sevenDay: windowOf(a, '7d')?.utilization ?? null }));
@@ -1480,13 +1491,13 @@ export function PoolDialog({
                     </span>
                   )}
                   {/* A line of its own under the member, since beside an email and the priority it would not fit. */}
-                  {on && (
+                  {on && a.kind === 'api_key' && (
                     <span className="member-picker__prio" style={{ flexBasis: '100%', justifyContent: 'flex-end' }}>
                       <span className="muted">Budget, USD</span>
                       <Input
                         type="number"
-                        min={0}
-                        step={1}
+                        min={0.01}
+                        step="any"
                         value={budgetOf(a.id).usd}
                         onChange={(e) => setBudget(a.id, { usd: e.target.value })}
                         placeholder="none"
