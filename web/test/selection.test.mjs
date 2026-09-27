@@ -27,7 +27,7 @@ const account = (id, over = {}) => ({
   ...over,
 });
 const window7d = (resetsAt, utilization = 0.5) => [{ id: '7d', label: '7-day', observedAt: '2026-09-18T00:00:00.000Z', periodHours: 168, resetsAt, utilization }];
-const inOverage = { disabledReason: null, enabled: true, inUse: true, monthlyLimitCredits: 100, usedCredits: 10 };
+const extraUsageOn = { disabledReason: null, enabled: true, inUse: true, monthlyLimitCredits: 100, usedCredits: 10 };
 // The eligibility verdict rides on the member, because the router computes it against its own live cooldowns and
 // overages; a case states it there rather than re-deriving it from the account.
 const member = (accountId, priority, eligible = 'eligible') => ({ accountId, eligible, priority });
@@ -80,7 +80,7 @@ const pool = (strategy, overagePolicy, members, over = {}) => {
   };
   return merged;
 };
-const accounts = [account('over', { extraUsage: inOverage }), account('plan')];
+const accounts = [account('over', { extraUsage: extraUsageOn }), account('plan')];
 
 test('an overage P0 beside a plan-funded P1 follows each overage policy', () => {
   const tiers = [member('over', 0), member('plan', 1)];
@@ -163,7 +163,7 @@ test('a pin counts only while the session holds it', () => {
 });
 
 test('the kind order walks plan oauth, overage oauth, then api keys ahead of priority', () => {
-  const trio = [account('key', { kind: 'api_key' }), account('over', { extraUsage: inOverage }), account('plan')];
+  const trio = [account('key', { kind: 'api_key' }), account('over', { extraUsage: extraUsageOn }), account('plan')];
   const members = [member('key', 0), member('over', 0), member('plan', 1)];
   const tiers = selectionOrder(pool('priority', 'prefer_plan', members, { preferSubscription: true }), trio, [], NOW);
   assert.deepEqual(tiers.map((t) => [t.group, t.priority, t.next]), [[0, 1, ['plan']], [1, 0, []], [2, 0, []]], 'the plan-funded P1 comes first, then the overage P0, then the key');

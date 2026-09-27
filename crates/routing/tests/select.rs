@@ -17,7 +17,7 @@ const HOUR: i64 = 3_600_000;
 /// `RoutingState::from_load` seeds this from `DEFAULT_SAMPLE_TTL_MS`, private to that crate; duplicated here
 /// since a state built with no override reads that default.
 const SAMPLE_TTL_MS: i64 = 60_000;
-/// The fallback `request()` carries, for a call to `in_overage` outside a full `SelectRequest`.
+/// The fallback `request()` carries, for a call to the overage predicate outside a full `SelectRequest`.
 const FALLBACK_MS: i64 = 60_000;
 
 struct Pool {
@@ -2429,8 +2429,8 @@ fn a_sample_that_retires_overage_evidence_returns_an_account_to_the_plan_funded_
         ["b".to_string()].into_iter().collect(),
         "the account in overage sits one group below the plan-funded one while the evidence stands"
     );
-    // `in_overage` never expires evidence of its own and the quota poll writes the ledger, not routing state,
-    // so this sample is the only thing that can retire it. `needs_sample` has to ask for it.
+    // the overage predicate never expires evidence of its own and the quota poll writes the ledger, not routing
+    // state, so this sample is the only thing that can retire it. `needs_sample` has to ask for it.
     st.record_overage("a", sampled(false, 2_000));
     assert!(!st.in_overage("a", 2_000, FALLBACK_MS));
     let mut served = std::collections::HashSet::new();
