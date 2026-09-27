@@ -31,6 +31,8 @@ pub use fake_upstream::{stays_for, wait_for, wait_for_async};
 
 pub const ACCOUNT_UUID: &str = "00000000-0000-4000-8000-000000000001";
 pub const KEY: &str = "phoebis-testkey";
+/// A raw Messages caller, not Claude Code.
+pub const SDK_USER_AGENT: &str = "anthropic-sdk-python/0.40.0";
 pub const NOW: i64 = 1_000_000;
 /// The catalog cache's window in every harness but `harness_with_catalog_window`'s: the bootstrap default.
 pub const CATALOG_WINDOW: Duration = Duration::from_secs(60);

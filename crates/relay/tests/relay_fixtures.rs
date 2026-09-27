@@ -460,6 +460,7 @@ async fn a_body_with_no_account_uuid_target_is_refused_with_body_shape() {
         .method("POST")
         .uri("/v1/messages")
         .header("Authorization", "Bearer phoebis-testkey")
+        .header("User-Agent", "claude-cli/2.1.269 (external, sdk-cli)")
         .body(Body::from(r#"{"model":"claude-sonnet-4-5","messages":[]}"#))
         .unwrap();
     let resp = app.oneshot(request).await.unwrap();
@@ -513,6 +514,7 @@ async fn an_oauth_count_tokens_body_without_metadata_reaches_the_upstream() {
         .method("POST")
         .uri("/v1/messages/count_tokens")
         .header("Authorization", "Bearer phoebis-testkey")
+        .header("User-Agent", "claude-cli/2.1.269 (external, sdk-cli)")
         .body(Body::from(
             r#"{"model":"claude-sonnet-4-5[1m]","messages":[{"role":"user","content":"hi"}]}"#,
         ))

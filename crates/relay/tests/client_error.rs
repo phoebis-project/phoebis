@@ -6,7 +6,9 @@ mod common;
 
 use std::time::Duration;
 
-use phoebis_routing::{resolve, RouterEvent, SelectRequest, SelectResult, SelectionTrace};
+use phoebis_routing::{
+    resolve, ClientClass, RouterEvent, SelectRequest, SelectResult, SelectionTrace,
+};
 use phoebis_store::AccountState;
 use common::*;
 use fake_upstream::{stays_for_async, FakeUpstream, Respond, Rule};
@@ -81,6 +83,9 @@ async fn next_trace(h: &Harness, session: &str) -> SelectionTrace {
             context_compacted: false,
             static_hash: None,
             boundaries: Vec::new(),
+            client: ClientClass::ClaudeCode,
+            static_boundaries: Vec::new(),
+            marker: false,
         })
         .await
         .unwrap();

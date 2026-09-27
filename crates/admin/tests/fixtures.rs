@@ -11,6 +11,7 @@ use phoebis_ledger::{
     AttemptRecord, BodyRecord, EventRecord, ExtraUsageSampleRecord, QuotaSampleRecord, Record,
     RequestRecord,
 };
+use phoebis_routing::ClientClass;
 use phoebis_store::{AccountState, Identity, NewBundle, Secret, SubscriptionRow};
 use common::{delete, deltas_until, get, json, login, next_text, patch, post, serve, wait_json};
 use fake_upstream::{FakeUpstream, Respond, Rule};
@@ -255,6 +256,9 @@ async fn every_route_is_captured_and_holds_its_shape() {
             context_compacted: false,
             static_hash: None,
             boundaries: Vec::new(),
+            client: ClientClass::ClaudeCode,
+            static_boundaries: Vec::new(),
+            marker: false,
         })
         .await
         .unwrap();

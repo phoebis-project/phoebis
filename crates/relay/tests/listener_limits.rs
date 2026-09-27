@@ -123,6 +123,7 @@ async fn a_request_still_in_flight_at_the_drain_deadline_is_ended_before_serve_r
         .write_all(
             format!(
                 "POST /v1/messages HTTP/1.1\r\nhost: x\r\nauthorization: Bearer {}\r\n\
+                 user-agent: claude-cli/2.1.269 (external, sdk-cli)\r\n\
                  content-type: application/json\r\ncontent-length: {}\r\n\r\n{body}",
                 KEY,
                 body.len()
@@ -205,6 +206,7 @@ async fn a_body_task_cut_at_the_deadline_publishes_its_completion_before_the_dra
         .write_all(
             format!(
                 "POST /v1/messages HTTP/1.1\r\nhost: x\r\nauthorization: Bearer {}\r\n\
+                 user-agent: claude-cli/2.1.269 (external, sdk-cli)\r\n\
                  content-type: application/json\r\ncontent-length: {}\r\n\r\n{body}",
                 KEY,
                 body.len()

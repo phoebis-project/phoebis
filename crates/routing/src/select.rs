@@ -1,8 +1,8 @@
 //! One selection: the spec's seven steps over the snapshot and the routing state.
 
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, OveragePolicy, PinKey, PinRow, PoolRow, Strategy,
-    WarmSessions,
+    AccountKind, AccountRow, AccountState, AffinityMode, OveragePolicy, PinKey, PinRow, PoolRow,
+    Strategy, WarmSessions,
 };
 use rand::{Rng, RngExt};
 
@@ -12,6 +12,24 @@ use crate::state::{
 };
 use crate::windows::window_for;
 use crate::{term, Candidate, RegistrySnapshot, ResolveError};
+
+/// Who sent the request: `claude-code/*` is Claude Code, everything else is not.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ClientClass {
+    ClaudeCode,
+    #[default]
+    Other,
+}
+
+impl ClientClass {
+    pub fn of_label(label: &str) -> ClientClass {
+        if label.starts_with("claude-code/") {
+            ClientClass::ClaudeCode
+        } else {
+            ClientClass::Other
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct SelectRequest {
@@ -43,6 +61,11 @@ pub struct SelectRequest {
     /// the body carried no chain.
     pub static_hash: Option<String>,
     pub boundaries: Vec<String>,
+    pub client: ClientClass,
+    /// Every static boundary in chain order; `static_hash` stays the last one.
+    pub static_boundaries: Vec<String>,
+    /// The body carries a `cache_control` marker, or the TTL policy will add one: the cache gate.
+    pub marker: bool,
 }
 
 /// Why a pin moved, in the order the rules run: the first rule with a destination moves it.
@@ -364,7 +387,12 @@ pub fn select(
         return (SelectResult::Exhausted(Exhaustion::Untimed), writes);
     };
     let ttl_ms = affinity_ttl_ms(pool);
-    let session = request.session_id.as_deref().filter(|_| ttl_ms > 0);
+    // A marker-less request writes no cache, so under `when_cached` it has no pin to keep and spreads by the
+    // strategy instead of pinning; `always`, a marked request, or a non-portable one pins as before.
+    let session = request.session_id.as_deref().filter(|_| {
+        ttl_ms > 0
+            && (pool.affinity.mode == AffinityMode::Always || request.marker || !request.portable)
+    });
 
     // Step 1: the pin, expired when idle past the TTL or when its account can no longer serve the model here. A
     // non-portable request keeps a pin whose account left the pool: the fence below answers for that account,

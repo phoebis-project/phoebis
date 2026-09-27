@@ -3,15 +3,16 @@
 //! reports whether it changed anything so the task knows what to write through.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 
 use phoebis_store::{
-    AccountKind, AccountState, CooldownRow, FitRow, OverageRow, PinKey, PinRow, RekeyWrite,
-    ResolutionRow, RoutingLoad,
+    AccountKind, AccountState, AffinityRow, BudgetPeriod, CooldownRow, FitRow, OverageRow, PinKey,
+    PinRow, RekeyWrite, ResolutionRow, RoutingLoad,
 };
 use tokio::sync::Notify;
 use tokio::time::Instant;
 
+use crate::affinity::AffinityMap;
 use crate::listing::{row_for, snapshot_date};
 use crate::RegistrySnapshot;
 
@@ -138,11 +139,13 @@ pub enum StateWrite {
         lifecycle_generation: u64,
         credential_generation: u64,
     },
+    DeleteAffinity(Vec<(String, String)>),
     DeleteCooldown(String, String),
     DeletePin(PinKey),
     /// One resolution landing, committed as one transaction so the store never holds moved rows without the
     /// spelling row that finds them after a restart.
     Rekey(RekeyWrite),
+    UpsertAffinity(Vec<AffinityRow>),
     UpsertCooldown(CooldownRow),
     UpsertFit(FitRow),
     UpsertOverage(OverageRow),
@@ -151,9 +154,24 @@ pub enum StateWrite {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Purged {
+    pub affinity: Vec<(String, String)>,
     pub cooldowns: Vec<(String, String)>,
     /// Each dropped pin with the one fact that dropped it: `deleted`, `expired`, or `unserved`.
     pub pins: Vec<(PinKey, &'static str)>,
+}
+
+/// A member's spend in its budget period, as the ledger last answered it; memory only. The period it was summed
+/// over travels with it: a row whose `period` is not the member's configured `budget_period`, or whose bounds do
+/// not hold `now`, is no obstacle.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MemberSpend {
+    pub pool_id: String,
+    pub account_id: String,
+    pub period: BudgetPeriod,
+    pub period_start: i64,
+    pub period_end: i64,
+    pub spent_usd: f64,
+    pub observed_at: i64,
 }
 
 /// A candidate's sort key in `choose`: group, priority, and the overage bit under the kind order; 0, priority,
@@ -475,10 +493,14 @@ impl Drop for AccountTicket {
 type ShedRound = (i64, HashSet<PinKey>);
 
 pub struct RoutingState {
+    /// Shared with the handle the way `in_flight` is, so a lookup never waits on a command round trip.
+    affinity: Arc<RwLock<AffinityMap>>,
     cooldowns: HashMap<(String, String), CooldownRow>,
     /// The ledger's live fit per account and window, kept here because the routing writer persists it.
     fits: HashMap<(String, String), FitRow>,
     in_flight: InFlight,
+    /// The ledger's last-answered spend per pool member, by `(pool_id, account_id)`; memory only.
+    member_spend: HashMap<(String, String), MemberSpend>,
     next_epoch: u64,
     overage: HashMap<String, OverageEvidence>,
     pins: HashMap<PinKey, PinRow>,
@@ -501,6 +523,7 @@ impl RoutingState {
     pub fn from_load(load: RoutingLoad) -> RoutingState {
         let next_epoch = load.pins.iter().map(|p| p.epoch).max().unwrap_or(0) + 1;
         RoutingState {
+            affinity: Arc::new(RwLock::new(AffinityMap::from_rows(load.affinity))),
             cooldowns: load
                 .cooldowns
                 .into_iter()
@@ -514,6 +537,7 @@ impl RoutingState {
                 .map(|f| ((f.account_id.clone(), f.window.clone()), f))
                 .collect(),
             in_flight: InFlight::default(),
+            member_spend: HashMap::new(),
             next_epoch,
             overage: load
                 .overage
@@ -917,6 +941,30 @@ impl RoutingState {
         self.in_flight = in_flight;
     }
 
+    /// The shared affinity map: the same one the handle's `ConversationLookup` reads without a command round
+    /// trip, so a report the writer just applied is visible to the very next request.
+    pub fn affinity(&self) -> Arc<RwLock<AffinityMap>> {
+        self.affinity.clone()
+    }
+
+    pub fn member_spend(&self, pool_id: &str, account_id: &str) -> Option<&MemberSpend> {
+        self.member_spend
+            .get(&(pool_id.to_string(), account_id.to_string()))
+    }
+
+    /// Replaces the named members' rows, keeping one only while the snapshot's member still carries a budget
+    /// under the period the row was summed over: an edit of the period retires the old spend at once.
+    pub fn record_member_spend(&mut self, snapshot: &RegistrySnapshot, rows: Vec<MemberSpend>) {
+        for row in rows {
+            let key = (row.pool_id.clone(), row.account_id.clone());
+            if member_spend_matches(snapshot, &row.pool_id, &row.account_id, row.period) {
+                self.member_spend.insert(key, row);
+            } else {
+                self.member_spend.remove(&key);
+            }
+        }
+    }
+
     /// The pins of an account, the burn of each in `unit` decayed to `now`, and the sum.
     pub fn burn_of(
         &self,
@@ -1205,8 +1253,49 @@ impl RoutingState {
             .unwrap_or(0);
         self.shed_rounds
             .retain(|_, (at, _)| now - *at < longest_dwell);
-        Purged { cooldowns, pins }
+        let ttl_of = |key_id: &str| -> Option<i64> {
+            snapshot
+                .key(key_id)
+                .and_then(|k| snapshot.pool(&k.pool_id))
+                .map(|pool| {
+                    i64::try_from(pool.affinity_ttl_seconds)
+                        .ok()
+                        .and_then(|s| s.checked_mul(1_000))
+                        .unwrap_or(i64::MAX)
+                })
+        };
+        let affinity = self
+            .affinity
+            .write()
+            .expect("affinity lock poisoned")
+            .purge(now, ttl_of, |account_id| {
+                snapshot.account(account_id).map(|a| a.incarnation)
+            });
+        self.member_spend.retain(|(pool_id, account_id), row| {
+            member_spend_matches(snapshot, pool_id, account_id, row.period)
+        });
+        Purged {
+            affinity,
+            cooldowns,
+            pins,
+        }
     }
+}
+
+/// Whether the snapshot's member for `(pool_id, account_id)` still carries a budget under `period`: a member
+/// the pool no longer has, one with no budget, or one whose `budget_period` has since changed all answer false,
+/// which retires the row rather than obstructing on a period nobody configured any more.
+fn member_spend_matches(
+    snapshot: &RegistrySnapshot,
+    pool_id: &str,
+    account_id: &str,
+    period: BudgetPeriod,
+) -> bool {
+    snapshot
+        .members(pool_id)
+        .iter()
+        .find(|m| m.account_id == account_id)
+        .is_some_and(|m| m.budget_usd.is_some() && m.budget_period == period)
 }
 
 /// The start of the current overage stretch, on first evidence and on every replacement alike: an account out of

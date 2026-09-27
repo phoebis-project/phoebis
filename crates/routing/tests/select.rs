@@ -1,14 +1,14 @@
 use phoebis_routing::{
-    effective_warm, release_reasons, resolve, select, warm, EvidenceSource, Exhaustion,
-    MigrateReason, OverageEvidence, PinRef, RegistrySnapshot, RoutingState, SelectRequest,
-    SelectResult, StateWrite, UtilizationSample, WindowReading, FIVE_HOUR, MODEL_REJECTED_REASON,
-    SEVEN_DAY, SEVEN_DAY_FABLE,
+    effective_warm, release_reasons, resolve, select, warm, ClientClass, EvidenceSource,
+    Exhaustion, MigrateReason, OverageEvidence, PinRef, RegistrySnapshot, RoutingState,
+    SelectRequest, SelectResult, StateWrite, UtilizationSample, WindowReading, FIVE_HOUR,
+    MODEL_REJECTED_REASON, SEVEN_DAY, SEVEN_DAY_FABLE,
 };
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, Affinity, AffinitySource, ApiKeyRow, BudgetPeriod,
-    CooldownRow, Failover, OveragePolicy, PinKey, PinRow, PoolMember, PoolRow,
-    QuotaHeaders, RegistryLoad, RoutingLoad, RulesMode, Shedding, Strategy, SubscriptionTerm,
-    WarmSessions,
+    AccountKind, AccountRow, AccountState, Affinity, AffinityMode, AffinitySource, ApiKeyRow,
+    BudgetPeriod, CooldownRow, Failover, OveragePolicy, PinKey, PinRow, PoolMember,
+    PoolRow, QuotaHeaders, RegistryLoad, RoutingLoad, RulesMode, Shedding, Strategy,
+    SubscriptionTerm, WarmSessions,
 };
 use rand::rngs::StdRng;
 use rand::SeedableRng;
@@ -24,6 +24,7 @@ struct Pool {
     policy: OveragePolicy,
     strategy: Strategy,
     affinity: u64,
+    mode: AffinityMode,
     migrate: Option<f64>,
     select_below: Option<f64>,
     members: Vec<(&'static str, u32)>,
@@ -39,6 +40,7 @@ impl Default for Pool {
             policy: OveragePolicy::PreferPlan,
             strategy: Strategy::Priority,
             affinity: 3600,
+            mode: AffinityMode::Always,
             migrate: None,
             select_below: None,
             members: vec![("a", 0), ("b", 0), ("c", 0)],
@@ -145,7 +147,10 @@ fn load_of(pool: Pool, unavailable: &[(&str, bool, AccountState)]) -> RegistryLo
             failover: pool.failover,
             cache_ttl_json: "{}".into(),
             cache_diagnostics: None,
-            affinity: Affinity::default(),
+            affinity: Affinity {
+                mode: pool.mode,
+                ..Affinity::default()
+            },
             quota_headers: QuotaHeaders::Pass,
             created_at: 0,
             updated_at: 0,
@@ -227,6 +232,9 @@ fn request(
         context_compacted: false,
         static_hash: None,
         boundaries: Vec::new(),
+        client: ClientClass::ClaudeCode,
+        static_boundaries: Vec::new(),
+        marker: false,
     }
 }
 
@@ -4063,6 +4071,67 @@ fn loaded(pins: Vec<PinRow>) -> RoutingState {
         pins,
         ..RoutingLoad::default()
     })
+}
+
+#[test]
+fn under_when_cached_a_marker_less_portable_request_neither_reads_nor_creates_a_pin() {
+    let s = snapshot(Pool {
+        mode: AffinityMode::WhenCached,
+        ..Pool::default()
+    });
+    let seeded = seeded_pin("s1", "a", 1_000);
+    let mut st = loaded(vec![seeded.clone()]);
+    let marker_less = SelectRequest {
+        marker: false,
+        ..request(&s, Some("s1"), "claude-sonnet-5", true, &[], 2_000)
+    };
+    let (_, writes) = select(&mut st, &s, &marker_less, &mut rng());
+    assert!(
+        writes.is_empty(),
+        "a marker-less request neither reads nor moves the pin"
+    );
+    assert_eq!(
+        st.pin(&pin_key("s1")),
+        Some(&seeded),
+        "the pin lands by the strategy and is left exactly as it was"
+    );
+
+    let marked = SelectRequest {
+        marker: true,
+        ..request(&s, Some("s1"), "claude-sonnet-5", true, &[], 3_000)
+    };
+    let (result, writes) = select(&mut st, &s, &marked, &mut rng());
+    assert!(
+        matches!(result, SelectResult::Selected(sel) if sel.pin.is_some()),
+        "a marker on the request reads and renews the pin"
+    );
+    assert!(writes.iter().any(|w| matches!(w, StateWrite::UpsertPin(_))));
+
+    let non_portable = SelectRequest {
+        marker: false,
+        ..request(&s, Some("s1"), "claude-sonnet-5", false, &[], 4_000)
+    };
+    let (result, _) = select(&mut st, &s, &non_portable, &mut rng());
+    assert!(
+        matches!(result, SelectResult::Selected(sel) if sel.account.id == "a"),
+        "a non-portable request binds to the pin whatever affinity_mode says"
+    );
+}
+
+#[test]
+fn under_always_a_marker_less_request_pins_as_today() {
+    let s = snapshot(Pool::default());
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let req = SelectRequest {
+        marker: false,
+        ..request(&s, Some("s1"), "claude-sonnet-5", true, &[], 1_000)
+    };
+    let (result, writes) = select(&mut st, &s, &req, &mut rng());
+    assert!(matches!(result, SelectResult::Selected(sel) if sel.pin.is_some()));
+    assert!(
+        writes.iter().any(|w| matches!(w, StateWrite::UpsertPin(_))),
+        "a marker-less request still pins under always"
+    );
 }
 
 /// A turn of `session` whose class says nothing about its cache, so every rule reads the pin's stored warmth.

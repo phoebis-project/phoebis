@@ -11,13 +11,16 @@ use phoebis_store::{AccountState, CooldownRow, FitRow, PinKey, PinRow, RekeyWrit
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
+use crate::affinity::{
+    AffinityMap, AffinityReport, ConversationLookup, ConversationMatch, ConversationQuery,
+};
 use crate::select::{
     release_reasons, select, Exhaustion, MigrateReason, SelectRequest, SelectResult,
 };
 use crate::state::{
-    burn_folded, AccountTicket, EvidenceSource, InFlight, OverageEvidence, PinRef, PinUsage,
-    RateTable, Rates, RoutingState, StateWrite, UtilizationSample, WindowReading, FIVE_HOUR,
-    SEVEN_DAY, SEVEN_DAY_FABLE,
+    burn_folded, AccountTicket, EvidenceSource, InFlight, MemberSpend, OverageEvidence, PinRef,
+    PinUsage, RateTable, Rates, RoutingState, StateWrite, UtilizationSample, WindowReading,
+    FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
 };
 use crate::{resolve, Presented, RegistrySnapshot};
 
@@ -189,6 +192,7 @@ pub enum Report {
         lifecycle_generation: u64,
         credential_generation: u64,
     },
+    Affinity(AffinityReport),
     Cooldown {
         account_id: String,
         row: CooldownRow,
@@ -204,6 +208,8 @@ pub enum Report {
         /// checks later.
         incarnation: u64,
     },
+    /// The ledger's latest read of a pool member's spend, replacing every row it names.
+    MemberSpend(Vec<MemberSpend>),
     Overage {
         account_id: String,
         evidence: OverageEvidence,
@@ -331,6 +337,7 @@ enum Command {
 
 #[derive(Clone)]
 pub struct RouterHandle {
+    affinity: Arc<RwLock<AffinityMap>>,
     events: broadcast::Sender<RouterEvent>,
     in_flight: InFlight,
     snapshot: Arc<RwLock<Arc<RegistrySnapshot>>>,
@@ -349,6 +356,12 @@ impl RouterHandle {
     /// every attempt; an account ticket per wire attempt, a leg's first handed out with its selection.
     pub fn in_flight(&self) -> &InFlight {
         &self.in_flight
+    }
+
+    /// The shared affinity map: the relay's conversation climb reads it under the same lock the report handler
+    /// writes, without a command round trip.
+    pub fn affinity(&self) -> Arc<RwLock<AffinityMap>> {
+        self.affinity.clone()
     }
 
     /// What changed in the routing state, as it changes. A receiver that falls behind loses the oldest
@@ -492,6 +505,26 @@ impl RouterHandle {
     }
 }
 
+impl ConversationLookup for RouterHandle {
+    /// The snapshot's own incarnation reading, so a stale conversation never outlives the account it named.
+    fn conversation(&self, query: &ConversationQuery<'_>) -> Option<ConversationMatch> {
+        let snapshot = self.snapshot();
+        let incarnation_of = |account_id: &str| snapshot.account(account_id).map(|a| a.incarnation);
+        let query = ConversationQuery {
+            canonical_model: query.canonical_model,
+            key_id: query.key_id,
+            key_generation: query.key_generation,
+            parent_ids: query.parent_ids,
+            message_boundaries: query.message_boundaries,
+            incarnation_of: &incarnation_of,
+        };
+        self.affinity
+            .read()
+            .expect("affinity lock poisoned")
+            .conversation(&query)
+    }
+}
+
 struct Task {
     cancel: HashMap<String, CancellationToken>,
     clock: Clock,
@@ -538,6 +571,9 @@ pub fn spawn(
     // selector's cap partition), so a count is exact wherever it is read.
     let in_flight = InFlight::default();
     state.set_in_flight(in_flight.clone());
+    // Shared the same way, so the relay's conversation climb reads the map under the same lock the report
+    // handler writes, without a command round trip.
+    let affinity = state.affinity();
     let (tx, mut rx) = mpsc::channel(COMMANDS);
     // Unbounded so the loop never blocks on SQLite: a stalled store grows this queue in memory rather than
     // stalling selection, and bounding the process's memory is the operator's call, not this channel's.
@@ -545,6 +581,7 @@ pub fn spawn(
     let (done_tx, done_rx) = oneshot::channel();
     let (events, _) = broadcast::channel(EVENTS);
     let handle = RouterHandle {
+        affinity,
         events: events.clone(),
         in_flight,
         snapshot: snapshot.clone(),
@@ -631,6 +668,18 @@ pub fn spawn(
                                 _ => {}
                             }
                         }
+                        // The map's own dirty rows are never written until this point, so a clean shutdown is
+                        // the one moment they have to reach the store; a crash loses them, which the design
+                        // accepts as best effort.
+                        let drained = task
+                            .state
+                            .affinity()
+                            .write()
+                            .expect("affinity lock poisoned")
+                            .drain();
+                        if !drained.is_empty() {
+                            task.write(vec![StateWrite::UpsertAffinity(drained)]);
+                        }
                         task.drain_writer().await;
                         let _ = reply.send(());
                         break;
@@ -693,6 +742,9 @@ fn apply(store: &Store, batch: Vec<StateWrite>) -> Result<bool, Failed> {
                     credential_generation,
                 )?;
             }
+            StateWrite::DeleteAffinity(keys) => {
+                store.delete_affinity(&keys)?;
+            }
             StateWrite::DeleteCooldown(account_id, scope) => {
                 store.delete_cooldown(&account_id, &scope)?;
             }
@@ -707,6 +759,7 @@ fn apply(store: &Store, batch: Vec<StateWrite>) -> Result<bool, Failed> {
                     });
                 }
             }
+            StateWrite::UpsertAffinity(rows) => store.upsert_affinity(&rows)?,
             StateWrite::UpsertCooldown(row) => store.upsert_cooldown(&row)?,
             StateWrite::UpsertFit(row) => store.upsert_fit(&row)?,
             StateWrite::UpsertOverage(row) => {
@@ -776,7 +829,12 @@ impl Task {
                         .first()
                         .map(|c| c.upstream_model.clone())
                         .unwrap_or_else(|| request.canonical_model.clone());
-                    match resolve(&snapshot, key, &request.canonical_model, &folded) {
+                    match resolve(
+                        &snapshot,
+                        key,
+                        &request.canonical_model,
+                        &folded,
+                    ) {
                         Ok(candidates) => request.candidates = candidates,
                         Err(refusal) => {
                             let _ = reply.send(SelectAnswer {
@@ -1058,6 +1116,28 @@ impl Task {
 
     fn report(&mut self, report: Report) {
         match report {
+            Report::Affinity(report) => {
+                if self.moved_past(&report.account_id, report.incarnation) {
+                    return;
+                }
+                let rows = self
+                    .state
+                    .affinity()
+                    .write()
+                    .expect("affinity lock poisoned")
+                    .record(&report);
+                if !rows.is_empty() {
+                    self.write(vec![StateWrite::UpsertAffinity(rows)]);
+                }
+            }
+            Report::MemberSpend(rows) => {
+                let snapshot = self
+                    .snapshot
+                    .read()
+                    .expect("snapshot lock poisoned")
+                    .clone();
+                self.state.record_member_spend(&snapshot, rows);
+            }
             Report::Cooldown {
                 account_id,
                 mut row,
@@ -1545,6 +1625,7 @@ impl Task {
             .collect();
         let purged = self.state.purge(&snapshot, now);
         tracing::debug!(
+            affinity = purged.affinity.len(),
             cooldowns = purged.cooldowns.len(),
             pins = purged.pins.len(),
             "purged expired and orphaned routing state"
@@ -1583,6 +1664,9 @@ impl Task {
                 .into_iter()
                 .map(|(key, _)| StateWrite::DeletePin(key)),
         );
+        if !purged.affinity.is_empty() {
+            writes.push(StateWrite::DeleteAffinity(purged.affinity));
+        }
         self.write(writes);
     }
 

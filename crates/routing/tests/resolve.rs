@@ -7,10 +7,10 @@ use phoebis_store::{
 
 const DIGEST_KEY: [u8; 32] = [7; 32];
 
-fn account(id: &str) -> AccountRow {
+fn account_kind(id: &str, kind: AccountKind) -> AccountRow {
     AccountRow {
         id: id.into(),
-        kind: AccountKind::ApiKey,
+        kind,
         label: id.into(),
         enabled: true,
         identity: None,
@@ -19,6 +19,10 @@ fn account(id: &str) -> AccountRow {
         revision: 1,
         state: AccountState::Ready,
     }
+}
+
+fn account(id: &str) -> AccountRow {
+    account_kind(id, AccountKind::ApiKey)
 }
 
 fn pool(id: &str, enabled: bool, rules: Vec<ModelRule>, body_capture_hours: u32) -> PoolRow {
@@ -73,7 +77,12 @@ fn key(id: &str, pool_id: &str, secret: &str, rules: Vec<ModelRule>, mode: Rules
 
 fn snapshot() -> RegistrySnapshot {
     let load = RegistryLoad {
-        accounts: vec![account("a"), account("b"), account("f")],
+        accounts: vec![
+            account("a"),
+            account("b"),
+            account("f"),
+            account_kind("oauth-member", AccountKind::Oauth),
+        ],
         credential_generations: Vec::new(),
         keys: vec![
             key(
@@ -147,6 +156,13 @@ fn snapshot() -> RegistrySnapshot {
                 Vec::new(),
                 RulesMode::Extend,
             ),
+            key(
+                "mixed_client",
+                "mixed",
+                "phoebis-mixedsecret000000",
+                Vec::new(),
+                RulesMode::Extend,
+            ),
         ],
         members: vec![
             PoolMember {
@@ -170,6 +186,20 @@ fn snapshot() -> RegistrySnapshot {
                 budget_usd: None,
                 budget_period: BudgetPeriod::Month,
             },
+            PoolMember {
+                pool_id: "mixed".into(),
+                account_id: "oauth-member".into(),
+                priority: 0,
+                budget_usd: None,
+                budget_period: BudgetPeriod::Month,
+            },
+            PoolMember {
+                pool_id: "mixed".into(),
+                account_id: "a".into(),
+                priority: 1,
+                budget_usd: None,
+                budget_period: BudgetPeriod::Month,
+            },
         ],
         pools: vec![
             pool(
@@ -183,6 +213,7 @@ fn snapshot() -> RegistrySnapshot {
             ),
             pool("off", false, Vec::new(), 0),
             pool("empty", true, Vec::new(), 0),
+            pool("mixed", true, Vec::new(), 0),
         ],
         retired_secrets: Vec::new(),
         reused_key_ids: Vec::new(),
@@ -306,5 +337,22 @@ fn a_pool_with_no_member_answers_an_empty_list() {
     assert_eq!(
         resolve(&s, solo, "claude-sonnet-5", "claude-sonnet-5").unwrap(),
         Vec::new()
+    );
+}
+
+#[test]
+fn a_claude_code_request_resolves_every_member_regardless_of_kind() {
+    let s = snapshot();
+    let mixed = s.key("mixed_client").unwrap();
+    let ids = |c: Vec<Candidate>| c.into_iter().map(|c| c.account_id).collect::<Vec<_>>();
+    assert_eq!(
+        ids(resolve(
+            &s,
+            mixed,
+            "claude-sonnet-5",
+            "claude-sonnet-5",
+        )
+        .unwrap()),
+        ["oauth-member".to_string(), "a".to_string()]
     );
 }

@@ -31,6 +31,7 @@ pub const KEY: &str = "phoebis-testkey";
 pub const NOW: i64 = 1_000_000;
 pub const A: &str = "sk-ant-oat01-AAAA";
 pub const B: &str = "sk-ant-oat01-BBBB";
+pub const C: &str = "sk-ant-api03-CCCC";
 
 pub struct Harness {
     pub app: axum::Router,
@@ -56,6 +57,15 @@ pub fn oauth(id: &'static str, secret: &'static str, priority: u32) -> Account {
     Account {
         id,
         kind: AccountKind::Oauth,
+        secret,
+        priority,
+    }
+}
+
+pub fn api_key(id: &'static str, secret: &'static str, priority: u32) -> Account {
+    Account {
+        id,
+        kind: AccountKind::ApiKey,
         secret,
         priority,
     }

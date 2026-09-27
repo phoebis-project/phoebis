@@ -55,6 +55,7 @@ Every field, in the order the request body takes them:
 | `strategy` | `pace` | `pace`, `priority`, or `round_robin` |
 | `prefer_subscription` | `true` | see below |
 | `affinity_ttl_seconds` | `3600` | `0` or at least 60: `affinity_ttl_seconds is 0 or at least 60` |
+| `affinity_mode` | `always` | `always` or `when_cached`; see below |
 | `overage_policy` | `prefer_plan` | `prefer_plan`, `allow`, or `never` |
 | `overage_move_grace_minutes` | `30` | 0 to 300; see Moves |
 | `migrate_above_utilization` | unset | 0 to 1: `migrate_above_utilization is between 0 and 1`; starts shedding |
@@ -78,6 +79,10 @@ Every field, in the order the request body takes them:
 `cache_diagnostics` forces the cache-diagnosis beta and the `previous_message_id` member toward
 `api.anthropic.com` for this pool's requests, whatever the [bootstrap option](installation.md#compatibility)
 says; `null` inherits it.
+
+Under `when_cached` a request that carries no `cache_control` marker, and receives none from the cache TTL
+policy, creates no pin and lands by the strategy instead of pinning; a non-portable request keeps its pin
+either way.
 
 A member's `priority` is a number; lower sorts first. Naming an unknown account in `members` answers `404
 account {id} not found`, and the pool is not created.
@@ -161,6 +166,11 @@ the admin secret can read them."
 
 [kl]: assets/keys-light.png#only-light
 [kd]: assets/keys-dark.png#only-dark
+
+## Clients
+
+Every request carries a class, read off its user agent: `claude-code/<entrypoint>` for a `claude-cli/` caller
+(the entrypoint token it names, `cli` when it names none) and `other` for anything else.
 
 ## Model rules
 

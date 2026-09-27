@@ -5,7 +5,8 @@ mod common;
 use phoebis_keepalive::{Event, KeepaliveLimits, KeepalivePolicy, Reason};
 use phoebis_ledger::{hour_of, read_rollups};
 use phoebis_routing::{
-    resolve, EvidenceSource, OverageEvidence, PinRef, Report, SelectRequest, SelectResult,
+    resolve, ClientClass, EvidenceSource, OverageEvidence, PinRef, Report, SelectRequest,
+    SelectResult,
 };
 use phoebis_store::{AccountState, CooldownRow, OveragePolicy};
 use common::*;
@@ -219,6 +220,9 @@ async fn select_main(r: &Rig) -> SelectResult {
             context_compacted: false,
             static_hash: None,
             boundaries: Vec::new(),
+            client: ClientClass::ClaudeCode,
+            static_boundaries: Vec::new(),
+            marker: false,
         })
         .await
         .unwrap()
@@ -633,6 +637,9 @@ async fn a_pin_the_router_moved_on_the_agents_own_request_moves_the_next_probe()
                 context_compacted: false,
                 static_hash: None,
                 boundaries: Vec::new(),
+                client: ClientClass::ClaudeCode,
+                static_boundaries: Vec::new(),
+                marker: false,
             })
             .await
             .unwrap();

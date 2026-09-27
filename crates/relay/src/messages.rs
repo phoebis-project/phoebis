@@ -20,9 +20,9 @@ use phoebis_bus::{
 };
 use phoebis_oauth::{AccessToken, AcquireError, Clock, CredentialManager};
 use phoebis_routing::{
-    resolve, AccountTicket, EvidenceSource, Exhaustion, KeyPermit, KeyRefusal, OverageEvidence,
-    PinRef, Presented, Report, ResolveError, RouterHandle, SelectRequest, SelectResult, Selection,
-    SelectionTrace, MODEL_REJECTED_REASON,
+    resolve, AccountTicket, ClientClass, EvidenceSource, Exhaustion, KeyPermit,
+    KeyRefusal, OverageEvidence, PinRef, Presented, Report, ResolveError, RouterHandle,
+    SelectRequest, SelectResult, Selection, SelectionTrace, MODEL_REJECTED_REASON,
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, MemoryStore, Store,
@@ -1020,6 +1020,7 @@ impl Relay {
                 key.rotated_at,
             )
             .await;
+        let client_class = ClientClass::of_label(&identity.client);
         let candidates = match resolve(
             &snapshot,
             &key,
@@ -1210,6 +1211,15 @@ impl Relay {
                         .as_ref()
                         .map(|c| c.message_boundaries.clone())
                         .unwrap_or_default(),
+                    client: client_class,
+                    static_boundaries: facts
+                        .chains
+                        .as_ref()
+                        .map(|c| c.static_boundaries.clone())
+                        .unwrap_or_default(),
+                    marker: admitted.markers_ttl_ms.is_some()
+                        || (admitted.cache_ttl_policy.enabled
+                            && admitted.cache_ttl_policy.inject_when_absent),
                 })
                 .await
             {

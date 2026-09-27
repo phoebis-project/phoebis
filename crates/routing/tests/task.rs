@@ -8,14 +8,15 @@ use phoebis_profile::{
     fixtures::{control_response, ControlFixture},
 };
 use phoebis_routing::{
-    resolve, sample_from_usage, spawn, BandWeight, BurnRates, Exhaustion, PinRef, PinUsage,
-    Presented, RateTable, Rates, ReloadError, Report, ResolveError, RouterConfig, SelectRequest,
-    SelectResult, UtilizationSample, WindowReading, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
+    resolve, sample_from_usage, spawn, AffinityReport, BandWeight, BurnRates, ClientClass,
+    Exhaustion, MemberSpend, PinRef, PinUsage, Presented, RateTable, Rates, ReloadError,
+    Report, ResolveError, RouterConfig, RoutingState, SelectRequest, SelectResult,
+    UtilizationSample, WindowReading, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
 };
 use phoebis_store::{
     key_prefix, AccountKind, AccountRow, AccountState, Affinity, AffinitySource, ApiKeyRow,
     CooldownRow, Failover, FitRow, MemberWrite, ModelRule, NewBundle, OveragePolicy,
-    PoolRow, QuotaHeaders, RulesMode, Secret, Shedding, StorageKey, Store, Strategy,
+    PoolRow, QuotaHeaders, RoutingLoad, RulesMode, Secret, Shedding, StorageKey, Store, Strategy,
 };
 use phoebis_transport::{
     connector_builder,
@@ -154,6 +155,9 @@ fn request(handle: &phoebis_routing::RouterHandle, session: Option<&str>, now: i
         context_compacted: false,
         static_hash: None,
         boundaries: Vec::new(),
+        client: ClientClass::ClaudeCode,
+        static_boundaries: Vec::new(),
+        marker: false,
     }
 }
 
@@ -168,6 +172,34 @@ const NOT_WRITTEN: Duration = Duration::from_millis(50);
 fn stale(mut req: SelectRequest) -> SelectRequest {
     req.revision = req.revision.saturating_sub(1);
     req
+}
+
+/// A minimal affinity report: one message boundary, no cache evidence, under `account_id`'s current
+/// incarnation and key `k`'s current generation.
+fn affinity_report(
+    handle: &phoebis_routing::RouterHandle,
+    account_id: &str,
+    now: i64,
+) -> AffinityReport {
+    let s = handle.snapshot();
+    AffinityReport {
+        account_id: account_id.into(),
+        incarnation: s.account(account_id).unwrap().incarnation,
+        key_id: "k".into(),
+        key_generation: s.key("k").unwrap().created_at,
+        canonical_model: "claude-sonnet-5".into(),
+        root: None,
+        static_boundaries: Vec::new(),
+        message_boundaries: vec!["b1".into()],
+        static_sizes: Vec::new(),
+        message_id: None,
+        request_id: None,
+        static_ttl_ms: None,
+        message_ttl_ms: None,
+        cache_touched: false,
+        prefix_tokens: 0,
+        now,
+    }
 }
 
 #[tokio::test]
@@ -540,6 +572,9 @@ async fn a_persisted_resolution_keys_the_dated_pin_after_a_restart_before_any_re
             context_compacted: false,
             static_hash: None,
             boundaries: Vec::new(),
+            client: ClientClass::ClaudeCode,
+            static_boundaries: Vec::new(),
+            marker: false,
         }
     };
     let epoch;
@@ -660,6 +695,9 @@ async fn resolve_answers_once_the_state_holds_the_spellings_pins_and_cooldowns_u
             context_compacted: false,
             static_hash: None,
             boundaries: Vec::new(),
+            client: ClientClass::ClaudeCode,
+            static_boundaries: Vec::new(),
+            marker: false,
         })
         .await
         .unwrap();
@@ -3142,4 +3180,224 @@ async fn a_stored_fit_the_fitter_would_refuse_is_not_served() {
         handle.fits().await.unwrap().is_empty(),
         "a zero scale is no window size to serve"
     );
+}
+
+#[tokio::test]
+async fn a_reports_affinity_rows_reach_the_store_and_a_restart_reloads_them() {
+    let store = seeded(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    {
+        let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
+        let report = AffinityReport {
+            message_boundaries: vec!["b1".into(), "b2".into()],
+            message_id: Some("resp-1".into()),
+            request_id: Some("req-1".into()),
+            ..affinity_report(&handle, "a", 1_000)
+        };
+        handle.report(Report::Affinity(report));
+        wait_for(WRITTEN, || {
+            (!store.load_routing().unwrap().affinity.is_empty()).then_some(())
+        })
+        .await;
+    }
+    let rows = store.load_routing().unwrap().affinity;
+    assert_eq!(
+        rows.len(),
+        4,
+        "the two message boundaries plus the response and request ids"
+    );
+    let handle = spawn(store, None, clock(&now), RouterConfig::default()).unwrap();
+    let entry = handle
+        .affinity()
+        .read()
+        .unwrap()
+        .entry("claude-sonnet-5", "b1")
+        .cloned();
+    assert!(
+        entry.is_some(),
+        "the restart reloaded the map from the store"
+    );
+}
+
+#[tokio::test]
+async fn a_shutdown_persists_a_refreshed_entrys_time() {
+    let store = seeded(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
+    handle.report(Report::Affinity(affinity_report(&handle, "a", 1_000)));
+    wait_for(WRITTEN, || {
+        (!store.load_routing().unwrap().affinity.is_empty()).then_some(())
+    })
+    .await;
+    handle.report(Report::Affinity(affinity_report(&handle, "a", 2_000)));
+    // The refresh is marked dirty, not written through: the store's row keeps the first report's time until
+    // the shutdown drains it.
+    stays_for(NOT_WRITTEN, || {
+        store
+            .load_routing()
+            .unwrap()
+            .affinity
+            .into_iter()
+            .find(|r| r.hash == "b1")
+            .is_some_and(|r| r.written_at == 1_000)
+    })
+    .await;
+    handle.shutdown().await.unwrap();
+    let row = store
+        .load_routing()
+        .unwrap()
+        .affinity
+        .into_iter()
+        .find(|r| r.hash == "b1")
+        .expect("the row survived the shutdown");
+    assert_eq!(
+        row.written_at, 2_000,
+        "the shutdown drained the refreshed row"
+    );
+}
+
+#[tokio::test]
+async fn the_purge_tick_deletes_an_aged_entry_from_the_store() {
+    let store = seeded(&["a"]);
+    // Short enough for the entry to age inside the test's own window, rather than the hour-scale default.
+    let mut pool = store.pool("p").unwrap().unwrap();
+    pool.affinity_ttl_seconds = 1;
+    store.update_pool(&pool, "test").unwrap();
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(
+        store.clone(),
+        None,
+        clock(&now),
+        RouterConfig {
+            purge_interval: Duration::from_millis(50),
+            ..RouterConfig::default()
+        },
+    )
+    .unwrap();
+    handle.report(Report::Affinity(affinity_report(&handle, "a", 1_000)));
+    wait_for(WRITTEN, || {
+        (!store.load_routing().unwrap().affinity.is_empty()).then_some(())
+    })
+    .await;
+    now.store(1_000 + 2_000, Ordering::SeqCst);
+    wait_for(WRITTEN, || {
+        store
+            .load_routing()
+            .unwrap()
+            .affinity
+            .is_empty()
+            .then_some(())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn an_account_recreated_under_its_id_drops_its_affinity_entries_and_a_late_report_from_the_old_holder_lands_nowhere(
+) {
+    let store = seeded(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
+    let report = affinity_report(&handle, "a", 1_000);
+    handle.report(Report::Affinity(report.clone()));
+    wait_for(WRITTEN, || {
+        (!store.load_routing().unwrap().affinity.is_empty()).then_some(())
+    })
+    .await;
+
+    store.delete_account("a", "test").unwrap();
+    handle.reload().await.unwrap();
+    store
+        .insert_account(&AccountRow {
+            id: "a".into(),
+            kind: AccountKind::ApiKey,
+            label: "a".into(),
+            enabled: true,
+            identity: None,
+            lifecycle_generation: 1,
+            incarnation: 1,
+            revision: 1,
+            state: AccountState::Ready,
+        })
+        .unwrap();
+    store
+        .set_pool_members(
+            "p",
+            &[MemberWrite {
+                account_id: "a".into(),
+                priority: 0,
+                budget_usd: None,
+                budget_period: phoebis_store::BudgetPeriod::Month,
+            }],
+            "test",
+        )
+        .unwrap();
+    handle.reload().await.unwrap();
+    assert!(
+        handle.affinity().read().unwrap().is_empty(),
+        "the reload's purge drops the old holder's entry from the shared map at once"
+    );
+    wait_for(WRITTEN, || {
+        store
+            .load_routing()
+            .unwrap()
+            .affinity
+            .is_empty()
+            .then_some(())
+    })
+    .await;
+
+    handle.report(Report::Affinity(report));
+    stays_for(NOT_WRITTEN, || handle.affinity().read().unwrap().is_empty()).await;
+    assert!(
+        store.load_routing().unwrap().affinity.is_empty(),
+        "a report under the old incarnation writes nothing"
+    );
+}
+
+#[tokio::test]
+async fn a_spend_report_under_another_period_than_the_members_is_discarded() {
+    let store = seeded(&["a"]);
+    store
+        .set_pool_members(
+            "p",
+            &[MemberWrite {
+                account_id: "a".into(),
+                priority: 0,
+                budget_usd: Some(10.0),
+                budget_period: phoebis_store::BudgetPeriod::Day,
+            }],
+            "test",
+        )
+        .unwrap();
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store, None, clock(&now), RouterConfig::default()).unwrap();
+    let snapshot = handle.snapshot();
+    // The task's own state is not reachable from the handle; the same read and write the report handler uses
+    // are exercised directly against a state built the way the task's does.
+    let mut state = RoutingState::from_load(RoutingLoad::default());
+    let month_row = MemberSpend {
+        pool_id: "p".into(),
+        account_id: "a".into(),
+        period: phoebis_store::BudgetPeriod::Month,
+        period_start: 0,
+        period_end: 1,
+        spent_usd: 5.0,
+        observed_at: 1_000,
+    };
+    state.record_member_spend(&snapshot, vec![month_row]);
+    assert!(
+        state.member_spend("p", "a").is_none(),
+        "a Month row is no obstacle for a member configured on Day"
+    );
+    let day_row = MemberSpend {
+        pool_id: "p".into(),
+        account_id: "a".into(),
+        period: phoebis_store::BudgetPeriod::Day,
+        period_start: 0,
+        period_end: 1,
+        spent_usd: 5.0,
+        observed_at: 1_000,
+    };
+    state.record_member_spend(&snapshot, vec![day_row.clone()]);
+    assert_eq!(state.member_spend("p", "a"), Some(&day_row));
 }

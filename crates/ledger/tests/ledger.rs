@@ -517,7 +517,7 @@ async fn a_request_with_no_user_agent_is_found_by_the_wildcard_and_the_exact_das
         respond: json_200(),
     }])
     .await;
-    let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let h = harness(&up, &[api_key("a", C, 0)], (0, None), LedgerConfig::default()).await;
     let mut req = request_for(KEY, "claude-sonnet-4-5", "s1");
     req.headers_mut().remove("user-agent");
     let resp = h.app.clone().oneshot(req).await.unwrap();
