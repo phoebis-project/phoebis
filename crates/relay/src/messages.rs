@@ -77,8 +77,9 @@ use crate::{
 /// shutdown flushes the rest.
 pub const MEMORY_FLUSH_INTERVAL: Duration = Duration::from_secs(5);
 
-/// Upstream response headers the relay keeps to itself: the connection and framing ones as before, and the
-/// upstream's own identity and cookies, which name the account behind the key and never the key holder.
+/// Upstream response headers the relay keeps to itself: the connection and framing ones describe the upstream
+/// hop, and the framing no longer matches the body the caller is sent; the upstream's own identity and cookies
+/// name the account behind the key, never the key holder.
 const NOT_FORWARDED: &[&str] = &[
     "anthropic-organization-id",
     "connection",
@@ -602,9 +603,9 @@ fn restore_with<'a>(
     })
 }
 
-/// Whether a 400 on this request says anything about the account past this leg. A `count_tokens` request is
-/// answered by a schema of its own, so what that endpoint refuses is no reason to strip an item from the
-/// inference requests the account serves; the strip retry still corrects this leg's own edit.
+/// Whether a 400 on this request says anything about the account past this leg. A `count_tokens` request
+/// injects nothing at all, so its refusal has nothing to latch; the strip retry still corrects this leg's own
+/// edit.
 fn latches(trace: &Trace) -> bool {
     trace.kind == Kind::Inference
 }
@@ -1247,7 +1248,8 @@ impl Relay {
                         .map(|c| c.static_boundaries.clone())
                         .unwrap_or_default(),
                     marker: admitted.markers_ttl_ms.is_some()
-                        || (admitted.cache_ttl_policy.enabled
+                        || (matches!(admitted.trace.kind, Kind::Inference | Kind::Probe)
+                            && admitted.cache_ttl_policy.enabled
                             && admitted.cache_ttl_policy.inject_when_absent),
                 })
                 .await
@@ -1950,8 +1952,7 @@ impl Relay {
                             checkin,
                             guards: ctx.guards(),
                             head: &head,
-                            hide_quota: ctx.quota_headers == QuotaHeaders::Hide
-                                && head.status != 429,
+                            hide_quota: ctx.hides_quota(head.status),
                             keep_alive: reusable,
                             observer: None,
                             on_message_id: None,
@@ -2109,8 +2110,7 @@ impl Relay {
                         let release = (!marked)
                             .then(|| self.release_on(&ctx, head.status))
                             .flatten();
-                        let hide_quota =
-                            ctx.quota_headers == QuotaHeaders::Hide && head.status != 429;
+                        let hide_quota = ctx.hides_quota(head.status);
                         return Next::Respond(
                             self.forward_buffered(
                                 ctx.trace,
@@ -2131,7 +2131,7 @@ impl Relay {
             // is forwarded as it came and the account keeps its state and a pin that already served.
             Verdict::Refresh => {
                 let release = self.release_on(&ctx, head.status);
-                let hide_quota = ctx.quota_headers == QuotaHeaders::Hide && head.status != 429;
+                let hide_quota = ctx.hides_quota(head.status);
                 return Next::Respond(
                     self.forward_buffered(
                         ctx.trace,
@@ -2270,7 +2270,7 @@ impl Relay {
                         (bytes, Some(PostCommit { inspect, on_error }))
                     }
                 };
-                let hide_quota = ctx.quota_headers == QuotaHeaders::Hide && head.status != 429;
+                let hide_quota = ctx.hides_quota(head.status);
                 let responded = match buffered {
                     Some(buffered) => {
                         self.forward_buffered(
@@ -2348,7 +2348,7 @@ impl Relay {
                     checkin,
                     guards,
                     head: &head,
-                    hide_quota: ctx.quota_headers == QuotaHeaders::Hide && head.status != 429,
+                    hide_quota: ctx.hides_quota(head.status),
                     keep_alive: false,
                     observer: None,
                     on_message_id: None,
@@ -2395,7 +2395,7 @@ impl Relay {
                 outcome,
                 None,
                 None,
-                ctx.quota_headers == QuotaHeaders::Hide && head.status != 429,
+                ctx.hides_quota(head.status),
             )
             .await,
         )
@@ -3018,7 +3018,7 @@ struct Responding<'a> {
     pin: Option<&'a PinRef>,
     pin_epoch: Option<u64>,
     portable: bool,
-    /// Whether a member's own identity and quota headers reach the caller on this pool's responses.
+    /// Whether the quota family reaches the caller on this pool's answers other than a 429.
     quota_headers: QuotaHeaders,
     replayed: bool,
     request_id: &'a str,
@@ -3039,6 +3039,12 @@ impl Responding<'_> {
             _key: self.key_permit.take(),
             _account: self.ticket.take(),
         }
+    }
+
+    /// Whether this pool's answer to `status` drops the quota family: never on a 429, so the client's continue
+    /// still arms.
+    fn hides_quota(&self, status: u16) -> bool {
+        self.quota_headers == QuotaHeaders::Hide && status != 429
     }
 }
 
@@ -3098,8 +3104,8 @@ struct Admitted<'a> {
     /// gave up on.
     original: Option<&'a OriginalHead>,
     portable: bool,
-    /// Whether a member's own identity and quota headers reach the caller on this pool's responses, read once
-    /// at admission alongside `cache_ttl_policy`.
+    /// Whether the quota family reaches the caller on this pool's answers other than a 429, read once at
+    /// admission alongside `cache_ttl_policy`.
     quota_headers: QuotaHeaders,
     raw: &'a Bytes,
     request_id: &'a str,

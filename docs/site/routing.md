@@ -70,7 +70,7 @@ Every field, in the order the request body takes them:
 | `select_below_utilization` | unset | 0 to 1: `select_below_utilization is between 0 and 1` |
 | `model_rules` | empty | an ordered list of `{pattern, not}` entries, at most 256; see Model rules |
 | `keepalive` | disabled | a policy object; its defaults are on the [Keepalive page](keepalive.md) |
-| `cache_ttl` | off | a policy object; see below |
+| `cache_ttl` | off | a policy object, `inject_when_absent` off by default; see below |
 | `cache_diagnostics` | unset (inherits) | `true`, `false`, or `null` |
 | `quota_headers` | `pass` | `pass` or `hide`; see below |
 | `body_capture_hours` | `0` (off) | `body_capture_hours exceeds stats.body_capture_max_hours` |
@@ -112,25 +112,26 @@ again.
 ### Cache TTL
 
 A pool can set the prompt cache TTL of every request it serves toward `api.anthropic.com`. The policy object carries
-`enabled` (default `false`) and two rule sets, `plan` and `metered`: `plan` prices a subscription upstream on plan
-quota, `metered` an API-key upstream or a subscription upstream in overage. Each set carries `main` and `subagent` in
-`5m` or `1h`, `keepalive` (the TTL a keepalive probe's replay writes with), and `models`, a list of `{model, main,
-subagent}` overrides on canonical ids. `plan` defaults to one hour throughout and `metered` to five minutes throughout:
-a one-hour write costs a metered upstream 2x base input against 1.25x for five minutes, and a plan-funded upstream the
-same plan tokens either way. With the policy on, every `cache_control` marker in the body is rewritten to the TTL the
-request's set and branch choose, the ones inside a tool result's own content included, the
-`extended-cache-ttl-2025-04-11` beta travels exactly when the body is one hour, and the `cch` hash is restamped, except
-a body the fail-closed guard refuses to edit, which goes as sent with its own markers and beta. The guard refuses when
-a JSON decoder counts a different number of markers than the rewrite reached, as with a `cache_control` key spelled
-with escapes or repeated in one object. On every other body the client's own `CLAUDE_CODE_PROMPT_CACHE_TTL` has no
-effect through the pool. A body that carries no marker is left as it came unless `inject_when_absent` is on, in which
-case the top-level `cache_control` member is added with the TTL, before `stream`; a token count is never edited: its
-markers travel as the client sent them and no beta follows it. The metered set applies while the write costs money:
-the serving upstream is in overage, or is an API-key upstream. A keepalive probe's replay writes with the chosen set's
-`keepalive` TTL; any other request reads `main` or `subagent` by its agent, and one without an agent id reads as the
-main conversation. The TTL is priced per attempt, so a request that fails over reads its destination's state. Mixed
-TTLs across a session's requests are fine: the cache is keyed on the prefix, and the TTL sets an entry's lifetime and
-price alone. The cost of each choice is on the [keepalive page](keepalive.md#the-cost-reference).
+`enabled` (default `false`), `inject_when_absent` (default `false`), and two rule sets, `plan` and `metered`: `plan`
+prices a subscription upstream on plan quota, `metered` an API-key upstream or a subscription upstream in overage. Each
+set carries `main` and `subagent` in `5m` or `1h`, `keepalive` (the TTL a keepalive probe's replay writes with), and
+`models`, a list of `{model, main, subagent}` overrides on canonical ids. `plan` defaults to one hour throughout and
+`metered` to five minutes throughout: a one-hour write costs a metered upstream 2x base input against 1.25x for five
+minutes, and a plan-funded upstream the same plan tokens either way. With the policy on, every `cache_control` marker in
+the body is rewritten to the TTL the request's set and branch choose, the ones inside a tool result's own content
+included, the `extended-cache-ttl-2025-04-11` beta travels exactly when the body is one hour, and the `cch` hash is
+restamped, except a body the fail-closed guard refuses to edit, which goes as sent with its own markers and beta. The
+guard refuses when a JSON decoder counts a different number of markers than the rewrite reached, as with a
+`cache_control` key spelled with escapes or repeated in one object. On every other body the client's own
+`CLAUDE_CODE_PROMPT_CACHE_TTL` has no effect through the pool. A body that carries no marker is left as it came unless
+`inject_when_absent` is on, in which case the top-level `cache_control` member is added with the TTL, before `stream`; a
+token count is never edited by the policy: its markers travel as the client sent them and no beta follows it. The
+metered set applies while the write costs money: the serving upstream is in overage, or is an API-key upstream. A
+keepalive probe's replay writes with the chosen set's `keepalive` TTL; any other request reads `main` or `subagent` by
+its agent, and one without an agent id reads as the main conversation. The TTL is priced per attempt, so a request that
+fails over reads its destination's state. Mixed TTLs across a session's requests are fine: the cache is keyed on the
+prefix, and the TTL sets an entry's lifetime and price alone.
+The cost of each choice is on the [keepalive page](keepalive.md#the-cost-reference).
 
 ![The Pools view: one card per pool with its strategy, affinity, overage policy, keepalive state, members, and keys][pl]
 ![The Pools view: one card per pool with its strategy, affinity, overage policy, keepalive state, members, and keys][pd]

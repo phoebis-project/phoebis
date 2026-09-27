@@ -109,7 +109,7 @@ async fn under_the_defaults_the_recorded_count_reaches_the_upstream_as_the_clien
 }
 
 #[tokio::test]
-async fn under_the_policy_the_recorded_count_travels_as_sent_since_it_carries_no_marker() {
+async fn under_the_policy_the_recorded_count_travels_as_sent() {
     let up = FakeUpstream::start(vec![count_rule()]).await;
     let h = harness(
         &up,

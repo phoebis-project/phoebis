@@ -24,8 +24,7 @@ pub struct BodyEdits {
 pub enum Markerless {
     /// The API's top-level member is added, so the policy's TTL reaches a message the client left unmarked.
     TakesTheMember,
-    /// The body travels as sent. The `count_tokens` schema is not documented to accept a member the client
-    /// never sent, and a 400 naming one has no strip path to fall back on.
+    /// The body travels as sent: the client asked for no cache, and the operator's toggle leaves it that way.
     GoesAsSent,
 }
 

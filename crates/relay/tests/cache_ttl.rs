@@ -3,8 +3,9 @@ use common::*;
 
 use phoebis_profile::fixtures::{body, inference_head, BodyFixture, FixtureKind};
 use phoebis_relay::EXTENDED_TTL_BETA;
-use phoebis_store::OveragePolicy;
+use phoebis_store::{AffinityMode, OveragePolicy};
 use fake_upstream::{FakeUpstream, Respond, Rule};
+use http_body_util::BodyExt;
 use tower::ServiceExt;
 
 const A: &str = "sk-ant-api03-AAAA0001";
@@ -310,12 +311,58 @@ async fn a_token_count_never_takes_the_member() {
         markers(&sent.body).is_empty(),
         "no top-level member was added"
     );
+    assert!(
+        !beta_list(sent).iter().any(|b| b == EXTENDED_TTL_BETA),
+        "no beta for a count that took no member"
+    );
+    up.shutdown().await;
+}
+
+async fn set_affinity_mode(h: &Harness, mode: AffinityMode) {
+    let mut pool = h.store.pool("main").unwrap().unwrap();
+    pool.affinity.mode = mode;
+    h.store.update_pool(&pool, "test").unwrap();
+    h.router.reload().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_marker_less_count_under_when_cached_with_the_toggle_on_creates_no_pin() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages/count_tokens".into(),
+        respond: Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: br#"{"input_tokens":7}"#.to_vec(),
+        },
+    }])
+    .await;
+    let h = harness(
+        &up,
+        &[api_key("acct", A, 0)],
+        policy(r#"{"enabled":true,"inject_when_absent":true,"metered":{"main":"1h"}}"#),
+    )
+    .await;
+    set_affinity_mode(&h, AffinityMode::WhenCached).await;
+    let count = request_from_fixture(
+        inference_head(FixtureKind::CountApiKey),
+        body(BodyFixture::CountApiKey),
+        KEY,
+    );
+    let resp = h.app.clone().oneshot(count).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let _ = resp.into_body().collect().await;
+    assert!(
+        h.router.pins().await.unwrap().is_empty(),
+        "a marker-less count carries no marker of its own, so it creates no pin under when_cached even with the toggle on"
+    );
     up.shutdown().await;
 }
 
 #[tokio::test]
 async fn a_metered_write_takes_the_metered_set_and_a_plan_write_the_plan_set() {
-    const POLICY: &str = r#"{"enabled":true,"plan":{"main":"1h"},"metered":{"main":"5m"}}"#;
+    // Inverted against each fixture's own markers, so a leg that read the wrong set would rewrite to the
+    // wrong TTL rather than pass on a no-op edit.
+    const POLICY: &str = r#"{"enabled":true,"plan":{"main":"5m"},"metered":{"main":"1h"}}"#;
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
         respond: json_200(),
@@ -331,9 +378,10 @@ async fn a_metered_write_takes_the_metered_set_and_a_plan_write_the_plan_set() {
     assert_eq!(resp.status(), 200);
     assert_eq!(
         markers(&up.requests()[0].body),
-        vec![r#"{"type":"ephemeral"}"#.to_string(); 3],
-        "an api_key write pays, so the metered set's five minutes applies"
+        vec![r#"{"type":"ephemeral","ttl":"1h"}"#.to_string(); 3],
+        "an api_key write pays, so the metered set's hour rewrites the fixture's bare markers"
     );
+    assert_eq!(outcome(&resp).cache_ttl_ms, Some(3_600_000));
 
     let oh = harness(&up, &[oauth("o", OA, 0)], policy(POLICY)).await;
     let req = request_from_fixture(
@@ -345,9 +393,10 @@ async fn a_metered_write_takes_the_metered_set_and_a_plan_write_the_plan_set() {
     assert_eq!(resp.status(), 200);
     assert_eq!(
         markers(&up.requests()[1].body),
-        vec![r#"{"type":"ephemeral","ttl":"1h"}"#.to_string(); 3],
-        "an oauth account on plan quota reads the plan set's hour"
+        vec![r#"{"type":"ephemeral"}"#.to_string(); 3],
+        "an oauth account on plan quota reads the plan set's five minutes, stripping the fixture's hour"
     );
+    assert_eq!(outcome(&resp).cache_ttl_ms, Some(300_000));
     up.shutdown().await;
 }
 
@@ -582,45 +631,6 @@ async fn a_refused_extended_ttl_beta_reverts_the_body_to_five_minutes_and_stays_
         .iter()
         .any(|b| b == EXTENDED_TTL_BETA));
 
-    up.shutdown().await;
-}
-
-#[tokio::test]
-async fn the_metered_value_applies_on_an_api_key_account_whatever_its_overage_state() {
-    const POLICY: &str = r#"{"enabled":true,"metered":{"main":"5m"},"plan":{"main":"1h"}}"#;
-
-    let up = FakeUpstream::start(vec![Rule {
-        path_prefix: "/v1/messages".into(),
-        respond: json_200(),
-    }])
-    .await;
-    let h = harness(&up, &[api_key("acct", A, 0)], policy(POLICY)).await;
-    let req = request_from_fixture(
-        inference_head(FixtureKind::ApiKey),
-        body(BodyFixture::ApiKey),
-        KEY,
-    );
-    let resp = h.app.clone().oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), 200);
-    assert_eq!(
-        markers(&up.requests()[0].body),
-        vec![r#"{"type":"ephemeral"}"#.to_string(); 3],
-        "an api_key account pays for every write, so the metered set applies with no overage evidence"
-    );
-
-    let oh = harness(&up, &[oauth("o", OA, 0)], policy(POLICY)).await;
-    let req = request_from_fixture(
-        inference_head(FixtureKind::OauthNonFirstParty),
-        body(BodyFixture::Oauth),
-        KEY,
-    );
-    let resp = oh.app.clone().oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), 200);
-    assert_eq!(
-        markers(&up.requests()[1].body),
-        vec![r#"{"type":"ephemeral","ttl":"1h"}"#.to_string(); 3],
-        "an oauth account with no overage evidence reads main"
-    );
     up.shutdown().await;
 }
 

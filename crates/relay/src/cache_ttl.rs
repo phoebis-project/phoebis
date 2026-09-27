@@ -316,7 +316,7 @@ mod tests {
     fn the_metered_set_prices_a_money_write_and_the_plan_set_the_rest() {
         let policy = CacheTtlPolicy::parse(&serde_json::json!({
             "enabled": true,
-            "plan": { "main": "1h", "subagent": "5m", "models": [{ "model": "claude-haiku-4-5-20251001", "main": "5m", "subagent": "1h" }] },
+            "plan": { "main": "1h", "subagent": "5m", "models": [{ "model": "claude-haiku-4-5-20251001", "main": "1h", "subagent": "1h" }] },
             "metered": { "main": "5m", "subagent": "1h" },
         }))
         .unwrap();
