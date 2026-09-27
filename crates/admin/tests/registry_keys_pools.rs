@@ -1615,6 +1615,31 @@ async fn a_cache_ttl_patch_with_an_unknown_field_is_refused() {
 }
 
 #[tokio::test]
+async fn a_member_with_an_unknown_field_is_refused_rather_than_silently_dropped() {
+    let (app, _up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    post(
+        &app,
+        "/admin/pools",
+        r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"business","priority":0}]}"#,
+        Some(&cookie),
+    )
+    .await;
+    let refused = patch(
+        &app,
+        "/admin/pools/main",
+        r#"{"members":[{"account_id":"business","priority":0,"budgetUsd":50.0}]}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(
+        refused.status(),
+        400,
+        "a misspelt budget key must not silently clear the member's budget"
+    );
+}
+
+#[tokio::test]
 async fn a_key_created_again_under_a_used_id_answers_the_stamped_generation() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("router.sqlite");
@@ -1978,11 +2003,10 @@ async fn a_pool_accepts_its_affinity_and_quota_fields_and_a_members_budget() {
             .is_some_and(|s| s > 0.0)
     })
     .await;
-    assert!(
-        spent["pools"][0]["members"][0]["period_end"]
-            .as_i64()
-            .is_some_and(|p| p > common::NOW),
-        "the period end is the budget period's own boundary, ahead of now"
+    assert_eq!(
+        spent["pools"][0]["members"][0]["period_end"].as_i64(),
+        Some(2_678_400_000),
+        "the period end is the calendar month's own boundary at the fixture's clock"
     );
     let patched = json(
         patch(
@@ -2051,6 +2075,121 @@ async fn a_pool_accepts_its_affinity_and_quota_fields_and_a_members_budget() {
         assert_eq!(refused.status(), 400, "{body}");
         assert_eq!(json(refused).await["error"].as_str(), Some(message));
     }
+    let via_members = json(
+        put(
+            app,
+            "/admin/pools/main/members",
+            r#"{"members":[{"account_id":"business","priority":0,"budget_usd":20.0,"budget_period":"month"}]}"#,
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        (
+            via_members["members"][0]["budget_usd"].as_f64(),
+            via_members["members"][0]["budget_period"].as_str(),
+        ),
+        (Some(20.0), Some("month")),
+        "PUT .../members carries a budget the same way a PATCH does"
+    );
+    let bad_budget = put(
+        app,
+        "/admin/pools/main/members",
+        r#"{"members":[{"account_id":"business","priority":0,"budget_usd":-1}]}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(bad_budget.status(), 400);
+    assert_eq!(
+        json(bad_budget).await["error"].as_str(),
+        Some("budget_usd is above 0")
+    );
+    let cleared = json(
+        put(
+            app,
+            "/admin/pools/main/members",
+            r#"{"members":[{"account_id":"business","priority":0}]}"#,
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        (
+            cleared["members"][0]["budget_usd"].as_f64(),
+            cleared["members"][0]["budget_period"].as_str(),
+        ),
+        (None, Some("month")),
+        "a member list is a replacement, so an absent budget clears the stored one"
+    );
+}
+
+#[tokio::test]
+async fn a_member_at_its_budget_reads_ineligible_and_its_lone_pool_reads_exhausted() {
+    use phoebis_ledger::{AttemptRecord, Record, RequestRecord};
+    use common::{generation, wait_json};
+
+    let parts = common::admin_parts_full().await;
+    let app = &parts.app;
+    let cookie = login(app, "admin-secret").await;
+    post(
+        app,
+        "/admin/pools",
+        r#"{"id":"main","label":"Main","strategy":"priority",
+            "members":[{"account_id":"direct","priority":0,"budget_usd":0.0001,"budget_period":"month"}]}"#,
+        Some(&cookie),
+    )
+    .await;
+    post(
+        app,
+        "/admin/keys",
+        r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
+        Some(&cookie),
+    )
+    .await;
+    let key_generation = generation(&parts.store, "desktop");
+    // A tiny real budget against a normally priced attempt, so the spend reaches it without a contrived cost.
+    parts.ledger.record(Record::Request {
+        request: RequestRecord {
+            id: "r1".into(),
+            received_at: common::NOW,
+            key_id: Some("desktop".into()),
+            key_generation,
+            pool_id: Some("main".into()),
+            session_id: Some("s1".into()),
+            model: "claude-sonnet-5".into(),
+            canonical_model: "claude-sonnet-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            outcome: "succeeded".into(),
+            attempts: 1,
+            ..Default::default()
+        },
+        attempts: vec![AttemptRecord {
+            request_id: "r1".into(),
+            attempt: 1,
+            account_id: "direct".into(),
+            account_kind: "api_key".into(),
+            outcome: "succeeded".into(),
+            input_tokens: Some(1_000),
+            output_tokens: Some(100),
+            ..Default::default()
+        }],
+        bodies: None,
+    });
+    let spent = wait_json(app, "/admin/pools", &cookie, |v| {
+        v["pools"][0]["members"][0]["eligible"] == "budget"
+    })
+    .await;
+    assert_eq!(
+        (
+            spent["pools"][0]["members"][0]["eligible"].as_str(),
+            spent["pools"][0]["status"].as_str(),
+        ),
+        (Some("budget"), Some("exhausted")),
+        "a member whose spend reached its budget is ineligible, and its only pool reads exhausted"
+    );
 }
 
 #[tokio::test]

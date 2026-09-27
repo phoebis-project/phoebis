@@ -513,14 +513,14 @@ test('an attempt carries the selection trace with its skipped members as named o
 test('request rows fold into analytics groups with the same sums the routes answer', () => {
   const page = d.decodeRequestPage(fixture('requests'));
   const [all] = d.foldGroups(page.requests, 'all');
-  assert.equal(all.requests, 4);
-  assert.equal(all.succeeded, 3);
+  assert.equal(all.requests, 5);
+  assert.equal(all.succeeded, 4);
   assert.equal(all.failed, 1);
-  assert.equal(all.attempts, 5);
+  assert.equal(all.attempts, 6);
   assert.equal(all.failovers, 1);
-  assert.equal(all.tokens.cacheRead, 2000);
-  assert.equal(all.histograms.ttfbMs.reduce((a, b) => a + b, 0), 4);
-  assert.equal(all.cacheMissReasons.none, 4);
+  assert.equal(all.tokens.cacheRead, 2500);
+  assert.equal(all.histograms.ttfbMs.reduce((a, b) => a + b, 0), 5);
+  assert.equal(all.cacheMissReasons.none, 5);
   assert.equal(all.probes.ok, 0);
   const captured = page.requests.find((r) => r.id === 'r-captured');
   const busy = d.foldGroups([{ ...captured, usage: { ...captured.usage, webSearch: 3, webFetch: 1 } }, captured], 'all')[0].tokens;
@@ -712,7 +712,7 @@ test('a session fold keeps two holders of one key id apart and labels the earlie
   const groups = d.foldGroups(rows, 'key');
   assert.deepEqual(
     groups.map((g) => [g.key, g.label, g.requests]),
-    [[`desktop@${live.keyGeneration}`, 'desktop', 3], [`desktop@${earlier.keyGeneration}`, 'desktop (deleted)', 1]],
+    [[`desktop@${live.keyGeneration}`, 'desktop', 4], [`desktop@${earlier.keyGeneration}`, 'desktop (deleted)', 1]],
     'the key a group carries is the lifetime the requests route selects by',
   );
   assert.deepEqual(d.foldGroups([{ ...live, keyGeneration: 0, keyId: null }], 'key').map((g) => [g.key, g.label]), [['-@0', 'unattributed']]);
@@ -727,12 +727,12 @@ test('a session view folds every page the cursor names', () => {
   const load = async (cursor) => { calls += 1; return cursor === undefined ? pages[0] : pages[1]; };
   return d.loadSessionRequests(load, 20).then(({ partial, requests }) => {
     assert.equal(calls, 2);
-    assert.equal(requests.length, 4, 'both pages folded');
+    assert.equal(requests.length, 5, 'both pages folded');
     assert.equal(partial, false);
     return d.loadSessionRequests(async () => ({ nextCursor: 'more', requests: page.requests }), 2);
   }).then(({ partial, requests }) => {
     assert.equal(partial, true, 'the page bound marks the result partial');
-    assert.equal(requests.length, 8);
+    assert.equal(requests.length, 10);
   });
 });
 
@@ -745,7 +745,7 @@ test('the dashboard reads the live pin count the route answers beside the rollup
 test('the dashboard, sessions, recipes, and overview decode', () => {
   const o = d.decodeDashboard(fixture('dashboard'));
   assert.equal(o.hourly.length, 24);
-  assert.equal(o.requests24h, 4);
+  assert.equal(o.requests24h, 5);
   const sessions = fixture('sessions').sessions.map(d.decodeSession);
   const s1 = sessions.find((s) => s.sessionId === 's1');
   assert.ok(sessions.every((s) => typeof s.keyGeneration === 'number' && typeof s.historical === 'boolean'), 'every session says which generation of its key owns it and whether that holder is gone');

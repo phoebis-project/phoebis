@@ -1,6 +1,7 @@
 //! Admin API: cookie sessions, account views, OAuth pairing, and usage.
 
-// The request and pool row literals list enough fields that `json!`'s macro recursion outgrows the default.
+// The request row literal in `requests.rs::request_summary` lists enough fields that `json!`'s macro
+// recursion outgrows the default.
 #![recursion_limit = "256"]
 
 mod accounts;

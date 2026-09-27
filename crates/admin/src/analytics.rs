@@ -166,13 +166,22 @@ pub(crate) async fn breakdown(
 
 pub(crate) async fn budgets(State(state): State<Arc<AdminState>>) -> Response {
     let snapshot = state.router.snapshot();
-    let spends = state.router.member_spends().await.unwrap_or_default();
+    let Ok(spends) = state.router.member_spends().await else {
+        return failure(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the router is not available",
+        );
+    };
     let mut members: Vec<Value> = snapshot
         .budgeted_members()
         .map(|m| {
-            let spend = spends
-                .iter()
-                .find(|s| s.pool_id == m.pool_id && s.account_id == m.account_id);
+            let spend = crate::routes::member_spend_of(
+                &spends,
+                &m.pool_id,
+                &m.account_id,
+                m.budget_usd,
+                m.budget_period,
+            );
             json!({
                 "pool_id": m.pool_id, "account_id": m.account_id,
                 "budget_usd": m.budget_usd, "budget_period": m.budget_period.as_str(),

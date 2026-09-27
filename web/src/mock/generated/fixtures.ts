@@ -1531,7 +1531,16 @@ export const FIXTURES: Record<string, Fixture> = {
     "body": {
       "from": -85400000,
       "to": 1000000,
-      "rows": []
+      "rows": [
+        {
+          "rung": "content",
+          "placements": 1,
+          "hits": 1,
+          "hit_share": 1,
+          "cache_read_tokens": 500,
+          "promised_tokens": 500
+        }
+      ]
     }
   },
   "analytics_rewrites": {
@@ -2803,11 +2812,11 @@ export const FIXTURES: Record<string, Fixture> = {
   "dashboard": {
     "route": "GET /admin/dashboard",
     "body": {
-      "requests_24h": 4,
-      "tokens_24h": 7200,
-      "tokens_cached_24h": 2000,
-      "cost_24h": 0.018000000000000002,
-      "error_rate_24h": 0.25,
+      "requests_24h": 5,
+      "tokens_24h": 9000,
+      "tokens_cached_24h": 2500,
+      "cost_24h": 0.0216,
+      "error_rate_24h": 0.2,
       "top_error_code": "upstream_error",
       "hourly": [
         {
@@ -2973,19 +2982,130 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "at": 0,
-          "cost": 0.0072,
+          "cost": 0.0108,
           "errors": 1,
-          "requests": 2,
-          "tokens": 3600
+          "requests": 3,
+          "tokens": 5400
         }
       ],
       "recent": [
+        {
+          "id": "r-placed",
+          "at": 970000,
+          "finished_at": 970900,
+          "key_id": "desktop",
+          "key_generation": 1790534470261,
+          "pool_id": "main",
+          "account_id": "direct",
+          "session_id": "s3",
+          "agent_id": "main",
+          "parent_agent_id": null,
+          "model": "claude-sonnet-5",
+          "canonical_model": "claude-sonnet-5",
+          "kind": "inference",
+          "origin": "client",
+          "transport": "sse",
+          "request_class": null,
+          "forked_from": null,
+          "fork_depth": null,
+          "status": 200,
+          "outcome": "succeeded",
+          "error_code": null,
+          "client_drift": null,
+          "ttfb_ms": 120,
+          "ttft_ms": 300,
+          "duration_ms": 900,
+          "request_bytes": null,
+          "response_bytes": null,
+          "kept_warm": false,
+          "captured_bodies": false,
+          "request_truncated": false,
+          "response_truncated": false,
+          "user_agent": "claude-cli/2.1.269 (external, cli)",
+          "client": "claude-code/cli",
+          "agent_type": null,
+          "compaction": null,
+          "context_compacted": null,
+          "prev_tool_ms": null,
+          "turn_origin": null,
+          "shape": {
+            "context_edits": [
+              "clear_thinking_20251015"
+            ],
+            "effort": "high",
+            "max_tokens": 32000,
+            "message_count": 1,
+            "requested_service_tier": null,
+            "requested_speed": null,
+            "system_blocks": 4,
+            "temperature": null,
+            "thinking_budget": 31999,
+            "thinking_type": "enabled",
+            "tool_count": 12
+          },
+          "usage": {
+            "cache_read": 500,
+            "cache_write_1h": 0,
+            "cache_write_5m": 200,
+            "input": 1000,
+            "output": 100,
+            "thinking": 40,
+            "web_fetch": 0,
+            "web_search": 0
+          },
+          "cost_usd": 0.0036,
+          "attempts": [
+            {
+              "index": 1,
+              "account_id": "direct",
+              "account_kind": "oauth",
+              "outcome": "succeeded",
+              "upstream_status": 200,
+              "upstream_request_id": null,
+              "started_at": 970000,
+              "duration_ms": 400,
+              "ttfb_ms": 120,
+              "ttft_ms": null,
+              "cache_miss_reason": "none",
+              "service_tier": null,
+              "client_drift": null,
+              "cooldown_set": null,
+              "windows": [
+                {
+                  "id": "5h",
+                  "utilization": 0.4,
+                  "resets_at": 4570000
+                }
+              ],
+              "overage_in_use": null,
+              "estimated_usd": 0.0036,
+              "pricing_version": "2026-09-08",
+              "selection": {
+                "placement": {
+                  "rung": "content",
+                  "depth": 2,
+                  "prefix_tokens": 500
+                }
+              },
+              "response": {
+                "cleared_input_tokens": null,
+                "inference_geo": "us",
+                "refusal_category": null,
+                "refusal_recommended_model": null,
+                "served_model": null,
+                "speed": "standard",
+                "stop_reason": "end_turn",
+                "stop_sequence": null
+              }
+            }
+          ]
+        },
         {
           "id": "r-captured",
           "at": 940000,
           "finished_at": 940900,
           "key_id": "desktop",
-          "key_generation": 1790531711817,
+          "key_generation": 1790534470261,
           "pool_id": "main",
           "account_id": "business",
           "session_id": "s1",
@@ -2997,8 +3117,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "origin": "client",
           "transport": "sse",
           "request_class": null,
-          "forked_from": null,
-          "fork_depth": null,
+          "forked_from": "s0",
+          "fork_depth": 2,
           "status": 200,
           "outcome": "succeeded",
           "error_code": null,
@@ -3090,7 +3210,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "at": 880000,
           "finished_at": 880900,
           "key_id": "desktop",
-          "key_generation": 1790531711817,
+          "key_generation": 1790534470261,
           "pool_id": "main",
           "account_id": "business",
           "session_id": "s2",
@@ -3300,7 +3420,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "at": -2600000,
           "finished_at": -2599100,
           "key_id": "desktop",
-          "key_generation": 1790531711817,
+          "key_generation": 1790534470261,
           "pool_id": "main",
           "account_id": "business",
           "session_id": "s1",
@@ -5196,11 +5316,122 @@ export const FIXTURES: Record<string, Fixture> = {
     "body": {
       "requests": [
         {
+          "id": "r-placed",
+          "at": 970000,
+          "finished_at": 970900,
+          "key_id": "desktop",
+          "key_generation": 1790534470261,
+          "pool_id": "main",
+          "account_id": "direct",
+          "session_id": "s3",
+          "agent_id": "main",
+          "parent_agent_id": null,
+          "model": "claude-sonnet-5",
+          "canonical_model": "claude-sonnet-5",
+          "kind": "inference",
+          "origin": "client",
+          "transport": "sse",
+          "request_class": null,
+          "forked_from": null,
+          "fork_depth": null,
+          "status": 200,
+          "outcome": "succeeded",
+          "error_code": null,
+          "client_drift": null,
+          "ttfb_ms": 120,
+          "ttft_ms": 300,
+          "duration_ms": 900,
+          "request_bytes": null,
+          "response_bytes": null,
+          "kept_warm": false,
+          "captured_bodies": false,
+          "request_truncated": false,
+          "response_truncated": false,
+          "user_agent": "claude-cli/2.1.269 (external, cli)",
+          "client": "claude-code/cli",
+          "agent_type": null,
+          "compaction": null,
+          "context_compacted": null,
+          "prev_tool_ms": null,
+          "turn_origin": null,
+          "shape": {
+            "context_edits": [
+              "clear_thinking_20251015"
+            ],
+            "effort": "high",
+            "max_tokens": 32000,
+            "message_count": 1,
+            "requested_service_tier": null,
+            "requested_speed": null,
+            "system_blocks": 4,
+            "temperature": null,
+            "thinking_budget": 31999,
+            "thinking_type": "enabled",
+            "tool_count": 12
+          },
+          "usage": {
+            "cache_read": 500,
+            "cache_write_1h": 0,
+            "cache_write_5m": 200,
+            "input": 1000,
+            "output": 100,
+            "thinking": 40,
+            "web_fetch": 0,
+            "web_search": 0
+          },
+          "cost_usd": 0.0036,
+          "attempts": [
+            {
+              "index": 1,
+              "account_id": "direct",
+              "account_kind": "oauth",
+              "outcome": "succeeded",
+              "upstream_status": 200,
+              "upstream_request_id": null,
+              "started_at": 970000,
+              "duration_ms": 400,
+              "ttfb_ms": 120,
+              "ttft_ms": null,
+              "cache_miss_reason": "none",
+              "service_tier": null,
+              "client_drift": null,
+              "cooldown_set": null,
+              "windows": [
+                {
+                  "id": "5h",
+                  "utilization": 0.4,
+                  "resets_at": 4570000
+                }
+              ],
+              "overage_in_use": null,
+              "estimated_usd": 0.0036,
+              "pricing_version": "2026-09-08",
+              "selection": {
+                "placement": {
+                  "rung": "content",
+                  "depth": 2,
+                  "prefix_tokens": 500
+                }
+              },
+              "response": {
+                "cleared_input_tokens": null,
+                "inference_geo": "us",
+                "refusal_category": null,
+                "refusal_recommended_model": null,
+                "served_model": null,
+                "speed": "standard",
+                "stop_reason": "end_turn",
+                "stop_sequence": null
+              }
+            }
+          ]
+        },
+        {
           "id": "r-captured",
           "at": 940000,
           "finished_at": 940900,
           "key_id": "desktop",
-          "key_generation": 1790531711817,
+          "key_generation": 1790534470261,
           "pool_id": "main",
           "account_id": "business",
           "session_id": "s1",
@@ -5212,8 +5443,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "origin": "client",
           "transport": "sse",
           "request_class": null,
-          "forked_from": null,
-          "fork_depth": null,
+          "forked_from": "s0",
+          "fork_depth": 2,
           "status": 200,
           "outcome": "succeeded",
           "error_code": null,
@@ -5305,7 +5536,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "at": 880000,
           "finished_at": 880900,
           "key_id": "desktop",
-          "key_generation": 1790531711817,
+          "key_generation": 1790534470261,
           "pool_id": "main",
           "account_id": "business",
           "session_id": "s2",
@@ -5515,7 +5746,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "at": -2600000,
           "finished_at": -2599100,
           "key_id": "desktop",
-          "key_generation": 1790531711817,
+          "key_generation": 1790534470261,
           "pool_id": "main",
           "account_id": "business",
           "session_id": "s1",

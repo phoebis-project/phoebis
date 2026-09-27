@@ -24,6 +24,7 @@ use crate::AdminState;
 const ACTOR: &str = "admin";
 
 #[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 struct MemberInput {
     account_id: String,
     #[serde(default)]
@@ -660,8 +661,9 @@ pub(crate) async fn set_members(
     }
 }
 
-/// One member row. Its own function, beside the pool's own `json!` call, because nested inline the two
-/// overflow the macro's expansion depth.
+/// One member row. Its own function, beside the pool's own `json!` call, for the same reason `requests.rs`
+/// keeps `attempt_json` beside `request_summary`: one row's worth of fields reads clearly on its own rather
+/// than nested inline inside the pool's larger literal.
 fn member_json(
     m: &PoolMember,
     accounts: &[phoebis_store::AccountRow],
@@ -675,9 +677,13 @@ fn member_json(
             phoebis_store::AccountKind::ApiKey => "api_key",
             phoebis_store::AccountKind::Oauth => "oauth",
         });
-    let spend = spends
-        .iter()
-        .find(|s| s.pool_id == m.pool_id && s.account_id == m.account_id);
+    let spend = crate::routes::member_spend_of(
+        spends,
+        &m.pool_id,
+        &m.account_id,
+        m.budget_usd,
+        m.budget_period,
+    );
     json!({
         "account_id": m.account_id, "priority": m.priority, "eligible": eligible,
         "kind": kind, "budget_usd": m.budget_usd, "budget_period": m.budget_period.as_str(),
@@ -736,9 +742,9 @@ pub(crate) async fn pool_json(state: &AdminState, row: &PoolRow) -> Result<Value
     let snapshot = state.router.snapshot();
     let fallback_ms = (state.settings.cooldown_fallback_seconds * 1_000) as i64;
     // Why routing would refuse a member, mirroring the selector's `obstacle`: not enabled or not ready, a
-    // subscription past its saved end, an account-wide cooldown, or overage the pool's policy admits no substitute
-    // for. `None` is eligible. An ended subscription reads `unavailable` as a paused account does: both stay
-    // skipped until an operator acts.
+    // subscription past its saved end, an account-wide cooldown, overage the pool's policy admits no substitute
+    // for, or a budget the member's own spend has reached. `None` is eligible. An ended subscription reads
+    // `unavailable` as a paused account does: both stay skipped until an operator acts.
     let ineligible = |m: &PoolMember| -> Option<&'static str> {
         let ready = accounts
             .iter()
@@ -762,6 +768,20 @@ pub(crate) async fn pool_json(state: &AdminState, row: &PoolRow) -> Result<Value
                 .any(|(id, e)| *id == m.account_id && e.stands(now, fallback_ms))
         {
             return Some("overage");
+        }
+        if let (Some(budget), Some(spend)) = (
+            m.budget_usd,
+            crate::routes::member_spend_of(
+                &spends,
+                &row.id,
+                &m.account_id,
+                m.budget_usd,
+                m.budget_period,
+            ),
+        ) {
+            if spend.spent_usd >= budget {
+                return Some("budget");
+            }
         }
         None
     };

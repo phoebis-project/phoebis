@@ -1892,8 +1892,25 @@ async fn a_request_answers_its_class_and_each_attempts_trace_with_skipped_as_nam
 async fn budgets_route_answers_a_members_spend_against_its_budget() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
-    post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority",
-        "members":[{"account_id":"business","priority":0,"budget_usd":50.0,"budget_period":"month"}]}"#, Some(&cookie)).await;
+    // "direct" rides both pools: unbudgeted in "main" (proving the route excludes it there) and budgeted in
+    // "aux" (proving a second row sorts by pool ahead of "main").
+    post(
+        &parts.app,
+        "/admin/pools",
+        r#"{"id":"main","label":"Main","strategy":"priority",
+        "members":[{"account_id":"business","priority":0,"budget_usd":50.0,"budget_period":"month"},
+                   {"account_id":"direct","priority":1}]}"#,
+        Some(&cookie),
+    )
+    .await;
+    post(
+        &parts.app,
+        "/admin/pools",
+        r#"{"id":"aux","label":"Aux","strategy":"priority",
+        "members":[{"account_id":"direct","priority":0,"budget_usd":5.0,"budget_period":"day"}]}"#,
+        Some(&cookie),
+    )
+    .await;
     // A real priced attempt, so the writer's own refresh reports a real spend; the route's job is reading it
     // back, not computing it.
     parts
@@ -1907,7 +1924,23 @@ async fn budgets_route_answers_a_members_spend_against_its_budget() {
             .any(|m| m["spent_usd"].as_f64().is_some_and(|s| s > 0.0))
     })
     .await;
-    let member = &budgets["members"][0];
+    let members = budgets["members"].as_array().unwrap();
+    assert_eq!(
+        members.len(),
+        2,
+        "direct's unbudgeted membership in main is excluded; only the two budgeted rows answer: {budgets}"
+    );
+    assert_eq!(
+        (
+            members[0]["pool_id"].as_str(),
+            members[0]["account_id"].as_str(),
+            members[0]["budget_usd"].as_f64(),
+            members[0]["budget_period"].as_str(),
+        ),
+        (Some("aux"), Some("direct"), Some(5.0), Some("day")),
+        "sorted by pool id ahead of main"
+    );
+    let member = &members[1];
     assert_eq!(
         (
             member["pool_id"].as_str(),
@@ -1918,11 +1951,23 @@ async fn budgets_route_answers_a_members_spend_against_its_budget() {
         (Some("main"), Some("business"), Some(50.0), Some("month")),
         "a budgeted member names its pool, account, and budget"
     );
-    assert!(
-        member["period_end"]
-            .as_i64()
-            .is_some_and(|p| p > common::NOW),
-        "the period end is the budget period's own boundary, ahead of now"
+    assert_eq!(
+        member["period_end"].as_i64(),
+        Some(2_678_400_000),
+        "the period end is the calendar month's own boundary at the fixture's clock"
+    );
+}
+
+#[tokio::test]
+async fn budgets_route_refuses_once_the_router_is_gone() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    parts.router.shutdown().await.unwrap();
+    let refused = get(&parts.app, "/admin/analytics/budgets", Some(&cookie)).await;
+    assert_eq!(refused.status(), 503);
+    assert_eq!(
+        json(refused).await["error"].as_str(),
+        Some("the router is not available")
     );
 }
 
@@ -1930,13 +1975,41 @@ async fn budgets_route_answers_a_members_spend_against_its_budget() {
 async fn placements_route_answers_the_seeded_ledgers_rows_by_rung() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
-    let plant = |id: &str, at: i64, rung: &str, prefix_tokens: u64, cache_read_tokens: u64| {
+    post(
+        &parts.app,
+        "/admin/pools",
+        r#"{"id":"main","label":"Main","strategy":"priority"}"#,
+        Some(&cookie),
+    )
+    .await;
+    post(
+        &parts.app,
+        "/admin/keys",
+        r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
+        Some(&cookie),
+    )
+    .await;
+    post(
+        &parts.app,
+        "/admin/keys",
+        r#"{"id":"other","label":"Other","pool_id":"main"}"#,
+        Some(&cookie),
+    )
+    .await;
+    let generation_of = |key: &str| common::generation(&parts.store, key);
+    let plant = |id: &str,
+                 key: &str,
+                 at: i64,
+                 rung: &str,
+                 prefix_tokens: u64,
+                 cache_read_tokens: u64| {
         Record::Request {
             request: RequestRecord {
                 id: id.into(),
                 received_at: at,
                 finished_at: Some(at + 500),
-                key_id: Some("desktop".into()),
+                key_id: Some(key.into()),
+                key_generation: generation_of(key),
                 pool_id: Some("main".into()),
                 canonical_model: "claude-sonnet-5".into(),
                 model: "claude-sonnet-5".into(),
@@ -1961,13 +2034,42 @@ async fn placements_route_answers_the_seeded_ledgers_rows_by_rung() {
             bodies: None,
         }
     };
-    parts
-        .ledger
-        .record(plant("p-content", common::NOW - 5_000, "content", 500, 500));
-    parts
-        .ledger
-        .record(plant("p-static", common::NOW - 4_000, "static", 200, 50));
-    for id in ["p-content", "p-static"] {
+    // A hit and a miss on the same rung, so the ratio the route answers is not a coincidence of the seed:
+    // inverting or fixing `hit_share` at either extreme would still pass a seed of one hit alone.
+    parts.ledger.record(plant(
+        "p-content",
+        "desktop",
+        common::NOW - 5_000,
+        "content",
+        500,
+        500,
+    ));
+    parts.ledger.record(plant(
+        "p-content-miss",
+        "desktop",
+        common::NOW - 4_500,
+        "content",
+        500,
+        200,
+    ));
+    parts.ledger.record(plant(
+        "p-static",
+        "desktop",
+        common::NOW - 4_000,
+        "static",
+        200,
+        50,
+    ));
+    // Under a different key, so the `keys` filter has something of its own to exclude.
+    parts.ledger.record(plant(
+        "p-other-key",
+        "other",
+        common::NOW - 3_000,
+        "with_main",
+        0,
+        10,
+    ));
+    for id in ["p-content", "p-content-miss", "p-static", "p-other-key"] {
         fake_upstream::wait_for_async(Duration::from_secs(5), || async {
             parts.db.request(id).await.unwrap()
         })
@@ -1982,33 +2084,54 @@ async fn placements_route_answers_the_seeded_ledgers_rows_by_rung() {
         .await,
     )
     .await;
-    let row = |rung: &str| {
+    let row = |placed: &serde_json::Value, rung: &str| {
         placed["rows"]
             .as_array()
             .unwrap()
             .iter()
             .find(|r| r["rung"] == rung)
-            .unwrap()
-            .clone()
+            .cloned()
     };
     assert_eq!(
         (
-            row("content")["placements"].as_u64(),
-            row("content")["hits"].as_u64(),
-            row("content")["hit_share"].as_f64(),
-            row("content")["cache_read_tokens"].as_u64(),
-            row("content")["promised_tokens"].as_u64(),
+            row(&placed, "content").as_ref().unwrap()["placements"].as_u64(),
+            row(&placed, "content").as_ref().unwrap()["hits"].as_u64(),
+            row(&placed, "content").as_ref().unwrap()["hit_share"].as_f64(),
+            row(&placed, "content").as_ref().unwrap()["cache_read_tokens"].as_u64(),
+            row(&placed, "content").as_ref().unwrap()["promised_tokens"].as_u64(),
         ),
-        (Some(1), Some(1), Some(1.0), Some(500), Some(500)),
-        "a content placement is a hit once the response reads at least the promised prefix"
+        (Some(2), Some(1), Some(0.5), Some(700), Some(1_000)),
+        "one hit among two placements reads the true ratio, not the extremes a single-row seed cannot tell apart"
     );
     assert_eq!(
         (
-            row("static")["placements"].as_u64(),
-            row("static")["hits"].as_u64(),
-            row("static")["hit_share"].as_f64(),
+            row(&placed, "static").as_ref().unwrap()["placements"].as_u64(),
+            row(&placed, "static").as_ref().unwrap()["hits"].as_u64(),
+            row(&placed, "static").as_ref().unwrap()["hit_share"].as_f64(),
         ),
         (Some(1), Some(1), Some(1.0)),
         "a static placement is a hit on any read at all"
+    );
+    assert!(
+        row(&placed, "with_main").is_some(),
+        "the other key's placement is answered without a keys filter"
+    );
+    let filtered = json(
+        get(
+            &parts.app,
+            "/admin/analytics/placements?range=24h&keys=desktop",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert!(
+        row(&filtered, "with_main").is_none(),
+        "a keys filter naming desktop excludes the other key's placement"
+    );
+    assert_eq!(
+        row(&filtered, "content").as_ref().unwrap()["placements"].as_u64(),
+        Some(2),
+        "desktop's own rows still answer under the filter"
     );
 }

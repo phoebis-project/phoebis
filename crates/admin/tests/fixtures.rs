@@ -211,7 +211,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             trial_ends_at: None,
         },
     ).unwrap();
-    post(app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"pace","affinity_ttl_seconds":600,"members":[{"account_id":"business","priority":0,"budget_usd":50.0,"budget_period":"month"},{"account_id":"direct","priority":1}],"keepalive":{"enabled":true,"probe_cost_cap_usd_per_day":4},"body_capture_hours":24,"model_rules":[{"pattern":"claude-haiku-*","not":true}]}"#, Some(&cookie)).await;
+    post(app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"pace","affinity_ttl_seconds":600,"members":[{"account_id":"business","priority":0},{"account_id":"direct","priority":1,"budget_usd":50.0,"budget_period":"month"}],"keepalive":{"enabled":true,"probe_cost_cap_usd_per_day":4},"body_capture_hours":24,"model_rules":[{"pattern":"claude-haiku-*","not":true}]}"#, Some(&cookie)).await;
     let created = json(post(app, "/admin/keys", r#"{"id":"desktop","label":"Desktop","pool_id":"main","model_rules":[{"pattern":"claude-opus-*","not":true}],"model_rules_mode":"extend"}"#, Some(&cookie)).await).await;
     let key_secret = created["secret"]
         .as_str()
@@ -437,6 +437,8 @@ async fn every_route_is_captured_and_holds_its_shape() {
     parts.ledger.record(Record::Request {
         request: RequestRecord {
             bodies_captured: true,
+            forked_from: Some("s0".into()),
+            fork_depth: Some(2),
             ..request(
                 key_generation,
                 "r-captured",
@@ -485,6 +487,26 @@ async fn every_route_is_captured_and_holds_its_shape() {
             "upstream_error",
             now - 120_000,
         )],
+        bodies: None,
+    });
+    // A row whose serving attempt carries a placement, so the placements route has a rung to answer rather
+    // than an empty list.
+    parts.ledger.record(Record::Request {
+        request: request(
+            key_generation,
+            "r-placed",
+            now - 30_000,
+            "desktop",
+            "s3",
+            200,
+            "succeeded",
+        ),
+        attempts: vec![AttemptRecord {
+            selection: Some(
+                r#"{"placement":{"rung":"content","depth":2,"prefix_tokens":500}}"#.into(),
+            ),
+            ..attempt("r-placed", 1, "direct", 200, "succeeded", now - 30_000)
+        }],
         bodies: None,
     });
     // A row an earlier key under the same id spent, so the key grouping answers the deleted holder beside
@@ -560,7 +582,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
         }));
     let prices = FakeUpstream::start_plain(vec![Rule { path_prefix: "/prices.json".into(), respond: Respond::Json { status: 200, headers: vec![], body: br#"{"claude-sonnet-5":{"input_cost_per_token":2e-06,"output_cost_per_token":1e-05,"cache_read_input_token_cost":2e-07,"cache_creation_input_token_cost":2.5e-06,"cache_creation_input_token_cost_above_1hr":4e-06}}"#.to_vec() } }]).await;
     let ready = wait_json(app, "/admin/requests", &cookie, |v| {
-        v["requests"].as_array().unwrap().len() == 4
+        v["requests"].as_array().unwrap().len() == 5
     })
     .await;
     hold(&planted, "requests", "GET /admin/requests", ready);

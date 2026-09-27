@@ -22,9 +22,10 @@ use phoebis_oauth::{
     PairingError, PairingSession, PairingStatus, PendingIdentity, ProfileResponse, UsageSnapshot,
 };
 use phoebis_relay::DiscoveryError;
-use phoebis_routing::{OverageEvidence, ReloadError};
+use phoebis_routing::{MemberSpend, OverageEvidence, ReloadError};
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, CooldownRow, Identity, NewBundle, PoolMember, StoreError,
+    AccountKind, AccountRow, AccountState, BudgetPeriod, CooldownRow, Identity, NewBundle,
+    PoolMember, StoreError,
 };
 use phoebis_transport::response::ResponseHead;
 use serde::Deserialize;
@@ -1243,6 +1244,22 @@ pub(crate) fn failure(status: StatusCode, message: &str) -> Response {
     (status, Json(json!({ "error": message }))).into_response()
 }
 
+/// The one report matching a budgeted member's pool, account and configured period; `None` without a budget
+/// (a spend against no budget is not this member's row) and `None` for a report the member's own period has
+/// moved past (a stale spend belongs to the period it was summed over, not the one now configured).
+pub(crate) fn member_spend_of<'a>(
+    spends: &'a [MemberSpend],
+    pool_id: &str,
+    account_id: &str,
+    budget_usd: Option<f64>,
+    budget_period: BudgetPeriod,
+) -> Option<&'a MemberSpend> {
+    budget_usd?;
+    spends
+        .iter()
+        .find(|s| s.pool_id == pool_id && s.account_id == account_id && s.period == budget_period)
+}
+
 /// Tells an absent field from an explicit `null`, so a `PATCH` can clear a nullable column.
 pub(crate) fn double_option<'de, T: serde::Deserialize<'de>, D: serde::Deserializer<'de>>(
     d: D,
@@ -1276,7 +1293,9 @@ fn set_cookie(status: StatusCode, attributes: &str) -> Response {
 
 #[cfg(test)]
 mod tests {
-    use super::same_authority;
+    use super::{member_spend_of, same_authority};
+    use phoebis_routing::MemberSpend;
+    use phoebis_store::BudgetPeriod;
 
     #[test]
     fn same_authority_names_the_requests_own_host_case_insensitively() {
@@ -1286,5 +1305,36 @@ mod tests {
         assert!(!same_authority("null", "localhost:8081"));
         assert!(!same_authority("https://localhost:8081", "localhost"));
         assert!(!same_authority("ftp://localhost:8081", "localhost:8081"));
+    }
+
+    #[test]
+    fn member_spend_of_pairs_by_period_and_skips_an_unbudgeted_member() {
+        let spends = vec![MemberSpend {
+            pool_id: "main".into(),
+            account_id: "a".into(),
+            period: BudgetPeriod::Month,
+            period_start: 0,
+            period_end: 2_678_400_000,
+            spent_usd: 12.5,
+            observed_at: 0,
+        }];
+        assert_eq!(
+            member_spend_of(&spends, "main", "a", Some(50.0), BudgetPeriod::Month)
+                .map(|s| s.spent_usd),
+            Some(12.5),
+            "a matching pool, account and period reads the spend"
+        );
+        assert!(
+            member_spend_of(&spends, "main", "a", Some(50.0), BudgetPeriod::Day).is_none(),
+            "a period the member no longer carries reads null, not the old period's spend"
+        );
+        assert!(
+            member_spend_of(&spends, "main", "a", None, BudgetPeriod::Month).is_none(),
+            "a cleared budget reads null even where a same-period row still matches"
+        );
+        assert!(
+            member_spend_of(&spends, "main", "b", Some(50.0), BudgetPeriod::Month).is_none(),
+            "a different account reads null"
+        );
     }
 }

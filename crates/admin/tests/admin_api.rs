@@ -1113,7 +1113,34 @@ async fn every_session_row_answers_its_fork_members_and_a_forked_session_names_i
             tail_hash: None,
         })
         .unwrap();
-    // The router task loads its pins at spawn, so the pin above needs the store written before this call.
+    // A live pin the ledger has never recorded a request for at all, not merely one older than the cutoff:
+    // `session_identities` reads no time bound, so this row's identity is null because the ledger genuinely
+    // holds nothing, not because of the window.
+    seed.store
+        .upsert_pin(&phoebis_store::PinRow {
+            key_id: "desktop".into(),
+            session_id: "pin-no-request".into(),
+            agent_id: "main".into(),
+            model: "claude-sonnet-5".into(),
+            account_id: "business".into(),
+            epoch: 1,
+            created_at: now - 1_000,
+            last_used_at: now - 1_000,
+            key_generation,
+            incarnation: 1,
+            burn: 1.0,
+            burn_at: Some(now - 1_000),
+            burn_usd: 0.1,
+            last_input_tokens: 100,
+            last_refresh_at: now - 1_000,
+            cache_ttl_ms: 300_000,
+            shed_from: None,
+            shed_at: None,
+            static_hash: None,
+            tail_hash: None,
+        })
+        .unwrap();
+    // The router task loads its pins at spawn, so the pins above need the store written before this call.
     let parts = common::admin_parts_full_on(seed.store.clone()).await;
     parts.clock_cell.store(now, Ordering::SeqCst);
     let cookie = login(&parts.app, "admin-secret").await;
@@ -1159,7 +1186,7 @@ async fn every_session_row_answers_its_fork_members_and_a_forked_session_names_i
     });
 
     let sessions = wait_json(&parts.app, "/admin/sessions", &cookie, |v| {
-        v["sessions"].as_array().unwrap().len() >= 4
+        v["sessions"].as_array().unwrap().len() >= 5
     })
     .await;
     let row = |session: &str| {
@@ -1189,6 +1216,16 @@ async fn every_session_row_answers_its_fork_members_and_a_forked_session_names_i
             "{session}: no fork, so both read null"
         );
     }
+    assert_eq!(
+        (
+            row("pin-no-request")["identified_by"].as_str(),
+            row("pin-no-request")["identity_root"].as_str(),
+            row("pin-no-request")["forked_from"].as_str(),
+            row("pin-no-request")["fork_depth"].as_i64(),
+        ),
+        (None, None, None, None),
+        "a pin the ledger holds no client request for at all reads null on every identity field"
+    );
 }
 
 #[tokio::test]
