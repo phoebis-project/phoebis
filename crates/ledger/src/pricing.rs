@@ -198,12 +198,7 @@ pub fn price_attempts(
     let mut total = CostSplit::default();
     let mut counted = false;
     for a in attempts.iter_mut() {
-        let has_usage = a.input_tokens.is_some()
-            || a.output_tokens.is_some()
-            || a.cache_read_tokens.is_some()
-            || a.cache_write_5m_tokens.is_some()
-            || a.cache_write_1h_tokens.is_some();
-        if !has_usage {
+        if !a.has_usage() {
             continue;
         }
         match table.estimate(

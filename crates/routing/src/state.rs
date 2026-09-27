@@ -957,6 +957,19 @@ impl RoutingState {
             .get(&(pool_id.to_string(), account_id.to_string()))
     }
 
+    /// The member's spend row, only while it still matches the snapshot's current budget and period: between
+    /// a period edit and the next report, a stored row from the old period answers `None` here instead of the
+    /// analytics reading a figure that no longer applies.
+    pub fn member_spend_live(
+        &self,
+        snapshot: &RegistrySnapshot,
+        pool_id: &str,
+        account_id: &str,
+    ) -> Option<&MemberSpend> {
+        let row = self.member_spend(pool_id, account_id)?;
+        member_spend_matches(snapshot, pool_id, account_id, row.period).then_some(row)
+    }
+
     /// Replaces the named members' rows, keeping one only while the snapshot's member still carries a budget
     /// under the period the row was summed over: an edit of the period retires the old spend at once.
     pub fn record_member_spend(&mut self, snapshot: &RegistrySnapshot, rows: Vec<MemberSpend>) {

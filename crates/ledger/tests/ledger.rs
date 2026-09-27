@@ -2040,6 +2040,18 @@ async fn the_ledger_reports_every_budgeted_members_spend_after_a_flush() {
         )
         .unwrap();
     h.router.reload().await.unwrap();
+    // Waits for the revision-driven refresh's own zero row before sending the request: without this, the
+    // positive spend below could come from a refresh that happened to land after the request rather than from
+    // the flush the test means to pin, whenever the two records batch together.
+    wait_for_async(Duration::from_secs(5), || async {
+        h.router
+            .member_spends()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|r| r.pool_id == "main" && r.account_id == "a")
+    })
+    .await;
     let resp = h
         .app
         .clone()
@@ -2078,7 +2090,9 @@ async fn an_exhausted_monthly_member_changed_to_daily_is_admitted_while_no_membe
         &[oauth("a", A, 0)],
         (0, None),
         LedgerConfig {
-            purge_interval: Duration::from_millis(20),
+            // Production's wake for a registry edit is the event mirror's poll, not the hourly purge tick; a
+            // short `event_poll` drives this test through the same path rather than a proxy for it.
+            event_poll: Duration::from_millis(20),
             ..LedgerConfig::default()
         },
     )
@@ -2136,6 +2150,23 @@ async fn an_exhausted_monthly_member_changed_to_daily_is_admitted_while_no_membe
     })
     .await;
     assert_eq!(exhausted.period, BudgetPeriod::Month);
+
+    // The member is genuinely excluded before the edit: the documented 429 with the overage claim, so the
+    // 200 after the edit below actually shows the edit's effect rather than a refusal that never happened.
+    let refused = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-5[1m]", "s2"))
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), 429);
+    assert_eq!(
+        refused
+            .headers()
+            .get("anthropic-ratelimit-unified-representative-claim")
+            .map(|v| v.to_str().unwrap()),
+        Some("overage")
+    );
 
     // The registry's period changes with no request flowing; the revision alone drives the ledger's next read.
     h.store

@@ -184,6 +184,33 @@ fn key_lifetimes(
     });
 }
 
+/// One clause matching any of `patterns` against `column` under the wildcard grammar of `crate::pattern`;
+/// `column` reads as `-` where it is NULL, as the rollup fold already does. No clause when `patterns` is empty.
+fn pattern_any(
+    column: &str,
+    patterns: &[String],
+    args: &mut Vec<Box<dyn ToSql>>,
+    clauses: &mut Vec<String>,
+) {
+    if patterns.is_empty() {
+        return;
+    }
+    let parts: Vec<String> = patterns
+        .iter()
+        .map(|p| {
+            let (like, escape) = crate::pattern::to_like(p);
+            args.push(Box::new(like));
+            let at_like = args.len();
+            args.push(Box::new(escape.to_string()));
+            format!(
+                "COALESCE({column}, '-') LIKE ?{at_like} ESCAPE ?{}",
+                at_like + 1
+            )
+        })
+        .collect();
+    clauses.push(format!("({})", parts.join(" OR ")));
+}
+
 /// The request log's key filter reads the selectors the analytics do, against the row's `(key_id,
 /// key_generation)`; `live` says which generation a bare id names.
 pub fn list_requests(
@@ -1135,10 +1162,26 @@ pub struct SessionIdentity {
     pub fork_depth: Option<u32>,
 }
 
+/// The bundled SQLite's default parameter cap (32,766) divided by the three parameters each named session
+/// binds, rounded down to a plain figure: a call over more sessions than this chunks and merges rather than
+/// tripping the cap.
+const SESSION_IDENTITY_CHUNK: usize = 900;
+
 /// For each (key id, key generation, session id) named, with no time bound: a pin-only session (one whose
 /// requests, if any, are all older than any activity window a caller applies elsewhere) is answered the same
 /// as a fresh one, since this query reads no `since` bound of its own.
 pub fn session_identities(
+    conn: &Connection,
+    sessions: &[(String, i64, String)],
+) -> Result<Vec<SessionIdentity>, LedgerError> {
+    let mut out = Vec::with_capacity(sessions.len());
+    for chunk in sessions.chunks(SESSION_IDENTITY_CHUNK) {
+        out.extend(session_identities_chunk(conn, chunk)?);
+    }
+    Ok(out)
+}
+
+fn session_identities_chunk(
     conn: &Connection,
     sessions: &[(String, i64, String)],
 ) -> Result<Vec<SessionIdentity>, LedgerError> {
@@ -1213,10 +1256,11 @@ fn period_bounds(period: BudgetPeriod, now: i64) -> (i64, i64) {
     }
 }
 
-/// One budgeted member's spend in its current period, summed from the hourly rollups and priced at read time;
-/// the row names the period kind and its UTC bounds in ms (`period_end` is the next day or month boundary). The
-/// rollup's own stored price is not read, since a budget must move with the table an operator confirms, not the
-/// price an attempt happened to be booked at.
+/// One budgeted member's spend in its current period, summed from the hourly rollups and priced at read time,
+/// a keepalive probe's cost included since it draws real money from an API-key member's budget the same as any
+/// other write; the row names the period kind and its UTC bounds in ms (`period_end` is the next day or month
+/// boundary). The rollup's own stored price is not read, since a budget must move with the table an operator
+/// confirms, not the price an attempt happened to be booked at.
 pub fn member_spends(
     conn: &Connection,
     members: &[(String, String, BudgetPeriod)],
@@ -1224,14 +1268,16 @@ pub fn member_spends(
     table: &PriceTable,
 ) -> Result<Vec<MemberSpend>, LedgerError> {
     let mut out = Vec::with_capacity(members.len());
+    // Prepared once outside the per-member loop: a monthly member's period scans up to a month of rows, and
+    // re-parsing the same statement text for every member in a pool would add nothing but overhead.
+    let mut stmt = conn.prepare(
+        "SELECT canonical_model, SUM(input_tokens), SUM(cache_read_tokens), SUM(cache_write_5m_tokens), \
+         SUM(cache_write_1h_tokens), SUM(output_tokens) FROM rollups_hourly \
+         WHERE pool_id = ?1 AND account_id = ?2 AND hour >= ?3 AND hour < ?4 \
+         GROUP BY canonical_model",
+    )?;
     for (pool_id, account_id, period) in members {
         let (period_start, period_end) = period_bounds(*period, now);
-        let mut stmt = conn.prepare(
-            "SELECT canonical_model, SUM(input_tokens), SUM(cache_read_tokens), SUM(cache_write_5m_tokens), \
-             SUM(cache_write_1h_tokens), SUM(output_tokens) FROM rollups_hourly \
-             WHERE pool_id = ?1 AND account_id = ?2 AND kind != 'probe' AND hour >= ?3 AND hour < ?4 \
-             GROUP BY canonical_model",
-        )?;
         let rows = stmt.query_map(
             params![
                 pool_id,
@@ -1286,7 +1332,10 @@ pub struct PlacementRow {
 
 /// A `content` placement is a hit when the response's cache-read tokens reach the entry's promised
 /// `prefix_tokens`; a `static` or `with_main` one is a hit when the response read anything, since the static
-/// tier's own size is not on the usage and a read is the only fact the upstream gives.
+/// tier's own size is not on the usage and a read is the only fact the upstream gives. Counts the serving
+/// attempt of a placed leg alone: a retry in place, a strip retry, or a 401 replay publishes the same trace on
+/// every earlier pass, and `finish` writes usage onto the serving attempt alone, so a pass with none is not a
+/// placement of its own, let alone a miss.
 pub fn placements(
     conn: &Connection,
     filter: &RollupFilter,
@@ -1298,6 +1347,23 @@ pub fn placements(
     let mut clauses: Vec<String> = Vec::new();
     key_lifetimes(&filter.keys, live, &mut args, &mut clauses);
     in_list_or_null("pool_id", &filter.pools, &mut args, &mut clauses);
+    in_list("account_id", &filter.accounts, &mut args, &mut clauses);
+    in_list(
+        "canonical_model",
+        &filter
+            .models
+            .iter()
+            .map(|m| m.to_ascii_lowercase())
+            .collect::<Vec<_>>(),
+        &mut args,
+        &mut clauses,
+    );
+    in_list("kind", &filter.kinds, &mut args, &mut clauses);
+    pattern_any("user_agent", &filter.user_agents, &mut args, &mut clauses);
+    pattern_any("client", &filter.clients, &mut args, &mut clauses);
+    if !filter.probes_counted() {
+        clauses.push("kind != 'probe'".into());
+    }
     let extra = if clauses.is_empty() {
         String::new()
     } else {
@@ -1310,7 +1376,9 @@ pub fn placements(
                   ELSE CASE WHEN COALESCE(a.cache_read_tokens, 0) > 0 THEN 1 ELSE 0 END END), \
          SUM(COALESCE(a.cache_read_tokens, 0)), SUM(COALESCE(json_extract(a.selection, '$.placement.prefix_tokens'), 0)) \
          FROM attempts a JOIN requests r ON r.id = a.request_id \
-         WHERE json_extract(a.selection, '$.placement') IS NOT NULL AND r.kind != 'probe' \
+         WHERE json_extract(a.selection, '$.placement') IS NOT NULL \
+         AND (a.input_tokens IS NOT NULL OR a.output_tokens IS NOT NULL OR a.cache_read_tokens IS NOT NULL \
+              OR a.cache_write_5m_tokens IS NOT NULL OR a.cache_write_1h_tokens IS NOT NULL) \
          AND r.received_at >= ?1 AND r.received_at < ?2{extra} GROUP BY 1 ORDER BY 1"
     );
     let mut stmt = conn.prepare(&sql)?;

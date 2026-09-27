@@ -3408,3 +3408,65 @@ async fn a_spend_report_under_another_period_than_the_members_is_discarded() {
     state.record_member_spend(&snapshot, vec![day_row.clone()]);
     assert_eq!(state.member_spend("p", "a"), Some(&day_row));
 }
+
+#[tokio::test]
+async fn a_members_spend_read_after_a_period_edit_answers_none_until_the_next_report() {
+    let store = seeded(&["a"]);
+    store
+        .set_pool_members(
+            "p",
+            &[MemberWrite {
+                account_id: "a".into(),
+                priority: 0,
+                budget_usd: Some(10.0),
+                budget_period: phoebis_store::BudgetPeriod::Month,
+            }],
+            "test",
+        )
+        .unwrap();
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
+    let month_snapshot = handle.snapshot();
+    let mut state = RoutingState::from_load(RoutingLoad::default());
+    let month_row = MemberSpend {
+        pool_id: "p".into(),
+        account_id: "a".into(),
+        period: phoebis_store::BudgetPeriod::Month,
+        period_start: 0,
+        period_end: 100_000,
+        spent_usd: 5.0,
+        observed_at: 1_000,
+    };
+    state.record_member_spend(&month_snapshot, vec![month_row.clone()]);
+    assert_eq!(
+        state.member_spend_live(&month_snapshot, "p", "a"),
+        Some(&month_row),
+        "the row matches the member's period at write time"
+    );
+
+    // The member's period changes with no report following yet: the raw accessor still holds the old row, but
+    // a read against the new snapshot must not answer it as if it were current.
+    store
+        .set_pool_members(
+            "p",
+            &[MemberWrite {
+                account_id: "a".into(),
+                priority: 0,
+                budget_usd: Some(10.0),
+                budget_period: phoebis_store::BudgetPeriod::Day,
+            }],
+            "test",
+        )
+        .unwrap();
+    handle.reload().await.unwrap();
+    let day_snapshot = handle.snapshot();
+    assert_eq!(
+        state.member_spend("p", "a"),
+        Some(&month_row),
+        "nothing has cleared the stale row yet"
+    );
+    assert!(
+        state.member_spend_live(&day_snapshot, "p", "a").is_none(),
+        "the read applies the current period, not the one the stored row was summed under"
+    );
+}

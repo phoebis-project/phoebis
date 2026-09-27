@@ -44,7 +44,10 @@ split across input, cache read, cache write, and output; and the pricing version
 
 Placements are counted by rung, with a hit share from the trace and the response's cache-read tokens: a
 placement by the conversation's own messages is a hit when the response read the prefix the entry promised;
-one by the static prefix is a hit when it read at all.
+one by the static prefix, or by a subagent falling back to the main agent's pin, is a hit when it read at all.
+
+A budgeted pool member's spend for its current period sums the priced hourly rollups; a keepalive probe's cost
+counts toward it the same as any other write, since a probe on an API-key member still draws real money.
 
 A model an upstream rejected leaves two events in the log: `model_rejected` names the refusing account and the
 spelling the request carried, `model_permitted` the account that served the same request afterwards; the request

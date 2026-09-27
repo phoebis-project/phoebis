@@ -315,14 +315,14 @@ async fn writer(
         persisted_fits(store).await,
     );
     let mut member_revision = router.snapshot().revision;
-    let mut spend_due = refresh_member_spends(&db, &pricing, &router, clock()).await;
+    let mut spend_due = refresh_member_spends(&db, &pricing, &router, clock(), None).await;
     loop {
         // Checked on every round, whatever woke it: a member's budget or period edited under the writer,
         // with no flush of its own, still recomputes without waiting on the next request or period boundary.
         let revision = router.snapshot().revision;
         if revision != member_revision {
             member_revision = revision;
-            spend_due = refresh_member_spends(&db, &pricing, &router, clock()).await;
+            spend_due = refresh_member_spends(&db, &pricing, &router, clock(), spend_due).await;
         }
         let first = tokio::select! {
             // `recv` on a closed channel still yields what was queued before the close, then `None`.
@@ -345,7 +345,7 @@ async fn writer(
             // Re-armed after every run: the boundary a budgeted member's period ends on, so a pool whose
             // traffic never touches this writer still turns over its spend at the period's edge.
             _ = sleep_until(spend_due, &clock) => {
-                spend_due = refresh_member_spends(&db, &pricing, &router, clock()).await;
+                spend_due = refresh_member_spends(&db, &pricing, &router, clock(), spend_due).await;
                 continue;
             }
         };
@@ -361,7 +361,7 @@ async fn writer(
         let landed = land(&db, &pricing, &stats, &metrics, batch).await;
         if landed && priced {
             member_revision = router.snapshot().revision;
-            spend_due = refresh_member_spends(&db, &pricing, &router, clock()).await;
+            spend_due = refresh_member_spends(&db, &pricing, &router, clock(), spend_due).await;
         }
         // The channel is empty: whatever was dropped since the last report is one gap.
         if rx.is_empty() {
@@ -402,23 +402,22 @@ async fn persisted_fits(store: Arc<Store>) -> Vec<phoebis_store::FitRow> {
 /// Every pool member with a spend budget, from the snapshot: its pool, account, and configured period.
 fn budgeted_members(snapshot: &RegistrySnapshot) -> Vec<(String, String, BudgetPeriod)> {
     snapshot
-        .pools()
-        .flat_map(|pool| snapshot.members(&pool.id))
-        .filter_map(|m| {
-            m.budget_usd
-                .map(|_| (m.pool_id.clone(), m.account_id.clone(), m.budget_period))
-        })
+        .budgeted_members()
+        .map(|m| (m.pool_id.clone(), m.account_id.clone(), m.budget_period))
         .collect()
 }
 
 /// Re-reads every budgeted member's spend and reports it to the router. Answers the earliest `period_end`
-/// among the rows read, to arm the next boundary tick, or `None` while no member carries a budget: a pool whose
-/// every member is excluded still refreshes on the revision and boundary arms alone, without traffic.
+/// among the rows read, to arm the next boundary tick; `current` on a read error, so a transient failure leaves
+/// the boundary tick armed where it was rather than disarming it; `None` while no member carries a budget, since
+/// a pool whose every member is excluded still refreshes on the revision and boundary arms alone, without
+/// traffic, and there is truly nothing to arm a tick for.
 async fn refresh_member_spends(
     db: &Arc<LedgerDb>,
     pricing: &Arc<Pricing>,
     router: &RouterHandle,
     now: i64,
+    current: Option<i64>,
 ) -> Option<i64> {
     let members = budgeted_members(&router.snapshot());
     if members.is_empty() {
@@ -436,7 +435,7 @@ async fn refresh_member_spends(
         }
         Err(error) => {
             tracing::warn!(%error, "a member's spend could not be read; the last report stands");
-            None
+            current
         }
     }
 }
@@ -454,13 +453,7 @@ async fn sleep_until(deadline: Option<i64>, clock: &Clock) {
 /// the signal the member spend refresh reacts to.
 fn wrote_priced_attempt(batch: &[Record]) -> bool {
     batch.iter().any(|record| match record {
-        Record::Request { attempts, .. } => attempts.iter().any(|a| {
-            a.input_tokens.is_some()
-                || a.output_tokens.is_some()
-                || a.cache_read_tokens.is_some()
-                || a.cache_write_5m_tokens.is_some()
-                || a.cache_write_1h_tokens.is_some()
-        }),
+        Record::Request { attempts, .. } => attempts.iter().any(AttemptRecord::has_usage),
         _ => false,
     })
 }
@@ -749,5 +742,87 @@ mod tests {
         ));
         landing.await.unwrap();
         assert_eq!(ledger.dropped(), 0);
+    }
+
+    /// A store carrying one pool, one account, and one budgeted member, and the router spawned over it: enough
+    /// for `refresh_member_spends` to find a member to read.
+    fn budgeted_router() -> RouterHandle {
+        let store = Arc::new(Store::open_in_memory(&phoebis_store::StorageKey::generate()).unwrap());
+        store
+            .insert_account(&phoebis_store::AccountRow {
+                id: "a".into(),
+                kind: AccountKind::Oauth,
+                label: "a".into(),
+                enabled: true,
+                identity: None,
+                lifecycle_generation: 1,
+                incarnation: 1,
+                revision: 1,
+                state: phoebis_store::AccountState::Ready,
+            })
+            .unwrap();
+        store
+            .insert_pool(
+                &phoebis_store::PoolRow {
+                    id: "p".into(),
+                    label: "p".into(),
+                    enabled: true,
+                    strategy: phoebis_store::Strategy::Priority,
+                    affinity_ttl_seconds: 3_600,
+                    overage_policy: phoebis_store::OveragePolicy::PreferPlan,
+                    migrate_above_utilization: None,
+                    select_below_utilization: None,
+                    model_rules: Vec::new(),
+                    keepalive_json: "{}".into(),
+                    body_capture_hours: 0,
+                    prefer_subscription: false,
+                    shedding: phoebis_store::Shedding::default(),
+                    failover: phoebis_store::Failover::default(),
+                    cache_ttl_json: "{}".into(),
+                    cache_diagnostics: None,
+                    affinity: phoebis_store::Affinity::default(),
+                    quota_headers: phoebis_store::QuotaHeaders::Pass,
+                    created_at: 0,
+                    updated_at: 0,
+                },
+                "test",
+            )
+            .unwrap();
+        store
+            .set_pool_members(
+                "p",
+                &[phoebis_store::MemberWrite {
+                    account_id: "a".into(),
+                    priority: 0,
+                    budget_usd: Some(10.0),
+                    budget_period: BudgetPeriod::Month,
+                }],
+                "test",
+            )
+            .unwrap();
+        let clock: Clock = Arc::new(|| 1_000);
+        phoebis_routing::spawn(store, None, clock, phoebis_routing::RouterConfig::default()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_failed_spend_refresh_keeps_the_previous_boundary_armed() {
+        let router = budgeted_router();
+        let db = Arc::new(LedgerDb::open_in_memory().unwrap());
+        let pricing = Arc::new(Pricing::new(PriceTable::shipped()));
+
+        let due = refresh_member_spends(&db, &pricing, &router, 1_000, None).await;
+        assert!(due.is_some(), "a working read arms the boundary tick");
+
+        db.write(|c| {
+            c.execute("DROP TABLE rollups_hourly", [])?;
+            Ok(())
+        })
+        .unwrap();
+
+        let after_failure = refresh_member_spends(&db, &pricing, &router, 2_000, due).await;
+        assert_eq!(
+            after_failure, due,
+            "a failed read keeps the previous boundary armed rather than disarming it"
+        );
     }
 }

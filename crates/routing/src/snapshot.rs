@@ -187,6 +187,13 @@ impl RegistrySnapshot {
     pub fn members(&self, pool_id: &str) -> &[PoolMember] {
         self.members.get(pool_id).map(Vec::as_slice).unwrap_or(&[])
     }
+    /// Every pool member with a spend budget, across every pool: what the ledger's member-spend refresh and
+    /// the analytics route both need the same walk over.
+    pub fn budgeted_members(&self) -> impl Iterator<Item = &PoolMember> {
+        self.pools()
+            .flat_map(|pool| self.members(&pool.id))
+            .filter(|m| m.budget_usd.is_some())
+    }
     pub fn term(&self, account_id: &str) -> Option<&SubscriptionTerm> {
         self.terms.get(account_id)
     }

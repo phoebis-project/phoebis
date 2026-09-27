@@ -129,6 +129,18 @@ pub struct AttemptRecord {
     pub selection: Option<String>,
 }
 
+impl AttemptRecord {
+    /// Whether the attempt carries any of the five priced token counts: what `price_attempts` prices, and what
+    /// a retried leg's earlier, answer-less passes lack.
+    pub fn has_usage(&self) -> bool {
+        self.input_tokens.is_some()
+            || self.output_tokens.is_some()
+            || self.cache_read_tokens.is_some()
+            || self.cache_write_5m_tokens.is_some()
+            || self.cache_write_1h_tokens.is_some()
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct BodyRecord {
     pub request_id: String,

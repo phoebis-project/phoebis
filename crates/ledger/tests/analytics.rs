@@ -1088,6 +1088,110 @@ fn priced_table(model: &str, rate_per_token: f64) -> PriceTable {
     }
 }
 
+/// One canonical model with a distinct rate per token kind, so a transposition of the five sums `member_spends`
+/// passes to `estimate` (the flat-rate `priced_table` above prices every kind alike and cannot catch one) shows
+/// up as a wrong total rather than the same number in the wrong place.
+fn priced_table_distinct(model: &str) -> PriceTable {
+    let per_m = |rate_per_token: f64| rate_per_token * 1_000_000.0;
+    let mut models = std::collections::BTreeMap::new();
+    models.insert(
+        model.to_string(),
+        ModelPrice {
+            input: per_m(1.0),
+            cache_read: per_m(2.0),
+            cache_write_5m: per_m(3.0),
+            cache_write_1h: per_m(4.0),
+            output: per_m(5.0),
+        },
+    );
+    PriceTable {
+        version: "test".into(),
+        effective: "test".into(),
+        source: "test".into(),
+        models,
+    }
+}
+
+/// A request and its one attempt, carrying every token kind at a distinct count, for the distinct-rate test.
+#[allow(clippy::too_many_arguments)]
+fn plant_spend_every_kind(
+    db: &LedgerDb,
+    id: &str,
+    pool: &str,
+    account: &str,
+    model: &str,
+    received_at: i64,
+    input_tokens: u64,
+    cache_read_tokens: u64,
+    cache_write_5m_tokens: u64,
+    cache_write_1h_tokens: u64,
+    output_tokens: u64,
+) {
+    let request = RequestRecord {
+        id: id.into(),
+        received_at,
+        finished_at: Some(received_at + 500),
+        key_id: Some("desktop".into()),
+        pool_id: Some(pool.into()),
+        canonical_model: model.into(),
+        model: model.into(),
+        kind: "inference".into(),
+        origin: "client".into(),
+        outcome: "succeeded".into(),
+        attempts: 1,
+        ..Default::default()
+    };
+    let attempt = AttemptRecord {
+        request_id: id.into(),
+        attempt: 1,
+        account_id: account.into(),
+        account_kind: "oauth".into(),
+        outcome: "succeeded".into(),
+        input_tokens: Some(input_tokens),
+        cache_read_tokens: Some(cache_read_tokens),
+        cache_write_5m_tokens: Some(cache_write_5m_tokens),
+        cache_write_1h_tokens: Some(cache_write_1h_tokens),
+        output_tokens: Some(output_tokens),
+        ..Default::default()
+    };
+    db.insert_request(&request, &[attempt], None).unwrap();
+}
+
+#[test]
+fn a_members_spend_prices_every_token_kind_at_its_own_rate() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let table = priced_table_distinct("claude-sonnet-5");
+    let now = ms(2026, 1, 15, 10, 0);
+    plant_spend_every_kind(
+        &db,
+        "every-kind",
+        "p",
+        "a",
+        "claude-sonnet-5",
+        ms(2026, 1, 15, 1, 0),
+        10,
+        20,
+        30,
+        40,
+        50,
+    );
+    let rows = db
+        .read_blocking(|c| {
+            member_spends(
+                c,
+                &[("p".into(), "a".into(), BudgetPeriod::Day)],
+                now,
+                &table,
+            )
+        })
+        .unwrap();
+    assert_eq!(
+        rows[0].spent_usd,
+        10.0 * 1.0 + 20.0 * 2.0 + 30.0 * 3.0 + 40.0 * 4.0 + 50.0 * 5.0,
+        "each token kind is priced at its own rate; a transposition of the five sums would answer a different total"
+    );
+}
+
 /// A request and its one attempt, for a pool member's spend: `estimated_usd` is planted at an obviously wrong
 /// figure, so a test that reads the priced sum back at the seeded token count (not the planted figure) proves
 /// `member_spends` recomputes at read time rather than trusting what the attempt was booked at.
@@ -1178,12 +1282,12 @@ fn a_members_spend_is_the_priced_rollups_of_its_utc_period_alone() {
         .unwrap();
     assert_eq!(
         (day[0].spent_usd, day[0].period_start, day[0].period_end),
-        (50.0, ms(2026, 1, 15, 0, 0), ms(2026, 1, 16, 0, 0)),
-        "the row before the day and the probe are left out; the price is the table's, not the row's \
-         planted estimated_usd of 999"
+        (250.0, ms(2026, 1, 15, 0, 0), ms(2026, 1, 16, 0, 0)),
+        "the row before the day is left out; the probe counts like any other write; the price is the \
+         table's, not the row's planted estimated_usd of 999"
     );
 
-    // The month bound over the same rows: both non-probe requests of January count.
+    // The month bound over the same rows: every request of January counts, the probe included.
     let month_now = ms(2026, 1, 20, 0, 0);
     let month = db
         .read_blocking(|c| {
@@ -1201,8 +1305,8 @@ fn a_members_spend_is_the_priced_rollups_of_its_utc_period_alone() {
             month[0].period_start,
             month[0].period_end
         ),
-        (150.0, ms(2026, 1, 1, 0, 0), ms(2026, 2, 1, 0, 0)),
-        "the month sums every day inside it, the probe still left out"
+        (350.0, ms(2026, 1, 1, 0, 0), ms(2026, 2, 1, 0, 0)),
+        "the month sums every day inside it, the probe included"
     );
 
     // A month that turns over at a UTC midnight: a row from the last day of January is out of February's month,
@@ -1441,6 +1545,276 @@ fn placements_by_rung_count_hits_from_the_trace_and_the_response() {
     );
 }
 
+/// A leg with two passes on one trace: the first carries no usage (a retry in place, a strip retry, or a 401
+/// replay before the serving attempt), the second is the one that answered.
+fn plant_retried_placement(
+    db: &LedgerDb,
+    id: &str,
+    received_at: i64,
+    rung: &str,
+    prefix_tokens: u64,
+    cache_read_tokens: u64,
+) {
+    let request = RequestRecord {
+        id: id.into(),
+        received_at,
+        finished_at: Some(received_at + 500),
+        key_id: Some("desktop".into()),
+        pool_id: Some("main".into()),
+        canonical_model: "claude-sonnet-5".into(),
+        model: "claude-sonnet-5".into(),
+        kind: "inference".into(),
+        origin: "client".into(),
+        outcome: "succeeded".into(),
+        attempts: 2,
+        ..Default::default()
+    };
+    let trace =
+        format!(r#"{{"placement":{{"rung":"{rung}","depth":1,"prefix_tokens":{prefix_tokens}}}}}"#);
+    let attempts = vec![
+        AttemptRecord {
+            request_id: id.into(),
+            attempt: 1,
+            account_id: "a".into(),
+            account_kind: "oauth".into(),
+            outcome: "rate_limited".into(),
+            selection: Some(trace.clone()),
+            ..Default::default()
+        },
+        AttemptRecord {
+            request_id: id.into(),
+            attempt: 2,
+            account_id: "b".into(),
+            account_kind: "oauth".into(),
+            outcome: "succeeded".into(),
+            cache_read_tokens: Some(cache_read_tokens),
+            selection: Some(trace),
+            ..Default::default()
+        },
+    ];
+    db.insert_request(&request, &attempts, None).unwrap();
+}
+
+#[test]
+fn placements_count_the_serving_attempt_alone_not_every_retried_pass() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    plant_retried_placement(&db, "r1", 1_000, "content", 500, 500);
+    let rows = db
+        .read_blocking(|c| placements(c, &RollupFilter::default(), &LiveKeys::default(), 0, 10_000))
+        .unwrap();
+    assert_eq!(
+        rows.iter()
+            .map(|r| (r.rung.as_str(), r.placements, r.hits))
+            .collect::<Vec<_>>(),
+        vec![("content", 1, 1)],
+        "the first pass carried no usage; only the serving attempt counts, as one placement and one hit"
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn plant_placement_full(
+    db: &LedgerDb,
+    id: &str,
+    pool: &str,
+    key: &str,
+    account: &str,
+    model: &str,
+    client: Option<&str>,
+    received_at: i64,
+    rung: &str,
+    prefix_tokens: u64,
+    cache_read_tokens: u64,
+) {
+    let request = RequestRecord {
+        id: id.into(),
+        received_at,
+        finished_at: Some(received_at + 500),
+        key_id: Some(key.into()),
+        pool_id: Some(pool.into()),
+        canonical_model: model.into(),
+        model: model.into(),
+        client: client.map(String::from),
+        kind: "inference".into(),
+        origin: "client".into(),
+        outcome: "succeeded".into(),
+        attempts: 1,
+        ..Default::default()
+    };
+    let attempt = AttemptRecord {
+        request_id: id.into(),
+        attempt: 1,
+        account_id: account.into(),
+        account_kind: "oauth".into(),
+        outcome: "succeeded".into(),
+        cache_read_tokens: Some(cache_read_tokens),
+        selection: Some(format!(
+            r#"{{"placement":{{"rung":"{rung}","depth":1,"prefix_tokens":{prefix_tokens}}}}}"#
+        )),
+        ..Default::default()
+    };
+    db.insert_request(&request, &[attempt], None).unwrap();
+}
+
+#[test]
+fn placements_apply_the_model_and_client_filter() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    plant_placement_full(
+        &db,
+        "m1",
+        "main",
+        "desktop",
+        "a",
+        "claude-sonnet-5",
+        Some("claude-code/cli"),
+        1_000,
+        "content",
+        500,
+        500,
+    );
+    plant_placement_full(
+        &db,
+        "m2",
+        "main",
+        "desktop",
+        "a",
+        "claude-opus-5",
+        Some("sdk/python"),
+        2_000,
+        "content",
+        500,
+        500,
+    );
+
+    let by_model = db
+        .read_blocking(|c| {
+            placements(
+                c,
+                &RollupFilter {
+                    models: vec!["claude-sonnet-5".into()],
+                    ..Default::default()
+                },
+                &LiveKeys::default(),
+                0,
+                10_000,
+            )
+        })
+        .unwrap();
+    assert_eq!(
+        by_model.iter().map(|r| r.placements).sum::<u64>(),
+        1,
+        "a model filter narrows placements to that model's own attempts"
+    );
+
+    let by_client = db
+        .read_blocking(|c| {
+            placements(
+                c,
+                &RollupFilter {
+                    clients: vec!["sdk/*".into()],
+                    ..Default::default()
+                },
+                &LiveKeys::default(),
+                0,
+                10_000,
+            )
+        })
+        .unwrap();
+    assert_eq!(
+        by_client.iter().map(|r| r.placements).sum::<u64>(),
+        1,
+        "a client filter narrows placements to that client's own attempts"
+    );
+}
+
+#[test]
+fn placements_apply_the_keys_and_pools_filter() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    plant_placement_full(
+        &db,
+        "kp1",
+        "p1",
+        "desktop",
+        "a",
+        "claude-sonnet-5",
+        None,
+        1_000,
+        "content",
+        500,
+        500,
+    );
+    plant_placement_full(
+        &db,
+        "kp2",
+        "p2",
+        "mobile",
+        "a",
+        "claude-sonnet-5",
+        None,
+        2_000,
+        "content",
+        500,
+        500,
+    );
+
+    let by_pool = db
+        .read_blocking(|c| {
+            placements(
+                c,
+                &RollupFilter {
+                    pools: vec!["p1".into()],
+                    ..Default::default()
+                },
+                &LiveKeys::default(),
+                0,
+                10_000,
+            )
+        })
+        .unwrap();
+    assert_eq!(
+        by_pool.iter().map(|r| r.placements).sum::<u64>(),
+        1,
+        "a pool filter narrows placements to that pool's own attempts"
+    );
+
+    let live = LiveKeys([("desktop".to_string(), 0)].into_iter().collect());
+    let by_key = db
+        .read_blocking(|c| {
+            placements(
+                c,
+                &RollupFilter {
+                    keys: vec!["desktop".into()],
+                    ..Default::default()
+                },
+                &live,
+                0,
+                10_000,
+            )
+        })
+        .unwrap();
+    assert_eq!(
+        by_key.iter().map(|r| r.placements).sum::<u64>(),
+        1,
+        "a key filter narrows placements to that key's own attempts"
+    );
+}
+
+#[test]
+fn placements_score_a_with_main_row_like_static() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    plant_placement(&db, "wm1", "inference", 1_000, "with_main", 0, 50);
+    plant_placement(&db, "wm2", "inference", 2_000, "with_main", 0, 0);
+    let rows = db
+        .read_blocking(|c| placements(c, &RollupFilter::default(), &LiveKeys::default(), 0, 10_000))
+        .unwrap();
+    assert_eq!(
+        rows.iter()
+            .map(|r| (r.rung.as_str(), r.placements, r.hits))
+            .collect::<Vec<_>>(),
+        vec![("with_main", 2, 1)],
+        "with_main scores like static: a hit is any read at all, since it names no entry of its own"
+    );
+}
+
 #[allow(clippy::too_many_arguments)]
 fn plant_identity(
     db: &LedgerDb,
@@ -1558,5 +1932,32 @@ fn a_session_the_ledger_holds_no_client_request_for_is_absent_from_the_answer() 
     assert!(
         rows.is_empty(),
         "a session with no client request is not recorded"
+    );
+}
+
+#[test]
+fn session_identities_chunks_a_call_over_many_sessions_and_merges_the_answer() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let mut named = Vec::new();
+    for i in 0..1_000 {
+        let session = format!("s{i}");
+        plant_identity(
+            &db,
+            &format!("r{i}"),
+            "k1",
+            0,
+            &session,
+            "inference",
+            1_000 + i as i64,
+            None,
+            None,
+        );
+        named.push(("k1".to_string(), 0_i64, session));
+    }
+    let rows = db.read_blocking(|c| session_identities(c, &named)).unwrap();
+    assert_eq!(
+        rows.len(),
+        1_000,
+        "every session across more than one chunk answers, not only the first chunk's"
     );
 }

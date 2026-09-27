@@ -1088,10 +1088,12 @@ impl Task {
                     .expect("snapshot lock poisoned")
                     .clone();
                 let rows = snapshot
-                    .pools()
-                    .flat_map(|pool| snapshot.members(&pool.id))
-                    .filter(|m| m.budget_usd.is_some())
-                    .filter_map(|m| self.state.member_spend(&m.pool_id, &m.account_id).cloned())
+                    .budgeted_members()
+                    .filter_map(|m| {
+                        self.state
+                            .member_spend_live(&snapshot, &m.pool_id, &m.account_id)
+                            .cloned()
+                    })
                     .collect();
                 let _ = reply.send(rows);
             }
