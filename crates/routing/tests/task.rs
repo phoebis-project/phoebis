@@ -3236,8 +3236,8 @@ async fn a_shutdown_persists_a_refreshed_entrys_time() {
     })
     .await;
     handle.report(Report::Affinity(affinity_report(&handle, "a", 2_000)));
-    // The refresh is marked dirty, not written through: the store's row keeps the first report's time until
-    // the shutdown drains it.
+    // The refresh is marked dirty, not written through: the store's row keeps the first report's time until a
+    // drain, and the default purge tick is a minute out, so here the shutdown is the one that drains it.
     stays_for(NOT_WRITTEN, || {
         store
             .load_routing()
@@ -3259,6 +3259,53 @@ async fn a_shutdown_persists_a_refreshed_entrys_time() {
     assert_eq!(
         row.written_at, 2_000,
         "the shutdown drained the refreshed row"
+    );
+}
+
+#[tokio::test]
+async fn the_purge_tick_writes_a_refreshed_entrys_time_so_a_restart_without_a_shutdown_keeps_it() {
+    let store = seeded(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    {
+        let handle = spawn(
+            store.clone(),
+            None,
+            clock(&now),
+            RouterConfig {
+                purge_interval: Duration::from_millis(50),
+                ..RouterConfig::default()
+            },
+        )
+        .unwrap();
+        handle.report(Report::Affinity(affinity_report(&handle, "a", 1_000)));
+        wait_for(WRITTEN, || {
+            (!store.load_routing().unwrap().affinity.is_empty()).then_some(())
+        })
+        .await;
+        now.store(2_000, Ordering::SeqCst);
+        handle.report(Report::Affinity(affinity_report(&handle, "a", 2_000)));
+        wait_for(WRITTEN, || {
+            store
+                .load_routing()
+                .unwrap()
+                .affinity
+                .into_iter()
+                .find(|r| r.hash == "b1" && r.written_at == 2_000)
+        })
+        .await;
+        // Dropped without a shutdown, the way a crash leaves the store: no drain runs after this point.
+    }
+    let handle = spawn(store, None, clock(&now), RouterConfig::default()).unwrap();
+    let written_at = handle
+        .affinity()
+        .read()
+        .unwrap()
+        .entry("claude-sonnet-5", "b1")
+        .map(|e| e.written_at);
+    assert_eq!(
+        written_at,
+        Some(2_000),
+        "the reload reads the refresh the purge tick wrote"
     );
 }
 

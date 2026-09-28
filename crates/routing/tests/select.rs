@@ -4167,6 +4167,157 @@ fn a_toolless_subagents_hold_never_follows_the_empty_tools_boundarys_cohort() {
     );
 }
 
+/// Two members capped at one slot each, `a` first by priority, with a subagent cohort's static entry on `b`:
+/// the pool the tests below hold a request in once both slots are taken.
+fn capped_cohort_on_b(subagent_placement: SubagentPlacement) -> (RegistrySnapshot, RoutingState) {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        subagent_placement,
+        failover: Failover {
+            in_flight_cap: 1,
+            ..Failover::default()
+        },
+        ..Pool::default()
+    });
+    let st = RoutingState::from_load(RoutingLoad::default());
+    seed_affinity(
+        &st,
+        vec![affinity_row(
+            &s,
+            "claude-sonnet-5",
+            "s1",
+            AffinityChain::Static,
+            "b",
+            1_000,
+            3_600_000,
+            500,
+            "root",
+        )],
+    );
+    (s, st)
+}
+
+#[test]
+fn a_held_subagent_under_by_strategy_waits_on_the_strategys_choice_rather_than_its_cohort() {
+    let (s, mut st) = capped_cohort_on_b(SubagentPlacement::ByStrategy);
+    let _a = st.in_flight().dispatched("a", 1_000);
+    let _b = st.in_flight().dispatched("b", 1_000);
+    let sub_req = subagent(
+        placement_req(
+            request(&s, Some("session"), "claude-sonnet-5", true, &[], 1_500),
+            &[],
+            &["s1"],
+            true,
+        ),
+        "worker",
+    );
+    let SelectResult::Held { account_id, hold } = select(&mut st, &s, &sub_req, &mut rng()).0
+    else {
+        panic!("held on the strategy's choice")
+    };
+    assert_eq!(
+        (account_id.as_str(), hold.cohort),
+        ("a", None),
+        "a pool that places subagents by the strategy never names a cohort for the hold"
+    );
+}
+
+#[test]
+fn a_held_marker_less_portable_subagent_waits_on_the_strategys_choice_rather_than_its_cohort() {
+    let (s, mut st) = capped_cohort_on_b(SubagentPlacement::ByCohort);
+    let _a = st.in_flight().dispatched("a", 1_000);
+    let _b = st.in_flight().dispatched("b", 1_000);
+    let sub_req = subagent(
+        placement_req(
+            request(&s, Some("session"), "claude-sonnet-5", true, &[], 1_500),
+            &[],
+            &["s1"],
+            false,
+        ),
+        "worker",
+    );
+    let SelectResult::Held { account_id, hold } = select(&mut st, &s, &sub_req, &mut rng()).0
+    else {
+        panic!("held on the strategy's choice")
+    };
+    assert_eq!(
+        (account_id.as_str(), hold.cohort),
+        ("a", None),
+        "a request that neither carries nor receives a marker reads no cache, so no cohort's warmth is its own"
+    );
+}
+
+#[test]
+fn a_token_count_is_never_placed_and_lands_by_the_strategy() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    seed_affinity(
+        &st,
+        vec![affinity_row(
+            &s,
+            "claude-sonnet-5",
+            "m1",
+            AffinityChain::Message,
+            "b",
+            1_000,
+            300_000,
+            900,
+            "root",
+        )],
+    );
+    let mut count = placement_req(
+        request(&s, Some("s1"), "claude-sonnet-5", true, &[], 2_000),
+        &["m1"],
+        &[],
+        false,
+    );
+    count.count = true;
+    let SelectResult::Selected(sel) = select(&mut st, &s, &count, &mut rng()).0 else {
+        panic!("the count lands")
+    };
+    assert_eq!(
+        (sel.account.id.as_str(), sel.trace.placement),
+        ("a", None),
+        "a count reads no cache, so a warm message boundary on b neither places it nor shows on its trace"
+    );
+}
+
+#[test]
+fn a_held_token_count_takes_neither_of_the_holds_overrides() {
+    let (s, mut st) = capped_cohort_on_b(SubagentPlacement::ByCohort);
+    // The session's main agent pins on b, the first override's landing for any other agent of the session.
+    select(
+        &mut st,
+        &s,
+        &request(&s, Some("session"), "claude-sonnet-5", true, &["a"], 1_000),
+        &mut rng(),
+    );
+    assert_eq!(pinned(&st, "session").account_id, "b");
+    let _a = st.in_flight().dispatched("a", 1_000);
+    let _b = st.in_flight().dispatched("b", 1_000);
+    let mut count = subagent(
+        placement_req(
+            request(&s, Some("session"), "claude-sonnet-5", true, &[], 1_500),
+            &[],
+            &["s1"],
+            true,
+        ),
+        "worker",
+    );
+    count.count = true;
+    let SelectResult::Held { account_id, hold } = select(&mut st, &s, &count, &mut rng()).0 else {
+        panic!("a count at the cap is held")
+    };
+    assert_eq!(
+        (account_id.as_str(), hold.cohort),
+        ("a", None),
+        "neither the session's pin on b nor the cohort's entry there lifts a count past the cap"
+    );
+}
+
 #[test]
 fn a_cohort_hold_that_times_out_lands_the_next_member_elsewhere() {
     let s = snapshot(Pool {

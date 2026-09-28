@@ -1370,6 +1370,58 @@ mod tests {
         marks.iter().map(|k| k.session_id.as_str()).collect()
     }
 
+    /// A report of one message boundary under `model`, as a completed answer on account "a" files it.
+    fn boundary_report(model: &str) -> crate::affinity::AffinityReport {
+        crate::affinity::AffinityReport {
+            account_id: "a".into(),
+            incarnation: 1,
+            key_id: "k".into(),
+            key_generation: 1,
+            canonical_model: model.into(),
+            root: None,
+            static_boundaries: Vec::new(),
+            message_boundaries: vec!["b1".into()],
+            static_sizes: Vec::new(),
+            message_id: None,
+            request_id: None,
+            static_ttl_ms: None,
+            message_ttl_ms: None,
+            cache_touched: false,
+            prefix_tokens: 0,
+            now: 1_000,
+        }
+    }
+
+    /// Whether a report filed under `spelling` lands at `dated`, the dated id the map was told it resolves to.
+    /// `dated` is no spelling of its own, so the lookup below reads that exact key.
+    fn lands_at_the_dated_id(state: &RoutingState, spelling: &str) -> bool {
+        let map = state.affinity();
+        let mut map = map.write().unwrap();
+        map.record(&boundary_report(spelling));
+        map.entry("dated", "b1").is_some()
+    }
+
+    #[test]
+    fn a_loaded_resolution_files_a_report_under_the_spelling_at_its_dated_id() {
+        let state = RoutingState::from_load(RoutingLoad {
+            resolutions: vec![ResolutionRow {
+                spelling: "spelling".into(),
+                dated_id: "dated".into(),
+                resolved_at: 0,
+            }],
+            ..RoutingLoad::default()
+        });
+        assert!(lands_at_the_dated_id(&state, "spelling"));
+    }
+
+    #[test]
+    fn a_resolution_applied_after_the_load_files_a_later_report_under_the_spelling_at_its_dated_id()
+    {
+        let mut state = RoutingState::from_load(RoutingLoad::default());
+        state.apply_resolution("spelling", "dated", 0);
+        assert!(lands_at_the_dated_id(&state, "spelling"));
+    }
+
     #[test]
     fn a_round_marks_in_order_to_the_share_and_never_the_last_pin_or_anything_for_a_zero_target() {
         let four = [

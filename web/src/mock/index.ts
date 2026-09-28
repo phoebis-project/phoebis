@@ -364,7 +364,8 @@ export class MockApi implements Api {
   }
 
   analyticsBudgets() {
-    // Read off the members as they stand, so a budget set on the Pools form shows here; the route orders by pool, then upstream.
+    // Read off the members as they stand, so a budget set on the Pools form shows here; the route orders by pool,
+    // then upstream.
     const members = this.pools.flatMap((p) =>
       p.members.flatMap((m) => (m.budgetUsd === null ? [] : [{ accountId: m.accountId, budgetPeriod: m.budgetPeriod, budgetUsd: m.budgetUsd, periodEnd: m.periodEnd, poolId: p.id, spentUsd: m.spentUsd }])),
     );

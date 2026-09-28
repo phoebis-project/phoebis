@@ -35,17 +35,35 @@ struct MemberInput {
     budget_period: Option<String>,
 }
 
-/// Turns the wire members into store writes, refusing a non-positive budget or an unknown period before any
-/// write lands; a member list replaces the pool's whole membership, so an absent budget clears it.
+/// Turns the wire members into store writes, refusing a non-positive budget, a budget on a member that is not
+/// an API-key account, or an unknown period before any write lands; a member list replaces the pool's whole
+/// membership, so an absent budget clears it. A subscription member's usage priced at list rates is quota, not
+/// money it spends, so a budget there would refuse it for a sum it never paid. An account the store does not
+/// hold is left to the member write itself, which answers its 404.
 // The error is a rendered HTTP response, returned once per request and dropped; boxing it would buy a
 // pointer chase and nothing else.
 #[allow(clippy::result_large_err)]
-fn member_writes(members: &[MemberInput]) -> Result<Vec<MemberWrite>, Response> {
+fn member_writes(
+    state: &AdminState,
+    members: &[MemberInput],
+) -> Result<Vec<MemberWrite>, Response> {
     members
         .iter()
         .map(|m| {
             if m.budget_usd.is_some_and(|b| b <= 0.0) {
                 return Err(failure(StatusCode::BAD_REQUEST, "budget_usd is above 0"));
+            }
+            if m.budget_usd.is_some() {
+                match state.store.account(&m.account_id) {
+                    Ok(Some(account)) if account.kind != phoebis_store::AccountKind::ApiKey => {
+                        return Err(failure(
+                            StatusCode::BAD_REQUEST,
+                            "budget_usd applies to an API-key member",
+                        ))
+                    }
+                    Ok(_) => {}
+                    Err(error) => return Err(store_failure(error)),
+                }
             }
             let budget_period = match &m.budget_period {
                 Some(period) => match BudgetPeriod::parse(period) {
@@ -506,7 +524,7 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
         return refusal;
     }
     let writes = match &input.members {
-        Some(members) => match member_writes(members) {
+        Some(members) => match member_writes(&state, members) {
             Ok(writes) => Some(writes),
             Err(refusal) => return refusal,
         },
@@ -571,7 +589,7 @@ pub(crate) async fn patch(
                     Err(error) => return store_failure(error),
                 }
             }
-            match member_writes(members) {
+            match member_writes(&state, members) {
                 Ok(writes) => Some(writes),
                 Err(refusal) => return refusal,
             }
@@ -641,7 +659,7 @@ pub(crate) async fn set_members(
         Ok(None) => return failure(StatusCode::NOT_FOUND, "pool not found"),
         Err(e) => return store_failure(e),
     };
-    let writes = match member_writes(&input.members) {
+    let writes = match member_writes(&state, &input.members) {
         Ok(writes) => writes,
         Err(refusal) => return refusal,
     };

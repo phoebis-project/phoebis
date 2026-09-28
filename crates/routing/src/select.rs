@@ -766,8 +766,12 @@ pub fn select(
         if held {
             // The cohort-aware hold is a cap exemption and nothing more: a session already on an account under
             // any agent lands there rather than waiting, and a still-held subagent waits where its own cohort
-            // is rather than on the strategy's unrelated choice.
-            if let Some(candidate) = any_agent_pin(state, request, &allowed, window, ttl_ms) {
+            // is rather than on the strategy's unrelated choice. A token count takes neither: it is never
+            // placed, so its session's pins and cohort have no say in where it lands or waits.
+            let session_pin = (!request.count)
+                .then(|| any_agent_pin(state, request, &allowed, window, ttl_ms))
+                .flatten();
+            if let Some(candidate) = session_pin {
                 (
                     candidate,
                     None,
@@ -778,15 +782,19 @@ pub fn select(
                     }),
                 )
             } else {
-                let cohort = subagent_cohort(
-                    state,
-                    snapshot,
-                    pool,
-                    request,
-                    &affinity_guard,
-                    &allowed,
-                    window,
-                );
+                let cohort = (!request.count)
+                    .then(|| {
+                        subagent_cohort(
+                            state,
+                            snapshot,
+                            pool,
+                            request,
+                            &affinity_guard,
+                            &allowed,
+                            window,
+                        )
+                    })
+                    .flatten();
                 let hold = match cohort {
                     Some(c) => HoldFacts {
                         account_id: c.account_id.clone(),
@@ -1379,7 +1387,8 @@ fn blocked(
 /// since the cohort's own account outweighs it) or the deepest static boundary past the size gate, the cache
 /// gate and the blocker (rung 4, already under the cap by construction). `allowed` is the selection set before
 /// step 6's own partitions, so the source of a move or an account a preference narrowed around can never win a
-/// placement it would not have won on its own account.
+/// placement it would not have won on its own account. A token count is never placed: it reads no cache, so a
+/// warm prefix would only lift it past the cap and promise its trace a read it can never make.
 #[allow(clippy::too_many_arguments)]
 fn placement_of<'a>(
     state: &RoutingState,
@@ -1390,6 +1399,9 @@ fn placement_of<'a>(
     allowed: &[&'a Candidate],
     window: &str,
 ) -> Option<(&'a Candidate, Placement)> {
+    if request.count {
+        return None;
+    }
     let now = request.now;
     let candidate_of =
         |account_id: &str| allowed.iter().copied().find(|c| c.account_id == account_id);

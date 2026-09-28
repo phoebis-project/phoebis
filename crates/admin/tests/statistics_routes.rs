@@ -1892,14 +1892,14 @@ async fn a_request_answers_its_class_and_each_attempts_trace_with_skipped_as_nam
 async fn budgets_route_answers_a_members_spend_against_its_budget() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
-    // "direct" rides both pools: unbudgeted in "main" (proving the route excludes it there) and budgeted in
-    // "aux" (proving a second row sorts by pool ahead of "main").
+    // A budget applies to an API-key member alone, so "direct" carries one in both pools (proving a second row
+    // sorts by pool ahead of "main") while "business" rides "main" unbudgeted (proving the route excludes it).
     post(
         &parts.app,
         "/admin/pools",
         r#"{"id":"main","label":"Main","strategy":"priority",
-        "members":[{"account_id":"business","priority":0,"budget_usd":50.0,"budget_period":"month"},
-                   {"account_id":"direct","priority":1}]}"#,
+        "members":[{"account_id":"business","priority":0},
+                   {"account_id":"direct","priority":1,"budget_usd":50.0,"budget_period":"month"}]}"#,
         Some(&cookie),
     )
     .await;
@@ -1913,9 +1913,12 @@ async fn budgets_route_answers_a_members_spend_against_its_budget() {
     .await;
     // A real priced attempt, so the writer's own refresh reports a real spend; the route's job is reading it
     // back, not computing it.
-    parts
-        .ledger
-        .record(record("r1", common::NOW, "claude-sonnet-5", "s1"));
+    let mut spend = record("r1", common::NOW, "claude-sonnet-5", "s1");
+    if let Record::Request { attempts, .. } = &mut spend {
+        attempts[0].account_id = "direct".into();
+        attempts[0].account_kind = "api_key".into();
+    }
+    parts.ledger.record(spend);
     let budgets = wait_json(&parts.app, "/admin/analytics/budgets", &cookie, |v| {
         v["members"]
             .as_array()
@@ -1928,7 +1931,7 @@ async fn budgets_route_answers_a_members_spend_against_its_budget() {
     assert_eq!(
         members.len(),
         2,
-        "direct's unbudgeted membership in main is excluded; only the two budgeted rows answer: {budgets}"
+        "business's unbudgeted membership in main is excluded; only the two budgeted rows answer: {budgets}"
     );
     assert_eq!(
         (
@@ -1948,7 +1951,7 @@ async fn budgets_route_answers_a_members_spend_against_its_budget() {
             member["budget_usd"].as_f64(),
             member["budget_period"].as_str(),
         ),
-        (Some("main"), Some("business"), Some(50.0), Some("month")),
+        (Some("main"), Some("direct"), Some(50.0), Some("month")),
         "a budgeted member names its pool, account, and budget"
     );
     assert_eq!(

@@ -676,9 +676,7 @@ pub fn spawn(
                                 _ => {}
                             }
                         }
-                        // The map's own dirty rows are never written until this point, so a clean shutdown is
-                        // the one moment they have to reach the store; a crash loses them, which the design
-                        // accepts as best effort.
+                        // A clean shutdown loses none of the refreshes since the last purge tick.
                         let drained = task
                             .state
                             .affinity()
@@ -1690,6 +1688,17 @@ impl Task {
         );
         if !purged.affinity.is_empty() {
             writes.push(StateWrite::DeleteAffinity(purged.affinity));
+        }
+        // A refresh moves an entry's time in place and is written with the purge's batch, so a crash loses at
+        // most one tick of them; a reload past the idle TTL would otherwise drop a live conversation's entries.
+        let refreshed = self
+            .state
+            .affinity()
+            .write()
+            .expect("affinity lock poisoned")
+            .drain();
+        if !refreshed.is_empty() {
+            writes.push(StateWrite::UpsertAffinity(refreshed));
         }
         self.write(writes);
     }

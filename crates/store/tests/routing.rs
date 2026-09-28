@@ -526,6 +526,19 @@ fn affinity_rows_land_together_replace_by_model_and_hash_and_delete_by_key() {
     let remaining = store.load_routing().unwrap().affinity;
     assert_eq!(remaining.len(), 1);
     assert_eq!(remaining[0].hash, "hash-2");
+    store.upsert_affinity(&rows).unwrap();
+    let batch: Vec<(String, String)> = rows
+        .iter()
+        .map(|r| (r.model.clone(), r.hash.clone()))
+        .collect();
+    assert_eq!(
+        (
+            store.delete_affinity(&batch).unwrap(),
+            store.load_routing().unwrap().affinity.len()
+        ),
+        (3, 0),
+        "a batch of three leaves in one call"
+    );
 }
 
 #[test]

@@ -263,10 +263,11 @@ continued and was renewed, moved (naming the rule), or was placed afresh, whethe
 how many of its input tokens, and every candidate the selection passed over with the obstacle in its way: already tried,
 above the ceiling, at its in-flight cap, at its spend budget, an account cooldown, at the pace floor, an operator hold,
 in overage, ranked behind another candidate, its subscription ended, its window spent, or winding down. A placement
-names where it landed: by its messages or by its static prefix at the depth that matched, or with the main conversation,
-and the upstream it waited on first when every upstream was at its cap. Its cache line reads the placement as a hit or a
-miss against the prefix it was promised: a placement by its messages is a hit when the response read at least that
-prefix, one by its static prefix when it read anything, and one with the main conversation keeps the plain cache line.
+names where it landed: by its messages or by its static prefix at the depth that matched, or with the main conversation.
+A request held while every upstream was at its cap names the upstream it was held on: its cohort's, or else the last
+one it waited on. The cache line reads a placement as a hit or a miss against the prefix it was promised: a placement
+by its messages is a hit when the response read at least that prefix, one by its static prefix when it read anything,
+and one with the main conversation keeps the plain cache line.
 
 ![The Requests view: the filterable table with its client column](assets/requests-light.png#only-light)
 ![The Requests view: the filterable table with its client column](assets/requests-dark.png#only-dark)

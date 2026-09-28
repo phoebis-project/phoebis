@@ -84,7 +84,7 @@ Every field, in the order the request body takes them:
 `api.anthropic.com` for this pool's requests, whatever the [bootstrap option](installation.md#compatibility)
 says; `null` inherits it.
 
-On `hide` a committed answer loses the `anthropic-ratelimit-unified-*` family, so an organization-wide quota
+On `hide` every answer but a 429 loses the `anthropic-ratelimit-unified-*` family, so an organization-wide quota
 never reaches a key holder as its own; a 429 keeps the family so the client's continue-when-reset arms;
 `request-id` passes either way, and the client shows no notice for the hidden family. The upstream's own
 `anthropic-organization-id` and `set-cookie` are never forwarded to a key holder.
@@ -96,10 +96,11 @@ either way.
 A member's `priority` is a number; lower sorts first. Naming an unknown account in `members` answers `404
 account {id} not found`, and the pool is not created.
 
-A member carries a spend `budget_usd`, unset by default (no cap), and a `budget_period` of `day` or `month`
-(default `month`, the UTC calendar day or month). A member whose spend for the current period reaches its
-budget is skipped until the period ends; a pool whose every member is at its budget answers `429` with the
-`overage` claim, the same one an account in overage carries.
+An API-key member carries a spend `budget_usd`, unset by default (no cap), and a `budget_period` of `day` or `month`
+(default `month`, the UTC calendar day or month); a budget on any other member answers `400 budget_usd applies to an
+API-key member`, since a subscription member spends plan quota rather than money. A member whose spend for the current
+period reaches its budget is skipped until the period ends; a pool whose every member is at its budget answers `429`
+with the `overage` claim, the same one an account in overage carries.
 
 `prefer_subscription` orders the set by kind (subscription accounts with plan quota, then those in overage, then
 API keys) before priority; it is the operator's answer alone, on by default, and no strategy overrides it. A pool
@@ -192,8 +193,9 @@ section after Requests in flight.
 
 ## Clients
 
-Every request carries a class, read off its user agent: `claude-code/<entrypoint>` for a `claude-cli/` caller
-(the entrypoint token it names, `cli` when it names none) and `other` for anything else.
+Every request carries a class, read off its user agent: `claude-code/<entrypoint>` for a `claude-cli/` caller (the
+entrypoint token it names, `cli` when it names none)
+and `other` for anything else.
 
 A conversation is identified by its session header: the session id the client sends names it.
 A key's `affinity_source` fixes one of these rungs instead of walking the whole
@@ -247,16 +249,18 @@ Selection keys every request by `(key id, root session, agent, canonical model)`
 state and answers every request over a channel, so two concurrent first requests of the same session cannot claim
 different accounts. The identity a pin is held under is the session header [Clients](#clients) names.
 
-A fresh request with no live pin lands where its prefix is already warm: the deepest message boundary any account
-still holds always wins first, and failing that, the deepest static boundary for a subagent under `by_cohort` or a
-main conversation under `by_warm_prefix`, when the shared prefix, sized by the relay's estimate from the request's
-bytes, is at least `min_shared_prefix_tokens`, the request carries or receives a cache marker, and the account is not
-at its cap, hot, under the Pace floor, or winding down; a cooling or spent account never reaches this check, since the
-eligible set already excludes it. A subagent under `with_main` lands its first request on its parent agent's pin
-instead of this walk, and one under `by_strategy` skips the walk and lands by the strategy alone; every other case
-that finds no live match also lands by the strategy. A held request of a subagent cohort waits where its cohort
-already is rather than on the strategy's own pick; a session already on an account, under any of its agents, is never
-held while that account can still serve.
+A fresh request with no live pin lands where its prefix is already warm. The deepest message boundary any account still
+holds wins first, for a main conversation and a subagent alike. Failing that, the deepest static boundary places a
+subagent under `by_cohort` or a main conversation under `by_warm_prefix`, when the shared prefix, sized by the relay's
+estimate from the request's bytes, is at least `min_shared_prefix_tokens`, the request carries or receives a cache
+marker, and the account is not at its cap, at or above the ceiling (`select_below_utilization`), at or above the migrate
+threshold less its 0.05 band (`migrate_above_utilization`), under the Pace floor, or winding down. A cooling account
+never reaches either rung, since the eligible set excludes it; a spent account is in the eligible set, and both rungs
+refuse it through the allowance check. A subagent under `with_main` lands its first request on its parent agent's pin in
+place of the static walk, and one under `by_strategy` skips the static walk; every case that finds no live match lands
+by the strategy. A held request of a subagent cohort waits where its cohort already is rather than on the strategy's own
+pick; a session already on an account, under any of its agents, is never held while that account can still serve. A
+token count is never placed and takes neither exemption from a hold: its pin or the strategy decides it.
 
 The eligible set starts from every account that can serve the canonical model: enabled, paired or keyed, not
 `reauth_required` or `funding_required`, off cooldown, and not already tried by this request.

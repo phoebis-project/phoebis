@@ -369,15 +369,18 @@ impl Store {
         Ok(())
     }
 
+    /// One transaction for the whole batch, as `upsert_affinity` takes, so a large purge costs one commit.
     pub fn delete_affinity(&self, keys: &[(String, String)]) -> Result<usize, StoreError> {
-        let conn = self.conn.lock().expect(LOCK_POISONED);
+        let mut conn = self.conn.lock().expect(LOCK_POISONED);
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let mut deleted = 0;
-        for (model, hash) in keys {
-            deleted += conn.execute(
-                "DELETE FROM affinity WHERE model = ?1 AND hash = ?2",
-                params![model, hash],
-            )?;
+        {
+            let mut stmt = tx.prepare("DELETE FROM affinity WHERE model = ?1 AND hash = ?2")?;
+            for (model, hash) in keys {
+                deleted += stmt.execute(params![model, hash])?;
+            }
         }
+        tx.commit()?;
         Ok(deleted)
     }
 

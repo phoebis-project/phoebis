@@ -1173,7 +1173,8 @@ async function agentLines(theme) {
 /**
  * The Sessions table's fork badge against the Upstream cell's kind badge: the fork
  * badge measures the same box and sits on
- * the session id's line. The router's seed records no fork, so there the fork parts stand down.
+ * the session id's line. Both seeds record a fork, so both passes measure the fork badge; only the mock's pass fails
+ * when none is drawn.
  */
 async function sessionForkMark(theme) {
   const say = (what) => failures.push(`${theme} /sessions: ${what}`);

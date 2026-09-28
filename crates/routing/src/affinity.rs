@@ -320,7 +320,8 @@ impl AffinityMap {
 
     /// An existing entry with the same account, key and generation is refreshed in place and its key marked
     /// dirty; any other case (new, or held by another key) replaces it and yields a row. `confirmed` decides
-    /// the warmth: when false a refreshed entry keeps what it already had, and a new one carries no warmth.
+    /// the warmth: when false a refreshed entry keeps its warm deadline, its `ttl_ms` shrinking to the lifetime
+    /// it has left, and a new one carries no warmth.
     #[allow(clippy::too_many_arguments)]
     fn upsert(
         &mut self,
