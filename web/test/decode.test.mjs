@@ -514,7 +514,7 @@ test('analytics groups and points keep the histograms and reasons whole', () => 
   const desktop = rows.find((g) => g.key === 'desktop');
   assert.equal(desktop.requests, 4);
   const earlier = rows.find((g) => g.key.startsWith('desktop@'));
-  assert.equal(earlier.label, 'desktop (deleted)');
+  assert.equal(earlier.label, 'desktop (deleted, created 1970-01-01 00:15 UTC)');
   assert.equal(earlier.requests, 1);
   assert.equal(desktop.histograms.ttfbMs.length, 64);
   assert.equal(typeof desktop.percentiles.ttfbMs.p50, 'number');
@@ -653,7 +653,7 @@ test('request rows fold into analytics groups with the same sums the routes answ
   assert.equal(busy.webSearch, 3 + captured.usage.webSearch);
   assert.equal(busy.webFetch, 1 + captured.usage.webFetch);
   const byKey = d.foldGroups(page.requests, 'key');
-  assert.deepEqual(byKey.map((g) => g.label), ['desktop', 'desktop (deleted)'], 'a reused id is one group per holder, as the breakdown answers it');
+  assert.deepEqual(byKey.map((g) => g.label), ['desktop', 'desktop (deleted, created 1970-01-01 00:15 UTC)'], 'a reused id is one group per holder, as the breakdown answers it');
   // No captured breakdown groups on effort, so the fold is where the dimension is proven.
   assert.deepEqual(d.foldGroups(page.requests, 'effort').map((g) => g.key), ['high']);
   assert.deepEqual(d.foldGroups([{ ...captured, shape: { ...captured.shape, effort: null } }], 'effort').map((g) => g.key), ['none'], 'a request that asked for no effort files under none, as the rollups file it');
@@ -838,12 +838,12 @@ test('a session fold keeps two holders of one key id apart and labels the earlie
   const groups = d.foldGroups(rows, 'key');
   assert.deepEqual(
     groups.map((g) => [g.key, g.label, g.requests]),
-    [[`desktop@${live.keyGeneration}`, 'desktop', 4], [`desktop@${earlier.keyGeneration}`, 'desktop (deleted)', 1]],
+    [[`desktop@${live.keyGeneration}`, 'desktop', 4], [`desktop@${earlier.keyGeneration}`, 'desktop (deleted, created 1970-01-01 00:15 UTC)', 1]],
     'the key a group carries is the lifetime the requests route selects by',
   );
   assert.deepEqual(d.foldGroups([{ ...live, keyGeneration: 0, keyId: null }], 'key').map((g) => [g.key, g.label]), [['-@0', 'unattributed']]);
   const points = d.foldRequests([{ ...earlier, at: '1970-01-01T00:10:00.000Z' }, { ...live, at: '1970-01-01T01:10:00.000Z' }], 3_600_000, '1970-01-01T00:00:00.000Z', '1970-01-01T02:00:00.000Z', 'key');
-  assert.deepEqual(points.map((p) => p.groups.map((g) => g.label)), [['desktop (deleted)'], ['desktop']], 'a bucket holding the earlier holder alone still labels it against the whole range');
+  assert.deepEqual(points.map((p) => p.groups.map((g) => g.label)), [['desktop (deleted, created 1970-01-01 00:15 UTC)'], ['desktop']], 'a bucket holding the earlier holder alone still labels it against the whole range');
 });
 
 test('a session view folds every page the cursor names', () => {

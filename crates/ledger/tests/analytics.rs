@@ -382,7 +382,7 @@ fn a_reused_id_is_two_key_groups_and_a_bare_selector_names_the_live_generation()
             .collect::<Vec<_>>(),
         vec![
             ("k1", "k1", 1),
-            ("k1@1000", "k1 (deleted)", 2),
+            ("k1@1000", "k1 (deleted, created 1970-01-01 00:00 UTC)", 2),
             ("k2", "k2", 2),
             ("-", "unattributed", 1)
         ],

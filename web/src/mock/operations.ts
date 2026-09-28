@@ -237,10 +237,10 @@ for (const pin of SESSIONS) {
   pin.keepalive.netUsd = main?.netUsd ?? null;
 }
 
-// The earlier holder of the `desktop` key id, which the analytics story already draws as `desktop (deleted)`:
-// the ledger keeps its sessions until they expire, with no recipe of their own. It joins the list after the
-// probe times are filled in because it carries the live session's id, which would otherwise hand it that
-// session's next probe.
+// The earlier holder of the `desktop` key id, which the analytics story already draws as
+// `desktop (deleted, created ... UTC)`: the ledger keeps its sessions until they expire, with no recipe of their
+// own. It joins the list after the probe times are filled in because it carries the live session's id, which would
+// otherwise hand it that session's next probe.
 const firstDesktop = SESSIONS[0];
 SESSIONS.push({
   ...firstDesktop,

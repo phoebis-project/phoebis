@@ -1,5 +1,6 @@
 import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons, missCount } from '@/lib/cache';
 import { countOf, emptyCounts } from '@/lib/counts';
+import { earlierHolderLabel } from '@/lib/format';
 import { emptyHistogram, histogramOf, mergeHistograms, percentileFromHistogram } from '@/lib/histogram';
 import { matchesPattern } from '@/lib/pattern';
 import type { AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, RequestLog, RequestPage } from './types';
@@ -78,13 +79,13 @@ function latestGenerations(rows: RequestLog[]): Map<string, number> {
 
 /**
  * The breakdown route's labels: `unattributed` for a row no key or client was read for, and under `key` the id
- * alone for its newest generation and `<id> (deleted)` for an earlier one. The rows stand in for the router's
- * registry here, so the newest generation among them reads as the live one.
+ * alone for its newest generation and `<id> (deleted, created 2026-09-14 09:31 UTC)` for an earlier one. The rows
+ * stand in for the router's registry here, so the newest generation among them reads as the live one.
  */
 function labelOf(r: RequestLog, key: string, by: AnalyticsGroupBy, latest: Map<string, number>): string {
   if (by !== 'key') return key === '-' ? 'unattributed' : key;
   if (r.keyId === null) return 'unattributed';
-  return latest.get(r.keyId) === r.keyGeneration ? r.keyId : `${r.keyId} (deleted)`;
+  return latest.get(r.keyId) === r.keyGeneration ? r.keyId : earlierHolderLabel(r.keyId, r.keyGeneration);
 }
 
 /** Throughput is measured after the first content token, as the ledger measures it; without both timings there is no sample. */

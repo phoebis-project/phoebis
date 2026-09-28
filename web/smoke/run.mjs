@@ -2889,7 +2889,8 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
       return new Map([...(table?.querySelectorAll('tbody tr') ?? [])].map((tr) => [tr.children[0]?.textContent?.trim() ?? '', Number(tr.children[1]?.textContent?.trim().replace(/,/g, '') ?? -1)]));
     };
     const unfiltered = trafficRows();
-    results.push({ name: '/analytics a deleted holder of a reused key id is its own group', ok: unfiltered.has('desktop (deleted)') && unfiltered.has('desktop'), missing: [...unfiltered.keys()] });
+    const earlierLabel = [...unfiltered.keys()].find((k) => k.startsWith('desktop (deleted, created ')) ?? '';
+    results.push({ name: '/analytics a deleted holder of a reused key id is its own group, labelled with its creation time', ok: /^desktop \(deleted, created \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC\)$/.test(earlierLabel) && unfiltered.has('desktop'), missing: [...unfiltered.keys()] });
     // One hour of the month reports a reason the console has no label for; the table lists it under its own name
     // after the eight it knows, and the panel draws a bar for it.
     const reasonHeads = [...([...m.container.querySelectorAll('.card--table')].find((c) => (c.textContent ?? '').startsWith('Misses by reason by key'))?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim());
@@ -2913,11 +2914,11 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
       return rows;
     };
     const liveOnly = await pick('desktop');
-    const deletedOnly = await pick('desktop (deleted)');
+    const deletedOnly = await pick(earlierLabel);
     results.push({
       name: '/analytics each desktop option selects its own rows',
       // A table that never rendered answers undefined on both sides, which would compare equal and prove nothing.
-      ok: typeof unfiltered.get('desktop') === 'number' && typeof unfiltered.get('desktop (deleted)') === 'number' && liveOnly.get('desktop') === unfiltered.get('desktop') && !liveOnly.has('desktop (deleted)') && deletedOnly.get('desktop (deleted)') === unfiltered.get('desktop (deleted)') && !deletedOnly.has('desktop'),
+      ok: typeof unfiltered.get('desktop') === 'number' && typeof unfiltered.get(earlierLabel) === 'number' && liveOnly.get('desktop') === unfiltered.get('desktop') && !liveOnly.has(earlierLabel) && deletedOnly.get(earlierLabel) === unfiltered.get(earlierLabel) && !deletedOnly.has('desktop'),
       missing: [`live ${[...liveOnly.entries()].join(';')}`, `deleted ${[...deletedOnly.entries()].join(';')}`],
     });
     range('24h')?.click();

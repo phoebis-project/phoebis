@@ -273,15 +273,15 @@ and one with the main conversation keeps the plain cache line.
 
 ### Analytics
 
-A range control offers 1 hour, 24 hours, 7 days, 30 days, or a custom span, and a group-by control regroups every
-chart and table by client, effort, key, kind, model, pool, request class, upstream, or user agent; the client
-grouping reads the class and the user agent grouping the raw agent. The request class shown by this grouping is the
-value the client sent on its class header, verbatim, so a class a client adds later shows up under its own name; a
-classless request folds under the reserved value alongside a keepalive credit. A key deleted and created again under
-the same id appears twice under the key grouping, the earlier holder labelled `<id> (deleted)`, since its figures
-stay with the key that spent them. The client and user agent filters take the same patterns as the request log's, and
-under the user agent grouping a pattern list names the groups: `claude-cli/2.1.*` and `claude-cli/2.0.*` as two
-groups, every other agent under `other`.
+A range control offers 1 hour, 24 hours, 7 days, 30 days, or a custom span, and a group-by control regroups every chart
+and table by client, effort, key, kind, model, pool, request class, upstream, or user agent; the client grouping reads
+the class and the user agent grouping the raw agent. The request class shown by this grouping is the value the client
+sent on its class header, verbatim, so a class a client adds later shows up under its own name; a classless request
+folds under the reserved value alongside a keepalive credit. A key deleted and created again under the same id appears
+twice under the key grouping, the earlier holder labelled `<id> (deleted, created 2026-09-14 09:31 UTC)`, the date and
+time the earlier key was created at minute precision, since its figures stay with the key that spent them. The client
+and user agent filters take the same patterns as the request log's, and under the user agent grouping a pattern list
+names the groups: `claude-cli/2.1.*` and `claude-cli/2.0.*` as two groups, every other agent under `other`.
 
 Traffic reports request volume by outcome and the error rate, with a Failovers chart and a Migration rewrites card
 beside it: the cache-write tokens the first request after a move paid to warm its new upstream, and the moves the range

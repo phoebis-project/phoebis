@@ -4,7 +4,7 @@ import type {
 } from '@/api/types';
 import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons, missCount } from '@/lib/cache';
 import { emptyCounts } from '@/lib/counts';
-import { placementHit } from '@/lib/format';
+import { earlierHolderLabel, placementHit } from '@/lib/format';
 import { emptyHistogram, mergeHistograms, percentileFromHistogram } from '@/lib/histogram';
 import { matchesPattern } from '@/lib/pattern';
 import { ACCOUNTS } from './accounts';
@@ -185,7 +185,12 @@ function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes
 }
 
 /** The key dimension alone carries a generation in its group key; the reserved id reads out in every dimension. */
-const labelOf = (key: string, groupBy: AnalyticsGroupBy) => (key === '-' ? 'unattributed' : groupBy === 'key' && key.includes('@') ? `${key.split('@')[0]} (deleted)` : key);
+const labelOf = (key: string, groupBy: AnalyticsGroupBy) => {
+  if (key === '-') return 'unattributed';
+  if (groupBy !== 'key' || !key.includes('@')) return key;
+  const [id, generation] = key.split('@');
+  return earlierHolderLabel(id, Number(generation));
+};
 
 function groupsOf(rows: HourlyRollup[], q: AnalyticsQuery): AnalyticsGroup[] {
   const named = q.userAgentGroups ?? [];
