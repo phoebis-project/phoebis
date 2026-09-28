@@ -650,16 +650,18 @@ impl LiveKeys {
 
     /// The label of a key group alone (every other dimension keeps its group key as its label): the id;
     /// `<id> (deleted, created 2026-09-14 09:31 UTC)` for a generation no live key holds, the generation being that
-    /// key's `created_at` so two earlier holders read apart; `unattributed` for the reserved id.
+    /// key's `created_at` so two earlier holders read apart; `<id> (deleted)` for generation 0, the rows the
+    /// startup stamp left unstamped, which carry no creation time; `unattributed` for the reserved id.
     pub fn label_of(&self, key: &str) -> String {
         if key == UNATTRIBUTED {
             return "unattributed".into();
         }
         // A key id never carries `@` (the admin's slug rule), so the split is unambiguous.
         match key.rsplit_once('@') {
-            Some((id, generation)) => {
-                format!("{id} (deleted, created {})", created_stamp(generation))
-            }
+            Some((id, generation)) => match created_stamp(generation) {
+                Some(stamp) => format!("{id} (deleted, created {stamp})"),
+                None => format!("{id} (deleted)"),
+            },
             None => key.into(),
         }
     }
@@ -721,16 +723,15 @@ pub fn group_of(
 }
 
 /// Minute precision in UTC; the `<id>@<generation>` selector, never the label, tells two holders created in
-/// the same minute apart.
-fn created_stamp(generation: &str) -> String {
+/// the same minute apart. `None` for generation 0, which is no creation time, and for a generation that is no
+/// millisecond instant, so the console's label of the same group reads the same.
+fn created_stamp(generation: &str) -> Option<String> {
     generation
         .parse::<i64>()
         .ok()
+        .filter(|&ms| ms != 0)
         .and_then(|ms| jiff::Timestamp::from_millisecond(ms).ok())
-        .map_or_else(
-            || generation.into(),
-            |t| t.strftime("%Y-%m-%d %H:%M UTC").to_string(),
-        )
+        .map(|t| t.strftime("%Y-%m-%d %H:%M UTC").to_string())
 }
 
 fn label_of(key: &str) -> String {

@@ -777,9 +777,9 @@ function historicalRollups(): HourlyRollup[] {
     const daylight = hourOfDay >= 8 && hourOfDay <= 19 ? 1 : 0.15;
     const volume = daylight * (weekend ? 0.35 : 1);
     for (const lane of LANES) {
-      // The morning of one day in the second week back belongs to an earlier holder of `desktop`, deleted before
-      // the live key was created, at a fraction of the live key's volume: the month answers the pair of key
-      // groups, the shorter ranges do not, and no hour carries both generations.
+      // The morning of one day in the second week back belongs to an earlier holder of `desktop` alone, at a
+      // fraction of the live key's volume: the month answers the pair of key groups, the shorter ranges do not,
+      // and no hour carries both generations.
       const earlierHolder = lane.keyId === 'desktop' && hourOfDay < 11 && new Date(t).toDateString() === DELETED_HOLDER_DAY;
       const generation = earlierHolder ? DELETED_HOLDER_GENERATION : Date.parse(keyById.get(lane.keyId)!.createdAt);
       const laneWeight = earlierHolder ? 0.3 : lane.keyId === 'desktop' ? 1 : lane.keyId === 'laptop' ? 0.45 : 0.14;

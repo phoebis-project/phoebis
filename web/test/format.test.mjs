@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { fmtAbsolute, fmtEndsIn, fmtHourTick, fmtShortTime, fmtTime, fmtUsd, placementHit, setTimeFormat } from './dist/api.js';
+import { earlierHolderLabel, fmtAbsolute, fmtEndsIn, fmtHourTick, fmtShortTime, fmtTime, fmtUsd, placementHit, setTimeFormat } from './dist/api.js';
 
 test('a placement is a hit when the cache read what it promised: a content one its prefix, any other one anything', () => {
   const content = { depth: 3, prefixTokens: 130_000, rung: 'content' };
@@ -56,4 +56,11 @@ test('an end reads in whole days, then hours, then minutes, and one already past
   assert.equal(fmtEndsIn(at(-(2 * DAY + HOUR)), now), 'ended 2 days ago');
   assert.equal(fmtEndsIn(at(-5 * MINUTE), now), 'ended 5 minutes ago');
   assert.equal(fmtEndsIn(at(0), now), 'ended 1 minute ago', 'the end itself has passed');
+});
+
+test('an earlier holder reads its creation minute in UTC, and one with no creation time reads deleted alone', () => {
+  assert.equal(earlierHolderLabel('desktop', 34_305_000), 'desktop (deleted, created 1970-01-01 09:31 UTC)', 'the seconds drop, the hour and the minute stay');
+  assert.equal(earlierHolderLabel('desktop', 0), 'desktop (deleted)', 'generation 0 is a row filed before the generation column');
+  assert.equal(earlierHolderLabel('desktop', Number('abc')), 'desktop (deleted)', 'a generation that is no number');
+  assert.equal(earlierHolderLabel('desktop', Infinity), 'desktop (deleted)');
 });

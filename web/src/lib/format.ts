@@ -118,9 +118,16 @@ export function fmtHourTick(ms: number): string {
   return new Date(ms).toLocaleTimeString('en-US', { hour: '2-digit', hourCycle: hourCycle(), minute: '2-digit' });
 }
 
-/** The analytics label of a key generation no live key holds, as the router renders it. */
-export const earlierHolderLabel = (id: string, generation: number): string =>
-  `${id} (deleted, created ${new Date(generation).toISOString().slice(0, 16).replace('T', ' ')} UTC)`;
+/**
+ * The analytics label of a key generation no live key holds, as the router renders it. Generation 0, the rows the
+ * ledger left unstamped, and a generation that is no instant carry no creation time; `toISOString` would throw on
+ * the second.
+ */
+export const earlierHolderLabel = (id: string, generation: number): string => {
+  const created = new Date(generation);
+  if (generation === 0 || Number.isNaN(created.getTime())) return `${id} (deleted)`;
+  return `${id} (deleted, created ${created.toISOString().slice(0, 16).replace('T', ' ')} UTC)`;
+};
 
 /** A client names itself in full, which is wider than any table cell affords; the whole string rides the title. */
 export const shortAgent = (ua: string) => (ua.length > 28 ? `${ua.slice(0, 28)}…` : ua);

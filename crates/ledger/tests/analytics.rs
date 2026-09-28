@@ -363,6 +363,10 @@ fn a_reused_id_is_two_key_groups_and_a_bare_selector_names_the_live_generation()
         Some("sdk/python"),
     );
     plant("r6", None, 0, None, None);
+    // An earlier holder's rows filed before the generation column stay at 0, which is no creation time; and a
+    // generation at 09:31:45 pins the hour and the minute.
+    plant("r7", Some("k1"), 0, None, Some("claude-code/cli"));
+    plant("r8", Some("k1"), 34_305_000, None, Some("claude-code/cli"));
     let live = LiveKeys(BTreeMap::from([
         ("k1".to_string(), 2_000),
         ("k2".to_string(), 0),
@@ -382,7 +386,13 @@ fn a_reused_id_is_two_key_groups_and_a_bare_selector_names_the_live_generation()
             .collect::<Vec<_>>(),
         vec![
             ("k1", "k1", 1),
+            ("k1@0", "k1 (deleted)", 1),
             ("k1@1000", "k1 (deleted, created 1970-01-01 00:00 UTC)", 2),
+            (
+                "k1@34305000",
+                "k1 (deleted, created 1970-01-01 09:31 UTC)",
+                1
+            ),
             ("k2", "k2", 2),
             ("-", "unattributed", 1)
         ],

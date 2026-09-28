@@ -846,6 +846,17 @@ test('a session fold keeps two holders of one key id apart and labels the earlie
   assert.deepEqual(points.map((p) => p.groups.map((g) => g.label)), [['desktop (deleted, created 1970-01-01 00:15 UTC)'], ['desktop']], 'a bucket holding the earlier holder alone still labels it against the whole range');
 });
 
+test('a session fold labels an earlier holder at generation 0 deleted, with no creation time', () => {
+  const rows = d.decodeRequestPage(fixture('requests')).requests;
+  const live = rows.find((r) => r.id === 'r-captured');
+  const earlier = rows.find((r) => r.id === 'r-earlier-holder');
+  assert.deepEqual(
+    d.foldGroups([live, { ...earlier, keyGeneration: 0 }], 'key').map((g) => [g.key, g.label]),
+    [['desktop@0', 'desktop (deleted)'], [`desktop@${live.keyGeneration}`, 'desktop']],
+    'a row filed before the generation column has no creation time to show',
+  );
+});
+
 test('a session view folds every page the cursor names', () => {
   const page = d.decodeRequestPage(fixture('requests'));
   const pages = [{ nextCursor: 'c1', requests: page.requests.slice(0, 2) }, { nextCursor: null, requests: page.requests.slice(2) }];

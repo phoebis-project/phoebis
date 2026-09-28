@@ -79,8 +79,9 @@ function latestGenerations(rows: RequestLog[]): Map<string, number> {
 
 /**
  * The breakdown route's labels: `unattributed` for a row no key or client was read for, and under `key` the id
- * alone for its newest generation and `<id> (deleted, created 2026-09-14 09:31 UTC)` for an earlier one. The rows
- * stand in for the router's registry here, so the newest generation among them reads as the live one.
+ * alone for its newest generation and `<id> (deleted, created 2026-09-14 09:31 UTC)` for an earlier one
+ * (`<id> (deleted)` at generation 0). The rows stand in for the router's registry here, so the newest generation
+ * among them reads as the live one.
  */
 function labelOf(r: RequestLog, key: string, by: AnalyticsGroupBy, latest: Map<string, number>): string {
   if (by !== 'key') return key === '-' ? 'unattributed' : key;
