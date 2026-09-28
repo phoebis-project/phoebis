@@ -399,10 +399,15 @@ first, `oauth`, `api_key`, or `shared` for both; within a partition the first ma
 
 | Upstream result | Cooldown | Failover |
 | --- | --- | --- |
-| 429, 5h/7d/status rejected (not Fable-only) | Account-wide until the reset, or Retry-After, or fallback | Yes |
-| 429, only 7d_oi-status rejected, both shared windows OK | Model-scoped for the model, same deadline | Yes |
+| 429, 5h/7d/status rejected, else the rows below | Account-wide until the reset, or Retry-After, or fallback | Yes |
+| 429, only 7d_oi-status rejected, 5h/7d healthy | Model-scoped for the model, same deadline | Yes |
+| 429, `status` rejected under a `seven_day_` claim, 5h/7d healthy | Model-scoped for the model, same deadline | Yes |
 | 429 without unified headers | Account-wide, Retry-After or fallback | Yes |
 | 200 SSE, first event `error`/`rate_limit_error` | As the 429 rows, using the response's headers | Yes |
+
+A shared window is healthy when its status reads `allowed` or `allowed_warning`, or when the status is absent and the
+window's own utilization reads below 1.0; an absent status with no utilization, or any other status value, is not
+evidence that the window is fine, and the rejection cools the whole account.
 
 **api_key**
 
@@ -544,9 +549,9 @@ A model every account in the pool has rejected within the rejection window answe
 Claude Code 2.1.269 resumes a subscriber session on its own, after a usage-limit reset, only when the `429`
 carried all three of `anthropic-ratelimit-unified-status: rejected`, `anthropic-ratelimit-unified-reset` (Unix
 seconds), and `anthropic-ratelimit-unified-representative-claim` naming the window (`five_hour`, `seven_day`,
-`seven_day_opus`, `seven_day_sonnet`, or `overage`), with the reset at most 24 hours away. `Retry-After` alone
-arms nothing, and the client also skips arming when the claim names a model-scoped window for a model the
-session is not using.
+`seven_day_overage_included`, `seven_day_opus`, `seven_day_sonnet`, or `overage`), with the reset at most 24
+hours away. `Retry-After` alone arms nothing, and the client also skips arming when the claim names a model-scoped
+window for a model the session is not using.
 
 ## Overage
 
@@ -566,9 +571,11 @@ An account is in overage when its latest quota evidence says so, and only newer 
 clock, replaces that state. A response head sets the flag when `anthropic-ratelimit-unified-overage-in-use` is
 true, and clears it when the header is present and false, or absent while the shared window headers are
 present. A usage sample sets the flag when `extra_usage.is_enabled` is true and the 5-hour or 7-day utilization
-has reached 1.0, and clears it when both shared windows are below 1.0. An account with extra usage enabled never
-answers `429` once its plan quota empties: it keeps serving with the flag set, so `prefer_plan` and `never` act
-through this flag rather than through a cooldown.
+has reached 1.0, and clears it when both shared windows are below 1.0. An account with extra usage enabled keeps
+serving with the flag set once its plan quota empties, so `prefer_plan` and `never` act through this flag rather than
+through a cooldown. Once the organisation's spend cap is reached it answers `429` with the overage window rejected and
+the claim `seven_day_overage_included`; both shared windows still read healthy, so the cooldown path scopes that
+rejection to the model.
 
 Whether the flag still counts is one rule every reader applies alike, the selector and the keepalive scheduler
 included: an account counts as in overage while the reset its evidence names is ahead of now; evidence that names

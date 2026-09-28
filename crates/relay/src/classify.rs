@@ -254,12 +254,24 @@ fn oauth_cooldown(
     }
 }
 
-/// A rejection whose only rejected window is the model-scoped one. Both shared statuses have to be present and
-/// exactly `allowed`: neither an absent status nor an unrecognized third value is evidence that the shared
-/// window is fine, and a model-only cooldown on that basis would keep sending an exhausted account traffic.
+/// A shared window is healthy when its status reads `allowed` or `allowed_warning` (the near-cap warning is
+/// still an allowance), or when the status is absent and the window's own utilization parses below 1.0: a
+/// window the upstream reported under capacity is not the one that rejected. An absent status with no
+/// utilization, or a third status value, is evidence of nothing, and a model-only cooldown on that basis would
+/// keep sending an exhausted account traffic.
+fn shared_healthy(status: &Option<String>, utilization: Option<f64>) -> bool {
+    match status.as_deref() {
+        Some("allowed" | "allowed_warning") => true,
+        Some(_) => false,
+        None => utilization.is_some_and(|u| (0.0..1.0).contains(&u)),
+    }
+}
+
+/// A rejection whose only rejected window is the model-scoped one: both shared windows healthy, and either
+/// the 7d_oi window rejected or a representative claim that names a `seven_day_` window.
 fn fable_only(u: &UnifiedHeaders) -> bool {
-    let allowed = |s: &Option<String>| s.as_deref() == Some("allowed");
-    let shared_fine = allowed(&u.five_hour_status) && allowed(&u.seven_day_status);
+    let shared_fine = shared_healthy(&u.five_hour_status, u.five_hour_utilization)
+        && shared_healthy(&u.seven_day_status, u.seven_day_utilization);
     shared_fine
         && (u.seven_day_oi_status.as_deref() == Some("rejected")
             || u.representative_claim
@@ -568,6 +580,88 @@ mod tests {
     }
 
     #[test]
+    fn a_spend_cap_rejection_of_the_overage_window_cools_only_the_model() {
+        // The header set an organisation at its spend cap answers, as observed: no 5h status, a 5h utilization
+        // of zero, no reset header, `Retry-After` alone.
+        let h = head(
+            429,
+            &[
+                ("anthropic-ratelimit-unified-status", "rejected"),
+                (
+                    "anthropic-ratelimit-unified-representative-claim",
+                    "seven_day_overage_included",
+                ),
+                ("anthropic-ratelimit-unified-7d-status", "allowed"),
+                ("anthropic-ratelimit-unified-7d-utilization", "0.69"),
+                ("anthropic-ratelimit-unified-5h-utilization", "0.00"),
+                ("anthropic-ratelimit-unified-7d_oi-status", "rejected"),
+                ("anthropic-ratelimit-unified-7d_oi-utilization", "1.02"),
+                ("anthropic-ratelimit-unified-overage-status", "rejected"),
+                (
+                    "anthropic-ratelimit-unified-overage-disabled-reason",
+                    "org_spend_cap_reached",
+                ),
+                ("retry-after", "121180"),
+            ],
+        );
+        let c = cooldown_of(classify(&h, &context(AccountKind::Oauth)));
+        assert_eq!(
+            (c.scope, c.until, c.window.as_str()),
+            (
+                Scope::Model,
+                NOW + 121_180_000 + MARGIN_MS,
+                "seven_day_overage_included"
+            ),
+            "the overage window rejected with both shared windows healthy cools the model, not the account"
+        );
+    }
+
+    #[test]
+    fn a_fable_only_rejection_under_a_five_hour_warning_cools_only_the_model() {
+        let h = head(
+            429,
+            &[
+                ("anthropic-ratelimit-unified-status", "rejected"),
+                (
+                    "anthropic-ratelimit-unified-representative-claim",
+                    "seven_day_fable",
+                ),
+                ("anthropic-ratelimit-unified-5h-status", "allowed_warning"),
+                ("anthropic-ratelimit-unified-7d-status", "allowed"),
+                ("anthropic-ratelimit-unified-7d_oi-status", "rejected"),
+                ("anthropic-ratelimit-unified-7d_oi-reset", "1700007200"),
+            ],
+        );
+        let c = cooldown_of(classify(&h, &context(AccountKind::Oauth)));
+        assert_eq!(
+            (c.scope, c.until, c.window.as_str()),
+            (
+                Scope::Model,
+                1_700_007_200_000 + MARGIN_MS,
+                "seven_day_fable"
+            )
+        );
+    }
+
+    #[test]
+    fn an_absent_shared_status_whose_utilization_reads_full_cools_the_account() {
+        let h = head(
+            429,
+            &[
+                ("anthropic-ratelimit-unified-status", "rejected"),
+                ("anthropic-ratelimit-unified-5h-utilization", "1.0"),
+                ("anthropic-ratelimit-unified-7d-status", "allowed"),
+                ("anthropic-ratelimit-unified-7d_oi-status", "rejected"),
+            ],
+        );
+        assert_eq!(
+            cooldown_of(classify(&h, &context(AccountKind::Oauth))).scope,
+            Scope::Account,
+            "a utilization at 1.0 is a spent window, whatever the missing status would have said"
+        );
+    }
+
+    #[test]
     fn a_model_only_rejection_without_both_shared_statuses_cools_the_account() {
         let h = head(
             429,
@@ -613,7 +707,7 @@ mod tests {
         assert_eq!(
             c.scope,
             Scope::Account,
-            "a shared status other than allowed or rejected is not evidence the window is fine"
+            "a shared status other than allowed, allowed_warning or rejected is not evidence of a healthy window"
         );
     }
 
