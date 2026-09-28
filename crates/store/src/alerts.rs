@@ -111,6 +111,30 @@ fn row_to_delivery(r: &rusqlite::Row<'_>) -> rusqlite::Result<AlertDeliveryRow> 
     })
 }
 
+/// The statement `Store::lifecycle_deliveries` runs. A term appears only when its value is given, since a
+/// nullable `? IS NULL OR` guard keeps the planner off the partial indexes. The index is named because the
+/// planner, lacking statistics, costs `event_id IS NULL` on `alert_deliveries_event` at a few rows when that
+/// entry holds every lifecycle row, then seeks there and sorts them all. The parameters bind in order: the kind
+/// when asked, the cursor's `at` and `id` when given, then the limit.
+pub fn lifecycle_deliveries_sql(kind: bool, cursor: bool) -> String {
+    let index = if kind {
+        "alert_deliveries_lifecycle_kind"
+    } else {
+        "alert_deliveries_lifecycle_at"
+    };
+    let mut sql = format!(
+        "SELECT {DELIVERY_COLUMNS} FROM alert_deliveries INDEXED BY {index} WHERE event_id IS NULL"
+    );
+    if kind {
+        sql.push_str(" AND kind = ?");
+    }
+    if cursor {
+        sql.push_str(" AND (at, id) < (?, ?)");
+    }
+    sql.push_str(" ORDER BY at DESC, id DESC LIMIT ?");
+    sql
+}
+
 /// Where a rule posts, with the port when it names one. A webhook URL may carry a credential in its userinfo,
 /// its path or its query, and the viewer role reads both a registry change and the rules route, so both stop
 /// at the destination and go no further. A URL that does not parse is answered as absent rather than whole.
@@ -409,14 +433,20 @@ impl Store {
         cursor: Option<(i64, i64)>,
         limit: usize,
     ) -> Result<(Vec<AlertDeliveryRow>, Option<(i64, i64)>), StoreError> {
+        let limit_param = limit as i64;
+        let mut bound: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(4);
+        if let Some(kind) = &kind {
+            bound.push(kind);
+        }
+        if let Some((at, id)) = &cursor {
+            bound.push(at);
+            bound.push(id);
+        }
+        bound.push(&limit_param);
         let conn = self.conn.lock().expect(LOCK_POISONED);
-        let (at, id) = cursor.map_or((None, None), |(at, id)| (Some(at), Some(id)));
-        let mut stmt = conn.prepare(&format!(
-            "SELECT {DELIVERY_COLUMNS} FROM alert_deliveries WHERE event_id IS NULL AND (?1 IS NULL OR kind = ?1) \
-             AND (?2 IS NULL OR at < ?2 OR (at = ?2 AND id < ?3)) ORDER BY at DESC, id DESC LIMIT ?4"
-        ))?;
+        let mut stmt = conn.prepare(&lifecycle_deliveries_sql(kind.is_some(), cursor.is_some()))?;
         let rows = stmt
-            .query_map(params![kind, at, id, limit as i64], row_to_delivery)?
+            .query_map(bound.as_slice(), row_to_delivery)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         let next = (rows.len() == limit)
             .then(|| rows.last().map(|r| (r.at, r.id as i64)))

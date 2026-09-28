@@ -2,7 +2,8 @@
 //! while it stays open.
 
 use phoebis_store::{
-    AlertDeliveryRow, AlertEventRow, AlertRuleRow, Secret, StorageKey, Store, StoreError,
+    lifecycle_deliveries_sql, AlertDeliveryRow, AlertEventRow, AlertRuleRow, Secret, StorageKey,
+    Store, StoreError,
 };
 
 fn rule(id: &str) -> AlertRuleRow {
@@ -24,7 +25,7 @@ fn rule(id: &str) -> AlertRuleRow {
 #[test]
 fn rules_are_stored_with_a_sealed_secret_that_only_has_secret_reveals() {
     let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 30);
+    assert_eq!(store.schema_version().unwrap(), 31);
     store
         .upsert_alert_rule(&rule("r1"), Some(Some(&Secret::new("hunter2"))), "admin")
         .unwrap();
@@ -493,6 +494,39 @@ fn a_lifecycle_delivery_lands_without_an_event_lists_newest_first_and_is_purged_
         .unwrap();
     assert_eq!(page3.iter().map(|d| d.at).collect::<Vec<_>>(), [1_000]);
     assert_eq!(next3, None, "the last page carries no cursor");
+}
+
+#[test]
+fn every_lifecycle_deliveries_page_seeks_a_partial_index_and_sorts_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("router.sqlite");
+    drop(Store::open(&path, &StorageKey::generate()).unwrap());
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    let mut wrong = Vec::new();
+    for (kind, cursor, index) in [
+        (false, false, "alert_deliveries_lifecycle_at"),
+        (false, true, "alert_deliveries_lifecycle_at"),
+        (true, false, "alert_deliveries_lifecycle_kind"),
+        (true, true, "alert_deliveries_lifecycle_kind"),
+    ] {
+        let mut stmt = conn
+            .prepare(&format!(
+                "EXPLAIN QUERY PLAN {}",
+                lifecycle_deliveries_sql(kind, cursor)
+            ))
+            .unwrap();
+        // The plan does not depend on the bound values, so the parameters stay unbound.
+        let mut rows = stmt.raw_query();
+        let mut plan = Vec::new();
+        while let Some(row) = rows.next().unwrap() {
+            plan.push(row.get::<_, String>(3).unwrap());
+        }
+        let plan = plan.join("; ");
+        if !plan.contains(index) || plan.contains("TEMP B-TREE") {
+            wrong.push(format!("kind {kind}, cursor {cursor}: {plan}"));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
 #[test]

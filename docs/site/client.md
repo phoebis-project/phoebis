@@ -215,11 +215,11 @@ upstream. The twins are on by default and switched off per key with `long_contex
 
 ## Headers and transport
 
-Request headers travel as the client sent them, in the client's own order and spelling. The router drops the
-hop-by-hop and forwarding headers, puts the account's credential where the client put the key, and adjusts
-`anthropic-beta` to what the account may claim. It owns `Host` and `Content-Length`, and adds nothing for a header the
-client left out beyond an `anthropic-beta` line for a beta the router injects, so any Claude Code version relays on its
-own measured shape rather than a guessed one.
+Request headers travel as the client sent them, in the client's own order and spelling. The router drops the hop-by-hop
+and forwarding headers, puts the account's credential where the client put the key, and adjusts `anthropic-beta` to what
+the account may claim. It owns `Host` and `Content-Length`, and adds nothing for a header the client left out beyond the
+restored `x-client-request-id` and an `anthropic-beta` line for a beta the router injects, so any Claude Code version
+relays on its own measured shape rather than a guessed one.
 
 Remote Control is unavailable behind the router. The client reports that `ANTHROPIC_BASE_URL` does not point at
 `api.anthropic.com`, and states that the override does not apply to Remote Control.

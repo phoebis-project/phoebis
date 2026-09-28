@@ -60,11 +60,12 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
     (28, V28),
     (29, V29),
     (30, V30),
+    (31, V31),
 ];
 
 /// The newest schema version this build knows how to read. `prepare` refuses a registry stamped past it
 /// rather than skip migrations it does not carry and misread the tables that follow.
-pub const SCHEMA_VERSION: u32 = 30;
+pub const SCHEMA_VERSION: u32 = 31;
 
 const V2: &str = r#"
 CREATE TABLE IF NOT EXISTS account_models (
@@ -480,3 +481,12 @@ CREATE INDEX affinity_written_at ON affinity (written_at);
 // The import that wrote this table is gone, and an attempt's pricing_version names the table in force by its
 // effective date, so no reader is left for the rows.
 const V30: &str = "DROP TABLE IF EXISTS pricing_versions;";
+
+// A lifecycle deliveries page orders by `at` then `id`, and a page narrowed to a kind seeks the kind first, so
+// each reads a partial index in its own order rather than sorting every lifecycle row. The `(kind, id)` index
+// ordered by `id`, which no reader asks for.
+const V31: &str = r#"
+DROP INDEX IF EXISTS alert_deliveries_lifecycle;
+CREATE INDEX alert_deliveries_lifecycle_at ON alert_deliveries (at, id) WHERE event_id IS NULL;
+CREATE INDEX alert_deliveries_lifecycle_kind ON alert_deliveries (kind, at, id) WHERE event_id IS NULL;
+"#;
