@@ -1788,7 +1788,7 @@ pub(crate) enum Gate {
 }
 
 impl Engine {
-    /// Five asks of the router task per tick, whatever the number of recipes: the scheduler must not queue one
+    /// Six asks of the router task per tick, whatever the number of recipes: the scheduler must not queue one
     /// command per agent in front of selection.
     pub(crate) async fn router_view(&self, now: i64, retained_models: Vec<String>) -> RouterView {
         self.router_view_calls

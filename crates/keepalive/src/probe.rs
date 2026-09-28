@@ -651,9 +651,11 @@ impl Inner {
     /// The Go `probeErrorLocked`, read from the answer the relay gave: a 429 after failover, or the exhaustion
     /// 429 the relay answers when every account is cooled, is the quota pause; a pool at its in-flight cap
     /// (`accounts_at_cap`) retries after the header's wait instead, since a slot there may free up before the
-    /// next real request would; the untimed exhaustion 503, when every account of the pool was unusable at
-    /// selection, pauses under its own reason; a 5xx forwarded from upstream retries; any other 4xx is a shape
-    /// the upstream refuses; a cancelled, timed-out, or lost exchange (status 0) is a transport error.
+    /// next real request would; a probe the selector refused on the pinned member's spend budget holds under
+    /// `budget` without a pause, since only a raised budget or the period's end clears it, never a wait; the
+    /// untimed exhaustion 503, when every account of the pool was unusable at selection, pauses under its own
+    /// reason; a 5xx forwarded from upstream retries; any other 4xx is a shape the upstream refuses; a
+    /// cancelled, timed-out, or lost exchange (status 0) is a transport error.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn probe_error(
         &mut self,

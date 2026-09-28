@@ -3,10 +3,12 @@
 //! time and the idle limits come from the pool's tuning.
 mod common;
 use phoebis_keepalive::{Event, KeepaliveLimits, KeepalivePolicy, Reason};
-use phoebis_ledger::{hour_of, read_rollups};
+use phoebis_ledger::{
+    hour_of, member_spends, read_rollups, AttemptRecord, PriceTable, Record, RequestRecord,
+};
 use phoebis_routing::{
-    resolve, ClientClass, EvidenceSource, MemberSpend, OverageEvidence, PinRef, Report,
-    SelectRequest, SelectResult,
+    resolve, ClientClass, EvidenceSource, OverageEvidence, PinRef, Report, SelectRequest,
+    SelectResult,
 };
 use phoebis_store::{AccountState, BudgetPeriod, CooldownRow, MemberWrite, OveragePolicy};
 use common::*;
@@ -319,17 +321,84 @@ async fn after_the_named_reset_passes_the_probe_is_no_longer_held_for_overage_an
     );
 }
 
-/// `a`'s spend row for the current period, at whatever level a case wants to cross or clear the budget with.
-fn budget_row(usd: f64, now: i64) -> MemberSpend {
-    MemberSpend {
-        pool_id: "main".into(),
+/// A real request and attempt for `a` in `main`: enough `claude-sonnet-5` input tokens, at the shipped table's
+/// live rate, to price at `usd` dollars, so a spend this test wants is a row the ledger's own rollups carry
+/// rather than a number the test invented.
+fn spend_of(id: &str, now: i64, usd: f64) -> (RequestRecord, AttemptRecord) {
+    let rate = PriceTable::shipped()
+        .models
+        .get("claude-sonnet-5")
+        .expect("the shipped table prices claude-sonnet-5")
+        .input;
+    let request = RequestRecord {
+        id: id.into(),
+        received_at: now,
+        finished_at: Some(now + 500),
+        key_id: Some("desktop".into()),
+        pool_id: Some("main".into()),
+        canonical_model: "claude-sonnet-5".into(),
+        model: "claude-sonnet-5".into(),
+        kind: "inference".into(),
+        origin: "client".into(),
+        outcome: "succeeded".into(),
+        attempts: 1,
+        ..Default::default()
+    };
+    let attempt = AttemptRecord {
+        request_id: id.into(),
+        attempt: 1,
         account_id: "a".into(),
-        period: BudgetPeriod::Month,
-        period_start: 0,
-        period_end: now + 1_000_000,
-        spent_usd: usd,
-        observed_at: now,
-    }
+        account_kind: "api_key".into(),
+        outcome: "succeeded".into(),
+        input_tokens: Some((usd / rate * 1_000_000.0).round() as u64),
+        ..Default::default()
+    };
+    (request, attempt)
+}
+
+/// Lands a real, priced request for `a` through the ledger's own channel, the path a real request's completion
+/// uses, and waits for the router's view of `a`'s spend to agree: a priced landing is what makes the writer
+/// refresh the router at once, rather than at its next slow poll of the registry for what `with_budget_member`
+/// just changed, so this is safe as the seed each test starts from, before anything else races its timing.
+async fn plant_spend(r: &Rig, id: &str, usd: f64) {
+    let (request, attempts) = spend_of(id, r.now(), usd);
+    r.ledger
+        .record_request(Record::Request {
+            request,
+            attempts: vec![attempts],
+            bodies: None,
+        })
+        .await;
+    settled(r, |r| async move {
+        r.h.router
+            .member_spends()
+            .await
+            .unwrap()
+            .iter()
+            .any(|row| row.account_id == "a" && row.spent_usd >= usd - 0.01)
+    })
+    .await;
+}
+
+/// Lands a second real request straight through the store, without the channel `plant_spend` uses, then reads
+/// `a`'s current-period spend the way the ledger's own background refresh would (the same query, the same rows)
+/// and relays it to the router at once: neither step awaits, so a caller racing this against the scheduler
+/// controls exactly when the router sees it, the way a direct `report` call did before, but with a real sum a
+/// later background round can only confirm, never contradict.
+fn plant_and_report_spend(r: &Rig, id: &str, usd: f64) {
+    let (request, attempt) = spend_of(id, r.now(), usd);
+    r.db.insert_request(&request, &[attempt], None).unwrap();
+    let rows =
+        r.db.read_blocking(|conn| {
+            member_spends(
+                conn,
+                &[("main".into(), "a".into(), BudgetPeriod::Month)],
+                r.now(),
+                &PriceTable::shipped(),
+            )
+        })
+        .unwrap();
+    r.h.router.report(Report::MemberSpend(rows));
 }
 
 /// `a` at a budget of 5.0 beside `b`, no budget: the shorthand both budget-hold tests below seed the pool with.
@@ -357,7 +426,33 @@ async fn with_budget_member(r: &Rig) {
     r.h.router.reload().await.unwrap();
 }
 
-/// Whether the router's own pin for `session`/`main` still names `a`.
+/// Raises `a`'s budget past any spend this suite plants, the production way a refusal clears: read live on the
+/// next poll, never a lower spend report.
+async fn raise_budget(r: &Rig) {
+    r.h.store
+        .set_pool_members(
+            "main",
+            &[
+                MemberWrite {
+                    account_id: "a".into(),
+                    priority: 0,
+                    budget_usd: Some(1_000.0),
+                    budget_period: BudgetPeriod::Month,
+                },
+                MemberWrite {
+                    account_id: "b".into(),
+                    priority: 1,
+                    budget_usd: None,
+                    budget_period: BudgetPeriod::Month,
+                },
+            ],
+            "test",
+        )
+        .unwrap();
+    r.h.router.reload().await.unwrap();
+}
+
+/// Whether the router holds a pin for session `session` on account `a`.
 async fn named_a(r: &Rig) -> bool {
     r.h.router
         .pins()
@@ -371,17 +466,7 @@ async fn named_a(r: &Rig) -> bool {
 async fn a_probe_pinned_to_a_member_at_its_budget_holds_until_the_budget_no_longer_refuses() {
     let mut r = armed(RigSpec::default()).await;
     with_budget_member(&r).await;
-    r.h.router
-        .report(Report::MemberSpend(vec![budget_row(5.0, r.now())]));
-    settled(&r, |r| async move {
-        r.h.router
-            .member_spends()
-            .await
-            .unwrap()
-            .iter()
-            .any(|row| row.account_id == "a" && row.spent_usd >= 5.0)
-    })
-    .await;
+    plant_spend(&r, "over-budget", 5.01).await;
     r.advance(270_000);
     r.step().await;
     assert_eq!(
@@ -389,22 +474,13 @@ async fn a_probe_pinned_to_a_member_at_its_budget_holds_until_the_budget_no_long
         (0, Reason::Budget)
     );
     assert_eq!(r.up.requests().len(), 1, "nothing went upstream");
-    r.h.router
-        .report(Report::MemberSpend(vec![budget_row(2.0, r.now())]));
-    settled(&r, |r| async move {
-        r.h.router
-            .member_spends()
-            .await
-            .unwrap()
-            .iter()
-            .any(|row| row.account_id == "a" && row.spent_usd < 5.0)
-    })
-    .await;
+    // The ledger's own spend for `a` still reads over 5.0 here; nothing lowers it.
+    raise_budget(&r).await;
     r.step().await;
     assert_eq!(
         (r.status("main").probes, r.status("main").reason),
         (1, Reason::Scheduled),
-        "the probe ran once the budget no longer refused"
+        "the probe ran once the raised budget no longer refused"
     );
 }
 
@@ -463,25 +539,16 @@ async fn a_budget_crossed_between_the_gate_and_the_selection_holds_the_probe_and
         })
         .await
         .unwrap();
-    r.h.router
-        .report(Report::MemberSpend(vec![budget_row(2.0, r.now())]));
-    settled(&r, |r| async move {
-        r.h.router
-            .member_spends()
-            .await
-            .unwrap()
-            .iter()
-            .any(|row| row.account_id == "a" && row.spent_usd < 5.0)
-    })
-    .await;
+    plant_spend(&r, "under-budget", 2.0).await;
     r.advance(270_000);
     // Drives the tick itself rather than `r.step()`: the gate passes on the view read here, and the job it
     // spawns has not run its own `select` when this returns, on the current-thread runtime the test builds.
     r.engine.step().await;
-    // The router's one command channel queues this report ahead of the spawned job's own `select`, so the
-    // selection that follows reads the crossed spend.
-    r.h.router
-        .report(Report::MemberSpend(vec![budget_row(5.0, r.now())]));
+    // A second real request pushes the ledger's own sum for `a` past the budget; relaying it here, with
+    // nothing awaited in between, queues the report on the router's one command channel ahead of the spawned
+    // job's own `select`, so the selection that follows reads the crossed spend. A later background refresh
+    // would compute the same real figure, so nothing after this can disagree with it.
+    plant_and_report_spend(&r, "crossing", 3.5);
     r.engine.wait_idle().await;
     r.pump(None).await;
     assert!(
@@ -496,28 +563,23 @@ async fn a_budget_crossed_between_the_gate_and_the_selection_holds_the_probe_and
     assert!(named_a(&r).await, "the pin still names a");
     r.step().await;
     assert_eq!(
-        r.status("main").reason,
-        Reason::Budget,
-        "the gate holds on the view again with nothing changed"
+        (r.status("main").probes, r.status("main").reason),
+        (1, Reason::Budget),
+        "the gate holds on the view again with nothing changed: no further probe was dispatched"
     );
     assert!(r.up.requests().is_empty());
-    r.h.router
-        .report(Report::MemberSpend(vec![budget_row(2.0, r.now())]));
-    settled(&r, |r| async move {
-        r.h.router
-            .member_spends()
-            .await
-            .unwrap()
-            .iter()
-            .any(|row| row.account_id == "a" && row.spent_usd < 5.0)
-    })
-    .await;
+    raise_budget(&r).await;
     r.step().await;
     assert_eq!(r.status("main").reason, Reason::Scheduled);
+    let sent = r.up.requests();
     assert_eq!(
-        r.up.requests().len(),
+        sent.len(),
         1,
         "the sole upstream request is the probe: this test sends no real one"
+    );
+    assert!(
+        sent[0].body.windows(14).any(|w| w == b"\"max_tokens\":0"),
+        "the one upstream request carries the probe's own marker, a max_tokens of zero"
     );
     assert!(named_a(&r).await, "the pin still names a");
 }

@@ -200,7 +200,7 @@ probe that made its net negative, not a contradiction.
 | --- | --- | --- |
 | `affinity_too_short` | affinity too short | The pool's affinity expires before the cache this probe would warm. |
 | `awaiting_cache_evidence` | awaiting cache evidence | The request's stream has not yet reported cache usage. |
-| `budget` | at budget | The pinned member is at its spend budget; the probe waits for the period to end or a raise. |
+| `budget` | at budget | The pinned member is at its spend budget until the period ends or the budget is raised. |
 | `cap_reached` | cap reached | The pool spent its daily probe cap, or a subscription account its 5-hour window share. |
 | `cold_probes` | paused: cold probes | Repeated cache-miss probes passed the pool's cold probe limit. |
 | `cooled` | cooled down | The pinned account is under a cooldown; the probe waits for it to end. |
