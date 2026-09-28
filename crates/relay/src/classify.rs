@@ -617,6 +617,42 @@ mod tests {
     }
 
     #[test]
+    fn a_spend_cap_rejection_cools_only_the_model_with_an_absent_seven_day_status() {
+        // The mirror of the #5915 case: the 5h status is explicit this time and the 7d status is absent, so
+        // the 7d window takes the predicate's own-utilization path instead of the 5h window.
+        let h = head(
+            429,
+            &[
+                ("anthropic-ratelimit-unified-status", "rejected"),
+                (
+                    "anthropic-ratelimit-unified-representative-claim",
+                    "seven_day_overage_included",
+                ),
+                ("anthropic-ratelimit-unified-5h-status", "allowed"),
+                ("anthropic-ratelimit-unified-7d-utilization", "0.69"),
+                ("anthropic-ratelimit-unified-7d_oi-status", "rejected"),
+                ("anthropic-ratelimit-unified-7d_oi-utilization", "1.02"),
+                ("anthropic-ratelimit-unified-overage-status", "rejected"),
+                (
+                    "anthropic-ratelimit-unified-overage-disabled-reason",
+                    "org_spend_cap_reached",
+                ),
+                ("retry-after", "121180"),
+            ],
+        );
+        let c = cooldown_of(classify(&h, &context(AccountKind::Oauth)));
+        assert_eq!(
+            (c.scope, c.until, c.window.as_str()),
+            (
+                Scope::Model,
+                NOW + 121_180_000 + MARGIN_MS,
+                "seven_day_overage_included"
+            ),
+            "an absent 7d status with a utilization below 1.0 is healthy, same as the 5h side"
+        );
+    }
+
+    #[test]
     fn a_fable_only_rejection_under_a_five_hour_warning_cools_only_the_model() {
         let h = head(
             429,
@@ -651,6 +687,9 @@ mod tests {
                 ("anthropic-ratelimit-unified-status", "rejected"),
                 ("anthropic-ratelimit-unified-5h-utilization", "1.0"),
                 ("anthropic-ratelimit-unified-7d-status", "allowed"),
+                // Pairs a utilization on the healthy side too, so a call that crossed the two windows'
+                // utilization arguments would read this one against the 5h status instead and answer Model.
+                ("anthropic-ratelimit-unified-7d-utilization", "0.10"),
                 ("anthropic-ratelimit-unified-7d_oi-status", "rejected"),
             ],
         );
