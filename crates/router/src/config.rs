@@ -794,19 +794,19 @@ mod tests {
     }
 
     #[test]
-    fn compatibility_refuses_a_key_this_build_no_longer_carries() {
+    fn compatibility_refuses_a_key_the_block_does_not_carry() {
         let dir = tempfile::tempdir().unwrap();
         std::env::set_var("TEST_CFG_ADMIN", "admin-secret-001");
         assert!(
             matches!(
                 load(&file_with_compat(
                     dir.path(),
-                    "outbound-gzip",
-                    "  outbound_gzip: false\n  profile: claude-code-2.1.269-linux-x64\n  usage_entrypoint: cli\n"
+                    "retired-gate",
+                    "  profile: claude-code-2.1.269-linux-x64\n  retired_gate: false\n"
                 )),
                 Err(ConfigError::Syntax(_))
             ),
-            "outbound_gzip left the block, so a file still naming it is refused like any other unknown key"
+            "retired_gate is a key no build has ever carried, so it is refused like any other unknown key"
         );
     }
 
