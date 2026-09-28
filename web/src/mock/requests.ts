@@ -17,7 +17,7 @@ const rng = createRng(7_331);
 
 export const SESSION_IDS = Array.from({ length: 14 }, () => rng.uuid());
 
-/** A holder of `desktop` created long before the live one and deleted before it, so the two never overlap. */
+/** An earlier holder of `desktop`, created long before the live one. */
 export const DELETED_HOLDER_GENERATION = Date.parse(daysAgo(120));
 const AGENT_IDS = ['main', 'main', 'main', 'a7f3', 'c21e', 'e90b', '4d1a'];
 

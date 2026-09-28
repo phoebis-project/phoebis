@@ -1690,7 +1690,8 @@ async fn a_client_request_folds_the_pins_burn_through_the_shipped_meter_table() 
     .unwrap();
     std::fs::write(dir.path().join("ca.pem"), up.ca_pem()).unwrap();
     let db_path = dir.path().join("phoebis.sqlite");
-    // No `pricing_path`: the confirmed table is the shipped one, matched against directly below.
+    // No `pricing_path`, and its default `./pricing.yaml` does not exist under the test's working directory, so
+    // `Pricing::load` chooses the shipped table, matched against directly below.
     seed_oauth_account(&db_path, &key_path);
     let (proxy_port, admin_port, metrics_port) = (free_port(), free_port(), free_port());
     let yaml = format!(

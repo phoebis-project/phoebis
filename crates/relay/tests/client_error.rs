@@ -588,7 +588,7 @@ async fn a_stale_keys_refusal_answers_admissions_401(recreated: bool) {
     );
 
     // Two requests complete on this harness (the one under test and the unknown-key comparison above), so the
-    // bus and the assembled ledger rows are both selected by this request's own id rather than by draw order.
+    // completion and the ledger row are selected by this request's id rather than by drain order.
     let events = drain_until_complete(&mut sub).await;
     let complete = events
         .iter()

@@ -364,7 +364,7 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
         )
         .unwrap(),
         0,
-        "V6 created it and V30 dropped it on the same carried-up open"
+        "V30 dropped the table the roll-back recreated on the same carried-up open"
     );
 }
 

@@ -129,10 +129,10 @@ account's `probe_cap_window_share_per_day`, and a migrated probe toward neither.
 
 ## The cost reference
 
-The Sessions view's Cost reference dialog builds its table from the shipped price table
-(`crates/ledger/pricing.yaml`, effective 2026-09-08), or the operator's `stats.pricing_path` file when one is
-configured (see [Statistics](statistics.md)). Per model it lists uncached input, cache write 5m, cache write 1h,
-cache read, and output, each in USD per million tokens, plus six derived comparisons explained below the table:
+The Sessions view's Cost reference dialog builds its table from the shipped price table (`crates/ledger/pricing.yaml`,
+effective 2026-09-08), or the file `stats.pricing_path` names (default `./pricing.yaml`) when that file exists (see
+[Statistics](statistics.md)). Per model it lists uncached input, cache write 5m, cache write 1h, cache read, and output,
+each in USD per million tokens, plus six derived comparisons explained below the table:
 
 <dl markdown="1">
 <dt>Per prefix token</dt>

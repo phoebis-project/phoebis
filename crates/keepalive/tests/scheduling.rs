@@ -383,8 +383,8 @@ async fn plant_spend(r: &Rig, id: &str, usd: f64) {
 /// Lands a second real request straight through the store, without the channel `plant_spend` uses, then reads
 /// `a`'s current-period spend the way the ledger's own background refresh would (the same query, the same rows)
 /// and relays it to the router at once: neither step awaits, so a caller racing this against the scheduler
-/// controls exactly when the router sees it, the way a direct `report` call did before, but with a real sum a
-/// later background round can only confirm, never contradict.
+/// controls exactly when the router sees it, with a real sum a later background round can only confirm, never
+/// contradict.
 fn plant_and_report_spend(r: &Rig, id: &str, usd: f64) {
     let (request, attempt) = spend_of(id, r.now(), usd);
     r.db.insert_request(&request, &[attempt], None).unwrap();
@@ -426,8 +426,8 @@ async fn with_budget_member(r: &Rig) {
     r.h.router.reload().await.unwrap();
 }
 
-/// Raises `a`'s budget past any spend this suite plants, the production way a refusal clears: read live on the
-/// next poll, never a lower spend report.
+/// Raises `a`'s budget past any spend this suite plants and reloads the router, so the refusal clears through the
+/// budget while `a`'s reported spend stays where it was.
 async fn raise_budget(r: &Rig) {
     r.h.store
         .set_pool_members(
@@ -473,7 +473,11 @@ async fn a_probe_pinned_to_a_member_at_its_budget_holds_until_the_budget_no_long
         (r.status("main").probes, r.status("main").reason),
         (0, Reason::Budget)
     );
-    assert_eq!(r.up.requests().len(), 1, "nothing went upstream");
+    assert_eq!(
+        r.up.requests().len(),
+        1,
+        "nothing more went upstream than the arming request"
+    );
     // The ledger's own spend for `a` still reads over 5.0 here; nothing lowers it.
     raise_budget(&r).await;
     r.step().await;

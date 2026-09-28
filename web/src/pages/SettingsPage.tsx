@@ -88,7 +88,10 @@ const toDraft = (m: ModelPrice): PriceDraft => ({
   outputPerM: String(m.outputPerM),
 });
 
-/** `pricing.source` is `shipped`, or `file` for the operator's `stats.pricing_path` table; shown as it reads. */
+/**
+ * `pricing.source` is `shipped`, `file` for the operator's `stats.pricing_path` table, or `edited by hand`, which
+ * only the mock build's hand edit below applies; shown as it reads.
+ */
 function sourceLabel(source: string): string {
   return source;
 }

@@ -618,8 +618,9 @@ mod tests {
 
     #[test]
     fn a_spend_cap_rejection_cools_only_the_model_with_an_absent_seven_day_status() {
-        // The mirror of the #5915 case: the 5h status is explicit this time and the 7d status is absent, so
-        // the 7d window takes the predicate's own-utilization path instead of the 5h window.
+        // The mirror of `a_spend_cap_rejection_of_the_overage_window_cools_only_the_model`: the 5h status is
+        // explicit this time and the 7d status is absent, so the 7d window takes the predicate's own-utilization
+        // path instead of the 5h window.
         let h = head(
             429,
             &[

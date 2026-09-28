@@ -399,9 +399,9 @@ first, `oauth`, `api_key`, or `shared` for both; within a partition the first ma
 
 | Upstream result | Cooldown | Failover |
 | --- | --- | --- |
-| 429, 5h/7d/status rejected, unless a row below matches | Account-wide until reset, Retry-After, or fallback | Yes |
-| 429, 7d_oi-status rejected, 5h/7d healthy | Model-scoped for the model, same deadline | Yes |
+| 429, 7d_oi-status rejected, 5h/7d healthy | Model-scoped for the model until reset, Retry-After, or fallback | Yes |
 | 429, `status` rejected under a `seven_day_` claim, 5h/7d healthy | Model-scoped for the model, same deadline | Yes |
+| 429, a shared window (5h or 7d) or `status` rejected | Account-wide, same deadline | Yes |
 | 429 without unified headers | Account-wide, Retry-After or fallback | Yes |
 | 200 SSE, first event `error`/`rate_limit_error` | As the 429 rows, using the response's headers | Yes |
 

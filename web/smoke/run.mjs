@@ -3697,7 +3697,7 @@ expect('/alerts', m.text(), ['Rules', 'Create rule', 'Re-auth required', 'Utiliz
   });
   const lifecycleLoadMore = () => [...(lifecycleCard()?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Load more');
   results.push({
-    name: '/alerts the load-more control never shows once the seed fits inside the default page',
+    name: '/alerts the load-more control never shows while the whole log fits on one page',
     ok: lifecycleLoadMore() === undefined,
     missing: [String(lifecycleLoadMore() !== undefined)],
   });
@@ -3727,6 +3727,30 @@ expect('/alerts', m.text(), ['Rules', 'Create rule', 'Re-auth required', 'Utiliz
   setValue.call(lifecycleFilter, 'all');
   lifecycleFilter.dispatchEvent(new window.Event('change', { bubbles: true }));
   await m.settle(300);
+}
+{
+  // The seed's own size, so the first page is exactly full and carries a cursor with nothing beyond it: the one
+  // click that answers no rows has to take the control away rather than fall back to the first page's cursor.
+  api.lifecyclePageSize = 9;
+  const fm = await mount('/alerts');
+  const card = () => [...fm.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Lifecycle');
+  const rowKeys = () => [...(card()?.querySelectorAll('tbody tr') ?? [])].map((r) => r.querySelector('td')?.getAttribute('title') ?? '');
+  const loadMore = () => [...(card()?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Load more');
+  results.push({
+    name: '/alerts an exactly full first page shows the load-more control',
+    ok: rowKeys().length === 9 && loadMore() !== undefined,
+    missing: [String(rowKeys().length), String(loadMore() !== undefined)],
+  });
+  loadMore()?.click();
+  await fm.settle();
+  const after = rowKeys();
+  results.push({
+    name: '/alerts a click past an exactly full first page answers no rows and the control disappears',
+    ok: after.length === 9 && new Set(after).size === 9 && loadMore() === undefined,
+    missing: [String(after.length), String(new Set(after).size), String(loadMore() !== undefined)],
+  });
+  fm.unmount();
+  api.lifecyclePageSize = 500;
 }
 {
   // A small page size the seed alone never reaches, so a click has somewhere to grow the log; the nine-row seed

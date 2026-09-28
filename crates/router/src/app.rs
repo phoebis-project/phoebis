@@ -649,8 +649,8 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
     served
 }
 
-/// The routing task's burn prices and peak band: the shipped plan tables for the meter side and `prices` for
-/// dollars, both fixed for the life of the process from the table `Pricing::load` chose at startup.
+/// The routing task's burn prices and peak band: the shipped plan tables for the meter side, and for dollars
+/// `prices`, the table `Pricing::load` chose at startup; both are fixed for the life of the process.
 fn router_config(prices: &phoebis_ledger::PriceTable) -> phoebis_routing::RouterConfig {
     let windows = Arc::new(phoebis_ledger::PlanWindows::shipped());
     phoebis_routing::RouterConfig {

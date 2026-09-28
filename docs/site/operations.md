@@ -114,12 +114,12 @@ A "pinned" build is the one Claude Code release the router is measured against: 
 the Stainless headers, the three beta lists, the control-plane URLs and client id, and the TLS curves and cipher
 list, checked against the fixtures under `crates/profile/fixtures/`.
 A newer client build is not relayed in its own shape automatically: headers
-travel as the client sends them, with the `anthropic-beta` line copied as sent and edited for three betas only:
-the OAuth beta, claimed for a subscription credential and stripped for an API key on every request; the
-cache-diagnosis beta under `compatibility.cache_diagnostics`; and the extended-TTL beta the cache TTL rewrite adds
-or drops. The profile's beta lists are the checklist the fixtures are verified against, and the fields the router
-restores for a Claude Code request are the ones on the [client page](client.md#the-environment-block), not what a
-newer client might add.
+travel as the client sends them, with the `anthropic-beta` line copied as sent and edited for three betas only: the
+OAuth beta, claimed for a subscription credential and stripped for an API key on every request that carries the line;
+the cache-diagnosis beta under `cache_diagnostics` (the compatibility option or the pool's own); and the extended-TTL
+beta the cache TTL rewrite adds or drops. The profile's beta lists record what the measured client sends, as the
+fixtures show, and the fields the router restores for a Claude Code request are the ones on the
+[client page](client.md#the-environment-block), not what a newer client might add.
 
 To re-pin the profile against a new build:
 
