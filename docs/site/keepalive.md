@@ -247,10 +247,10 @@ example because the cost cap or a cooldown already held the recipe.
 
 ## In the console
 
-![The Sessions view: summary tiles, and the session table with a forked
-session's fork badge](assets/sessions-light.png#only-light)
-![The Sessions view: summary tiles, and the session table with a forked
-session's fork badge](assets/sessions-dark.png#only-dark)
+![The Sessions view: summary tiles, the cost reference link, and the session table with
+a forked session's fork badge](assets/sessions-light.png#only-light)
+![The Sessions view: summary tiles, the cost reference link, and the session table with
+a forked session's fork badge](assets/sessions-dark.png#only-dark)
 
 The Sessions view opens with tiles for the session count, the cache-warming agents by state, cache probes in the last 24
 hours by outcome, sessions whose cache expired between turns, net savings over 7 days, and the day's probe cost per pool

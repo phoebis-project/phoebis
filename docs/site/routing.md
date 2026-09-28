@@ -243,8 +243,8 @@ ledger recorded.
 
 ## Selection
 
-Selection keys every request by `(key id, root session, canonical model)`. The router holds all routing state
-and answers every request over a channel, so two concurrent first requests of the same session cannot claim
+Selection keys every request by `(key id, root session, agent, canonical model)`. The router holds all routing
+state and answers every request over a channel, so two concurrent first requests of the same session cannot claim
 different accounts. The identity a pin is held under is the session header [Clients](#clients) names.
 
 A fresh request with no live pin lands where its prefix is already warm: the deepest message boundary any account
