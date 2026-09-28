@@ -539,8 +539,8 @@ pool whose accounts are all paused, `phoebis` answers `503` with error code `acc
 `no account in this pool can serve requests`, and no `retry-after`. A request admitted under a key that was deleted, or
 deleted and created again under its id, before it was routed is refused with the `401` admission answers a key the
 registry does not hold (see [What the proxy accepts](client.md#what-the-proxy-accepts)). A pool whose every member has
-reached its spend budget answers `429` with the `overage` claim, the same one an
-account in overage carries (see [Pools](#pools)).
+reached its spend budget answers `429` with the `overage` claim, the same one an account in overage carries (see
+[Pools](#pools)).
 
 A model every account in the pool has rejected within the rejection window answers `404` with error code
 `model_rejected` and the message `every account in this pool rejected the model`; the

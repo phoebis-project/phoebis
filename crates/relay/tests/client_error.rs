@@ -540,7 +540,13 @@ async fn a_stale_keys_refusal_answers_admissions_401(recreated: bool) {
     );
     let bus = Bus::new();
     let mut sub = bus.subscribe("test");
-    let h = harness_with_bus(&up, &[oauth("a", A, 0)], PoolSpec::default(), bus).await;
+    let h = harness_with_bus(
+        &up,
+        &[oauth("a", A, 0), oauth("b", B, 1)],
+        PoolSpec::default(),
+        bus,
+    )
+    .await;
     let app = h.app.clone();
     let pending =
         tokio::spawn(async move { app.oneshot(request_for(KEY, MODEL, "s1")).await.unwrap() });
@@ -566,7 +572,6 @@ async fn a_stale_keys_refusal_answers_admissions_401(recreated: bool) {
     let request_id = body["request_id"].as_str().unwrap().to_string();
     body.as_object_mut().unwrap().remove("request_id");
 
-    // The same 401 a request with a key the registry never held gets at admission, on the same harness.
     let unknown = h
         .app
         .clone()
@@ -582,18 +587,19 @@ async fn a_stale_keys_refusal_answers_admissions_401(recreated: bool) {
         "the stale path answers the same 401 admission gives an unknown key"
     );
 
+    // Two requests complete on this harness (the one under test and the unknown-key comparison above), so the
+    // bus and the assembled ledger rows are both selected by this request's own id rather than by draw order.
     let events = drain_until_complete(&mut sub).await;
     let complete = events
         .iter()
         .find_map(|e| match e {
-            Event::RequestComplete(c) => Some(c.clone()),
+            Event::RequestComplete(c) if c.request_id == request_id => Some(c.clone()),
             _ => None,
         })
-        .expect("a completion");
+        .expect("this request's completion");
     assert_eq!(complete.error_code.as_deref(), Some("auth_unknown"));
     assert_eq!(complete.attempt, 1);
     assert_eq!(complete.outcome, Outcome::Rejected);
-    assert_eq!(complete.request_id, request_id);
 
     let mut assembler = Assembler::new(std::sync::Arc::new(|| 0));
     let records: Vec<Record> = events
@@ -605,15 +611,19 @@ async fn a_stale_keys_refusal_answers_admissions_401(recreated: bool) {
         .find_map(|r| match r {
             Record::Request {
                 request, attempts, ..
-            } => Some((request, attempts)),
+            } if request.id == request_id => Some((request, attempts)),
             _ => None,
         })
-        .expect("the request lands a ledger row");
+        .expect("this request's ledger row");
     assert_eq!(request.outcome, "rejected");
     assert_eq!(attempts.len(), 1);
     assert!(attempts[0].finished_at.is_some());
 
-    assert_eq!(up.requests().len(), 1, "no sibling was attempted");
+    assert_eq!(
+        up.requests().len(),
+        1,
+        "the eligible sibling never dispatches: the stale path refuses before candidates are considered"
+    );
     up.shutdown().await;
 }
 
@@ -625,4 +635,67 @@ async fn a_request_whose_key_was_replaced_before_selection_answers_admissions_40
 #[tokio::test]
 async fn a_request_whose_key_was_deleted_before_selection_answers_admissions_401() {
     a_stale_keys_refusal_answers_admissions_401(false).await;
+}
+
+/// A gated credential rule holds the account's first attempt while the pool's model rules tighten under the
+/// request: the reselect after the attempt reads the current rules and refuses on them, as conclusive a
+/// refusal as a key gone from the registry, so it reads rejected whatever the attempt count.
+#[tokio::test]
+async fn a_stale_model_refusal_after_an_attempt_still_reads_rejected() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    up.add_credential_rule(
+        A,
+        "/v1/messages",
+        Respond::Gated(Box::new(json_429_unified(4_600, "five_hour"))),
+    );
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test");
+    let h = harness_with_bus(&up, &[oauth("a", A, 0)], PoolSpec::default(), bus).await;
+    let app = h.app.clone();
+    let pending =
+        tokio::spawn(async move { app.oneshot(request_for(KEY, MODEL, "s1")).await.unwrap() });
+    wait_for(Duration::from_secs(2), || {
+        credentials_seen(&up).contains(&A.to_string()).then_some(())
+    })
+    .await;
+    let mut pool = h.store.pool("main").unwrap().unwrap();
+    pool.model_rules = rules(&["NOT *"]);
+    h.store.update_pool(&pool, "test").unwrap();
+    h.router.reload().await.unwrap();
+    up.release();
+    let resp = pending.await.unwrap();
+    assert_eq!(resp.status(), 404);
+    assert_eq!(resp.headers()["x-phoebis-error-code"], "model_not_allowed");
+
+    let events = drain_until_complete(&mut sub).await;
+    let complete = events
+        .iter()
+        .find_map(|e| match e {
+            Event::RequestComplete(c) if c.error_code.as_deref() == Some("model_not_allowed") => {
+                Some(c.clone())
+            }
+            _ => None,
+        })
+        .expect("a completion");
+    assert_eq!(complete.attempt, 1);
+    assert_eq!(complete.outcome, Outcome::Rejected);
+
+    let mut assembler = Assembler::new(std::sync::Arc::new(|| 0));
+    let records: Vec<Record> = events
+        .into_iter()
+        .flat_map(|e| assembler.observe(e))
+        .collect();
+    let request = records
+        .iter()
+        .find_map(|r| match r {
+            Record::Request { request, .. } if request.id == complete.request_id => Some(request),
+            _ => None,
+        })
+        .expect("this request's ledger row");
+    assert_eq!(request.outcome, "rejected");
+    up.shutdown().await;
 }

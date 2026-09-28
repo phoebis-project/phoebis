@@ -353,7 +353,6 @@ async fn a_request_admitted_under_a_key_deleted_before_selection_is_refused_as_u
     let now = Arc::new(AtomicI64::new(1_000));
     let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
     let admitted = request(&handle, Some("s1"), 1_000);
-    // The key is deleted and never recreated: the id the request was admitted on names nothing.
     store.delete_api_key("k", "test").unwrap();
     handle.reload().await.unwrap();
     let answer = handle.select(stale(admitted)).await.unwrap();

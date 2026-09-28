@@ -547,9 +547,11 @@ fn outcome_of(outcome: &RelayOutcome) -> Outcome {
         // selection) or after the last one (the budget's end): the account that answered it is
         // conclusive either way, not a transport or upstream failure.
         Some("model_rejected") => Outcome::Rejected,
-        // A key refusal is conclusive whether it is caught at admission or at the reselect after an attempt,
-        // so the ledger row reads rejected rather than upstream_error.
-        Some("auth_unknown") => Outcome::Rejected,
+        // A key or policy refusal is conclusive whether it is caught at admission or at the reselect after an
+        // attempt, so the ledger row reads rejected rather than failed.
+        Some("auth_unknown") | Some("client_not_allowed") | Some("model_not_allowed") => {
+            Outcome::Rejected
+        }
         Some(_) if outcome.attempt == 0 => Outcome::Rejected,
         Some(_) => Outcome::Failed,
         None if outcome.upstream_status < 400 => Outcome::Succeeded,
