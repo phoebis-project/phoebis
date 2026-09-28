@@ -325,9 +325,9 @@ export class MockApi implements Api {
   private events: AlertEvent[] = ALERT_EVENTS.map((e) => ({ ...e }));
   private keys: ApiKey[] = [...KEYS];
   private lifecycle: LifecycleDelivery[] = LIFECYCLE_DELIVERIES.map((d) => ({ ...d }));
-  // Public so a smoke check can force several pages of a log the seed alone never fills; the route's own cap is
-  // `EVENT_LIMIT`, matched here as the default.
-  lifecyclePageSize = 500;
+  // Public so a check can set its own page size; the default sits below the nine-row seed so the control renders
+  // in the mock bundle without extra setup, while a smoke check that wants the route's own cap sets it to 500.
+  lifecyclePageSize = 6;
   private pairings = new Map<string, { accountId: string; state: string }>();
   // The route reads every member's kind and verdict afresh on each answer; the story's are read once, at load.
   private pools: Omit<Pool, 'keys'>[] = POOLS.map((p) => ({
@@ -749,7 +749,9 @@ export class MockApi implements Api {
     const after = cursor ? sorted.filter((d) => isAfterLifecycleCursor(d, cursor)) : sorted;
     const page = after.slice(0, this.lifecyclePageSize);
     const last = page[page.length - 1];
-    return latency({ deliveries: page, nextCursor: after.length > this.lifecyclePageSize && last ? `${Date.parse(last.at)}:${last.id}` : null });
+    // The route's own rule: a full page carries a cursor even when nothing lies beyond it, so a page exactly the
+    // seed's size still says so, the way an operator's log can land on that boundary too.
+    return latency({ deliveries: page, nextCursor: page.length === this.lifecyclePageSize && last ? `${Date.parse(last.at)}:${last.id}` : null });
   }
 
   listPools() {

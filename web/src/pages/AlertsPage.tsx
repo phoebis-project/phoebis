@@ -119,12 +119,16 @@ export function AlertsPage() {
   const [lifecycleKind, setLifecycleKind] = useState<AlertKind | 'all'>('all');
   const lifecycle = useAsync(() => api.listLifecycleDeliveries(lifecycleKind === 'all' ? undefined : lifecycleKind), [lifecycleKind]);
   const moreGeneration = useRef(0);
-  const [more, setMore] = useState<{ generation: number; loading: boolean; nextCursor: string | null; rows: LifecycleDelivery[] }>({ generation: 0, loading: false, nextCursor: null, rows: [] });
+  // `nextCursor` stays `undefined` until a load-more reply lands in this generation; a page can be exactly full
+  // with nothing beyond it, so the route answers a cursor whenever the page is full, not only while rows remain
+  // (`crates/store/src/alerts.rs`), and a landed `null` must win over the first page's cursor rather than fall
+  // back to it forever.
+  const [more, setMore] = useState<{ generation: number; loading: boolean; nextCursor: string | null | undefined; rows: LifecycleDelivery[] }>({ generation: 0, loading: false, nextCursor: undefined, rows: [] });
   useEffect(() => {
     moreGeneration.current += 1;
-    setMore({ generation: moreGeneration.current, loading: false, nextCursor: null, rows: [] });
+    setMore({ generation: moreGeneration.current, loading: false, nextCursor: undefined, rows: [] });
   }, [lifecycleKind]);
-  const lifecycleCursor = more.rows.length > 0 ? more.nextCursor : (lifecycle.data?.nextCursor ?? null);
+  const lifecycleCursor = more.nextCursor !== undefined ? more.nextCursor : (lifecycle.data?.nextCursor ?? null);
   const [toast, setToast] = useState<string | null>(null);
   const now = useNow();
   const named: Named = { accounts: accounts.data ?? [], keys: keys.data ?? [], pools: pools.data ?? [] };

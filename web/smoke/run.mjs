@@ -3645,6 +3645,9 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
 m.unmount();
 
 
+// The mock's default page size sits below the seed so the control renders without setup elsewhere (the mock
+// pass); this section reads the whole nine-row log unpaginated, so it asks for the route's own cap explicitly.
+api.lifecyclePageSize = 500;
 m = await mount('/alerts');
 expect('/alerts an expired question says so to an admin', m.text(), ['question expired with its captured body']);
 expect('/alerts', m.text(), ['Rules', 'Create rule', 'Re-auth required', 'Utilization above threshold', 'Pool exhausted', 'Waiting for user input', 'Client drift', 'Funding required', 'Probe cost cap reached', 'Credential refresh failed', 'hooks.example.com/phoebis/active', 'hooks.example.com/phoebis/subagent', 'All traffic', 'Signed', 'Unsigned', 'Events', 'Any condition', 'Any state', 'open', 'resolved', 'refused', 'asked: The ledger migration can rewrite rows in place', 'client 2.1.274, caught by the billing-hash check', 'agent main', 'Resolve', '2 in a row, the last refused: invalid_grant', 'Lifecycle', 'Any session condition', 'Session started', 'Subagent ended', 'idle for 30 min', 'parent main']);
@@ -3699,8 +3702,16 @@ expect('/alerts', m.text(), ['Rules', 'Create rule', 'Re-auth required', 'Utiliz
   await m.settle(300);
 }
 {
-  // A small page size the seed alone never reaches, so a click has somewhere to grow the log.
+  // A small page size the seed alone never reaches, so a click has somewhere to grow the log; the nine-row seed
+  // divides evenly by three, so the third page is exactly full too and still carries a cursor (the route's own
+  // rule), and a call counter proves the fourth click's empty answer is the one that stops the growth.
   api.lifecyclePageSize = 3;
+  let calls = 0;
+  const original = api.listLifecycleDeliveries.bind(api);
+  api.listLifecycleDeliveries = (...args) => {
+    calls += 1;
+    return original(...args);
+  };
   const lm = await mount('/alerts');
   const card = () => [...lm.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Lifecycle');
   const rowKeys = () => [...(card()?.querySelectorAll('tbody tr') ?? [])].map((r) => r.querySelector('td')?.getAttribute('title') ?? '');
@@ -3723,10 +3734,28 @@ expect('/alerts', m.text(), ['Rules', 'Create rule', 'Re-auth required', 'Utiliz
   await lm.settle();
   const afterTwo = rowKeys();
   results.push({
-    name: '/alerts the load-more control is gone once the log has reached its last page',
-    ok: afterTwo.length === 9 && new Set(afterTwo).size === 9 && afterTwo[0] === firstRow && loadMore() === undefined,
+    name: '/alerts an exactly full last page still carries a cursor, so the control stays up',
+    ok: afterTwo.length === 9 && new Set(afterTwo).size === 9 && afterTwo[0] === firstRow && loadMore() !== undefined,
     missing: [String(afterTwo.length), String(new Set(afterTwo).size), String(loadMore() !== undefined)],
   });
+  const callsBeforeLast = calls;
+  loadMore()?.click();
+  await lm.settle();
+  const afterThree = rowKeys();
+  results.push({
+    name: '/alerts a click past the exactly-full boundary answers no rows and the control disappears',
+    ok: afterThree.length === 9 && new Set(afterThree).size === 9 && loadMore() === undefined && calls === callsBeforeLast + 1,
+    missing: [String(afterThree.length), String(loadMore() !== undefined), String(calls), String(callsBeforeLast)],
+  });
+  const callsAfterGone = calls;
+  loadMore()?.click();
+  await lm.settle();
+  results.push({
+    name: '/alerts once the control is gone, calls stop growing',
+    ok: calls === callsAfterGone && rowKeys().length === 9,
+    missing: [String(calls), String(callsAfterGone), String(rowKeys().length)],
+  });
+  api.listLifecycleDeliveries = original;
   lm.unmount();
   api.lifecyclePageSize = 500;
 }
@@ -3775,6 +3804,7 @@ expect('/alerts', m.text(), ['Rules', 'Create rule', 'Re-auth required', 'Utiliz
     ok: JSON.stringify(held.calls.at(-1)) === JSON.stringify(['session_idle', idleFirstPage.nextCursor]) && bothRows.length === 2 && bothRows.every((r) => r.includes('Session idle')) && new Set(bothRows).size === 2,
     missing: [JSON.stringify(held.calls.at(-1)), JSON.stringify(['session_idle', idleFirstPage.nextCursor]), String(bothRows.length)],
   });
+  held.restore();
   dm.unmount();
   api.lifecyclePageSize = 500;
 }

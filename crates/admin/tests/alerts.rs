@@ -519,6 +519,22 @@ async fn lifecycle_deliveries_are_listed_newest_first_by_kind_and_refuse_another
 async fn lifecycle_deliveries_continue_below_a_cursor_and_refuse_a_malformed_one() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
+    post(&parts.app, "/admin/alerts/rules", r#"{"kind":"session_idle","scope":{"type":"all"},"threshold":30,"webhook_url":"http://127.0.0.1:1/idle"}"#, Some(&cookie)).await;
+    // Delivered first and so the oldest of the four (every delivery below shares the harness's fixed clock, and
+    // ties break on insertion order): an off-kind row inside the continuation, which a route that drops the
+    // filter behind a cursor would leak into the `with_kind` answer below.
+    parts.alerts.deliver_event(
+        &phoebis_alerts::Signal {
+            kind: phoebis_alerts::Kind::SessionIdle,
+            account_id: None,
+            key_id: Some("desktop".into()),
+            pool_id: Some("main".into()),
+            subject: "desktop, session s3".into(),
+            detail: serde_json::json!({ "idle_minutes": 5, "key": "desktop", "pool": "main", "session": "s3" }),
+        },
+        phoebis_alerts::LifecycleEvent::SessionIdle,
+    );
+    parts.alerts.wait_idle().await;
     post(&parts.app, "/admin/alerts/rules", r#"{"kind":"session_active","scope":{"type":"all"},"webhook_url":"http://127.0.0.1:1/life"}"#, Some(&cookie)).await;
     for (session, event) in [
         ("s1", phoebis_alerts::LifecycleEvent::SessionStarted),
@@ -540,7 +556,7 @@ async fn lifecycle_deliveries_continue_below_a_cursor_and_refuse_a_malformed_one
     }
     let listed = json(get(&parts.app, "/admin/alerts/deliveries", Some(&cookie)).await).await;
     let rows = listed["deliveries"].as_array().unwrap().clone();
-    assert_eq!(rows.len(), 3);
+    assert_eq!(rows.len(), 4);
     assert_eq!(listed["next_cursor"], serde_json::Value::Null);
     let cursor = format!(
         "{}:{}",
@@ -568,8 +584,15 @@ async fn lifecycle_deliveries_continue_below_a_cursor_and_refuse_a_malformed_one
         .await,
     )
     .await;
+    let rest_active = serde_json::Value::Array(
+        rows[1..]
+            .iter()
+            .filter(|d| d["kind"] == "session_active")
+            .cloned()
+            .collect(),
+    );
     assert_eq!(
-        with_kind["deliveries"], rest,
+        with_kind["deliveries"], rest_active,
         "the filter carries across the page"
     );
     let malformed = get(
