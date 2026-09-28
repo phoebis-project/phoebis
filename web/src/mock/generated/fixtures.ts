@@ -6437,9 +6437,7 @@ export const FIXTURES: Record<string, Fixture> = {
       },
       "compatibility": {
         "cache_diagnostics": false,
-        "outbound_gzip": false,
-        "profile": "claude-code-2.1.269-linux-x64",
-        "usage_entrypoint": "cli"
+        "profile": "claude-code-2.1.269-linux-x64"
       },
       "keepalive": {
         "lease_seconds": 90,

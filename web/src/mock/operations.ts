@@ -789,7 +789,7 @@ export const SETTINGS: Settings = {
   ...SETTINGS_SAMPLE,
   about: { profile: 'claude-code-2.1.269-linux-x64', publicUrl: 'https://router.home.example', version: SETTINGS_SAMPLE.about.version },
   access: { adminConfigured: true, viewerConfigured: true },
-  compatibility: { cacheDiagnostics: false, outboundGzip: false, profile: 'claude-code-2.1.269-linux-x64', usageEntrypoint: 'cli' },
+  compatibility: { cacheDiagnostics: false, profile: 'claude-code-2.1.269-linux-x64' },
   keepalive: { leaseSeconds: 90, maxAgents: 1024, maxRequestBytes: 8_388_608, maxRetainedBytes: 268_435_456, maxSessions: 128, maxWorkers: 4, oauthPrewarmVerified: false },
   listeners: { admin: '127.0.0.1:8081', metrics: '127.0.0.1:9464', proxy: '127.0.0.1:8080' },
   // The route answers the table the ledger ships, so the captured answer is the table itself.

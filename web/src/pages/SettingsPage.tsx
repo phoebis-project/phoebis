@@ -328,9 +328,7 @@ export function SettingsPage() {
           <KeyValue
             rows={[
               { label: 'Cache diagnostics', value: s.compatibility.cacheDiagnostics ? 'on' : 'off', title: bootstrapNote('compatibility.cache_diagnostics') },
-              { label: 'Outbound gzip', value: s.compatibility.outboundGzip ? 'on' : 'off', title: bootstrapNote('compatibility.outbound_gzip') },
               { label: 'Profile', value: s.compatibility.profile, mono: true },
-              { label: 'Usage entrypoint', value: s.compatibility.usageEntrypoint, mono: true },
             ]}
           />
         ) : (

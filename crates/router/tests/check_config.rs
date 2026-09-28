@@ -13,9 +13,9 @@ fn config_file(dir: &Path, name: &str, extra: &str) -> PathBuf {
     .unwrap();
     let yaml = format!(
         "admin:\n  listen: 127.0.0.1:0\n  plain_http: true\n  secret_env: TEST_CHECK_CONFIG_ADMIN\n\
-         compatibility:\n  outbound_gzip: false\n  profile: claude-code-2.1.269-linux-x64\n  \
-         usage_entrypoint: cli\nproxy:\n  listen: 127.0.0.1:0\nstorage:\n  encryption_key_file: {}\n  \
-         path: {}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n{extra}",
+         compatibility:\n  profile: claude-code-2.1.269-linux-x64\nproxy:\n  listen: 127.0.0.1:0\n\
+         storage:\n  encryption_key_file: {}\n  path: {}\nusage:\n  cache_ttl_seconds: 60\n  \
+         refresh_concurrency: 2\n{extra}",
         key.display(),
         dir.join("router.sqlite").display()
     );
@@ -95,4 +95,26 @@ fn an_unknown_upstream_key_fails_check_config() {
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
+}
+
+#[test]
+fn every_shipped_deploy_config_passes_check_config() {
+    let deploy = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../deploy");
+    for name in [
+        "config.container.yaml",
+        "config.example.yaml",
+    ] {
+        let out = phoebis()
+            .env("ROUTER_ADMIN_SECRET", "deploy-check-admin-secret")
+            .env("ROUTER_VIEWER_SECRET", "deploy-check-viewer-secret")
+            .args(["check-config", "--config"])
+            .arg(deploy.join(name))
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{name}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
 }

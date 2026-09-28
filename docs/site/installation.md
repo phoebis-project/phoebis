@@ -210,9 +210,7 @@ admin:
 compatibility:
   # Opt-in: forces the cache-diagnosis beta and a previous_message_id toward api.anthropic.com for every client.
   cache_diagnostics: false
-  outbound_gzip: false
   profile: claude-code-2.1.269-linux-x64
-  usage_entrypoint: cli
 keepalive:
   # Process-wide limits only. Whether a pool's sessions are probed, and the probe tuning, are pool settings in
   # the registry; probes on oauth accounts stay off until the expiry-crossing experiment has passed for the
@@ -307,22 +305,17 @@ Refused with:
 
 ### compatibility
 
-Required; `outbound_gzip`, `profile`, and `usage_entrypoint` are required and `cache_diagnostics` defaults to
-`false`. Only `profile` and `cache_diagnostics` are consumed today; the other two are validated so a file
-written for a later build is not accepted with the wrong meaning.
+Required; `profile` is required and `cache_diagnostics` defaults to `false`. A key this build does not carry under
+`compatibility` is refused at load, as under every other block.
 
 | Key | Accepts |
 | --- | --- |
 | `cache_diagnostics` | `true` or `false` (default) |
-| `outbound_gzip` | `false` |
 | `profile` | `claude-code-2.1.269-linux-x64`, the one profile this build carries |
-| `usage_entrypoint` | `cli` or `sdk-cli` |
 
 Refused with:
 
-- `outbound_gzip`: `compatibility.outbound_gzip must be false: the native gzip gate is not implemented`
 - `profile`: `compatibility.profile {name} is not a profile this build carries`
-- `usage_entrypoint`: `compatibility.usage_entrypoint must be cli or sdk-cli, not {value}`
 
 With `cache_diagnostics` on, every request toward `api.anthropic.com` carries the `cache-diagnosis-2026-04-07` beta and
 a `diagnostics.previous_message_id` naming the previous answer on the same key, session, agent, model, and upstream, so
@@ -465,7 +458,7 @@ Required: `cache_ttl_seconds` is how long a cached usage snapshot is served befo
 fresh fetch; `refresh_concurrency` is how many accounts' usage and profile fetches may run at once, at least 1,
 refused with `usage.refresh_concurrency must be at least 1`.
 
-The checks above run in a fixed order at load, not block by block: `compatibility`'s three fields, then
+The checks above run in a fixed order at load, not block by block: `compatibility.profile`, then
 `admin`'s loopback-or-origin rule, then `usage.refresh_concurrency`, `storage.path`, `routing.max_attempts`, the
 `keepalive` bounds, `routing.catalog_cache_seconds`, `routing.startup_fetch_seconds`,
 `routing.catalog_refresh_seconds`, the four `sessions` keys,

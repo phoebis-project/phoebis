@@ -58,19 +58,14 @@ pub struct AdminConfig {
     pub viewer_secret_env: Option<String>,
 }
 
-/// Of these four, `profile` and `cache_diagnostics` are consumed today: `outbound_gzip` has to stay off because
-/// the native gzip gate is not implemented, and `usage_entrypoint` selects a `User-Agent` the usage service does
-/// not take from configuration yet. Every field is still parsed so a file written for a later build is not
-/// silently accepted with the wrong meaning.
+/// `profile` names the Claude Code release the relay is measured against. `cache_diagnostics` is the one opt-in: it changes the
+/// wire shape toward Anthropic for every client behind the router.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CompatConfig {
-    /// Opt-in: it changes the wire shape toward Anthropic for every client behind the router.
     #[serde(default)]
     pub cache_diagnostics: bool,
-    pub outbound_gzip: bool,
     pub profile: String,
-    pub usage_entrypoint: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -188,8 +183,6 @@ pub enum ConfigError {
     CatalogRefreshOutOfRange { value: u64 },
     #[error("{first} and {second} resolve to the same secret")]
     DuplicateSecret { first: String, second: String },
-    #[error("compatibility.outbound_gzip must be false: the native gzip gate is not implemented")]
-    GzipUnsupported,
     #[error("{0}")]
     Keepalive(#[from] LimitsError),
     #[error("stats.ledger_path {path} must name a database file inside a directory")]
@@ -235,8 +228,6 @@ pub enum ConfigError {
     Syntax(#[from] serde_norway::Error),
     #[error("compatibility.profile {name} is not a profile this build carries")]
     UnknownProfile { name: String },
-    #[error("compatibility.usage_entrypoint must be cli or sdk-cli, not {value}")]
-    UnknownUsageEntrypoint { value: String },
     #[error("usage.refresh_concurrency must be at least 1")]
     ZeroRefreshConcurrency,
 }
@@ -318,17 +309,6 @@ fn check_shape(config: &Config) -> Result<(), ConfigError> {
     if phoebis_profile::by_name(&config.compatibility.profile).is_none() {
         return Err(ConfigError::UnknownProfile {
             name: config.compatibility.profile.clone(),
-        });
-    }
-    if config.compatibility.outbound_gzip {
-        return Err(ConfigError::GzipUnsupported);
-    }
-    if !matches!(
-        config.compatibility.usage_entrypoint.as_str(),
-        "cli" | "sdk-cli"
-    ) {
-        return Err(ConfigError::UnknownUsageEntrypoint {
-            value: config.compatibility.usage_entrypoint.clone(),
         });
     }
     if !config.admin.plain_http && config.admin.origin.is_none() {
@@ -618,7 +598,7 @@ mod tests {
             "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
         )
         .unwrap();
-        let yaml = format!("admin:\n  listen: 127.0.0.1:0\n  secret_env: TEST_CFG_ADMIN\n  plain_http: true\ncompatibility:\n  outbound_gzip: false\n  profile: claude-code-2.1.269-linux-x64\n  usage_entrypoint: cli\nproxy:\n  listen: 127.0.0.1:0\nstorage:\n  encryption_key_file: {}\n  path: {}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n{body}", key.display(), dir.join("router.sqlite").display());
+        let yaml = format!("admin:\n  listen: 127.0.0.1:0\n  secret_env: TEST_CFG_ADMIN\n  plain_http: true\ncompatibility:\n  profile: claude-code-2.1.269-linux-x64\nproxy:\n  listen: 127.0.0.1:0\nstorage:\n  encryption_key_file: {}\n  path: {}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n{body}", key.display(), dir.join("router.sqlite").display());
         let path = dir.join(format!("{name}.yaml"));
         std::fs::write(&path, yaml).unwrap();
         path
@@ -653,15 +633,14 @@ mod tests {
     fn cache_diagnostics_parses_when_set_and_defaults_to_false() {
         let dir = tempfile::tempdir().unwrap();
         std::env::set_var("TEST_CFG_ADMIN", "admin-secret-001");
-        let without = "  outbound_gzip: false\n  profile: claude-code-2.1.269-linux-x64\n  usage_entrypoint: cli";
+        let without = "  profile: claude-code-2.1.269-linux-x64";
         assert!(
             !load(&file_with_compat(dir.path(), "absent", without))
                 .unwrap()
                 .compatibility
                 .cache_diagnostics
         );
-        let with = "  cache_diagnostics: true\n  outbound_gzip: false\n  \
-                    profile: claude-code-2.1.269-linux-x64\n  usage_entrypoint: cli";
+        let with = "  cache_diagnostics: true\n  profile: claude-code-2.1.269-linux-x64";
         assert!(
             load(&file_with_compat(dir.path(), "set", with))
                 .unwrap()
@@ -815,6 +794,23 @@ mod tests {
     }
 
     #[test]
+    fn compatibility_refuses_a_key_this_build_no_longer_carries() {
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("TEST_CFG_ADMIN", "admin-secret-001");
+        assert!(
+            matches!(
+                load(&file_with_compat(
+                    dir.path(),
+                    "outbound-gzip",
+                    "  outbound_gzip: false\n  profile: claude-code-2.1.269-linux-x64\n  usage_entrypoint: cli\n"
+                )),
+                Err(ConfigError::Syntax(_))
+            ),
+            "outbound_gzip left the block, so a file still naming it is refused like any other unknown key"
+        );
+    }
+
+    #[test]
     fn the_session_memory_keys_default_to_the_constants_and_are_bounded() {
         let dir = tempfile::tempdir().unwrap();
         std::env::set_var("TEST_CFG_ADMIN", "admin-secret-001");
@@ -892,9 +888,9 @@ mod tests {
         .unwrap();
         let yaml = format!(
             "admin:\n  listen: 127.0.0.1:0\n  secret_env: {secret_env}\n  plain_http: true\n\
-             compatibility:\n  outbound_gzip: false\n  profile: claude-code-2.1.269-linux-x64\n  \
-             usage_entrypoint: cli\nproxy:\n  listen: 127.0.0.1:0\nstorage:\n  encryption_key_file: {}\n  \
-             path: {}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
+             compatibility:\n  profile: claude-code-2.1.269-linux-x64\nproxy:\n  listen: 127.0.0.1:0\n\
+             storage:\n  encryption_key_file: {}\n  path: {}\nusage:\n  cache_ttl_seconds: 60\n  \
+             refresh_concurrency: 2\n",
             key.display(),
             dir.join("router.sqlite").display()
         );

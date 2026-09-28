@@ -917,7 +917,7 @@ test('a placement row and a member budget keep the figures the routes leave null
 test('a settings answer with no compatibility block reads the defaults the router ships with', () => {
   const bare = { ...fixture('settings') };
   delete bare.compatibility;
-  assert.deepEqual(d.decodeSettings(bare).compatibility, { cacheDiagnostics: false, outboundGzip: false, profile: 'claude-code-2.1.269-linux-x64', usageEntrypoint: 'cli' }, 'the profile falls back to the one the about block carries, and the rest to what the router does without the block');
+  assert.deepEqual(d.decodeSettings(bare).compatibility, { cacheDiagnostics: false, profile: 'claude-code-2.1.269-linux-x64' }, 'the profile falls back to the one the about block carries, and the rest to what the router does without the block');
   assert.deepEqual(d.decodeSettings({ ...bare, about: { ...bare.about, profile: 'claude-code-9.9.9-linux-x64' } }).compatibility.profile, 'claude-code-9.9.9-linux-x64');
 });
 
@@ -956,7 +956,7 @@ test('settings, pricing, the import preview, pairing, quota, and usage decode', 
   assert.equal(s.sessions.expireAfterSeconds, 86400);
   assert.equal(s.keepalive.maxWorkers, 4);
   assert.equal(s.listeners.metrics, '127.0.0.1:9464');
-  assert.deepEqual(s.compatibility, { cacheDiagnostics: false, outboundGzip: false, profile: 'claude-code-2.1.269-linux-x64', usageEntrypoint: 'cli' });
+  assert.deepEqual(s.compatibility, { cacheDiagnostics: false, profile: 'claude-code-2.1.269-linux-x64' });
   assert.equal(s.pricing.models.find((m) => m.model === 'claude-sonnet-5').inputPerM, 2);
   const preview = d.decodePriceImport(fixture('pricing_import'));
   // The imported file carries the one model the router serves, at the five prices the shipped table already

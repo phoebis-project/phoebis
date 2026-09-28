@@ -11,9 +11,7 @@ admin:
 compatibility:
   # Opt-in: forces the cache-diagnosis beta and a previous_message_id toward api.anthropic.com for every client.
   cache_diagnostics: false
-  outbound_gzip: false
   profile: claude-code-2.1.269-linux-x64
-  usage_entrypoint: cli
 keepalive:
   # Process-wide limits only. Whether a pool's sessions are probed, and the probe tuning, are pool settings in
   # the registry; probes on oauth accounts stay off until the expiry-crossing experiment has passed for the

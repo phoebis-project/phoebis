@@ -383,7 +383,6 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             startup_fetch_seconds: config.routing.startup_fetch_seconds,
             storage_path: config.storage.path.display().to_string(),
             usage_cache_ttl_seconds: config.usage.cache_ttl_seconds,
-            usage_entrypoint: config.compatibility.usage_entrypoint.clone(),
             usage_refresh_concurrency: config.usage.refresh_concurrency,
             viewer_configured: config.admin.viewer_secret.is_some(),
         }),

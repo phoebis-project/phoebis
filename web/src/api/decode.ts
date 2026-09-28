@@ -550,7 +550,7 @@ export function decodeSettings(v: unknown): Settings {
     about: { profile: str(rec(s.about).profile), publicUrl: strOrNull(rec(s.about).public_url), version: str(rec(s.about).version) },
     access: { adminConfigured: bool(rec(s.access).admin_configured, true), viewerConfigured: bool(rec(s.access).viewer_configured) },
     // A router too old to answer the block behaves as the block's own defaults describe, and runs the profile the about card already shows.
-    compatibility: { cacheDiagnostics: bool(c.cache_diagnostics), outboundGzip: bool(c.outbound_gzip), profile: str(c.profile, str(rec(s.about).profile)), usageEntrypoint: str(c.usage_entrypoint, 'cli') },
+    compatibility: { cacheDiagnostics: bool(c.cache_diagnostics), profile: str(c.profile, str(rec(s.about).profile)) },
     keepalive: { leaseSeconds: num(k.lease_seconds), maxAgents: num(k.max_agents), maxRequestBytes: num(k.max_request_bytes), maxRetainedBytes: num(k.max_retained_bytes), maxSessions: num(k.max_sessions), maxWorkers: num(k.max_workers), oauthPrewarmVerified: bool(k.oauth_prewarm_verified) },
     listeners: { admin: str(l.admin), metrics: str(l.metrics), proxy: str(l.proxy) },
     planFactors: decodePlanFactors(s.plan_factors),

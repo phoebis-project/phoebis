@@ -251,9 +251,7 @@ admin:
   secret_env: TEST_ADMIN_SECRET
   plain_http: true
 compatibility:
-  outbound_gzip: false
   profile: claude-code-2.1.269-linux-x64
-  usage_entrypoint: cli
 proxy:
   listen: 127.0.0.1:{proxy_port}
 routing:
@@ -472,9 +470,7 @@ admin:
   secret_env: TEST_SHUTDOWN_ADMIN
   plain_http: true
 compatibility:
-  outbound_gzip: false
   profile: claude-code-2.1.269-linux-x64
-  usage_entrypoint: cli
 proxy:
   listen: 127.0.0.1:{proxy_port}
 stats:
@@ -567,9 +563,7 @@ admin:
   secret_env: TEST_ADMIN_SECRET
   plain_http: true
 compatibility:
-  outbound_gzip: false
   profile: claude-code-2.1.269-linux-x64
-  usage_entrypoint: cli
 proxy:
   listen: 127.0.0.1:{proxy_port}
 routing:
@@ -784,9 +778,7 @@ admin:
   secret_env: TEST_ADMIN_SECRET
   plain_http: true
 compatibility:
-  outbound_gzip: false
   profile: claude-code-2.1.269-linux-x64
-  usage_entrypoint: cli
 proxy:
   listen: 127.0.0.1:{proxy_port}
 stats:
@@ -1055,9 +1047,7 @@ fn config_with(dir: &std::path::Path, name: &str, admin: &str) -> std::path::Pat
         r#"admin:
 {admin}
 compatibility:
-  outbound_gzip: false
   profile: claude-code-2.1.269-linux-x64
-  usage_entrypoint: cli
 proxy:
   listen: 127.0.0.1:0
 storage:
@@ -1370,7 +1360,7 @@ async fn the_binary_ledgers_serves_statistics_and_metrics_and_lands_the_ledger_o
     std::fs::write(dir.path().join("pricing.yaml"), "effective: 2026-10-01\nmodels:\n  claude-sonnet-4-5: {input: 3, cache_write_5m: 3.75, cache_write_1h: 6, cache_read: 0.3, output: 15}\n").unwrap();
     let (proxy_port, admin_port, metrics_port) = (free_port(), free_port(), free_port());
     let yaml = format!(
-        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\n  plain_http: true\ncompatibility:\n  outbound_gzip: false\n  profile: claude-code-2.1.269-linux-x64\n  usage_entrypoint: cli\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\n  pricing_path: {pricing}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
+        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\n  plain_http: true\ncompatibility:\n  profile: claude-code-2.1.269-linux-x64\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\n  pricing_path: {pricing}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
         ledger = dir.path().join("ledger.sqlite").display(), pricing = dir.path().join("pricing.yaml").display(),
         key = dir.path().join("storage.key").display(), db = dir.path().join("phoebis.sqlite").display(),
         addr = up.addr(), ca = dir.path().join("ca.pem").display(),
@@ -1704,7 +1694,7 @@ async fn a_client_request_folds_the_pins_burn_through_the_shipped_meter_table() 
     seed_oauth_account(&db_path, &key_path);
     let (proxy_port, admin_port, metrics_port) = (free_port(), free_port(), free_port());
     let yaml = format!(
-        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_BURN_ADMIN_SECRET\n  plain_http: true\ncompatibility:\n  outbound_gzip: false\n  profile: claude-code-2.1.269-linux-x64\n  usage_entrypoint: cli\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
+        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_BURN_ADMIN_SECRET\n  plain_http: true\ncompatibility:\n  profile: claude-code-2.1.269-linux-x64\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
         ledger = dir.path().join("ledger.sqlite").display(),
         key = key_path.display(),
         db = db_path.display(),
@@ -1828,7 +1818,7 @@ async fn the_proxy_listener_binds_after_the_startup_fetch_or_its_bound_whichever
                        routing: &str| {
         format!(
             "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_STARTUP_ADMIN\n  plain_http: true\n\
-             compatibility:\n  outbound_gzip: false\n  profile: claude-code-2.1.269-linux-x64\n  usage_entrypoint: cli\n\
+             compatibility:\n  profile: claude-code-2.1.269-linux-x64\n\
              proxy:\n  listen: 127.0.0.1:{proxy_port}\n{routing}\
              stats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\n\
              storage:\n  encryption_key_file: {key}\n  path: {db}\n\
@@ -2094,7 +2084,7 @@ async fn the_binary_retains_a_session_probes_it_and_serves_the_keepalive_views()
     .unwrap();
     let (proxy_port, admin_port, metrics_port) = (free_port(), free_port(), free_port());
     let yaml = format!(
-        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\n  plain_http: true\ncompatibility:\n  outbound_gzip: false\n  profile: claude-code-2.1.269-linux-x64\n  usage_entrypoint: cli\nkeepalive:\n  max_workers: 2\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
+        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\n  plain_http: true\ncompatibility:\n  profile: claude-code-2.1.269-linux-x64\nkeepalive:\n  max_workers: 2\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
         ledger = dir.path().join("ledger.sqlite").display(), key = dir.path().join("storage.key").display(), db = dir.path().join("phoebis.sqlite").display(), addr = up.addr(), ca = dir.path().join("ca.pem").display(),
     );
     let cfg_path = dir.path().join("config.yaml");
@@ -2320,7 +2310,7 @@ async fn the_companion_registers_through_the_binary_under_the_clients_environmen
     .unwrap();
     let (proxy_port, admin_port, metrics_port) = (free_port(), free_port(), free_port());
     let yaml = format!(
-        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\n  plain_http: true\ncompatibility:\n  outbound_gzip: false\n  profile: claude-code-2.1.269-linux-x64\n  usage_entrypoint: cli\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
+        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\n  plain_http: true\ncompatibility:\n  profile: claude-code-2.1.269-linux-x64\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
         ledger = dir.path().join("ledger.sqlite").display(), key = dir.path().join("storage.key").display(), db = dir.path().join("phoebis.sqlite").display(), addr = up.addr(), ca = dir.path().join("ca.pem").display(),
     );
     let cfg_path = dir.path().join("config.yaml");
@@ -2495,9 +2485,7 @@ admin:
   secret_env: TEST_ADMIN_SECRET
   plain_http: true
 compatibility:
-  outbound_gzip: false
   profile: claude-code-2.1.269-linux-x64
-  usage_entrypoint: cli
 proxy:
   listen: 127.0.0.1:{proxy_port}
 stats:
@@ -2606,7 +2594,7 @@ async fn the_ui_passes_the_browser_pass_over_every_view_in_both_themes() {
     .unwrap();
     let (proxy_port, admin_port, metrics_port) = (free_port(), free_port(), free_port());
     let yaml = format!(
-        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\n  viewer_secret_env: TEST_VIEWER_SECRET\n  plain_http: true\ncompatibility:\n  outbound_gzip: false\n  profile: claude-code-2.1.269-linux-x64\n  usage_entrypoint: cli\nkeepalive:\n  max_workers: 2\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nrouting:\n  cooldown_fallback_seconds: 3600\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
+        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\n  viewer_secret_env: TEST_VIEWER_SECRET\n  plain_http: true\ncompatibility:\n  profile: claude-code-2.1.269-linux-x64\nkeepalive:\n  max_workers: 2\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nrouting:\n  cooldown_fallback_seconds: 3600\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
         ledger = dir.path().join("ledger.sqlite").display(), key = dir.path().join("storage.key").display(), db = dir.path().join("phoebis.sqlite").display(), addr = up.addr(), ca = dir.path().join("ca.pem").display(),
     );
     let cfg_path = dir.path().join("config.yaml");
@@ -2886,9 +2874,7 @@ admin:
   secret_env: TEST_ADMIN_SECRET
   plain_http: true
 compatibility:
-  outbound_gzip: false
   profile: claude-code-2.1.269-linux-x64
-  usage_entrypoint: cli
 proxy:
   listen: 127.0.0.1:{proxy_port}
 routing:

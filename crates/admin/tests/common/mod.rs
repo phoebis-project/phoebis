@@ -891,7 +891,6 @@ async fn app_with_webhook_policy(
         startup_fetch_seconds: 5,
         storage_path: "test".into(),
         usage_cache_ttl_seconds: 60,
-        usage_entrypoint: "cli".into(),
         usage_refresh_concurrency: 4,
         viewer_configured: true,
     });

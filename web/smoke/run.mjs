@@ -3835,7 +3835,7 @@ results.push({ name: '/settings has no statusline mention', ok: !/statusline/i.t
   const card = (title) => [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === title);
   const rows = (title) => [...(card(title)?.querySelectorAll('.kv__row') ?? [])].map((r) => [`${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.textContent?.trim()}`, r.querySelector('dd')?.getAttribute('title') ?? '']);
   const want = {
-    Compatibility: [['Cache diagnostics=off', 'compatibility.cache_diagnostics'], ['Outbound gzip=off', 'compatibility.outbound_gzip'], ['Profile=claude-code-2.1.269-linux-x64', ''], ['Usage entrypoint=cli', '']],
+    Compatibility: [['Cache diagnostics=off', 'compatibility.cache_diagnostics'], ['Profile=claude-code-2.1.269-linux-x64', '']],
     Quota: [['Poll interval (seconds)=3,600', 'quota.poll_interval_seconds'], ['Sample retention (days)=30', 'quota.sample_retention_days']],
     Routing: [['Catalog cache (seconds)=60', 'routing.catalog_cache_seconds'], ['Catalog refresh (seconds)=21,600', 'routing.catalog_refresh_seconds'], ['Cooldown fallback (seconds)=60', 'routing.cooldown_fallback_seconds'], ['Model rejection (seconds)=3,600', 'routing.model_rejection_seconds'], ['Max attempts=3', 'routing.max_attempts'], ['Startup fetch (seconds)=5', 'routing.startup_fetch_seconds']],
     Storage: [['Ledger path=./data/ledger.sqlite', 'stats.ledger_path'], ['Pricing path=./pricing.yaml', 'stats.pricing_path'], ['Storage path=./data/router.sqlite', 'storage.path']],
