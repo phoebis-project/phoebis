@@ -35,10 +35,7 @@ pub use pattern::{
     within_bounds as patterns_within_bounds, MAX_PATTERNS, MAX_PATTERN_CHARS, PATTERNS_TOO_LONG,
 };
 pub use plan::{Band, ModelFactor, PlanFactors, PlanWindows, TierWindows};
-pub use pricing::{
-    diff_against, parse_import, price_attempts, ImportFormat, ModelPrice, PriceChange, PriceDiff,
-    PriceTable, Pricing,
-};
+pub use pricing::{price_attempts, ModelPrice, PriceTable, Pricing};
 pub use query::{
     apply_filter, breakdown, bucket_seconds, burn_rows, burn_series, burn_series_over, dashboard,
     group_of, hour_ceil, key_request_totals, latest_extra_usage, latest_quota, list_requests,

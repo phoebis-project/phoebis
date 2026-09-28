@@ -104,7 +104,6 @@ export class HttpApi implements Api {
     return { email: r.pending.email, organization: r.pending.organization_name ?? 'Personal', state: pairingId };
   };
   confirmPairing = (pairingId: string) => call<void>('POST', `/admin/oauth/sessions/${enc(pairingId)}/confirm`);
-  confirmPriceImport = async (token: string) => d.decodePricing(await call('POST', '/admin/pricing/import/confirm', { token }));
   createAccount = async (input: AccountInput): Promise<Account> => d.decodeAccount(await call('POST', '/admin/accounts', { id: input.id, kind: input.kind, label: input.label, secret: input.secret }));
   createAlertRule = async (input: AlertRuleInput): Promise<AlertRule> => d.decodeAlertRule(await call('POST', '/admin/alerts/rules', d.encodeRule(input)));
   createKey = async (input: CreateKeyInput): Promise<CreatedApiKey> => {
@@ -196,7 +195,6 @@ export class HttpApi implements Api {
   };
   logout = () => call<void>('DELETE', '/admin/session');
   pauseAccount = (accountId: string) => call<void>('POST', `/admin/accounts/${enc(accountId)}/pause`);
-  previewPriceImport = async (url: string) => d.decodePriceImport(await call('POST', '/admin/pricing/import', { url }));
   refreshUsage = async (accountId: string) => {
     await call('POST', `/admin/accounts/${enc(accountId)}/usage/refresh`);
   };

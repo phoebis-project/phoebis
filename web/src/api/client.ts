@@ -39,7 +39,6 @@ import type {
   PoolCacheTtl,
   PoolKeepalive,
   PoolStrategy,
-  PriceImportPreview,
   QuotaHistory,
   QuotaSnapshot,
   RequestDetail,
@@ -164,7 +163,6 @@ export interface Api {
   clearFunding(accountId: string): Promise<void>;
   completePairing(pairingId: string, input: PairingInput): Promise<PairingPreview>;
   confirmPairing(pairingId: string): Promise<void>;
-  confirmPriceImport(token: string): Promise<Settings['pricing']>;
   createAccount(input: AccountInput): Promise<Account>;
   createAlertRule(input: AlertRuleInput): Promise<AlertRule>;
   createKey(input: CreateKeyInput): Promise<CreatedApiKey>;
@@ -215,8 +213,6 @@ export interface Api {
   login(secret: string): Promise<SessionInfo>;
   logout(): Promise<void>;
   pauseAccount(accountId: string): Promise<void>;
-  /** The rows a catalog at this URL yields, already converted to USD per million and reduced to models the router serves, with the counts behind that filter. */
-  previewPriceImport(url: string): Promise<PriceImportPreview>;
   refreshUsage(accountId: string): Promise<void>;
   releaseSession(keyId: string, sessionId: string): Promise<void>;
   renameAccount(accountId: string, label: string): Promise<Account>;

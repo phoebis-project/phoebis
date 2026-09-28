@@ -59,11 +59,12 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
     (27, V27),
     (28, V28),
     (29, V29),
+    (30, V30),
 ];
 
 /// The newest schema version this build knows how to read. `prepare` refuses a registry stamped past it
 /// rather than skip migrations it does not carry and misread the tables that follow.
-pub const SCHEMA_VERSION: u32 = 29;
+pub const SCHEMA_VERSION: u32 = 30;
 
 const V2: &str = r#"
 CREATE TABLE IF NOT EXISTS account_models (
@@ -475,3 +476,7 @@ CREATE TABLE affinity (
 );
 CREATE INDEX affinity_written_at ON affinity (written_at);
 "#;
+
+// The import that wrote this table is gone, and an attempt's pricing_version names the table in force by its
+// effective date, so no reader is left for the rows.
+const V30: &str = "DROP TABLE IF EXISTS pricing_versions;";

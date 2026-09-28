@@ -1,10 +1,10 @@
 import { useState } from 'react';
 import { api, MOCK } from '@/api';
-import type { ModelPrice, PriceImportPreview, Settings } from '@/api/types';
+import type { ModelPrice, Settings } from '@/api/types';
 import { useSession } from '@/app/session';
 import { useAppSettings, type ThemeChoice } from '@/app/settings';
 import { IconMonitor, IconMoon, IconSun, IconX } from '@/components/ui/icons';
-import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, ErrorState, Input, KeyValue, Segmented, Skeleton, Toast, Toggle } from '@/components/ui/primitives';
+import { Badge, Button, Card, ConfirmDialog, CopyButton, ErrorState, Input, KeyValue, Segmented, Skeleton, Toast, Toggle } from '@/components/ui/primitives';
 import { fmtDate, fmtInt } from '@/lib/format';
 import type { TimeFormat } from '@/lib/format';
 import { useAsync } from '@/lib/hooks';
@@ -40,9 +40,6 @@ const ENV_TERMS: { body: string; term: string }[] = [
   },
 ];
 
-const IMPORT_HINT =
-  'Accepts the LiteLLM model_prices_and_context_window.json or a models.dev catalog. Per-token costs are converted to USD per million; the 1h write price comes from the above-1hr field. Only models the router serves are imported, and nothing is written until you confirm the diff.';
-
 const EXPIRY_PRESETS: { label: string; seconds: number }[] = [
   { label: '1h', seconds: 3_600 },
   { label: '6h', seconds: 21_600 },
@@ -75,15 +72,6 @@ interface PriceDraft extends Record<PriceField, string> {
   isNew: boolean;
 }
 
-interface DiffRow {
-  current: number | null;
-  field: string;
-  id: string;
-  imported: number;
-  isNew: boolean;
-  model: string;
-}
-
 type Pricing = Settings['pricing'];
 
 /** Two decimals, extended to at most four when an imported price needs them. */
@@ -112,27 +100,6 @@ function sourceLabel(source: string): string {
     return source;
   }
   return url.protocol === 'http:' || url.protocol === 'https:' ? `imported from ${url.host}` : source;
-}
-
-/**
- * The change count is the diff on screen rather than the router's, because the
- * table here may carry price edits the router has never seen.
- */
-const importSubtitle = (preview: PriceImportPreview, changes: number) =>
-  `${preview.inFile} models in the file, ${preview.served} the router serves; ${changes} change${changes === 1 ? '' : 's'}. Nothing is written until you confirm.`;
-
-/** One line per changed field; a model the table does not carry yet contributes every field. */
-function diffRows(current: ModelPrice[], imported: ModelPrice[]): DiffRow[] {
-  const byModel = new Map(current.map((m) => [m.model, m]));
-  const out: DiffRow[] = [];
-  for (const m of imported) {
-    const before = byModel.get(m.model) ?? null;
-    for (const f of PRICE_FIELDS) {
-      if (before && before[f.key] === m[f.key]) continue;
-      out.push({ current: before ? before[f.key] : null, field: f.label, id: `${m.model}-${f.key}`, imported: m[f.key], isNew: before === null, model: m.model });
-    }
-  }
-  return out;
 }
 
 /** The admin secret reads configured while the settings load, since no session reaches this page without one. */
@@ -413,13 +380,10 @@ export function SettingsPage() {
 
 function PricingCard({ canMutate, error: failed, onToast, pricing: served }: { canMutate: boolean; error: string | null; onToast: (message: string) => void; pricing: Pricing | null }) {
   const [applied, setApplied] = useState<Pricing | null>(null);
-  const [importError, setImportError] = useState<string | null>(null);
   const [draft, setDraft] = useState<PriceDraft[] | null>(null);
   const [editing, setEditing] = useState<{ field: PriceField; id: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [removing, setRemoving] = useState<PriceDraft | null>(null);
-  const [url, setUrl] = useState('');
-  const [review, setReview] = useState<{ preview: PriceImportPreview; rows: DiffRow[] } | null>(null);
 
   const pricing = applied ?? served;
   const saved = pricing ? pricing.models.map(toDraft) : [];
@@ -473,21 +437,6 @@ function PricingCard({ canMutate, error: failed, onToast, pricing: served }: { c
     setEditing(null);
     setError(null);
     onToast('Price table saved');
-  };
-
-  const confirmImport = async () => {
-    if (!review) return;
-    try {
-      setApplied(await api.confirmPriceImport(review.preview.token));
-      setDraft(null);
-      setEditing(null);
-      setError(null);
-      setReview(null);
-      setUrl('');
-      onToast('Price list imported');
-    } catch (e) {
-      onToast(e instanceof Error ? e.message : String(e));
-    }
   };
 
   return (
@@ -589,35 +538,6 @@ function PricingCard({ canMutate, error: failed, onToast, pricing: served }: { c
       <p className="muted" style={{ padding: '10px 14px' }}>
         USD per million tokens. Costs in the ledger are estimates computed at request time.
       </p>
-      {editable && (
-        <div className="price-import">
-          <form
-            className="row"
-            onSubmit={(e) => {
-              e.preventDefault();
-              void api.previewPriceImport(url).then(
-                (preview) => {
-                  setImportError(null);
-                  setReview({ preview, rows: diffRows(pricing?.models ?? [], preview.models) });
-                },
-                // A mistyped URL is the common way this fails, and the button looked dead without this.
-                (failure: unknown) => setImportError(failure instanceof Error ? failure.message : String(failure)),
-              );
-            }}
-          >
-            <Input placeholder="Import from URL" value={url} onChange={(e) => setUrl(e.target.value)} style={{ width: 320 }} />
-            <Button type="submit" size="md" disabled={!url}>
-              Import
-            </Button>
-          </form>
-          <p className="muted price-import__hint">{IMPORT_HINT}</p>
-          {importError && (
-            <p className="price-import__error" role="alert">
-              {importError}
-            </p>
-          )}
-        </div>
-      )}
 
       <ConfirmDialog
         open={removing !== null}
@@ -631,56 +551,6 @@ function PricingCard({ canMutate, error: failed, onToast, pricing: served }: { c
           setError(null);
         }}
       />
-
-      <Dialog
-        open={review !== null}
-        onClose={() => setReview(null)}
-        title="Review import"
-        subtitle={review ? importSubtitle(review.preview, review.rows.length) : undefined}
-        width={720}
-        footer={
-          <>
-            <Button variant="ghost" onClick={() => setReview(null)}>
-              Cancel
-            </Button>
-            <Button variant="primary" disabled={!review || review.rows.length === 0} onClick={() => void confirmImport()}>
-              Confirm
-            </Button>
-          </>
-        }
-      >
-        {review && review.rows.length === 0 ? (
-          <p className="secondary">Every price in that catalog already matches the table, so there is nothing to write.</p>
-        ) : (
-          <table className="table diff-table">
-            <thead>
-              <tr>
-                <th>Model</th>
-                <th>Field</th>
-                <th className="right">Current</th>
-                <th className="right">Imported</th>
-              </tr>
-            </thead>
-            <tbody>
-              {(review?.rows ?? []).map((r) => (
-                <tr key={r.id}>
-                  <td className="mono">
-                    {r.model}
-                    {r.isNew && (
-                      <Badge tone="accent" title="This model is not in the table yet; confirming adds it.">
-                        new
-                      </Badge>
-                    )}
-                  </td>
-                  <td>{r.field}</td>
-                  <td className="right num">{r.current === null ? <span className="muted">-</span> : fmtPrice(r.current)}</td>
-                  <td className="right num">{fmtPrice(r.imported)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </Dialog>
     </Card>
   );
 }

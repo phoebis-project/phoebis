@@ -3828,7 +3828,7 @@ m.unmount();
 }
 
 m = await mount('/settings');
-expect('/settings', m.text(), ['Appearance', 'Theme', 'Time format', 'Access', 'Admin secret', 'Viewer secret', 'except captured bodies, live previews, question text, and webhook URLs beyond their host', 'Preview as viewer', 'Pricing', 'Import', 'claude-fable-5-1', 'Sessions', 'Session expiry', '24h', 'Retention', 'deleted by the hourly purge', 'Ledger (days)', 'Rollups (days)', 'Quota samples (days)', 'Body capture, max hours', 'stats.rollup_retention_days', 'Downstream client configuration', 'ANTHROPIC_BASE_URL=https://router.example.com', 'inference is served on 127.0.0.1:8080', 'CC_KEEPALIVE_OWNER_ID=$(uuidgen)', 'About', 'claude-code-2.1.269-linux-x64', MOCK_VERSION]);
+expect('/settings', m.text(), ['Appearance', 'Theme', 'Time format', 'Access', 'Admin secret', 'Viewer secret', 'except captured bodies, live previews, question text, and webhook URLs beyond their host', 'Preview as viewer', 'Pricing', 'claude-fable-5-1', 'Sessions', 'Session expiry', '24h', 'Retention', 'deleted by the hourly purge', 'Ledger (days)', 'Rollups (days)', 'Quota samples (days)', 'Body capture, max hours', 'stats.rollup_retention_days', 'Downstream client configuration', 'ANTHROPIC_BASE_URL=https://router.example.com', 'inference is served on 127.0.0.1:8080', 'CC_KEEPALIVE_OWNER_ID=$(uuidgen)', 'About', 'claude-code-2.1.269-linux-x64', MOCK_VERSION]);
 results.push({ name: '/settings has no statusline mention', ok: !/statusline/i.test(m.text()), missing: [] });
 {
   // Each row names its bootstrap key the way the compatibility card does, since the route reads these and never writes them.
@@ -3884,69 +3884,6 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
     ok: !m.text().includes('Other upstream prices') && !/gpt-\d/.test(m.text()) && m.container.querySelectorAll('.price-extra').length === 0,
     missing: [m.text().includes('Other upstream prices') ? 'heading still there' : '', /gpt-\d/.test(m.text()) ? 'a gpt row is still priced' : ''].filter(Boolean),
   });
-  expect('/settings import help', m.text(), [
-    'Accepts the LiteLLM model_prices_and_context_window.json or a models.dev catalog.',
-    'Per-token costs are converted to USD per million; the 1h write price comes from the above-1hr field.',
-    'Only models the router serves are imported, and nothing is written until you confirm the diff.',
-  ]);
-}
-
-// Importing a catalog: the diff lists only what changes, and Confirm writes it.
-{
-  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-  const urlInput = [...m.container.querySelectorAll('input')].find((i) => i.placeholder === 'Import from URL');
-  setter.call(urlInput, 'https://models.dev/api.json?key=s3cret');
-  urlInput.dispatchEvent(new window.Event('input', { bubbles: true }));
-  await m.settle(150);
-  [...m.container.querySelectorAll('.price-import button')].find((b) => b.textContent?.trim() === 'Import')?.click();
-  await m.settle(800);
-  const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
-  expect('/settings import dialog', dlg?.textContent ?? '', ['Review import', '13 models in the file, 10 the router serves; 10 changes. Nothing is written until you confirm.', 'Model', 'Field', 'Current', 'Imported', 'Cancel', 'Confirm']);
-  results.push({
-    name: '/settings import dialog keeps the models the router does not serve out of the diff',
-    ok: !(dlg?.textContent ?? '').includes('gemini'),
-    missing: [(dlg?.textContent ?? '').includes('gemini') ? 'a gemini row reached the diff' : ''].filter(Boolean),
-  });
-  const diff = [...(dlg?.querySelectorAll('.diff-table tbody tr') ?? [])].map((tr) => [...tr.children].map((td) => td.textContent?.trim()).join(' '));
-  results.push({ name: '/settings import diff omits unchanged rows', ok: diff.length === 10 && diff.every((r) => r.startsWith('claude-haiku')), missing: diff.slice(0, 4) });
-  results.push({ name: '/settings import diff reads current against imported', ok: diff.includes('claude-haiku-4-5-20251001 Input $1.00 $0.80'), missing: diff.filter((r) => r.includes('Input')) });
-  results.push({ name: '/settings import diff marks a model the table does not carry', ok: diff.some((r) => r.startsWith('claude-haiku-5new ') && r.includes('- $')), missing: diff.filter((r) => r.includes('new ')).slice(0, 2) });
-  [...(dlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Confirm')?.click();
-  // Confirm posts the preview token now, so the applied table lands a round trip later.
-  await m.settle(600);
-  const pricingSubtitle = () =>
-    [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Pricing')?.querySelector('.card__subtitle')?.textContent ?? 'absent';
-  results.push({
-    name: '/settings Confirm applies the import and names the host',
-    ok: m.text().includes('Price list imported') && m.text().includes('source: imported from models.dev') && m.text().includes('claude-haiku-5') && m.text().includes('$0.80'),
-    missing: [pricingSubtitle()],
-  });
-  results.push({
-    name: '/settings the imported source names the host, not the path or the query the router recorded',
-    ok: pricingSubtitle().includes('source: imported from models.dev') && !pricingSubtitle().includes('api.json') && !m.text().includes('s3cret'),
-    missing: [pricingSubtitle()],
-  });
-}
-
-// A refused preview: the import form says why instead of leaving a button that looks dead.
-{
-  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-  const urlInput = [...m.container.querySelectorAll('input')].find((i) => i.placeholder === 'Import from URL');
-  setter.call(urlInput, 'https://models.dev/nope.json');
-  urlInput.dispatchEvent(new window.Event('input', { bubbles: true }));
-  await m.settle(150);
-  failNextCall('previewPriceImport', '/admin/pricing/import', 'that URL answered 404');
-  [...m.container.querySelectorAll('.price-import button')].find((b) => b.textContent?.trim() === 'Import')?.click();
-  await m.settle(400);
-  const callout = m.container.querySelector('.price-import__error')?.textContent ?? 'no callout';
-  results.push({
-    name: '/settings a refused import preview names the reason and opens no dialog',
-    ok: callout.includes('that URL answered 404') && [...m.container.querySelectorAll('dialog[open]')].length === 0,
-    missing: [callout],
-  });
-  setter.call(urlInput, '');
-  urlInput.dispatchEvent(new window.Event('input', { bubbles: true }));
-  await m.settle(100);
 }
 
 // Editing a price by hand: cell, Save bar, validation, Discard.
@@ -4071,7 +4008,7 @@ for (const [path, absent, present] of [
   ['/keys', ['Create API key'], ['Lifetime cost by key']],
   ['/pools', ['Create pool', 'Delete', 'Edit'], ['Selection order']],
   ['/sessions', ['Release'], ['Cache warming']],
-  ['/settings', ['Add model', 'Import'], ['Keepalive', 'Pricing']],
+  ['/settings', ['Add model'], ['Keepalive', 'Pricing']],
   ['/upstreams/business', ['Add upstream', 'Clear', 'Clear funding flag', 'Delete upstream', 'Disconnect', 'Pause', 'Re-pair', 'Resume', 'Verify'], ['Catalog', 'Identity']],
 ]) {
   await m.navigate(path);
@@ -4138,7 +4075,7 @@ await m.navigate('/alerts');
 await m.navigate('/settings');
 results.push({
   name: 'viewer: /settings price table is the plain one',
-  ok: m.container.querySelector('.price-cell__btn') === null && m.container.querySelector('.price-import') === null && !m.text().includes('Add model') && m.text().includes('claude-fable-5-1'),
+  ok: m.container.querySelector('.price-cell__btn') === null && !m.text().includes('Add model') && m.text().includes('claude-fable-5-1'),
   missing: [],
 });
 await m.navigate('/sessions');

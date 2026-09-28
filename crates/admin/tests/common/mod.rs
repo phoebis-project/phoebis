@@ -36,7 +36,7 @@ use phoebis_transport::{
 use fake_upstream::{FakeUpstream, Respond, Rule};
 use futures::StreamExt;
 use http_body_util::BodyExt;
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::pin::Pin;
@@ -928,8 +928,6 @@ async fn app_with_webhook_policy(
         keepalive: keepalive.clone(),
         alerts: alerts.clone(),
         allow_local_webhooks,
-        pending_imports: Mutex::new(HashMap::new()),
-        confirming: tokio::sync::Mutex::new(()),
     });
     Parts {
         alerts,

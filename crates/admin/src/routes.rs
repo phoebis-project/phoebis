@@ -125,8 +125,6 @@ pub fn router(state: Arc<AdminState>) -> Router {
         .route("/admin/pools/{id}/members", put(pools::set_members))
         .route("/admin/pools/{id}/traffic", get(pools::traffic))
         .route("/admin/pricing", get(pricing::show))
-        .route("/admin/pricing/import", post(pricing::import))
-        .route("/admin/pricing/import/confirm", post(pricing::confirm))
         .route("/admin/requests", get(requests::list))
         .route("/admin/requests/{id}", get(requests::show))
         .route("/admin/requests/{id}/bodies", get(requests::bodies))

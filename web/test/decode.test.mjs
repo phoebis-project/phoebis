@@ -949,7 +949,7 @@ test('an account patch encodes the cancelled flag and its end', () => {
   assert.deepEqual(d.encodeAccountPatch({ cancelled: false, subscriptionEndsAt: null }), { cancelled: false, subscription_ends_at: null }, 'a cleared end is sent as null, not left out');
 });
 
-test('settings, pricing, the import preview, pairing, quota, and usage decode', () => {
+test('settings, pricing, pairing, quota, and usage decode', () => {
   const s = d.decodeSettings(fixture('settings'));
   assert.equal(s.access.viewerConfigured, true);
   assert.equal(s.about.publicUrl, null);
@@ -958,14 +958,6 @@ test('settings, pricing, the import preview, pairing, quota, and usage decode', 
   assert.equal(s.listeners.metrics, '127.0.0.1:9464');
   assert.deepEqual(s.compatibility, { cacheDiagnostics: false, profile: 'claude-code-2.1.269-linux-x64' });
   assert.equal(s.pricing.models.find((m) => m.model === 'claude-sonnet-5').inputPerM, 2);
-  const preview = d.decodePriceImport(fixture('pricing_import'));
-  // The imported file carries the one model the router serves, at the five prices the shipped table already
-  // holds, so an exact diff would count no change. `diff_against` compares the five fields with `!=`, and the
-  // file's 2e-07 per token reads back as 0.19999999999999998 per million against a stored 0.2, so the route
-  // answers one. This pins the route's answer, artefact and all; the tolerance belongs to the import, not here.
-  assert.equal(preview.inFile, 1);
-  assert.equal(preview.changes, 1);
-  assert.ok(preview.token.startsWith('imp_'));
   const pairing = d.decodePairingSession(fixture('pairing_started'));
   assert.ok(pairing.id && pairing.state && pairing.authorizeUrl.includes('state=') && isIso(pairing.expiresAt));
   const history = d.decodeQuotaHistory(fixture('account_quota'));

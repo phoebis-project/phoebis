@@ -37,7 +37,6 @@
         "cache_read_per_m": 0.2,
         "output_per_m": 10.0
       }
-    ],
-    "versions": []
+    ]
   }
 }

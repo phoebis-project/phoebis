@@ -1066,19 +1066,6 @@ export interface ModelPrice {
   outputPerM: number;
 }
 
-export interface PriceImportPreview {
-  /** One change per field the diff would write, against the table the router serves. */
-  changes: number;
-  /** Models the file carries, before the ones the router does not serve are dropped. */
-  inFile: number;
-  /** The rows that survived the filter, which is what the diff is built from. */
-  models: ModelPrice[];
-  /** How many of the models in the file the router serves. */
-  served: number;
-  /** Identifies this preview to the apply call, so what is applied is what was shown. */
-  token: string;
-}
-
 /** Meter tokens per token of each type on the plan side; `factor` weighs the model against the reference and
  *  multiplies every type column. */
 export interface PlanFactor { cacheRead: number; cacheWrite1h: number; cacheWrite5m: number; factor: number; input: number; measured: string | null; output: number; unmeasured: boolean }

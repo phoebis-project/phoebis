@@ -2,7 +2,7 @@ import type { AccountPatch, Api, CreateKeyInput, KeyInput, PoolInput } from '@/a
 import { AFFINITY_MODE_VALUES, AFFINITY_SOURCE_VALUES, BUDGET_PERIOD_VALUES, QUOTA_HEADERS_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES, decodeLiveDelta, decodeLiveSnapshot } from '@/api/decode';
 import { ApiError, catalogUnion, slug } from '@/api/http';
 import type {
-  Account, AccountCatalog, AccountInput, AlertDeliveryTest, AlertEvent, AlertKind, AlertRule, AlertRuleInput, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, Delivery, KeyModels, LifecycleDelivery, LiveEvent, MemberEligibility, ModelEvent, ModelPrice,
+  Account, AccountCatalog, AccountInput, AlertDeliveryTest, AlertEvent, AlertKind, AlertRule, AlertRuleInput, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, Delivery, KeyModels, LifecycleDelivery, LiveEvent, MemberEligibility, ModelEvent,
   ModelRule, ModelsState, PairingInput, PairingPreview, PairingSession, Pool, PoolMember, RequestDetail, RequestLog, RequestPage, RequestQuery, Role, RuleCooldown, Session, SessionInfo, Settings, Subscription,
 } from '@/api/types';
 import { urlHost } from '@/lib/format';
@@ -11,13 +11,13 @@ import { matchesPattern } from '@/lib/pattern';
 import { matchesPattern as matchesModelPattern, processRules } from '@/lib/patterns';
 import { ACCOUNTS, QUOTA_HISTORY, QUOTA_SNAPSHOTS } from './accounts';
 import { FITS, breakdownOf, burnOf, placementsOf, rewritesOf, seriesOf } from './analytics';
-import { CATALOG, IMPORTED_CATALOG, IMPORTED_PRICES, countPriceChanges } from './catalog';
+import { CATALOG } from './catalog';
 import { liveFeed } from './live';
 import { ALERT_EVENTS, ALERT_RULES, KEEPALIVE_OVERVIEW, LIFECYCLE_DELIVERIES, RECIPES, SESSIONS, SETTINGS } from './operations';
 import { KEYS, POOLS } from './pools';
 import { ACCOUNT_ROLLUPS, ALL_ROLLUPS, REQUEST_EVENTS, REQUESTS, capturedBodiesFor, requestById } from './requests';
 import { createRng } from './rng';
-import { ACCOUNT_SAMPLE, ALERT_RULE_SAMPLE, KEY_SAMPLE, PAIRING_SAMPLE, POOL_SAMPLE, PRICE_IMPORT_SAMPLE } from './samples';
+import { ACCOUNT_SAMPLE, ALERT_RULE_SAMPLE, KEY_SAMPLE, PAIRING_SAMPLE, POOL_SAMPLE } from './samples';
 import { DAY, MINUTE, NOW, ago, ahead, iso } from './time';
 
 // Fixed, like the live feed's draw: a pass over the mock reads the same secrets every run.
@@ -324,8 +324,6 @@ export class MockApi implements Api {
       return { ...m, eligible: eligibilityOf(account, p.overagePolicy, m), kind: account?.kind ?? 'oauth' };
     }),
   }));
-  /** What the last preview minted, held beside the URL it read, so a confirm writes the rows that were shown. */
-  private pricePreview: { models: ModelPrice[]; token: string; url: string } | null = null;
   private rules: AlertRule[] = ALERT_RULES.map((r) => ({ ...r }));
   private secretRng = createRng(MOCK_SEED);
   private session: SessionInfo | null = null;
@@ -412,18 +410,6 @@ export class MockApi implements Api {
     this.mutation();
     this.pairings.delete(pairingId);
     return latency(undefined, 250);
-  }
-
-  async confirmPriceImport(token: string) {
-    this.mutation();
-    const preview = this.pricePreview;
-    if (!preview || preview.token !== token) return Promise.reject(new ApiError(404, 'that preview is no longer available; import again', null));
-    const imported = new Map(preview.models.map((m) => [m.model, m]));
-    const current = this.settings.pricing.models;
-    const added = preview.models.filter((m) => !current.some((c) => c.model === m.model));
-    this.pricePreview = null;
-    this.settings = { ...this.settings, pricing: { effectiveDate: iso(NOW), models: [...current.map((m) => imported.get(m.model) ?? m), ...added], source: preview.url } };
-    return latency(this.settings.pricing, 300);
   }
 
   async createAccount(input: AccountInput): Promise<Account> {
@@ -790,13 +776,6 @@ export class MockApi implements Api {
     const a = this.account(accountId);
     this.putAccount({ ...a, routingEnabled: false, status: statusOf(a, false) });
     return latency(undefined, 250);
-  }
-
-  async previewPriceImport(url: string) {
-    this.mutation();
-    const preview = { ...PRICE_IMPORT_SAMPLE, changes: countPriceChanges(this.settings.pricing.models, IMPORTED_PRICES), inFile: IMPORTED_CATALOG.length, models: IMPORTED_PRICES, served: IMPORTED_PRICES.length, token: `imp_${this.token(32)}` };
-    this.pricePreview = { models: preview.models, token: preview.token, url };
-    return latency(preview, 400);
   }
 
   refreshUsage(_accountId: string) {

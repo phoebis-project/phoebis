@@ -1,4 +1,4 @@
-import { decodeAccount, decodeAccountRollups, decodeAlertEvent, decodeAlertRule, decodeAnalyticsGroup, decodeDashboard, decodeDelivery, decodeKeepaliveOverview, decodeKey, decodeLifecycleDelivery, decodeLiveRequest, decodePairingSession, decodePool, decodePriceImport, decodeQuotaHistory, decodeRecipe, decodeRequest, decodeRequestEvent, decodeSession, decodeSettings, decodeSnapshot } from '@/api/decode';
+import { decodeAccount, decodeAccountRollups, decodeAlertEvent, decodeAlertRule, decodeAnalyticsGroup, decodeDashboard, decodeDelivery, decodeKeepaliveOverview, decodeKey, decodeLifecycleDelivery, decodeLiveRequest, decodePairingSession, decodePool, decodeQuotaHistory, decodeRecipe, decodeRequest, decodeRequestEvent, decodeSession, decodeSettings, decodeSnapshot } from '@/api/decode';
 import { FIXTURES } from './generated/fixtures';
 
 /** The fixture's body, or the named member of it, as the decoder takes it. */
@@ -18,7 +18,6 @@ export const LIVE_REQUEST_SAMPLE = decodeLiveRequest(((body('live_messages').del
 export const OVERVIEW_SAMPLE = decodeDashboard(body('dashboard'));
 export const PAIRING_SAMPLE = decodePairingSession(body('pairing_started'));
 export const POOL_SAMPLE = decodePool(first('pools', 'pools'));
-export const PRICE_IMPORT_SAMPLE = decodePriceImport(body('pricing_import'));
 export const QUOTA_HISTORY_SAMPLE = decodeQuotaHistory(body('account_quota'))[0];
 export const QUOTA_SNAPSHOT_SAMPLE = decodeSnapshot('business', body('account_usage'));
 export const RECIPE_SAMPLE = decodeRecipe(first('keepalive_recipes', 'recipes'));

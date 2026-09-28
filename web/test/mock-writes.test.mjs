@@ -23,7 +23,6 @@ const WRITES = [
   ['clearFunding', (api) => api.clearFunding('personal')],
   ['completePairing', (api) => api.completePairing('pair_unknown', { code: 'code', state: 'state' })],
   ['confirmPairing', (api) => api.confirmPairing('pair_unknown')],
-  ['confirmPriceImport', (api) => api.confirmPriceImport('imp_unknown')],
   ['createAccount', (api) => api.createAccount({ id: 'fresh', kind: 'api_key', label: 'Fresh', secret: 'sk-ant-api03-FAKE' })],
   ['createAlertRule', (api) => api.createAlertRule(newRule)],
   ['createKey', (api) => api.createKey(keyInput)],
@@ -34,7 +33,6 @@ const WRITES = [
   ['deletePool', (api) => api.deletePool('codex')],
   ['disconnectAccount', (api) => api.disconnectAccount('business')],
   ['pauseAccount', (api) => api.pauseAccount('business')],
-  ['previewPriceImport', (api) => api.previewPriceImport('https://example.invalid/prices.json')],
   ['releaseSession', async (api) => { const s = (await api.listSessions()).find((x) => !x.historical); return api.releaseSession(s.keyId, s.sessionId); }],
   ['renameAccount', (api) => api.renameAccount('business', 'Renamed')],
   ['resolveAlertEvent', async (api) => api.resolveAlertEvent((await api.listAlertEvents('open'))[0].id)],
@@ -359,7 +357,6 @@ test('the catalog union names each model once and a failed fetch contributes not
 test('a refusal never carries an error code, which the router sets for an unavailable registry alone', async () => {
   const api = await as('admin');
   const missing = [
-    () => api.confirmPriceImport('imp_unknown'),
     () => api.renameAccount('nobody', 'x'),
     () => api.resolveAlertEvent('nothing'),
     () => api.rotateKey('nothing'),

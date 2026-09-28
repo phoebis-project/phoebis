@@ -6,7 +6,6 @@ mod budgets;
 mod credentials;
 mod lock;
 mod memory;
-mod pricing;
 mod registry;
 mod routing;
 mod schema;
@@ -35,7 +34,6 @@ pub use credentials::{
     ResolvedAttempt, Secret,
 };
 pub use memory::{MemoryKey, MemoryRecord, MemoryStore};
-pub use pricing::PricingVersion;
 pub use registry::{
     canonical_id, key_prefix, AccountUpdate, Affinity, AffinityMode, AffinitySource, ApiKeyRow,
     BudgetPeriod, Failover, MemberWrite, ModelRule, OveragePolicy, PoolMember,

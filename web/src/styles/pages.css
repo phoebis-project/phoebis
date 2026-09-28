@@ -1863,31 +1863,6 @@
   color: var(--critical-ink);
 }
 
-.price-import {
-  padding: 4px 14px 14px;
-}
-
-.price-import__hint {
-  max-width: 760px;
-  margin-top: 8px;
-  font-size: 12.5px;
-}
-
-.price-import__error {
-  margin-top: 8px;
-  font-size: 12.5px;
-  color: var(--critical-ink);
-}
-
-.diff-table td,
-.diff-table th {
-  padding: 6px 10px;
-}
-
-.diff-table .badge {
-  margin-left: 8px;
-}
-
 .snippet-group {
   margin-bottom: 4px;
 }

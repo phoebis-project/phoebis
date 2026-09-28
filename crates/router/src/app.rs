@@ -1,9 +1,8 @@
 //! The running process: the store and the credential manager the three listeners share, and the drain that
 //! ends them.
 
-use std::collections::HashMap;
 use std::future::Future;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context};
@@ -153,7 +152,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
     ));
     // Loaded ahead of the routing task, which prices every burn through it from its first renewal on.
     let pricing = Arc::new(
-        Pricing::load(&store, config.stats.pricing_path.as_deref()).with_context(|| {
+        Pricing::load(config.stats.pricing_path.as_deref()).with_context(|| {
             format!(
                 "loading the price table from {}",
                 config
@@ -391,8 +390,6 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         keepalive: keepalive.clone(),
         alerts: alerts.clone(),
         allow_local_webhooks: ALLOW_LOCAL_WEBHOOKS,
-        pending_imports: Mutex::new(HashMap::new()),
-        confirming: tokio::sync::Mutex::new(()),
     });
 
     // Before the proxy listener binds, so the first request finds the dated ids and the samples in place; each

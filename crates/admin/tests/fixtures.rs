@@ -14,7 +14,6 @@ use phoebis_ledger::{
 use phoebis_routing::ClientClass;
 use phoebis_store::{AccountState, Identity, NewBundle, Secret, SubscriptionRow};
 use common::{delete, deltas_until, get, json, login, next_text, patch, post, serve, wait_json};
-use fake_upstream::{FakeUpstream, Respond, Rule};
 use serde_json::{json as j, Value};
 
 fn dir() -> PathBuf {
@@ -663,7 +662,6 @@ async fn every_route_is_captured_and_holds_its_shape() {
             response_chunks: None,
             finished_at: now,
         }));
-    let prices = FakeUpstream::start_plain(vec![Rule { path_prefix: "/prices.json".into(), respond: Respond::Json { status: 200, headers: vec![], body: br#"{"claude-sonnet-5":{"input_cost_per_token":2e-06,"output_cost_per_token":1e-05,"cache_read_input_token_cost":2e-07,"cache_creation_input_token_cost":2.5e-06,"cache_creation_input_token_cost_above_1hr":4e-06}}"#.to_vec() } }]).await;
     let ready = wait_json(app, "/admin/requests", &cookie, |v| {
         v["requests"].as_array().unwrap().len() == 5
     })
@@ -795,36 +793,6 @@ async fn every_route_is_captured_and_holds_its_shape() {
         )
         .await,
     );
-    // The shipped table prices claude-sonnet-5, not the harness's own claude-sonnet-4-5, so the live catalog
-    // this preview reads is pointed at the id the price file and the fixture both name.
-    parts.up.set_rule_after(
-        0,
-        "/v1/models",
-        Respond::Json {
-            status: 200,
-            headers: vec![],
-            body: br#"{"data":[{"id":"claude-sonnet-5"}]}"#.to_vec(),
-        },
-    );
-    let preview = json(
-        post(
-            app,
-            "/admin/pricing/import",
-            &format!(
-                r#"{{"url":"http://127.0.0.1:{}/prices.json"}}"#,
-                prices.addr().port()
-            ),
-            Some(&cookie),
-        )
-        .await,
-    )
-    .await;
-    hold(
-        &planted,
-        "pricing_import",
-        "POST /admin/pricing/import",
-        preview,
-    );
     hold(
         &planted,
         "pairing_started",
@@ -951,5 +919,4 @@ async fn every_route_is_captured_and_holds_its_shape() {
         "GET /admin/live",
         j!({ "snapshot": snapshot, "deltas": deltas }),
     );
-    prices.shutdown().await;
 }

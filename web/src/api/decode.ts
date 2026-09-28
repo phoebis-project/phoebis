@@ -1,7 +1,7 @@
 import type {
   Account, AccountCatalog, AccountRollup, AffinityMode, AffinitySource, AlertEvent, AlertRule, AlertRuleInput, AnalyticsGroup, AnalyticsPoint, ApiKey, AttemptOutcome, AttemptResponse, BudgetPeriod, BurnPoint, BurnUnit, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
   CohortHold, Delivery, GuardVerdict, KeepaliveOverview, KeepaliveRecipe, KeyModels, LifecycleDelivery, LiveAttempt, LiveDelta, LiveMetric, LiveRequest, LiveSnapshot, LiveTick, MemberBudget, MemberEligibility, ModelEvent, ModelPrice, ModelRule, ModelRulesMode,
-  ModelsState, Overview, PairingSession, PinMigrationReason, PinReleaseReason, Placement, PlacementRow, PlanFactor, PlanFactors, Pool, PoolCacheTtl, PriceImportPreview, QuotaHeaders, QuotaHistory, QuotaSnapshot, RateLimitWindow, RequestEvent, RequestLog, RequestPage, RequestShape, RewritePoint,
+  ModelsState, Overview, PairingSession, PinMigrationReason, PinReleaseReason, Placement, PlacementRow, PlanFactor, PlanFactors, Pool, PoolCacheTtl, QuotaHeaders, QuotaHistory, QuotaSnapshot, RateLimitWindow, RequestEvent, RequestLog, RequestPage, RequestShape, RewritePoint,
   RuleCooldown, SelectionTrace, Session, SessionLifecycleDetail, SessionPlacement, Settings, SubagentPlacement, Subscription, TtlRules, WarmSessions, WindowFit, WindowId,
 } from './types';
 import { ACCOUNT_KIND_VALUES } from './types';
@@ -525,7 +525,6 @@ export function decodeAlertEvent(v: unknown): AlertEvent {
 
 const price = (m: Rec): ModelPrice => ({ cacheReadPerM: num(m.cache_read_per_m), cacheWrite1hPerM: num(m.cache_write_1h_per_m), cacheWrite5mPerM: num(m.cache_write_5m_per_m), inputPerM: num(m.input_per_m), model: str(m.model), outputPerM: num(m.output_per_m) });
 export const decodePricing = (v: unknown): Settings['pricing'] => ({ effectiveDate: new Date(str(rec(v).effective, '1970-01-01')).toISOString(), models: list(rec(v).models).map(rec).map(price), source: str(rec(v).source) });
-export const decodePriceImport = (v: unknown): PriceImportPreview => ({ changes: list(rec(v).changes).length, inFile: num(rec(v).in_file), models: list(rec(v).models).map(rec).map(price), served: num(rec(v).served), token: str(rec(v).token) });
 
 const planFactor = (v: unknown): PlanFactor => {
   const f = rec(v);

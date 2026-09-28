@@ -79,12 +79,9 @@ first request after a restart; the poll then keeps its interval.
 Every attempt is stamped with a cost estimate at list prices per million tokens: an estimate rather than a bill,
 since tier and batch modifiers are not known here and subscription quota is the rate-limit windows, never this
 number. The shipped price table is embedded in the binary and dated 2026-09-08; `stats.pricing_path` overrides it
-with a file of the operator's own; an import confirmed through Settings wins over both and is kept as its own
-version. An import takes a URL, shows a diff against the table in force, and asks for confirmation before it
-writes anything; the preview it shows expires after ten minutes. Settings tells the operator the import "accepts
-the LiteLLM `model_prices_and_context_window.json` or a models.dev catalog"; a source that prices only the
-5-minute cache write has its 1-hour price derived as 1.6 times it. An attempt on a model the table does not price
-carries no cost estimate and is counted in `phoebis_pricing_unknown_model_total`.
+with a file of the operator's own, and Settings shows the table in force with its version and its source. An
+attempt on a model the table does not price carries no cost estimate and is counted in
+`phoebis_pricing_unknown_model_total`.
 
 ## Plan meter
 

@@ -239,16 +239,6 @@ async fn the_viewer_reads_every_view_refreshes_usage_and_is_refused_every_mutati
             "/admin/pools/main/members".into(),
             r#"{"members":[]}"#,
         ),
-        (
-            "POST",
-            "/admin/pricing/import".into(),
-            r#"{"url":"http://127.0.0.1:1/p"}"#,
-        ),
-        (
-            "POST",
-            "/admin/pricing/import/confirm".into(),
-            r#"{"token":"x"}"#,
-        ),
         ("POST", "/admin/sessions/desktop/s1/release".into(), ""),
     ];
     for (method, path, body) in &mutations {
@@ -277,7 +267,7 @@ async fn the_viewer_reads_every_view_refreshes_usage_and_is_refused_every_mutati
         .collect::<String>()
         .matches(".route(\"/admin/")
         .count();
-    assert_eq!(routed, 59, "a route joined the table; add it to this test");
+    assert_eq!(routed, 57, "a route joined the table; add it to this test");
     // The state the mutations would have changed is as the admin left it.
     assert_eq!(
         json(get(&parts.app, "/admin/keys", Some(&admin)).await).await["keys"]
