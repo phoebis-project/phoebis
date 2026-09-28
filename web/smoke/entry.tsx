@@ -7,13 +7,15 @@ import type { LiveEvent } from '@/api/types';
 import { routes } from '@/app/App';
 import { SessionProvider } from '@/app/session';
 import { AppSettingsProvider } from '@/app/settings';
-import { REQUEST_EVENTS, REQUESTS } from '@/mock/requests';
+import { ALL_ROLLUPS, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, REQUEST_EVENTS, REQUESTS } from '@/mock/requests';
 import { SETTINGS_SAMPLE } from '@/mock/samples';
 
-export { api };
+export { api, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION };
 export const MOCK_VERSION = SETTINGS_SAMPLE.about.version;
 export const requestEvents = REQUEST_EVENTS;
 export const requests = REQUESTS;
+// The mock's raw hourly rows, so a check can read the story itself rather than a page's derivation of it.
+export const rollups = ALL_ROLLUPS;
 
 /**
  * Drops the feed's ticks so a check can watch the page notice the silence. Only the ticks: the deltas keep

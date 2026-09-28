@@ -58,7 +58,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { api, deferNextCall, failCalls, failNextCall, MOCK_VERSION, mount, requestEvents, requests, stallLive } = await import('./dist/entry.js');
+const { api, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, failCalls, failNextCall, MOCK_VERSION, mount, requestEvents, requests, rollups, stallLive } = await import('./dist/entry.js');
 
 const results = [];
 function expect(name, text, needles) {
@@ -2891,6 +2891,32 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
     const unfiltered = trafficRows();
     const earlierLabel = [...unfiltered.keys()].find((k) => k.startsWith('desktop (deleted, created ')) ?? '';
     results.push({ name: '/analytics a deleted holder of a reused key id is its own group, labelled with its creation time', ok: /^desktop \(deleted, created \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC\)$/.test(earlierLabel) && unfiltered.has('desktop'), missing: [...unfiltered.keys()] });
+    {
+      // The mock's raw rows rather than the page's sums of them: an hour both generations filled would still
+      // split into two key groups, so only the rows show it. The runner's zone is UTC, so `getHours` reads the
+      // mock's own bucket.
+      const desktop = rollups.filter((r) => r.keyId === 'desktop');
+      const holder = desktop.filter((r) => new Date(r.hour).toDateString() === DELETED_HOLDER_DAY && new Date(r.hour).getHours() < 11);
+      const rest = desktop.filter((r) => !holder.includes(r));
+      const restGenerations = new Set(rest.map((r) => r.keyGeneration));
+      const requestsOf = (rows) => rows.filter((r) => r.kind === 'inference').reduce((n, r) => n + Object.values(r.requests).reduce((a, b) => a + b, 0), 0);
+      const followingDay = new Set(holder.map((r) => new Date(Date.parse(r.hour) + 86_400_000).toISOString()));
+      const holderRequests = requestsOf(holder);
+      const liveRequests = requestsOf(rest.filter((r) => followingDay.has(r.hour)));
+      results.push({
+        name: '/analytics the earlier desktop holder owns its morning hours, probes included',
+        ok: holder.some((r) => r.kind === 'inference') && holder.some((r) => r.kind === 'probe') && holder.every((r) => r.keyGeneration === DELETED_HOLDER_GENERATION) && restGenerations.size === 1 && !restGenerations.has(DELETED_HOLDER_GENERATION) && holderRequests < liveRequests,
+        missing: [`holder ${holder.map((r) => `${r.hour} ${r.kind} ${r.keyGeneration}`).join(';')}`, `rest generations ${[...restGenerations].join(',')}`, `requests ${holderRequests} against ${liveRequests}`],
+      });
+    }
+    {
+      // Both sides sum the same groups, so this holds by construction; it stands for a later grouping that counts
+      // an hour twice.
+      const meta = m.container.querySelector('#traffic .analytics-section__meta')?.textContent?.trim() ?? '';
+      const shown = Number(meta.split(' ')[0].replace(/,/g, ''));
+      const grouped = [...unfiltered.values()].reduce((n, v) => n + v, 0);
+      results.push({ name: "/analytics the key grouping's total equals the ungrouped total", ok: unfiltered.size > 1 && meta.endsWith('errors') && grouped === shown, missing: [meta, String(grouped)] });
+    }
     // One hour of the month reports a reason the console has no label for; the table lists it under its own name
     // after the eight it knows, and the panel draws a bar for it.
     const reasonHeads = [...([...m.container.querySelectorAll('.card--table')].find((c) => (c.textContent ?? '').startsWith('Misses by reason by key'))?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim());
