@@ -37,9 +37,9 @@ struct MemberInput {
 
 /// Turns the wire members into store writes, refusing a non-positive budget, a budget on a member that is not
 /// an API-key account, or an unknown period before any write lands; a member list replaces the pool's whole
-/// membership, so an absent budget clears it. A subscription member's usage priced at list rates is quota, not
-/// money it spends, so a budget there would refuse it for a sum it never paid. An account the store does not
-/// hold is left to the member write itself, which answers its 404.
+/// membership, so an absent budget clears it. A subscription member's usage is metered against its plan windows
+/// and its overage is not a per-member budget, so a budget there has nothing of its own to cap. An account the
+/// store does not hold is left to the member write itself, which answers its 404.
 // The error is a rendered HTTP response, returned once per request and dropped; boxing it would buy a
 // pointer chase and nothing else.
 #[allow(clippy::result_large_err)]

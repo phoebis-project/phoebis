@@ -20,3 +20,13 @@ test("the trail keeps a session's pin event for its own agent and drops a siblin
     [['pin_expired', 'main']],
   );
 });
+
+test('the trail reads a pin event recorded without an agent id as the main agent', () => {
+  const request = { agentId: 'main', canonicalModel: 'claude-sonnet-5', id: 'r1', keyId: 'desktop', sessionId: 's1' };
+  const legacy = { ...event('pin_expired', 'main'), detail: { reasons: ['cooldown'] } };
+  assert.deepEqual(
+    d.requestTrail([legacy], request).map((e) => e.kind),
+    ['pin_expired'],
+  );
+  assert.deepEqual(d.requestTrail([legacy], { ...request, agentId: 'worker' }), [], "a subagent's request never takes it");
+});

@@ -11,7 +11,7 @@
         "model": "claude-sonnet-5",
         "net_meter_tokens": 0.0,
         "net_usd": 0.0,
-        "next_probe_at": 1236875,
+        "next_probe_at": 1238586,
         "pool_id": "main",
         "reason": null,
         "session_id": "s1",

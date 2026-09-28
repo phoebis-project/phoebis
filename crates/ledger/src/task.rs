@@ -311,7 +311,7 @@ async fn writer(
     // lands ahead of `router.reload()` publishing the new revision, the top-of-loop check sees the old one and
     // nothing else wakes the loop again until the next record, the hourly purge, or a boundary tick days out.
     // This arm re-checks the revision at the mirror's own cadence regardless, at the cost of one extra
-    // `router.snapshot()` per poll.
+    // `router.snapshot()` per poll; a price confirmation, which wakes nothing of its own, is seen here too.
     let mut revision_poll = tokio::time::interval(config.event_poll);
     revision_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     revision_poll.tick().await;
@@ -323,14 +323,19 @@ async fn writer(
         persisted_fits(store).await,
     );
     let mut member_revision = router.snapshot().revision;
+    // A confirmed price table moves no registry revision and prices no request, and a member refused at its
+    // budget sends no traffic that would, so the table's version is watched beside the revision.
+    let mut priced_with = pricing.current().version.clone();
     let mut spend_due =
         refresh_member_spends(&db, &pricing, &router, clock(), None, config.event_poll).await;
     loop {
         // Checked on every round, whatever woke it: a member's budget or period edited under the writer,
         // with no flush of its own, still recomputes without waiting on the next request or period boundary.
         let revision = router.snapshot().revision;
-        if revision != member_revision {
+        let table = pricing.current();
+        if revision != member_revision || table.version != priced_with {
             member_revision = revision;
+            priced_with = table.version.clone();
             spend_due = refresh_member_spends(
                 &db,
                 &pricing,
@@ -356,7 +361,7 @@ async fn writer(
                 continue;
             }
             _ = purge.tick() => {
-                run_purge(&db, &config, clock()).await;
+                run_purge(&db, &config, &router, clock()).await;
                 continue;
             }
             // Nothing but the top-of-loop check runs here; see the arm's own comment above.
@@ -381,6 +386,7 @@ async fn writer(
         let landed = land(&db, &pricing, &stats, &metrics, batch).await;
         if landed && priced {
             member_revision = router.snapshot().revision;
+            priced_with = pricing.current().version.clone();
             spend_due = refresh_member_spends(
                 &db,
                 &pricing,
@@ -703,9 +709,10 @@ async fn land(
     }
 }
 
-async fn run_purge(db: &Arc<LedgerDb>, config: &LedgerConfig, now: i64) {
+async fn run_purge(db: &Arc<LedgerDb>, config: &LedgerConfig, router: &RouterHandle, now: i64) {
     let (db, config) = (db.clone(), config.clone());
-    match tokio::task::spawn_blocking(move || run_retention(&db, &config, now)).await {
+    let budgeted = budgeted_members(&router.snapshot());
+    match tokio::task::spawn_blocking(move || run_retention(&db, &config, now, &budgeted)).await {
         Ok(Ok(purged)) => tracing::debug!(?purged, "ledger retention ran"),
         Ok(Err(error)) => tracing::warn!(%error, "ledger retention failed"),
         Err(error) => tracing::error!(%error, "ledger retention panicked"),

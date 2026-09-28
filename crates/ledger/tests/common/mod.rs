@@ -40,6 +40,8 @@ pub struct Harness {
     pub db: Arc<LedgerDb>,
     pub ledger: Ledger,
     pub metrics: Arc<Metrics>,
+    /// The table the writer prices with, which the admin's confirmation replaces in place.
+    pub pricing: Arc<Pricing>,
     pub relay: Arc<Relay>,
     pub router: RouterHandle,
     pub store: Arc<Store>,
@@ -291,7 +293,7 @@ pub async fn harness_on(
     let metrics = Arc::new(Metrics::new());
     let ledger = spawn(
         db.clone(),
-        pricing,
+        pricing.clone(),
         store.clone(),
         usage.clone(),
         &bus,
@@ -330,6 +332,7 @@ pub async fn harness_on(
         db,
         ledger,
         metrics,
+        pricing,
         relay,
         router: router_handle,
         store,

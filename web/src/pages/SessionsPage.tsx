@@ -363,6 +363,7 @@ function SessionRows({
   const expiresAt = expireAfterSeconds === null || lastUsed === null ? null : new Date(Date.parse(lastUsed) + expireAfterSeconds * 1000).toISOString();
   // Analytics and observe both read the ledger, so a session that never reached it has nothing to open.
   const hasTraffic = session.requests > 0;
+  const trafficSession = session.sessionId;
   return (
     <>
       <tr
@@ -483,8 +484,8 @@ function SessionRows({
           <Menu
             label={`Actions for session ${shortId(session.sessionId, 13)}${session.historical ? ', deleted holder' : ''}`}
             items={[
-              { label: 'View in analytics', disabled: !hasTraffic, title: hasTraffic ? undefined : NO_TRAFFIC_HINT, onClick: () => onOpen(`/analytics?session=${encodeURIComponent(session.sessionId)}&key=${encodeURIComponent(`${session.keyId}@${session.keyGeneration}`)}`) },
-              { label: 'View in observe', disabled: !hasTraffic, title: hasTraffic ? undefined : NO_TRAFFIC_HINT, onClick: () => onOpen(`/observe?session=${encodeURIComponent(session.sessionId)}`) },
+              { label: 'View in analytics', disabled: !hasTraffic, title: hasTraffic ? undefined : NO_TRAFFIC_HINT, onClick: () => onOpen(`/analytics?session=${encodeURIComponent(trafficSession)}&key=${encodeURIComponent(`${session.keyId}@${session.keyGeneration}`)}`) },
+              { label: 'View in observe', disabled: !hasTraffic, title: hasTraffic ? undefined : NO_TRAFFIC_HINT, onClick: () => onOpen(`/observe?session=${encodeURIComponent(trafficSession)}`) },
               ...(canMutate && !session.historical ? [{ label: 'Release', onClick: onRelease }] : []),
             ]}
           />

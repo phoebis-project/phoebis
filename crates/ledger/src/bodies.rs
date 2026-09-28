@@ -1,8 +1,10 @@
 //! Captured bodies, kept only for keys whose effective capture window is above zero, and the hourly purge
 //! that enforces every retention window the ledger has.
 
-use rusqlite::params;
+use phoebis_store::BudgetPeriod;
+use rusqlite::{params, params_from_iter, ToSql};
 
+use crate::query::period_bounds;
 use crate::task::LedgerConfig;
 use crate::{LedgerDb, LedgerError};
 
@@ -24,10 +26,12 @@ pub struct Purged {
     pub rollups: usize,
 }
 
+/// `budgeted` is every pool member with a spend budget, as `member_spends` takes them.
 pub fn run_retention(
     db: &LedgerDb,
     config: &LedgerConfig,
     now: i64,
+    budgeted: &[(String, String, BudgetPeriod)],
 ) -> Result<Purged, LedgerError> {
     db.write(|conn| {
         let tx = conn.transaction()?;
@@ -55,10 +59,49 @@ pub fn run_retention(
             quota_samples: tx.execute("DELETE FROM quota_samples WHERE bucket < ?1", params![sample_cutoff])?,
             extra_usage_samples: tx
                 .execute("DELETE FROM extra_usage_samples WHERE bucket < ?1", params![sample_cutoff])?,
-            rollups: purge("DELETE FROM rollups_hourly WHERE hour < ?1", rollup_cutoff)?
+            rollups: purge_hourly_rollups(&tx, rollup_cutoff, budgeted, now)?
                 + purge("DELETE FROM account_rollups_hourly WHERE hour < ?1", rollup_cutoff)?,
         };
         tx.commit()?;
         Ok(purged)
     })
+}
+
+/// A budget sums its member's hourly rows over the whole active period, so a retention shorter than the period
+/// would reopen an exhausted member before the period ends: a budgeted member's rows from its period's start on
+/// stay, and the first purge past the period's end takes them.
+fn purge_hourly_rollups(
+    tx: &rusqlite::Transaction<'_>,
+    cutoff: Option<i64>,
+    budgeted: &[(String, String, BudgetPeriod)],
+    now: i64,
+) -> Result<usize, LedgerError> {
+    let Some(cutoff) = cutoff else {
+        return Ok(0);
+    };
+    if budgeted.is_empty() {
+        return Ok(tx.execute(
+            "DELETE FROM rollups_hourly WHERE hour < ?1",
+            params![cutoff],
+        )?);
+    }
+    let mut args: Vec<Box<dyn ToSql>> = vec![Box::new(cutoff)];
+    let values: Vec<String> = budgeted
+        .iter()
+        .map(|(pool_id, account_id, period)| {
+            args.push(Box::new(pool_id.clone()));
+            args.push(Box::new(account_id.clone()));
+            args.push(Box::new(period_bounds(*period, now).0 / 1_000));
+            let n = args.len();
+            format!("(?{}, ?{}, ?{n})", n - 2, n - 1)
+        })
+        .collect();
+    let sql = format!(
+        "WITH budgeted(pool_id, account_id, since) AS (VALUES {}) \
+         DELETE FROM rollups_hourly WHERE hour < ?1 AND NOT EXISTS (SELECT 1 FROM budgeted b \
+         WHERE b.pool_id = rollups_hourly.pool_id AND b.account_id = rollups_hourly.account_id \
+         AND rollups_hourly.hour >= b.since)",
+        values.join(", ")
+    );
+    Ok(tx.execute(&sql, params_from_iter(args.iter().map(|a| a.as_ref())))?)
 }

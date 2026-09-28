@@ -13,6 +13,8 @@ export interface TrailRequest {
  * The session's events by time alone, so a move or a release belongs to `request` only when it is the same
  * agent's pin, keyed by key, session, agent, and canonical model; a model's rejection or permit only when it
  * carries the request's id.
+ * An event whose detail names
+ * no agent (one recorded before pins were kept per agent, which the ledger does not rewrite) is the main agent's.
  */
 export function requestTrail(events: RequestEvent[], request: TrailRequest): RequestEvent[] {
   return events.filter((e) =>
@@ -21,7 +23,7 @@ export function requestTrail(events: RequestEvent[], request: TrailRequest): Req
         e.keyId === request.keyId &&
         e.sessionId === request.sessionId &&
         e.model === request.canonicalModel &&
-        e.detail.agent_id === request.agentId
+        (e.detail.agent_id ?? 'main') === request.agentId
       : (e.kind === 'model_rejected' || e.kind === 'model_permitted') && e.detail?.source_request_id === request.id,
   );
 }

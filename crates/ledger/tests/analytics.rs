@@ -1430,6 +1430,7 @@ fn a_purge_of_the_periods_raw_requests_leaves_the_members_spend_in_force() {
             ..LedgerConfig::default()
         },
         now,
+        &[],
     )
     .unwrap();
     assert_eq!((purged.requests, purged.attempts), (1, 1));
@@ -1473,6 +1474,76 @@ fn a_purge_of_the_periods_raw_requests_leaves_the_members_spend_in_force() {
     assert!(
         spend.spent_usd >= 10.0,
         "the member stays excluded: its spend is still at or above the budget"
+    );
+}
+
+#[test]
+fn the_rollup_retention_keeps_the_rows_of_a_budgeted_members_active_period() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let table = priced_table("claude-sonnet-5", 1.0);
+    let now = ms(2026, 1, 20, 12, 0);
+    let ten_days_ago = ms(2026, 1, 10, 12, 0);
+    // The same age on three accounts: `a` budgets by the month, `b` carries no budget, `c` budgets by the day.
+    for (id, account) in [("monthly", "a"), ("unbudgeted", "b"), ("daily", "c")] {
+        plant_spend(
+            &db,
+            id,
+            "p",
+            account,
+            "claude-sonnet-5",
+            "inference",
+            ten_days_ago,
+            50,
+        );
+    }
+    let budgeted = vec![
+        ("p".to_string(), "a".to_string(), BudgetPeriod::Month),
+        ("p".to_string(), "c".to_string(), BudgetPeriod::Day),
+    ];
+    run_retention(
+        &db,
+        &LedgerConfig {
+            retention_days: 5,
+            rollup_retention_days: 5,
+            ..LedgerConfig::default()
+        },
+        now,
+        &budgeted,
+    )
+    .unwrap();
+    let spent = |account: &str, period: BudgetPeriod| {
+        db.read_blocking(|c| {
+            member_spends(
+                c,
+                &[("p".to_string(), account.to_string(), period)],
+                now,
+                &table,
+            )
+        })
+        .unwrap()[0]
+            .spent_usd
+    };
+    assert_eq!(
+        spent("a", BudgetPeriod::Month),
+        50.0,
+        "the monthly member's row of this month outlives the five-day retention"
+    );
+    assert_eq!(
+        spent("b", BudgetPeriod::Month),
+        0.0,
+        "an unbudgeted account's row of the same age goes"
+    );
+    assert_eq!(
+        spent("c", BudgetPeriod::Month),
+        0.0,
+        "a daily member's row from before its day goes"
+    );
+    let accounts = db
+        .read_blocking(|c| read_account_rollups(c, 0, i64::MAX))
+        .unwrap();
+    assert!(
+        accounts.is_empty(),
+        "the account rollups keep the retention as configured: {accounts:?}"
     );
 }
 

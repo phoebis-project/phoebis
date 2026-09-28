@@ -382,6 +382,8 @@ pub fn request_by_id(
     Ok(Some((request, attempts)))
 }
 
+/// The events of the request's window under its own session, and
+/// every event that names the request itself.
 pub fn request_events(
     conn: &Connection,
     request: &RequestRecord,
@@ -1129,15 +1131,31 @@ pub fn session_activity(
     conn: &Connection,
     since: i64,
 ) -> Result<Vec<SessionActivity>, LedgerError> {
-    let mut stmt = conn.prepare(
-        "SELECT r.key_id, r.key_generation, r.session_id, MIN(r.received_at), MAX(r.received_at), COUNT(*), \
-         (SELECT canonical_model FROM requests r2 WHERE r2.key_id = r.key_id AND r2.key_generation = r.key_generation AND r2.session_id = r.session_id AND r2.kind != 'probe' ORDER BY r2.received_at DESC, r2.id DESC LIMIT 1), \
-         (SELECT a.account_id FROM attempts a WHERE a.request_id = (SELECT r3.id FROM requests r3 WHERE r3.key_id = r.key_id AND r3.key_generation = r.key_generation AND r3.session_id = r.session_id AND r3.kind != 'probe' ORDER BY r3.received_at DESC, r3.id DESC LIMIT 1) ORDER BY a.attempt DESC LIMIT 1), \
-         (SELECT r3.presented_retired FROM requests r3 WHERE r3.key_id = r.key_id AND r3.key_generation = r.key_generation AND r3.session_id = r.session_id AND r3.kind != 'probe' ORDER BY r3.received_at DESC, r3.id DESC LIMIT 1), \
-         (SELECT r3.rotation_at FROM requests r3 WHERE r3.key_id = r.key_id AND r3.key_generation = r.key_generation AND r3.session_id = r.session_id AND r3.kind != 'probe' ORDER BY r3.received_at DESC, r3.id DESC LIMIT 1) \
-         FROM requests r WHERE r.key_id IS NOT NULL AND r.session_id IS NOT NULL AND r.kind != 'probe' AND r.received_at >= ?1 \
-         GROUP BY r.key_id, r.key_generation, r.session_id ORDER BY MAX(r.received_at) DESC",
-    )?;
+    activity(conn, since, "session_id")
+}
+
+/// One pass over the window's client requests, grouped by `group` (a column expression over `requests`): the
+/// newest request of a group is inside the window whenever any of its requests is, so the window alone answers
+/// both the counts and the newest request's facts.
+fn activity(
+    conn: &Connection,
+    since: i64,
+    group: &str,
+) -> Result<Vec<SessionActivity>, LedgerError> {
+    let mut stmt = conn.prepare(&format!(
+        "WITH recent AS (SELECT id, key_id, key_generation, session_id, {group} AS grp, received_at, canonical_model, \
+         presented_retired, rotation_at, identified_by, identity_root FROM requests \
+         WHERE key_id IS NOT NULL AND session_id IS NOT NULL AND kind != 'probe' AND received_at >= ?1), \
+         ranked AS (SELECT recent.*, \
+         ROW_NUMBER() OVER (PARTITION BY key_id, key_generation, grp ORDER BY received_at DESC, id DESC) AS nth, \
+         MIN(received_at) OVER (PARTITION BY key_id, key_generation, grp) AS first_at, \
+         COUNT(*) OVER (PARTITION BY key_id, key_generation, grp) AS n \
+         FROM recent WHERE grp IS NOT NULL) \
+         SELECT key_id, key_generation, grp, first_at, received_at, n, canonical_model, \
+         (SELECT a.account_id FROM attempts a WHERE a.request_id = ranked.id ORDER BY a.attempt DESC LIMIT 1), \
+         presented_retired, rotation_at, session_id, identified_by, identity_root \
+         FROM ranked WHERE nth = 1 ORDER BY received_at DESC"
+    ))?;
     let rows = stmt.query_map(params![since], |r| {
         Ok(SessionActivity {
             key_id: r.get(0)?,
@@ -1227,7 +1245,7 @@ fn session_identities_chunk(
 
 /// The UTC bounds of the budget period containing `now`, in milliseconds: a day is its own midnight to the
 /// next, a month its first to the next month's first.
-fn period_bounds(period: BudgetPeriod, now: i64) -> (i64, i64) {
+pub(crate) fn period_bounds(period: BudgetPeriod, now: i64) -> (i64, i64) {
     let midnight = |date: jiff::civil::Date| {
         date.to_zoned(jiff::tz::TimeZone::UTC)
             .expect("every civil midnight exists in UTC")

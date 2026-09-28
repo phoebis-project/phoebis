@@ -549,6 +549,7 @@ export interface RequestLog {
   requestClass: string | null;
   requestTruncated: boolean;
   responseTruncated: boolean;
+  /** The client's own session, the one its companion registers under. */
   sessionId: string | null;
   shape: RequestShape;
   status: number | null;

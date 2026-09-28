@@ -200,6 +200,7 @@ async fn a_key_override_of_zero_stores_nothing_and_an_override_of_six_captures_o
         &six.db,
         &LedgerConfig::default(),
         row.finished_at.unwrap() + 6 * 3_600_000 - 1,
+        &[],
     )
     .unwrap();
     assert_eq!(purged, Purged::default());
@@ -207,6 +208,7 @@ async fn a_key_override_of_zero_stores_nothing_and_an_override_of_six_captures_o
         &six.db,
         &LedgerConfig::default(),
         row.finished_at.unwrap() + 6 * 3_600_000,
+        &[],
     )
     .unwrap();
     assert_eq!(
@@ -291,7 +293,7 @@ async fn retention_purges_requests_events_and_samples_by_their_own_windows_and_r
     .unwrap();
     // One past the 90-day cutoff, so the row received at 0 is older than the window and the one at day 89 is not.
     let now = 90 * day + 1;
-    let purged = run_retention(&h.db, &LedgerConfig::default(), now).unwrap();
+    let purged = run_retention(&h.db, &LedgerConfig::default(), now, &[]).unwrap();
     assert_eq!(
         purged,
         Purged {
@@ -312,7 +314,7 @@ async fn retention_purges_requests_events_and_samples_by_their_own_windows_and_r
         h.db.read_blocking(|c| phoebis_ledger::read_rollups(c, 0, i64::MAX))
             .unwrap();
     assert_eq!(rollups.len(), 2, "rollups outlive their raw rows");
-    let purged = run_retention(&h.db, &LedgerConfig::default(), 401 * day).unwrap();
+    let purged = run_retention(&h.db, &LedgerConfig::default(), 401 * day, &[]).unwrap();
     assert_eq!(
         purged.rollups, 1,
         "the hour-zero rollup is past 400 days; the other is not"
@@ -350,7 +352,7 @@ async fn a_zero_retention_keeps_the_raw_rows_and_a_zero_rollup_retention_keeps_t
         rollup_retention_days: 400,
         ..LedgerConfig::default()
     };
-    let purged = run_retention(&h.db, &forever_raw, 402 * day).unwrap();
+    let purged = run_retention(&h.db, &forever_raw, 402 * day, &[]).unwrap();
     assert_eq!(
         (purged.requests, purged.attempts, purged.events),
         (0, 0, 0),
@@ -364,7 +366,7 @@ async fn a_zero_retention_keeps_the_raw_rows_and_a_zero_rollup_retention_keeps_t
         rollup_retention_days: 0,
         ..LedgerConfig::default()
     };
-    let purged = run_retention(&h.db, &forever_rollups, 402 * day).unwrap();
+    let purged = run_retention(&h.db, &forever_rollups, 402 * day, &[]).unwrap();
     assert_eq!(
         (purged.requests, purged.attempts),
         (2, 2),

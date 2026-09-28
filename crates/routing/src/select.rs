@@ -555,35 +555,14 @@ pub fn select(
                 writes,
             );
         }
-        let own = obstacle(
+        let exhaustion = fenced(
             state,
             snapshot,
             pool,
-            &Candidate {
-                account_id: current.account_id.clone(),
-                incarnation: current.incarnation,
-                priority: 0,
-                upstream_model: String::new(),
-            },
-            &request.canonical_model,
-            &[],
-            request.now,
-            request.fallback_ms,
+            request,
+            &current.account_id,
+            current.incarnation,
         );
-        let exhaustion = match own {
-            Some(Obstacle::Cooldown { reason, .. }) if reason == MODEL_REJECTED_REASON => {
-                Exhaustion::ModelRejected
-            }
-            Some(Obstacle::Cooldown { until, window, .. }) => Exhaustion::Timed {
-                deadline: until,
-                window,
-            },
-            Some(Obstacle::Budget { until }) => Exhaustion::Timed {
-                deadline: until,
-                window: "overage".into(),
-            },
-            _ => Exhaustion::Untimed,
-        };
         return (SelectResult::Exhausted(exhaustion), writes);
     }
 
@@ -833,35 +812,7 @@ pub fn select(
     // Step 7: a fresh pin with a fresh epoch.
     let pin_ref = session.map(|session| {
         let epoch = state.fresh_epoch();
-        let mut row = PinRow {
-            key_id: request.key_id.clone(),
-            session_id: session.to_string(),
-            agent_id: request.agent_id.clone(),
-            model: request.canonical_model.clone(),
-            account_id: chosen.account_id.clone(),
-            epoch,
-            created_at: request.now,
-            last_used_at: request.now,
-            // The generation the relay admitted this request under, not the snapshot's: a key deleted and
-            // created again under its id between admission and here must not stamp the new holder's
-            // generation on a pin this request's old one is choosing.
-            key_generation: request.key_generation,
-            incarnation: chosen.incarnation,
-            burn: 0.0,
-            burn_at: None,
-            burn_usd: 0.0,
-            last_input_tokens: 0,
-            // A fresh pin has no cache to be cold about, and its TTL is the default until the first report.
-            last_refresh_at: request.now,
-            cache_ttl_ms: 300_000,
-            // The shed pin remembers its source for the dwell, so no round sends it straight back; every other
-            // move clears both.
-            shed_from: shed_from.clone(),
-            shed_at: shed_from.is_some().then_some(request.now),
-            static_hash: None,
-            tail_hash: None,
-        };
-        stamp_hashes(&mut row, request);
+        let row = fresh_pin(request, session, epoch, chosen, shed_from.clone());
         state.put_pin(row.clone());
         writes.push(StateWrite::UpsertPin(row));
         PinRef {
@@ -904,6 +855,87 @@ pub fn select(
         }),
         writes,
     )
+}
+
+/// A pin under `session` on `chosen`, created by this request with the request's hashes stamped.
+fn fresh_pin(
+    request: &SelectRequest,
+    session: &str,
+    epoch: u64,
+    chosen: &Candidate,
+    shed_from: Option<String>,
+) -> PinRow {
+    let mut row = PinRow {
+        key_id: request.key_id.clone(),
+        session_id: session.to_string(),
+        agent_id: request.agent_id.clone(),
+        model: request.canonical_model.clone(),
+        account_id: chosen.account_id.clone(),
+        epoch,
+        created_at: request.now,
+        last_used_at: request.now,
+        // The generation the relay admitted this request under, not the snapshot's: a key deleted and created
+        // again under its id between admission and here must not stamp the new holder's generation on a pin
+        // this request's old one is choosing.
+        key_generation: request.key_generation,
+        incarnation: chosen.incarnation,
+        burn: 0.0,
+        burn_at: None,
+        burn_usd: 0.0,
+        last_input_tokens: 0,
+        // A fresh pin has no cache to be cold about, and its TTL is the default until the first report.
+        last_refresh_at: request.now,
+        cache_ttl_ms: 300_000,
+        // The shed pin remembers its source for the dwell, so no round sends it straight back; every other move
+        // clears both.
+        shed_at: shed_from.is_some().then_some(request.now),
+        shed_from,
+        static_hash: None,
+        tail_hash: None,
+    };
+    stamp_hashes(&mut row, request);
+    row
+}
+
+/// What a non-portable request bound to `account_id` answers when that account cannot serve it: the account's
+/// own obstacle, since no other account holds the state the request refers to.
+fn fenced(
+    state: &RoutingState,
+    snapshot: &RegistrySnapshot,
+    pool: &PoolRow,
+    request: &SelectRequest,
+    account_id: &str,
+    incarnation: u64,
+) -> Exhaustion {
+    let own = obstacle(
+        state,
+        snapshot,
+        pool,
+        &Candidate {
+            account_id: account_id.to_string(),
+            incarnation,
+            priority: 0,
+            upstream_model: String::new(),
+        },
+        &request.canonical_model,
+        &[],
+        request.now,
+        request.fallback_ms,
+    );
+    match own {
+        Some(Obstacle::Cooldown { reason, .. }) if reason == MODEL_REJECTED_REASON => {
+            Exhaustion::ModelRejected
+        }
+        Some(Obstacle::Cooldown { until, window, .. }) => Exhaustion::Timed {
+            deadline: until,
+            window,
+        },
+        Some(Obstacle::Budget { until }) => Exhaustion::Timed {
+            deadline: until,
+            window: "overage".into(),
+        },
+        _ => Exhaustion::Untimed,
+    }
 }
 
 fn seconds_ms(seconds: u64) -> i64 {

@@ -25,7 +25,7 @@ pub struct BodyFacts {
     pub shape: RequestShape,
     /// `None` for a body that is not a JSON object; the same parse `shape` and the rest above read.
     pub chains: Option<Chains>,
-    /// The largest `cache_control.ttl` the body carries, `None` without a marker.
+    /// The largest `cache_control.ttl` at the API's marker positions, `None` without a marker there.
     pub markers_ttl_ms: Option<i64>,
 }
 
@@ -133,20 +133,14 @@ pub(crate) fn marker_ttl_ms(marker: &Value) -> i64 {
     }
 }
 
-/// The largest TTL of any `cache_control` object anywhere in the body: the tools, the system blocks, the
-/// messages' blocks and a top-level marker all write an entry the pin's cache lives by.
-fn markers_ttl_ms(value: &Value) -> Option<i64> {
-    match value {
-        Value::Object(members) => members
-            .iter()
-            .filter_map(|(name, member)| match (name.as_str(), member) {
-                ("cache_control", Value::Object(_)) => Some(marker_ttl_ms(member)),
-                _ => markers_ttl_ms(member),
-            })
-            .max(),
-        Value::Array(items) => items.iter().filter_map(markers_ttl_ms).max(),
-        _ => None,
-    }
+/// The largest TTL of a `cache_control` object at the positions the TTL editor scans: the tools, the system
+/// blocks, the messages' blocks and a top-level marker each write an entry the pin's cache lives by.
+fn markers_ttl_ms(root: &Value) -> Option<i64> {
+    crate::body::schema_cache_controls(root.as_object()?)
+        .into_iter()
+        .filter(|marker| marker.is_object())
+        .map(marker_ttl_ms)
+        .max()
 }
 
 impl ClientHints {
@@ -425,7 +419,33 @@ mod tests {
     }
 
     #[test]
-    fn the_markers_ttl_is_the_largest_marker_anywhere_and_absent_without_one() {
+    fn a_cache_control_object_outside_the_apis_marker_positions_is_no_marker() {
+        let ttl = |body: &str| BodyFacts::read(body.as_bytes()).markers_ttl_ms;
+        assert_eq!(
+            ttl(
+                r#"{"tools":[{"name":"t","input_schema":{"type":"object","properties":{"cache_control":{"type":"object"}}}}],"messages":[{"role":"user","content":"hi"}]}"#
+            ),
+            None,
+            "a tool's input schema may name a property cache_control"
+        );
+        assert_eq!(
+            ttl(
+                r#"{"messages":[{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"x","input":{"cache_control":{"type":"ephemeral"}}}]}]}"#
+            ),
+            None,
+            "so may a tool call's input"
+        );
+        assert_eq!(
+            ttl(
+                r#"{"messages":[{"role":"user","content":[{"type":"text","text":"x","cache_control":{"type":"ephemeral"}}]}]}"#
+            ),
+            Some(300_000),
+            "a content block's own marker is one"
+        );
+    }
+
+    #[test]
+    fn the_markers_ttl_is_the_largest_marker_at_the_apis_positions_and_absent_without_one() {
         let ttl = |body: &str| BodyFacts::read(body.as_bytes()).markers_ttl_ms;
         assert_eq!(
             ttl(r#"{"messages":[{"role":"user","content":"hi"}]}"#),

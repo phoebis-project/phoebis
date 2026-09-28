@@ -205,6 +205,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
         }
     }
     // One read over every row's key, after the pin, activity and engine passes have settled who belongs on
+    // the page at all, so a row's fork facts come from the requests of its own session whichever pass surfaced it.
     let identity_keys: Vec<(String, i64, String)> = rows.keys().cloned().collect();
     let identities = match state
         .ledger

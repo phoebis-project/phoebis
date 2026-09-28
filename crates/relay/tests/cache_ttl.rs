@@ -359,6 +359,53 @@ async fn a_marker_less_count_under_when_cached_with_the_toggle_on_creates_no_pin
 }
 
 #[tokio::test]
+async fn under_when_cached_a_cache_control_object_in_a_tool_schema_pins_nothing_and_a_block_marker_pins(
+) {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let h = harness(&up, &[api_key("acct", A, 0)], PoolSpec::default()).await;
+    set_affinity_mode(&h, AffinityMode::WhenCached).await;
+    let send = |native: &'static [u8], session: &'static str| {
+        let app = h.app.clone();
+        async move {
+            let mut req = request_from_fixture(inference_head(FixtureKind::ApiKey), native, KEY);
+            set_header(&mut req, "x-claude-code-session-id", session);
+            let resp = app.oneshot(req).await.unwrap();
+            assert_eq!(resp.status(), 200);
+            let _ = resp.into_body().collect().await;
+        }
+    };
+
+    send(
+        br#"{"model":"claude-sonnet-4-5","max_tokens":8,"tools":[{"name":"t","input_schema":{"type":"object","properties":{"cache_control":{"type":"object"}}}}],"messages":[{"role":"user","content":"hi"}]}"#,
+        "schema-only",
+    )
+    .await;
+    assert!(
+        h.router.pins().await.unwrap().is_empty(),
+        "a tool schema naming a property cache_control writes no cache, so the request pins nothing"
+    );
+
+    send(
+        br#"{"model":"claude-sonnet-4-5","max_tokens":8,"messages":[{"role":"user","content":[{"type":"text","text":"hi","cache_control":{"type":"ephemeral"}}]}]}"#,
+        "marked",
+    )
+    .await;
+    let pins = h.router.pins().await.unwrap();
+    assert_eq!(
+        pins.iter()
+            .map(|p| p.session_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["marked"],
+        "a content block's marker pins"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
 async fn a_metered_write_takes_the_metered_set_and_a_plan_write_the_plan_set() {
     // Inverted against each fixture's own markers, so a leg that read the wrong set would rewrite to the
     // wrong TTL rather than pass on a no-op edit.

@@ -2126,8 +2126,8 @@ async fn a_pool_accepts_its_affinity_and_quota_fields_and_a_members_budget() {
 }
 
 #[tokio::test]
-async fn a_budget_on_a_member_that_is_not_an_api_key_account_is_refused_and_no_budget_is_accepted()
-{
+async fn a_budget_on_a_member_that_is_not_an_api_key_account_is_refused_and_a_null_budget_is_accepted(
+) {
     let (app, _up) = common::admin_app().await;
     let cookie = login(&app, "admin-secret").await;
     let refused = post(

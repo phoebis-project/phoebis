@@ -216,47 +216,48 @@ pub fn set_cache_ttl(
     Ok(TtlEdit::Applied(changed))
 }
 
-/// How many `cache_control` members a decoder reads at the five positions the Messages API takes them from:
-/// the top level, `system[]`, `tools[]`, `messages[].content[]`, and the blocks inside a content block's own
-/// `content`. `None` where the body does not parse.
+/// How many `cache_control` members a decoder reads at the positions the Messages API takes them from. `None`
+/// where the body does not parse.
 fn schema_markers(body: &[u8]) -> Option<usize> {
     let root = serde_json::from_slice::<serde_json::Value>(body).ok()?;
-    let root = root.as_object()?;
-    let blocks = |value: Option<&serde_json::Value>| {
+    Some(schema_cache_controls(root.as_object()?).len())
+}
+
+/// Every `cache_control` member at the five positions the Messages API takes one from: the top level,
+/// `system[]`, `tools[]`, `messages[].content[]`, and the blocks inside a content block's own `content`. One
+/// object of that name anywhere else (a tool's input schema, a tool call's input) is the client's data.
+pub(crate) fn schema_cache_controls(
+    root: &serde_json::Map<String, serde_json::Value>,
+) -> Vec<&serde_json::Value> {
+    fn blocks(value: Option<&serde_json::Value>) -> impl Iterator<Item = &serde_json::Value> {
         value
             .and_then(serde_json::Value::as_array)
-            .map_or(0, |blocks| {
-                blocks
-                    .iter()
-                    .filter(|block| block.get("cache_control").is_some())
-                    .count()
-            })
-    };
+            .into_iter()
+            .flatten()
+            .filter_map(|block| block.get("cache_control"))
+    }
+    let mut found: Vec<&serde_json::Value> = root.get("cache_control").into_iter().collect();
+    found.extend(blocks(root.get("system")));
+    found.extend(blocks(root.get("tools")));
     let messages = root
         .get("messages")
         .and_then(serde_json::Value::as_array)
-        .map_or(0, |messages| {
-            messages
-                .iter()
-                .map(|message| {
-                    let content = message.get("content");
-                    // The walk reads a `tool_result`'s own blocks one level down, so this count has to as
-                    // well, or the two would disagree on every such body and the edit would be refused.
-                    let nested: usize = content
-                        .and_then(serde_json::Value::as_array)
-                        .map_or(0, |list| {
-                            list.iter().map(|block| blocks(block.get("content"))).sum()
-                        });
-                    blocks(content) + nested
-                })
-                .sum()
-        });
-    Some(
-        usize::from(root.contains_key("cache_control"))
-            + blocks(root.get("system"))
-            + blocks(root.get("tools"))
-            + messages,
-    )
+        .into_iter()
+        .flatten();
+    for message in messages {
+        let content = message.get("content");
+        found.extend(blocks(content));
+        // The walk reads a `tool_result`'s own blocks one level down, so this reading has to as well, or the
+        // two would disagree on every such body and the edit would be refused.
+        let nested = content
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten();
+        for block in nested {
+            found.extend(blocks(block.get("content")));
+        }
+    }
+    found
 }
 
 /// Rewrites every ephemeral marker to `ttl`: `1h` writes `"ttl":"1h"` right after `"type":"ephemeral"`, `5m`
@@ -352,21 +353,34 @@ pub fn tier_ttls(body: &[u8]) -> (Option<i64>, Option<i64>) {
     let within = |span: Option<(usize, usize)>, at: usize| {
         span.is_some_and(|(start, end)| (start..end).contains(&at))
     };
-    // The deepest marker per tier by offset: the last one in body order, which is the tail the pin's warmth
-    // reads. A marker inside neither container is a top-level member and counts for both tiers.
-    let mut static_marker = None;
+    // The deepest marker per tier, the tail the pin's warmth reads. The static tier ranks by the cached prefix's
+    // own order (tools, then system, then a top-level marker) before the offset within a tier, so a body that
+    // serializes `system` ahead of `tools` reads the same; the message tier is one array, whose body order is
+    // its prefix order. A marker inside no container is a top-level member and counts for both tiers.
+    let mut static_marker: Option<((u8, usize), (usize, usize))> = None;
     let mut message_marker = None;
     for (start, end) in spans {
-        let is_static = within(tools, start) || within(system, start);
         let is_message = within(messages, start);
-        let is_top_level = !is_static && !is_message;
-        if (is_static || is_top_level) && static_marker.is_none_or(|(s, _)| start > s) {
-            static_marker = Some((start, end));
+        let static_rank = if within(tools, start) {
+            Some(0)
+        } else if within(system, start) {
+            Some(1)
+        } else if is_message {
+            None
+        } else {
+            Some(2)
+        };
+        let is_top_level = static_rank == Some(2);
+        if let Some(rank) = static_rank {
+            if static_marker.is_none_or(|(deepest, _)| (rank, start) > deepest) {
+                static_marker = Some(((rank, start), (start, end)));
+            }
         }
         if (is_message || is_top_level) && message_marker.is_none_or(|(s, _)| start > s) {
             message_marker = Some((start, end));
         }
     }
+    let static_marker = static_marker.map(|(_, span)| span);
     let ttl_ms = |span: Option<(usize, usize)>| {
         span.map(|(start, end)| {
             serde_json::from_slice::<serde_json::Value>(&body[start..end])
@@ -824,6 +838,20 @@ mod tests {
         assert_eq!(tier_ttls(top_level), (Some(300_000), Some(300_000)));
         assert_eq!(tier_ttls(br#"{"messages":[]}"#), (None, None));
         assert_eq!(tier_ttls(b"not json"), (None, None));
+    }
+
+    #[test]
+    fn the_static_tiers_deepest_marker_follows_the_prefix_order_whatever_the_member_order() {
+        // The cached prefix runs tools, then system, so the system block's five minutes is the deeper marker
+        // even where the body serializes `system` first.
+        let system_first = br#"{"system":[{"type":"text","text":"a","cache_control":{"type":"ephemeral"}}],"tools":[{"name":"t","cache_control":{"type":"ephemeral","ttl":"1h"}}],"messages":[]}"#;
+        let tools_first = br#"{"tools":[{"name":"t","cache_control":{"type":"ephemeral","ttl":"1h"}}],"system":[{"type":"text","text":"a","cache_control":{"type":"ephemeral"}}],"messages":[]}"#;
+        assert_eq!(tier_ttls(system_first).0, Some(300_000));
+        assert_eq!(
+            tier_ttls(tools_first).0,
+            Some(300_000),
+            "the usual member order reads the same"
+        );
     }
 
     #[test]

@@ -98,9 +98,11 @@ account {id} not found`, and the pool is not created.
 
 An API-key member carries a spend `budget_usd`, unset by default (no cap), and a `budget_period` of `day` or `month`
 (default `month`, the UTC calendar day or month); a budget on any other member answers `400 budget_usd applies to an
-API-key member`, since a subscription member spends plan quota rather than money. A member whose spend for the current
-period reaches its budget is skipped until the period ends; a pool whose every member is at its budget answers `429`
-with the `overage` claim, the same one an account in overage carries.
+API-key member`, since a subscription member's usage is metered against its plan windows and its overage is not a
+per-member budget. A member whose spend for the current period reaches its budget is skipped until the period ends; a
+pool whose every member is at its budget answers `429` with the `overage` claim, the same one an account in overage
+carries. The spend sums the member's hourly rollups, and the rows of an active budget period outlive
+`stats.rollup_retention_days` until that period ends.
 
 `prefer_subscription` orders the set by kind (subscription accounts with plan quota, then those in overage, then
 API keys) before priority; it is the operator's answer alone, on by default, and no strategy overrides it. A pool
