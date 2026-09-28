@@ -75,7 +75,7 @@ Every field, in the order the request body takes them:
 | `keepalive` | disabled | a policy object; its defaults are on the [Keepalive page](keepalive.md) |
 | `cache_ttl` | off | a policy object, `inject_when_absent` off by default; see below |
 | `cache_diagnostics` | unset (inherits) | `true`, `false`, or `null` |
-| `quota_headers` | `pass` | `pass` or `hide`; see below |
+| `quota_headers` | `pass` | `hide` or `pass`; see below |
 | `body_capture_hours` | `0` (off) | `body_capture_hours exceeds stats.body_capture_max_hours` |
 | `wind_down_minutes` | `30` | 0 to 10,080 (a week) |
 | `members` | none | create only; replaced wholesale by `PUT /admin/pools/{id}/members` |
@@ -248,21 +248,24 @@ and answers every request over a channel, so two concurrent first requests of th
 different accounts. The identity a pin is held under is the session header [Clients](#clients) names.
 
 A fresh request with no live pin lands where its prefix is already warm: the deepest message boundary any account
-still holds always wins first, and failing that, the deepest static boundary for a subagent under `by_cohort`
-or a main conversation under `by_warm_prefix`, when the shared prefix is at least `min_shared_prefix_tokens`,
-the request carries or receives a cache marker, and the account is not at its cap, hot, under the Pace floor, or
-winding down; a cooling or spent account never reaches this check, since the eligible set already excludes it. A
-subagent under `with_main` lands its first request on its parent agent's pin instead of this walk, and one under
-`by_strategy` skips the walk and lands by the strategy alone; every other case that finds no live match also lands
-by the strategy. A held request of a subagent cohort waits where its cohort already is rather than on the strategy's
-own pick; a session already on an account, under any of its agents, is never held while that account can still serve.
+still holds always wins first, and failing that, the deepest static boundary for a subagent under `by_cohort` or a
+main conversation under `by_warm_prefix`, when the shared prefix, sized by the relay's estimate from the request's
+bytes, is at least `min_shared_prefix_tokens`, the request carries or receives a cache marker, and the account is not
+at its cap, hot, under the Pace floor, or winding down; a cooling or spent account never reaches this check, since the
+eligible set already excludes it. A subagent under `with_main` lands its first request on its parent agent's pin
+instead of this walk, and one under `by_strategy` skips the walk and lands by the strategy alone; every other case
+that finds no live match also lands by the strategy. A held request of a subagent cohort waits where its cohort
+already is rather than on the strategy's own pick; a session already on an account, under any of its agents, is never
+held while that account can still serve.
 
 The eligible set starts from every account that can serve the canonical model: enabled, paired or keyed, not
 `reauth_required` or `funding_required`, off cooldown, and not already tried by this request.
 
-A pin lasts `affinity_ttl_seconds` from its last use: while it is live and its account is still eligible, the
-request returns to that account, and stickiness wins over priority even across a later priority change. A pool
-with affinity off (`affinity_ttl_seconds` at `0`) keeps no pins at all.
+A pin is held per agent of a conversation, where a conversation is the session id
+or the conversation's own messages. It lasts `affinity_ttl_seconds` from its last
+use: while it is live and its account is still eligible, the request returns to that account, and stickiness wins over
+priority even across a later priority change. A pool with affinity off (`affinity_ttl_seconds` at `0`) keeps no pins
+at all.
 
 Narrowing then trims what is left. A model-specific window (a canonical id containing `fable`) at or above 1 drops the
 account outright, and an account already at the pool's `in_flight_cap` takes no fresh placement, ahead of every
@@ -500,9 +503,9 @@ with every account passed over it is answered `429` with the error type `rate_li
 `retry_in_place_seconds` held between 1 and 19 seconds: the client waits out a `Retry-After` under 20 seconds and treats
 a longer one as a block it does not retry. A hold costs one attempt of `routing.max_attempts`, and a hold that would
 leave none for the dial is answered the same `429` at once. A request that dialled an account before its holds ran out,
-and a pool with no account to hold for, keep the `503 accounts_unavailable` below. A session already pinned to the
-account is never held, and a move whose every destination is at its cap is not made: the pin renews in place and the
-next request judges the move again.
+and a pool with no account to hold for, keep the `503 accounts_unavailable` below. A request whose session already
+holds a pin under any agent is never held, and a move whose every destination is at its cap is not made: the pin
+renews in place and the next request judges the move again; a held subagent waits where its cohort is.
 
 **Per key.** A key's own `in_flight_cap`, unset by default, counts each Messages request once, from its admission,
 before anything is selected, until its response ends. A keepalive probe and a `count_tokens` request take no slot and
@@ -524,7 +527,8 @@ and the message is `every account in this pool is rate limited`. With every acco
 pool whose accounts are all paused, `phoebis` answers `503` with error code `accounts_unavailable`, message
 `no account in this pool can serve requests`, and no `retry-after`. A request admitted under a key that was deleted and
 created again before it was routed is answered the same way, since the registry it was admitted against no longer holds
-its key.
+its key. A pool whose every member has reached its spend budget answers `429` with the `overage` claim, the same one an
+account in overage carries (see [Pools](#pools)).
 
 A model every account in the pool has rejected within the rejection window answers `404` with error code
 `model_rejected` and the message `every account in this pool rejected the model`; the
