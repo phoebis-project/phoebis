@@ -1281,8 +1281,8 @@ pub(crate) fn period_bounds(period: BudgetPeriod, now: i64) -> (i64, i64) {
 /// One budgeted member's spend in its current period, summed from the hourly rollups and priced at read time,
 /// a keepalive probe's cost included since it draws real money from an API-key member's budget the same as any
 /// other request's; the row names the period kind and its UTC bounds in ms (`period_end` is the next day or
-/// month boundary). The rollup's own stored price is not read, since a budget must move with the table an
-/// operator confirms, not the price an attempt happened to be booked at.
+/// month boundary). The rollup's own stored price is not read, since a budget must move with the table in
+/// force, not the price an attempt happened to be booked at.
 pub fn member_spends(
     conn: &Connection,
     members: &[(String, String, BudgetPeriod)],

@@ -262,7 +262,7 @@ async fn a_dropped_fetch_future_lowers_the_in_flight_count_so_a_later_miss_does_
         (h.catalog_up.requests().len() == 1).then_some(())
     })
     .await;
-    // The client went away mid-fill, as the catalog popup, the pricing import, and `GET /v1/models` all can.
+    // The client went away mid-fill, as the catalog popup and `GET /v1/models` both can.
     fut.abort();
     let _ = fut.await;
     h.catalog_up.release();

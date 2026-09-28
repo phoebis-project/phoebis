@@ -297,9 +297,9 @@ impl CatalogService {
             .copied()
             .unwrap_or(0);
         self.raise_in_flight();
-        // Three callers await `fetch` inside an HTTP handler (the catalog popup, the pricing import,
-        // `GET /v1/models`) whose future the server drops on a client disconnect; the guard's `Drop` still
-        // lowers the count then, so a caller leaving mid-fill never strands a later miss on the full wait.
+        // Two callers await `fetch` inside an HTTP handler (the catalog popup, `GET /v1/models`) whose future
+        // the server drops on a client disconnect; the guard's `Drop` still lowers the count then, so a caller
+        // leaving mid-fill never strands a later miss on the full wait.
         let _lower_on_drop = InFlightGuard(self);
         let discovered = self.discover(account).await;
         // The window opens when the answer is in hand: dated from before a discovery slower than the window,

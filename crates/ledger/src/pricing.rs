@@ -154,10 +154,6 @@ impl Pricing {
             .clone()
     }
 
-    pub fn replace(&self, table: PriceTable) {
-        *self.table.write().expect("price table lock poisoned") = Arc::new(table);
-    }
-
     pub fn unknown_models(&self) -> u64 {
         self.unknown.load(Ordering::Relaxed)
     }
@@ -428,8 +424,5 @@ mod tests {
             ),
             ("file", "2026-10-01", 1)
         );
-        let pricing = Pricing::new(PriceTable::shipped());
-        pricing.replace(from_file.as_ref().clone());
-        assert_eq!(pricing.current().version, "2026-10-01");
     }
 }

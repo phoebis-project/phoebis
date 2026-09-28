@@ -3861,7 +3861,7 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
   results.push({ name: '/settings reads the session expiry as a value, not a control', ok: rows.join('|') === 'Session expiry=24h' && card?.querySelector('button') === null, missing: rows });
 }
 {
-  expect('/settings pricing meta', m.text(), ['Effective Sep 08, 2026', 'source: shipped table']);
+  expect('/settings pricing meta', m.text(), ['Effective Sep 08, 2026', 'source: shipped']);
   const priceRow = (model) => {
     const row = [...m.container.querySelectorAll('tbody tr')].find((tr) => tr.children[0]?.textContent?.trim() === model);
     return row ? [...row.children].slice(1).map((td) => td.textContent?.trim()) : null;

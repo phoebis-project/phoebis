@@ -20,8 +20,6 @@ phoebis-relay = { path = "../relay" }
 phoebis-routing = { path = "../routing" }
 phoebis-store = { path = "../store" }
 phoebis-transport = { path = "../transport" }
-futures = { workspace = true }
-jiff = { workspace = true }
 rand = { workspace = true }
 rusqlite = { workspace = true }
 serde = { workspace = true }
@@ -35,6 +33,7 @@ url = { workspace = true }
 [dev-dependencies]
 phoebis-store = { path = "../store", features = ["debug-hooks"] }
 fake-upstream = { path = "../../tests/fake_upstream" }
+futures = { workspace = true }
 http-body-util = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }

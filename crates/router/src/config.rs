@@ -148,8 +148,8 @@ pub struct StatsConfig {
     pub ledger_path: PathBuf,
     #[serde(default = "default_metrics_listen")]
     pub metrics_listen: SocketAddr,
-    /// A price table that overrides the shipped one until an import is confirmed; a missing file is not an
-    /// error, so the example path can stay in a fresh configuration.
+    /// A price table that overrides the shipped one; a missing file is not an error, so the example path can
+    /// stay in a fresh configuration.
     #[serde(default = "default_pricing_path")]
     pub pricing_path: Option<PathBuf>,
     /// Days the raw request, attempt, and event rows are kept; 0 keeps them forever.

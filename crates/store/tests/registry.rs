@@ -93,9 +93,11 @@ FROM pins;
 DROP TABLE pins;
 ALTER TABLE pins_prev RENAME TO pins;
 "#;
-// The exact reverse of `V30`: the table the import wrote to is gone, so nothing here does more than let the
-// forward migration run again over a store that has already dropped it.
-const UNDO_V30: &str = "CREATE TABLE pricing_versions (version TEXT PRIMARY KEY, effective TEXT NOT NULL, source TEXT NOT NULL, table_json TEXT NOT NULL, imported_at INTEGER NOT NULL); -- rollback";
+// The exact reverse of `V30`: `V30` is `DROP TABLE IF EXISTS`, so the forward migration would run again with
+// or without this undo; what recreating the table buys is a faithful version-29 store for a test that seeds
+// one directly. The trailing `\n` ends the marker's comment at this constant's own close, as the comment above
+// `UNDO_V11` explains.
+const UNDO_V30: &str = "CREATE TABLE pricing_versions (version TEXT PRIMARY KEY, effective TEXT NOT NULL, source TEXT NOT NULL, table_json TEXT NOT NULL, imported_at INTEGER NOT NULL); -- rollback\n";
 
 fn account(id: &str, kind: AccountKind) -> AccountRow {
     AccountRow {
@@ -353,6 +355,16 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
         .unwrap(),
         1,
         "and the index it was missing is there"
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'pricing_versions'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        0,
+        "V6 created it and V30 dropped it on the same carried-up open"
     );
 }
 

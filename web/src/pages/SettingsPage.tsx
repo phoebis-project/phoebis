@@ -74,7 +74,7 @@ interface PriceDraft extends Record<PriceField, string> {
 
 type Pricing = Settings['pricing'];
 
-/** Two decimals, extended to at most four when an imported price needs them. */
+/** Two decimals, extended to at most four when a price needs them. */
 const fmtPrice = (n: number) => `$${n.toFixed(4).replace(/(\.\d\d[1-9]?)0+$/, '$1')}`;
 
 const toDraft = (m: ModelPrice): PriceDraft => ({
@@ -88,18 +88,9 @@ const toDraft = (m: ModelPrice): PriceDraft => ({
   outputPerM: String(m.outputPerM),
 });
 
-/**
- * An imported table's source is the URL the router was handed, query string and all, so only its host is shown.
- * Anything else is a label the router wrote and reads as it stands.
- */
+/** `pricing.source` is `shipped`, or `file` for the operator's `stats.pricing_path` table; shown as it reads. */
 function sourceLabel(source: string): string {
-  let url: URL;
-  try {
-    url = new URL(source);
-  } catch {
-    return source;
-  }
-  return url.protocol === 'http:' || url.protocol === 'https:' ? `imported from ${url.host}` : source;
+  return source;
 }
 
 /** The admin secret reads configured while the settings load, since no session reaches this page without one. */

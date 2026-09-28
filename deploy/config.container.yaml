@@ -51,8 +51,7 @@ stats:
   ledger_path: /var/lib/phoebis/ledger.sqlite
   # Prometheus text format at /metrics; the compose example publishes it on the host's loopback.
   metrics_listen: 0.0.0.0:9464
-  # Overrides the shipped price table until an import is confirmed through the admin API; a missing file is
-  # fine, and the volume is where one would be dropped.
+  # Overrides the shipped price table; a missing file is fine, and the volume is where one would be dropped.
   pricing_path: /var/lib/phoebis/pricing.yaml
   # Raw requests, attempts, and events are purged past this; 0 keeps them forever.
   retention_days: 90

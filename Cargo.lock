@@ -329,7 +329,6 @@ dependencies = [
  "fake-upstream",
  "futures",
  "http-body-util",
- "jiff",
  "rand 0.10.2",
  "rusqlite",
  "serde",

@@ -50,8 +50,7 @@ stats:
   ledger_path: ./data/ledger.sqlite
   # Prometheus text format at /metrics; bind it where your scraper can reach it.
   metrics_listen: 127.0.0.1:9464
-  # Overrides the shipped price table until an import is confirmed through the admin API; a missing file is
-  # fine.
+  # Overrides the shipped price table; a missing file is fine.
   pricing_path: ./pricing.yaml
   # Raw requests, attempts, and events are purged past this; 0 keeps them forever.
   retention_days: 90

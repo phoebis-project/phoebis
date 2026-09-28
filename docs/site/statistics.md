@@ -48,9 +48,9 @@ by the static prefix, by a subagent's fallback to its parent agent's pin, or, wi
 any request's landing on another agent's pin of its session, is a hit when it read at all.
 
 A budgeted pool member's spend for its current period sums the priced hourly rollups; a keepalive probe's cost
-counts toward it the same as any other request's, since a probe on an API-key member still draws real money. A
-price confirmation re-prices the spend within the ledger's next poll, so a member held at its budget by prices
-corrected downward is admitted again without waiting for traffic or the period's end.
+counts toward it the same as any other request's, since a probe on an API-key member still draws real money. The
+table in force is fixed at startup, so a member held at its budget waits for the period to end rather than for a
+price correction to admit it again.
 
 A model an upstream rejected leaves two events in the log: `model_rejected` names the refusing account and the
 spelling the request carried, `model_permitted` the account that served the same request afterwards; the request
