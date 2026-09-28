@@ -1186,6 +1186,15 @@
   align-items: center;
 }
 
+/* Wraps the badge under the spend on a narrow card rather than breaking the spend across lines. */
+.pool__eligibility {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  justify-content: flex-end;
+}
+
 .pool__prio {
   font-family: var(--font-mono);
   font-size: 11px;
@@ -1246,6 +1255,11 @@
   gap: 8px;
   align-items: center;
   font-size: 12px;
+}
+
+.member-picker__budget {
+  flex-basis: 100%;
+  justify-content: flex-end;
 }
 
 .radio-list {
@@ -2201,6 +2215,18 @@
 }
 
 /* Keepalive */
+/* The spend and its bar share one cell, so the bar reads against the figure above it. */
+.budgets-table__spent {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.budgets-table .meter {
+  min-width: 140px;
+}
+
 .cost-caps {
   display: flex;
   flex-direction: column;
@@ -2273,6 +2299,16 @@
 /* The session id is mono; the epoch line under it is prose. */
 .srow__epoch {
   font-family: var(--font-sans);
+}
+
+/* The Session cell is monospace for the id; the fork badge reads as the other badges do. */
+.srow__fork {
+  margin-left: 6px;
+  font-family: var(--font-sans);
+}
+
+.srow[aria-current='true'] td {
+  background: var(--accent-soft);
 }
 
 .srow__account,

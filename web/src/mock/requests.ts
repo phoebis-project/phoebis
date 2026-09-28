@@ -1,6 +1,6 @@
 import type {
   AccountRollup, Attempt, AttemptOutcome, AttemptWindow, CacheMissReason, CapturedBodies, CohortHold, CostSplit, LatencyHistograms, PinMigrationReason, Placement,
-  RateLimitWindow, RequestEvent, RequestKind, RequestLog, Usage, WastedProbeReason,
+  RateLimitWindow, RequestEvent, RequestKind, RequestLog, SelectionTrace, Usage, WastedProbeReason,
 } from '@/api/types';
 import { emptyCacheMissReasons, emptyWastedProbeReasons, missCount } from '@/lib/cache';
 import { AGENT_TYPES } from '@/lib/client';
@@ -560,8 +560,38 @@ function identifyRequests() {
   if (first) Object.assign(first, { forkDepth: 3, forkedFrom: base });
 }
 
+/**
+ * The drawer lines the draws above leave out, each on an answered single-attempt inference: a placement beside the
+ * move that led to it, a placement with the main conversation and no hold, and a hold on the strategy's choice,
+ * which names no cohort. Nothing is drawn, so every seeded stream keeps its values.
+ */
+function seedDrawerBranches() {
+  const taken = new Set<string>();
+  const seed = (want: (s: SelectionTrace, r: RequestLog) => boolean, trace: (s: SelectionTrace, r: RequestLog) => SelectionTrace) => {
+    const r = REQUESTS.find((x) => !taken.has(x.id) && x.kind === 'inference' && x.status === 200 && x.attempts.length === 1 && x.attempts[0].selection !== null && want(x.attempts[0].selection, x));
+    if (!r) return;
+    taken.add(r.id);
+    r.attempts = [{ ...r.attempts[0], selection: trace(r.attempts[0].selection as SelectionTrace, r) }];
+  };
+  // A placement ranks nothing, so it names no tier and passes nobody over as ranked.
+  const placed = (s: SelectionTrace, placement: Placement): SelectionTrace => ({ ...s, placement, skipped: s.skipped.filter((x) => x.obstacle !== 'ranked'), tier: null });
+  seed(
+    (s) => s.moved === 'spent' && s.placement === null,
+    (s) => placed(s, { depth: 2, prefixTokens: s.cacheRead !== null && s.cacheRead > 0 ? Math.round(s.cacheRead * 0.9) : 30_000, rung: 'static' }),
+  );
+  seed(
+    (s, r) => r.agentId !== 'main' && s.moved === null && s.placement === null && s.cohortHold === null && (s.cacheRead ?? 0) > 0 && !REQUEST_EVENTS.has(r.id),
+    (s) => ({ ...placed(s, { depth: 0, prefixTokens: 0, rung: 'with_main' }), renewed: false }),
+  );
+  seed(
+    (s, r) => s.moved === null && s.placement === null && !s.renewed && s.cohortHold === null && s.skipped.length > 0 && !REQUEST_EVENTS.has(r.id),
+    (s, r) => ({ ...s, cohortHold: { cohort: null, waitedOn: [r.attempts[0].accountId] } }),
+  );
+}
+
 addStoryEvents();
 traceRequests();
+seedDrawerBranches();
 identifyRequests();
 
 const outputTps = (r: RequestLog): number | null => {

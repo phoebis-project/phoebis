@@ -38,9 +38,11 @@ const SYNC = {
   alert_lifecycle: { decode: (b) => b.deliveries.map(d.decodeLifecycleDelivery), mock: (api) => api.listLifecycleDeliveries() },
   alert_rules: { decode: (b) => b.rules.map(d.decodeAlertRule), mock: (api) => api.listAlertRules() },
   analytics_accounts: { decode: (b) => d.decodeAccountRollups(b), mock: (api) => api.listAccountRollups(day, now) },
+  analytics_budgets: { decode: (b) => b.members.map(d.decodeMemberBudget), mock: (api) => api.analyticsBudgets() },
   analytics_breakdown: { decode: (b) => b.rows.map(d.decodeAnalyticsGroup), mock: (api) => api.getAnalyticsBreakdown(query) },
   analytics_burn: { decode: (b) => d.decodeBurn(b), mock: (api) => api.getAnalyticsBurn(query, 'account') },
   analytics_fits: { decode: (b) => b.fits.map(d.decodeWindowFit), mock: (api) => api.getAnalyticsFits() },
+  analytics_placements: { decode: (b) => b.rows.map(d.decodePlacementRow), mock: (api) => api.analyticsPlacements(query) },
   analytics_rewrites: { decode: (b) => d.decodeRewrites(b), mock: (api) => api.getAnalyticsRewrites(query) },
   analytics_series: { decode: (b) => b.points.filter((p) => p.groups.length).map(d.decodeAnalyticsPoint), mock: async (api) => (await api.getAnalyticsSeries(query)).filter((p) => p.groups.length) },
   dashboard: { decode: (b) => d.decodeDashboard(b), mock: (api) => api.getOverview() },
@@ -64,7 +66,7 @@ const SYNC = {
   settings: { decode: (b) => d.decodeSettings(b), mock: (api) => api.getSettings() },
 };
 /** Fixtures captured for their route's shape alone: no decoder and no `Api` method reads them today. */
-const UNCONSUMED = ['analytics_budgets', 'analytics_placements', 'live_past', 'pool_traffic', 'pricing', 'sessions_costs', 'system'];
+const UNCONSUMED = ['live_past', 'pool_traffic', 'pricing', 'sessions_costs', 'system'];
 
 test('the generated fixtures module is a fresh render', () => {
   const committed = readFileSync(new URL('../src/mock/generated/fixtures.ts', import.meta.url), 'utf8');
@@ -101,6 +103,8 @@ const REQUEST_CLASS_VALUES = ['auxiliary', 'compaction', 'main', 'subagent', 'wo
 const CLOSED = {
   accounts: { '[].kind': d.ACCOUNT_KIND_VALUES },
   alert_lifecycle: { '[].event': d.LIFECYCLE_EVENT_VALUES },
+  analytics_budgets: { '[].budgetPeriod': d.BUDGET_PERIOD_VALUES },
+  analytics_placements: { '[].rung': d.PLACEMENT_RUNG_VALUES },
   alert_rules: { '[].kind': d.ALERT_KIND_VALUES, '[].scope.type': d.SCOPE_TYPE_VALUES, '[].windowId': [...d.WINDOW_ID_VALUES, null] },
   keepalive_recipes: { '[].reason': [...d.RECIPE_REASON_VALUES, null], '[].state': d.RECIPE_STATE_VALUES },
   live_messages: { '.recent[].attempts[].outcome': d.ATTEMPT_OUTCOME_VALUES, '.recent[].kind': d.REQUEST_KIND_VALUES },

@@ -619,8 +619,7 @@ function PoolCard({
                     P{m.priority}
                   </span>
                   <Link to={`/upstreams/${m.accountId}`}>{a?.label ?? m.accountId}</Link>
-                  {/* Wraps the badge under the spend on a narrow card rather than breaking the spend across lines. */}
-                  <span className="pool__eligibility" style={{ alignItems: 'center', display: 'inline-flex', flexWrap: 'wrap', gap: 6, justifyContent: 'flex-end' }}>
+                  <span className="pool__eligibility">
                     <MemberBudget member={m} now={now} />
                     <Eligibility verdict={m.eligible} account={a} now={now} periodEnd={m.periodEnd} />
                   </span>
@@ -1506,7 +1505,7 @@ export function PoolDialog({
                   )}
                   {/* A line of its own under the member, since beside an email and the priority it would not fit. */}
                   {on && a.kind === 'api_key' && (
-                    <span className="member-picker__prio" style={{ flexBasis: '100%', justifyContent: 'flex-end' }}>
+                    <span className="member-picker__prio member-picker__budget">
                       <span className="muted">Budget, USD</span>
                       <Input
                         type="number"

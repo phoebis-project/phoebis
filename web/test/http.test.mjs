@@ -144,6 +144,26 @@ test('the burn, rewrite and fit reads send the range and the grouping and answer
   assert.deepEqual(fits.map((f) => [f.accountId, f.window, f.drift]), [['business', 'five_hour', 0.5]]);
 });
 
+test('the placements read sends the range and the key and pool lists, the budgets read no query, and both decode', async () => {
+  const body = (name) => JSON.parse(readFileSync(new URL(`./fixtures/${name}.json`, import.meta.url), 'utf8')).body;
+  const bodies = { '/admin/analytics/budgets': body('analytics_budgets'), '/admin/analytics/placements': body('analytics_placements') };
+  const calls = stub((url) => answer(200, bodies[new URL(url, 'http://x').pathname]));
+  const api = new HttpApi();
+  const range = { from: '1970-01-01T00:00:00.000Z', to: '1970-01-02T00:00:00.000Z' };
+  const placements = await api.analyticsPlacements({ ...range, keyIds: ['desktop', 'ci'], poolIds: ['all'] });
+  await api.analyticsPlacements({ ...range, keyIds: [], poolIds: [] });
+  const budgets = await api.analyticsBudgets();
+  const [filtered, bare, budgetsUrl] = calls.map((c) => new URL(c.url, 'http://x'));
+  assert.deepEqual(
+    [filtered.pathname, filtered.searchParams.get('range'), filtered.searchParams.get('keys'), filtered.searchParams.get('pools')],
+    ['/admin/analytics/placements', '0,86400000', 'desktop,ci', 'all'],
+  );
+  assert.deepEqual([...bare.searchParams.keys()], ['range'], 'an empty key or pool list is left off the query');
+  assert.deepEqual([budgetsUrl.pathname, budgetsUrl.search], ['/admin/analytics/budgets', ''], 'the budgets route reads no query');
+  assert.deepEqual(placements, [{ cacheReadTokens: 1_000, hitShare: 1, hits: 2, placements: 2, promisedTokens: 1_000, rung: 'content' }]);
+  assert.deepEqual(budgets, [{ accountId: 'direct', budgetPeriod: 'month', budgetUsd: 50, periodEnd: new Date(2_678_400_000).toISOString(), poolId: 'main', spentUsd: 0.0036 }]);
+});
+
 test('getSession answers null on 401 without running the hook', async () => {
   let unauthorized = 0;
   setHooks({ onForbidden: () => undefined, onUnauthorized: () => { unauthorized += 1; } });

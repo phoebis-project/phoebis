@@ -300,6 +300,17 @@ cache, and the output split into thinking and plain output; Cost reports the est
 warming reports what probes cost against what they saved; and Upstreams reports peak utilization, ineligible time, and
 pin churn per upstream.
 
+The Cache section closes with Placements by rung: the attempts in the range the router placed by a warm prefix or beside
+the main conversation rather than by its strategy, counted by rung (by the conversation's own messages, by its static
+prefix, or with the main conversation), each with its hits, hit share, the tokens the responses read from cache, and the
+prefix sizes the placements promised. A placement by the conversation's own messages is a hit when the response read the
+whole prefix it was promised; one by the static prefix or beside the main conversation is a hit when the response read
+from cache at all, since the latter promises no size. The table reads the range and the key and pool filters, and a
+session view leaves it out. The Burn section closes with Member budgets: each API-key pool member with a budget, its
+spend in the current day or month against that budget with a bar, and when the period ends. A member at its budget is
+marked, since routing skips it until the period ends; one the ledger has not reported on yet reads "not reported". The
+range and the filters do not apply to it.
+
 Cooldown time books to the hour it elapses in as the interval runs, and a cooldown cleared early gives back only the
 hours it never held. A cooldown is booked up to seven days ahead of the announcement that set it, and a later
 announcement books the next stretch. Filtered to one session, the view sums the request log instead of the rollups, and

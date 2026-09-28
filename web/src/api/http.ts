@@ -94,6 +94,8 @@ export const catalogUnion = (catalogs: (AccountCatalog | null)[]): CatalogModel[
 };
 
 export class HttpApi implements Api {
+  analyticsBudgets = async () => (await call<{ members: unknown[] }>('GET', '/admin/analytics/budgets')).members.map(d.decodeMemberBudget);
+  analyticsPlacements = async (q: Pick<AnalyticsQuery, 'from' | 'keyIds' | 'poolIds' | 'to'>) => (await call<{ rows: unknown[] }>('GET', `/admin/analytics/placements${qs({ keys: q.keyIds, pools: q.poolIds, range: range(q.from, q.to) })}`)).rows.map(d.decodePlacementRow);
   cancelPairing = (pairingId: string) => call<void>('DELETE', `/admin/oauth/sessions/${enc(pairingId)}`);
   clearCooldown = (accountId: string, scope: string) => call<void>('DELETE', `/admin/accounts/${enc(accountId)}/cooldowns/${enc(scope)}`);
   clearFunding = (accountId: string) => call<void>('POST', `/admin/accounts/${enc(accountId)}/clear-funding`);

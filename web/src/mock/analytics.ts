@@ -1,8 +1,10 @@
 import type {
-  AccountRollup, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, CacheMissReason, CostSplit, LatencyHistograms, PinMigrationReason, RequestKind, RewritePoint, WastedProbeReason, WindowFit,
+  AccountRollup, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, CacheMissReason, CostSplit, LatencyHistograms, PinMigrationReason, PlacementRow, RequestKind, RequestLog, RewritePoint, WastedProbeReason,
+  WindowFit,
 } from '@/api/types';
 import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons, missCount } from '@/lib/cache';
 import { emptyCounts } from '@/lib/counts';
+import { placementHit } from '@/lib/format';
 import { emptyHistogram, mergeHistograms, percentileFromHistogram } from '@/lib/histogram';
 import { matchesPattern } from '@/lib/pattern';
 import { ACCOUNTS } from './accounts';
@@ -89,7 +91,7 @@ const GROUP_KEY: Record<AnalyticsGroupBy, (r: HourlyRollup) => string> = {
  * The route's selector rule: `<id>@<generation>` names one lifetime, a bare id the live key's, and `-` the rows
  * the router never attributed. A bare id the story does not hold selects nothing, as the route answers it.
  */
-function selectsKey(selector: string, r: HourlyRollup): boolean {
+function selectsKey(selector: string, r: Pick<HourlyRollup, 'keyGeneration' | 'keyId'>): boolean {
   if (selector === '-') return r.keyId === '-';
   if (selector.includes('@')) return `${r.keyId}@${r.keyGeneration}` === selector;
   const live = keyById.get(selector);
@@ -304,4 +306,33 @@ export function rewritesOf(rollups: AccountRollup[], range: Range): { moves: Rec
     return { at: iso(at), rewriteTokens };
   });
   return { moves, points };
+}
+
+/**
+ * Placements by rung off the request rows' traces, as the route counts them: each attempt that placed and carried
+ * usage, a hit by the rule the request drawer reads its cache line by. The route narrows by the range and the key
+ * and pool lists here.
+ */
+export function placementsOf(requests: RequestLog[], q: Pick<AnalyticsQuery, 'from' | 'keyIds' | 'poolIds' | 'to'>): PlacementRow[] {
+  const fromMs = Date.parse(q.from);
+  const toMs = Date.parse(q.to);
+  const byRung = new Map<string, Omit<PlacementRow, 'hitShare'>>();
+  for (const r of requests) {
+    const at = Date.parse(r.at);
+    if (at < fromMs || at > toMs) continue;
+    if (q.keyIds?.length && !q.keyIds.some((selector) => selectsKey(selector, { keyGeneration: r.keyGeneration, keyId: r.keyId ?? '-' }))) continue;
+    if (q.poolIds?.length && !q.poolIds.includes(r.poolId ?? '-')) continue;
+    for (const a of r.attempts) {
+      const placement = a.selection?.placement ?? null;
+      const read = a.selection?.cacheRead ?? null;
+      if (placement === null || read === null) continue;
+      const row = byRung.get(placement.rung) ?? { cacheReadTokens: 0, hits: 0, placements: 0, promisedTokens: 0, rung: placement.rung };
+      row.placements += 1;
+      if (placementHit(placement, read)) row.hits += 1;
+      row.cacheReadTokens += read;
+      row.promisedTokens += placement.prefixTokens;
+      byRung.set(placement.rung, row);
+    }
+  }
+  return [...byRung.values()].sort((a, b) => a.rung.localeCompare(b.rung)).map((row) => ({ ...row, hitShare: row.placements > 0 ? row.hits / row.placements : null }));
 }

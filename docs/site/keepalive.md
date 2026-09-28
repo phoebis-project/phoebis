@@ -251,13 +251,18 @@ reference link](assets/sessions-light.png#only-light)
 ![The Sessions view: summary tiles, the session table with companion state and next probe, and the cost
 reference link](assets/sessions-dark.png#only-dark)
 
-The Sessions view opens with tiles for the session count, the cache-warming agents by state, cache probes in the
-last 24 hours by outcome, sessions whose cache expired between turns, net savings over 7 days, and the day's
-probe cost per pool against its cap. Its table lists one row per session (key, session, model, upstream, last
-used, requests, last request, agents, companion, cache warming, next probe), and opening a row expands into the
-recipe each of its agents carries. A session's menu offers Release, and, once it has ledgered traffic, "View in
-analytics" and "View in observe"; the analytics view opens on the requests of the key holder the row belongs to. The
-view reads its sessions again every 15 seconds, so a session that keeps sending requests stays on it.
+The Sessions view opens with tiles for the session count, the cache-warming agents by state, cache probes in the last 24
+hours by outcome, sessions whose cache expired between turns, net savings over 7 days, and the day's probe cost per pool
+against its cap. Its table lists one row per session (key, session, model, upstream, last used, requests,
+last request, agents, companion, cache warming, next probe), and opening a row expands into the recipe each of its
+agents carries. A session's menu offers Release, and, once it has ledgered traffic, "View in analytics" and "View in
+observe"; the analytics view opens on the requests of the key holder the row belongs to. The view reads its sessions
+again every 15 seconds, so a session that keeps sending requests stays on it.
+
+A session whose first request branched from another
+conversation carries a `fork at 3` badge beside its id, 3 being the depth where the two part; following the badge
+scrolls to the row of the session it branched from and marks that row, and where that session is not listed the badge
+names it instead, as `fork of 4ef130f1-90e0…`.
 
 ![The Analytics view; the Cache warming section draws probes by outcome, savings, wasted probes, and kept-warm
 requests](assets/analytics-light.png#only-light)

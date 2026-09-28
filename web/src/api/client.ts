@@ -25,6 +25,7 @@ import type {
   KeyModels,
   LifecycleDelivery,
   LiveEvent,
+  MemberBudget,
   ModelRule,
   ModelRulesMode,
   ModelsState,
@@ -33,6 +34,7 @@ import type {
   PairingInput,
   PairingPreview,
   PairingSession,
+  PlacementRow,
   Pool,
   PoolCacheTtl,
   PoolKeepalive,
@@ -150,6 +152,10 @@ export interface PoolInput extends PoolEngineFields, PoolAffinityFields {
 }
 
 export interface Api {
+  /** Every budgeted member's spend in its current period; the route reads no range and no filter. */
+  analyticsBudgets(): Promise<MemberBudget[]>;
+  /** Sends the range and the key and pool lists; the route's other filters stay unset, so the page's others pass it by. */
+  analyticsPlacements(query: Pick<AnalyticsQuery, 'from' | 'keyIds' | 'poolIds' | 'to'>): Promise<PlacementRow[]>;
   cancelPairing(pairingId: string): Promise<void>;
   clearCooldown(accountId: string, scope: string): Promise<void>;
   clearFunding(accountId: string): Promise<void>;

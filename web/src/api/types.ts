@@ -663,6 +663,30 @@ export interface AnalyticsQuery {
   userAgents?: string[];
 }
 
+/** The placements of one rung over the range, counted off the attempts that carried usage. */
+export interface PlacementRow {
+  cacheReadTokens: number;
+  /** Hits over placements; null for a rung with no placement. */
+  hitShare: number | null;
+  hits: number;
+  placements: number;
+  /** The prefix sizes the placements promised; a `with_main` placement promises none. */
+  promisedTokens: number;
+  /** `content`, `static` or `with_main`; a rung this build does not know reads as the route sent it. */
+  rung: string;
+}
+
+/** A budgeted pool member's spend against its budget for the current period. */
+export interface MemberBudget {
+  accountId: string;
+  budgetPeriod: BudgetPeriod;
+  budgetUsd: number;
+  /** The next UTC day or month boundary; null, with `spentUsd`, until the ledger reports. */
+  periodEnd: string | null;
+  poolId: string;
+  spentUsd: number | null;
+}
+
 /** One group of one bucket or of the whole range, as the analytics routes sum it. */
 export interface AnalyticsGroup {
   attempts: number;
@@ -810,6 +834,10 @@ export interface Session {
   companionSince: string | null;
   createdAt: string | null;
   epoch: number | null;
+  /** The depth where a forked session parts from its base; null with `forkedFrom`. */
+  forkDepth: number | null;
+  /** The session this one branched from, null for one that branched from none. */
+  forkedFrom: string | null;
   /** A generation no live key holds: the ledger's memory of an earlier holder of this key id. Read-only, no recipe, no release. */
   historical: boolean;
   /** `state` is null when the session carries no cache-warming recipe at all; the other three are null with it. */

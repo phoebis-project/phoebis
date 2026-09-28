@@ -2395,6 +2395,36 @@ if (failoverRow) {
     const drawn = traceOf(m.container.querySelector('.drawer .selection-trace'));
     results.push({ name: '/requests drawer names the account a hold waited on', ok: drawn.head.includes(`held on ${held.attempts[0].selection.cohortHold.cohort} before placing`), missing: [drawn.head] });
   }
+  // The lines a trace draws more rarely: a placement beside a move, a placement with the main conversation, which
+  // promises no size and so keeps the plain cache line, and a hold on the strategy's choice, which names no cohort.
+  const movedPlaced = requests.find((r) => r.attempts.length === 1 && r.attempts[0].selection?.moved && r.attempts[0].selection.placement);
+  const withMain = requests.find((r) => r.attempts.length === 1 && r.attempts[0].selection?.placement?.rung === 'with_main' && r.attempts[0].selection.cacheRead !== null && r.attempts[0].selection.cohortHold === null);
+  const strategyHold = requests.find((r) => r.attempts.length === 1 && r.attempts[0].selection?.cohortHold?.cohort === null && r.attempts[0].selection.placement === null);
+  results.push({ name: 'fixture: a placement beside a move, one with the main conversation, and a hold with no cohort', ok: movedPlaced !== undefined && withMain !== undefined && strategyHold !== undefined, missing: [String(movedPlaced?.id), String(withMain?.id), String(strategyHold?.id)] });
+  if (movedPlaced) {
+    await m.navigate(`/requests/${movedPlaced.id}`);
+    await m.settle(300);
+    const drawn = traceOf(m.container.querySelector('.drawer .selection-trace'));
+    const { moved, placement } = movedPlaced.attempts[0].selection;
+    results.push({ name: '/requests drawer reads a placement beside the move that led to it', ok: moved === 'spent' && drawn.head.includes('moved: window spent') && drawn.head.includes(`placed by its static prefix, depth ${placement.depth}`), missing: [movedPlaced.id, drawn.head] });
+  }
+  if (withMain) {
+    await m.navigate(`/requests/${withMain.id}`);
+    await m.settle(300);
+    const drawn = traceOf(m.container.querySelector('.drawer .selection-trace'));
+    results.push({
+      name: '/requests drawer reads a placement with the main conversation against the input, since it promised no size',
+      ok: drawn.head.includes('placed with the main conversation') && drawn.head.includes('input tokens read from cache') && !drawn.head.includes('promised tokens') && !drawn.head.includes('held on'),
+      missing: [withMain.id, drawn.head],
+    });
+  }
+  if (strategyHold) {
+    await m.navigate(`/requests/${strategyHold.id}`);
+    await m.settle(300);
+    const drawn = traceOf(m.container.querySelector('.drawer .selection-trace'));
+    const waited = strategyHold.attempts[0].selection.cohortHold.waitedOn;
+    results.push({ name: '/requests drawer names the last account a hold with no cohort waited on', ok: drawn.head.includes('fresh placement') && drawn.head.includes(`held on ${waited[waited.length - 1]} before placing`), missing: [strategyHold.id, drawn.head] });
+  }
 }
 {
   const fableAttempt = requests.find((r) => r.attempts.some((a) => a.windows.some((w) => w.id === '7d_fable')));
@@ -2591,6 +2621,56 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
   const keys = legendOf('Spend per minute');
   results.push({ name: '/analytics the key grouping charts each key in dollars and draws no plan share', ok: keys.includes('desktop') && keys.includes('laptop') && card('Plan per hour') === undefined, missing: keys });
   await burnGroup('Upstream');
+
+  // Placements by rung sit in the Cache section, each budgeted member's spend in the Burn section.
+  const tableOf = (t) => ({
+    heads: [...(card(t)?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim()),
+    rows: [...(card(t)?.querySelectorAll('tbody tr') ?? [])].map((tr) => [...tr.children].map((td) => td.textContent?.trim())),
+  });
+  const placements = await api.analyticsPlacements({ from: new Date(Date.now() - 24 * 3_600_000).toISOString(), to: new Date().toISOString() });
+  const placed = tableOf('Placements by rung');
+  const WORDS = { content: 'by its messages', static: 'by its static prefix', with_main: 'with the main conversation' };
+  results.push({
+    name: '/analytics the cache section counts placements by rung with their hit share',
+    ok:
+      card('Placements by rung')?.closest('.analytics-section')?.id === 'cache' &&
+      JSON.stringify(placed.heads) === JSON.stringify(['Rung', 'Placements', 'Hits', 'Hit share', 'Tokens read', 'Tokens promised']) &&
+      placements.length === 3 &&
+      JSON.stringify(placed.rows.map((r) => [r[0], r[1], r[2], r[3]])) === JSON.stringify(placements.map((p) => [WORDS[p.rung], String(p.placements), String(p.hits), `${(p.hitShare * 100).toFixed(0)}%`])) &&
+      placed.rows.find((r) => r[0] === WORDS.with_main)?.[5] === '-',
+    missing: [JSON.stringify(placed.heads), ...placed.rows.map((r) => r.join(' | ')), JSON.stringify(placements)],
+  });
+  results.push({
+    name: '/analytics the placements card says how a hit is read',
+    ok: card('Placements by rung')?.querySelector('.card__subtitle')?.textContent === "A placement by the conversation's own messages is a hit when the response read the prefix it was promised; one by the static prefix when it read at all",
+    missing: [card('Placements by rung')?.querySelector('.card__subtitle')?.textContent ?? 'no subtitle'],
+  });
+  const budgets = await api.analyticsBudgets();
+  const budgeted = tableOf('Member budgets');
+  const budgetRows = [...(card('Member budgets')?.querySelectorAll('tbody tr') ?? [])];
+  const atBudget = budgetRows.filter((tr) => [...tr.querySelectorAll('.badge')].some((b) => b.textContent?.trim() === 'at budget'));
+  results.push({
+    name: '/analytics the burn section shows each budgeted member against its budget with a bar per row',
+    ok:
+      card('Member budgets')?.closest('.analytics-section')?.id === 'burn' &&
+      JSON.stringify(budgeted.heads) === JSON.stringify(['Pool', 'Upstream', 'Spent', 'Budget', 'Period ends']) &&
+      budgets.length === 2 &&
+      JSON.stringify(budgeted.rows.map((r) => [r[0], r[1]])) === JSON.stringify(budgets.map((b) => [b.poolId, b.accountId])) &&
+      budgeted.rows.every((r, i) => r[3] === `$${budgets[i].budgetUsd.toFixed(2)} per ${budgets[i].budgetPeriod}`) &&
+      budgetRows.every((tr) => tr.querySelectorAll('.meter').length === 1),
+    missing: [JSON.stringify(budgeted.heads), ...budgeted.rows.map((r) => r.join(' | '))],
+  });
+  // The pool checks above saved both budgeted pools, and a pool write answers no spend until the ledger reports
+  // again, so the marks follow the data as it stands here; the browser pass reads the story's member at its budget.
+  const reached = budgets.filter((b) => b.spentUsd !== null && b.spentUsd >= b.budgetUsd && b.periodEnd !== null && Date.parse(b.periodEnd) > Date.now());
+  const unreported = budgets.filter((b) => b.spentUsd === null).map((b) => b.accountId);
+  results.push({
+    name: '/analytics only a member at its budget is marked, and a member with no reported spend says so',
+    ok:
+      JSON.stringify(atBudget.map((tr) => tr.children[1]?.textContent?.trim())) === JSON.stringify(reached.map((b) => b.accountId)) &&
+      JSON.stringify(budgetRows.filter((tr) => tr.children[2]?.textContent?.includes('not reported')).map((tr) => tr.children[1]?.textContent?.trim())) === JSON.stringify(unreported),
+    missing: budgeted.rows.map((r) => r.join(' | ')),
+  });
 }
 {
   const cardByTitle = (t) => [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === t);
@@ -3171,6 +3251,38 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
     results.push({ name: '/sessions parked badge says the idle limits do not apply', ok: (parkedBadge?.getAttribute('title') ?? '').includes('idle limits do not apply'), missing: [parkedBadge?.getAttribute('title') ?? 'absent'] });
   }
 
+  // A forked session's badge links to the row of the session it branched from.
+  {
+    const heads = [...m.container.querySelectorAll('.sessions-table thead th')].map((th) => th.textContent?.trim() ?? '');
+    const sessionAt = heads.indexOf('Session');
+    const listed = await api.listSessions();
+    const cellOf = (r) => ({ label: r.children[sessionAt]?.firstChild?.textContent ?? '', title: r.children[sessionAt]?.getAttribute('title') ?? '' });
+    const forked = listed.find((s) => s.forkedFrom !== null);
+    const forkRow = forked ? rows().find((r) => cellOf(r).title === forked.sessionId && r.children[1]?.textContent === forked.keyId) : undefined;
+    const link = forkRow?.children[sessionAt]?.querySelector('a.badge');
+    const target = link ? m.container.querySelector(`[id="${(link.getAttribute('href') ?? '').slice(1)}"]`) : null;
+    results.push({
+      name: '/sessions a forked session carries a fork badge that links to its base session\'s row',
+      ok:
+        forked !== undefined &&
+        link?.textContent?.trim() === `fork at ${forked.forkDepth}` &&
+        link.classList.contains('badge--accent') &&
+        (link.getAttribute('title') ?? '').includes(forked.forkedFrom) &&
+        target?.tagName === 'TR' &&
+        cellOf(target).title === forked.forkedFrom &&
+        target.children[1]?.textContent === forked.keyId,
+      missing: [String(forked?.sessionId), link?.outerHTML ?? 'no link', target?.textContent?.slice(0, 80) ?? 'no target row'],
+    });
+    const expandedBefore = m.container.querySelectorAll('.srow__detail').length;
+    link?.click();
+    await m.settle(150);
+    results.push({
+      name: '/sessions following a fork link marks the base row current and leaves the forked row closed',
+      ok: target?.getAttribute('aria-current') === 'true' && m.container.querySelectorAll('tr[aria-current="true"]').length === 1 && m.container.querySelectorAll('.srow__detail').length === expandedBefore,
+      missing: [String(target?.getAttribute('aria-current')), String(m.container.querySelectorAll('.srow__detail').length)],
+    });
+  }
+
   // A session with no ledgered requests cannot open either view.
   // Only the first nine sessions also appear in the live feed, so the observe jump needs one of those.
   const busyRow = () => rows().find((r, i) => i < 9 && Number(r.children[6]?.textContent?.trim()) > 0);
@@ -3511,6 +3623,22 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
       name: '/sessions releasing the live holder leaves the earlier one in the ledger',
       ok: released.length === 1 && released[0].children[1]?.querySelector('.sub')?.textContent?.trim() === 'deleted holder',
       missing: released.map((r) => r.children[1]?.textContent?.trim() ?? ''),
+    });
+  }
+  {
+    // A fork whose base is no longer listed names the base and links nowhere.
+    const forked = (await api.listSessions()).find((s) => s.forkedFrom !== null);
+    const base = rows().find((r) => r.children[2]?.getAttribute('title') === forked?.forkedFrom);
+    (await openMenu(base)).find((b) => b.textContent?.trim() === 'Release')?.click();
+    await m.settle(250);
+    [...([...m.container.querySelectorAll('dialog[open]')].pop()?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Release')?.click();
+    await m.settle(600);
+    const forkCell = rows().find((r) => r.children[2]?.getAttribute('title') === forked?.sessionId)?.children[2];
+    const badge = forkCell?.querySelector('.badge--accent');
+    results.push({
+      name: '/sessions a fork whose base is not listed reads the base it branched from, with no link',
+      ok: forked !== undefined && base !== undefined && badge?.textContent?.trim() === `fork of ${forked.forkedFrom.slice(0, 13)}…` && badge.tagName !== 'A' && forkCell.querySelector('a') === null,
+      missing: [badge?.outerHTML ?? 'no badge', String(base !== undefined)],
     });
   }
 }

@@ -141,8 +141,10 @@ fails over reads its destination's state. Mixed TTLs across a session's requests
 prefix, and the TTL sets an entry's lifetime and price alone.
 The cost of each choice is on the [keepalive page](keepalive.md#the-cost-reference).
 
-![The Pools view: one card per pool with its strategy, affinity, overage policy, keepalive state, members, and keys][pl]
-![The Pools view: one card per pool with its strategy, affinity, overage policy, keepalive state, members, and keys][pd]
+![The Pools view: one card per pool with its strategy, affinity, overage policy, keepalive state, members, and keys;
+the codex pool reads exhausted because its one member is at its daily budget][pl]
+![The Pools view: one card per pool with its strategy, affinity, overage policy, keepalive state, members, and keys;
+the codex pool reads exhausted because its one member is at its daily budget][pd]
 
 [pl]: assets/pools-light.png#only-light
 [pd]: assets/pools-dark.png#only-dark

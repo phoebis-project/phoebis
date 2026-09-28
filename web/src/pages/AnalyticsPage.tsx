@@ -1,20 +1,20 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, ComposedChart, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { api } from '@/api';
 import { foldGroups, foldRequests, loadSessionRequests, sumGroups } from '@/api/fold';
-import type { AccountRollup, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, CacheMissReason, CostSplit, LatencyHistograms, RequestLog, RewritePoint, WindowFit } from '@/api/types';
+import type { AccountRollup, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, CacheMissReason, CostSplit, LatencyHistograms, MemberBudget, PlacementRow, RequestLog, RewritePoint, WindowFit } from '@/api/types';
 import { Donut } from '@/components/charts/Donut';
 import { OUTCOME_SERIES, PERCENTILES, PROBE_SERIES, TOKEN_SERIES, accountColor } from '@/components/charts/theme';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { ChartTooltip, Legend, type TooltipRow } from '@/components/charts/Tooltip';
 import { MultiSelect, type Option } from '@/components/ui/MultiSelect';
 import { IconX } from '@/components/ui/icons';
-import { Badge, Button, Card, ErrorState, Input, Segmented, Select, Skeleton, Toggle } from '@/components/ui/primitives';
-import { BAND_TOLERANCE, CONVERSATION_CLASSES, DRIFT_TOLERANCE, FIT_WINDOW_LABEL, driftLabel, driftWide, foldBurn, moveLabel, own, type BurnLine, type BurnRow } from '@/lib/analytics';
+import { Badge, Button, Card, ErrorState, Input, Meter, Segmented, Select, Skeleton, Toggle } from '@/components/ui/primitives';
+import { BAND_TOLERANCE, CONVERSATION_CLASSES, DRIFT_TOLERANCE, FIT_WINDOW_LABEL, driftLabel, driftWide, foldBurn, moveLabel, own, placementCells, placementRungLabel, type BurnLine, type BurnRow } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missCount, missLabel, missReasonOrder } from '@/lib/cache';
-import { fmtAbsolute, fmtCompact, fmtDayShort, fmtDuration, fmtHourTick, fmtInt, fmtMs, fmtPct, fmtUsd, shortId, toLocalInput, upperFirst } from '@/lib/format';
+import { fmtAbsolute, fmtCompact, fmtDayShort, fmtDuration, fmtHourTick, fmtInt, fmtMs, fmtPct, fmtPeriodEnd, fmtUsd, shortId, toLocalInput, upperFirst } from '@/lib/format';
 import { BUCKET_COUNT, BUCKET_EDGES, PERCENTILE_HINT, histogramCount } from '@/lib/histogram';
 import { useAsync } from '@/lib/hooks';
 import { scrollToSection, useScrollSpy } from '@/lib/scroll';
@@ -194,6 +194,11 @@ export function AnalyticsPage() {
   const burn = useAsync(() => api.getAnalyticsBurn({ from: fromIso, to: toIso }, burnGroup), [fromIso, toIso, burnGroup]);
   const rewrites = useAsync(() => api.getAnalyticsRewrites({ from: fromIso, to: toIso }), [fromIso, toIso]);
   const fits = useAsync(() => api.getAnalyticsFits(), []);
+  const placements = useAsync(
+    () => (sessionId === null ? api.analyticsPlacements({ from: fromIso, keyIds: filters.keyId, poolIds: filters.poolId, to: toIso }) : Promise.resolve<PlacementRow[]>([])),
+    [fromIso, toIso, filters.keyId, filters.poolId, sessionId],
+  );
+  const budgets = useAsync(() => api.analyticsBudgets(), []);
   const accountKeys = useDimensionKeys(fromIso, toIso, DIM_GROUP.accountId);
   const keyKeys = useDimensionKeys(fromIso, toIso, DIM_GROUP.keyId);
   const modelKeys = useDimensionKeys(fromIso, toIso, DIM_GROUP.model);
@@ -211,7 +216,7 @@ export function AnalyticsPage() {
   // An outage of the ledger fails the section and filter-choice reads with these three, and this is the one
   // control that reads again, so it reads everything the view draws from.
   const retry = () => {
-    for (const read of [accountKeys, accountRollups, breakdown, burn, byModel, byPool, fits, keyKeys, log, modelKeys, poolKeys, rewrites, series]) read.reload();
+    for (const read of [accountKeys, accountRollups, breakdown, budgets, burn, byModel, byPool, fits, keyKeys, log, modelKeys, placements, poolKeys, rewrites, series]) read.reload();
   };
   const rows = useMemo(() => (log.stale ? [] : (log.data?.requests ?? [])), [log.stale, log.data]);
   const points = useMemo(() => (stale ? [] : sessionId === null ? (series.data ?? []) : foldRequests(rows, rangeBucketMs, fromIso, toIso, groupBy, foldOptions)), [stale, sessionId, series.data, rows, rangeBucketMs, fromIso, toIso, groupBy, foldOptions]);
@@ -419,6 +424,7 @@ export function AnalyticsPage() {
         </div>
         <BurnCharts answer={burn.stale ? null : burn.data} error={burn.error} groupBy={burnGroup} loading={burn.data === null || burn.stale} />
         <FitTable error={fits.error} fits={fits.stale ? null : fits.data} />
+        <BudgetTable budgets={budgets.data} error={budgets.error} now={now} />
       </Section>
 
       {/* Latency */}
@@ -526,6 +532,14 @@ export function AnalyticsPage() {
         </div>
         <MissReasonsByGroup groups={groups} groupLabel={groupLabel} loading={loading} />
         {sessionId === null && <CacheByModel groups={byModel.stale ? [] : (byModel.data ?? [])} error={byModel.error} loading={byModel.data === null || byModel.stale} />}
+        {/* The route reads no session, so a session view has no placements of its own to show. */}
+        {sessionId === null && (
+          <PlacementTable
+            error={placements.error}
+            rows={placements.stale ? null : placements.data}
+            unfiltered={filters.accountId.length > 0 || filters.model.length > 0 || userAgentPattern.trim() !== '' || classPattern.trim() !== ''}
+          />
+        )}
       </Section>
 
       {/* Cost */}
@@ -1353,6 +1367,116 @@ function FitTable({ error, fits }: { error: string | null; fits: WindowFit[] | n
               <tr>
                 <td colSpan={9} className={error ? '' : 'muted'}>
                   {error ? <ErrorState title="Could not load the fits" body={error} /> : fits === null ? <Skeleton height={22} /> : 'No fits yet.'}
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  );
+}
+
+const PLACEMENT_HINT = "A placement by the conversation's own messages is a hit when the response read the prefix it was promised; one by the static prefix when it read at all";
+const PLACEMENT_UNFILTERED_NOTE = '. The upstream, model and pattern filters above do not apply here';
+
+/** Placements by rung over the range, narrowed by the key and pool filters, the two the route reads here. */
+function PlacementTable({ error, rows, unfiltered }: { error: string | null; rows: PlacementRow[] | null; unfiltered: boolean }) {
+  return (
+    <Card title="Placements by rung" subtitle={`${PLACEMENT_HINT}${unfiltered ? PLACEMENT_UNFILTERED_NOTE : ''}`} padded={false} className="card--table">
+      <div className="table-wrap">
+        <table className="table">
+          <thead>
+            <tr>
+              <th>Rung</th>
+              <th className="right">Placements</th>
+              <th className="right">Hits</th>
+              <th className="right">Hit share</th>
+              <th className="right">Tokens read</th>
+              <th className="right">Tokens promised</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(rows ?? []).map((r) => (
+              <tr key={r.rung}>
+                <td>{placementRungLabel(r.rung)}</td>
+                {placementCells(r).map((cell, i) => (
+                  <td key={i} className="right num">
+                    {cell}
+                  </td>
+                ))}
+              </tr>
+            ))}
+            {(rows === null || rows.length === 0) && (
+              <tr>
+                <td colSpan={6} className={error ? '' : 'muted'}>
+                  {error ? <ErrorState title="Could not load the placements" body={error} /> : rows === null ? <Skeleton height={22} /> : 'No placements in range'}
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  );
+}
+
+const BUDGET_HINT = "Each budgeted API-key member's spend in its current period; the range and the filters above do not apply here";
+
+/** Spend against each member's budget; a member at its budget is skipped until its period ends. */
+function BudgetTable({ budgets, error, now }: { budgets: MemberBudget[] | null; error: string | null; now: number }) {
+  return (
+    <Card title="Member budgets" subtitle={BUDGET_HINT} padded={false} className="card--table">
+      <div className="table-wrap">
+        <table className="table budgets-table">
+          <thead>
+            <tr>
+              <th>Pool</th>
+              <th>Upstream</th>
+              <th>Spent</th>
+              <th className="right">Budget</th>
+              <th>Period ends</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(budgets ?? []).map((b) => {
+              const ratio = b.spentUsd === null ? 0 : b.spentUsd / b.budgetUsd;
+              // A spend reported for a period that has since ended says nothing about the one running now.
+              const reached = b.spentUsd !== null && b.spentUsd >= b.budgetUsd && b.periodEnd !== null && Date.parse(b.periodEnd) > now;
+              return (
+                <tr key={`${b.poolId}-${b.accountId}`}>
+                  <td className="mono">{b.poolId}</td>
+                  <td className="mono">
+                    <Link to={`/upstreams/${b.accountId}`}>{b.accountId}</Link>
+                  </td>
+                  <td>
+                    <span className="budgets-table__spent">
+                      {b.spentUsd === null ? (
+                        <span className="muted" title="The ledger has not reported this member's spend yet">
+                          not reported
+                        </span>
+                      ) : (
+                        <span className="num">{fmtUsd(b.spentUsd)}</span>
+                      )}
+                      {reached && (
+                        <Badge tone="warning" title="Routing skips this member until its period ends">
+                          at budget
+                        </Badge>
+                      )}
+                    </span>
+                    <Meter value={ratio} tone={reached ? 'low' : ratio >= 0.8 ? 'warn' : 'accent'} thin label={`Spend of ${b.accountId} in pool ${b.poolId} against its budget`} />
+                  </td>
+                  <td className="right num">
+                    {fmtUsd(b.budgetUsd)} per {b.budgetPeriod}
+                  </td>
+                  <td title={b.periodEnd ? fmtAbsolute(b.periodEnd) : undefined}>{b.periodEnd ? <span className="num">{fmtPeriodEnd(b.periodEnd)}</span> : <span className="muted">-</span>}</td>
+                </tr>
+              );
+            })}
+            {(budgets === null || budgets.length === 0) && (
+              <tr>
+                <td colSpan={5} className={error ? '' : 'muted'}>
+                  {error ? <ErrorState title="Could not load the member budgets" body={error} /> : budgets === null ? <Skeleton height={22} /> : 'No member carries a budget'}
                 </td>
               </tr>
             )}

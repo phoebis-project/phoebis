@@ -10,7 +10,7 @@ import { modelRulesRefusal, type NumericKeepaliveKey } from '@/lib/forms';
 import { matchesPattern } from '@/lib/pattern';
 import { matchesPattern as matchesModelPattern, processRules } from '@/lib/patterns';
 import { ACCOUNTS, QUOTA_HISTORY, QUOTA_SNAPSHOTS } from './accounts';
-import { FITS, breakdownOf, burnOf, rewritesOf, seriesOf } from './analytics';
+import { FITS, breakdownOf, burnOf, placementsOf, rewritesOf, seriesOf } from './analytics';
 import { CATALOG, IMPORTED_CATALOG, IMPORTED_PRICES, countPriceChanges } from './catalog';
 import { liveFeed } from './live';
 import { ALERT_EVENTS, ALERT_RULES, KEEPALIVE_OVERVIEW, LIFECYCLE_DELIVERIES, RECIPES, SESSIONS, SETTINGS } from './operations';
@@ -361,6 +361,18 @@ export class MockApi implements Api {
   private putAccount(next: Account): Account {
     this.accounts = this.accounts.map((a) => (a.id === next.id ? next : a));
     return next;
+  }
+
+  analyticsBudgets() {
+    // Read off the members as they stand, so a budget set on the Pools form shows here; the route orders by pool, then upstream.
+    const members = this.pools.flatMap((p) =>
+      p.members.flatMap((m) => (m.budgetUsd === null ? [] : [{ accountId: m.accountId, budgetPeriod: m.budgetPeriod, budgetUsd: m.budgetUsd, periodEnd: m.periodEnd, poolId: p.id, spentUsd: m.spentUsd }])),
+    );
+    return latency(members.sort((a, b) => a.poolId.localeCompare(b.poolId) || a.accountId.localeCompare(b.accountId)));
+  }
+
+  analyticsPlacements(query: Pick<AnalyticsQuery, 'from' | 'keyIds' | 'poolIds' | 'to'>) {
+    return latency(placementsOf(REQUESTS, query));
   }
 
   async cancelPairing(pairingId: string) {

@@ -830,6 +830,77 @@ async function burnCards(theme) {
 }
 
 /**
+ * The two analytics tables each against the table card before it in its section: Placements by rung against Cache
+ * by model, Member budgets against Plan meter fit. The title and head types and the card width match, and where both
+ * cards draw figures, their type too, and a placements row is as tall as a cache row. Every budget row draws its
+ * bar; in the mock's story the member past its budget carries the at-budget badge in the box of the fit table's drift
+ * badge. The router's seed places nothing and budgets no member, so there the tables draw their empty rows.
+ */
+async function analyticsTables(theme) {
+  const say = (what) => failures.push(`${theme} /analytics: ${what}`);
+  try {
+    await page.waitForFunction(
+      () => ['Placements by rung', 'Member budgets'].every((t) => [...document.querySelectorAll('.card__title')].some((x) => x.textContent === t)) && !document.querySelector('#cache .skeleton, #burn .skeleton'),
+      null,
+      { timeout: 15_000 },
+    );
+  } catch {
+    say('the placements and member budgets cards never finished loading');
+    return;
+  }
+  const read = await page.evaluate(() => {
+    const card = (t) => [...document.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === t);
+    const type = (el) => (el ? `${getComputedStyle(el).fontFamily}/${getComputedStyle(el).fontSize}/${getComputedStyle(el).fontWeight}` : null);
+    const badge = (el) => {
+      if (!el) return null;
+      const s = getComputedStyle(el);
+      return `${s.fontFamily}/${s.fontSize}/${s.lineHeight}/${s.paddingTop}/${s.paddingLeft}/${Math.round(el.getBoundingClientRect().height)}`;
+    };
+    const box = (title) => {
+      const el = card(title);
+      if (!el) return null;
+      const row = el.querySelector('tbody tr');
+      return {
+        figure: type(el.querySelector('tbody td.num')),
+        head: type(el.querySelector('thead th')),
+        row: row ? Math.round(row.getBoundingClientRect().height) : null,
+        rows: el.querySelectorAll('tbody td.num').length > 0,
+        section: el.closest('.analytics-section')?.id ?? null,
+        title: type(el.querySelector('.card__title')),
+        width: Math.round(el.getBoundingClientRect().width),
+      };
+    };
+    const budgetRows = [...(card('Member budgets')?.querySelectorAll('tbody tr') ?? [])].filter((tr) => tr.children.length === 5);
+    const atBudget = (tr) => [...tr.querySelectorAll('.badge')].find((b) => b.textContent?.trim() === 'at budget');
+    return {
+      atBudget: budgetRows.filter(atBudget).map((tr) => ({ badge: badge(atBudget(tr)), upstream: tr.children[1].textContent?.trim() })),
+      bars: budgetRows.map((tr) => {
+        const bar = tr.querySelector('.meter');
+        return bar ? `${Math.round(bar.getBoundingClientRect().width)}x${Math.round(bar.getBoundingClientRect().height)}` : null;
+      }),
+      budgets: box('Member budgets'),
+      cache: box('Cache by model'),
+      driftBadge: badge(card('Plan meter fit')?.querySelector('tbody .badge')),
+      fit: box('Plan meter fit'),
+      placements: box('Placements by rung'),
+    };
+  });
+  measurements.push(`${theme} /analytics placement and budget tables ${JSON.stringify(read)}`);
+  const drawn = (a, b, keys) => (a?.rows && b?.rows ? keys : []);
+  failures.push(...compare(read.placements, read.cache, ['title', 'head', 'width', ...drawn(read.placements, read.cache, ['figure', 'row'])], `${theme} /analytics: "Placements by rung" against "Cache by model"`));
+  failures.push(...compare(read.budgets, read.fit, ['title', 'head', 'width', ...drawn(read.budgets, read.fit, ['figure'])], `${theme} /analytics: "Member budgets" against "Plan meter fit"`));
+  if (read.placements?.section !== 'cache') say(`the placements card sits in ${read.placements?.section}, not the Cache section`);
+  if (read.budgets?.section !== 'burn') say(`the member budgets card sits in ${read.budgets?.section}, not the Burn section`);
+  for (const bar of read.bars.filter((b) => b === null || !/^[0-9]{3,}x4$/.test(b))) say(`a member budget row draws its bar as ${bar}`);
+  if (mock) {
+    if (!read.placements?.rows) say('the story places requests by rung, yet the placements card draws no figure');
+    if (read.bars.length === 0) say('the story budgets two members, yet the card lists none');
+    if (JSON.stringify(read.atBudget.map((r) => r.upstream)) !== JSON.stringify(['evals'])) say(`the at-budget mark sits on ${JSON.stringify(read.atBudget.map((r) => r.upstream))}, not on evals alone`);
+    for (const r of read.atBudget.filter((x) => x.badge !== read.driftBadge)) say(`the at-budget badge measures ${r.badge} against the drift badge's ${read.driftBadge}`);
+  }
+}
+
+/**
  * The newest request's drawer: every attempt draws its selection trace, and each badge the trace and the summary
  * add (a member passed over, the request class) is the same box as the status badge beside them. It runs after the
  * list view's shot, so that shot stays the list alone.
@@ -1099,6 +1170,71 @@ async function agentLines(theme) {
   await settle();
 }
 
+/**
+ * The Sessions table's fork badge against the Upstream cell's kind badge: the fork
+ * badge measures the same box and sits on
+ * the session id's line. The router's seed records no fork, so there the fork parts stand down.
+ */
+async function sessionForkMark(theme) {
+  const say = (what) => failures.push(`${theme} /sessions: ${what}`);
+  const read = await page.evaluate(() => {
+    const badge = (el) => {
+      if (!el) return null;
+      const s = getComputedStyle(el);
+      return `${s.fontFamily}/${s.fontSize}/${s.lineHeight}/${s.paddingTop}/${s.paddingLeft}/${Math.round(el.getBoundingClientRect().height)}`;
+    };
+    const fork = document.querySelector('.sessions-table .srow__fork');
+    // The badge is centred on the id's line when the two share it, and sits below it when the cell wrapped.
+    const beside = (() => {
+      const label = fork?.closest('td')?.firstChild;
+      if (!fork || !label) return null;
+      const range = document.createRange();
+      range.selectNodeContents(label);
+      const line = range.getBoundingClientRect();
+      const box = fork.getBoundingClientRect();
+      const middle = (box.top + box.bottom) / 2;
+      return middle > line.top && middle < line.bottom;
+    })();
+    return {
+      beside,
+      forkBadge: badge(fork),
+      kindBadge: badge(document.querySelector('.sessions-table .srow__account .badge')),
+    };
+  });
+  measurements.push(`${theme} /sessions fork mark ${JSON.stringify(read)}`);
+  if (read.forkBadge === null) {
+    if (mock) say('the story forks a session, yet no fork badge is drawn');
+  } else {
+    if (read.forkBadge !== read.kindBadge) say(`the fork badge measures ${read.forkBadge} against the kind badge's ${read.kindBadge}`);
+    if (read.beside !== true) say('the fork badge wraps under the session id rather than sitting beside it');
+  }
+}
+
+/**
+ * Following the fork badge scrolls its base's row into view and marks it current. It runs after the view's shot, so
+ * that shot shows the list at rest.
+ */
+async function forkLink(theme) {
+  const say = (what) => failures.push(`${theme} /sessions: ${what}`);
+  const link = page.locator('.sessions-table a.srow__fork').first();
+  if ((await link.count()) === 0) {
+    if (mock) say('the story forks a session beside its base, yet no fork link is drawn');
+    return;
+  }
+  const target = ((await link.getAttribute('href')) ?? '').slice(1);
+  await link.click();
+  await settle();
+  const read = await page.evaluate((id) => {
+    const row = document.getElementById(id);
+    if (!row) return null;
+    const box = row.getBoundingClientRect();
+    return { current: row.getAttribute('aria-current'), inView: box.top >= 0 && box.bottom <= window.innerHeight, marked: document.querySelectorAll('tr[aria-current="true"]').length };
+  }, target);
+  measurements.push(`${theme} /sessions fork link ${JSON.stringify(read)}`);
+  if (read === null) say(`the fork link targets ${target}, which no row carries`);
+  else if (read.current !== 'true' || read.marked !== 1 || !read.inView) say(`following the fork link leaves its base ${JSON.stringify(read)}`);
+}
+
 // Where a throw below came from, so the failure it becomes names a view rather than a stack.
 let at = 'the login';
 try {
@@ -1142,6 +1278,7 @@ try {
         await costCapRows(theme);
         await costReference(theme);
         await agentLines(theme);
+        await sessionForkMark(theme);
       }
       if (view.path === '/pools') {
         await poolChips(theme);
@@ -1152,6 +1289,7 @@ try {
       if (view.path === '/analytics') {
         await wastedProbeRows(theme);
         await burnCards(theme);
+        await analyticsTables(theme);
       }
       if (view.path === '/settings') {
         await compatibilityCard(theme);
@@ -1169,6 +1307,7 @@ try {
       await advance(SHOT_MS);
       await page.screenshot({ fullPage: true, path: join(shots, theme, `${view.slug}.png`) });
       if (view.path === '/requests') await requestDrawer(theme);
+      if (view.path === '/sessions') await forkLink(theme);
     }
   }
 } catch (error) {

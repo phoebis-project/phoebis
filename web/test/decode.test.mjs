@@ -891,6 +891,29 @@ test('the dashboard, sessions, recipes, and overview decode', () => {
   assert.equal(ov.costToday[0].capUsd, 4);
 });
 
+test('a session decodes its fork', () => {
+  const rows = fixture('sessions').sessions;
+  const sessions = rows.map(d.decodeSession);
+  const by = (id) => sessions.find((s) => s.sessionId === id);
+  assert.deepEqual(
+    [by('s1').forkedFrom, by('s1').forkDepth],
+    ['s0', 2],
+    'a session that branched from another names its base and the depth where the two part',
+  );
+  assert.deepEqual([by('s2').forkedFrom, by('s2').forkDepth], [null, null], 'a session that continued no other reads no fork');
+  assert.deepEqual([by('s-fixture').forkedFrom, by('s-fixture').forkDepth], [null, null], 'a session the ledger holds no request for reads no fork');
+});
+
+test('a placement row and a member budget keep the figures the routes leave null as null', () => {
+  const [row] = fixture('analytics_placements').rows;
+  assert.equal(d.decodePlacementRow({ ...row, hit_share: null }).hitShare, null, 'a rung that placed nothing has no share, not a zero one');
+  assert.equal(d.decodePlacementRow({ ...row, rung: 'by_moonlight' }).rung, 'by_moonlight', 'a rung this build does not know reads as the route sent it');
+  const [member] = fixture('analytics_budgets').members;
+  const unreported = d.decodeMemberBudget({ ...member, period_end: null, spent_usd: null });
+  assert.deepEqual([unreported.spentUsd, unreported.periodEnd], [null, null], 'a member the ledger has not reported on has no spend yet');
+  assert.equal(d.decodeMemberBudget({ ...member, budget_period: 'week' }).budgetPeriod, 'month', 'a period outside the two reads as the store default');
+});
+
 test('a settings answer with no compatibility block reads the defaults the router ships with', () => {
   const bare = { ...fixture('settings') };
   delete bare.compatibility;

@@ -59,7 +59,12 @@ interface Row {
 }
 
 /** One session id can be held by two generations of a key id, so all three name a row. */
-const rowKey = (session: Session) => `${session.keyId}:${session.keyGeneration}:${session.sessionId}`;
+const rowKey = (session: Pick<Session, 'keyGeneration' | 'keyId' | 'sessionId'>) => `${session.keyId}:${session.keyGeneration}:${session.sessionId}`;
+/** The row's element id, so a fork's badge can link to its base; a session id may hold characters an id may not. */
+const rowDomId = (session: Pick<Session, 'keyGeneration' | 'keyId' | 'sessionId'>) => `session-${encodeURIComponent(rowKey(session))}`;
+
+const sessionLabel = (session: Session) =>
+  shortId(session.sessionId, 13);
 
 /** When the pool stopped probing: the max idle time counted from the session's last activity. */
 function idleLimitRanOutAt(session: Session, pool: Pool | null): string | null {
@@ -138,6 +143,8 @@ export function SessionsPage() {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [pending, setPending] = useState<Row | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  // The base row the last fork link led to, marked until another fork link is followed.
+  const [current, setCurrent] = useState<string | null>(null);
 
   const sessionData = sessions.data;
   const recipeData = recipes.data;
@@ -168,6 +175,12 @@ export function SessionsPage() {
       (e: unknown) => setToast(e instanceof Error ? e.message : String(e)),
     );
   };
+  const listedIds = useMemo(() => new Set((rows ?? []).map((r) => rowDomId(r.session))), [rows]);
+  const followFork = (id: string) => {
+    // jsdom leaves scrollIntoView undefined.
+    document.getElementById(id)?.scrollIntoView?.({ block: 'center' });
+    setCurrent(id);
+  };
   const warmingSomewhere = (pools.data ?? []).some((p) => p.keepalive.enabled);
   const allOpen = rows !== null && rows.length > 0 && rows.every((r) => expanded.has(rowKey(r.session)));
   const toggle = (id: string) =>
@@ -182,7 +195,7 @@ export function SessionsPage() {
     <div className="stack">
       <div className="page-head">
         <p className="page-head__meta">
-          Every Claude Code session the router has seen within the session expiry, whether or not a cache-keepalive companion registered for it. A pin binds each model a session uses to one
+          Every Claude Code session the router has seen within the session expiry, and every conversation it identified without a session id, whether or not a cache-keepalive companion registered for it. A pin binds each model a session uses to one
           upstream, so subagents on another model may sit on another upstream, and with affinity off every request picks again; where cache warming is on, each agent carries a recipe that replays its
           cacheable prefix just before the prompt cache expires, so the next real turn reads the cache instead of rewriting it.
         </p>
@@ -274,7 +287,11 @@ export function SessionsPage() {
                     now={now}
                     canMutate={canMutate}
                     columns={columns}
+                    current={current === rowDomId(row.session)}
                     expireAfterSeconds={expireAfterSeconds}
+                    forkBase={row.session.forkedFrom === null ? null : rowDomId({ ...row.session, sessionId: row.session.forkedFrom })}
+                    listedIds={listedIds}
+                    onFollowFork={followFork}
                     onOpen={(path) => navigate(path)}
                     onRelease={() => setPending(row)}
                   />
@@ -292,7 +309,7 @@ export function SessionsPage() {
         confirmLabel="Release"
         body={
           pending
-            ? `Session ${shortId(pending.session.sessionId, 13)} loses its pin to ${pending.session.accountId ?? 'its upstream'} and every recipe on it is dropped. The next request picks an upstream again and the prompt cache on ${pending.session.accountId ?? 'it'} goes cold.`
+            ? `Session ${sessionLabel(pending.session)} loses its pin to ${pending.session.accountId ?? 'its upstream'} and every recipe on it is dropped. The next request picks an upstream again and the prompt cache on ${pending.session.accountId ?? 'it'} goes cold.`
             : ''
         }
         onConfirm={onConfirmRelease}
@@ -309,14 +326,24 @@ function SessionRows({
   now,
   canMutate,
   columns,
+  current,
   expireAfterSeconds,
+  forkBase,
+  listedIds,
+  onFollowFork,
   onOpen,
   onRelease,
 }: {
   canMutate: boolean;
   columns: number;
+  /** Whether a fork link last led here. */
+  current: boolean;
   expireAfterSeconds: number | null;
+  /** The element id the base of a forked session would carry, whether or not it is listed; null off a fork. */
+  forkBase: string | null;
+  listedIds: Set<string>;
   now: number;
+  onFollowFork: (id: string) => void;
   onOpen: (path: string) => void;
   onRelease: () => void;
   onToggle: () => void;
@@ -339,7 +366,9 @@ function SessionRows({
   return (
     <>
       <tr
+        id={rowDomId(session)}
         className={`srow ${open ? 'is-open' : ''}`}
+        aria-current={current ? 'true' : undefined}
         aria-expanded={open}
         tabIndex={0}
         onClick={onToggle}
@@ -363,7 +392,8 @@ function SessionRows({
           )}
         </td>
         <td className="mono" title={session.sessionId}>
-          {shortId(session.sessionId, 13)}
+          {sessionLabel(session)}
+          {session.forkedFrom !== null && forkBase !== null && <ForkBadge base={listedIds.has(forkBase) ? forkBase : null} depth={session.forkDepth} from={session.forkedFrom} onFollow={onFollowFork} />}
           {(session.epoch ?? 1) > 1 && (
             <span className="sub srow__epoch" title="How many times this session's pin was re-created">
               epoch {session.epoch}
@@ -517,6 +547,35 @@ function SessionRows({
         </tr>
       )}
     </>
+  );
+}
+
+/**
+ * A forked session's marker: a link to its base's row where the base is listed, the base's id where it is not. The
+ * link stops at the row, whose click and Enter would otherwise open it.
+ */
+function ForkBadge({ base, depth, from, onFollow }: { base: string | null; depth: number | null; from: string; onFollow: (id: string) => void }) {
+  const at = depth === null ? '' : ` at depth ${depth}`;
+  if (base === null)
+    return (
+      <span className="badge badge--accent srow__fork" title={`Branched from session ${from}${at}, which this list does not hold`}>
+        fork of {shortId(from, 13)}
+      </span>
+    );
+  return (
+    <a
+      className="badge badge--accent srow__fork"
+      href={`#${base}`}
+      title={`Branched from session ${from}${at}; follow to its row`}
+      onClick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        onFollow(base);
+      }}
+      onKeyDown={(e) => e.stopPropagation()}
+    >
+      {depth === null ? 'fork' : `fork at ${depth}`}
+    </a>
   );
 }
 

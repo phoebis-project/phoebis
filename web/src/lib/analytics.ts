@@ -1,4 +1,5 @@
-import type { BurnGroup, BurnPoint, BurnUnit, PinMigrationReason } from '@/api/types';
+import type { BurnGroup, BurnPoint, BurnUnit, PinMigrationReason, Placement, PlacementRow } from '@/api/types';
+import { fmtCompact, fmtInt, fmtPct } from '@/lib/format';
 
 /** Why a session's pin moved, as the request drawer, its selection trace and the rewrites legend word it. */
 export const PIN_MIGRATION_LABEL: Record<PinMigrationReason, string> = {
@@ -142,3 +143,20 @@ export const driftLabel = (drift: number) => {
   return `${off > 0 ? '+' : ''}${(off * 100).toFixed(1)}%`;
 };
 export const driftWide = (drift: number | null) => drift !== null && Math.abs(drift - 1) > DRIFT_TOLERANCE;
+
+/** A placement rung as the request drawer words its placed phrase. */
+export const PLACEMENT_RUNG_LABEL: Record<Placement['rung'], string> = { content: 'by its messages', static: 'by its static prefix', with_main: 'with the main conversation' };
+/** A rung the console has no label for reads as the router sent it. */
+export const placementRungLabel = (rung: string): string => (own(PLACEMENT_RUNG_LABEL, rung) ? PLACEMENT_RUNG_LABEL[rung as Placement['rung']] : rung);
+
+/**
+ * A placements row's figures in column order: placements, hits, hit share, tokens read, tokens promised. A rung
+ * with no placement has no share, and a placement beside the main conversation names no entry and so no size.
+ */
+export const placementCells = (row: PlacementRow): string[] => [
+  fmtInt(row.placements),
+  fmtInt(row.hits),
+  row.hitShare === null ? '-' : fmtPct(row.hitShare),
+  fmtCompact(row.cacheReadTokens),
+  row.rung === 'with_main' ? '-' : fmtCompact(row.promisedTokens),
+];

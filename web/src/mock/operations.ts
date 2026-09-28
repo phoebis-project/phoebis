@@ -83,9 +83,13 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
   const burnAtRoll = ago(rng.int(2, 40) * MINUTE);
   const lastInputRoll = rng.int(500, 20_000);
   const lastRefreshRoll = ago(rng.int(2, 40) * MINUTE);
+  // The ledger names a session's fork from its requests, so a session it never saw records none.
+  const fork = REQUESTS.find((r) => r.sessionId === sessionId && r.forkedFrom !== null);
   return {
     ...SESSION_SAMPLE,
     sessionId,
+    forkedFrom: fork?.forkedFrom ?? null,
+    forkDepth: fork?.forkDepth ?? null,
     keyId: spec.keyId,
     accountId: spec.accountId,
     model: spec.model,
@@ -128,6 +132,8 @@ SESSIONS.push({
   companionSince: null,
   createdAt: null,
   epoch: null,
+  forkDepth: null,
+  forkedFrom: null,
   historical: false,
   keepalive: { lastGuard: null, netMeterTokens: null, netUsd: null, nextProbeAt: null, state: null },
   keyGeneration: Date.parse(keyById.get('laptop')!.createdAt),

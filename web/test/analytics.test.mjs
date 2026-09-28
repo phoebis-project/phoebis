@@ -69,3 +69,13 @@ test('a fitted scale reads its drift as a signed share, and past 20% either way 
   assert.deepEqual([d.driftLabel(1.25), d.driftLabel(0.5), d.driftLabel(1)], ['+25.0%', '-50.0%', '0.0%']);
   assert.deepEqual([d.driftWide(1.2), d.driftWide(1.21), d.driftWide(0.79), d.driftWide(0.8), d.driftWide(null)], [false, true, true, false, false]);
 });
+
+test("the placements table's hit share formats", () => {
+  const row = { cacheReadTokens: 184_000, hitShare: 2 / 3, hits: 2, placements: 3, promisedTokens: 190_500, rung: 'content' };
+  assert.deepEqual(d.placementCells(row), ['3', '2', '67%', '184K', '190.5K'], 'placements, hits, hit share, tokens read, tokens promised');
+  assert.equal(d.placementCells({ ...row, hitShare: 1, hits: 3 })[2], '100%');
+  assert.equal(d.placementCells({ ...row, hitShare: 0, hits: 0 })[2], '0%', 'a rung whose every placement missed reads zero');
+  assert.equal(d.placementCells({ ...row, hitShare: null, hits: 0, placements: 0 })[2], '-', 'a rung with no placement has no share to read');
+  assert.equal(d.placementCells({ ...row, promisedTokens: 0, rung: 'with_main' })[4], '-', 'a placement beside the main conversation promises no size');
+  assert.deepEqual(['content', 'static', 'with_main', 'by_moonlight'].map(d.placementRungLabel), ['by its messages', 'by its static prefix', 'with the main conversation', 'by_moonlight']);
+});
