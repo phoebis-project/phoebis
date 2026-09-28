@@ -12,7 +12,7 @@ use crate::state::{
     SEVEN_DAY_FABLE,
 };
 use crate::windows::window_for;
-use crate::{term, Candidate, RegistrySnapshot, ResolveError};
+use crate::{term, Candidate, KeyRefusal, RegistrySnapshot, ResolveError};
 
 /// Who sent the request: `claude-code/*` is Claude Code, everything else is not.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -272,6 +272,14 @@ pub enum Exhaustion {
     Untimed,
 }
 
+/// Why the current registry refuses a request admitted under an older one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Refusal {
+    /// The registry no longer holds the key the request was admitted on, or holds another key under its id.
+    Key(KeyRefusal),
+    Resolve(ResolveError),
+}
+
 // Boxing the selection would put an allocation on the path every request takes, to shrink a value that is
 // built once per selection and moved once into the answering channel.
 #[allow(clippy::large_enum_variant)]
@@ -283,7 +291,7 @@ pub enum SelectResult {
         account_id: String,
         hold: HoldFacts,
     },
-    Refused(ResolveError),
+    Refused(Refusal),
     Selected(Selection),
 }
 

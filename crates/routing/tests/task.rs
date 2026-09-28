@@ -9,9 +9,9 @@ use phoebis_profile::{
 };
 use phoebis_routing::{
     resolve, sample_from_usage, spawn, AffinityReport, BandWeight, BurnRates, ClientClass,
-    Exhaustion, MemberSpend, PinRef, PinUsage, Presented, RateTable, Rates, ReloadError,
-    Report, ResolveError, RouterConfig, RoutingState, SelectRequest, SelectResult,
-    UtilizationSample, WindowReading, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
+    Exhaustion, KeyRefusal, MemberSpend, PinRef, PinUsage, Presented, RateTable, Rates,
+    Refusal, ReloadError, Report, ResolveError, RouterConfig, RoutingState, SelectRequest,
+    SelectResult, UtilizationSample, WindowReading, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
 };
 use phoebis_store::{
     key_prefix, AccountKind, AccountRow, AccountState, Affinity, AffinitySource, ApiKeyRow,
@@ -300,14 +300,17 @@ async fn a_request_admitted_under_an_older_registry_is_re_resolved_against_the_c
     let answer = handle.select(stale(admitted.clone())).await.unwrap();
     assert!(matches!(
         answer.result,
-        SelectResult::Refused(ResolveError::ModelNotAllowed)
+        SelectResult::Refused(Refusal::Resolve(ResolveError::ModelNotAllowed))
     ));
     store.revoke_api_key("k", 2, "test").unwrap();
     handle.reload().await.unwrap();
     let answer = handle.select(stale(admitted)).await.unwrap();
     assert!(
-        matches!(answer.result, SelectResult::Exhausted(Exhaustion::Untimed)),
-        "a key revoked after admission selects nothing"
+        matches!(
+            answer.result,
+            SelectResult::Refused(Refusal::Key(KeyRefusal::Revoked))
+        ),
+        "a key revoked after admission is refused as admission refuses it"
     );
 }
 
@@ -331,13 +334,40 @@ async fn a_request_admitted_under_a_key_that_was_replaced_under_its_id_is_refuse
     );
     let answer = handle.select(stale(admitted)).await.unwrap();
     assert!(
-        matches!(answer.result, SelectResult::Exhausted(Exhaustion::Untimed)),
+        matches!(
+            answer.result,
+            SelectResult::Refused(Refusal::Key(KeyRefusal::Replaced))
+        ),
         "refused as a refused id is, never resolved against the replacement: {:?}",
         answer.result
     );
     assert!(
         handle.pins().await.unwrap().is_empty(),
         "no pin was written under the replacement key"
+    );
+}
+
+#[tokio::test]
+async fn a_request_admitted_under_a_key_deleted_before_selection_is_refused_as_unknown() {
+    let store = seeded(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
+    let admitted = request(&handle, Some("s1"), 1_000);
+    // The key is deleted and never recreated: the id the request was admitted on names nothing.
+    store.delete_api_key("k", "test").unwrap();
+    handle.reload().await.unwrap();
+    let answer = handle.select(stale(admitted)).await.unwrap();
+    assert!(
+        matches!(
+            answer.result,
+            SelectResult::Refused(Refusal::Key(KeyRefusal::Unknown))
+        ),
+        "the key the request was admitted on is gone: {:?}",
+        answer.result
+    );
+    assert!(
+        handle.pins().await.unwrap().is_empty(),
+        "no pin was written under the deleted key"
     );
 }
 

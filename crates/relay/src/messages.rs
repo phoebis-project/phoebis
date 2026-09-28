@@ -21,8 +21,9 @@ use phoebis_bus::{
 use phoebis_oauth::{AccessToken, AcquireError, Clock, CredentialManager};
 use phoebis_routing::{
     resolve, AccountTicket, ClientClass, EvidenceSource, Exhaustion, HoldFacts,
-    KeyPermit, KeyRefusal, OverageEvidence, PinRef, Presented, Report, ResolveError,
-    RouterHandle, SelectRequest, SelectResult, Selection, SelectionTrace, MODEL_REJECTED_REASON,
+    KeyPermit, KeyRefusal, OverageEvidence, PinRef, Presented, Refusal, Report,
+    ResolveError, RouterHandle, SelectRequest, SelectResult, Selection, SelectionTrace,
+    MODEL_REJECTED_REASON,
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, MemoryStore,
@@ -546,6 +547,9 @@ fn outcome_of(outcome: &RelayOutcome) -> Outcome {
         // selection) or after the last one (the budget's end): the account that answered it is
         // conclusive either way, not a transport or upstream failure.
         Some("model_rejected") => Outcome::Rejected,
+        // A key refusal is conclusive whether it is caught at admission or at the reselect after an attempt,
+        // so the ledger row reads rejected rather than upstream_error.
+        Some("auth_unknown") => Outcome::Rejected,
         Some(_) if outcome.attempt == 0 => Outcome::Rejected,
         Some(_) => Outcome::Failed,
         None if outcome.upstream_status < 400 => Outcome::Succeeded,
@@ -750,7 +754,7 @@ impl Relay {
                         )
                         .await;
                     return self
-                        .refused(&trace, key_refusal(&refusal), None, None, None)
+                        .refused(&trace, 0, key_refusal(&refusal), None, None, None)
                         .await;
                 }
                 // A probe authenticates by key id, never by secret, so it never presents a retired one.
@@ -774,7 +778,7 @@ impl Relay {
                         )
                         .await;
                     return self
-                        .refused(&trace, key_refusal(&refusal), None, None, None)
+                        .refused(&trace, 0, key_refusal(&refusal), None, None, None)
                         .await;
                 }
             },
@@ -799,7 +803,7 @@ impl Relay {
                             )
                             .await;
                         return self
-                            .refused(&trace, auth_failure(&error), None, None, None)
+                            .refused(&trace, 0, auth_failure(&error), None, None, None)
                             .await;
                     }
                 };
@@ -824,7 +828,7 @@ impl Relay {
                             )
                             .await;
                         return self
-                            .refused(&trace, key_refusal(&refusal), None, None, None)
+                            .refused(&trace, 0, key_refusal(&refusal), None, None, None)
                             .await;
                     }
                 }
@@ -884,6 +888,7 @@ impl Relay {
                 return self
                     .refused(
                         &trace,
+                        0,
                         relay_failure(&error),
                         Some(&key),
                         None,
@@ -925,6 +930,7 @@ impl Relay {
             return self
                 .refused(
                     &trace,
+                    0,
                     relay_failure(&error),
                     Some(&key),
                     None,
@@ -970,6 +976,7 @@ impl Relay {
                 return self
                     .refused(
                         &trace,
+                        0,
                         key_in_flight_cap(seconds),
                         Some(&key),
                         None,
@@ -1000,6 +1007,7 @@ impl Relay {
                 return self
                     .refused(
                         &trace,
+                        0,
                         relay_failure(&error),
                         Some(&key),
                         None,
@@ -1056,6 +1064,7 @@ impl Relay {
                 return self
                     .refused(
                         &trace,
+                        0,
                         MODEL_NOT_ALLOWED,
                         Some(&key),
                         Some(&identity),
@@ -1208,6 +1217,7 @@ impl Relay {
                 return self
                     .refused(
                         &trace,
+                        attempt,
                         UPSTREAM_UNREACHABLE,
                         Some(&key),
                         Some(&identity),
@@ -1264,6 +1274,7 @@ impl Relay {
                     return self
                         .refused(
                             &trace,
+                            attempt,
                             ROUTER_UNAVAILABLE,
                             Some(&key),
                             Some(&identity),
@@ -1274,12 +1285,29 @@ impl Relay {
             };
             let selection = match answer.result {
                 SelectResult::Selected(selection) => selection,
-                // The registry moved after admission and no longer admits this request; the answer is the one the
-                // current registry would have given at admission.
-                SelectResult::Refused(ResolveError::ModelNotAllowed) => {
+                // The key the request was admitted on left the registry, or another key took its id, before the
+                // selection ran: the answer is the one admission gives a key the registry does not hold, so a
+                // request and a probe agree.
+                SelectResult::Refused(Refusal::Key(refusal)) => {
+                    tracing::debug!(%refusal, key = %key.id, "a request's key was refused after admission");
                     return self
                         .refused(
                             &trace,
+                            attempt,
+                            key_refusal(&refusal),
+                            Some(&key),
+                            Some(&identity),
+                            admitted.client_version.as_deref(),
+                        )
+                        .await;
+                }
+                // The registry moved after admission and no longer admits this request; the answer is the one the
+                // current registry would have given at admission.
+                SelectResult::Refused(Refusal::Resolve(ResolveError::ModelNotAllowed)) => {
+                    return self
+                        .refused(
+                            &trace,
+                            attempt,
                             MODEL_NOT_ALLOWED,
                             Some(&key),
                             Some(&identity),
@@ -1594,6 +1622,7 @@ impl Relay {
                 return Leg::Respond(
                     self.refused(
                         admitted.trace,
+                        *attempt,
                         relay_failure(&error),
                         Some(admitted.key),
                         Some(admitted.identity),
@@ -1869,6 +1898,7 @@ impl Relay {
                             return Leg::Respond(
                                 self.refused(
                                     admitted.trace,
+                                    *attempt,
                                     relay_failure(&error),
                                     Some(admitted.key),
                                     Some(admitted.identity),
@@ -2547,6 +2577,7 @@ impl Relay {
     async fn refused(
         &self,
         trace: &Trace,
+        attempt: u8,
         failure: Failure,
         key: Option<&ApiKeyRow>,
         identity: Option<&RequestIdentity>,
@@ -2558,7 +2589,7 @@ impl Relay {
             identity,
             "",
             0,
-            0,
+            attempt,
             false,
             None,
             client_version.map(str::to_string),

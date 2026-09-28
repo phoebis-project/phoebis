@@ -536,9 +536,10 @@ and the message is `every account in this pool is rate limited`. With every acco
 `phoebis` answers `429` with error code `accounts_at_cap` and a `Retry-After` of at most 19 seconds
 ([in-flight caps](#in-flight-caps)), since the pool frees on its own. For anything only an operator can clear, such as a
 pool whose accounts are all paused, `phoebis` answers `503` with error code `accounts_unavailable`, message
-`no account in this pool can serve requests`, and no `retry-after`. A request admitted under a key that was deleted and
-created again before it was routed is answered the same way, since the registry it was admitted against no longer holds
-its key. A pool whose every member has reached its spend budget answers `429` with the `overage` claim, the same one an
+`no account in this pool can serve requests`, and no `retry-after`. A request admitted under a key that was deleted, or
+deleted and created again under its id, before it was routed is refused with the `401` admission answers a key the
+registry does not hold (see [What the proxy accepts](client.md#what-the-proxy-accepts)). A pool whose every member has
+reached its spend budget answers `429` with the `overage` claim, the same one an
 account in overage carries (see [Pools](#pools)).
 
 A model every account in the pool has rejected within the rejection window answers `404` with error code

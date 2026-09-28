@@ -13,7 +13,7 @@ pub enum Presented {
     Retired,
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum KeyRefusal {
     #[error("the key is disabled")]
     Disabled,

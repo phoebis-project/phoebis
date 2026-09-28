@@ -21,8 +21,8 @@ pub use phoebis_store::canonical_id as canonical_model;
 pub use resolve::{resolve, Candidate, ResolveError};
 pub use select::{
     effective_warm, release_reasons, select, warmth_of, ClientClass, CohortHold, Exhaustion,
-    HoldFacts, MigrateReason, Placement, SelectRequest, SelectResult,
-    Selection, SelectionTrace, Skipped, Warmth, MIGRATE_BAND, MODEL_REJECTED_REASON,
+    HoldFacts, MigrateReason, Placement, Refusal, SelectRequest,
+    SelectResult, Selection, SelectionTrace, Skipped, Warmth, MIGRATE_BAND, MODEL_REJECTED_REASON,
     REFRESHING_CLASSES,
 };
 pub use snapshot::{KeyRefusal, Presented, RegistrySnapshot};

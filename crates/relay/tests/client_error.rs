@@ -6,6 +6,8 @@ mod common;
 
 use std::time::Duration;
 
+use phoebis_bus::{Bus, Event, Outcome};
+use phoebis_ledger::{Assembler, Record};
 use phoebis_routing::{
     resolve, ClientClass, RouterEvent, SelectRequest, SelectResult, SelectionTrace,
 };
@@ -520,4 +522,107 @@ async fn a_fresh_pin_renewed_in_the_same_millisecond_survives_the_first_requests
     up.release();
     drain(second).await;
     up.shutdown().await;
+}
+
+/// A gated credential rule holds the account's first attempt while the registry moves under the request: the
+/// store write and the reload bump the revision the router task compares against, so releasing the gate sends
+/// the reselect down the stale path, which answers the same 401 admission gives a key the registry does not hold.
+async fn a_stale_keys_refusal_answers_admissions_401(recreated: bool) {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    up.add_credential_rule(
+        A,
+        "/v1/messages",
+        Respond::Gated(Box::new(json_429_unified(4_600, "five_hour"))),
+    );
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test");
+    let h = harness_with_bus(&up, &[oauth("a", A, 0)], PoolSpec::default(), bus).await;
+    let app = h.app.clone();
+    let pending =
+        tokio::spawn(async move { app.oneshot(request_for(KEY, MODEL, "s1")).await.unwrap() });
+    wait_for(Duration::from_secs(2), || {
+        credentials_seen(&up).contains(&A.to_string()).then_some(())
+    })
+    .await;
+    if recreated {
+        let mut again = h.store.api_key("desktop").unwrap().unwrap();
+        again.secret_digest = h.store.api_key_digest("phoebis-reissued").to_vec();
+        h.store.delete_api_key("desktop", "test").unwrap();
+        h.store.insert_api_key(&again, "test").unwrap();
+    } else {
+        h.store.delete_api_key("desktop", "test").unwrap();
+    }
+    h.router.reload().await.unwrap();
+    up.release();
+    let resp = pending.await.unwrap();
+    assert_eq!(resp.status(), 401);
+    assert_eq!(resp.headers()["x-phoebis-error-code"], "auth_unknown");
+    let mut body: serde_json::Value =
+        serde_json::from_slice(&resp.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    let request_id = body["request_id"].as_str().unwrap().to_string();
+    body.as_object_mut().unwrap().remove("request_id");
+
+    // The same 401 a request with a key the registry never held gets at admission, on the same harness.
+    let unknown = h
+        .app
+        .clone()
+        .oneshot(request_for("phoebis-bogus", MODEL, "s2"))
+        .await
+        .unwrap();
+    assert_eq!(unknown.status(), 401);
+    let mut unknown_body: serde_json::Value =
+        serde_json::from_slice(&unknown.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    unknown_body.as_object_mut().unwrap().remove("request_id");
+    assert_eq!(
+        body, unknown_body,
+        "the stale path answers the same 401 admission gives an unknown key"
+    );
+
+    let events = drain_until_complete(&mut sub).await;
+    let complete = events
+        .iter()
+        .find_map(|e| match e {
+            Event::RequestComplete(c) => Some(c.clone()),
+            _ => None,
+        })
+        .expect("a completion");
+    assert_eq!(complete.error_code.as_deref(), Some("auth_unknown"));
+    assert_eq!(complete.attempt, 1);
+    assert_eq!(complete.outcome, Outcome::Rejected);
+    assert_eq!(complete.request_id, request_id);
+
+    let mut assembler = Assembler::new(std::sync::Arc::new(|| 0));
+    let records: Vec<Record> = events
+        .into_iter()
+        .flat_map(|e| assembler.observe(e))
+        .collect();
+    let (request, attempts) = records
+        .iter()
+        .find_map(|r| match r {
+            Record::Request {
+                request, attempts, ..
+            } => Some((request, attempts)),
+            _ => None,
+        })
+        .expect("the request lands a ledger row");
+    assert_eq!(request.outcome, "rejected");
+    assert_eq!(attempts.len(), 1);
+    assert!(attempts[0].finished_at.is_some());
+
+    assert_eq!(up.requests().len(), 1, "no sibling was attempted");
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_request_whose_key_was_replaced_before_selection_answers_admissions_401() {
+    a_stale_keys_refusal_answers_admissions_401(true).await;
+}
+
+#[tokio::test]
+async fn a_request_whose_key_was_deleted_before_selection_answers_admissions_401() {
+    a_stale_keys_refusal_answers_admissions_401(false).await;
 }

@@ -138,11 +138,13 @@ A well-formed but unrecognized key is refused too, again in an Anthropic-shaped 
 - the key has expired
 - the key is disabled
 - the key is not in the registry
-- the key was replaced under its id (a keepalive probe whose key was deleted and created again under the same
-  id)
+- the key was replaced under its id
 - the key was revoked
 - the key's pool does not exist
 - the key's pool is disabled
+
+The same answer meets a request or a keepalive probe whose key was deleted, or deleted and created again under its
+id, between admission and routing.
 
 A request body whose top-level object carries `model`, `metadata` or `stream` more than once, raw or escaped, is
 refused before anything reaches the upstream: `400` with the error code `body_shape` and a message naming the

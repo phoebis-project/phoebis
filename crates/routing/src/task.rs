@@ -14,15 +14,13 @@ use tokio_util::sync::CancellationToken;
 use crate::affinity::{
     AffinityMap, AffinityReport, ConversationLookup, ConversationMatch, ConversationQuery,
 };
-use crate::select::{
-    release_reasons, select, Exhaustion, MigrateReason, SelectRequest, SelectResult,
-};
+use crate::select::{release_reasons, select, MigrateReason, Refusal, SelectRequest, SelectResult};
 use crate::state::{
     burn_folded, AccountTicket, EvidenceSource, InFlight, MemberSpend, OverageEvidence, PinRef,
     PinUsage, RateTable, Rates, RoutingState, StateWrite, UtilizationSample, WindowReading,
     FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
 };
-use crate::{resolve, Presented, RegistrySnapshot};
+use crate::{resolve, KeyRefusal, Presented, RegistrySnapshot};
 
 const COMMANDS: usize = 4_096;
 
@@ -810,19 +808,22 @@ impl Task {
                     // The registry moved after admission: the key, its policy, the pool, and the candidates are
                     // re-derived from what is current, and a request the current registry would refuse is refused.
                     let now = (self.clock)();
-                    let Ok(key) = snapshot.authenticate_id(&request.key_id, now) else {
-                        let _ = reply.send(SelectAnswer {
-                            result: SelectResult::Exhausted(Exhaustion::Untimed),
-                            cancel: CancellationToken::new(),
-                            ticket: None,
-                        });
-                        return;
+                    let key = match snapshot.authenticate_id(&request.key_id, now) {
+                        Ok(key) => key,
+                        Err(refusal) => {
+                            let _ = reply.send(SelectAnswer {
+                                result: SelectResult::Refused(Refusal::Key(refusal)),
+                                cancel: CancellationToken::new(),
+                                ticket: None,
+                            });
+                            return;
+                        }
                     };
                     // The id is reusable, so the lifetime is the identity: a key created again under the id
                     // since admission is another key, and the request is refused as a refused id is.
                     if key.created_at != request.key_generation {
                         let _ = reply.send(SelectAnswer {
-                            result: SelectResult::Exhausted(Exhaustion::Untimed),
+                            result: SelectResult::Refused(Refusal::Key(KeyRefusal::Replaced)),
                             cancel: CancellationToken::new(),
                             ticket: None,
                         });
@@ -844,7 +845,7 @@ impl Task {
                         Ok(candidates) => request.candidates = candidates,
                         Err(refusal) => {
                             let _ = reply.send(SelectAnswer {
-                                result: SelectResult::Refused(refusal),
+                                result: SelectResult::Refused(Refusal::Resolve(refusal)),
                                 cancel: CancellationToken::new(),
                                 ticket: None,
                             });
