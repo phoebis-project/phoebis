@@ -57,6 +57,9 @@ pub(crate) struct ProbeResult {
     pub in_overage: bool,
     /// The `Retry-After` header's seconds, on a pool-at-its-cap 429; `None` otherwise.
     pub retry_after_secs: Option<u64>,
+    /// The relay's `RelayOutcome::obstacle`: `budget` for a probe the selector refused on the pinned member's
+    /// spend.
+    pub obstacle: Option<&'static str>,
 }
 
 pub(crate) enum Exchange {
@@ -201,6 +204,7 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
             cache_ttl_ms: None,
             in_overage: false,
             retry_after_secs: None,
+            obstacle: None,
         }),
         Ok(request) => {
             let relay = engine.parts.relay.clone();
@@ -227,6 +231,7 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
                     cache_ttl_ms: outcome.as_ref().and_then(|o| o.cache_ttl_ms),
                     in_overage: served_under.is_some_and(|s| s.in_overage),
                     retry_after_secs,
+                    obstacle: outcome.as_ref().and_then(|o| o.obstacle),
                 }
             };
             // The whole exchange, the head and the body, sits in one arm: a cancellation or the deadline ends
@@ -475,7 +480,7 @@ impl Inner {
         let cold_limit = agent.policy.cold_probe_limit;
         let result = match exchange {
             Exchange::Cancelled | Exchange::TimedOut => {
-                self.probe_error(key, agent_id, 0, None, None, false, now);
+                self.probe_error(key, agent_id, 0, None, None, None, false, now);
                 return Applied::Landed { covered: false };
             }
             Exchange::Answered(result) => result,
@@ -487,6 +492,7 @@ impl Inner {
                 agent_id,
                 result.status,
                 result.error_code.as_deref(),
+                result.obstacle,
                 result.retry_after_secs,
                 exhausted,
                 now,
@@ -655,6 +661,7 @@ impl Inner {
         agent_id: &str,
         status: u16,
         error_code: Option<&str>,
+        obstacle: Option<&str>,
         retry_after_secs: Option<u64>,
         exhausted: bool,
         now: i64,
@@ -668,6 +675,14 @@ impl Inner {
                     .saturating_mul(1_000)
             });
             self.retry(key, agent_id, Reason::RetryableProbeError, now, delay_ms);
+            return;
+        }
+        if status == 429 && obstacle == Some("budget") {
+            // The pinned member reached its spend budget between the gate's read and the selection. A pause
+            // would outlive the budget (nothing but a real request undoes one); the reason alone leaves the
+            // schedule armed, so the gate re-reads the spend on the next poll and releases the probe itself
+            // when the period ends or the budget is raised.
+            self.set_reason(key, agent_id, Reason::Budget);
             return;
         }
         let reason = match status {
@@ -794,6 +809,7 @@ mod tests {
             "main",
             429,
             Some("accounts_at_cap"),
+            None,
             Some(3),
             false,
             1_000,
@@ -811,7 +827,7 @@ mod tests {
     #[test]
     fn every_other_429_still_pauses_as_probe_quota_exhausted() {
         let (mut inner, key) = one_agent_inner();
-        inner.probe_error(&key, "main", 429, None, None, false, 1_000);
+        inner.probe_error(&key, "main", 429, None, None, None, false, 1_000);
         let agent = &inner.sessions[&key].agents["main"];
         assert!(agent.paused);
         assert_eq!(agent.reason, Reason::ProbeQuotaExhausted);
@@ -825,6 +841,7 @@ mod tests {
             "main",
             429,
             Some("accounts_at_cap"),
+            None,
             None,
             false,
             1_000,

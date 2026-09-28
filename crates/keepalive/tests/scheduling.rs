@@ -5,10 +5,10 @@ mod common;
 use phoebis_keepalive::{Event, KeepaliveLimits, KeepalivePolicy, Reason};
 use phoebis_ledger::{hour_of, read_rollups};
 use phoebis_routing::{
-    resolve, ClientClass, EvidenceSource, OverageEvidence, PinRef, Report, SelectRequest,
-    SelectResult,
+    resolve, ClientClass, EvidenceSource, MemberSpend, OverageEvidence, PinRef, Report,
+    SelectRequest, SelectResult,
 };
-use phoebis_store::{AccountState, CooldownRow, OveragePolicy};
+use phoebis_store::{AccountState, BudgetPeriod, CooldownRow, MemberWrite, OveragePolicy};
 use common::*;
 
 async fn armed(spec: RigSpec) -> Rig {
@@ -317,6 +317,209 @@ async fn after_the_named_reset_passes_the_probe_is_no_longer_held_for_overage_an
         "and a selection through the same handle reads the evidence as standing too; only a subscription \
          account's overage moves a pin, so the api_key pin renews"
     );
+}
+
+/// `a`'s spend row for the current period, at whatever level a case wants to cross or clear the budget with.
+fn budget_row(usd: f64, now: i64) -> MemberSpend {
+    MemberSpend {
+        pool_id: "main".into(),
+        account_id: "a".into(),
+        period: BudgetPeriod::Month,
+        period_start: 0,
+        period_end: now + 1_000_000,
+        spent_usd: usd,
+        observed_at: now,
+    }
+}
+
+/// `a` at a budget of 5.0 beside `b`, no budget: the shorthand both budget-hold tests below seed the pool with.
+async fn with_budget_member(r: &Rig) {
+    r.h.store
+        .set_pool_members(
+            "main",
+            &[
+                MemberWrite {
+                    account_id: "a".into(),
+                    priority: 0,
+                    budget_usd: Some(5.0),
+                    budget_period: BudgetPeriod::Month,
+                },
+                MemberWrite {
+                    account_id: "b".into(),
+                    priority: 1,
+                    budget_usd: None,
+                    budget_period: BudgetPeriod::Month,
+                },
+            ],
+            "test",
+        )
+        .unwrap();
+    r.h.router.reload().await.unwrap();
+}
+
+/// Whether the router's own pin for `session`/`main` still names `a`.
+async fn named_a(r: &Rig) -> bool {
+    r.h.router
+        .pins()
+        .await
+        .unwrap()
+        .iter()
+        .any(|p| p.session_id == "session" && p.account_id == "a")
+}
+
+#[tokio::test]
+async fn a_probe_pinned_to_a_member_at_its_budget_holds_until_the_budget_no_longer_refuses() {
+    let mut r = armed(RigSpec::default()).await;
+    with_budget_member(&r).await;
+    r.h.router
+        .report(Report::MemberSpend(vec![budget_row(5.0, r.now())]));
+    settled(&r, |r| async move {
+        r.h.router
+            .member_spends()
+            .await
+            .unwrap()
+            .iter()
+            .any(|row| row.account_id == "a" && row.spent_usd >= 5.0)
+    })
+    .await;
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(
+        (r.status("main").probes, r.status("main").reason),
+        (0, Reason::Budget)
+    );
+    assert_eq!(r.up.requests().len(), 1, "nothing went upstream");
+    r.h.router
+        .report(Report::MemberSpend(vec![budget_row(2.0, r.now())]));
+    settled(&r, |r| async move {
+        r.h.router
+            .member_spends()
+            .await
+            .unwrap()
+            .iter()
+            .any(|row| row.account_id == "a" && row.spent_usd < 5.0)
+    })
+    .await;
+    r.step().await;
+    assert_eq!(
+        (r.status("main").probes, r.status("main").reason),
+        (1, Reason::Scheduled),
+        "the probe ran once the budget no longer refused"
+    );
+}
+
+#[tokio::test]
+async fn a_budget_crossed_between_the_gate_and_the_selection_holds_the_probe_and_then_releases_it()
+{
+    let mut r = rig(RigSpec::default()).await;
+    with_budget_member(&r).await;
+    // Arms the recipe on the engine's own side, with no request against the fake upstream: the same synthetic
+    // path `the_due_time_follows_the_pools_lead_and_jitter` uses for a session the test builds by hand.
+    r.engine.observe(r.observed("req", "main", BODY));
+    r.engine.observe(r.selected("req", "a"));
+    r.engine.observe(r.complete(
+        "req",
+        phoebis_bus::Outcome::Succeeded,
+        Some(phoebis_bus::Usage {
+            cache_write_5m_tokens: Some(2_000),
+            ..Default::default()
+        }),
+    ));
+    // Pins the session on `a` in the router's own state, in process and upstream-free, so the probe-only budget
+    // rule (which only ever answers a request that already has a pin) has one to find.
+    let snapshot = r.h.router.snapshot();
+    let key = snapshot.key("desktop").unwrap();
+    let candidates = resolve(
+        &snapshot,
+        key,
+        "claude-sonnet-4-5",
+        "claude-sonnet-4-5",
+    )
+    .unwrap();
+    r.h.router
+        .select(SelectRequest {
+            key_id: "desktop".into(),
+            key_generation: key.created_at,
+            agent_id: "main".into(),
+            session_id: Some("session".into()),
+            canonical_model: "claude-sonnet-4-5".into(),
+            candidates,
+            portable: true,
+            attempted: Vec::new(),
+            now: r.now(),
+            fallback_ms: 60_000,
+            revision: snapshot.revision,
+            probe: false,
+            count: false,
+            request_class: None,
+            context_compacted: false,
+            static_hash: None,
+            boundaries: Vec::new(),
+            client: ClientClass::ClaudeCode,
+            static_boundaries: Vec::new(),
+            marker: false,
+            parent_agent_id: None,
+            holds: Vec::new(),
+        })
+        .await
+        .unwrap();
+    r.h.router
+        .report(Report::MemberSpend(vec![budget_row(2.0, r.now())]));
+    settled(&r, |r| async move {
+        r.h.router
+            .member_spends()
+            .await
+            .unwrap()
+            .iter()
+            .any(|row| row.account_id == "a" && row.spent_usd < 5.0)
+    })
+    .await;
+    r.advance(270_000);
+    // Drives the tick itself rather than `r.step()`: the gate passes on the view read here, and the job it
+    // spawns has not run its own `select` when this returns, on the current-thread runtime the test builds.
+    r.engine.step().await;
+    // The router's one command channel queues this report ahead of the spawned job's own `select`, so the
+    // selection that follows reads the crossed spend.
+    r.h.router
+        .report(Report::MemberSpend(vec![budget_row(5.0, r.now())]));
+    r.engine.wait_idle().await;
+    r.pump(None).await;
+    assert!(
+        r.up.requests().is_empty(),
+        "the selection read the crossed spend, so the probe never reached the upstream"
+    );
+    let status = r.status("main");
+    assert_eq!(
+        (status.probes, status.in_flight, status.reason),
+        (1, false, Reason::Budget)
+    );
+    assert!(named_a(&r).await, "the pin still names a");
+    r.step().await;
+    assert_eq!(
+        r.status("main").reason,
+        Reason::Budget,
+        "the gate holds on the view again with nothing changed"
+    );
+    assert!(r.up.requests().is_empty());
+    r.h.router
+        .report(Report::MemberSpend(vec![budget_row(2.0, r.now())]));
+    settled(&r, |r| async move {
+        r.h.router
+            .member_spends()
+            .await
+            .unwrap()
+            .iter()
+            .any(|row| row.account_id == "a" && row.spent_usd < 5.0)
+    })
+    .await;
+    r.step().await;
+    assert_eq!(r.status("main").reason, Reason::Scheduled);
+    assert_eq!(
+        r.up.requests().len(),
+        1,
+        "the sole upstream request is the probe: this test sends no real one"
+    );
+    assert!(named_a(&r).await, "the pin still names a");
 }
 
 #[tokio::test]

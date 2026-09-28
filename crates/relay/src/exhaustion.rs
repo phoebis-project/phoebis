@@ -29,8 +29,12 @@ pub fn exhaustion_response(exhaustion: &Exhaustion, now: i64, request_id: &str) 
             let seconds = deadline.saturating_sub(now).max(1_000).saturating_add(999) / 1_000;
             // The client treats an unknown claim as no claim and then never arms its continue, so the one
             // window name it cannot know is rendered as the five-hour window; the deadline is what matters.
+            // A probe's "budget" window is the selector's word to the keepalive, never a claim of its own, so
+            // the caller sees the same overage claim a request at a budget-refused pool gets.
             let claim = if window == "retry_after" {
                 "five_hour"
+            } else if window == "budget" {
+                "overage"
             } else {
                 window.as_str()
             };

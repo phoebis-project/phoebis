@@ -2488,6 +2488,81 @@ fn a_pin_on_a_member_at_its_budget_is_released_with_reason_budget() {
 }
 
 #[test]
+fn a_probe_on_a_pin_whose_member_is_at_its_budget_answers_the_periods_end_and_moves_nothing() {
+    let s = with_member_budget(
+        &snapshot(Pool {
+            members: vec![("a", 0), ("b", 1)],
+            ..Pool::default()
+        }),
+        "a",
+        Some(5.0),
+        BudgetPeriod::Month,
+    );
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    assert_eq!(
+        picked(
+            &select(
+                &mut st,
+                &s,
+                &request(&s, Some("s1"), "claude-sonnet-5", true, &[], 1_000),
+                &mut rng(),
+            )
+            .0
+        ),
+        "a",
+        "a serves before its spend reaches the budget"
+    );
+    st.record_member_spend(
+        &s,
+        vec![MemberSpend {
+            pool_id: "p".into(),
+            account_id: "a".into(),
+            period: BudgetPeriod::Month,
+            period_start: 0,
+            period_end: 10_000,
+            spent_usd: 5.0,
+            observed_at: 2_000,
+        }],
+    );
+    let probe = SelectRequest {
+        probe: true,
+        ..request(&s, Some("s1"), "claude-sonnet-5", true, &[], 2_000)
+    };
+    let (result, writes) = select(&mut st, &s, &probe, &mut rng());
+    assert_eq!(
+        result,
+        SelectResult::Exhausted(Exhaustion::Timed {
+            deadline: 10_000,
+            window: "budget".into(),
+        }),
+        "the probe answers the budget's own deadline rather than moving to a sibling"
+    );
+    assert_eq!(
+        st.pin(&pin_key("s1")).map(|p| p.account_id.as_str()),
+        Some("a"),
+        "the pin still names a after the probe"
+    );
+    assert!(
+        writes.is_empty(),
+        "the probe moves no pin and releases nothing: {writes:?}"
+    );
+    let SelectResult::Selected(sel) = select(
+        &mut st,
+        &s,
+        &request(&s, Some("s1"), "claude-sonnet-5", true, &[], 3_000),
+        &mut rng(),
+    )
+    .0
+    else {
+        panic!("a real request still moves the pin to the sibling")
+    };
+    assert_eq!(
+        sel.account.id, "b",
+        "a real request still moves the pin off the member at its budget"
+    );
+}
+
+#[test]
 fn a_non_portable_request_bound_to_a_member_at_its_budget_answers_the_timed_exhaustion_with_the_overage_claim(
 ) {
     let s = with_member_budget(

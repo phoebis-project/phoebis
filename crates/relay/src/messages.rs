@@ -148,6 +148,9 @@ pub struct RelayOutcome {
     pub upstream_request_id: Option<String>,
     /// The TTL the relay rewrote the body to on this attempt, in milliseconds; `None` when the body went as sent.
     pub cache_ttl_ms: Option<i64>,
+    /// `budget` when the selector answered a probe pinned to a member at its spend budget, the one exhaustion the
+    /// keepalive holds on rather than pauses; `None` otherwise.
+    pub obstacle: Option<&'static str>,
 }
 
 /// Which side funded the account a request served under, on the response's extensions beside `RelayOutcome`.
@@ -1410,7 +1413,7 @@ impl Relay {
                 exhaustion_response(exhaustion, now, admitted.request_id),
             ),
         };
-        let outcome = self.outcome(
+        let mut outcome = self.outcome(
             admitted.trace,
             Some(admitted.key),
             Some(admitted.identity),
@@ -1425,6 +1428,11 @@ impl Relay {
             None,
             None,
         );
+        if let Exhaustion::Timed { window, .. } = exhaustion {
+            if window == "budget" {
+                outcome.obstacle = Some("budget");
+            }
+        }
         self.answer(
             admitted.trace,
             response,
@@ -2719,6 +2727,7 @@ impl Relay {
             head_at,
             upstream_request_id: None,
             cache_ttl_ms,
+            obstacle: None,
         }
     }
 

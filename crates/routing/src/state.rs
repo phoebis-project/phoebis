@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 
 use phoebis_store::{
     AccountKind, AccountState, AffinityRow, BudgetPeriod, CooldownRow, FitRow, OverageRow, PinKey,
-    PinRow, RekeyWrite, ResolutionRow, RoutingLoad,
+    PinRow, PoolMember, RekeyWrite, ResolutionRow, RoutingLoad,
 };
 use tokio::sync::Notify;
 use tokio::time::Instant;
@@ -1321,6 +1321,18 @@ fn member_spend_matches(
         .iter()
         .find(|m| m.account_id == account_id)
         .is_some_and(|m| m.budget_usd.is_some() && m.budget_period == period)
+}
+
+/// The period's end while the member's spend row refuses it at `now`: the row was summed over the member's
+/// configured period, its bounds hold `now`, and its spend reached the budget. `None` for a member with no
+/// budget or a row from another period.
+pub fn budget_deadline(member: &PoolMember, spend: &MemberSpend, now: i64) -> Option<i64> {
+    let budget = member.budget_usd?;
+    (spend.period == member.budget_period
+        && spend.period_start <= now
+        && now < spend.period_end
+        && spend.spent_usd >= budget)
+        .then_some(spend.period_end)
 }
 
 /// The start of the current overage stretch, on first evidence and on every replacement alike: an account out of

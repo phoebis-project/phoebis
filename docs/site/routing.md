@@ -99,9 +99,10 @@ account {id} not found`, and the pool is not created.
 An API-key member carries a spend `budget_usd`, unset by default (no cap), and a `budget_period` of `day` or `month`
 (default `month`, the UTC calendar day or month); a budget on any other member answers `400 budget_usd applies to an
 API-key member`, since a subscription member's usage is metered against its plan windows and its overage is not a
-per-member budget. A member whose spend for the current period reaches its budget is skipped until the period ends; a
-pool whose every member is at its budget answers `429` with the `overage` claim, the same one an account in overage
-carries. The spend sums the member's hourly rollups, and the rows of an active budget period outlive
+per-member budget. A member whose spend for the current period reaches its budget is skipped for requests until the
+period ends, and a keepalive probe pinned to it waits rather than moving the pin. A pool whose every member is at its
+budget answers `429` with the `overage` claim, the same one an account in overage carries. The spend sums the
+member's hourly rollups, and the rows of an active budget period outlive
 `stats.rollup_retention_days` until that period ends.
 
 `prefer_subscription` orders the set by kind (subscription accounts with plan quota, then those in overage, then
@@ -540,7 +541,8 @@ pool whose accounts are all paused, `phoebis` answers `503` with error code `acc
 deleted and created again under its id, before it was routed is refused with the `401` admission answers a key the
 registry does not hold (see [What the proxy accepts](client.md#what-the-proxy-accepts)). A pool whose every member has
 reached its spend budget answers `429` with the `overage` claim, the same one an account in overage carries (see
-[Pools](#pools)).
+[Pools](#pools)), and a probe pinned to a member at its budget is answered with that deadline whatever its siblings
+hold.
 
 A model every account in the pool has rejected within the rejection window answers `404` with error code
 `model_rejected` and the message `every account in this pool rejected the model`; the

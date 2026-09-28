@@ -14,7 +14,7 @@ use phoebis_bus::{
 use phoebis_ledger::{Ledger, Metrics, PlanFactors, PlanWindows, Pricing};
 use phoebis_oauth::Clock;
 use phoebis_relay::Relay;
-use phoebis_routing::{RegistrySnapshot, RouterHandle, FIVE_HOUR};
+use phoebis_routing::{budget_deadline, RegistrySnapshot, RouterHandle, FIVE_HOUR};
 use phoebis_store::{AccountKind, AccountState, FitRow, OveragePolicy, Store};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
@@ -108,6 +108,7 @@ reasons! {
     AwaitingCacheEvidence => "awaiting_cache_evidence",
     AwaitingRequest => "awaiting_request",
     AwaitingSelection => "awaiting_selection",
+    Budget => "budget",
     BusGap => "bus_gap",
     CapReached => "cap_reached",
     Cooled => "cooled",
@@ -1761,6 +1762,8 @@ impl Engine {
 }
 
 pub(crate) struct RouterView {
+    /// `(pool, account)` of every member whose spend row refuses it now: the gate holds a probe pinned there.
+    pub budgets: BTreeSet<(String, String)>,
     /// A retained model name to the one the router keys its rows on, for the names that differ.
     pub canonical: HashMap<String, String>,
     pub cooled: BTreeSet<(String, String)>,
@@ -1785,7 +1788,7 @@ pub(crate) enum Gate {
 }
 
 impl Engine {
-    /// Four asks of the router task per tick, whatever the number of recipes: the scheduler must not queue one
+    /// Five asks of the router task per tick, whatever the number of recipes: the scheduler must not queue one
     /// command per agent in front of selection.
     pub(crate) async fn router_view(&self, now: i64, retained_models: Vec<String>) -> RouterView {
         self.router_view_calls
@@ -1852,7 +1855,24 @@ impl Engine {
                 Some((a.id.clone(), tier))
             })
             .collect();
+        let budgets = self
+            .parts
+            .router
+            .member_spends()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|row| {
+                snapshot
+                    .members(&row.pool_id)
+                    .iter()
+                    .find(|m| m.account_id == row.account_id)
+                    .is_some_and(|member| budget_deadline(member, row, now).is_some())
+            })
+            .map(|row| (row.pool_id, row.account_id))
+            .collect();
         RouterView {
+            budgets,
             canonical,
             cooled,
             fits,
@@ -1968,6 +1988,14 @@ pub(crate) fn gate(
     }
     if view.overage.contains(&account.id) && pool.overage_policy != OveragePolicy::Allow {
         return Some(Gate::Hold(Reason::Overage));
+    }
+    // Read live on every poll like the two holds above: the period's end or a raised budget clears it on the
+    // next tick, and a real request that moves the pin clears it through the pin.
+    if view
+        .budgets
+        .contains(&(pool.id.clone(), account.id.clone()))
+    {
+        return Some(Gate::Hold(Reason::Budget));
     }
     // The cap bounds the pool the probe runs under, which the refresh above may have just moved.
     let spent = spent_today.get(&agent.pool_id).copied().unwrap_or(0.0);

@@ -8,8 +8,8 @@ use rand::{Rng, RngExt};
 
 use crate::affinity::{AffinityEntry, AffinityMap};
 use crate::state::{
-    shed_marks, warm, BurnUnit, PinRef, RoutingState, StateWrite, Tier, FIVE_HOUR, SEVEN_DAY,
-    SEVEN_DAY_FABLE,
+    budget_deadline, shed_marks, warm, BurnUnit, PinRef, RoutingState, StateWrite, Tier, FIVE_HOUR,
+    SEVEN_DAY, SEVEN_DAY_FABLE,
 };
 use crate::windows::window_for;
 use crate::{term, Candidate, KeyRefusal, RegistrySnapshot, ResolveError};
@@ -340,13 +340,8 @@ fn budget_exhausted(
         .members(pool_id)
         .iter()
         .find(|m| m.account_id == account_id)?;
-    let budget = member.budget_usd?;
     let spend = state.member_spend(pool_id, account_id)?;
-    (spend.period == member.budget_period
-        && spend.period_start <= now
-        && now < spend.period_end
-        && spend.spent_usd >= budget)
-        .then_some(spend.period_end)
+    budget_deadline(member, spend, now)
 }
 
 /// Whether an account can still serve a request whose allowance is judged in `window`: the model's own weekly
@@ -546,6 +541,27 @@ pub fn select(
         }
     }
     let in_set = |set: &[&Candidate], id: &str| set.iter().any(|c| c.account_id == id);
+
+    // A probe warms the pin it was sent for. With that member at its spend budget there is nothing to warm, and a
+    // placement on a sibling would move the session's pin onto a member no request asked for, so the probe
+    // answers the budget's deadline and moves nothing. The window names the obstacle for the relay, which
+    // renders it on the wire as the overage claim and hands the keepalive the name.
+    if request.probe {
+        if let Some(current) = pin.as_ref() {
+            if let Some((_, Obstacle::Budget { until })) = obstacles
+                .iter()
+                .find(|(id, o)| id == &current.account_id && matches!(o, Obstacle::Budget { .. }))
+            {
+                return (
+                    SelectResult::Exhausted(Exhaustion::Timed {
+                        deadline: *until,
+                        window: "budget".into(),
+                    }),
+                    writes,
+                );
+            }
+        }
+    }
 
     // Step 3: a non-portable request is bound to its pin.
     if let (false, Some(current)) = (request.portable, pin.as_ref()) {

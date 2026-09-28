@@ -12,6 +12,7 @@ use crate::engine::{Agent, AgentState, Engine, Guard, Reason, Wasted, MAIN_AGENT
 pub enum ViewReason {
     AffinityTooShort,
     AwaitingCacheEvidence,
+    Budget,
     CapReached,
     ColdProbes,
     Cooled,
@@ -38,6 +39,7 @@ pub fn view_reason(reason: Reason) -> Option<ViewReason> {
         AwaitingCacheEvidence | NoCacheEvidence | NoProbeCacheEvidence => {
             ViewReason::AwaitingCacheEvidence
         }
+        Budget => ViewReason::Budget,
         CapReached => ViewReason::CapReached,
         RepeatedColdProbe | PartialCacheCoverage => ViewReason::ColdProbes,
         Cooled => ViewReason::Cooled,

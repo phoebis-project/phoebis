@@ -15,7 +15,9 @@ limit.
 
 Shortly before the retained request's prompt cache would expire, the router sends a probe built from it: the same
 body with `max_tokens` set to `0` and `stream` set to `false`, through the same failover loop a real request
-takes. The probe follows the session's pin, renews it, and migrates to another account on a 429.
+takes. The probe follows the session's pin, renews it, and migrates to another account on a 429. A probe whose pinned
+member is at its spend budget is not sent, and one that reaches the selector anyway is answered with the budget's
+deadline rather than placed on a sibling, so a probe never moves a session's pin on that account.
 
 A probe costs a cache read at list price. The ledger credits the gross saving a later kept-warm request earns
 against that cost, per pool and per hour, and `GET /admin/keepalive/overview` reports the net of the two, which
@@ -183,7 +185,7 @@ over the cache read price: 50 for `claude-fable-5-1`, 12.5 for the other three.
 ## Recipe states
 
 A recipe is `armed`, its probe scheduled or arming from the first stream event of the request in flight;
-`probing`, with a probe in flight; or `held`, with no probe scheduled and one of seventeen reasons attached.
+`probing`, with a probe in flight; or `held`, with no probe scheduled and one of eighteen reasons attached.
 
 ### The guard field
 
@@ -198,6 +200,7 @@ probe that made its net negative, not a contradiction.
 | --- | --- | --- |
 | `affinity_too_short` | affinity too short | The pool's affinity expires before the cache this probe would warm. |
 | `awaiting_cache_evidence` | awaiting cache evidence | The request's stream has not yet reported cache usage. |
+| `budget` | at budget | The pinned member is at its spend budget; the probe waits for the period to end or a raise. |
 | `cap_reached` | cap reached | The pool spent its daily probe cap, or a subscription account its 5-hour window share. |
 | `cold_probes` | paused: cold probes | Repeated cache-miss probes passed the pool's cold probe limit. |
 | `cooled` | cooled down | The pinned account is under a cooldown; the probe waits for it to end. |
