@@ -35,7 +35,7 @@ const SYNC = {
   accounts: { decode: (b) => b.accounts.map(d.decodeAccount), mock: (api) => api.listAccounts() },
   alert_deliveries: { decode: (b) => b.deliveries.map(d.decodeDelivery), mock: async (api) => { for (const e of await api.listAlertEvents()) { const rows = await api.listAlertDeliveries(e.id); if (rows.length) return rows; } throw new Error('no mock alert event carries a delivery'); } },
   alert_events: { decode: (b) => b.events.map(d.decodeAlertEvent), mock: (api) => api.listAlertEvents() },
-  alert_lifecycle: { decode: (b) => b.deliveries.map(d.decodeLifecycleDelivery), mock: (api) => api.listLifecycleDeliveries() },
+  alert_lifecycle: { decode: (b) => d.decodeLifecyclePage(b), mock: (api) => api.listLifecycleDeliveries() },
   alert_rules: { decode: (b) => b.rules.map(d.decodeAlertRule), mock: (api) => api.listAlertRules() },
   analytics_accounts: { decode: (b) => d.decodeAccountRollups(b), mock: (api) => api.listAccountRollups(day, now) },
   analytics_breakdown: { decode: (b) => b.rows.map(d.decodeAnalyticsGroup), mock: (api) => api.getAnalyticsBreakdown(query) },
@@ -101,7 +101,7 @@ const REQUEST_CLASS_VALUES = ['auxiliary', 'compaction', 'main', 'subagent', 'wo
  */
 const CLOSED = {
   accounts: { '[].kind': d.ACCOUNT_KIND_VALUES },
-  alert_lifecycle: { '[].event': d.LIFECYCLE_EVENT_VALUES },
+  alert_lifecycle: { '.deliveries[].event': d.LIFECYCLE_EVENT_VALUES },
   alert_rules: { '[].kind': d.ALERT_KIND_VALUES, '[].scope.type': d.SCOPE_TYPE_VALUES, '[].windowId': [...d.WINDOW_ID_VALUES, null] },
   analytics_budgets: { '[].budgetPeriod': d.BUDGET_PERIOD_VALUES },
   analytics_placements: { '[].rung': d.PLACEMENT_RUNG_VALUES },

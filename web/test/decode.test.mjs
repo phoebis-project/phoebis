@@ -1095,6 +1095,14 @@ test('a lifecycle delivery whose event name this build does not know still decod
   assert.equal(d.decodeLifecycleDelivery({ ...wire, status: null, error: 'refused' }).status, null);
 });
 
+test('a lifecycle page carries the cursor for its next page, or none on the last one', () => {
+  const body = fixture('alert_lifecycle');
+  const page = d.decodeLifecyclePage(body);
+  assert.equal(page.nextCursor, null);
+  assert.equal(page.deliveries.length, body.deliveries.length);
+  assert.equal(d.decodeLifecyclePage({ deliveries: [], next_cursor: '1758000000000:41' }).nextCursor, '1758000000000:41');
+});
+
 test('a session lifecycle rule keeps its threshold in minutes and a lifecycle event keeps its detail', () => {
   const [wire] = fixture('alert_rules').rules;
   const idle = d.decodeAlertRule({ ...wire, kind: 'session_idle', threshold: 30, window: null });

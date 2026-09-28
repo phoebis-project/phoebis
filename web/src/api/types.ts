@@ -1043,6 +1043,11 @@ export interface LifecycleDelivery {
   subject: string;
 }
 
+export interface LifecyclePage {
+  deliveries: LifecycleDelivery[];
+  nextCursor: string | null;
+}
+
 export type LifecycleEventName = 'session_ended' | 'session_idle' | 'session_parked' | 'session_resumed' | 'session_started' | 'subagent_ended' | 'subagent_started';
 
 export interface AlertEvent {

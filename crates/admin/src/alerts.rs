@@ -463,10 +463,21 @@ pub(crate) async fn list_lifecycle(
             )
         }
     };
-    match state.store.lifecycle_deliveries(kind, EVENT_LIMIT) {
-        Ok(rows) => Json(
-            json!({ "deliveries": rows.iter().map(lifecycle_delivery_json).collect::<Vec<_>>() }),
-        )
+    let cursor = match q.get("cursor") {
+        None => None,
+        Some(raw) => match raw
+            .split_once(':')
+            .and_then(|(at, id)| Some((at.parse::<i64>().ok()?, id.parse::<i64>().ok()?)))
+        {
+            Some(parsed) => Some(parsed),
+            None => return failure(StatusCode::BAD_REQUEST, "cursor is <at>:<id>"),
+        },
+    };
+    match state.store.lifecycle_deliveries(kind, cursor, EVENT_LIMIT) {
+        Ok((rows, next)) => Json(json!({
+            "deliveries": rows.iter().map(lifecycle_delivery_json).collect::<Vec<_>>(),
+            "next_cursor": next.map(|(at, id)| format!("{at}:{id}")),
+        }))
         .into_response(),
         Err(e) => store_failure(e),
     }

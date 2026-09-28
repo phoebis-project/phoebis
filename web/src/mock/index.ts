@@ -2,7 +2,7 @@ import type { AccountPatch, Api, CreateKeyInput, KeyInput, PoolInput } from '@/a
 import { AFFINITY_MODE_VALUES, AFFINITY_SOURCE_VALUES, BUDGET_PERIOD_VALUES, QUOTA_HEADERS_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES, decodeLiveDelta, decodeLiveSnapshot } from '@/api/decode';
 import { ApiError, catalogUnion, slug } from '@/api/http';
 import type {
-  Account, AccountCatalog, AccountInput, AlertDeliveryTest, AlertEvent, AlertKind, AlertRule, AlertRuleInput, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, Delivery, KeyModels, LifecycleDelivery, LiveEvent, MemberEligibility, ModelEvent,
+  Account, AccountCatalog, AccountInput, AlertDeliveryTest, AlertEvent, AlertKind, AlertRule, AlertRuleInput, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, Delivery, KeyModels, LifecycleDelivery, LifecyclePage, LiveEvent, MemberEligibility, ModelEvent,
   ModelRule, ModelsState, PairingInput, PairingPreview, PairingSession, Pool, PoolMember, RequestDetail, RequestLog, RequestPage, RequestQuery, Role, RuleCooldown, Session, SessionInfo, Settings, Subscription,
 } from '@/api/types';
 import { urlHost } from '@/lib/format';
@@ -310,11 +310,24 @@ function isAfterCursor(r: RequestLog, cursor: string): boolean {
   return rowAt < at || (rowAt === at && r.id < id);
 }
 
+/** The lifecycle route's cursor is the same `<at>:<id>` shape, but the delivery id is the table's integer key
+ * rather than the request's string one, so the tie-break compares numbers. */
+function isAfterLifecycleCursor(d: LifecycleDelivery, cursor: string): boolean {
+  const sep = cursor.indexOf(':');
+  const at = Number(cursor.slice(0, sep));
+  const id = Number(cursor.slice(sep + 1));
+  const rowAt = Date.parse(d.at);
+  return rowAt < at || (rowAt === at && d.id < id);
+}
+
 export class MockApi implements Api {
   private accounts = ACCOUNTS.map((a) => ({ ...a }));
   private events: AlertEvent[] = ALERT_EVENTS.map((e) => ({ ...e }));
   private keys: ApiKey[] = [...KEYS];
   private lifecycle: LifecycleDelivery[] = LIFECYCLE_DELIVERIES.map((d) => ({ ...d }));
+  // Public so a smoke check can force several pages of a log the seed alone never fills; the route's own cap is
+  // `EVENT_LIMIT`, matched here as the default.
+  lifecyclePageSize = 500;
   private pairings = new Map<string, { accountId: string; state: string }>();
   // The route reads every member's kind and verdict afresh on each answer; the story's are read once, at load.
   private pools: Omit<Pool, 'keys'>[] = POOLS.map((p) => ({
@@ -730,9 +743,13 @@ export class MockApi implements Api {
     return latency(this.keys);
   }
 
-  listLifecycleDeliveries(kind?: AlertKind) {
+  listLifecycleDeliveries(kind?: AlertKind, cursor?: string): Promise<LifecyclePage> {
     const rows = emptyStore() ? [] : this.lifecycle.filter((d) => kind === undefined || d.kind === kind);
-    return latency([...rows].sort((a, b) => b.id - a.id));
+    const sorted = [...rows].sort((a, b) => Date.parse(b.at) - Date.parse(a.at) || b.id - a.id);
+    const after = cursor ? sorted.filter((d) => isAfterLifecycleCursor(d, cursor)) : sorted;
+    const page = after.slice(0, this.lifecyclePageSize);
+    const last = page[page.length - 1];
+    return latency({ deliveries: page, nextCursor: after.length > this.lifecyclePageSize && last ? `${Date.parse(last.at)}:${last.id}` : null });
   }
 
   listPools() {

@@ -292,7 +292,7 @@ async fn a_lifecycle_event_posts_one_delivery_per_matching_rule_opens_nothing_an
         rig.store.open_alert_events().unwrap().is_empty(),
         "nothing opens"
     );
-    let deliveries = rig.store.lifecycle_deliveries(None, 10).unwrap();
+    let (deliveries, _) = rig.store.lifecycle_deliveries(None, None, 10).unwrap();
     assert_eq!(deliveries.len(), 4);
     assert!(deliveries.iter().all(|d| d.event_id.is_none()
         && d.event.as_deref() == Some("session_started")

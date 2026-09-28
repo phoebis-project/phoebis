@@ -23,7 +23,7 @@ import type {
   KeepaliveOverview,
   KeepaliveRecipe,
   KeyModels,
-  LifecycleDelivery,
+  LifecyclePage,
   LiveEvent,
   MemberBudget,
   ModelRule,
@@ -205,7 +205,7 @@ export interface Api {
   listKeepaliveRecipes(): Promise<KeepaliveRecipe[]>;
   listKeys(): Promise<ApiKey[]>;
   /** The session events as they were posted; a lifecycle rule opens no event, so this log is all there is to read. */
-  listLifecycleDeliveries(kind?: AlertKind): Promise<LifecycleDelivery[]>;
+  listLifecycleDeliveries(kind?: AlertKind, cursor?: string): Promise<LifecyclePage>;
   listPools(): Promise<Pool[]>;
   listQuotaSnapshots(): Promise<QuotaSnapshot[]>;
   listRequests(query?: RequestQuery): Promise<RequestPage>;

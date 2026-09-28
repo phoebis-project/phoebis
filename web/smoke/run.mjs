@@ -58,7 +58,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { api, failCalls, failNextCall, MOCK_VERSION, mount, requestEvents, requests, stallLive } = await import('./dist/entry.js');
+const { api, deferNextCall, failCalls, failNextCall, MOCK_VERSION, mount, requestEvents, requests, stallLive } = await import('./dist/entry.js');
 
 const results = [];
 function expect(name, text, needles) {
@@ -3656,13 +3656,20 @@ expect('/alerts', m.text(), ['Rules', 'Create rule', 'Re-auth required', 'Utiliz
 }
 {
   // The lifecycle table carries no class of its own, so it is reached through the card whose title names it.
-  const lifecycleTable = () => [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Lifecycle')?.querySelector('table');
+  const lifecycleCard = () => [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Lifecycle');
+  const lifecycleTable = () => lifecycleCard()?.querySelector('table');
   const lifecycleRows = () => [...(lifecycleTable()?.querySelectorAll('tbody tr') ?? [])].map((r) => r.textContent?.trim() ?? '');
   const first = lifecycleRows()[0] ?? '';
   results.push({
     name: '/alerts the lifecycle log lists the newest event first, with its failed delivery',
     ok: /^\d+m ago/.test(first) && first.includes('Session started') && first.includes('refused'),
     missing: [first.slice(0, 120)],
+  });
+  const lifecycleLoadMore = () => [...(lifecycleCard()?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Load more');
+  results.push({
+    name: '/alerts the load-more control never shows once the seed fits inside the default page',
+    ok: lifecycleLoadMore() === undefined,
+    missing: [String(lifecycleLoadMore() !== undefined)],
   });
   // The router always writes idle_minutes; the type leaves it optional, so one row has to read without it.
   const idleSubs = [...(lifecycleTable()?.querySelectorAll('tbody tr') ?? [])]
@@ -3690,6 +3697,86 @@ expect('/alerts', m.text(), ['Rules', 'Create rule', 'Re-auth required', 'Utiliz
   setValue.call(lifecycleFilter, 'all');
   lifecycleFilter.dispatchEvent(new window.Event('change', { bubbles: true }));
   await m.settle(300);
+}
+{
+  // A small page size the seed alone never reaches, so a click has somewhere to grow the log.
+  api.lifecyclePageSize = 3;
+  const lm = await mount('/alerts');
+  const card = () => [...lm.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Lifecycle');
+  const rowKeys = () => [...(card()?.querySelectorAll('tbody tr') ?? [])].map((r) => r.querySelector('td')?.getAttribute('title') ?? '');
+  const loadMore = () => [...(card()?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Load more');
+  results.push({
+    name: '/alerts a small page size shows one page of the log and the load-more control',
+    ok: rowKeys().length === 3 && loadMore() !== undefined,
+    missing: [String(rowKeys().length), String(loadMore() !== undefined)],
+  });
+  const firstRow = rowKeys()[0];
+  loadMore()?.click();
+  await lm.settle();
+  const afterOne = rowKeys();
+  results.push({
+    name: '/alerts a load-more click appends the next rows below, with none repeated',
+    ok: afterOne.length === 6 && new Set(afterOne).size === 6 && afterOne[0] === firstRow && loadMore() !== undefined,
+    missing: [String(afterOne.length), String(new Set(afterOne).size), String(afterOne[0] === firstRow)],
+  });
+  loadMore()?.click();
+  await lm.settle();
+  const afterTwo = rowKeys();
+  results.push({
+    name: '/alerts the load-more control is gone once the log has reached its last page',
+    ok: afterTwo.length === 9 && new Set(afterTwo).size === 9 && afterTwo[0] === firstRow && loadMore() === undefined,
+    missing: [String(afterTwo.length), String(new Set(afterTwo).size), String(loadMore() !== undefined)],
+  });
+  lm.unmount();
+  api.lifecyclePageSize = 500;
+}
+{
+  // A page size of one, so the first "Load more" click is easy to hold behind a promise and the kind switch
+  // that follows is easy to tell apart from it by the row it lands.
+  api.lifecyclePageSize = 1;
+  const dm = await mount('/alerts');
+  const card = () => [...dm.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Lifecycle');
+  const rowTexts = () => [...(card()?.querySelectorAll('tbody tr') ?? [])].map((r) => r.textContent?.trim() ?? '');
+  const loadMore = () => [...(card()?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Load more');
+  // Read directly, before deferNextCall intercepts the method, so a later comparison never touches held.calls.
+  const allFirstPage = await api.listLifecycleDeliveries();
+  const idleFirstPage = await api.listLifecycleDeliveries('session_idle');
+  results.push({
+    name: '/alerts a page size of one still shows a row and the load-more control',
+    ok: rowTexts().length === 1 && loadMore() !== undefined,
+    missing: [String(rowTexts().length), String(loadMore() !== undefined)],
+  });
+  const held = deferNextCall('listLifecycleDeliveries');
+  loadMore()?.click();
+  const lifecycleFilter2 = [...dm.container.querySelectorAll('select')].find((el) => el.getAttribute('aria-label') === 'Filter lifecycle by condition');
+  const setValue2 = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
+  setValue2.call(lifecycleFilter2, 'session_idle');
+  lifecycleFilter2.dispatchEvent(new window.Event('change', { bubbles: true }));
+  await dm.settle();
+  const switched = rowTexts();
+  results.push({
+    name: '/alerts switching kind while a load-more reply is held shows only the new kinds first page',
+    ok: JSON.stringify(held.calls[0]) === JSON.stringify([undefined, allFirstPage.nextCursor]) && switched.length === 1 && switched[0].includes('Session idle') && loadMore() !== undefined,
+    missing: [JSON.stringify(held.calls[0]), ...switched],
+  });
+  held.release();
+  await dm.settle();
+  const stillOneRow = rowTexts();
+  results.push({
+    name: '/alerts the held reply from the kind before the switch lands nowhere once it resolves',
+    ok: stillOneRow.length === 1 && stillOneRow[0].includes('Session idle'),
+    missing: stillOneRow,
+  });
+  loadMore()?.click();
+  await dm.settle();
+  const bothRows = rowTexts();
+  results.push({
+    name: '/alerts a load-more click after the switch asks the new kind with its own cursor',
+    ok: JSON.stringify(held.calls.at(-1)) === JSON.stringify(['session_idle', idleFirstPage.nextCursor]) && bothRows.length === 2 && bothRows.every((r) => r.includes('Session idle')) && new Set(bothRows).size === 2,
+    missing: [JSON.stringify(held.calls.at(-1)), JSON.stringify(['session_idle', idleFirstPage.nextCursor]), String(bothRows.length)],
+  });
+  dm.unmount();
+  api.lifecyclePageSize = 500;
 }
 {
   const stateFilter = [...m.container.querySelectorAll('select')].find((el) => el.getAttribute('aria-label') === 'Filter by state');

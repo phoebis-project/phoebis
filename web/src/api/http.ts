@@ -168,7 +168,7 @@ export class HttpApi implements Api {
   listCatalogOf = async (accountIds: string[]): Promise<CatalogModel[]> => catalogUnion(await Promise.all(accountIds.map((id) => this.getAccountCatalog(id).catch(() => null))));
   listKeepaliveRecipes = async () => (await call<{ recipes: unknown[] }>('GET', '/admin/keepalive/recipes')).recipes.map(d.decodeRecipe);
   listKeys = async () => (await call<{ keys: unknown[] }>('GET', '/admin/keys')).keys.map(d.decodeKey);
-  listLifecycleDeliveries = async (kind?: AlertKind) => (await call<{ deliveries: unknown[] }>('GET', `/admin/alerts/deliveries${qs({ kind })}`)).deliveries.map(d.decodeLifecycleDelivery);
+  listLifecycleDeliveries = async (kind?: AlertKind, cursor?: string) => d.decodeLifecyclePage(await call('GET', `/admin/alerts/deliveries${qs({ cursor, kind })}`));
   listPools = async () => (await call<{ pools: unknown[] }>('GET', '/admin/pools')).pools.map(d.decodePool);
   listQuotaSnapshots = async (): Promise<QuotaSnapshot[]> => {
     const accounts = (await this.listAccounts()).filter((a) => a.kind === 'oauth');

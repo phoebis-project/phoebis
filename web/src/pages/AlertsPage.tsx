@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { api } from '@/api';
 import type { Account, AlertEvent, AlertEventDetail, AlertKind, AlertRule, AlertRuleInput, ApiKey, AskUserQuestionDetail, ClientDriftDetail, LifecycleDelivery, LifecycleEventName, Pool, RefreshFailedDetail, WindowId } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
@@ -118,6 +118,13 @@ export function AlertsPage() {
   const [kindFilter, setKindFilter] = useState<AlertKind | 'all'>('all');
   const [lifecycleKind, setLifecycleKind] = useState<AlertKind | 'all'>('all');
   const lifecycle = useAsync(() => api.listLifecycleDeliveries(lifecycleKind === 'all' ? undefined : lifecycleKind), [lifecycleKind]);
+  const moreGeneration = useRef(0);
+  const [more, setMore] = useState<{ generation: number; loading: boolean; nextCursor: string | null; rows: LifecycleDelivery[] }>({ generation: 0, loading: false, nextCursor: null, rows: [] });
+  useEffect(() => {
+    moreGeneration.current += 1;
+    setMore({ generation: moreGeneration.current, loading: false, nextCursor: null, rows: [] });
+  }, [lifecycleKind]);
+  const lifecycleCursor = more.rows.length > 0 ? more.nextCursor : (lifecycle.data?.nextCursor ?? null);
   const [toast, setToast] = useState<string | null>(null);
   const now = useNow();
   const named: Named = { accounts: accounts.data ?? [], keys: keys.data ?? [], pools: pools.data ?? [] };
@@ -130,6 +137,21 @@ export function AlertsPage() {
       setToast(message);
       reload();
     } catch (e) {
+      setToast(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const loadMoreLifecycle = async () => {
+    const generation = more.generation;
+    const cursor = lifecycleCursor;
+    if (cursor === null) return;
+    setMore((m) => ({ ...m, loading: true }));
+    try {
+      const page = await api.listLifecycleDeliveries(lifecycleKind === 'all' ? undefined : lifecycleKind, cursor);
+      // A reply for a kind the operator has already moved past would misattribute its rows and cursor to the new one.
+      setMore((m) => (m.generation === generation ? { generation, loading: false, nextCursor: page.nextCursor, rows: [...m.rows, ...page.deliveries] } : m));
+    } catch (e) {
+      setMore((m) => (m.generation === generation ? { ...m, loading: false } : m));
       setToast(e instanceof Error ? e.message : String(e));
     }
   };
@@ -360,18 +382,25 @@ export function AlertsPage() {
                     </td>
                   </tr>
                 ))
-              ) : lifecycle.data.length === 0 ? (
+              ) : lifecycle.data.deliveries.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="muted">
                     {lifecycleKind === 'all' ? 'No session events.' : `No ${KIND_LABEL[lifecycleKind].toLowerCase()} events.`}
                   </td>
                 </tr>
               ) : (
-                lifecycle.data.map((d) => <LifecycleRow key={d.id} delivery={d} now={now} />)
+                [...lifecycle.data.deliveries, ...more.rows].map((d) => <LifecycleRow key={d.id} delivery={d} now={now} />)
               )}
             </tbody>
           </table>
         </div>
+        {lifecycleCursor !== null && (
+          <footer className="pager">
+            <Button size="sm" onClick={() => void loadMoreLifecycle()} disabled={lifecycle.data === null || lifecycle.stale || more.loading}>
+              Load more
+            </Button>
+          </footer>
+        )}
       </Card>
 
       <RuleDialog

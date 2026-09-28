@@ -399,21 +399,29 @@ impl Store {
         Ok(grouped)
     }
 
-    /// The deliveries that opened no event, newest first: the lifecycle log the console lists, narrowed to one
-    /// rule kind when asked.
+    /// The deliveries that opened no event, newest first by `at` then `id`, narrowed to one rule kind when asked
+    /// and continuing below `cursor` (the `(at, id)` of the last row the caller has) when given; `next` is the
+    /// last row's `(at, id)` when the page is full, else `None`.
+    #[allow(clippy::type_complexity)]
     pub fn lifecycle_deliveries(
         &self,
         kind: Option<&str>,
+        cursor: Option<(i64, i64)>,
         limit: usize,
-    ) -> Result<Vec<AlertDeliveryRow>, StoreError> {
+    ) -> Result<(Vec<AlertDeliveryRow>, Option<(i64, i64)>), StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
+        let (at, id) = cursor.map_or((None, None), |(at, id)| (Some(at), Some(id)));
         let mut stmt = conn.prepare(&format!(
             "SELECT {DELIVERY_COLUMNS} FROM alert_deliveries WHERE event_id IS NULL AND (?1 IS NULL OR kind = ?1) \
-             ORDER BY id DESC LIMIT ?2"
+             AND (?2 IS NULL OR at < ?2 OR (at = ?2 AND id < ?3)) ORDER BY at DESC, id DESC LIMIT ?4"
         ))?;
-        let rows = stmt.query_map(params![kind, limit as i64], row_to_delivery)?;
-        rows.collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(StoreError::from)
+        let rows = stmt
+            .query_map(params![kind, at, id, limit as i64], row_to_delivery)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let next = (rows.len() == limit)
+            .then(|| rows.last().map(|r| (r.at, r.id as i64)))
+            .flatten();
+        Ok((rows, next))
     }
 
     /// Resolved events older than the mark go, deliveries with them; an open event is never purged. The

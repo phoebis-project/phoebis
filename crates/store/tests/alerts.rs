@@ -420,7 +420,8 @@ fn a_lifecycle_delivery_lands_without_an_event_lists_newest_first_and_is_purged_
                 .unwrap(),
         );
     }
-    let listed = store.lifecycle_deliveries(None, 10).unwrap();
+    let (listed, next) = store.lifecycle_deliveries(None, None, 10).unwrap();
+    assert_eq!(next, None);
     assert_eq!(
         listed
             .iter()
@@ -434,23 +435,64 @@ fn a_lifecycle_delivery_lands_without_an_event_lists_newest_first_and_is_purged_
     assert_eq!(listed[0].event_id, None);
     assert_eq!(
         store
-            .lifecycle_deliveries(Some("session_idle"), 10)
-            .unwrap(),
+            .lifecycle_deliveries(Some("session_idle"), None, 10)
+            .unwrap()
+            .0,
         []
     );
     assert_eq!(
         store
-            .lifecycle_deliveries(Some("reauth_required"), 1)
+            .lifecycle_deliveries(Some("reauth_required"), None, 1)
             .unwrap()
+            .0
             .len(),
         1
     );
     store.purge_alert_events_before(1_500, 0, 3_000).unwrap();
     assert_eq!(
-        store.lifecycle_deliveries(None, 10).unwrap().len(),
+        store.lifecycle_deliveries(None, None, 10).unwrap().0.len(),
         1,
         "the older delivery aged out on the resolved-events mark"
     );
+    for at in [5_000, 4_000, 3_000, 2_000, 1_000] {
+        store
+            .insert_alert_delivery(&AlertDeliveryRow {
+                id: 0,
+                event_id: None,
+                rule_id: "r1".into(),
+                kind: "session_idle".into(),
+                subject: "desktop, session s2".into(),
+                event: Some("session_idle".into()),
+                detail_json: None,
+                state: "event".into(),
+                attempt: 1,
+                at,
+                status: Some(200),
+                error: None,
+            })
+            .unwrap();
+    }
+    let (page1, next1) = store
+        .lifecycle_deliveries(Some("session_idle"), None, 2)
+        .unwrap();
+    assert_eq!(
+        page1.iter().map(|d| d.at).collect::<Vec<_>>(),
+        [5_000, 4_000]
+    );
+    let next1 = next1.expect("a full page carries a cursor");
+    let (page2, next2) = store
+        .lifecycle_deliveries(Some("session_idle"), Some(next1), 2)
+        .unwrap();
+    assert_eq!(
+        page2.iter().map(|d| d.at).collect::<Vec<_>>(),
+        [3_000, 2_000]
+    );
+    let next2 = next2.expect("a full page carries a cursor");
+    let (page3, next3) = store
+        .lifecycle_deliveries(Some("session_idle"), Some(next2), 2)
+        .unwrap();
+    assert_eq!(page3.iter().map(|d| d.at).collect::<Vec<_>>(), [1_000]);
+    assert_eq!(next3, None, "the last page carries no cursor");
 }
 
 #[test]

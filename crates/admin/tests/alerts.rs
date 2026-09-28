@@ -455,6 +455,7 @@ async fn lifecycle_deliveries_are_listed_newest_first_by_kind_and_refuse_another
     let listed = json(get(&parts.app, "/admin/alerts/deliveries", Some(&cookie)).await).await;
     let rows = listed["deliveries"].as_array().unwrap();
     assert_eq!(rows.len(), 2);
+    assert_eq!(listed["next_cursor"], serde_json::Value::Null);
     assert_eq!(
         rows.iter()
             .map(|d| d["event"].as_str().unwrap())
@@ -510,6 +511,84 @@ async fn lifecycle_deliveries_are_listed_newest_first_by_kind_and_refuse_another
         get(&parts.app, "/admin/alerts/deliveries", Some(&viewer))
             .await
             .status(),
+        200
+    );
+}
+
+#[tokio::test]
+async fn lifecycle_deliveries_continue_below_a_cursor_and_refuse_a_malformed_one() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    post(&parts.app, "/admin/alerts/rules", r#"{"kind":"session_active","scope":{"type":"all"},"webhook_url":"http://127.0.0.1:1/life"}"#, Some(&cookie)).await;
+    for (session, event) in [
+        ("s1", phoebis_alerts::LifecycleEvent::SessionStarted),
+        ("s1", phoebis_alerts::LifecycleEvent::SessionEnded),
+        ("s2", phoebis_alerts::LifecycleEvent::SessionStarted),
+    ] {
+        parts.alerts.deliver_event(
+            &phoebis_alerts::Signal {
+                kind: phoebis_alerts::Kind::SessionActive,
+                account_id: None,
+                key_id: Some("desktop".into()),
+                pool_id: Some("main".into()),
+                subject: format!("desktop, session {session}"),
+                detail: serde_json::json!({ "key": "desktop", "pool": "main", "session": session, "source": "request" }),
+            },
+            event,
+        );
+        parts.alerts.wait_idle().await;
+    }
+    let listed = json(get(&parts.app, "/admin/alerts/deliveries", Some(&cookie)).await).await;
+    let rows = listed["deliveries"].as_array().unwrap().clone();
+    assert_eq!(rows.len(), 3);
+    assert_eq!(listed["next_cursor"], serde_json::Value::Null);
+    let cursor = format!(
+        "{}:{}",
+        rows[0]["at"].as_i64().unwrap(),
+        rows[0]["id"].as_u64().unwrap()
+    );
+    let rest = serde_json::Value::Array(rows[1..].to_vec());
+    let continued = json(
+        get(
+            &parts.app,
+            &format!("/admin/alerts/deliveries?cursor={cursor}"),
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(continued["deliveries"], rest, "no overlap, no gap");
+    assert_eq!(continued["next_cursor"], serde_json::Value::Null);
+    let with_kind = json(
+        get(
+            &parts.app,
+            &format!("/admin/alerts/deliveries?cursor={cursor}&kind=session_active"),
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        with_kind["deliveries"], rest,
+        "the filter carries across the page"
+    );
+    let malformed = get(
+        &parts.app,
+        "/admin/alerts/deliveries?cursor=abc",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(malformed.status(), 400);
+    assert_eq!(json(malformed).await["error"], "cursor is <at>:<id>");
+    let viewer = login(&parts.app, "viewer-secret").await;
+    assert_eq!(
+        get(
+            &parts.app,
+            &format!("/admin/alerts/deliveries?cursor={cursor}"),
+            Some(&viewer),
+        )
+        .await
+        .status(),
         200
     );
 }

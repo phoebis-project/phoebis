@@ -429,12 +429,13 @@ export const FIXTURES: Record<string, Fixture> = {
           "event": "session_started",
           "id": 4,
           "kind": "session_active",
-          "rule_id": "rule_66045ced4f7edc1a",
+          "rule_id": "rule_70032b8fc1a3867e",
           "state": "event",
           "status": 200,
           "subject": "desktop, session e2e-ui"
         }
-      ]
+      ],
+      "next_cursor": null
     }
   },
   "alert_rules": {
