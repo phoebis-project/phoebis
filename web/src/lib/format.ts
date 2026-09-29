@@ -26,6 +26,8 @@ export const bytesDropped = (seen: number, stored: number) => Math.max(0, seen -
 // Intl would print its sign as "-$0.00".
 export const fmtUsd = (n: number, v = n + 0) => (Math.abs(v) > 0 && Math.abs(v) < 0.01 ? usd4.format(v) : usd.format(v));
 export const fmtPct = (ratio: number, digits = 0) => `${(ratio * 100).toFixed(digits)}%`;
+/** A share of a window as a percent to three significant digits, trailing zeros dropped: 8.41%, 0.219%, 12.5%. */
+export const fmtShare = (ratio: number) => `${Number((ratio * 100).toPrecision(3))}%`;
 export const fmtMs = (ms: number | null) => (ms === null ? '-' : ms >= 1000 ? `${(ms / 1000).toFixed(ms >= 10_000 ? 0 : 1)} s` : `${Math.round(ms)} ms`);
 export const fmtCredits = (credits: number) => usd.format(credits / 100);
 

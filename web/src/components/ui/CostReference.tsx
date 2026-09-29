@@ -1,11 +1,12 @@
 import { useState, type ReactNode } from 'react';
 import { api } from '@/api';
-import type { ModelPrice, PlanFactor, PlanFactors } from '@/api/types';
+import type { CostTable, ModelPrice, PlanModelCells, TierFactors } from '@/api/types';
 import { own } from '@/lib/analytics';
+import { fmtShare } from '@/lib/format';
 import { useAsync } from '@/lib/hooks';
-import { Badge, Button, Dialog, Skeleton } from './primitives';
+import { Button, Dialog, Skeleton } from './primitives';
 
-const CAVEAT = 'API list prices. A subscription upstream on plan quota spends the plan meter columns instead of money.';
+const CAVEAT = 'API list prices. A subscription upstream on plan quota spends the window share columns instead of money.';
 /** One term per column group, in table order, so a reader can find the one column they are looking at. */
 const NOTES: { body: ReactNode; term: string }[] = [
   { term: 'Per prefix token', body: 'Every column is per prefix token, so the comparison leaves out the new tokens each turn writes.' },
@@ -26,17 +27,19 @@ const NOTES: { body: ReactNode; term: string }[] = [
     body: 'On Fable 5.1, where a cache read costs 0.025x, a 5-minute entry kept warm by probes stays cheaper than a 1-hour entry for any idle span; a session with cache warming on may set CLAUDE_CODE_PROMPT_CACHE_TTL=5m on the client. Without warming, the 1-hour entry wins after a 5-minute pause.',
   },
   {
-    term: 'Plan meter',
+    term: 'Window share',
     body: (
       <>
-        One plain Opus input token on the 5-hour meter is the unit; a 1-hour write costs a subscription upstream the same as a 5-minute one, so on plan-funded traffic the long TTL is free and the
-        pool's plan rule set keeps <code>1h</code> for the main conversation and subagents alike; while a write costs money a 1-hour write is 2x against 1.25x, so the metered rule set's{' '}
-        <code>keepalive</code> TTL defaults to <code>5m</code>.
+        Each plan column is the share of a Max 5x subscription's 5-hour or 7-day window that one million tokens of the type consume, from the cost table the ledger ships. An account on
+        another tier spends that share over its tier's factor from the tier factor table, so a Pro account spends more of its own window and a Max 20x account less, by the multiples a group
+        header's tooltip gives. A share marked * is not yet measured on its window and carries a stand-in derived from earlier meter readings. A 1-hour write spends the same share as a 5-minute
+        one, so on plan-funded traffic the long TTL is free and the pool's plan rule set keeps <code>1h</code> for the main conversation and subagents alike; while a write costs money a
+        1-hour write is 2x against 1.25x, so the metered rule set's <code>keepalive</code> TTL defaults to <code>5m</code>.
       </>
     ),
   },
 ];
-const UNMEASURED_HINT = 'No meter run has measured this model yet; the row carries its list-price ratio to the reference.';
+const UNMEASURED = 'not measured on this window; derived from earlier meter readings';
 // An idle 5m entry is rewritten by a probe about every four minutes; a 1h entry once an hour.
 const PROBES_PER_IDLE_HOUR = 15;
 
@@ -65,20 +68,32 @@ const payoffMinutes = (p: ModelPrice) => {
 
 const dash = <span className="muted">-</span>;
 
-/** The model's row, exact first and then undated, since the price table lists dated ids and the factors ship undated. */
-const factorOf = (factors: PlanFactors, model: string): PlanFactor | null => {
+/** The model's cells on a window, exact first and then undated, since the price table lists dated ids and the cost table ships undated. */
+const cellsOf = (table: CostTable, window: string, model: string): PlanModelCells | null => {
+  const models = own(table.windows, window) ? table.windows[window] : {};
   const undated = model.replace(/-\d{8}$/, '');
-  return own(factors.models, model) ? factors.models[model] : own(factors.models, undated) ? factors.models[undated] : null;
+  return own(models, model) ? models[model] : own(models, undated) ? models[undated] : null;
 };
-/** Meter tokens per token, three significant digits at most: 0.0939, 4.44, 16.9. */
-const meter = (n: number) => String(Number(n.toPrecision(3)));
-const PLAN_COLUMNS: { key: keyof Pick<PlanFactor, 'cacheRead' | 'cacheWrite1h' | 'cacheWrite5m' | 'input' | 'output'>; label: string }[] = [
+const PLAN_COLUMNS: { key: keyof PlanModelCells; label: string }[] = [
   { key: 'input', label: 'Input' },
   { key: 'cacheRead', label: 'Cache read' },
   { key: 'cacheWrite5m', label: '5m write' },
   { key: 'cacheWrite1h', label: '1h write' },
   { key: 'output', label: 'Output' },
 ];
+const WINDOWS = [
+  { factor: 'fiveHour', key: 'five_hour', label: '5-hour window' },
+  { factor: 'sevenDay', key: 'seven_day', label: '7-day window' },
+] as const;
+
+/** What a Pro and a Max 20x account spend of their own window against the Max 5x share the group shows. */
+const groupTitle = (tiers: TierFactors, window: (typeof WINDOWS)[number]['factor']) => {
+  const times = (tier: string) => {
+    const factor = own(tiers.tiers, tier) ? tiers.tiers[tier][window].factor : 0;
+    return factor > 0 ? Number((1 / factor).toPrecision(3)) : '-';
+  };
+  return `Share of a Max 5x window per million tokens; a Pro account spends ${times('default_claude_pro')} times as much of its own, a Max 20x ${times('default_claude_max_20x')} times`;
+};
 
 /** Opens the shipped price table next to anything that spends tokens on the user's behalf. */
 export function CostReferenceLink() {
@@ -92,7 +107,7 @@ export function CostReferenceLink() {
         open={open}
         onClose={() => setOpen(false)}
         title="Cost reference"
-        subtitle="USD per million tokens, from the shipped price table, what they make a kept-warm prefix cost, and each token's weight on the plan meter."
+        subtitle="USD per million tokens, from the shipped price table, what they make a kept-warm prefix cost, and the share of a subscription window each million spends."
         width={1600}
         footer={
           <Button variant="primary" onClick={() => setOpen(false)}>
@@ -109,7 +124,7 @@ export function CostReferenceLink() {
 function PriceTable() {
   const settings = useAsync(() => api.getSettings(), []);
   const prices = settings.data?.pricing.models ?? null;
-  const factors = settings.data?.planFactors ?? null;
+  const tables = settings.data?.planTables ?? null;
   return (
     <div className="cost-ref">
       <p className="secondary">{CAVEAT}</p>
@@ -128,17 +143,20 @@ function PriceTable() {
               <th rowSpan={2} className="right cost-ref__sep">Hold warm 1h, 5m + probes</th>
               <th rowSpan={2} className="right">Hold warm 1h, 1h + probe</th>
               <th rowSpan={2} className="right">1h pays off after</th>
-              <th colSpan={PLAN_COLUMNS.length + 1} className="cost-ref__sep" title={factors ? `Meter tokens per token; one plain ${factors.reference} input token is 1` : undefined}>
-                Plan meter
-              </th>
-            </tr>
-            <tr>
-              {PLAN_COLUMNS.map((c, i) => (
-                <th key={c.key} className={`right ${i === 0 ? 'cost-ref__sep' : ''}`}>
-                  {c.label}
+              {WINDOWS.map((w) => (
+                <th key={w.key} colSpan={PLAN_COLUMNS.length} className="cost-ref__sep" title={tables ? groupTitle(tables.tiers, w.factor) : undefined}>
+                  {w.label}
                 </th>
               ))}
-              <th>Measured</th>
+            </tr>
+            <tr>
+              {WINDOWS.map((w) =>
+                PLAN_COLUMNS.map((c, i) => (
+                  <th key={`${w.key}-${c.key}`} className={`right ${i === 0 ? 'cost-ref__sep' : ''}`}>
+                    {c.label}
+                  </th>
+                )),
+              )}
             </tr>
           </thead>
           <tbody>
@@ -147,7 +165,6 @@ function PriceTable() {
                 const idle5m = idleHour(p, p.cacheWrite5mPerM, PROBES_PER_IDLE_HOUR);
                 const idle1h = idleHour(p, p.cacheWrite1hPerM, 1);
                 const payoff = payoffMinutes(p);
-                const f = factors ? factorOf(factors, p.model) : null;
                 return (
                   <tr key={p.model}>
                     <td className="mono">{p.model}</td>
@@ -161,26 +178,31 @@ function PriceTable() {
                     <td className="right num cost-ref__sep">{idle5m ?? dash}</td>
                     <td className="right num">{idle1h ?? dash}</td>
                     <td className="right num">{payoff ?? dash}</td>
-                    {PLAN_COLUMNS.map((c, i) => (
-                      <td key={c.key} className={`right num ${i === 0 ? 'cost-ref__sep' : ''}`}>
-                        {f ? meter(f[c.key] * f.factor) : dash}
-                      </td>
-                    ))}
-                    <td>
-                      {f?.unmeasured ? (
-                        <Badge tone="warning" title={UNMEASURED_HINT}>
-                          unmeasured
-                        </Badge>
-                      ) : (
-                        (f?.measured ?? dash)
-                      )}
-                    </td>
+                    {WINDOWS.map((w) => {
+                      const cells = tables ? cellsOf(tables.cost, w.key, p.model) : null;
+                      return PLAN_COLUMNS.map((c, i) => (
+                        <td key={`${w.key}-${c.key}`} className={`right num ${i === 0 ? 'cost-ref__sep' : ''}`}>
+                          {cells ? (
+                            <>
+                              {fmtShare(cells[c.key].sharePerMillion)}
+                              {cells[c.key].unmeasured && (
+                                <span className="muted cost-ref__flag" title={UNMEASURED}>
+                                  *
+                                </span>
+                              )}
+                            </>
+                          ) : (
+                            dash
+                          )}
+                        </td>
+                      ));
+                    })}
                   </tr>
                 );
               })
             ) : (
               <tr>
-                <td colSpan={11 + PLAN_COLUMNS.length + 1}>
+                <td colSpan={11 + WINDOWS.length * PLAN_COLUMNS.length}>
                   <Skeleton />
                 </td>
               </tr>
@@ -188,6 +210,9 @@ function PriceTable() {
           </tbody>
         </table>
       </div>
+      <p className="secondary cost-ref__legend">
+        <span className="muted">*</span> {UNMEASURED}
+      </p>
       <dl className="cost-ref__notes">
         {NOTES.map((n) => (
           <div className="cost-ref__notes-row" key={n.term}>

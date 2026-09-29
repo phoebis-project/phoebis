@@ -1071,11 +1071,18 @@ export interface ModelPrice {
   outputPerM: number;
 }
 
-/** Meter tokens per token of each type on the plan side; `factor` weighs the model against the reference and
- *  multiplies every type column. */
-export interface PlanFactor { cacheRead: number; cacheWrite1h: number; cacheWrite5m: number; factor: number; input: number; measured: string | null; output: number; unmeasured: boolean }
-/** The dated table the ledger ships: one plain input token of `reference` on the 5-hour meter is the unit. */
-export interface PlanFactors { measured: string; models: Record<string, PlanFactor>; reference: string }
+/** The fraction of a Max 5x window one million tokens of one type consume; `measured` is null on a flagged cell,
+ *  whose share is a stand-in derived from earlier meter readings. */
+export interface PlanCell { measured: string | null; sharePerMillion: number; unmeasured: boolean }
+export interface PlanModelCells { cacheRead: PlanCell; cacheWrite1h: PlanCell; cacheWrite5m: PlanCell; input: PlanCell; output: PlanCell }
+/** The peak band on the 5-hour cells: a charge landing inside its hours in `zone` is weighed by `factor`. */
+export interface PlanBand { effectiveFrom: string | null; factor: number; fromHour: number; measured: string; provisional: boolean; toHour: number; weekdays: boolean; windows: string[]; zone: string }
+/** The share of the Max 5x window per million tokens, per window (`five_hour`, `seven_day`) and model. */
+export interface CostTable { bands: PlanBand[]; effective: string; tier: string; version: string; windows: Record<string, Record<string, PlanModelCells>> }
+/** A tier's capacity of one window over Max 5x's, dated or flagged like a cell. */
+export interface TierFactor { factor: number; measured: string | null; unmeasured: boolean }
+export interface TierFactors { measured: string; reference: string; tiers: Record<string, { fiveHour: TierFactor; sevenDay: TierFactor }> }
+export interface PlanTables { cost: CostTable; tiers: TierFactors }
 
 export interface Settings {
   about: { profile: string; publicUrl: string | null; version: string };
@@ -1084,7 +1091,7 @@ export interface Settings {
   compatibility: { cacheDiagnostics: boolean; profile: string };
   keepalive: { leaseSeconds: number; maxAgents: number; maxRequestBytes: number; maxRetainedBytes: number; maxSessions: number; maxWorkers: number; oauthPrewarmVerified: boolean };
   listeners: { admin: string; metrics: string; proxy: string };
-  planFactors: PlanFactors;
+  planTables: PlanTables;
   /** The price table shown to the user and used to cost the ledger. */
   pricing: { effectiveDate: string; models: ModelPrice[]; source: string };
   quota: { sampleRetentionDays: number };

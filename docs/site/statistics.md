@@ -92,24 +92,37 @@ attempt on a model the table does not price carries no cost estimate and is coun
 
 ## Plan meter
 
-The plan side of every figure is counted in meter tokens: one plain input token of Claude Opus 5 on the 5-hour meter of
-a subscription. Two dated tables ship beside the price table. `plan_factors` says what one token of each type costs in
-meter tokens, the same ratios for every model: an input token 1, a cache read 0.026, a 5-minute or 1-hour cache write
-1.23 and an output token 4.67, each times the model's factor.
+A subscription account's plan-side figures read as a share of its own 5-hour window and of its 7-day window, a percent
+with the window named; an API-key account, and a subscription account in overage, read dollars.
 
-| Model | Factor | Measured |
-| --- | --- | --- |
-| `claude-fable-5` | 2.0 | Not measured: the list-price ratio |
-| `claude-fable-5-1` | 3.61 | 2026-09-19 |
-| `claude-haiku-4-5` | 0.36 | 2026-09-24 |
-| `claude-opus-5` | 1 | 2026-09-19 |
-| `claude-sonnet-5` | 0.54 | 2026-09-24 |
+The cost table (`crates/ledger/cost_table.yaml`) ships beside the price table: per window, model and token type, the
+share of a Max 5x subscription's window that one million tokens consume, each cell dated with the day it was measured or
+flagged as not measured. A flagged cell carries a stand-in derived from earlier meter readings, and every view that
+shows it marks it. A dated model id reads the cells of its undated name. The 5-hour input and output cells, as a percent
+of the window per million tokens:
 
-A row flagged `unmeasured` carries the list-price ratio until a meter run fills it. A dated model id reads the row of
-its undated base, and a model the table lacks weighs as Claude Opus 5. `plan_windows` holds each subscription tier's
-window sizes as measured on Max 5x, Max 20x and Pro: the 5-hour and 7-day windows in meter tokens, the Fable-scoped week
-in Fable tokens, since the weekly meter may weigh Fable differently from the 5-hour one. The live fit replaces them per
-account once it folds.
+| Model | Input | Output | Measured |
+| --- | --- | --- | --- |
+| `claude-fable-5` | 16.8% | 78.6% | Not measured: derived |
+| `claude-fable-5-1` | 30.4% | 142% | 2026-09-19 |
+| `claude-haiku-4-5` | 3.03% | 14.1% | Not measured: derived |
+| `claude-opus-5` | 8.41% | 39.3% | 2026-09-19 |
+| `claude-sonnet-5` | 4.54% | 21.2% | Not measured: derived |
+
+Every 7-day cell is derived until the 7-day window is measured per model. The peak band is one provisional factor on the
+5-hour cells, applied at a request's completion; the 7-day cells are unbanded.
+
+The tier factor table (`crates/ledger/tier_factors.yaml`) holds each subscription tier's capacity of each window over
+Max 5x's, so a share of a Max 5x window over the tier's factor is that share of the account's own window:
+
+| Tier | 5-hour | 7-day | Measured |
+| --- | --- | --- | --- |
+| `default_claude_max_20x` | 4.03 | 2.14 | Not measured |
+| `default_claude_max_5x` | 1 | 1 | 2026-09-19, the reference |
+| `default_claude_pro` | 0.215 | 0.18 | 2026-09-24 |
+
+The Fable-scoped week is half the 7-day window on every tier, so a Fable request's share of it is twice its 7-day share.
+An account whose tier the table does not list is priced at no share.
 
 **Live fit** The ledger fits each subscription account's window sizes from its own traffic: the meter tokens the router
 sent to the account, booked when each request completes, against the rise of the account's utilization readings. A run

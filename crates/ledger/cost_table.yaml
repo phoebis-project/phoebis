@@ -1,0 +1,107 @@
+# The share of a Max 5x subscription's window that one million tokens of each type consume, per window and model,
+# as a fraction of the window: 0.0841 is 8.41% of it, and the console shows the percent. Every cell is priced on Max
+# 5x; `tier_factors.yaml` carries each tier's capacity over Max 5x's, so a share over a tier's factor is that share of
+# the tier's own window. A dated id reads the row of its undated name.
+#
+# A cell is the model's weight per token on the 5-hour meter over the Max 5x window size read the same day: 11 890 000
+# for the 5-hour window, 164 000 000 for the 7-day one. A cell carries `measured`, the day both were read on Max 5x,
+# or `unmeasured: true` when either was read elsewhere or not at all, and every reader shows it as unmeasured. No
+# per-model 7-day weight has been read, so each 7-day cell assumes the 7-day meter weighs the types as the 5-hour one
+# does outside the peak band, which a measurement on that window tests cell by cell. A measurement replaces a cell by
+# writing its share and date and dropping the flag.
+#
+# The Fable-scoped week is priced as half the 7-day window on every tier, so a request's share of it is twice its
+# 7-day share. The earlier readings sized Max 5x's Fable week at 23 000 000 of its 164 000 000 7-day window, a seventh
+# rather than a half; a measurement of that window settles which figure stands.
+#
+# A band row's hours and weekdays are read in its time zone, so its UTC edges follow the zone's daylight rule. A row
+# with `effective_from` takes over its windows from that date, and an earlier charge keeps the row in force at its own
+# time, so a new row never re-weights history.
+effective: 2026-09-29
+tier: default_claude_max_5x
+windows:
+  five_hour:
+    claude-fable-5:
+      # Never metered: the list-price ratio to Opus, 2.0.
+      input: {share_per_million: 0.168, unmeasured: true}
+      cache_read: {share_per_million: 0.00437, unmeasured: true}
+      cache_write_5m: {share_per_million: 0.207, unmeasured: true}
+      cache_write_1h: {share_per_million: 0.207, unmeasured: true}
+      output: {share_per_million: 0.786, unmeasured: true}
+    claude-fable-5-1:
+      # 3.61 times Opus's weight, read in the Max 5x sessions of 2026-09-19.
+      input: {share_per_million: 0.304, measured: 2026-09-19}
+      cache_read: {share_per_million: 0.00789, measured: 2026-09-19}
+      cache_write_5m: {share_per_million: 0.373, measured: 2026-09-19}
+      cache_write_1h: {share_per_million: 0.373, measured: 2026-09-19}
+      output: {share_per_million: 1.42, measured: 2026-09-19}
+    claude-haiku-4-5:
+      # The weight was read on Pro inside the peak band and derived outside it through the band's 1.442; the
+      # cache columns carry Opus's type ratios.
+      input: {share_per_million: 0.0303, unmeasured: true}
+      cache_read: {share_per_million: 0.000787, unmeasured: true}
+      cache_write_5m: {share_per_million: 0.0372, unmeasured: true}
+      cache_write_1h: {share_per_million: 0.0372, unmeasured: true}
+      output: {share_per_million: 0.141, unmeasured: true}
+    claude-opus-5:
+      # Read in the Max 5x sessions of 2026-09-18 and 2026-09-19.
+      input: {share_per_million: 0.0841, measured: 2026-09-19}
+      cache_read: {share_per_million: 0.00219, measured: 2026-09-19}
+      cache_write_5m: {share_per_million: 0.103, measured: 2026-09-19}
+      cache_write_1h: {share_per_million: 0.103, measured: 2026-09-19}
+      output: {share_per_million: 0.393, measured: 2026-09-19}
+    claude-sonnet-5:
+      # The weight was read on Pro, input and output agreeing at 0.538 inside the peak band and derived outside it
+      # through the band's 1.442; the cache columns carry Opus's type ratios.
+      input: {share_per_million: 0.0454, unmeasured: true}
+      cache_read: {share_per_million: 0.00118, unmeasured: true}
+      cache_write_5m: {share_per_million: 0.0559, unmeasured: true}
+      cache_write_1h: {share_per_million: 0.0559, unmeasured: true}
+      output: {share_per_million: 0.212, unmeasured: true}
+  seven_day:
+    # No per-model weight has been read on this window.
+    claude-fable-5:
+      input: {share_per_million: 0.0122, unmeasured: true}
+      cache_read: {share_per_million: 0.000317, unmeasured: true}
+      cache_write_5m: {share_per_million: 0.0150, unmeasured: true}
+      cache_write_1h: {share_per_million: 0.0150, unmeasured: true}
+      output: {share_per_million: 0.0570, unmeasured: true}
+    claude-fable-5-1:
+      input: {share_per_million: 0.0220, unmeasured: true}
+      cache_read: {share_per_million: 0.000572, unmeasured: true}
+      cache_write_5m: {share_per_million: 0.0271, unmeasured: true}
+      cache_write_1h: {share_per_million: 0.0271, unmeasured: true}
+      output: {share_per_million: 0.103, unmeasured: true}
+    claude-haiku-4-5:
+      input: {share_per_million: 0.00220, unmeasured: true}
+      cache_read: {share_per_million: 0.0000571, unmeasured: true}
+      cache_write_5m: {share_per_million: 0.00270, unmeasured: true}
+      cache_write_1h: {share_per_million: 0.00270, unmeasured: true}
+      output: {share_per_million: 0.0103, unmeasured: true}
+    claude-opus-5:
+      input: {share_per_million: 0.00610, unmeasured: true}
+      cache_read: {share_per_million: 0.000159, unmeasured: true}
+      cache_write_5m: {share_per_million: 0.00750, unmeasured: true}
+      cache_write_1h: {share_per_million: 0.00750, unmeasured: true}
+      output: {share_per_million: 0.0285, unmeasured: true}
+    claude-sonnet-5:
+      input: {share_per_million: 0.00329, unmeasured: true}
+      cache_read: {share_per_million: 0.0000856, unmeasured: true}
+      cache_write_5m: {share_per_million: 0.00405, unmeasured: true}
+      cache_write_1h: {share_per_million: 0.00405, unmeasured: true}
+      output: {share_per_million: 0.0154, unmeasured: true}
+bands:
+  # Provisional. A charge is weighed by the band it lands in, at the request's completion. Input read 1.33
+  # (measured 2026-09-25) and output 1.44 (measured 2026-09-24), so the factor is 1.3 to 1.45 until one in-band
+  # window reads both; 1.45 follows the output, which dominates a Claude Code request's meter cost. The edges are
+  # steps, sharp within twenty minutes, measured at 12:00 and 18:00 UTC on 2026-09-25; they move with the zone
+  # (13:00 to 19:00 UTC from 2026-11-01). The weekend is off: a Saturday probe inside the band hours read the
+  # off-peak rate, measured 2026-09-26.
+  - zone: America/Los_Angeles
+    weekdays: true
+    from_hour: 5
+    to_hour: 11
+    factor: 1.45
+    windows: [five_hour]
+    measured: 2026-09-24
+    provisional: true

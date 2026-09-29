@@ -3852,7 +3852,7 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
   const costDlg = [...m.container.querySelectorAll('dialog[open]')].pop();
   expect('/sessions cost reference dialog', costDlg?.textContent ?? '', [
     'Cost reference',
-    'API list prices. A subscription upstream on plan quota spends the plan meter columns instead of money.',
+    'API list prices. A subscription upstream on plan quota spends the window share columns instead of money.',
     'Model',
     'Uncached input',
     'Cache write 5m',
@@ -3864,19 +3864,18 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
     'Hold warm 1h, 5m + probes',
     'Hold warm 1h, 1h + probe',
     '1h pays off after',
-    'Plan meter',
+    '5-hour window',
+    '7-day window',
     '5m write',
     '1h write',
-    'Measured',
-    'unmeasured',
+    'not measured on this window; derived from earlier meter readings',
+    'Window share',
     'number of later turns that must read the prefix before writing it into the cache was cheaper than sending it uncached each turn',
     'A 5-minute entry needs a probe about every 4 minutes to survive an idle hour, 15 in all; a 1-hour entry needs one.',
     'cost of keeping one prefix token warm across one idle hour (one write plus the probe reads), as a multiple of sending that token once as uncached input; 2.75x means holding it warm costs 2.75 times sending it cold once',
     'per prefix token',
     'On Fable 5.1, where a cache read costs 0.025x, a 5-minute entry kept warm by probes stays cheaper than a 1-hour entry for any idle span; a session with cache warming on may set CLAUDE_CODE_PROMPT_CACHE_TTL=5m on the client.',
     'Without warming, the 1-hour entry wins after a 5-minute pause.',
-    'One plain Opus input token on the 5-hour meter is the unit; a 1-hour write costs a subscription upstream the same as a 5-minute one, so on plan-funded traffic the long TTL is free',
-    "the pool's plan rule set keeps 1h for the main conversation and subagents alike; while a write costs money a 1-hour write is 2x against 1.25x, so the metered rule set's keepalive TTL defaults to 5m.",
     'claude-fable-5-1',
     'claude-fable-5',
     'claude-opus-4-8',
@@ -3889,7 +3888,7 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
     const terms = [...(costDlg?.querySelectorAll('.cost-ref__notes dt') ?? [])].map((dt) => dt.textContent?.trim() ?? '');
     results.push({
       name: '/sessions cost reference footnote is a definition list of six terms',
-      ok: JSON.stringify(terms) === JSON.stringify(['Per prefix token', 'Turns to pay off', 'Hold warm', 'Payoff', 'Fable 5.1', 'Plan meter']),
+      ok: JSON.stringify(terms) === JSON.stringify(['Per prefix token', 'Turns to pay off', 'Hold warm', 'Payoff', 'Fable 5.1', 'Window share']),
       missing: terms,
     });
   }
@@ -3908,23 +3907,44 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
   results.push({ name: '/sessions cost reference says a 1h entry never pays off on Fable 5.1', ok: fable[10] === 'never within 1h', missing: fable });
   const haiku = priceRow('claude-haiku-4-5-20251001');
   results.push({ name: '/sessions cost reference prices Haiku 4.5 from the shipped table', ok: haiku[1] === '$1.00' && haiku[2] === '$1.25' && haiku[3] === '$2.00' && haiku[4] === '$0.10' && haiku[5] === '$5.00', missing: haiku });
-  // Input, cache read, 5m write, 1h write and output, each times the model's factor, then the measurement date.
+  // Input, cache read, 5m write, 1h write and output on the 5-hour window, then the same five on the 7-day one.
   const plan = (row) => row.slice(11);
   results.push({
-    name: '/sessions cost reference weighs every token type on the plan meter by the model factor',
-    ok: JSON.stringify(plan(fable)) === JSON.stringify(['3.61', '0.0939', '4.44', '4.44', '16.9', '2026-09-19']) && JSON.stringify(plan(priceRow('claude-opus-5'))) === JSON.stringify(['1', '0.026', '1.23', '1.23', '4.67', '2026-09-19']),
-    missing: [JSON.stringify(plan(fable)), JSON.stringify(plan(priceRow('claude-opus-5')))],
+    name: '/sessions cost reference prices every token type as a share of both windows',
+    ok:
+      JSON.stringify(plan(priceRow('claude-opus-5'))) === JSON.stringify(['8.41%', '0.219%', '10.3%', '10.3%', '39.3%', '0.61%*', '0.0159%*', '0.75%*', '0.75%*', '2.85%*']) &&
+      JSON.stringify(plan(fable)) === JSON.stringify(['30.4%', '0.789%', '37.3%', '37.3%', '142%', '2.2%*', '0.0572%*', '2.71%*', '2.71%*', '10.3%*']),
+    missing: [JSON.stringify(plan(priceRow('claude-opus-5'))), JSON.stringify(plan(fable))],
   });
-  results.push({ name: '/sessions cost reference finds the undated factor row for a dated model', ok: JSON.stringify(plan(haiku)) === JSON.stringify(['0.36', '0.00936', '0.443', '0.443', '1.68', '2026-09-24']), missing: plan(haiku) });
+  results.push({ name: '/sessions cost reference finds the undated cells for a dated model', ok: JSON.stringify(plan(haiku)) === JSON.stringify(['3.03%*', '0.0787%*', '3.72%*', '3.72%*', '14.1%*', '0.22%*', '0.00571%*', '0.27%*', '0.27%*', '1.03%*']), missing: plan(haiku) });
   {
-    const unmeasured = [...(costDlg?.querySelectorAll('tbody tr') ?? [])].find((row) => row.children[0]?.textContent?.trim() === 'claude-fable-5')?.querySelector('.badge');
+    const hint = 'not measured on this window; derived from earlier meter readings';
+    const cells = (model) => [...([...(costDlg?.querySelectorAll('tbody tr') ?? [])].find((row) => row.children[0]?.textContent?.trim() === model)?.children ?? [])].slice(11);
+    const mark = (td) => td.querySelector('.cost-ref__flag');
+    const flagged = (tds) => tds.length === 5 && tds.every((td) => mark(td)?.textContent === '*' && mark(td)?.getAttribute('title') === hint);
+    const sevenDay = ['claude-fable-5-1', 'claude-fable-5', 'claude-opus-5', 'claude-sonnet-5', 'claude-haiku-4-5-20251001'].map((model) => cells(model).slice(5));
+    const opusFiveHour = cells('claude-opus-5').slice(0, 5);
+    const legend = costDlg?.querySelector('.cost-ref__legend')?.textContent?.trim() ?? '';
     results.push({
-      name: '/sessions cost reference flags a factor row no meter run has measured',
-      ok: unmeasured?.textContent?.trim() === 'unmeasured' && (unmeasured.getAttribute('title') ?? '').includes('list-price ratio') && JSON.stringify(plan(priceRow('claude-fable-5')).slice(0, 5)) === JSON.stringify(['2', '0.052', '2.46', '2.46', '9.34']),
-      missing: [unmeasured?.textContent ?? 'no badge', JSON.stringify(plan(priceRow('claude-fable-5')))],
+      name: '/sessions cost reference flags a cell no measurement filled',
+      ok: flagged(cells('claude-sonnet-5').slice(0, 5)) && sevenDay.every(flagged) && opusFiveHour.length === 5 && opusFiveHour.every((td) => mark(td) === null) && legend === `* ${hint}`,
+      missing: [legend, ...sevenDay.map((tds) => tds.map((td) => td.textContent).join(' '))],
     });
   }
-  results.push({ name: '/sessions cost reference leaves a model with no factor row blank on the plan side', ok: plan(priceRow('claude-opus-4-8')).every((c) => c === '-') && plan(priceRow('claude-opus-4-8')).length === 6, missing: plan(priceRow('claude-opus-4-8')) });
+  {
+    const groups = [...(costDlg?.querySelectorAll('thead tr:first-child th') ?? [])].slice(11).map((th) => [th.textContent?.trim(), th.getAttribute('title')]);
+    results.push({
+      name: "/sessions cost reference titles each window group with that window's tier factors",
+      ok:
+        JSON.stringify(groups) ===
+        JSON.stringify([
+          ['5-hour window', 'Share of a Max 5x window per million tokens; a Pro account spends 4.65 times as much of its own, a Max 20x 0.248 times'],
+          ['7-day window', 'Share of a Max 5x window per million tokens; a Pro account spends 5.56 times as much of its own, a Max 20x 0.467 times'],
+        ]),
+      missing: groups.map((g) => g.join(': ')),
+    });
+  }
+  results.push({ name: '/sessions cost reference leaves a model with no cells blank on both windows', ok: plan(priceRow('claude-opus-4-8')).every((c) => c === '-') && plan(priceRow('claude-opus-4-8')).length === 10, missing: plan(priceRow('claude-opus-4-8')) });
   const close = [...(costDlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Close');
   close?.click();
   await m.settle(200);

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { earlierHolderLabel, fmtAbsolute, fmtEndsIn, fmtHourTick, fmtShortTime, fmtTime, fmtUsd, placementHit, setTimeFormat } from './dist/api.js';
+import { earlierHolderLabel, fmtAbsolute, fmtEndsIn, fmtHourTick, fmtShare, fmtShortTime, fmtTime, fmtUsd, placementHit, setTimeFormat } from './dist/api.js';
 
 test('a placement is a hit when the cache read what it promised: a content one its prefix, any other one anything', () => {
   const content = { depth: 3, prefixTokens: 130_000, rung: 'content' };
@@ -63,4 +63,12 @@ test('an earlier holder reads its creation minute in UTC, and one with no creati
   assert.equal(earlierHolderLabel('desktop', 0), 'desktop (deleted)', 'generation 0 is a row filed before the generation column');
   assert.equal(earlierHolderLabel('desktop', Number('abc')), 'desktop (deleted)', 'a generation that is no number');
   assert.equal(earlierHolderLabel('desktop', Infinity), 'desktop (deleted)');
+});
+
+test('a window share reads as a percent to three significant digits with no trailing zero', () => {
+  assert.equal(fmtShare(0.0841), '8.41%');
+  assert.equal(fmtShare(0.00219), '0.219%');
+  assert.equal(fmtShare(0.125), '12.5%');
+  assert.equal(fmtShare(0.0061), '0.61%', 'a trailing zero drops');
+  assert.equal(fmtShare(0.0000571), '0.00571%', 'a small share keeps its three digits');
 });

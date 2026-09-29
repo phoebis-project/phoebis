@@ -793,7 +793,7 @@ export const SETTINGS: Settings = {
   keepalive: { leaseSeconds: 90, maxAgents: 1024, maxRequestBytes: 8_388_608, maxRetainedBytes: 268_435_456, maxSessions: 128, maxWorkers: 4, oauthPrewarmVerified: false },
   listeners: { admin: '127.0.0.1:8081', metrics: '127.0.0.1:9464', proxy: '127.0.0.1:8080' },
   // The route answers the table the ledger ships, so the captured answer is the table itself.
-  planFactors: SETTINGS_SAMPLE.planFactors,
+  planTables: SETTINGS_SAMPLE.planTables,
   pricing: { effectiveDate: '2026-09-08', models: PRICES, source: 'shipped' },
   quota: { sampleRetentionDays: 30 },
   retention: { bodyCaptureMaxHours: 72, ledgerDays: 90, quotaSamplesDays: 30, rollupDays: 400 },

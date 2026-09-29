@@ -6425,59 +6425,343 @@ export const FIXTURES: Record<string, Fixture> = {
         "metrics": "127.0.0.1:9464",
         "proxy": "test"
       },
-      "plan_factors": {
-        "measured": "2026-09-24",
-        "reference": "claude-opus-5",
-        "models": {
-          "claude-fable-5": {
-            "factor": 2,
-            "input": 1,
-            "cache_read": 0.026,
-            "cache_write_5m": 1.23,
-            "cache_write_1h": 1.23,
-            "output": 4.67,
-            "measured": null,
-            "unmeasured": true
-          },
-          "claude-fable-5-1": {
-            "factor": 3.61,
-            "input": 1,
-            "cache_read": 0.026,
-            "cache_write_5m": 1.23,
-            "cache_write_1h": 1.23,
-            "output": 4.67,
-            "measured": "2026-09-19",
-            "unmeasured": false
-          },
-          "claude-haiku-4-5": {
-            "factor": 0.36,
-            "input": 1,
-            "cache_read": 0.026,
-            "cache_write_5m": 1.23,
-            "cache_write_1h": 1.23,
-            "output": 4.67,
-            "measured": "2026-09-24",
-            "unmeasured": false
-          },
-          "claude-opus-5": {
-            "factor": 1,
-            "input": 1,
-            "cache_read": 0.026,
-            "cache_write_5m": 1.23,
-            "cache_write_1h": 1.23,
-            "output": 4.67,
-            "measured": "2026-09-19",
-            "unmeasured": false
-          },
-          "claude-sonnet-5": {
-            "factor": 0.54,
-            "input": 1,
-            "cache_read": 0.026,
-            "cache_write_5m": 1.23,
-            "cache_write_1h": 1.23,
-            "output": 4.67,
-            "measured": "2026-09-24",
-            "unmeasured": false
+      "plan_tables": {
+        "cost": {
+          "bands": [
+            {
+              "weekdays": true,
+              "from_hour": 5,
+              "to_hour": 11,
+              "factor": 1.45,
+              "windows": [
+                "five_hour"
+              ],
+              "measured": "2026-09-24",
+              "provisional": true,
+              "zone": "America/Los_Angeles",
+              "effective_from": null
+            }
+          ],
+          "effective": "2026-09-29",
+          "tier": "default_claude_max_5x",
+          "version": "2026-09-29",
+          "windows": {
+            "five_hour": {
+              "claude-fable-5": {
+                "cache_read": {
+                  "measured": null,
+                  "share_per_million": 0.00437,
+                  "unmeasured": true
+                },
+                "cache_write_1h": {
+                  "measured": null,
+                  "share_per_million": 0.207,
+                  "unmeasured": true
+                },
+                "cache_write_5m": {
+                  "measured": null,
+                  "share_per_million": 0.207,
+                  "unmeasured": true
+                },
+                "input": {
+                  "measured": null,
+                  "share_per_million": 0.168,
+                  "unmeasured": true
+                },
+                "output": {
+                  "measured": null,
+                  "share_per_million": 0.786,
+                  "unmeasured": true
+                }
+              },
+              "claude-fable-5-1": {
+                "cache_read": {
+                  "measured": "2026-09-19",
+                  "share_per_million": 0.00789,
+                  "unmeasured": false
+                },
+                "cache_write_1h": {
+                  "measured": "2026-09-19",
+                  "share_per_million": 0.373,
+                  "unmeasured": false
+                },
+                "cache_write_5m": {
+                  "measured": "2026-09-19",
+                  "share_per_million": 0.373,
+                  "unmeasured": false
+                },
+                "input": {
+                  "measured": "2026-09-19",
+                  "share_per_million": 0.304,
+                  "unmeasured": false
+                },
+                "output": {
+                  "measured": "2026-09-19",
+                  "share_per_million": 1.42,
+                  "unmeasured": false
+                }
+              },
+              "claude-haiku-4-5": {
+                "cache_read": {
+                  "measured": null,
+                  "share_per_million": 0.000787,
+                  "unmeasured": true
+                },
+                "cache_write_1h": {
+                  "measured": null,
+                  "share_per_million": 0.0372,
+                  "unmeasured": true
+                },
+                "cache_write_5m": {
+                  "measured": null,
+                  "share_per_million": 0.0372,
+                  "unmeasured": true
+                },
+                "input": {
+                  "measured": null,
+                  "share_per_million": 0.0303,
+                  "unmeasured": true
+                },
+                "output": {
+                  "measured": null,
+                  "share_per_million": 0.141,
+                  "unmeasured": true
+                }
+              },
+              "claude-opus-5": {
+                "cache_read": {
+                  "measured": "2026-09-19",
+                  "share_per_million": 0.00219,
+                  "unmeasured": false
+                },
+                "cache_write_1h": {
+                  "measured": "2026-09-19",
+                  "share_per_million": 0.103,
+                  "unmeasured": false
+                },
+                "cache_write_5m": {
+                  "measured": "2026-09-19",
+                  "share_per_million": 0.103,
+                  "unmeasured": false
+                },
+                "input": {
+                  "measured": "2026-09-19",
+                  "share_per_million": 0.0841,
+                  "unmeasured": false
+                },
+                "output": {
+                  "measured": "2026-09-19",
+                  "share_per_million": 0.393,
+                  "unmeasured": false
+                }
+              },
+              "claude-sonnet-5": {
+                "cache_read": {
+                  "measured": null,
+                  "share_per_million": 0.00118,
+                  "unmeasured": true
+                },
+                "cache_write_1h": {
+                  "measured": null,
+                  "share_per_million": 0.0559,
+                  "unmeasured": true
+                },
+                "cache_write_5m": {
+                  "measured": null,
+                  "share_per_million": 0.0559,
+                  "unmeasured": true
+                },
+                "input": {
+                  "measured": null,
+                  "share_per_million": 0.0454,
+                  "unmeasured": true
+                },
+                "output": {
+                  "measured": null,
+                  "share_per_million": 0.212,
+                  "unmeasured": true
+                }
+              }
+            },
+            "seven_day": {
+              "claude-fable-5": {
+                "cache_read": {
+                  "measured": null,
+                  "share_per_million": 0.000317,
+                  "unmeasured": true
+                },
+                "cache_write_1h": {
+                  "measured": null,
+                  "share_per_million": 0.015,
+                  "unmeasured": true
+                },
+                "cache_write_5m": {
+                  "measured": null,
+                  "share_per_million": 0.015,
+                  "unmeasured": true
+                },
+                "input": {
+                  "measured": null,
+                  "share_per_million": 0.0122,
+                  "unmeasured": true
+                },
+                "output": {
+                  "measured": null,
+                  "share_per_million": 0.057,
+                  "unmeasured": true
+                }
+              },
+              "claude-fable-5-1": {
+                "cache_read": {
+                  "measured": null,
+                  "share_per_million": 0.000572,
+                  "unmeasured": true
+                },
+                "cache_write_1h": {
+                  "measured": null,
+                  "share_per_million": 0.0271,
+                  "unmeasured": true
+                },
+                "cache_write_5m": {
+                  "measured": null,
+                  "share_per_million": 0.0271,
+                  "unmeasured": true
+                },
+                "input": {
+                  "measured": null,
+                  "share_per_million": 0.022,
+                  "unmeasured": true
+                },
+                "output": {
+                  "measured": null,
+                  "share_per_million": 0.103,
+                  "unmeasured": true
+                }
+              },
+              "claude-haiku-4-5": {
+                "cache_read": {
+                  "measured": null,
+                  "share_per_million": 0.0000571,
+                  "unmeasured": true
+                },
+                "cache_write_1h": {
+                  "measured": null,
+                  "share_per_million": 0.0027,
+                  "unmeasured": true
+                },
+                "cache_write_5m": {
+                  "measured": null,
+                  "share_per_million": 0.0027,
+                  "unmeasured": true
+                },
+                "input": {
+                  "measured": null,
+                  "share_per_million": 0.0022,
+                  "unmeasured": true
+                },
+                "output": {
+                  "measured": null,
+                  "share_per_million": 0.0103,
+                  "unmeasured": true
+                }
+              },
+              "claude-opus-5": {
+                "cache_read": {
+                  "measured": null,
+                  "share_per_million": 0.000159,
+                  "unmeasured": true
+                },
+                "cache_write_1h": {
+                  "measured": null,
+                  "share_per_million": 0.0075,
+                  "unmeasured": true
+                },
+                "cache_write_5m": {
+                  "measured": null,
+                  "share_per_million": 0.0075,
+                  "unmeasured": true
+                },
+                "input": {
+                  "measured": null,
+                  "share_per_million": 0.0061,
+                  "unmeasured": true
+                },
+                "output": {
+                  "measured": null,
+                  "share_per_million": 0.0285,
+                  "unmeasured": true
+                }
+              },
+              "claude-sonnet-5": {
+                "cache_read": {
+                  "measured": null,
+                  "share_per_million": 0.0000856,
+                  "unmeasured": true
+                },
+                "cache_write_1h": {
+                  "measured": null,
+                  "share_per_million": 0.00405,
+                  "unmeasured": true
+                },
+                "cache_write_5m": {
+                  "measured": null,
+                  "share_per_million": 0.00405,
+                  "unmeasured": true
+                },
+                "input": {
+                  "measured": null,
+                  "share_per_million": 0.00329,
+                  "unmeasured": true
+                },
+                "output": {
+                  "measured": null,
+                  "share_per_million": 0.0154,
+                  "unmeasured": true
+                }
+              }
+            }
+          }
+        },
+        "tiers": {
+          "measured": "2026-09-24",
+          "reference": "default_claude_max_5x",
+          "tiers": {
+            "default_claude_max_20x": {
+              "five_hour": {
+                "factor": 4.03,
+                "measured": null,
+                "unmeasured": true
+              },
+              "seven_day": {
+                "factor": 2.14,
+                "measured": null,
+                "unmeasured": true
+              }
+            },
+            "default_claude_max_5x": {
+              "five_hour": {
+                "factor": 1,
+                "measured": "2026-09-19",
+                "unmeasured": false
+              },
+              "seven_day": {
+                "factor": 1,
+                "measured": "2026-09-19",
+                "unmeasured": false
+              }
+            },
+            "default_claude_pro": {
+              "five_hour": {
+                "factor": 0.215,
+                "measured": "2026-09-24",
+                "unmeasured": false
+              },
+              "seven_day": {
+                "factor": 0.18,
+                "measured": "2026-09-24",
+                "unmeasured": false
+              }
+            }
           }
         }
       },

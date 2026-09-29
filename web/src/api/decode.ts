@@ -1,8 +1,8 @@
 import type {
   Account, AccountCatalog, AccountRollup, AffinityMode, AffinitySource, AlertEvent, AlertRule, AlertRuleInput, AnalyticsGroup, AnalyticsPoint, ApiKey, AttemptOutcome, AttemptResponse, BudgetPeriod, BurnPoint, BurnUnit, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
   CohortHold, Delivery, GuardVerdict, KeepaliveOverview, KeepaliveRecipe, KeyModels, LifecycleDelivery, LifecyclePage, LiveAttempt, LiveDelta, LiveMetric, LiveRequest, LiveSnapshot, LiveTick, MemberBudget, MemberEligibility, ModelEvent, ModelPrice, ModelRule, ModelRulesMode,
-  ModelsState, Overview, PairingSession, PinMigrationReason, PinReleaseReason, Placement, PlacementRow, PlanFactor, PlanFactors, Pool, PoolCacheTtl, QuotaHeaders, QuotaHistory, QuotaSnapshot, RateLimitWindow, RequestEvent, RequestLog, RequestPage, RequestShape, RewritePoint,
-  RuleCooldown, SelectionTrace, Session, SessionLifecycleDetail, SessionPlacement, Settings, SubagentPlacement, Subscription, TtlRules, WarmSessions, WindowFit, WindowId,
+  ModelsState, Overview, PairingSession, PinMigrationReason, PinReleaseReason, Placement, PlacementRow, PlanBand, PlanCell, PlanModelCells, PlanTables, Pool, PoolCacheTtl, QuotaHeaders, QuotaHistory, QuotaSnapshot, RateLimitWindow, RequestEvent, RequestLog, RequestPage, RequestShape, RewritePoint,
+  RuleCooldown, SelectionTrace, Session, SessionLifecycleDetail, SessionPlacement, Settings, SubagentPlacement, Subscription, TierFactor, TtlRules, WarmSessions, WindowFit, WindowId,
 } from './types';
 import { ACCOUNT_KIND_VALUES } from './types';
 import { CACHE_TTL_DEFAULTS, METERED_TTL_DEFAULTS, PLAN_TTL_DEFAULTS, POOL_AFFINITY_DEFAULTS, POOL_ENGINE_DEFAULTS, type AccountPatch, type KeyInput, type PoolInput } from './client';
@@ -527,13 +527,24 @@ export function decodeAlertEvent(v: unknown): AlertEvent {
 const price = (m: Rec): ModelPrice => ({ cacheReadPerM: num(m.cache_read_per_m), cacheWrite1hPerM: num(m.cache_write_1h_per_m), cacheWrite5mPerM: num(m.cache_write_5m_per_m), inputPerM: num(m.input_per_m), model: str(m.model), outputPerM: num(m.output_per_m) });
 export const decodePricing = (v: unknown): Settings['pricing'] => ({ effectiveDate: new Date(str(rec(v).effective, '1970-01-01')).toISOString(), models: list(rec(v).models).map(rec).map(price), source: str(rec(v).source) });
 
-const planFactor = (v: unknown): PlanFactor => {
-  const f = rec(v);
-  return { cacheRead: num(f.cache_read), cacheWrite1h: num(f.cache_write_1h), cacheWrite5m: num(f.cache_write_5m), factor: num(f.factor), input: num(f.input), measured: strOrNull(f.measured), output: num(f.output), unmeasured: bool(f.unmeasured) };
+const planCell = (v: unknown): PlanCell => ({ measured: strOrNull(rec(v).measured), sharePerMillion: num(rec(v).share_per_million), unmeasured: bool(rec(v).unmeasured) });
+const planModelCells = (v: unknown): PlanModelCells => {
+  const m = rec(v);
+  return { cacheRead: planCell(m.cache_read), cacheWrite1h: planCell(m.cache_write_1h), cacheWrite5m: planCell(m.cache_write_5m), input: planCell(m.input), output: planCell(m.output) };
 };
-const decodePlanFactors = (v: unknown): PlanFactors => {
-  const p = rec(v);
-  return { measured: str(p.measured), models: Object.fromEntries(Object.entries(rec(p.models)).map(([model, f]) => [model, planFactor(f)])), reference: str(p.reference) };
+const planBand = (v: unknown): PlanBand => {
+  const b = rec(v);
+  return { effectiveFrom: strOrNull(b.effective_from), factor: num(b.factor, 1), fromHour: num(b.from_hour), measured: str(b.measured), provisional: bool(b.provisional), toHour: num(b.to_hour), weekdays: bool(b.weekdays), windows: list(b.windows).map((w) => str(w)), zone: str(b.zone) };
+};
+const tierFactor = (v: unknown): TierFactor => ({ factor: num(rec(v).factor), measured: strOrNull(rec(v).measured), unmeasured: bool(rec(v).unmeasured) });
+const byKey = <T>(v: unknown, of: (row: unknown) => T): Record<string, T> => Object.fromEntries(Object.entries(rec(v)).map(([key, row]) => [key, of(row)]));
+const decodePlanTables = (v: unknown): PlanTables => {
+  const cost = rec(rec(v).cost);
+  const tiers = rec(rec(v).tiers);
+  return {
+    cost: { bands: list(cost.bands).map(planBand), effective: str(cost.effective), tier: str(cost.tier), version: str(cost.version), windows: byKey(cost.windows, (models) => byKey(models, planModelCells)) },
+    tiers: { measured: str(tiers.measured), reference: str(tiers.reference), tiers: byKey(tiers.tiers, (t) => ({ fiveHour: tierFactor(rec(t).five_hour), sevenDay: tierFactor(rec(t).seven_day) })) },
+  };
 };
 
 export function decodeSettings(v: unknown): Settings {
@@ -553,7 +564,7 @@ export function decodeSettings(v: unknown): Settings {
     compatibility: { cacheDiagnostics: bool(c.cache_diagnostics), profile: str(c.profile, str(rec(s.about).profile)) },
     keepalive: { leaseSeconds: num(k.lease_seconds), maxAgents: num(k.max_agents), maxRequestBytes: num(k.max_request_bytes), maxRetainedBytes: num(k.max_retained_bytes), maxSessions: num(k.max_sessions), maxWorkers: num(k.max_workers), oauthPrewarmVerified: bool(k.oauth_prewarm_verified) },
     listeners: { admin: str(l.admin), metrics: str(l.metrics), proxy: str(l.proxy) },
-    planFactors: decodePlanFactors(s.plan_factors),
+    planTables: decodePlanTables(s.plan_tables),
     pricing: decodePricing(s.pricing),
     quota: { sampleRetentionDays: num(q.sample_retention_days) },
     retention: { bodyCaptureMaxHours: num(r.body_capture_max_hours), ledgerDays: num(r.ledger_days), quotaSamplesDays: num(r.quota_samples_days), rollupDays: num(r.rollup_days) },

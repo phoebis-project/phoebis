@@ -73,10 +73,19 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
     );
     assert_eq!(settings["pricing"]["version"], "2026-09-08");
     assert_eq!(settings["pricing"]["source"], "shipped");
-    assert_eq!(settings["plan_factors"]["reference"], "claude-opus-5");
+    let tables = &settings["plan_tables"];
+    assert_eq!(tables["cost"]["tier"], "default_claude_max_5x");
     assert_eq!(
-        settings["plan_factors"]["models"]["claude-opus-5"]["factor"].as_f64(),
-        Some(1.0)
+        tables["cost"]["windows"]["five_hour"]["claude-opus-5"]["input"]["measured"],
+        "2026-09-19"
+    );
+    assert_eq!(
+        tables["cost"]["windows"]["seven_day"]["claude-opus-5"]["input"]["unmeasured"],
+        true
+    );
+    assert_eq!(
+        tables["tiers"]["tiers"]["default_claude_pro"]["five_hour"]["factor"].as_f64(),
+        Some(0.215)
     );
     let text = settings.to_string();
     assert!(

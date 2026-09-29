@@ -152,23 +152,27 @@ spent by then.</dd>
 <dd>On Fable 5.1, where a cache read costs 0.025x, a 5-minute entry kept warm by probes stays cheaper than a
 1-hour entry for any idle span; a session with cache warming on may set `CLAUDE_CODE_PROMPT_CACHE_TTL=5m` on the
 client. Without warming, the 1-hour entry wins after a 5-minute pause.</dd>
-<dt>Plan meter</dt>
-<dd>One plain Opus input token on the 5-hour meter is the unit; a 1-hour write costs a subscription upstream the
-same as a 5-minute one, so on plan-funded traffic the long TTL is free and the pool's plan rule set keeps `1h`
-for the main conversation and subagents alike; while a write costs money a 1-hour write is 2x against 1.25x, so the
-metered rule set's `keepalive` TTL defaults to `5m`.</dd>
+<dt>Window share</dt>
+<dd>Each plan column is the share of a Max 5x subscription's 5-hour or 7-day window that one million tokens of the type
+consume, from the cost table the ledger ships. An account on another tier spends that share over its tier's factor from
+the tier factor table, so a Pro account spends more of its own window and a Max 20x account less, by the multiples a
+group header's tooltip gives. A share marked with an asterisk is not yet measured on its window and carries a stand-in
+derived from earlier meter readings. A 1-hour write spends the same share as a 5-minute one, so on plan-funded traffic
+the long TTL is free and the pool's plan rule set keeps `1h` for the main conversation and subagents alike; while a
+write costs money a 1-hour write is 2x against 1.25x, so the metered rule set's `keepalive` TTL defaults to `5m`.</dd>
 </dl>
 
-Beside the prices a Plan meter column group reads the dated factor table the ledger ships
-(`crates/ledger/plan_factors.yaml`): per model the meter tokens one token of each type costs a subscription upstream
-on plan quota (input, cache read, 5m write, 1h write, output, each times the model's factor), the date the row was
-measured, and an `unmeasured` badge on a row that still carries its list-price ratio until a meter run fills it. A
-dated model id reads the row of its undated name; a model the table has no row for leaves the group blank.
+Beside the prices, two column groups read the cost table the ledger ships (`crates/ledger/cost_table.yaml`): the share
+of a Max 5x subscription's 5-hour window and of its 7-day window that one million tokens of each type consume, per
+model. An account on another tier spends the share over its tier's factor (`crates/ledger/tier_factors.yaml`: Pro 0.215
+and 0.18, Max 20x 4.03 and 2.14 of Max 5x's two windows). A cell no measurement has filled is marked with an asterisk
+and carries a stand-in derived from earlier meter readings. A dated model id reads the cells of its undated name; a
+model the table has no cells for leaves both groups blank.
 
-The prices carry one caveat: "API list prices. A subscription upstream on plan quota spends the plan meter columns
-instead of money." A recipe's own net follows the same split: meter tokens on a subscription account outside
-overage, dollars on an api_key account or one in overage. Each agent line of the Sessions view shows its net, as "N
-plan tokens", in dollars, or both for an agent whose upstream changed funding while it was warmed.
+The prices carry one caveat: "API list prices. A subscription upstream on plan quota spends the window share columns
+instead of money." A recipe's own net follows the same split: meter tokens on a subscription account outside overage,
+dollars on an api_key account or one in overage. Each agent line of the Sessions view shows its net, as "N plan tokens",
+in dollars, or both for an agent whose upstream changed funding while it was warmed.
 
 The four shipped rows, all prices in USD per million tokens:
 

@@ -50,8 +50,8 @@ the mock's admin secret and the clock pinned at `2026-09-16T14:30:00Z`, the week
 The mock's random draws are seeded, so two runs write the same screenshots byte for byte, which `diff -r` over the
 two directories shows. The dashboard's remaining cards and its empty state are checked against the router's seeded
 registry alone (`PHOEBIS_E2E_MOCK=1` skips them), since the mock's story has subscription upstreams and no empty list on
-the dashboard. The subscription end editor and the cost reference's unmeasured badge need the story's OAuth upstream
-and unmeasured factor row, so against the router's seed those two parts stand down.
+the dashboard. The subscription end editor needs the story's OAuth upstream, so against the router's seed that part
+stands down.
 
 ## On a host without Chromium
 

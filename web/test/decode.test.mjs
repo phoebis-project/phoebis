@@ -942,16 +942,26 @@ test('settings decode the quota, routing, storage, and usage blocks the route an
   assert.equal(d.decodeSettings({ ...wire, storage: { ...wire.storage, pricing_path: './pricing.yaml' } }).storage.pricingPath, './pricing.yaml');
 });
 
-test('settings decode the plan factors', () => {
+test('settings decode the cost table and the tier factor table', () => {
   const wire = fixture('settings');
-  const f = d.decodeSettings(wire).planFactors;
-  assert.deepEqual([f.measured, f.reference], [wire.plan_factors.measured, 'claude-opus-5']);
-  assert.deepEqual(Object.keys(f.models).sort(), Object.keys(wire.plan_factors.models).sort());
-  assert.deepEqual(f.models['claude-fable-5-1'], { cacheRead: 0.026, cacheWrite1h: 1.23, cacheWrite5m: 1.23, factor: 3.61, input: 1, measured: '2026-09-19', output: 4.67, unmeasured: false });
-  assert.deepEqual([f.models['claude-fable-5'].measured, f.models['claude-fable-5'].unmeasured], [null, true], 'a row the meter has not measured names no date');
+  const { cost, tiers } = d.decodeSettings(wire).planTables;
+  assert.deepEqual([cost.effective, cost.version, cost.tier], [wire.plan_tables.cost.effective, wire.plan_tables.cost.version, 'default_claude_max_5x']);
+  assert.deepEqual(Object.keys(cost.windows).sort(), ['five_hour', 'seven_day']);
+  assert.deepEqual(Object.keys(cost.windows.five_hour).sort(), Object.keys(wire.plan_tables.cost.windows.five_hour).sort());
+  assert.deepEqual(cost.windows.five_hour['claude-opus-5'].input, { measured: '2026-09-19', sharePerMillion: 0.0841, unmeasured: false }, 'a measured cell names its date');
+  assert.deepEqual(cost.windows.seven_day['claude-opus-5'].cacheWrite1h, { measured: null, sharePerMillion: 0.0075, unmeasured: true }, 'a flagged cell names no date');
+  assert.deepEqual(Object.keys(cost.windows.five_hour['claude-opus-5']).sort(), ['cacheRead', 'cacheWrite1h', 'cacheWrite5m', 'input', 'output']);
+  assert.deepEqual(cost.bands, [{ effectiveFrom: null, factor: 1.45, fromHour: 5, measured: '2026-09-24', provisional: true, toHour: 11, weekdays: true, windows: ['five_hour'], zone: 'America/Los_Angeles' }]);
+  assert.deepEqual([tiers.measured, tiers.reference], [wire.plan_tables.tiers.measured, 'default_claude_max_5x']);
+  assert.deepEqual(tiers.tiers.default_claude_pro.fiveHour, { factor: 0.215, measured: '2026-09-24', unmeasured: false });
+  assert.deepEqual(tiers.tiers.default_claude_max_20x.sevenDay, { factor: 2.14, measured: null, unmeasured: true });
   const bare = { ...wire };
-  delete bare.plan_factors;
-  assert.deepEqual(d.decodeSettings(bare).planFactors, { measured: '', models: {}, reference: '' }, 'an answer without the table reads as an empty one');
+  delete bare.plan_tables;
+  assert.deepEqual(
+    d.decodeSettings(bare).planTables,
+    { cost: { bands: [], effective: '', tier: '', version: '', windows: {} }, tiers: { measured: '', reference: '', tiers: {} } },
+    'an answer without the tables reads as empty ones',
+  );
 });
 
 test('an account patch encodes the cancelled flag and its end', () => {

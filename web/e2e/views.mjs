@@ -1706,10 +1706,9 @@ async function keyDialogGeometry(theme) {
 }
 
 /**
- * The cost reference dialog from Sessions: the plan meter's column heads and cells read in the type of the price
- * columns beside them, a row the factor table covers is the height of one it does not, an unmeasured badge is the
- * box of the companion badge on the page behind it (the kind badge sits in a monospace cell), and the whole table
- * fits the dialog without a sideways scroll.
+ * The cost reference dialog from Sessions: the window groups' heads, their column heads and their cells read in the
+ * type of the price columns beside them, a row the cost table covers is the height of one it does not, an
+ * unmeasured mark reads in its cell's face and size, and the whole table fits the dialog without a sideways scroll.
  */
 async function costReference(theme) {
   const say = (what) => failures.push(`${theme} /sessions: ${what}`);
@@ -1725,26 +1724,24 @@ async function costReference(theme) {
   }
   const read = await page.evaluate(() => {
     const type = (el) => (el ? `${getComputedStyle(el).fontFamily} ${getComputedStyle(el).fontSize} ${getComputedStyle(el).fontWeight} ${getComputedStyle(el).color}` : null);
-    const badge = (el) => {
-      if (!el) return null;
-      const s = getComputedStyle(el);
-      return `${s.fontFamily}/${s.fontSize}/${s.lineHeight}/${s.paddingTop}/${s.paddingLeft}/${Math.round(el.getBoundingClientRect().height)}`;
-    };
+    // The mark is muted, so its colour is the one thing it does not share with the cell around it.
+    const face = (el) => (el ? `${getComputedStyle(el).fontFamily} ${getComputedStyle(el).fontSize} ${getComputedStyle(el).fontWeight}` : null);
     const dlg = [...document.querySelectorAll('dialog[open]')].pop();
     const heads = [...dlg.querySelectorAll('thead th')];
-    // Both groups head a column Cache read: the price table's first, the plan meter's in the second header row.
+    // Every group heads a column Cache read: the price table's first, then each window's in the second header row.
     const [priceRead, planRead] = heads.filter((th) => th.textContent?.trim() === 'Cache read');
     const rows = [...dlg.querySelectorAll('tbody tr')];
-    // The plan meter cells close every row, six of them after the eleven price and payoff cells.
-    const covered = rows.find((r) => r.children.length === 17 && r.children[11].textContent?.trim() !== '-');
-    const bare = rows.find((r) => r.children.length === 17 && r.children[11].textContent?.trim() === '-');
+    // The window share cells close every row, ten of them after the eleven price and payoff cells.
+    const covered = rows.find((r) => r.children.length === 21 && r.children[11].textContent?.trim() !== '-');
+    const bare = rows.find((r) => r.children.length === 21 && r.children[11].textContent?.trim() === '-');
     const wrap = dlg.querySelector('.table-wrap');
+    const flag = dlg.querySelector('tbody .cost-ref__flag');
     return {
-      badge: badge(dlg.querySelector('tbody .badge')),
       bareHeight: bare ? Math.round(bare.getBoundingClientRect().height) : null,
       coveredHeight: covered ? Math.round(covered.getBoundingClientRect().height) : null,
-      group: type(heads.find((th) => th.textContent?.trim() === 'Plan meter')),
-      pageBadge: badge([...document.querySelectorAll('.sessions-table .badge')].find((b) => ['reporting', 'silent'].includes(b.textContent?.trim() ?? ''))),
+      flag: face(flag),
+      flagCell: face(flag?.closest('td')),
+      groups: heads.filter((th) => ['5-hour window', '7-day window'].includes(th.textContent?.trim() ?? '')).map(type),
       overflow: wrap ? wrap.scrollWidth - wrap.clientWidth : null,
       planCell: type(covered?.children[12]),
       planHead: type(planRead),
@@ -1753,14 +1750,13 @@ async function costReference(theme) {
     };
   });
   measurements.push(`${theme} /sessions cost reference ${JSON.stringify(read)}`);
-  if (read.planHead === null || read.planHead !== read.priceHead) say(`the plan meter's Cache read head reads ${read.planHead} against the price column's ${read.priceHead}`);
-  if (read.group === null || read.group !== read.priceHead) say(`the Plan meter group head reads ${read.group} against the price heads' ${read.priceHead}`);
-  if (read.planCell === null || read.planCell !== read.priceCell) say(`a plan meter cell reads ${read.planCell} against a price cell's ${read.priceCell}`);
-  if (read.bareHeight !== null && read.coveredHeight !== read.bareHeight) say(`a row with plan factors is ${read.coveredHeight}px tall against ${read.bareHeight}px without`);
+  if (read.planHead === null || read.planHead !== read.priceHead) say(`the 5-hour window's Cache read head reads ${read.planHead} against the price column's ${read.priceHead}`);
+  if (read.groups.length !== 2 || read.groups.some((group) => group !== read.priceHead)) say(`the window group heads read ${JSON.stringify(read.groups)} against the price heads' ${read.priceHead}`);
+  if (read.planCell === null || read.planCell !== read.priceCell) say(`a window share cell reads ${read.planCell} against a price cell's ${read.priceCell}`);
+  if (read.bareHeight !== null && read.coveredHeight !== read.bareHeight) say(`a row with window shares is ${read.coveredHeight}px tall against ${read.bareHeight}px without`);
   if (read.overflow === null || read.overflow > 0) say(`the table runs ${read.overflow}px past the dialog`);
-  if (read.badge === null || read.pageBadge === null) {
-    if (mock) say(`the story carries an unmeasured factor row and a reporting companion, yet the badges read ${read.badge} and ${read.pageBadge}`);
-  } else if (read.badge !== read.pageBadge) say(`the unmeasured badge measures ${read.badge} against the companion badge's ${read.pageBadge}`);
+  // Every shipped 7-day cell is a stand-in, so the router's seed draws the mark as the mock's story does.
+  if (read.flag === null || read.flag !== read.flagCell) say(`the unmeasured mark reads ${read.flag} against its cell's ${read.flagCell}`);
   await page.keyboard.press('Escape');
   await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => say('the dialog stayed open after Escape'));
   await atRest();
