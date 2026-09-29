@@ -482,6 +482,17 @@
   border-top: 1px solid var(--hairline);
 }
 
+.qcard__status {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.qcard__backoff {
+  color: var(--serious-ink);
+}
+
 /*
  * One line per window: chip, meter, reset. Both outer columns are fixed rather
  * than content-sized, so the three meters start and end on one vertical line

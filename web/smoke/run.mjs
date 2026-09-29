@@ -277,7 +277,7 @@ m = await mount('/observe');
 m.unmount();
 
 m = await mount('/quota');
-expect('/quota', m.text(), ['7 credentials', '7 loaded', '2 need attention', 'Refresh all', 'Plan', 'Trial', 'Ends in', 'Extra usage', '$12.34 / $50.00', '5h', '7d', 'Fable', 'n/a', 'not reported', 'resets in', 'Quota windows', 'Credential', '5-hour limit', '7-day limit', 'Fable 7-day limit', 'used ·', 'Weekly', '5-hour', 'Today', 'current window', 'Retry', 'invalid_grant']);
+expect('/quota', m.text(), ['7 credentials', '7 loaded', '3 need attention', 'Refresh all', 'Plan', 'Trial', 'Ends in', 'Extra usage', '$12.34 / $50.00', '5h', '7d', 'Fable', 'n/a', 'not reported', 'resets in', 'Quota windows', 'Credential', '5-hour limit', '7-day limit', 'Fable 7-day limit', 'used ·', 'Weekly', '5-hour', 'Today', 'current window', 'Retry', 'not yet polled', 'polled', 'rate limited', 'backing off since']);
 {
   const byLabel = new Map((await api.listAccounts()).map((a) => [a.label, a.id]));
   await emailLines('/quota each card names its email on hover, and nothing for one without', [...m.container.querySelectorAll('.qcard__name')].map((n) => [byLabel.get(n.textContent?.trim() ?? '') ?? '', n.getAttribute('title')]));
@@ -317,7 +317,7 @@ expect('/quota', m.text(), ['7 credentials', '7 loaded', '2 need attention', 'Re
 {
   const chipRows = [...m.container.querySelectorAll('.qcard__windows')];
   const names = chipRows.map((g) => [...g.querySelectorAll('.qchip__name')].map((n) => n.textContent).join(','));
-  results.push({ name: '/quota every card chips 5h, 7d, Fable in that order', ok: chipRows.length === 3 && names.every((n) => n === '5h,7d,Fable'), missing: [String(chipRows.length), ...new Set(names)] });
+  results.push({ name: '/quota every card chips 5h, 7d, Fable in that order', ok: chipRows.length === 4 && names.every((n) => n === '5h,7d,Fable'), missing: [String(chipRows.length), ...new Set(names)] });
   const tones = [...m.container.querySelectorAll('.qcard__windows .qchip')].map((c) => [...c.classList].find((n) => n.startsWith('qchip--')) ?? 'none');
   results.push({ name: '/quota chips carry a meter tone', ok: tones.length > 0 && tones.every((t) => ['qchip--absent', 'qchip--good', 'qchip--low', 'qchip--warn'].includes(t)), missing: [...new Set(tones)] });
   results.push({ name: '/quota fixtures exercise all three meter tones', ok: ['qchip--good', 'qchip--low', 'qchip--warn'].every((t) => tones.includes(t)), missing: [...new Set(tones)] });
@@ -329,7 +329,7 @@ expect('/quota', m.text(), ['7 credentials', '7 loaded', '2 need attention', 'Re
   const resets = [...m.container.querySelectorAll('.qcard__windows .qwin__reset')].length;
   results.push({ name: '/quota every chip has a reset label beside it', ok: resets === [...m.container.querySelectorAll('.qcard__windows .qchip')].length, missing: [String(resets)] });
   const aligned = chipRows.map((g) => g.querySelectorAll(':scope > .qwin__chip').length);
-  results.push({ name: '/quota every window row owns a cell in the aligned chip column', ok: aligned.length === 3 && aligned.every((n) => n === 3), missing: aligned.map(String) });
+  results.push({ name: '/quota every window row owns a cell in the aligned chip column', ok: aligned.length === 4 && aligned.every((n) => n === 3), missing: aligned.map(String) });
   const laneChips = [...m.container.querySelectorAll('.lane')].map((l) => [...l.querySelectorAll('.tl-chip')].length);
   results.push({ name: '/quota timeline gives every credential a chip per window', ok: laneChips.length >= 3 && laneChips.every((n) => n === 3), missing: laneChips.map(String) });
   const chipLabels = [...m.container.querySelectorAll('.lane .tl-chip')].map((c) => c.childNodes[0]?.textContent?.trim());
@@ -368,13 +368,57 @@ expect('/quota', m.text(), ['7 credentials', '7 loaded', '2 need attention', 'Re
   // The mock registry holds seven, so the plural is what this can read; the singular is asserted by its absence.
   const count = m.container.querySelector('.quota-meta span')?.textContent ?? 'no count';
   results.push({ name: '/quota gives the credential count the noun that number takes', ok: count === '7 credentials', missing: [count] });
-  // The route serves a cached snapshot inside the TTL, so the button says how young a snapshot it hands back as is.
+  // The route answers from the upstream's hold or its cache inside either, so the button says when it reads the endpoint.
   const hints = [...m.container.querySelectorAll('.pill')].filter((b) => ['Refresh', 'Refresh all'].includes(b.textContent?.trim() ?? '')).map((b) => b.getAttribute('title') ?? '');
-  results.push({ name: '/quota Refresh names the snapshot age the router serves as is', ok: hints.length > 1 && hints.every((t) => t === 'a snapshot younger than 60 seconds is served as is'), missing: [...new Set(hints)] });
+  results.push({ name: '/quota Refresh says it reads the endpoint unless a backoff or a young snapshot holds', ok: hints.length > 1 && hints.every((t) => t === 'reads the endpoint now unless the upstream is backing off or a snapshot younger than 60 seconds is cached'), missing: [...new Set(hints)] });
   const personal = [...m.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === 'personal');
   results.push({ name: '/quota draws the reason the provider gave for its extra usage', ok: personal?.querySelector('.callout')?.textContent?.includes('Payment method declined') === true, missing: [personal?.textContent?.slice(0, 160) ?? 'no personal card'] });
 }
+{
+  const cardOf = (label) => [...m.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === label);
+  const lines = (label) => [...(cardOf(label)?.querySelectorAll('.qcard__status > span') ?? [])].map((n) => n.textContent?.trim() ?? '');
+  const drawn = { business: lines('business'), mail: lines('mail'), spare: lines('spare'), team: lines('team') };
+  // The pinned clock runs on from the story's anchor, so a minute count may have ticked once by the time it is read.
+  results.push({
+    name: '/quota each subscription card says when the poll last asked and how it answered, then when its snapshot was read',
+    ok:
+      /^polled (now|\d+s ago): clean$/.test(drawn.business[0] ?? '') &&
+      /^checked (now|\d+s ago)$/.test(drawn.business[1] ?? '') &&
+      /^polled 1[12]m ago: rate limited$/.test(drawn.mail[0] ?? '') &&
+      /^polled [34]m ago: failed$/.test(drawn.team[0] ?? '') &&
+      drawn.team[1] === 'checked 2d 3h ago' &&
+      JSON.stringify(drawn.spare) === JSON.stringify(['not yet polled']),
+    missing: [JSON.stringify(drawn)],
+  });
+  const backoff = [...m.container.querySelectorAll('.qcard__backoff')];
+  results.push({
+    name: '/quota a card backing off says since when and when the next attempt comes, the run in its title',
+    ok:
+      backoff.length === 2 &&
+      backoff.every((b) => cardOf('mail')?.contains(b)) &&
+      /^backing off since 4[23]m ago$/.test(backoff[0].textContent?.trim() ?? '') &&
+      backoff[0].getAttribute('title') === '6 rate-limited answers in a row' &&
+      /^next attempt in [34]m$/.test(backoff[1].textContent?.trim() ?? ''),
+    missing: backoff.map((b) => `${b.textContent?.trim()} | ${b.getAttribute('title')}`),
+  });
+}
 m.unmount();
+
+// The route answers no error beside windows, but a read of it that failed does; the card draws what it holds.
+{
+  const { listQuotaSnapshots } = api;
+  api.listQuotaSnapshots = async () => (await listQuotaSnapshots.call(api)).map((s) => (s.accountId === 'team' ? { ...s, error: 'the admin API timed out', poll: null, status: 'error' } : s));
+  const held = await mount('/quota');
+  const cardOf = (label) => [...held.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === label);
+  const team = cardOf('team');
+  results.push({
+    name: '/quota a card whose read failed still draws the windows it holds, and the error block is kept for a card with none',
+    ok: Boolean(team?.querySelector('.qcard__windows')) && !team?.querySelector('.qcard__error') && !team?.classList.contains('is-error') && Boolean(cardOf('spare')?.querySelector('.qcard__error')),
+    missing: [team?.textContent?.slice(0, 160) ?? 'no team card'],
+  });
+  api.listQuotaSnapshots = listQuotaSnapshots;
+  held.unmount();
+}
 
 // A failed read draws the error state where the cards are, instead of leaving placeholders up for ever.
 {
@@ -4129,7 +4173,7 @@ m.unmount();
 api.lifecyclePageSize = 500;
 m = await mount('/alerts');
 expect('/alerts an expired question says so to an admin', m.text(), ['question expired with its captured body']);
-expect('/alerts', m.text(), ['Rules', 'Create rule', 'Re-auth required', 'Utilization above threshold', 'Pool exhausted', 'Waiting for user input', 'Client drift', 'Funding required', 'Probe cost cap reached', 'Credential refresh failed', 'Meter drift', 'personal:5h', '5-hour window, ratio 1.41 after a rise of 31%', 'hooks.example.com/phoebis/active', 'hooks.example.com/phoebis/subagent', 'All traffic', 'Signed', 'Unsigned', 'Events', 'Any condition', 'Any state', 'open', 'resolved', 'refused', 'asked: The ledger migration can rewrite rows in place', 'client 2.1.274, caught by the billing-hash check', 'agent main', 'Resolve', '2 in a row, the last refused: invalid_grant', 'Lifecycle', 'Any session condition', 'Session started', 'Subagent ended', 'idle for 30 min', 'parent main']);
+expect('/alerts', m.text(), ['Rules', 'Create rule', 'Re-auth required', 'Utilization above threshold', 'Pool exhausted', 'Waiting for user input', 'Client drift', 'Funding required', 'Probe cost cap reached', 'Credential refresh failed', 'Meter drift', 'personal:5h', 'Usage poll backing off', 'backing off since', '5-hour window, ratio 1.41 after a rise of 31%', 'hooks.example.com/phoebis/active', 'hooks.example.com/phoebis/subagent', 'All traffic', 'Signed', 'Unsigned', 'Events', 'Any condition', 'Any state', 'open', 'resolved', 'refused', 'asked: The ledger migration can rewrite rows in place', 'client 2.1.274, caught by the billing-hash check', 'agent main', 'Resolve', '2 in a row, the last refused: invalid_grant', 'Lifecycle', 'Any session condition', 'Session started', 'Subagent ended', 'idle for 30 min', 'parent main']);
 {
   // An opened run and a resolve run both start at attempt 1, so a row has to say which run it belongs to.
   const row = [...[...m.container.querySelectorAll('table')][1].querySelectorAll('tbody tr')].find((r) => r.textContent.includes('Credential refresh failed'));
@@ -4375,6 +4419,8 @@ expect('/alerts', m.text(), ['Rules', 'Create rule', 'Re-auth required', 'Utiliz
   results.push({ name: '/alerts keepalive_cost_cap scopes by pool or all', ok: cap.includes('All traffic') && cap.some((o) => o.startsWith('Pool ')) && !cap.some((o) => o.startsWith('Key ')), missing: cap });
   const meter = await scopesFor('meter_drift');
   results.push({ name: '/alerts meter_drift scopes by any upstream or one upstream', ok: meter[0] === 'Any upstream' && meter.some((o) => o.startsWith('Upstream ')) && !meter.includes('All traffic') && !meter.some((o) => o.startsWith('Pool ')), missing: meter });
+  const backoff = await scopesFor('poll_backoff');
+  results.push({ name: '/alerts poll_backoff scopes by any upstream or one upstream', ok: backoff[0] === 'Any upstream' && backoff.some((o) => o.startsWith('Upstream ')) && !backoff.includes('All traffic') && !backoff.some((o) => o.startsWith('Pool ')), missing: backoff });
   await scopesFor('utilization_above');
   const windows = [...(dlg?.querySelectorAll('select')[2]?.options ?? [])].map((o) => o.textContent?.trim());
   results.push({ name: '/alerts utilization windows include the Fable window under the shared label', ok: JSON.stringify(windows) === JSON.stringify(['5-hour', '7-day', '7-day Fable']), missing: windows });

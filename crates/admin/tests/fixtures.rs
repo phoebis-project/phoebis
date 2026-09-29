@@ -740,6 +740,8 @@ async fn every_route_is_captured_and_holds_its_shape() {
         .status(),
         204
     );
+    // The GET reads no endpoint of its own, so the capture reads a clean poll's snapshot and standing.
+    parts.usage.poll("business").await.unwrap();
     for (name, route) in [
         ("account", "/admin/accounts/business"),
         ("account_catalog", "/admin/accounts/business/catalog"),

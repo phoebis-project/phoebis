@@ -1,7 +1,7 @@
 import type {
   Account, AccountCatalog, AccountRollup, AffinityMode, AffinitySource, AlertEvent, AlertRule, AlertRuleInput, AnalyticsGroup, AnalyticsPoint, AnalyticsReconciliations, ApiKey, AttemptOutcome, AttemptResponse, BudgetPeriod, BurnPoint, BurnUnit, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
   CohortHold, Delivery, GuardVerdict, KeepaliveOverview, KeepaliveRecipe, KeyModels, LifecycleDelivery, LifecyclePage, LiveAttempt, LiveDelta, LiveMetric, LiveRequest, LiveSnapshot, LiveTick, MemberBudget, MemberEligibility, ModelEvent, ModelPrice, ModelRule, ModelRulesMode,
-  ModelsState, Overview, PairingSession, PinMigrationReason, PinReleaseReason, Placement, PlacementRow, PlanBand, PlanCell, PlanModelCells, PlanTables, Pool, PoolCacheTtl, QuotaHeaders, QuotaHistory, QuotaSnapshot, RateLimitWindow, RequestEvent, RequestLog, RequestPage, RequestShape, RewritePoint,
+  ModelsState, Overview, PairingSession, PinMigrationReason, PinReleaseReason, Placement, PlacementRow, PlanBand, PlanCell, PlanModelCells, PlanTables, Pool, PoolCacheTtl, QuotaHeaders, QuotaHistory, QuotaPoll, QuotaSnapshot, RateLimitWindow, RequestEvent, RequestLog, RequestPage, RequestShape, RewritePoint,
   RuleCooldown, SelectionTrace, Session, SessionLifecycleDetail, SessionPlacement, Settings, SubagentPlacement, Subscription, TierFactor, TtlRules, WarmSessions, WindowId, WindowReconciliation,
 } from './types';
 import { ACCOUNT_KIND_VALUES } from './types';
@@ -194,10 +194,26 @@ export function decodeQuotaHistory(v: unknown): QuotaHistory[] {
   return WINDOW_ORDER.flatMap((id) => byId.get(id) ?? []);
 }
 
+export const POLL_OUTCOME_VALUES = ['clean', 'failed', 'rate_limited'] as const;
+
+function decodePoll(v: unknown): QuotaPoll | null {
+  if (!v || typeof v !== 'object') return null;
+  const p = rec(v);
+  return {
+    backoffSince: isoOrNull(p.backoff_since),
+    lastAttemptAt: isoOrNull(p.last_attempt_at),
+    lastCleanAt: isoOrNull(p.last_clean_at),
+    // An outcome this build does not know reads as a failure rather than as a clean answer.
+    lastOutcome: POLL_OUTCOME_VALUES.find((o) => o === str(p.last_outcome)) ?? 'failed',
+    nextAttemptAt: isoOrNull(p.next_attempt_at),
+    rateLimitedInARow: num(p.rate_limited_in_a_row),
+  };
+}
+
 export function decodeSnapshot(accountId: string, v: unknown): QuotaSnapshot {
   const u = rec(v);
   const error = strOrNull(u.error);
-  return { accountId, error, fetchedAt: isoOrNull(u.fetched_at), status: error ? 'error' : 'success' };
+  return { accountId, error, fetchedAt: isoOrNull(u.fetched_at), poll: decodePoll(u.poll), status: error ? 'error' : 'success' };
 }
 
 export function decodeKey(v: unknown): ApiKey {
@@ -520,7 +536,7 @@ export function decodeKeepaliveOverview(v: unknown): KeepaliveOverview {
   return { agents: { busy: num(rec(o.agents).busy), idle: num(rec(o.agents).idle), parked: num(rec(o.agents).parked) }, costToday: list(o.cost_today).map(rec).map((c) => ({ capUsd: numOrNull(c.cap_usd), poolId: str(c.pool_id), usd: num(c.usd) })), expiredBetweenTurns24h: num(o.expired_between_turns_24h), netSaved7dUsd: num(o.net_saved_7d_usd), probes24h: { failed: num(p.failed), migrated: num(p.migrated), ok: num(p.ok), skipped: num(p.skipped) }, sessions: num(o.sessions), sessionsWithCompanion: num(o.sessions_with_companion) };
 }
 
-export const ALERT_KIND_VALUES = ['ask_user_question', 'client_drift', 'funding_required', 'keepalive_cost_cap', 'meter_drift', 'pool_exhausted', 'reauth_required', 'refresh_failed', 'session_active', 'session_idle', 'session_parked', 'subagent_active', 'utilization_above'] as const;
+export const ALERT_KIND_VALUES = ['ask_user_question', 'client_drift', 'funding_required', 'keepalive_cost_cap', 'meter_drift', 'poll_backoff', 'pool_exhausted', 'reauth_required', 'refresh_failed', 'session_active', 'session_idle', 'session_parked', 'subagent_active', 'utilization_above'] as const;
 export const SCOPE_TYPE_VALUES = ['account', 'all', 'any_account', 'key', 'pool'] as const;
 export const WINDOW_ID_VALUES = ['5h', '7d', '7d_oi'] as const;
 const scopeOf = (v: unknown): AlertRule['scope'] => { const s = rec(v); return { id: strOrNull(s.id), type: SCOPE_TYPE_VALUES.find((t) => t === str(s.type)) ?? 'all' }; };

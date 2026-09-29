@@ -448,9 +448,10 @@ Defaults whole and is rarely set.
 
 ### usage
 
-Required: `cache_ttl_seconds` is how long a cached usage snapshot is served before the next request triggers a
-fresh fetch; `refresh_concurrency` is how many accounts' usage and profile fetches may run at once, at least 1,
-refused with `usage.refresh_concurrency must be at least 1`.
+Required: `cache_ttl_seconds` is how long a cached usage snapshot is served before a manual refresh reads the
+endpoint again; the poll reads every five minutes whatever the cache holds; `refresh_concurrency` is how many
+accounts' usage and profile fetches may run at once, at least 1, refused with
+`usage.refresh_concurrency must be at least 1`.
 
 The checks above run in a fixed order at load, not block by block: `compatibility.profile`, then
 `admin`'s loopback-or-origin rule, then `usage.refresh_concurrency`, `storage.path`, `routing.max_attempts`, the

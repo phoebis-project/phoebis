@@ -18,13 +18,17 @@ use phoebis_bus::{
 use phoebis_ledger::{
     spawn as spawn_ledger, Ledger, LedgerConfig, LedgerDb, Metrics, PriceTable, Pricing,
 };
-use phoebis_oauth::Clock;
+use phoebis_oauth::{Clock, CredentialManager, UsageService};
+use phoebis_profile::claude_code_2_1_269_linux_x64;
 use phoebis_routing::{spawn as spawn_router, RouterConfig, RouterHandle};
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, Affinity, AffinitySource, AlertRuleRow, ApiKeyRow,
-    Failover, MemberWrite, OveragePolicy, PoolRow, QuotaHeaders, RulesMode, Secret,
-    Shedding, StorageKey, Store, Strategy,
+    Failover, Identity, MemberWrite, NewBundle, OveragePolicy, PoolRow, QuotaHeaders,
+    RulesMode, Secret, Shedding, StorageKey, Store, Strategy,
 };
+use phoebis_transport::control::{ControlClient, ResolveFuture, Resolver};
+use phoebis_transport::{connector_builder, trust_extra_ca, Plane};
+use fake_upstream::FakeUpstream;
 
 pub const NOW: i64 = 1_700_000_000_000;
 
@@ -311,7 +315,65 @@ pub fn inputs(rig: &Rig, spent: BTreeMap<String, f64>) -> AlertInputs {
         session_expiry: Duration::from_secs(3_600),
         spent_today: Arc::new(move || spent.clone()),
         tick: Duration::from_secs(1),
+        usage: None,
     }
+}
+
+/// A usage service reading `up` on the rig's clock, with `business` given an identity and a token far from
+/// expiry so a poll can read clean. No scheduler runs: the test reads the endpoint through `poll`.
+pub fn usage_over(rig: &Rig, up: &FakeUpstream) -> Arc<UsageService> {
+    rig.store
+        .set_identity(
+            "business",
+            &Identity {
+                account_uuid: "00000000-0000-4000-8000-000000000001".into(),
+                email: "business@example.invalid".into(),
+                organization_uuid: None,
+            },
+        )
+        .unwrap();
+    rig.store
+        .commit_credentials(
+            "business",
+            1,
+            1,
+            None,
+            None,
+            &NewBundle {
+                access_token: Secret::new("sk-ant-oat01-PLACEHOLDER"),
+                refresh_token: Some(Secret::new("sk-ant-ort01-PLACEHOLDER")),
+                issued_at: NOW,
+                expires_at: i64::MAX / 2,
+                refresh_expires_at: None,
+                scopes: "user:profile user:inference".into(),
+            },
+        )
+        .unwrap();
+    let profile = claude_code_2_1_269_linux_x64();
+    let addr = up.addr();
+    let resolver: Resolver =
+        Arc::new(move |_: &str| Box::pin(async move { Some(addr) }) as ResolveFuture);
+    let mut builder = connector_builder(profile, Plane::Control).unwrap();
+    trust_extra_ca(&mut builder, up.ca_pem()).unwrap();
+    let control = Arc::new(ControlClient::new(profile, builder.build(), resolver));
+    let clock: Clock = {
+        let c = rig.clock.clone();
+        Arc::new(move || c.load(Ordering::SeqCst))
+    };
+    let manager = Arc::new(CredentialManager::new(
+        rig.store.clone(),
+        control.clone(),
+        profile,
+        clock.clone(),
+    ));
+    Arc::new(UsageService::new(
+        manager,
+        control,
+        profile,
+        Duration::from_secs(60),
+        2,
+        clock,
+    ))
 }
 
 pub fn observed(id: &str, key: &str, pool: &str, session: &str, capture: u32) -> Event {

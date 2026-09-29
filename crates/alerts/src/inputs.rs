@@ -1,4 +1,4 @@
-//! Where the conditions and the session events come from: five conditions off the observation bus, seven off a
+//! Where the conditions and the session events come from: five conditions off the observation bus, eight off a
 //! one-second poll of state other parts of the process already keep, and the session's events off the bus, the
 //! lifecycle channel the keepalive engine feeds from the companion's reports, and the poll's idle and expiry
 //! clocks.
@@ -13,8 +13,9 @@ use phoebis_bus::{
     RequestObserved, SessionLifecycle,
 };
 use phoebis_ledger::{read_reconciliations, ReconciliationRow, RATIO_HIGH, RATIO_LOW};
+use phoebis_oauth::{PollOutcome, UsageService};
 use phoebis_routing::{RouterHandle, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE};
-use phoebis_store::{AccountState, AlertEventRow};
+use phoebis_store::{AccountKind, AccountState, AlertEventRow};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
@@ -40,6 +41,9 @@ pub struct AlertInputs {
     pub session_expiry: Duration,
     pub spent_today: SpendSource,
     pub tick: Duration,
+    /// Where the poll's standing per account is read; `None` where a harness builds no usage service, and the
+    /// backoff alert then never fires.
+    pub usage: Option<Arc<UsageService>>,
 }
 
 impl AlertInputs {
@@ -48,6 +52,10 @@ impl AlertInputs {
         self
     }
 }
+
+/// How long an account may back off before the alert fires: the whole ladder and one capped hold, so a single
+/// 429 or a short run never alerts.
+pub const BACKOFF_ALERT_AFTER_MS: i64 = 30 * 60 * 1_000;
 
 /// How long an in-flight entry may wait for its completion before the arm forgets it.
 const IN_FLIGHT_TTL_MS: i64 = 15 * 60 * 1_000;
@@ -292,7 +300,7 @@ struct InFlight {
     stream: Option<SseCutter>,
 }
 
-/// The bus half of the inputs: five of the thirteen conditions are facts about a request going by. Public so a
+/// The bus half of the inputs: five of the fourteen conditions are facts about a request going by. Public so a
 /// test drives it event by event without a bus.
 pub struct BusArm {
     alerts: Arc<Alerts>,
@@ -896,7 +904,7 @@ impl LifecycleArm {
     }
 }
 
-/// The polled half of the inputs: seven of the thirteen conditions are state another part of the process already
+/// The polled half of the inputs: eight of the fourteen conditions are state another part of the process already
 /// keeps. Public so a test drives one evaluation without waiting for the ticker.
 pub struct Poller {
     alerts: Arc<Alerts>,
@@ -910,6 +918,7 @@ pub struct Poller {
     spent_today: SpendSource,
     ticks: u64,
     tracked: Tracked,
+    usage: Option<Arc<UsageService>>,
 }
 
 impl Poller {
@@ -956,6 +965,7 @@ impl Poller {
             spent_today: inputs.spent_today.clone(),
             ticks: 0,
             tracked,
+            usage: inputs.usage.clone(),
         }
     }
 
@@ -1046,6 +1056,48 @@ impl Poller {
                 {
                     self.alerts.clear(Kind::MeterDrift, &subject);
                 }
+            }
+        }
+        if let Some(usage) = &self.usage {
+            let snapshot = self.router.snapshot();
+            for account in snapshot.accounts().filter(|a| a.kind == AccountKind::Oauth) {
+                // No standing yet, as after a restart before the account's first poll, decides nothing.
+                let Some(status) = usage.poll_status(&account.id) else {
+                    continue;
+                };
+                if status
+                    .backoff_since
+                    .is_some_and(|since| since <= now - BACKOFF_ALERT_AFTER_MS)
+                {
+                    self.alerts.signal(&Signal {
+                        kind: Kind::PollBackoff,
+                        account_id: Some(account.id.clone()),
+                        key_id: None,
+                        pool_id: None,
+                        subject: account.id.clone(),
+                        detail: json!({
+                            "account": account.id,
+                            "backoff_since": status.backoff_since,
+                            "next_attempt_at": status.next_attempt_at,
+                            "rate_limited_in_a_row": status.rate_limited_in_a_row,
+                        }),
+                    });
+                } else if status.last_outcome == PollOutcome::Clean
+                    && open
+                        .iter()
+                        .any(|e| e.kind == Kind::PollBackoff.as_str() && e.subject == account.id)
+                {
+                    self.alerts.clear(Kind::PollBackoff, &account.id);
+                }
+            }
+            // An id the registry no longer holds as a subscription has nothing left to back off from.
+            for event in open.iter().filter(|e| {
+                e.kind == Kind::PollBackoff.as_str()
+                    && snapshot
+                        .account(&e.subject)
+                        .is_none_or(|a| a.kind != AccountKind::Oauth)
+            }) {
+                self.alerts.clear(Kind::PollBackoff, &event.subject);
             }
         }
         if let Ok(samples) = self.router.samples().await {

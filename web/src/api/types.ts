@@ -191,10 +191,28 @@ export interface QuotaHistory {
 
 export type QuotaFetchStatus = 'error' | 'loading' | 'success';
 
+/** How the usage endpoint answered an upstream's last attempt. */
+export type PollOutcome = 'clean' | 'failed' | 'rate_limited';
+
+/** The poll's standing for an OAuth upstream, kept by the router; null until the poll first asks. */
+export interface QuotaPoll {
+  /** The first 429 of the run the upstream is in; null outside one. */
+  backoffSince: string | null;
+  lastAttemptAt: string | null;
+  /** When the windows of the last clean answer were read; null until one lands. */
+  lastCleanAt: string | null;
+  lastOutcome: PollOutcome;
+  /** When the upstream may be asked again; null when its next slot may ask it. */
+  nextAttemptAt: string | null;
+  /** 429s answered in a row; 0 after a clean answer. */
+  rateLimitedInARow: number;
+}
+
 export interface QuotaSnapshot {
   accountId: string;
   error: string | null;
   fetchedAt: string | null;
+  poll: QuotaPoll | null;
   status: QuotaFetchStatus;
 }
 
@@ -954,6 +972,7 @@ export type AlertKind =
   | 'funding_required'
   | 'keepalive_cost_cap'
   | 'meter_drift'
+  | 'poll_backoff'
   | 'pool_exhausted'
   | 'reauth_required'
   | 'refresh_failed'
@@ -1001,6 +1020,15 @@ export interface MeterDriftDetail {
   /** `five_hour` or `seven_day`. */
   window: string;
   window_end: number;
+}
+
+/** What a poll_backoff event carried: since when the upstream's usage poll has been answered 429. */
+export interface PollBackoffDetail {
+  account: string;
+  backoff_since: number;
+  /** Null once the hold has passed and the upstream's next slot may ask it. */
+  next_attempt_at: number | null;
+  rate_limited_in_a_row: number;
 }
 
 export interface RefreshFailedDetail {

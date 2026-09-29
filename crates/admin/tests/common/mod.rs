@@ -59,6 +59,9 @@ pub const NOW: i64 = 1_000_000;
 
 const BODY_CAPTURE_MAX_HOURS: u32 = 72;
 
+/// The usage cache TTL every builder but `admin_parts_polled` runs with, the settings echo's figure.
+const USAGE_TTL: Duration = Duration::from_secs(60);
+
 /// The bound the relay harness gives discovery too, so a fake that never answers cannot hang the suite.
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -133,6 +136,7 @@ struct Parts {
     router: RouterHandle,
     store: Arc<Store>,
     up: FakeUpstream,
+    usage: Arc<UsageService>,
     vault: Arc<PairingVault>,
     webhook: Arc<FakeWebhook>,
 }
@@ -156,6 +160,8 @@ pub struct Full {
     pub router: RouterHandle,
     pub store: Arc<Store>,
     pub up: FakeUpstream,
+    /// No scheduler runs in the harness, so a test that needs a polled snapshot reads it through `usage.poll`.
+    pub usage: Arc<UsageService>,
     pub webhook: Arc<FakeWebhook>,
 }
 
@@ -172,14 +178,28 @@ pub async fn admin_parts_full_with_origin(origin: &str) -> Full {
 /// The full harness with the alert webhook destination check on, as every running router has it. The other
 /// builders leave it off so a rule may name the fake receiver, which is on loopback.
 pub async fn admin_parts_full_refusing_local_webhooks() -> Full {
-    full_from(app_with_webhook_policy(None, ACCOUNT_UUID, None, true, None, false, None).await)
+    full_from(
+        app_with_webhook_policy(None, ACCOUNT_UUID, None, true, None, false, None, USAGE_TTL).await,
+    )
 }
 
 /// The full harness with a hook on the alerts engine's own clock, for a test that must interleave a store
 /// mutation with `Alerts::resolve`'s internal read-then-write; every other builder's alerts engine reads the
 /// plain clock.
 pub async fn admin_parts_full_with_alert_clock_hook(hook: ClockHook) -> Full {
-    full_from(app_with_webhook_policy(None, ACCOUNT_UUID, None, true, None, true, Some(hook)).await)
+    full_from(
+        app_with_webhook_policy(
+            None,
+            ACCOUNT_UUID,
+            None,
+            true,
+            None,
+            true,
+            Some(hook),
+            USAGE_TTL,
+        )
+        .await,
+    )
 }
 
 /// The full harness over a store the caller already holds. The router task reads the routing state once, at
@@ -204,6 +224,7 @@ fn full_from(parts: Parts) -> Full {
         router: parts.router,
         store: parts.store,
         up: parts.up,
+        usage: parts.usage,
         webhook: parts.webhook,
     }
 }
@@ -222,6 +243,40 @@ pub async fn admin_app() -> (Router, FakeUpstream) {
 pub async fn admin_app_paired() -> (Router, FakeUpstream) {
     let parts = app_with(Some(fixture_identity()), ACCOUNT_UUID, None, None).await;
     (parts.app, parts.up)
+}
+
+/// A paired slot with its usage service and the router behind it, the service's cache TTL the test's.
+pub struct Polled {
+    pub app: Router,
+    pub clock_cell: Arc<AtomicI64>,
+    pub router: RouterHandle,
+    pub store: Arc<Store>,
+    pub up: FakeUpstream,
+    pub usage: Arc<UsageService>,
+}
+
+/// No scheduler runs here, so the test reads the endpoint through `usage.poll` where a running router's
+/// schedule would; a TTL of zero lets every manual refresh past the backoff reach the endpoint.
+pub async fn admin_parts_polled(usage_ttl: Duration) -> Polled {
+    let parts = app_with_webhook_policy(
+        Some(fixture_identity()),
+        ACCOUNT_UUID,
+        None,
+        true,
+        None,
+        true,
+        None,
+        usage_ttl,
+    )
+    .await;
+    Polled {
+        app: parts.app,
+        clock_cell: parts.clock_cell,
+        router: parts.router,
+        store: parts.store,
+        up: parts.up,
+        usage: parts.usage,
+    }
 }
 
 /// A paired slot whose upstream now answers as a different account, which is how the re-pairing test
@@ -360,6 +415,7 @@ pub async fn admin_app_plain_with_origin(origin: &str) -> (Router, FakeUpstream)
         None,
         true,
         None,
+        USAGE_TTL,
     )
     .await;
     (parts.app, parts.up)
@@ -651,10 +707,12 @@ async fn app_with(
         store,
         true,
         None,
+        USAGE_TTL,
     )
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn app_with_webhook_policy(
     identity: Option<Identity>,
     upstream_uuid: &str,
@@ -663,6 +721,7 @@ async fn app_with_webhook_policy(
     store: Option<Arc<Store>>,
     allow_local_webhooks: bool,
     alert_clock_hook: Option<ClockHook>,
+    usage_ttl: Duration,
 ) -> Parts {
     let up = fake_control_plane(upstream_uuid).await;
     let p = claude_code_2_1_269_linux_x64();
@@ -761,7 +820,7 @@ async fn app_with_webhook_policy(
         manager.clone(),
         control.clone(),
         p,
-        Duration::from_secs(60),
+        usage_ttl,
         4,
         clock.clone(),
     ));
@@ -895,7 +954,7 @@ async fn app_with_webhook_policy(
     let state = Arc::new(AdminState {
         store: store.clone(),
         manager: manager.clone(),
-        usage,
+        usage: usage.clone(),
         pairing: Arc::new(PairingSessions::new()),
         control,
         profile: p,
@@ -943,6 +1002,7 @@ async fn app_with_webhook_policy(
         router: router_handle,
         store,
         up,
+        usage,
         vault,
         webhook,
     }

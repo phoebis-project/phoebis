@@ -5,9 +5,11 @@ use std::time::Duration;
 
 use phoebis_alerts::{
     question_subject, spawn_inputs, AlertInputs, BusArm, Kind, Poller, ScopeType, Tracked,
+    BACKOFF_ALERT_AFTER_MS,
 };
 use phoebis_bus::{Bus, Event, Kind as RequestKind, Origin, Outcome, RequestObserved, ResponseChunk};
 use phoebis_ledger::ReconciliationRow;
+use phoebis_oauth::PollOutcome;
 use phoebis_routing::{Report, UtilizationSample, WindowReading, FIVE_HOUR, SEVEN_DAY};
 use phoebis_store::{AccountState, AlertEventRow};
 use common::*;
@@ -1124,6 +1126,7 @@ fn private_inputs(rig: &Rig) -> (Bus, AlertInputs) {
         session_expiry: Duration::from_secs(3_600),
         spent_today: std::sync::Arc::new(BTreeMap::new),
         tick: Duration::from_secs(3_600),
+        usage: None,
     };
     (bus, alert_inputs)
 }
@@ -1736,5 +1739,214 @@ async fn each_window_keeps_its_own_drift_event_whatever_order_the_rows_arrive_in
         open_drift(&rig),
         ["a:7d"],
         "the rows from before the poller started fire nothing"
+    );
+}
+
+fn usage_answer(status: u16) -> fake_upstream::Respond {
+    let body = match status {
+        200 => {
+            phoebis_profile::fixtures::control_response(phoebis_profile::fixtures::ControlFixture::Usage)
+                .to_vec()
+        }
+        _ => b"{}".to_vec(),
+    };
+    fake_upstream::Respond::Json {
+        status,
+        headers: vec![],
+        body,
+    }
+}
+
+async fn usage_upstream(status: u16) -> fake_upstream::FakeUpstream {
+    fake_upstream::FakeUpstream::start(vec![fake_upstream::Rule {
+        path_prefix: "/api/oauth/usage".into(),
+        respond: usage_answer(status),
+    }])
+    .await
+}
+
+fn open_backoff(rig: &Rig) -> Vec<AlertEventRow> {
+    rig.store
+        .open_alert_events()
+        .unwrap()
+        .into_iter()
+        .filter(|e| e.kind == "poll_backoff")
+        .collect()
+}
+
+fn backoff_event(id: &str, subject: &str) -> AlertEventRow {
+    AlertEventRow {
+        id: id.into(),
+        rule_id: "backoff".into(),
+        kind: "poll_backoff".into(),
+        subject: subject.into(),
+        state: "open".into(),
+        opened_at: NOW - 60_000,
+        resolved_at: None,
+        detail_json: None,
+    }
+}
+
+fn backoff_rule(rig: &Rig) {
+    rig.store
+        .upsert_alert_rule(
+            &rule("backoff", Kind::PollBackoff, ScopeType::AnyAccount, None),
+            None,
+            "test",
+        )
+        .unwrap();
+    rig.alerts.reload().unwrap();
+}
+
+#[tokio::test]
+async fn a_poll_backoff_alert_fires_after_thirty_minutes_of_backoff_and_resolves_on_the_next_clean_poll(
+) {
+    let up = usage_upstream(429).await;
+    let rig = rig().await;
+    let usage = usage_over(&rig, &up);
+    backoff_rule(&rig);
+    let mut poller = Poller::new(
+        rig.alerts.clone(),
+        &AlertInputs {
+            usage: Some(usage.clone()),
+            ..inputs(&rig, BTreeMap::new())
+        },
+        Tracked::default(),
+    );
+    usage.poll("business").await.unwrap();
+    let at = |ms: i64| rig.clock.store(NOW + ms, Ordering::SeqCst);
+    // A second 429 once the first step's minute has passed: the run keeps its start and climbs the ladder.
+    at(29 * 60_000);
+    usage.poll("business").await.unwrap();
+    let status = usage.poll_status("business").unwrap();
+    assert_eq!(
+        (
+            status.backoff_since,
+            status.last_outcome,
+            status.rate_limited_in_a_row
+        ),
+        (Some(NOW), PollOutcome::RateLimited, 2)
+    );
+    poller.tick().await;
+    settled(&rig).await;
+    at(BACKOFF_ALERT_AFTER_MS - 1);
+    poller.tick().await;
+    settled(&rig).await;
+    assert!(
+        open_backoff(&rig).is_empty(),
+        "short of thirty minutes nothing fires"
+    );
+    at(BACKOFF_ALERT_AFTER_MS);
+    poller.tick().await;
+    settled(&rig).await;
+    let open = open_backoff(&rig);
+    assert_eq!(open.len(), 1, "{open:?}");
+    assert_eq!(open[0].subject, "business");
+    let detail: serde_json::Value =
+        serde_json::from_str(open[0].detail_json.as_deref().unwrap()).unwrap();
+    assert_eq!(
+        detail,
+        serde_json::json!({
+            "account": "business",
+            "backoff_since": NOW,
+            "next_attempt_at": NOW + 29 * 60_000 + 120_000,
+            "rate_limited_in_a_row": 2,
+        })
+    );
+    poller.tick().await;
+    settled(&rig).await;
+    assert_eq!(
+        open_backoff(&rig).len(),
+        1,
+        "one event however long it lasts"
+    );
+
+    // A threshold of 0 applies the switch at the rule's next request, whatever it has counted so far.
+    up.set_rule_after(0, "/api/oauth/usage", usage_answer(200));
+    at(29 * 60_000 + 120_000);
+    usage.poll("business").await.unwrap();
+    assert_eq!(
+        usage.poll_status("business").unwrap().last_outcome,
+        PollOutcome::Clean
+    );
+    poller.tick().await;
+    settled(&rig).await;
+    assert!(open_backoff(&rig).is_empty());
+}
+
+#[tokio::test]
+async fn an_open_poll_backoff_event_is_cleared_at_start_once_the_account_reads_clean() {
+    let up = usage_upstream(200).await;
+    let rig = rig().await;
+    let usage = usage_over(&rig, &up);
+    backoff_rule(&rig);
+    for (id, subject) in [("left", "business"), ("gone", "ghost")] {
+        assert!(rig
+            .store
+            .insert_alert_event(&backoff_event(id, subject))
+            .unwrap());
+    }
+    let mut poller = Poller::new(
+        rig.alerts.clone(),
+        &AlertInputs {
+            usage: Some(usage.clone()),
+            ..inputs(&rig, BTreeMap::new())
+        },
+        Tracked::default(),
+    );
+    settled(&rig).await;
+    assert_eq!(
+        rig.store.alert_event("left").unwrap().unwrap().state,
+        "open",
+        "the constructor leaves the kind to the tick"
+    );
+    poller.tick().await;
+    settled(&rig).await;
+    assert_eq!(
+        rig.store.alert_event("left").unwrap().unwrap().state,
+        "open",
+        "an account the poll has not asked since the start keeps its event"
+    );
+    assert_eq!(
+        rig.store.alert_event("gone").unwrap().unwrap().state,
+        "resolved",
+        "an id the registry no longer holds has nothing to back off from"
+    );
+    usage.poll("business").await.unwrap();
+    poller.tick().await;
+    settled(&rig).await;
+    assert_eq!(
+        rig.store.alert_event("left").unwrap().unwrap().state,
+        "resolved"
+    );
+    assert!(open_backoff(&rig).is_empty());
+
+    // The same start while the endpoint still refuses, the run forty minutes old: the event stays the one.
+    let up = usage_upstream(429).await;
+    let rig = common::rig().await;
+    let usage = usage_over(&rig, &up);
+    backoff_rule(&rig);
+    rig.clock.store(NOW - 40 * 60_000, Ordering::SeqCst);
+    usage.poll("business").await.unwrap();
+    rig.clock.store(NOW, Ordering::SeqCst);
+    assert!(rig
+        .store
+        .insert_alert_event(&backoff_event("left", "business"))
+        .unwrap());
+    let mut poller = Poller::new(
+        rig.alerts.clone(),
+        &AlertInputs {
+            usage: Some(usage.clone()),
+            ..inputs(&rig, BTreeMap::new())
+        },
+        Tracked::default(),
+    );
+    poller.tick().await;
+    settled(&rig).await;
+    let open = open_backoff(&rig);
+    assert_eq!(
+        open.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(),
+        ["left"],
+        "still backing off: the event stays open and no second opens"
     );
 }

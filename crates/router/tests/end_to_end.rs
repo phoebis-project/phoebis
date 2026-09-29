@@ -2333,21 +2333,16 @@ async fn a_startup_poll_the_endpoint_refuses_routes_the_first_request_from_the_p
             .find(|r| r.line.contains("/v1/messages"))
             .and_then(|r| r.credential().map(str::to_string))
     };
+    // The startup step's refused read is the account's standing, whatever windows the answer carries.
     let held_usage = |client: &reqwest::Client, admin_port: u16| {
-        let request = client.get(format!(
-            "http://127.0.0.1:{admin_port}/admin/accounts/a/usage"
-        ));
+        let client = client.clone();
         async move {
-            let usage: serde_json::Value = request.send().await.unwrap().json().await.unwrap();
-            assert!(
-                !usage["error"].is_null(),
-                "the refused poll reads as an error: {usage}"
-            );
-            assert_eq!(
-                usage["windows"],
-                serde_json::json!([]),
-                "and no windows: {usage}"
-            );
+            wait_json(
+                &client,
+                &format!("http://127.0.0.1:{admin_port}/admin/accounts/a/usage"),
+                |usage| usage["poll"]["last_outcome"] == "rate_limited",
+            )
+            .await
         }
     };
     let admin_client = || {
@@ -2380,7 +2375,16 @@ async fn a_startup_poll_the_endpoint_refuses_routes_the_first_request_from_the_p
         Some(B_TOKEN),
         "the persisted windows leave b more allowance per hour than a"
     );
-    held_usage(&client, admin_port).await;
+    let usage = held_usage(&client, admin_port).await;
+    assert!(
+        usage["error"].is_null(),
+        "the persisted windows answer in place of the refused read: {usage}"
+    );
+    assert_eq!(
+        usage["windows"].as_array().map(Vec::len),
+        Some(2),
+        "{usage}"
+    );
     let _ = stop_tx.send(());
     server.await.unwrap().unwrap();
 
@@ -2411,7 +2415,12 @@ async fn a_startup_poll_the_endpoint_refuses_routes_the_first_request_from_the_p
         &format!("http://127.0.0.1:{admin_port}/admin/session"),
     )
     .await;
-    held_usage(&client, admin_port).await;
+    let usage = held_usage(&client, admin_port).await;
+    assert!(
+        !usage["error"].is_null(),
+        "the replacement holds no windows, so the refused read is the answer: {usage}"
+    );
+    assert_eq!(usage["windows"], serde_json::json!([]), "{usage}");
     let resp = opus_request(&client, proxy_port, KEY_SECRET, "persisted-2")
         .send()
         .await

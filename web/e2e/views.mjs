@@ -1095,7 +1095,8 @@ const measureInput = (label) =>
  * threshold pair for a minutes field as the condition changes. The minutes input is measured against the
  * threshold input it stands in for, since a control that reads smaller than the one it replaces is the defect
  * this dialog would show first. It also reads the body's headings, Rule, Condition and Delivery in that order,
- * with Enabled the first field. A meter drift rule names an upstream or any upstream and nothing else.
+ * with Enabled the first field. A meter drift rule and a usage poll rule each name an upstream or any upstream
+ * and nothing else.
  */
 async function alertRuleDialog(theme) {
   const say = (what) => failures.push(`${theme} /alerts: ${what}`);
@@ -1125,6 +1126,10 @@ async function alertRuleDialog(theme) {
     const scopes = await control('Scope', 'select').locator('option').allTextContents();
     if (scopes[0] !== 'Any upstream' || scopes.some((o) => o === 'All traffic' || o.startsWith('Pool ') || o.startsWith('Key '))) say(`the meter drift condition offers ${JSON.stringify(scopes)} rather than the upstream scopes`);
     if ((await control('Window', 'select').count()) !== 0 || (await control('Threshold (%)', 'input').count()) !== 0) say('the meter drift condition offers a threshold or a window, which its fixed band leaves no room for');
+    await condition.selectOption({ label: 'Usage poll backing off' });
+    const backoffScopes = await control('Scope', 'select').locator('option').allTextContents();
+    if (backoffScopes[0] !== 'Any upstream' || backoffScopes.some((o) => o === 'All traffic' || o.startsWith('Pool ') || o.startsWith('Key '))) say(`the usage poll condition offers ${JSON.stringify(backoffScopes)} rather than the upstream scopes`);
+    if ((await control('Window', 'select').count()) !== 0 || (await control('Threshold (%)', 'input').count()) !== 0) say('the usage poll condition offers a threshold or a window, which its fixed thirty minutes leaves no room for');
     if (!minutes || !threshold) say('the minutes input and the threshold input are not both drawn to compare');
     else {
       measurements.push(`${theme} /alerts idle after minutes ${JSON.stringify(minutes)}`);
@@ -1138,6 +1143,41 @@ async function alertRuleDialog(theme) {
   await page.keyboard.press('Escape');
   await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => say('the dialog stayed open after Escape'));
   await atRest();
+}
+
+/**
+ * Each Quota card's poll lines against the Refresh pill beside them: the lines end before the pill starts and
+ * inside the card, the backoff line reads in the serious ink rather than the muted ink of the lines above it, and
+ * no line wraps. The router's seed has no subscription upstream, so only the story's pass has lines to read.
+ */
+async function quotaPollLines(theme) {
+  const say = (what) => failures.push(`${theme} /quota: ${what}`);
+  const cards = await page.evaluate(() =>
+    [...document.querySelectorAll('.qcard')].map((card) => {
+      const status = card.querySelector('.qcard__status');
+      const pill = card.querySelector('.qcard__foot .pill');
+      const lines = [...(status?.children ?? [])].map((line) => {
+        const box = line.getBoundingClientRect();
+        return { color: getComputedStyle(line).color, height: Math.round(box.height), lineHeight: parseFloat(getComputedStyle(line).lineHeight), right: Math.round(box.right), serious: line.classList.contains('qcard__backoff'), text: line.textContent?.trim() ?? '' };
+      });
+      return { cardRight: Math.round(card.getBoundingClientRect().right), lines, name: card.querySelector('.qcard__name')?.textContent?.trim() ?? '', pillLeft: pill ? Math.round(pill.getBoundingClientRect().left) : null };
+    }),
+  );
+  const polled = cards.filter((c) => c.lines.some((l) => /^(polled |not yet polled)/.test(l.text)));
+  measurements.push(`${theme} /quota poll lines ${JSON.stringify(polled.map((c) => ({ name: c.name, lines: c.lines.map((l) => [l.text, l.right, l.height]), pillLeft: c.pillLeft })))}`);
+  if (mock && polled.length === 0) say('the story has subscription upstreams, yet no card draws a poll line');
+  for (const card of polled) {
+    for (const line of card.lines) {
+      if (card.pillLeft !== null && line.right > card.pillLeft) say(`${card.name}'s line ${JSON.stringify(line.text)} ends at ${line.right}px, past the Refresh pill at ${card.pillLeft}px`);
+      if (line.right > card.cardRight) say(`${card.name}'s line ${JSON.stringify(line.text)} runs past its card`);
+      if (line.height > Math.ceil(line.lineHeight) + 1) say(`${card.name}'s line ${JSON.stringify(line.text)} wraps (${line.height}px)`);
+    }
+    const muted = card.lines.find((l) => !l.serious);
+    for (const line of card.lines.filter((l) => l.serious)) {
+      if (muted && line.color === muted.color) say(`${card.name}'s backoff line reads in the muted ink of the lines above it`);
+    }
+  }
+  if (mock && !polled.some((c) => c.lines.some((l) => l.serious))) say('the story backs one upstream off, yet no card draws a backoff line');
 }
 
 /**
@@ -1953,6 +1993,7 @@ try {
         await keyDialogGeometry(theme);
       }
       if (view.path === '/alerts') await alertRuleDialog(theme);
+      if (view.path === '/quota') await quotaPollLines(theme);
       // A shot of a placeholder reviews nothing, so the page is given a moment to replace them; a view that
       // keeps one is still worth the shot, which is why the wait is capped and its expiry ignored.
       await page.waitForFunction(() => !document.querySelector('.skeleton'), null, { timeout: 3_000 }).catch(() => {});

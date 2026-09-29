@@ -316,6 +316,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
                 move || engine.spent_today()
             }),
             tick: Duration::from_secs(1),
+            usage: Some(usage.clone()),
         },
     );
     let observer = spawn_observer(keepalive.clone());

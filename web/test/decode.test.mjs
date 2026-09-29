@@ -1005,6 +1005,16 @@ test('settings, pricing, pairing, quota, and usage decode', () => {
   assert.ok(history.every((h) => h.samples.every((x) => isIso(x.at))));
   const snapshot = d.decodeSnapshot('business', fixture('account_usage'));
   assert.equal(snapshot.status, 'success');
+  const at = new Date(fixture('account_usage').poll.last_attempt_at).toISOString();
+  assert.deepEqual(snapshot.poll, { backoffSince: null, lastAttemptAt: at, lastCleanAt: at, lastOutcome: 'clean', nextAttemptAt: null, rateLimitedInARow: 0 }, 'a clean poll');
+  const held = d.decodeSnapshot('mail', { error: 'usage request rate-limited', fetched_at: 1_000, poll: { backoff_since: 60_000, last_attempt_at: 120_000, last_clean_at: 1_000, last_outcome: 'rate_limited', next_attempt_at: 240_000, rate_limited_in_a_row: 2 } });
+  assert.deepEqual(
+    [held.status, held.poll],
+    ['error', { backoffSince: '1970-01-01T00:01:00.000Z', lastAttemptAt: '1970-01-01T00:02:00.000Z', lastCleanAt: '1970-01-01T00:00:01.000Z', lastOutcome: 'rate_limited', nextAttemptAt: '1970-01-01T00:04:00.000Z', rateLimitedInARow: 2 }],
+    'a poll backing off keeps each instant and the count',
+  );
+  assert.equal(d.decodeSnapshot('spare', { error: 'the poll has not read this account yet', fetched_at: null, poll: null }).poll, null, 'no poll before the first ask');
+  assert.equal(d.decodeSnapshot('a', { poll: { last_outcome: 'somewhere_new' } }).poll.lastOutcome, 'failed', 'an outcome this build does not know reads as a failure');
   assert.deepEqual(
     d.decodeCatalogModel({ id: 'claude-opus-5', display_name: 'Opus', created_at: '2026-01-01', max_input_tokens: 1_000_000, max_tokens: 128_000 }),
     { id: 'claude-opus-5', displayName: 'Opus', createdAt: '2026-01-01', maxInputTokens: 1_000_000, maxTokens: 128_000 },
@@ -1104,6 +1114,8 @@ test('alert rules, events, and deliveries decode with the secret reduced to has_
   assert.ok(isIso(util.createdAt) && !('secret' in util));
   assert.equal(rules.find((r) => r.kind === 'client_drift').enabled, false);
   assert.deepEqual(rules.find((r) => r.kind === 'meter_drift').scope, { id: 'business', type: 'account' }, 'the drift kind is its own, not read as the fallback');
+  assert.equal(d.decodeAlertRule({ ...fixture('alert_rules').rules[0], kind: 'poll_backoff' }).kind, 'poll_backoff', 'the backoff kind is its own, not read as the fallback');
+  assert.equal(d.decodeAlertEvent({ ...fixture('alert_events').events[0], kind: 'poll_backoff' }).kind, 'poll_backoff');
   const [event] = fixture('alert_events').events.map(d.decodeAlertEvent);
   assert.equal(event.state, 'open');
   assert.equal(event.detail.trigger, 'hash');

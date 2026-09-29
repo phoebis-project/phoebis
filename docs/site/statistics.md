@@ -168,7 +168,8 @@ shows a captured body in the request drawer, with a control to copy it.
 | Hourly rollups | `stats.rollup_retention_days` (400 days; 0 forever, otherwise at least `stats.retention_days`) |
 | Window reconciliations | As long as the hourly rollups |
 
-The purge that enforces these runs once an hour.
+The purge that enforces these runs once an hour. Every five-minute poll's reading is kept for
+`quota.sample_retention_days`, so an idle upstream adds 288 quota rows per window per day.
 
 ## Metrics
 
@@ -237,11 +238,15 @@ that fails after its 200 head keeps that status, so a finished request with an e
 
 ### Quota
 
-A card per upstream shows one row per rate-limit window, filterable by tabs for all accounts, OAuth accounts,
-and API-key accounts. Each card names the account's plan with the date its subscription started and, for an account
-on the Claude Code trial, when the trial ends; an account marked cancelled says when its plan ends, in the serious
-tone inside a week. Below the cards, a reset timeline lays the same windows across a calendar, zoomable between a
-two-week weekly view and a three-day 5-hour view.
+A card per upstream shows one row per rate-limit window, filterable by tabs for all accounts, OAuth accounts, and
+API-key accounts. Each OAuth card's footer says when the poll last asked the endpoint and how it answered, when the
+snapshot it shows was read, and, while the upstream backs off, since when and when the next attempt comes; Refresh reads
+the endpoint now unless the upstream is backing off or a fresh snapshot is cached. A card draws the windows it holds
+whatever the last read said and shows an error in their place only when it holds none; the page counts a card that shows
+an error, whose last poll failed, or that is backing off as needing attention. Each card names the account's plan with
+the date its subscription started and, for an account on the Claude Code trial, when the trial ends; an account marked
+cancelled says when its plan ends, in the serious tone inside a week. Below the cards, a reset timeline lays the same
+windows across a calendar, zoomable between a two-week weekly view and a three-day 5-hour view.
 
 ![The Quota view: the cards per upstream and the reset timeline](assets/quota-light.png#only-light)
 ![The Quota view: the cards per upstream and the reset timeline](assets/quota-dark.png#only-dark)
@@ -360,6 +365,7 @@ one.
 | `funding_required` | Funding required | `account`, `any_account` |
 | `keepalive_cost_cap` | Probe cost cap reached | `all`, `pool` |
 | `meter_drift` | Meter drift | `account`, `any_account` |
+| `poll_backoff` | Usage poll backing off | `account`, `any_account` |
 | `pool_exhausted` | Pool exhausted | `all`, `pool` |
 | `reauth_required` | Re-auth required | `account`, `any_account` |
 | `refresh_failed` | Credential refresh failed | `account`, `any_account` |
@@ -383,6 +389,11 @@ clears the funding flag.
 
 **Probe cost cap reached** fires when a pool's daily probe cost cap is reached; probes pause until the next UTC
 day, which resolves it, as removing the cap resolves it at the next poll.
+
+**Usage poll backing off** fires when an OAuth upstream's usage poll has been backing off from the endpoint's 429
+answers for thirty minutes, longer than the whole backoff ladder and one capped hold, and resolves on the upstream's
+next clean poll. The detail names the upstream, since when it has backed off, when the next attempt comes, and how many
+429s it answered in a row. An event left open across a restart resolves once the upstream's first poll reads clean.
 
 **Pool exhausted** fires when a request finds no eligible upstream in the pool and resolves on the next request
 the pool serves.

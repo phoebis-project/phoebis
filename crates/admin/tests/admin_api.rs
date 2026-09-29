@@ -430,36 +430,199 @@ async fn a_confirmed_pairing_stores_the_plan_and_the_start_at_once() {
 }
 
 #[tokio::test]
-async fn usage_is_cached_and_exposed_without_secrets() {
-    use common::{get, json, login, post};
-    let (app, up) = common::admin_app_paired().await;
-    let cookie = login(&app, "admin-secret").await;
-    let first = json(get(&app, "/admin/accounts/business/usage", Some(&cookie)).await).await;
+async fn the_usage_get_answers_the_polls_latest_snapshot_and_standing_without_a_fetch() {
+    use common::{get, json, login, post, NOW};
+    use std::sync::atomic::Ordering;
+    // A zero TTL, so every refresh below past the backoff reaches the endpoint and the GET's own reads show.
+    let h = common::admin_parts_polled(std::time::Duration::ZERO).await;
+    let cookie = login(&h.app, "admin-secret").await;
+    let path = "/admin/accounts/business/usage";
+    let refresh = "/admin/accounts/business/usage/refresh";
+    let asked = || {
+        h.up.requests()
+            .iter()
+            .filter(|r| r.line.starts_with("GET /api/oauth/usage"))
+            .count()
+    };
+    let before = json(get(&h.app, path, Some(&cookie)).await).await;
+    assert_eq!(
+        (
+            before["error"].as_str(),
+            before["fetched_at"].is_null(),
+            before["poll"].is_null(),
+            before["identity_generation"].as_u64(),
+            before["windows"].as_array().map(Vec::len),
+        ),
+        (
+            Some("the poll has not read this account yet"),
+            true,
+            true,
+            Some(0),
+            Some(0)
+        ),
+        "{before}"
+    );
+    assert_eq!(asked(), 0, "the GET never reads the endpoint itself");
+
+    h.usage.poll("business").await.unwrap();
+    let first = json(get(&h.app, path, Some(&cookie)).await).await;
+    let second = json(get(&h.app, path, Some(&cookie)).await).await;
+    assert_eq!(asked(), 1, "two GETs after the poll add no request");
+    assert_eq!(first, second);
     assert_eq!(first["windows"][0]["key"], "five_hour");
-    let _second = get(&app, "/admin/accounts/business/usage", Some(&cookie)).await;
+    assert!(first["error"].is_null(), "{first}");
     assert_eq!(
-        up.requests()
-            .iter()
-            .filter(|r| r.line.starts_with("GET /api/oauth/usage"))
-            .count(),
-        1
+        first["poll"],
+        serde_json::json!({
+            "backoff_since": null,
+            "last_attempt_at": NOW,
+            "last_clean_at": NOW,
+            "last_outcome": "clean",
+            "next_attempt_at": null,
+            "rate_limited_in_a_row": 0,
+        })
     );
-    let refreshed = post(
-        &app,
-        "/admin/accounts/business/usage/refresh",
-        "",
-        Some(&cookie),
-    )
-    .await;
-    assert_eq!(refreshed.status(), 200);
+    assert!(!first.to_string().contains("sk-ant-"), "{first}");
+
+    // A threshold of 0 applies the switch at the rule's next request, whatever it has counted so far.
+    h.up.set_rule_after(
+        0,
+        "/api/oauth/usage",
+        fake_upstream::Respond::Json {
+            status: 429,
+            headers: vec![],
+            body: b"{}".to_vec(),
+        },
+    );
+    h.clock_cell.store(NOW + 10_000, Ordering::SeqCst);
+    let refused = post(&h.app, refresh, "", Some(&cookie)).await;
+    assert_eq!(refused.status(), 200);
+    let refused = json(refused).await;
+    assert_eq!(asked(), 2);
+    assert_eq!(refused["error"], "usage request rate-limited");
     assert_eq!(
-        up.requests()
-            .iter()
-            .filter(|r| r.line.starts_with("GET /api/oauth/usage"))
-            .count(),
-        1,
-        "a manual refresh inside the cache TTL is served from the cache"
+        refused["poll"],
+        serde_json::json!({
+            "backoff_since": NOW + 10_000,
+            "last_attempt_at": NOW + 10_000,
+            "last_clean_at": NOW,
+            "last_outcome": "rate_limited",
+            "next_attempt_at": NOW + 10_000 + 60_000,
+            "rate_limited_in_a_row": 1,
+        }),
+        "the first 429 holds the account for the ladder's first step, one minute"
     );
+    let held = json(get(&h.app, path, Some(&cookie)).await).await;
+    assert!(
+        held["error"].is_null(),
+        "an account with windows never reads as an error: {held}"
+    );
+    assert_eq!(held["windows"], first["windows"]);
+    assert_eq!(held["fetched_at"], NOW, "the windows are the clean read's");
+    assert_eq!(held["poll"], refused["poll"]);
+
+    h.clock_cell.store(NOW + 40_000, Ordering::SeqCst);
+    let again = json(post(&h.app, refresh, "", Some(&cookie)).await).await;
+    assert_eq!(asked(), 2, "a refresh inside the hold reads nothing");
+    assert_eq!(again["poll"], refused["poll"]);
+    assert!(
+        again["error"]
+            .as_str()
+            .is_some_and(|e| e.contains("rate-limited the account")),
+        "{again}"
+    );
+
+    h.up.set_rule_after(
+        0,
+        "/api/oauth/usage",
+        fake_upstream::Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: phoebis_profile::fixtures::control_response(
+                phoebis_profile::fixtures::ControlFixture::Usage,
+            )
+            .to_vec(),
+        },
+    );
+    h.clock_cell.store(NOW + 70_000, Ordering::SeqCst);
+    let restored = json(post(&h.app, refresh, "", Some(&cookie)).await).await;
+    assert_eq!(asked(), 3, "past the hold the refresh reads the endpoint");
+    assert!(restored["error"].is_null(), "{restored}");
+    assert_eq!(
+        restored["poll"],
+        serde_json::json!({
+            "backoff_since": null,
+            "last_attempt_at": NOW + 70_000,
+            "last_clean_at": NOW + 70_000,
+            "last_outcome": "clean",
+            "next_attempt_at": null,
+            "rate_limited_in_a_row": 0,
+        })
+    );
+}
+
+#[tokio::test]
+async fn an_account_whose_snapshot_holds_no_windows_answers_the_windows_the_router_holds() {
+    use phoebis_routing::{Report, UtilizationSample, WindowReading, FIVE_HOUR, SEVEN_DAY};
+    use common::{get, json, login, wait_json, NOW};
+    let h = common::admin_parts_polled(std::time::Duration::from_secs(60)).await;
+    let cookie = login(&h.app, "admin-secret").await;
+    let path = "/admin/accounts/business/usage";
+    // What a restart loads from the persisted windows, before the poll has read the account.
+    h.router.report(Report::Sample {
+        account_id: "business".into(),
+        sample: UtilizationSample::default()
+            .with(
+                FIVE_HOUR,
+                WindowReading {
+                    utilization: 0.25,
+                    reset: Some(NOW + 3_600_000),
+                    observed_at: NOW - 120_000,
+                },
+            )
+            .with(
+                SEVEN_DAY,
+                WindowReading {
+                    utilization: 0.5,
+                    reset: Some(NOW + 86_400_000),
+                    observed_at: NOW - 60_000,
+                },
+            ),
+        incarnation: 1,
+    });
+    let held = wait_json(&h.app, path, &cookie, |v| v["error"].is_null()).await;
+    assert_eq!(
+        held["windows"],
+        serde_json::json!([
+            { "key": "five_hour", "resets_at": NOW + 3_600_000, "utilization": 25.0 },
+            { "key": "seven_day", "resets_at": NOW + 86_400_000, "utilization": 50.0 },
+        ])
+    );
+    assert_eq!(
+        held["fetched_at"],
+        NOW - 60_000,
+        "the newest of the readings shown"
+    );
+    assert!(held["poll"].is_null(), "not yet polled: {held}");
+
+    h.up.set_rule_after(
+        0,
+        "/api/oauth/usage",
+        fake_upstream::Respond::Json {
+            status: 429,
+            headers: vec![],
+            body: b"{}".to_vec(),
+        },
+    );
+    let refused = h.usage.poll("business").await.unwrap();
+    assert!(refused.windows.is_empty() && refused.error.is_some());
+    let polled = json(get(&h.app, path, Some(&cookie)).await).await;
+    assert!(
+        polled["error"].is_null(),
+        "the router's windows still answer: {polled}"
+    );
+    assert_eq!(polled["windows"], held["windows"]);
+    assert_eq!(polled["poll"]["last_outcome"], "rate_limited");
 }
 
 #[tokio::test]

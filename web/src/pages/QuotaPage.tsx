@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { api } from '@/api';
-import type { Account, QuotaSnapshot, RateLimitWindow } from '@/api/types';
+import type { Account, PollOutcome, QuotaPoll, QuotaSnapshot, RateLimitWindow } from '@/api/types';
 import { accountColor } from '@/components/charts/theme';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { IconAnthropic, IconChevronLeft, IconChevronRight, IconRefresh, IconServer, IconWarning } from '@/components/ui/icons';
@@ -37,15 +37,15 @@ export function QuotaPage() {
 
   const total = accounts.data?.length ?? 0;
   const loaded = (snapshots.data ?? []).filter((s) => s.status !== 'loading').length;
-  const attention = (snapshots.data ?? []).filter((s) => s.status === 'error').length;
+  const attention = (snapshots.data ?? []).filter((s) => s.status === 'error' || needsAttention(s.poll)).length;
   const counts = { all: total, api_key: (accounts.data ?? []).filter((a) => a.kind === 'api_key').length, oauth: (accounts.data ?? []).filter((a) => a.kind === 'oauth').length };
 
   const reload = () => {
     accounts.reload();
     snapshots.reload();
   };
-  // The route hands back a cached snapshot inside this TTL, which is why a refresh can change nothing.
-  const refreshHint = settings.data ? `a snapshot younger than ${settings.data.usage.cacheTtlSeconds} seconds is served as is` : undefined;
+  // The route answers from the upstream's hold or its cache while either lasts, which is why a refresh can change nothing.
+  const refreshHint = settings.data ? `reads the endpoint now unless the upstream is backing off or a snapshot younger than ${settings.data.usage.cacheTtlSeconds} seconds is cached` : undefined;
   const refreshAll = async () => {
     setRefreshing(true);
     // A credential the route refuses still reports through its snapshot, so one failure does not hold up the rest.
@@ -127,6 +127,39 @@ function QuotaCardSkeleton() {
   );
 }
 
+const OUTCOME_LABEL: Record<PollOutcome, string> = { clean: 'clean', failed: 'failed', rate_limited: 'rate limited' };
+
+/** A poll that last failed or is backing off wants a look even while the card still draws the windows it had. */
+const needsAttention = (poll: QuotaPoll | null) => poll !== null && (poll.lastOutcome !== 'clean' || poll.backoffSince !== null);
+
+/** When the poll last asked the endpoint and how it answered; "not yet polled" until it first asks. */
+function PollLine({ poll, now }: { now: number; poll: QuotaPoll | null }) {
+  if (!poll) return <span className="muted">not yet polled</span>;
+  return (
+    <span className="muted" title={poll.lastAttemptAt ? fmtAbsolute(poll.lastAttemptAt) : undefined}>
+      polled {fmtRelative(poll.lastAttemptAt, now)}: {OUTCOME_LABEL[poll.lastOutcome]}
+    </span>
+  );
+}
+
+/** Since when the upstream has been answered 429, and when the poll may ask it again: two lines, so neither wraps. */
+function BackoffLines({ poll, since, now }: { now: number; poll: QuotaPoll; since: string }) {
+  const n = poll.rateLimitedInARow;
+  const run = `${n} rate-limited ${n === 1 ? 'answer' : 'answers'} in a row`;
+  return (
+    <>
+      <span className="qcard__backoff" title={run}>
+        backing off since {fmtRelative(since, now)}
+      </span>
+      {poll.nextAttemptAt && (
+        <span className="qcard__backoff" title={fmtAbsolute(poll.nextAttemptAt)}>
+          next attempt {fmtRelative(poll.nextAttemptAt, now)}
+        </span>
+      )}
+    </>
+  );
+}
+
 function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshed }: { account: Account; now: number; onRefreshed: () => void; refreshHint?: string; refreshing: boolean; snapshot?: QuotaSnapshot }) {
   const status = snapshot?.status ?? 'success';
   const soonest = soonestReset(account, now);
@@ -146,8 +179,10 @@ function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshe
   const trialEndsAt = account.subscription?.trialEndsAt ?? null;
   const endsAt = account.cancelled ? (account.subscription?.endsAt ?? null) : null;
   const soon = (at: string) => Date.parse(at) - now < 7 * DAY;
+  // Windows the card holds are drawn whatever the last read said; the error takes their place only with none.
+  const failed = status === 'error' && !w5 && !w7 && !account.fableWindow;
   return (
-    <article className={`qcard ${status === 'error' ? 'is-error' : ''}`}>
+    <article className={`qcard ${failed ? 'is-error' : ''}`}>
       <header className="qcard__head">
         <span className={`qcard__icon qcard__icon--${account.kind}`} title={account.kind === 'oauth' ? 'Claude.ai subscription' : 'API key upstream'}>
           {account.kind === 'oauth' ? <IconAnthropic size={15} /> : <IconServer size={15} />}
@@ -173,7 +208,7 @@ function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshe
               <Skeleton height={4} />
             </div>
           </div>
-        ) : status === 'error' ? (
+        ) : failed ? (
           <div className="qcard__error" role="alert">
             <p>{snapshot?.error}</p>
             <Pill onClick={() => void onRefresh()} disabled={busy} icon={<IconRefresh size={13} className={busy ? 'spin' : ''} />}>
@@ -231,9 +266,15 @@ function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshe
 
       {status !== 'loading' && (
         <footer className="qcard__foot">
-          <span className="muted" title={snapshot?.fetchedAt ? fmtAbsolute(snapshot.fetchedAt) : undefined}>
-            {snapshot?.fetchedAt ? `checked ${fmtRelative(snapshot.fetchedAt, now)}` : ''}
-          </span>
+          <div className="qcard__status">
+            {snapshot && account.kind === 'oauth' && <PollLine poll={snapshot.poll} now={now} />}
+            {snapshot?.fetchedAt && (
+              <span className="muted" title={fmtAbsolute(snapshot.fetchedAt)}>
+                checked {fmtRelative(snapshot.fetchedAt, now)}
+              </span>
+            )}
+            {snapshot?.poll?.backoffSince && <BackoffLines poll={snapshot.poll} since={snapshot.poll.backoffSince} now={now} />}
+          </div>
           <Pill onClick={() => void onRefresh()} disabled={busy} title={refreshHint} icon={<IconRefresh size={13} className={busy ? 'spin' : ''} />}>
             Refresh
           </Pill>

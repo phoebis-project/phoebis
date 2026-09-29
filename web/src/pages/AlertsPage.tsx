@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { api } from '@/api';
-import type { Account, AlertEvent, AlertEventDetail, AlertKind, AlertRule, AlertRuleInput, ApiKey, AskUserQuestionDetail, ClientDriftDetail, LifecycleDelivery, LifecycleEventName, MeterDriftDetail, Pool, RefreshFailedDetail, WindowId } from '@/api/types';
+import type { Account, AlertEvent, AlertEventDetail, AlertKind, AlertRule, AlertRuleInput, ApiKey, AskUserQuestionDetail, ClientDriftDetail, LifecycleDelivery, LifecycleEventName, MeterDriftDetail, PollBackoffDetail, Pool, RefreshFailedDetail, WindowId } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
 import { Badge, Button, Card, ConfirmDialog, Dialog, ErrorState, Field, Input, Menu, Select, Skeleton, Toast, Toggle } from '@/components/ui/primitives';
 import { IconPlus } from '@/components/ui/icons';
@@ -16,6 +16,7 @@ const KIND_LABEL: Record<AlertKind, string> = {
   funding_required: 'Funding required',
   keepalive_cost_cap: 'Probe cost cap reached',
   meter_drift: 'Meter drift',
+  poll_backoff: 'Usage poll backing off',
   pool_exhausted: 'Pool exhausted',
   reauth_required: 'Re-auth required',
   refresh_failed: 'Credential refresh failed',
@@ -35,6 +36,8 @@ const KIND_HINT: Record<AlertKind, string> = {
   keepalive_cost_cap: "Fires when a pool's daily probe cost cap is reached; probes pause until the next UTC day, which resolves it.",
   meter_drift:
     "Fires when a completed 5-hour or 7-day window's readings rose by at least 5% of the window and the rise was under 0.8 or over 1.25 times the share the router predicted for its own requests. It resolves when the upstream's next completed window of that kind reads inside.",
+  poll_backoff:
+    "Fires when an OAuth upstream's usage poll has been backing off from the endpoint's 429 answers for thirty minutes. It resolves on the upstream's next clean poll.",
   pool_exhausted: 'Fires when a request finds no eligible upstream in the pool. It resolves on the next request the pool serves.',
   reauth_required: 'Fires when an upstream enters reauth_required. It resolves once the upstream is paired or verified again.',
   refresh_failed: 'Fires when a credential refresh fails twice in a row. It resolves on the next refresh that succeeds.',
@@ -57,6 +60,7 @@ const ALLOWED_SCOPES: Record<AlertKind, AlertRule['scope']['type'][]> = {
   funding_required: ['any_account', 'account'],
   keepalive_cost_cap: ['all', 'pool'],
   meter_drift: ['any_account', 'account'],
+  poll_backoff: ['any_account', 'account'],
   pool_exhausted: ['all', 'pool'],
   reauth_required: ['any_account', 'account'],
   refresh_failed: ['any_account', 'account'],
@@ -572,6 +576,16 @@ function EventDetail({ kind, detail, now }: { detail: AlertEventDetail; kind: Al
     return (
       <span className="sub">
         {own(RECONCILED_WINDOW_LABEL, drift.window) ? RECONCILED_WINDOW_LABEL[drift.window] : drift.window} window, ratio {drift.ratio.toFixed(2)} after a rise of {fmtShare(drift.observed_rise)}
+      </span>
+    );
+  }
+  if (kind === 'poll_backoff' && typeof detail.backoff_since === 'number') {
+    const backoff = detail as unknown as PollBackoffDetail;
+    const at = (ms: number) => fmtAbsolute(new Date(ms).toISOString());
+    // The detail is what the poll said when the event opened, so both instants read as fixed times.
+    return (
+      <span className="sub" title={`${backoff.rate_limited_in_a_row} rate-limited ${backoff.rate_limited_in_a_row === 1 ? 'answer' : 'answers'} in a row`}>
+        backing off since {at(backoff.backoff_since)}, next attempt {backoff.next_attempt_at === null ? 'at its next poll' : `at ${at(backoff.next_attempt_at)}`}
       </span>
     );
   }

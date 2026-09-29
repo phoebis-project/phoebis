@@ -375,10 +375,13 @@ test('an unknown id is refused with the route\'s own 404 text, which the console
   await assert.rejects(() => api.updateAlertRule('nothing', newRule), refusedAs(404, 'alert rule not found'));
 });
 
-test('the quota snapshots never answer a status the decoder cannot produce', async () => {
+test('the quota snapshots never answer a status or a poll outcome the decoder cannot produce', async () => {
   const api = await as('admin');
   for (let read = 0; read < 2; read += 1) {
-    const statuses = (await api.listQuotaSnapshots()).map((s) => s.status);
-    assert.deepEqual(statuses.filter((s) => s !== 'error' && s !== 'success'), [], `read ${read + 1}`);
+    const snapshots = await api.listQuotaSnapshots();
+    assert.deepEqual(snapshots.map((s) => s.status).filter((s) => s !== 'error' && s !== 'success'), [], `read ${read + 1}`);
+    const polls = snapshots.map((s) => s.poll);
+    assert.deepEqual(polls.filter((p) => p !== null && !['clean', 'failed', 'rate_limited'].includes(p.lastOutcome)), [], `read ${read + 1}`);
+    assert.ok(polls.includes(null) && polls.some((p) => p?.backoffSince), 'the story holds an upstream not yet polled and one backing off');
   }
 });

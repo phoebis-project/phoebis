@@ -19,10 +19,14 @@ use axum::{Extension, Json, Router};
 use phoebis_oauth::{
     authorization_url, control_request, ephemeral_port, exchange_body, loopback_redirect_uri,
     parse_profile, parse_token_response, CallbackInput, ControlKind, LoginKind, OauthError,
-    PairingError, PairingSession, PairingStatus, PendingIdentity, ProfileResponse, UsageSnapshot,
+    PairingError, PairingSession, PairingStatus, PendingIdentity, PollStatus, ProfileResponse,
+    UsageSnapshot, UsageWindow,
 };
 use phoebis_relay::DiscoveryError;
-use phoebis_routing::{MemberSpend, OverageEvidence, ReloadError};
+use phoebis_routing::{
+    MemberSpend, OverageEvidence, ReloadError, UtilizationSample, FIVE_HOUR, SEVEN_DAY,
+    SEVEN_DAY_FABLE,
+};
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, BudgetPeriod, CooldownRow, Identity, NewBundle,
     PoolMember, StoreError,
@@ -66,8 +70,8 @@ pub fn router(state: Arc<AdminState>) -> Router {
         .route("/admin/accounts/{id}/catalog", get(accounts::catalog))
         .route("/admin/accounts/{id}/quota", get(accounts::quota))
         .route("/admin/accounts/{id}/resume", post(resume))
-        .route("/admin/accounts/{id}/usage", get(usage))
-        .route("/admin/accounts/{id}/usage/refresh", post(usage))
+        .route("/admin/accounts/{id}/usage", get(usage_latest))
+        .route("/admin/accounts/{id}/usage/refresh", post(usage_refresh))
         .route("/admin/accounts/{id}/verify", post(verify))
         .route("/admin/alerts/deliveries", get(alerts::list_lifecycle))
         .route("/admin/alerts/events", get(alerts::list_events))
@@ -258,7 +262,8 @@ fn admit(state: &AdminState, request: &mut Request) -> Option<Response> {
 }
 
 /// The two mutations a viewer may issue: ending its own session, which reaches nothing but itself, and a
-/// usage refresh, which is served from the usage cache and so changes nothing upstream either.
+/// usage refresh, which only reads the account's windows and asks the endpoint no sooner than the backoff and
+/// the usage cache allow.
 fn viewer_may_mutate(method: &Method, path: &str) -> bool {
     (method == Method::DELETE && path == LOGIN_PATH)
         || (path.starts_with("/admin/accounts/") && path.ends_with("/usage/refresh"))
@@ -426,14 +431,39 @@ async fn disconnect(State(state): State<Arc<AdminState>>, Path(id): Path<String>
     StatusCode::NO_CONTENT.into_response()
 }
 
-/// Serves `GET .../usage` and `POST .../usage/refresh` alike: the usage service has no cache bypass, so
-/// a held-down refresh button cannot turn into a stream of requests against a per-account rate limit.
-async fn usage(State(state): State<Arc<AdminState>>, Path(id): Path<String>) -> Response {
+/// `GET .../usage`: the poll's latest snapshot and standing, with no read of the endpoint. A snapshot with no
+/// windows gives way to the windows the router holds, persisted from the last run or read since, so a card
+/// never reads as an error while windows exist; the error answers only when none do.
+async fn usage_latest(State(state): State<Arc<AdminState>>, Path(id): Path<String>) -> Response {
+    if let Err(refusal) = account(&state, &id) {
+        return refusal;
+    }
+    let poll = state.usage.poll_status(&id);
+    let latest = state.usage.latest(&id);
+    let held = match &latest {
+        Some(snapshot) if has_windows(snapshot) => None,
+        _ => state.router.samples().await.ok().and_then(|samples| {
+            samples
+                .into_iter()
+                .find_map(|(account_id, sample)| (account_id == id).then_some(sample))
+        }),
+    };
+    let answer = compose_usage(&id, latest, held);
+    Json(usage_json(&id, answer.as_ref(), poll.as_ref())).into_response()
+}
+
+/// `POST .../usage/refresh`: the one manual read of the endpoint. The usage service has no cache bypass and
+/// answers a held account from its hold, so a held-down refresh button cannot turn into a stream of requests
+/// against a per-account rate limit.
+async fn usage_refresh(State(state): State<Arc<AdminState>>, Path(id): Path<String>) -> Response {
     if let Err(refusal) = account(&state, &id) {
         return refusal;
     }
     match state.usage.snapshot(&id).await {
-        Ok(snapshot) => Json(usage_json(&snapshot)).into_response(),
+        Ok(snapshot) => {
+            let poll = state.usage.poll_status(&id);
+            Json(usage_json(&id, Some(&snapshot), poll.as_ref())).into_response()
+        }
         Err(error) => failure(StatusCode::SERVICE_UNAVAILABLE, &error.to_string()),
     }
 }
@@ -1136,8 +1166,94 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
     })
 }
 
-fn usage_json(snapshot: &UsageSnapshot) -> Value {
-    let window = |window: &phoebis_oauth::UsageWindow| {
+/// The key the usage service gives the Fable week, so an answer built from the router's windows reads like
+/// one the endpoint gave.
+const FABLE_WINDOW_KEY: &str = "fable";
+
+fn has_windows(snapshot: &UsageSnapshot) -> bool {
+    !snapshot.windows.is_empty() || snapshot.fable_window.is_some()
+}
+
+/// What the `GET` answers from the poll's `latest` snapshot and the router's `held` sample of the account.
+fn compose_usage(
+    id: &str,
+    latest: Option<UsageSnapshot>,
+    held: Option<UtilizationSample>,
+) -> Option<UsageSnapshot> {
+    if let Some(snapshot) = latest.as_ref().filter(|s| has_windows(s)) {
+        return Some(UsageSnapshot {
+            error: None,
+            ..snapshot.clone()
+        });
+    }
+    // The router reads a utilization as a fraction; the endpoint's windows carry a percentage.
+    let window = |sample: &UtilizationSample, name: &str, key: &str| {
+        sample.reading(name).map(|reading| {
+            (
+                UsageWindow {
+                    key: key.to_string(),
+                    utilization: Some(reading.utilization * 100.0),
+                    resets_at: reading.reset,
+                },
+                reading.observed_at,
+            )
+        })
+    };
+    let held = held.and_then(|sample| {
+        // The router names these two as the endpoint does.
+        let windows: Vec<(UsageWindow, i64)> = [FIVE_HOUR, SEVEN_DAY]
+            .into_iter()
+            .filter_map(|name| window(&sample, name, name))
+            .collect();
+        let fable = window(&sample, SEVEN_DAY_FABLE, FABLE_WINDOW_KEY);
+        let observed_at = windows
+            .iter()
+            .chain(fable.iter())
+            .map(|(_, at)| *at)
+            .max()?;
+        Some((windows, fable, observed_at))
+    });
+    let Some((windows, fable, observed_at)) = held else {
+        return latest;
+    };
+    Some(UsageSnapshot {
+        account_id: id.to_string(),
+        identity_generation: latest.as_ref().map_or(0, |s| s.identity_generation),
+        fetched_at: observed_at,
+        windows: windows.into_iter().map(|(window, _)| window).collect(),
+        fable_window: fable.map(|(window, _)| window),
+        extra_usage: latest.as_ref().and_then(|s| s.extra_usage.clone()),
+        raw_keys: latest.map(|s| s.raw_keys).unwrap_or_default(),
+        error: None,
+    })
+}
+
+fn usage_json(id: &str, snapshot: Option<&UsageSnapshot>, poll: Option<&PollStatus>) -> Value {
+    let poll = poll.map(|status| {
+        json!({
+            "backoff_since": status.backoff_since,
+            "last_attempt_at": status.last_attempt_at,
+            "last_clean_at": status.last_clean_at,
+            "last_outcome": status.last_outcome,
+            "next_attempt_at": status.next_attempt_at,
+            "rate_limited_in_a_row": status.rate_limited_in_a_row,
+        })
+    });
+    let Some(snapshot) = snapshot else {
+        // Zero is the unstamped generation, as the ledger stamps a row it has no identity for.
+        return json!({
+            "account_id": id,
+            "error": "the poll has not read this account yet",
+            "extra_usage": null,
+            "fable_window": null,
+            "fetched_at": null,
+            "identity_generation": 0,
+            "poll": poll,
+            "raw_keys": [],
+            "windows": [],
+        });
+    };
+    let window = |window: &UsageWindow| {
         json!({
             "key": window.key,
             "resets_at": window.resets_at,
@@ -1158,6 +1274,7 @@ fn usage_json(snapshot: &UsageSnapshot) -> Value {
         "fable_window": snapshot.fable_window.as_ref().map(&window),
         "fetched_at": snapshot.fetched_at,
         "identity_generation": snapshot.identity_generation,
+        "poll": poll,
         "raw_keys": snapshot.raw_keys,
         "windows": snapshot.windows.iter().map(&window).collect::<Vec<_>>(),
     })

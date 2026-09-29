@@ -201,17 +201,31 @@ export const ACCOUNTS: Account[] = ([
 export const accountById = new Map(ACCOUNTS.map((a) => [a.id, a]));
 
 export const QUOTA_SNAPSHOTS: QuotaSnapshot[] = ACCOUNTS.map((a) => {
-  if (a.id === 'spare') return { ...QUOTA_SNAPSHOT_SAMPLE, accountId: a.id, error: 'no credential is stored for this upstream; pair it to load quota', fetchedAt: null, status: 'error' };
+  if (a.id === 'spare') return { ...QUOTA_SNAPSHOT_SAMPLE, accountId: a.id, error: 'no credential is stored for this upstream; pair it to load quota', fetchedAt: null, poll: null, status: 'error' };
+  // The refresh keeps failing, so every poll fails while the windows of the last clean read still answer.
   if (a.id === 'team') {
     return {
       ...QUOTA_SNAPSHOT_SAMPLE,
       accountId: a.id,
-      error: 'Refresh token rejected (invalid_grant). Re-pair the account to load quota.',
+      error: null,
       fetchedAt: ago(2 * DAY + 3 * HOUR),
-      status: 'error',
+      poll: { backoffSince: null, lastAttemptAt: ago(3 * MINUTE), lastCleanAt: ago(2 * DAY + 3 * HOUR), lastOutcome: 'failed', nextAttemptAt: null, rateLimitedInARow: 0 },
+      status: 'success',
     };
   }
-  return { ...QUOTA_SNAPSHOT_SAMPLE, accountId: a.id, error: null, fetchedAt: ago(40_000), status: 'success' };
+  // Past thirty minutes of 429s, so the poll_backoff event on the alerts page is open for this one.
+  if (a.id === 'mail') {
+    return {
+      ...QUOTA_SNAPSHOT_SAMPLE,
+      accountId: a.id,
+      error: null,
+      fetchedAt: ago(47 * MINUTE),
+      poll: { backoffSince: ago(42 * MINUTE), lastAttemptAt: ago(11 * MINUTE), lastCleanAt: ago(47 * MINUTE), lastOutcome: 'rate_limited', nextAttemptAt: ahead(4 * MINUTE), rateLimitedInARow: 6 },
+      status: 'success',
+    };
+  }
+  const poll = QUOTA_SNAPSHOT_SAMPLE.poll && { ...QUOTA_SNAPSHOT_SAMPLE.poll, lastAttemptAt: ago(40_000), lastCleanAt: ago(40_000) };
+  return { ...QUOTA_SNAPSHOT_SAMPLE, accountId: a.id, error: null, fetchedAt: ago(40_000), poll, status: 'success' };
 });
 
 const SAMPLE_STEP = 5 * MINUTE;

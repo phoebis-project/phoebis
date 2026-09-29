@@ -96,8 +96,8 @@ curl -sS -b jar.txt -X POST https://phoebis.example/admin/oauth/sessions/$ID/con
   -H 'origin: https://phoebis.example'
 ```
 
-`GET /admin/accounts` lists the slots and their states, and `GET /admin/accounts/{id}/usage` reports the
-account's usage windows.
+`GET /admin/accounts` lists the slots and their states, and `GET /admin/accounts/{id}/usage` answers the poll's
+latest snapshot of the account's usage windows and the poll's standing.
 
 A loopback deployment behind an SSH tunnel uses `http://127.0.0.1:8081` in place of `https://phoebis.example` in
 every example above, and sends no `Origin`.

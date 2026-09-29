@@ -12,6 +12,7 @@ pub enum Kind {
     FundingRequired,
     KeepaliveCostCap,
     MeterDrift,
+    PollBackoff,
     PoolExhausted,
     ReauthRequired,
     RefreshFailed,
@@ -23,12 +24,13 @@ pub enum Kind {
 }
 
 impl Kind {
-    pub const ALL: [Kind; 13] = [
+    pub const ALL: [Kind; 14] = [
         Kind::AskUserQuestion,
         Kind::ClientDrift,
         Kind::FundingRequired,
         Kind::KeepaliveCostCap,
         Kind::MeterDrift,
+        Kind::PollBackoff,
         Kind::PoolExhausted,
         Kind::ReauthRequired,
         Kind::RefreshFailed,
@@ -46,6 +48,7 @@ impl Kind {
             Kind::FundingRequired => "funding_required",
             Kind::KeepaliveCostCap => "keepalive_cost_cap",
             Kind::MeterDrift => "meter_drift",
+            Kind::PollBackoff => "poll_backoff",
             Kind::PoolExhausted => "pool_exhausted",
             Kind::ReauthRequired => "reauth_required",
             Kind::RefreshFailed => "refresh_failed",
@@ -144,9 +147,11 @@ pub fn allowed_scopes(kind: Kind) -> &'static [ScopeType] {
         | Kind::SessionParked
         | Kind::SubagentActive => &[All, Key, Pool],
         Kind::ClientDrift => &[All],
-        Kind::FundingRequired | Kind::MeterDrift | Kind::ReauthRequired | Kind::RefreshFailed => {
-            &[Account, AnyAccount]
-        }
+        Kind::FundingRequired
+        | Kind::MeterDrift
+        | Kind::PollBackoff
+        | Kind::ReauthRequired
+        | Kind::RefreshFailed => &[Account, AnyAccount],
         Kind::KeepaliveCostCap | Kind::PoolExhausted => &[All, Pool],
         Kind::UtilizationAbove => &[Account, All, AnyAccount, Key, Pool],
     }

@@ -25,6 +25,9 @@ tracing = { workspace = true }
 bytes = { workspace = true }
 # An integration test drives the store's injected-failure seam, which needs the feature on.
 phoebis-store = { path = "../store", features = ["debug-hooks"] }
+# A backoff test polls a real usage service over the fake upstream, which needs a profile and a control client.
+phoebis-profile = { path = "../profile" }
+phoebis-transport = { path = "../transport" }
 fake-upstream = { path = "../../tests/fake_upstream" }
 rusqlite = { workspace = true }
 tempfile = { workspace = true }

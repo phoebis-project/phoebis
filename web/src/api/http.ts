@@ -177,7 +177,7 @@ export class HttpApi implements Api {
         try {
           return d.decodeSnapshot(a.id, await call('GET', `/admin/accounts/${enc(a.id)}/usage`));
         } catch (e) {
-          return { accountId: a.id, error: e instanceof Error ? e.message : String(e), fetchedAt: null, status: 'error' as const };
+          return { accountId: a.id, error: e instanceof Error ? e.message : String(e), fetchedAt: null, poll: null, status: 'error' as const };
         }
       }),
     );
