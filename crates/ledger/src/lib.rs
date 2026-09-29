@@ -49,7 +49,8 @@ pub use query::{
     MAX_RANGE_MS,
 };
 pub use quota::{
-    samples_from_head, samples_from_poll, QuotaPoll, Sampled, POLL_INTERVAL, PROFILE_EVERY_POLLS,
+    polled, samples_from_head, samples_from_poll, QuotaPoll, Sampled, POLL_INTERVAL,
+    PROFILE_EVERY_POLLS,
 };
 pub use reconcile::{
     read_reconciliations, reconcile, ReconciliationRow, MIN_RISE, RATIO_HIGH, RATIO_LOW,

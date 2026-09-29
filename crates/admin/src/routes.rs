@@ -435,10 +435,26 @@ async fn disconnect(State(state): State<Arc<AdminState>>, Path(id): Path<String>
 /// windows gives way to the windows the router holds, persisted from the last run or read since, so a card
 /// never reads as an error while windows exist; the error answers only when none do.
 async fn usage_latest(State(state): State<Arc<AdminState>>, Path(id): Path<String>) -> Response {
-    if let Err(refusal) = account(&state, &id) {
-        return refusal;
-    }
-    let poll = state.usage.poll_status(&id);
+    let row = match account(&state, &id) {
+        Ok(row) => row,
+        Err(refusal) => return refusal,
+    };
+    // The poll never asks an account without a credential, so no read is coming: the card says what the
+    // operator can do, and a standing left from before the credential went would describe nothing current.
+    let no_credential = matches!(
+        row.state,
+        AccountState::Disconnected | AccountState::Unpaired
+    );
+    let poll = if no_credential {
+        None
+    } else {
+        state.usage.poll_status(&id)
+    };
+    let unread = if no_credential {
+        "no credential is stored for this upstream; pair it to load quota"
+    } else {
+        "the poll has not read this account yet"
+    };
     let latest = state.usage.latest(&id);
     let held = match &latest {
         Some(snapshot) if has_windows(snapshot) => None,
@@ -449,7 +465,12 @@ async fn usage_latest(State(state): State<Arc<AdminState>>, Path(id): Path<Strin
         }),
     };
     let answer = compose_usage(&id, latest, held);
-    Json(usage_json(&id, answer.as_ref(), poll.as_ref())).into_response()
+    Json(usage_json(
+        &id,
+        answer.as_ref().ok_or(unread),
+        poll.as_ref(),
+    ))
+    .into_response()
 }
 
 /// `POST .../usage/refresh`: the one manual read of the endpoint. The usage service has no cache bypass and
@@ -462,7 +483,7 @@ async fn usage_refresh(State(state): State<Arc<AdminState>>, Path(id): Path<Stri
     match state.usage.snapshot(&id).await {
         Ok(snapshot) => {
             let poll = state.usage.poll_status(&id);
-            Json(usage_json(&id, Some(&snapshot), poll.as_ref())).into_response()
+            Json(usage_json(&id, Ok(&snapshot), poll.as_ref())).into_response()
         }
         Err(error) => failure(StatusCode::SERVICE_UNAVAILABLE, &error.to_string()),
     }
@@ -1228,7 +1249,12 @@ fn compose_usage(
     })
 }
 
-fn usage_json(id: &str, snapshot: Option<&UsageSnapshot>, poll: Option<&PollStatus>) -> Value {
+/// `snapshot` is the answer, or the error that stands in for it when there is none.
+fn usage_json(
+    id: &str,
+    snapshot: Result<&UsageSnapshot, &str>,
+    poll: Option<&PollStatus>,
+) -> Value {
     let poll = poll.map(|status| {
         json!({
             "backoff_since": status.backoff_since,
@@ -1239,19 +1265,22 @@ fn usage_json(id: &str, snapshot: Option<&UsageSnapshot>, poll: Option<&PollStat
             "rate_limited_in_a_row": status.rate_limited_in_a_row,
         })
     });
-    let Some(snapshot) = snapshot else {
+    let snapshot = match snapshot {
+        Ok(snapshot) => snapshot,
         // Zero is the unstamped generation, as the ledger stamps a row it has no identity for.
-        return json!({
-            "account_id": id,
-            "error": "the poll has not read this account yet",
-            "extra_usage": null,
-            "fable_window": null,
-            "fetched_at": null,
-            "identity_generation": 0,
-            "poll": poll,
-            "raw_keys": [],
-            "windows": [],
-        });
+        Err(error) => {
+            return json!({
+                "account_id": id,
+                "error": error,
+                "extra_usage": null,
+                "fable_window": null,
+                "fetched_at": null,
+                "identity_generation": 0,
+                "poll": poll,
+                "raw_keys": [],
+                "windows": [],
+            });
+        }
     };
     let window = |window: &UsageWindow| {
         json!({

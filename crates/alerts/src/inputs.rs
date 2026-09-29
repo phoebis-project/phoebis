@@ -12,10 +12,10 @@ use phoebis_bus::{
     spawn_subscriber, Bus, Event, Kind as RequestKind, LifecycleReceiver, Origin, Outcome,
     RequestObserved, SessionLifecycle,
 };
-use phoebis_ledger::{read_reconciliations, ReconciliationRow, RATIO_HIGH, RATIO_LOW};
+use phoebis_ledger::{polled, read_reconciliations, ReconciliationRow, RATIO_HIGH, RATIO_LOW};
 use phoebis_oauth::{PollOutcome, UsageService};
 use phoebis_routing::{RouterHandle, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE};
-use phoebis_store::{AccountKind, AccountState, AlertEventRow};
+use phoebis_store::{AccountState, AlertEventRow};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
@@ -53,8 +53,7 @@ impl AlertInputs {
     }
 }
 
-/// How long an account may back off before the alert fires: the whole ladder and one capped hold, so a single
-/// 429 or a short run never alerts.
+/// How long after a run's first 429 the alert fires, so a single 429 or a short run never alerts.
 pub const BACKOFF_ALERT_AFTER_MS: i64 = 30 * 60 * 1_000;
 
 /// How long an in-flight entry may wait for its completion before the arm forgets it.
@@ -1060,7 +1059,7 @@ impl Poller {
         }
         if let Some(usage) = &self.usage {
             let snapshot = self.router.snapshot();
-            for account in snapshot.accounts().filter(|a| a.kind == AccountKind::Oauth) {
+            for account in snapshot.accounts().filter(|a| polled(a.kind, a.state)) {
                 // No standing yet, as after a restart before the account's first poll, decides nothing.
                 let Some(status) = usage.poll_status(&account.id) else {
                     continue;
@@ -1090,12 +1089,14 @@ impl Poller {
                     self.alerts.clear(Kind::PollBackoff, &account.id);
                 }
             }
-            // An id the registry no longer holds as a subscription has nothing left to back off from.
+            // An id the poll no longer asks about (gone, keyed, disconnected or unpaired) has nothing left to
+            // back off from; the disconnect and the delete forget its standing, so the loop above never reaches
+            // it.
             for event in open.iter().filter(|e| {
                 e.kind == Kind::PollBackoff.as_str()
                     && snapshot
                         .account(&e.subject)
-                        .is_none_or(|a| a.kind != AccountKind::Oauth)
+                        .is_none_or(|a| !polled(a.kind, a.state))
             }) {
                 self.alerts.clear(Kind::PollBackoff, &event.subject);
             }

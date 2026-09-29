@@ -1367,7 +1367,9 @@ function BurnCharts({ answer, error, groupBy, loading }: { answer: { bucketSecon
 }
 
 const RECONCILIATION_HINT =
-  "For each completed 5-hour and 7-day window, the rise the upstream's readings showed against the share the router predicted for its own requests in it: 1.1 means the meter charged 1.1 times the table. A ratio under 0.8 or over 1.25 after a rise of at least 5% is marked; a window priced through a cell no measurement has filled is marked as such.";
+  "For each completed 5-hour and 7-day window, the rise the upstream's readings showed against the share the router predicted for its own requests in it: 1.1 means the meter charged 1.1 times the table. A ratio under 0.8 or over 1.25 after a rise of at least 5% is marked; a window priced through a cell no measurement has filled, or where an attempt on a model the cost table lacks was left out of the prediction, is marked as such.";
+// The burn prices no share for a model the cost table lacks, so only the reconciliation's mark names that case.
+const RECONCILED_UNMEASURED_HINT = `${UNMEASURED_HINT}, or an attempt on a model the cost table lacks was left out of the prediction`;
 
 function ReconciliationTable({ answer, error }: { answer: AnalyticsReconciliations | null; error: string | null }) {
   const rows = answer?.reconciliations ?? [];
@@ -1397,7 +1399,7 @@ function ReconciliationTable({ answer, error }: { answer: AnalyticsReconciliatio
                 <td className="right num">
                   {fmtShare(r.predictedShare)}
                   {r.unmeasured && (
-                    <span className="muted" title={UNMEASURED_HINT}>
+                    <span className="muted" title={RECONCILED_UNMEASURED_HINT}>
                       *
                     </span>
                   )}

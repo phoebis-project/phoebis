@@ -2457,7 +2457,6 @@ impl Relay {
                 Kind::Probe => "keepalive",
                 Kind::CountTokens | Kind::Inference => "client",
             },
-            canonical_model: ctx.identity.canonical_model.clone(),
             cache_ttl_ms: ctx
                 .cache_ttl_ms
                 .or(ctx.markers_ttl_ms)

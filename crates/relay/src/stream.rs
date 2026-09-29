@@ -103,7 +103,6 @@ pub(crate) struct Renewal {
     pub pin: PinRef,
     /// `client` or `keepalive`.
     pub origin: &'static str,
-    pub canonical_model: String,
     pub cache_ttl_ms: i64,
     /// Whether this request created the pin rather than renewing one that already served.
     pub fresh: bool,
@@ -143,7 +142,6 @@ impl Renewal {
             now,
             usage: usage.filter(|u| !u.is_empty()).map(pin_usage),
             origin: self.origin,
-            canonical_model: self.canonical_model,
             cache_ttl_ms: self.cache_ttl_ms,
         });
     }

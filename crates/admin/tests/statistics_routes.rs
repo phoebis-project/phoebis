@@ -971,7 +971,8 @@ async fn the_burn_route_ranks_sessions_by_tokens_and_prices_each_by_its_accounts
         points.iter().all(|p| null_field(p, "five_hour_share")
             && null_field(p, "seven_day_share")
             && null_field(p, "five_hour_unmeasured")
-            && null_field(p, "seven_day_unmeasured")),
+            && null_field(p, "seven_day_unmeasured")
+            && null_field(p, "unit")),
         "the session grouping answers no share, a tier on file or not: {points:?}"
     );
 }

@@ -122,6 +122,7 @@ fn tier_row<'a, T>(rows: &'a BTreeMap<String, T>, tier: &str) -> Option<&'a T> {
 /// it was measured. A cell no measurement filled carries a stand-in derived from the meter's earlier readings and
 /// is flagged, so every reader shows it as unmeasured until a measurement fills it.
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Cell {
     pub measured: Option<String>,
     pub share_per_million: f64,
@@ -131,6 +132,7 @@ pub struct Cell {
 
 /// A model's five cells on one window.
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ModelCells {
     pub cache_read: Cell,
     pub cache_write_1h: Cell,
@@ -229,6 +231,7 @@ impl CostTable {
 
 /// One tier's capacity of one window over Max 5x's, dated or flagged like a cell.
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Factor {
     pub factor: f64,
     pub measured: Option<String>,
@@ -237,6 +240,7 @@ pub struct Factor {
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct TierFactor {
     pub five_hour: Factor,
     pub seven_day: Factor,

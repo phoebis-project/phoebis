@@ -1912,6 +1912,23 @@ async fn an_open_poll_backoff_event_is_cleared_at_start_once_the_account_reads_c
         "resolved",
         "an id the registry no longer holds has nothing to back off from"
     );
+    // A failed read says nothing about the endpoint's limit, so only a clean one resolves the event.
+    up.set_rule_after(0, "/api/oauth/usage", usage_answer(500));
+    rig.clock.store(NOW + 5 * 60_000, Ordering::SeqCst);
+    usage.poll("business").await.unwrap();
+    assert_eq!(
+        usage.poll_status("business").unwrap().last_outcome,
+        PollOutcome::Failed
+    );
+    poller.tick().await;
+    settled(&rig).await;
+    assert_eq!(
+        rig.store.alert_event("left").unwrap().unwrap().state,
+        "open",
+        "a 500 is not a clean read"
+    );
+    up.set_rule_after(0, "/api/oauth/usage", usage_answer(200));
+    rig.clock.store(NOW + 10 * 60_000, Ordering::SeqCst);
     usage.poll("business").await.unwrap();
     poller.tick().await;
     settled(&rig).await;
@@ -1949,4 +1966,67 @@ async fn an_open_poll_backoff_event_is_cleared_at_start_once_the_account_reads_c
         ["left"],
         "still backing off: the event stays open and no second opens"
     );
+}
+
+/// A run of 429s that started `minutes` before `NOW`, read on the rig's clock, which is left at `NOW`.
+async fn backing_off(rig: &Rig, usage: &phoebis_oauth::UsageService, minutes: i64) {
+    rig.clock.store(NOW - minutes * 60_000, Ordering::SeqCst);
+    usage.poll("business").await.unwrap();
+    rig.clock.store(NOW, Ordering::SeqCst);
+}
+
+#[tokio::test]
+async fn an_open_poll_backoff_event_resolves_once_its_account_is_disconnected_or_unpaired() {
+    let up = usage_upstream(429).await;
+    let rig = rig().await;
+    let usage = usage_over(&rig, &up);
+    backoff_rule(&rig);
+    let mut poller = Poller::new(
+        rig.alerts.clone(),
+        &AlertInputs {
+            usage: Some(usage.clone()),
+            ..inputs(&rig, BTreeMap::new())
+        },
+        Tracked::default(),
+    );
+    backing_off(&rig, &usage, 40).await;
+    poller.tick().await;
+    settled(&rig).await;
+    assert_eq!(open_backoff(&rig).len(), 1);
+
+    // The disconnect route forgets the account's standing, so the tick finds no status to read.
+    rig.store
+        .set_state("business", AccountState::Disconnected)
+        .unwrap();
+    usage.invalidate("business");
+    rig.router.reload().await.unwrap();
+    poller.tick().await;
+    settled(&rig).await;
+    assert!(
+        open_backoff(&rig).is_empty(),
+        "a disconnected account is never polled, so nothing is left to back off from"
+    );
+
+    // Unpaired with the forty-minute run still on record: the poll skips it, so it neither keeps an event
+    // nor opens a new one.
+    rig.store
+        .set_state("business", AccountState::Ready)
+        .unwrap();
+    rig.router.reload().await.unwrap();
+    backing_off(&rig, &usage, 40).await;
+    poller.tick().await;
+    settled(&rig).await;
+    assert_eq!(open_backoff(&rig).len(), 1);
+    rig.store
+        .set_state("business", AccountState::Unpaired)
+        .unwrap();
+    rig.router.reload().await.unwrap();
+    for _ in 0..2 {
+        poller.tick().await;
+        settled(&rig).await;
+        assert!(
+            open_backoff(&rig).is_empty(),
+            "an unpaired account is never polled"
+        );
+    }
 }

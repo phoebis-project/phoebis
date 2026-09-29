@@ -371,6 +371,34 @@ fn a_tier_without_one_of_its_two_windows_is_refused() {
 }
 
 #[test]
+fn a_misspelt_cell_flag_or_a_third_tier_window_is_refused_rather_than_read_as_measured() {
+    let misspelt = CostTable::from_yaml(&cost_file(
+        &[FIVE_HOUR, SEVEN_DAY],
+        &CELLS.replace(
+            "output: {share_per_million: 0.393, measured: 2026-09-19}",
+            "output: {share_per_million: 0.393, measured: 2026-09-19, unmeasurd: true}",
+        ),
+        "America/Los_Angeles",
+    ))
+    .unwrap_err()
+    .to_string();
+    assert!(
+        misspelt.contains("unmeasurd"),
+        "the refusal names the key: {misspelt}"
+    );
+    let third = TierFactors::from_yaml(&TIERS.replace(
+        "    seven_day: {factor: 1, measured: 2026-09-19}\n",
+        "    seven_day: {factor: 1, measured: 2026-09-19}\n    seven_day_fable: {factor: 1, measured: 2026-09-19}\n",
+    ))
+    .unwrap_err()
+    .to_string();
+    assert!(
+        third.contains(SEVEN_DAY_FABLE),
+        "the refusal names the window: {third}"
+    );
+}
+
+#[test]
 fn a_tier_factor_at_or_below_zero_is_refused() {
     for factor in ["0", "-1"] {
         let refused = TierFactors::from_yaml(&TIERS.replace(

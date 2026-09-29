@@ -824,7 +824,8 @@ export interface WindowReconciliation {
   /** `observedRise` over `predictedShare`: 1.1 means the meter charged 1.1 times the table. */
   ratio: number;
   requests: number;
-  /** Whether any request was priced through a cell or factor no measurement has filled. */
+  /** Whether any request was priced through a cell or factor no measurement has filled, or an attempt on a model
+   *  the cost table lacks was left out of the prediction. */
   unmeasured: boolean;
   /** `five_hour` or `seven_day`. */
   window: string;

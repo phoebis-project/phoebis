@@ -562,6 +562,51 @@ async fn the_usage_get_answers_the_polls_latest_snapshot_and_standing_without_a_
 }
 
 #[tokio::test]
+async fn the_usage_get_says_no_credential_is_stored_for_a_disconnected_or_unpaired_account() {
+    use common::{delete, get, json, login};
+    let h = common::admin_parts_polled(std::time::Duration::from_secs(60)).await;
+    let cookie = login(&h.app, "admin-secret").await;
+    let path = "/admin/accounts/business/usage";
+    let answer = |v: &serde_json::Value| {
+        (
+            v["error"].as_str().map(str::to_owned),
+            v["poll"].is_null(),
+            v["windows"].as_array().map(Vec::len),
+        )
+    };
+    let unread = json(get(&h.app, path, Some(&cookie)).await).await;
+    assert_eq!(
+        answer(&unread),
+        (
+            Some("the poll has not read this account yet".into()),
+            true,
+            Some(0)
+        ),
+        "a paired account the poll has not read yet"
+    );
+    h.usage.poll("business").await.unwrap();
+    let removed = delete(
+        &h.app,
+        "/admin/accounts/business/credentials",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(removed.status(), 204);
+    let no_credential = (
+        Some("no credential is stored for this upstream; pair it to load quota".into()),
+        true,
+        Some(0),
+    );
+    let disconnected = json(get(&h.app, path, Some(&cookie)).await).await;
+    assert_eq!(answer(&disconnected), no_credential, "{disconnected}");
+    h.store
+        .set_state("business", phoebis_store::AccountState::Unpaired)
+        .unwrap();
+    let unpaired = json(get(&h.app, path, Some(&cookie)).await).await;
+    assert_eq!(answer(&unpaired), no_credential, "{unpaired}");
+}
+
+#[tokio::test]
 async fn an_account_whose_snapshot_holds_no_windows_answers_the_windows_the_router_holds() {
     use phoebis_routing::{Report, UtilizationSample, WindowReading, FIVE_HOUR, SEVEN_DAY};
     use common::{get, json, login, wait_json, NOW};
@@ -1315,7 +1360,6 @@ async fn a_pinned_sessions_burn_reads_its_share_rate_on_the_account_it_sits_on()
             ..phoebis_routing::PinUsage::default()
         }),
         origin: "client",
-        canonical_model: "claude-opus-5".into(),
         cache_ttl_ms: 300_000,
     });
     let window = 600.0;

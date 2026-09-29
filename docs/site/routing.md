@@ -314,10 +314,10 @@ stored tier: a tier change is read at the next profile refresh, within the hour,
 tier changed while the router was down is read at start. The newest reading per account and window is kept in the
 registry and loaded at startup, so a restart, and an account whose first poll the endpoint refuses, route from the last
 known windows. The router never fetches usage at a selection; use of an account outside the router shows in the next
-head or poll, so a decision can lag it by up to five minutes plus any backoff. The [Quota view](statistics.md#quota)
-shows when the poll last asked the endpoint for each OAuth account and how it answered, and while an account backs off,
-since when and when its next attempt comes; a `poll_backoff` [alert](statistics.md#alerts) fires once an account has
-backed off for thirty minutes.
+head or poll, so a decision can lag it by up to five minutes plus any backoff, and by up to one more interval after a
+failed poll or a restart. The [Quota view](statistics.md#quota) shows when the poll last asked the endpoint for each
+OAuth account and how it answered, and while an account backs off, since when and when its next attempt comes; a
+`poll_backoff` [alert](statistics.md#alerts) fires once an account has backed off for thirty minutes.
 
 ### Moves
 
@@ -368,8 +368,9 @@ order: `never` stops after the cold pins, `when_needed` (the default) goes on to
 orders every pin by burn over rewrite cost, cold or warm.
 
 The console's Pools form offers `shed_share`, `burn_window_seconds`, and `source_dwell_seconds` together as three
-presets beside custom: balanced (0.5, 600 s, 900 s, the default), fast (0.5, 300 s, 600 s), and conservative
-(0.3, 900 s, 1800 s).
+presets beside custom: balanced (0.5, 600 s, 900 s, the default), fast (0.5, 300 s, 600 s), and conservative (0.3,
+900 s, 1800 s). The form's preview of what a shedding round would move leaves out the pins of a subscription upstream
+whose tier is not known, which the round still sheds.
 
 A marked session moves at its next request, onto a cool sibling (see above) that did not shed this pin within
 `source_dwell_seconds`. A marked pin whose account is cooling for the session's model is released instead, with

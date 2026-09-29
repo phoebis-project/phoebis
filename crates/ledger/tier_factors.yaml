@@ -6,8 +6,8 @@
 # A factor carries `measured`, the day the tier's window was read against Max 5x's, or `unmeasured: true`, and every
 # reader shows a flagged factor as unmeasured. Pro's 5-hour factor is its window size read on 2026-09-24 over Max 5x's
 # read on 2026-09-19, 2 560 000 over 11 890 000; its 7-day factor is the reading of 2026-09-24 rounded to 0.18, where
-# that day's window sizes give 0.183. Max 20x's rest on sizes read on 2026-09-18 and are flagged until a measurement
-# on that tier confirms them.
+# 30 000 000 over 164 000 000 gives 0.183. Max 20x's rest on sizes read on 2026-09-18 and are flagged until a
+# measurement on that tier confirms them.
 measured: 2026-09-24
 reference: default_claude_max_5x
 tiers:

@@ -231,7 +231,6 @@ pub enum Report {
         usage: Option<PinUsage>,
         /// `client` or `keepalive`.
         origin: &'static str,
-        canonical_model: String,
         /// The cache TTL the relay resolved for the attempt: the policy's rewrite, else the client's marker.
         cache_ttl_ms: i64,
     },
@@ -553,8 +552,8 @@ pub fn spawn(
         tx: tx.clone(),
     };
     let writer_store = store.clone();
-    // Weak for the same reason the task's own sender is: a strong one here would keep the loop running after
-    // the last handle is gone, and with it the process lock a reopened on-disk store needs back.
+    // Weak: a strong sender would keep the loop running after the last handle is gone, and with it the process
+    // lock a reopened on-disk store needs back.
     let writer_tx = tx.downgrade();
     tokio::spawn(async move {
         // The memory has already moved when a rekey fails, and only the next landing of the same spelling
@@ -1289,7 +1288,6 @@ impl Task {
                 now,
                 usage,
                 origin,
-                canonical_model: _,
                 cache_ttl_ms,
             } => {
                 pin.model = self.state.canonical(&pin.model).to_string();

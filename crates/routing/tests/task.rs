@@ -1701,6 +1701,121 @@ async fn a_completed_requests_share_is_added_to_the_reading_until_the_next_readi
 }
 
 #[tokio::test]
+async fn a_usage_report_charges_the_fable_week_for_a_fable_model_and_nothing_unpriced_or_moved_past(
+) {
+    let store = seeded_oauth(&["a"]);
+    with_tier(&store, "a");
+    let now = Arc::new(AtomicI64::new(3_000));
+    // A tenth of a shared window per million input tokens, and twice that of the Fable week, which is half the
+    // 7-day window. The unpriced model has no 7-day cell, so it prices on the 5-hour window alone: only the rule
+    // that both shared windows price keeps its 5-hour share out.
+    let share = SharePricer::new(|window, _, model, usage, _| {
+        let tenth = usage.input as f64 / 1_000_000.0 * 0.1;
+        match (window, model) {
+            (SEVEN_DAY, "claude-unpriced-1") => None,
+            (SEVEN_DAY_FABLE, _) => Some(2.0 * tenth),
+            _ => Some(tenth),
+        }
+    });
+    let handle = spawn(
+        store.clone(),
+        clock(&now),
+        RouterConfig {
+            share,
+            ..RouterConfig::default()
+        },
+    )
+    .unwrap();
+    let readings = |incarnation: u64| {
+        let reading = WindowReading {
+            utilization: 0.5,
+            reset: Some(10 * HOUR),
+            observed_at: 1_000,
+        };
+        Report::Sample {
+            account_id: "a".into(),
+            sample: sample(1_000)
+                .with(FIVE_HOUR, reading)
+                .with(SEVEN_DAY, reading)
+                .with(SEVEN_DAY_FABLE, reading),
+            incarnation,
+        }
+    };
+    let used = |model: &str, incarnation: u64| Report::Usage {
+        account_id: "a".into(),
+        at: 2_000,
+        canonical_model: model.into(),
+        incarnation,
+        usage: PinUsage {
+            input: 1_000_000,
+            ..PinUsage::default()
+        },
+    };
+    let windows = || async {
+        let mut read_all = Vec::new();
+        for window in [FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE] {
+            read_all.push(read(&handle, "a", window).await);
+        }
+        read_all
+    };
+    let reads = |read_all: Vec<Option<f64>>, expected: [f64; 3]| {
+        read_all
+            .iter()
+            .zip(expected)
+            .all(|(read, expected)| close(*read, expected))
+    };
+    handle.report(readings(1));
+
+    handle.report(used("claude-fable-5", 1));
+    let fable = windows().await;
+    assert!(
+        reads(fable.clone(), [0.6, 0.6, 0.7]),
+        "a Fable request charges both shared windows and its week at twice the 7-day share: {fable:?}"
+    );
+    handle.report(used("claude-sonnet-5", 1));
+    let sonnet = windows().await;
+    assert!(
+        reads(sonnet.clone(), [0.7, 0.7, 0.7]),
+        "any other model leaves the Fable week alone: {sonnet:?}"
+    );
+    handle.report(used("claude-unpriced-1", 1));
+    let unpriced = windows().await;
+    assert!(
+        reads(unpriced.clone(), [0.7, 0.7, 0.7]),
+        "a model the pricer cannot price on both shared windows charges neither: {unpriced:?}"
+    );
+
+    // The id held again under a new incarnation, with its own readings: a report from the old holder is late.
+    store.delete_account("a", "test").unwrap();
+    store
+        .insert_account(&AccountRow {
+            id: "a".into(),
+            kind: AccountKind::Oauth,
+            label: "a".into(),
+            enabled: true,
+            identity: None,
+            lifecycle_generation: 1,
+            incarnation: 1,
+            revision: 1,
+            state: AccountState::Ready,
+        })
+        .unwrap();
+    with_tier(&store, "a");
+    handle.reload().await.unwrap();
+    handle.report(readings(2));
+    assert!(
+        reads(windows().await, [0.5, 0.5, 0.5]),
+        "the new holder reads its own readings"
+    );
+    handle.report(used("claude-sonnet-5", 1));
+    let moved_past = windows().await;
+    assert!(
+        reads(moved_past.clone(), [0.5, 0.5, 0.5]),
+        "a report for the incarnation the account moved past charges nothing: {moved_past:?}"
+    );
+}
+
+#[tokio::test]
 async fn a_head_writes_the_windows_it_moved_and_a_restart_reads_them() {
     let store = seeded_oauth(&["a"]);
     let now = Arc::new(AtomicI64::new(1_000));
@@ -2896,7 +3011,6 @@ async fn a_probe_after_a_compacted_request_refreshes_warmth() {
         now: 3_500,
         usage: None,
         origin: "keepalive",
-        canonical_model: "claude-sonnet-5".into(),
         cache_ttl_ms: 300_000,
     });
     let pin = handle.pins().await.unwrap().remove(0);
@@ -2936,7 +3050,6 @@ fn renewal(
         now,
         usage: Some(usage),
         origin,
-        canonical_model: "claude-sonnet-5".into(),
         cache_ttl_ms,
     }
 }
@@ -2995,7 +3108,6 @@ async fn a_renewal_with_usage_folds_the_typed_rates_and_the_banded_copy_and_a_pr
         now: 2_000,
         usage: None,
         origin: "client",
-        canonical_model: "claude-sonnet-5".into(),
         cache_ttl_ms: 3_600_000,
     });
     let pins = handle.pins().await.unwrap();

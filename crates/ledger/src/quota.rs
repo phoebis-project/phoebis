@@ -139,7 +139,7 @@ pub fn samples_from_poll(
 
 /// Whether the poll asks about this account: every OAuth account that holds a credential, paused or not,
 /// because a paused account's quota is still the operator's to watch.
-fn polled(kind: AccountKind, state: AccountState) -> bool {
+pub fn polled(kind: AccountKind, state: AccountState) -> bool {
     kind == AccountKind::Oauth
         && !matches!(state, AccountState::Disconnected | AccountState::Unpaired)
 }

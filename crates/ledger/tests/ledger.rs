@@ -1274,8 +1274,7 @@ fn head_with_reading(utilization: &str) -> Respond {
 }
 
 #[tokio::test]
-async fn a_head_sample_before_the_completion_reaches_the_router_through_the_assembler_and_the_writer(
-) {
+async fn a_relayed_heads_reading_reaches_the_router_and_a_header_sample_with_its_instant() {
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
         respond: head_with_reading("0.3125"),

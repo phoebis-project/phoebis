@@ -391,9 +391,10 @@ clears the funding flag.
 day, which resolves it, as removing the cap resolves it at the next poll.
 
 **Usage poll backing off** fires when an OAuth upstream's usage poll has been backing off from the endpoint's 429
-answers for thirty minutes, longer than the whole backoff ladder and one capped hold, and resolves on the upstream's
-next clean poll. The detail names the upstream, since when it has backed off, when the next attempt comes, and how many
-429s it answered in a row. An event left open across a restart resolves once the upstream's first poll reads clean.
+answers for thirty minutes, counted from the run's first 429, and resolves on the upstream's next clean poll, or once
+the upstream is disconnected or its credential removed, since the poll no longer asks about it. The detail names the
+upstream, since when it has backed off, when the next attempt comes, and how many 429s it answered in a row. An event
+left open across a restart resolves once the upstream's first poll reads clean.
 
 **Pool exhausted** fires when a request finds no eligible upstream in the pool and resolves on the next request
 the pool serves.

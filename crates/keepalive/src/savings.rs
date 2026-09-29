@@ -369,6 +369,28 @@ mod tests {
     }
 
     #[test]
+    fn a_window_share_saving_is_the_input_share_less_the_read_share() {
+        // 2026-09-26, a Saturday: outside the peak band's weekdays, so the band weighs nothing.
+        const SATURDAY_AFTERNOON: i64 = 1_790_431_200_000;
+        let saved = gross_saving(
+            SavingsUnit::WindowShare,
+            &PriceTable::shipped(),
+            &PlanTables::shipped(),
+            Some("default_claude_max_5x"),
+            "claude-opus-5",
+            1_000_000,
+            SATURDAY_AFTERNOON,
+        )
+        .expect("a priced model on a known tier");
+        // The shipped table's Opus 5-hour cells, per million tokens: input 0.0841, cache read 0.00219.
+        assert!(
+            (saved.share - (0.0841 - 0.00219)).abs() < 1e-12,
+            "{saved:?}"
+        );
+        assert!(!saved.unmeasured, "both cells are dated");
+    }
+
+    #[test]
     fn a_delta_without_an_account_takes_the_ledgers_reserved_id() {
         let key = ("desktop".to_string(), "session".to_string());
         let of =
