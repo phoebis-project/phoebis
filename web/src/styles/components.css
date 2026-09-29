@@ -1025,6 +1025,207 @@ textarea.input {
   border-top: 1px solid var(--hairline);
 }
 
+/* Grouped dialog: a two-level rail beside one group at a time; the fixed height keeps the frame still between
+   groups. */
+.dialog--grouped {
+  width: min(var(--dialog-w, 1040px), calc(100vw - 32px));
+  height: min(800px, calc(100vh - 48px));
+}
+
+.dialog--grouped .dialog__inner {
+  height: 100%;
+  max-height: none;
+}
+
+.dialog__rail-split {
+  display: grid;
+  flex: 1 1 auto;
+  grid-template-columns: 184px minmax(0, 1fr);
+  min-height: 0;
+  overflow: hidden;
+  border-top: 1px solid var(--hairline);
+}
+
+/* Sized so the pool dialog's 22 entries fit the rail at 1280 by 800 (about 624 px) with room: 17 group rows of
+   24.25 px, 5 parent rows of 19.75 px, 2 px inside a run, 8 px between runs and 8 px of padding sum to 593 px. */
+.dialog-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 10px;
+  overflow-y: auto;
+  background: var(--surface-2);
+  border-right: 1px solid var(--hairline);
+}
+
+.dialog-rail__run {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.dialog-rail__parent {
+  padding: 3px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.25;
+  color: var(--ink-3);
+  text-align: left;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: none;
+  border: 0;
+}
+
+.dialog-rail__parent:hover {
+  color: var(--ink);
+}
+
+.dialog-rail__group {
+  padding: 4px 10px;
+  font-size: 13px;
+  line-height: 1.25;
+  color: var(--ink-2);
+  text-align: left;
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+}
+
+.dialog-rail__group:hover {
+  color: var(--ink);
+  background: var(--surface-3);
+}
+
+.dialog-rail__group[aria-current] {
+  font-weight: 600;
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+}
+
+/* The dot follows its label, so nothing on the rail sits at the right edge. */
+.dialog-rail__dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-left: 6px;
+  vertical-align: middle;
+  background: var(--critical-ink);
+  border-radius: 50%;
+}
+
+.dialog-rail__break {
+  display: none;
+}
+
+.dialog__body--grouped {
+  gap: 0;
+  padding: 0 24px 24px;
+}
+
+.dialog-group {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding-top: 18px;
+  container-type: inline-size;
+}
+
+/* An author display beats the hidden attribute's UA rule, so the hidden groups say so again here. */
+.dialog-group[hidden] {
+  display: none;
+}
+
+.dialog-group__title {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.dialog-group__title:focus-visible {
+  outline: none;
+  border-radius: 4px;
+  box-shadow: 0 0 0 3px var(--accent-ring);
+}
+
+.dialog-group__intro {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--ink-3);
+}
+
+/* The cell grid: two equal columns with the gutter; a child spans both unless it is one of a pair. */
+.cells {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px 32px;
+}
+
+.cells > * {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+
+.cells > .cell--half {
+  grid-column: span 1;
+}
+
+/* An input, a select or a text area fills its cell; a switch, a pill row, a segmented control and a button keep
+   their width. */
+.cells .select {
+  display: flex;
+  width: 100%;
+}
+
+.field--beside .field__control {
+  flex-direction: row;
+  gap: 10px;
+  align-items: center;
+  justify-content: flex-start;
+}
+
+.switched {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.dialog__foot--status {
+  align-items: center;
+  justify-content: space-between;
+}
+
+.dialog__status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--ink-3);
+}
+
+.dialog__status.is-held {
+  color: var(--critical-ink);
+}
+
+.dialog__actions {
+  display: flex;
+  flex: none;
+  gap: 8px;
+}
+
+@container (max-width: 600px) {
+  .cells {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .cells > .cell--half {
+    grid-column: 1 / -1;
+  }
+}
+
 /* KV */
 .kv {
   display: grid;
@@ -1308,6 +1509,69 @@ textarea.input {
 
   .dialog-nav__link {
     white-space: nowrap;
+  }
+}
+
+@media (max-width: 760px) {
+  /* Two strips above the body: the parents, then the chosen parent's groups; a flat rail is one strip. */
+  .dialog__rail-split {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .dialog-rail {
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 10px 12px;
+    overflow: visible;
+    border-right: 0;
+    border-bottom: 1px solid var(--hairline);
+  }
+
+  .dialog-rail__run {
+    display: contents;
+  }
+
+  .dialog-rail__parent {
+    order: 0;
+    padding: 6px 10px;
+  }
+
+  .dialog-rail__run.is-chosen .dialog-rail__parent {
+    color: var(--ink);
+  }
+
+  .dialog-rail__break {
+    display: block;
+    flex-basis: 100%;
+    order: 1;
+    height: 0;
+  }
+
+  .dialog-rail--flat .dialog-rail__break {
+    display: none;
+  }
+
+  .dialog-rail__group {
+    order: 2;
+    white-space: nowrap;
+  }
+
+  .dialog-rail__run.has-parent:not(.is-chosen) .dialog-rail__group {
+    display: none;
+  }
+}
+
+@media (max-width: 720px) {
+  .dialog--grouped {
+    width: 100vw;
+    max-width: none;
+    height: 100vh;
+    max-height: none;
+    margin: 0;
+    border: 0;
+    border-radius: 0;
   }
 }
 

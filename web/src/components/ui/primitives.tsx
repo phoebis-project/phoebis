@@ -1,4 +1,5 @@
-import { useEffect, useId, useRef, useState, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes } from 'react';
+import { createContext, Fragment, useContext, useEffect, useId, useRef, useState, type ButtonHTMLAttributes, type CSSProperties, type HTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes } from 'react';
+import { Link } from 'react-router-dom';
 import type { BadgeTone } from '@/lib/quota';
 import { scrollToSection, useScrollSpy } from '@/lib/scroll';
 import { IconCheck, IconChevron, IconCopy, IconSearch, IconWarning, IconX } from './icons';
@@ -102,15 +103,22 @@ export function ErrorState({ title = 'Could not load', body, action }: { action?
   );
 }
 
-/** The hint is a block outside the label, so label and hint never share a line. */
-export function Field({ label, hint, children, inline = false }: { children: ReactNode; hint?: ReactNode; inline?: boolean; label: ReactNode }) {
+/**
+ * The hint is a block outside the label, so label and hint never share a line. `beside` puts the control before its
+ * label on one line (a switch); `plain` frames without a label element, for a control a label click would press.
+ * Every other prop lands on the root `div.field` (`data-rule-set`, `id`, `title`), so a caller can mark the root the
+ * selectors and the CSS read; the hint is a `div` because a hint may hold a dialog, which a `p` cannot.
+ */
+export function Field({ label, hint, children, inline = false, beside = false, plain = false, className, ...rest }: Omit<HTMLAttributes<HTMLDivElement>, 'children'> & { beside?: boolean; children: ReactNode; hint?: ReactNode; inline?: boolean; label: ReactNode; plain?: boolean }) {
+  const Frame = plain ? 'div' : 'label';
+  const text = <span className="field__label">{label}</span>;
   return (
-    <div className={`field ${inline ? 'field--inline' : ''}`}>
-      <label className="field__control">
-        <span className="field__label">{label}</span>
-        {children}
-      </label>
-      {hint && <p className="field__hint">{hint}</p>}
+    <div {...rest} className={`field ${inline ? 'field--inline' : ''} ${beside ? 'field--beside' : ''} ${className ?? ''}`}>
+      <Frame className="field__control">
+        {beside ? children : text}
+        {beside ? text : children}
+      </Frame>
+      {hint && <div className="field__hint">{hint}</div>}
     </div>
   );
 }
@@ -142,6 +150,32 @@ export function Toggle({ checked, onChange, label, disabled }: { checked: boolea
     <button type="button" role="switch" aria-checked={checked} aria-label={label} className={`toggle ${checked ? 'is-on' : ''}`} onClick={() => onChange(!checked)} disabled={disabled}>
       <span className="toggle__knob" />
     </button>
+  );
+}
+
+/**
+ * A switch over the number it enables: the number stays drawn under the switch and turns on with it. `disabled`
+ * disables the switch and the number together; with it off, the switch alone gates the number.
+ */
+export function SwitchedNumber({ checked, disabled, hint, input, label, numberLabel, onChange }: { checked: boolean; disabled?: boolean; hint?: ReactNode; input: InputHTMLAttributes<HTMLInputElement>; label: string; numberLabel?: string; onChange: (v: boolean) => void }) {
+  // After the spread, so a `disabled` the caller put in `input` can never reopen a gated number.
+  const number = <Input type="number" {...input} disabled={disabled || !checked} />;
+  return (
+    <div className="switched">
+      <Field label={label} beside>
+        <Toggle label={label} checked={checked} onChange={onChange} disabled={disabled} />
+      </Field>
+      {numberLabel ? (
+        <Field label={numberLabel} hint={hint}>
+          {number}
+        </Field>
+      ) : (
+        <div className="field">
+          {number}
+          {hint && <div className="field__hint">{hint}</div>}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -315,6 +349,217 @@ export function SectionedDialog({ open, onClose, title, subtitle, sections, foot
         {footer && <footer className="dialog__foot">{footer}</footer>}
       </div>
     </dialog>
+  );
+}
+
+export interface DialogGroup {
+  body: ReactNode;
+  /** Unique within the dialog; the rail button, the section and its heading carry it. */
+  id: string;
+  label: string;
+  /** The rail heading this group sits under; consecutive groups that share one form a run under it. */
+  parent?: string;
+  /** Marks the group and its parent on the rail while a refusal sits in the group. */
+  refused?: boolean;
+}
+
+const GroupChoice = createContext<(id: string) => void>(() => {});
+
+/** A hint link that switches the rail to another group and focuses its heading; reads the dialog's context. */
+export function GroupLink({ id, children }: { children: ReactNode; id: string }) {
+  const choose = useContext(GroupChoice);
+  return (
+    <button type="button" className="link-btn" onClick={() => choose(id)}>
+      {children}
+    </button>
+  );
+}
+
+/** A hint link to a console page in a new tab, so the unsaved form stays open behind it; says so to a reader. */
+export function PageLink({ to, children }: { children: ReactNode; to: string }) {
+  return (
+    <Link to={to} target="_blank" rel="noopener">
+      {children}
+      <span className="sr-only"> (opens in a new tab)</span>
+    </Link>
+  );
+}
+
+/**
+ * A long form split into groups behind a rail, one group shown at a time. The rest stay mounted and hidden, so
+ * their state and their refusal checks live on while another group is in view.
+ */
+export function GroupedDialog({
+  open,
+  onClose,
+  title,
+  groups,
+  chosen,
+  onChoose,
+  railLabel,
+  status,
+  hold = null,
+  held = hold !== null,
+  footer,
+  width = 1040,
+}: {
+  /** The id of the group shown; the page owns it and resets it on open. */
+  chosen: string;
+  /** The footer's buttons, after the status line. */
+  footer?: ReactNode;
+  groups: DialogGroup[];
+  /** The refusal's tone on the status line; defaults to whether `hold` is set, so a server refusal sets it alone. */
+  held?: boolean;
+  /** The group of the first refusal: draws "Go to <label>", which opens it and focuses its `[aria-invalid]` control. */
+  hold?: string | null;
+  /** The rail, a hint link and Go to call it; the page stores the id. */
+  onChoose: (id: string) => void;
+  onClose: () => void;
+  open: boolean;
+  /** The rail's accessible name: "Pool settings", "Key settings". */
+  railLabel: string;
+  /** The footer's status line, read in a `role="status"` element before the buttons. */
+  status: ReactNode;
+  title: ReactNode;
+  width?: number;
+}) {
+  const ref = useModalDialog(open, onClose);
+  const titleId = useId();
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const sections = useRef(new Map<string, HTMLElement>());
+  const seen = useRef<string | null>(null);
+  const target = useRef<'heading' | 'refused'>('heading');
+  const focusIn = (id: string) => {
+    const section = sections.current.get(id);
+    const control = target.current === 'refused' ? section?.querySelector<HTMLElement>('[aria-invalid="true"]') : null;
+    (control ?? section?.querySelector<HTMLElement>('.dialog-group__title'))?.focus();
+    target.current = 'heading';
+  };
+  const choose = (id: string, focus: 'heading' | 'refused' = 'heading') => {
+    target.current = focus;
+    if (id === chosen) focusIn(id);
+    else onChoose(id);
+  };
+  // The open itself leaves focus where the browser put it, so a field's autoFocus still wins; every later choice
+  // scrolls the body back to the top and lands on the group's heading, or on its refused control for Go to.
+  useEffect(() => {
+    if (!open) {
+      seen.current = null;
+      return;
+    }
+    const first = seen.current === null;
+    if (seen.current === chosen) return;
+    seen.current = chosen;
+    if (first) return;
+    bodyRef.current?.scrollTo?.({ top: 0 });
+    focusIn(chosen);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, chosen]);
+  const runs: { groups: DialogGroup[]; parent?: string }[] = [];
+  for (const g of groups) {
+    const last = runs[runs.length - 1];
+    if (last && last.parent !== undefined && last.parent === g.parent) last.groups.push(g);
+    else runs.push({ groups: [g], parent: g.parent });
+  }
+  const flat = groups.every((g) => g.parent === undefined);
+  const labelOf = (id: string) => groups.find((g) => g.id === id)?.label ?? id;
+  // The dot is decoration and the announcement sits outside the button, so the button's name stays its label and a
+  // lookup by name or by the label span never meets the refusal's words.
+  const railId = useId();
+  const noteId = (key: string) => `${railId}-${key}-refused`;
+  const dot = <span className="dialog-rail__dot" aria-hidden />;
+  const note = (key: string) => (
+    <span id={noteId(key)} className="sr-only">
+      holds a refusal
+    </span>
+  );
+
+  return (
+    <GroupChoice.Provider value={(id) => choose(id)}>
+      <dialog
+        ref={ref}
+        className="dialog dialog--grouped"
+        aria-labelledby={titleId}
+        style={{ '--dialog-w': `${width}px` } as CSSProperties}
+        onClick={(e) => {
+          if (e.target === ref.current) onClose();
+        }}
+      >
+        <div className="dialog__inner">
+          <header className="dialog__head">
+            <div>
+              <h2 id={titleId} className="dialog__title">
+                {title}
+              </h2>
+            </div>
+            <button type="button" className="dialog__close" onClick={onClose} aria-label="Close">
+              <IconX size={16} />
+            </button>
+          </header>
+          <div className="dialog__rail-split">
+            <nav className={`dialog-rail ${flat ? 'dialog-rail--flat' : ''}`} aria-label={railLabel}>
+              {runs.map((run, i) => {
+                const isChosen = run.groups.some((g) => g.id === chosen);
+                const refused = run.groups.some((g) => g.refused);
+                return (
+                  <div key={run.parent ?? run.groups[0].id} className={`dialog-rail__run ${run.parent ? 'has-parent' : ''} ${isChosen ? 'is-chosen' : ''}`}>
+                    {run.parent && (
+                      <>
+                        <button type="button" className="dialog-rail__parent" data-parent={run.parent} aria-describedby={refused ? noteId(`parent-${i}`) : undefined} onClick={() => choose(run.groups[0].id)}>
+                          <span className="dialog-rail__label">{run.parent}</span>
+                          {refused && dot}
+                        </button>
+                        {refused && note(`parent-${i}`)}
+                      </>
+                    )}
+                    {run.groups.map((g) => (
+                      <Fragment key={g.id}>
+                        <button type="button" className="dialog-rail__group" data-group={g.id} aria-current={g.id === chosen ? 'true' : undefined} aria-describedby={g.refused ? noteId(g.id) : undefined} onClick={() => choose(g.id)}>
+                          <span className="dialog-rail__label">{g.label}</span>
+                          {g.refused && dot}
+                        </button>
+                        {g.refused && note(g.id)}
+                      </Fragment>
+                    ))}
+                  </div>
+                );
+              })}
+              <span className="dialog-rail__break" aria-hidden />
+            </nav>
+            <div className="dialog__body dialog__body--grouped" ref={bodyRef}>
+              {groups.map((g) => (
+                <section
+                  key={g.id}
+                  className="dialog-group"
+                  aria-label={g.label}
+                  hidden={g.id !== chosen}
+                  ref={(el) => {
+                    if (el) sections.current.set(g.id, el);
+                    else sections.current.delete(g.id);
+                  }}
+                >
+                  <h3 className="dialog-group__title" tabIndex={-1}>
+                    {g.label}
+                  </h3>
+                  {g.body}
+                </section>
+              ))}
+            </div>
+          </div>
+          <footer className="dialog__foot dialog__foot--status">
+            <p className={`dialog__status ${held ? 'is-held' : ''}`} role="status">
+              {status}
+              {hold && (
+                <button type="button" className="link-btn" onClick={() => choose(hold, 'refused')}>
+                  Go to {labelOf(hold)}
+                </button>
+              )}
+            </p>
+            <div className="dialog__actions">{footer}</div>
+          </footer>
+        </div>
+      </dialog>
+    </GroupChoice.Provider>
   );
 }
 

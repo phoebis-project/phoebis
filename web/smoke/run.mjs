@@ -58,7 +58,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { api, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, failCalls, failNextCall, MOCK_VERSION, mount, requestEvents, requests, rollups, stallLive } = await import('./dist/entry.js');
+const { api, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, failCalls, failNextCall, Field, GroupedDialog, GroupLink, Input, MOCK_VERSION, mount, mountNode, PageLink, React, requestEvents, requests, rollups, stallLive, SwitchedNumber } = await import('./dist/entry.js');
 
 const results = [];
 function expect(name, text, needles) {
@@ -4151,6 +4151,131 @@ const roleBeforePreview = localStorage.getItem('phoebis.role');
   results.push({ name: 'viewer toggle persisted', ok: localStorage.getItem('phoebis.role') === 'viewer', missing: [localStorage.getItem('phoebis.role')] });
 }
 m.unmount();
+
+// Fixtures mounted alone pin the grouped dialog's contract apart from any one page's form.
+{
+  const { createElement: h, useState } = React;
+  function Fixture({ hold = null, refused = false, status = 'Every group saves together.' }) {
+    const [chosen, setChosen] = useState('one');
+    const groups = [
+      { id: 'one', label: 'One', parent: 'First', body: h(Field, { label: 'A' }, h(Input, { 'aria-label': 'A' })) },
+      { id: 'two', label: 'Two', parent: 'First', refused, body: h(Field, { label: 'B' }, h(Input, { 'aria-label': 'B', 'aria-invalid': refused ? true : undefined })) },
+      { id: 'three', label: 'Three', parent: 'Second', body: h('p', { className: 'field__hint' }, h(GroupLink, { id: 'one' }, 'One'), ' ', h(PageLink, { to: '/pools' }, 'Pools page')) },
+    ];
+    return h(GroupedDialog, { chosen, footer: h('button', { type: 'button' }, 'Save'), groups, hold, onChoose: setChosen, onClose() {}, open: true, railLabel: 'Fixture settings', status, title: 'Fixture' });
+  }
+  const texts = (root, selector) => [...root.querySelectorAll(selector)].map((el) => el.textContent?.trim() ?? '');
+  const attrs = (root, selector, name) => [...root.querySelectorAll(selector)].map((el) => el.getAttribute(name));
+  const shown = (root) => [...root.querySelectorAll('section.dialog-group:not([hidden])')].map((s) => s.getAttribute('aria-label')).join();
+  const group = (root, id) => root.querySelector(`.dialog-rail__group[data-group="${id}"]`);
+  const heading = (root, label) => root.querySelector(`section.dialog-group[aria-label="${label}"] > h3.dialog-group__title`);
+  const focused = () => document.activeElement?.outerHTML?.slice(0, 80) ?? 'nothing';
+
+  let f = await mountNode(h(Fixture));
+  {
+    const c = f.container;
+    const read = [texts(c, '.dialog-rail__parent .dialog-rail__label').join(), attrs(c, '.dialog-rail__parent', 'data-parent').join(), texts(c, '.dialog-rail__group .dialog-rail__label').join(), attrs(c, '.dialog-rail__group', 'data-group').join(), c.querySelector('nav.dialog-rail')?.getAttribute('aria-label')];
+    results.push({ name: 'grouped dialog: the rail lists the parents and the groups in order', ok: JSON.stringify(read) === JSON.stringify(['First,Second', 'First,Second', 'One,Two,Three', 'one,two,three', 'Fixture settings']), missing: read });
+    const hidden = c.querySelectorAll('section.dialog-group[hidden]').length;
+    const title = c.querySelector('section.dialog-group:not([hidden]) .dialog-group__title')?.textContent;
+    const current = attrs(c, '[aria-current="true"]', 'data-group').join();
+    results.push({ name: 'grouped dialog: one group shows and the rest carry hidden', ok: hidden === 2 && title === 'One' && current === 'one', missing: [`${hidden} hidden`, `shown ${title}`, `current ${current}`] });
+    group(c, 'two')?.click();
+    await f.settle(100);
+    results.push({
+      name: 'grouped dialog: choosing a group hides the others, marks its rail entry and focuses its heading',
+      ok: shown(c) === 'Two' && group(c, 'two')?.getAttribute('aria-current') === 'true' && !group(c, 'one')?.hasAttribute('aria-current') && heading(c, 'Two') !== null && document.activeElement === heading(c, 'Two'),
+      missing: [`shown ${shown(c)}`, `focus ${focused()}`],
+    });
+    c.querySelector('.dialog-rail__parent[data-parent="Second"]')?.click();
+    await f.settle(100);
+    results.push({ name: 'grouped dialog: a parent heading chooses its first group', ok: shown(c) === 'Three', missing: [`shown ${shown(c)}`] });
+    group(c, 'three')?.click();
+    await f.settle(100);
+    [...c.querySelectorAll('button.link-btn')].find((b) => b.textContent?.trim() === 'One')?.click();
+    await f.settle(100);
+    const page = [...c.querySelectorAll('a')].find((a) => a.textContent?.startsWith('Pools page'));
+    results.push({
+      name: 'grouped dialog: a group link switches the rail and a page link opens in a new tab',
+      ok: shown(c) === 'One' && document.activeElement === heading(c, 'One') && page?.getAttribute('target') === '_blank' && (page?.getAttribute('href') ?? '').endsWith('/pools') && page?.querySelector('.sr-only')?.textContent?.trim() === '(opens in a new tab)',
+      missing: [`shown ${shown(c)}`, `focus ${focused()}`, page?.outerHTML?.slice(0, 160) ?? 'no page link'],
+    });
+    const status = c.querySelector('[role="status"]');
+    const actions = c.querySelector('.dialog__actions');
+    const before = status && actions ? Boolean(status.compareDocumentPosition(actions) & window.Node.DOCUMENT_POSITION_FOLLOWING) : false;
+    results.push({ name: 'grouped dialog: the footer keeps its buttons after the status line', ok: texts(c, '.dialog__actions button').join() === 'Save' && before, missing: [texts(c, '.dialog__actions button').join(), `status first ${before}`] });
+  }
+  f.unmount();
+
+  f = await mountNode(h(Fixture, { hold: 'two', refused: true, status: 'Save is held: B is empty.' }));
+  {
+    const c = f.container;
+    const two = group(c, 'two');
+    const first = c.querySelector('.dialog-rail__parent[data-parent="First"]');
+    const note = (button) => {
+      const id = button?.getAttribute('aria-describedby');
+      return id ? (document.getElementById(id)?.textContent?.trim() ?? null) : null;
+    };
+    const status = c.querySelector('[role="status"]');
+    const marked = Boolean(two?.querySelector('.dialog-rail__dot')) && Boolean(first?.querySelector('.dialog-rail__dot'));
+    const named = note(two) === 'holds a refusal' && note(first) === 'holds a refusal' && !two?.querySelector('.sr-only') && !first?.querySelector('.sr-only') && two?.querySelector('.dialog-rail__label')?.textContent === 'Two';
+    const footer = (status?.textContent ?? '').includes('Save is held: B is empty.') && (status?.textContent ?? '').includes('Go to Two') && status?.classList.contains('is-held');
+    [...(status?.querySelectorAll('button.link-btn') ?? [])].find((b) => b.textContent?.trim() === 'Go to Two')?.click();
+    await f.settle(100);
+    const landed = shown(c) === 'Two' && document.activeElement === c.querySelector('input[aria-label="B"]');
+    results.push({
+      name: 'grouped dialog: a refused group marks itself and its parent, the footer names the hold, and Go to focuses the refused control',
+      ok: marked && named && footer && landed,
+      missing: [`dots ${marked}`, `notes ${note(two)} / ${note(first)}`, `status ${status?.className} ${status?.textContent}`, `shown ${shown(c)}`, `focus ${focused()}`],
+    });
+  }
+  f.unmount();
+
+  function Switched({ disabled, initial = false }) {
+    const [checked, setChecked] = useState(initial);
+    return h(SwitchedNumber, { checked, disabled, input: { 'aria-label': 'Cap amount', value: 5, onChange() {} }, label: 'Cap', numberLabel: 'Amount', onChange: setChecked });
+  }
+  const parts = (c) => ({ input: c.querySelector('input[aria-label="Cap amount"]'), toggle: c.querySelector('button[role="switch"]') });
+  f = await mountNode(h(Switched));
+  {
+    const c = f.container;
+    const off = parts(c).input?.disabled === true;
+    parts(c).toggle?.click();
+    await f.settle(100);
+    const on = parts(c).input?.disabled === false;
+    const labels = texts(c, '.field__label').join();
+    results.push({ name: 'grouped dialog: the switch over a number keeps the number drawn and turns it on with the switch', ok: off && on && labels === 'Cap,Amount', missing: [`off disabled ${off}`, `on enabled ${on}`, labels] });
+  }
+  f.unmount();
+  f = await mountNode(h(Switched, { disabled: true, initial: true }));
+  {
+    const { input, toggle } = parts(f.container);
+    results.push({ name: 'grouped dialog: a disabled parent disables the switch and the number', ok: toggle?.disabled === true && input?.disabled === true, missing: [`switch ${toggle?.disabled}`, `number ${input?.disabled}`] });
+  }
+  f.unmount();
+  f = await mountNode(h(Switched, { disabled: false, initial: false }));
+  {
+    const c = f.container;
+    const gated = parts(c).toggle?.disabled === false && parts(c).input?.disabled === true;
+    parts(c).toggle?.click();
+    await f.settle(100);
+    const opened = parts(c).input?.disabled === false;
+    results.push({ name: 'grouped dialog: with the parent enabled the switch alone gates the number', ok: gated && opened, missing: [`gated ${gated}`, `opened ${opened}`] });
+  }
+  f.unmount();
+
+  f = await mountNode(h(Field, { label: 'A', hint: 'Below', 'data-rule-set': 'plan', title: 'root' }, h(Input, { 'aria-label': 'A' })));
+  {
+    const root = f.container.querySelector('.field[data-rule-set="plan"]');
+    const hint = root?.querySelector('.field__hint');
+    results.push({
+      name: 'grouped dialog: a field forwards a root attribute and renders its hint as a block',
+      ok: root?.getAttribute('title') === 'root' && root?.querySelector('.field__label')?.textContent === 'A' && hint?.tagName === 'DIV' && hint?.textContent === 'Below',
+      missing: [f.container.innerHTML.slice(0, 200)],
+    });
+  }
+  f.unmount();
+}
 
 // Viewer mode: no mutating controls, no bodies.
 m = await mount('/keys');

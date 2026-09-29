@@ -1,6 +1,6 @@
-import React from 'react';
+import React, { type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { createMemoryRouter, RouterProvider } from 'react-router-dom';
+import { createMemoryRouter, MemoryRouter, RouterProvider } from 'react-router-dom';
 import { api } from '@/api';
 import { ApiError, reportFailure } from '@/api/http';
 import type { LiveEvent } from '@/api/types';
@@ -11,6 +11,8 @@ import { ALL_ROLLUPS, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, REQUEST_EVE
 import { SETTINGS_SAMPLE } from '@/mock/samples';
 
 export { api, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION };
+export { default as React } from 'react';
+export { Field, GroupedDialog, GroupLink, Input, PageLink, SwitchedNumber, Toggle } from '@/components/ui/primitives';
 export const MOCK_VERSION = SETTINGS_SAMPLE.about.version;
 export const requestEvents = REQUEST_EVENTS;
 export const requests = REQUESTS;
@@ -145,6 +147,31 @@ export async function mount(path: string): Promise<Mounted> {
     settle: (ms = 400) => wait(ms),
     text: () => {
       // Closed <dialog> elements keep their text in the DOM but are not visible.
+      const clone = container.cloneNode(true) as HTMLElement;
+      clone.querySelectorAll('dialog:not([open])').forEach((d) => d.remove());
+      return clone.textContent ?? '';
+    },
+    unmount: () => {
+      root.unmount();
+      container.remove();
+    },
+  };
+}
+
+/** Mounts one element under a memory router, for a check over a component the pages do not reach alone. */
+export async function mountNode(node: ReactNode): Promise<Mounted> {
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  root.render(<MemoryRouter>{node}</MemoryRouter>);
+  await wait(600);
+  return {
+    container,
+    navigate: () => {
+      throw new Error('a mounted node has no routes to navigate');
+    },
+    settle: (ms = 400) => wait(ms),
+    text: () => {
       const clone = container.cloneNode(true) as HTMLElement;
       clone.querySelectorAll('dialog:not([open])').forEach((d) => d.remove());
       return clone.textContent ?? '';

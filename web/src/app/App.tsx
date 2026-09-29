@@ -1,3 +1,4 @@
+import { lazy, Suspense } from 'react';
 import { createBrowserRouter, Navigate, RouterProvider, useParams } from 'react-router-dom';
 import { Shell } from '@/components/shell/Shell';
 import { AccountsPage } from '@/pages/AccountsPage';
@@ -14,6 +15,10 @@ import { SessionsPage } from '@/pages/SessionsPage';
 import { SettingsPage } from '@/pages/SettingsPage';
 import { SessionProvider } from './session';
 import { AppSettingsProvider } from './settings';
+
+// Gated on the build variable here, not on `MOCK`: the bundler gathers dynamic imports before it folds a constant
+// imported from another module, so only a local condition keeps the fixture's chunk out of the served bundle.
+const GroupedDialogFixtureRoute = import.meta.env.VITE_PHOEBIS_MOCK === '1' ? lazy(() => import('@/mock/fixtures/GroupedDialogFixture')) : null;
 
 /** Keeps a bookmarked /accounts/:id landing on the same upstream. */
 function UpstreamRedirect() {
@@ -47,6 +52,19 @@ export const routes = [
       { path: 'upstreams/:accountId', element: <AccountsPage /> },
     ],
   },
+  // The fixture the browser pass measures; the served bundle carries neither the path nor the module.
+  ...(GroupedDialogFixtureRoute
+    ? [
+        {
+          path: '/fixtures/grouped-dialog',
+          element: (
+            <Suspense fallback={null}>
+              <GroupedDialogFixtureRoute />
+            </Suspense>
+          ),
+        },
+      ]
+    : []),
 ];
 
 const router = createBrowserRouter(routes);

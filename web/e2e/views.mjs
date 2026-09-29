@@ -177,6 +177,43 @@ async function advance(ms) {
   await settle();
 }
 
+/**
+ * The grouped dialog on a mock-only fixture that carries the pool dialog's seventeen groups under five parents: the
+ * frame keeps its fixed size and the rail holds all 22 entries without scrolling at the pass's viewport. The numbers
+ * go to the measurements whatever the outcome, since the rail's fit is argued from row heights the browser decides.
+ */
+async function groupedDialogFixture(theme) {
+  const say = (what) => failures.push(`${theme} /fixtures/grouped-dialog: ${what}`);
+  await page.goto(`${base}/fixtures/grouped-dialog`);
+  await booted();
+  await advance(LOAD_MS);
+  try {
+    await page.waitForSelector('dialog[open] .dialog-rail', { timeout: 15_000 });
+  } catch {
+    say('dialog[open] .dialog-rail never appeared');
+    return;
+  }
+  const read = await page.evaluate(() => {
+    const dialog = document.querySelector('dialog[open]');
+    const rail = dialog.querySelector('.dialog-rail');
+    const box = dialog.getBoundingClientRect();
+    // scrollHeight never reads under clientHeight, so the entries' own height is taken from the last run's edge.
+    const runs = rail.querySelectorAll('.dialog-rail__run');
+    const last = runs[runs.length - 1];
+    const entries = last ? last.getBoundingClientRect().bottom - rail.getBoundingClientRect().top + parseFloat(getComputedStyle(rail).paddingBottom) : null;
+    return {
+      frame: { height: box.height, width: box.width },
+      groups: rail.querySelectorAll('.dialog-rail__group').length,
+      parents: rail.querySelectorAll('.dialog-rail__parent').length,
+      rail: { clientHeight: rail.clientHeight, entries, scrollHeight: rail.scrollHeight },
+    };
+  });
+  measurements.push(`${theme} /fixtures/grouped-dialog ${JSON.stringify(read)}`);
+  if (read.frame.width !== 1040 || read.frame.height !== 752) say(`the frame measures ${read.frame.width} by ${read.frame.height}, not 1040 by 752`);
+  if (read.groups !== 17 || read.parents !== 5) say(`the rail draws ${read.groups} groups under ${read.parents} parents, not 17 under 5`);
+  if (read.rail.scrollHeight > read.rail.clientHeight) say(`the rail scrolls: ${read.rail.scrollHeight} px of entries in ${read.rail.clientHeight} px`);
+}
+
 async function poolChips(theme) {
   const chips = await page.evaluate(() => {
     const box = (el) => {
@@ -1309,6 +1346,15 @@ try {
       await page.screenshot({ fullPage: true, path: join(shots, theme, `${view.slug}.png`) });
       if (view.path === '/requests') await requestDrawer(theme);
       if (view.path === '/sessions') await forkLink(theme);
+    }
+  }
+  // Only the mock bundle routes the fixture path. It runs after every view because its load moves the page clock,
+  // and the views' shots would then draw other instants than a pass without it.
+  if (mock) {
+    for (const theme of ['light', 'dark']) {
+      at = `${theme} /fixtures/grouped-dialog`;
+      await page.evaluate((t) => localStorage.setItem('phoebis.theme', t), theme);
+      await groupedDialogFixture(theme);
     }
   }
 } catch (error) {
