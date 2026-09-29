@@ -88,11 +88,14 @@ const WINDOWS = [
 
 /** What a Pro and a Max 20x account spend of their own window against the Max 5x share the group shows. */
 const groupTitle = (tiers: TierFactors, window: (typeof WINDOWS)[number]['factor']) => {
-  const times = (tier: string) => {
-    const factor = own(tiers.tiers, tier) ? tiers.tiers[tier][window].factor : 0;
-    return factor > 0 ? Number((1 / factor).toPrecision(3)) : '-';
+  const spends = (tier: string, words: (times: number | string) => string) => {
+    const factor = own(tiers.tiers, tier) ? tiers.tiers[tier][window] : null;
+    const times = factor && factor.factor > 0 ? Number((1 / factor.factor).toPrecision(3)) : '-';
+    return `${words(times)}${factor?.unmeasured ? ' (not measured)' : ''}`;
   };
-  return `Share of a Max 5x window per million tokens; a Pro account spends ${times('default_claude_pro')} times as much of its own, a Max 20x ${times('default_claude_max_20x')} times`;
+  const pro = spends('default_claude_pro', (times) => `a Pro account spends ${times} times as much of its own`);
+  const max20x = spends('default_claude_max_20x', (times) => `a Max 20x ${times} times`);
+  return `Share of a Max 5x window per million tokens; ${pro}, ${max20x}`;
 };
 
 /** Opens the shipped price table next to anything that spends tokens on the user's behalf. */

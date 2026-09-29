@@ -3940,12 +3940,12 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
   {
     const groups = [...(shareTable?.querySelectorAll('thead tr:first-child th') ?? [])].slice(1).map((th) => [th.textContent?.trim(), th.getAttribute('title')]);
     results.push({
-      name: "/sessions cost reference titles each window group with that window's tier factors",
+      name: "/sessions cost reference titles each window group with that window's tier factors and marks the unmeasured ones",
       ok:
         JSON.stringify(groups) ===
         JSON.stringify([
-          ['5-hour window', 'Share of a Max 5x window per million tokens; a Pro account spends 4.65 times as much of its own, a Max 20x 0.248 times'],
-          ['7-day window', 'Share of a Max 5x window per million tokens; a Pro account spends 5.56 times as much of its own, a Max 20x 0.467 times'],
+          ['5-hour window', 'Share of a Max 5x window per million tokens; a Pro account spends 4.65 times as much of its own, a Max 20x 0.248 times (not measured)'],
+          ['7-day window', 'Share of a Max 5x window per million tokens; a Pro account spends 5.56 times as much of its own, a Max 20x 0.467 times (not measured)'],
         ]),
       missing: groups.map((g) => g.join(': ')),
     });

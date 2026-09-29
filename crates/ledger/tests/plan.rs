@@ -499,15 +499,15 @@ fn a_cost_table_whose_windows_are_not_the_two_is_refused() {
     .unwrap_err()
     .to_string();
     assert!(
-        third.contains(SEVEN_DAY_FABLE),
-        "the refusal names the third window: {third}"
+        third.contains(r#"["five_hour", "seven_day", "seven_day_fable"]"#),
+        "the refusal lists the windows the file carries: {third}"
     );
     let missing = CostTable::from_yaml(&cost_file(&[FIVE_HOUR], CELLS, zone))
         .unwrap_err()
         .to_string();
     assert!(
-        missing.contains(SEVEN_DAY),
-        "a table without the 7-day window is refused too: {missing}"
+        missing.contains(r#"["five_hour"]"#),
+        "a table without the 7-day window is refused too, listing the one it carries: {missing}"
     );
 }
 
@@ -694,6 +694,22 @@ fn an_unlisted_tier_and_an_unlisted_model_read_none() {
         None
     );
     assert_eq!(tables.cost.cells(FIVE_HOUR, "claude-opus-4-8"), None);
+    let haiku = tables.share(FIVE_HOUR, "default_claude_pro", "claude-haiku-4-5", usage);
+    assert!(haiku.is_some());
+    assert_eq!(
+        tables.share(
+            FIVE_HOUR,
+            "default_claude_pro",
+            "claude-haiku-4-5-20251001",
+            usage
+        ),
+        haiku,
+        "a dated id prices at its undated row"
+    );
+    assert_eq!(
+        tables.cost.cells(SEVEN_DAY, "claude-haiku-4-5-20251001"),
+        tables.cost.cells(SEVEN_DAY, "claude-haiku-4-5")
+    );
     assert_eq!(
         tables.share("5h", "default_claude_pro", "claude-opus-5", usage),
         None,
@@ -809,5 +825,86 @@ fn the_share_rate_table_prices_a_dated_id_at_its_undated_row_and_an_unknown_mode
     assert!(
         close(priced, share),
         "the rate table prices a usage as max_5x_share does: {priced} against {share}"
+    );
+}
+
+#[test]
+fn a_flagged_cell_flags_a_charge_only_when_the_usage_reads_it() {
+    let cells = CELLS.replace(
+        "output: {share_per_million: 0.393, measured: 2026-09-19}",
+        "output: {share_per_million: 0.393, unmeasured: true}",
+    );
+    assert_ne!(cells, CELLS);
+    let cost = CostTable::from_yaml(&cost_file(
+        &[FIVE_HOUR, SEVEN_DAY],
+        &cells,
+        "America/Los_Angeles",
+    ))
+    .unwrap();
+    let input_only = cost
+        .max_5x_share(FIVE_HOUR, "claude-opus-5", million_input())
+        .unwrap();
+    assert!(close(input_only.share, 0.0841), "{}", input_only.share);
+    assert!(
+        !input_only.unmeasured,
+        "a flagged cell at a zero count adds nothing to the charge and flags nothing"
+    );
+    let with_output = cost
+        .max_5x_share(
+            FIVE_HOUR,
+            "claude-opus-5",
+            PinUsage {
+                input: 1_000_000,
+                output: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert!(
+        with_output.unmeasured,
+        "a flagged cell the usage reads flags the charge"
+    );
+}
+
+/// One model's five cells, flagged, in the order input, cache read, 5-minute write, 1-hour write, output.
+fn flagged_cells(shares: [f64; 5]) -> String {
+    let [input, read, write_5m, write_1h, output] = shares;
+    format!(
+        "
+      input: {{share_per_million: {input}, unmeasured: true}}
+      cache_read: {{share_per_million: {read}, unmeasured: true}}
+      cache_write_5m: {{share_per_million: {write_5m}, unmeasured: true}}
+      cache_write_1h: {{share_per_million: {write_1h}, unmeasured: true}}
+      output: {{share_per_million: {output}, unmeasured: true}}"
+    )
+}
+
+#[test]
+fn an_unknown_model_prices_at_the_dearest_cell_of_each_type_across_the_models() {
+    // Each model is the dearer on some types and the cheaper on others, so the dearest cells come from both rows
+    // and match neither.
+    let a = [0.5, 0.001, 0.4, 0.2, 1.0];
+    let b = [0.1, 0.003, 0.3, 0.6, 2.0];
+    let window = format!(
+        "    claude-a:{}\n    claude-b:{}\n",
+        flagged_cells(a),
+        flagged_cells(b)
+    );
+    let tables = PlanTables {
+        cost: CostTable::from_yaml(&format!(
+            "effective: 2026-09-29\ntier: default_claude_max_5x\nwindows:\n  five_hour:\n{window}  seven_day:\n{window}bands: []\n"
+        ))
+        .unwrap(),
+        tiers: TierFactors::shipped(),
+    };
+    let rates = tables.rate_table(FIVE_HOUR);
+    assert!(
+        all_close(per_million(rates.rates_for("claude-a")), a),
+        "a listed model reads its own cells"
+    );
+    let dearest = per_million(rates.rates_for("gpt-5"));
+    assert!(
+        all_close(dearest, [0.5, 0.003, 0.4, 0.6, 2.0]),
+        "{dearest:?}"
     );
 }
