@@ -790,6 +790,107 @@ async function poolDialogGeometry(theme) {
 }
 
 /**
+ * The cost reference opened from the pool dialog's Cache TTL group keeps its own capped height, so its footer stays
+ * inside the viewport with the price table drawn, while the pool dialog's inner still fills its frame. Load shedding,
+ * Cache TTL and Keepalive open the one cost reference, so Cache TTL stands for them. The table waits on the clock,
+ * which every view's shot reads, so this runs after the views.
+ */
+async function poolCostReference(theme) {
+  const say = (what) => failures.push(`${theme} /pools dialog Cache TTL: ${what}`);
+  const frame = page.locator('dialog.dialog--grouped[open]');
+  const nested = frame.locator('dialog[open]');
+  try {
+    await page.goto(`${base}/pools`);
+    await booted();
+    await advance(LOAD_MS);
+    await page.locator('.pool button[aria-label^="Edit pool"]').first().click();
+    await frame.waitFor({ state: 'visible', timeout: 15_000 });
+    await railEntry(frame, 'Cache TTL').click();
+    await frame.locator('section.dialog-group[aria-label="Cache TTL"]').getByRole('button', { name: 'Cost reference', exact: true }).click();
+    await nested.waitFor({ state: 'visible', timeout: 15_000 });
+    await advance(LOAD_MS);
+    await nested.locator('tbody td.num').first().waitFor({ timeout: 15_000 });
+  } catch (error) {
+    say(`the cost reference never drew its table (${error instanceof Error ? error.message : String(error)})`);
+    return;
+  }
+  const read = await frame.evaluate((el) => {
+    const inner = el.querySelector(':scope > .dialog__inner');
+    const child = el.querySelector('dialog[open]');
+    return {
+      footBottom: child?.querySelector('.dialog__foot')?.getBoundingClientRect().bottom ?? null,
+      frame: el.clientHeight,
+      inner: inner?.getBoundingClientRect().height ?? null,
+      title: child?.querySelector('.dialog__title')?.textContent ?? null,
+      viewport: window.innerHeight,
+    };
+  });
+  measurements.push(`${theme} /pools dialog Cache TTL cost reference ${JSON.stringify(read)}`);
+  if (read.title !== 'Cost reference') say(`the link opened ${JSON.stringify(read.title)}`);
+  if (read.footBottom === null || read.footBottom > read.viewport) say(`the cost reference's footer ends at ${read.footBottom} px, past the ${read.viewport} px viewport`);
+  if (read.inner === null || Math.abs(read.inner - read.frame) > 1) say(`the pool dialog's inner is ${read.inner} px tall in its ${read.frame} px frame`);
+  await page.keyboard.press('Escape');
+  await nested.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => say('the cost reference stayed open after Escape'));
+  await page.keyboard.press('Escape');
+  await frame.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => say('the pool dialog stayed open after Escape'));
+  await atRest();
+}
+
+/**
+ * Every pool's Keys group at the pass's viewport: the last key's Actions menu opens below the table, and each of its
+ * items takes a pointer at its centre where it is drawn, with nothing scrolled, so no wrapper clips it. The mock's
+ * story holds a pool with several keys and one with a single key; a seed without keys has no menu to open.
+ */
+async function poolKeyMenus(theme) {
+  const say = (what) => failures.push(`${theme} /pools dialog Keys: ${what}`);
+  const dialog = page.locator('dialog[open]');
+  const edits = page.locator('.pool button[aria-label^="Edit pool "]');
+  // Reaching a lower pool's Edit button scrolls the page, and the view's shot expects the scroll the checks before
+  // it left.
+  const scrolled = await page.evaluate(() => window.scrollY);
+  const counts = [];
+  for (let i = 0; i < (await edits.count()); i += 1) {
+    const pool = ((await edits.nth(i).getAttribute('aria-label')) ?? '').slice('Edit pool '.length);
+    try {
+      await edits.nth(i).click();
+      await dialog.waitFor({ state: 'visible', timeout: 15_000 });
+      await railEntry(dialog, 'Keys').click();
+      await settle();
+      const rows = dialog.locator('section.dialog-group[aria-label="Keys"] tbody tr');
+      const count = await rows.count();
+      counts.push(count);
+      if (count > 0) {
+        const trigger = rows.last().locator('.menu__trigger');
+        await trigger.click();
+        await settle();
+        const items = await rows.last().evaluate((row) =>
+          [...row.querySelectorAll('.menu__list [role="menuitem"]')].map((item) => {
+            const box = item.getBoundingClientRect();
+            const x = Math.round(box.left + box.width / 2);
+            const y = Math.round(box.top + box.height / 2);
+            const hit = document.elementFromPoint(x, y);
+            return { at: hit ? `${hit.tagName.toLowerCase()}.${hit.className}` : 'nothing', hit: hit !== null && item.contains(hit), label: item.textContent?.trim(), x, y };
+          }),
+        );
+        measurements.push(`${theme} /pools dialog Keys of ${pool} last menu ${JSON.stringify(items)}`);
+        if (items.length !== 2) say(`${pool}'s last key menu draws ${items.length} items, not Move to and Revoke`);
+        for (const item of items.filter((it) => !it.hit)) say(`${pool}'s last key menu item ${item.label} takes no pointer at its centre (${item.x}, ${item.y}): ${item.at} lies there`);
+        // Closed again, since the dialog stays mounted and would reopen with the menu showing.
+        await trigger.click();
+        await settle();
+      }
+    } catch (error) {
+      say(`${pool}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    await page.keyboard.press('Escape');
+    await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => say(`${pool}'s dialog stayed open after Escape`));
+  }
+  if (mock && !(counts.some((n) => n > 1) && counts.includes(1))) say(`the story's pools hold ${JSON.stringify(counts)} keys, not one pool with several and one with a single key`);
+  await page.evaluate((y) => window.scrollTo(0, y), scrolled);
+  await atRest();
+}
+
+/**
  * The compatibility card on Settings, and its geometry against the About card it sits above. The two carry the
  * same kind of read-only rows from the same bootstrap file, so a card that reads smaller than its neighbour is
  * the defect this page would show first.
@@ -1377,6 +1478,7 @@ async function subscriptionEndForm(theme) {
   if (rowAfter !== rowBefore) say(`opening the editor moved the card's first row from ${rowBefore}px to ${rowAfter}px`);
   // Closed again, so the view's shot is the card as it loaded.
   await identity.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await atRest();
   await settle();
 }
 
@@ -1816,6 +1918,7 @@ try {
         await poolSelectBelow(theme);
         await poolRoutingCards(theme);
         await poolDialogGeometry(theme);
+        await poolKeyMenus(theme);
       }
       if (view.path === '/analytics') {
         await wastedProbeRows(theme);
@@ -1853,6 +1956,11 @@ try {
       await page.evaluate((t) => localStorage.setItem('phoebis.theme', t), theme);
       await groupedDialogFixture(theme);
     }
+  }
+  for (const theme of ['light', 'dark']) {
+    at = `${theme} /pools cost reference`;
+    await page.evaluate((t) => localStorage.setItem('phoebis.theme', t), theme);
+    await poolCostReference(theme);
   }
 } catch (error) {
   // Reported, never re-raised: the console errors collected so far are the point of the run, and a rethrow

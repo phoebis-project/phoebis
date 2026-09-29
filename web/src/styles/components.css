@@ -893,7 +893,9 @@ textarea.input {
   height: min(800px, calc(100vh - 48px));
 }
 
-.dialog--grouped .dialog__inner {
+/* The child combinator keeps a dialog opened from inside a group, such as the cost reference, on its own capped
+   height, so its body scrolls under a footer that stays in view. */
+.dialog--grouped > .dialog__inner {
   height: 100%;
   max-height: none;
 }
@@ -1040,6 +1042,14 @@ textarea.input {
 /* A link inside a group's sentence reads as one of its words, so it takes no side padding. */
 .dialog-group .link-btn {
   padding: 0;
+}
+
+/* A scrolling wrapper clips on both axes and would cut off a key row's menu, which opens below the table. Both tables
+   fit the frame at 1280 and 720 px; where a narrower frame is too tight for the members table, the group's body
+   scrolls sideways instead. The child combinators leave a dialog opened from a group, such as the cost reference,
+   scrolling its own table. */
+.dialog-group > .cells > .table-wrap {
+  overflow: visible;
 }
 
 /* The cell grid: two equal columns with the gutter; a child spans both unless it is one of a pair. */
