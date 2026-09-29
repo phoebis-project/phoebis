@@ -1706,9 +1706,10 @@ async function keyDialogGeometry(theme) {
 }
 
 /**
- * The cost reference dialog from Sessions: the window groups' heads, their column heads and their cells read in the
- * type of the price columns beside them, a row the cost table covers is the height of one it does not, an
- * unmeasured mark reads in its cell's face and size, and the whole table fits the dialog without a sideways scroll.
+ * The cost reference dialog from Sessions: the dollar table and the window share table below it each fit the dialog
+ * without a sideways scroll, and their Model columns end at one edge; the window groups' heads, their column heads
+ * and their cells read in the type of the price columns above them; a row the cost table covers is the height of
+ * one it does not and of a price row; an unmeasured mark reads in its cell's face and size.
  */
 async function costReference(theme) {
   const say = (what) => failures.push(`${theme} /sessions: ${what}`);
@@ -1726,35 +1727,48 @@ async function costReference(theme) {
     const type = (el) => (el ? `${getComputedStyle(el).fontFamily} ${getComputedStyle(el).fontSize} ${getComputedStyle(el).fontWeight} ${getComputedStyle(el).color}` : null);
     // The mark is muted, so its colour is the one thing it does not share with the cell around it.
     const face = (el) => (el ? `${getComputedStyle(el).fontFamily} ${getComputedStyle(el).fontSize} ${getComputedStyle(el).fontWeight}` : null);
+    const height = (el) => (el ? Math.round(el.getBoundingClientRect().height) : null);
     const dlg = [...document.querySelectorAll('dialog[open]')].pop();
-    const heads = [...dlg.querySelectorAll('thead th')];
-    // Every group heads a column Cache read: the price table's first, then each window's in the second header row.
-    const [priceRead, planRead] = heads.filter((th) => th.textContent?.trim() === 'Cache read');
-    const rows = [...dlg.querySelectorAll('tbody tr')];
-    // The window share cells close every row, ten of them after the eleven price and payoff cells.
-    const covered = rows.find((r) => r.children.length === 21 && r.children[11].textContent?.trim() !== '-');
-    const bare = rows.find((r) => r.children.length === 21 && r.children[11].textContent?.trim() === '-');
-    const wrap = dlg.querySelector('.table-wrap');
-    const flag = dlg.querySelector('tbody .cost-ref__flag');
+    const prices = dlg.querySelector('.cost-ref__prices');
+    const shares = dlg.querySelector('.cost-ref__shares');
+    const headOf = (table, text) => [...(table?.querySelectorAll('thead th') ?? [])].find((th) => th.textContent?.trim() === text) ?? null;
+    const overflow = (table) => {
+      const wrap = table?.closest('.table-wrap');
+      return wrap ? wrap.scrollWidth - wrap.clientWidth : null;
+    };
+    // A share row is the model and ten cells, one five-cell group per window.
+    const rows = [...(shares?.querySelectorAll('tbody tr') ?? [])];
+    const covered = rows.find((r) => r.children.length === 11 && r.children[1].textContent?.trim() !== '-');
+    const bare = rows.find((r) => r.children.length === 11 && r.children[1].textContent?.trim() === '-');
+    const priceRow = prices?.querySelector('tbody tr') ?? null;
+    const flag = shares?.querySelector('tbody .cost-ref__flag') ?? null;
     return {
-      bareHeight: bare ? Math.round(bare.getBoundingClientRect().height) : null,
-      coveredHeight: covered ? Math.round(covered.getBoundingClientRect().height) : null,
+      bareHeight: height(bare),
+      coveredHeight: height(covered),
       flag: face(flag),
       flagCell: face(flag?.closest('td')),
-      groups: heads.filter((th) => ['5-hour window', '7-day window'].includes(th.textContent?.trim() ?? '')).map(type),
-      overflow: wrap ? wrap.scrollWidth - wrap.clientWidth : null,
-      planCell: type(covered?.children[12]),
-      planHead: type(planRead),
-      priceCell: type(covered?.children[4]),
-      priceHead: type(priceRead),
+      groups: [...(shares?.querySelectorAll('thead th') ?? [])].filter((th) => ['5-hour window', '7-day window'].includes(th.textContent?.trim() ?? '')).map(type),
+      modelEdges: [prices, shares].map((table) => {
+        const th = table?.querySelector('thead th');
+        return th ? Math.round(th.getBoundingClientRect().right) : null;
+      }),
+      overflow: { prices: overflow(prices), shares: overflow(shares) },
+      planCell: type(covered?.children[2]),
+      planHead: type(headOf(shares, 'Cache read')),
+      priceCell: type(priceRow?.children[4]),
+      priceHead: type(headOf(prices, 'Cache read')),
+      priceHeight: height(priceRow),
     };
   });
   measurements.push(`${theme} /sessions cost reference ${JSON.stringify(read)}`);
+  for (const [table, px] of Object.entries(read.overflow)) if (px === null || px > 0) say(`the ${table} table runs ${px}px past the dialog`);
+  const [priceEdge, shareEdge] = read.modelEdges;
+  if (priceEdge === null || shareEdge === null || Math.abs(priceEdge - shareEdge) > 1) say(`the Model columns end at ${priceEdge}px and ${shareEdge}px`);
   if (read.planHead === null || read.planHead !== read.priceHead) say(`the 5-hour window's Cache read head reads ${read.planHead} against the price column's ${read.priceHead}`);
   if (read.groups.length !== 2 || read.groups.some((group) => group !== read.priceHead)) say(`the window group heads read ${JSON.stringify(read.groups)} against the price heads' ${read.priceHead}`);
   if (read.planCell === null || read.planCell !== read.priceCell) say(`a window share cell reads ${read.planCell} against a price cell's ${read.priceCell}`);
+  if (read.coveredHeight === null || read.coveredHeight !== read.priceHeight) say(`a row with window shares is ${read.coveredHeight}px tall against a price row's ${read.priceHeight}px`);
   if (read.bareHeight !== null && read.coveredHeight !== read.bareHeight) say(`a row with window shares is ${read.coveredHeight}px tall against ${read.bareHeight}px without`);
-  if (read.overflow === null || read.overflow > 0) say(`the table runs ${read.overflow}px past the dialog`);
   // Every shipped 7-day cell is a stand-in, so the router's seed draws the mark as the mock's story does.
   if (read.flag === null || read.flag !== read.flagCell) say(`the unmeasured mark reads ${read.flag} against its cell's ${read.flagCell}`);
   await page.keyboard.press('Escape');

@@ -129,34 +129,20 @@ function PriceTable() {
     <div className="cost-ref">
       <p className="secondary">{CAVEAT}</p>
       <div className="table-wrap">
-        <table className="table cost-ref__table">
+        <table className="table cost-ref__table cost-ref__prices">
           <thead>
             <tr>
-              <th rowSpan={2}>Model</th>
-              <th rowSpan={2} className="right">Uncached input</th>
-              <th rowSpan={2} className="right">Cache write 5m</th>
-              <th rowSpan={2} className="right">Cache write 1h</th>
-              <th rowSpan={2} className="right">Cache read</th>
-              <th rowSpan={2} className="right">Output</th>
-              <th rowSpan={2} className="right cost-ref__sep">Turns to pay off, 5m</th>
-              <th rowSpan={2} className="right">Turns to pay off, 1h</th>
-              <th rowSpan={2} className="right cost-ref__sep">Hold warm 1h, 5m + probes</th>
-              <th rowSpan={2} className="right">Hold warm 1h, 1h + probe</th>
-              <th rowSpan={2} className="right">1h pays off after</th>
-              {WINDOWS.map((w) => (
-                <th key={w.key} colSpan={PLAN_COLUMNS.length} className="cost-ref__sep" title={tables ? groupTitle(tables.tiers, w.factor) : undefined}>
-                  {w.label}
-                </th>
-              ))}
-            </tr>
-            <tr>
-              {WINDOWS.map((w) =>
-                PLAN_COLUMNS.map((c, i) => (
-                  <th key={`${w.key}-${c.key}`} className={`right ${i === 0 ? 'cost-ref__sep' : ''}`}>
-                    {c.label}
-                  </th>
-                )),
-              )}
+              <th>Model</th>
+              <th className="right">Uncached input</th>
+              <th className="right">Cache write 5m</th>
+              <th className="right">Cache write 1h</th>
+              <th className="right">Cache read</th>
+              <th className="right">Output</th>
+              <th className="right cost-ref__sep">Turns to pay off, 5m</th>
+              <th className="right">Turns to pay off, 1h</th>
+              <th className="right cost-ref__sep">Hold warm 1h, 5m + probes</th>
+              <th className="right">Hold warm 1h, 1h + probe</th>
+              <th className="right">1h pays off after</th>
             </tr>
           </thead>
           <tbody>
@@ -178,31 +164,69 @@ function PriceTable() {
                     <td className="right num cost-ref__sep">{idle5m ?? dash}</td>
                     <td className="right num">{idle1h ?? dash}</td>
                     <td className="right num">{payoff ?? dash}</td>
-                    {WINDOWS.map((w) => {
-                      const cells = tables ? cellsOf(tables.cost, w.key, p.model) : null;
-                      return PLAN_COLUMNS.map((c, i) => (
-                        <td key={`${w.key}-${c.key}`} className={`right num ${i === 0 ? 'cost-ref__sep' : ''}`}>
-                          {cells ? (
-                            <>
-                              {fmtShare(cells[c.key].sharePerMillion)}
-                              {cells[c.key].unmeasured && (
-                                <span className="muted cost-ref__flag" title={UNMEASURED}>
-                                  *
-                                </span>
-                              )}
-                            </>
-                          ) : (
-                            dash
-                          )}
-                        </td>
-                      ));
-                    })}
                   </tr>
                 );
               })
             ) : (
               <tr>
-                <td colSpan={11 + WINDOWS.length * PLAN_COLUMNS.length}>
+                <td colSpan={11}>
+                  <Skeleton />
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+      <div className="table-wrap">
+        <table className="table cost-ref__table cost-ref__shares">
+          <thead>
+            <tr>
+              <th rowSpan={2}>Model</th>
+              {WINDOWS.map((w) => (
+                <th key={w.key} colSpan={PLAN_COLUMNS.length} className="cost-ref__sep" title={tables ? groupTitle(tables.tiers, w.factor) : undefined}>
+                  {w.label}
+                </th>
+              ))}
+            </tr>
+            <tr>
+              {WINDOWS.map((w) =>
+                PLAN_COLUMNS.map((c, i) => (
+                  <th key={`${w.key}-${c.key}`} className={`right ${i === 0 ? 'cost-ref__sep' : ''}`}>
+                    {c.label}
+                  </th>
+                )),
+              )}
+            </tr>
+          </thead>
+          <tbody>
+            {prices ? (
+              prices.map((p) => (
+                <tr key={p.model}>
+                  <td className="mono">{p.model}</td>
+                  {WINDOWS.map((w) => {
+                    const cells = tables ? cellsOf(tables.cost, w.key, p.model) : null;
+                    return PLAN_COLUMNS.map((c, i) => (
+                      <td key={`${w.key}-${c.key}`} className={`right num ${i === 0 ? 'cost-ref__sep' : ''}`}>
+                        {cells ? (
+                          <>
+                            {fmtShare(cells[c.key].sharePerMillion)}
+                            {cells[c.key].unmeasured && (
+                              <span className="muted cost-ref__flag" title={UNMEASURED}>
+                                *
+                              </span>
+                            )}
+                          </>
+                        ) : (
+                          dash
+                        )}
+                      </td>
+                    ));
+                  })}
+                </tr>
+              ))
+            ) : (
+              <tr>
+                <td colSpan={1 + WINDOWS.length * PLAN_COLUMNS.length}>
                   <Skeleton />
                 </td>
               </tr>

@@ -3892,12 +3892,18 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
       missing: terms,
     });
   }
-  const priceRow = (model) => {
-    const tr = [...(costDlg?.querySelectorAll('tbody tr') ?? [])].find((row) => row.children[0]?.textContent?.trim() === model);
-    return tr ? [...tr.children].map((td) => td.textContent?.trim()) : [];
-  };
-  const models = [...(costDlg?.querySelectorAll('tbody tr') ?? [])].map((row) => row.children[0]?.textContent?.trim() ?? '');
+  const priceTable = costDlg?.querySelector('.cost-ref__prices');
+  const shareTable = costDlg?.querySelector('.cost-ref__shares');
+  const rowOf = (table, model) => [...(table?.querySelectorAll('tbody tr') ?? [])].find((row) => row.children[0]?.textContent?.trim() === model);
+  const priceRow = (model) => [...(rowOf(priceTable, model)?.children ?? [])].map((td) => td.textContent?.trim());
+  const modelsOf = (table) => [...(table?.querySelectorAll('tbody tr') ?? [])].map((row) => row.children[0]?.textContent?.trim() ?? '');
+  const models = modelsOf(priceTable);
   results.push({ name: '/sessions cost reference lists Anthropic models only', ok: models.length === 9 && models.every((n) => n.startsWith('claude-')), missing: models });
+  results.push({
+    name: '/sessions cost reference keeps the dollar table to its eleven columns and lists its models again below in the window share table',
+    ok: models.length === 9 && [...(priceTable?.querySelectorAll('tbody tr') ?? [])].every((row) => row.children.length === 11) && JSON.stringify(modelsOf(shareTable)) === JSON.stringify(models),
+    missing: modelsOf(shareTable),
+  });
   results.push({ name: '/sessions cost reference groups a class newest first', ok: models.slice(2, 5).join(',') === 'claude-opus-5,claude-opus-4-8,claude-opus-4-7', missing: models });
   const fable = priceRow('claude-fable-5-1');
   results.push({ name: '/sessions cost reference turns to pay off on cheap-read Fable', ok: fable[6] === '0.3' && fable[7] === '1.0', missing: fable });
@@ -3908,18 +3914,18 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
   const haiku = priceRow('claude-haiku-4-5-20251001');
   results.push({ name: '/sessions cost reference prices Haiku 4.5 from the shipped table', ok: haiku[1] === '$1.00' && haiku[2] === '$1.25' && haiku[3] === '$2.00' && haiku[4] === '$0.10' && haiku[5] === '$5.00', missing: haiku });
   // Input, cache read, 5m write, 1h write and output on the 5-hour window, then the same five on the 7-day one.
-  const plan = (row) => row.slice(11);
+  const plan = (model) => [...(rowOf(shareTable, model)?.children ?? [])].slice(1).map((td) => td.textContent?.trim());
   results.push({
     name: '/sessions cost reference prices every token type as a share of both windows',
     ok:
-      JSON.stringify(plan(priceRow('claude-opus-5'))) === JSON.stringify(['8.41%', '0.219%', '10.3%', '10.3%', '39.3%', '0.61%*', '0.0159%*', '0.75%*', '0.75%*', '2.85%*']) &&
-      JSON.stringify(plan(fable)) === JSON.stringify(['30.4%', '0.789%', '37.3%', '37.3%', '142%', '2.2%*', '0.0572%*', '2.71%*', '2.71%*', '10.3%*']),
-    missing: [JSON.stringify(plan(priceRow('claude-opus-5'))), JSON.stringify(plan(fable))],
+      JSON.stringify(plan('claude-opus-5')) === JSON.stringify(['8.41%', '0.219%', '10.3%', '10.3%', '39.3%', '0.61%*', '0.0159%*', '0.75%*', '0.75%*', '2.85%*']) &&
+      JSON.stringify(plan('claude-fable-5-1')) === JSON.stringify(['30.4%', '0.789%', '37.3%', '37.3%', '142%', '2.2%*', '0.0572%*', '2.71%*', '2.71%*', '10.3%*']),
+    missing: [JSON.stringify(plan('claude-opus-5')), JSON.stringify(plan('claude-fable-5-1'))],
   });
-  results.push({ name: '/sessions cost reference finds the undated cells for a dated model', ok: JSON.stringify(plan(haiku)) === JSON.stringify(['3.03%*', '0.0787%*', '3.72%*', '3.72%*', '14.1%*', '0.22%*', '0.00571%*', '0.27%*', '0.27%*', '1.03%*']), missing: plan(haiku) });
+  results.push({ name: '/sessions cost reference finds the undated cells for a dated model', ok: JSON.stringify(plan('claude-haiku-4-5-20251001')) === JSON.stringify(['3.03%*', '0.0787%*', '3.72%*', '3.72%*', '14.1%*', '0.22%*', '0.00571%*', '0.27%*', '0.27%*', '1.03%*']), missing: plan('claude-haiku-4-5-20251001') });
   {
     const hint = 'not measured on this window; derived from earlier meter readings';
-    const cells = (model) => [...([...(costDlg?.querySelectorAll('tbody tr') ?? [])].find((row) => row.children[0]?.textContent?.trim() === model)?.children ?? [])].slice(11);
+    const cells = (model) => [...(rowOf(shareTable, model)?.children ?? [])].slice(1);
     const mark = (td) => td.querySelector('.cost-ref__flag');
     const flagged = (tds) => tds.length === 5 && tds.every((td) => mark(td)?.textContent === '*' && mark(td)?.getAttribute('title') === hint);
     const sevenDay = ['claude-fable-5-1', 'claude-fable-5', 'claude-opus-5', 'claude-sonnet-5', 'claude-haiku-4-5-20251001'].map((model) => cells(model).slice(5));
@@ -3932,7 +3938,7 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
     });
   }
   {
-    const groups = [...(costDlg?.querySelectorAll('thead tr:first-child th') ?? [])].slice(11).map((th) => [th.textContent?.trim(), th.getAttribute('title')]);
+    const groups = [...(shareTable?.querySelectorAll('thead tr:first-child th') ?? [])].slice(1).map((th) => [th.textContent?.trim(), th.getAttribute('title')]);
     results.push({
       name: "/sessions cost reference titles each window group with that window's tier factors",
       ok:
@@ -3944,7 +3950,7 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
       missing: groups.map((g) => g.join(': ')),
     });
   }
-  results.push({ name: '/sessions cost reference leaves a model with no cells blank on both windows', ok: plan(priceRow('claude-opus-4-8')).every((c) => c === '-') && plan(priceRow('claude-opus-4-8')).length === 10, missing: plan(priceRow('claude-opus-4-8')) });
+  results.push({ name: '/sessions cost reference leaves a model with no cells blank on both windows', ok: plan('claude-opus-4-8').every((c) => c === '-') && plan('claude-opus-4-8').length === 10, missing: plan('claude-opus-4-8') });
   const close = [...(costDlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Close');
   close?.click();
   await m.settle(200);

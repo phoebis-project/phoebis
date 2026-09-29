@@ -2365,7 +2365,7 @@
   border-radius: var(--radius-sm);
 }
 
-/* Seventeen columns inside one dialog: headings wrap, numeric cells give back the padding. */
+/* Two tables of eleven columns inside one dialog: headings wrap, numeric cells give back the padding. */
 .cost-ref__table th {
   padding: 8px 6px;
   vertical-align: bottom;
@@ -2389,6 +2389,13 @@
 
 .cost-ref__sep {
   border-left: 1px solid var(--hairline);
+}
+
+/* The share table's ten cells are narrower than the price table's, so its Model column is held to its content, as the
+   price table's is, and the two tables' model names line up. */
+.cost-ref__shares thead tr:first-child th:first-child,
+.cost-ref__shares td:first-child {
+  width: 1%;
 }
 
 .cost-ref__notes {

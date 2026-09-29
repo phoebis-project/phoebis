@@ -162,12 +162,12 @@ the long TTL is free and the pool's plan rule set keeps `1h` for the main conver
 write costs money a 1-hour write is 2x against 1.25x, so the metered rule set's `keepalive` TTL defaults to `5m`.</dd>
 </dl>
 
-Beside the prices, two column groups read the cost table the ledger ships (`crates/ledger/cost_table.yaml`): the share
-of a Max 5x subscription's 5-hour window and of its 7-day window that one million tokens of each type consume, per
-model. An account on another tier spends the share over its tier's factor (`crates/ledger/tier_factors.yaml`: Pro 0.215
-and 0.18, Max 20x 4.03 and 2.14 of Max 5x's two windows). A cell no measurement has filled is marked with an asterisk
-and carries a stand-in derived from earlier meter readings. A dated model id reads the cells of its undated name; a
-model the table has no cells for leaves both groups blank.
+Below the prices, a second table reads the cost table the ledger ships (`crates/ledger/cost_table.yaml`) in two column
+groups: the share of a Max 5x subscription's 5-hour window and of its 7-day window that one million tokens of each type
+consume, per model. An account on another tier spends the share over its tier's factor
+(`crates/ledger/tier_factors.yaml`: Pro 0.215 and 0.18, Max 20x 4.03 and 2.14 of Max 5x's two windows). A cell no
+measurement has filled is marked with an asterisk and carries a stand-in derived from earlier meter readings. A dated
+model id reads the cells of its undated name; a model the table has no cells for leaves both groups blank.
 
 The prices carry one caveat: "API list prices. A subscription upstream on plan quota spends the window share columns
 instead of money." A recipe's own net follows the same split: meter tokens on a subscription account outside overage,
