@@ -2004,8 +2004,10 @@ async fn the_proxy_listener_binds_after_the_startup_fetch_or_its_bound_whichever
             .unwrap();
         let admin = |path: &str| format!("http://127.0.0.1:{admin_port}/admin{path}");
         logged_in(&client, &admin("/session")).await;
-        let account: serde_json::Value = client
-            .get(admin("/accounts/a"))
+        // The account's windows may already hold what the heads of the requests above reported, so the evidence
+        // is the poll's standing, which only the stalled fetch can move.
+        let usage: serde_json::Value = client
+            .get(admin("/accounts/a/usage"))
             .send()
             .await
             .unwrap()
@@ -2013,8 +2015,8 @@ async fn the_proxy_listener_binds_after_the_startup_fetch_or_its_bound_whichever
             .await
             .unwrap();
         assert!(
-            account["windows"].as_array().unwrap().is_empty(),
-            "the stalled fetch had not reported by the bound: {account}"
+            usage["poll"].is_null() || usage["poll"]["last_clean_at"].is_null(),
+            "the stalled fetch had not reported by the bound: {usage}"
         );
         let _ = stop_tx.send(());
         server.await.unwrap().unwrap();
