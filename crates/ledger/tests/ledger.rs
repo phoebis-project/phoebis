@@ -1342,9 +1342,9 @@ async fn a_rollup_row_from_before_the_class_dimension_reads_under_the_reserved_c
     {
         let db = phoebis_ledger::LedgerDb::open(&path).unwrap();
         // The four columns migration 18 adds, the five migration 19 adds and migration 20's column and table,
-        // each dropped back out so the replay below has to add them again; `rollups_hourly` keeps the shape the class dimension joins,
-        // since a primary-key column cannot be dropped in place and the rebuild names its own columns
-        // regardless of what the source table still carries.
+        // each dropped back out so the replay below has to add them again; `rollups_hourly` keeps the shape the
+        // class dimension joins, since a primary-key column cannot be dropped in place and the rebuild names its
+        // own columns regardless of what the source table still carries.
         db.write(|c| {
             c.execute_batch(
                 "ALTER TABLE requests DROP COLUMN request_class; \

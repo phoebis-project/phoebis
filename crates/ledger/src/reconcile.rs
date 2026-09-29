@@ -250,8 +250,8 @@ fn readings_of(
 }
 
 /// The share of `window` the account's attempts completed after `from` and at or before `to` were priced at,
-/// as the analytics price them, with how many priced and whether any read a stand-in; `None` when none priced
-/// to a share above zero.
+/// as the analytics price them, with how many priced and whether any read a stand-in or priced nothing; `None`
+/// when none priced to a share above zero.
 fn predicted(
     conn: &Connection,
     tables: &PlanTables,
@@ -317,10 +317,15 @@ fn predicted(
                 .seven_day_share
                 .map(|s| (s, point.seven_day_unmeasured))
         };
-        if let Some((charge, flagged)) = priced {
-            share += charge;
-            requests += 1;
-            unmeasured |= flagged;
+        match priced {
+            Some((charge, flagged)) => {
+                share += charge;
+                requests += 1;
+                unmeasured |= flagged;
+            }
+            // A model the cost table lacks prices no share while its charge is in the rise, so the ratio reads
+            // high: the row carries the mark.
+            None => unmeasured = true,
         }
     }
     Ok((share > 0.0 && share.is_finite()).then_some((share, requests, unmeasured)))

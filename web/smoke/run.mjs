@@ -2998,20 +2998,22 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
   });
 
   const reconciled = [...(card('Meter reconciliation')?.querySelectorAll('tbody tr') ?? [])].map((tr) => [...tr.children].map((td) => ({ badge: td.querySelector('.badge--serious') !== null, text: td.textContent?.trim() })));
-  const windowOf = (id) => reconciled.find((r) => r[0]?.text === id) ?? [];
+  const windowOf = (id, window) => reconciled.find((r) => r[0]?.text === id && r[1]?.text === window) ?? [];
   results.push({
     name: '/analytics the reconciliation table marks a ratio outside 0.8 to 1.25 and a window priced through an unmeasured cell',
     ok:
       JSON.stringify([...(card('Meter reconciliation')?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim())) === JSON.stringify(['Upstream', 'Window', 'Ended', 'Rise', 'Predicted', 'Ratio', 'Requests']) &&
-      windowOf('personal')[1]?.text === '7-day' &&
-      windowOf('personal')[5]?.text === '1.41' &&
-      windowOf('personal')[5]?.badge === true &&
-      windowOf('personal')[4]?.text?.endsWith('*') === true &&
-      windowOf('business')[1]?.text === '5-hour' &&
-      windowOf('business')[5]?.text === '1.06' &&
-      windowOf('business')[5]?.badge === false &&
-      windowOf('business')[4]?.text?.endsWith('*') === false &&
-      windowOf('business')[3]?.text === '24%' &&
+      windowOf('personal', '7-day')[5]?.text === '1.41' &&
+      windowOf('personal', '7-day')[5]?.badge === true &&
+      windowOf('personal', '7-day')[4]?.text?.endsWith('*') === true &&
+      windowOf('personal', '5-hour')[5]?.text === '1.41' &&
+      windowOf('personal', '5-hour')[5]?.badge === true &&
+      windowOf('personal', '5-hour')[3]?.text === '31%' &&
+      windowOf('personal', '5-hour')[4]?.text?.endsWith('*') === false &&
+      windowOf('business', '5-hour')[5]?.text === '1.06' &&
+      windowOf('business', '5-hour')[5]?.badge === false &&
+      windowOf('business', '5-hour')[4]?.text?.endsWith('*') === false &&
+      windowOf('business', '5-hour')[3]?.text === '24%' &&
       !card('Meter reconciliation')?.textContent?.includes('Requests are kept'),
     missing: reconciled.map((r) => r.map((c) => `${c.text}${c.badge ? '!' : ''}`).join(' | ')),
   });
@@ -3506,14 +3508,16 @@ m.unmount();
 {
   // A ledger with no completed window yet, whose requests are kept for less than a 7-day window needs.
   const { getAnalyticsReconciliations } = api;
-  api.getAnalyticsReconciliations = async () => ({ reconciliations: [], requestRetentionDays: 3 });
-  const empty = await mount('/analytics');
-  api.getAnalyticsReconciliations = getAnalyticsReconciliations;
-  expect('/analytics the reconciliation table says when no window has completed and when the retention is under a week', empty.text(), [
-    'no completed window yet',
-    'Requests are kept 3 days; a window whose oldest requests are gone is not reconciled, so a 7-day window needs 8 or more.',
-  ]);
-  empty.unmount();
+  for (const [days, kept] of [[3, '3 days'], [1, '1 day']]) {
+    api.getAnalyticsReconciliations = async () => ({ reconciliations: [], requestRetentionDays: days });
+    const empty = await mount('/analytics');
+    api.getAnalyticsReconciliations = getAnalyticsReconciliations;
+    expect(`/analytics the reconciliation table says when no window has completed and when the retention is ${kept}`, empty.text(), [
+      'no completed window yet',
+      `Requests are kept ${kept}; a window whose oldest requests are gone is not reconciled, so a 7-day window needs 8 or more.`,
+    ]);
+    empty.unmount();
+  }
 }
 
 {

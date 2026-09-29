@@ -608,14 +608,19 @@ async fn run_reconcile(db: &Arc<LedgerDb>, store: &Arc<Store>, tables: &Arc<Plan
         let kinds: HashMap<String, AccountKind> =
             accounts.iter().map(|a| (a.id.clone(), a.kind)).collect();
         let mut tiers = Tiers::new();
+        let mut unread = Vec::new();
         for account in accounts.iter().filter(|a| a.kind == AccountKind::Oauth) {
-            let tier = store.subscription(&account.id)?.and_then(|s| s.tier);
-            tiers.insert(account.id.clone(), tier);
+            match store.subscription(&account.id) {
+                Ok(row) => {
+                    tiers.insert(account.id.clone(), row.and_then(|s| s.tier));
+                }
+                Err(error) => unread.push((account.id.clone(), error)),
+            }
         }
-        Ok::<_, phoebis_store::StoreError>((kinds, tiers))
+        Ok::<_, phoebis_store::StoreError>((kinds, tiers, unread))
     })
     .await;
-    let (kinds, tiers) = match accounts {
+    let (kinds, tiers, unread) = match accounts {
         Ok(Ok(read)) => read,
         Ok(Err(error)) => {
             tracing::warn!(%error, "the accounts could not be read; no window was reconciled");
@@ -626,6 +631,15 @@ async fn run_reconcile(db: &Arc<LedgerDb>, store: &Arc<Store>, tables: &Arc<Plan
             return;
         }
     };
+    // An account without a tier reconciles nothing, so one whose row cannot be read waits for the next pass
+    // while the rest go ahead.
+    for (account, error) in unread {
+        tracing::warn!(
+            %error,
+            %account,
+            "an account's subscription could not be read; its windows wait for the next pass"
+        );
+    }
     let tables = tables.clone();
     let rows = match db
         .read(move |conn| reconcile(conn, &tables, &tiers, &kinds, now))

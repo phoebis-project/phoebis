@@ -1424,7 +1424,7 @@ function ReconciliationTable({ answer, error }: { answer: AnalyticsReconciliatio
             {retention !== 0 && retention < RETENTION_FOR_A_WEEK && (
               <tr>
                 <td colSpan={7} className="muted">
-                  Requests are kept {retention} days; a window whose oldest requests are gone is not reconciled, so a 7-day window needs {RETENTION_FOR_A_WEEK} or more.
+                  Requests are kept {retention} day{retention === 1 ? '' : 's'}; a window whose oldest requests are gone is not reconciled, so a 7-day window needs {RETENTION_FOR_A_WEEK} or more.
                 </td>
               </tr>
             )}

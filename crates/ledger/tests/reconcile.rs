@@ -3,13 +3,18 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
+use phoebis_bus::Bus;
 use phoebis_ledger::{
-    bucket_of, reconcile, run_retention, AttemptRecord, LedgerConfig, LedgerDb, PlanTables,
-    QuotaSampleRecord, ReconciliationRow, RequestRecord, Tiers, POLL_INTERVAL,
+    bucket_of, read_reconciliations, reconcile, run_retention, spawn, AttemptRecord, Ledger,
+    LedgerConfig, LedgerDb, Metrics, PlanTables, PriceTable, Pricing, QuotaSampleRecord,
+    ReconciliationRow, RequestRecord, Tiers, POLL_INTERVAL, RECONCILE_INTERVAL,
 };
-use phoebis_routing::{PinUsage, FIVE_HOUR, SEVEN_DAY};
-use phoebis_store::AccountKind;
+use phoebis_oauth::Clock;
+use phoebis_routing::{PinUsage, RouterConfig, FIVE_HOUR, SEVEN_DAY};
+use phoebis_store::{AccountKind, AccountRow, AccountState, StorageKey, Store, SubscriptionRow};
+use fake_upstream::{capture_tracing, wait_for_async};
 
 const MINUTE: i64 = 60_000;
 const HOUR: i64 = 60 * MINUTE;
@@ -68,14 +73,20 @@ fn seed_request(db: &LedgerDb, id: &str, at: i64) {
 /// One request on account `a` whose single attempt completed at `completed` with `input` plain input tokens of
 /// Opus.
 fn opus_attempt(db: &LedgerDb, id: &str, completed: i64, input: u64) {
+    attempt_on(db, "a", id, OPUS, completed, input);
+}
+
+/// One request on `account` whose single attempt completed at `completed` with `input` plain input tokens of
+/// `model`.
+fn attempt_on(db: &LedgerDb, account: &str, id: &str, model: &str, completed: i64, input: u64) {
     let started = completed - 30_000;
     db.insert_request(
         &RequestRecord {
             id: id.into(),
             received_at: started,
             finished_at: Some(completed),
-            model: OPUS.into(),
-            canonical_model: OPUS.into(),
+            model: model.into(),
+            canonical_model: model.into(),
             kind: "inference".into(),
             origin: "client".into(),
             outcome: "succeeded".into(),
@@ -85,7 +96,7 @@ fn opus_attempt(db: &LedgerDb, id: &str, completed: i64, input: u64) {
         &[AttemptRecord {
             request_id: id.into(),
             attempt: 1,
-            account_id: "a".into(),
+            account_id: account.into(),
             account_kind: "oauth".into(),
             started_at: started,
             finished_at: Some(completed),
@@ -101,8 +112,19 @@ fn opus_attempt(db: &LedgerDb, id: &str, completed: i64, input: u64) {
 
 /// A reading of account `a` observed at `at`, under the key its source spells the window with.
 fn reading(key: &str, source: &str, at: i64, utilization: f64, reset_at: i64) -> QuotaSampleRecord {
+    reading_of("a", key, source, at, utilization, reset_at)
+}
+
+fn reading_of(
+    account: &str,
+    key: &str,
+    source: &str,
+    at: i64,
+    utilization: f64,
+    reset_at: i64,
+) -> QuotaSampleRecord {
     QuotaSampleRecord {
-        account_id: "a".into(),
+        account_id: account.into(),
         bucket: bucket_of(at),
         window: key.into(),
         utilization: Some(utilization),
@@ -129,18 +151,45 @@ const STEADY_DONE: i64 = STEADY_RESET + 6 * MINUTE;
 /// Readings at 0.10, 0.20 and 0.30 in three buckets naming one reset, on the 5-hour window and, when asked, on
 /// the 7-day one; two Opus attempts of a million input tokens each complete between the first and the last.
 fn steady_rise(db: &LedgerDb, seven_day: bool) {
-    seed_request(db, "seed", SATURDAY - MINUTE);
+    steady_rise_of(db, "a", seven_day);
+}
+
+/// `steady_rise` on `account`, its request ids prefixed with it.
+fn steady_rise_of(db: &LedgerDb, account: &str, seven_day: bool) {
+    seed_request(db, &format!("{account}-seed"), SATURDAY - MINUTE);
     let mut readings = Vec::new();
     for (n, utilization) in [0.10, 0.20, 0.30].into_iter().enumerate() {
         let at = SATURDAY + n as i64 * 10 * MINUTE;
-        readings.push(head("5h", at, utilization, STEADY_RESET));
+        readings.push(reading_of(
+            account,
+            "5h",
+            "header",
+            at,
+            utilization,
+            STEADY_RESET,
+        ));
         if seven_day {
-            readings.push(head("7d", at, utilization / 10.0, STEADY_RESET));
+            readings.push(reading_of(
+                account,
+                "7d",
+                "header",
+                at,
+                utilization / 10.0,
+                STEADY_RESET,
+            ));
         }
     }
     db.insert_samples(&readings, None).unwrap();
-    opus_attempt(db, "r1", SATURDAY + 5 * MINUTE, MILLION);
-    opus_attempt(db, "r2", SATURDAY + 15 * MINUTE, MILLION);
+    for (n, completed) in [5 * MINUTE, 15 * MINUTE].into_iter().enumerate() {
+        attempt_on(
+            db,
+            account,
+            &format!("{account}-r{n}"),
+            OPUS,
+            SATURDAY + completed,
+            MILLION,
+        );
+    }
 }
 
 #[test]
@@ -386,5 +435,350 @@ fn a_run_older_than_the_retained_requests_is_skipped() {
             .collect::<Vec<_>>(),
         [FIVE_HOUR],
         "the 7-day run's first reading is five days old, past the three the requests are kept"
+    );
+}
+
+#[test]
+fn a_stale_reading_inside_a_run_closes_nothing_and_joins_nothing() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    seed_request(&db, "seed", SATURDAY);
+    db.insert_samples(
+        &[
+            head("5h", SATURDAY, 0.10, STEADY_RESET),
+            // An answer naming the window before this one, a reset only ever moving forward.
+            reading(
+                "five_hour",
+                "poll",
+                SATURDAY + 10 * MINUTE,
+                0.95,
+                STEADY_RESET - 5 * HOUR,
+            ),
+            head("5h", SATURDAY + 20 * MINUTE, 0.30, STEADY_RESET),
+        ],
+        None,
+    )
+    .unwrap();
+    opus_attempt(&db, "r1", SATURDAY + 5 * MINUTE, MILLION);
+    opus_attempt(&db, "r2", SATURDAY + 15 * MINUTE, MILLION);
+    let rows = run(&db, Some(MAX_5X), STEADY_DONE);
+    assert_eq!(
+        rows.iter()
+            .map(|r| (
+                r.window_end,
+                r.first_reading_at,
+                r.last_reading_at,
+                r.requests
+            ))
+            .collect::<Vec<_>>(),
+        [(STEADY_RESET, SATURDAY, SATURDAY + 20 * MINUTE, 2)],
+        "the run keeps its first and last reading and both attempts"
+    );
+    assert!(
+        close(rows[0].observed_rise, 0.20),
+        "{}",
+        rows[0].observed_rise
+    );
+}
+
+#[test]
+fn a_reading_without_a_reset_or_a_utilization_leaves_the_run_as_it_was() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    steady_rise(&db, false);
+    db.insert_samples(
+        &[
+            // A poll that named no reset, and a head that carried a reset and no utilization.
+            QuotaSampleRecord {
+                reset_at: None,
+                ..reading(
+                    "five_hour",
+                    "poll",
+                    SATURDAY + 15 * MINUTE,
+                    0.90,
+                    STEADY_RESET,
+                )
+            },
+            QuotaSampleRecord {
+                utilization: None,
+                ..head("5h", SATURDAY + 5 * MINUTE, 0.0, STEADY_RESET)
+            },
+        ],
+        None,
+    )
+    .unwrap();
+    let rows = run(&db, Some(MAX_5X), STEADY_DONE);
+    assert_eq!(
+        rows.iter()
+            .map(|r| (
+                r.window_end,
+                r.first_reading_at,
+                r.last_reading_at,
+                r.requests
+            ))
+            .collect::<Vec<_>>(),
+        [(STEADY_RESET, SATURDAY, SATURDAY + 20 * MINUTE, 2)]
+    );
+    assert!(
+        close(rows[0].observed_rise, 0.20),
+        "{}",
+        rows[0].observed_rise
+    );
+}
+
+#[test]
+fn readings_of_one_bucket_run_in_the_order_they_were_observed() {
+    let start = bucket_of(SATURDAY) * 1_000;
+    let db = LedgerDb::open_in_memory().unwrap();
+    seed_request(&db, "seed", start);
+    // The head lands first but was observed last: its row comes before the poll's in the table.
+    db.insert_samples(&[head("5h", start + 200_000, 0.30, STEADY_RESET)], None)
+        .unwrap();
+    db.insert_samples(
+        &[reading(
+            "five_hour",
+            "poll",
+            start + 50_000,
+            0.10,
+            STEADY_RESET,
+        )],
+        None,
+    )
+    .unwrap();
+    opus_attempt(&db, "r1", start + 100_000, MILLION);
+    opus_attempt(&db, "r2", start + 150_000, MILLION);
+    let rows = run(&db, Some(MAX_5X), STEADY_DONE);
+    assert_eq!(
+        rows.iter()
+            .map(|r| (r.first_reading_at, r.last_reading_at, r.requests))
+            .collect::<Vec<_>>(),
+        [(start + 50_000, start + 200_000, 2)],
+        "the poll's reading opens the run"
+    );
+    assert!(
+        close(rows[0].observed_rise, 0.20),
+        "{}",
+        rows[0].observed_rise
+    );
+}
+
+#[test]
+fn a_window_is_reconciled_once_its_reset_lies_a_poll_interval_behind_now() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    steady_rise(&db, false);
+    let poll = POLL_INTERVAL.as_millis() as i64;
+    assert_eq!(
+        run(&db, Some(MAX_5X), STEADY_RESET + poll - 1),
+        [],
+        "a window whose reset is under a poll interval behind may still take a reading"
+    );
+    assert_eq!(
+        run(&db, Some(MAX_5X), STEADY_RESET + poll + 1)
+            .iter()
+            .map(|r| r.window_end)
+            .collect::<Vec<_>>(),
+        [STEADY_RESET]
+    );
+}
+
+#[test]
+fn a_run_whose_first_reading_has_no_instant_yields_nothing() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    seed_request(&db, "seed", SATURDAY - MINUTE);
+    db.insert_samples(
+        &[
+            // A reading stored before the instant was kept, at its bucket's start.
+            QuotaSampleRecord {
+                observed_at: None,
+                ..head("5h", SATURDAY, 0.10, STEADY_RESET)
+            },
+            head("5h", SATURDAY + 10 * MINUTE, 0.20, STEADY_RESET),
+            head("5h", SATURDAY + 20 * MINUTE, 0.30, STEADY_RESET),
+        ],
+        None,
+    )
+    .unwrap();
+    opus_attempt(&db, "r1", SATURDAY + 5 * MINUTE, MILLION);
+    opus_attempt(&db, "r2", SATURDAY + 15 * MINUTE, MILLION);
+    assert_eq!(run(&db, Some(MAX_5X), STEADY_DONE), []);
+}
+
+#[test]
+fn an_attempt_on_a_model_the_cost_table_lacks_marks_the_window_unmeasured() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    seed_request(&db, "seed", SATURDAY - MINUTE);
+    db.insert_samples(
+        &[
+            head("5h", SATURDAY, 0.10, STEADY_RESET),
+            head("5h", SATURDAY + 20 * MINUTE, 0.30, STEADY_RESET),
+        ],
+        None,
+    )
+    .unwrap();
+    opus_attempt(&db, "r1", SATURDAY + 5 * MINUTE, MILLION);
+    attempt_on(&db, "a", "r2", "gpt-5", SATURDAY + 15 * MINUTE, MILLION);
+    let rows = run(&db, Some(MAX_5X), STEADY_DONE);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        (rows[0].requests, rows[0].unmeasured),
+        (1, true),
+        "the unpriced attempt's charge is in the rise and not in the prediction"
+    );
+    assert!(
+        close(rows[0].ratio, 0.20 / opus_share(FIVE_HOUR)),
+        "{}",
+        rows[0].ratio
+    );
+}
+
+/// An OAuth account on Max 5x in `store`.
+fn subscribed(store: &Store, id: &str) {
+    store
+        .insert_account(&AccountRow {
+            id: id.into(),
+            kind: AccountKind::Oauth,
+            label: id.into(),
+            enabled: true,
+            identity: None,
+            lifecycle_generation: 1,
+            incarnation: 1,
+            revision: 1,
+            state: AccountState::Ready,
+        })
+        .unwrap();
+    store
+        .set_profile(
+            id,
+            r#"{"account":{"uuid":"u","email_address":"a@example.invalid"},"organization":{}}"#,
+            &SubscriptionRow {
+                plan: Some("max".into()),
+                tier: Some(MAX_5X.into()),
+                since: None,
+                trial_ends_at: None,
+            },
+        )
+        .unwrap();
+}
+
+/// The ledger's writer over `db` and `store`, pricing through `tables`, its clock at `STEADY_DONE`, once it has
+/// taken its first turn. Called with tokio's clock paused, so only an advance moves its reconciliation tick.
+async fn writer_over(db: Arc<LedgerDb>, store: Arc<Store>, tables: PlanTables) -> (Bus, Ledger) {
+    let clock: Clock = Arc::new(|| STEADY_DONE);
+    let router = phoebis_routing::spawn(store.clone(), clock.clone(), RouterConfig::default()).unwrap();
+    let bus = Bus::new();
+    let ledger = spawn(
+        db,
+        Arc::new(Pricing::new(PriceTable::shipped())),
+        store,
+        &bus,
+        router,
+        clock,
+        Arc::new(Metrics::new()),
+        LedgerConfig {
+            tables: Arc::new(tables),
+            ..LedgerConfig::default()
+        },
+    );
+    // A sleep, unlike a yield, turns the time driver, which fires the first ticks the writer awaits before it
+    // arms its reconciliation interval.
+    for _ in 0..10 {
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+    (bus, ledger)
+}
+
+/// Advances the paused clock past one reconciliation interval, then waits with time moving for the rows the
+/// writer's pass lands.
+async fn after_one_interval(db: &Arc<LedgerDb>) -> Vec<ReconciliationRow> {
+    tokio::time::advance(RECONCILE_INTERVAL + Duration::from_millis(1)).await;
+    tokio::time::resume();
+    wait_for_async(Duration::from_secs(10), || {
+        let db = db.clone();
+        async move {
+            let rows = db.reconciliations(0).await.unwrap();
+            (!rows.is_empty()).then_some(rows)
+        }
+    })
+    .await
+}
+
+#[tokio::test]
+async fn the_writer_reconciles_on_its_tick_through_the_tables_its_config_carries() {
+    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+    subscribed(&store, "a");
+    let db = Arc::new(LedgerDb::open_in_memory().unwrap());
+    steady_rise(&db, false);
+    // Opus input at a tenth of the window per million, so the two attempts predict 0.2 against the rise's 0.2,
+    // where the shipped table's 0.0841 would read 1.19.
+    let mut tables = PlanTables::shipped();
+    tables
+        .cost
+        .windows
+        .get_mut(FIVE_HOUR)
+        .and_then(|models| models.get_mut(OPUS))
+        .unwrap()
+        .input
+        .share_per_million = 0.1;
+    tokio::time::pause();
+    let (_bus, _ledger) = writer_over(db.clone(), store, tables).await;
+    assert_eq!(
+        db.read_blocking(|conn| read_reconciliations(conn, 0))
+            .unwrap(),
+        [],
+        "the first pass waits a whole interval"
+    );
+    let rows = after_one_interval(&db).await;
+    assert_eq!(
+        rows.iter()
+            .map(|r| (r.account_id.as_str(), r.window_end, r.computed_at))
+            .collect::<Vec<_>>(),
+        [("a", STEADY_RESET, STEADY_DONE)]
+    );
+    assert!(
+        close(rows[0].predicted_share, 0.2) && close(rows[0].ratio, 1.0),
+        "priced through the config's tables: {} at {}",
+        rows[0].predicted_share,
+        rows[0].ratio
+    );
+}
+
+#[tokio::test]
+async fn the_writer_skips_an_account_whose_subscription_cannot_be_read_and_reconciles_the_rest() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("router.sqlite");
+    let key = StorageKey::generate();
+    {
+        let store = Store::open(&path, &key).unwrap();
+        subscribed(&store, "a");
+        subscribed(&store, "b");
+    }
+    // A plan the store cannot read back as text: `b`'s subscription read fails, `a`'s answers.
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "UPDATE accounts SET subscription_plan = x'00' WHERE id = 'b'",
+            [],
+        )
+        .unwrap();
+    let store = Arc::new(Store::open(&path, &key).unwrap());
+    assert!(store.subscription("b").is_err());
+    let db = Arc::new(LedgerDb::open_in_memory().unwrap());
+    steady_rise_of(&db, "a", false);
+    steady_rise_of(&db, "b", false);
+    let (lines, _capture) = capture_tracing();
+    tokio::time::pause();
+    let (_bus, _ledger) = writer_over(db.clone(), store, PlanTables::shipped()).await;
+    let rows = after_one_interval(&db).await;
+    assert_eq!(
+        rows.iter()
+            .map(|r| r.account_id.as_str())
+            .collect::<Vec<_>>(),
+        ["a"],
+        "the readable account reconciles"
+    );
+    let lines = lines.lock().unwrap().clone();
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("account=b") && l.contains("subscription could not be read")),
+        "the skipped account is named: {lines:?}"
     );
 }

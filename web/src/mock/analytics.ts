@@ -239,13 +239,15 @@ function bucketsOf(range: Range): { bucketMs: number; starts: number[] } {
 }
 
 /**
- * Two completed windows, one inside the band and one past it priced through unmeasured cells, so the table has a
- * ratio to mark and a flag to show.
+ * Three completed windows: one inside the band, the 5-hour window past it that the open `meter_drift` event of the
+ * operations story names, and a 7-day one past it priced through unmeasured cells, so the table has ratios to mark
+ * and a flag to show.
  */
 export const RECONCILIATIONS: AnalyticsReconciliations = {
   reconciliations: [
     { accountId: 'business', computedAt: ago(12 * MINUTE), firstReadingAt: ago(5 * HOUR + 20 * MINUTE), lastReadingAt: ago(25 * MINUTE), observedRise: 0.24, predictedShare: 0.226, ratio: 0.24 / 0.226, requests: 61, unmeasured: false, window: 'five_hour', windowEnd: ago(20 * MINUTE) },
     { accountId: 'personal', computedAt: ago(12 * MINUTE), firstReadingAt: ago(7 * DAY + 30 * MINUTE), lastReadingAt: ago(40 * MINUTE), observedRise: 0.38, predictedShare: 0.27, ratio: 0.38 / 0.27, requests: 412, unmeasured: true, window: 'seven_day', windowEnd: ago(35 * MINUTE) },
+    { accountId: 'personal', computedAt: ago(28 * MINUTE), firstReadingAt: ago(5 * HOUR + 30 * MINUTE), lastReadingAt: ago(45 * MINUTE), observedRise: 0.31, predictedShare: 0.22, ratio: 0.31 / 0.22, requests: 48, unmeasured: false, window: 'five_hour', windowEnd: ago(40 * MINUTE) },
   ],
   requestRetentionDays: 30,
 };
