@@ -533,6 +533,13 @@ mod service {
                 ),
                 "step {step}"
             );
+            if step == 0 {
+                assert_eq!(
+                    service.snapshot("a").await.unwrap().error.as_deref(),
+                    Some("the usage endpoint rate-limited the account; next attempt at 1970-01-01 00:17:40 UTC"),
+                    "the held answer names the endpoint and when it may be asked again"
+                );
+            }
             now.store(at + wait_ms - 1, Ordering::SeqCst);
             assert!(
                 service.snapshot("a").await.unwrap().error.is_some(),
@@ -674,18 +681,30 @@ mod service {
             Duration::from_secs(3_600),
             &now,
         );
+        let (lines, _sink) = crate::common::capture_tracing();
         let clean = service.snapshot("a").await.unwrap();
         assert!(clean.error.is_none());
         assert!(
             service.profile("a").await.is_err(),
             "the profile is rate-limited"
         );
+        assert_eq!(
+            lines
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|l| l.contains("the profile endpoint rate-limited the account"))
+                .count(),
+            1,
+            "the warning names the endpoint that answered 429"
+        );
 
         // Inside both the cache TTL and the profile's hold: the cached windows are no new reading.
         now.store(1_060_000, Ordering::SeqCst);
         let held = service.snapshot("a").await.unwrap();
-        assert!(
-            held.error.is_some(),
+        assert_eq!(
+            held.error.as_deref(),
+            Some("the profile endpoint rate-limited the account; next attempt at 1970-01-01 00:18:40 UTC"),
             "a cache hit inside the hold carries the error"
         );
         assert_eq!(held.windows.len(), clean.windows.len(), "the old windows");
@@ -763,6 +782,68 @@ mod service {
             usage_requests(&up),
             1,
             "the two hours asked for are capped to fifteen minutes"
+        );
+        up.shutdown().await;
+    }
+
+    /// A fetch whose account is disconnected while it is out is discarded, and the caller gets the cached
+    /// entry instead; when a hold was armed meanwhile, that answer is the held one, never the clean windows.
+    #[tokio::test]
+    async fn a_lifecycle_change_during_a_fetch_under_a_new_hold_answers_the_held_snapshot() {
+        let now = Arc::new(AtomicI64::new(1_000_000));
+        let up = FakeUpstream::start(vec![
+            Rule {
+                path_prefix: "/api/oauth/profile".into(),
+                respond: Respond::Json {
+                    status: 429,
+                    headers: vec![("retry-after".into(), "600".into())],
+                    body: b"{}".to_vec(),
+                },
+            },
+            Rule {
+                path_prefix: "/api/oauth/usage".into(),
+                respond: Respond::Json {
+                    status: 200,
+                    headers: vec![],
+                    body: control_response(ControlFixture::Usage).to_vec(),
+                },
+            },
+        ])
+        .await;
+        let store = store_with_bundle_until(1_000_000 + 86_400_000);
+        let service = Arc::new(service_for(
+            &up,
+            store.clone(),
+            Duration::from_secs(1),
+            &now,
+        ));
+        assert!(service.snapshot("a").await.unwrap().error.is_none());
+        up.set_rule_after(
+            1,
+            "/api/oauth/usage",
+            Respond::Gated(Box::new(Respond::Json {
+                status: 200,
+                headers: vec![],
+                body: control_response(ControlFixture::Usage).to_vec(),
+            })),
+        );
+        now.store(1_010_000, Ordering::SeqCst);
+        let fetching = {
+            let service = service.clone();
+            tokio::spawn(async move { service.snapshot("a").await })
+        };
+        wait_for(Duration::from_secs(5), || {
+            (usage_requests(&up) == 2).then_some(())
+        })
+        .await;
+        assert!(service.profile("a").await.is_err(), "the hold is armed");
+        store.bump_lifecycle("a").unwrap();
+        up.release();
+        let answer = fetching.await.unwrap().unwrap();
+        assert_eq!(
+            answer.error.as_deref(),
+            Some("the profile endpoint rate-limited the account; next attempt at 1970-01-01 00:26:50 UTC"),
+            "the discarded fetch answers the held snapshot"
         );
         up.shutdown().await;
     }

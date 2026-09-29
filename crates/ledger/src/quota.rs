@@ -28,10 +28,6 @@ pub const POLL_INTERVAL: Duration = Duration::from_secs(300);
 /// profile endpoint shares the usage endpoint's per-account limit.
 pub const PROFILE_EVERY_POLLS: u32 = 12;
 
-/// The earliest a slot is drawn after the pass that spreads it: the scheduler starts right after the startup
-/// step read every account, so the account at phase zero is not asked again in the same instant.
-const SLOT_FLOOR: Duration = Duration::from_secs(1);
-
 pub fn samples_from_head(
     account_id: &str,
     headers: &[(String, String)],
@@ -180,13 +176,15 @@ struct Completion {
 }
 
 /// Draws the schedule again when the polled accounts differ from the ones it was drawn for: a pairing, a
-/// re-pairing or a delete re-spreads the phases, an attempt in flight keeps its slot, and a backoff keeps the
-/// service's time.
+/// re-pairing or a delete re-spreads the phases, an attempt in flight keeps its slot, and a backoff that ends
+/// later than the phase keeps the service's time. The first pass follows the startup step, which has just read
+/// every account it lists, so those slots start an interval on with that read counted as their first poll.
 fn spread(
     slots: &mut BTreeMap<String, Slot>,
     rows: Vec<AccountRow>,
     usage: &UsageService,
     now: Instant,
+    first_pass: bool,
 ) {
     let accounts: Vec<AccountRow> = rows
         .into_iter()
@@ -210,14 +208,20 @@ fn spread(
             incarnation: account.incarnation,
             in_flight: None,
             at: now,
-            polls: 0,
+            polls: u32::from(first_pass),
         });
         slot.account = account.clone();
         if slot.in_flight.is_none() {
+            let phase = QuotaPoll::phase(index, accounts.len());
+            let offset = if first_pass {
+                POLL_INTERVAL + phase
+            } else {
+                phase
+            };
             slot.at = now
                 + usage
                     .held_for(&account.id)
-                    .unwrap_or_else(|| QuotaPoll::phase(index, accounts.len()).max(SLOT_FLOOR));
+                    .map_or(offset, |held| held.max(offset));
         }
     }
 }
@@ -236,13 +240,14 @@ impl QuotaPoll {
     /// polled accounts sorted by id, re-spread when an account joins or leaves), every attempt spawned into
     /// the scheduler's own set and reaped when it completes, so a slow answer or a backoff on one account
     /// delays no other and no finished attempt is kept; a completion moves its slot only while the slot still
-    /// belongs to the incarnation the attempt was drawn for. The next slot is the interval after the last, or
-    /// the usage service's next-attempt time after a 429; with no slot to wait for, the scheduler wakes after
-    /// one interval and re-reads the registry. Every clean snapshot is recorded to the ledger and reported to
-    /// the router as `poll_account` does with a router.
+    /// belongs to the incarnation the attempt was drawn for. The next slot is the interval after the last or,
+    /// after a 429, the usage service's next-attempt time when that is later, so a backoff never brings an
+    /// attempt sooner than the cadence; with no slot to wait for, the scheduler wakes after one interval and
+    /// re-reads the registry. Every clean snapshot is recorded to the ledger and reported to the router as
+    /// `poll_account` does with a router.
     ///
-    /// Spawned once the startup step is done: that step has just read every account, so a first slot is its
-    /// phase from the scheduler's start and never less than a second.
+    /// Spawned once the startup step is done: that step has just read every account, so an account the first
+    /// pass finds is next read an interval after the start, on its phase, and its profile an hour on.
     pub fn spawn(
         store: Arc<Store>,
         usage: Arc<UsageService>,
@@ -254,14 +259,24 @@ impl QuotaPoll {
             // The scheduler owns its attempts: a completion is reaped here, and dropping the set when the
             // scheduler is aborted aborts what is still out.
             let mut attempts: JoinSet<Completion> = JoinSet::new();
+            let mut first_pass = true;
+            let mut registry_failing = false;
             loop {
                 let now = Instant::now();
                 match store.accounts() {
-                    Ok(rows) => spread(&mut slots, rows, &usage, now),
+                    Ok(rows) => {
+                        spread(&mut slots, rows, &usage, now, first_pass);
+                        first_pass = false;
+                        registry_failing = false;
+                    }
                     // The slots stand: a registry that cannot be read is no reason to stop polling the
-                    // accounts it last listed, and the next pass reads it again.
+                    // accounts it last listed, and the next pass reads it again. A pass runs on every wake
+                    // and every completion, so the outage is logged once, when it starts.
                     Err(error) => {
-                        tracing::warn!(%error, "the registry could not be read for the poll")
+                        if !registry_failing {
+                            tracing::warn!(%error, "the registry could not be read for the poll");
+                        }
+                        registry_failing = true;
                     }
                 }
                 for slot in slots.values_mut() {
@@ -303,10 +318,8 @@ impl QuotaPoll {
                             if let Some(slot) = slots.get_mut(&done.account_id) {
                                 if slot.in_flight == Some(id) && slot.incarnation == done.incarnation {
                                     slot.in_flight = None;
-                                    slot.at = match done.held {
-                                        Some(wait) => Instant::now() + wait,
-                                        None => slot.at + POLL_INTERVAL,
-                                    };
+                                    let next = slot.at + POLL_INTERVAL;
+                                    slot.at = done.held.map_or(next, |wait| (Instant::now() + wait).max(next));
                                 }
                             }
                         }

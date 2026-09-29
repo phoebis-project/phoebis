@@ -276,6 +276,8 @@ async fn a_head_writes_its_bucket_and_a_poll_in_the_same_bucket_does_not_overwri
     ])
     .await;
     let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    // The head lands in the bucket of the first scheduled read, one interval after the scheduler starts.
+    h.clock.store(NOW + 250_000, Ordering::SeqCst);
     let resp = h
         .app
         .clone()
@@ -284,7 +286,7 @@ async fn a_head_writes_its_bucket_and_a_poll_in_the_same_bucket_does_not_overwri
         .unwrap();
     assert_eq!(resp.status(), 200);
     let _ = resp.into_body().collect().await.unwrap();
-    let bucket = phoebis_ledger::bucket_of(NOW);
+    let bucket = phoebis_ledger::bucket_of(NOW + 250_000);
     let header = wait_for_async(Duration::from_secs(5), || async {
         let rows = h.db.quota_samples("a", bucket, bucket + 300).await.unwrap();
         rows.iter()
@@ -314,10 +316,10 @@ async fn a_head_writes_its_bucket_and_a_poll_in_the_same_bucket_does_not_overwri
         "a head carries no credits"
     );
 
-    // The head landed first; the account's first slot, a second after the scheduler starts, falls in the same
-    // bucket: the header rows stay, the poll adds its own windows beside them, and the credits wait.
+    // The head landed first; the account's first slot falls in the same bucket: the header rows stay, the poll
+    // adds its own windows beside them, and the credits wait.
     let paused = start_polling(&h, &up).await;
-    step_to(&h, &up, &paused, secs(2)).await;
+    step_to(&h, &up, &paused, secs(302)).await;
     assert_eq!(usage_asked(&up, A), 1, "the first slot");
     let rows = resumed(wait_for_async(Duration::from_secs(5), || async {
         let rows = h.db.quota_samples("a", bucket, bucket + 300).await.unwrap();
@@ -351,7 +353,7 @@ async fn a_head_writes_its_bucket_and_a_poll_in_the_same_bucket_does_not_overwri
     );
 
     // The next slot, an interval on, lands in the next bucket and writes the credits there.
-    step_to(&h, &up, &paused, secs(302)).await;
+    step_to(&h, &up, &paused, secs(602)).await;
     assert_eq!(usage_asked(&up, A), 2, "the second slot");
     let next = bucket + 300;
     let extra = resumed(wait_for_async(Duration::from_secs(5), || async {
@@ -398,26 +400,33 @@ async fn every_polled_account_is_read_once_per_interval_on_its_own_phase_and_rep
             .count()
     };
 
-    // With `a` and `c` polled, their phases are 0 (a second, never at once) and 150 s.
+    // With `a` and `c` polled, their phases are 0 and 150 s; the startup step has just read both, so each
+    // first scheduled read comes an interval on, at 300 and 450 s.
     let paused = start_polling(&h, &up).await;
-    step_to(&h, &up, &paused, secs(100)).await;
+    step_to(&h, &up, &paused, secs(299)).await;
+    assert_eq!(
+        (usage_asked(&up, A), usage_asked(&up, OAUTH_C)),
+        (0, 0),
+        "nothing inside the first interval"
+    );
+    step_to(&h, &up, &paused, secs(302)).await;
     assert_eq!(
         (usage_asked(&up, A), usage_asked(&up, OAUTH_C)),
         (1, 0),
-        "a alone by 100 s"
+        "a alone by 302 s"
     );
-    step_to(&h, &up, &paused, secs(151)).await;
+    step_to(&h, &up, &paused, secs(452)).await;
     assert_eq!(
         (usage_asked(&up, A), usage_asked(&up, OAUTH_C)),
         (1, 1),
-        "both once by 151 s"
+        "both once by 452 s"
     );
     assert_eq!(
         profiles(&up),
-        2,
-        "one profile read per polled account on its first poll"
+        0,
+        "the startup step's profile read counts as the first"
     );
-    step_to(&h, &up, &paused, secs(302)).await;
+    step_to(&h, &up, &paused, secs(602)).await;
     assert_eq!(
         (
             usage_asked(&up, A),
@@ -425,7 +434,7 @@ async fn every_polled_account_is_read_once_per_interval_on_its_own_phase_and_rep
             usage_asked(&up, B)
         ),
         (2, 1, 0),
-        "a twice and c once by 302 s; the unpaired b never"
+        "a twice and c once by 602 s; the unpaired b never"
     );
 
     let samples = resumed(h.router.samples()).await.unwrap();
@@ -442,10 +451,19 @@ async fn every_polled_account_is_read_once_per_interval_on_its_own_phase_and_rep
         "the poll's overage evidence reached the router"
     );
 
-    // Eleven more intervals make twelve polls of each account, the profile still read once; the thirteenth
-    // reads it again.
+    // With the startup step's read as the first, the twelfth scheduled poll of each account reads the profile
+    // again, an hour after the startup step.
     let interval = POLL_INTERVAL.as_secs();
-    step_to(&h, &up, &paused, secs(152 + 11 * interval)).await;
+    step_to(&h, &up, &paused, secs(452 + 10 * interval)).await;
+    assert_eq!(
+        (usage_asked(&up, A), usage_asked(&up, OAUTH_C)),
+        (
+            PROFILE_EVERY_POLLS as usize - 1,
+            PROFILE_EVERY_POLLS as usize - 1
+        )
+    );
+    assert_eq!(profiles(&up), 0, "none before the twelfth poll");
+    step_to(&h, &up, &paused, secs(452 + 11 * interval)).await;
     assert_eq!(
         (usage_asked(&up, A), usage_asked(&up, OAUTH_C)),
         (PROFILE_EVERY_POLLS as usize, PROFILE_EVERY_POLLS as usize)
@@ -453,13 +471,7 @@ async fn every_polled_account_is_read_once_per_interval_on_its_own_phase_and_rep
     assert_eq!(
         profiles(&up),
         2,
-        "none more before the twelfth poll is done"
-    );
-    step_to(&h, &up, &paused, secs(152 + 12 * interval)).await;
-    assert_eq!(
-        profiles(&up),
-        4,
-        "the thirteenth poll of each reads the profile again"
+        "the twelfth poll of each reads the profile"
     );
     assert_eq!(usage_asked(&up, B), 0);
     assert!(
@@ -483,14 +495,33 @@ async fn a_rate_limited_account_backs_off_alone_while_its_sibling_keeps_the_inte
     let (lines, _sink) = capture_tracing();
     let paused = start_polling(&h, &up).await;
 
-    // `a` at 0, 60, 180, 420, 900, 1 800 and 2 700 s (each a second or so late, as its first slot is); `c`
-    // every 300 s from 150 s throughout.
+    // The hold grows through 1, 2, 4 and 8 minutes to 15, and the next attempt waits for the hold or the next
+    // slot, whichever is later: `a` at 300, 600, 900 and 1 200 s, then 480 s and 900 s on (1 681 and 2 582 s,
+    // a second or so late each); `c` every 300 s from 450 s throughout.
+    step_to(&h, &up, &paused, secs(599)).await;
+    assert_eq!(
+        usage_asked(&up, A),
+        1,
+        "the one-minute hold waits for the next slot"
+    );
+    step_to(&h, &up, &paused, secs(1_205)).await;
+    assert_eq!(
+        usage_asked(&up, A),
+        4,
+        "the holds below the interval read as the interval"
+    );
+    step_to(&h, &up, &paused, secs(1_675)).await;
+    assert_eq!(
+        usage_asked(&up, A),
+        4,
+        "the eight-minute hold outlasts the next slot"
+    );
     step_to(&h, &up, &paused, secs(3_000)).await;
-    assert_eq!((usage_asked(&up, A), usage_asked(&up, OAUTH_C)), (7, 10));
+    assert_eq!((usage_asked(&up, A), usage_asked(&up, OAUTH_C)), (6, 9));
     let status = h.usage.as_ref().unwrap().poll_status("a").unwrap();
     assert_eq!(
         (status.last_outcome, status.rate_limited_in_a_row),
-        (PollOutcome::RateLimited, 7)
+        (PollOutcome::RateLimited, 6)
     );
     let warnings = lines
         .lock()
@@ -498,7 +529,7 @@ async fn a_rate_limited_account_backs_off_alone_while_its_sibling_keeps_the_inte
         .iter()
         .filter(|l| l.contains("rate-limited") && l.contains("account=a"))
         .count();
-    assert_eq!(warnings, 7, "one warning per 429, naming the account");
+    assert_eq!(warnings, 6, "one warning per 429, naming the account");
     assert!(
         !lines.lock().unwrap().iter().any(|l| l.contains("sk-ant-")),
         "no token reaches a line"
@@ -507,7 +538,7 @@ async fn a_rate_limited_account_backs_off_alone_while_its_sibling_keeps_the_inte
     // The next answer is clean: the run ends, and the request after it is one interval later.
     up.set_credential_rule_after(A, 0, "/api/oauth/usage", usage_rule().respond);
     step_to(&h, &up, &paused, secs(3_700)).await;
-    assert_eq!(usage_asked(&up, A), 8);
+    assert_eq!(usage_asked(&up, A), 7);
     let status = h.usage.as_ref().unwrap().poll_status("a").unwrap();
     assert_eq!(
         (
@@ -520,11 +551,11 @@ async fn a_rate_limited_account_backs_off_alone_while_its_sibling_keeps_the_inte
     );
     let clean_at = secs_past_now(status.last_attempt_at).ceil() as u64;
     step_to(&h, &up, &paused, secs(clean_at + 297)).await;
-    assert_eq!(usage_asked(&up, A), 8, "not before the interval");
+    assert_eq!(usage_asked(&up, A), 7, "not before the interval");
     step_to(&h, &up, &paused, secs(clean_at + 303)).await;
     assert_eq!(
         usage_asked(&up, A),
-        9,
+        8,
         "one interval after the clean answer"
     );
     up.shutdown().await;
@@ -539,23 +570,25 @@ async fn a_retry_after_is_honoured_and_capped_by_the_poll() {
     let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
     let paused = start_polling(&h, &up).await;
 
-    step_to(&h, &up, &paused, secs(119)).await;
+    step_to(&h, &up, &paused, secs(302)).await;
+    assert_eq!(usage_asked(&up, A), 1, "the first slot");
+    step_to(&h, &up, &paused, secs(598)).await;
     assert_eq!(
         usage_asked(&up, A),
         1,
-        "the first slot, then the 120 s asked for"
+        "the 120 s asked for end before the next slot, which the retry waits for"
     );
-    step_to(&h, &up, &paused, secs(125)).await;
-    assert_eq!(usage_asked(&up, A), 2, "asked again once the 120 s passed");
+    step_to(&h, &up, &paused, secs(602)).await;
+    assert_eq!(usage_asked(&up, A), 2, "asked again at the next slot");
     let status = h.usage.as_ref().unwrap().poll_status("a").unwrap();
     assert_eq!(
         status.next_attempt_at,
         Some(status.last_attempt_at + 900_000),
         "the hour asked for is held to fifteen minutes"
     );
-    step_to(&h, &up, &paused, secs(1_020)).await;
+    step_to(&h, &up, &paused, secs(1_498)).await;
     assert_eq!(usage_asked(&up, A), 2, "held inside the fifteen minutes");
-    step_to(&h, &up, &paused, secs(1_026)).await;
+    step_to(&h, &up, &paused, secs(1_504)).await;
     assert_eq!(usage_asked(&up, A), 3, "asked again at the cap");
     up.shutdown().await;
 }
@@ -625,7 +658,7 @@ async fn a_registry_read_that_fails_keeps_the_schedule_and_logs() {
             .collect::<Vec<_>>()
     };
     let paused = start_polling(&h, &up).await;
-    step_to(&h, &up, &paused, secs(152)).await;
+    step_to(&h, &up, &paused, secs(452)).await;
     assert_eq!((usage_asked(&up, A), usage_asked(&up, OAUTH_C)), (1, 1));
 
     // A second connection on the store's file takes the table away, as the migration tests open the file
@@ -634,19 +667,20 @@ async fn a_registry_read_that_fails_keeps_the_schedule_and_logs() {
     conn.busy_timeout(Duration::from_secs(5)).unwrap();
     conn.execute_batch("ALTER TABLE accounts RENAME TO accounts_gone")
         .unwrap();
-    step_to(&h, &up, &paused, secs(452)).await;
+    step_to(&h, &up, &paused, secs(752)).await;
     // Neither account's row can be read to fetch with, so the attempts fail before a request; the service
     // still saw each on its phase.
     let usage = h.usage.as_ref().unwrap();
     let attempted = |id: &str| secs_past_now(usage.poll_status(id).unwrap().last_attempt_at);
     assert!(
-        (300.5..303.5).contains(&attempted("a")) && (449.5..452.5).contains(&attempted("c")),
+        (599.5..603.5).contains(&attempted("a")) && (749.5..752.5).contains(&attempted("c")),
         "both asked on their phases: a at {}, c at {}",
         attempted("a"),
         attempted("c")
     );
+    // Four passes failed to read (two slots, two completions); the outage is logged once.
     let warned = registry_warnings();
-    assert!(!warned.is_empty(), "the failed read is logged");
+    assert_eq!(warned.len(), 1, "one warning for the outage: {warned:?}");
     assert!(
         warned.iter().all(|l| !l.contains("sk-ant-")),
         "no token in the warning: {warned:?}"
@@ -654,8 +688,7 @@ async fn a_registry_read_that_fails_keeps_the_schedule_and_logs() {
 
     conn.execute_batch("ALTER TABLE accounts_gone RENAME TO accounts")
         .unwrap();
-    let warned = warned.len();
-    step_to(&h, &up, &paused, secs(752)).await;
+    step_to(&h, &up, &paused, secs(1_052)).await;
     assert_eq!(
         (usage_asked(&up, A), usage_asked(&up, OAUTH_C)),
         (2, 2),
@@ -663,7 +696,7 @@ async fn a_registry_read_that_fails_keeps_the_schedule_and_logs() {
     );
     assert_eq!(
         registry_warnings().len(),
-        warned,
+        1,
         "no warning once the table is back"
     );
     up.shutdown().await;
@@ -672,9 +705,9 @@ async fn a_registry_read_that_fails_keeps_the_schedule_and_logs() {
 #[tokio::test]
 async fn a_completion_drawn_for_a_deleted_holder_moves_no_slot_of_its_replacement() {
     let up = FakeUpstream::start(vec![usage_rule(), profile_rule()]).await;
-    // `c`'s first answer brings its second attempt to two seconds before `a`'s second slot; that attempt is held
-    // at the fake's gate across the pass `a`'s slot makes, which finds `c` paired again.
-    up.push_credential_rule(OAUTH_C, "/api/oauth/usage", rate_limited_for("148"));
+    // `c`'s first answer, at 450 s, holds it until two seconds before `a`'s slot at 900 s; that second attempt is
+    // held at the fake's gate across the pass `a`'s slot makes, which finds `c` paired again.
+    up.push_credential_rule(OAUTH_C, "/api/oauth/usage", rate_limited_for("447"));
     up.push_credential_rule(
         OAUTH_C,
         "/api/oauth/usage",
@@ -688,10 +721,10 @@ async fn a_completion_drawn_for_a_deleted_holder_moves_no_slot_of_its_replacemen
     )
     .await;
     let paused = start_polling(&h, &up).await;
-    step_to(&h, &up, &paused, secs(297)).await;
-    assert_eq!((usage_asked(&up, A), usage_asked(&up, OAUTH_C)), (1, 1));
+    step_to(&h, &up, &paused, secs(897)).await;
+    assert_eq!((usage_asked(&up, A), usage_asked(&up, OAUTH_C)), (2, 1));
     paused.idle.set(paused.idle.get() + 1);
-    step_to(&h, &up, &paused, secs(300)).await;
+    step_to(&h, &up, &paused, secs(899)).await;
     assert_eq!(
         usage_asked(&up, OAUTH_C),
         2,
@@ -702,12 +735,8 @@ async fn a_completion_drawn_for_a_deleted_holder_moves_no_slot_of_its_replacemen
     pair(&h.store, "c", REPAIRED);
     assert_eq!(h.store.account("c").unwrap().unwrap().incarnation, 2);
     // `a`'s slot makes the pass that re-spreads: the replacement is drawn half an interval on.
-    step_to(&h, &up, &paused, Duration::from_millis(301_500)).await;
-    assert_eq!(
-        usage_asked(&up, A),
-        1,
-        "the pass moved a's due slot a second on"
-    );
+    step_to(&h, &up, &paused, Duration::from_millis(900_500)).await;
+    assert_eq!(usage_asked(&up, A), 3, "a asked at its slot");
 
     // The old attempt completes after that pass; its completion moves nothing, so the replacement keeps the
     // slot the pass drew it.
@@ -720,17 +749,17 @@ async fn a_completion_drawn_for_a_deleted_holder_moves_no_slot_of_its_replacemen
     for _ in 0..8 {
         tokio::task::yield_now().await;
     }
-    step_to(&h, &up, &paused, secs(449)).await;
+    step_to(&h, &up, &paused, secs(1_048)).await;
     assert_eq!(usage_asked(&up, REPAIRED), 0, "not before its phase");
-    step_to(&h, &up, &paused, secs(455)).await;
+    step_to(&h, &up, &paused, secs(1_053)).await;
     assert_eq!(
         usage_asked(&up, REPAIRED),
         1,
         "the replacement asked at its own slot, with its own token"
     );
-    step_to(&h, &up, &paused, secs(749)).await;
+    step_to(&h, &up, &paused, secs(1_349)).await;
     assert_eq!(usage_asked(&up, REPAIRED), 1);
-    step_to(&h, &up, &paused, secs(755)).await;
+    step_to(&h, &up, &paused, secs(1_355)).await;
     assert_eq!(
         (usage_asked(&up, OAUTH_C), usage_asked(&up, REPAIRED)),
         (2, 2),
@@ -767,12 +796,19 @@ async fn the_scheduler_reaps_its_attempts_and_the_ledger_tracks_none_of_them() {
     let paused = start_polling(&h, &up).await;
     let before = h.ledger.tracked();
     assert_eq!(before, mirror + 3, "and the scheduler");
-    step_to(&h, &up, &paused, secs(10 * POLL_INTERVAL.as_secs() + 1)).await;
+    let profiles = || {
+        up.requests()
+            .iter()
+            .filter(|r| r.line.starts_with("GET /api/oauth/profile"))
+            .count()
+    };
+    step_to(&h, &up, &paused, secs(10 * POLL_INTERVAL.as_secs() + 152)).await;
     assert_eq!(
         (usage_asked(&up, A), usage_asked(&up, OAUTH_C)),
         (11, 11),
         "the startup read and ten slots each"
     );
+    assert_eq!(profiles(), 2, "the startup step's profile reads alone");
     assert_eq!(
         h.ledger.tracked(),
         before,

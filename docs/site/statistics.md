@@ -72,12 +72,14 @@ an idle account leaves, is the only source of extra-usage credit totals, and han
 
 The usage endpoint is also read once at startup for every OAuth account with a credential, before the proxy listener
 accepts requests and bounded by `routing.startup_fetch_seconds`, so selection holds a sample per account from the
-first request after a restart; the poll then keeps its interval.
+first request after a restart. The poll counts that read as its own: it next reads each account five minutes after the
+startup step, on the account's phase, and its profile an hour after.
 
-An account the endpoint answers 429 backs off alone: one, two, four and eight minutes between attempts, then fifteen,
-a `Retry-After` honoured up to the same fifteen; each 429 is logged as a warning naming the account, and the next clean
-answer returns it to the five minutes. A transport failure or another error keeps the cadence. The other accounts keep
-theirs throughout.
+An account the endpoint answers 429 backs off alone. Its hold grows through one, two, four and eight minutes to
+fifteen, a `Retry-After` honoured up to the same fifteen, and a retry never comes sooner than the account's next
+five-minute slot, so a hold shorter than that waits for the slot. Each 429 is logged as a warning naming the account
+and the endpoint that answered it, and the next clean answer returns the account to the five minutes. A transport
+failure or another error keeps the cadence. The other accounts keep theirs throughout.
 
 ## Pricing
 

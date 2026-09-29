@@ -2,7 +2,7 @@
 #![allow(dead_code)]
 
 use std::sync::atomic::{AtomicI64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::body::Body;
@@ -23,11 +23,9 @@ use phoebis_store::{
 };
 use phoebis_transport::request::parse_head;
 use fake_upstream::FakeUpstream;
-use tracing_subscriber::layer::{Context, SubscriberExt};
-use tracing_subscriber::registry::LookupSpan;
 // The polls live with the fake so every integration suite has them; only some of them are used here.
 #[allow(unused_imports)]
-pub use fake_upstream::{stays_for, stays_for_async, wait_for, wait_for_async};
+pub use fake_upstream::{capture_tracing, stays_for, stays_for_async, wait_for, wait_for_async};
 
 pub const KEY: &str = "phoebis-testkey";
 pub const NOW: i64 = 1_000_000;
@@ -422,93 +420,4 @@ pub fn json_200() -> fake_upstream::Respond {
         body: br#"{"id":"msg_1","type":"message","model":"claude-sonnet-4-5","stop_reason":"end_turn","usage":{"input_tokens":3,"output_tokens":4,"output_tokens_details":{"thinking_tokens":1},"server_tool_use":{"web_search_requests":1,"web_fetch_requests":0},"speed":"standard","inference_geo":"us"}}"#
             .to_vec(),
     }
-}
-
-/// The module paths whose events are captured: the poll's registry warning and the usage endpoint's 429
-/// warning. Any other crate's events would only be noise in an assertion about those.
-const CAPTURED_TARGETS: &[&str] = &["phoebis_ledger::", "phoebis_oauth::"];
-
-/// One formatted line per captured event, the span's own fields joined ahead of the event's.
-#[derive(Default)]
-struct Fields(String);
-
-impl tracing::field::Visit for Fields {
-    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
-        self.0.push_str(&format!("{}={value:?} ", field.name()));
-    }
-}
-
-thread_local! {
-    // A global subscriber's callsite interest is cached process-wide: a thread-local default installed only
-    // for one test would race every other test in the binary, some of which would win the cache with a
-    // subscriber that is not interested and silence this one's events for good. Routing through a
-    // thread-local sink instead keeps the interest decision uncontested (one global subscriber, always
-    // interested) while keeping every test's capture to its own thread.
-    static SINK: std::cell::RefCell<Option<Arc<Mutex<Vec<String>>>>> = const { std::cell::RefCell::new(None) };
-}
-
-struct CaptureLayer;
-
-impl<S> tracing_subscriber::Layer<S> for CaptureLayer
-where
-    S: tracing::Subscriber + for<'a> LookupSpan<'a>,
-{
-    fn on_new_span(
-        &self,
-        attrs: &tracing::span::Attributes<'_>,
-        id: &tracing::Id,
-        ctx: Context<'_, S>,
-    ) {
-        let mut fields = Fields::default();
-        attrs.record(&mut fields);
-        if let Some(span) = ctx.span(id) {
-            span.extensions_mut().insert(fields);
-        }
-    }
-
-    fn on_event(&self, event: &tracing::Event<'_>, ctx: Context<'_, S>) {
-        let target = event.metadata().target();
-        if !CAPTURED_TARGETS
-            .iter()
-            .any(|prefix| target.starts_with(prefix))
-        {
-            return;
-        }
-        SINK.with(|cell| {
-            let Some(sink) = cell.borrow().clone() else {
-                return;
-            };
-            let mut line = String::new();
-            if let Some(scope) = ctx.event_scope(event) {
-                for span in scope.from_root() {
-                    if let Some(fields) = span.extensions().get::<Fields>() {
-                        line.push_str(&fields.0);
-                    }
-                }
-            }
-            let mut fields = Fields::default();
-            event.record(&mut fields);
-            line.push_str(&fields.0);
-            sink.lock().unwrap().push(line);
-        });
-    }
-}
-
-/// Installs the capturing layer as the process's one subscriber, the first time any test calls this, and
-/// points this thread's events at a fresh buffer until the guard drops.
-pub fn capture_tracing() -> (Arc<Mutex<Vec<String>>>, impl Drop) {
-    static ONCE: std::sync::Once = std::sync::Once::new();
-    ONCE.call_once(|| {
-        let subscriber = tracing_subscriber::registry().with(CaptureLayer);
-        let _ = tracing::subscriber::set_global_default(subscriber);
-    });
-    let lines = Arc::new(Mutex::new(Vec::new()));
-    SINK.with(|cell| *cell.borrow_mut() = Some(lines.clone()));
-    struct ClearSink;
-    impl Drop for ClearSink {
-        fn drop(&mut self) {
-            SINK.with(|cell| *cell.borrow_mut() = None);
-        }
-    }
-    (lines, ClearSink)
 }

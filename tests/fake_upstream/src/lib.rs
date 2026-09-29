@@ -2,6 +2,10 @@
 //! TLS for the `api.anthropic.com` / `platform.claude.com` SNI, for the SANs `start_tls_for` is given, or
 //! speaking plain HTTP via `start_plain`.
 
+mod capture;
+
+pub use capture::capture_tracing;
+
 use std::collections::{HashMap, VecDeque};
 use std::future::Future;
 use std::net::SocketAddr;

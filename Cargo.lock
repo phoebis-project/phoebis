@@ -446,7 +446,6 @@ dependencies = [
  "tokio",
  "tower",
  "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
@@ -495,7 +494,6 @@ dependencies = [
  "thiserror",
  "tokio",
  "tracing",
- "tracing-subscriber",
  "url",
 ]
 
@@ -992,6 +990,8 @@ dependencies = [
  "rcgen",
  "tokio",
  "tokio-boring",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

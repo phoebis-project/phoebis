@@ -31,6 +31,10 @@ pub const BACKOFF_CAP_MS: i64 = 15 * 60 * 1_000;
 /// ladder every further 429 waits `BACKOFF_CAP_MS`.
 const BACKOFF_LADDER_MS: [i64; 4] = [60_000, 120_000, 240_000, 480_000];
 
+/// The endpoint names a 429's warning and the held answer carry.
+const PROFILE_ENDPOINT: &str = "profile";
+const USAGE_ENDPOINT: &str = "usage";
+
 /// Top-level keys the 2.1.270 binary and the Management Center source use for the Fable weekly window,
 /// read only when `limits[]` is absent from the response.
 const FABLE_KEY_ALIASES: &[&str] = &["cinder_cove", "iguana_necktie"];
@@ -230,6 +234,8 @@ struct CachedEntry {
     /// leaves it equal to `fetched_at` so the ordinary cache TTL governs the next retry.
     not_before: i64,
     snapshot: UsageSnapshot,
+    /// The endpoint whose 429 armed the hold, named in the held answer.
+    held_by: &'static str,
     backoff_since: Option<i64>,
     last_clean_at: Option<i64>,
     last_outcome: PollOutcome,
@@ -239,17 +245,24 @@ struct CachedEntry {
 impl CachedEntry {
     /// Counts a 429 against the account: the ladder steps, a run starts unless one is under way, and the hold
     /// becomes the `Retry-After` asked for or else the ladder's step, never shorter than one already armed.
-    fn rate_limited(&mut self, account_id: &str, at: i64, retry_after: Option<i64>) {
+    fn rate_limited(
+        &mut self,
+        account_id: &str,
+        endpoint: &'static str,
+        at: i64,
+        retry_after: Option<i64>,
+    ) {
         self.rate_limited_in_a_row = self.rate_limited_in_a_row.saturating_add(1);
         self.backoff_since.get_or_insert(at);
         self.last_outcome = PollOutcome::RateLimited;
+        self.held_by = endpoint;
         let wait = retry_after.unwrap_or_else(|| ladder_step(self.rate_limited_in_a_row));
         self.not_before = self.not_before.max(at.saturating_add(wait));
         tracing::warn!(
             account = %account_id,
-            next_attempt_at = self.not_before,
+            next_attempt_at = %utc(self.not_before),
             retry_after_ms = ?retry_after,
-            "the usage endpoint rate-limited the account"
+            "the {endpoint} endpoint rate-limited the account"
         );
     }
 
@@ -258,12 +271,20 @@ impl CachedEntry {
     fn held_answer(&self) -> UsageSnapshot {
         UsageSnapshot {
             error: Some(format!(
-                "the usage endpoint rate-limited the account; next attempt at {}",
-                self.not_before
+                "the {} endpoint rate-limited the account; next attempt at {}",
+                self.held_by,
+                utc(self.not_before)
             )),
             ..self.snapshot.clone()
         }
     }
+}
+
+/// `at_ms` as the UTC time the console shows, or the raw milliseconds for one out of range.
+fn utc(at_ms: i64) -> String {
+    jiff::Timestamp::from_millisecond(at_ms)
+        .map(|at| at.strftime("%Y-%m-%d %H:%M:%S UTC").to_string())
+        .unwrap_or_else(|_| at_ms.to_string())
 }
 
 /// The ladder's wait for the `in_a_row`-th 429 in a row, counted from 1.
@@ -472,8 +493,12 @@ impl UsageService {
         let (head, body) =
             sent.map_err(|error| UsageError::Unavailable(format!("transport: {error}")))?;
         if head.status == 429 {
-            self.inner
-                .rate_limited(account_id, now, retry_after_ms(&head, now, BACKOFF_CAP_MS));
+            self.inner.rate_limited(
+                account_id,
+                PROFILE_ENDPOINT,
+                now,
+                retry_after_ms(&head, now, BACKOFF_CAP_MS),
+            );
             return Err(UsageError::Unavailable(
                 "profile request rate limited".into(),
             ));
@@ -608,17 +633,20 @@ impl Inner {
     ) -> FetchOutcome {
         let mut cache = self.cache.lock().expect(LOCK_POISONED);
         if generation_changed {
+            // A hold armed while this fetch was out still marks the answer, as on every other path.
+            let now = (self.clock)();
             return match cache.get(account_id) {
+                Some(entry) if now < entry.not_before => Ok(entry.held_answer()),
                 Some(entry) => Ok(entry.snapshot.clone()),
                 None => Err("account identity changed while fetching usage".to_string()),
             };
         }
         // A hold armed while this fetch was out belongs to the account rather than to the snapshot it is
         // stored beside, so replacing the entry never shortens it.
-        let held = cache
+        let (held, held_by) = cache
             .get(account_id)
-            .map(|entry| entry.not_before)
-            .unwrap_or(i64::MIN);
+            .map(|entry| (entry.not_before, entry.held_by))
+            .unwrap_or((i64::MIN, USAGE_ENDPOINT));
         match result {
             Ok(parsed) => {
                 let snapshot = UsageSnapshot {
@@ -638,6 +666,7 @@ impl Inner {
                         identity_generation: snapshot.identity_generation,
                         not_before: fetched_at.max(held),
                         snapshot: snapshot.clone(),
+                        held_by,
                         backoff_since: None,
                         last_clean_at: Some(fetched_at),
                         last_outcome: PollOutcome::Clean,
@@ -680,13 +709,14 @@ impl Inner {
                     identity_generation: snapshot.identity_generation,
                     not_before: fetched_at.max(held),
                     snapshot: snapshot.clone(),
+                    held_by,
                     backoff_since,
                     last_clean_at,
                     last_outcome: PollOutcome::Failed,
                     rate_limited_in_a_row,
                 };
                 if let Some(retry_after) = retry_after {
-                    entry.rate_limited(account_id, fetched_at, retry_after);
+                    entry.rate_limited(account_id, USAGE_ENDPOINT, fetched_at, retry_after);
                 }
                 cache.insert(account_id.to_string(), entry);
                 Ok(snapshot)
@@ -696,10 +726,16 @@ impl Inner {
 
     /// Counts a profile 429 against the account without touching the snapshot, so a usage fetch after this
     /// waits as a usage 429 would have made it wait.
-    fn rate_limited(&self, account_id: &str, at: i64, retry_after: Option<i64>) {
+    fn rate_limited(
+        &self,
+        account_id: &str,
+        endpoint: &'static str,
+        at: i64,
+        retry_after: Option<i64>,
+    ) {
         let mut cache = self.cache.lock().expect(LOCK_POISONED);
         match cache.get_mut(account_id) {
-            Some(entry) => entry.rate_limited(account_id, at, retry_after),
+            Some(entry) => entry.rate_limited(account_id, endpoint, at, retry_after),
             None => {
                 let generation = self.lifecycle_generation(account_id).unwrap_or_default();
                 let mut entry = CachedEntry {
@@ -712,12 +748,13 @@ impl Inner {
                         at,
                         "no usage fetched yet".into(),
                     ),
+                    held_by: endpoint,
                     backoff_since: None,
                     last_clean_at: None,
                     last_outcome: PollOutcome::RateLimited,
                     rate_limited_in_a_row: 0,
                 };
-                entry.rate_limited(account_id, at, retry_after);
+                entry.rate_limited(account_id, endpoint, at, retry_after);
                 cache.insert(account_id.to_string(), entry);
             }
         }
