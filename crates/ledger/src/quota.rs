@@ -162,9 +162,13 @@ struct Slot {
     in_flight: Option<tokio::task::Id>,
     /// The next attempt's instant, or the slot the attempt in flight was drawn at.
     at: Instant,
-    /// Attempts made on this slot's incarnation; the profile is read when it is a multiple of
-    /// `PROFILE_EVERY_POLLS`, the first attempt included.
+    /// Reads counted on this slot's incarnation, the startup step's among them for a slot the first pass
+    /// drew; an attempt made while the count is a multiple of `PROFILE_EVERY_POLLS` reads the profile, so a
+    /// new account's first attempt reads it and a first-pass slot's first attempt does not.
     polls: u32,
+    /// When the account was last read: the last attempt's dispatch, or the scheduler's start for a slot the
+    /// first pass drew, standing in for the startup step's read. `None` until a new account's first attempt.
+    last_read: Option<Instant>,
 }
 
 /// What an attempt answers the scheduler with: whose slot, drawn for which incarnation, and the wait the
@@ -176,9 +180,10 @@ struct Completion {
 }
 
 /// Draws the schedule again when the polled accounts differ from the ones it was drawn for: a pairing, a
-/// re-pairing or a delete re-spreads the phases, an attempt in flight keeps its slot, and a backoff that ends
-/// later than the phase keeps the service's time. The first pass follows the startup step, which has just read
-/// every account it lists, so those slots start an interval on with that read counted as their first poll.
+/// re-pairing or a delete re-spreads the phases, an attempt in flight keeps its slot, an account is not read
+/// again sooner than an interval after its last read, and a backoff that ends later keeps the service's time.
+/// The first pass follows the startup step, which has just read every account it lists, so those slots start
+/// an interval on with that read counted as their first poll.
 fn spread(
     slots: &mut BTreeMap<String, Slot>,
     rows: Vec<AccountRow>,
@@ -209,19 +214,21 @@ fn spread(
             in_flight: None,
             at: now,
             polls: u32::from(first_pass),
+            last_read: first_pass.then_some(now),
         });
         slot.account = account.clone();
         if slot.in_flight.is_none() {
-            let phase = QuotaPoll::phase(index, accounts.len());
-            let offset = if first_pass {
-                POLL_INTERVAL + phase
-            } else {
-                phase
-            };
-            slot.at = now
-                + usage
-                    .held_for(&account.id)
-                    .map_or(offset, |held| held.max(offset));
+            let mut at = now + QuotaPoll::phase(index, accounts.len());
+            if first_pass {
+                at += POLL_INTERVAL;
+            }
+            if let Some(read) = slot.last_read {
+                at = at.max(read + POLL_INTERVAL);
+            }
+            if let Some(held) = usage.held_for(&account.id) {
+                at = at.max(now + held);
+            }
+            slot.at = at;
         }
     }
 }
@@ -285,6 +292,7 @@ impl QuotaPoll {
                     }
                     let profile_due = slot.polls % PROFILE_EVERY_POLLS == 0;
                     slot.polls = slot.polls.wrapping_add(1);
+                    slot.last_read = Some(now);
                     let (account, incarnation) = (slot.account.clone(), slot.incarnation);
                     let (store, usage, ledger, router) =
                         (store.clone(), usage.clone(), ledger.clone(), router.clone());

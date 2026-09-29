@@ -413,8 +413,8 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         bound_seconds = config.routing.startup_fetch_seconds,
         "startup fetch finished"
     );
-    // Started only now: the startup step has just read every account, so the scheduler's first slots are
-    // phases from here. The ledger aborts it before its channel closes.
+    // Started only now: the startup step has just read every account, so the scheduler's first slots lie one
+    // interval plus their phase from here. The ledger aborts it before its channel closes.
     ledger.track(QuotaPoll::spawn(
         admin.store.clone(),
         admin.usage.clone(),

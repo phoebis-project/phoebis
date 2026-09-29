@@ -10,8 +10,8 @@ use tracing_subscriber::registry::LookupSpan;
 /// names the account.
 const CAPTURED_TARGETS: &[&str] = &["phoebis_ledger::", "phoebis_oauth::"];
 
-/// One formatted line per captured event, the span's own fields joined ahead of the event's, so a line
-/// carries the account id `debug_span!` attached without a second pass over the span stack.
+/// One formatted line per captured event, the enclosing spans' fields joined ahead of the event's, so a line
+/// carries what a span attached (an account id, say) without a second pass over the span stack.
 #[derive(Default)]
 struct Fields(String);
 
@@ -23,8 +23,8 @@ impl tracing::field::Visit for Fields {
 
 thread_local! {
     // A global subscriber's callsite interest is cached process-wide: a thread-local default installed only
-    // for this test would race every other test in the binary that also refreshes, some of which would win
-    // the cache with a subscriber that is not interested and silence this one's events for good. Routing
+    // for one test would race every other test in the binary, some of which would win the cache with a
+    // subscriber that is not interested and silence this one's events for good. Routing
     // through a thread-local sink instead of a thread-local default keeps the interest decision uncontested
     // (one global subscriber, always interested) while keeping every test's capture to its own thread.
     static SINK: std::cell::RefCell<Option<Arc<Mutex<Vec<String>>>>> = const { std::cell::RefCell::new(None) };

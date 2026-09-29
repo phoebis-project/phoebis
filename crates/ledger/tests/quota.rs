@@ -631,6 +631,51 @@ async fn an_empty_schedule_wakes_every_interval_and_polls_a_paired_account_witho
 }
 
 #[tokio::test]
+async fn a_pairing_re_spreads_the_slots_without_reading_an_account_again_within_its_interval() {
+    let up = FakeUpstream::start(vec![usage_rule(), profile_rule()]).await;
+    let h = harness_with_poll(
+        &up,
+        &[oauth("a", A, 0), oauth("c", OAUTH_C, 1)],
+        (0, None),
+        LedgerConfig::default(),
+    )
+    .await;
+    let paused = start_polling(&h, &up).await;
+    step_to(&h, &up, &paused, secs(302)).await;
+    assert_eq!((usage_asked(&up, A), usage_asked(&up, OAUTH_C)), (1, 0));
+
+    // Paired ten seconds after `a`'s read; `c`'s slot at 450 s makes the pass that re-spreads the three.
+    step_to(&h, &up, &paused, secs(310)).await;
+    pair(&h.store, "b", B);
+    step_to(&h, &up, &paused, secs(452)).await;
+    assert_eq!(
+        (usage_asked(&up, A), usage_asked(&up, B)),
+        (1, 0),
+        "the re-spread reads a no sooner than its interval, and b at its phase"
+    );
+    step_to(&h, &up, &paused, secs(598)).await;
+    assert_eq!(
+        (usage_asked(&up, A), usage_asked(&up, B)),
+        (1, 1),
+        "b read at its phase, 100 s after the pass"
+    );
+    step_to(&h, &up, &paused, secs(602)).await;
+    assert_eq!(
+        usage_asked(&up, A),
+        2,
+        "a read again an interval after its last read"
+    );
+    assert_eq!(
+        usage_asked(&up, OAUTH_C),
+        0,
+        "c's due slot took its new phase, 200 s after the pass"
+    );
+    step_to(&h, &up, &paused, secs(652)).await;
+    assert_eq!(usage_asked(&up, OAUTH_C), 1);
+    up.shutdown().await;
+}
+
+#[tokio::test]
 async fn a_registry_read_that_fails_keeps_the_schedule_and_logs() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("router.sqlite");
