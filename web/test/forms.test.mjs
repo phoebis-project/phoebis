@@ -325,6 +325,13 @@ test('a pool refusal names the group its control sits in', () => {
   for (const [patch, expected] of cases) assert.deepEqual(d.poolRefusals({ ...input, ...patch }, accounts), expected, JSON.stringify(patch));
 });
 
+test('the Probe tuning rows lay out every numeric keepalive bound but the grace count, in the order the refusals read', () => {
+  assert.deepEqual(d.PROBE_TUNING_ROWS, [['leadSeconds5m', 'leadSeconds1h'], ['jitterSeconds5m', 'jitterSeconds1h'], ['coldProbeLimit'], ['retrySeconds', 'retryMaxSeconds'], ['maxIdleSeconds', 'maxIdleTicks']]);
+  assert.deepEqual(d.PROBE_TUNING_KEYS, d.PROBE_TUNING_ROWS.flat(), 'the refusals walk the fields in the order the group draws them');
+  // A numeric keepalive field added later gets a bound from KEEPALIVE_BOUNDS; this keeps it from escaping the refusals.
+  assert.deepEqual([...d.PROBE_TUNING_KEYS, 'netNegativeGraceProbes'].sort(), Object.keys(d.KEEPALIVE_BOUNDS).sort());
+});
+
 test("refusals come in rail order, a new pool's first two the name and the member", () => {
   const refusals = d.poolRefusals({ ...input, name: '', members: [], modelRules: rules('a***'), quotaHeaders: 'strip' }, accounts);
   assert.deepEqual(

@@ -504,8 +504,9 @@ async function poolRoutingCards(theme) {
   await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => say('the dialog stayed open after Escape'));
 }
 
-/** The pool dialog's groups in rail order, each with the switches whose dependents the geometry pass turns off. */
+/** The pool dialog's groups in rail order. */
 const POOL_GROUP_LABELS = ['Identity', 'Members', 'Keys', 'Models', 'Selection', 'Placement', 'Pinning', 'Utilization thresholds', 'Load shedding', 'Failover', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Probe tuning', 'Response headers', 'Body capture', 'Cache diagnostics'];
+/** Per group, the switches whose dependents the geometry pass turns off, and the controls that must go disabled. */
 const POOL_DEPENDENTS = {
   'Body capture': [{ switch: 'Capture request and response bodies', controls: ['input[aria-label="Capture retention in hours"]'] }],
   'Cache TTL': [{ switch: 'Set the cache TTL for this pool', controls: ['button[role="switch"][aria-label="Add a cache marker to a request without one"]', '.ttl-grid select', '[data-rule-set] select', '[data-rule-set] button'] }],
@@ -582,6 +583,7 @@ async function poolDialogGeometry(theme) {
           const half = child.classList.contains('cell--half');
           const expected = half && column === 1 ? second : box.left;
           if (!near(at.left, expected)) found.push(`${name(child)} starts at ${at.left}, not ${expected}`);
+          if (!half && !near(at.width, box.width)) found.push(`${name(child)} is ${at.width} px wide, not the ${box.width} px of both columns`);
           if (at.right > contentRight + 1) found.push(`${name(child)} ends at ${at.right}, past the body's ${contentRight}`);
           column = half && column === 0 ? 1 : 0;
         }

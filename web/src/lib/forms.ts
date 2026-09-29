@@ -115,8 +115,10 @@ export const KEEPALIVE_FIELD_LABELS: Record<NumericKeepaliveKey, string> = {
   retrySeconds: 'Retry backoff base (s)',
 };
 
-/** The Probe tuning group's fields in the order it lays them out, so its refusals read in that order too. */
-export const PROBE_TUNING_KEYS = ['leadSeconds5m', 'leadSeconds1h', 'jitterSeconds5m', 'jitterSeconds1h', 'coldProbeLimit', 'retrySeconds', 'retryMaxSeconds', 'maxIdleSeconds', 'maxIdleTicks'] as const satisfies readonly NumericKeepaliveKey[];
+/** The Probe tuning group's rows as the dialog lays them out: a related pair, or a field alone. */
+export const PROBE_TUNING_ROWS = [['leadSeconds5m', 'leadSeconds1h'], ['jitterSeconds5m', 'jitterSeconds1h'], ['coldProbeLimit'], ['retrySeconds', 'retryMaxSeconds'], ['maxIdleSeconds', 'maxIdleTicks']] as const satisfies readonly (readonly NumericKeepaliveKey[])[];
+/** The same fields in the rows' order, so the refusals read in the order the group draws them. */
+export const PROBE_TUNING_KEYS: readonly NumericKeepaliveKey[] = PROBE_TUNING_ROWS.flat();
 
 /** A bound's sentence: a field with no practical ceiling states its floor alone. */
 const boundText = (label: string, { max, min }: { max: number; min: number }) =>

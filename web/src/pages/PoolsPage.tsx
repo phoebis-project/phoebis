@@ -17,7 +17,7 @@ import { UtilizationBar } from '@/components/UtilizationBar';
 import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, ErrorState, Field, GroupedDialog, GroupLink, Input, Menu, PageLink, Select, Skeleton, SwitchedNumber, Toast, Toggle, type DialogGroup } from '@/components/ui/primitives';
 import { fmtAbsolute, fmtCompact, fmtHourTick, fmtInt, fmtPct, fmtPeriodEnd, fmtRelative, fmtUsd } from '@/lib/format';
-import { ENGINE_BOUNDS, ENGINE_FIELD_LABELS, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_LABELS, POOL_GROUPS, poolRefusals, type PoolGroup } from '@/lib/forms';
+import { ENGINE_BOUNDS, ENGINE_FIELD_LABELS, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_LABELS, POOL_GROUPS, PROBE_TUNING_ROWS, bandRefusal, poolRefusals, type PoolGroup } from '@/lib/forms';
 import { useAsync, useNow } from '@/lib/hooks';
 import { FAILOVER_PRESETS, SHEDDING_PRESETS, failoverPresetOf, sheddingPresetOf, shedPreview, shedPreviewLine, type FailoverPreset, type SheddingPreset } from '@/lib/presets';
 import { windowOf } from '@/lib/quota';
@@ -42,34 +42,22 @@ const OVERAGE_CHOICES: { body: string; title: string; value: OveragePolicy }[] =
   { value: 'allow', title: 'Allow', body: 'ignore extra usage' },
   { value: 'never', title: 'Never', body: 'treat an upstream in extra usage as unavailable until its window resets' },
 ];
-// The Probe tuning group's rows in reading order: a related pair shares one hint below it, a lone field carries its own.
-const PROBE_ROWS: { hint: ReactNode; keys: [NumericTuningKey] | [NumericTuningKey, NumericTuningKey] }[] = [
-  {
-    keys: ['leadSeconds5m', 'leadSeconds1h'],
-    hint: 'How long before an entry expires its probe is due. The lead covers the round trip and the jitter; the 1-hour lead also leaves room for a retry, since a missed refresh costs a full 1-hour write.',
-  },
-  {
-    keys: ['jitterSeconds5m', 'jitterSeconds1h'],
-    hint: 'Random seconds taken off each due time, so sessions that started together do not probe at the same instant; wider for 1-hour entries, whose due times cluster on the hour.',
-  },
-  {
-    keys: ['coldProbeLimit'],
-    hint: (
-      <>
-        Probes in a row that find the cache already gone, after which the session&apos;s probes pause until its next real request. A cold probe rewrites the entry, so a streak also pulls the <GroupLink id="keepalive">net</GroupLink> down; a probe that moved the session does not count.
-      </>
-    ),
-  },
-  { keys: ['retrySeconds', 'retryMaxSeconds'], hint: 'After a failed probe the wait starts at the base and doubles up to the max, so a long outage settles into a steady retry.' },
-  {
-    keys: ['maxIdleSeconds', 'maxIdleTicks'],
-    hint: (
-      <>
-        Stop probing once this long, or this many probes, passes without a real request: for the main agent while its companion reports, for every agent once the companion falls silent. 0 turns a limit off. The <PageLink to="/sessions">Sessions page</PageLink> shows each companion&apos;s state.
-      </>
-    ),
-  },
-];
+// A pair's hint sits below both fields and a lone field carries its own, keyed by the row's first field.
+const PROBE_HINT: Record<(typeof PROBE_TUNING_ROWS)[number][0], ReactNode> = {
+  coldProbeLimit: (
+    <>
+      Probes in a row that find the cache already gone, after which the session&apos;s probes pause until its next real request. A cold probe rewrites the entry, so a streak also pulls the <GroupLink id="keepalive">net</GroupLink> down; a probe that moved the session does not count.
+    </>
+  ),
+  jitterSeconds5m: 'Random seconds taken off each due time, so sessions that started together do not probe at the same instant; wider for 1-hour entries, whose due times cluster on the hour.',
+  leadSeconds5m: 'How long before an entry expires its probe is due. The lead covers the round trip and the jitter; the 1-hour lead also leaves room for a retry, since a missed refresh costs a full 1-hour write.',
+  maxIdleSeconds: (
+    <>
+      Stop probing once this long, or this many probes, passes without a real request: for the main agent while its companion reports, for every agent once the companion falls silent. 0 turns a limit off. The <PageLink to="/sessions">Sessions page</PageLink> shows each companion&apos;s state.
+    </>
+  ),
+  retrySeconds: 'After a failed probe the wait starts at the base and doubles up to the max, so a long outage settles into a steady retry.',
+};
 const labelOf = (accountById: Map<string, Account>, id: string) => accountById.get(id)?.label ?? id;
 /** Members first, lowest priority number first, then alphabetically; non-members trail alphabetically. */
 const orderedAccountIds = (accounts: Account[], members: Record<string, number>): string[] =>
@@ -1012,7 +1000,8 @@ export function PoolDialog({
   const pickFailover = (name: FailoverPreset) =>
     setForm((f) => (name === 'custom' ? { ...f, failoverCustom: true } : { ...f, engine: { ...f.engine, ...FAILOVER_PRESETS[name] }, failoverCustom: false }));
   const rulesRefusal = refusalOf('Model rules');
-  const band = refusalOf('Select below utilization (%)');
+  // The band's own sentence alone: a select-below out of its range reads in the footer and on the rail.
+  const band = bandRefusal(input);
   const prefixRefusal = refusalOf('Minimum shared prefix, tokens');
   const budgetRefusal = refusals.find((r) => r.field.startsWith('budget:'));
   const budgetRefused = budgetRefusal && { label: accounts.find((a) => `budget:${a.id}` === budgetRefusal.field)?.label ?? budgetRefusal.field, refusal: budgetRefusal.text };
@@ -1770,14 +1759,14 @@ export function PoolDialog({
     ),
     probeTuning: (
       <div className="cells">
-        {PROBE_ROWS.map(({ hint, keys: [left, right] }) =>
-          right === undefined ? (
-            probeField(left, undefined, hint)
+        {PROBE_TUNING_ROWS.map((keys) =>
+          keys.length === 1 ? (
+            probeField(keys[0], undefined, PROBE_HINT[keys[0]])
           ) : (
-            <Fragment key={left}>
-              {probeField(left, 'cell--half')}
-              {probeField(right, 'cell--half')}
-              <p className="field__hint">{hint}</p>
+            <Fragment key={keys[0]}>
+              {probeField(keys[0], 'cell--half')}
+              {probeField(keys[1], 'cell--half')}
+              <p className="field__hint">{PROBE_HINT[keys[0]]}</p>
             </Fragment>
           ),
         )}

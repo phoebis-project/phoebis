@@ -874,7 +874,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
   const dlg = m.container.querySelector('dialog[open]');
   const t = dlg?.textContent ?? '';
   expect('/pools edit dialog prefilled', t, ['Edit pool all', 'Name', 'Status', 'Strategy', 'Session affinity', 'How long a session stays on its upstream after its last request; off keeps no pins, and a custom value is at least 60 seconds.', 'off', '5m', '10m', '1h', '4h', 'custom', 'Migrate above utilization', 'Prefer plan quota:', 'move sessions to a sibling with plan quota when this upstream starts billing extra usage', 'Allow:', 'ignore extra usage', 'Never:', 'treat an upstream in extra usage as unavailable until its window resets', 'Keep prompt caches warm', 'Daily probe cost cap ($)', 'Per UTC day, for probes paid in dollars: on API-key upstreams, on subscription upstreams in overage, and on models the plan table lacks. Plan-funded probes do not count here.', 'Cost reference', 'Probe tuning', 'Members', 'Priority', 'Keys', 'Create key', 'desktop', 'laptop', 'phoebis-8f2a', 'active', "A key reaches only this pool's members. Create key, Move to and Revoke apply at once, without Save pool; rotation and expiry are on the API keys page", 'Save pool', 'Model rules', 'Allow', 'Deny', 'Add rule', 'written with a trailing *']);
-  const nameInput = dlg?.querySelector('input[placeholder="research"]');
+  const nameInput = group(dlg, 'Identity')?.querySelector('input[placeholder="research"]');
   results.push({ name: '/pools edit dialog name prefilled', ok: nameInput?.value === 'all', missing: [nameInput?.value] });
   const keysMulti = [...(dlg?.querySelectorAll('.mselect__trigger') ?? [])].map((b) => b.textContent?.trim()).filter((x) => x?.startsWith('Keys'));
   results.push({ name: '/pools keys section is not a multi-select', ok: keysMulti.length === 0, missing: keysMulti });
@@ -1012,18 +1012,35 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
 
   // The toggle is the operator's alone: no strategy forces it, so switching strategies never touches it.
   {
-    const strategy = dlg?.querySelector('select[aria-label="Strategy"]');
-    const toggle = dlg?.querySelector('[role="switch"][aria-label="Prioritize subscription upstreams"]');
+    const selection = group(dlg, 'Selection');
+    const strategy = selection?.querySelector('select[aria-label="Strategy"]');
+    const toggle = selection?.querySelector('[role="switch"][aria-label="Prioritize subscription upstreams"]');
     const options = [...(strategy?.querySelectorAll('option') ?? [])].map((o) => o.textContent?.trim());
     results.push({ name: '/pools the strategy select lists Pace, Priority, then random, and Round robin', ok: JSON.stringify(options) === JSON.stringify(['Pace', 'Priority, then random', 'Round robin']), missing: options });
-    strategy.value = 'round_robin';
-    strategy.dispatchEvent(new window.Event('change', { bubbles: true }));
-    await m.settle(150);
+    const choose = async (value) => {
+      if (!strategy) return;
+      strategy.value = value;
+      strategy.dispatchEvent(new window.Event('change', { bubbles: true }));
+      await m.settle(150);
+    };
+    // The card's rule line is the first sentence of the dialog's Strategy hint, so the two cannot drift apart. Each
+    // strategy is read on the card of a pool that holds it.
+    const hint = () => [...(selection?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === 'Strategy')?.querySelector('.field__hint')?.textContent ?? '';
+    const cardRule = (label) =>
+      [...m.container.querySelectorAll('.pool')]
+        .find((c) => [...c.querySelectorAll('.pool__policy > div')].some((d) => d.querySelector('dt')?.textContent?.trim() === 'Strategy' && (d.querySelector('dd')?.textContent ?? '').trim().startsWith(label)))
+        ?.querySelector('.selection-order__rule')?.textContent ?? null;
+    const drift = [];
+    for (const option of [...(strategy?.options ?? [])]) {
+      await choose(option.value);
+      const rule = cardRule(option.textContent?.trim() ?? '');
+      if (!rule || !hint().startsWith(rule)) drift.push(`${option.value}: card ${JSON.stringify(rule)}, hint ${JSON.stringify(hint().slice(0, 80))}`);
+    }
+    results.push({ name: "/pools the Strategy hint opens with the card's rule for each strategy", ok: (strategy?.options.length ?? 0) === 3 && drift.length === 0, missing: drift });
+    await choose('round_robin');
     results.push({ name: '/pools switching strategies leaves the toggle enabled', ok: toggle?.disabled === false, missing: [toggle?.outerHTML.slice(0, 120) ?? 'absent'] });
     // Back to the stored strategy: this dialog stays open for the checks below, which read the pool as it is saved.
-    strategy.value = 'pace';
-    strategy.dispatchEvent(new window.Event('change', { bubbles: true }));
-    await m.settle(150);
+    await choose('pace');
   }
 
   // Affinity: 10m is a preset chip, custom enables the seconds input drawn beside the chips.
@@ -1212,6 +1229,23 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
         percent()?.getAttribute('max') === '100' &&
         (util?.textContent ?? '').includes('A fresh pick passes over members at or above this 5-hour utilization, unless every member is. With both lines on, it sits at least 5% under the migrate line.'),
       missing: [percent()?.value ?? 'absent', String(percent()?.disabled), percent()?.getAttribute('min') ?? '', percent()?.getAttribute('max') ?? ''],
+    });
+    // The callout under the bar is the band's; a select-below out of its range reads in the footer and on the rail.
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+    const type = async (value) => {
+      if (!percent()) return;
+      setter.call(percent(), value);
+      percent().dispatchEvent(new window.Event('input', { bubbles: true }));
+      await m.settle(120);
+    };
+    await type('120');
+    const status = dlg?.querySelector('.dialog__status')?.textContent ?? '';
+    const outOfRange = [util?.querySelector('.callout--critical')?.textContent ?? null, status, !!rail(dlg, 'utilization')?.querySelector('.dialog-rail__dot')];
+    await type('80');
+    results.push({
+      name: '/pools a select-below out of range holds the save from the footer and leaves the band callout to the band',
+      ok: outOfRange[0] === null && outOfRange[1] === 'Save is held: Select below utilization is from 0 to 100.Go to Utilization thresholds' && outOfRange[2] === true,
+      missing: outOfRange.map(String),
     });
     selectSwitch?.click();
     await m.settle(120);
@@ -1664,7 +1698,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
   await m.settle(300);
   const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
   // The dialog sends the toggle on every save, so it has to start where the route seeds a new pool.
-  const prefer = dlg?.querySelector('[role="switch"][aria-label="Prioritize subscription upstreams"]');
+  const prefer = group(dlg, 'Selection')?.querySelector('[role="switch"][aria-label="Prioritize subscription upstreams"]');
   results.push({
     name: '/pools create dialog starts with subscription upstreams prioritized',
     ok: prefer?.getAttribute('aria-checked') === 'true',
@@ -1673,7 +1707,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
   const status = () => dlg?.querySelector('.dialog__status');
   const goTo = () => [...(status()?.querySelectorAll('button') ?? [])].map((b) => b.textContent?.trim());
   const unnamed = [status()?.textContent ?? '', JSON.stringify(goTo())];
-  const nameInput = dlg?.querySelector('input[placeholder="research"]');
+  const nameInput = group(dlg, 'Identity')?.querySelector('input[placeholder="research"]');
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
   setter.call(nameInput, 'draft');
   nameInput?.dispatchEvent(new window.Event('input', { bubbles: true }));
