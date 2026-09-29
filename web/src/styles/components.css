@@ -1037,18 +1037,19 @@ textarea.input {
   max-height: none;
 }
 
+/* The rail's 220 px, less its border, its 9 px sides and a row's 10 px sides, leave a group label 181 px: room for
+   the widest label chosen at weight 600 with its refusal dot, so no rail row wraps. */
 .dialog__rail-split {
   display: grid;
   flex: 1 1 auto;
-  grid-template-columns: 184px minmax(0, 1fr);
+  grid-template-columns: 220px minmax(0, 1fr);
   min-height: 0;
   overflow: hidden;
   border-top: 1px solid var(--hairline);
 }
 
-/* Sized so the pool dialog's 22 entries fit the rail at 1280 by 800 (about 624 px) with room: 17 group rows of
-   24.25 px, 5 parent rows of 19.75 px, 2 px inside a run, 8 px between runs and 8 px of padding sum to 593 px. The
-   9 px sides leave a group label 145 px, which holds "Overage and plan end" on one line, so no row wraps. */
+/* Sized so the pool dialog's 22 entries fit the rail's 623 px at 1280 by 800 with room: 17 group rows of 24.25 px,
+   5 parent rows of 19.75 px, 2 px inside a run, 8 px between runs and 8 px of padding sum to 593 px. */
 .dialog-rail {
   display: flex;
   flex-direction: column;

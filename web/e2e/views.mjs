@@ -179,39 +179,71 @@ async function advance(ms) {
 
 /**
  * The grouped dialog on a mock-only fixture that carries the pool dialog's seventeen groups under five parents: the
- * frame keeps its fixed size and the rail holds all 22 entries without scrolling at the pass's viewport. The numbers
- * go to the measurements whatever the outcome, since the rail's fit is argued from row heights the browser decides.
+ * frame keeps its fixed size, no rail row wraps and the rail holds all 22 entries without scrolling at the pass's
+ * viewport. The two longest labels are read chosen, refused, and both, since the chosen weight and the refusal dot
+ * widen an entry. The numbers go to the measurements whatever the outcome, since the rail's fit rests on text widths
+ * the browser's font decides.
  */
 async function groupedDialogFixture(theme) {
   const say = (what) => failures.push(`${theme} /fixtures/grouped-dialog: ${what}`);
-  await page.goto(`${base}/fixtures/grouped-dialog`);
-  await booted();
-  await advance(LOAD_MS);
-  try {
+  const load = async (query) => {
+    await page.goto(`${base}/fixtures/grouped-dialog${query}`);
+    await booted();
+    await advance(LOAD_MS);
     await page.waitForSelector('dialog[open] .dialog-rail', { timeout: 15_000 });
-  } catch {
-    say('dialog[open] .dialog-rail never appeared');
-    return;
+    const applied = await page.evaluate(() => document.documentElement.getAttribute('data-theme'));
+    if (applied !== theme) say(`data-theme is ${applied}`);
+  };
+  const choose = async (id) => {
+    await page.locator(`.dialog-rail__group[data-group="${id}"]`).click();
+    await settle();
+  };
+  const check = async (state) => {
+    const read = await page.evaluate(() => {
+      const dialog = document.querySelector('dialog[open]');
+      const rail = dialog.querySelector('.dialog-rail');
+      const box = dialog.getBoundingClientRect();
+      // scrollHeight never reads under clientHeight, so the entries' own height is taken from the last run's edge.
+      const runs = rail.querySelectorAll('.dialog-rail__run');
+      const last = runs[runs.length - 1];
+      const entries = last ? last.getBoundingClientRect().bottom - rail.getBoundingClientRect().top + parseFloat(getComputedStyle(rail).paddingBottom) : null;
+      const wrapped = [...rail.querySelectorAll('button')]
+        .filter((b) => {
+          const style = getComputedStyle(b);
+          return b.getBoundingClientRect().height > parseFloat(style.lineHeight) + parseFloat(style.paddingTop) + parseFloat(style.paddingBottom) + 0.5;
+        })
+        .map((b) => b.querySelector('.dialog-rail__label')?.textContent);
+      return {
+        frame: { height: box.height, width: box.width },
+        groups: rail.querySelectorAll('.dialog-rail__group').length,
+        parents: rail.querySelectorAll('.dialog-rail__parent').length,
+        rail: { clientHeight: rail.clientHeight, entries, scrollHeight: rail.scrollHeight, width: rail.getBoundingClientRect().width },
+        wrapped,
+      };
+    });
+    measurements.push(`${theme} /fixtures/grouped-dialog ${state} ${JSON.stringify(read)}`);
+    const sayIn = (what) => say(`${state}: ${what}`);
+    if (read.frame.width !== 1040 || read.frame.height !== 752) sayIn(`the frame measures ${read.frame.width} by ${read.frame.height}, not 1040 by 752`);
+    if (read.groups !== 17 || read.parents !== 5) sayIn(`the rail draws ${read.groups} groups under ${read.parents} parents, not 17 under 5`);
+    if (read.wrapped.length) sayIn(`${read.wrapped.join(', ')} wraps onto a second line`);
+    if (read.rail.scrollHeight > read.rail.clientHeight) sayIn(`the rail scrolls: ${read.rail.scrollHeight} px of entries in ${read.rail.clientHeight} px`);
+  };
+  try {
+    await load('');
+    await check('Identity chosen');
+    await choose('overage-and-plan-end');
+    await check('Overage and plan end chosen');
+    await choose('utilization-thresholds');
+    await check('Utilization thresholds chosen');
+    await load('?refused=overage-and-plan-end,utilization-thresholds');
+    await check('Identity chosen, both refused');
+    await choose('overage-and-plan-end');
+    await check('Overage and plan end chosen, both refused');
+    await choose('utilization-thresholds');
+    await check('Utilization thresholds chosen, both refused');
+  } catch (error) {
+    say(error instanceof Error ? error.message : String(error));
   }
-  const read = await page.evaluate(() => {
-    const dialog = document.querySelector('dialog[open]');
-    const rail = dialog.querySelector('.dialog-rail');
-    const box = dialog.getBoundingClientRect();
-    // scrollHeight never reads under clientHeight, so the entries' own height is taken from the last run's edge.
-    const runs = rail.querySelectorAll('.dialog-rail__run');
-    const last = runs[runs.length - 1];
-    const entries = last ? last.getBoundingClientRect().bottom - rail.getBoundingClientRect().top + parseFloat(getComputedStyle(rail).paddingBottom) : null;
-    return {
-      frame: { height: box.height, width: box.width },
-      groups: rail.querySelectorAll('.dialog-rail__group').length,
-      parents: rail.querySelectorAll('.dialog-rail__parent').length,
-      rail: { clientHeight: rail.clientHeight, entries, scrollHeight: rail.scrollHeight },
-    };
-  });
-  measurements.push(`${theme} /fixtures/grouped-dialog ${JSON.stringify(read)}`);
-  if (read.frame.width !== 1040 || read.frame.height !== 752) say(`the frame measures ${read.frame.width} by ${read.frame.height}, not 1040 by 752`);
-  if (read.groups !== 17 || read.parents !== 5) say(`the rail draws ${read.groups} groups under ${read.parents} parents, not 17 under 5`);
-  if (read.rail.scrollHeight > read.rail.clientHeight) say(`the rail scrolls: ${read.rail.scrollHeight} px of entries in ${read.rail.clientHeight} px`);
 }
 
 async function poolChips(theme) {

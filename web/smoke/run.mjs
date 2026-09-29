@@ -4154,15 +4154,15 @@ m.unmount();
 
 // Fixtures mounted alone pin the grouped dialog's contract apart from any one page's form.
 {
-  const { createElement: h, useState } = React;
-  function Fixture({ hold = null, refused = false, status = 'Every group saves together.' }) {
+  const { createElement: h, Fragment, useEffect, useState } = React;
+  function Fixture({ held, hold = null, refused = false, status = 'Every group saves together.' }) {
     const [chosen, setChosen] = useState('one');
     const groups = [
       { id: 'one', label: 'One', parent: 'First', body: h(Field, { label: 'A' }, h(Input, { 'aria-label': 'A' })) },
       { id: 'two', label: 'Two', parent: 'First', refused, body: h(Field, { label: 'B' }, h(Input, { 'aria-label': 'B', 'aria-invalid': refused ? true : undefined })) },
       { id: 'three', label: 'Three', parent: 'Second', body: h('p', { className: 'field__hint' }, h(GroupLink, { id: 'one' }, 'One'), ' ', h(PageLink, { to: '/pools' }, 'Pools page')) },
     ];
-    return h(GroupedDialog, { chosen, footer: h('button', { type: 'button' }, 'Save'), groups, hold, onChoose: setChosen, onClose() {}, open: true, railLabel: 'Fixture settings', status, title: 'Fixture' });
+    return h(GroupedDialog, { chosen, footer: h('button', { type: 'button' }, 'Save'), groups, held, hold, onChoose: setChosen, onClose() {}, open: true, railLabel: 'Fixture settings', status, title: 'Fixture' });
   }
   const texts = (root, selector) => [...root.querySelectorAll(selector)].map((el) => el.textContent?.trim() ?? '');
   const attrs = (root, selector, name) => [...root.querySelectorAll(selector)].map((el) => el.getAttribute(name));
@@ -4187,9 +4187,10 @@ m.unmount();
       ok: shown(c) === 'Two' && group(c, 'two')?.getAttribute('aria-current') === 'true' && !group(c, 'one')?.hasAttribute('aria-current') && heading(c, 'Two') !== null && document.activeElement === heading(c, 'Two'),
       missing: [`shown ${shown(c)}`, `focus ${focused()}`],
     });
-    c.querySelector('.dialog-rail__parent[data-parent="Second"]')?.click();
+    // Two, the second of First's groups, is chosen here, so landing on One tells the first group from the last.
+    c.querySelector('.dialog-rail__parent[data-parent="First"]')?.click();
     await f.settle(100);
-    results.push({ name: 'grouped dialog: a parent heading chooses its first group', ok: shown(c) === 'Three', missing: [`shown ${shown(c)}`] });
+    results.push({ name: 'grouped dialog: a parent heading chooses its first group', ok: shown(c) === 'One', missing: [`shown ${shown(c)}`] });
     group(c, 'three')?.click();
     await f.settle(100);
     [...c.querySelectorAll('button.link-btn')].find((b) => b.textContent?.trim() === 'One')?.click();
@@ -4231,15 +4232,54 @@ m.unmount();
   }
   f.unmount();
 
+  f = await mountNode(h(Fixture, { held: true, status: 'The server refused the save.' }));
+  {
+    const status = f.container.querySelector('[role="status"]');
+    results.push({ name: 'grouped dialog: an explicit held sets the refusal tone with no group to go to', ok: Boolean(status?.classList.contains('is-held')) && !status?.querySelector('button'), missing: [status?.outerHTML?.slice(0, 160) ?? 'no status line'] });
+  }
+  f.unmount();
+
+  // The page resets the chosen group in its own open effect, which React runs after the dialog's.
+  function Reopened() {
+    const [open, setOpen] = useState(true);
+    const [chosen, setChosen] = useState('one');
+    useEffect(() => {
+      if (open) setChosen('one');
+    }, [open]);
+    const groups = [
+      { id: 'one', label: 'One', body: h('p', null, 'first') },
+      { id: 'two', label: 'Two', body: h('p', null, 'second') },
+    ];
+    return h(Fragment, null, h('button', { type: 'button', className: 'reopen', onClick: () => setOpen((v) => !v) }, 'Toggle'), h(GroupedDialog, { chosen, groups, onChoose: setChosen, onClose: () => setOpen(false), open, railLabel: 'Reopen settings', status: '', title: 'Reopen' }));
+  }
+  f = await mountNode(h(Reopened));
+  {
+    const c = f.container;
+    const toggle = c.querySelector('button.reopen');
+    group(c, 'two')?.click();
+    await f.settle(100);
+    toggle?.click();
+    await f.settle(100);
+    toggle?.focus();
+    toggle?.click();
+    await f.settle(100);
+    results.push({ name: "grouped dialog: reopening under the page's reset to the first group leaves focus where it was", ok: shown(c) === 'One' && toggle !== null && document.activeElement === toggle, missing: [`shown ${shown(c)}`, `focus ${focused()}`] });
+  }
+  f.unmount();
+
   function Switched({ disabled, initial = false }) {
     const [checked, setChecked] = useState(initial);
-    return h(SwitchedNumber, { checked, disabled, input: { 'aria-label': 'Cap amount', value: 5, onChange() {} }, label: 'Cap', numberLabel: 'Amount', onChange: setChecked });
+    // The caller's own `disabled: false` must lose to the switch's gate.
+    return h(SwitchedNumber, { checked, disabled, input: { 'aria-label': 'Cap amount', disabled: false, value: 5, onChange() {} }, label: 'Cap', numberLabel: 'Amount', onChange: setChecked });
   }
   const parts = (c) => ({ input: c.querySelector('input[aria-label="Cap amount"]'), toggle: c.querySelector('button[role="switch"]') });
   f = await mountNode(h(Switched));
   {
     const c = f.container;
     const off = parts(c).input?.disabled === true;
+    const control = c.querySelector('.field--beside .field__control');
+    results.push({ name: 'grouped dialog: a beside field draws its control before its label', ok: control?.firstElementChild?.getAttribute('role') === 'switch' && Boolean(control?.lastElementChild?.classList.contains('field__label')), missing: [control?.innerHTML?.slice(0, 160) ?? 'no beside field'] });
+    results.push({ name: 'grouped dialog: a disabled the caller puts on the number cannot reopen it while the switch is off', ok: off, missing: [`number disabled ${parts(c).input?.disabled}`] });
     parts(c).toggle?.click();
     await f.settle(100);
     const on = parts(c).input?.disabled === false;
@@ -4264,7 +4304,7 @@ m.unmount();
   }
   f.unmount();
 
-  f = await mountNode(h(Field, { label: 'A', hint: 'Below', 'data-rule-set': 'plan', title: 'root' }, h(Input, { 'aria-label': 'A' })));
+  f = await mountNode(h(Fragment, null, h(Field, { className: 'extra', 'data-rule-set': 'plan', hint: 'Below', label: 'A', title: 'root' }, h(Input, { 'aria-label': 'A' })), h(Field, { label: 'P', plain: true }, h(Input, { 'aria-label': 'P' }))));
   {
     const root = f.container.querySelector('.field[data-rule-set="plan"]');
     const hint = root?.querySelector('.field__hint');
@@ -4273,6 +4313,9 @@ m.unmount();
       ok: root?.getAttribute('title') === 'root' && root?.querySelector('.field__label')?.textContent === 'A' && hint?.tagName === 'DIV' && hint?.textContent === 'Below',
       missing: [f.container.innerHTML.slice(0, 200)],
     });
+    results.push({ name: "grouped dialog: a field keeps its own classes beside a caller's className", ok: Boolean(root?.classList.contains('field')) && Boolean(root?.classList.contains('extra')), missing: [root?.className ?? 'no field'] });
+    const plain = [...f.container.querySelectorAll('.field')].find((el) => el.querySelector('.field__label')?.textContent === 'P');
+    results.push({ name: 'grouped dialog: a plain field frames its control in a div', ok: plain?.querySelector('.field__control')?.tagName === 'DIV' && root?.querySelector('.field__control')?.tagName === 'LABEL', missing: [plain?.outerHTML?.slice(0, 160) ?? 'no plain field'] });
   }
   f.unmount();
 }

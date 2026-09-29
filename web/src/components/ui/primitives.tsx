@@ -427,32 +427,29 @@ export function GroupedDialog({
   const titleId = useId();
   const bodyRef = useRef<HTMLDivElement>(null);
   const sections = useRef(new Map<string, HTMLElement>());
-  const seen = useRef<string | null>(null);
-  const target = useRef<'heading' | 'refused'>('heading');
-  const focusIn = (id: string) => {
+  // A choice made through the rail, a hint link or Go to, waiting for the page to show its group.
+  const pending = useRef<{ focus: 'heading' | 'refused'; id: string } | null>(null);
+  const focusIn = (id: string, focus: 'heading' | 'refused') => {
     const section = sections.current.get(id);
-    const control = target.current === 'refused' ? section?.querySelector<HTMLElement>('[aria-invalid="true"]') : null;
+    const control = focus === 'refused' ? section?.querySelector<HTMLElement>('[aria-invalid="true"]') : null;
     (control ?? section?.querySelector<HTMLElement>('.dialog-group__title'))?.focus();
-    target.current = 'heading';
   };
   const choose = (id: string, focus: 'heading' | 'refused' = 'heading') => {
-    target.current = focus;
-    if (id === chosen) focusIn(id);
-    else onChoose(id);
-  };
-  // The open itself leaves focus where the browser put it, so a field's autoFocus still wins; every later choice
-  // scrolls the body back to the top and lands on the group's heading, or on its refused control for Go to.
-  useEffect(() => {
-    if (!open) {
-      seen.current = null;
+    if (id === chosen) {
+      focusIn(id, focus);
       return;
     }
-    const first = seen.current === null;
-    if (seen.current === chosen) return;
-    seen.current = chosen;
-    if (first) return;
+    pending.current = { focus, id };
+    onChoose(id);
+  };
+  // Every group shown starts the body at its top. Only a choice moves focus, to the group's heading or, for Go to,
+  // its refused control; a group the page sets itself, such as its reset when the dialog opens, leaves focus where
+  // the browser put it, so a field's autoFocus still wins.
+  useEffect(() => {
     bodyRef.current?.scrollTo?.({ top: 0 });
-    focusIn(chosen);
+    const choice = pending.current;
+    pending.current = null;
+    if (open && choice?.id === chosen) focusIn(chosen, choice.focus);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, chosen]);
   const runs: { groups: DialogGroup[]; parent?: string }[] = [];

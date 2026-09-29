@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Button, Field, GroupedDialog, Input, type DialogGroup } from '@/components/ui/primitives';
 
 // The pool dialog's parents and groups, so the rail the browser pass measures wraps and stacks as the real one will.
@@ -61,17 +62,21 @@ const GROUPS: DialogGroup[] = RAIL.flatMap(([parent, groups]) =>
 );
 
 export default function GroupedDialogFixture() {
+  // `?refused=<id>,<id>` marks groups refused, since the dot widens a rail entry and the pass measures that state.
+  const [params] = useSearchParams();
+  const refused = (params.get('refused') ?? '').split(',').filter(Boolean);
   const [chosen, setChosen] = useState('identity');
   return (
     <GroupedDialog
       chosen={chosen}
       footer={<Button variant="primary">Save</Button>}
-      groups={GROUPS}
+      groups={GROUPS.map((g) => (refused.includes(g.id) ? { ...g, refused: true } : g))}
+      hold={refused[0] ?? null}
       onChoose={setChosen}
       onClose={() => {}}
       open
       railLabel="Pool settings"
-      status="Every group saves together."
+      status={refused.length ? 'Save is held.' : 'Every group saves together.'}
       title="Edit pool"
     />
   );
