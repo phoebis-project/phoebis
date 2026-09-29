@@ -582,6 +582,8 @@ pub struct SubscriptionTerm {
     pub trial_ends_at: Option<i64>,
     pub cancelled: bool,
     pub ends_at: Option<i64>,
+    /// The profile's rate-limit tier, which prices the router's own use of the account's windows.
+    pub tier: Option<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -727,8 +729,8 @@ impl Store {
                 .collect::<rusqlite::Result<Vec<_>>>()?,
             terms: tx
                 .prepare(
-                    "SELECT id, subscription_since, trial_ends_at, cancelled, subscription_ends_at \
-                     FROM accounts ORDER BY id",
+                    "SELECT id, subscription_since, trial_ends_at, cancelled, subscription_ends_at, \
+                     subscription_tier FROM accounts ORDER BY id",
                 )?
                 .query_map([], |r| {
                     Ok(SubscriptionTerm {
@@ -737,6 +739,7 @@ impl Store {
                         trial_ends_at: r.get(2)?,
                         cancelled: r.get(3)?,
                         ends_at: r.get(4)?,
+                        tier: r.get(5)?,
                     })
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?,

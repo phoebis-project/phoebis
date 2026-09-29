@@ -1,12 +1,12 @@
 //! The router task: one loop that owns the routing state, answers selections over a channel, reloads the
-//! registry snapshot on request, pulls utilization samples in the background, and writes state through a
-//! single writer so the store sees every change in the order the loop made it.
+//! registry snapshot on request, folds the readings and the usage the relay and the poll report, and writes state
+//! through a single writer so the store sees every change in the order the loop made it.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-use phoebis_oauth::{Clock, UsageService, UsageSnapshot};
+use phoebis_oauth::{Clock, UsageSnapshot};
 use phoebis_store::{AccountState, CooldownRow, FitRow, PinKey, PinRow, RekeyWrite, Store, StoreError};
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
@@ -17,10 +17,10 @@ use crate::affinity::{
 use crate::select::{release_reasons, select, MigrateReason, Refusal, SelectRequest, SelectResult};
 use crate::state::{
     burn_folded, AccountTicket, EvidenceSource, InFlight, MemberSpend, OverageEvidence, PinRef,
-    PinUsage, RateTable, RoutingState, StateWrite, UtilizationSample, WindowReading, FIVE_HOUR,
-    SEVEN_DAY, SEVEN_DAY_FABLE,
+    PinUsage, RateTable, RoutingState, SharePricer, StateWrite, UtilizationSample, WindowReading,
+    FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
 };
-use crate::{resolve, KeyRefusal, Presented, RegistrySnapshot};
+use crate::{resolve, window_for, KeyRefusal, Presented, RegistrySnapshot};
 
 const COMMANDS: usize = 4_096;
 
@@ -107,7 +107,8 @@ pub struct RouterConfig {
     /// The burn's prices. The task holds them because neither this crate nor the relay can see the ledger's
     /// tables.
     pub rates: BurnRates,
-    pub sample_ttl: Duration,
+    /// The share of an account's windows a completed request consumed; the default prices nothing.
+    pub share: SharePricer,
     pub touch_interval: Duration,
 }
 
@@ -117,7 +118,7 @@ impl Default for RouterConfig {
             band: BandWeight::default(),
             purge_interval: Duration::from_secs(60),
             rates: BurnRates::default(),
-            sample_ttl: Duration::from_secs(60),
+            share: SharePricer::default(),
             touch_interval: Duration::from_secs(60),
         }
     }
@@ -244,6 +245,15 @@ pub enum Report {
         sample: UtilizationSample,
         incarnation: u64,
     },
+    /// A finished inference or probe answer's typed tokens on the account that served it, pinned or not: what the
+    /// prediction adds to the account's last reading until the next one lands.
+    Usage {
+        account_id: String,
+        at: i64,
+        canonical_model: String,
+        incarnation: u64,
+        usage: PinUsage,
+    },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -301,12 +311,6 @@ enum Command {
         dated_id: String,
         at: i64,
         reply: oneshot::Sender<()>,
-    },
-    /// A usage fetch ended: `at` is when its sample landed, `None` for a fetch that failed.
-    SampleFinished {
-        account_id: String,
-        incarnation: u64,
-        at: Option<i64>,
     },
     Samples {
         reply: oneshot::Sender<Vec<(String, UtilizationSample)>>,
@@ -460,8 +464,8 @@ impl RouterHandle {
         })
         .await
     }
-    /// One ask for every account's latest utilization sample, so a rule sweep never queues one command per
-    /// account in front of selection.
+    /// One ask for every account's latest utilization sample, each plan window predicted at the task's clock, so
+    /// a rule sweep never queues one command per account in front of selection.
     pub async fn samples(&self) -> Result<Vec<(String, UtilizationSample)>, RouterGone> {
         self.ask(|reply| Command::Samples { reply }).await
     }
@@ -514,17 +518,12 @@ struct Task {
     /// within `MIGRATION_WINDOW_MS` reports a migration rather than a fresh pin; older entries go on purge.
     invalidated: HashMap<PinKey, (String, &'static str, i64)>,
     revision: u64,
-    sampling: Sampling,
     snapshot: Arc<RwLock<Arc<RegistrySnapshot>>>,
     state: RoutingState,
     store: Arc<Store>,
     /// The rotation each slot's last touch was stamped under, beside its timestamp: a touch under a different
     /// rotation is a first sight of that presentation, not a repeat the grace period should swallow.
     touched_at: HashMap<(String, Presented), (i64, Option<i64>)>,
-    /// Weak on purpose: the loop ends when the last handle drops, so a test that reopens an on-disk store
-    /// gets the process lock back; the task's own follow-ups upgrade it and give up when nobody is left.
-    tx: mpsc::WeakSender<Command>,
-    usage: Option<Arc<UsageService>>,
     writer: mpsc::UnboundedSender<Vec<StateWrite>>,
     /// Resolves once the writer has landed everything it was sent and exited; `shutdown` waits on it.
     writer_done: Option<oneshot::Receiver<()>>,
@@ -532,12 +531,12 @@ struct Task {
 
 pub fn spawn(
     store: Arc<Store>,
-    usage: Option<Arc<UsageService>>,
     clock: Clock,
     config: RouterConfig,
 ) -> Result<RouterHandle, StoreError> {
     let now = clock();
     store.purge_cooldowns_before(now)?;
+    store.purge_stale_windows()?;
     let snapshot = Arc::new(RwLock::new(Arc::new(RegistrySnapshot::from_load(
         store.load_registry()?,
         store.digest_key(),
@@ -545,8 +544,6 @@ pub fn spawn(
         1,
     ))));
     let mut state = RoutingState::from_load(store.load_routing()?);
-    // Selection ages a full-window reading that dates no refund on the same interval the pulls below run on.
-    state.set_sample_ttl_ms(config.sample_ttl.as_millis() as i64);
     // One table, shared by the handle (the relay's synchronous permits and tickets) and the state (the
     // selector's cap partition), so a count is exact wherever it is read.
     let in_flight = InFlight::default();
@@ -616,13 +613,10 @@ pub fn spawn(
         events,
         invalidated: HashMap::new(),
         revision: 1,
-        sampling: Sampling::default(),
         snapshot,
         state,
         store,
         touched_at: HashMap::new(),
-        tx: tx.downgrade(),
-        usage,
         writer,
         writer_done: Some(done_rx),
     };
@@ -729,6 +723,9 @@ fn apply(store: &Store, batch: Vec<StateWrite>) -> Result<bool, Failed> {
             StateWrite::DeletePin(key) => {
                 store.delete_pin(&key)?;
             }
+            StateWrite::PurgeStaleWindows => {
+                store.purge_stale_windows()?;
+            }
             StateWrite::Rekey(rekey) => {
                 if let Err(error) = store.rekey_resolution(&rekey) {
                     return Err(Failed {
@@ -744,6 +741,9 @@ fn apply(store: &Store, batch: Vec<StateWrite>) -> Result<bool, Failed> {
                 store.upsert_overage(&row)?;
             }
             StateWrite::UpsertPin(row) => store.upsert_pin(&row)?,
+            StateWrite::UpsertWindow(row) => {
+                store.upsert_window(&row)?;
+            }
         }
     }
     Ok(moved)
@@ -828,7 +828,6 @@ impl Task {
                     }
                     request.revision = snapshot.revision;
                 }
-                self.pull_samples(&request);
                 let pin_key = request.session_id.as_ref().map(|s| PinKey {
                     key_id: request.key_id.clone(),
                     session_id: s.clone(),
@@ -979,17 +978,6 @@ impl Task {
                         .collect(),
                 );
             }
-            Command::SampleFinished {
-                account_id,
-                incarnation,
-                at,
-            } => {
-                // The reload already dropped the marker of a holder the id moved past, and the one standing
-                // now may be the next holder's own fetch.
-                if !self.moved_past(&account_id, incarnation) {
-                    self.sampling.finish(&account_id, at);
-                }
-            }
             Command::Reload { reply } => {
                 let _ = reply.send(self.reload().await);
             }
@@ -1067,7 +1055,17 @@ impl Task {
                 let _ = reply.send(self.state.overage(&account_id).cloned());
             }
             Command::Samples { reply } => {
-                let _ = reply.send(self.state.samples());
+                let now = (self.clock)();
+                let samples = self
+                    .state
+                    .samples()
+                    .into_iter()
+                    .map(|(id, read)| {
+                        let predicted = self.state.predicted_sample(&id, now).unwrap_or(read);
+                        (id, predicted)
+                    })
+                    .collect();
+                let _ = reply.send(samples);
             }
             Command::Touch {
                 key_id,
@@ -1365,31 +1363,64 @@ impl Task {
                 if self.moved_past(&account_id, incarnation) {
                     return;
                 }
-                // A head that read both shared windows and every window the account's sample already holds says
-                // what a usage fetch would, so it holds the poll off for a TTL as a fetch does. One that leaves a
-                // known window unread leaves the poll due: a head may not carry the Fable reading, and only the
-                // poll would re-read it while the account stays busy.
-                let covers = sample.windows.contains_key(FIVE_HOUR)
-                    && sample.windows.contains_key(SEVEN_DAY)
-                    && self.state.sample(&account_id).is_none_or(|stored| {
-                        stored
-                            .windows
-                            .keys()
-                            .all(|window| sample.windows.contains_key(window))
-                    });
-                if covers {
-                    self.sampling.stamp(&account_id, sample.observed_at);
-                }
                 // A cooled account sends no requests, so a window the upstream reset ahead of the deadline it
                 // announced reaches the router here and nowhere else. Only a sample newer than the stored one
-                // answers for the account now: two pulls can be in flight, and the older one's reading is one
+                // answers for the account now: a head and a poll can cross, and the older one's reading is one
                 // the window has already moved past.
-                if self.state.record_sample(&account_id, sample.clone()) {
+                let moved = self.state.record_sample(&account_id, sample.clone());
+                if !moved.is_empty() {
                     let now = (self.clock)();
                     for row in self.state.recovered_cooldowns(&account_id, &sample, now) {
                         self.release_cooldown(row.account_id, row.scope, "recovered");
                     }
+                    // An api_key bucket refills within a minute, so only the plan windows are worth a restart.
+                    let windows: Vec<String> = moved
+                        .into_iter()
+                        .filter(|w| [FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE].contains(&w.as_str()))
+                        .collect();
+                    let rows = self.state.window_rows(&account_id, &windows, incarnation);
+                    self.write(rows.into_iter().map(StateWrite::UpsertWindow).collect());
                 }
+            }
+            Report::Usage {
+                account_id,
+                at,
+                canonical_model,
+                incarnation,
+                usage,
+            } => {
+                if self.moved_past(&account_id, incarnation) {
+                    return;
+                }
+                let snapshot = self
+                    .snapshot
+                    .read()
+                    .expect("snapshot lock poisoned")
+                    .clone();
+                // An api_key account bills its tokens and has no plan window to charge, and an account whose tier
+                // the profile has not named yet has no factor to price through.
+                if snapshot.account(&account_id).map(|a| a.kind)
+                    != Some(phoebis_store::AccountKind::Oauth)
+                {
+                    return;
+                }
+                let Some(tier) = snapshot.tier(&account_id) else {
+                    return;
+                };
+                let price = |window: &str| {
+                    self.config
+                        .share
+                        .price(window, tier, &canonical_model, usage, at)
+                };
+                let (Some(five_hour), Some(seven_day)) = (price(FIVE_HOUR), price(SEVEN_DAY))
+                else {
+                    return;
+                };
+                let fable = (window_for(&canonical_model) == SEVEN_DAY_FABLE)
+                    .then(|| price(SEVEN_DAY_FABLE))
+                    .flatten();
+                self.state
+                    .charge(&account_id, at, five_hour, seven_day, fable);
             }
             Report::Fit { row, incarnation } => {
                 if self.moved_past(&row.account_id, incarnation) {
@@ -1525,7 +1556,7 @@ impl Task {
         // A pause is not a reason to cancel: `enabled` governs routing and probes only, and an admitted request
         // finishes on its account. A disconnect or a deletion takes the credential away, so its streams end,
         // and so do those of a holder deleted and created again under its id since the previous snapshot.
-        // Samples and the sampler's marks are keyed by id alone, so a moved holder's go here, before the purge.
+        // Samples and charges are keyed by id alone, so a moved holder's go here, before the purge.
         for account in previous.accounts() {
             let moved = next
                 .account(&account.id)
@@ -1541,7 +1572,6 @@ impl Task {
             }
             if moved {
                 self.state.forget_sample(&account.id);
-                self.sampling.forget(&account.id);
             }
         }
         *self.snapshot.write().expect("snapshot lock poisoned") = next;
@@ -1665,84 +1695,10 @@ impl Task {
         if !refreshed.is_empty() {
             writes.push(StateWrite::UpsertAffinity(refreshed));
         }
+        // The fenced upsert keeps a previous holder's window rows off disk; this sweep is the backstop, so none that
+        // got there anyway outlives a tick.
+        writes.push(StateWrite::PurgeStaleWindows);
         self.write(writes);
-    }
-
-    /// Samples arrive through `Report::Sample` from a background fetch, so the loop never waits on the
-    /// network; a selection uses whatever samples exist when it runs. The fetch names the holder it was
-    /// started for, so an answer that lands after a delete, a create and a reload under the same id is
-    /// refused rather than recorded against the next holder.
-    fn pull_samples(&mut self, request: &SelectRequest) {
-        let Some(usage) = self.usage.clone() else {
-            return;
-        };
-        let snapshot = self
-            .snapshot
-            .read()
-            .expect("snapshot lock poisoned")
-            .clone();
-        let Some(pool) = snapshot
-            .key(&request.key_id)
-            .and_then(|k| snapshot.pool(&k.pool_id))
-        else {
-            return;
-        };
-        let now = (self.clock)();
-        let ttl = self.config.sample_ttl.as_millis() as i64;
-        for candidate in &request.candidates {
-            let Some(account) = snapshot.account(&candidate.account_id) else {
-                continue;
-            };
-            let oauth = account.kind == phoebis_store::AccountKind::Oauth;
-            let due = self.sampling.due(&candidate.account_id, now, ttl);
-            let needs = needs_sample(pool, &self.state, &candidate.account_id, now);
-            if !oauth || !due || !needs {
-                continue;
-            }
-            self.sampling.begin(&candidate.account_id);
-            let (usage, tx, clock, account_id, incarnation) = (
-                usage.clone(),
-                self.tx.clone(),
-                self.clock.clone(),
-                candidate.account_id.clone(),
-                account.incarnation,
-            );
-            tokio::spawn(async move {
-                let Some(tx) = tx.upgrade() else { return };
-                let mut guard = SampleGuard::new(&account_id, incarnation, tx.clone());
-                let at = match usage.snapshot(&account_id).await {
-                    Ok(snapshot) => {
-                        let (sample, overage) = sample_from_usage(&snapshot, incarnation);
-                        let _ = tx
-                            .send(Command::Report(Report::Sample {
-                                account_id: account_id.clone(),
-                                sample,
-                                incarnation,
-                            }))
-                            .await;
-                        if let Some(evidence) = overage {
-                            let _ = tx
-                                .send(Command::Report(Report::Overage {
-                                    account_id: account_id.clone(),
-                                    evidence,
-                                    incarnation,
-                                }))
-                                .await;
-                        }
-                        Some(clock())
-                    }
-                    Err(_) => None,
-                };
-                guard.finish();
-                let _ = tx
-                    .send(Command::SampleFinished {
-                        account_id,
-                        incarnation,
-                        at,
-                    })
-                    .await;
-            });
-        }
     }
 
     fn write(&self, writes: Vec<StateWrite>) {
@@ -1767,120 +1723,6 @@ fn holder<'a>(
         tracing::debug!(account = %account_id, "a report named a holder the id has moved past");
     }
     account
-}
-
-/// The sampler's bookkeeping per account id. An account is sampled again once its last sample is a TTL old,
-/// dated when the sample landed rather than when the fetch left, so a failed fetch leaves it due at the next
-/// selection instead of unsampled for a whole TTL. The in-flight mark is what keeps two selections from
-/// fetching the same account twice meanwhile.
-#[derive(Default)]
-struct Sampling {
-    in_flight: HashSet<String>,
-    sampled_at: HashMap<String, i64>,
-}
-
-impl Sampling {
-    fn due(&self, account_id: &str, now: i64, ttl: i64) -> bool {
-        !self.in_flight.contains(account_id)
-            && self
-                .sampled_at
-                .get(account_id)
-                .is_none_or(|at| now - at >= ttl)
-    }
-
-    fn begin(&mut self, account_id: &str) {
-        self.in_flight.insert(account_id.to_string());
-    }
-
-    fn finish(&mut self, account_id: &str, at: Option<i64>) {
-        self.in_flight.remove(account_id);
-        if let Some(at) = at {
-            self.sampled_at.insert(account_id.to_string(), at);
-        }
-    }
-
-    /// Dates a sample that arrived without a fetch, leaving a fetch that is out to finish on its own. An older
-    /// head landing late never moves the date back.
-    fn stamp(&mut self, account_id: &str, at: i64) {
-        let sampled_at = self.sampled_at.entry(account_id.to_string()).or_insert(at);
-        *sampled_at = (*sampled_at).max(at);
-    }
-
-    fn forget(&mut self, account_id: &str) {
-        self.in_flight.remove(account_id);
-        self.sampled_at.remove(account_id);
-    }
-}
-
-/// Sends a failed `SampleFinished` if the sample task it guards ends without sending its own: a panic inside
-/// `sample_from_usage`, the one synchronous step of that task, unwinds through this guard first, and without
-/// it the account's in-flight mark would outlive the panicked fetch until a reload or restart cleared it.
-struct SampleGuard {
-    account_id: String,
-    incarnation: u64,
-    tx: mpsc::Sender<Command>,
-    done: bool,
-}
-
-impl SampleGuard {
-    fn new(account_id: &str, incarnation: u64, tx: mpsc::Sender<Command>) -> SampleGuard {
-        SampleGuard {
-            account_id: account_id.to_string(),
-            incarnation,
-            tx,
-            done: false,
-        }
-    }
-
-    /// Marks the task's own `SampleFinished` as sent, so the drop below sends nothing more.
-    fn finish(&mut self) {
-        self.done = true;
-    }
-}
-
-impl Drop for SampleGuard {
-    fn drop(&mut self) {
-        if self.done {
-            return;
-        }
-        let _ = self.tx.try_send(Command::SampleFinished {
-            account_id: std::mem::take(&mut self.account_id),
-            incarnation: self.incarnation,
-            at: None,
-        });
-    }
-}
-
-/// Whether a selection has to read a candidate's usage. The pool's own reasons stand, and a candidate with a
-/// live rate-limit cooldown row of any scope is read whatever the strategy: while the account is cooled no
-/// response head of its own can show the window the upstream reset ahead of the deadline it announced, and the
-/// one row `cooldown` answers for the model can be a permission row standing over a rate-limit row, or miss a
-/// rate-limit row on another model's scope. A candidate whose latest sample spent its model-scoped window is
-/// read for the same reason: selection excludes it on that reading, so no request of its own will ever bring a
-/// fresher one. The kind order is a third: it reads overage evidence to put an account in the second group, and
-/// nothing but a sample retires that evidence, so without one a recovered account would sit below its
-/// plan-funded siblings until the process restarts. The spent move is a fourth: it moves a pin only onto a
-/// sibling whose sample is younger than the TTL. Pace is a fifth: it ranks by the readings themselves, and a quiet
-/// sibling brings no head of its own to refresh them.
-fn needs_sample(
-    pool: &phoebis_store::PoolRow,
-    state: &RoutingState,
-    account_id: &str,
-    now: i64,
-) -> bool {
-    pool.strategy == phoebis_store::Strategy::Pace
-        || pool.kind_ordered()
-        || pool.shedding.migrate_when_spent
-        || pool.migrate_above_utilization.is_some()
-        || pool.select_below_utilization.is_some()
-        || pool.overage_policy != phoebis_store::OveragePolicy::Allow
-        || state
-            .cooldowns_of(account_id, now)
-            .any(|row| row.reason == "rate_limit")
-        || state
-            .sample(account_id)
-            .and_then(|s| s.reading(SEVEN_DAY_FABLE))
-            .is_some_and(|r| r.utilization >= 1.0)
 }
 
 /// `incarnation` is the holder of the account id the snapshot was fetched for, which the evidence names.
@@ -1948,283 +1790,4 @@ pub fn sample_from_usage(
         }
     };
     (sample, overage)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use phoebis_store::{
-        Affinity, Failover, OveragePolicy, PoolRow, QuotaHeaders, RoutingLoad, Shedding, Strategy,
-    };
-
-    /// A pool that reads no utilization of its own: no threshold, no strategy that orders by a window, an
-    /// overage policy that never keeps an account out, and no spent move.
-    fn plain_pool() -> PoolRow {
-        PoolRow {
-            id: "p".into(),
-            label: "p".into(),
-            enabled: true,
-            strategy: Strategy::Priority,
-            affinity_ttl_seconds: 3_600,
-            overage_policy: OveragePolicy::Allow,
-            migrate_above_utilization: None,
-            select_below_utilization: None,
-            model_rules: Vec::new(),
-            keepalive_json: "{}".into(),
-            body_capture_hours: 0,
-            prefer_subscription: false,
-            shedding: Shedding {
-                migrate_when_spent: false,
-                ..Shedding::default()
-            },
-            failover: Failover::default(),
-            cache_ttl_json: "{}".into(),
-            cache_diagnostics: None,
-            affinity: Affinity::default(),
-            quota_headers: QuotaHeaders::Pass,
-            created_at: 0,
-            updated_at: 0,
-        }
-    }
-
-    #[test]
-    fn a_pool_that_moves_a_spent_pin_is_sampled_for_the_destinations_fresh_reading() {
-        let quiet = RoutingState::from_load(RoutingLoad::default());
-        let spent_moves = PoolRow {
-            shedding: Shedding::default(),
-            ..plain_pool()
-        };
-        assert!(
-            !needs_sample(&plain_pool(), &quiet, "a", 1_000),
-            "the same pool without the spent move reads no usage at all"
-        );
-        assert!(
-            needs_sample(&spent_moves, &quiet, "a", 1_000),
-            "a spent pin moves only onto a sibling with a fresh sample, and only sampling brings one"
-        );
-    }
-
-    fn cooled(until: i64, reason: &str) -> RoutingState {
-        RoutingState::from_load(RoutingLoad {
-            cooldowns: vec![CooldownRow {
-                account_id: "a".into(),
-                scope: "account".into(),
-                until,
-                set_at: 0,
-                reason: reason.into(),
-                window: "five_hour".into(),
-                source_request_id: None,
-                incarnation: 1,
-            }],
-            ..RoutingLoad::default()
-        })
-    }
-
-    #[test]
-    fn a_candidate_whose_latest_sample_spent_its_fable_window_is_sampled_again() {
-        let mut spent = RoutingState::from_load(RoutingLoad::default());
-        spent.record_sample(
-            "a",
-            UtilizationSample {
-                observed_at: 1_000,
-                ..Default::default()
-            }
-            .with(
-                SEVEN_DAY_FABLE,
-                WindowReading {
-                    utilization: 1.0,
-                    reset: None,
-                    observed_at: 1_000,
-                },
-            )
-            .with(
-                FIVE_HOUR,
-                WindowReading {
-                    utilization: 0.1,
-                    reset: None,
-                    observed_at: 1_000,
-                },
-            )
-            .with(
-                SEVEN_DAY,
-                WindowReading {
-                    utilization: 0.1,
-                    reset: None,
-                    observed_at: 1_000,
-                },
-            ),
-        );
-        assert!(
-            needs_sample(&plain_pool(), &spent, "a", 2_000),
-            "selection excludes on this reading, so nothing but another sample can undo it"
-        );
-    }
-
-    #[test]
-    fn a_candidate_under_a_live_rate_limit_cooldown_is_sampled_whatever_the_strategy() {
-        let pool = plain_pool();
-        let quiet = RoutingState::from_load(RoutingLoad::default());
-        let needs = |pool: &PoolRow, state: &RoutingState| needs_sample(pool, state, "a", 1_000);
-        assert!(!needs(&pool, &quiet), "nothing in this pool reads usage");
-        assert!(
-            needs(&pool, &cooled(2_000, "rate_limit")),
-            "a cooled candidate is re-checked under priority with no threshold set"
-        );
-        assert!(
-            !needs(&pool, &cooled(500, "rate_limit")),
-            "a row already past its deadline has nothing left to release"
-        );
-        assert!(
-            !needs(&pool, &cooled(2_000, "permission")),
-            "and no amount of allowance restores an entitlement"
-        );
-        let migrating = PoolRow {
-            migrate_above_utilization: Some(0.8),
-            ..plain_pool()
-        };
-        assert!(
-            needs(&migrating, &quiet),
-            "the pool's own reasons to sample still stand"
-        );
-    }
-
-    #[test]
-    fn a_live_rate_limit_row_of_any_scope_is_read_past_the_row_the_selector_answers_for_the_model()
-    {
-        let pool = plain_pool();
-        let rows = |rows: &[(&str, i64, &str)]| {
-            RoutingState::from_load(RoutingLoad {
-                cooldowns: rows
-                    .iter()
-                    .map(|(scope, until, reason)| CooldownRow {
-                        account_id: "a".into(),
-                        scope: (*scope).into(),
-                        until: *until,
-                        set_at: 0,
-                        reason: (*reason).into(),
-                        window: "five_hour".into(),
-                        source_request_id: None,
-                        incarnation: 1,
-                    })
-                    .collect(),
-                ..RoutingLoad::default()
-            })
-        };
-        let needs = |state: &RoutingState| needs_sample(&pool, state, "a", 1_000);
-        // The model row is a permission row with the later deadline, the one `cooldown` answers; the
-        // account-wide rate-limit row under it is the one a sample can release.
-        assert!(
-            needs(&rows(&[
-                ("account", 2_000, "rate_limit"),
-                ("model:claude-sonnet-5", 3_000, "permission"),
-            ])),
-            "a later permission row on the model does not hide a live rate-limit row on the account"
-        );
-        assert!(
-            needs(&rows(&[("model:claude-fable-5-1", 2_000, "rate_limit")])),
-            "a rate-limit row on another model's scope is still this account's window to re-read"
-        );
-        assert!(
-            !needs(&rows(&[
-                ("model:claude-fable-5-1", 500, "rate_limit"),
-                ("account", 3_000, "permission"),
-            ])),
-            "an expired rate-limit row and a live permission row leave nothing a sample could release"
-        );
-    }
-
-    #[test]
-    fn a_failed_usage_fetch_leaves_the_account_due_for_the_next_sample() {
-        let pool = PoolRow {
-            migrate_above_utilization: Some(0.8),
-            ..plain_pool()
-        };
-        let state = RoutingState::from_load(RoutingLoad::default());
-        let ttl = 60_000;
-        let mut sampling = Sampling::default();
-        let due = |sampling: &Sampling, now: i64| {
-            sampling.due("a", now, ttl) && needs_sample(&pool, &state, "a", now)
-        };
-        assert!(due(&sampling, 1_000));
-        sampling.begin("a");
-        assert!(
-            !due(&sampling, 1_000),
-            "a second selection while the fetch is out asks nothing"
-        );
-        sampling.finish("a", None);
-        assert!(
-            due(&sampling, 2_000),
-            "the fetch failed, so the next selection a second later asks again"
-        );
-        sampling.begin("a");
-        sampling.finish("a", Some(2_500));
-        assert!(
-            !due(&sampling, 3_000),
-            "a sample that landed stands for the TTL"
-        );
-        assert!(due(&sampling, 2_500 + ttl));
-    }
-
-    #[tokio::test]
-    async fn a_sample_guard_dropped_without_finishing_sends_a_failed_sample_finished() {
-        let (tx, mut rx) = mpsc::channel(1);
-        {
-            let _guard = SampleGuard::new("a", 3, tx);
-        }
-        let Some(Command::SampleFinished {
-            account_id,
-            incarnation,
-            at,
-        }) = rx.recv().await
-        else {
-            panic!("the drop must send SampleFinished on its own");
-        };
-        assert_eq!((account_id.as_str(), incarnation, at), ("a", 3, None));
-    }
-
-    #[tokio::test]
-    async fn a_sample_guard_that_finished_sends_nothing_on_drop() {
-        let (tx, mut rx) = mpsc::channel(1);
-        {
-            let mut guard = SampleGuard::new("a", 3, tx);
-            guard.finish();
-        }
-        assert!(
-            rx.try_recv().is_err(),
-            "the task's own send is the only one, once it finished"
-        );
-    }
-
-    #[test]
-    fn a_kind_ordered_pool_is_sampled_even_when_nothing_else_reads_usage() {
-        let quiet = RoutingState::from_load(RoutingLoad::default());
-        let kind_ordered = PoolRow {
-            prefer_subscription: true,
-            ..plain_pool()
-        };
-        assert!(
-            !needs_sample(&plain_pool(), &quiet, "a", 1_000),
-            "the same pool without the preference reads no usage at all"
-        );
-        assert!(
-            needs_sample(&kind_ordered, &quiet, "a", 1_000),
-            "the kind order reads overage evidence, and only a sample retires it"
-        );
-        let mut recovered = RoutingState::from_load(RoutingLoad::default());
-        recovered.record_overage(
-            "a",
-            OverageEvidence {
-                in_use: true,
-                since: Some(1_000),
-                reset: None,
-                observed_at: 1_000,
-                source: EvidenceSource::Sample,
-                incarnation: 1,
-            },
-        );
-        assert!(
-            needs_sample(&kind_ordered, &recovered, "a", 1_000),
-            "an account already in the second group is exactly the one whose evidence has to be refreshed"
-        );
-    }
 }

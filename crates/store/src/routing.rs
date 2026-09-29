@@ -85,6 +85,17 @@ pub struct OverageRow {
     pub incarnation: u64,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct WindowRow {
+    pub account_id: String,
+    pub incarnation: u64,
+    pub observed_at: i64,
+    pub reset: Option<i64>,
+    pub utilization: f64,
+    /// `five_hour`, `seven_day` or `seven_day_fable`.
+    pub window: String,
+}
+
 /// A folded spelling and the dated id the API listed for it; the routing state keys that spelling's rows on
 /// the dated id from the moment the row exists, and the row is loaded before any request is served.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -292,6 +303,7 @@ pub struct RoutingLoad {
     pub overage: Vec<OverageRow>,
     pub pins: Vec<PinRow>,
     pub resolutions: Vec<ResolutionRow>,
+    pub windows: Vec<WindowRow>,
 }
 
 impl Store {
@@ -323,6 +335,12 @@ impl Store {
                 .collect::<rusqlite::Result<Vec<_>>>()?,
             affinity: tx.prepare(&format!("SELECT {AFFINITY_COLUMNS} FROM affinity ORDER BY model, hash"))?
                 .query_map([], affinity_of)?
+                .collect::<rusqlite::Result<Vec<_>>>()?,
+            // A row of a previous holder of the id is never loaded: the replacement starts with no windows.
+            windows: tx.prepare("SELECT w.account_id, w.incarnation, w.observed_at, w.reset, w.utilization, w.window \
+                 FROM usage_windows w JOIN accounts ON accounts.id = w.account_id AND accounts.incarnation = w.incarnation \
+                 ORDER BY w.account_id, w.window")?
+                .query_map([], |r| Ok(WindowRow { account_id: r.get(0)?, incarnation: r.get::<_, i64>(1)? as u64, observed_at: r.get(2)?, reset: r.get(3)?, utilization: r.get(4)?, window: r.get(5)? }))?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
         };
         tx.commit()?;
@@ -407,6 +425,41 @@ impl Store {
              WHERE excluded.observed_at > overage_state.observed_at OR excluded.incarnation <> overage_state.incarnation",
             params![row.account_id, row.in_use, row.since, row.reset, row.observed_at, row.source, row.incarnation as i64])?;
         Ok(written > 0)
+    }
+
+    /// Written only while `row.incarnation` is the account's current one, and only when newer than the stored
+    /// row: one statement, so a write queued for a holder the id has since left lands nowhere. Answers whether a
+    /// row was written.
+    pub fn upsert_window(&self, row: &WindowRow) -> Result<bool, StoreError> {
+        let conn = self.conn.lock().expect(LOCK_POISONED);
+        // The `WHERE` on the select is what lets SQLite parse the `ON CONFLICT` of an insert-select, and it is
+        // the incarnation check too: a deleted and re-paired id answers no row, so nothing is inserted.
+        let written = conn.execute(
+            "INSERT INTO usage_windows (account_id, window, utilization, reset, observed_at, incarnation) \
+             SELECT ?1, ?2, ?3, ?4, ?5, ?6 FROM accounts WHERE id = ?1 AND incarnation = ?6 \
+             ON CONFLICT(account_id, window) DO UPDATE SET utilization = excluded.utilization, \
+               reset = excluded.reset, observed_at = excluded.observed_at, incarnation = excluded.incarnation \
+             WHERE excluded.observed_at > usage_windows.observed_at",
+            params![
+                row.account_id,
+                row.window,
+                row.utilization,
+                row.reset,
+                row.observed_at,
+                row.incarnation as i64
+            ],
+        )?;
+        Ok(written > 0)
+    }
+
+    /// Drops every row whose incarnation is not its account's; the router's purge tick calls it.
+    pub fn purge_stale_windows(&self) -> Result<usize, StoreError> {
+        let conn = self.conn.lock().expect(LOCK_POISONED);
+        Ok(conn.execute(
+            "DELETE FROM usage_windows WHERE NOT EXISTS (SELECT 1 FROM accounts \
+             WHERE accounts.id = usage_windows.account_id AND accounts.incarnation = usage_windows.incarnation)",
+            [],
+        )?)
     }
 
     /// All or nothing: a crash or a failed statement part way through would leave rows under the dated id with no

@@ -70,6 +70,7 @@ mod tests {
             trial_ends_at,
             cancelled,
             ends_at,
+            tier: None,
         }
     }
 

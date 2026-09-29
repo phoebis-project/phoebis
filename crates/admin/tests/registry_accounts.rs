@@ -742,6 +742,7 @@ async fn the_account_view_carries_its_profile_windows_pools_totals_and_models() 
             trial_ends_at: Some(1_790_899_200_000),
             cancelled: false,
             ends_at: None,
+            tier: None,
         },
         now,
     );
@@ -862,6 +863,7 @@ async fn a_cancelled_account_stores_the_end_it_was_saved_with_and_answers_the_de
             trial_ends_at: None,
             cancelled: true,
             ends_at: Some(end),
+            tier: None,
         },
         common::NOW,
     );

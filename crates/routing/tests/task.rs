@@ -2,28 +2,21 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use phoebis_oauth::{Clock, CredentialManager, ExtraUsage, UsageService, UsageSnapshot, UsageWindow};
-use phoebis_profile::{
-    claude_code_2_1_269_linux_x64,
-    fixtures::{control_response, ControlFixture},
-};
+use phoebis_oauth::{Clock, ExtraUsage, UsageSnapshot, UsageWindow};
 use phoebis_routing::{
     resolve, sample_from_usage, spawn, AffinityReport, BandWeight, BurnRates, ClientClass,
     Exhaustion, KeyRefusal, MemberSpend, PinRef, PinUsage, Presented, RateTable, Rates,
-    Refusal, ReloadError, Report, ResolveError, RouterConfig, RoutingState, SelectRequest,
-    SelectResult, UtilizationSample, WindowReading, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
+    Refusal, ReloadError, Report, ResolveError, RouterConfig, RouterHandle, RoutingState,
+    SelectRequest, SelectResult, SharePricer, UtilizationSample, WindowReading, FIVE_HOUR,
+    SEVEN_DAY, SEVEN_DAY_FABLE,
 };
 use phoebis_store::{
     key_prefix, AccountKind, AccountRow, AccountState, Affinity, AffinitySource, ApiKeyRow,
-    CooldownRow, Failover, FitRow, MemberWrite, ModelRule, NewBundle, OveragePolicy,
-    PoolRow, QuotaHeaders, RoutingLoad, RulesMode, Secret, Shedding, StorageKey, Store, Strategy,
+    CooldownRow, Failover, FitRow, MemberWrite, ModelRule, OveragePolicy, PoolRow,
+    QuotaHeaders, RoutingLoad, RulesMode, Shedding, StorageKey, Store, Strategy, SubscriptionRow,
+    WindowRow,
 };
-use phoebis_transport::{
-    connector_builder,
-    control::{ControlClient, ResolveFuture, Resolver},
-    trust_extra_ca, Plane,
-};
-use fake_upstream::{stays_for, wait_for, wait_for_async, FakeUpstream, Respond, Rule};
+use fake_upstream::{stays_for, wait_for, wait_for_async};
 
 const HOUR: i64 = 3_600_000;
 
@@ -208,7 +201,7 @@ fn affinity_report(
 async fn a_selection_is_written_through_and_a_registry_write_shows_up_after_reload() {
     let store = seeded(&["a"]);
     let now = Arc::new(AtomicI64::new(1_000));
-    let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
     let answer = handle
         .select(request(&handle, Some("s1"), 1_000))
         .await
@@ -273,7 +266,7 @@ async fn a_selection_is_written_through_and_a_registry_write_shows_up_after_relo
 async fn a_request_admitted_under_an_older_registry_is_re_resolved_against_the_current_one() {
     let store = seeded(&["a", "b"]);
     let now = Arc::new(AtomicI64::new(1_000));
-    let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
     // Admitted with both candidates; then `a` is deleted before the selection runs.
     let admitted = request(&handle, Some("s1"), 1_000);
     store.delete_account("a", "test").unwrap();
@@ -318,7 +311,7 @@ async fn a_request_admitted_under_an_older_registry_is_re_resolved_against_the_c
 async fn a_request_admitted_under_a_key_that_was_replaced_under_its_id_is_refused() {
     let store = seeded(&["a"]);
     let now = Arc::new(AtomicI64::new(1_000));
-    let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
     let admitted = request(&handle, Some("s1"), 1_000);
     // The key is deleted and created again under its id before the selection runs: another key, whatever
     // the id says.
@@ -351,7 +344,7 @@ async fn a_request_admitted_under_a_key_that_was_replaced_under_its_id_is_refuse
 async fn a_request_admitted_under_a_key_deleted_before_selection_is_refused_as_unknown() {
     let store = seeded(&["a"]);
     let now = Arc::new(AtomicI64::new(1_000));
-    let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
     let admitted = request(&handle, Some("s1"), 1_000);
     store.delete_api_key("k", "test").unwrap();
     handle.reload().await.unwrap();
@@ -374,7 +367,7 @@ async fn a_request_admitted_under_a_key_deleted_before_selection_is_refused_as_u
 async fn a_failed_reload_keeps_the_old_snapshot_and_says_so() {
     let store = seeded(&["a"]);
     let now = Arc::new(AtomicI64::new(1_000));
-    let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
     store.revoke_api_key("k", 2, "test").unwrap();
     store.debug_fail_next_load();
     assert!(matches!(handle.reload().await, Err(ReloadError::Load(_))));
@@ -396,7 +389,7 @@ async fn shutdown_lands_every_acknowledged_write_before_it_returns() {
     store
         .set_api_key_secret("a", &phoebis_store::Secret::new("k1"))
         .unwrap();
-    let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
     for i in 0..200 {
         let answer = handle
             .select(request(&handle, Some(&format!("s{i}")), 1_000 + i))
@@ -450,7 +443,7 @@ async fn shutdown_lands_every_acknowledged_write_before_it_returns() {
 async fn a_state_verdict_about_a_replaced_credential_changes_nothing() {
     let store = seeded(&["a"]);
     let now = Arc::new(AtomicI64::new(1_000));
-    let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
     store
         .set_api_key_secret("a", &phoebis_store::Secret::new("k1"))
         .unwrap();
@@ -487,7 +480,7 @@ async fn a_state_verdict_about_a_replaced_credential_changes_nothing() {
 async fn two_concurrent_first_requests_of_one_session_land_on_one_account() {
     let store = seeded(&["a", "b", "c"]);
     let now = Arc::new(AtomicI64::new(1_000));
-    let handle = spawn(store, None, clock(&now), RouterConfig::default()).unwrap();
+    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
     let mut picks = std::collections::HashSet::new();
     for _ in 0..5 {
         let session = format!("s{}", rand::random::<u32>());
@@ -511,7 +504,7 @@ async fn a_cooldown_survives_a_restart_and_an_expired_row_does_not_revive() {
     let store = seeded(&["a"]);
     let now = Arc::new(AtomicI64::new(1_000));
     {
-        let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
+        let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
         handle.report(Report::Cooldown {
             account_id: "a".into(),
             row: CooldownRow {
@@ -551,7 +544,7 @@ async fn a_cooldown_survives_a_restart_and_an_expired_row_does_not_revive() {
             incarnation: 1,
         })
         .unwrap();
-    let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
     let answer = handle.select(request(&handle, None, 1_000)).await.unwrap();
     assert!(
         matches!(answer.result, SelectResult::Exhausted(Exhaustion::Timed { deadline, .. }) if deadline == 1_000 + 2 * HOUR)
@@ -612,7 +605,7 @@ async fn a_persisted_resolution_keys_the_dated_pin_after_a_restart_before_any_re
     };
     let epoch;
     {
-        let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
+        let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
         let answer = handle.select(req(&handle, 1_000)).await.unwrap();
         let SelectResult::Selected(selection) = answer.result else {
             panic!("expected a selection")
@@ -636,7 +629,7 @@ async fn a_persisted_resolution_keys_the_dated_pin_after_a_restart_before_any_re
         })
         .await;
     }
-    let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
     let answer = handle.select(req(&handle, 2_000)).await.unwrap();
     let SelectResult::Selected(selection) = answer.result else {
         panic!("expected a selection")
@@ -701,7 +694,7 @@ async fn resolve_answers_once_the_state_holds_the_spellings_pins_and_cooldowns_u
 {
     let store = seeded(&["a", "b"]);
     let now = Arc::new(AtomicI64::new(1_000));
-    let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
     let s = handle.snapshot();
     let answer = handle
         .select(SelectRequest {
@@ -770,7 +763,7 @@ async fn resolve_answers_once_the_state_holds_the_spellings_pins_and_cooldowns_u
 async fn a_refused_rekey() -> (Arc<Store>, phoebis_routing::RouterHandle) {
     let store = seeded(&["a", "b"]);
     let now = Arc::new(AtomicI64::new(1_000));
-    let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
     handle.report(model_cooldown("a", "model:claude-sonnet-4-5", 1_000));
     wait_for(WRITTEN, || {
         (!store.load_routing().unwrap().cooldowns.is_empty()).then_some(())
@@ -852,7 +845,7 @@ async fn a_rekey_the_store_refused_is_retried_once_at_the_next_write_and_then_dr
 async fn disconnecting_an_account_cancels_its_in_flight_relays_and_a_pause_does_not() {
     let store = seeded(&["a", "b"]);
     let now = Arc::new(AtomicI64::new(1_000));
-    let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
     let first = handle
         .select(request(&handle, Some("s1"), 1_000))
         .await
@@ -923,7 +916,7 @@ async fn disconnecting_an_account_cancels_its_in_flight_relays_and_a_pause_does_
 async fn a_key_is_touched_at_most_once_a_minute() {
     let store = seeded(&["a"]);
     let now = Arc::new(AtomicI64::new(1_000));
-    let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
     handle.touch_key("k", Presented::Live, None);
     wait_for(WRITTEN, || {
         (store.api_key("k").unwrap().unwrap().last_used_at == Some(1_000)).then_some(())
@@ -960,7 +953,7 @@ async fn a_retired_presentation_inside_the_minute_after_a_live_one_is_still_writ
         )
         .unwrap();
     let now = Arc::new(AtomicI64::new(1_000));
-    let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
     handle.touch_key("k", Presented::Live, rotated_at);
     wait_for(WRITTEN, || {
         (store.api_key("k").unwrap().unwrap().last_used_at == Some(1_000)).then_some(())
@@ -1133,7 +1126,7 @@ async fn a_cooldown_about_a_replaced_credential_is_dropped_and_the_pin_survives(
     store
         .set_api_key_secret("a", &phoebis_store::Secret::new("k1"))
         .unwrap();
-    let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
     let answer = handle
         .select(request(&handle, Some("s1"), 1_000))
         .await
@@ -1220,7 +1213,7 @@ async fn pin_of(handle: &phoebis_routing::RouterHandle) -> phoebis_routing::PinR
 async fn an_account_recreated_under_a_used_id_inherits_none_of_its_routing_state() {
     let store = seeded(&["a"]);
     let now = Arc::new(AtomicI64::new(1_000));
-    let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
     handle.report(Report::Cooldown {
         account_id: "a".into(),
         row: CooldownRow {
@@ -1363,7 +1356,7 @@ fn cooldown_row(account: &str) -> CooldownRow {
 async fn a_delayed_verdict_from_the_previous_holder_leaves_the_new_one_alone() {
     let store = seeded(&["a"]);
     let now = Arc::new(AtomicI64::new(1_000));
-    let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
     store.delete_account("a", "test").unwrap();
     insert_account_a(&store);
     handle.reload().await.unwrap();
@@ -1398,7 +1391,7 @@ async fn a_delayed_verdict_from_the_previous_holder_leaves_the_new_one_alone() {
 async fn a_pin_mark_from_the_previous_holder_leaves_the_new_holders_pin_alone() {
     let store = seeded(&["a"]);
     let now = Arc::new(AtomicI64::new(1_000));
-    let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
     store.delete_account("a", "test").unwrap();
     insert_account_a(&store);
     handle.reload().await.unwrap();
@@ -1444,7 +1437,7 @@ async fn a_pin_mark_from_the_previous_holder_leaves_the_new_holders_pin_alone() 
 async fn one_reload_over_a_delete_and_a_recreate_keeps_none_of_the_previous_holders_state() {
     let store = seeded(&["a"]);
     let now = Arc::new(AtomicI64::new(1_000));
-    let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
     let first = handle
         .select(request(&handle, Some("s"), 1_000))
         .await
@@ -1517,7 +1510,7 @@ async fn a_key_created_again_under_its_id_before_one_reload_inherits_no_pin() {
     use phoebis_routing::RouterEvent;
     let store = seeded(&["a"]);
     let now = Arc::new(AtomicI64::new(1_000));
-    let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
     handle
         .select(request(&handle, Some("s"), 1_000))
         .await
@@ -1537,14 +1530,14 @@ async fn a_key_created_again_under_its_id_before_one_reload_inherits_no_pin() {
 }
 
 #[tokio::test]
-async fn a_fetch_started_under_a_previous_incarnation_changes_nothing() {
+async fn a_reading_reported_for_a_previous_incarnation_changes_nothing() {
     let store = seeded(&["a"]);
     let now = Arc::new(AtomicI64::new(1_000));
-    let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
     store.delete_account("a", "test").unwrap();
     insert_account_a(&store);
     handle.reload().await.unwrap();
-    // The answers of a usage fetch that left under the first holder and landed after the reload.
+    // The answers of a poll that left under the first holder and landed after the reload.
     handle.report(Report::Sample {
         account_id: "a".into(),
         sample: sample_with(1_500, FIVE_HOUR, 1.0, None),
@@ -1571,268 +1564,293 @@ async fn a_fetch_started_under_a_previous_incarnation_changes_nothing() {
         "and so was its overage reading"
     );
     handle.shutdown().await.unwrap();
+    let load = store.load_routing().unwrap();
     assert!(
-        store.load_routing().unwrap().overage.is_empty(),
+        load.overage.is_empty() && load.windows.is_empty(),
         "and nothing reached the store"
     );
 }
 
-/// A usage service over account `a` of `store` whose fetches reach `up`, a fake control plane on a loopback
-/// port. The token is far from expiry, so no fetch refreshes first, and the cache holds nothing, so every fetch
-/// the router starts is one request the fake records.
-fn usage_against(up: &FakeUpstream, store: &Arc<Store>, clock: Clock) -> Arc<UsageService> {
+fn window_row(account: &str, window: &str, utilization: f64, reset: Option<i64>) -> WindowRow {
+    WindowRow {
+        account_id: account.into(),
+        incarnation: 1,
+        observed_at: 500,
+        reset,
+        utilization,
+        window: window.into(),
+    }
+}
+
+/// Prices a million input tokens at a tenth of either window, whatever the tier, the model or the instant.
+fn a_tenth_per_million() -> SharePricer {
+    SharePricer::new(|_, _, _, usage, _| Some(usage.input as f64 / 1_000_000.0 * 0.1))
+}
+
+fn with_tier(store: &Store, account: &str) {
     store
-        .commit_credentials(
-            "a",
-            1,
-            1,
-            None,
-            None,
-            &NewBundle {
-                access_token: Secret::new("sk-ant-oat01-PLACEHOLDER"),
-                refresh_token: Some(Secret::new("rt")),
-                issued_at: 0,
-                expires_at: i64::MAX / 2,
-                refresh_expires_at: None,
-                scopes: "user:profile user:inference".into(),
+        .set_profile(
+            account,
+            "{}",
+            &SubscriptionRow {
+                tier: Some("default_claude_max_5x".into()),
+                ..SubscriptionRow::default()
             },
         )
         .unwrap();
-    let profile = claude_code_2_1_269_linux_x64();
-    let mut builder = connector_builder(profile, Plane::Control).unwrap();
-    trust_extra_ca(&mut builder, up.ca_pem()).unwrap();
-    let addr = up.addr();
-    let resolver: Resolver =
-        Arc::new(move |_| Box::pin(async move { Some(addr) }) as ResolveFuture);
-    let control = Arc::new(ControlClient::new(profile, builder.build(), resolver));
-    let manager = Arc::new(CredentialManager::new(
-        store.clone(),
-        control.clone(),
-        profile,
-        clock.clone(),
-    ));
-    Arc::new(UsageService::new(
-        manager,
-        control,
-        profile,
-        Duration::ZERO,
-        4,
-        clock,
-    ))
 }
 
-#[tokio::test]
-async fn a_head_sample_within_the_ttl_defers_the_usage_poll_and_one_past_it_does_not() {
-    let up = usage_endpoint().await;
-    let fetches = || usage_fetches(&up);
-    // Under `prefer_plan` every selection needs a sample, so only the sampler's own clock holds a fetch back.
-    let store = seeded_oauth(&["a"]);
-    let start = 1_000_000;
-    let now = Arc::new(AtomicI64::new(start));
-    let config = RouterConfig::default();
-    let ttl = config.sample_ttl.as_millis() as i64;
-    let handle = spawn(
-        store.clone(),
-        Some(usage_against(&up, &store, clock(&now))),
-        clock(&now),
-        config,
-    )
-    .unwrap();
-    handle.report(observed("a", shared_windows(start)));
-    let inside = start + ttl - 1_000;
-    now.store(inside, Ordering::SeqCst);
-    handle
-        .select(request(&handle, Some("s1"), inside))
-        .await
-        .unwrap();
-    stays_for(Duration::from_millis(200), || fetches() == 0).await;
-
-    let past = start + ttl;
-    now.store(past, Ordering::SeqCst);
-    handle
-        .select(request(&handle, Some("s1"), past))
-        .await
-        .unwrap();
-    wait_for(WRITTEN, || (fetches() == 1).then_some(())).await;
-    stays_for(Duration::from_millis(100), || fetches() == 1).await;
-    up.shutdown().await;
-}
-
-/// A fake control plane whose usage endpoint answers the recorded document.
-async fn usage_endpoint() -> FakeUpstream {
-    FakeUpstream::start(vec![Rule {
-        path_prefix: "/api/oauth/usage".into(),
-        respond: Respond::Json {
-            status: 200,
-            headers: vec![],
-            body: control_response(ControlFixture::Usage).to_vec(),
+fn a_million_input(account: &str, at: i64) -> Report {
+    Report::Usage {
+        account_id: account.into(),
+        at,
+        canonical_model: "claude-sonnet-5".into(),
+        incarnation: 1,
+        usage: PinUsage {
+            input: 1_000_000,
+            ..PinUsage::default()
         },
-    }])
-    .await
+    }
 }
 
-fn usage_fetches(up: &FakeUpstream) -> usize {
-    up.requests()
-        .iter()
-        .filter(|r| r.line.contains("/api/oauth/usage"))
-        .count()
-}
-
-/// The two shared windows as a head reads them, at `observed_at`.
-fn shared_windows(observed_at: i64) -> UtilizationSample {
-    sample_with(observed_at, FIVE_HOUR, 0.2, None).with(
-        SEVEN_DAY,
-        WindowReading {
-            utilization: 0.1,
-            reset: None,
-            observed_at,
-        },
-    )
-}
-
-#[tokio::test]
-async fn a_head_that_leaves_a_stored_window_unread_leaves_the_usage_poll_due() {
-    let up = usage_endpoint().await;
-    let store = seeded_oauth(&["a"]);
-    let start = 1_000_000;
-    let now = Arc::new(AtomicI64::new(start));
-    let config = RouterConfig::default();
-    let ttl = config.sample_ttl.as_millis() as i64;
-    let handle = spawn(
-        store.clone(),
-        Some(usage_against(&up, &store, clock(&now))),
-        clock(&now),
-        config,
-    )
-    .unwrap();
-    // A TTL ago the account's sample read the Fable window too; the heads since read the shared windows alone.
-    let earlier = start - ttl;
-    handle.report(observed(
-        "a",
-        shared_windows(earlier).with(
-            SEVEN_DAY_FABLE,
-            WindowReading {
-                utilization: 0.3,
-                reset: None,
-                observed_at: earlier,
-            },
-        ),
-    ));
-    handle.report(observed("a", shared_windows(start)));
-    let inside = start + 1_000;
-    now.store(inside, Ordering::SeqCst);
+async fn read(handle: &RouterHandle, account: &str, window: &str) -> Option<f64> {
     handle
-        .select(request(&handle, Some("s1"), inside))
+        .samples()
         .await
-        .unwrap();
-    wait_for(WRITTEN, || (usage_fetches(&up) == 1).then_some(())).await;
-    up.shutdown().await;
+        .unwrap()
+        .into_iter()
+        .find(|(id, _)| id == account)
+        .and_then(|(_, sample)| sample.reading(window))
+        .map(|r| r.utilization)
+}
+
+fn close(read: Option<f64>, expected: f64) -> bool {
+    read.is_some_and(|r| (r - expected).abs() < 1e-9)
 }
 
 #[tokio::test]
-async fn a_head_that_reads_one_shared_window_leaves_the_usage_poll_due() {
-    let up = usage_endpoint().await;
-    let store = seeded_oauth(&["a"]);
-    let start = 1_000_000;
-    let now = Arc::new(AtomicI64::new(start));
-    let handle = spawn(
-        store.clone(),
-        Some(usage_against(&up, &store, clock(&now))),
-        clock(&now),
-        RouterConfig::default(),
-    )
-    .unwrap();
-    handle.report(observed("a", sample_with(start, FIVE_HOUR, 0.2, None)));
-    let inside = start + 1_000;
-    now.store(inside, Ordering::SeqCst);
-    handle
-        .select(request(&handle, Some("s1"), inside))
-        .await
-        .unwrap();
-    wait_for(WRITTEN, || (usage_fetches(&up) == 1).then_some(())).await;
-    up.shutdown().await;
-}
-
-/// Pace ranks subscription accounts by their readings, so it is a reason on its own to read a quiet sibling: with
-/// the kind order, the spent move, the thresholds and the overage policy all left without a reason to sample, a due
-/// sibling is still fetched, and its reading is what the next placement ranks it by.
-#[tokio::test]
-async fn a_pace_pool_with_its_other_sampling_reasons_off_still_reads_a_due_sibling() {
-    let up = usage_endpoint().await;
+async fn a_restart_loads_the_persisted_windows_and_the_first_selection_ranks_by_them() {
     let store = seeded_oauth(&["a", "b"]);
     let mut pool = store.pool("p").unwrap().unwrap();
     pool.strategy = Strategy::Pace;
-    pool.prefer_subscription = false;
-    pool.overage_policy = OveragePolicy::Allow;
-    pool.shedding.migrate_when_spent = false;
-    pool.migrate_above_utilization = None;
-    pool.select_below_utilization = None;
     store.update_pool(&pool, "test").unwrap();
-    let start = 1_000_000;
-    let now = Arc::new(AtomicI64::new(start));
-    let usage = usage_against(&up, &store, clock(&now));
-    store
-        .commit_credentials(
-            "b",
-            1,
-            1,
-            None,
-            None,
-            &NewBundle {
-                access_token: Secret::new("sk-ant-oat01-PLACEHOLDER-B"),
-                refresh_token: Some(Secret::new("rt")),
-                issued_at: 0,
-                expires_at: i64::MAX / 2,
-                refresh_expires_at: None,
-                scopes: "user:profile user:inference".into(),
-            },
-        )
-        .unwrap();
+    let reset = Some(1_000 + 3 * HOUR);
+    for (account, utilization) in [("a", 0.9), ("b", 0.1)] {
+        for window in [FIVE_HOUR, SEVEN_DAY] {
+            assert!(store
+                .upsert_window(&window_row(account, window, utilization, reset))
+                .unwrap());
+        }
+    }
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    for (account, utilization) in [("a", 0.9), ("b", 0.1)] {
+        for window in [FIVE_HOUR, SEVEN_DAY] {
+            assert_eq!(
+                read(&handle, account, window).await,
+                Some(utilization),
+                "{account} reads its persisted {window} before any head or report"
+            );
+        }
+    }
+    match handle
+        .select(request(&handle, Some("s1"), 1_000))
+        .await
+        .unwrap()
+        .result
+    {
+        SelectResult::Selected(selection) => assert_eq!(
+            selection.account.id, "b",
+            "the first selection ranks by the loaded windows"
+        ),
+        other => panic!("expected a selection, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn a_completed_requests_share_is_added_to_the_reading_until_the_next_reading_drops_it() {
+    let store = seeded_oauth(&["a"]);
+    with_tier(&store, "a");
+    let now = Arc::new(AtomicI64::new(3_000));
     let handle = spawn(
         store.clone(),
-        Some(usage),
         clock(&now),
-        RouterConfig::default(),
+        RouterConfig {
+            share: a_tenth_per_million(),
+            ..RouterConfig::default()
+        },
     )
     .unwrap();
-    // `a` answers from its own heads, which holds its fetch off; `b` has no reading and reads as untouched.
-    handle.report(observed("a", shared_windows(start)));
-    let inside = start + 1_000;
-    now.store(inside, Ordering::SeqCst);
-    handle
-        .select(request(&handle, Some("s1"), inside))
-        .await
-        .unwrap();
-    wait_for(WRITTEN, || (usage_fetches(&up) == 1).then_some(())).await;
-    let b = wait_for_async(WRITTEN, || async {
-        handle
-            .samples()
-            .await
-            .unwrap()
-            .into_iter()
-            .find(|(id, _)| id == "b")
-            .map(|(_, sample)| sample)
+    handle.report(observed(
+        "a",
+        sample_with(1_000, FIVE_HOUR, 0.5, Some(10 * HOUR)),
+    ));
+    handle.report(a_million_input("a", 2_000));
+    assert!(
+        close(read(&handle, "a", FIVE_HOUR).await, 0.6),
+        "the reading plus the request's share"
+    );
+    handle.report(observed(
+        "a",
+        sample_with(3_000, FIVE_HOUR, 0.55, Some(10 * HOUR)),
+    ));
+    assert!(
+        close(read(&handle, "a", FIVE_HOUR).await, 0.55),
+        "a reading observed after the request carries it, so the share is dropped"
+    );
+}
+
+#[tokio::test]
+async fn a_head_writes_the_windows_it_moved_and_a_restart_reads_them() {
+    let store = seeded_oauth(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let reading = |utilization: f64| WindowReading {
+        utilization,
+        reset: Some(100 * HOUR),
+        observed_at: 1_000,
+    };
+    handle.report(observed(
+        "a",
+        sample(1_000)
+            .with(FIVE_HOUR, reading(0.2))
+            .with(SEVEN_DAY, reading(0.3))
+            .with(SEVEN_DAY_FABLE, reading(0.4)),
+    ));
+    let rows = wait_for(WRITTEN, || {
+        let windows = store.load_routing().unwrap().windows;
+        (windows.len() == 3).then_some(windows)
     })
     .await;
     assert_eq!(
-        b.reading(SEVEN_DAY).map(|r| r.utilization),
-        Some(0.4),
-        "the fetched document's weekly reading"
+        rows.iter()
+            .map(|r| (
+                r.window.as_str(),
+                r.utilization,
+                r.observed_at,
+                r.incarnation
+            ))
+            .collect::<Vec<_>>(),
+        vec![
+            (FIVE_HOUR, 0.2, 1_000, 1),
+            (SEVEN_DAY, 0.3, 1_000, 1),
+            (SEVEN_DAY_FABLE, 0.4, 1_000, 1)
+        ]
     );
-    // The weekly reading leaves `b` far less allowance per hour to its reset than `a` has, so the next session
-    // is placed on `a`, which only a selection reading `b`'s sample can decide.
-    let next = start + 2_000;
-    now.store(next, Ordering::SeqCst);
-    let answer = handle
-        .select(request(&handle, Some("s2"), next))
-        .await
-        .unwrap();
-    match answer.result {
-        SelectResult::Selected(selection) => assert_eq!(selection.account.id, "a"),
-        other => panic!("expected a selection, got {other:?}"),
+    handle.report(observed(
+        "a",
+        sample_with(900, FIVE_HOUR, 0.9, Some(100 * HOUR)),
+    ));
+    handle.shutdown().await.unwrap();
+    assert_eq!(
+        store.load_routing().unwrap().windows,
+        rows,
+        "an older head writes nothing"
+    );
+    let again = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    for (window, utilization) in [(FIVE_HOUR, 0.2), (SEVEN_DAY, 0.3), (SEVEN_DAY_FABLE, 0.4)] {
+        assert_eq!(
+            read(&again, "a", window).await,
+            Some(utilization),
+            "a restart reads {window} back"
+        );
     }
-    stays_for(Duration::from_millis(100), || usage_fetches(&up) == 1).await;
-    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn an_api_key_account_and_an_account_without_a_tier_are_charged_nothing() {
+    let store = seeded_oauth(&["a", "n"]);
+    store
+        .insert_account(&AccountRow {
+            id: "k".into(),
+            kind: AccountKind::ApiKey,
+            label: "k".into(),
+            enabled: true,
+            identity: None,
+            lifecycle_generation: 1,
+            incarnation: 1,
+            revision: 1,
+            state: AccountState::Ready,
+        })
+        .unwrap();
+    with_tier(&store, "a");
+    let now = Arc::new(AtomicI64::new(3_000));
+    let handle = spawn(
+        store.clone(),
+        clock(&now),
+        RouterConfig {
+            share: a_tenth_per_million(),
+            ..RouterConfig::default()
+        },
+    )
+    .unwrap();
+    for account in ["k", "n", "a"] {
+        handle.report(observed(
+            account,
+            sample_with(1_000, FIVE_HOUR, 0.5, Some(10 * HOUR)),
+        ));
+        handle.report(a_million_input(account, 2_000));
+    }
+    assert!(
+        close(read(&handle, "k", FIVE_HOUR).await, 0.5),
+        "an api_key account"
+    );
+    assert!(
+        close(read(&handle, "n", FIVE_HOUR).await, 0.5),
+        "an account whose snapshot carries no tier"
+    );
+    assert!(
+        close(read(&handle, "a", FIVE_HOUR).await, 0.6),
+        "the pricer was asked for the account with a tier alone"
+    );
+}
+
+#[tokio::test]
+async fn a_windows_write_queued_for_a_deleted_holder_lands_nowhere_and_its_replacement_restarts_with_none(
+) {
+    let store = seeded_oauth(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    handle.report(observed(
+        "a",
+        sample_with(1_000, FIVE_HOUR, 0.7, Some(5 * HOUR)),
+    ));
+    let rows = wait_for(WRITTEN, || {
+        let windows = store.load_routing().unwrap().windows;
+        (!windows.is_empty()).then_some(windows)
+    })
+    .await;
+    handle.shutdown().await.unwrap();
+    store.delete_account("a", "test").unwrap();
+    store
+        .insert_account(&AccountRow {
+            id: "a".into(),
+            kind: AccountKind::Oauth,
+            label: "a".into(),
+            enabled: true,
+            identity: None,
+            lifecycle_generation: 1,
+            incarnation: 1,
+            revision: 1,
+            state: AccountState::Ready,
+        })
+        .unwrap();
+    assert_eq!(store.account("a").unwrap().unwrap().incarnation, 2);
+    assert!(
+        !store.upsert_window(&rows[0]).unwrap(),
+        "the old holder's delayed write lands nowhere"
+    );
+    assert!(store.load_routing().unwrap().windows.is_empty());
+    let again = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    assert!(
+        again
+            .samples()
+            .await
+            .unwrap()
+            .iter()
+            .all(|(id, _)| id != "a"),
+        "the replacement starts with no window"
+    );
 }
 
 async fn next_event(
@@ -1851,7 +1869,6 @@ async fn the_router_broadcasts_pin_cooldown_and_overage_events() {
     let now = Arc::new(AtomicI64::new(1_000));
     let handle = spawn(
         store.clone(),
-        None,
         clock(&now),
         RouterConfig {
             purge_interval: Duration::from_millis(50),
@@ -1988,7 +2005,7 @@ async fn the_router_broadcasts_pin_cooldown_and_overage_events() {
     // need still standing.
     handle.report(Report::Sample {
         account_id: a.clone(),
-        sample: sample_with(1_500, FIVE_HOUR, 0.7, Some(9_000)).with(
+        sample: sample_with(1_500, FIVE_HOUR, 0.7, Some(9 * HOUR)).with(
             SEVEN_DAY,
             WindowReading {
                 utilization: 0.2,
@@ -2015,7 +2032,7 @@ async fn a_spent_five_hour_window_migrates_the_pin_with_reason_spent() {
     use phoebis_routing::{Report, RouterEvent};
     let store = seeded(&["a", "b"]);
     let now = Arc::new(AtomicI64::new(1_000));
-    let handle = spawn(store, None, clock(&now), RouterConfig::default()).unwrap();
+    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
     let mut events = handle.subscribe_events();
     let first = handle
         .select(request(&handle, Some("s1"), 1_000))
@@ -2066,7 +2083,7 @@ async fn a_pin_on_a_cooled_and_spent_account_with_no_sibling_allowance_expires_w
     use phoebis_routing::{Report, RouterEvent};
     let store = seeded(&["a", "b"]);
     let now = Arc::new(AtomicI64::new(1_000));
-    let handle = spawn(store, None, clock(&now), RouterConfig::default()).unwrap();
+    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
     let mut events = handle.subscribe_events();
     let first = handle
         .select(request(&handle, Some("s1"), 1_000))
@@ -2186,7 +2203,7 @@ async fn a_sample_that_shows_the_cooled_window_below_its_limit_releases_the_acco
     use phoebis_routing::RouterEvent;
     let store = seeded_oauth(&["a"]);
     let now = Arc::new(AtomicI64::new(1_000));
-    let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
     let mut events = handle.subscribe_events();
     handle.report(cooled(
         "a",
@@ -2236,13 +2253,13 @@ async fn a_sample_that_shows_the_cooled_window_below_its_limit_releases_the_acco
 async fn a_repeated_rejection_moves_the_fence_a_recovery_sample_has_to_clear() {
     let store = seeded_oauth(&["a"]);
     let now = Arc::new(AtomicI64::new(1_000));
-    let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
     let rejection = || cooled("a", "account", 1_000 + 5 * HOUR, "rate_limit", "five_hour");
     handle.report(rejection());
     assert_eq!(handle.cooldowns().await.unwrap().len(), 1);
     now.store(3_000, Ordering::SeqCst);
     handle.report(rejection());
-    // The usage fetch behind this reading left before the second rejection and landed after it.
+    // The poll behind this reading read the endpoint before the second rejection and landed after it.
     handle.report(observed("a", sample_with(2_000, FIVE_HOUR, 0.4, None)));
     assert_eq!(
         handle.cooldowns().await.unwrap().len(),
@@ -2260,7 +2277,7 @@ async fn a_repeated_rejection_moves_the_fence_a_recovery_sample_has_to_clear() {
 async fn a_sample_the_cooled_account_was_holding_when_it_was_rejected_releases_nothing() {
     let store = seeded_oauth(&["a"]);
     let now = Arc::new(AtomicI64::new(2_000));
-    let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
     handle.report(cooled(
         "a",
         "account",
@@ -2288,7 +2305,7 @@ async fn a_sample_the_cooled_account_was_holding_when_it_was_rejected_releases_n
 async fn a_window_at_its_limit_keeps_the_cooldown() {
     let store = seeded_oauth(&["a"]);
     let now = Arc::new(AtomicI64::new(1_000));
-    let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
     handle.report(cooled(
         "a",
         "account",
@@ -2317,7 +2334,7 @@ async fn a_window_at_its_limit_keeps_the_cooldown() {
 async fn a_claim_that_names_neither_shared_window_waits_for_both() {
     let store = seeded_oauth(&["a"]);
     let now = Arc::new(AtomicI64::new(1_000));
-    let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
     // The upstream's representative claim travels into the row as it came, so the window is not always one of
     // the two names the sample reads.
     handle.report(cooled(
@@ -2368,7 +2385,7 @@ async fn a_claim_that_names_neither_shared_window_waits_for_both() {
 async fn a_row_no_usage_window_answers_for_is_left_alone() {
     let store = seeded_oauth(&["a"]);
     let now = Arc::new(AtomicI64::new(1_000));
-    let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
     handle.report(cooled(
         "a",
         "account",
@@ -2426,7 +2443,7 @@ async fn a_row_no_usage_window_answers_for_is_left_alone() {
 async fn a_sample_older_than_the_one_already_stored_releases_nothing() {
     let store = seeded_oauth(&["a"]);
     let now = Arc::new(AtomicI64::new(1_000));
-    let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
     handle.report(cooled(
         "a",
         "account",
@@ -2458,7 +2475,6 @@ async fn a_sample_that_arrives_after_the_deadline_leaves_the_row_to_the_purge_ti
     let now = Arc::new(AtomicI64::new(1_000));
     let handle = spawn(
         store.clone(),
-        None,
         clock(&now),
         RouterConfig {
             purge_interval: Duration::from_millis(50),
@@ -2493,7 +2509,7 @@ async fn a_sample_that_arrives_after_the_deadline_leaves_the_row_to_the_purge_ti
 async fn a_model_scoped_row_reads_the_model_window_and_nothing_else() {
     let store = seeded_oauth(&["a"]);
     let now = Arc::new(AtomicI64::new(1_000));
-    let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
     handle.report(cooled(
         "a",
         "model:claude-sonnet-5",
@@ -2662,7 +2678,7 @@ async fn a_completion_wakes_a_waiter_and_the_bound_ends_the_wait() {
 async fn two_selections_answered_together_read_the_slot_the_first_one_charged() {
     let store = seeded(&["a"]);
     let now = Arc::new(AtomicI64::new(1_000));
-    let handle = spawn(store, None, clock(&now), RouterConfig::default()).unwrap();
+    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
     let cap = phoebis_store::Failover::default().in_flight_cap;
     let _busy: Vec<_> = (1..cap)
         .map(|_| handle.in_flight().dispatched("a", 1_000))
@@ -2717,7 +2733,7 @@ async fn a_fail_over_after_a_cooldown_names_cooldown_in_the_trace() {
     use phoebis_routing::RouterEvent;
     let store = seeded(&["a", "b"]);
     let now = Arc::new(AtomicI64::new(1_000));
-    let handle = spawn(store, None, clock(&now), RouterConfig::default()).unwrap();
+    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
     let mut events = handle.subscribe_events();
     let first = handle
         .select(request(&handle, Some("s1"), 1_000))
@@ -2775,7 +2791,7 @@ async fn a_siblings_fresh_placement_in_the_window_never_consumes_another_agents_
     use phoebis_routing::RouterEvent;
     let store = seeded(&["a", "b"]);
     let now = Arc::new(AtomicI64::new(1_000));
-    let handle = spawn(store, None, clock(&now), RouterConfig::default()).unwrap();
+    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
     let mut events = handle.subscribe_events();
     let main = handle
         .select(request(&handle, Some("s1"), 1_000))
@@ -2847,7 +2863,7 @@ async fn a_probe_after_a_compacted_request_refreshes_warmth() {
     use phoebis_routing::{warm, Report};
     let store = seeded(&["a"]);
     let now = Arc::new(AtomicI64::new(1_000));
-    let handle = spawn(store, None, clock(&now), RouterConfig::default()).unwrap();
+    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
     let compacted = |now: i64, probe: bool| SelectRequest {
         probe,
         request_class: Some("main".into()),
@@ -2940,7 +2956,7 @@ async fn a_renewal_with_usage_folds_both_averages_and_a_probes_usage_never_count
         rates: quarter_dollar_rates(),
         ..RouterConfig::default()
     };
-    let handle = spawn(store, None, clock(&now), config).unwrap();
+    let handle = spawn(store, clock(&now), config).unwrap();
     let client = selected_pin(
         handle
             .select(request(&handle, Some("s1"), 1_000))
@@ -3033,7 +3049,7 @@ async fn the_burn_lands_in_the_store_with_the_input_size_and_the_ttl() {
         rates: quarter_dollar_rates(),
         ..RouterConfig::default()
     };
-    let handle = spawn(store.clone(), None, clock(&now), config).unwrap();
+    let handle = spawn(store.clone(), clock(&now), config).unwrap();
     let pin = selected_pin(
         handle
             .select(request(&handle, Some("s1"), 1_000))
@@ -3070,7 +3086,7 @@ async fn the_burn_lands_in_the_store_with_the_input_size_and_the_ttl() {
         "the input size counts every prompt token and the TTL is the one the relay resolved"
     );
     handle.shutdown().await.unwrap();
-    let again = spawn(store, None, clock(&now), RouterConfig::default()).unwrap();
+    let again = spawn(store, clock(&now), RouterConfig::default()).unwrap();
     let reloaded = again.pins().await.unwrap().remove(0);
     assert_eq!(
         (reloaded.burn, reloaded.burn_usd),
@@ -3098,7 +3114,7 @@ async fn a_renewal_inside_the_band_folds_a_heavier_meter_burn_and_the_same_dolla
         rates: quarter_dollar_rates(),
         ..RouterConfig::default()
     };
-    let handle = spawn(store, None, clock(&now), config).unwrap();
+    let handle = spawn(store, clock(&now), config).unwrap();
     let afternoon = selected_pin(
         handle
             .select(request(&handle, Some("s1"), 1_000))
@@ -3154,7 +3170,7 @@ async fn a_fit_report_lands_in_the_store_and_reloads() {
         ..FitRow::default()
     };
     {
-        let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
+        let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
         handle.report(Report::Fit {
             row: row.clone(),
             incarnation: 1,
@@ -3185,7 +3201,7 @@ async fn a_fit_report_lands_in_the_store_and_reloads() {
         .await;
         handle.shutdown().await.unwrap();
     }
-    let again = spawn(store, None, clock(&now), RouterConfig::default()).unwrap();
+    let again = spawn(store, clock(&now), RouterConfig::default()).unwrap();
     assert_eq!(
         again.fits().await.unwrap(),
         vec![row],
@@ -3210,7 +3226,7 @@ async fn a_stored_fit_the_fitter_would_refuse_is_not_served() {
     assert!(!refused.sound());
     store.upsert_fit(&refused).unwrap();
     let now = Arc::new(AtomicI64::new(1_000));
-    let handle = spawn(store, None, clock(&now), RouterConfig::default()).unwrap();
+    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
     assert!(
         handle.fits().await.unwrap().is_empty(),
         "a zero scale is no window size to serve"
@@ -3222,7 +3238,7 @@ async fn a_reports_affinity_rows_reach_the_store_and_a_restart_reloads_them() {
     let store = seeded(&["a"]);
     let now = Arc::new(AtomicI64::new(1_000));
     {
-        let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
+        let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
         let report = AffinityReport {
             message_boundaries: vec!["b1".into(), "b2".into()],
             message_id: Some("resp-1".into()),
@@ -3241,7 +3257,7 @@ async fn a_reports_affinity_rows_reach_the_store_and_a_restart_reloads_them() {
         4,
         "the two message boundaries plus the response and request ids"
     );
-    let handle = spawn(store, None, clock(&now), RouterConfig::default()).unwrap();
+    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
     let entry = handle
         .affinity()
         .read()
@@ -3258,7 +3274,7 @@ async fn a_reports_affinity_rows_reach_the_store_and_a_restart_reloads_them() {
 async fn a_shutdown_persists_a_refreshed_entrys_time() {
     let store = seeded(&["a"]);
     let now = Arc::new(AtomicI64::new(1_000));
-    let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
     handle.report(Report::Affinity(affinity_report(&handle, "a", 1_000)));
     wait_for(WRITTEN, || {
         (!store.load_routing().unwrap().affinity.is_empty()).then_some(())
@@ -3298,7 +3314,6 @@ async fn the_purge_tick_writes_a_refreshed_entrys_time_so_a_restart_without_a_sh
     {
         let handle = spawn(
             store.clone(),
-            None,
             clock(&now),
             RouterConfig {
                 purge_interval: Duration::from_millis(50),
@@ -3324,7 +3339,7 @@ async fn the_purge_tick_writes_a_refreshed_entrys_time_so_a_restart_without_a_sh
         .await;
         // Dropped without a shutdown, the way a crash leaves the store: no drain runs after this point.
     }
-    let handle = spawn(store, None, clock(&now), RouterConfig::default()).unwrap();
+    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
     let written_at = handle
         .affinity()
         .read()
@@ -3348,7 +3363,6 @@ async fn the_purge_tick_deletes_an_aged_entry_from_the_store() {
     let now = Arc::new(AtomicI64::new(1_000));
     let handle = spawn(
         store.clone(),
-        None,
         clock(&now),
         RouterConfig {
             purge_interval: Duration::from_millis(50),
@@ -3378,7 +3392,7 @@ async fn an_account_recreated_under_its_id_drops_its_affinity_entries_and_a_late
 ) {
     let store = seeded(&["a"]);
     let now = Arc::new(AtomicI64::new(1_000));
-    let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
     let report = affinity_report(&handle, "a", 1_000);
     handle.report(Report::Affinity(report.clone()));
     wait_for(WRITTEN, || {
@@ -3453,7 +3467,7 @@ async fn a_spend_report_under_another_period_than_the_members_is_discarded() {
         )
         .unwrap();
     let now = Arc::new(AtomicI64::new(1_000));
-    let handle = spawn(store, None, clock(&now), RouterConfig::default()).unwrap();
+    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
     let snapshot = handle.snapshot();
     // The task's own state is not reachable from the handle; the same read and write the report handler uses
     // are exercised directly against a state built the way the task's does.
@@ -3501,7 +3515,7 @@ async fn a_members_spend_read_after_a_period_edit_answers_none_until_the_next_re
         )
         .unwrap();
     let now = Arc::new(AtomicI64::new(1_000));
-    let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
     let month_snapshot = handle.snapshot();
     let mut state = RoutingState::from_load(RoutingLoad::default());
     let month_row = MemberSpend {
@@ -3563,7 +3577,7 @@ async fn the_handle_answers_no_row_for_a_member_whose_period_the_report_predates
         )
         .unwrap();
     let now = Arc::new(AtomicI64::new(1_000));
-    let handle = spawn(store.clone(), None, clock(&now), RouterConfig::default()).unwrap();
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
     handle.report(Report::MemberSpend(vec![MemberSpend {
         pool_id: "p".into(),
         account_id: "a".into(),

@@ -1,6 +1,6 @@
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, AffinityChain, AffinityRow, CooldownRow, FitRow,
-    OverageRow, PinKey, PinRow, RekeyWrite, ResolutionRow, StorageKey, Store,
+    OverageRow, PinKey, PinRow, RekeyWrite, ResolutionRow, StorageKey, Store, WindowRow,
 };
 
 const SPELLING: &str = "claude-sonnet-4-5";
@@ -254,6 +254,113 @@ fn overage_evidence_only_moves_forward_in_time() {
         "a late head cannot roll the state back"
     );
     assert!(store.load_routing().unwrap().overage[0].in_use);
+}
+
+fn window_row(window: &str, utilization: f64, observed_at: i64, incarnation: u64) -> WindowRow {
+    WindowRow {
+        account_id: "a".into(),
+        incarnation,
+        observed_at,
+        reset: Some(observed_at + 3_600_000),
+        utilization,
+        window: window.into(),
+    }
+}
+
+#[test]
+fn usage_windows_survive_a_reopen_move_only_forward_and_leave_with_their_account() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("router.sqlite");
+    let storage_key = StorageKey::generate();
+    let rows = vec![
+        window_row("five_hour", 0.5, 1_000, 1),
+        window_row("seven_day", 0.25, 1_000, 1),
+        window_row("seven_day_fable", 0.75, 1_000, 1),
+    ];
+    {
+        let store = Store::open(&path, &storage_key).unwrap();
+        seed_accounts(&store, &["a"]);
+        for row in &rows {
+            assert!(store.upsert_window(row).unwrap(), "{row:?}");
+        }
+    }
+    let store = Store::open(&path, &storage_key).unwrap();
+    assert_eq!(
+        store.load_routing().unwrap().windows,
+        rows,
+        "the three rows reopen as written"
+    );
+    let older = WindowRow {
+        utilization: 0.9,
+        observed_at: 900,
+        ..rows[0].clone()
+    };
+    assert!(
+        !store.upsert_window(&older).unwrap(),
+        "an older reading writes nothing"
+    );
+    assert_eq!(store.load_routing().unwrap().windows[0], rows[0]);
+    let newer = WindowRow {
+        utilization: 0.6,
+        observed_at: 2_000,
+        ..rows[0].clone()
+    };
+    assert!(store.upsert_window(&newer).unwrap());
+    assert_eq!(
+        store.load_routing().unwrap().windows[0],
+        newer,
+        "a newer reading replaces the row"
+    );
+    store.delete_account("a", "test").unwrap();
+    assert!(
+        store.load_routing().unwrap().windows.is_empty(),
+        "the rows leave with their account"
+    );
+    assert_eq!(
+        store.purge_stale_windows().unwrap(),
+        0,
+        "the cascade took them, so the purge finds none"
+    );
+}
+
+#[test]
+fn a_window_of_another_holder_of_the_id_is_never_written_loaded_or_kept() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("router.sqlite");
+    let storage_key = StorageKey::generate();
+    let store = Store::open(&path, &storage_key).unwrap();
+    seed_accounts(&store, &["a"]);
+    store.delete_account("a", "test").unwrap();
+    seed_accounts(&store, &["a"]);
+    assert_eq!(store.account("a").unwrap().unwrap().incarnation, 2);
+    assert!(
+        !store
+            .upsert_window(&window_row("five_hour", 0.9, 1_000, 1))
+            .unwrap(),
+        "a write queued for the deleted holder lands nowhere"
+    );
+    assert!(store.load_routing().unwrap().windows.is_empty());
+    drop(store);
+    // A row the replacement never wrote, as a write from before the incarnation fence would have left it.
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute(
+        "INSERT INTO usage_windows (account_id, window, utilization, reset, observed_at, incarnation) \
+         VALUES ('a', 'seven_day', 0.9, NULL, 1000, 1)",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+    let store = Store::open(&path, &storage_key).unwrap();
+    assert!(
+        store.load_routing().unwrap().windows.is_empty(),
+        "the previous holder's row is never loaded"
+    );
+    assert_eq!(store.purge_stale_windows().unwrap(), 1);
+    assert_eq!(
+        store.purge_stale_windows().unwrap(),
+        0,
+        "and the purge deleted it"
+    );
 }
 
 #[test]

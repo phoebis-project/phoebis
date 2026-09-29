@@ -166,7 +166,6 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
     );
     let router_task = phoebis_routing::spawn(
         store.clone(),
-        Some(usage.clone()),
         clock.clone(),
         router_config(&pricing.current()),
     )?;
@@ -655,15 +654,24 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
 }
 
 /// The routing task's burn prices and peak band: the shipped plan tables for the meter side, and for dollars
-/// `prices`, the table `Pricing::load` chose at startup; both are fixed for the life of the process.
+/// `prices`, the table `Pricing::load` chose at startup; the share of an account's window a completed request
+/// consumed, priced through the cost table and the tier factor table. All are fixed for the life of the process.
 fn router_config(prices: &phoebis_ledger::PriceTable) -> phoebis_routing::RouterConfig {
     let windows = Arc::new(phoebis_ledger::PlanWindows::shipped());
+    let tables = Arc::new(phoebis_ledger::PlanTables::shipped());
     phoebis_routing::RouterConfig {
         band: phoebis_routing::BandWeight::new(move |window, at| windows.band_factor(window, at)),
         rates: phoebis_routing::BurnRates {
             meter: phoebis_ledger::PlanFactors::shipped().rate_table(),
             dollars: prices.rate_table(),
         },
+        share: phoebis_routing::SharePricer::new(move |window, tier, model, usage, at| {
+            let share = match window {
+                phoebis_routing::FIVE_HOUR => tables.five_hour_share_at(tier, model, usage, at),
+                window => tables.share(window, tier, model, usage),
+            };
+            share.map(|s| s.share)
+        }),
         ..phoebis_routing::RouterConfig::default()
     }
 }
@@ -757,6 +765,55 @@ fn init_tracing() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_router_config_prices_a_windows_share_through_the_shipped_plan_tables() {
+        let config = router_config(&phoebis_ledger::PriceTable::shipped());
+        let tables = phoebis_ledger::PlanTables::shipped();
+        let usage = phoebis_routing::PinUsage {
+            input: 1_000,
+            cache_read: 10_000,
+            write_5m: 100,
+            write_1h: 200,
+            output: 500,
+        };
+        let tier = "default_claude_max_5x";
+        // Monday 2026-09-21 at 14:00 UTC, inside the peak band.
+        let at = 1_789_999_200_000;
+        assert_eq!(
+            config
+                .share
+                .price(phoebis_routing::FIVE_HOUR, tier, "claude-opus-5", usage, at),
+            tables
+                .five_hour_share_at(tier, "claude-opus-5", usage, at)
+                .map(|s| s.share),
+            "the 5-hour share is weighed by the band at the completion"
+        );
+        for window in [phoebis_routing::SEVEN_DAY, phoebis_routing::SEVEN_DAY_FABLE] {
+            assert_eq!(
+                config.share.price(window, tier, "claude-opus-5", usage, at),
+                tables
+                    .share(window, tier, "claude-opus-5", usage)
+                    .map(|s| s.share),
+                "{window}"
+            );
+        }
+        assert!(config
+            .share
+            .price(phoebis_routing::FIVE_HOUR, tier, "claude-opus-5", usage, at)
+            .is_some_and(|share| share > 0.0));
+        assert_eq!(
+            config.share.price(
+                phoebis_routing::FIVE_HOUR,
+                "no_such_tier",
+                "claude-opus-5",
+                usage,
+                at
+            ),
+            None,
+            "a tier the factor table lacks prices at no share"
+        );
+    }
 
     #[test]
     fn the_router_config_prices_the_burn_through_the_shipped_meter_table_and_the_price_table() {

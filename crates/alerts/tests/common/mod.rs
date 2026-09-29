@@ -259,7 +259,7 @@ async fn rig_over(store: Arc<Store>, webhook: Arc<dyn Webhook>, hook: Option<Clo
             c.load(Ordering::SeqCst)
         })
     };
-    let router = spawn_router(store.clone(), None, clock.clone(), RouterConfig::default()).unwrap();
+    let router = spawn_router(store.clone(), clock.clone(), RouterConfig::default()).unwrap();
     let bus = Bus::new();
     let db = Arc::new(LedgerDb::open_in_memory().unwrap());
     let pricing = Arc::new(Pricing::new(PriceTable::shipped()));

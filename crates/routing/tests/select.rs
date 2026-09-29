@@ -15,9 +15,6 @@ use rand::rngs::StdRng;
 use rand::SeedableRng;
 
 const HOUR: i64 = 3_600_000;
-/// `RoutingState::from_load` seeds this from `DEFAULT_SAMPLE_TTL_MS`, private to that crate; duplicated here
-/// since a state built with no override reads that default.
-const SAMPLE_TTL_MS: i64 = 60_000;
 /// The fallback `request()` carries, for a call to the overage predicate outside a full `SelectRequest`.
 const FALLBACK_MS: i64 = 60_000;
 
@@ -1015,10 +1012,6 @@ fn prefer_plan_migrates_out_of_overage_and_returns_only_when_no_sibling_is_eligi
     );
 }
 
-/// The TTL the router's default configuration pulls samples on, which is how long a reading that dates no
-/// refund of its own is worth.
-const SAMPLE_TTL: i64 = 60_000;
-
 #[test]
 fn a_spent_fable_window_stops_excluding_once_the_reset_it_named_passes() {
     let s = snapshot(Pool {
@@ -1057,7 +1050,7 @@ fn a_spent_fable_window_stops_excluding_once_the_reset_it_named_passes() {
 }
 
 #[test]
-fn a_spent_fable_window_that_dated_no_reset_stops_excluding_once_the_reading_ages_out() {
+fn a_spent_fable_window_that_dated_no_reset_keeps_excluding_until_a_newer_reading_lands() {
     let s = snapshot(Pool {
         members: vec![("a", 0)],
         ..Pool::default()
@@ -1074,14 +1067,15 @@ fn a_spent_fable_window_that_dated_no_reset_stops_excluding_once_the_reading_age
                 "claude-fable-5-1",
                 true,
                 &[],
-                1_000 + SAMPLE_TTL - 1
+                1_000 + 6 * HOUR
             ),
             &mut rng()
         )
         .0,
         SelectResult::Exhausted(Exhaustion::Untimed),
-        "while the router would still be trusting the reading it is an exclusion"
+        "a full reading that names no reset stands however old it is"
     );
+    st.record_sample("a", with_fable(sample(0.1, 0.1, 2_000), 0.5, None));
     assert_eq!(
         picked(
             &select(
@@ -1093,14 +1087,14 @@ fn a_spent_fable_window_that_dated_no_reset_stops_excluding_once_the_reading_age
                     "claude-fable-5-1",
                     true,
                     &[],
-                    1_000 + SAMPLE_TTL
+                    1_000 + 6 * HOUR
                 ),
                 &mut rng()
             )
             .0
         ),
         "a",
-        "past it the account is tried again rather than excluded on a reading nothing refreshes"
+        "a newer reading under the limit ends the exclusion"
     );
 }
 
@@ -2002,9 +1996,8 @@ fn a_pin_on_a_spent_five_hour_window_moves_to_a_sibling_with_allowance_and_stays
         ("a", None),
         "a's reset has already passed, so the reading no longer stands and a holds allowance again"
     );
-    // The no-reset branch: absent a reset, a full reading stands only for the sample TTL. Continuing s2's pin
-    // on a with a fresh no-reset spent reading exercises the "still fresh" half: the account cannot serve, so
-    // the pin moves.
+    // The no-reset branch: absent a reset, a full reading stands until the next reading. Continuing s2's pin on
+    // a with a no-reset spent reading: the account cannot serve, so the pin moves.
     let t = now + 1_000;
     st.record_sample("a", sample(1.0, 0.1, t));
     st.record_sample("b", refreshing(0.2, 9 * HOUR, 9 * HOUR, t));
@@ -2014,27 +2007,7 @@ fn a_pin_on_a_spent_five_hour_window_moves_to_a_sibling_with_allowance_and_stays
     assert_eq!(
         (sel.account.id.as_str(), sel.migrated),
         ("b", Some(MigrateReason::Spent)),
-        "no reset dated: a full reading still stands for the sample TTL"
-    );
-    // The same no-reset reading, on a fresh pin, once the sample TTL has passed: it no longer stands.
-    let pick3 = |st: &mut RoutingState, now: i64| {
-        select(
-            st,
-            &s,
-            &request(&s, Some("s3"), "claude-sonnet-5", true, &[], now),
-            &mut rng(),
-        )
-    };
-    let t2 = t + 1_000;
-    assert_eq!(picked(&pick3(&mut st, t2).0), "a");
-    st.record_sample("a", sample(1.0, 0.1, t2));
-    let SelectResult::Selected(sel) = pick3(&mut st, t2 + SAMPLE_TTL_MS + 1).0 else {
-        panic!()
-    };
-    assert_eq!(
-        (sel.account.id.as_str(), sel.migrated),
-        ("a", None),
-        "no reset dated: the reading ages out once the sample TTL passes, and a holds allowance again"
+        "no reset dated: a full reading stands until the next reading"
     );
 }
 
@@ -3194,6 +3167,7 @@ fn the_blocker_refuses_a_winding_down_account_for_the_static_tier() {
             trial_ends_at: None,
             cancelled: true,
             ends_at: Some(1_000 + 10 * 60_000), // 10 minutes out, inside the 30-minute window
+            tier: None,
         }],
     );
     let mut st = RoutingState::from_load(RoutingLoad::default());
@@ -3817,6 +3791,7 @@ fn a_tail_match_bypasses_the_ceiling_the_wind_down_and_the_floor() {
             trial_ends_at: None,
             cancelled: true,
             ends_at: Some(1_000 + 10 * 60_000),
+            tier: None,
         }],
         &|_| {},
     );
@@ -4737,8 +4712,8 @@ fn a_sample_that_retires_overage_evidence_returns_an_account_to_the_plan_funded_
         ["b".to_string()].into_iter().collect(),
         "the account in overage sits one group below the plan-funded one while the evidence stands"
     );
-    // the overage predicate never expires evidence of its own and the quota poll writes the ledger, not routing
-    // state, so this sample is the only thing that can retire it. `needs_sample` has to ask for it.
+    // Newer evidence retires the flag before its fallback runs out; for an account this quiet that is the poll's
+    // next reading.
     st.record_overage("a", sampled(false, 2_000));
     assert!(!st.in_overage("a", 2_000, FALLBACK_MS));
     let mut served = std::collections::HashSet::new();
@@ -5605,6 +5580,7 @@ fn an_ending_account_is_paced_against_the_earlier_of_its_reset_and_its_end() {
             trial_ends_at: None,
             cancelled: true,
             ends_at: Some(1_000 + 6 * HOUR),
+            tier: None,
         }],
     );
     let mut st = RoutingState::from_load(RoutingLoad::default());
@@ -5647,6 +5623,7 @@ fn a_winding_down_account_takes_a_fresh_session_only_as_the_last_resort_under_ev
             trial_ends_at: None,
             cancelled: true,
             ends_at: Some(1_000 + 10 * 60_000), // 10 minutes out, inside the 30-minute window
+            tier: None,
         }];
         let failover = Failover {
             wind_down_minutes: 30,
@@ -5708,6 +5685,7 @@ fn a_cancelled_account_past_its_end_is_an_obstacle_and_its_pin_is_released_as_su
             trial_ends_at: None,
             cancelled: true,
             ends_at: Some(5_000),
+            tier: None,
         }],
     );
     let mut st = RoutingState::from_load(RoutingLoad::default());
@@ -5760,6 +5738,7 @@ fn a_future_trial_end_counts_as_an_end_and_a_passed_one_leaves_the_account_alone
             trial_ends_at: Some(1_000 + 10 * 60_000),
             cancelled: false,
             ends_at: None,
+            tier: None,
         }],
     );
     let mut st = RoutingState::from_load(RoutingLoad::default());
@@ -5777,6 +5756,7 @@ fn a_future_trial_end_counts_as_an_end_and_a_passed_one_leaves_the_account_alone
             trial_ends_at: Some(500),
             cancelled: false,
             ends_at: None,
+            tier: None,
         }],
     );
     let mut st2 = RoutingState::from_load(RoutingLoad::default());
@@ -7277,7 +7257,7 @@ fn marked(st: &RoutingState, session: &str, now: i64) -> bool {
 const MINUTE: i64 = 60_000;
 
 #[test]
-fn the_spent_toggle_gates_the_spent_move_and_a_destination_needs_a_fresh_sample_unless_it_is_an_api_key(
+fn the_spent_toggle_gates_the_spent_move_and_a_destination_needs_a_reading_of_the_window_unless_it_is_an_api_key(
 ) {
     let pool = |migrate_when_spent: bool, kinds: Vec<(&'static str, AccountKind)>| Pool {
         members: vec![("a", 0), ("b", 1)],
@@ -7311,9 +7291,12 @@ fn the_spent_toggle_gates_the_spent_move_and_a_destination_needs_a_fresh_sample_
             .0
         ),
         ("a".into(), None),
-        "after a restart b's allowance is unknown, so b is no destination and the upstream decides"
+        "a sibling never read holds no reading of the window, so it is no destination and the upstream decides"
     );
-    st.record_sample("b", sample(0.2, 0.2, T + 1_000 - 2 * SAMPLE_TTL_MS));
+    st.record_sample(
+        "b",
+        refreshing(0.2, T + 9 * HOUR, T + 9 * HOUR, T + 1_000 - HOUR),
+    );
     assert_eq!(
         landed(
             select(
@@ -7324,22 +7307,8 @@ fn the_spent_toggle_gates_the_spent_move_and_a_destination_needs_a_fresh_sample_
             )
             .0
         ),
-        ("a".into(), None),
-        "a sample older than the sample TTL is no evidence of allowance"
-    );
-    st.record_sample("b", sample(0.2, 0.2, T + 2_500));
-    assert_eq!(
-        landed(
-            select(
-                &mut st,
-                &s,
-                &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T + 3_000),
-                &mut rng()
-            )
-            .0
-        ),
         ("b".into(), Some(MigrateReason::Spent)),
-        "a fresh sample on the sibling makes it a destination"
+        "a sibling read an hour ago, its reset ahead, is a destination"
     );
 
     let off = snapshot(pool(false, vec![]));
@@ -7387,6 +7356,47 @@ fn the_spent_toggle_gates_the_spent_move_and_a_destination_needs_a_fresh_sample_
         ),
         ("b".into(), Some(MigrateReason::Spent)),
         "an api_key sibling holds allowance without a sample"
+    );
+}
+
+#[test]
+fn a_spent_sibling_whose_reading_passed_its_reset_holds_allowance_and_the_shed_trigger_reads_zero_after_a_reset(
+) {
+    let s = snapshot(Pool {
+        select_below: Some(0.8),
+        ..shedding_pool(Shedding::default())
+    });
+    let mut st = loaded(vec![burning("s1", "b", 4.0, false, T)]);
+    // a read its 5-hour window full an hour ago, and that window reset a minute ago; b is spent until its reset.
+    st.record_sample("a", refreshing(1.0, T - MINUTE, T + 9 * HOUR, T - HOUR));
+    st.record_sample("b", refreshing(1.0, T + HOUR, T + 9 * HOUR, T - 1_000));
+    assert_eq!(
+        landed(select(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng()).0),
+        ("a".into(), Some(MigrateReason::Spent)),
+        "a's full reading passed its reset, so a holds allowance and takes the spent pin"
+    );
+    assert_eq!(
+        landed(select(&mut st, &s, &auxiliary(&s, "s1", T + 1_000), &mut rng()).0),
+        ("a".into(), None)
+    );
+    assert_eq!(
+        st.last_shed("a"),
+        None,
+        "the shed trigger reads zero after the reset, so no round ran on a"
+    );
+    st.record_sample("b", refreshing(0.1, T + HOUR, T + 9 * HOUR, T + 1_500));
+    assert_eq!(
+        picked(
+            &select(
+                &mut st,
+                &s,
+                &request(&s, Some("s2"), "claude-sonnet-5", true, &[], T + 2_000),
+                &mut rng()
+            )
+            .0
+        ),
+        "a",
+        "the ceiling reads zero after the reset too, so a stays under it"
     );
 }
 
@@ -7599,6 +7609,7 @@ fn a_cold_pin_on_a_winding_down_account_drains_and_a_warm_one_stays() {
             trial_ends_at: None,
             cancelled: true,
             ends_at: Some(T + 10 * MINUTE),
+            tier: None,
         }],
     );
     let mut st = loaded(vec![
@@ -7713,6 +7724,7 @@ fn a_drain_move_prefers_a_cool_sibling() {
             trial_ends_at: None,
             cancelled: true,
             ends_at: Some(T + 10 * MINUTE),
+            tier: None,
         }],
     );
     let mut st = loaded(vec![burning("cold", "a", 0.0, false, T)]);
@@ -8014,11 +8026,9 @@ fn a_move_consumes_the_mark_so_a_pin_returning_inside_the_dwell_renews_in_place(
         burning("s1", "a", 4.0, false, T),
         burning("s0", "a", 1.0, false, T),
     ]);
-    // c stays cool throughout, so a mark that outlived the move would find a destination. Its reading is older
-    // than the sample TTL, so no spent move takes it for a destination whose allowance it cannot know, and the
-    // spent move below has only a to go to.
+    // c holds no reading, so it reads as cool and a mark that outlived the move would find it a destination,
+    // while the spent move below, which needs a reading of the window, has only a to go to.
     hot_a_cool_b(&mut st, T - 500);
-    st.record_sample("c", sample(0.1, 0.1, T - 2 * SAMPLE_TTL_MS));
     assert_eq!(
         landed(select(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng()).0),
         ("b".into(), Some(MigrateReason::Shed)),

@@ -286,7 +286,7 @@ pub async fn harness_on(
         Duration::from_secs(60),
     ));
     let router_handle =
-        spawn_router(store.clone(), None, clock.clone(), RouterConfig::default()).unwrap();
+        spawn_router(store.clone(), clock.clone(), RouterConfig::default()).unwrap();
     let catalog = Arc::new(CatalogService::new(
         store.clone(),
         manager.clone(),

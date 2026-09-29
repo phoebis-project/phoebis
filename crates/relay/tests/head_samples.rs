@@ -2,9 +2,12 @@
 //! unified windows for an OAuth account.
 mod common;
 
-use phoebis_routing::{FIVE_HOUR, SEVEN_DAY};
+use std::time::Duration;
+
+use phoebis_routing::{RouterConfig, SharePricer, FIVE_HOUR, SEVEN_DAY};
+use phoebis_store::SubscriptionRow;
 use common::*;
-use fake_upstream::{FakeUpstream, Rule};
+use fake_upstream::{wait_for_async, FakeUpstream, Respond, Rule};
 use tower::ServiceExt;
 
 const CLOSE: f64 = 1e-9;
@@ -109,4 +112,73 @@ async fn a_head_from_each_account_kind_lands_a_sample_the_router_answers() {
         .reading(SEVEN_DAY)
         .is_some_and(|r| (r.utilization - 0.13).abs() < CLOSE));
     up_oauth.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_finished_answer_reports_its_usage_to_the_router() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: Respond::Json {
+            status: 200,
+            headers: vec![
+                // A second before the harness clock, so the answer completes after the reading its head carries.
+                ("date".into(), "Thu, 01 Jan 1970 00:16:39 GMT".into()),
+                ("anthropic-ratelimit-unified-5h-status".into(), "allowed".into()),
+                ("anthropic-ratelimit-unified-5h-utilization".into(), "0.42".into()),
+                ("anthropic-ratelimit-unified-7d-status".into(), "allowed".into()),
+                ("anthropic-ratelimit-unified-7d-utilization".into(), "0.13".into()),
+            ],
+            body: br#"{"id":"msg_usage","type":"message","role":"assistant","content":[],"usage":{"input_tokens":1000000,"output_tokens":0}}"#.to_vec(),
+        },
+    }])
+    .await;
+    let h = harness_with_router_config(
+        &up,
+        &[oauth("o", "sk-ant-oat01-OOOO", 0)],
+        PoolSpec::default(),
+        RouterConfig {
+            share: SharePricer::new(|_, _, _, usage, _| {
+                Some(usage.input as f64 / 1_000_000.0 * 0.1)
+            }),
+            ..RouterConfig::default()
+        },
+    )
+    .await;
+    h.store
+        .set_profile(
+            "o",
+            "{}",
+            &SubscriptionRow {
+                tier: Some("default_claude_max_5x".into()),
+                ..SubscriptionRow::default()
+            },
+        )
+        .unwrap();
+    h.router.reload().await.unwrap();
+    let response = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let read = |window: &'static str, expected: f64| {
+        let router = h.router.clone();
+        async move {
+            router
+                .samples()
+                .await
+                .unwrap()
+                .into_iter()
+                .find(|(id, _)| id == "o")
+                .and_then(|(_, sample)| sample.reading(window))
+                .filter(|r| (r.utilization - expected).abs() < CLOSE)
+        }
+    };
+    wait_for_async(Duration::from_secs(2), || read(FIVE_HOUR, 0.52)).await;
+    wait_for_async(Duration::from_secs(2), || read(SEVEN_DAY, 0.23)).await;
+    up.shutdown().await;
 }

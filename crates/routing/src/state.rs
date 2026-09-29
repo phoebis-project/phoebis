@@ -1,13 +1,13 @@
 //! What the router task owns between selections: pins, cooldowns, the newest overage evidence per account, the
-//! newest utilization sample per account, and the in-flight counts per key and per account. Every mutation
-//! reports whether it changed anything so the task knows what to write through.
+//! newest utilization sample per account with the router's own charges since it, and the in-flight counts per key
+//! and per account. Every mutation reports whether it changed anything so the task knows what to write through.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 
 use phoebis_store::{
     AccountKind, AccountState, AffinityRow, BudgetPeriod, CooldownRow, FitRow, OverageRow, PinKey,
-    PinRow, PoolMember, RekeyWrite, ResolutionRow, RoutingLoad,
+    PinRow, PoolMember, RekeyWrite, ResolutionRow, RoutingLoad, WindowRow,
 };
 use tokio::sync::Notify;
 use tokio::time::Instant;
@@ -17,9 +17,10 @@ use crate::listing::{row_for, snapshot_date};
 use crate::select::affinity_ttl_ms;
 use crate::RegistrySnapshot;
 
-/// The sample TTL a state nobody configured ages readings on. The router task replaces it with its own
-/// configured interval; this matches `RouterConfig::default().sample_ttl`.
-const DEFAULT_SAMPLE_TTL_MS: i64 = 60_000;
+/// How long an api_key bucket read without its reset header stands: the buckets refill within a minute, so a
+/// bucket older than that says nothing about the account now.
+pub const BUCKET_LIFE_MS: i64 = 60_000;
+pub const WEEK_MS: i64 = 7 * 24 * 3_600_000;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PinRef {
@@ -84,17 +85,6 @@ pub struct WindowReading {
     pub observed_at: i64,
 }
 
-impl WindowReading {
-    /// Whether the reading still describes the window at `now`: its reset is ahead, or it names none and was
-    /// read within `ttl_ms`. A reading past its reset is refunded; one that aged out says nothing.
-    pub fn live_at(&self, now: i64, ttl_ms: i64) -> bool {
-        match self.reset {
-            Some(reset) => reset > now,
-            None => now - self.observed_at < ttl_ms,
-        }
-    }
-}
-
 /// An account's latest readings by window name: `five_hour`, `seven_day`, `seven_day_fable` for a subscription
 /// account; `rpm:<model>`, `itpm:<model>`, `otpm:<model>` per canonical model for an api_key account.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -104,20 +94,24 @@ pub struct UtilizationSample {
 }
 
 impl UtilizationSample {
-    /// The stored reading, live or not; the callers that rank or gate pass it through `live_at`.
+    /// The stored reading as it arrived.
     pub fn reading(&self, window: &str) -> Option<WindowReading> {
         self.windows.get(window).copied()
     }
 
-    /// The worst of the api_key buckets still live at `now`, the account's reading under Pace's api_key
-    /// degradation; `None` when every bucket was refunded or aged out, which reads as untouched.
-    pub fn worst_bucket(&self, now: i64, ttl_ms: i64) -> Option<WindowReading> {
+    /// The worst api_key bucket still standing at `now`: its reset ahead, or read within `BUCKET_LIFE_MS` when it
+    /// named none; `None` when every bucket was refunded or aged, which reads as untouched.
+    pub fn worst_bucket(&self, now: i64) -> Option<WindowReading> {
         self.windows
             .iter()
             .filter(|(name, _)| {
                 name.starts_with("rpm:") || name.starts_with("itpm:") || name.starts_with("otpm:")
             })
-            .filter_map(|(_, reading)| reading.live_at(now, ttl_ms).then_some(*reading))
+            .filter(|(_, reading)| match reading.reset {
+                Some(reset) => reset > now,
+                None => now - reading.observed_at < BUCKET_LIFE_MS,
+            })
+            .map(|(_, reading)| *reading)
             .max_by(|a, b| a.utilization.total_cmp(&b.utilization))
     }
 
@@ -143,6 +137,8 @@ pub enum StateWrite {
     DeleteAffinity(Vec<(String, String)>),
     DeleteCooldown(String, String),
     DeletePin(PinKey),
+    /// The purge tick's sweep of window rows no current holder of their id wrote.
+    PurgeStaleWindows,
     /// One resolution landing, committed as one transaction so the store never holds moved rows without the
     /// spelling row that finds them after a restart.
     Rekey(RekeyWrite),
@@ -151,6 +147,7 @@ pub enum StateWrite {
     UpsertFit(FitRow),
     UpsertOverage(OverageRow),
     UpsertPin(PinRow),
+    UpsertWindow(WindowRow),
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -187,6 +184,77 @@ pub struct PinUsage {
     pub write_5m: u64,
     pub write_1h: u64,
     pub output: u64,
+}
+
+/// The share of an account's own window a completed request consumed, priced through the ledger's tables, which
+/// this crate cannot name; the default prices nothing, so a task spawned without one predicts from readings alone.
+#[derive(Clone)]
+pub struct SharePricer(Arc<Price>);
+
+type Price = dyn Fn(&str, &str, &str, PinUsage, i64) -> Option<f64> + Send + Sync;
+
+impl SharePricer {
+    /// `price(window, tier, canonical_model, usage, at)`: the share of `window` on `tier` at `at` (the band
+    /// weighs the 5-hour window at a completion), `None` for a model or a tier the tables lack.
+    pub fn new(
+        price: impl Fn(&str, &str, &str, PinUsage, i64) -> Option<f64> + Send + Sync + 'static,
+    ) -> SharePricer {
+        SharePricer(Arc::new(price))
+    }
+
+    pub fn price(
+        &self,
+        window: &str,
+        tier: &str,
+        canonical_model: &str,
+        usage: PinUsage,
+        at: i64,
+    ) -> Option<f64> {
+        (self.0)(window, tier, canonical_model, usage, at)
+    }
+}
+
+impl Default for SharePricer {
+    /// Prices nothing: a task spawned without the ledger's tables predicts from readings alone.
+    fn default() -> Self {
+        SharePricer::new(|_, _, _, _, _| None)
+    }
+}
+
+// A closure has no `Debug`, and `RouterConfig` derives it, so the pricer prints its name alone.
+impl std::fmt::Debug for SharePricer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SharePricer")
+    }
+}
+
+/// The router's own requests completed on one account since its readings, as `(at, share)` per plan window.
+#[derive(Clone, Debug, Default)]
+struct Charges {
+    five_hour: Vec<(i64, f64)>,
+    seven_day: Vec<(i64, f64)>,
+    seven_day_fable: Vec<(i64, f64)>,
+}
+
+impl Charges {
+    /// The window's entries, empty for a name that is none of the three.
+    fn of(&self, window: &str) -> &[(i64, f64)] {
+        match window {
+            FIVE_HOUR => &self.five_hour,
+            SEVEN_DAY => &self.seven_day,
+            SEVEN_DAY_FABLE => &self.seven_day_fable,
+            _ => &[],
+        }
+    }
+
+    fn of_mut(&mut self, window: &str) -> Option<&mut Vec<(i64, f64)>> {
+        match window {
+            FIVE_HOUR => Some(&mut self.five_hour),
+            SEVEN_DAY => Some(&mut self.seven_day),
+            SEVEN_DAY_FABLE => Some(&mut self.seven_day_fable),
+            _ => None,
+        }
+    }
 }
 
 /// The price of one token of each type.
@@ -496,6 +564,9 @@ type ShedRound = (i64, HashSet<PinKey>);
 pub struct RoutingState {
     /// Shared with the handle the way `in_flight` is, so a lookup never waits on a command round trip.
     affinity: Arc<RwLock<AffinityMap>>,
+    /// The router's own requests since each account's readings, what `predicted` adds to them. Memory only: a
+    /// restart loads the newest readings and predicts from them alone until the next request completes.
+    charges: HashMap<String, Charges>,
     cooldowns: HashMap<(String, String), CooldownRow>,
     /// The ledger's live fit per account and window, kept here because the routing writer persists it.
     fits: HashMap<(String, String), FitRow>,
@@ -513,7 +584,6 @@ pub struct RoutingState {
     /// dated id once it is known, whichever spelling the caller names.
     resolutions: HashMap<String, String>,
     round_robin: HashMap<(String, Tier, String), usize>,
-    sample_ttl_ms: i64,
     samples: HashMap<String, UtilizationSample>,
     /// Each account's latest shedding round. Memory only, so a restart forgets the marks with the dwell and the
     /// next hot request may start a fresh round.
@@ -527,8 +597,22 @@ impl RoutingState {
         for resolution in &load.resolutions {
             affinity_map.learn_resolution(&resolution.spelling, &resolution.dated_id);
         }
+        let mut samples: HashMap<String, UtilizationSample> = HashMap::new();
+        for row in load.windows {
+            let sample = samples.entry(row.account_id).or_default();
+            sample.observed_at = sample.observed_at.max(row.observed_at);
+            sample.windows.insert(
+                row.window,
+                WindowReading {
+                    utilization: row.utilization,
+                    reset: row.reset,
+                    observed_at: row.observed_at,
+                },
+            );
+        }
         RoutingState {
             affinity: Arc::new(RwLock::new(affinity_map)),
+            charges: HashMap::new(),
             cooldowns: load
                 .cooldowns
                 .into_iter()
@@ -573,8 +657,7 @@ impl RoutingState {
                 .map(|r| (r.spelling, r.dated_id))
                 .collect(),
             round_robin: HashMap::new(),
-            sample_ttl_ms: DEFAULT_SAMPLE_TTL_MS,
-            samples: HashMap::new(),
+            samples,
             shed_rounds: HashMap::new(),
         }
     }
@@ -855,26 +938,34 @@ impl RoutingState {
         Some(evidence.reset.unwrap_or(evidence.observed_at + fallback_ms))
     }
 
-    /// Folds `sample` in window by window; true when any reading moved. A reading lands only when it is newer
-    /// than the one already stored for that name, so an api_key head that carries one model's buckets never
-    /// erases another model's.
-    pub fn record_sample(&mut self, account_id: &str, sample: UtilizationSample) -> bool {
+    /// Folds `sample` in window by window and answers the names of the windows it moved, empty when none. A
+    /// reading lands only when it is newer than the one already stored for that name, so an api_key head that
+    /// carries one model's buckets never erases another model's. A moved plan window's charges observed at or
+    /// before the new reading are dropped, since the reading carries them.
+    pub fn record_sample(&mut self, account_id: &str, sample: UtilizationSample) -> Vec<String> {
         if sample.windows.is_empty() {
-            return false;
+            return Vec::new();
         }
         let current = self.samples.entry(account_id.to_string()).or_default();
-        let mut changed = false;
+        let mut moved = Vec::new();
         for (window, reading) in sample.windows {
             let newer = current
                 .windows
                 .get(&window)
                 .is_none_or(|existing| reading.observed_at > existing.observed_at);
             if newer {
-                current.windows.insert(window, reading);
-                changed = true;
+                if let Some(charges) = self
+                    .charges
+                    .get_mut(account_id)
+                    .and_then(|c| c.of_mut(&window))
+                {
+                    charges.retain(|(at, _)| *at > reading.observed_at);
+                }
+                current.windows.insert(window.clone(), reading);
+                moved.push(window);
             }
         }
-        if changed {
+        if !moved.is_empty() {
             current.observed_at = current
                 .windows
                 .values()
@@ -882,7 +973,117 @@ impl RoutingState {
                 .max()
                 .unwrap_or(0);
         }
-        changed
+        moved
+    }
+
+    /// Books a completed request's share on the account's windows at `at`: the 5-hour and the 7-day window
+    /// always, the Fable week when the request's model has one. A charge lives until a reading observed after it
+    /// lands on its window, or a week.
+    pub fn charge(
+        &mut self,
+        account_id: &str,
+        at: i64,
+        five_hour: f64,
+        seven_day: f64,
+        seven_day_fable: Option<f64>,
+    ) {
+        let charges = self.charges.entry(account_id.to_string()).or_default();
+        let shares = [
+            (FIVE_HOUR, Some(five_hour)),
+            (SEVEN_DAY, Some(seven_day)),
+            (SEVEN_DAY_FABLE, seven_day_fable),
+        ];
+        for (window, share) in shares {
+            let Some(entries) = charges.of_mut(window) else {
+                continue;
+            };
+            if let Some(share) = share {
+                entries.push((at, share));
+            }
+            // No window outlives a week, so a charge older than that is past every reset it could count toward.
+            entries.retain(|(booked, _)| *booked >= at - WEEK_MS);
+        }
+    }
+
+    /// One window's reading at `now`, what every reader of a plan window takes. Before the reading's reset, or
+    /// with none named: the reading, plus the share of the router's own requests completed on the account since
+    /// it was observed. At or past the reset: zero plus the share of the requests completed since the reset; a
+    /// weekly window's reset advanced by whole weeks past `now`, a 5-hour window's `None` until the next reading
+    /// names one. `None` while the account holds no reading of the window.
+    pub fn predicted(&self, account_id: &str, window: &str, now: i64) -> Option<WindowReading> {
+        let reading = self.samples.get(account_id)?.reading(window)?;
+        let charges = self
+            .charges
+            .get(account_id)
+            .map_or(&[][..], |c| c.of(window));
+        // Folded from positive zero: an empty `sum` of floats is negative zero, which a JSON reader shows as -0.
+        let since = |after: i64| {
+            charges
+                .iter()
+                .filter(|(at, _)| *at > after)
+                .fold(0.0, |sum, (_, share)| sum + share)
+        };
+        match reading.reset {
+            Some(reset) if reset <= now => match window {
+                // The weekly windows reset at the same weekday time every week, so the reading's reset names every
+                // later one; the 5-hour window opens with the next request and names its reset in the next reading.
+                SEVEN_DAY | SEVEN_DAY_FABLE => {
+                    let next = reset + ((now - reset) / WEEK_MS + 1) * WEEK_MS;
+                    Some(WindowReading {
+                        utilization: since(next - WEEK_MS),
+                        reset: Some(next),
+                        observed_at: reading.observed_at,
+                    })
+                }
+                _ => Some(WindowReading {
+                    utilization: since(reset),
+                    reset: None,
+                    observed_at: reading.observed_at,
+                }),
+            },
+            _ => Some(WindowReading {
+                utilization: reading.utilization + since(reading.observed_at),
+                ..reading
+            }),
+        }
+    }
+
+    /// The account's sample with each plan window replaced by its prediction at `now`, the api_key buckets as
+    /// read; what `RouterHandle::samples` answers.
+    pub fn predicted_sample(&self, account_id: &str, now: i64) -> Option<UtilizationSample> {
+        let mut sample = self.samples.get(account_id)?.clone();
+        for window in [FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE] {
+            if let Some(predicted) = self.predicted(account_id, window, now) {
+                sample.windows.insert(window.to_string(), predicted);
+            }
+        }
+        Some(sample)
+    }
+
+    /// The stored rows of `windows` on the account, for the writer.
+    pub fn window_rows(
+        &self,
+        account_id: &str,
+        windows: &[String],
+        incarnation: u64,
+    ) -> Vec<WindowRow> {
+        let Some(sample) = self.samples.get(account_id) else {
+            return Vec::new();
+        };
+        windows
+            .iter()
+            .filter_map(|window| {
+                let reading = sample.reading(window)?;
+                Some(WindowRow {
+                    account_id: account_id.to_string(),
+                    incarnation,
+                    observed_at: reading.observed_at,
+                    reset: reading.reset,
+                    utilization: reading.utilization,
+                    window: window.clone(),
+                })
+            })
+            .collect()
     }
 
     pub fn sample(&self, account_id: &str) -> Option<&UtilizationSample> {
@@ -891,6 +1092,7 @@ impl RoutingState {
 
     pub(crate) fn forget_sample(&mut self, account_id: &str) {
         self.samples.remove(account_id);
+        self.charges.remove(account_id);
     }
 
     /// Keeps the row unless the one held for its account and window has folded later; a row written for the
@@ -924,16 +1126,6 @@ impl RoutingState {
             .collect();
         out.sort_by(|a, b| a.0.cmp(&b.0));
         out
-    }
-
-    /// How long a reading stands when it dates no refund of its own: the interval the router pulls samples
-    /// on, so a window read full is re-read rather than believed for ever.
-    pub fn sample_ttl_ms(&self) -> i64 {
-        self.sample_ttl_ms
-    }
-
-    pub(crate) fn set_sample_ttl_ms(&mut self, ms: i64) {
-        self.sample_ttl_ms = ms;
     }
 
     /// The shared in-flight table this state's selections read the cap against: the same one the handle a test
@@ -1258,15 +1450,17 @@ impl RoutingState {
             self.take_pin(key);
         }
         // None of these needs a deletion written: the overage and fit rows cascade with the account and the next
-        // holder's first reading replaces one left under another incarnation, and samples, round-robin cursors
-        // and shedding rounds are held in memory only. Samples and cursors are keyed by id alone, so the reload
-        // drops the sample of a holder the id has moved past.
+        // holder's first reading replaces one left under another incarnation, the window rows cascade too and the
+        // purge tick drops one of another incarnation, and charges, round-robin cursors and shedding rounds are
+        // held in memory only. Samples, charges and cursors are keyed by id alone, so the reload drops those of a
+        // holder the id has moved past.
         let absent = |account_id: &str| snapshot.account(account_id).is_none();
         self.overage
             .retain(|account_id, evidence| !gone(account_id, evidence.incarnation));
         self.fits
             .retain(|(account_id, _), fit| !gone(account_id, fit.incarnation));
         self.samples.retain(|account_id, _| !absent(account_id));
+        self.charges.retain(|account_id, _| !absent(account_id));
         self.round_robin.retain(|(pool_id, _, cohort), _| {
             snapshot.pool(pool_id).is_some() && cohort.split(',').all(|id| !absent(id))
         });
@@ -1568,7 +1762,7 @@ mod tests {
         );
         assert_eq!(stored.reading("itpm:y").map(|r| r.utilization), Some(0.6));
 
-        let changed = state.record_sample(
+        let moved = state.record_sample(
             "a",
             UtilizationSample {
                 observed_at: 1_000,
@@ -1576,7 +1770,10 @@ mod tests {
             }
             .with("itpm:x", reading(0.9, 1_000)),
         );
-        assert!(!changed, "1_000 is older than the 2_000 x already carries");
+        assert!(
+            moved.is_empty(),
+            "1_000 is older than the 2_000 x already carries"
+        );
         assert_eq!(
             state
                 .sample("a")
@@ -1586,7 +1783,7 @@ mod tests {
             Some(0.4)
         );
 
-        let changed = state.record_sample(
+        let moved = state.record_sample(
             "a",
             UtilizationSample {
                 observed_at: 3_000,
@@ -1594,7 +1791,7 @@ mod tests {
             }
             .with("itpm:x", reading(0.1, 3_000)),
         );
-        assert!(changed);
+        assert!(!moved.is_empty());
         assert_eq!(
             state
                 .sample("a")
@@ -1606,9 +1803,7 @@ mod tests {
     }
 
     #[test]
-    fn a_bucket_past_its_reset_is_refunded_and_a_reading_without_a_reset_ages_out_after_the_sample_ttl(
-    ) {
-        let ttl_ms = 1_000;
+    fn a_bucket_past_its_reset_is_refunded_and_a_bucket_without_a_reset_lives_a_minute() {
         let sample = UtilizationSample {
             observed_at: 1_000,
             ..Default::default()
@@ -1630,19 +1825,157 @@ mod tests {
             },
         );
         assert_eq!(
-            sample.worst_bucket(1_300, ttl_ms).map(|r| r.utilization),
+            sample.worst_bucket(1_300).map(|r| r.utilization),
             Some(0.9),
-            "x is live and worse than y before its reset"
+            "x stands and is worse than y before its reset"
         );
         assert_eq!(
-            sample.worst_bucket(1_500, ttl_ms).map(|r| r.utilization),
+            sample.worst_bucket(1_500).map(|r| r.utilization),
             Some(0.3),
-            "past x's reset it is refunded, so y answers as the worst live bucket"
+            "past x's reset it is refunded, so y answers as the worst bucket standing"
         );
         assert_eq!(
-            sample.worst_bucket(1_000 + ttl_ms + 1, ttl_ms),
-            None,
-            "y names no reset and ages out ttl_ms after it was observed, leaving nothing live"
+            sample
+                .worst_bucket(1_000 + BUCKET_LIFE_MS - 1)
+                .map(|r| r.utilization),
+            Some(0.3),
+            "y names no reset and stands for a minute"
         );
+        assert_eq!(
+            sample.worst_bucket(1_000 + BUCKET_LIFE_MS),
+            None,
+            "a minute after y was read nothing stands"
+        );
+    }
+
+    const CLOSE: f64 = 1e-9;
+    const HOUR_MS: i64 = 3_600_000;
+
+    fn read(state: &mut RoutingState, window: &str, utilization: f64, reset: Option<i64>, at: i64) {
+        state.record_sample(
+            "a",
+            UtilizationSample {
+                observed_at: at,
+                ..Default::default()
+            }
+            .with(
+                window,
+                WindowReading {
+                    utilization,
+                    reset,
+                    observed_at: at,
+                },
+            ),
+        );
+    }
+
+    fn utilization(state: &RoutingState, window: &str, now: i64) -> f64 {
+        state
+            .predicted("a", window, now)
+            .expect("the account holds a reading of the window")
+            .utilization
+    }
+
+    #[test]
+    fn a_weekly_reading_past_its_reset_reads_zero_with_the_reset_advanced_by_whole_weeks() {
+        let reset = 10 * WEEK_MS;
+        let observed_at = reset - HOUR_MS;
+        let mut state = RoutingState::from_load(RoutingLoad::default());
+        read(&mut state, SEVEN_DAY, 0.8, Some(reset), observed_at);
+        read(&mut state, SEVEN_DAY_FABLE, 0.9, Some(reset), observed_at);
+        for (weeks, now) in [
+            (0, reset + 5),
+            (1, reset + WEEK_MS + 5),
+            (3, reset + 3 * WEEK_MS + 5),
+        ] {
+            for window in [SEVEN_DAY, SEVEN_DAY_FABLE] {
+                assert_eq!(
+                    state.predicted("a", window, now),
+                    Some(WindowReading {
+                        utilization: 0.0,
+                        reset: Some(reset + (weeks + 1) * WEEK_MS),
+                        observed_at,
+                    }),
+                    "{window} past its reset by {weeks} whole weeks"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_five_hour_reading_past_its_reset_reads_zero_with_no_successor() {
+        let mut state = RoutingState::from_load(RoutingLoad::default());
+        read(&mut state, FIVE_HOUR, 0.5, Some(5_000), 1_000);
+        state.charge("a", 3_000, 0.25, 0.0, None);
+        assert!((utilization(&state, FIVE_HOUR, 4_000) - 0.75).abs() < CLOSE);
+        assert_eq!(
+            state.predicted("a", FIVE_HOUR, 5_000),
+            Some(WindowReading {
+                utilization: 0.0,
+                reset: None,
+                observed_at: 1_000,
+            }),
+            "at the reset the window reads zero, and the next reading names the reset after it"
+        );
+        state.charge("a", 6_000, 0.125, 0.0, None);
+        assert!(
+            (utilization(&state, FIVE_HOUR, 7_000) - 0.125).abs() < CLOSE,
+            "a request completed since the reset counts; the one before it does not"
+        );
+    }
+
+    #[test]
+    fn a_reading_before_its_reset_adds_the_routers_own_share_and_a_later_reading_drops_it() {
+        let mut state = RoutingState::from_load(RoutingLoad::default());
+        read(&mut state, FIVE_HOUR, 0.5, Some(HOUR_MS), 1_000);
+        read(&mut state, SEVEN_DAY, 0.3, Some(WEEK_MS), 1_000);
+        state.charge("a", 2_000, 0.1, 0.1, None);
+        assert!((utilization(&state, FIVE_HOUR, 3_000) - 0.6).abs() < CLOSE);
+        let moved = state.record_sample(
+            "a",
+            UtilizationSample {
+                observed_at: 2_500,
+                ..Default::default()
+            }
+            .with(
+                FIVE_HOUR,
+                WindowReading {
+                    utilization: 0.55,
+                    reset: Some(HOUR_MS),
+                    observed_at: 2_500,
+                },
+            ),
+        );
+        assert_eq!(moved, vec![FIVE_HOUR.to_string()]);
+        assert!(
+            (utilization(&state, FIVE_HOUR, 3_000) - 0.55).abs() < CLOSE,
+            "the newer reading carries the charge, so the charge is gone"
+        );
+        assert!(
+            (utilization(&state, SEVEN_DAY, 3_000) - 0.4).abs() < CLOSE,
+            "the 7-day window read nothing newer and keeps it"
+        );
+        state.charge("a", 2_600, 0.1, 0.1, None);
+        assert!(
+            (utilization(&state, FIVE_HOUR, 3_000) - 0.65).abs() < CLOSE,
+            "a charge after the reading reads on top of it"
+        );
+    }
+
+    #[test]
+    fn a_reading_without_a_reset_holds_as_read_until_the_next() {
+        let mut state = RoutingState::from_load(RoutingLoad::default());
+        read(&mut state, FIVE_HOUR, 0.7, None, 1_000);
+        assert_eq!(
+            state.predicted("a", FIVE_HOUR, 1_000 + 3 * WEEK_MS),
+            Some(WindowReading {
+                utilization: 0.7,
+                reset: None,
+                observed_at: 1_000,
+            }),
+            "no reset named: the reading stands however old it is"
+        );
+        read(&mut state, FIVE_HOUR, 0.2, None, 2_000);
+        assert!((utilization(&state, FIVE_HOUR, 1_000 + 3 * WEEK_MS) - 0.2).abs() < CLOSE);
     }
 }

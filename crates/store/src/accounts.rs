@@ -522,8 +522,8 @@ impl Store {
     pub fn subscription_term(&self, id: &str) -> Result<Option<SubscriptionTerm>, StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
         conn.query_row(
-            "SELECT id, subscription_since, trial_ends_at, cancelled, subscription_ends_at \
-             FROM accounts WHERE id = ?1",
+            "SELECT id, subscription_since, trial_ends_at, cancelled, subscription_ends_at, \
+             subscription_tier FROM accounts WHERE id = ?1",
             params![id],
             |row| {
                 Ok(SubscriptionTerm {
@@ -532,6 +532,7 @@ impl Store {
                     trial_ends_at: row.get(2)?,
                     cancelled: row.get(3)?,
                     ends_at: row.get(4)?,
+                    tier: row.get(5)?,
                 })
             },
         )

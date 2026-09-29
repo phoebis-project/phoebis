@@ -1023,6 +1023,32 @@ async fn a_usage_endpoint_that_hangs_ends_the_startup_step_at_its_bound() {
 }
 
 #[tokio::test]
+async fn a_profile_read_that_names_a_new_tier_reloads_the_router() {
+    let up = FakeUpstream::start(vec![usage_rule(), profile_rule()]).await;
+    let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    assert_eq!(h.router.snapshot().tier("a"), None, "no profile read yet");
+    QuotaPoll::sample_all(
+        h.store.clone(),
+        h.usage
+            .clone()
+            .expect("the harness was built with the poll"),
+        h.ledger.clone(),
+        h.router.clone(),
+        Duration::from_secs(2),
+    )
+    .await;
+    let tier = wait_for(Duration::from_secs(2), || {
+        h.router.snapshot().tier("a").map(str::to_string)
+    })
+    .await;
+    assert_eq!(
+        tier, "default_claude_max_5x",
+        "the snapshot prices the account's windows through the tier the profile named"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
 async fn a_profile_endpoint_that_hangs_holds_no_reported_sample_back() {
     let up = FakeUpstream::start(vec![usage_rule(), profile_gated()]).await;
     let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;

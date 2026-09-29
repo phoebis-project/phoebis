@@ -2055,6 +2055,358 @@ async fn the_proxy_listener_binds_after_the_startup_fetch_or_its_bound_whichever
     }
 }
 
+/// An OAuth account paired straight into the store, as the pairing flow leaves one.
+fn pair_oauth(store: &phoebis_store::Store, id: &str, token: &str, account_uuid: &str) {
+    store
+        .insert_account(&phoebis_store::AccountRow {
+            id: id.into(),
+            kind: phoebis_store::AccountKind::Oauth,
+            label: id.into(),
+            enabled: true,
+            identity: Some(phoebis_store::Identity {
+                account_uuid: account_uuid.into(),
+                email: format!("{id}@example.invalid"),
+                organization_uuid: None,
+            }),
+            lifecycle_generation: 1,
+            incarnation: 1,
+            revision: 1,
+            state: phoebis_store::AccountState::Ready,
+        })
+        .unwrap();
+    // A re-paired id takes the next incarnation, which the credential write is fenced on.
+    let incarnation = store.account(id).unwrap().unwrap().incarnation;
+    store
+        .commit_credentials(
+            id,
+            incarnation,
+            1,
+            None,
+            None,
+            &phoebis_store::NewBundle {
+                access_token: phoebis_store::Secret::new(token),
+                refresh_token: Some(phoebis_store::Secret::new("sk-ant-ort01-persisted-refresh")),
+                issued_at: 0,
+                expires_at: i64::MAX / 2,
+                refresh_expires_at: None,
+                scopes: "user:inference".into(),
+            },
+        )
+        .unwrap();
+}
+
+/// `a` and `b` on one priority, since Pace ranks within the first priority tier: the windows alone order them.
+fn members() -> Vec<phoebis_store::MemberWrite> {
+    ["a", "b"]
+        .into_iter()
+        .map(|id| phoebis_store::MemberWrite {
+            account_id: id.into(),
+            priority: 0,
+            budget_usd: None,
+            budget_period: phoebis_store::BudgetPeriod::Month,
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn a_startup_poll_the_endpoint_refuses_routes_the_first_request_from_the_persisted_windows() {
+    const A_TOKEN: &str = "sk-ant-oat01-persisted-aaaa";
+    const B_TOKEN: &str = "sk-ant-oat01-persisted-bbbb";
+    const KEY_SECRET: &str = "phoebis-persisted-windows-secret";
+    let up = FakeUpstream::start(vec![
+        Rule {
+            path_prefix: "/v1/messages".into(),
+            respond: Respond::Json {
+                status: 200,
+                headers: vec![],
+                body: br#"{"id":"msg_1","type":"message","model":"claude-opus-5","usage":{"input_tokens":1000,"output_tokens":100}}"#.to_vec(),
+            },
+        },
+        Rule {
+            path_prefix: "/v1/models".into(),
+            respond: Respond::Json {
+                status: 200,
+                headers: vec![],
+                body: br#"{"data":[{"id":"claude-opus-5","type":"model"}]}"#.to_vec(),
+            },
+        },
+        Rule {
+            path_prefix: "/api/oauth/profile".into(),
+            respond: Respond::Json {
+                status: 200,
+                headers: vec![],
+                body: control_response(ControlFixture::Profile).to_vec(),
+            },
+        },
+        Rule {
+            path_prefix: "/api/oauth/usage".into(),
+            respond: Respond::Json {
+                status: 429,
+                headers: vec![],
+                body: br#"{"type":"error","error":{"type":"rate_limit_error","message":"limit"}}"#.to_vec(),
+            },
+        },
+    ])
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    let key_path = dir.path().join("storage.key");
+    std::fs::write(
+        &key_path,
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    )
+    .unwrap();
+    let ca_path = dir.path().join("ca.pem");
+    std::fs::write(&ca_path, up.ca_pem()).unwrap();
+    let db_path = dir.path().join("phoebis.sqlite");
+    let storage_key = || phoebis_store::StorageKey::from_file(&key_path).unwrap();
+    // The run before this one: `a` read near its limit, `b` barely touched, both a day from their reset.
+    let reset = jiff::Timestamp::now().as_millisecond() + 86_400_000;
+    {
+        let store = phoebis_store::Store::open(&db_path, &storage_key()).unwrap();
+        pair_oauth(&store, "a", A_TOKEN, "00000000-0000-4000-8000-00000000000a");
+        pair_oauth(&store, "b", B_TOKEN, "00000000-0000-4000-8000-00000000000b");
+        store
+            .insert_pool(
+                &phoebis_store::PoolRow {
+                    id: "main".into(),
+                    label: "Main".into(),
+                    enabled: true,
+                    strategy: phoebis_store::Strategy::Pace,
+                    affinity_ttl_seconds: 3600,
+                    overage_policy: phoebis_store::OveragePolicy::PreferPlan,
+                    migrate_above_utilization: None,
+                    select_below_utilization: None,
+                    model_rules: Vec::new(),
+                    keepalive_json: "{}".into(),
+                    body_capture_hours: 0,
+                    prefer_subscription: false,
+                    shedding: phoebis_store::Shedding::default(),
+                    failover: phoebis_store::Failover::default(),
+                    cache_ttl_json: "{}".into(),
+                    cache_diagnostics: None,
+                    affinity: phoebis_store::Affinity::default(),
+                    quota_headers: phoebis_store::QuotaHeaders::Pass,
+                    created_at: 0,
+                    updated_at: 0,
+                },
+                "test",
+            )
+            .unwrap();
+        store.set_pool_members("main", &members(), "test").unwrap();
+        store
+            .insert_api_key(
+                &phoebis_store::ApiKeyRow {
+                    id: "desktop".into(),
+                    label: "Desktop".into(),
+                    notes: None,
+                    pool_id: "main".into(),
+                    enabled: true,
+                    revoked_at: None,
+                    expires_at: None,
+                    model_rules: Vec::new(),
+                    model_rules_mode: phoebis_store::RulesMode::Extend,
+                    long_context_twins: true,
+                    keepalive_opt_out: false,
+                    body_capture_hours: None,
+                    secret_digest: store.api_key_digest(KEY_SECRET).to_vec(),
+                    prefix: phoebis_store::key_prefix(KEY_SECRET),
+                    created_at: 0,
+                    rotated_at: None,
+                    last_used_at: None,
+                    retired_secret_last_used_at: None,
+                    in_flight_cap: None,
+                    affinity_source: phoebis_store::AffinitySource::Auto,
+                },
+                "test",
+            )
+            .unwrap();
+        for (id, utilization) in [("a", 0.9), ("b", 0.1)] {
+            for window in [phoebis_routing::FIVE_HOUR, phoebis_routing::SEVEN_DAY] {
+                assert!(store
+                    .upsert_window(&phoebis_store::WindowRow {
+                        account_id: id.into(),
+                        incarnation: 1,
+                        observed_at: reset - 2 * 86_400_000,
+                        reset: Some(reset),
+                        utilization,
+                        window: window.into(),
+                    })
+                    .unwrap());
+            }
+        }
+    }
+    let run = |name: &str| {
+        let (admin_port, proxy_port, metrics_port) = (free_port(), free_port(), free_port());
+        let cfg_path = dir.path().join(format!("{name}.yaml"));
+        std::fs::write(
+            &cfg_path,
+            format!(
+                "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_PERSISTED_ADMIN\n  plain_http: true\n\
+                 compatibility:\n  profile: claude-code-2.1.269-linux-x64\n\
+                 proxy:\n  listen: 127.0.0.1:{proxy_port}\n\
+                 routing:\n  startup_fetch_seconds: 5\n\
+                 stats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\n\
+                 storage:\n  encryption_key_file: {key}\n  path: {db}\n\
+                 upstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\n\
+                 usage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
+                ledger = dir.path().join(format!("{name}-ledger.sqlite")).display(),
+                key = key_path.display(),
+                db = db_path.display(),
+                addr = up.addr(),
+                ca = ca_path.display(),
+            ),
+        )
+        .unwrap();
+        let config = {
+            let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            std::env::set_var("TEST_PERSISTED_ADMIN", "admin-secret-001");
+            phoebis_router::config::load(&cfg_path).unwrap()
+        };
+        let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+        let server = tokio::spawn(phoebis_router::app::run(config, async {
+            let _ = stop_rx.await;
+        }));
+        (admin_port, proxy_port, stop_tx, server)
+    };
+    async fn bound(proxy_port: u16) -> std::time::Duration {
+        let client = reqwest::Client::new();
+        let started = std::time::Instant::now();
+        loop {
+            if client
+                .head(format!("http://127.0.0.1:{proxy_port}/api/hello"))
+                .send()
+                .await
+                .is_ok()
+            {
+                return started.elapsed();
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    }
+    let served_by = |up: &FakeUpstream| {
+        up.requests()
+            .iter()
+            .rev()
+            .find(|r| r.line.contains("/v1/messages"))
+            .and_then(|r| r.credential().map(str::to_string))
+    };
+    let held_usage = |client: &reqwest::Client, admin_port: u16| {
+        let request = client.get(format!(
+            "http://127.0.0.1:{admin_port}/admin/accounts/a/usage"
+        ));
+        async move {
+            let usage: serde_json::Value = request.send().await.unwrap().json().await.unwrap();
+            assert!(
+                !usage["error"].is_null(),
+                "the refused poll reads as an error: {usage}"
+            );
+            assert_eq!(
+                usage["windows"],
+                serde_json::json!([]),
+                "and no windows: {usage}"
+            );
+        }
+    };
+    let admin_client = || {
+        reqwest::Client::builder()
+            .cookie_store(true)
+            .build()
+            .unwrap()
+    };
+
+    let (admin_port, proxy_port, stop_tx, server) = run("first");
+    let elapsed = bound(proxy_port).await;
+    assert!(
+        elapsed < std::time::Duration::from_secs(5),
+        "the listener binds inside the bound: {elapsed:?}"
+    );
+    let client = admin_client();
+    logged_in(
+        &client,
+        &format!("http://127.0.0.1:{admin_port}/admin/session"),
+    )
+    .await;
+    let resp = opus_request(&client, proxy_port, KEY_SECRET, "persisted-1")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let _ = resp.text().await.unwrap();
+    assert_eq!(
+        served_by(&up).as_deref(),
+        Some(B_TOKEN),
+        "the persisted windows leave b more allowance per hour than a"
+    );
+    held_usage(&client, admin_port).await;
+    let _ = stop_tx.send(());
+    server.await.unwrap().unwrap();
+
+    // `a` is deleted and paired again under its id: the replacement is another holder, and the rows the first
+    // holder left went with it.
+    let give_up = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let store = loop {
+        if let Ok(store) = phoebis_store::Store::open(&db_path, &storage_key()) {
+            break store;
+        }
+        assert!(
+            std::time::Instant::now() < give_up,
+            "the first run never released the store"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    };
+    store.delete_account("a", "test").unwrap();
+    pair_oauth(&store, "a", A_TOKEN, "00000000-0000-4000-8000-00000000000a");
+    store.set_pool_members("main", &members(), "test").unwrap();
+    assert_eq!(store.account("a").unwrap().unwrap().incarnation, 2);
+    drop(store);
+
+    let (admin_port, proxy_port, stop_tx, server) = run("second");
+    bound(proxy_port).await;
+    let client = admin_client();
+    logged_in(
+        &client,
+        &format!("http://127.0.0.1:{admin_port}/admin/session"),
+    )
+    .await;
+    held_usage(&client, admin_port).await;
+    let resp = opus_request(&client, proxy_port, KEY_SECRET, "persisted-2")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let _ = resp.text().await.unwrap();
+    assert_eq!(
+        served_by(&up).as_deref(),
+        Some(B_TOKEN),
+        "b's persisted rows still rank it above the untouched replacement of a"
+    );
+    let _ = stop_tx.send(());
+    server.await.unwrap().unwrap();
+    let give_up = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let store = loop {
+        if let Ok(store) = phoebis_store::Store::open(&db_path, &storage_key()) {
+            break store;
+        }
+        assert!(
+            std::time::Instant::now() < give_up,
+            "the second run never released the store"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    };
+    assert_eq!(
+        store
+            .load_routing()
+            .unwrap()
+            .windows
+            .iter()
+            .map(|w| (w.account_id.as_str(), w.window.as_str()))
+            .collect::<Vec<_>>(),
+        vec![("b", phoebis_routing::FIVE_HOUR), ("b", phoebis_routing::SEVEN_DAY)],
+        "b's rows are still there and the replacement a holds none"
+    );
+    up.shutdown().await;
+}
+
 /// A session through the binary is retained, probed on the ticker once its cache entry nears expiry, and shown
 /// on every view: the recipes, the overview, the sessions row, the request log under `kind = probe`, and the
 /// metrics. The pool's lead is set so the first probe is due one second after the request.

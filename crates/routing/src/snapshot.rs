@@ -197,6 +197,11 @@ impl RegistrySnapshot {
     pub fn term(&self, account_id: &str) -> Option<&SubscriptionTerm> {
         self.terms.get(account_id)
     }
+    /// The rate-limit tier the account's stored profile names, which prices the router's own use of its windows;
+    /// `None` before the first profile read and for an api_key account.
+    pub fn tier(&self, account_id: &str) -> Option<&str> {
+        self.terms.get(account_id).and_then(|t| t.tier.as_deref())
+    }
     pub fn body_capture_hours(&self, key: &ApiKeyRow) -> u32 {
         key.body_capture_hours.unwrap_or_else(|| {
             self.pools

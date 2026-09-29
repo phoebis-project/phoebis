@@ -70,6 +70,7 @@ fn load(revoked_at: Option<i64>) -> RegistryLoad {
             trial_ends_at: None,
             cancelled: true,
             ends_at: Some(1_000),
+            tier: None,
         }],
     }
 }
@@ -114,6 +115,7 @@ fn term_answers_the_account_it_was_loaded_for_and_none_for_any_other() {
             trial_ends_at: None,
             cancelled: true,
             ends_at: Some(1_000),
+            tier: None,
         })
     );
     assert_eq!(s.term("y"), None);

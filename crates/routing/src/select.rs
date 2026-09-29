@@ -345,19 +345,15 @@ fn budget_exhausted(
 }
 
 /// Whether an account can still serve a request whose allowance is judged in `window`: the model's own weekly
-/// window for a fable request, both shared plan windows otherwise, either of whose two readings at 1.0 is
+/// window for a fable request, both shared plan windows otherwise, either of whose two predictions at 1.0 is
 /// spent. No sample, or a sample that never read the window, counts as allowance (an api_key account, whose
-/// sample carries no plan window of its own, always holds it here), and a window read full excludes only while
-/// the reading stands for it, through `WindowReading::live_at`.
+/// sample carries no plan window of its own, always holds it here); a reading past its reset, or one a newer
+/// head lowered, no longer excludes.
 fn holds_allowance(state: &RoutingState, account_id: &str, window: &str, now: i64) -> bool {
-    let Some(sample) = state.sample(account_id) else {
-        return true;
-    };
-    let ttl = state.sample_ttl_ms();
     let spent = |name: &str| {
-        sample
-            .reading(name)
-            .is_some_and(|r| r.utilization >= 1.0 && r.live_at(now, ttl))
+        state
+            .predicted(account_id, name, now)
+            .is_some_and(|r| r.utilization >= 1.0)
     };
     if window == SEVEN_DAY_FABLE {
         !spent(SEVEN_DAY_FABLE)
@@ -665,8 +661,7 @@ pub fn select(
                 obstacle: "spent",
             });
             if let Some(until) = state
-                .sample(&c.account_id)
-                .and_then(|s| s.reading(SEVEN_DAY_FABLE))
+                .predicted(&c.account_id, SEVEN_DAY_FABLE, request.now)
                 .and_then(|r| r.reset)
             {
                 spent_deadlines.push((
@@ -700,8 +695,7 @@ pub fn select(
             .copied()
             .filter(|c| {
                 state
-                    .sample(&c.account_id)
-                    .and_then(|s| s.reading(FIVE_HOUR))
+                    .predicted(&c.account_id, FIVE_HOUR, request.now)
                     .is_none_or(|r| r.utilization < threshold)
             })
             .collect();
@@ -969,24 +963,34 @@ fn seconds_ms(seconds: u64) -> i64 {
         .unwrap_or(i64::MAX)
 }
 
-fn reading_at_least(state: &RoutingState, account_id: &str, name: &str, threshold: f64) -> bool {
+fn reading_at_least(
+    state: &RoutingState,
+    account_id: &str,
+    name: &str,
+    threshold: f64,
+    now: i64,
+) -> bool {
     state
-        .sample(account_id)
-        .and_then(|s| s.reading(name))
+        .predicted(account_id, name, now)
         .is_some_and(|r| r.utilization >= threshold)
 }
 
 /// An unsampled account, or one that never read the window, counts as under.
-fn reading_under(state: &RoutingState, account_id: &str, name: &str, threshold: f64) -> bool {
+fn reading_under(
+    state: &RoutingState,
+    account_id: &str,
+    name: &str,
+    threshold: f64,
+    now: i64,
+) -> bool {
     state
-        .sample(account_id)
-        .and_then(|s| s.reading(name))
+        .predicted(account_id, name, now)
         .is_none_or(|r| r.utilization < threshold)
 }
 
 /// Whether `account_id` reads under `migrate_above_utilization` minus the hysteresis band: the shared plan
-/// windows for a subscription account, the worst live bucket for an api_key one. No threshold configured, or
-/// no live reading, counts as under. The same reading `move_of`'s `cool` predicate takes for a migration
+/// windows' predictions for a subscription account, the worst standing bucket for an api_key one. No threshold
+/// configured, or no reading, counts as under. The same reading `move_of`'s `cool` predicate takes for a migration
 /// destination, so the arithmetic lives once.
 fn under_band(
     state: &RoutingState,
@@ -1002,27 +1006,32 @@ fn under_band(
     match snapshot.account(account_id).map(|a| a.kind) {
         Some(AccountKind::ApiKey) => state
             .sample(account_id)
-            .and_then(|s| s.worst_bucket(now, state.sample_ttl_ms()))
+            .and_then(|s| s.worst_bucket(now))
             .is_none_or(|r| r.utilization < band),
         _ => {
-            reading_under(state, account_id, FIVE_HOUR, band)
-                && reading_under(state, account_id, SEVEN_DAY, band)
+            reading_under(state, account_id, FIVE_HOUR, band, now)
+                && reading_under(state, account_id, SEVEN_DAY, band, now)
         }
     }
 }
 
-/// Whether the account's allowance is known: an api_key account has no plan window to read, and anything else
-/// needs a sample younger than the sample TTL.
+/// Whether the account's allowance is known: an api_key account has no plan window to read, and a subscription
+/// account holds a prediction of the request's window, `SEVEN_DAY_FABLE` for a Fable request and both shared
+/// windows otherwise.
 fn allowance_known(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
     account_id: &str,
+    window: &str,
     now: i64,
 ) -> bool {
+    let known = |name: &str| state.predicted(account_id, name, now).is_some();
     snapshot.account(account_id).map(|a| a.kind) == Some(AccountKind::ApiKey)
-        || state
-            .sample(account_id)
-            .is_some_and(|s| now - s.observed_at < state.sample_ttl_ms())
+        || if window == SEVEN_DAY_FABLE {
+            known(SEVEN_DAY_FABLE)
+        } else {
+            known(FIVE_HOUR) && known(SEVEN_DAY)
+        }
 }
 
 /// Step 4's rules in their order: spent, overage, return to plan, drain, shed. Each yields the siblings it
@@ -1083,15 +1092,16 @@ fn move_of<'a>(
 
     // A spent window is not a hover: the pinned account cannot serve the request until the window resets, so
     // the pin moves outside the round's budget as soon as a sibling is known to hold allowance, rather than
-    // renewing until the upstream's 429 moves it one request later. After a restart no sibling's allowance is
-    // known, and a guess could land the session on another spent account, so the upstream decides instead.
+    // renewing until the upstream's 429 moves it one request later. A sibling holding no reading of the window
+    // has an unknown allowance, and a guess could land the session on another spent account, so the upstream
+    // decides instead.
     // Under `prefer_plan` a sibling in overage is no destination: the overage rule would hand the session back
     // on the next request, the two rules trading it on no new evidence.
     if pool.shedding.migrate_when_spent && !holds_allowance(state, &current.account_id, window, now)
     {
         let set = destinations(state, &|c| {
             holds_allowance(state, &c.account_id, window, now)
-                && allowance_known(state, snapshot, &c.account_id, now)
+                && allowance_known(state, snapshot, &c.account_id, window, now)
                 && !(prefer_plan && state.in_overage(&c.account_id, now, fallback_ms))
         });
         if !set.is_empty() {
@@ -1151,11 +1161,10 @@ fn move_of<'a>(
         }
     }
 
-    // The trigger reads the stored reading raw, as the ceiling does: a refunded window is re-read by the next
-    // poll within the sample TTL.
+    // The trigger reads the prediction, as the ceiling does: a refunded window reads zero at its reset.
     let threshold = pool.migrate_above_utilization?;
-    let hot = reading_at_least(state, &current.account_id, FIVE_HOUR, threshold)
-        || reading_at_least(state, &current.account_id, SEVEN_DAY, threshold);
+    let hot = reading_at_least(state, &current.account_id, FIVE_HOUR, threshold, now)
+        || reading_at_least(state, &current.account_id, SEVEN_DAY, threshold, now);
     if !hot {
         return None;
     }
@@ -1428,7 +1437,7 @@ fn blocked(
     state.in_flight().account(account_id) >= pool.failover.in_flight_cap
         || pool
             .select_below_utilization
-            .is_some_and(|threshold| reading_at_least(state, account_id, FIVE_HOUR, threshold))
+            .is_some_and(|threshold| reading_at_least(state, account_id, FIVE_HOUR, threshold, now))
         || snapshot
             .term(account_id)
             .is_some_and(|term| term::winding_down(term, now, pool.failover.wind_down_minutes))
@@ -1592,19 +1601,15 @@ fn subagent_cohort<'a>(
 
 const WEEK_HOURS: f64 = 168.0;
 
-/// Pace's remaining allowance for a candidate at `now`, and the live reading's reset when it came from the
+/// Pace's remaining allowance for a candidate at `now`, and the predicted reading's reset when it came from the
 /// candidate's own `window` (an api_key account's worst-bucket reset never enters the score). A subscription
-/// account whose window was refunded or aged out, an api_key account with every bucket refunded or aged out, or
-/// an account never sampled, all read as untouched: remaining 1, no reset.
+/// window nobody has read, an api_key account with every bucket refunded or aged, or an account never sampled,
+/// all read as untouched: remaining 1, no reset. A reading past its reset reads as the router's own use since it.
 fn remaining(state: &RoutingState, account_id: &str, window: &str, now: i64) -> (f64, Option<i64>) {
-    let ttl = state.sample_ttl_ms();
-    let Some(sample) = state.sample(account_id) else {
-        return (1.0, None);
-    };
-    if let Some(reading) = sample.reading(window).filter(|r| r.live_at(now, ttl)) {
+    if let Some(reading) = state.predicted(account_id, window, now) {
         return ((1.0 - reading.utilization).max(0.0), reading.reset);
     }
-    match sample.worst_bucket(now, ttl) {
+    match state.sample(account_id).and_then(|s| s.worst_bucket(now)) {
         Some(reading) => ((1.0 - reading.utilization).max(0.0), None),
         None => (1.0, None),
     }

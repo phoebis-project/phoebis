@@ -828,7 +828,7 @@ mod tests {
             )
             .unwrap();
         let clock: Clock = Arc::new(|| 1_000);
-        phoebis_routing::spawn(store, None, clock, phoebis_routing::RouterConfig::default()).unwrap()
+        phoebis_routing::spawn(store, clock, phoebis_routing::RouterConfig::default()).unwrap()
     }
 
     #[tokio::test]

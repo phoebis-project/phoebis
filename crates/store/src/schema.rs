@@ -61,11 +61,12 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
     (29, V29),
     (30, V30),
     (31, V31),
+    (32, V32),
 ];
 
 /// The newest schema version this build knows how to read. `prepare` refuses a registry stamped past it
 /// rather than skip migrations it does not carry and misread the tables that follow.
-pub const SCHEMA_VERSION: u32 = 31;
+pub const SCHEMA_VERSION: u32 = 32;
 
 const V2: &str = r#"
 CREATE TABLE IF NOT EXISTS account_models (
@@ -489,4 +490,17 @@ const V31: &str = r#"
 DROP INDEX IF EXISTS alert_deliveries_lifecycle;
 CREATE INDEX alert_deliveries_lifecycle_at ON alert_deliveries (at, id) WHERE event_id IS NULL;
 CREATE INDEX alert_deliveries_lifecycle_kind ON alert_deliveries (kind, at, id) WHERE event_id IS NULL;
+"#;
+
+// The newest reading of each of an OAuth account's plan windows, as the routing state last held it, so a restart
+// or a startup poll the endpoint refuses routes from the last known windows; the api_key buckets refill within
+// a minute and are not kept. Deleted with the account.
+const V32: &str = r#"
+CREATE TABLE usage_windows (
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  window TEXT NOT NULL,
+  utilization REAL NOT NULL, reset INTEGER, observed_at INTEGER NOT NULL,
+  incarnation INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (account_id, window)
+);
 "#;

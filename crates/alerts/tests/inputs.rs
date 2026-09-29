@@ -529,6 +529,75 @@ async fn an_answering_turn_cannot_land_between_a_questions_claim_and_its_event()
     );
 }
 
+/// A 5-hour reading of 0.95 read an hour before the clock, whose window resets at `reset`.
+fn five_hour_at(reset: i64, observed_at: i64) -> UtilizationSample {
+    UtilizationSample {
+        observed_at,
+        ..Default::default()
+    }
+    .with(
+        FIVE_HOUR,
+        WindowReading {
+            utilization: 0.95,
+            reset: Some(reset),
+            observed_at,
+        },
+    )
+}
+
+#[tokio::test]
+async fn utilization_above_reads_a_reading_past_its_reset_as_zero() {
+    const HOUR: i64 = 3_600_000;
+    let rig = rig().await;
+    rig.store
+        .upsert_alert_rule(
+            &phoebis_store::AlertRuleRow {
+                threshold: Some(0.9),
+                window: Some("5h".into()),
+                ..rule(
+                    "util",
+                    Kind::UtilizationAbove,
+                    ScopeType::Pool,
+                    Some("main"),
+                )
+            },
+            None,
+            "test",
+        )
+        .unwrap();
+    rig.alerts.reload().unwrap();
+    let mut poller = Poller::new(
+        rig.alerts.clone(),
+        &inputs(&rig, BTreeMap::new()),
+        Tracked::default(),
+    );
+    let fired = || {
+        rig.store
+            .open_alert_events()
+            .unwrap()
+            .into_iter()
+            .any(|e| e.kind == "utilization_above" && e.subject == "business")
+    };
+    rig.router.report(Report::Sample {
+        account_id: "business".into(),
+        sample: five_hour_at(NOW - 1_000, NOW - HOUR),
+        incarnation: 1,
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    poller.tick().await;
+    settled(&rig).await;
+    assert!(!fired(), "a reading past its reset reads zero");
+    rig.router.report(Report::Sample {
+        account_id: "business".into(),
+        sample: five_hour_at(NOW + HOUR, NOW - HOUR + 1_000),
+        incarnation: 1,
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    poller.tick().await;
+    settled(&rig).await;
+    assert!(fired(), "the same reading with its reset ahead fires");
+}
+
 #[tokio::test]
 async fn the_poller_reads_account_state_refresh_attempts_samples_and_the_cap() {
     let rig = rig().await;

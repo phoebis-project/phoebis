@@ -288,6 +288,31 @@ pub async fn harness(up: &FakeUpstream, accounts: &[TestAccount], pool: PoolSpec
     harness_with(up, accounts, pool, default_limits()).await
 }
 
+/// The default harness with the router task on `config`, for a test that needs a share pricer or another router
+/// setting of its own.
+pub async fn harness_with_router_config(
+    up: &FakeUpstream,
+    accounts: &[TestAccount],
+    pool: PoolSpec,
+    config: RouterConfig,
+) -> Harness {
+    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+    build(
+        store,
+        up,
+        accounts,
+        pool,
+        default_limits(),
+        None,
+        false,
+        None,
+        None,
+        CATALOG_WINDOW,
+        config,
+    )
+    .await
+}
+
 /// A harness whose pool is restricted to one model, for the tests that check a routing refusal against a
 /// specific model without a second account or model to route around. The pattern is a glob on the spelling: the
 /// prefetch names the harness's default model by its dated snapshot before any request, so an exact entry for
@@ -348,6 +373,7 @@ pub async fn harness_on(
         None,
         None,
         CATALOG_WINDOW,
+        RouterConfig::default(),
     )
     .await
 }
@@ -372,6 +398,7 @@ pub async fn harness_with_memory_cap(
         Some(cap),
         None,
         CATALOG_WINDOW,
+        RouterConfig::default(),
     )
     .await
 }
@@ -396,6 +423,7 @@ pub async fn harness_with_cache_diagnostics_default(
         None,
         None,
         CATALOG_WINDOW,
+        RouterConfig::default(),
     )
     .await
 }
@@ -430,6 +458,7 @@ pub async fn harness_with_bus_limits(
         None,
         None,
         CATALOG_WINDOW,
+        RouterConfig::default(),
     )
     .await
 }
@@ -454,6 +483,7 @@ pub async fn harness_with_catalog(
         None,
         Some(catalog_up),
         CATALOG_WINDOW,
+        RouterConfig::default(),
     )
     .await
 }
@@ -479,6 +509,7 @@ pub async fn harness_with_catalog_window(
         None,
         Some(catalog_up),
         window,
+        RouterConfig::default(),
     )
     .await
 }
@@ -505,6 +536,7 @@ pub async fn harness_with_bus_and_catalog(
         None,
         Some(catalog_up),
         CATALOG_WINDOW,
+        RouterConfig::default(),
     )
     .await
 }
@@ -530,6 +562,7 @@ pub async fn harness_with_store_and_catalog(
         None,
         Some(catalog_up),
         window,
+        RouterConfig::default(),
     )
     .await
 }
@@ -546,6 +579,7 @@ async fn build(
     memory_cap: Option<usize>,
     catalog_up: Option<FakeUpstream>,
     catalog_window: Duration,
+    router_config: RouterConfig,
 ) -> Harness {
     let p = claude_code_2_1_269_linux_x64();
     if store.accounts().unwrap().is_empty() {
@@ -710,7 +744,7 @@ async fn build(
         4,
         Duration::from_secs(60),
     ));
-    let router_handle = spawn(store.clone(), None, clock.clone(), RouterConfig::default()).unwrap();
+    let router_handle = spawn(store.clone(), clock.clone(), router_config).unwrap();
     // A separate connector, pool, and resolver from the relay's own: `PoolKey` is the account and the host
     // with no address, so a shared pool would hand a listing fetch an inference connection into `up`, or an
     // inference request a listing fetch's connection into `catalog_up`.

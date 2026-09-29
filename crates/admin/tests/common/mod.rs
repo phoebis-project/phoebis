@@ -773,7 +773,7 @@ async fn app_with_webhook_policy(
         4,
         Duration::from_secs(60),
     ));
-    let router_handle = spawn(store.clone(), None, clock.clone(), RouterConfig::default()).unwrap();
+    let router_handle = spawn(store.clone(), clock.clone(), RouterConfig::default()).unwrap();
     let catalog = Arc::new(CatalogService::new(
         store.clone(),
         manager.clone(),

@@ -299,7 +299,7 @@ impl QuotaPoll {
                     let handle = attempts.spawn(async move {
                         Self::poll_account(&usage, &ledger, Some(&router), &account).await;
                         if profile_due {
-                            Self::refresh_profile(&store, &usage, &account).await;
+                            Self::refresh_profile(&store, &usage, &router, &account).await;
                         }
                         Completion {
                             held: usage.held_for(&account.id),
@@ -394,16 +394,31 @@ impl QuotaPoll {
         }
     }
 
-    /// The profile row's refresh; a failure is logged and nothing else.
-    pub async fn refresh_profile(store: &Store, usage: &UsageService, account: &AccountRow) {
+    /// The profile row's refresh; a failure is logged and nothing else. A stored tier the profile changes asks
+    /// the router to reload, since the snapshot's tier prices the router's own use of the account's windows.
+    pub async fn refresh_profile(
+        store: &Store,
+        usage: &UsageService,
+        router: &RouterHandle,
+        account: &AccountRow,
+    ) {
         // The profile row is the poll's to refresh: nothing else reads the endpoint after pairing, and the
         // admin views show what it says.
         match usage.profile(&account.id).await {
             Ok(profile) => {
+                let before = store
+                    .subscription(&account.id)
+                    .ok()
+                    .flatten()
+                    .and_then(|s| s.tier);
                 if let Err(error) =
                     store.set_profile(&account.id, &profile.raw.to_string(), &profile.subscription)
                 {
                     tracing::warn!(account = %account.id, %error, "the profile could not be stored");
+                } else if before != profile.subscription.tier {
+                    if let Err(error) = router.reload().await {
+                        tracing::debug!(account = %account.id, %error, "the router did not reload for a new tier");
+                    }
                 }
             }
             Err(error) => {
@@ -444,7 +459,7 @@ impl QuotaPoll {
                 let answer =
                     Self::poll_account(&usage, &task_ledger, Some(&router), &account).await;
                 let _ = tx.send(answer.is_some());
-                Self::refresh_profile(&store, &usage, &account).await;
+                Self::refresh_profile(&store, &usage, &router, &account).await;
             });
             ledger.track(handle);
         }

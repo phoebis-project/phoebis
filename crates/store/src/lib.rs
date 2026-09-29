@@ -45,7 +45,7 @@ pub use registry::{
 };
 pub use routing::{
     AffinityChain, AffinityRow, CooldownRow, FitRow, OverageRow, PinKey, PinRow, RekeyWrite,
-    ResolutionRow, RoutingLoad,
+    ResolutionRow, RoutingLoad, WindowRow,
 };
 
 // A poisoned store mutex means a prior panic happened while a write was in flight; the store's

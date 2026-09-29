@@ -151,7 +151,8 @@ impl Renewal {
 
 /// A completed inference or probe answer's report on its conversation: built at the commit beside the renewal
 /// with every fact the request knows, completed and sent as `Report::Affinity` once the answer has ended and its
-/// message id and usage are known. A token count builds none: it writes no cache.
+/// message id and usage are known. Built for a pinned and an unpinned request alike, so it also carries the
+/// answer's usage to the router's window prediction. A token count builds none: it writes no cache.
 pub(crate) struct AffinityFacts {
     pub router: RouterHandle,
     pub account_id: String,
@@ -173,9 +174,10 @@ pub(crate) struct AffinityFacts {
 }
 
 impl AffinityFacts {
-    /// Converts into `AffinityReport` (`cache_touched` and `prefix_tokens` from the usage's three cache fields,
-    /// false and 0 without them) and sends `Report::Affinity` through `router.report`; a committed answer only
-    /// (`status == 200`), since a rejection continues no conversation.
+    /// Sends `Report::Usage` for an answer whose usage is not empty, then converts into `AffinityReport`
+    /// (`cache_touched` and `prefix_tokens` from the usage's three cache fields, false and 0 without them) and
+    /// sends `Report::Affinity` through `router.report`; a committed answer only (`status == 200`), since a
+    /// rejection continues no conversation and consumes no window.
     pub(crate) fn send(
         self,
         now: i64,
@@ -186,6 +188,15 @@ impl AffinityFacts {
         // A rejection continues no conversation, so it leaves no link to resolve a later request by.
         if status != 200 {
             return;
+        }
+        if let Some(counted) = usage.filter(|u| !u.is_empty()) {
+            self.router.report(Report::Usage {
+                account_id: self.account_id.clone(),
+                at: now,
+                canonical_model: self.canonical_model.clone(),
+                incarnation: self.incarnation,
+                usage: pin_usage(counted),
+            });
         }
         let cached = |field: fn(&Usage) -> Option<u64>| usage.and_then(field).unwrap_or(0);
         let prefix_tokens = cached(|u| u.cache_read_tokens)

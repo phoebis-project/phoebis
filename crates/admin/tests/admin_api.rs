@@ -411,6 +411,7 @@ async fn a_confirmed_pairing_stores_the_plan_and_the_start_at_once() {
             trial_ends_at: Some(1_790_899_200_000),
             cancelled: false,
             ends_at: None,
+            tier: None,
         },
         common::NOW,
     );

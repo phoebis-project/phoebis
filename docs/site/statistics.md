@@ -71,9 +71,11 @@ endpoint, every five minutes per OAuth account with each account on its own phas
 an idle account leaves, is the only source of extra-usage credit totals, and hands every clean reading to the router.
 
 The usage endpoint is also read once at startup for every OAuth account with a credential, before the proxy listener
-accepts requests and bounded by `routing.startup_fetch_seconds`, so selection holds a sample per account from the
-first request after a restart. The poll counts that read as its own: it next reads each account five minutes after the
-startup step, on the account's phase, and its profile an hour after.
+accepts requests and bounded by `routing.startup_fetch_seconds`, so selection holds a sample per account from the first
+request after a restart; an account whose first answer is a 429 serves from the windows kept in the registry from its
+last run, predicted forward, and its backoff starts at once, and one whose first answer is a transport failure or
+another error serves from them too and keeps the cadence. The poll counts that read as its own: it next reads each
+account five minutes after the startup step, on the account's phase, and its profile an hour after.
 
 An account the endpoint answers 429 backs off alone. Its hold grows through one, two, four and eight minutes to
 fifteen, a `Retry-After` honoured up to the same fifteen, and a retry never comes sooner than the account's next
@@ -427,8 +429,9 @@ for the session neither happens.
 and `subagent_ended` when the companion releases the agent, when the session ends, or at the session's expiry.
 The detail names the parent agent when the client sent `x-claude-code-parent-agent-id`.
 
-**Utilization above threshold** fires when a usage sample for the chosen window reaches the threshold and
-resolves once a sample reads five points below it.
+**Utilization above threshold** fires when the router's reading of the chosen window, carried forward between heads and
+polls as the [routing page](routing.md#the-windows-the-router-works-from) says, reaches the threshold and resolves once
+a sample reads five points below it.
 
 For the other eight kinds at most one open event exists per rule and subject; an event resolves either on the
 condition its description names or by hand, through Resolve. A webhook may not point at `localhost` or a

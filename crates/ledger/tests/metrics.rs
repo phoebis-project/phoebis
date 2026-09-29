@@ -250,7 +250,6 @@ async fn cooldowns_on_two_unpriced_models_render_as_one_other_sample_with_the_lo
     }
     let router = phoebis_routing::spawn(
         store,
-        None,
         Arc::new(|| 1_000),
         phoebis_routing::RouterConfig::default(),
     )
@@ -290,7 +289,6 @@ async fn an_overage_observations_reset_decides_the_gauge_rather_than_the_raw_fla
     }
     let router = phoebis_routing::spawn(
         store,
-        None,
         Arc::new(|| 2_000),
         phoebis_routing::RouterConfig::default(),
     )
