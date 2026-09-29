@@ -128,8 +128,8 @@ prices a subscription upstream on plan quota, `metered` an API-key upstream or a
 set carries `main` and `subagent` in `5m` or `1h`, `keepalive` (the TTL a keepalive probe's replay writes with), and
 `models`, a list of `{model, main, subagent}` overrides on canonical ids. `plan` defaults to one hour throughout and
 `metered` to five minutes throughout: a one-hour write costs a metered upstream 2x base input against 1.25x for five
-minutes, and a plan-funded upstream the same plan tokens either way. With the policy on, every `cache_control` marker in
-the body is rewritten to the TTL the request's set and branch choose, the ones inside a tool result's own content
+minutes, and a plan-funded upstream the same window share either way. With the policy on, every `cache_control` marker
+in the body is rewritten to the TTL the request's set and branch choose, the ones inside a tool result's own content
 included, the `extended-cache-ttl-2025-04-11` beta travels exactly when the body is one hour, and the `cch` hash is
 restamped, except a body the fail-closed guard refuses to edit, which goes as sent with its own markers and beta. The
 guard refuses when a JSON decoder counts a different number of markers than the rewrite reached, as with a
@@ -388,11 +388,13 @@ cannot read refreshes the pin on every request. A keepalive probe replays anothe
 the router judges none of them: a probe never colds a session, and its renewal counts as a refresh. A `count_tokens`
 request creates no cache entry, so it neither refreshes nor colds the pin and leaves its cache TTL as it was.
 
-**Burn** Each pin keeps a moving average of its priced usage over `burn_window_seconds` twice, in plan-meter
-tokens and in dollars, and the round reads the one the account's funding selects: plan-meter tokens while a
-subscription account runs on its plan, dollars on an API-key account or a subscription account in overage. Every
-renewal folds both, so leaving overage switches the reading back without a reset. A keepalive probe's usage never
-counts.
+**Burn** Each pin keeps its usage over `burn_window_seconds` as typed tokens per hour (input, cache read, 5-minute and
+1-hour cache writes, output) for the pin's one model, in two copies: one plain and one weighed by the peak band at each
+renewal. Nothing is priced until it is read: the round prices the banded copy as a share of the account's 5-hour window
+while a subscription account runs on its plan, and the plain copy in dollars on an API-key account or a subscription
+account in overage, so leaving overage switches the reading without a reset and a session that moves between tiers reads
+the right share on both. A keepalive probe's usage never counts. A figure priced through a cell or a factor the
+measurement campaign has not filled is marked as the cost reference marks the cell.
 
 Any move records a `pin_migrated` event with reason `cooldown`, `drain`, `mark`, `overage`, `return_to_plan`, `shed`, or
 `spent`: `cooldown` and `mark` when a failover or a credential mark moved the session, the others after the rule above

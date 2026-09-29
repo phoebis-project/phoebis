@@ -21,8 +21,7 @@ use phoebis_keepalive::{
     Ack, Engine, EngineParts, Event, EventError, KeepaliveLimits, KeepalivePolicy,
 };
 use phoebis_ledger::{
-    spawn as spawn_ledger, Ledger, LedgerConfig, LedgerDb, Metrics, PlanFactors, PlanWindows,
-    PriceTable, Pricing,
+    spawn as spawn_ledger, Ledger, LedgerConfig, LedgerDb, Metrics, PlanTables, PriceTable, Pricing,
 };
 use phoebis_oauth::Clock;
 use fake_upstream::{FakeUpstream, Respond, Rule};
@@ -70,12 +69,11 @@ pub struct Rig {
     /// The spec's limits, kept so `restart` builds its engine with what this one was built with.
     pub limits: KeepaliveLimits,
     pub metrics: Arc<Metrics>,
-    /// The spec's tables, kept so `restart` builds its engine with what this one was built with.
-    pub plan: Arc<PlanFactors>,
     pub sequence: u64,
     pub sub: Subscriber,
+    /// The spec's tables, kept so `restart` builds its engine with what this one was built with.
+    pub tables: Arc<PlanTables>,
     pub up: FakeUpstream,
-    pub windows: Arc<PlanWindows>,
 }
 
 pub struct RigSpec {
@@ -85,14 +83,14 @@ pub struct RigSpec {
     pub lifecycle: Option<LifecycleSender>,
     pub limits: KeepaliveLimits,
     pub policy: KeepalivePolicy,
-    /// The shipped factors by default; a test naming a model the plan table lacks (though the price table
-    /// prices it) overrides this so the gap is deliberate rather than a coincidence of the shipped tables.
-    pub plan: PlanFactors,
     pub pool: PoolSpec,
     pub session_expiry: Duration,
-    /// The shipped table by default; a test naming the plan-side cap's tier fall-back overrides this to a size
-    /// one probe can cross, so it need not shape a real probe's cost around the shipped windows' true scale.
-    pub windows: PlanWindows,
+    /// The shipped tables by default; a test naming a model the cost table lacks (though the price table
+    /// prices it) overrides this so the gap is deliberate rather than a coincidence of the shipped tables.
+    pub tables: PlanTables,
+    /// The subscription tier every OAuth account's stored profile names, `None` to store none: a plan-funded
+    /// probe settles in the share of the tier's window, and in dollars on an account without one.
+    pub tier: Option<&'static str>,
 }
 
 impl Default for RigSpec {
@@ -115,10 +113,10 @@ impl Default for RigSpec {
                 jitter_seconds_1h: 0,
                 ..KeepalivePolicy::default()
             },
-            plan: PlanFactors::shipped(),
             pool: PoolSpec::default(),
             session_expiry: Duration::from_secs(86_400),
-            windows: PlanWindows::shipped(),
+            tables: PlanTables::shipped(),
+            tier: None,
         }
     }
 }
@@ -151,6 +149,15 @@ pub async fn rig(spec: RigSpec) -> Rig {
     let mut pool = h.store.pool("main").unwrap().unwrap();
     pool.keepalive_json = serde_json::to_string(&spec.policy).unwrap();
     h.store.update_pool(&pool, "test").unwrap();
+    if let Some(tier) = spec.tier {
+        for account in spec
+            .accounts
+            .iter()
+            .filter(|a| a.kind == phoebis_store::AccountKind::Oauth)
+        {
+            name_the_tier(&h.store, account.id, tier);
+        }
+    }
     h.router.reload().await.unwrap();
     let clock: Clock = {
         let c = h.clock.clone();
@@ -169,8 +176,7 @@ pub async fn rig(spec: RigSpec) -> Rig {
         metrics.clone(),
         LedgerConfig::default(),
     );
-    let plan = Arc::new(spec.plan);
-    let windows = Arc::new(spec.windows);
+    let tables = Arc::new(spec.tables);
     let engine = Engine::new(EngineParts {
         bus: bus.clone(),
         clock,
@@ -179,13 +185,12 @@ pub async fn rig(spec: RigSpec) -> Rig {
         lifecycle: spec.lifecycle,
         limits: spec.limits.clone(),
         metrics: metrics.clone(),
-        plan: plan.clone(),
         pricing,
         relay: h.relay.clone(),
         router: h.router.clone(),
         session_expiry: spec.session_expiry,
         store: h.store.clone(),
-        windows: windows.clone(),
+        tables: tables.clone(),
     });
     let mut rig = Rig {
         bus,
@@ -196,11 +201,10 @@ pub async fn rig(spec: RigSpec) -> Rig {
         ledger,
         limits: spec.limits,
         metrics,
-        plan,
         sequence: 0,
         sub,
+        tables,
         up,
-        windows,
     };
     rig.event(Event {
         event: "session_start".into(),
@@ -208,6 +212,22 @@ pub async fn rig(spec: RigSpec) -> Rig {
     })
     .unwrap();
     rig
+}
+
+/// Stores a profile naming `tier` for `account`, as the profile fetch would.
+pub fn name_the_tier(store: &phoebis_store::Store, account: &str, tier: &str) {
+    store
+        .set_profile(
+            account,
+            "{}",
+            &phoebis_store::SubscriptionRow {
+                plan: None,
+                tier: Some(tier.to_string()),
+                since: None,
+                trial_ends_at: None,
+            },
+        )
+        .unwrap();
 }
 
 /// A `session_start` for `session_id`, under the rig's one instance: a multi-session test names its own
@@ -246,7 +266,7 @@ pub fn session_start_as(
 
 impl Rig {
     /// A second engine over the same ledger, store and router: a real restart, whose fresh `Inner` starts
-    /// empty and has to restore `spent_today` and `meter_spent_today` itself, unlike a `load_spent_today`
+    /// empty and has to restore `spent_today` and `share_spent_today` itself, unlike a `load_spent_today`
     /// called back on this rig's own engine, which the running one already answers from.
     pub async fn restart(&self) -> Arc<Engine> {
         let clock: Clock = {
@@ -261,13 +281,12 @@ impl Rig {
             lifecycle: None,
             limits: self.limits.clone(),
             metrics: Arc::new(Metrics::new()),
-            plan: self.plan.clone(),
             pricing: Arc::new(Pricing::new(PriceTable::shipped())),
             relay: self.h.relay.clone(),
             router: self.h.router.clone(),
             session_expiry: Duration::from_secs(86_400),
             store: self.h.store.clone(),
-            windows: self.windows.clone(),
+            tables: self.tables.clone(),
         })
     }
 

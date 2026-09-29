@@ -14,6 +14,16 @@ pub struct PinKey {
     pub model: String,
 }
 
+/// Tokens per second of each type, a pin's burn averaged over the pool's burn window and decayed from `burn_at`.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct PinBurn {
+    pub cache_read: f64,
+    pub input: f64,
+    pub output: f64,
+    pub write_1h: f64,
+    pub write_5m: f64,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct PinRow {
     pub key_id: String,
@@ -28,14 +38,14 @@ pub struct PinRow {
     /// a pin is only ever the holders' it was made for.
     pub key_generation: i64,
     pub incarnation: u64,
-    /// The moving average of the pin's usage priced in meter tokens over the pool's burn window, and when it
-    /// and `burn_usd` were last folded; 0 and `None` for a pin never renewed with usage. Both averages fold on
-    /// every client renewal, so no average ever mixes units, and a reader takes the one the account's funding
-    /// selects through the routing crate's `BurnUnit`.
-    pub burn: f64,
+    /// The pin's usage as typed tokens per second over the pool's burn window, and when it was last folded; a
+    /// reader prices it on the account the pin sits on when it reads, so no average carries a unit. Zero and
+    /// `None` for a pin never renewed with usage.
+    pub burn: PinBurn,
     pub burn_at: Option<i64>,
-    /// The same usage as `burn`, priced in dollars and folded at the same `burn_at`.
-    pub burn_usd: f64,
+    /// The same tokens weighed by the peak band at each renewal: what the 5-hour meter charged, which the
+    /// shedding order and a subscription account's figure read; the dollar figure reads `burn`.
+    pub burn_banded: PinBurn,
     pub last_input_tokens: u64,
     /// The last main, subagent or compaction turn, or a keepalive probe's renewal; `last_used_at` moves on every
     /// request, this does not.
@@ -317,14 +327,15 @@ impl Store {
             overage: tx.prepare("SELECT account_id, in_use, since, reset, observed_at, source, incarnation FROM overage_state ORDER BY account_id")?
                 .query_map([], |r| Ok(OverageRow { account_id: r.get(0)?, in_use: r.get(1)?, since: r.get(2)?, reset: r.get(3)?, observed_at: r.get(4)?, source: r.get(5)?, incarnation: r.get::<_, i64>(6)? as u64 }))?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
-            pins: tx.prepare("SELECT key_id, session_id, agent_id, model, account_id, epoch, created_at, last_used_at, key_generation, incarnation, burn, burn_at, last_input_tokens, last_refresh_at, cache_ttl_ms, shed_from, shed_at, static_hash, tail_hash, burn_usd FROM pins ORDER BY key_id, session_id, agent_id, model")?
+            pins: tx.prepare(&format!("SELECT key_id, session_id, agent_id, model, account_id, epoch, created_at, last_used_at, key_generation, incarnation, burn_at, last_input_tokens, last_refresh_at, cache_ttl_ms, shed_from, shed_at, static_hash, tail_hash, {BURN_COLUMNS} FROM pins ORDER BY key_id, session_id, agent_id, model"))?
                 .query_map([], |r| Ok(PinRow {
                     key_id: r.get(0)?, session_id: r.get(1)?, agent_id: r.get(2)?, model: r.get(3)?, account_id: r.get(4)?,
                     epoch: r.get::<_, i64>(5)? as u64, created_at: r.get(6)?, last_used_at: r.get(7)?,
                     key_generation: r.get(8)?, incarnation: r.get::<_, i64>(9)? as u64,
-                    burn: r.get(10)?, burn_at: r.get(11)?, burn_usd: r.get(19)?, last_input_tokens: r.get::<_, i64>(12)? as u64,
-                    last_refresh_at: r.get(13)?, cache_ttl_ms: r.get(14)?,
-                    shed_from: r.get(15)?, shed_at: r.get(16)?, static_hash: r.get(17)?, tail_hash: r.get(18)?,
+                    burn_at: r.get(10)?, last_input_tokens: r.get::<_, i64>(11)? as u64,
+                    last_refresh_at: r.get(12)?, cache_ttl_ms: r.get(13)?,
+                    shed_from: r.get(14)?, shed_at: r.get(15)?, static_hash: r.get(16)?, tail_hash: r.get(17)?,
+                    burn: burn_from(r, 18)?, burn_banded: burn_from(r, 23)?,
                 }))?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
             resolutions: tx.prepare("SELECT spelling, dated_id, resolved_at FROM model_resolutions ORDER BY spelling")?
@@ -566,17 +577,38 @@ impl Store {
     }
 }
 
+// `burn_from` reads each copy's five columns in this order, the plain copy first.
+const BURN_COLUMNS: &str = "burn_cache_read, burn_input, burn_output, burn_write_1h, burn_write_5m, \
+     burn_banded_cache_read, burn_banded_input, burn_banded_output, burn_banded_write_1h, burn_banded_write_5m";
+
+fn burn_from(r: &rusqlite::Row<'_>, first: usize) -> rusqlite::Result<PinBurn> {
+    Ok(PinBurn {
+        cache_read: r.get(first)?,
+        input: r.get(first + 1)?,
+        output: r.get(first + 2)?,
+        write_1h: r.get(first + 3)?,
+        write_5m: r.get(first + 4)?,
+    })
+}
+
 fn upsert_pin_on(conn: &Connection, pin: &PinRow) -> Result<(), StoreError> {
     conn.execute(
-        "INSERT INTO pins (key_id, session_id, agent_id, model, account_id, epoch, created_at, last_used_at, key_generation, incarnation, burn, burn_at, last_input_tokens, last_refresh_at, cache_ttl_ms, shed_from, shed_at, static_hash, tail_hash, burn_usd) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20) \
-         ON CONFLICT(key_id, session_id, agent_id, model) DO UPDATE SET \
-           account_id = excluded.account_id, epoch = excluded.epoch, created_at = excluded.created_at, \
-           last_used_at = excluded.last_used_at, key_generation = excluded.key_generation, \
-           incarnation = excluded.incarnation, burn = excluded.burn, burn_at = excluded.burn_at, \
-           last_input_tokens = excluded.last_input_tokens, last_refresh_at = excluded.last_refresh_at, \
-           cache_ttl_ms = excluded.cache_ttl_ms, shed_from = excluded.shed_from, shed_at = excluded.shed_at, \
-           static_hash = excluded.static_hash, tail_hash = excluded.tail_hash, burn_usd = excluded.burn_usd",
+        &format!(
+            "INSERT INTO pins (key_id, session_id, agent_id, model, account_id, epoch, created_at, last_used_at, key_generation, incarnation, burn_at, last_input_tokens, last_refresh_at, cache_ttl_ms, shed_from, shed_at, static_hash, tail_hash, {BURN_COLUMNS}) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28) \
+             ON CONFLICT(key_id, session_id, agent_id, model) DO UPDATE SET \
+               account_id = excluded.account_id, epoch = excluded.epoch, created_at = excluded.created_at, \
+               last_used_at = excluded.last_used_at, key_generation = excluded.key_generation, \
+               incarnation = excluded.incarnation, burn_at = excluded.burn_at, \
+               last_input_tokens = excluded.last_input_tokens, last_refresh_at = excluded.last_refresh_at, \
+               cache_ttl_ms = excluded.cache_ttl_ms, shed_from = excluded.shed_from, shed_at = excluded.shed_at, \
+               static_hash = excluded.static_hash, tail_hash = excluded.tail_hash, \
+               burn_cache_read = excluded.burn_cache_read, burn_input = excluded.burn_input, \
+               burn_output = excluded.burn_output, burn_write_1h = excluded.burn_write_1h, \
+               burn_write_5m = excluded.burn_write_5m, burn_banded_cache_read = excluded.burn_banded_cache_read, \
+               burn_banded_input = excluded.burn_banded_input, burn_banded_output = excluded.burn_banded_output, \
+               burn_banded_write_1h = excluded.burn_banded_write_1h, burn_banded_write_5m = excluded.burn_banded_write_5m"
+        ),
         params![
             pin.key_id,
             pin.session_id,
@@ -588,7 +620,6 @@ fn upsert_pin_on(conn: &Connection, pin: &PinRow) -> Result<(), StoreError> {
             pin.last_used_at,
             pin.key_generation,
             pin.incarnation as i64,
-            pin.burn,
             pin.burn_at,
             pin.last_input_tokens as i64,
             pin.last_refresh_at,
@@ -597,7 +628,16 @@ fn upsert_pin_on(conn: &Connection, pin: &PinRow) -> Result<(), StoreError> {
             pin.shed_at,
             pin.static_hash,
             pin.tail_hash,
-            pin.burn_usd
+            pin.burn.cache_read,
+            pin.burn.input,
+            pin.burn.output,
+            pin.burn.write_1h,
+            pin.burn.write_5m,
+            pin.burn_banded.cache_read,
+            pin.burn_banded.input,
+            pin.burn_banded.output,
+            pin.burn_banded.write_1h,
+            pin.burn_banded.write_5m
         ],
     )?;
     Ok(())

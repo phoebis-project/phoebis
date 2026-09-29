@@ -164,10 +164,13 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             )
         })?,
     );
+    // One copy of the shipped plan tables for every reader: the router's burn rates, band and share pricer,
+    // the keepalive's settlements and the admin's session burn and settings echo.
+    let tables = Arc::new(phoebis_ledger::PlanTables::shipped());
     let router_task = phoebis_routing::spawn(
         store.clone(),
         clock.clone(),
-        router_config(&pricing.current()),
+        router_config(&pricing.current(), tables.clone()),
     )?;
     let bus = Bus::new();
     let ledger_db = Arc::new(LedgerDb::open(&config.stats.ledger_path).with_context(|| {
@@ -277,13 +280,12 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         lifecycle: Some(lifecycle_tx),
         limits: config.keepalive.clone(),
         metrics: metrics.clone(),
-        plan: Arc::new(phoebis_ledger::PlanFactors::shipped()),
         pricing: pricing.clone(),
         relay: relay.clone(),
         router: router_task.clone(),
         session_expiry: Duration::from_secs(config.sessions.expire_after_seconds),
         store: store.clone(),
-        windows: Arc::new(phoebis_ledger::PlanWindows::shipped()),
+        tables: tables.clone(),
     });
     // Both daily budgets are read back from the store so a restart resets neither cap.
     keepalive.load_spent_today().await;
@@ -351,6 +353,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         live: live.clone(),
         metrics: metrics.clone(),
         pricing: pricing.clone(),
+        tables,
         settings: Arc::new(SettingsView {
             admin_listen: config.admin.listen.to_string(),
             admin_origin: config.admin.origin.clone(),
@@ -653,17 +656,20 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
     served
 }
 
-/// The routing task's burn prices and peak band: the shipped plan tables for the meter side, and for dollars
-/// `prices`, the table `Pricing::load` chose at startup; the share of an account's window a completed request
-/// consumed, priced through the cost table and the tier factor table. All are fixed for the life of the process.
-fn router_config(prices: &phoebis_ledger::PriceTable) -> phoebis_routing::RouterConfig {
-    let windows = Arc::new(phoebis_ledger::PlanWindows::shipped());
-    let tables = Arc::new(phoebis_ledger::PlanTables::shipped());
+/// The routing task's burn prices and peak band: the cost table's Max 5x 5-hour share per token and its band,
+/// and for dollars `prices`, the table `Pricing::load` chose at startup; the share of an account's window a
+/// completed request consumed, priced through the cost table and the tier factor table. All are fixed for the
+/// life of the process.
+fn router_config(
+    prices: &phoebis_ledger::PriceTable,
+    tables: Arc<phoebis_ledger::PlanTables>,
+) -> phoebis_routing::RouterConfig {
+    let band = tables.clone();
     phoebis_routing::RouterConfig {
-        band: phoebis_routing::BandWeight::new(move |window, at| windows.band_factor(window, at)),
+        band: phoebis_routing::BandWeight::new(move |window, at| band.cost.band_factor(window, at)),
         rates: phoebis_routing::BurnRates {
-            meter: phoebis_ledger::PlanFactors::shipped().rate_table(),
             dollars: prices.rate_table(),
+            five_hour: tables.rate_table(phoebis_routing::FIVE_HOUR),
         },
         share: phoebis_routing::SharePricer::new(move |window, tier, model, usage, at| {
             let share = match window {
@@ -768,8 +774,8 @@ mod tests {
 
     #[test]
     fn the_router_config_prices_a_windows_share_through_the_shipped_plan_tables() {
-        let config = router_config(&phoebis_ledger::PriceTable::shipped());
         let tables = phoebis_ledger::PlanTables::shipped();
+        let config = router_config(&phoebis_ledger::PriceTable::shipped(), Arc::new(tables.clone()));
         let usage = phoebis_routing::PinUsage {
             input: 1_000,
             cache_read: 10_000,
@@ -816,9 +822,11 @@ mod tests {
     }
 
     #[test]
-    fn the_router_config_prices_the_burn_through_the_shipped_meter_table_and_the_price_table() {
+    fn the_router_config_prices_the_burn_through_the_cost_tables_five_hour_rates_and_the_price_table(
+    ) {
         let prices = phoebis_ledger::PriceTable::shipped();
-        let config = router_config(&prices);
+        let tables = phoebis_ledger::PlanTables::shipped();
+        let config = router_config(&prices, Arc::new(tables.clone()));
         let usage = phoebis_routing::PinUsage {
             input: 1_000,
             cache_read: 10_000,
@@ -826,17 +834,24 @@ mod tests {
             write_1h: 200,
             output: 500,
         };
-        let meter = config.rates.meter.price("claude-opus-5", usage);
-        assert_eq!(
-            meter,
-            phoebis_ledger::PlanFactors::shipped()
-                .rate_table()
-                .price("claude-opus-5", usage)
+        let share = config.rates.five_hour.price("claude-opus-5", usage);
+        let expected = tables
+            .share(
+                phoebis_routing::FIVE_HOUR,
+                "default_claude_max_5x",
+                "claude-opus-5",
+                usage,
+            )
+            .unwrap()
+            .share;
+        assert!(
+            (share - expected).abs() < 1e-15,
+            "the 5-hour table is the Max 5x share per token, unweighed by the band: {share} against {expected}"
         );
         assert_ne!(
-            meter,
+            share,
             phoebis_routing::RateTable::unit().price("claude-opus-5", usage),
-            "the meter table, not the unit table's token count"
+            "the share table, not the unit table's token count"
         );
         let (usd, _) = prices
             .estimate("claude-sonnet-5", 1_000, 10_000, 100, 200, 500)

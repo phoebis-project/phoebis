@@ -129,7 +129,7 @@ pub struct CacheTtlPolicy {
     pub inject_when_absent: bool,
     /// The rules while a write costs money: an api_key account, or a subscription account in overage. A
     /// one-hour write costs a metered account 2x base input against 1.25x for five minutes, and a plan-funded
-    /// one the same plan tokens either way, so the metered default is five minutes while the plan side keeps
+    /// one the same window share either way, so the metered default is five minutes while the plan side keeps
     /// the hour.
     pub metered: TtlRules,
     pub plan: TtlRules,

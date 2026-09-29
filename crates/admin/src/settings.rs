@@ -13,7 +13,7 @@ use crate::AdminState;
 pub(crate) async fn show(State(state): State<Arc<AdminState>>) -> Response {
     let s = &state.settings;
     let table = state.pricing.current();
-    let tables = phoebis_ledger::PlanTables::shipped();
+    let tables = &state.tables;
     Json(json!({
         "about": { "profile": s.profile, "version": env!("CARGO_PKG_VERSION"), "public_url": s.admin_origin },
         "access": { "admin_configured": true, "viewer_configured": s.viewer_configured },

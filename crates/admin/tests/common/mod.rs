@@ -12,8 +12,7 @@ use phoebis_alerts::{AlertParts, Alerts, Webhook};
 use phoebis_bus::Bus;
 use phoebis_keepalive::{Engine, EngineParts, KeepaliveLimits};
 use phoebis_ledger::{
-    spawn as spawn_ledger, Ledger, LedgerConfig, LedgerDb, Metrics, PlanFactors, PlanWindows,
-    PriceTable, Pricing,
+    spawn as spawn_ledger, Ledger, LedgerConfig, LedgerDb, Metrics, PlanTables, PriceTable, Pricing,
 };
 use phoebis_live::{LiveConfig, LiveFeed};
 use phoebis_oauth::{Clock, CredentialManager, PairingSessions, UsageService};
@@ -825,6 +824,7 @@ async fn app_with_webhook_policy(
         )
         .with_bus(bus.clone()),
     );
+    let tables = Arc::new(PlanTables::shipped());
     let keepalive = Engine::new(EngineParts {
         bus: bus.clone(),
         clock: clock.clone(),
@@ -833,13 +833,12 @@ async fn app_with_webhook_policy(
         lifecycle: None,
         limits: KeepaliveLimits::default(),
         metrics: metrics.clone(),
-        plan: Arc::new(PlanFactors::shipped()),
         pricing: pricing.clone(),
         relay: relay.clone(),
         router: router_handle.clone(),
         session_expiry: Duration::from_secs(86_400),
         store: store.clone(),
-        windows: Arc::new(PlanWindows::shipped()),
+        tables: tables.clone(),
     });
     let webhook = FakeWebhook::new();
     // A hooked clock for the alerts engine alone: sharing the hook with `clock` would fire it on every other
@@ -922,6 +921,7 @@ async fn app_with_webhook_policy(
         live: live.clone(),
         metrics: metrics.clone(),
         pricing: pricing.clone(),
+        tables,
         settings,
         keepalive: keepalive.clone(),
         alerts: alerts.clone(),

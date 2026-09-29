@@ -908,3 +908,37 @@ fn an_unknown_model_prices_at_the_dearest_cell_of_each_type_across_the_models() 
         "{dearest:?}"
     );
 }
+
+#[test]
+fn unmeasured_reads_true_for_a_flagged_cell_or_factor_and_false_for_a_dated_pair() {
+    let tables = PlanTables::shipped();
+    const MAX_5X: &str = "default_claude_max_5x";
+    assert!(
+        !tables.unmeasured(FIVE_HOUR, MAX_5X, "claude-opus-5"),
+        "Opus's 5-hour cells and Max 5x's factor are all dated"
+    );
+    assert!(
+        !tables.unmeasured(FIVE_HOUR, MAX_5X, "claude-opus-5-20260101"),
+        "a dated id reads its undated row"
+    );
+    assert!(
+        tables.unmeasured(FIVE_HOUR, MAX_5X, "claude-sonnet-5"),
+        "Sonnet's 5-hour cells are stand-ins"
+    );
+    assert!(
+        tables.unmeasured(FIVE_HOUR, "default_claude_max_20x", "claude-opus-5"),
+        "Max 20x's factor is a stand-in"
+    );
+    assert!(
+        tables.unmeasured(SEVEN_DAY, MAX_5X, "claude-opus-5"),
+        "no 7-day cell has been measured"
+    );
+    assert!(
+        tables.unmeasured(FIVE_HOUR, MAX_5X, "claude-unlisted-9"),
+        "an unlisted model prices at the dearest cells, a stand-in wherever it is read"
+    );
+    assert!(
+        !tables.unmeasured(FIVE_HOUR, "default_claude_team", "claude-opus-5"),
+        "an unlisted tier prices no share, so there is no figure to flag"
+    );
+}

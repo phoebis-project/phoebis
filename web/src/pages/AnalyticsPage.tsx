@@ -1215,13 +1215,13 @@ function BurnCharts({ answer, error, groupBy, loading }: { answer: { bucketSecon
   // Read off the buckets, not the lines: the class grouping draws its two lines even over a range with no traffic.
   const empty = !loading && error === null && rows.length === 0 ? 'No traffic in this range.' : undefined;
   const byUpstream = groupBy === 'account';
-  const meterAxis = byUpstream && lines.some((l) => l.unit === 'meter_tokens');
+  const meterAxis = byUpstream && lines.some((l) => l.unit === 'window_share');
   const usdAxis = !meterAxis || lines.some((l) => l.unit === 'usd');
   // One precision for every tick, from the largest figure drawn, so the axis never mixes $0.0070 with $0.01.
   const usdMax = Math.max(0, ...rows.flatMap((r) => r.usd));
   const usdDigits = usdMax >= 10 ? 0 : usdMax >= 0.1 ? 2 : usdMax >= 0.01 ? 3 : 4;
-  const planned = lines.map((l, i) => ({ i, l })).filter(({ l }) => byUpstream && !l.other && l.unit === 'meter_tokens');
-  const spendOf = (l: BurnLine, r: BurnRow, i: number) => (byUpstream ? (l.unit === 'meter_tokens' ? `${fmtCompact(r.meter[i])} meter tokens` : fmtUsd(r.usd[i])) : `${fmtUsd(r.usd[i])}, ${fmtCompact(r.meter[i])} meter tokens`);
+  const planned = lines.map((l, i) => ({ i, l })).filter(({ l }) => byUpstream && !l.other && l.unit === 'window_share');
+  const spendOf = (l: BurnLine, r: BurnRow, i: number) => (byUpstream ? (l.unit === 'window_share' ? `${fmtCompact(r.meter[i])} meter tokens` : fmtUsd(r.usd[i])) : `${fmtUsd(r.usd[i])}, ${fmtCompact(r.meter[i])} meter tokens`);
   return (
     <div className="grid-2">
       <ChartCard
@@ -1256,7 +1256,7 @@ function BurnCharts({ answer, error, groupBy, loading }: { answer: { bucketSecon
         error={error}
         loading={loading}
         empty={empty}
-        legend={lines.map((l) => ({ color: colorOf(l), dashed: byUpstream && l.unit === 'meter_tokens', label: nameOf(l), shape: 'line' as const, title: titleOf(l), value: byUpstream && l.unit === 'meter_tokens' ? `${fmtCompact(l.meterPerMinute)} tokens` : fmtUsd(l.usdPerMinute) }))}
+        legend={lines.map((l) => ({ color: colorOf(l), dashed: byUpstream && l.unit === 'window_share', label: nameOf(l), shape: 'line' as const, title: titleOf(l), value: byUpstream && l.unit === 'window_share' ? `${fmtCompact(l.meterPerMinute)} tokens` : fmtUsd(l.usdPerMinute) }))}
       >
         <LineChart data={rows} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
           <CartesianGrid vertical={false} stroke={ink.grid} />
@@ -1265,7 +1265,7 @@ function BurnCharts({ answer, error, groupBy, loading }: { answer: { bucketSecon
           {meterAxis && <YAxis yAxisId="meter" orientation="right" tickFormatter={(v: number) => fmtCompact(v)} tickLine={false} axisLine={false} width={44} />}
           <Tooltip cursor={{ stroke: ink.axis }} content={timeTip<BurnRow>((r) => lines.map((l, i) => ({ color: colorOf(l), label: nameOf(l), title: titleOf(l), value: spendOf(l, r, i) })))} />
           {lines.map((l, i) => {
-            const meter = byUpstream && l.unit === 'meter_tokens';
+            const meter = byUpstream && l.unit === 'window_share';
             return <Line key={i} yAxisId={meter ? 'meter' : 'usd'} type="monotone" dataKey={(r: BurnRow) => (meter ? r.meter[i] : r.usd[i])} stroke={colorOf(l)} strokeWidth={2} strokeDasharray={meter ? '5 3' : undefined} dot={false} isAnimationActive={false} />;
           })}
         </LineChart>

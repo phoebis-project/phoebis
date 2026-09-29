@@ -6,8 +6,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 
 use phoebis_store::{
-    AccountKind, AccountState, AffinityRow, BudgetPeriod, CooldownRow, FitRow, OverageRow, PinKey,
-    PinRow, PoolMember, RekeyWrite, ResolutionRow, RoutingLoad, WindowRow,
+    AccountKind, AccountState, AffinityRow, BudgetPeriod, CooldownRow, FitRow, OverageRow, PinBurn,
+    PinKey, PinRow, PoolMember, RekeyWrite, ResolutionRow, RoutingLoad, WindowRow,
 };
 use tokio::sync::Notify;
 use tokio::time::Instant;
@@ -15,6 +15,7 @@ use tokio::time::Instant;
 use crate::affinity::AffinityMap;
 use crate::listing::{row_for, snapshot_date};
 use crate::select::affinity_ttl_ms;
+use crate::task::BurnRates;
 use crate::RegistrySnapshot;
 
 /// How long an api_key bucket read without its reset header stands: the buckets refill within a minute, so a
@@ -294,6 +295,16 @@ impl RateTable {
         *row_for(canonical_model, |k| self.rows.get(k)).unwrap_or(&self.fallback)
     }
 
+    /// Each rate times its price, summed: the price of one second of a pin's burn.
+    pub fn price_burn(&self, canonical_model: &str, burn: &PinBurn) -> f64 {
+        let rates = self.rates_for(canonical_model);
+        burn.input * rates.input
+            + burn.cache_read * rates.cache_read
+            + burn.write_5m * rates.write_5m
+            + burn.write_1h * rates.write_1h
+            + burn.output * rates.output
+    }
+
     /// Each count times its rate, summed.
     pub fn price(&self, canonical_model: &str, usage: PinUsage) -> f64 {
         let rates = self.rates_for(canonical_model);
@@ -305,28 +316,37 @@ impl RateTable {
     }
 }
 
-/// Which of a pin's two averages a reader takes: meter tokens while the account is funded by its plan, dollars
-/// on an api_key account or a subscription account in overage. Serializes as `meter_tokens` or `usd`.
+/// Which figure a reader takes for a pin's burn: the share of the account's 5-hour window while a subscription
+/// account runs on its plan, dollars on an api_key account or a subscription account in overage. Serializes
+/// as `window_share` or `usd`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BurnUnit {
-    MeterTokens,
     Usd,
+    WindowShare,
 }
 
 impl BurnUnit {
     pub fn of(kind: AccountKind, in_overage: bool) -> BurnUnit {
         match (kind, in_overage) {
-            (AccountKind::Oauth, false) => BurnUnit::MeterTokens,
+            (AccountKind::Oauth, false) => BurnUnit::WindowShare,
             (AccountKind::Oauth, true) | (AccountKind::ApiKey, _) => BurnUnit::Usd,
         }
     }
 
-    /// `pin.burn` or `pin.burn_usd`.
-    pub fn read(self, pin: &PinRow) -> f64 {
+    /// `pin.burn_banded` under `WindowShare` (the band is part of what the meter charged), `pin.burn` under `Usd`.
+    pub fn read(self, pin: &PinRow) -> PinBurn {
         match self {
-            BurnUnit::MeterTokens => pin.burn,
-            BurnUnit::Usd => pin.burn_usd,
+            BurnUnit::Usd => pin.burn,
+            BurnUnit::WindowShare => pin.burn_banded,
+        }
+    }
+
+    /// The table `rates` prices this unit's copy through.
+    pub fn table(self, rates: &BurnRates) -> &RateTable {
+        match self {
+            BurnUnit::Usd => &rates.dollars,
+            BurnUnit::WindowShare => &rates.five_hour,
         }
     }
 }
@@ -341,16 +361,16 @@ pub fn burn_decayed(burn: f64, burn_at: Option<i64>, now: i64, window_ms: i64) -
     }
 }
 
-/// The fold a renewal with usage applies at `now`: the average decayed to `now`, plus `priced` spread over the
-/// window, so the average is priced usage per second.
+/// The fold a renewal with usage applies at `now`: the average decayed to `now`, plus `tokens` spread over the
+/// window, so the average is tokens per second.
 pub(crate) fn burn_folded(
     burn: f64,
     burn_at: Option<i64>,
     now: i64,
     window_ms: i64,
-    priced: f64,
+    tokens: f64,
 ) -> f64 {
-    burn_decayed(burn, burn_at, now, window_ms) + priced / (window_ms.max(1) as f64 / 1_000.0)
+    burn_decayed(burn, burn_at, now, window_ms) + tokens / (window_ms.max(1) as f64 / 1_000.0)
 }
 
 /// Whether the pin's cache entry is still alive at `now`: its last refresh is younger than the TTL in force
@@ -576,6 +596,9 @@ pub struct RoutingState {
     next_epoch: u64,
     overage: HashMap<String, OverageEvidence>,
     pins: HashMap<PinKey, PinRow>,
+    /// The ledger's tables, which this crate cannot name, handed in by the task; unit tables until then, so a
+    /// burn read through them is a token count.
+    rates: BurnRates,
     /// The pins some selection or completion renewed since their placement. A client error on the request that
     /// created a pin releases the pin only while its key is absent here: a renewal means the pin serves another
     /// turn, however close in time. Memory only, since no request outlives a restart to report on a loaded pin.
@@ -650,6 +673,7 @@ impl RoutingState {
                 })
                 .collect(),
             pins: load.pins.into_iter().map(|p| (p.key(), p)).collect(),
+            rates: BurnRates::default(),
             renewed: HashSet::new(),
             resolutions: load
                 .resolutions
@@ -1138,6 +1162,16 @@ impl RoutingState {
         self.in_flight = in_flight;
     }
 
+    /// The tables the shedding round prices each pin's burn through.
+    pub fn rates(&self) -> &BurnRates {
+        &self.rates
+    }
+
+    /// Set by the task at spawn from its config, and by a test that prices a round through its own tables.
+    pub fn set_rates(&mut self, rates: BurnRates) {
+        self.rates = rates;
+    }
+
     /// The shared affinity map: the same one the handle's `ConversationLookup` reads without a command round
     /// trip, so a report the writer just applied is visible to the very next request.
     pub fn affinity(&self) -> Arc<RwLock<AffinityMap>> {
@@ -1175,21 +1209,25 @@ impl RoutingState {
         }
     }
 
-    /// The pins of an account, the burn of each in `unit` decayed to `now`, and the sum.
+    /// The pins of an account, each priced in `unit` through `rates` and decayed to `now`, and the sum; under
+    /// `WindowShare` the Max 5x share per second, which orders the account's pins as the tier's share does.
     pub fn burn_of(
         &self,
         account_id: &str,
         unit: BurnUnit,
+        rates: &BurnRates,
         now: i64,
         window_ms: i64,
     ) -> (Vec<(PinRow, f64)>, f64) {
+        let table = unit.table(rates);
         let mut pins: Vec<(PinRow, f64)> = self
             .pins
             .values()
             .filter(|p| p.account_id == account_id)
             .map(|p| {
-                let burn = burn_decayed(unit.read(p), p.burn_at, now, window_ms);
-                (p.clone(), burn)
+                // Every type decays by the same factor, so decaying the price equals pricing the decayed rates.
+                let priced = table.price_burn(&p.model, &unit.read(p));
+                (p.clone(), burn_decayed(priced, p.burn_at, now, window_ms))
             })
             .collect();
         pins.sort_by(|a, b| {
@@ -1558,9 +1596,15 @@ mod tests {
             last_used_at: 0,
             key_generation: 0,
             incarnation: 1,
-            burn,
+            burn: PinBurn {
+                input: burn,
+                ..PinBurn::default()
+            },
             burn_at: None,
-            burn_usd: burn,
+            burn_banded: PinBurn {
+                input: burn,
+                ..PinBurn::default()
+            },
             last_input_tokens: 0,
             last_refresh_at: 0,
             cache_ttl_ms: 300_000,

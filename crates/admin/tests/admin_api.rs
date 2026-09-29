@@ -927,11 +927,63 @@ async fn the_session_route_answers_the_role_and_settings_say_which_secrets_are_c
     );
 }
 
-#[tokio::test]
-async fn a_session_row_carries_the_burn_in_the_unit_the_accounts_funding_selects() {
-    use common::{generation, get, json, login, post, wait_json};
-    // The router task loads its pins at spawn, so the pool, the key, and the pins are written through one
-    // harness and the store handed to the one under test.
+/// A pin burning `plain` Opus input tokens a second, and `banded` in the copy weighed by the peak band.
+fn burning_opus_pin(
+    session: &str,
+    account: &str,
+    key_generation: i64,
+    now: i64,
+    plain: f64,
+    banded: f64,
+) -> phoebis_store::PinRow {
+    let input = |input: f64| phoebis_store::PinBurn {
+        input,
+        ..phoebis_store::PinBurn::default()
+    };
+    phoebis_store::PinRow {
+        key_id: "desktop".into(),
+        session_id: session.into(),
+        agent_id: "main".into(),
+        model: "claude-opus-5".into(),
+        account_id: account.into(),
+        epoch: 1,
+        created_at: now - 10,
+        last_used_at: now - 5,
+        key_generation,
+        incarnation: 1,
+        burn: input(plain),
+        burn_at: Some(now - 5),
+        burn_banded: input(banded),
+        last_input_tokens: 1_000,
+        last_refresh_at: now - 5,
+        cache_ttl_ms: 300_000,
+        shed_from: None,
+        shed_at: None,
+        static_hash: None,
+        tail_hash: None,
+    }
+}
+
+/// Stores a profile naming `tier` for `account`, as the profile fetch would.
+fn name_the_tier(store: &phoebis_store::Store, account: &str, tier: &str) {
+    store
+        .set_profile(
+            account,
+            "{}",
+            &phoebis_store::SubscriptionRow {
+                plan: None,
+                tier: Some(tier.into()),
+                since: None,
+                trial_ends_at: None,
+            },
+        )
+        .unwrap();
+}
+
+/// The pool `main` over `business` (subscription, Max 5x) and `direct` (api_key) behind key `desktop`, seeded
+/// through one harness with `pins` and handed to a second one: the router task loads its pins at spawn.
+async fn sessions_harness_with(pins: impl Fn(i64) -> Vec<phoebis_store::PinRow>) -> common::Full {
+    use common::{generation, login, post};
     let seed = common::admin_parts_full().await;
     let seeding = login(&seed.app, "admin-secret").await;
     post(&seed.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"business","priority":0},{"account_id":"direct","priority":1}]}"#, Some(&seeding)).await;
@@ -942,59 +994,72 @@ async fn a_session_row_carries_the_burn_in_the_unit_the_accounts_funding_selects
         Some(&seeding),
     )
     .await;
-    let key_generation = generation(&seed.store, "desktop");
+    name_the_tier(&seed.store, "business", "default_claude_max_5x");
+    for pin in pins(generation(&seed.store, "desktop")) {
+        seed.store.upsert_pin(&pin).unwrap();
+    }
+    common::admin_parts_full_on(seed.store.clone()).await
+}
+
+fn session_row(sessions: &serde_json::Value, session: &str) -> serde_json::Value {
+    sessions["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["session_id"] == session)
+        .unwrap_or_else(|| panic!("no row for {session}: {sessions}"))
+        .clone()
+}
+
+/// A row's `(burn, burn_unit, burn_unmeasured)`.
+fn burn_of(
+    sessions: &serde_json::Value,
+    session: &str,
+) -> (Option<f64>, Option<String>, Option<bool>) {
+    let row = session_row(sessions, session);
+    (
+        row["burn"].as_f64(),
+        row["burn_unit"].as_str().map(String::from),
+        row["burn_unmeasured"].as_bool(),
+    )
+}
+
+fn close(a: Option<f64>, b: f64) -> bool {
+    a.is_some_and(|a| (a - b).abs() < 1e-12)
+}
+
+#[tokio::test]
+async fn a_session_row_carries_the_burn_in_the_unit_the_accounts_funding_selects() {
+    use common::{get, json, login, wait_json};
     let now = common::NOW;
-    let pin = |session: &str, account: &str| phoebis_store::PinRow {
-        key_id: "desktop".into(),
-        session_id: session.into(),
-        agent_id: "main".into(),
-        model: "claude-sonnet-5".into(),
-        account_id: account.into(),
-        epoch: 1,
-        created_at: now - 10,
-        last_used_at: now - 5,
-        key_generation,
-        incarnation: 1,
-        burn: 42.0,
-        burn_at: Some(now - 5),
-        burn_usd: 0.5,
-        last_input_tokens: 1_000,
-        last_refresh_at: now - 5,
-        cache_ttl_ms: 300_000,
-        shed_from: None,
-        shed_at: None,
-        static_hash: None,
-        tail_hash: None,
-    };
-    seed.store.upsert_pin(&pin("s1", "business")).unwrap();
-    seed.store.upsert_pin(&pin("s2", "direct")).unwrap();
-    let parts = common::admin_parts_full_on(seed.store.clone()).await;
+    // One hundred Opus input tokens a second plain and 145 banded: the share reads the banded copy, dollars the
+    // plain one.
+    let parts = sessions_harness_with(|generation| {
+        vec![
+            burning_opus_pin("s1", "business", generation, now, 100.0, 145.0),
+            burning_opus_pin("s2", "direct", generation, now, 100.0, 145.0),
+        ]
+    })
+    .await;
     let cookie = login(&parts.app, "admin-secret").await;
     let sessions = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
-    let row = |sessions: &serde_json::Value, session: &str| {
-        sessions["sessions"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|r| r["session_id"] == session)
-            .unwrap()
-            .clone()
-    };
-    assert_eq!(
-        (
-            row(&sessions, "s1")["burn"].as_f64(),
-            row(&sessions, "s1")["burn_unit"].as_str()
-        ),
-        (Some(42.0), Some("meter_tokens")),
-        "a subscription account funded by its plan reads the meter average"
+    let row = |sessions: &serde_json::Value, session: &str| session_row(sessions, session);
+    // Opus: 0.0841 of the Max 5x 5-hour window and $5 per million input tokens.
+    let share_per_hour = 145.0 * 0.0841 / 1_000_000.0 * 3_600.0;
+    let usd_per_hour = 100.0 * 5.0 / 1_000_000.0 * 3_600.0;
+    let (burn, unit, unmeasured) = burn_of(&sessions, "s1");
+    assert!(
+        close(burn, share_per_hour)
+            && unit.as_deref() == Some("window_share")
+            && unmeasured == Some(false),
+        "a subscription account on its plan reads the banded copy as its share per hour, measured: {:?}",
+        (burn, unit, unmeasured)
     );
-    assert_eq!(
-        (
-            row(&sessions, "s2")["burn"].as_f64(),
-            row(&sessions, "s2")["burn_unit"].as_str()
-        ),
-        (Some(0.5), Some("usd")),
-        "an api_key pin always reads the dollar average"
+    let (burn, unit, unmeasured) = burn_of(&sessions, "s2");
+    assert!(
+        close(burn, usd_per_hour) && unit.as_deref() == Some("usd") && unmeasured == Some(false),
+        "an api_key pin always reads the plain copy in dollars per hour: {:?}",
+        (burn, unit, unmeasured)
     );
     assert_eq!(
         row(&sessions, "s1")["burn_at"].as_i64(),
@@ -1022,13 +1087,10 @@ async fn a_session_row_carries_the_burn_in_the_unit_the_accounts_funding_selects
             .any(|r| r["session_id"] == "s1" && r["burn_unit"] == "usd")
     })
     .await;
-    assert_eq!(
-        (
-            row(&overage_sessions, "s1")["burn"].as_f64(),
-            row(&overage_sessions, "s1")["burn_unit"].as_str()
-        ),
-        (Some(0.5), Some("usd")),
-        "overage evidence whose reset is ahead moves a subscription account's reading to dollars"
+    assert!(
+        close(row(&overage_sessions, "s1")["burn"].as_f64(), usd_per_hour),
+        "overage evidence whose reset is ahead moves a subscription account's reading to dollars: {}",
+        row(&overage_sessions, "s1")
     );
     // A reset that has already passed no longer counts as overage: a raw `in_use` read would still answer
     // `usd` here, since the flag itself never cleared. A later `observed_at` than the ahead-of-now report
@@ -1050,16 +1112,129 @@ async fn a_session_row_carries_the_burn_in_the_unit_the_accounts_funding_selects
             .as_array()
             .unwrap()
             .iter()
-            .any(|r| r["session_id"] == "s1" && r["burn_unit"] == "meter_tokens")
+            .any(|r| r["session_id"] == "s1" && r["burn_unit"] == "window_share")
+    })
+    .await;
+    assert!(
+        close(
+            row(&recovered_sessions, "s1")["burn"].as_f64(),
+            share_per_hour
+        ),
+        "a passed reset reads as not in overage, so the reading returns to the share: {}",
+        row(&recovered_sessions, "s1")
+    );
+}
+
+#[tokio::test]
+async fn a_pinned_sessions_burn_reads_its_share_rate_on_the_account_it_sits_on() {
+    use common::{login, wait_json};
+    let now = common::NOW;
+    let parts = sessions_harness_with(|generation| {
+        vec![burning_opus_pin(
+            "s1", "business", generation, now, 0.0, 0.0,
+        )]
+    })
+    .await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    // A million Opus input tokens at the fixed clock, which the peak band never covers, folded over the pool's
+    // default 600-second burn window.
+    parts.router.report(phoebis_routing::Report::PinRenewed {
+        pin: phoebis_routing::PinRef {
+            key_id: "desktop".into(),
+            session_id: "s1".into(),
+            agent_id: "main".into(),
+            model: "claude-opus-5".into(),
+            epoch: 1,
+        },
+        now,
+        usage: Some(phoebis_routing::PinUsage {
+            input: 1_000_000,
+            ..phoebis_routing::PinUsage::default()
+        }),
+        origin: "client",
+        canonical_model: "claude-opus-5".into(),
+        cache_ttl_ms: 300_000,
+    });
+    let window = 600.0;
+    let on_max_5x = 0.0841 * 3_600.0 / window;
+    let renewed = wait_json(&parts.app, "/admin/sessions", &cookie, |v| {
+        session_row(v, "s1")["burn"]
+            .as_f64()
+            .is_some_and(|b| b > 0.0)
+    })
+    .await;
+    let (burn, unit, unmeasured) = burn_of(&renewed, "s1");
+    assert!(
+        close(burn, on_max_5x)
+            && unit.as_deref() == Some("window_share")
+            && unmeasured == Some(false),
+        "a million Opus input tokens over the window, as a share of Max 5x's 5-hour window per hour: {:?} \
+         against {on_max_5x}",
+        (burn, unit, unmeasured)
+    );
+    name_the_tier(&parts.store, "business", "default_claude_pro");
+    let on_pro = wait_json(&parts.app, "/admin/sessions", &cookie, |v| {
+        !close(session_row(v, "s1")["burn"].as_f64(), on_max_5x)
+    })
+    .await;
+    assert!(
+        close(burn_of(&on_pro, "s1").0, on_max_5x / 0.215),
+        "the same tokens read on Pro are that share over Pro's 5-hour factor: {:?}",
+        burn_of(&on_pro, "s1")
+    );
+    name_the_tier(&parts.store, "business", "default_claude_team");
+    let on_team = wait_json(&parts.app, "/admin/sessions", &cookie, |v| {
+        session_row(v, "s1")["burn"].is_null()
     })
     .await;
     assert_eq!(
-        (
-            row(&recovered_sessions, "s1")["burn"].as_f64(),
-            row(&recovered_sessions, "s1")["burn_unit"].as_str()
-        ),
-        (Some(42.0), Some("meter_tokens")),
-        "a passed reset reads as not in overage, so the reading returns to the meter"
+        burn_of(&on_team, "s1"),
+        (None, Some("window_share".into()), Some(false)),
+        "a tier the factor table lacks sizes no window, so the figure is null rather than a guess"
+    );
+}
+
+#[tokio::test]
+async fn a_pin_on_a_model_priced_through_a_stand_in_cell_reads_its_burn_as_unmeasured() {
+    use common::{get, json, login, wait_json};
+    let now = common::NOW;
+    let parts = sessions_harness_with(|generation| {
+        vec![phoebis_store::PinRow {
+            model: "claude-sonnet-5".into(),
+            ..burning_opus_pin("s1", "business", generation, now, 100.0, 100.0)
+        }]
+    })
+    .await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let sessions = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
+    let (burn, unit, unmeasured) = burn_of(&sessions, "s1");
+    assert!(
+        burn.is_some_and(|b| b > 0.0)
+            && unit.as_deref() == Some("window_share")
+            && unmeasured == Some(true),
+        "Sonnet's 5-hour cells are stand-ins, so its share is marked: {:?}",
+        (burn, unit, unmeasured)
+    );
+    parts.router.report(phoebis_routing::Report::Overage {
+        account_id: "business".into(),
+        evidence: phoebis_routing::OverageEvidence {
+            in_use: true,
+            since: Some(now - 3_600_000),
+            reset: Some(now + 3_600_000),
+            observed_at: now,
+            source: phoebis_routing::EvidenceSource::Head,
+            incarnation: 1,
+        },
+        incarnation: 1,
+    });
+    let overage = wait_json(&parts.app, "/admin/sessions", &cookie, |v| {
+        session_row(v, "s1")["burn_unit"] == "usd"
+    })
+    .await;
+    assert_eq!(
+        burn_of(&overage, "s1").2,
+        Some(false),
+        "in overage the figure is dollars at list prices, never an estimate of this kind"
     );
 }
 
@@ -1102,9 +1277,15 @@ async fn every_session_row_answers_its_fork_members_and_a_forked_session_names_i
             last_used_at: now - 1_000,
             key_generation,
             incarnation: 1,
-            burn: 1.0,
+            burn: phoebis_store::PinBurn {
+                input: 1.0,
+                ..phoebis_store::PinBurn::default()
+            },
             burn_at: Some(now - 1_000),
-            burn_usd: 0.1,
+            burn_banded: phoebis_store::PinBurn {
+                input: 1.0,
+                ..phoebis_store::PinBurn::default()
+            },
             last_input_tokens: 100,
             last_refresh_at: now - 1_000,
             cache_ttl_ms: 300_000,
@@ -1129,9 +1310,15 @@ async fn every_session_row_answers_its_fork_members_and_a_forked_session_names_i
             last_used_at: now - 1_000,
             key_generation,
             incarnation: 1,
-            burn: 1.0,
+            burn: phoebis_store::PinBurn {
+                input: 1.0,
+                ..phoebis_store::PinBurn::default()
+            },
             burn_at: Some(now - 1_000),
-            burn_usd: 0.1,
+            burn_banded: phoebis_store::PinBurn {
+                input: 1.0,
+                ..phoebis_store::PinBurn::default()
+            },
             last_input_tokens: 100,
             last_refresh_at: now - 1_000,
             cache_ttl_ms: 300_000,

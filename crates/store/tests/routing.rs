@@ -1,6 +1,7 @@
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, AffinityChain, AffinityRow, CooldownRow, FitRow,
-    OverageRow, PinKey, PinRow, RekeyWrite, ResolutionRow, StorageKey, Store, WindowRow,
+    AccountKind, AccountRow, AccountState, AffinityChain, AffinityRow, BudgetRow, BudgetScope,
+    CooldownRow, FitRow, OverageRow, PinBurn, PinKey, PinRow, RekeyWrite, ResolutionRow,
+    StorageKey, Store, WindowRow,
 };
 
 const SPELLING: &str = "claude-sonnet-4-5";
@@ -20,9 +21,9 @@ fn pin(key_id: &str, session_id: &str, model: &str, account_id: &str) -> PinRow 
         last_used_at: 1,
         key_generation: 1,
         incarnation: 1,
-        burn: 0.0,
+        burn: PinBurn::default(),
         burn_at: None,
-        burn_usd: 0.0,
+        burn_banded: PinBurn::default(),
         last_input_tokens: 0,
         last_refresh_at: 1,
         cache_ttl_ms: 300_000,
@@ -143,9 +144,15 @@ fn a_repeat_rejection_advances_the_set_time_under_the_standing_deadline() {
 fn pins_are_upserted_deleted_and_dropped_with_their_account() {
     let store = store_with(&["a", "b"]);
     let seeded = PinRow {
-        burn: 12.5,
+        burn: PinBurn {
+            input: 12.5,
+            ..PinBurn::default()
+        },
         burn_at: Some(2),
-        burn_usd: 0.75,
+        burn_banded: PinBurn {
+            input: 18.125,
+            ..PinBurn::default()
+        },
         last_input_tokens: 4_000,
         last_refresh_at: 3,
         cache_ttl_ms: 3_600_000,
@@ -172,7 +179,7 @@ fn pins_are_upserted_deleted_and_dropped_with_their_account() {
             row.account_id.as_str(),
             row.epoch,
             row.last_used_at,
-            row.burn,
+            row.burn.input,
             row.burn_at,
             row.last_input_tokens,
             row.last_refresh_at,
@@ -198,13 +205,87 @@ fn pins_are_upserted_deleted_and_dropped_with_their_account() {
         )
     );
     assert_eq!(
-        row.burn_usd, 0.75,
-        "the dollar average reads back beside the meter one"
+        row.burn_banded.input, 18.125,
+        "the banded copy reads back beside the plain one"
     );
     store.delete_account("b", "test").unwrap();
     assert!(
         store.load_routing().unwrap().pins.is_empty(),
         "foreign keys cascade the pin"
+    );
+}
+
+#[test]
+fn a_pins_typed_burn_and_its_banded_copy_survive_a_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("router.sqlite");
+    let storage_key = StorageKey::generate();
+    let burning = PinRow {
+        burn: PinBurn {
+            cache_read: 1.0,
+            input: 2.0,
+            output: 3.0,
+            write_1h: 4.0,
+            write_5m: 5.0,
+        },
+        burn_at: Some(7),
+        burn_banded: PinBurn {
+            cache_read: 1.5,
+            input: 2.5,
+            output: 3.5,
+            write_1h: 4.5,
+            write_5m: 5.5,
+        },
+        ..pin("k", "s", "claude-opus-5", "a")
+    };
+    {
+        let store = Store::open(&path, &storage_key).unwrap();
+        seed_accounts(&store, &["a"]);
+        store.upsert_pin(&burning).unwrap();
+    }
+    let reopened = Store::open(&path, &storage_key)
+        .unwrap()
+        .load_routing()
+        .unwrap()
+        .pins;
+    assert_eq!(
+        reopened
+            .iter()
+            .map(|p| (p.burn, p.burn_at, p.burn_banded))
+            .collect::<Vec<_>>(),
+        vec![(burning.burn, Some(7), burning.burn_banded)],
+        "every type of both copies reads back as written"
+    );
+}
+
+#[test]
+fn a_days_budget_keeps_its_stand_in_flag_once_set() {
+    let store = store_with(&["a"]);
+    let charge = |five_hour_share, five_hour_share_unmeasured| BudgetRow {
+        scope: BudgetScope::Account,
+        id: "a".into(),
+        usd: 0.0,
+        five_hour_share,
+        five_hour_share_unmeasured,
+    };
+    store
+        .add_keepalive_budget("2026-09-29", &charge(0.25, true))
+        .unwrap();
+    store
+        .add_keepalive_budget("2026-09-29", &charge(0.5, false))
+        .unwrap();
+    assert_eq!(
+        store.keepalive_budgets("2026-09-29").unwrap(),
+        vec![charge(0.75, true)],
+        "the shares add and a measured charge never clears an estimate already in the day"
+    );
+    store
+        .add_keepalive_budget("2026-09-30", &charge(0.5, false))
+        .unwrap();
+    assert_eq!(
+        store.keepalive_budgets("2026-09-30").unwrap(),
+        vec![charge(0.5, false)],
+        "the next day starts measured"
     );
 }
 

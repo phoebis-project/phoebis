@@ -86,6 +86,8 @@ export interface ShedPreview {
   sessions: number;
   /** The unit every replayed member's burn is in; null when none has a pin or two members differ. */
   unit: BurnUnit | null;
+  /** Some replayed burn was priced through a cell or a factor the measurement campaign has not filled. */
+  unmeasured: boolean;
   warm: number;
 }
 
@@ -104,7 +106,7 @@ export function shedPreview(
   now: number,
 ): ShedPreview {
   const threshold = pool.migrateAboveUtilization;
-  if (threshold === null) return { averaged: false, burnShare: 0, cool: false, members: 0, sessions: 0, unit: null, warm: 0 };
+  if (threshold === null) return { averaged: false, burnShare: 0, cool: false, members: 0, sessions: 0, unit: null, unmeasured: false, warm: 0 };
   const byId = new Map(accounts.map((a) => [a.id, a]));
   const band = threshold - MIGRATE_BAND;
   // The router's destination readings: a subscription account's two shared windows, an API-key account's worst
@@ -132,6 +134,7 @@ export function shedPreview(
         // A pin with no prompt size reported yet ranks as the cheapest rewrite.
         rewrite: Math.max(s.lastInputTokens ?? 0, 1),
         unit: s.burnUnit,
+        unmeasured: s.burnUnmeasured,
         warm: s.lastRefreshAt !== null && s.cacheTtlMs !== null && now - Date.parse(s.lastRefreshAt) < s.cacheTtlMs,
       }));
     const perRewrite = (p: (typeof pins)[number]) => p.burn / p.rewrite;
@@ -143,7 +146,7 @@ export function shedPreview(
     // The warm pins stay in the order under `never`, so the last-pin rule still counts them among the member's pins.
     if (pool.warmSessions === 'never') marks = marks.slice(0, cold.length);
     const marked = pins.filter((p) => marks.includes(p.id));
-    return { burn: marked.reduce((s, p) => s + p.burn, 0), sessions: marked.length, total, unit: pins[0]?.unit ?? null, warm: marked.filter((p) => p.warm).length };
+    return { burn: marked.reduce((s, p) => s + p.burn, 0), sessions: marked.length, total, unit: pins[0]?.unit ?? null, unmeasured: pins.some((p) => p.unmeasured), warm: marked.filter((p) => p.warm).length };
   });
   const units = new Set(rounds.flatMap((r) => (r.unit === null ? [] : [r.unit])));
   const burning = rounds.filter((r) => r.total > 0);
@@ -157,22 +160,29 @@ export function shedPreview(
     members: hot.length,
     sessions: rounds.reduce((s, r) => s + r.sessions, 0),
     unit: units.size === 1 ? [...units][0] : null,
+    unmeasured: rounds.some((r) => r.unmeasured),
     warm: rounds.reduce((s, r) => s + r.warm, 0),
   };
 }
 
-/** The shedding card's dry run in one sentence, naming the unit its share was taken in. */
+/**
+ * The shedding card's dry run in one sentence, naming the unit its share was taken in. A share taken over a burn
+ * priced through a stand-in cell carries the cost reference's asterisk and says so, so an estimate never reads as
+ * a measured figure.
+ */
 export function shedPreviewLine(preview: ShedPreview, migrateOn: boolean): string {
   if (!migrateOn) return 'No round runs while migrate above utilization is off.';
   if (preview.members === 0) return 'No member is above the threshold.';
   const of = preview.averaged
     ? "of each upstream's burn on average"
-    : preview.unit === 'meter_tokens'
-      ? 'of the burn in meter tokens'
+    : preview.unit === 'window_share'
+      ? 'of the burn in window share'
       : preview.unit === 'usd'
         ? 'of the burn in dollars'
         : 'of the burn';
   const across = preview.members > 1 ? `, across ${preview.members} upstreams` : '';
-  const what = `${preview.sessions} ${preview.sessions === 1 ? 'session' : 'sessions'}, ${preview.warm} warm, ${fmtPct(preview.burnShare)} ${of}${across}`;
-  return preview.cool ? `Would move ${what}.` : `Would mark ${what}, but no member reads under the band to take them.`;
+  const flag = preview.unmeasured ? '*' : '';
+  const what = `${preview.sessions} ${preview.sessions === 1 ? 'session' : 'sessions'}, ${preview.warm} warm, ${fmtPct(preview.burnShare)}${flag} ${of}${across}`;
+  const note = preview.unmeasured ? ' *Part of the burn is priced through a cell not measured yet.' : '';
+  return preview.cool ? `Would move ${what}.${note}` : `Would mark ${what}, but no member reads under the band to take them.${note}`;
 }

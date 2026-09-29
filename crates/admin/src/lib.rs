@@ -75,6 +75,9 @@ pub struct AdminState {
     pub live: LiveFeed,
     pub metrics: Arc<Metrics>,
     pub pricing: Arc<Pricing>,
+    /// The shipped cost table and tier factors, the one copy the router's burn rates and the keepalive read too,
+    /// so the settings echo and a session's burn price through what the rest of the process prices through.
+    pub tables: Arc<phoebis_ledger::PlanTables>,
     pub settings: Arc<SettingsView>,
     pub keepalive: Arc<Engine>,
     pub alerts: Arc<Alerts>,

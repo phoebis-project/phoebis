@@ -62,11 +62,12 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
     (30, V30),
     (31, V31),
     (32, V32),
+    (33, V33),
 ];
 
 /// The newest schema version this build knows how to read. `prepare` refuses a registry stamped past it
 /// rather than skip migrations it does not carry and misread the tables that follow.
-pub const SCHEMA_VERSION: u32 = 32;
+pub const SCHEMA_VERSION: u32 = 33;
 
 const V2: &str = r#"
 CREATE TABLE IF NOT EXISTS account_models (
@@ -503,4 +504,25 @@ CREATE TABLE usage_windows (
   incarnation INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (account_id, window)
 );
+"#;
+
+// A pin's burn is typed tokens per second, plain and weighed by the peak band at each renewal, priced when
+// read; the keepalive's plan-side day budget is the share of the account's 5-hour window its probes consumed.
+// Both sums restart at zero here: nothing has been released, and the old columns held another unit.
+const V33: &str = r#"
+ALTER TABLE pins DROP COLUMN burn;
+ALTER TABLE pins DROP COLUMN burn_usd;
+ALTER TABLE pins ADD COLUMN burn_input REAL NOT NULL DEFAULT 0;
+ALTER TABLE pins ADD COLUMN burn_cache_read REAL NOT NULL DEFAULT 0;
+ALTER TABLE pins ADD COLUMN burn_write_5m REAL NOT NULL DEFAULT 0;
+ALTER TABLE pins ADD COLUMN burn_write_1h REAL NOT NULL DEFAULT 0;
+ALTER TABLE pins ADD COLUMN burn_output REAL NOT NULL DEFAULT 0;
+ALTER TABLE pins ADD COLUMN burn_banded_input REAL NOT NULL DEFAULT 0;
+ALTER TABLE pins ADD COLUMN burn_banded_cache_read REAL NOT NULL DEFAULT 0;
+ALTER TABLE pins ADD COLUMN burn_banded_write_5m REAL NOT NULL DEFAULT 0;
+ALTER TABLE pins ADD COLUMN burn_banded_write_1h REAL NOT NULL DEFAULT 0;
+ALTER TABLE pins ADD COLUMN burn_banded_output REAL NOT NULL DEFAULT 0;
+ALTER TABLE keepalive_budgets DROP COLUMN meter_tokens;
+ALTER TABLE keepalive_budgets ADD COLUMN five_hour_share REAL NOT NULL DEFAULT 0;
+ALTER TABLE keepalive_budgets ADD COLUMN five_hour_share_unmeasured INTEGER NOT NULL DEFAULT 0;
 "#;

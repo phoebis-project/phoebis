@@ -897,6 +897,7 @@ test('the dashboard, sessions, recipes, and overview decode', () => {
   const [recipe] = fixture('keepalive_recipes').recipes.map(d.decodeRecipe);
   assert.equal(recipe.state, 'armed');
   assert.equal(recipe.reason, null);
+  assert.deepEqual([recipe.netFiveHourShare, recipe.netFiveHourShareUnmeasured], [0, false], 'no probe has settled into the recipe yet');
   const ov = d.decodeKeepaliveOverview(fixture('keepalive_overview'));
   assert.equal(ov.sessionsWithCompanion, 1);
   assert.equal(ov.costToday[0].capUsd, 4);
@@ -1135,4 +1136,18 @@ test('a session lifecycle rule keeps its threshold in minutes and a lifecycle ev
   const started = d.decodeAlertEvent({ ...wireEvent, detail, kind: 'subagent_active', subject: 'desktop, session e2e-ui, agent sub-1' });
   assert.equal(started.kind, 'subagent_active');
   assert.deepEqual(started.detail, detail, 'a detail is the free-form object the signal built and is passed through undecoded');
+});
+
+test('a session decodes its burn unit, the stand-in flag beside it, and both net balances', () => {
+  const rows = fixture('sessions').sessions;
+  const pinned = d.decodeSession(rows.find((s) => s.session_id === 's-fixture'));
+  assert.deepEqual([pinned.burnUnit, pinned.burnUnmeasured, typeof pinned.burn], ['window_share', true, 'number'], 'the fixture pins Sonnet on a subscription account, whose 5-hour cells are stand-ins');
+  const unpinned = rows.find((s) => s.session_id === 's1');
+  assert.equal(unpinned.burn_unmeasured, null, 'a row with no pin answers null beside its null burn');
+  assert.equal(d.decodeSession(unpinned).burnUnmeasured, false);
+  assert.equal(d.decodeSession({ ...rows[0], burn_unit: 'meter_tokens' }).burnUnit, null, 'a unit outside the two reads as none');
+  const k = d.decodeSession({ ...rows[0], keepalive: { net_five_hour_share: -0.0004, net_five_hour_share_unmeasured: true, net_usd: 0.25 } }).keepalive;
+  assert.deepEqual([k.netFiveHourShare, k.netFiveHourShareUnmeasured, k.netUsd], [-0.0004, true, 0.25]);
+  const recipe = d.decodeRecipe({ ...fixture('keepalive_recipes').recipes[0], net_five_hour_share: -0.0002, net_five_hour_share_unmeasured: true });
+  assert.deepEqual([recipe.netFiveHourShare, recipe.netFiveHourShareUnmeasured], [-0.0002, true]);
 });

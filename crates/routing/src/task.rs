@@ -7,7 +7,9 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use phoebis_oauth::{Clock, UsageSnapshot};
-use phoebis_store::{AccountState, CooldownRow, FitRow, PinKey, PinRow, RekeyWrite, Store, StoreError};
+use phoebis_store::{
+    AccountState, CooldownRow, FitRow, PinBurn, PinKey, PinRow, RekeyWrite, Store, StoreError,
+};
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
@@ -100,11 +102,12 @@ pub enum RouterEvent {
 
 #[derive(Clone, Debug)]
 pub struct RouterConfig {
-    /// The meter's peak band at a renewal's instant: the meter burn folds its price times it, the dollar burn
-    /// does not.
+    /// The meter's peak band at a renewal's instant: a pin's banded copy folds its tokens times it, the plain
+    /// copy does not.
     pub band: BandWeight,
     pub purge_interval: Duration,
-    /// The burn's prices. The task holds them because neither this crate nor the relay can see the ledger's
+    /// The dollar table and the Max 5x 5-hour share table the shedding round prices each pin's burn through
+    /// when it reads it. The task holds them because neither this crate nor the relay can see the ledger's
     /// tables.
     pub rates: BurnRates,
     /// The share of an account's windows a completed request consumed; the default prices nothing.
@@ -124,20 +127,19 @@ impl Default for RouterConfig {
     }
 }
 
-/// The two tables a renewal's usage is priced through: meter tokens for `PinRow::burn`, dollars for
-/// `PinRow::burn_usd`. Both default to `RateTable::unit`, so a burn is a token count until the ledger's tables
-/// are wired in.
+/// The two tables a reader prices a pin's burn through: dollars per token, and the Max 5x share of the 5-hour
+/// window per token. Both default to `RateTable::unit`, so a burn read through the default is a token count.
 #[derive(Clone, Debug, PartialEq)]
 pub struct BurnRates {
-    pub meter: RateTable,
     pub dollars: RateTable,
+    pub five_hour: RateTable,
 }
 
 impl Default for BurnRates {
     fn default() -> Self {
         BurnRates {
-            meter: RateTable::unit(),
             dollars: RateTable::unit(),
+            five_hour: RateTable::unit(),
         }
     }
 }
@@ -548,6 +550,7 @@ pub fn spawn(
     // selector's cap partition), so a count is exact wherever it is read.
     let in_flight = InFlight::default();
     state.set_in_flight(in_flight.clone());
+    state.set_rates(config.rates.clone());
     // Shared the same way, so the relay's conversation climb reads the map under the same lock the report
     // handler writes, without a command round trip.
     let affinity = state.affinity();
@@ -1305,7 +1308,7 @@ impl Task {
                 now,
                 usage,
                 origin,
-                canonical_model,
+                canonical_model: _,
                 cache_ttl_ms,
             } => {
                 pin.model = self.state.canonical(&pin.model).to_string();
@@ -1328,23 +1331,26 @@ impl Task {
                             // session's burn.
                             renewed.last_refresh_at = now;
                         } else if let Some(usage) = usage {
-                            // Both averages fold whatever the account's kind: the reader picks the unit its
-                            // funding selects at read time, so leaving overage needs no reset.
+                            // Both copies fold whatever the account's kind and nothing is priced here: the
+                            // reader prices the copy its funding selects on the account the pin sits on when it
+                            // reads, so leaving overage or moving between tiers needs no reset.
                             let window_ms = self.burn_window_ms(&pin.key_id);
-                            // The meter charges a request inside the peak band more, so the meter burn weighs it
-                            // by the band at the renewal; dollars cost the same at every hour.
-                            let meter = self.config.rates.meter.price(&canonical_model, usage)
-                                * self.config.band.at(FIVE_HOUR, now);
-                            let dollars = self.config.rates.dollars.price(&canonical_model, usage);
-                            renewed.burn =
-                                burn_folded(renewed.burn, renewed.burn_at, now, window_ms, meter);
-                            renewed.burn_usd = burn_folded(
-                                renewed.burn_usd,
-                                renewed.burn_at,
-                                now,
-                                window_ms,
-                                dollars,
-                            );
+                            // The meter charges a request inside the peak band more, so the banded copy weighs
+                            // it by the band at the renewal; dollars cost the same at every hour.
+                            let band = self.config.band.at(FIVE_HOUR, now);
+                            let at = renewed.burn_at;
+                            let fold = |rate: f64, tokens: u64, weight: f64| {
+                                burn_folded(rate, at, now, window_ms, tokens as f64 * weight)
+                            };
+                            let folded = |copy: PinBurn, weight: f64| PinBurn {
+                                cache_read: fold(copy.cache_read, usage.cache_read, weight),
+                                input: fold(copy.input, usage.input, weight),
+                                output: fold(copy.output, usage.output, weight),
+                                write_1h: fold(copy.write_1h, usage.write_1h, weight),
+                                write_5m: fold(copy.write_5m, usage.write_5m, weight),
+                            };
+                            renewed.burn = folded(renewed.burn, 1.0);
+                            renewed.burn_banded = folded(renewed.burn_banded, band);
                             renewed.burn_at = Some(now);
                             renewed.last_input_tokens =
                                 usage.input + usage.cache_read + usage.write_5m + usage.write_1h;

@@ -1185,7 +1185,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
       ok: JSON.stringify(before) === '["90","90"]' && JSON.stringify(after) === '["89","89"]' && ticks.length === 6 && ticks.includes('business: 5-hour 62%') && util?.querySelector('.ubar__band') !== null,
       missing: [JSON.stringify(before), JSON.stringify(after), ...ticks],
     });
-    expect("/pools the shedding preview replays a round over the hot members' pins", card('Load shedding')?.querySelector('.shed-preview')?.textContent ?? '', ['Would move', 'warm', 'of the burn in meter tokens', 'across 2 upstreams']);
+    expect("/pools the shedding preview replays a round over the hot members' pins, its share marked where a replayed burn is a stand-in", card('Load shedding')?.querySelector('.shed-preview')?.textContent ?? '', ['Would move', 'warm', '%* of the burn in window share', 'across 2 upstreams', '*Part of the burn is priced through a cell not measured yet.']);
 
     // Select-below inside the band under the migrate threshold holds the save and says why.
     const save = () => [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Save pool');
@@ -3835,8 +3835,14 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
     const nets = [...m.container.querySelectorAll('.agents__row .agents__net')].map((cell) => [...cell.children].map((part) => part.textContent?.trim()).join(' | '));
     results.push({
       name: "/sessions an agent's net reads in the unit it settled in, and one that crossed a funding change carries both",
-      ok: nets.includes('-520 plan tokens') && nets.includes('1.6K plan tokens | -$0.01') && nets.includes('0') && nets.every((n) => n === '0' || /plan tokens|\$/.test(n)),
+      ok: nets.includes('-0.016% of the 5-hour window') && nets.includes('0.048% of the 5-hour window | -$0.01') && nets.includes('0') && nets.every((n) => n === '0' || /of the 5-hour window|\$/.test(n)),
       missing: [...new Set(nets)],
+    });
+    const marks = [...m.container.querySelectorAll('.agents__row .agents__net span[title]')].filter((mark) => mark.textContent?.trim() === '*');
+    results.push({
+      name: '/sessions a net share priced through a stand-in cell carries the cost reference asterisk and says why',
+      ok: nets.includes('-0.016% of the 5-hour window*') && marks.length > 0 && marks.every((mark) => (mark.getAttribute('title') ?? '').includes('not filled')),
+      missing: [...marks.map((mark) => mark.getAttribute('title') ?? 'untitled'), ...new Set(nets)],
     });
   }
   const collapseAll = [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Collapse all');

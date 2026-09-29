@@ -58,6 +58,16 @@ for (const r of REQUESTS) {
   else ledgered.set(r.sessionId, { last: r.at > seen.last ? r.at : seen.last, requests: seen.requests + 1 });
 }
 
+// The shipped cost table's 5-hour rows: a model whose row has a flagged cell, or no row at all, is priced through
+// stand-ins, so its share carries the unmeasured mark.
+const FIVE_HOUR_CELLS = SETTINGS_SAMPLE.planTables.cost.windows.five_hour ?? {};
+const standIn = (model: string): boolean => {
+  const row = FIVE_HOUR_CELLS[model] ?? FIVE_HOUR_CELLS[model.replace(/-\d{8}$/, '')];
+  return row === undefined || Object.values(row).some((cell) => cell.unmeasured);
+};
+/** A 20k-token prefix read back at Fable 5.1's cache-read cell, 0.00789 of the Max 5x window per million. */
+const PROBE_SHARE = 0.00016;
+
 export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
   // The last entry deliberately falls outside the ledgered ids.
   const sessionId = i < SESSION_IDS.length ? SESSION_IDS[i] : rng.uuid();
@@ -73,12 +83,12 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
   const unit: BurnUnit | null = pinned
     ? accountById.get(spec.accountId)?.kind === 'api_key'
       ? 'usd'
-      : 'meter_tokens'
+      : 'window_share'
     : null;
   // Drawn whatever the spec says, so pinning or the account's kind never shifts the stream the rows after this
-  // one read. A usd row's burn is the dollar average the wire actually answers for that unit, on its own
-  // dollar-sized roll rather than the meter-token one.
-  const burnRoll = rng.int(200, 4_000);
+  // one read. A row's burn is the per-hour figure the wire answers for its unit: dollars on the usd roll, a share
+  // of the upstream's 5-hour window on the other.
+  const burnRoll = rng.float(0.01, 0.9);
   const burnUsdRoll = rng.float(0.01, 0.5);
   const burnAtRoll = ago(rng.int(2, 40) * MINUTE);
   const lastInputRoll = rng.int(500, 20_000);
@@ -104,6 +114,7 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
     burn: pinned ? (unit === 'usd' ? burnUsdRoll : burnRoll) : null,
     burnAt: pinned ? burnAtRoll : null,
     burnUnit: unit,
+    burnUnmeasured: unit === 'window_share' && standIn(spec.model),
     cacheTtlMs: pinned ? 5 * MINUTE : null,
     lastInputTokens: pinned ? lastInputRoll : null,
     lastRefreshAt: pinned ? lastRefreshRoll : null,
@@ -115,7 +126,8 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
       state: spec.state,
       // Filled in from the recipes below, so a row and its agents cannot disagree.
       lastGuard: null,
-      netMeterTokens: null,
+      netFiveHourShare: null,
+      netFiveHourShareUnmeasured: false,
       netUsd: null,
       nextProbeAt: null,
     },
@@ -128,6 +140,7 @@ SESSIONS.push({
   ...SESSION_SAMPLE,
   accountId: null,
   agents: 0,
+  burnUnmeasured: false,
   companion: 'reporting',
   companionSince: null,
   createdAt: null,
@@ -135,7 +148,7 @@ SESSIONS.push({
   forkDepth: null,
   forkedFrom: null,
   historical: false,
-  keepalive: { lastGuard: null, netMeterTokens: null, netUsd: null, nextProbeAt: null, state: null },
+  keepalive: { lastGuard: null, netFiveHourShare: null, netFiveHourShareUnmeasured: false, netUsd: null, nextProbeAt: null, state: null },
   keyGeneration: Date.parse(keyById.get('laptop')!.createdAt),
   keyId: 'laptop',
   lastRequestAt: null,
@@ -191,9 +204,9 @@ export const RECIPES: KeepaliveRecipe[] = SESSIONS.flatMap((pin, i) => {
     // A subagent spawned in the last turn may not have sent a request yet.
     const lastRequestAt = j === 0 ? pin.lastRequestAt : rng.int(0, 4) === 0 ? null : ago(rng.int(1, 40) * MINUTE);
     const accountId = j === 0 ? pin.accountId : sub?.accountId ?? pin.accountId;
-    // The unit a probe settles in follows the serving account's own funding: meter tokens on a subscription
-    // upstream, dollars on an api_key one, the same split the engine's own net carries. A probe replays a
-    // prefix of about 20k tokens at the cache-read rate: some 520 meter tokens, or $0.004 in dollars.
+    // The unit a probe settles in follows the serving account's own funding: a share of the 5-hour window on a
+    // subscription upstream, dollars on an api_key one, the same split the engine's own net carries. A probe
+    // replays a prefix of about 20k tokens at the cache-read rate: about 0.016% of the window, or $0.004.
     const probes = state === 'armed' && reason === null ? j + 1 : 0;
     const onPlan = accountById.get(accountId ?? '')?.kind === 'oauth';
     // Held for overage after probing on plan quota, so it settled in both units and carries a balance in each.
@@ -210,7 +223,8 @@ export const RECIPES: KeepaliveRecipe[] = SESSIONS.flatMap((pin, i) => {
       model,
       // A freshly-armed agent has paid one probe's cost and earned no credit back yet; a held one has paid
       // nothing further since its last hold began.
-      netMeterTokens: crossed ? 1_560 : onPlan ? -520 * probes : 0,
+      netFiveHourShare: crossed ? 3 * PROBE_SHARE : onPlan ? -PROBE_SHARE * probes : 0,
+      netFiveHourShareUnmeasured: (crossed || (onPlan && probes > 0)) && standIn(model),
       netUsd: crossed ? -0.012 : onPlan ? 0 : -0.004 * probes,
       nextProbeAt: state === 'armed' && reason === null ? ahead(rng.int(20, 280) * 1000) : null,
       poolId: keyById.get(pin.keyId)?.poolId ?? 'all',
@@ -233,7 +247,8 @@ for (const pin of SESSIONS) {
   // The session's own summary reads the main agent's guard note and balances, the way the admin route does.
   const main = RECIPES.find((r) => r.sessionId === pin.sessionId && r.agentId === 'main');
   pin.keepalive.lastGuard = main?.lastGuard ?? null;
-  pin.keepalive.netMeterTokens = main?.netMeterTokens ?? null;
+  pin.keepalive.netFiveHourShare = main?.netFiveHourShare ?? null;
+  pin.keepalive.netFiveHourShareUnmeasured = main?.netFiveHourShareUnmeasured ?? false;
   pin.keepalive.netUsd = main?.netUsd ?? null;
 }
 
@@ -249,7 +264,7 @@ SESSIONS.push({
   companionSince: null,
   createdAt: null,
   historical: true,
-  keepalive: { lastGuard: null, netMeterTokens: null, netUsd: null, nextProbeAt: null, state: null },
+  keepalive: { lastGuard: null, netFiveHourShare: null, netFiveHourShareUnmeasured: false, netUsd: null, nextProbeAt: null, state: null },
   keyGeneration: DELETED_HOLDER_GENERATION,
   lastUsedAt: null,
   pinned: false,

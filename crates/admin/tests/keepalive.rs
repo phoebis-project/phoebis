@@ -343,7 +343,8 @@ async fn the_sessions_view_carries_the_companion_and_the_recipes_and_release_dis
             "last_guard",
             "last_request_at",
             "model",
-            "net_meter_tokens",
+            "net_five_hour_share",
+            "net_five_hour_share_unmeasured",
             "net_usd",
             "next_probe_at",
             "pool_id",
@@ -361,7 +362,8 @@ async fn the_sessions_view_carries_the_companion_and_the_recipes_and_release_dis
             recipe["last_request_at"].as_i64(),
             recipe["ttl_seconds"].as_i64(),
             recipe["net_usd"].as_f64(),
-            recipe["net_meter_tokens"].as_f64(),
+            recipe["net_five_hour_share"].as_f64(),
+            recipe["net_five_hour_share_unmeasured"].as_bool(),
             recipe["last_guard"].as_str()
         ),
         (
@@ -372,6 +374,7 @@ async fn the_sessions_view_carries_the_companion_and_the_recipes_and_release_dis
             Some(300),
             Some(0.0),
             Some(0.0),
+            Some(false),
             Some("rearm")
         ),
         "no probe has landed yet, so both balances still read zero; the first request re-armed a fresh recipe"
@@ -435,11 +438,13 @@ async fn the_sessions_view_carries_the_companion_and_the_recipes_and_release_dis
     assert_eq!(
         (
             row["keepalive"]["net_usd"].as_f64(),
-            row["keepalive"]["net_meter_tokens"].as_f64()
+            row["keepalive"]["net_five_hour_share"].as_f64(),
+            row["keepalive"]["net_five_hour_share_unmeasured"].as_bool()
         ),
         (
             recipe["net_usd"].as_f64(),
-            recipe["net_meter_tokens"].as_f64()
+            recipe["net_five_hour_share"].as_f64(),
+            recipe["net_five_hour_share_unmeasured"].as_bool()
         ),
         "the session's keepalive summary reads the same main-agent balances the recipe view does"
     );

@@ -5,7 +5,8 @@
 
 use std::collections::BTreeMap;
 
-use phoebis_ledger::{KeepaliveDelta, PlanFactors, PriceTable, Record, UNATTRIBUTED};
+use phoebis_ledger::{KeepaliveDelta, PlanTables, PriceTable, Record, Share, UNATTRIBUTED};
+use phoebis_routing::PinUsage;
 use phoebis_store::{BudgetRow, BudgetScope};
 
 use crate::engine::{Engine, SavingsUnit, SessionKey, Settlement};
@@ -13,35 +14,58 @@ use crate::probe::{Applied, ProbeOutcome, ProbeRecord};
 use crate::usage::ProbeUsage;
 
 /// The gross saving of a request that read `cache_read_tokens` it would otherwise have paid as input, in the
-/// unit the covering probe was funded under: dollars at list prices, or meter tokens through the plan table.
+/// unit the covering probe was funded under: dollars at list prices, or the share of the `tier`'s 5-hour window
+/// at `at` (the band inside the price). `None` for a model the table lacks, or on the share side a missing or
+/// unlisted tier; a dollar figure is never flagged.
 pub(crate) fn gross_saving(
     unit: SavingsUnit,
     table: &PriceTable,
-    plan: &PlanFactors,
+    tables: &PlanTables,
+    tier: Option<&str>,
     canonical_model: &str,
     cache_read_tokens: u64,
-) -> Option<f64> {
+    at: i64,
+) -> Option<Share> {
     match unit {
         SavingsUnit::Usd => {
             let price = table.price(canonical_model)?;
-            Some(cache_read_tokens as f64 * (price.input - price.cache_read) / 1_000_000.0)
+            Some(Share {
+                share: cache_read_tokens as f64 * (price.input - price.cache_read) / 1_000_000.0,
+                unmeasured: false,
+            })
         }
-        SavingsUnit::MeterTokens => {
-            let factor = plan.factor(canonical_model)?;
-            Some(cache_read_tokens as f64 * (factor.input - factor.cache_read) * factor.factor)
+        SavingsUnit::WindowShare => {
+            let tier = tier?;
+            let priced = |usage| tables.five_hour_share_at(tier, canonical_model, usage, at);
+            let as_input = priced(PinUsage {
+                input: cache_read_tokens,
+                ..PinUsage::default()
+            })?;
+            let as_read = priced(PinUsage {
+                cache_read: cache_read_tokens,
+                ..PinUsage::default()
+            })?;
+            Some(Share {
+                share: as_input.share - as_read.share,
+                unmeasured: as_input.unmeasured || as_read.unmeasured,
+            })
         }
     }
 }
 
 /// A probe's estimated cost, in the unit the account serving it is funded under: dollars at list prices for an
-/// api_key account or a subscription account in overage, meter tokens through the plan table on plan.
+/// api_key account or a subscription account in overage, the share of the `tier`'s 5-hour window at `at` on
+/// plan (the band inside the price). `None` for a model the table lacks, or on the share side a missing or
+/// unlisted tier; a dollar figure is never flagged.
 pub(crate) fn probe_cost(
     unit: SavingsUnit,
     table: &PriceTable,
-    plan: &PlanFactors,
+    tables: &PlanTables,
+    tier: Option<&str>,
     canonical_model: &str,
     usage: ProbeUsage,
-) -> Option<f64> {
+    at: i64,
+) -> Option<Share> {
     // An answer that reports the aggregate `cache_creation_input_tokens` and no TTL breakdown is priced as
     // five-minute writes, which is how the relay's own usage parser reads the same answer; the estimate here
     // would otherwise miss a charge the request ledger recognises.
@@ -59,14 +83,21 @@ pub(crate) fn probe_cost(
                 one_hour,
                 usage.output,
             )
-            .map(|(total, _)| total),
-        SavingsUnit::MeterTokens => plan.meter_tokens(
+            .map(|(total, _)| Share {
+                share: total,
+                unmeasured: false,
+            }),
+        SavingsUnit::WindowShare => tables.five_hour_share_at(
+            tier?,
             canonical_model,
-            usage.input,
-            usage.read,
-            five_minutes,
-            one_hour,
-            usage.output,
+            PinUsage {
+                input: usage.input,
+                cache_read: usage.read,
+                write_5m: five_minutes,
+                write_1h: one_hour,
+                output: usage.output,
+            },
+            at,
         ),
     }
 }
@@ -234,9 +265,10 @@ impl Engine {
         self.lock().spent_today.clone()
     }
 
-    /// Probe meter tokens per subscription account for the current UTC day, band-weighted at each probe's time.
-    pub fn meter_spent_today(&self) -> BTreeMap<String, f64> {
-        self.lock().meter_spent_today.clone()
+    /// The share of each subscription account's 5-hour window its probes consumed on the current UTC day, the
+    /// band inside each probe's price.
+    pub fn share_spent_today(&self) -> BTreeMap<String, f64> {
+        self.lock().share_spent_today.clone()
     }
 
     /// The pool's probe spend for the current UTC day, and the accounts' plan-side figure beside it, as the
@@ -255,11 +287,11 @@ impl Engine {
                 Vec::new()
             });
         let mut spent = BTreeMap::new();
-        let mut meter_spent = BTreeMap::new();
+        let mut share_spent = BTreeMap::new();
         for row in rows {
             match row.scope {
                 BudgetScope::Account => {
-                    meter_spent.insert(row.id, row.meter_tokens);
+                    share_spent.insert(row.id, row.five_hour_share);
                 }
                 BudgetScope::Pool => {
                     spent.insert(row.id, row.usd);
@@ -268,7 +300,7 @@ impl Engine {
         }
         let mut inner = self.lock();
         inner.spent_today = spent.clone();
-        inner.meter_spent_today = meter_spent;
+        inner.share_spent_today = share_spent;
         inner.spent_day = day;
         spent
     }
@@ -310,7 +342,7 @@ mod tests {
     #[test]
     fn an_aggregate_only_cache_write_costs_a_five_minute_write() {
         let table = PriceTable::shipped();
-        let plan = PlanFactors::shipped();
+        let tables = PlanTables::shipped();
         let split = ProbeUsage {
             write: 2_000,
             five_minutes: 2_000,
@@ -320,19 +352,20 @@ mod tests {
             write: 2_000,
             ..ProbeUsage::default()
         };
-        let priced = probe_cost(SavingsUnit::Usd, &table, &plan, "claude-sonnet-5", split)
-            .expect("a priced model");
-        assert!(priced > 0.0, "{priced}");
-        assert_eq!(
+        let cost = |usage| {
             probe_cost(
                 SavingsUnit::Usd,
                 &table,
-                &plan,
+                &tables,
+                None,
                 "claude-sonnet-5",
-                aggregate
-            ),
-            Some(priced)
-        );
+                usage,
+                0,
+            )
+        };
+        let priced = cost(split).expect("a priced model");
+        assert!(priced.share > 0.0, "{priced:?}");
+        assert_eq!(cost(aggregate), Some(priced));
     }
 
     #[test]

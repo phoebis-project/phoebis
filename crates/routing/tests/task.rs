@@ -12,9 +12,9 @@ use phoebis_routing::{
 };
 use phoebis_store::{
     key_prefix, AccountKind, AccountRow, AccountState, Affinity, AffinitySource, ApiKeyRow,
-    CooldownRow, Failover, FitRow, MemberWrite, ModelRule, OveragePolicy, PoolRow,
-    QuotaHeaders, RoutingLoad, RulesMode, Shedding, StorageKey, Store, Strategy, SubscriptionRow,
-    WindowRow,
+    CooldownRow, Failover, FitRow, MemberWrite, ModelRule, OveragePolicy, PinBurn,
+    PoolRow, QuotaHeaders, RoutingLoad, RulesMode, Shedding, StorageKey, Store, Strategy,
+    SubscriptionRow, WindowRow,
 };
 use fake_upstream::{stays_for, wait_for, wait_for_async};
 
@@ -2907,8 +2907,8 @@ async fn a_probe_after_a_compacted_request_refreshes_warmth() {
     assert!(warm(&pin, 3_600));
 }
 
-/// A meter table weighing every token 1 and a dollar table weighing every token a quarter, so a pin's two
-/// averages differ by exactly that ratio.
+/// A dollar table weighing every token a quarter beside a unit share table, so a fold that priced anything
+/// would read a quarter of the tokens on one side.
 fn quarter_dollar_rates() -> BurnRates {
     let mut dollars = RateTable::unit();
     dollars.fallback = Rates {
@@ -2919,8 +2919,8 @@ fn quarter_dollar_rates() -> BurnRates {
         output: 0.25,
     };
     BurnRates {
-        meter: RateTable::unit(),
         dollars,
+        five_hour: RateTable::unit(),
     }
 }
 
@@ -2949,7 +2949,8 @@ fn selected_pin(answer: phoebis_routing::SelectAnswer) -> PinRef {
 }
 
 #[tokio::test]
-async fn a_renewal_with_usage_folds_both_averages_and_a_probes_usage_never_counts() {
+async fn a_renewal_with_usage_folds_the_typed_rates_and_the_banded_copy_and_a_probes_usage_never_counts(
+) {
     let store = seeded(&["a"]);
     let now = Arc::new(AtomicI64::new(1_000));
     let config = RouterConfig {
@@ -3000,18 +3001,36 @@ async fn a_renewal_with_usage_folds_both_averages_and_a_probes_usage_never_count
     let pins = handle.pins().await.unwrap();
     // The pool's burn window is the default 600 s, and the second fold lands 60 s after the first.
     let window = 600.0_f64;
-    let meter = 1_200.0 / window * (-60.0_f64 / window).exp() + 500.0 / window;
+    let decay = (-60.0_f64 / window).exp();
+    let expected = PinBurn {
+        cache_read: 1_000.0 / window * decay,
+        input: 100.0 / window * decay + 500.0 / window,
+        output: 20.0 / window * decay,
+        write_1h: 30.0 / window * decay,
+        write_5m: 50.0 / window * decay,
+    };
     let folded = pins.iter().find(|p| p.session_id == "s1").unwrap();
+    let close = |a: PinBurn, b: PinBurn| {
+        [
+            a.cache_read - b.cache_read,
+            a.input - b.input,
+            a.output - b.output,
+            a.write_1h - b.write_1h,
+            a.write_5m - b.write_5m,
+        ]
+        .iter()
+        .all(|d| d.abs() < 1e-9)
+    };
     assert!(
-        (folded.burn - meter).abs() < 1e-9,
-        "the second fold decays the first by exp(-dt/window) and adds its own p/window: {} against {meter}",
+        close(folded.burn, expected),
+        "each type decays by exp(-dt/window) and adds its own tokens over the window, unpriced: {:?} against \
+         {expected:?}",
         folded.burn
     );
     assert!(
-        (folded.burn_usd - 0.25 * meter).abs() < 1e-9,
-        "the dollar average folds the same usage through its own table: {} against {}",
-        folded.burn_usd,
-        0.25 * meter
+        close(folded.burn_banded, expected),
+        "outside the band the banded copy is the plain one: {:?}",
+        folded.burn_banded
     );
     assert_eq!(
         (folded.burn_at, folded.last_input_tokens),
@@ -3019,8 +3038,8 @@ async fn a_renewal_with_usage_folds_both_averages_and_a_probes_usage_never_count
     );
     let probed = pins.iter().find(|p| p.session_id == "s2").unwrap();
     assert_eq!(
-        (probed.burn, probed.burn_usd, probed.burn_at),
-        (0.0, 0.0, None),
+        (probed.burn, probed.burn_banded, probed.burn_at),
+        (PinBurn::default(), PinBurn::default(), None),
         "a probe's usage never counts"
     );
     let bare = pins.iter().find(|p| p.session_id == "s3").unwrap();
@@ -3032,11 +3051,11 @@ async fn a_renewal_with_usage_folds_both_averages_and_a_probes_usage_never_count
     assert_eq!(
         (
             bare.burn,
-            bare.burn_usd,
+            bare.burn_banded,
             bare.burn_at,
             bare.last_input_tokens
         ),
-        (0.0, 0.0, None, 0),
+        (PinBurn::default(), PinBurn::default(), None, 0),
         "and folds nothing"
     );
 }
@@ -3073,12 +3092,18 @@ async fn the_burn_lands_in_the_store_with_the_input_size_and_the_ttl() {
             .find(|p| p.burn_at.is_some())
     })
     .await;
-    let priced = 642.0 / 600.0;
-    assert!((row.burn - priced).abs() < 1e-9, "{}", row.burn);
-    assert!(
-        (row.burn_usd - 0.25 * priced).abs() < 1e-9,
-        "{}",
-        row.burn_usd
+    let per_second = |tokens: f64| tokens / 600.0;
+    let expected = PinBurn {
+        cache_read: per_second(540.0),
+        input: per_second(60.0),
+        output: per_second(12.0),
+        write_1h: per_second(30.0),
+        write_5m: 0.0,
+    };
+    assert_eq!(
+        (row.burn, row.burn_banded),
+        (expected, expected),
+        "the ten columns hold each type's tokens over the window, the banded copy unweighed outside the band"
     );
     assert_eq!(
         (row.last_input_tokens, row.cache_ttl_ms),
@@ -3089,14 +3114,14 @@ async fn the_burn_lands_in_the_store_with_the_input_size_and_the_ttl() {
     let again = spawn(store, clock(&now), RouterConfig::default()).unwrap();
     let reloaded = again.pins().await.unwrap().remove(0);
     assert_eq!(
-        (reloaded.burn, reloaded.burn_usd),
-        (row.burn, row.burn_usd),
-        "a restart reads both averages back"
+        (reloaded.burn, reloaded.burn_banded),
+        (row.burn, row.burn_banded),
+        "a restart reads both copies back"
     );
 }
 
 #[tokio::test]
-async fn a_renewal_inside_the_band_folds_a_heavier_meter_burn_and_the_same_dollars() {
+async fn a_renewal_inside_the_band_folds_a_heavier_banded_copy_and_the_same_plain_rates() {
     // Monday 2026-09-21 at 14:00 and at 20:00 UTC.
     let (inside, outside) = (1_789_999_200_000_i64, 1_790_020_800_000_i64);
     let band = BandWeight::new(|window: &str, at: i64| {
@@ -3135,16 +3160,17 @@ async fn a_renewal_inside_the_band_folds_a_heavier_meter_burn_and_the_same_dolla
     handle.report(renewal(evening, outside, usage, "client", 300_000));
     let pins = handle.pins().await.unwrap();
     let pin = |session: &str| pins.iter().find(|p| p.session_id == session).unwrap();
+    let (afternoon, evening) = (pin("s1").burn_banded, pin("s2").burn_banded);
     assert!(
-        (pin("s1").burn - 1.45 * pin("s2").burn).abs() < 1e-9 && pin("s2").burn > 0.0,
-        "the afternoon renewal folds 1.45 times the evening one: {} against {}",
-        pin("s1").burn,
-        pin("s2").burn
+        (afternoon.input - 1.45 * evening.input).abs() < 1e-9 && evening.input > 0.0,
+        "the afternoon renewal folds a banded copy 1.45 times the evening one: {} against {}",
+        afternoon.input,
+        evening.input
     );
     assert_eq!(
-        pin("s1").burn_usd,
-        pin("s2").burn_usd,
-        "the dollar average is not weighted by the band"
+        pin("s1").burn,
+        pin("s2").burn,
+        "the plain rates are not weighted by the band"
     );
 }
 

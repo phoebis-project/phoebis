@@ -171,9 +171,12 @@ readings. A dated model id reads the cells of its undated name; a model the tabl
 blank.
 
 The prices carry one caveat: "API list prices. A subscription upstream on plan quota spends the window share columns
-instead of money." A recipe's own net follows the same split: meter tokens on a subscription account outside overage,
-dollars on an api_key account or one in overage. Each agent line of the Sessions view shows its net, as "N plan tokens",
-in dollars, or both for an agent whose upstream changed funding while it was warmed.
+instead of money." A recipe's own net follows the same split: the share of the account's 5-hour window, the band inside
+each probe's price, on a subscription account outside overage, and dollars on an api_key account or one in overage; a
+plan-funded probe on a model the cost table lacks, or on an account whose tier the factor table lacks, settles in
+dollars too. Each agent line of the Sessions view shows its net, as "N% of the 5-hour window", in dollars, or both for
+an agent whose upstream changed funding while it was warmed. A balance with a share priced through a stand-in cell or
+factor in it keeps the asterisk.
 
 The four shipped rows, all prices in USD per million tokens:
 

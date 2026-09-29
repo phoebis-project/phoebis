@@ -1,8 +1,8 @@
 //! One selection: the spec's seven steps over the snapshot and the routing state.
 
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, AffinityMode, OveragePolicy, PinKey, PinRow, PoolRow,
-    SessionPlacement, Strategy, SubagentPlacement, WarmSessions,
+    AccountKind, AccountRow, AccountState, AffinityMode, OveragePolicy, PinBurn, PinKey, PinRow,
+    PoolRow, SessionPlacement, Strategy, SubagentPlacement, WarmSessions,
 };
 use rand::{Rng, RngExt};
 
@@ -897,9 +897,9 @@ fn fresh_pin(
         // this request's old one is choosing.
         key_generation: request.key_generation,
         incarnation: chosen.incarnation,
-        burn: 0.0,
+        burn: PinBurn::default(),
         burn_at: None,
-        burn_usd: 0.0,
+        burn_banded: PinBurn::default(),
         last_input_tokens: 0,
         // A fresh pin has no cache to be cold about, and its TTL is the default until the first report.
         last_refresh_at: request.now,
@@ -1199,8 +1199,9 @@ fn move_of<'a>(
 
 /// A shedding round over the account `current` sits on: every pin of it, cold first by burn, then warm by burn
 /// over rewrite cost, bounded by `warm_sessions`, marked in that order up to `shed_share` of the account's burn
-/// in the unit its funding selects. The current pin's warmth is this request's verdict; every other pin's is
-/// the stored one.
+/// in the unit its funding selects. On plan quota each burn is the Max 5x 5-hour share rate: the tier's factor
+/// divides every pin of the account alike, so neither the order nor the share of the sum needs it. The current
+/// pin's warmth is this request's verdict; every other pin's is the stored one.
 fn shed_round(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
@@ -1218,6 +1219,7 @@ fn shed_round(
     let (pins, sum) = state.burn_of(
         account_id,
         unit,
+        state.rates(),
         now,
         seconds_ms(pool.shedding.burn_window_seconds),
     );

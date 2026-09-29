@@ -6,7 +6,7 @@ import { useAppSettings } from '@/app/settings';
 import { CostReferenceLink } from '@/components/ui/CostReference';
 import { IconChevron } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Menu, Meter, Skeleton, Toast } from '@/components/ui/primitives';
-import { fmtAbsolute, fmtCompact, fmtDuration, fmtInt, fmtPct, fmtRelative, fmtUsd, shortId } from '@/lib/format';
+import { fmtAbsolute, fmtDuration, fmtInt, fmtPct, fmtRelative, fmtShare, fmtUsd, shortId } from '@/lib/format';
 import { REASON_HINT, REASON_LABEL, WARNING_REASONS } from '@/lib/keepalive';
 import { useAsync, useNow } from '@/lib/hooks';
 import type { BadgeTone } from '@/lib/quota';
@@ -42,12 +42,16 @@ const MIGRATED_PROBE_HINT =
   "The probe was served by another account than the recipe's; it paid the write the next request would have paid there, so it counts for neither the cold streak nor the net.";
 const NO_TRAFFIC_HINT = 'This session has no ledgered requests, so there is nothing to show in analytics or observe.';
 const NET_HINT =
-  "What the agent's probes saved minus what they cost, in the unit each probe settled in: plan tokens on plan quota, dollars on an API key or in overage. An agent whose upstream changed funding carries both.";
+  "What the agent's probes saved minus what they cost, in the unit each probe settled in: a share of the upstream's 5-hour window on plan quota, dollars on an API key or in overage. An agent whose upstream changed funding carries both.";
+const UNMEASURED_HINT = 'Priced in part through a cell or a tier factor the measurement campaign has not filled';
 
-/** Each balance that is not zero, so an agent that settled in one unit shows that unit alone. */
-const netOf = (agent: Pick<KeepaliveRecipe, 'netMeterTokens' | 'netUsd'>): string[] => [
-  ...(agent.netMeterTokens !== 0 ? [`${fmtCompact(agent.netMeterTokens)} plan tokens`] : []),
-  ...(agent.netUsd !== 0 ? [fmtUsd(agent.netUsd)] : []),
+/**
+ * Each balance that is not zero, so an agent that settled in one unit shows that unit alone; a share with a
+ * stand-in in it is marked as the cost reference marks an unmeasured cell.
+ */
+const netOf = (agent: Pick<KeepaliveRecipe, 'netFiveHourShare' | 'netFiveHourShareUnmeasured' | 'netUsd'>): { text: string; unmeasured: boolean }[] => [
+  ...(agent.netFiveHourShare !== 0 ? [{ text: `${fmtShare(agent.netFiveHourShare)} of the 5-hour window`, unmeasured: agent.netFiveHourShareUnmeasured }] : []),
+  ...(agent.netUsd !== 0 ? [{ text: fmtUsd(agent.netUsd), unmeasured: false }] : []),
 ];
 
 interface Row {
@@ -538,7 +542,20 @@ function SessionRows({
                       )}
                     </span>
                     <span className="num agents__net" title={NET_HINT}>
-                      {netOf(a).length ? netOf(a).map((part) => <span key={part}>{part}</span>) : <span className="muted">0</span>}
+                      {netOf(a).length ? (
+                        netOf(a).map((part) => (
+                          <span key={part.text}>
+                            {part.text}
+                            {part.unmeasured && (
+                              <span className="muted" title={UNMEASURED_HINT}>
+                                *
+                              </span>
+                            )}
+                          </span>
+                        ))
+                      ) : (
+                        <span className="muted">0</span>
+                      )}
                     </span>
                   </div>
                 ))}

@@ -34,7 +34,7 @@ test('an upstream burns in the unit its figures come in, and every other groupin
   const answered = [point(0, 'console', { usd: 1.2 }), point(0, 'personal', { meterTokens: 900 }), point(0, 'unfitted', { planPercent: null, meterTokens: 40 }), point(0, 'idle', { planPercent: 0 })];
   const { lines } = d.foldBurn(answered, 'account', 3_600);
   const byKey = Object.fromEntries(lines.map((l) => [l.key, l]));
-  assert.deepEqual([byKey.console.unit, byKey.personal.unit, byKey.unfitted.unit, byKey.idle.unit], ['usd', 'meter_tokens', 'meter_tokens', 'meter_tokens'], 'a plan share or meter tokens mark a subscription upstream');
+  assert.deepEqual([byKey.console.unit, byKey.personal.unit, byKey.unfitted.unit, byKey.idle.unit], ['usd', 'window_share', 'window_share', 'window_share'], 'a plan share or meter tokens mark a subscription upstream');
   assert.equal(byKey.unfitted.planPeak, null, 'a subscription upstream with no plan share at all has no fit yet');
   assert.equal(byKey.idle.planPeak, 0);
   assert.ok(d.foldBurn(answered.map((p) => ({ ...p, group: `k-${p.group}` })), 'key', 3_600).lines.every((l) => l.unit === 'usd'));
@@ -56,7 +56,7 @@ test('under the upstream grouping the rest folds into one other per unit, so no 
   const answered = [...kept, point(0, 'small-plan', { cachedTokens: 120, meterTokens: 30, planPercent: 0.01 }), point(0, 'small-key', { cachedTokens: 60, usd: 0.6 })];
   const { lines, rows } = d.foldBurn(answered, 'account', 60);
   const rest = lines.slice(7);
-  assert.deepEqual(rest.map((l) => [l.label, l.unit, l.other]), [['Other (plan)', 'meter_tokens', true], ['Other (dollars)', 'usd', true]]);
+  assert.deepEqual(rest.map((l) => [l.label, l.unit, l.other]), [['Other (plan)', 'window_share', true], ['Other (dollars)', 'usd', true]]);
   assert.equal(new Set(lines.map((l) => l.key)).size, lines.length, 'each line keeps a key of its own');
   assert.deepEqual([rows[0].meter[7], rows[0].usd[7], rows[0].cached[7]], [30, 0, 120], 'the plan side carries the subscription upstream alone');
   assert.deepEqual([rows[0].usd[8], rows[0].meter[8], rows[0].cached[8]], [0.6, 0, 60], 'the dollar side keeps the API-key upstream\'s dollars');

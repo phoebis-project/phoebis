@@ -1,15 +1,15 @@
 use phoebis_routing::{
     effective_warm, release_reasons, resolve, select, warm, AffinityChain, AffinityMap,
-    AffinityRow, ClientClass, CohortHold, EvidenceSource, Exhaustion, HoldFacts,
-    MemberSpend, MigrateReason, OverageEvidence, PinRef, Placement, RegistrySnapshot,
-    RoutingState, SelectRequest, SelectResult, StateWrite, UtilizationSample, WindowReading,
-    FIVE_HOUR, MODEL_REJECTED_REASON, SEVEN_DAY, SEVEN_DAY_FABLE,
+    AffinityRow, BurnRates, ClientClass, CohortHold, EvidenceSource, Exhaustion, HoldFacts,
+    MemberSpend, MigrateReason, OverageEvidence, PinRef, Placement,
+    RateTable, Rates, RegistrySnapshot, RoutingState, SelectRequest, SelectResult, StateWrite,
+    UtilizationSample, WindowReading, FIVE_HOUR, MODEL_REJECTED_REASON, SEVEN_DAY, SEVEN_DAY_FABLE,
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, Affinity, AffinityMode, AffinitySource, ApiKeyRow,
-    BudgetPeriod, CooldownRow, Failover, OveragePolicy, PinKey, PinRow, PoolMember,
-    PoolRow, QuotaHeaders, RegistryLoad, RoutingLoad, RulesMode, SessionPlacement, Shedding,
-    Strategy, SubagentPlacement, SubscriptionTerm, WarmSessions,
+    BudgetPeriod, CooldownRow, Failover, OveragePolicy, PinBurn, PinKey, PinRow,
+    PoolMember, PoolRow, QuotaHeaders, RegistryLoad, RoutingLoad, RulesMode, SessionPlacement,
+    Shedding, Strategy, SubagentPlacement, SubscriptionTerm, WarmSessions,
 };
 use rand::rngs::StdRng;
 use rand::SeedableRng;
@@ -5269,9 +5269,9 @@ fn an_overage_whose_named_reset_has_passed_no_longer_counts_for_the_release_reas
         last_used_at: 0,
         key_generation: 0,
         incarnation: 1,
-        burn: 0.0,
+        burn: PinBurn::default(),
         burn_at: None,
-        burn_usd: 0.0,
+        burn_banded: PinBurn::default(),
         last_input_tokens: 0,
         last_refresh_at: 0,
         cache_ttl_ms: 300_000,
@@ -7127,9 +7127,9 @@ fn seeded_pin(session: &str, account: &str, now: i64) -> PinRow {
         last_used_at: now - 1_000,
         key_generation: 0,
         incarnation: 1,
-        burn: 0.0,
+        burn: PinBurn::default(),
         burn_at: Some(now),
-        burn_usd: 0.0,
+        burn_banded: PinBurn::default(),
         last_input_tokens: 1_000,
         last_refresh_at: now - 1_000,
         cache_ttl_ms: 300_000,
@@ -7140,13 +7140,40 @@ fn seeded_pin(session: &str, account: &str, now: i64) -> PinRow {
     }
 }
 
-/// `seeded_pin` burning `burn` in both units, warm or cold.
+/// `seeded_pin` burning `burn` input tokens a second in both copies, warm or cold: the default tables price it
+/// at `burn`.
 fn burning(session: &str, account: &str, burn: f64, warm: bool, now: i64) -> PinRow {
+    let rates = input_rate(burn);
     PinRow {
-        burn,
-        burn_usd: burn,
+        burn: rates,
+        burn_banded: rates,
         last_refresh_at: if warm { now - 1_000 } else { now - HOUR },
         ..seeded_pin(session, account, now)
+    }
+}
+
+fn input_rate(input: f64) -> PinBurn {
+    PinBurn {
+        input,
+        ..PinBurn::default()
+    }
+}
+
+/// A table pricing each listed model's input tokens at its rate and every other token at nothing.
+fn input_prices(rows: &[(&str, f64)]) -> RateTable {
+    let only_input = |input: f64| Rates {
+        input,
+        cache_read: 0.0,
+        write_5m: 0.0,
+        write_1h: 0.0,
+        output: 0.0,
+    };
+    RateTable {
+        rows: rows
+            .iter()
+            .map(|(model, input)| (model.to_string(), only_input(*input)))
+            .collect(),
+        fallback: only_input(0.0),
     }
 }
 
@@ -7915,31 +7942,45 @@ fn hot_a_cool_b(st: &mut RoutingState, at: i64) {
 }
 
 #[test]
-fn a_subscription_pin_in_overage_orders_the_round_by_the_dollar_average_and_leaving_overage_reads_the_meter_one_back(
+fn a_subscription_pin_in_overage_orders_the_round_by_the_dollar_average_and_leaving_overage_reads_the_window_share_back(
 ) {
     let s = snapshot(Pool {
         policy: OveragePolicy::Allow,
         ..shedding_pool(Shedding::default())
     });
-    let meter_heavy = PinRow {
-        burn: 9.0,
-        burn_usd: 1.0,
-        ..burning("meter-heavy", "a", 0.0, false, T)
+    // Both pins burn the same tokens; the dollar table weighs Sonnet's nine times Opus's and the 5-hour share
+    // table the other way round, so the unit alone decides which pin is heavier.
+    let opus = PinRow {
+        model: "claude-opus-5".into(),
+        ..burning("opus", "a", 1.0, false, T)
     };
-    let dollar_heavy = PinRow {
-        burn: 1.0,
-        burn_usd: 9.0,
-        ..burning("dollar-heavy", "a", 0.0, false, T)
+    let sonnet = burning("sonnet", "a", 1.0, false, T);
+    let mut st = loaded(vec![opus, sonnet]);
+    st.set_rates(BurnRates {
+        dollars: input_prices(&[("claude-opus-5", 1.0), ("claude-sonnet-5", 9.0)]),
+        five_hour: input_prices(&[("claude-opus-5", 9.0), ("claude-sonnet-5", 1.0)]),
+    });
+    let opus_key = PinKey {
+        model: "claude-opus-5".into(),
+        ..pin_key("opus")
     };
-    let mut st = loaded(vec![meter_heavy, dollar_heavy]);
+    let opus_turn = |now: i64| {
+        with_facts(
+            request(&s, Some("opus"), "claude-opus-5", true, &[], now),
+            Some("quota"),
+            false,
+            None,
+            &[],
+        )
+    };
     hot_a_cool_b(&mut st, T - 500);
     st.record_overage("a", overage(true, T - 500, Some(T + 10 * MINUTE)));
     assert_eq!(
-        landed(select(&mut st, &s, &auxiliary(&s, "meter-heavy", T), &mut rng()).0),
+        landed(select(&mut st, &s, &opus_turn(T), &mut rng()).0),
         ("a".into(), None),
-        "in overage the round reads dollars, so the meter-heavy pin is the last unmarked one"
+        "in overage the round reads dollars, so the Opus pin is the last unmarked one"
     );
-    assert!(marked(&st, "dollar-heavy", T) && !marked(&st, "meter-heavy", T));
+    assert!(marked(&st, "sonnet", T) && !st.shed_marked(&opus_key, T, 900_000));
 
     let later = T + 900_000;
     hot_a_cool_b(&mut st, later - 500);
@@ -7948,23 +7989,15 @@ fn a_subscription_pin_in_overage_orders_the_round_by_the_dollar_average_and_leav
         "the reset has passed"
     );
     assert_eq!(
-        landed(
-            select(
-                &mut st,
-                &s,
-                &auxiliary(&s, "meter-heavy", later),
-                &mut rng()
-            )
-            .0
-        ),
+        landed(select(&mut st, &s, &opus_turn(later), &mut rng()).0),
         ("b".into(), Some(MigrateReason::Shed)),
-        "back on plan the round reads meter tokens and marks the meter-heavy pin first"
+        "back on plan the round reads the 5-hour share and marks the Opus pin first"
     );
-    let untouched = pinned(&st, "dollar-heavy");
+    let untouched = pinned(&st, "sonnet");
     assert_eq!(
-        (untouched.burn, untouched.burn_usd),
-        (1.0, 9.0),
-        "neither average was reset by the switch"
+        (untouched.burn, untouched.burn_banded),
+        (input_rate(1.0), input_rate(1.0)),
+        "neither copy was reset by the switch"
     );
 }
 
@@ -7978,6 +8011,12 @@ fn the_shedding_round_orders_cold_pins_first_then_warm_by_burn_over_rewrite_and_
         burning("warm-2", "a", 2.0, true, T),
         burning("warm-1", "a", 1.0, true, T),
     ]);
+    // Sonnet's measured-scale share per token: one table's rate scales every pin of the account alike, so the
+    // order and the share of the sum read as the token counts would.
+    st.set_rates(BurnRates {
+        five_hour: input_prices(&[("claude-sonnet-5", 0.0454e-6)]),
+        ..BurnRates::default()
+    });
     hot_a_cool_b(&mut st, T - 500);
     assert_eq!(
         landed(select(&mut st, &s, &main_turn(&s, "warm-1", T), &mut rng()).0),
@@ -8246,14 +8285,14 @@ fn a_shed_pin_never_returns_to_the_account_that_shed_it_within_the_dwell_even_wh
         .into_iter()
         .map(|p| match p.session_id.as_str() {
             "p4" => PinRow {
-                burn: 5.0,
-                burn_usd: 5.0,
+                burn: input_rate(5.0),
+                burn_banded: input_rate(5.0),
                 burn_at: Some(at),
                 ..p
             },
             "p3" => PinRow {
-                burn: 1.0,
-                burn_usd: 1.0,
+                burn: input_rate(1.0),
+                burn_banded: input_rate(1.0),
                 burn_at: Some(at),
                 ..p
             },

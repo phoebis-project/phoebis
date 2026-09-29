@@ -112,8 +112,8 @@ pub struct KeepalivePolicy {
     pub max_idle_seconds: u64,
     pub max_idle_ticks: u64,
     pub net_negative_grace_probes: u32,
-    /// Probes stop for the day once a subscription account's probe meter tokens reach this share of its
-    /// 5-hour window; `None` is uncapped. Between 0 and 1.
+    /// Probes stop for the day once a subscription account's probes have consumed this share of its 5-hour
+    /// window; `None` is uncapped. Between 0 and 1.
     pub probe_cap_window_share_per_day: Option<f64>,
     pub probe_cost_cap_usd_per_day: Option<f64>,
     pub retry_max_seconds: u64,

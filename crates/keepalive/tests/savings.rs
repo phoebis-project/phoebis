@@ -761,7 +761,7 @@ async fn a_restart_mid_day_restores_the_plan_side_figure() {
     r.step().await;
     let live = r
         .engine
-        .meter_spent_today()
+        .share_spent_today()
         .get("o")
         .copied()
         .unwrap_or(0.0);
@@ -771,7 +771,7 @@ async fn a_restart_mid_day_restores_the_plan_side_figure() {
     let restarted = r.restart().await;
     restarted.load_spent_today().await;
     let rebuilt = restarted
-        .meter_spent_today()
+        .share_spent_today()
         .get("o")
         .copied()
         .unwrap_or(0.0);
@@ -830,14 +830,14 @@ async fn a_restart_after_overage_probes_reached_the_dollar_cap_keeps_both_budget
         (2, Reason::CapReached)
     );
     let spent = r.engine.spent_today();
-    let meter = r.engine.meter_spent_today();
+    let share_spent = r.engine.share_spent_today();
     assert!(
         spent.get("main").copied().unwrap_or(0.0) >= 0.0005,
         "{spent:?}"
     );
     assert!(
-        same_budgets(&meter, &BTreeMap::new()),
-        "a probe served in overage never counts toward the plan side: {meter:?}"
+        same_budgets(&share_spent, &BTreeMap::new()),
+        "a probe served in overage never counts toward the plan side: {share_spent:?}"
     );
     // The rollups carry the probes' tokens under the subscription account; the restore must not read them there.
     rollups(&r, |rows| {
@@ -856,9 +856,9 @@ async fn a_restart_after_overage_probes_reached_the_dollar_cap_keeps_both_budget
         restarted.spent_today()
     );
     assert!(
-        same_budgets(&restarted.meter_spent_today(), &meter),
-        "and the plan-side one: {:?} vs {meter:?}",
-        restarted.meter_spent_today()
+        same_budgets(&restarted.share_spent_today(), &share_spent),
+        "and the plan-side one: {:?} vs {share_spent:?}",
+        restarted.share_spent_today()
     );
     r.engine = restarted;
     r.event(session_start("session")).unwrap();
@@ -878,7 +878,7 @@ async fn a_restart_after_overage_probes_reached_the_dollar_cap_keeps_both_budget
 #[tokio::test]
 async fn a_restart_restores_the_dollar_delta_of_a_plan_funded_probe_on_an_unlisted_model() {
     let mut r = rig(RigSpec {
-        plan: plan_pricing_no_model(),
+        tables: plan_pricing_no_model(),
         ..subscription_spec()
     })
     .await;
@@ -902,9 +902,9 @@ async fn a_restart_restores_the_dollar_delta_of_a_plan_funded_probe_on_an_unlist
         restarted.spent_today()
     );
     assert!(
-        same_budgets(&restarted.meter_spent_today(), &BTreeMap::new()),
+        same_budgets(&restarted.share_spent_today(), &BTreeMap::new()),
         "and reaches no plan-side figure: {:?}",
-        restarted.meter_spent_today()
+        restarted.share_spent_today()
     );
 }
 
@@ -937,7 +937,7 @@ async fn a_restart_restores_nothing_for_a_migrated_probe() {
     assert_eq!(r.status("main").migrations, 1, "{:?}", r.status("main"));
     assert!(
         same_budgets(&r.engine.spent_today(), &BTreeMap::new())
-            && same_budgets(&r.engine.meter_spent_today(), &BTreeMap::new()),
+            && same_budgets(&r.engine.share_spent_today(), &BTreeMap::new()),
         "a migrated probe charges neither budget live"
     );
     // The rollups carry the migrated probe's write under the account that served it.
@@ -950,10 +950,10 @@ async fn a_restart_restores_nothing_for_a_migrated_probe() {
     restarted.load_spent_today().await;
     assert!(
         same_budgets(&restarted.spent_today(), &BTreeMap::new())
-            && same_budgets(&restarted.meter_spent_today(), &BTreeMap::new()),
+            && same_budgets(&restarted.share_spent_today(), &BTreeMap::new()),
         "nor after a restart: {:?} {:?}",
         restarted.spent_today(),
-        restarted.meter_spent_today()
+        restarted.share_spent_today()
     );
 }
 
@@ -1094,21 +1094,24 @@ async fn an_unpriced_model_costs_nothing_and_still_lands_a_probe_row() {
     );
 }
 
-/// A plan table lacking every model, so "claude-haiku-4-5-20251001" (which the shipped dollar table prices) is
+/// A cost table lacking every model, so "claude-haiku-4-5-20251001" (which the shipped dollar table prices) is
 /// unlisted on purpose rather than by a coincidence of the shipped one's date-suffix fall-back.
-fn plan_pricing_no_model() -> phoebis_ledger::PlanFactors {
-    phoebis_ledger::PlanFactors::from_yaml(
-        "measured: 2026-09-24\nreference: claude-opus-5\nmodels: {}\n",
-    )
-    .unwrap()
+fn plan_pricing_no_model() -> phoebis_ledger::PlanTables {
+    phoebis_ledger::PlanTables {
+        cost: phoebis_ledger::CostTable::from_yaml(
+            "effective: 2026-09-29\ntier: default_claude_max_5x\nbands: []\nwindows:\n  five_hour: {}\n  seven_day: {}\n",
+        )
+        .unwrap(),
+        tiers: phoebis_ledger::TierFactors::shipped(),
+    }
 }
 
-/// A model the dollar table prices but the plan table lacks settles a plan-funded probe in dollars, the same
+/// A model the dollar table prices but the cost table lacks settles a plan-funded probe in dollars, the same
 /// fall-back the settlement takes; the stop and the dollar cap must read that unit too, or nothing bounds it.
 #[tokio::test]
 async fn a_plan_funded_recipe_on_an_unlisted_model_stops_on_a_negative_dollar_net() {
     let mut r = rig(RigSpec {
-        plan: plan_pricing_no_model(),
+        tables: plan_pricing_no_model(),
         policy: KeepalivePolicy {
             net_negative_grace_probes: 0,
             ..RigSpec::default().policy
@@ -1123,12 +1126,12 @@ async fn a_plan_funded_recipe_on_an_unlisted_model_stops_on_a_negative_dollar_ne
     r.step().await;
     let status = r.status("main");
     assert!(
-        status.net_usd < 0.0 && status.net_meter_tokens == 0.0,
-        "the plan table lacks this model, so the probe settles in dollars whatever the funding: {status:?}"
+        status.net_usd < 0.0 && status.net_five_hour_share == 0.0,
+        "the cost table lacks this model, so the probe settles in dollars whatever the funding: {status:?}"
     );
     assert!(
         r.engine.spent_today().get("main").copied().unwrap_or(0.0) > 0.0,
-        "the dollar cap is the only one that bounds this probe: the plan-side cap counts meter tokens alone"
+        "the dollar cap is the only one that bounds this probe: the plan-side cap counts the window share alone"
     );
     r.advance(270_000);
     r.step().await;
@@ -1145,7 +1148,7 @@ async fn a_plan_funded_recipe_on_an_unlisted_model_stops_on_a_negative_dollar_ne
 #[tokio::test]
 async fn a_plan_funded_credit_on_an_unlisted_model_lands_in_dollars() {
     let mut r = rig(RigSpec {
-        plan: plan_pricing_no_model(),
+        tables: plan_pricing_no_model(),
         ..subscription_spec()
     })
     .await;
@@ -1156,16 +1159,16 @@ async fn a_plan_funded_credit_on_an_unlisted_model_lands_in_dollars() {
     r.step().await;
     let status = r.status("main");
     assert!(
-        status.net_usd < 0.0 && status.net_meter_tokens == 0.0,
-        "the plan table lacks this model, so the probe settles in dollars: {status:?}"
+        status.net_usd < 0.0 && status.net_five_hour_share == 0.0,
+        "the cost table lacks this model, so the probe settles in dollars: {status:?}"
     );
     r.advance(60_000);
     r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", warm_answer());
     r.observe_with("main", &body).await;
     let credited = r.status("main");
     assert!(
-        credited.net_usd > status.net_usd && credited.net_meter_tokens == 0.0,
-        "the credit for a probe settled in dollars lands in dollars too, the meter balance untouched: {credited:?}"
+        credited.net_usd > status.net_usd && credited.net_five_hour_share == 0.0,
+        "the credit for a probe settled in dollars lands in dollars too, the share balance untouched: {credited:?}"
     );
 }
 
@@ -1504,6 +1507,7 @@ fn subscription_spec() -> RigSpec {
             overage_policy: phoebis_store::OveragePolicy::Allow,
             ..PoolSpec::default()
         },
+        tier: Some("default_claude_max_5x"),
         ..RigSpec::default()
     }
 }
@@ -1545,10 +1549,10 @@ async fn the_credit_follows_only_a_re_arming_request() {
     assert!(row(&r, &credited).await.kept_warm);
 }
 
-/// A subscription account's probes and credits are a proxy for quota, priced in meter tokens; an api_key
-/// account's stay in dollars, as before.
+/// A subscription account's probes and credits are a proxy for quota, priced as a share of its 5-hour window;
+/// an api_key account's stay in dollars.
 #[tokio::test]
-async fn a_subscription_accounts_net_is_in_meter_tokens_and_an_api_key_accounts_in_dollars() {
+async fn a_subscription_accounts_net_is_in_five_hour_share_and_an_api_key_accounts_in_dollars() {
     let mut r = rig(subscription_spec()).await;
     let body = priced_body();
     r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
@@ -1561,13 +1565,13 @@ async fn a_subscription_accounts_net_is_in_meter_tokens_and_an_api_key_accounts_
         after_probe.net_usd, 0.0,
         "a plan-funded probe costs no dollars"
     );
-    assert!(after_probe.net_meter_tokens < 0.0, "{after_probe:?}");
+    assert!(after_probe.net_five_hour_share < 0.0, "{after_probe:?}");
     r.advance(60_000);
     r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", warm_answer());
     let credited = r.observe_with("main", &body).await;
     let after_credit = r.status("main");
     assert!(
-        after_credit.net_meter_tokens > after_probe.net_meter_tokens,
+        after_credit.net_five_hour_share > after_probe.net_five_hour_share,
         "{after_credit:?}"
     );
     assert_eq!(after_credit.net_usd, 0.0);
@@ -1583,8 +1587,8 @@ async fn a_subscription_accounts_net_is_in_meter_tokens_and_an_api_key_accounts_
     let status = r.status("main");
     assert!(status.net_usd < 0.0, "{status:?}");
     assert_eq!(
-        status.net_meter_tokens, 0.0,
-        "an api_key account never touches the meter balance"
+        status.net_five_hour_share, 0.0,
+        "an api_key account never touches the share balance"
     );
 }
 
@@ -1602,14 +1606,14 @@ async fn plan_traffic_then_metered_traffic_then_a_return_to_plan_keep_two_balanc
     })
     .await;
     let body = priced_body();
-    // Leg 1: on plan, the probe's cost and the next request's credit both land in meter tokens.
+    // Leg 1: on plan, the probe's cost and the next request's credit both land in the 5-hour share.
     r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
     r.observe_with("main", &body).await;
     r.advance(270_000);
     r.step().await;
     let after_plan_probe = r.status("main");
     assert!(
-        after_plan_probe.net_meter_tokens < 0.0,
+        after_plan_probe.net_five_hour_share < 0.0,
         "{after_plan_probe:?}"
     );
     assert_eq!(after_plan_probe.net_usd, 0.0);
@@ -1618,13 +1622,13 @@ async fn plan_traffic_then_metered_traffic_then_a_return_to_plan_keep_two_balanc
     r.observe_with("main", &body).await;
     let after_plan_credit = r.status("main");
     assert!(
-        after_plan_credit.net_meter_tokens > after_plan_probe.net_meter_tokens,
+        after_plan_credit.net_five_hour_share > after_plan_probe.net_five_hour_share,
         "{after_plan_credit:?}"
     );
     assert_eq!(after_plan_credit.net_usd, 0.0);
-    let meter_balance = after_plan_credit.net_meter_tokens;
+    let share_balance = after_plan_credit.net_five_hour_share;
 
-    // Leg 2: the account enters overage; the next probe and credit land in dollars, the meter balance stands.
+    // Leg 2: the account enters overage; the next probe and credit land in dollars, the share balance stands.
     r.enter_overage("o", r.now() + 10_000_000);
     settled(&r, |r| async move {
         r.h.router
@@ -1639,8 +1643,8 @@ async fn plan_traffic_then_metered_traffic_then_a_return_to_plan_keep_two_balanc
     r.step().await;
     let after_overage_probe = r.status("main");
     assert!(after_overage_probe.net_usd < 0.0, "{after_overage_probe:?}");
-    assert_eq!(after_overage_probe.net_meter_tokens, meter_balance);
-    // With no grace, the very next due tick holds under the dollar balance alone: a positive meter balance
+    assert_eq!(after_overage_probe.net_five_hour_share, share_balance);
+    // With no grace, the very next due tick holds under the dollar balance alone: a positive share balance
     // never masks it, since the account is in overage and the stop reads the unit the next probe would be
     // charged in.
     r.advance(270_000);
@@ -1652,12 +1656,12 @@ async fn plan_traffic_then_metered_traffic_then_a_return_to_plan_keep_two_balanc
         r.status("main")
     );
     assert_eq!(
-        r.status("main").net_meter_tokens,
-        meter_balance,
+        r.status("main").net_five_hour_share,
+        share_balance,
         "still positive relative to where it started, and untouched by the dollar-side stop"
     );
     // A real request still reads the held recipe's own cache normally: its credit lands in the unit the
-    // withheld probe settled in, dollars here, and leaves the meter balance it never touched alone.
+    // withheld probe settled in, dollars here, and leaves the share balance it never touched alone.
     r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", warm_answer());
     r.observe_with("main", &body).await;
     let after_overage_credit = r.status("main");
@@ -1666,8 +1670,8 @@ async fn plan_traffic_then_metered_traffic_then_a_return_to_plan_keep_two_balanc
         "the credit for a probe that settled in dollars lands in dollars too: {after_overage_credit:?}"
     );
     assert_eq!(
-        after_overage_credit.net_meter_tokens, meter_balance,
-        "a warm request while in overage leaves the meter balance untouched"
+        after_overage_credit.net_five_hour_share, share_balance,
+        "a warm request while in overage leaves the share balance untouched"
     );
     // The credit paid back past zero; one more dollar-funded probe returns the stop before the reset test.
     r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
@@ -1682,7 +1686,7 @@ async fn plan_traffic_then_metered_traffic_then_a_return_to_plan_keep_two_balanc
         r.status("main")
     );
 
-    // Leg 3: the overage's reset passes; a real request re-arms, and the next probe settles in meter tokens.
+    // Leg 3: the overage's reset passes; a real request re-arms, and the next probe settles in the share again.
     r.leave_overage("o");
     settled(&r, |r| async move {
         r.h.router
@@ -1703,8 +1707,8 @@ async fn plan_traffic_then_metered_traffic_then_a_return_to_plan_keep_two_balanc
     r.step().await;
     let after_return = r.status("main");
     assert!(
-        after_return.net_meter_tokens < meter_balance,
-        "the next probe's cost landed in meter tokens again: {after_return:?}"
+        after_return.net_five_hour_share < share_balance,
+        "the next probe's cost landed in the share again: {after_return:?}"
     );
 }
 
@@ -1712,7 +1716,7 @@ async fn plan_traffic_then_metered_traffic_then_a_return_to_plan_keep_two_balanc
 /// evidence says by the time the result is processed.
 #[tokio::test]
 async fn a_probe_settles_in_the_funding_captured_with_its_serving_attempt() {
-    // Dispatched on plan; overage evidence lands before the gated response is released: still meter tokens.
+    // Dispatched on plan; overage evidence lands before the gated response is released: still the share.
     let mut r = rig(subscription_spec()).await;
     let body = priced_body();
     r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
@@ -1742,7 +1746,7 @@ async fn a_probe_settles_in_the_funding_captured_with_its_serving_attempt() {
     r.pump(None).await;
     let status = r.status("main");
     assert!(
-        status.net_meter_tokens < 0.0 && status.net_usd == 0.0,
+        status.net_five_hour_share < 0.0 && status.net_usd == 0.0,
         "dispatched before the flip, so it settles in the unit it was dispatched under: {status:?}"
     );
     r.advance(60_000);
@@ -1750,8 +1754,8 @@ async fn a_probe_settles_in_the_funding_captured_with_its_serving_attempt() {
     r.observe_with("main", &body).await;
     let credited = r.status("main");
     assert!(
-        credited.net_meter_tokens > status.net_meter_tokens && credited.net_usd == 0.0,
-        "the credit for a probe settled on plan lands in meter tokens too, whatever the account is now: {credited:?}"
+        credited.net_five_hour_share > status.net_five_hour_share && credited.net_usd == 0.0,
+        "the credit for a probe settled on plan lands in the share too, whatever the account is now: {credited:?}"
     );
 
     // The reverse: dispatched in overage; the reset passes before the gated response is released.
@@ -1792,7 +1796,7 @@ async fn a_probe_settles_in_the_funding_captured_with_its_serving_attempt() {
     r.pump(None).await;
     let status = r.status("main");
     assert!(
-        status.net_usd < 0.0 && status.net_meter_tokens == 0.0,
+        status.net_usd < 0.0 && status.net_five_hour_share == 0.0,
         "dispatched in overage, so it settles in dollars whatever the reset does meanwhile: {status:?}"
     );
     r.advance(60_000);
@@ -1800,178 +1804,182 @@ async fn a_probe_settles_in_the_funding_captured_with_its_serving_attempt() {
     r.observe_with("main", &body).await;
     let credited = r.status("main");
     assert!(
-        credited.net_usd > status.net_usd && credited.net_meter_tokens == 0.0,
+        credited.net_usd > status.net_usd && credited.net_five_hour_share == 0.0,
         "the credit for a probe settled in dollars lands in dollars too, whatever the reset did meanwhile: {credited:?}"
     );
 }
 
-/// The plan-side cap counts a subscription account's probe meter tokens against the share of its 5-hour window,
-/// band-weighted at each probe's own time.
+const OPUS: &str = "claude-opus-5";
+
+fn opus_body() -> String {
+    BODY.replace("claude-sonnet-4-5", OPUS)
+}
+
+/// A probe answer that reads the 2,000-token prefix back and bills a million input tokens beside it, so the
+/// probe stays covered while its cost is the cost table's own input cell.
+fn million_input_answer() -> Respond {
+    Respond::Json { status: 200, headers: vec![], body: br#"{"id":"msg_p","type":"message","content":[],"usage":{"input_tokens":1000000,"cache_read_input_tokens":2000,"cache_creation_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0},"output_tokens":0}}"#.to_vec() }
+}
+
+/// That probe's share of the Max 5x 5-hour window outside the band: a million input tokens at 0.0841 and 2,000
+/// cache reads at 0.00219 per million, both measured cells.
+const OPUS_PROBE_SHARE: f64 = 0.0841 + 2_000.0 * 0.00219 / 1_000_000.0;
+
+/// One such probe on account `o` settled at `at`, and the share of the day it spent there.
+async fn one_opus_probe(spec: RigSpec, at: i64) -> (Rig, f64) {
+    let mut r = rig(spec).await;
+    r.clock.store(at, std::sync::atomic::Ordering::SeqCst);
+    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
+    r.observe_with("main", &opus_body()).await;
+    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", million_input_answer());
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").probes, 1);
+    let spent = r
+        .engine
+        .share_spent_today()
+        .get("o")
+        .copied()
+        .unwrap_or(0.0);
+    (r, spent)
+}
+
+/// The plan-side cap counts a subscription account's probes as the share of its own 5-hour window they
+/// consumed, weighed by the band at each probe's settlement, and stops probes for the day once the share is
+/// spent.
 #[tokio::test]
 async fn the_window_share_cap_stops_probes_for_the_day_and_a_probe_in_the_band_counts_more() {
-    let windows = phoebis_ledger::PlanWindows::shipped();
+    let tables = phoebis_ledger::PlanTables::shipped();
     let hour_ms = 3_600_000i64;
     let week: Vec<i64> = (0..7 * 24).map(|h| NOW + h as i64 * hour_ms).collect();
+    // The probe settles 270 s after the observation, so both instants are checked there.
+    let band_at = |at: i64| tables.cost.band_factor("five_hour", at + 270_000);
     let in_band = *week
         .iter()
-        .find(|&&at| windows.band_factor("five_hour", at) > 1.0)
+        .find(|&&at| band_at(at) > 1.0)
         .expect("the shipped table names a peak band");
     let out_of_band = *week
         .iter()
-        .find(|&&at| windows.band_factor("five_hour", at) == 1.0)
+        .find(|&&at| band_at(at) == 1.0)
         .expect("the shipped table leaves most hours at par");
 
-    // A probe outside the band, for the baseline the in-band probe below is compared against.
-    let mut r = rig(subscription_spec()).await;
-    r.clock
-        .store(out_of_band, std::sync::atomic::Ordering::SeqCst);
-    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
-    r.observe_with("main", &priced_body()).await;
-    r.advance(270_000);
-    r.step().await;
-    let outside = r
-        .engine
-        .meter_spent_today()
-        .get("o")
-        .copied()
-        .unwrap_or(0.0);
-    assert!(outside > 0.0);
-
-    // The same probe inside the band counts more, by exactly the band's factor.
-    let mut r = rig(subscription_spec()).await;
-    r.clock.store(in_band, std::sync::atomic::Ordering::SeqCst);
-    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
-    r.observe_with("main", &priced_body()).await;
-    r.advance(270_000);
-    r.step().await;
-    let inside = r
-        .engine
-        .meter_spent_today()
-        .get("o")
-        .copied()
-        .unwrap_or(0.0);
-    let factor = windows.band_factor("five_hour", in_band);
+    let (r, outside) = one_opus_probe(subscription_spec(), out_of_band).await;
     assert!(
-        (inside - outside * factor).abs() < 1e-6,
-        "{inside} against {outside} times {factor}"
+        (outside - OPUS_PROBE_SHARE).abs() < 1e-12,
+        "a million Opus input tokens on Max 5x outside the band: {outside} against {OPUS_PROBE_SHARE}"
+    );
+    let status = r.status("main");
+    assert!(
+        (status.net_five_hour_share + OPUS_PROBE_SHARE).abs() < 1e-12
+            && !status.net_five_hour_share_unmeasured
+            && status.net_usd == 0.0,
+        "the probe's cost is the agent's share balance, measured: {status:?}"
     );
 
-    // The cap stops probes for the day once the share is spent.
-    let mut r = rig(RigSpec {
-        policy: KeepalivePolicy {
-            probe_cap_window_share_per_day: Some(0.5),
-            ..RigSpec::default().policy
-        },
-        ..subscription_spec()
-    })
-    .await;
-    r.clock
-        .store(out_of_band, std::sync::atomic::Ordering::SeqCst);
-    r.h.router.report(phoebis_routing::Report::Fit {
-        row: phoebis_store::FitRow {
-            account_id: "o".into(),
-            window: "five_hour".into(),
-            scale: outside * 1.5,
-            confidence: 1.0,
-            intervals: 1,
-            corrections_json: "{}".into(),
-            fitted_at: r.now(),
-            incarnation: 1,
-            ..Default::default()
-        },
-        incarnation: 1,
-    });
-    settled(&r, |r| async move {
-        !r.h.router.fits().await.unwrap().is_empty()
-    })
-    .await;
-    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
-    r.observe_with("main", &priced_body()).await;
-    r.advance(270_000);
-    r.step().await;
-    assert_eq!(
-        r.status("main").probes,
-        1,
-        "the first probe alone spends past half the fitted window"
+    let (_, inside) = one_opus_probe(subscription_spec(), in_band).await;
+    assert!(
+        (inside - OPUS_PROBE_SHARE * 1.45).abs() < 1e-12,
+        "the same probe inside the band counts 1.45 times: {inside}"
     );
-    r.advance(270_000);
-    r.step().await;
-    assert_eq!(
-        (r.status("main").probes, r.status("main").reason),
-        (1, Reason::CapReached)
-    );
-}
 
-/// An account the router has not fitted yet still named a tier on its profile; the cap falls back to that
-/// tier's predicted window rather than leaving a fresh subscription account uncapped for however long
-/// calibration takes.
-#[tokio::test]
-async fn the_window_share_cap_falls_back_to_the_tiers_predicted_window_without_a_fit() {
-    fn tier(name: &str, five_hour: f64) -> phoebis_ledger::PlanWindows {
-        phoebis_ledger::PlanWindows::from_yaml(&format!(
-            "measured: 2026-09-24\ntiers:\n  default_{name}:\n    five_hour: {five_hour}\nbands: []\n"
-        ))
-        .unwrap()
-    }
-    fn name_the_tier(r: &Rig, name: &str) {
-        r.h.store
-            .set_profile(
-                "o",
-                "{}",
-                &phoebis_store::SubscriptionRow {
-                    plan: None,
-                    tier: Some(name.to_string()),
-                    since: None,
-                    trial_ends_at: None,
-                },
-            )
-            .unwrap();
-    }
-
-    // Baseline: what one probe spends under an oversized window, for the size below to bound against.
-    let mut r = rig(RigSpec {
-        windows: tier("claude_max_5x", 1e12),
-        ..subscription_spec()
-    })
-    .await;
-    name_the_tier(&r, "claude_max_5x");
-    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
-    r.observe_with("main", &priced_body()).await;
-    r.advance(270_000);
-    r.step().await;
-    let spent = r
-        .engine
-        .meter_spent_today()
-        .get("o")
-        .copied()
-        .unwrap_or(0.0);
-    assert!(spent > 0.0, "{spent}");
-
-    // The tier's window sized so this same probe alone crosses half of it.
-    let mut r = rig(RigSpec {
-        policy: KeepalivePolicy {
-            probe_cap_window_share_per_day: Some(0.5),
-            ..RigSpec::default().policy
+    let (_, on_pro) = one_opus_probe(
+        RigSpec {
+            tier: Some("default_claude_pro"),
+            ..subscription_spec()
         },
-        windows: tier("claude_max_5x", spent * 1.5),
-        ..subscription_spec()
-    })
+        out_of_band,
+    )
     .await;
-    name_the_tier(&r, "claude_max_5x");
-    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
-    r.observe_with("main", &priced_body()).await;
-    r.advance(270_000);
-    r.step().await;
-    assert_eq!(
-        r.status("main").probes,
-        1,
-        "the first probe alone spends past half the tier's predicted window"
+    assert!(
+        (on_pro - OPUS_PROBE_SHARE / 0.215).abs() < 1e-12,
+        "on Pro the same tokens are that share over Pro's 5-hour factor: {on_pro}"
+    );
+
+    let (mut r, spent) = one_opus_probe(
+        RigSpec {
+            policy: KeepalivePolicy {
+                probe_cap_window_share_per_day: Some(0.08),
+                ..RigSpec::default().policy
+            },
+            ..subscription_spec()
+        },
+        out_of_band,
+    )
+    .await;
+    assert!(
+        spent >= 0.08,
+        "the first probe alone reaches the cap: {spent}"
     );
     r.advance(270_000);
     r.step().await;
     assert_eq!(
         (r.status("main").probes, r.status("main").reason),
         (1, Reason::CapReached),
-        "the tier's predicted window bounds the cap without a fitted row"
+        "the day's share reached the cap, so the next probe waits for midnight"
+    );
+}
+
+/// A real request on `body` re-arms the recipe on its model, and the due probe runs.
+async fn probe_on(r: &mut Rig, body: &str) {
+    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
+    r.observe_with("main", body).await;
+    r.advance(270_000);
+    r.step().await;
+}
+
+/// A share priced through a cell the measurement campaign has not filled marks the agent's balance and the
+/// day's budget row, and a measured probe after it clears neither: a figure with one estimate in it is an
+/// estimate. The next day's row starts measured; the balance keeps its mark.
+#[tokio::test]
+async fn a_stand_in_share_marks_the_balance_and_the_days_budget_until_the_day_ends() {
+    let mut r = rig(RigSpec {
+        // The clock crosses a UTC midnight below, which the idle limit would read as an abandoned session.
+        policy: KeepalivePolicy {
+            max_idle_seconds: 0,
+            ..RigSpec::default().policy
+        },
+        ..subscription_spec()
+    })
+    .await;
+    let marks = |r: &Rig| {
+        let day =
+            r.h.store
+                .keepalive_budgets(&budget_day(r.now()))
+                .unwrap()
+                .into_iter()
+                .find(|row| row.id == "o")
+                .map(|row| row.five_hour_share_unmeasured);
+        (r.status("main").net_five_hour_share_unmeasured, day)
+    };
+    probe_on(&mut r, &opus_body()).await;
+    assert_eq!(r.status("main").probes, 1);
+    assert_eq!(
+        marks(&r),
+        (false, Some(false)),
+        "an Opus probe reads measured cells alone"
+    );
+    probe_on(&mut r, &priced_body()).await;
+    assert_eq!(r.status("main").probes, 2);
+    assert_eq!(
+        marks(&r),
+        (true, Some(true)),
+        "a Sonnet probe reads a cell the campaign has not filled"
+    );
+    probe_on(&mut r, &opus_body()).await;
+    assert_eq!(r.status("main").probes, 3);
+    assert_eq!(
+        marks(&r),
+        (true, Some(true)),
+        "a measured probe after it clears neither mark"
+    );
+    let midnight = (r.now() / 86_400_000 + 1) * 86_400_000;
+    r.clock
+        .store(midnight + 1_000, std::sync::atomic::Ordering::SeqCst);
+    r.step().await;
+    assert_eq!(r.status("main").probes, 4, "the Opus recipe probed again");
+    assert_eq!(
+        marks(&r),
+        (true, Some(false)),
+        "the new day's row starts measured, and the balance keeps its mark"
     );
 }

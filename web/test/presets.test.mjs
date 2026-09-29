@@ -34,7 +34,8 @@ const pin = (sessionId, burn, warm, over = {}) => ({
   accountId: 'hot',
   burn,
   burnAt: at(NOW),
-  burnUnit: 'meter_tokens',
+  burnUnit: 'window_share',
+  burnUnmeasured: false,
   cacheTtlMs: 5 * MINUTE,
   keyId: 'desktop',
   lastInputTokens: 1_000,
@@ -88,7 +89,7 @@ test('the preview orders cold pins first, stops at the share, and never marks th
     'nothing for a zero target',
   );
   const round = preview(four);
-  assert.deepEqual([round.sessions, round.warm, round.burnShare.toFixed(2), round.members, round.unit], [2, 1, '0.70', 1, 'meter_tokens'], 'cold 3 then warm 4 reach half of 10, and the cool member runs no round');
+  assert.deepEqual([round.sessions, round.warm, round.burnShare.toFixed(2), round.members, round.unit], [2, 1, '0.70', 1, 'window_share'], 'cold 3 then warm 4 reach half of 10, and the cool member runs no round');
   const one = preview([pin('only', 100, false)]);
   assert.deepEqual([one.sessions, one.burnShare], [0, 0], 'a one-pin member sheds nothing');
   const pair = preview([pin('warm-9', 9, true), pin('cold-1', 1, false)]);
@@ -116,11 +117,11 @@ test('two hot members in one unit share the burn by weight, and members in two u
   const second = account('second', 0.85);
   const heavy = (unit) => [pin('big', 18, false, { accountId: 'second', burnUnit: unit }), pin('small', 2, false, { accountId: 'second', burnUnit: unit })];
   // The four pins mark 7 of 10; the second member marks 18 of 20.
-  const same = replay([hot, second, cool], [...four, ...heavy('meter_tokens')]);
-  assert.deepEqual([same.sessions, same.warm, same.members, same.unit, same.burnShare.toFixed(3)], [3, 1, 2, 'meter_tokens', (25 / 30).toFixed(3)]);
-  assert.equal(d.shedPreviewLine(same, true), 'Would move 3 sessions, 1 warm, 83% of the burn in meter tokens, across 2 upstreams.');
+  const same = replay([hot, second, cool], [...four, ...heavy('window_share')]);
+  assert.deepEqual([same.sessions, same.warm, same.members, same.unit, same.burnShare.toFixed(3)], [3, 1, 2, 'window_share', (25 / 30).toFixed(3)]);
+  assert.equal(d.shedPreviewLine(same, true), 'Would move 3 sessions, 1 warm, 83% of the burn in window share, across 2 upstreams.');
   const mixed = replay([hot, second, cool], [...four, ...heavy('usd')]);
-  assert.deepEqual([mixed.unit, mixed.averaged, mixed.burnShare.toFixed(3)], [null, true, ((0.7 + 0.9) / 2).toFixed(3)], 'meter tokens and dollars cannot be summed, so each member counts once');
+  assert.deepEqual([mixed.unit, mixed.averaged, mixed.burnShare.toFixed(3)], [null, true, ((0.7 + 0.9) / 2).toFixed(3)], 'a window share and dollars cannot be summed, so each member counts once');
   assert.equal(same.averaged, false);
   assert.equal(d.shedPreviewLine(mixed, true), "Would move 3 sessions, 1 warm, 80% of each upstream's burn on average, across 2 upstreams.");
 });
@@ -130,11 +131,22 @@ test('with no member under the band the preview marks sessions it cannot move', 
   const near = account('near', 0.78);
   const stuck = replay([hot, near], four);
   assert.deepEqual([stuck.sessions, stuck.cool], [2, false]);
-  assert.equal(d.shedPreviewLine(stuck, true), 'Would mark 2 sessions, 1 warm, 70% of the burn in meter tokens, but no member reads under the band to take them.');
+  assert.equal(d.shedPreviewLine(stuck, true), 'Would mark 2 sessions, 1 warm, 70% of the burn in window share, but no member reads under the band to take them.');
   const cooling = d.shedPreview(pool({ members: [member('hot'), member('cool', 'cooldown')] }), [hot, cool], four, NOW);
   assert.equal(cooling.cool, false, 'a member the router skips is no destination');
   const open = replay([hot, near, cool], four);
-  assert.deepEqual([open.cool, d.shedPreviewLine(open, true)], [true, 'Would move 2 sessions, 1 warm, 70% of the burn in meter tokens.']);
+  assert.deepEqual([open.cool, d.shedPreviewLine(open, true)], [true, 'Would move 2 sessions, 1 warm, 70% of the burn in window share.']);
   assert.equal(d.shedPreviewLine(open, false), 'No round runs while migrate above utilization is off.');
   assert.equal(d.shedPreviewLine(replay([cool], []), true), 'No member is above the threshold.');
+});
+
+test('a burn priced through a stand-in cell marks the share with the cost reference asterisk', () => {
+  const measured = replay([hot, cool], four);
+  assert.equal(measured.unmeasured, false);
+  const flagged = replay([hot, cool], four.map((p, i) => (i === 3 ? { ...p, burnUnmeasured: true } : p)));
+  assert.equal(flagged.unmeasured, true, 'one flagged pin among the summed burns marks the whole share');
+  assert.equal(
+    d.shedPreviewLine(flagged, true),
+    'Would move 2 sessions, 1 warm, 70%* of the burn in window share. *Part of the burn is priced through a cell not measured yet.',
+  );
 });

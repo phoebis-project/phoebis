@@ -148,9 +148,9 @@ UTC from 2026-11-01, the 5-hour meter charges a request about 1.45 times as much
 input 1.33 on 2026-09-25, so the factor lies between 1.3 and 1.45 until one window reads both; the edges are steps, and
 a weekend probe read the off-peak rate on 2026-09-26, so the band is weekdays only; the row stays provisional for its
 factor until one in-band window reads both input and output. The meter charges a request when it completes, so the band
-in force then sets its weight: the fit books its tokens that way, and a session's burn in meter tokens folds a renewal
-inside the band at the band's factor, so the shedding order reads what the meter charges. A band row with a later date
-takes over from that date and never re-weights an earlier request.
+in force then sets its weight: the fit books its tokens that way, and a session's burn keeps a copy weighed by the band
+at each renewal, which the shedding round prices on plan quota, so the order reads what the meter charges. A band row
+with a later date takes over from that date and never re-weights an earlier request.
 
 The analytics set each fit beside its tier's row, which shows the drift between the table and the meter, and the band
 factor the fit observes beside the row's.

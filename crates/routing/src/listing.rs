@@ -24,8 +24,8 @@ pub fn undated(id: &str) -> Option<&str> {
 }
 
 /// The exact row, else the row of `undated(canonical_model)`, else `None`; the caller applies its own fallback.
-/// Shared by `RateTable::price` and the ledger's `PlanFactors::factor`, since a request's canonical model is a
-/// dated catalog id and the rows ship undated.
+/// Shared by `RateTable::price` and the ledger's tables, since a request's canonical model is a dated catalog id
+/// and the rows ship undated.
 pub fn row_for<'a, T>(canonical_model: &str, get: impl Fn(&str) -> Option<&'a T>) -> Option<&'a T> {
     get(canonical_model).or_else(|| undated(canonical_model).and_then(&get))
 }

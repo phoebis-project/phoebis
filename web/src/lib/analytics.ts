@@ -31,7 +31,7 @@ export const classLegendOf = (requestClass: string): ClassLegend => ((CONVERSATI
 export const MAX_BURN_LINES = 7;
 /** The key the folded rest carries, suffixed by its unit under the upstream grouping; no group is looked up by it. */
 export const OTHER_KEY = 'other';
-const OTHER_LABEL: Record<BurnUnit, string> = { meter_tokens: 'Other (plan)', usd: 'Other (dollars)' };
+const OTHER_LABEL: Record<BurnUnit, string> = { usd: 'Other (dollars)', window_share: 'Other (plan)' };
 
 export interface BurnLine {
   key: string;
@@ -82,11 +82,11 @@ export function foldBurn(points: BurnPoint[], groupBy: BurnGroup, bucketSeconds:
   for (const p of points) tokens.set(lineOf(p.group), (tokens.get(lineOf(p.group)) ?? 0) + p.cachedTokens + p.uncachedTokens);
   // A plan share or meter tokens mark a subscription upstream; the route answers neither for an API-key one.
   const metered = new Set(groupBy === 'account' ? points.filter((p) => p.meterTokens > 0 || p.planPercent !== null).map((p) => p.group) : []);
-  const unitOf = (group: string): BurnUnit => (metered.has(group) ? 'meter_tokens' : 'usd');
+  const unitOf = (group: string): BurnUnit => (metered.has(group) ? 'window_share' : 'usd');
   const ranked = [...tokens.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([k]) => k);
   const kept: string[] = groupBy === 'request_class' ? LEGEND_ORDER : ranked.slice(0, max);
   const folded = groupBy === 'request_class' ? [] : ranked.slice(max);
-  const rests = (['meter_tokens', 'usd'] as const).filter((unit) => folded.some((g) => unitOf(g) === unit));
+  const rests = (['window_share', 'usd'] as const).filter((unit) => folded.some((g) => unitOf(g) === unit));
   // The rests take the slots after the kept lines, so a group whose id happens to read `other` stays its own line.
   const slots = kept.length + rests.length;
   const slotOf = (group: string) => (kept.includes(lineOf(group)) ? kept.indexOf(lineOf(group)) : kept.length + rests.indexOf(unitOf(group)));

@@ -538,4 +538,31 @@ impl PlanTables {
     pub fn tier_factor(&self, tier: &str, window: &str) -> Option<f64> {
         self.tiers.factor(tier, window).map(|f| f.factor)
     }
+
+    /// Whether a figure priced on `window` (`seven_day_fable` reads the 7-day row) for the model on `tier` rests
+    /// on a stand-in: any of the model's five cells or the tier's factor flagged, or a model the window lacks,
+    /// which `rate_table` prices at the dearest cells. False for a tier the factor table lacks, since no share
+    /// is priced there and every reader nulls the figure first.
+    pub fn unmeasured(&self, window: &str, tier: &str, canonical_model: &str) -> bool {
+        let priced = match window {
+            SEVEN_DAY_FABLE => SEVEN_DAY,
+            other => other,
+        };
+        let Some(factor) = self.tiers.factor(tier, priced) else {
+            return false;
+        };
+        let Some(cells) = self.cost.cells(priced, canonical_model) else {
+            return true;
+        };
+        factor.unmeasured
+            || [
+                &cells.cache_read,
+                &cells.cache_write_1h,
+                &cells.cache_write_5m,
+                &cells.input,
+                &cells.output,
+            ]
+            .iter()
+            .any(|cell| cell.unmeasured)
+    }
 }

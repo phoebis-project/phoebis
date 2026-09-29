@@ -1319,7 +1319,7 @@ async fn the_renewal_report_carries_the_usage_the_origin_and_the_ttl_and_a_probe
             .await
             .unwrap()
             .into_iter()
-            .find(|p| p.burn > 0.0)
+            .find(|p| p.burn_at.is_some())
     })
     .await;
     assert_eq!(

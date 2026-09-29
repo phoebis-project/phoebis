@@ -1618,8 +1618,8 @@ fn seed_oauth_account(db_path: &std::path::Path, key_path: &std::path::Path) {
     }
 }
 
-/// The fixture head, with an Opus-5 body instead of the captured fixture's own model: `PlanFactors::shipped()`
-/// and the shipped price table both name `claude-opus-5`, and neither names the fixture's `claude-sonnet-4-5`.
+/// The fixture head, with an Opus-5 body instead of the captured fixture's own model: the shipped cost table and
+/// the shipped price table both name `claude-opus-5`, and neither names the fixture's `claude-sonnet-4-5`.
 fn opus_request(
     client: &reqwest::Client,
     proxy_port: u16,
@@ -1650,7 +1650,8 @@ fn opus_request(
 }
 
 #[tokio::test]
-async fn a_client_request_folds_the_pins_burn_through_the_shipped_meter_table() {
+async fn a_client_request_folds_the_pins_typed_burn_and_the_sessions_route_prices_it_in_window_share(
+) {
     let up = FakeUpstream::start(vec![
         Rule {
             path_prefix: "/v1/messages".into(),
@@ -1682,6 +1683,22 @@ async fn a_client_request_folds_the_pins_burn_through_the_shipped_meter_table() 
     // No `pricing_path`, and its default `./pricing.yaml` does not exist under the test's working directory, so
     // `Pricing::load` chooses the shipped table, matched against directly below.
     seed_oauth_account(&db_path, &key_path);
+    phoebis_store::Store::open(
+        &db_path,
+        &phoebis_store::StorageKey::from_file(&key_path).unwrap(),
+    )
+    .unwrap()
+    .set_profile(
+        "a",
+        "{}",
+        &phoebis_store::SubscriptionRow {
+            plan: None,
+            tier: Some("default_claude_max_5x".into()),
+            since: None,
+            trial_ends_at: None,
+        },
+    )
+    .unwrap();
     let (proxy_port, admin_port, metrics_port) = (free_port(), free_port(), free_port());
     let yaml = format!(
         "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_BURN_ADMIN_SECRET\n  plain_http: true\ncompatibility:\n  profile: claude-code-2.1.269-linux-x64\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
@@ -1740,21 +1757,27 @@ async fn a_client_request_folds_the_pins_burn_through_the_shipped_meter_table() 
     .await;
     let row = &sessions["sessions"][0];
     assert_eq!(
-        row["burn_unit"], "meter_tokens",
-        "an oauth account funded by its plan"
+        (&row["burn_unit"], &row["burn_unmeasured"]),
+        (&serde_json::json!("window_share"), &serde_json::json!(false)),
+        "an oauth account funded by its plan reads the share of its window, through measured Opus cells: {row}"
     );
     let burn_at = row["burn_at"].as_i64().unwrap();
-    let meter_tokens = phoebis_ledger::PlanFactors::shipped()
-        .meter_tokens("claude-opus-5", 1_000, 0, 0, 0, 100)
-        .unwrap();
-    let band_factor =
-        phoebis_ledger::PlanWindows::shipped().band_factor(phoebis_routing::FIVE_HOUR, burn_at);
+    let tables = phoebis_ledger::PlanTables::shipped();
+    let usage = phoebis_routing::PinUsage {
+        input: 1_000,
+        output: 100,
+        ..Default::default()
+    };
     // The default `burn_window_seconds` (no pool override above): a single renewal from a cold average is the
-    // priced usage spread over that window.
-    let expected_burn = meter_tokens * band_factor / 600.0;
+    // usage spread over that window, weighed by the band at the renewal, read per hour on Max 5x.
+    let share = tables
+        .five_hour_share_at("default_claude_max_5x", "claude-opus-5", usage, burn_at)
+        .unwrap()
+        .share;
+    let expected_burn = share / 600.0 * 3_600.0;
     assert!(
-        (row["burn"].as_f64().unwrap() - expected_burn).abs() < 1e-6,
-        "{row}"
+        (row["burn"].as_f64().unwrap() - expected_burn).abs() < 1e-12,
+        "{row} against {expected_burn}"
     );
     let _ = stop_tx.send(());
     server.await.unwrap().unwrap();
@@ -1770,18 +1793,38 @@ async fn a_client_request_folds_the_pins_burn_through_the_shipped_meter_table() 
         .into_iter()
         .find(|p| p.key_id == "desktop" && p.session_id == "burn-e2e")
         .expect("the pin the request created is on disk once the binary has stopped");
-    let dollars = phoebis_ledger::PriceTable::shipped().rate_table().price(
-        "claude-opus-5",
-        phoebis_routing::PinUsage {
-            input: 1_000,
-            output: 100,
-            ..Default::default()
-        },
+    let per_second = |tokens: f64| tokens / 600.0;
+    let band = tables.cost.band_factor(phoebis_routing::FIVE_HOUR, burn_at);
+    assert_eq!(
+        (pin.burn, pin.burn_at),
+        (
+            phoebis_store::PinBurn {
+                input: per_second(1_000.0),
+                output: per_second(100.0),
+                ..Default::default()
+            },
+            Some(burn_at)
+        ),
+        "the plain copy holds each type's tokens a second, unpriced"
     );
     assert!(
-        (pin.burn_usd - dollars / 600.0).abs() < 1e-12,
-        "the unit price table gives the dollar average, unweighted by the band: {}",
-        pin.burn_usd
+        (pin.burn_banded.input - per_second(1_000.0) * band).abs() < 1e-12
+            && (pin.burn_banded.output - per_second(100.0) * band).abs() < 1e-12
+            && pin.burn_banded.cache_read == 0.0,
+        "the banded copy weighs the same tokens by the band at the renewal ({band}): {:?}",
+        pin.burn_banded
+    );
+    let dollars = phoebis_ledger::PriceTable::shipped()
+        .rate_table()
+        .price("claude-opus-5", usage);
+    assert!(
+        (phoebis_ledger::PriceTable::shipped()
+            .rate_table()
+            .price_burn("claude-opus-5", &pin.burn)
+            - dollars / 600.0)
+            .abs()
+            < 1e-12,
+        "priced when read, the plain copy is the dollar rate the usage costs over the window"
     );
     up.shutdown().await;
 }

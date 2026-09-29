@@ -97,7 +97,8 @@ pub struct RecipeView {
     pub last_guard: Option<Guard>,
     pub last_request_at: Option<i64>,
     pub model: String,
-    pub net_meter_tokens: f64,
+    pub net_five_hour_share: f64,
+    pub net_five_hour_share_unmeasured: bool,
     pub net_usd: f64,
     pub next_probe_at: Option<i64>,
     pub pool_id: String,
@@ -110,7 +111,8 @@ pub struct RecipeView {
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct KeepaliveSummary {
     pub last_guard: Option<Guard>,
-    pub net_meter_tokens: Option<f64>,
+    pub net_five_hour_share: Option<f64>,
+    pub net_five_hour_share_unmeasured: bool,
     pub net_usd: Option<f64>,
     pub next_probe_at: Option<i64>,
     pub state: Option<AgentState>,
@@ -147,7 +149,8 @@ fn recipe_of(agent: &Agent, key_id: &str, session_id: &str) -> RecipeView {
         last_guard: agent.last_guard,
         last_request_at: agent.last_real_at,
         model: agent.canonical_model.clone(),
-        net_meter_tokens: agent.net.meter_tokens,
+        net_five_hour_share: agent.net.five_hour_share,
+        net_five_hour_share_unmeasured: agent.net.five_hour_share_unmeasured,
         net_usd: agent.net.usd,
         next_probe_at: agent.due_at(),
         pool_id: agent.pool_id.clone(),
@@ -194,7 +197,9 @@ impl Engine {
                     key_generation: s.key_generation,
                     keepalive: KeepaliveSummary {
                         last_guard: main.and_then(|a| a.last_guard),
-                        net_meter_tokens: main.map(|a| a.net.meter_tokens),
+                        net_five_hour_share: main.map(|a| a.net.five_hour_share),
+                        net_five_hour_share_unmeasured: main
+                            .is_some_and(|a| a.net.five_hour_share_unmeasured),
                         net_usd: main.map(|a| a.net.usd),
                         next_probe_at: s.agents.values().filter_map(|a| a.due_at()).min(),
                         state: main.map(|a| a.state),

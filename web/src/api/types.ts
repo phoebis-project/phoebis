@@ -202,7 +202,7 @@ export type PoolStrategy = 'pace' | 'priority' | 'round_robin';
 export type OveragePolicy = 'allow' | 'never' | 'prefer_plan';
 
 export interface PoolKeepalive {
-  /** Probes stop for the day once a subscription account's probe meter tokens reach this share of its 5-hour
+  /** Probes stop for the day once a subscription account's probes have consumed this share of its 5-hour
    * window; null means uncapped. */
   capWindowSharePerDay: number | null;
   /** Retries allowed for a session whose cache already went cold. */
@@ -813,21 +813,23 @@ export type KeepaliveState = 'busy' | 'idle' | 'parked';
 /** Whether a cache-keepalive companion is registered for the session and still reporting. */
 export type CompanionState = 'none' | 'reporting' | 'silent';
 
-/** Which of a pin's two burn averages a reader takes: meter tokens under plan funding, dollars off it. */
-export type BurnUnit = 'meter_tokens' | 'usd';
+/** Which figure a pin's burn reads: the share of the upstream's own 5-hour window per hour on plan quota, dollars per hour off it. */
+export type BurnUnit = 'usd' | 'window_share';
 
 export interface Session {
   accountId: string | null;
   /** The pin's own agent: `main`, or a subagent's id; null for a session with no pin. */
   agentId: string | null;
   agents: number;
-  /** The moving average priced in `burnUnit`; 0 for a pin never renewed with usage, null with no pin at all or
-   *  with one whose account left the registry. */
+  /** The pin's typed burn per hour in `burnUnit`, priced when read; 0 for a pin never renewed with usage, null with
+   *  no pin at all, with one whose account left the registry, or on a subscription upstream whose tier is unknown. */
   burn: number | null;
   /** When `burn` was last folded, the instant the shedding preview decays it forward from; null with `burn`. */
   burnAt: string | null;
   /** Null for a session with no pin, or one whose account left the registry: no kind is left to pick a unit from. */
   burnUnit: BurnUnit | null;
+  /** True when `burn` was priced through a cell or a factor the measurement campaign has not filled. */
+  burnUnmeasured: boolean;
   /** The cache TTL in force at the pin's last refresh; null for a session with no pin. */
   cacheTtlMs: number | null;
   companion: CompanionState;
@@ -844,7 +846,9 @@ export interface Session {
   /** `state` is null when the session carries no cache-warming recipe at all; the other three are null with it. */
   keepalive: {
     lastGuard: GuardVerdict | null;
-    netMeterTokens: number | null;
+    netFiveHourShare: number | null;
+    /** True once any share in `netFiveHourShare` was priced through a stand-in cell or factor. */
+    netFiveHourShareUnmeasured: boolean;
     netUsd: number | null;
     nextProbeAt: string | null;
     state: KeepaliveState | null;
@@ -906,7 +910,10 @@ export interface KeepaliveRecipe {
   /** This agent's last real request; null for an agent that has not sent one yet. */
   lastRequestAt: string | null;
   model: string;
-  netMeterTokens: number;
+  /** The share of the upstream's 5-hour window the agent's probes saved minus what they cost. */
+  netFiveHourShare: number;
+  /** True once any share in `netFiveHourShare` was priced through a stand-in cell or factor. */
+  netFiveHourShareUnmeasured: boolean;
   netUsd: number;
   nextProbeAt: string | null;
   poolId: string;

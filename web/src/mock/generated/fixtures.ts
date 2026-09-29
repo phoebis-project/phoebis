@@ -3900,9 +3900,10 @@ export const FIXTURES: Record<string, Fixture> = {
           "last_guard": "rearm",
           "last_request_at": 1000000,
           "model": "claude-sonnet-5",
-          "net_meter_tokens": 0,
+          "net_five_hour_share": 0,
+          "net_five_hour_share_unmeasured": false,
           "net_usd": 0,
-          "next_probe_at": 1238586,
+          "next_probe_at": 1237168,
           "pool_id": "main",
           "reason": null,
           "session_id": "s1",
@@ -6179,7 +6180,7 @@ export const FIXTURES: Record<string, Fixture> = {
       "sessions": [
         {
           "key_id": "desktop",
-          "key_generation": 1790575957924,
+          "key_generation": 1790685487409,
           "session_id": "s-fixture",
           "agent_id": "main",
           "model": "claude-sonnet-5",
@@ -6191,7 +6192,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "requests": null,
           "pinned": true,
           "burn": 0,
-          "burn_unit": "meter_tokens",
+          "burn_unit": "window_share",
+          "burn_unmeasured": true,
           "burn_at": null,
           "cache_ttl_ms": 300000,
           "last_input_tokens": 0,
@@ -6203,7 +6205,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "agents": 1,
           "keepalive": {
             "last_guard": null,
-            "net_meter_tokens": null,
+            "net_five_hour_share": null,
+            "net_five_hour_share_unmeasured": false,
             "net_usd": null,
             "next_probe_at": null,
             "state": null
@@ -6213,7 +6216,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "key_id": "desktop",
-          "key_generation": 1790575957924,
+          "key_generation": 1790685487409,
           "session_id": "s3",
           "agent_id": null,
           "model": "claude-sonnet-5",
@@ -6226,6 +6229,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "pinned": false,
           "burn": null,
           "burn_unit": null,
+          "burn_unmeasured": null,
           "burn_at": null,
           "cache_ttl_ms": null,
           "last_input_tokens": null,
@@ -6237,7 +6241,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "agents": 0,
           "keepalive": {
             "last_guard": null,
-            "net_meter_tokens": null,
+            "net_five_hour_share": null,
+            "net_five_hour_share_unmeasured": false,
             "net_usd": null,
             "next_probe_at": null,
             "state": null
@@ -6247,7 +6252,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "key_id": "desktop",
-          "key_generation": 1790575957924,
+          "key_generation": 1790685487409,
           "session_id": "s1",
           "agent_id": null,
           "model": "claude-sonnet-5",
@@ -6260,6 +6265,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "pinned": false,
           "burn": null,
           "burn_unit": null,
+          "burn_unmeasured": null,
           "burn_at": null,
           "cache_ttl_ms": null,
           "last_input_tokens": null,
@@ -6270,9 +6276,10 @@ export const FIXTURES: Record<string, Fixture> = {
           "agents": 1,
           "keepalive": {
             "last_guard": "rearm",
-            "net_meter_tokens": 0,
+            "net_five_hour_share": 0,
+            "net_five_hour_share_unmeasured": false,
             "net_usd": 0,
-            "next_probe_at": 1238586,
+            "next_probe_at": 1237168,
             "state": "busy"
           },
           "historical": false,
@@ -6281,7 +6288,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "key_id": "desktop",
-          "key_generation": 1790575957924,
+          "key_generation": 1790685487409,
           "session_id": "s2",
           "agent_id": null,
           "model": "claude-sonnet-5",
@@ -6294,6 +6301,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "pinned": false,
           "burn": null,
           "burn_unit": null,
+          "burn_unmeasured": null,
           "burn_at": null,
           "cache_ttl_ms": null,
           "last_input_tokens": null,
@@ -6305,7 +6313,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "agents": 0,
           "keepalive": {
             "last_guard": null,
-            "net_meter_tokens": null,
+            "net_five_hour_share": null,
+            "net_five_hour_share_unmeasured": false,
             "net_usd": null,
             "next_probe_at": null,
             "state": null
@@ -6328,6 +6337,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "pinned": false,
           "burn": null,
           "burn_unit": null,
+          "burn_unmeasured": null,
           "burn_at": null,
           "cache_ttl_ms": null,
           "last_input_tokens": null,
@@ -6339,7 +6349,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "agents": 0,
           "keepalive": {
             "last_guard": null,
-            "net_meter_tokens": null,
+            "net_five_hour_share": null,
+            "net_five_hour_share_unmeasured": false,
             "net_usd": null,
             "next_probe_at": null,
             "state": null

@@ -189,7 +189,7 @@ async fn a_pinned_sessions_retry_in_place_keeps_its_pin_and_a_sibling_sees_the_c
     assert_eq!(outcome(&first).account_id, "a");
     drain(first).await;
     let pin = h.router.pins().await.unwrap()[0].clone();
-    assert_eq!(pin.burn, 0.0, "the first answer carried no usage");
+    assert_eq!(pin.burn_at, None, "the first answer carried no usage");
     let mut events = h.router.subscribe_events();
     up.push_credential_rule(A, "/v1/messages", json_429_retry_after("1"));
     up.push_credential_rule(A, "/v1/messages", json_200_with_usage());
@@ -239,7 +239,7 @@ async fn a_pinned_sessions_retry_in_place_keeps_its_pin_and_a_sibling_sees_the_c
             .await
             .unwrap()
             .into_iter()
-            .find(|p| p.session_id == "s1" && p.burn > pin.burn)
+            .find(|p| p.session_id == "s1" && p.burn_at > pin.burn_at)
     })
     .await;
     assert_eq!(

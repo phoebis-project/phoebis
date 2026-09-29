@@ -482,20 +482,20 @@ const agentState = (v: unknown): Session['keepalive']['state'] => AGENT_STATE_VA
 export const GUARD_VERDICT_VALUES = ['auxiliary', 'foreign', 'rearm', 'restart'] as const;
 const guardVerdict = (v: unknown): GuardVerdict | null => GUARD_VERDICT_VALUES.find((x) => x === str(v)) ?? null;
 
-export const BURN_UNIT_VALUES = ['meter_tokens', 'usd'] as const satisfies readonly BurnUnit[];
+export const BURN_UNIT_VALUES = ['usd', 'window_share'] as const satisfies readonly BurnUnit[];
 const burnUnit = (v: unknown): BurnUnit | null => BURN_UNIT_VALUES.find((u) => u === str(v)) ?? null;
 
 export function decodeSession(v: unknown): Session {
   const s = rec(v);
   const k = rec(s.keepalive);
-  return { accountId: strOrNull(s.account_id), agentId: strOrNull(s.agent_id), agents: num(s.agents), burn: numOrNull(s.burn), burnAt: isoOrNull(s.burn_at), burnUnit: burnUnit(s.burn_unit), cacheTtlMs: numOrNull(s.cache_ttl_ms), companion: companion(s.companion), companionSince: isoOrNull(s.companion_since), createdAt: isoOrNull(s.created_at), epoch: numOrNull(s.epoch), forkDepth: numOrNull(s.fork_depth), forkedFrom: strOrNull(s.forked_from), historical: bool(s.historical), keepalive: { lastGuard: guardVerdict(k.last_guard), netMeterTokens: numOrNull(k.net_meter_tokens), netUsd: numOrNull(k.net_usd), nextProbeAt: isoOrNull(k.next_probe_at), state: agentState(k.state) }, keyGeneration: num(s.key_generation), keyId: str(s.key_id), lastInputTokens: numOrNull(s.last_input_tokens), lastRefreshAt: isoOrNull(s.last_refresh_at), lastRequestAt: isoOrNull(s.last_request_at), lastUsedAt: isoOrNull(s.last_used_at) ?? isoOrNull(s.last_request_at), model: strOrNull(s.model), pinned: bool(s.pinned), requests: num(s.requests), sessionId: str(s.session_id), shedFrom: strOrNull(s.shed_from) };
+  return { accountId: strOrNull(s.account_id), agentId: strOrNull(s.agent_id), agents: num(s.agents), burn: numOrNull(s.burn), burnAt: isoOrNull(s.burn_at), burnUnit: burnUnit(s.burn_unit), burnUnmeasured: bool(s.burn_unmeasured), cacheTtlMs: numOrNull(s.cache_ttl_ms), companion: companion(s.companion), companionSince: isoOrNull(s.companion_since), createdAt: isoOrNull(s.created_at), epoch: numOrNull(s.epoch), forkDepth: numOrNull(s.fork_depth), forkedFrom: strOrNull(s.forked_from), historical: bool(s.historical), keepalive: { lastGuard: guardVerdict(k.last_guard), netFiveHourShare: numOrNull(k.net_five_hour_share), netFiveHourShareUnmeasured: bool(k.net_five_hour_share_unmeasured), netUsd: numOrNull(k.net_usd), nextProbeAt: isoOrNull(k.next_probe_at), state: agentState(k.state) }, keyGeneration: num(s.key_generation), keyId: str(s.key_id), lastInputTokens: numOrNull(s.last_input_tokens), lastRefreshAt: isoOrNull(s.last_refresh_at), lastRequestAt: isoOrNull(s.last_request_at), lastUsedAt: isoOrNull(s.last_used_at) ?? isoOrNull(s.last_request_at), model: strOrNull(s.model), pinned: bool(s.pinned), requests: num(s.requests), sessionId: str(s.session_id), shedFrom: strOrNull(s.shed_from) };
 }
 
 export const RECIPE_REASON_VALUES = ['affinity_too_short', 'awaiting_cache_evidence', 'budget', 'cap_reached', 'cold_probes', 'cooled', 'idle_limit', 'net_negative', 'oauth_unverified', 'overage', 'paused', 'pool_exhausted', 'probe_error', 'quota_exhausted', 'reauth', 'retrying', 'storage_limit', 'unsupported_shape'] as const;
 export const RECIPE_STATE_VALUES = ['armed', 'held', 'probing'] as const;
 export function decodeRecipe(v: unknown): KeepaliveRecipe {
   const r = rec(v);
-  return { accountId: strOrNull(r.account_id), agentId: str(r.agent_id), keyId: str(r.key_id), lastGuard: guardVerdict(r.last_guard), lastRequestAt: isoOrNull(r.last_request_at), model: str(r.model), netMeterTokens: num(r.net_meter_tokens), netUsd: num(r.net_usd), nextProbeAt: isoOrNull(r.next_probe_at), poolId: str(r.pool_id), reason: RECIPE_REASON_VALUES.find((x) => x === str(r.reason)) ?? null, sessionId: str(r.session_id), state: RECIPE_STATE_VALUES.find((x) => x === str(r.state)) ?? 'armed', ttlSeconds: num(r.ttl_seconds) };
+  return { accountId: strOrNull(r.account_id), agentId: str(r.agent_id), keyId: str(r.key_id), lastGuard: guardVerdict(r.last_guard), lastRequestAt: isoOrNull(r.last_request_at), model: str(r.model), netFiveHourShare: num(r.net_five_hour_share), netFiveHourShareUnmeasured: bool(r.net_five_hour_share_unmeasured), netUsd: num(r.net_usd), nextProbeAt: isoOrNull(r.next_probe_at), poolId: str(r.pool_id), reason: RECIPE_REASON_VALUES.find((x) => x === str(r.reason)) ?? null, sessionId: str(r.session_id), state: RECIPE_STATE_VALUES.find((x) => x === str(r.state)) ?? 'armed', ttlSeconds: num(r.ttl_seconds) };
 }
 
 export function decodeKeepaliveOverview(v: unknown): KeepaliveOverview {

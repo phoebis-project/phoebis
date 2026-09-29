@@ -7,7 +7,7 @@ use axum::extract::{Path, State};
 use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use phoebis_routing::BurnUnit;
+use phoebis_routing::{BurnUnit, FIVE_HOUR};
 use serde_json::json;
 
 use crate::routes::failure;
@@ -67,6 +67,13 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
         (String, i64, String),
         std::collections::BTreeSet<String>,
     > = std::collections::BTreeMap::new();
+    // A pin's burn is typed tokens a second, priced here on the account it sits on: dollars through the table
+    // in force, or the share of the account's own 5-hour window through the Max 5x rates over its tier's
+    // factor. Each account's tier is read once per request.
+    let dollar_rates = state.pricing.current().rate_table();
+    let share_rates = state.tables.rate_table(FIVE_HOUR);
+    let mut tiers: std::collections::HashMap<String, Option<String>> =
+        std::collections::HashMap::new();
     for p in pins.into_iter().filter(|p| p.last_used_at >= cutoff) {
         // `delete_api_key` deletes the key's pins, so a pin always names the live generation of its id.
         let Some(&generation) = live.get(&p.key_id) else {
@@ -107,13 +114,40 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
                     .any(|(id, e)| *id == p.account_id && e.stands(now, fallback_ms));
                 BurnUnit::of(kind, in_overage)
             });
-        let burn = unit.map(|u| u.read(&p));
+        let (burn, burn_unmeasured) = match unit {
+            None => (None, false),
+            Some(BurnUnit::Usd) => (
+                Some(dollar_rates.price_burn(&p.model, &p.burn) * 3_600.0),
+                false,
+            ),
+            Some(BurnUnit::WindowShare) => {
+                let tier = tiers
+                    .entry(p.account_id.clone())
+                    .or_insert_with(|| {
+                        state
+                            .store
+                            .subscription(&p.account_id)
+                            .ok()
+                            .flatten()
+                            .and_then(|s| s.tier)
+                    })
+                    .as_deref();
+                // An unknown or unlisted tier sizes no window, so the figure reads null rather than a guess.
+                match tier.and_then(|t| Some((t, state.tables.tier_factor(t, FIVE_HOUR)?))) {
+                    Some((tier, factor)) => (
+                        Some(share_rates.price_burn(&p.model, &p.burn_banded) * 3_600.0 / factor),
+                        state.tables.unmeasured(FIVE_HOUR, tier, &p.model),
+                    ),
+                    None => (None, false),
+                }
+            }
+        };
         rows.insert(
             key,
             json!({
                 "key_id": p.key_id, "key_generation": generation, "session_id": p.session_id, "agent_id": p.agent_id, "model": p.model, "account_id": p.account_id, "epoch": p.epoch,
                 "created_at": p.created_at, "last_used_at": p.last_used_at, "last_request_at": null, "requests": null, "pinned": true,
-                "burn": burn, "burn_unit": unit, "burn_at": p.burn_at, "cache_ttl_ms": p.cache_ttl_ms,
+                "burn": burn, "burn_unit": unit, "burn_unmeasured": burn_unmeasured, "burn_at": p.burn_at, "cache_ttl_ms": p.cache_ttl_ms,
                 "last_input_tokens": p.last_input_tokens, "last_refresh_at": p.last_refresh_at, "shed_from": p.shed_from,
             }),
         );
@@ -125,7 +159,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
                 json!({
                     "key_id": a.key_id, "key_generation": a.key_generation, "session_id": a.session_id, "agent_id": null, "model": a.model, "account_id": null, "epoch": null,
                     "created_at": null, "last_used_at": null, "last_request_at": null, "requests": 0, "pinned": false,
-                    "burn": null, "burn_unit": null, "burn_at": null, "cache_ttl_ms": null, "last_input_tokens": null,
+                    "burn": null, "burn_unit": null, "burn_unmeasured": null, "burn_at": null, "cache_ttl_ms": null, "last_input_tokens": null,
                     "last_refresh_at": null, "shed_from": null,
                 })
             });
@@ -153,7 +187,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
             json!({
                 "key_id": key.0, "key_generation": key.1, "session_id": key.2, "agent_id": null, "model": null, "account_id": null, "epoch": null,
                 "created_at": null, "last_used_at": null, "last_request_at": null, "requests": 0, "pinned": false,
-                "burn": null, "burn_unit": null, "burn_at": null, "cache_ttl_ms": null, "last_input_tokens": null,
+                "burn": null, "burn_unit": null, "burn_unmeasured": null, "burn_at": null, "cache_ttl_ms": null, "last_input_tokens": null,
                 "last_refresh_at": null, "shed_from": null,
             })
         });
@@ -174,7 +208,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
             entry["companion_since"] = json!(null);
             entry["agents"] = json!(agents_by_session.get(key).map_or(0, |a| a.len()));
             entry["keepalive"] = json!({
-                "last_guard": null, "net_meter_tokens": null, "net_usd": null, "next_probe_at": null, "state": null
+                "last_guard": null, "net_five_hour_share": null, "net_five_hour_share_unmeasured": false, "net_usd": null, "next_probe_at": null, "state": null
             });
         }
     }

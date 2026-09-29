@@ -2306,14 +2306,14 @@
 
 .agents__row {
   display: grid;
-  grid-template-columns: 90px 190px 110px 60px 120px 100px minmax(0, 1fr) 110px;
+  grid-template-columns: 90px 190px 110px 60px 120px 100px minmax(0, 1fr) 210px;
   gap: 12px;
   align-items: center;
   padding: 6px 12px;
 }
 
-/* Net closes the line so State keeps its place in a 1280px window, and two balances stack rather than widen the
-   column. */
+/* Net closes the line so State keeps its place in a 1280px window. The column holds one balance's share of the
+   5-hour window with its unmeasured mark, and two balances stack rather than widen it further. */
 .agents__net {
   display: flex;
   flex-direction: column;
