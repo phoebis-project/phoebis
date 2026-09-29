@@ -879,6 +879,49 @@ mod service {
         up.shutdown().await;
     }
 
+    /// A profile 429's hold runs from the answer's arrival, as a usage 429's does, so a request that sat at the
+    /// endpoint does not shorten the wait both endpoints share.
+    #[tokio::test]
+    async fn a_profile_retry_after_hold_starts_when_the_429_arrives() {
+        let now = Arc::new(AtomicI64::new(1_000_000));
+        let up = FakeUpstream::start(vec![Rule {
+            path_prefix: "/api/oauth/profile".into(),
+            respond: Respond::Gated(Box::new(Respond::Json {
+                status: 429,
+                headers: vec![("retry-after".into(), "120".into())],
+                body: b"{}".to_vec(),
+            })),
+        }])
+        .await;
+        let service = Arc::new(service_for(
+            &up,
+            store_with_bundle_until(1_000_000 + 86_400_000),
+            Duration::from_secs(1),
+            &now,
+        ));
+        let asking = {
+            let service = service.clone();
+            tokio::spawn(async move { service.profile("a").await })
+        };
+        wait_for(Duration::from_secs(5), || {
+            up.requests()
+                .iter()
+                .any(|r| r.line.starts_with("GET /api/oauth/profile"))
+                .then_some(())
+        })
+        .await;
+        now.store(1_004_000, Ordering::SeqCst);
+        up.release();
+        assert!(asking.await.unwrap().is_err());
+        let status = service.poll_status("a").unwrap();
+        assert_eq!(
+            (status.backoff_since, status.next_attempt_at),
+            (Some(1_004_000), Some(1_124_000)),
+            "the backoff and its two minutes start at the 429's arrival"
+        );
+        up.shutdown().await;
+    }
+
     /// A fetch whose account is disconnected while it is out is discarded, and the caller gets the cached
     /// entry instead; when a hold was armed meanwhile, that answer is the held one, never the clean windows.
     #[tokio::test]

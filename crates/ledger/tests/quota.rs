@@ -191,11 +191,6 @@ fn secs(n: u64) -> Duration {
     Duration::from_secs(n)
 }
 
-/// An account's reads under `step_to`: each is due an interval after the one before went out, and tokio rounds
-/// that deadline up to its millisecond, past the step that lands on it unless the paused clock sits on a
-/// millisecond boundary, so a read can come a second more than an interval after the one before.
-const STEPPED_INTERVAL: u64 = POLL_INTERVAL.as_secs() + 1;
-
 /// Requests to `path` carrying `secret`.
 fn asked(up: &FakeUpstream, path: &str, secret: &str) -> usize {
     up.requests()
@@ -458,7 +453,7 @@ async fn every_polled_account_is_read_once_per_interval_on_its_own_phase_and_rep
 
     // With the startup step's read as the first, the twelfth scheduled poll of each account reads the profile
     // again, an hour after the startup step.
-    let interval = STEPPED_INTERVAL;
+    let interval = POLL_INTERVAL.as_secs();
     step_to(&h, &up, &paused, secs(452 + 10 * interval)).await;
     assert_eq!(
         (usage_asked(&up, A), usage_asked(&up, OAUTH_C)),
@@ -599,32 +594,40 @@ async fn a_retry_after_is_honoured_and_capped_by_the_poll() {
 }
 
 /// A scheduler that wakes several slots late, after a stall or a suspended process, reads once and takes the
-/// cadence up from that read: a poll ignores the cache TTL, so replaying each missed slot would ask an endpoint
-/// that rate-limits per account several times back to back.
+/// cadence up at the next slot on the account's own phase: a poll ignores the cache TTL, so replaying each
+/// missed slot would ask an endpoint that rate-limits per account several times back to back, and a cadence
+/// counted from the late read would move the account off its phase for good.
 #[tokio::test]
-async fn a_wake_several_slots_late_reads_once_and_the_next_read_comes_an_interval_after_it() {
+async fn a_wake_several_slots_late_reads_once_and_the_next_read_keeps_the_phase() {
     let up = FakeUpstream::start(vec![usage_rule(), profile_rule()]).await;
     let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
     let paused = start_polling(&h, &up).await;
-    // The first slot is due 300 s on; the scheduler next runs just before 1,200 s, past four slots in one step.
-    let late = Duration::from_millis(1_199_001);
+    // The account's slots fall on 300 s and every interval after; the scheduler next runs at 1,049 s, past three
+    // of them in one step.
+    let late = Duration::from_millis(1_049_001);
     h.clock
         .store(NOW + late.as_millis() as i64, Ordering::SeqCst);
     tokio::time::advance(late).await;
-    step_to(&h, &up, &paused, secs(1_202)).await;
+    step_to(&h, &up, &paused, secs(1_052)).await;
     assert_eq!(usage_asked(&up, A), 1, "the late wake reads once");
-    step_to(&h, &up, &paused, secs(1_498)).await;
+    step_to(&h, &up, &paused, secs(1_352)).await;
     assert_eq!(
         usage_asked(&up, A),
         1,
-        "not again before an interval after that read"
+        "not an interval after the late read, which is off the phase"
     );
+    step_to(&h, &up, &paused, secs(1_498)).await;
+    assert_eq!(usage_asked(&up, A), 1);
     step_to(&h, &up, &paused, secs(1_502)).await;
     assert_eq!(
         usage_asked(&up, A),
         2,
-        "the next read an interval after the late one"
+        "the next read at the account's next slot on its phase"
     );
+    step_to(&h, &up, &paused, secs(1_798)).await;
+    assert_eq!(usage_asked(&up, A), 2);
+    step_to(&h, &up, &paused, secs(1_802)).await;
+    assert_eq!(usage_asked(&up, A), 3, "and every interval after it");
     up.shutdown().await;
 }
 
@@ -785,8 +788,8 @@ async fn a_registry_read_that_fails_keeps_the_schedule_and_logs() {
 #[tokio::test]
 async fn a_completion_drawn_for_a_deleted_holder_moves_no_slot_of_its_replacement() {
     let up = FakeUpstream::start(vec![usage_rule(), profile_rule()]).await;
-    // `c`'s first answer, at 450 s, holds it until 897 s, just before `a`'s third read at about 900 s; that second
-    // attempt is held at the fake's gate across the pass `a`'s slot makes, which finds `c` paired again.
+    // `c`'s first answer, at 450 s, holds it until two seconds before `a`'s slot at 900 s; that second attempt is
+    // held at the fake's gate across the pass `a`'s slot makes, which finds `c` paired again.
     up.push_credential_rule(OAUTH_C, "/api/oauth/usage", rate_limited_for("447"));
     up.push_credential_rule(
         OAUTH_C,
@@ -815,8 +818,7 @@ async fn a_completion_drawn_for_a_deleted_holder_moves_no_slot_of_its_replacemen
     pair(&h.store, "c", REPAIRED);
     assert_eq!(h.store.account("c").unwrap().unwrap().incarnation, 2);
     // `a`'s slot makes the pass that re-spreads: the replacement is drawn half an interval on.
-    // Two reads on, `a`'s slot is up to two seconds past 900 s under the steps.
-    step_to(&h, &up, &paused, Duration::from_millis(902_500)).await;
+    step_to(&h, &up, &paused, Duration::from_millis(900_500)).await;
     assert_eq!(usage_asked(&up, A), 3, "a asked at its slot");
 
     // The old attempt completes after that pass; its completion moves nothing, so the replacement keeps the
@@ -832,7 +834,7 @@ async fn a_completion_drawn_for_a_deleted_holder_moves_no_slot_of_its_replacemen
     }
     step_to(&h, &up, &paused, secs(1_048)).await;
     assert_eq!(usage_asked(&up, REPAIRED), 0, "not before its phase");
-    step_to(&h, &up, &paused, secs(1_055)).await;
+    step_to(&h, &up, &paused, secs(1_053)).await;
     assert_eq!(
         usage_asked(&up, REPAIRED),
         1,
@@ -883,7 +885,7 @@ async fn the_scheduler_reaps_its_attempts_and_the_ledger_tracks_none_of_them() {
             .filter(|r| r.line.starts_with("GET /api/oauth/profile"))
             .count()
     };
-    step_to(&h, &up, &paused, secs(10 * STEPPED_INTERVAL + 152)).await;
+    step_to(&h, &up, &paused, secs(10 * POLL_INTERVAL.as_secs() + 152)).await;
     assert_eq!(
         (usage_asked(&up, A), usage_asked(&up, OAUTH_C)),
         (11, 11),
@@ -912,7 +914,7 @@ async fn a_scheduled_poll_reads_the_endpoint_inside_a_long_cache_ttl() {
     )
     .await;
     let paused = start_polling(&h, &up).await;
-    step_to(&h, &up, &paused, secs(10 * STEPPED_INTERVAL + 1)).await;
+    step_to(&h, &up, &paused, secs(10 * POLL_INTERVAL.as_secs() + 1)).await;
     assert_eq!(
         usage_asked(&up, A),
         10,

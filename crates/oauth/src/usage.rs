@@ -505,11 +505,14 @@ impl UsageService {
         let (head, body) =
             sent.map_err(|error| UsageError::Unavailable(format!("transport: {error}")))?;
         if head.status == 429 {
+            // The hold runs from the answer's arrival, as a usage 429's does; `now` predates the credential and
+            // permit waits.
+            let received_at = (self.inner.clock)();
             self.inner.rate_limited(
                 account_id,
                 PROFILE_ENDPOINT,
-                now,
-                retry_after_ms(&head, now, BACKOFF_CAP_MS),
+                received_at,
+                retry_after_ms(&head, received_at, BACKOFF_CAP_MS),
             );
             return Err(UsageError::Unavailable(
                 "profile request rate limited".into(),

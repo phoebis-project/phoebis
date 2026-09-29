@@ -25,6 +25,11 @@ use crate::task::Ledger;
 /// 429 warnings say so.
 pub const POLL_INTERVAL: Duration = Duration::from_secs(300);
 
+/// How much sooner than an interval after a read the next slot may come: the loop wakes a little after a slot is
+/// due, so an on-time read lands just past its slot, and without this slack the next slot on its phase would be
+/// too soon and the read would skip to the slot after next.
+const WAKE_TOLERANCE: Duration = Duration::from_secs(1);
+
 /// The profile is read again on every twelfth poll of an account, an hour apart: a tier moves rarely, and the
 /// profile endpoint shares the usage endpoint's per-account limit.
 pub const PROFILE_EVERY_POLLS: u32 = 12;
@@ -182,6 +187,18 @@ struct Completion {
     held: Option<Duration>,
 }
 
+/// The first slot on the account's phase, `at` plus whole intervals, that comes no sooner than an interval after
+/// the read dispatched at `dispatched`, less `WAKE_TOLERANCE`: an on-time read keeps its phase, and a wake several
+/// slots late reads once and skips the slots it missed rather than replaying them or leaving the phase.
+fn next_slot(at: Instant, dispatched: Instant) -> Instant {
+    let due = dispatched + POLL_INTERVAL - WAKE_TOLERANCE;
+    let mut next = at + POLL_INTERVAL;
+    while next < due {
+        next += POLL_INTERVAL;
+    }
+    next
+}
+
 /// Draws the schedule again when the polled accounts differ from the ones it was drawn for: a pairing, a
 /// re-pairing or a delete re-spreads the phases, an attempt in flight keeps its slot, an account is not read
 /// again sooner than an interval after its last read, and a backoff that ends later keeps the service's time.
@@ -250,11 +267,11 @@ impl QuotaPoll {
     /// polled accounts sorted by id, re-spread when an account joins or leaves), every attempt spawned into
     /// the scheduler's own set and reaped when it completes, so a slow answer or a backoff on one account
     /// delays no other and no finished attempt is kept; a completion moves its slot only while the slot still
-    /// belongs to the incarnation the attempt was drawn for. The next slot is an interval after the last slot or
-    /// after the last read, whichever is later, so a late wake reads once, or, after a 429, the usage service's
-    /// next-attempt time when that is later, so a backoff never brings an attempt sooner than the cadence; with
-    /// no slot to wait for, the scheduler wakes after one interval and re-reads the registry. Every clean
-    /// snapshot is recorded to the ledger and reported to the router as `poll_account` does with a router.
+    /// belongs to the incarnation the attempt was drawn for. The next slot is the first on the account's phase an
+    /// interval after the read (`next_slot`), so a late wake reads once and keeps the phase, or, after a 429, the
+    /// usage service's next-attempt time when that is later, so a backoff never brings an attempt sooner than the
+    /// cadence; with no slot to wait for, the scheduler wakes after one interval and re-reads the registry. Every
+    /// clean snapshot is recorded to the ledger and reported to the router as `poll_account` does with a router.
     ///
     /// Spawned once the startup step is done: that step has just read every account, so an account the first
     /// pass finds is next read an interval after the start, on its phase, and its profile an hour on.
@@ -329,10 +346,7 @@ impl QuotaPoll {
                             if let Some(slot) = slots.get_mut(&done.account_id) {
                                 if slot.in_flight == Some(id) && slot.incarnation == done.incarnation {
                                     slot.in_flight = None;
-                                    // An interval after the dispatch as well, so a wake that came several slots
-                                    // late reads once rather than replaying every slot it missed.
-                                    let dispatched = slot.last_read.unwrap_or(slot.at);
-                                    let next = slot.at.max(dispatched) + POLL_INTERVAL;
+                                    let next = next_slot(slot.at, slot.last_read.unwrap_or(slot.at));
                                     slot.at = done.held.map_or(next, |wait| (Instant::now() + wait).max(next));
                                 }
                             }
@@ -486,6 +500,28 @@ impl QuotaPoll {
 mod tests {
     use super::*;
     use phoebis_oauth::{ExtraUsage, UsageSnapshot, UsageWindow};
+
+    #[test]
+    fn the_next_slot_keeps_the_phase_and_skips_the_slots_a_late_wake_missed() {
+        let start = Instant::now();
+        let at = |ms: u64| start + Duration::from_millis(ms);
+        let slot = at(300_000);
+        assert_eq!(
+            next_slot(slot, at(300_001)),
+            at(600_000),
+            "a read just past its slot keeps the phase"
+        );
+        assert_eq!(
+            next_slot(slot, at(1_200_000)),
+            at(1_500_000),
+            "a read three slots late skips them"
+        );
+        assert_eq!(
+            next_slot(slot, at(1_499_000)),
+            at(1_800_000),
+            "and the next slot comes no sooner than an interval after the read, less the tolerance"
+        );
+    }
 
     #[test]
     fn a_head_yields_one_row_per_window_present_and_the_overage_row() {
