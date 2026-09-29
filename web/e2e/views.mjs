@@ -875,7 +875,6 @@ async function poolKeyMenus(theme) {
         measurements.push(`${theme} /pools dialog Keys of ${pool} last menu ${JSON.stringify(items)}`);
         if (items.length !== 2) say(`${pool}'s last key menu draws ${items.length} items, not Move to and Revoke`);
         for (const item of items.filter((it) => !it.hit)) say(`${pool}'s last key menu item ${item.label} takes no pointer at its centre (${item.x}, ${item.y}): ${item.at} lies there`);
-        // Closed again, since the dialog stays mounted and would reopen with the menu showing.
         await trigger.click();
         await settle();
       }
