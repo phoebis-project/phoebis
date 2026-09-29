@@ -1090,8 +1090,8 @@ impl Poller {
                 }
             }
             // An id the poll no longer asks about (gone, keyed, disconnected or unpaired) has nothing left to
-            // back off from; the disconnect and the delete forget its standing, so the loop above never reaches
-            // it.
+            // back off from: the poll never asks it again and the loop above skips it, so its open event resolves
+            // here.
             for event in open.iter().filter(|e| {
                 e.kind == Kind::PollBackoff.as_str()
                     && snapshot
