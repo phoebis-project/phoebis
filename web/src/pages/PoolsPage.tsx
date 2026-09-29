@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { Bar, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { api, ApiError, CACHE_TTL_DEFAULTS, KEEPALIVE_TUNING_DEFAULTS, type PoolInput } from '@/api';
@@ -15,13 +15,13 @@ import { CostReferenceLink } from '@/components/ui/CostReference';
 import { SelectionOrder } from '@/components/ui/SelectionOrder';
 import { UtilizationBar } from '@/components/UtilizationBar';
 import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
-import { Badge, Button, Card, Collapsible, ConfirmDialog, CopyButton, Dialog, ErrorState, Field, Input, Menu, SectionedDialog, Select, Skeleton, Toast, Toggle, type DialogSection } from '@/components/ui/primitives';
+import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, ErrorState, Field, GroupedDialog, GroupLink, Input, Menu, PageLink, Select, Skeleton, SwitchedNumber, Toast, Toggle, type DialogGroup } from '@/components/ui/primitives';
 import { fmtAbsolute, fmtCompact, fmtHourTick, fmtInt, fmtPct, fmtPeriodEnd, fmtRelative, fmtUsd } from '@/lib/format';
-import { ENGINE_BOUNDS, KEEPALIVE_BOUNDS, bandRefusal, budgetRefusal, modelRulesRefusal, prefixThresholdRefusal, validatePoolInput } from '@/lib/forms';
+import { ENGINE_BOUNDS, ENGINE_FIELD_LABELS, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_LABELS, POOL_GROUPS, poolRefusals, type PoolGroup } from '@/lib/forms';
 import { useAsync, useNow } from '@/lib/hooks';
 import { FAILOVER_PRESETS, SHEDDING_PRESETS, failoverPresetOf, sheddingPresetOf, shedPreview, shedPreviewLine, type FailoverPreset, type SheddingPreset } from '@/lib/presets';
 import { windowOf } from '@/lib/quota';
-import { STRATEGY_LABEL, STRATEGY_RULE, kindOrdered } from '@/lib/selection';
+import { STRATEGY_LABEL, kindOrdered } from '@/lib/selection';
 import { KeyDialog } from './KeysPage';
 
 export const OVERAGE_LABEL: Record<OveragePolicy, string> = { allow: 'Allow overage', never: 'Never use overage', prefer_plan: 'Prefer plan quota' };
@@ -42,37 +42,34 @@ const OVERAGE_CHOICES: { body: string; title: string; value: OveragePolicy }[] =
   { value: 'allow', title: 'Allow', body: 'ignore extra usage' },
   { value: 'never', title: 'Never', body: 'treat an upstream in extra usage as unavailable until its window resets' },
 ];
-const PROBE_FIELDS: { help: string; key: NumericTuningKey; label: string }[] = [
-  { key: 'leadSeconds5m', label: 'Lead time, 5m cache (s)', help: 'How long before a 5-minute entry expires its probe is due. The lead has to cover the round trip and the jitter below, or the entry expires before the probe lands.' },
+// The Probe tuning group's rows in reading order: a related pair shares one hint below it, a lone field carries its own.
+const PROBE_ROWS: { hint: ReactNode; keys: [NumericTuningKey] | [NumericTuningKey, NumericTuningKey] }[] = [
   {
-    key: 'leadSeconds1h',
-    label: 'Lead time, 1h cache (s)',
-    help: 'The same for 1-hour entries. The lead is larger because the entry is worth more: missing the refresh costs a full 1-hour write, so the probe is given room for a retry before the entry goes cold.',
-  },
-  { key: 'jitterSeconds5m', label: 'Jitter, 5m cache (s)', help: 'Random seconds taken off the 5-minute due time, so sessions that started together do not all probe in the same instant.' },
-  { key: 'jitterSeconds1h', label: 'Jitter, 1h cache (s)', help: 'The same spread for 1-hour entries, wider because their due times cluster on the hour.' },
-  {
-    key: 'coldProbeLimit',
-    label: 'Cold probe limit',
-    help: "A cold probe is one whose response shows no cache read for the prefix it was meant to keep warm, because the entry had already expired or the upstream changed. After this many cold probes in a row the recipe pauses until the next real request. A cold probe is the expensive kind (it rewrites the entry instead of reading it), so a streak also drags the session's net negative; the grace probes in this section are what lets the next turn recover. A probe that migrated the session does not count.",
-  },
-  { key: 'retrySeconds', label: 'Retry backoff base (s)', help: 'How long the recipe waits after a probe fails on the transport or with a server error. Each further failure doubles the wait.' },
-  { key: 'retryMaxSeconds', label: 'Retry backoff max (s)', help: 'Ceiling for that doubling, so a long upstream outage settles into a steady retry instead of growing without bound.' },
-  {
-    key: 'maxIdleSeconds',
-    label: 'Max idle seconds',
-    help: "Stop probing the main conversation agent once this much time has passed since its own last real request. It applies to that agent only: subagents stop when their lifecycle ends, at their Stop hook or the end of the session, never by idle time. 0 keeps probing while the pin lives.",
+    keys: ['leadSeconds5m', 'leadSeconds1h'],
+    hint: 'How long before an entry expires its probe is due. The lead covers the round trip and the jitter; the 1-hour lead also leaves room for a retry, since a missed refresh costs a full 1-hour write.',
   },
   {
-    key: 'maxIdleTicks',
-    label: 'Max idle ticks',
-    help: 'The same limit counted in probes: stop after this many probes with no real request in between. It applies to the main conversation agent only, for the same reason as the idle seconds above. 0 means no limit.',
+    keys: ['jitterSeconds5m', 'jitterSeconds1h'],
+    hint: 'Random seconds taken off each due time, so sessions that started together do not probe at the same instant; wider for 1-hour entries, whose due times cluster on the hour.',
+  },
+  {
+    keys: ['coldProbeLimit'],
+    hint: (
+      <>
+        Probes in a row that find the cache already gone, after which the session&apos;s probes pause until its next real request. A cold probe rewrites the entry, so a streak also pulls the <GroupLink id="keepalive">net</GroupLink> down; a probe that moved the session does not count.
+      </>
+    ),
+  },
+  { keys: ['retrySeconds', 'retryMaxSeconds'], hint: 'After a failed probe the wait starts at the base and doubles up to the max, so a long outage settles into a steady retry.' },
+  {
+    keys: ['maxIdleSeconds', 'maxIdleTicks'],
+    hint: (
+      <>
+        Stop probing once this long, or this many probes, passes without a real request: for the main agent while its companion reports, for every agent once the companion falls silent. 0 turns a limit off. The <PageLink to="/sessions">Sessions page</PageLink> shows each companion&apos;s state.
+      </>
+    ),
   },
 ];
-const NET_NEGATIVE_HELP =
-  'The router keeps a running net per session in the ledger: the gross cache savings credited by real requests that landed on a warm entry, minus the cost of every probe. Once that net is below zero the recipe gets the grace probes below and then pauses. A later real request that lands warm adds to the savings again and can resume probing.';
-const NET_NEGATIVE_GRACE_HELP =
-  'Probes a recipe still gets after its net has gone negative, so one expensive turn does not pause a session that is about to earn the cost back. The budget is granted again on every real request while the net stays negative, because a cold streak drags the net down and the net only rises on a request that lands warm, which needs a probe first.';
 const labelOf = (accountById: Map<string, Account>, id: string) => accountById.get(id)?.label ?? id;
 /** Members first, lowest priority number first, then alphabetically; non-members trail alphabetically. */
 const orderedAccountIds = (accounts: Account[], members: Record<string, number>): string[] =>
@@ -85,12 +82,12 @@ const orderedAccountIds = (accounts: Account[], members: Record<string, number>)
       return a.label.localeCompare(b.label);
     })
     .map((a) => a.id);
+// The card's tooltips carry the dialog's words; a title attribute holds no link, so they read without them.
 const KEEPALIVE_SUMMARY_HINT =
-  'Cold limit: consecutive probes that read no cache before the recipe pauses. Idle: time without a real request on the main conversation agent before probing stops. Net-negative stop: probes left once a session has spent more on probes than it saved.';
-const CAPTURE_HELP = 'Bodies of every key in this pool without an override are stored for this long; admins only; capped by the retention setting.';
-const AFFINITY_HINT = "Idle time before a session's pin expires. Off means every request picks an upstream afresh.";
-const AFFINITY_CUSTOM_HINT = 'A custom value is at least 60 seconds; 0 turns affinity off.';
-const MIGRATE_HINT = 'A member at or above this line on either window runs a shedding round, which moves part of its burn to siblings reading under the band.';
+  "Cold limit: probes in a row that find the cache already gone, after which the session's probes pause until its next real request. Idle: how long, or how many probes, without a real request before probing stops. Net-negative stop: probes a session still gets after its probes have cost more than the cache reads they saved.";
+const AFFINITY_HINT = 'How long a session stays on its upstream after its last request; off keeps no pins, and a custom value is at least 60 seconds.';
+const QUOTA_HEADERS_HINT =
+  "Hide drops the anthropic-ratelimit-unified-* headers from every answer but a 429, so an organization's quota never reads as the key holder's own; a 429 keeps them so the client can resume after the reset. request-id passes either way.";
 // The order the pills read in: the default, the two directions away from it, then a hand-set mix.
 const PRESET_PILLS = ['balanced', 'fast', 'conservative', 'custom'] as const;
 const PRESET_LABEL: Record<SheddingPreset, string> = { balanced: 'Balanced', conservative: 'Conservative', custom: 'Custom', fast: 'Fast' };
@@ -126,21 +123,47 @@ function PresetPills({ label, value, onPick, hints }: { hints: Record<SheddingPr
     </span>
   );
 }
-const KEEPALIVE_GATE = "Requires session affinity of at least 5 minutes. A probe follows the session's pin; a shorter pin cannot keep the session on the upstream it warmed.";
-const KEEPALIVE_WARNING = 'Session affinity is shorter than one hour. One-hour cache entries outlive the pin, so a session can migrate away from a warmed cache.';
 const AFFINITY_MODE_LABEL: Record<AffinityMode, string> = { always: 'always', when_cached: 'when cached' };
-const PIN_HINT = "Under 'only when the request caches' a request with no cache marker that receives none from the TTL policy creates no pin and lands by the strategy; a request bound to its upstream keeps its pin either way.";
 const SUBAGENT_PLACEMENT_LABEL: Record<SubagentPlacement, string> = { by_cohort: 'by cohort', by_strategy: 'by strategy', with_main: 'with the main conversation' };
-const SUBAGENT_PLACEMENT_HINT = 'By cohort lands subagents that share a static prefix together; with the main conversation lands them on its upstream; by strategy looks nothing up.';
-const PREFIX_HINT =
-  "A fresh session lands where its static prefix is warm only when that prefix is at least this large, so a small shared prefix never overrides Pace. The size is an estimate from the request's bytes, not a token count the upstream reported.";
-const QUOTA_HEADERS_HINT =
-  'Hide drops the anthropic-ratelimit-unified-* family from every answer but a 429, so an organization-wide quota never reaches a key holder as its own; request-id passes, and the client shows no notice either way.';
-const MARKER_HINT = 'Off rewrites the markers a request carries and leaves a marker-less body as sent.';
-const METERED_HINT = 'Metered: an API-key upstream, or a subscription upstream in overage; a one-hour write costs 2x base input there against 1.25x for five minutes.';
-const KEEPALIVE_TTL_HINT = "The first probe after a turn follows that turn's TTL; the probe itself writes with this TTL, which the next probe follows.";
-const BUDGET_HINT = 'An API-key member whose spend reaches its budget is skipped until the UTC day or month ends; spend is priced at API list rates.';
 const fmtTokens = (n: number) => fmtCompact(n).toLowerCase();
+/** Each group's rail label and the parent it sits under; `POOL_GROUPS` holds their order. */
+const GROUP_RAIL: Record<PoolGroup, { label: string; parent: string }> = {
+  bodyCapture: { label: 'Body capture', parent: 'Visibility' },
+  cacheDiagnostics: { label: 'Cache diagnostics', parent: 'Visibility' },
+  cacheTtl: { label: 'Cache TTL', parent: 'Caching' },
+  failover: { label: 'Failover', parent: 'Load' },
+  identity: { label: 'Identity', parent: 'Pool' },
+  keepalive: { label: 'Keepalive', parent: 'Caching' },
+  keys: { label: 'Keys', parent: 'Pool' },
+  members: { label: 'Members', parent: 'Pool' },
+  models: { label: 'Models', parent: 'Pool' },
+  overage: { label: 'Overage and plan end', parent: 'Load' },
+  pinning: { label: 'Pinning', parent: 'Routing' },
+  placement: { label: 'Placement', parent: 'Routing' },
+  probeTuning: { label: 'Probe tuning', parent: 'Caching' },
+  responseHeaders: { label: 'Response headers', parent: 'Visibility' },
+  selection: { label: 'Selection', parent: 'Routing' },
+  shedding: { label: 'Load shedding', parent: 'Load' },
+  utilization: { label: 'Utilization thresholds', parent: 'Load' },
+};
+/** The Strategy hint follows the chosen strategy; its first sentence is the card's rule, `STRATEGY_RULE`. */
+const STRATEGY_HINT: Record<PoolStrategy, ReactNode> = {
+  pace: (
+    <>
+      Within the first <GroupLink id="members">priority tier</GroupLink> that has an eligible upstream, the one with the most weekly allowance left per hour until its window resets or its subscription ends; an unsampled upstream counts as untouched, and ties are random. Each upstream&apos;s windows are on the <PageLink to="/upstreams">Upstreams page</PageLink>.
+    </>
+  ),
+  priority: (
+    <>
+      Within the first <GroupLink id="members">priority tier</GroupLink> that has an eligible upstream, any of them at random.
+    </>
+  ),
+  round_robin: (
+    <>
+      Within the first <GroupLink id="members">priority tier</GroupLink> that has an eligible upstream, each in turn; a restart starts the round again.
+    </>
+  ),
+};
 
 export function PoolsPage() {
   const pools = useAsync(() => api.listPools(), []);
@@ -280,17 +303,61 @@ function Tile({ label, value }: { label: string; value: string | null }) {
   );
 }
 
-/** One cache TTL rule set's controls, rendered once per set; its root carries `data-rule-set={name}`, and the
- *  per-model picker's state is its own, so each set adds overrides independently. */
-function CacheTtlRuleSet({
-  hint,
+/** The two rule sets as one grid, the plan and the metered choice of each row side by side. */
+function CacheTtlGrid({ disabled, hint, metered, onChange, plan }: { disabled: boolean; hint: ReactNode; metered: TtlRules; onChange: (name: 'metered' | 'plan', rules: TtlRules) => void; plan: TtlRules }) {
+  const rows = [
+    { key: 'main', label: 'Main conversation', name: 'main conversation' },
+    { key: 'subagent', label: 'Subagents', name: 'subagent' },
+    { key: 'keepalive', label: 'Keepalive', name: 'keepalive' },
+  ] as const;
+  const sets = [
+    { label: 'Plan writes', name: 'plan', rules: plan },
+    { label: 'Metered writes', name: 'metered', rules: metered },
+  ] as const;
+  return (
+    <div className="field">
+      <div className="table-wrap">
+        <table className="table ttl-grid">
+          <thead>
+            <tr>
+              <th />
+              {sets.map((s) => (
+                <th key={s.name}>{s.label}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={row.key}>
+                <th scope="row">{row.label}</th>
+                {sets.map((s) => (
+                  <td key={s.name}>
+                    <Select value={s.rules[row.key]} disabled={disabled} onChange={(e) => onChange(s.name, { ...s.rules, [row.key]: e.target.value as CacheTtl })} aria-label={`${s.label} ${row.name} TTL`}>
+                      <option value="5m">5 minutes</option>
+                      <option value="1h">1 hour</option>
+                    </Select>
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="field__hint">{hint}</p>
+    </div>
+  );
+}
+
+/** One rule set's per-model overrides; the picker's state is its own, so each set adds overrides independently. */
+function CacheTtlOverrides({
+  disabled,
   label,
   models,
   name,
   onChange,
   rules,
 }: {
-  hint?: string;
+  disabled: boolean;
   label: string;
   models: { label: string; value: string }[];
   name: 'metered' | 'plan';
@@ -298,7 +365,6 @@ function CacheTtlRuleSet({
   rules: TtlRules;
 }) {
   const [addModelId, setAddModelId] = useState('');
-  const setField = (key: 'keepalive' | 'main' | 'subagent', value: CacheTtl) => onChange({ ...rules, [key]: value });
   const setModelOverride = (model: string, key: 'main' | 'subagent', value: CacheTtl) =>
     onChange({ ...rules, models: rules.models.map((m) => (m.model === model ? { ...m, [key]: value } : m)) });
   const removeModelOverride = (model: string) => onChange({ ...rules, models: rules.models.filter((m) => m.model !== model) });
@@ -308,87 +374,61 @@ function CacheTtlRuleSet({
     setAddModelId('');
   };
   return (
-    <div data-rule-set={name} className="field">
-      <span className="field__label">{label}</span>
-      {hint && <p className="field__hint">{hint}</p>}
-      <div className="form-row form-row--3">
-        <Field label="Main conversation">
-          <Select value={rules.main} onChange={(e) => setField('main', e.target.value as CacheTtl)} aria-label={`${label} main conversation TTL`}>
-            <option value="5m">5 minutes</option>
-            <option value="1h">1 hour</option>
-          </Select>
-        </Field>
-        <Field label="Subagents">
-          <Select value={rules.subagent} onChange={(e) => setField('subagent', e.target.value as CacheTtl)} aria-label={`${label} subagent TTL`}>
-            <option value="5m">5 minutes</option>
-            <option value="1h">1 hour</option>
-          </Select>
-        </Field>
-        <Field label="Keepalive" hint={KEEPALIVE_TTL_HINT}>
-          <Select value={rules.keepalive} onChange={(e) => setField('keepalive', e.target.value as CacheTtl)} aria-label={`${label} keepalive TTL`}>
-            <option value="5m">5 minutes</option>
-            <option value="1h">1 hour</option>
-          </Select>
-        </Field>
-      </div>
-      <div className="field">
-        <span className="field__label">Per-model overrides</span>
-        <p className="field__hint">A model absent here takes the rule above.</p>
-        {rules.models.length > 0 && (
-          <div className="table-wrap">
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Model</th>
-                  <th>Main conversation</th>
-                  <th>Subagents</th>
-                  <th />
+    <Field plain label={label} data-rule-set={name} hint="A model absent here takes the rule above.">
+      {rules.models.length > 0 && (
+        <div className="table-wrap">
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Model</th>
+                <th>Main conversation</th>
+                <th>Subagents</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {rules.models.map((m) => (
+                <tr key={m.model}>
+                  <td className="mono">{m.model}</td>
+                  <td>
+                    <Select value={m.main} disabled={disabled} onChange={(e) => setModelOverride(m.model, 'main', e.target.value as CacheTtl)} aria-label={`${label} main conversation TTL for ${m.model}`}>
+                      <option value="5m">5 minutes</option>
+                      <option value="1h">1 hour</option>
+                    </Select>
+                  </td>
+                  <td>
+                    <Select value={m.subagent} disabled={disabled} onChange={(e) => setModelOverride(m.model, 'subagent', e.target.value as CacheTtl)} aria-label={`${label} subagent TTL for ${m.model}`}>
+                      <option value="5m">5 minutes</option>
+                      <option value="1h">1 hour</option>
+                    </Select>
+                  </td>
+                  <td>
+                    <Button size="sm" variant="ghost" disabled={disabled} onClick={() => removeModelOverride(m.model)}>
+                      Remove
+                    </Button>
+                  </td>
                 </tr>
-              </thead>
-              <tbody>
-                {rules.models.map((m) => (
-                  <tr key={m.model}>
-                    <td className="mono">{m.model}</td>
-                    <td>
-                      <Select value={m.main} onChange={(e) => setModelOverride(m.model, 'main', e.target.value as CacheTtl)} aria-label={`${label} main conversation TTL for ${m.model}`}>
-                        <option value="5m">5 minutes</option>
-                        <option value="1h">1 hour</option>
-                      </Select>
-                    </td>
-                    <td>
-                      <Select value={m.subagent} onChange={(e) => setModelOverride(m.model, 'subagent', e.target.value as CacheTtl)} aria-label={`${label} subagent TTL for ${m.model}`}>
-                        <option value="5m">5 minutes</option>
-                        <option value="1h">1 hour</option>
-                      </Select>
-                    </td>
-                    <td>
-                      <Button size="sm" variant="ghost" onClick={() => removeModelOverride(m.model)}>
-                        Remove
-                      </Button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-        <div className="row">
-          <Select value={addModelId} onChange={(e) => setAddModelId(e.target.value)} aria-label={`Model to add a ${label.toLowerCase()} cache TTL override for`} style={{ maxWidth: 260 }}>
-            <option value="">Choose a model…</option>
-            {models
-              .filter((m) => !rules.models.some((x) => x.model === m.value))
-              .map((m) => (
-                <option key={m.value} value={m.value}>
-                  {m.label}
-                </option>
               ))}
-          </Select>
-          <Button size="sm" icon={<IconPlus size={13} />} disabled={!addModelId} onClick={addModelOverride}>
-            Add
-          </Button>
+            </tbody>
+          </table>
         </div>
+      )}
+      <div className="row">
+        <Select value={addModelId} disabled={disabled} onChange={(e) => setAddModelId(e.target.value)} aria-label={`Model to add a ${label.toLowerCase()} cache TTL override for`}>
+          <option value="">Choose a model…</option>
+          {models
+            .filter((m) => !rules.models.some((x) => x.model === m.value))
+            .map((m) => (
+              <option key={m.value} value={m.value}>
+                {m.label}
+              </option>
+            ))}
+        </Select>
+        <Button size="sm" icon={<IconPlus size={13} />} disabled={disabled || !addModelId} onClick={addModelOverride}>
+          Add
+        </Button>
       </div>
-    </div>
+    </Field>
   );
 }
 
@@ -859,7 +899,7 @@ export function PoolDialog({
   const [form, setForm] = useState<PoolForm>(blankForm);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const errorRef = useRef<HTMLDivElement>(null);
+  const [chosen, setChosen] = useState<PoolGroup>('identity');
   const settings = useAsync(() => api.getSettings(), []);
   const captureMaxHours = settings.data?.retention.bodyCaptureMaxHours ?? 72;
   const [keyOpen, setKeyOpen] = useState(false);
@@ -883,16 +923,14 @@ export function PoolDialog({
     setRevoked(new Set());
     setBusy(false);
     setError(null);
+    setChosen('identity');
     // `accounts` is read but not tracked: the parent hands down a fresh array on
     // every render, and reacting to that would wipe the form mid-edit.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, pool]);
-
-  // A save is refused from whichever section the operator is reading, and the callout leads the first one, so
-  // the body is brought back to it. jsdom leaves scrollIntoView undefined, as it does Element.scrollTo.
-  useEffect(() => {
-    if (error) errorRef.current?.scrollIntoView?.({ block: 'nearest' });
-  }, [error]);
+  // The server's refusal describes the form it was sent; every control writes through `setForm`, so the next edit
+  // takes it away, while a failed save changes no field and leaves it standing.
+  useEffect(() => setError(null), [form]);
 
   const set = <K extends keyof PoolForm>(key: K, value: PoolForm[K]) => setForm((f) => ({ ...f, [key]: value }));
   const poolKeys = (pool ? [...localKeys, ...keys.filter((k) => k.poolId === pool.id && !localKeys.some((l) => l.id === k.id))] : localKeys).filter((k) => !moved.has(k.id));
@@ -910,11 +948,12 @@ export function PoolDialog({
     [pool, pools, draftCaptureHours, draftPoolId, draftName, form.members, form.modelRules],
   );
   const suggestions = useCatalogSuggestions(Object.keys(form.members), open);
-  const rulesRefusal = modelRulesRefusal(form.modelRules);
   // Below five minutes a pin expires before the probe it scheduled can help.
   const keepaliveBlocked = form.affinity < 300;
   const shortAffinity = form.affinity >= 300 && form.affinity < 3_600;
   const warming = form.keepalive && !keepaliveBlocked;
+  // Sessions by warm prefix and subagents by cohort both place by the shared prefix, so either one reads the threshold.
+  const prefixEnabled = form.sessionPlacement === 'by_warm_prefix' || form.subagentPlacement === 'by_cohort';
   const budgetOf = (accountId: string) => form.budgets[accountId] ?? { period: 'month' as const, usd: '' };
   const apiKeyIds = new Set(accounts.filter((a) => a.kind === 'api_key').map((a) => a.id));
   const input: PoolInput = {
@@ -924,7 +963,7 @@ export function PoolDialog({
     bodyCaptureHours: form.capture ? form.captureHours : 0,
     cacheDiagnostics: form.cacheDiagnostics,
     cacheTtl: form.cacheTtl,
-    // With warming off the block is hidden, so what it holds goes back as stored: an edit left in it can
+    // With warming off the block is disabled, so what it holds goes back as stored: an edit left in it can
     // neither reach the policy nor hold up the save.
     keepalive: warming
       ? { ...form.tuning, costCapUsdPerDay: form.capEnabled ? form.capUsd : null, enabled: true, warmSubagents: form.warmSubagents }
@@ -934,15 +973,14 @@ export function PoolDialog({
       // member goes back as none, which clears it.
       if (!apiKeyIds.has(accountId)) return { accountId, budgetPeriod: 'month' as const, budgetUsd: null, priority };
       const budget = budgetOf(accountId);
-      // A field that reads no number goes on as NaN, which the validation below holds the save for.
+      // A field that reads no number goes on as NaN, which the refusals below hold the save for.
       return { accountId, budgetPeriod: budget.period, budgetUsd: budget.usd.trim() === '' ? null : Number(budget.usd), priority };
     }),
     migrateAboveUtilization: form.migrateOn ? form.migrate / 100 : null,
-    // Hidden under the strategy placement, the threshold goes back as stored, so an edit left in it holds nothing.
-    minSharedPrefixTokens:
-      form.sessionPlacement === 'by_warm_prefix'
-        ? form.prefixTokens.trim() === '' ? Number.NaN : Number(form.prefixTokens)
-        : (pool?.minSharedPrefixTokens ?? POOL_AFFINITY_DEFAULTS.minSharedPrefixTokens),
+    // With neither placement reading the threshold it goes back as stored, so an edit left in it holds nothing.
+    minSharedPrefixTokens: prefixEnabled
+      ? form.prefixTokens.trim() === '' ? Number.NaN : Number(form.prefixTokens)
+      : (pool?.minSharedPrefixTokens ?? POOL_AFFINITY_DEFAULTS.minSharedPrefixTokens),
     modelRules: form.modelRules,
     name: form.name.trim(),
     overagePolicy: form.overage,
@@ -954,7 +992,13 @@ export function PoolDialog({
     strategy: form.strategy,
     subagentPlacement: form.subagentPlacement,
   };
-  const valid = validatePoolInput(input, new Set(accounts.map((a) => a.id)));
+  const refusals = poolRefusals(input, new Set(accounts.map((a) => a.id)));
+  const refusedFields = new Set(refusals.map((r) => r.field));
+  const refusedGroups = new Set<PoolGroup>(refusals.map((r) => r.group));
+  const invalid = (field: string) => (refusedFields.has(field) ? true : undefined);
+  const refusalOf = (field: string) => refusals.find((r) => r.field === field)?.text ?? null;
+  const first = refusals[0] ?? null;
+  const valid = first === null;
 
   const orderIndex = new Map(memberOrder.map((id, i) => [id, i]));
   const orderedAccounts = [...accounts].sort((a, b) => (orderIndex.get(a.id) ?? accounts.length) - (orderIndex.get(b.id) ?? accounts.length) || a.label.localeCompare(b.label));
@@ -967,13 +1011,12 @@ export function PoolDialog({
     setForm((f) => (name === 'custom' ? { ...f, sheddingCustom: true } : { ...f, engine: { ...f.engine, ...SHEDDING_PRESETS[name] }, sheddingCustom: false }));
   const pickFailover = (name: FailoverPreset) =>
     setForm((f) => (name === 'custom' ? { ...f, failoverCustom: true } : { ...f, engine: { ...f.engine, ...FAILOVER_PRESETS[name] }, failoverCustom: false }));
-  const band = bandRefusal(input);
+  const rulesRefusal = refusalOf('Model rules');
+  const band = refusalOf('Select below utilization (%)');
+  const prefixRefusal = refusalOf('Minimum shared prefix, tokens');
+  const budgetRefusal = refusals.find((r) => r.field.startsWith('budget:'));
+  const budgetRefused = budgetRefusal && { label: accounts.find((a) => `budget:${a.id}` === budgetRefusal.field)?.label ?? budgetRefusal.field, refusal: budgetRefusal.text };
   const memberAccounts = accounts.filter((a) => a.id in form.members);
-  const prefixRefusal = form.sessionPlacement === 'by_warm_prefix' ? prefixThresholdRefusal(form.prefixTokens) : null;
-  const budgetRefused = memberAccounts
-    .filter((a) => a.kind === 'api_key')
-    .map((a) => ({ label: a.label, refusal: budgetRefusal(budgetOf(a.id).usd) }))
-    .find((b) => b.refusal !== null);
   const setBudget = (accountId: string, patch: Partial<{ period: BudgetPeriod; usd: string }>) =>
     setForm((f) => ({ ...f, budgets: { ...f.budgets, [accountId]: { ...(f.budgets[accountId] ?? { period: 'month', usd: '' }), ...patch } } }));
   const readings = memberAccounts.map((a) => ({ fiveHour: windowOf(a, '5h')?.utilization ?? null, id: a.id, label: a.label, sevenDay: windowOf(a, '7d')?.utilization ?? null }));
@@ -1034,518 +1077,144 @@ export function PoolDialog({
     onSaved(pool === null);
   };
 
-  const sections: DialogSection[] = [
-    {
-      id: 'general',
-      label: 'General',
-      body: (
-        <>
-          {error && (
-            <div ref={errorRef} className="callout callout--critical" role="alert">
-              <IconWarning size={16} />
-              <div>{error}</div>
-            </div>
-          )}
-          <Field label="Name">
-            <Input value={form.name} onChange={(e) => set('name', e.target.value)} placeholder="research" className="mono" />
-          </Field>
-          <Field label="Status" hint="A disabled pool keeps its keys and members but stops accepting requests.">
-            <Select value={form.status} onChange={(e) => set('status', e.target.value as 'active' | 'disabled')}>
-              <option value="active">Active</option>
-              <option value="disabled">Disabled</option>
-            </Select>
-          </Field>
-          <Field label="Quota headers" hint={QUOTA_HEADERS_HINT}>
-            <Select value={form.quotaHeaders} onChange={(e) => set('quotaHeaders', e.target.value as QuotaHeaders)} aria-label="Quota headers">
-              <option value="pass">Pass through</option>
-              <option value="hide">Hide on committed answers</option>
-            </Select>
-          </Field>
-        </>
-      ),
-    },
-    {
-      id: 'routing',
-      label: 'Routing',
-      body: (
-        <>
-          <Field label="Strategy" hint={STRATEGY_RULE[form.strategy]}>
-            <Select value={form.strategy} onChange={(e) => set('strategy', e.target.value as PoolStrategy)} aria-label="Strategy">
-              {(Object.keys(STRATEGY_LABEL) as PoolStrategy[]).map((v) => (
-                <option key={v} value={v}>
-                  {STRATEGY_LABEL[v]}
-                </option>
-              ))}
-            </Select>
-          </Field>
-          <div className="capture">
-            <div className="field--inline field">
-              <span className="field__text">
-                <span className="field__label">Prioritize subscription upstreams</span>
-                <p className="field__hint">Plan quota first, then upstreams in overage, then API keys; priority orders each of those groups.</p>
-              </span>
-              <Toggle checked={form.preferSubscription} onChange={(v) => set('preferSubscription', v)} label="Prioritize subscription upstreams" />
-            </div>
-          </div>
-          <Field label="Session affinity" hint={form.customAffinity ? `${AFFINITY_HINT} ${AFFINITY_CUSTOM_HINT}` : AFFINITY_HINT}>
-            <span className="chips" role="group" aria-label="Session affinity">
-              {AFFINITY_PICKS.map((pick) => {
-                const on = !form.customAffinity && form.affinity === pick.seconds;
+  const refusalCallout = (text: ReactNode) => (
+    <div className="callout callout--critical" role="alert">
+      <IconWarning size={16} />
+      <div>{text}</div>
+    </div>
+  );
+  const probeField = (key: NumericTuningKey, className?: string, hint?: ReactNode) => (
+    <Field key={key} label={KEEPALIVE_FIELD_LABELS[key]} className={className} hint={hint}>
+      <Input
+        type="number"
+        min={KEEPALIVE_BOUNDS[key].min}
+        max={KEEPALIVE_BOUNDS[key].max}
+        value={form.tuning[key]}
+        onChange={(e) => setTuning(key, Number(e.target.value))}
+        disabled={!warming}
+        aria-invalid={invalid(KEEPALIVE_FIELD_LABELS[key])}
+      />
+    </Field>
+  );
+
+  // Keyed by group, so a group without a body fails to compile; `POOL_GROUPS` sets the rail order.
+  const bodies: Record<PoolGroup, ReactNode> = {
+    identity: (
+      <div className="cells">
+        <Field label="Name" className="cell--half" hint="The pool's id is made from this name when the pool is created, and stays when it is renamed.">
+          <Input value={form.name} onChange={(e) => set('name', e.target.value)} placeholder="research" className="mono" aria-invalid={invalid('Name')} />
+        </Field>
+        <Field label="Status" className="cell--half" hint="A disabled pool keeps its keys and members but stops accepting requests.">
+          <Select value={form.status} onChange={(e) => set('status', e.target.value as 'active' | 'disabled')}>
+            <option value="active">Active</option>
+            <option value="disabled">Disabled</option>
+          </Select>
+        </Field>
+      </div>
+    ),
+    members: (
+      <div className="cells">
+        <p className="field__hint">
+          Lower numbers are tried first: the strategy picks inside the first tier that has an eligible upstream, after the kind order that <GroupLink id="selection">Prioritize subscription upstreams</GroupLink> sets. Each upstream&apos;s windows and state are on the{' '}
+          <PageLink to="/upstreams">Upstreams page</PageLink>.
+        </p>
+        <p className="field__hint">
+          API-key members only. A member whose spend reaches its daily or its monthly budget is skipped until that UTC day or month ends, priced at API list rates; a subscription member follows the <GroupLink id="overage">overage policy</GroupLink> instead.
+        </p>
+        <div className="table-wrap">
+          <table className="table members-table">
+            <thead>
+              <tr>
+                <th>Upstream</th>
+                <th className="right">Priority</th>
+                <th className="right">Budget, USD</th>
+                <th>Period</th>
+              </tr>
+            </thead>
+            <tbody>
+              {orderedAccounts.map((a) => {
+                const on = a.id in form.members;
                 return (
-                  <button key={pick.label} type="button" className={`pill ${on ? 'is-active' : ''}`} aria-pressed={on} onClick={() => setForm((f) => ({ ...f, affinity: pick.seconds, customAffinity: false }))}>
-                    {pick.label}
-                  </button>
-                );
-              })}
-              <button type="button" className={`pill ${form.customAffinity ? 'is-active' : ''}`} aria-pressed={form.customAffinity} onClick={() => set('customAffinity', true)}>
-                custom
-              </button>
-            </span>
-            {form.customAffinity && <Input type="number" min={60} step={30} value={form.affinity} onChange={(e) => set('affinity', Math.max(0, Number(e.target.value)))} style={{ width: 120 }} aria-label="Session affinity in seconds" />}
-          </Field>
-          <Field label="Pin sessions" hint={PIN_HINT}>
-            <Select value={form.affinityMode} onChange={(e) => set('affinityMode', e.target.value as AffinityMode)} aria-label="Pin sessions">
-              <option value="always">Always</option>
-              <option value="when_cached">Only when the request caches</option>
-            </Select>
-          </Field>
-          <Field label="Subagent placement" hint={SUBAGENT_PLACEMENT_HINT}>
-            <Select value={form.subagentPlacement} onChange={(e) => set('subagentPlacement', e.target.value as SubagentPlacement)} aria-label="Subagent placement">
-              <option value="by_cohort">By cohort</option>
-              <option value="by_strategy">By strategy</option>
-              <option value="with_main">With the main conversation</option>
-            </Select>
-          </Field>
-          <Field label="Session placement">
-            <Select value={form.sessionPlacement} onChange={(e) => set('sessionPlacement', e.target.value as SessionPlacement)} aria-label="Session placement">
-              <option value="by_strategy">By strategy</option>
-              <option value="by_warm_prefix">By warm prefix</option>
-            </Select>
-          </Field>
-          {form.sessionPlacement === 'by_warm_prefix' && (
-            <Field label="Minimum shared prefix, tokens" hint={PREFIX_HINT}>
-              <Input
-                type="number"
-                min={0}
-                step={1_000}
-                value={form.prefixTokens}
-                onChange={(e) => set('prefixTokens', e.target.value)}
-                style={{ width: 120 }}
-                aria-label="Minimum shared prefix, tokens"
-                aria-invalid={prefixRefusal ? true : undefined}
-              />
-            </Field>
-          )}
-          {prefixRefusal && (
-            <div className="callout callout--critical" role="alert">
-              <IconWarning size={16} />
-              <div>{prefixRefusal}</div>
-            </div>
-          )}
-          <div className="capture">
-            <label className="row">
-              <input type="checkbox" checked={form.migrateOn} onChange={(e) => set('migrateOn', e.target.checked)} />
-              <span className="field__label">Migrate above utilization</span>
-              {!form.migrateOn && <span className="muted">Off</span>}
-            </label>
-            {form.migrateOn && (
-              <Field label="Utilization (%)" hint={MIGRATE_HINT}>
-                <Input type="number" min={50} max={100} value={form.migrate} onChange={(e) => set('migrate', Number(e.target.value))} style={{ width: 120 }} />
-              </Field>
-            )}
-          </div>
-          <div className="capture">
-            <label className="row">
-              <input type="checkbox" checked={form.selectBelowOn} onChange={(e) => set('selectBelowOn', e.target.checked)} />
-              <span className="field__label">Select below utilization</span>
-              {!form.selectBelowOn && <span className="muted">Off</span>}
-            </label>
-            {form.selectBelowOn && (
-              <Field label="Utilization (%)" hint="A pick passes over members at or above this 5-hour utilization, unless every member is.">
-                <Input type="number" min={0} max={100} value={form.selectBelow} onChange={(e) => set('selectBelow', Number(e.target.value))} style={{ width: 120 }} aria-label="Select below utilization (%)" />
-              </Field>
-            )}
-          </div>
-          <div className="field">
-            <span className="field__label">Member utilization</span>
-            <UtilizationBar
-              readings={readings}
-              migrate={form.migrateOn ? { onChange: (v) => set('migrate', v), value: form.migrate } : null}
-              migrateMin={50}
-              selectBelow={form.selectBelowOn ? { onChange: (v) => set('selectBelow', v), value: form.selectBelow } : null}
-            />
-            <p className="field__hint">Each tick is a member&apos;s current reading. Drag a threshold&apos;s handle, or focus it and use the arrow keys.</p>
-          </div>
-          {band && (
-            <div className="callout callout--critical" role="alert">
-              <IconWarning size={16} />
-              <div>{band}</div>
-            </div>
-          )}
-          <h3 className="section-title" style={{ marginTop: 12 }}>
-            Load shedding
-          </h3>
-          <div className="capture" role="group" aria-label="Load shedding">
-            <p className="field__hint">A member at or above the migrate threshold moves part of its burn to siblings reading under the band, one round per source dwell.</p>
-            <PresetPills label="Load shedding preset" value={sheddingPill} onPick={pickShedding} hints={SHEDDING_HINT} />
-            {sheddingPill === 'custom' ? (
-              <div className="form-row form-row--3">
-                <Field label="Share (%)" hint="Of the member's burn one round moves.">
-                  <Input type="number" min={0} max={100} value={percentOf(form.engine.shedShare)} onChange={(e) => setEngine('shedShare', Number(e.target.value) / 100)} />
-                </Field>
-                <Field label="Burn window (s)" hint="How far back a session's burn reaches.">
-                  <Input type="number" min={ENGINE_BOUNDS.burnWindowSeconds.min} step={60} value={form.engine.burnWindowSeconds} onChange={(e) => setEngine('burnWindowSeconds', Number(e.target.value))} />
-                </Field>
-                <Field label="Source dwell (s)" hint="Between two rounds on one member, and how long a shed session stays off it.">
-                  <Input type="number" min={ENGINE_BOUNDS.sourceDwellSeconds.min} step={60} value={form.engine.sourceDwellSeconds} onChange={(e) => setEngine('sourceDwellSeconds', Number(e.target.value))} />
-                </Field>
-              </div>
-            ) : (
-              <p className="field__hint">
-                {SHEDDING_HINT[sheddingPill]} Share {fmtPct(form.engine.shedShare)}, burn window {form.engine.burnWindowSeconds} s, source dwell {form.engine.sourceDwellSeconds} s.
-              </p>
-            )}
-            <div className="field--inline field">
-              <span className="field__text">
-                <span className="field__label">Migrate when spent</span>
-                <p className="field__hint">Move a session off a member whose window for its model is spent while a sibling has allowance left, outside the share.</p>
-              </span>
-              <Toggle checked={form.engine.migrateWhenSpent} onChange={(v) => setEngine('migrateWhenSpent', v)} label="Migrate when spent" />
-            </div>
-            <div className="field">
-              <span className="field__label">Warm sessions</span>
-              <div className="radio-list" role="radiogroup" aria-label="Warm sessions">
-                {WARM_CHOICES.map((c) => (
-                  <label key={c.value} className={`radio-list__item ${form.engine.warmSessions === c.value ? 'is-active' : ''}`}>
-                    <input type="radio" name={`warm-${pool?.id ?? 'new'}`} checked={form.engine.warmSessions === c.value} onChange={() => setEngine('warmSessions', c.value)} />
-                    <span>
-                      <b>{c.title}:</b> {c.body}
-                    </span>
-                  </label>
-                ))}
-              </div>
-            </div>
-            <p className="shed-preview num" role="status">
-              {shedPreviewLine(preview, form.migrateOn)}
-            </p>
-          </div>
-          <h3 className="section-title" style={{ marginTop: 12 }}>
-            Failover
-          </h3>
-          <div className="capture" role="group" aria-label="Failover">
-            <p className="field__hint">How long a request waits out a throttle on its member, how many requests one member holds, and how far Pace spends a member before it is the last resort.</p>
-            <PresetPills label="Failover preset" value={failoverPill} onPick={pickFailover} hints={FAILOVER_HINT} />
-            {failoverPill === 'custom' ? (
-              <div className="form-row form-row--3">
-                <Field label="In flight" hint="Requests one member holds before a fresh session skips it.">
-                  <Input type="number" min={ENGINE_BOUNDS.inFlightCap.min} value={form.engine.inFlightCap} onChange={(e) => setEngine('inFlightCap', Number(e.target.value))} />
-                </Field>
-                <Field label="Retry in place (s)" hint="The longest throttle a request waits out on its member; 0 fails over at once.">
-                  <Input type="number" min={ENGINE_BOUNDS.retryInPlaceSeconds.min} max={ENGINE_BOUNDS.retryInPlaceSeconds.max} value={form.engine.retryInPlaceSeconds} onChange={(e) => setEngine('retryInPlaceSeconds', Number(e.target.value))} />
-                </Field>
-                <Field label="Pace floor (%)" hint="Under Pace, a member with this share of its window left or less is the last resort.">
-                  <Input type="number" min={0} max={100} value={percentOf(form.engine.paceFloor)} onChange={(e) => setEngine('paceFloor', Number(e.target.value) / 100)} />
-                </Field>
-              </div>
-            ) : (
-              <p className="field__hint">
-                {FAILOVER_HINT[failoverPill]} In flight {form.engine.inFlightCap}, retry in place {form.engine.retryInPlaceSeconds} s, Pace floor {fmtPct(form.engine.paceFloor)}.
-              </p>
-            )}
-            <div className="form-row">
-              <Field label="Overage grace (min)" hint="Keep a session on an upstream in overage while its window resets within this many minutes.">
-                <Input type="number" min={ENGINE_BOUNDS.overageMoveGraceMinutes.min} max={ENGINE_BOUNDS.overageMoveGraceMinutes.max} value={form.engine.overageMoveGraceMinutes} onChange={(e) => setEngine('overageMoveGraceMinutes', Number(e.target.value))} />
-              </Field>
-              <Field label="Wind down (min)" hint="Before a cancelled upstream ends, take new sessions only as the last resort and move cold sessions off.">
-                <Input type="number" min={ENGINE_BOUNDS.windDownMinutes.min} max={ENGINE_BOUNDS.windDownMinutes.max} value={form.engine.windDownMinutes} onChange={(e) => setEngine('windDownMinutes', Number(e.target.value))} />
-              </Field>
-            </div>
-          </div>
-          {/* Field's frame without its label element: a label forwards a click on its text to the first control
-              inside, which here would press Add rule or flip the first row. */}
-          <div className="field">
-            <div className="field__control">
-              <span className="field__label">Model rules</span>
-              <PatternEditor label="Model rules" value={form.modelRules} onChange={(rules) => set('modelRules', rules)} suggestions={suggestions} />
-            </div>
-            <p className="field__hint">Top to bottom, first match wins; a model no rule names is allowed. Deny * at the end turns the list into an allowlist.</p>
-          </div>
-          {rulesRefusal && (
-            <div className="callout callout--critical" role="alert">
-              <IconWarning size={16} />
-              <div>{rulesRefusal}</div>
-            </div>
-          )}
-        </>
-      ),
-    },
-    {
-      id: 'overage',
-      label: 'Overage',
-      body: (
-        <div className="radio-list" role="radiogroup" aria-label="Overage policy">
-          {OVERAGE_CHOICES.map((c) => (
-            <label key={c.value} className={`radio-list__item ${form.overage === c.value ? 'is-active' : ''}`}>
-              <input type="radio" name={`overage-${pool?.id ?? 'new'}`} checked={form.overage === c.value} onChange={() => set('overage', c.value)} />
-              <span>
-                <b>{c.title}:</b> {c.body}
-              </span>
-            </label>
-          ))}
-        </div>
-      ),
-    },
-    {
-      id: 'keepalive',
-      label: 'Caching',
-      body: (
-        <>
-          <h3 className="section-title">Cache TTL</h3>
-          <div className="capture">
-            <div className="field--inline field">
-              <span className="field__text">
-                <span className="field__label">Set the cache TTL for this pool</span>
-                <p className="field__hint">
-                  Every breakpoint the client sends is rewritten to the TTL chosen here. The client's own TTL setting then has no effect through this pool. Applies to every upstream in this pool.
-                </p>
-              </span>
-              <Toggle checked={form.cacheTtl.enabled} onChange={(v) => setCacheTtl('enabled', v)} label="Set the cache TTL for this pool" />
-            </div>
-            {form.cacheTtl.enabled && (
-              <>
-                <div className="field--inline field">
-                  <span className="field__text">
-                    <span className="field__label">Add a cache marker to a request without one</span>
-                    <p className="field__hint">{MARKER_HINT}</p>
-                  </span>
-                  <Toggle checked={form.cacheTtl.injectWhenAbsent} onChange={(v) => setCacheTtl('injectWhenAbsent', v)} label="Add a cache marker to a request without one" />
-                </div>
-                <div className="row" style={{ justifyContent: 'space-between' }}>
-                  <span className="field__label">Write cost</span>
-                  <CostReferenceLink />
-                </div>
-                <p className="field__hint">A 1-hour entry costs 2 times the input price on every write, a 5-minute entry 1.25 times; reads cost the same either way.</p>
-                <CacheTtlRuleSet
-                  key={`plan-${open}-${pool?.id ?? 'new'}`}
-                  name="plan"
-                  label="Plan writes"
-                  rules={form.cacheTtl.plan}
-                  onChange={(rules) => setCacheTtl('plan', rules)}
-                  models={models}
-                />
-                <CacheTtlRuleSet
-                  key={`metered-${open}-${pool?.id ?? 'new'}`}
-                  name="metered"
-                  label="Metered writes"
-                  hint={METERED_HINT}
-                  rules={form.cacheTtl.metered}
-                  onChange={(rules) => setCacheTtl('metered', rules)}
-                  models={models}
-                />
-              </>
-            )}
-          </div>
-          <h3 className="section-title" style={{ marginTop: 12 }}>
-            Cache diagnostics
-          </h3>
-          <div className="capture">
-            <Field
-              label="Cache diagnostics"
-              hint="Forced diagnostics apply to key and subscription upstreams alike."
-            >
-              <Select value={form.cacheDiagnostics === null ? 'inherit' : form.cacheDiagnostics ? 'on' : 'off'} onChange={(e) => set('cacheDiagnostics', e.target.value === 'inherit' ? null : e.target.value === 'on')}>
-                <option value="inherit">Inherit the bootstrap setting</option>
-                <option value="on">On</option>
-                <option value="off">Off</option>
-              </Select>
-            </Field>
-          </div>
-          <h3 className="section-title" style={{ marginTop: 12 }}>
-            Keep prompt caches warm
-          </h3>
-          <div className="capture">
-            <div className="field--inline field">
-              <span className="field__text">
-                <span className="field__label">Keep prompt caches warm</span>
-                <p className="field__hint">Idle sessions get a small probe before their cache expires, so the next turn reads instead of writes.</p>
-              </span>
-              <Toggle checked={form.keepalive && !keepaliveBlocked} onChange={(v) => set('keepalive', v)} label="Keep prompt caches warm" disabled={keepaliveBlocked} />
-            </div>
-            {keepaliveBlocked && <p className="field__hint">{KEEPALIVE_GATE}</p>}
-            {!keepaliveBlocked && form.keepalive && shortAffinity && (
-              <div className="callout callout--warning" role="status">
-                <IconWarning size={16} />
-                <div>{KEEPALIVE_WARNING}</div>
-              </div>
-            )}
-          </div>
-          {!keepaliveBlocked && form.keepalive && (
-            <>
-              <div className="capture">
-                <div className="field--inline field">
-                  <span className="field__text">
-                    <span className="field__label">Also warm subagent caches</span>
-                    <p className="field__hint">Off probes the main conversation only; subagent recipes end with the subagent either way.</p>
-                  </span>
-                  <Toggle checked={form.warmSubagents} onChange={(v) => set('warmSubagents', v)} label="Also warm subagent caches" />
-                </div>
-              </div>
-              <div className="capture">
-                <div className="row" style={{ justifyContent: 'space-between' }}>
-                  <label className="row">
-                    <input type="checkbox" checked={form.capEnabled} onChange={(e) => set('capEnabled', e.target.checked)} />
-                    <span className="field__label">Daily probe cost cap ($)</span>
-                  </label>
-                  <CostReferenceLink />
-                </div>
-                {form.capEnabled && <Input type="number" min={0} step={0.5} value={form.capUsd} onChange={(e) => set('capUsd', Number(e.target.value))} style={{ width: 120 }} aria-label="Daily probe cost cap in dollars" />}
-                <p className="field__hint">Estimated at API list prices for every upstream. For subscription upstreams this approximates quota consumption rather than money.</p>
-              </div>
-              <div className="capture">
-                <div className="field--inline field">
-                  <span className="field__text">
-                    <span className="field__label">Stop when probes cost more than they save</span>
-                    <p className="field__hint">{NET_NEGATIVE_HELP}</p>
-                  </span>
-                  <Toggle checked={form.tuning.stopWhenNetNegative} onChange={setNetNegative} label="Stop when probes cost more than they save" />
-                </div>
-                {form.tuning.stopWhenNetNegative && (
-                  <Field label="Grace probes after the net turns negative" hint={NET_NEGATIVE_GRACE_HELP}>
-                    <Input
-                      type="number"
-                      min={KEEPALIVE_BOUNDS.netNegativeGraceProbes.min}
-                      max={KEEPALIVE_BOUNDS.netNegativeGraceProbes.max}
-                      value={form.tuning.netNegativeGraceProbes}
-                      onChange={(e) => setTuning('netNegativeGraceProbes', Math.max(0, Number(e.target.value)))}
-                      style={{ width: 120 }}
-                      aria-label="Grace probes after the net turns negative"
-                    />
-                  </Field>
-                )}
-              </div>
-              <Collapsible title="Probe tuning" hint={`${PROBE_FIELDS.length} settings`}>
-                <div className="form-row">
-                  {PROBE_FIELDS.map((f) => (
-                    <Field key={f.key} label={f.label} hint={f.help}>
-                      <Input type="number" min={KEEPALIVE_BOUNDS[f.key].min} max={KEEPALIVE_BOUNDS[f.key].max} value={form.tuning[f.key]} onChange={(e) => setTuning(f.key, Number(e.target.value))} />
-                    </Field>
-                  ))}
-                </div>
-              </Collapsible>
-            </>
-          )}
-        </>
-      ),
-    },
-    {
-      id: 'capture',
-      label: 'Capture',
-      body: (
-        <div className="capture">
-          <div className="field--inline field">
-            <span className="field__text">
-              <span className="field__label">Capture request and response bodies</span>
-              <p className="field__hint">{CAPTURE_HELP}</p>
-            </span>
-            <Toggle checked={form.capture} onChange={(v) => set('capture', v)} label="Capture request and response bodies" />
-          </div>
-          {form.capture && (
-            <Field label="Retention (hours)">
-              <Input type="number" min={1} max={captureMaxHours} value={form.captureHours} onChange={(e) => set('captureHours', Number(e.target.value))} style={{ width: 120 }} aria-label="Capture retention in hours" />
-            </Field>
-          )}
-        </div>
-      ),
-    },
-    {
-      id: 'members',
-      label: 'Members',
-      body: (
-        <div className="field">
-          <span className="field__label">Members</span>
-          <p className="field__hint">Lower priority numbers are tried first, so the list reads in the order the router walks it.</p>
-          <p className="field__hint">{BUDGET_HINT}</p>
-          <ul className="member-picker">
-            {orderedAccounts.map((a) => {
-              const on = a.id in form.members;
-              return (
-                <li key={a.id} style={{ flexWrap: 'wrap' }}>
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={on}
-                      onChange={(e) => {
-                        const next = { ...form.members };
-                        if (e.target.checked) next[a.id] = 0;
-                        else delete next[a.id];
-                        set('members', next);
-                        setMemberOrder(orderedAccountIds(accounts, next));
-                      }}
-                    />
-                    <span>{a.label}</span>
-                    {a.email && <span className="muted mono">{a.email}</span>}
-                  </label>
-                  {on && (
-                    <span className="member-picker__prio">
-                      <span className="muted">priority</span>
+                  <tr key={a.id}>
+                    <td>
+                      <label>
+                        <input
+                          type="checkbox"
+                          checked={on}
+                          onChange={(e) => {
+                            const next = { ...form.members };
+                            if (e.target.checked) next[a.id] = 0;
+                            else delete next[a.id];
+                            set('members', next);
+                            setMemberOrder(orderedAccountIds(accounts, next));
+                          }}
+                        />
+                        <span>{a.label}</span>
+                        {a.email && <span className="muted mono">{a.email}</span>}
+                      </label>
+                    </td>
+                    <td className="right">
                       <Input
                         type="number"
                         min={0}
                         max={9}
-                        value={form.members[a.id]}
+                        value={on ? form.members[a.id] : ''}
+                        disabled={!on}
                         onChange={(e) => set('members', { ...form.members, [a.id]: Number(e.target.value) })}
                         onBlur={() => setMemberOrder(orderedAccountIds(accounts, form.members))}
                         onKeyDown={(e) => {
                           if (e.key === 'Enter') setMemberOrder(orderedAccountIds(accounts, form.members));
                         }}
-                        style={{ width: 56 }}
                         aria-label={`Priority for ${a.label}`}
+                        aria-invalid={invalid(`priority:${a.id}`)}
                       />
-                    </span>
-                  )}
-                  {/* A line of its own under the member, since beside an email and the priority it would not fit. */}
-                  {on && a.kind === 'api_key' && (
-                    <span className="member-picker__prio member-picker__budget">
-                      <span className="muted">Budget, USD</span>
-                      <Input
-                        type="number"
-                        min={0.01}
-                        step="any"
-                        value={budgetOf(a.id).usd}
-                        onChange={(e) => setBudget(a.id, { usd: e.target.value })}
-                        placeholder="none"
-                        style={{ width: 90 }}
-                        aria-label={`Budget for ${a.label}, USD`}
-                        aria-invalid={budgetRefusal(budgetOf(a.id).usd) ? true : undefined}
-                      />
-                      <Select value={budgetOf(a.id).period} onChange={(e) => setBudget(a.id, { period: e.target.value as BudgetPeriod })} aria-label={`Budget period for ${a.label}`}>
-                        <option value="day">per day</option>
-                        <option value="month">per month</option>
-                      </Select>
-                    </span>
-                  )}
-                </li>
-              );
-            })}
-          </ul>
-          {budgetRefused && (
-            <div className="callout callout--critical" role="alert">
-              <IconWarning size={16} />
-              <div>
-                {budgetRefused.label}: {budgetRefused.refusal}
-              </div>
-            </div>
-          )}
+                    </td>
+                    {a.kind === 'api_key' ? (
+                      <>
+                        <td className="right">
+                          <Input
+                            type="number"
+                            min={0.01}
+                            step="any"
+                            value={budgetOf(a.id).usd}
+                            disabled={!on}
+                            placeholder="none"
+                            onChange={(e) => setBudget(a.id, { usd: e.target.value })}
+                            aria-label={`Budget for ${a.label}, USD`}
+                            aria-invalid={invalid(`budget:${a.id}`)}
+                          />
+                        </td>
+                        <td>
+                          <Select value={budgetOf(a.id).period} disabled={!on} onChange={(e) => setBudget(a.id, { period: e.target.value as BudgetPeriod })} aria-label={`Budget period for ${a.label}`} aria-invalid={invalid(`period:${a.id}`)}>
+                            <option value="day">per day</option>
+                            <option value="month">per month</option>
+                          </Select>
+                        </td>
+                      </>
+                    ) : (
+                      <>
+                        <td />
+                        <td />
+                      </>
+                    )}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
-      ),
-    },
-    {
-      id: 'keys',
-      label: 'Keys',
-      body: (
-        <div className="field">
-          <div className="row" style={{ justifyContent: 'space-between' }}>
-            <span className="field__label">Keys</span>
+        {budgetRefused &&
+          refusalCallout(
+            <>
+              {budgetRefused.label}: {budgetRefused.refusal}
+            </>,
+          )}
+      </div>
+    ),
+    keys: (
+      <>
+        <div className="cells">
+          <div className="row">
             {/* A key is posted against a pool id, so there is nothing to create one on until the pool exists. */}
             <Button size="sm" icon={<IconPlus size={13} />} onClick={() => setKeyOpen(true)} disabled={!pool}>
               Create key
@@ -1554,42 +1223,638 @@ export function PoolDialog({
           {poolKeys.length === 0 ? (
             <p className="muted">{pool ? 'No keys belong to this pool yet.' : 'Keys can be created once the pool is saved.'}</p>
           ) : (
-            <ul className="key-list">
-              {poolKeys.map((k) => {
-                const status = revoked.has(k.id) ? 'revoked' : k.status;
-                return (
-                  <li key={k.id}>
-                    <span>{k.name}</span>
-                    <span className="mono muted">{k.prefix}…</span>
-                    <Badge tone={KEY_STATUS_TONE[status]} dot>
-                      {status}
-                    </Badge>
-                    <Menu
-                      label={`Actions for key ${k.name}`}
-                      items={[
-                        { label: 'Move to…', disabled: otherPools.length === 0, onClick: () => startMove(k) },
-                        { label: 'Revoke', danger: true, disabled: status !== 'active', onClick: () => setRevoking(k) },
-                      ]}
-                    />
-                  </li>
-                );
-              })}
-            </ul>
+            <div className="table-wrap">
+              <table className="table keys-table">
+                <thead>
+                  <tr>
+                    <th>Key</th>
+                    <th>Prefix</th>
+                    <th>Status</th>
+                    <th />
+                  </tr>
+                </thead>
+                <tbody>
+                  {poolKeys.map((k) => {
+                    const status = revoked.has(k.id) ? 'revoked' : k.status;
+                    return (
+                      <tr key={k.id}>
+                        <td>{k.name}</td>
+                        <td className="mono muted">{k.prefix}…</td>
+                        <td>
+                          <Badge tone={KEY_STATUS_TONE[status]} dot>
+                            {status}
+                          </Badge>
+                        </td>
+                        <td>
+                          <Menu
+                            label={`Actions for key ${k.name}`}
+                            items={[
+                              { label: 'Move to…', disabled: otherPools.length === 0, onClick: () => startMove(k) },
+                              { label: 'Revoke', danger: true, disabled: status !== 'active', onClick: () => setRevoking(k) },
+                            ]}
+                          />
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           )}
-          <p className="field__hint">A key belongs to one pool. Move it to another pool to take it off this one.</p>
+          <p className="field__hint">
+            A key reaches only this pool&apos;s members. Create key, Move to and Revoke apply at once, without Save pool; rotation and expiry are on the <PageLink to="/keys">API keys page</PageLink>.
+          </p>
         </div>
-      ),
-    },
-  ];
+      </>
+    ),
+    models: (
+      <div className="cells">
+        {/* Field's frame without its label element: a label forwards a click on its text to the first control
+            inside, which here would press Add rule or flip the first row. */}
+        <Field
+          label="Model rules"
+          plain
+          hint={
+            <>
+              Top to bottom, first match wins; a model no rule names is allowed, and a closing Deny * allows only what the list names. Write an undated id with a trailing *. A key extends or replaces these rules; the{' '}
+              <PageLink to="/models">Models page</PageLink> shows the list a key ends up with.
+            </>
+          }
+        >
+          <PatternEditor label="Model rules" value={form.modelRules} onChange={(rules) => set('modelRules', rules)} suggestions={suggestions} />
+        </Field>
+        {rulesRefusal && refusalCallout(rulesRefusal)}
+      </div>
+    ),
+    selection: (
+      <div className="cells">
+        <Field label="Strategy" hint={STRATEGY_HINT[form.strategy]}>
+          <Select value={form.strategy} onChange={(e) => set('strategy', e.target.value as PoolStrategy)} aria-label="Strategy">
+            {(Object.keys(STRATEGY_LABEL) as PoolStrategy[]).map((v) => (
+              <option key={v} value={v}>
+                {STRATEGY_LABEL[v]}
+              </option>
+            ))}
+          </Select>
+        </Field>
+        <Field
+          label="Prioritize subscription upstreams"
+          beside
+          hint={
+            <>
+              Plan quota first, then upstreams in <GroupLink id="overage">overage</GroupLink>, then API keys; <GroupLink id="members">priority</GroupLink> orders each of those groups.
+            </>
+          }
+        >
+          <Toggle checked={form.preferSubscription} onChange={(v) => set('preferSubscription', v)} label="Prioritize subscription upstreams" />
+        </Field>
+      </div>
+    ),
+    placement: (
+      <div className="cells">
+        <Field
+          label="Subagent placement"
+          hint={
+            <>
+              Where a subagent&apos;s first request lands. By cohort: with the subagents that share its static prefix. With the main conversation: on its parent&apos;s upstream. By strategy: wherever the <GroupLink id="selection">strategy</GroupLink> picks.
+            </>
+          }
+        >
+          <Select value={form.subagentPlacement} onChange={(e) => set('subagentPlacement', e.target.value as SubagentPlacement)} aria-label="Subagent placement" aria-invalid={invalid('Subagent placement')}>
+            <option value="by_cohort">By cohort</option>
+            <option value="by_strategy">By strategy</option>
+            <option value="with_main">With the main conversation</option>
+          </Select>
+        </Field>
+        <Field
+          label="Session placement"
+          hint={
+            <>
+              By warm prefix lands a fresh session where its static prefix is already cached, when the prefix reaches the minimum below; By strategy leaves it to the <GroupLink id="selection">strategy</GroupLink>.
+            </>
+          }
+        >
+          <Select value={form.sessionPlacement} onChange={(e) => set('sessionPlacement', e.target.value as SessionPlacement)} aria-label="Session placement" aria-invalid={invalid('Session placement')}>
+            <option value="by_strategy">By strategy</option>
+            <option value="by_warm_prefix">By warm prefix</option>
+          </Select>
+        </Field>
+        <Field
+          label="Minimum shared prefix, tokens"
+          hint={
+            <>
+              The smallest shared prefix that places a fresh session, or a subagent by cohort, by warmth; below it the <GroupLink id="selection">strategy</GroupLink> decides. Estimated from the request&apos;s bytes, not counted by the upstream.
+            </>
+          }
+        >
+          <Input
+            type="number"
+            min={0}
+            step={1_000}
+            value={form.prefixTokens}
+            onChange={(e) => set('prefixTokens', e.target.value)}
+            disabled={!prefixEnabled}
+            aria-label="Minimum shared prefix, tokens"
+            aria-invalid={invalid('Minimum shared prefix, tokens')}
+          />
+        </Field>
+        {prefixRefusal && refusalCallout(prefixRefusal)}
+      </div>
+    ),
+    pinning: (
+      <div className="cells">
+        <Field
+          label="Session affinity"
+          plain
+          hint={
+            <>
+              {AFFINITY_HINT} <GroupLink id="keepalive">Keepalive</GroupLink> needs at least 5m and warns under 1h.
+            </>
+          }
+        >
+          <span className="chips" role="group" aria-label="Session affinity">
+            {AFFINITY_PICKS.map((pick) => {
+              const on = !form.customAffinity && form.affinity === pick.seconds;
+              return (
+                <button key={pick.label} type="button" className={`pill ${on ? 'is-active' : ''}`} aria-pressed={on} onClick={() => setForm((f) => ({ ...f, affinity: pick.seconds, customAffinity: false }))}>
+                  {pick.label}
+                </button>
+              );
+            })}
+            <button type="button" className={`pill ${form.customAffinity ? 'is-active' : ''}`} aria-pressed={form.customAffinity} onClick={() => set('customAffinity', true)}>
+              custom
+            </button>
+          </span>
+          <Input
+            type="number"
+            min={60}
+            step={30}
+            value={form.affinity}
+            onChange={(e) => set('affinity', Math.max(0, Number(e.target.value)))}
+            disabled={!form.customAffinity}
+            aria-label="Session affinity in seconds"
+            aria-invalid={invalid('Session affinity in seconds')}
+          />
+        </Field>
+        <Field
+          label="Pin sessions"
+          hint={
+            <>
+              Only when the request caches: a request with no cache marker, and none added by the <GroupLink id="cacheTtl">cache TTL policy</GroupLink>, lands by the <GroupLink id="selection">strategy</GroupLink> and takes no pin. A request bound to its upstream keeps its pin either way.
+            </>
+          }
+        >
+          <Select value={form.affinityMode} onChange={(e) => set('affinityMode', e.target.value as AffinityMode)} aria-label="Pin sessions" aria-invalid={invalid('Pin sessions')}>
+            <option value="always">Always</option>
+            <option value="when_cached">Only when the request caches</option>
+          </Select>
+        </Field>
+      </div>
+    ),
+    utilization: (
+      <div className="cells">
+        <div className="cell--half">
+          <SwitchedNumber
+            label="Migrate above utilization"
+            numberLabel="Utilization (%)"
+            checked={form.migrateOn}
+            onChange={(v) => set('migrateOn', v)}
+            input={{ min: 50, max: 100, value: form.migrate, onChange: (e) => set('migrate', Number(e.target.value)), 'aria-label': 'Migrate above utilization (%)', 'aria-invalid': invalid('Migrate above utilization (%)') }}
+            hint={
+              <>
+                A member at or above this line on its 5-hour or 7-day window starts a <GroupLink id="shedding">shedding round</GroupLink>; a sibling counts as cool below the line minus 5%.
+              </>
+            }
+          />
+        </div>
+        <div className="cell--half">
+          <SwitchedNumber
+            label="Select below utilization"
+            numberLabel="Utilization (%)"
+            checked={form.selectBelowOn}
+            onChange={(v) => set('selectBelowOn', v)}
+            input={{ min: 0, max: 100, value: form.selectBelow, onChange: (e) => set('selectBelow', Number(e.target.value)), 'aria-label': 'Select below utilization (%)', 'aria-invalid': invalid('Select below utilization (%)') }}
+            hint={
+              <>
+                A <GroupLink id="selection">fresh pick</GroupLink> passes over members at or above this 5-hour utilization, unless every member is. With both lines on, it sits at least 5% under the migrate line.
+              </>
+            }
+          />
+        </div>
+        <Field
+          label="Member utilization"
+          plain
+          hint={
+            <>
+              Each tick is a member&apos;s latest 5-hour or 7-day reading, as on the <PageLink to="/quota">Quota page</PageLink>. Drag a threshold&apos;s handle, or focus it and use the arrow keys.
+            </>
+          }
+        >
+          <UtilizationBar
+            readings={readings}
+            migrate={form.migrateOn ? { onChange: (v) => set('migrate', v), value: form.migrate } : null}
+            migrateMin={50}
+            selectBelow={form.selectBelowOn ? { onChange: (v) => set('selectBelow', v), value: form.selectBelow } : null}
+          />
+        </Field>
+        {band && refusalCallout(band)}
+      </div>
+    ),
+    shedding: (
+      <>
+        <p className="dialog-group__intro">
+          A member at or above the <GroupLink id="utilization">migrate line</GroupLink> runs a round that marks some of its sessions; each moves to a cooler sibling at its next request.
+        </p>
+        <div className="cells">
+          <Field label="Preset" plain hint={SHEDDING_HINT[sheddingPill]}>
+            <PresetPills label="Load shedding preset" value={sheddingPill} onPick={pickShedding} hints={SHEDDING_HINT} />
+          </Field>
+          <Field label="Share (%)" className="cell--half" hint="The part of the member's recent burn one round marks to move.">
+            <Input type="number" min={0} max={100} value={percentOf(form.engine.shedShare)} onChange={(e) => setEngine('shedShare', Number(e.target.value) / 100)} disabled={sheddingPill !== 'custom'} aria-invalid={invalid('Share (%)')} />
+          </Field>
+          <Field label={ENGINE_FIELD_LABELS.burnWindowSeconds} className="cell--half" hint="The span each session's burn is averaged over.">
+            <Input
+              type="number"
+              min={ENGINE_BOUNDS.burnWindowSeconds.min}
+              step={60}
+              value={form.engine.burnWindowSeconds}
+              onChange={(e) => setEngine('burnWindowSeconds', Number(e.target.value))}
+              disabled={sheddingPill !== 'custom'}
+              aria-invalid={invalid(ENGINE_FIELD_LABELS.burnWindowSeconds)}
+            />
+          </Field>
+          <Field label={ENGINE_FIELD_LABELS.sourceDwellSeconds} className="cell--half" hint="The least time between two rounds on one member, and how long a moved session stays off it.">
+            <Input
+              type="number"
+              min={ENGINE_BOUNDS.sourceDwellSeconds.min}
+              step={60}
+              value={form.engine.sourceDwellSeconds}
+              onChange={(e) => setEngine('sourceDwellSeconds', Number(e.target.value))}
+              disabled={sheddingPill !== 'custom'}
+              aria-invalid={invalid(ENGINE_FIELD_LABELS.sourceDwellSeconds)}
+            />
+          </Field>
+          <Field label="Migrate when spent" beside hint="Moves a session off a member whose window for its model is spent, to a sibling with allowance left, without waiting for a round or the upstream's 429.">
+            <Toggle checked={form.engine.migrateWhenSpent} onChange={(v) => setEngine('migrateWhenSpent', v)} label="Migrate when spent" />
+          </Field>
+          <Field
+            label="Warm sessions"
+            plain
+            hint={
+              <>
+                A warm session rewrites its cache where it lands; the <CostReferenceLink /> shows what that write costs.
+              </>
+            }
+          >
+            <div className="radio-list" role="radiogroup" aria-label="Warm sessions" aria-invalid={invalid('Warm sessions')}>
+              {WARM_CHOICES.map((c) => (
+                <label key={c.value} className={`radio-list__item ${form.engine.warmSessions === c.value ? 'is-active' : ''}`}>
+                  <input type="radio" name={`warm-${pool?.id ?? 'new'}`} checked={form.engine.warmSessions === c.value} onChange={() => setEngine('warmSessions', c.value)} />
+                  <span>
+                    <b>{c.title}:</b> {c.body}
+                  </span>
+                </label>
+              ))}
+            </div>
+          </Field>
+          <Field label="Preview" plain>
+            <p className="shed-preview num" role="status">
+              {form.migrateOn ? (
+                shedPreviewLine(preview, true)
+              ) : (
+                <>
+                  No round runs while <GroupLink id="utilization">migrate above utilization</GroupLink> is off.
+                </>
+              )}
+            </p>
+          </Field>
+        </div>
+      </>
+    ),
+    failover: (
+      <>
+        <p className="dialog-group__intro">
+          How long a request waits out a throttle on its member, how many requests one member serves at once, and how far <GroupLink id="selection">Pace</GroupLink> spends a member before it is the last resort.
+        </p>
+        <div className="cells">
+          <Field label="Preset" plain hint={FAILOVER_HINT[failoverPill]}>
+            <PresetPills label="Failover preset" value={failoverPill} onPick={pickFailover} hints={FAILOVER_HINT} />
+          </Field>
+          <Field
+            label={ENGINE_FIELD_LABELS.inFlightCap}
+            className="cell--half"
+            hint={
+              <>
+                Requests one member serves at once. A member at the cap takes no fresh session while a sibling has room; with every member full, a request waits up to Retry in place for a slot. A key&apos;s own cap is on the{' '}
+                <PageLink to="/keys">API keys page</PageLink>.
+              </>
+            }
+          >
+            <Input
+              type="number"
+              min={ENGINE_BOUNDS.inFlightCap.min}
+              value={form.engine.inFlightCap}
+              onChange={(e) => setEngine('inFlightCap', Number(e.target.value))}
+              disabled={failoverPill !== 'custom'}
+              aria-invalid={invalid(ENGINE_FIELD_LABELS.inFlightCap)}
+            />
+          </Field>
+          <Field label={ENGINE_FIELD_LABELS.retryInPlaceSeconds} className="cell--half" hint="The longest throttle a request waits out on its member before failing over, and the longest wait for a free slot; 0 fails over at once.">
+            <Input
+              type="number"
+              min={ENGINE_BOUNDS.retryInPlaceSeconds.min}
+              max={ENGINE_BOUNDS.retryInPlaceSeconds.max}
+              value={form.engine.retryInPlaceSeconds}
+              onChange={(e) => setEngine('retryInPlaceSeconds', Number(e.target.value))}
+              disabled={failoverPill !== 'custom'}
+              aria-invalid={invalid(ENGINE_FIELD_LABELS.retryInPlaceSeconds)}
+            />
+          </Field>
+          <Field
+            label="Pace floor (%)"
+            className="cell--half"
+            hint={
+              <>
+                Under <GroupLink id="selection">Pace</GroupLink>, a member with this share of its window left or less serves only as the last resort.
+              </>
+            }
+          >
+            <Input type="number" min={0} max={100} value={percentOf(form.engine.paceFloor)} onChange={(e) => setEngine('paceFloor', Number(e.target.value) / 100)} disabled={failoverPill !== 'custom'} aria-invalid={invalid('Pace floor (%)')} />
+          </Field>
+        </div>
+      </>
+    ),
+    overage: (
+      <div className="cells">
+        <Field
+          label="Overage policy"
+          plain
+          hint={
+            <>
+              For subscription upstreams billing extra usage; API-key members stop at their budget in <GroupLink id="members">Members</GroupLink> instead. The <PageLink to="/upstreams">Upstreams page</PageLink> shows which upstream is in overage.
+            </>
+          }
+        >
+          <div className="radio-list" role="radiogroup" aria-label="Overage policy">
+            {OVERAGE_CHOICES.map((c) => (
+              <label key={c.value} className={`radio-list__item ${form.overage === c.value ? 'is-active' : ''}`}>
+                <input type="radio" name={`overage-${pool?.id ?? 'new'}`} checked={form.overage === c.value} onChange={() => set('overage', c.value)} />
+                <span>
+                  <b>{c.title}:</b> {c.body}
+                </span>
+              </label>
+            ))}
+          </div>
+        </Field>
+        <Field label={ENGINE_FIELD_LABELS.overageMoveGraceMinutes} hint="Under Prefer plan quota, a session stays on an upstream in overage while its window resets within this many minutes; 0 moves it at once.">
+          <Input
+            type="number"
+            min={ENGINE_BOUNDS.overageMoveGraceMinutes.min}
+            max={ENGINE_BOUNDS.overageMoveGraceMinutes.max}
+            value={form.engine.overageMoveGraceMinutes}
+            onChange={(e) => setEngine('overageMoveGraceMinutes', Number(e.target.value))}
+            aria-invalid={invalid(ENGINE_FIELD_LABELS.overageMoveGraceMinutes)}
+          />
+        </Field>
+        <Field
+          label={ENGINE_FIELD_LABELS.windDownMinutes}
+          hint={
+            <>
+              This long before a cancelled subscription ends, its upstream takes new sessions only as the last resort and cold sessions move off. The end is set on the <PageLink to="/upstreams">Upstreams page</PageLink>.
+            </>
+          }
+        >
+          <Input
+            type="number"
+            min={ENGINE_BOUNDS.windDownMinutes.min}
+            max={ENGINE_BOUNDS.windDownMinutes.max}
+            value={form.engine.windDownMinutes}
+            onChange={(e) => setEngine('windDownMinutes', Number(e.target.value))}
+            aria-invalid={invalid(ENGINE_FIELD_LABELS.windDownMinutes)}
+          />
+        </Field>
+      </div>
+    ),
+    cacheTtl: (
+      <div className="cells">
+        <Field label="Set the cache TTL for this pool" beside hint="Rewrites every cache marker a request carries to the TTL below, on every upstream of this pool, so the client's own TTL setting has no effect through it.">
+          <Toggle checked={form.cacheTtl.enabled} onChange={(v) => setCacheTtl('enabled', v)} label="Set the cache TTL for this pool" />
+        </Field>
+        <Field
+          label="Add a cache marker to a request without one"
+          beside
+          hint={
+            <>
+              Adds a marker to a request that carries none; off leaves such a request as sent. <GroupLink id="pinning">Pin sessions</GroupLink> counts an added marker.
+            </>
+          }
+        >
+          <Toggle checked={form.cacheTtl.injectWhenAbsent} onChange={(v) => setCacheTtl('injectWhenAbsent', v)} label="Add a cache marker to a request without one" disabled={!form.cacheTtl.enabled} />
+        </Field>
+        <Field
+          label="Write cost"
+          plain
+          hint="Plan writes apply while an upstream spends plan quota, where a 1-hour write costs the same as a 5-minute one. Metered writes apply while a write costs money, on an API-key upstream or a subscription upstream in overage: 2x input for an hour against 1.25x for five minutes. Reads cost the same either way."
+        >
+          <div className="row">
+            <CostReferenceLink />
+          </div>
+        </Field>
+        <CacheTtlGrid
+          disabled={!form.cacheTtl.enabled}
+          plan={form.cacheTtl.plan}
+          metered={form.cacheTtl.metered}
+          onChange={(name, rules) => setCacheTtl(name, rules)}
+          hint={
+            <>
+              The TTL a <GroupLink id="keepalive">keepalive probe</GroupLink> writes with. The first probe after a turn follows that turn&apos;s TTL, and each later probe follows this one.
+            </>
+          }
+        />
+        <CacheTtlOverrides
+          key={`plan-${open}-${pool?.id ?? 'new'}`}
+          name="plan"
+          label="Plan writes"
+          disabled={!form.cacheTtl.enabled}
+          rules={form.cacheTtl.plan}
+          onChange={(rules) => setCacheTtl('plan', rules)}
+          models={models}
+        />
+        <CacheTtlOverrides
+          key={`metered-${open}-${pool?.id ?? 'new'}`}
+          name="metered"
+          label="Metered writes"
+          disabled={!form.cacheTtl.enabled}
+          rules={form.cacheTtl.metered}
+          onChange={(rules) => setCacheTtl('metered', rules)}
+          models={models}
+        />
+      </div>
+    ),
+    keepalive: (
+      <>
+        <div className="cells">
+          <Field
+            label="Keep prompt caches warm"
+            beside
+            hint={
+              <>
+                Probes an idle session shortly before its cache expires, so its next turn reads instead of writes. A probe follows the session&apos;s pin, so <GroupLink id="pinning">Session affinity</GroupLink> must be at least 5m. Subscription upstreams also wait for OAuth prewarm verified on the{' '}
+                <PageLink to="/settings">Settings page</PageLink>.
+                {keepaliveBlocked && (
+                  <p className="field__hint">
+                    Needs Session affinity of at least 5 minutes: a probe follows the session&apos;s pin, and a shorter pin cannot keep the session on the upstream it warmed. Set it under <GroupLink id="pinning">Pinning</GroupLink>.
+                  </p>
+                )}
+              </>
+            }
+          >
+            <Toggle checked={warming} onChange={(v) => set('keepalive', v)} label="Keep prompt caches warm" disabled={keepaliveBlocked} />
+          </Field>
+          <Field label="Also warm subagent caches" beside hint="Off probes the main conversation only.">
+            <Toggle checked={form.warmSubagents} onChange={(v) => set('warmSubagents', v)} label="Also warm subagent caches" disabled={!warming} />
+          </Field>
+          <Field
+            label="Stop when probes cost more than they save"
+            beside
+            className="cell--half"
+            hint={
+              <>
+                Pauses a session&apos;s probes once they have cost more than the cache reads they saved; a real request that lands warm resumes them. Savings per pool are on the{' '}
+                <PageLink to="/analytics#cache-warming">Analytics page</PageLink>.
+              </>
+            }
+          >
+            <Toggle checked={form.tuning.stopWhenNetNegative} onChange={setNetNegative} label="Stop when probes cost more than they save" disabled={!warming} />
+          </Field>
+          <Field
+            label={KEEPALIVE_FIELD_LABELS.netNegativeGraceProbes}
+            className="cell--half"
+            hint="Probes a session still gets after its net turns negative, granted again on every real request, so one expensive turn does not stop a session about to earn it back."
+          >
+            <Input
+              type="number"
+              min={KEEPALIVE_BOUNDS.netNegativeGraceProbes.min}
+              max={KEEPALIVE_BOUNDS.netNegativeGraceProbes.max}
+              value={form.tuning.netNegativeGraceProbes}
+              onChange={(e) => setTuning('netNegativeGraceProbes', Math.max(0, Number(e.target.value)))}
+              disabled={!warming || !form.tuning.stopWhenNetNegative}
+              aria-label="Grace probes after the net turns negative"
+              aria-invalid={invalid(KEEPALIVE_FIELD_LABELS.netNegativeGraceProbes)}
+            />
+          </Field>
+          <div className="cell--half">
+            <SwitchedNumber
+              label="Daily probe cost cap ($)"
+              disabled={!warming}
+              checked={form.capEnabled}
+              onChange={(v) => set('capEnabled', v)}
+              input={{ min: 0, step: 0.5, value: form.capUsd, onChange: (e) => set('capUsd', Number(e.target.value)), 'aria-label': 'Daily probe cost cap in dollars', 'aria-invalid': invalid('Daily probe cost cap in dollars') }}
+              hint={
+                <>
+                  Per UTC day, for probes paid in dollars: on API-key upstreams, on subscription upstreams in overage, and on models the plan table lacks. Plan-funded probes do not count here. The <CostReferenceLink /> prices a probe.
+                </>
+              }
+            />
+          </div>
+        </div>
+        {warming && shortAffinity && (
+          <div className="callout callout--warning" role="status">
+            <IconWarning size={16} />
+            <div>
+              Session affinity is {fmtAffinity(form.affinity)}, shorter than one hour: a one-hour cache entry outlives the pin, so a session can move away from the cache it warmed. Raise it under <GroupLink id="pinning">Pinning</GroupLink>.
+            </div>
+          </div>
+        )}
+      </>
+    ),
+    probeTuning: (
+      <div className="cells">
+        {PROBE_ROWS.map(({ hint, keys: [left, right] }) =>
+          right === undefined ? (
+            probeField(left, undefined, hint)
+          ) : (
+            <Fragment key={left}>
+              {probeField(left, 'cell--half')}
+              {probeField(right, 'cell--half')}
+              <p className="field__hint">{hint}</p>
+            </Fragment>
+          ),
+        )}
+      </div>
+    ),
+    responseHeaders: (
+      <div className="cells">
+        <Field label="Quota headers" hint={QUOTA_HEADERS_HINT}>
+          <Select value={form.quotaHeaders} onChange={(e) => set('quotaHeaders', e.target.value as QuotaHeaders)} aria-label="Quota headers" aria-invalid={invalid('Quota headers')}>
+            <option value="pass">Pass through</option>
+            <option value="hide">Hide on committed answers</option>
+          </Select>
+        </Field>
+      </div>
+    ),
+    bodyCapture: (
+      <div className="cells">
+        <Field
+          label="Capture request and response bodies"
+          beside
+          hint={
+            <>
+              Keeps the request and response bodies of this pool&apos;s keys for the request drawer on the <PageLink to="/requests">Requests page</PageLink>. A key can override it, and only admins read bodies.
+            </>
+          }
+        >
+          <Toggle checked={form.capture} onChange={(v) => set('capture', v)} label="Capture request and response bodies" />
+        </Field>
+        <Field
+          label="Retention (hours)"
+          hint={
+            <>
+              At most the bootstrap&apos;s body capture limit, {captureMaxHours} hours here, shown on the <PageLink to="/settings">Settings page</PageLink>.
+            </>
+          }
+        >
+          <Input type="number" min={1} max={captureMaxHours} value={form.captureHours} onChange={(e) => set('captureHours', Number(e.target.value))} disabled={!form.capture} aria-label="Capture retention in hours" />
+        </Field>
+      </div>
+    ),
+    cacheDiagnostics: (
+      <div className="cells">
+        <Field
+          label="Cache diagnostics"
+          hint={
+            <>
+              On asks the upstream why a cache read missed, on every upstream of this pool, and the reason lands in the <PageLink to="/requests">request log</PageLink>. Inherit follows the bootstrap setting on the{' '}
+              <PageLink to="/settings">Settings page</PageLink>.
+            </>
+          }
+        >
+          <Select value={form.cacheDiagnostics === null ? 'inherit' : form.cacheDiagnostics ? 'on' : 'off'} onChange={(e) => set('cacheDiagnostics', e.target.value === 'inherit' ? null : e.target.value === 'on')}>
+            <option value="inherit">Inherit the bootstrap setting</option>
+            <option value="on">On</option>
+            <option value="off">Off</option>
+          </Select>
+        </Field>
+      </div>
+    ),
+  };
+  const groups: DialogGroup[] = POOL_GROUPS.map((id) => ({ ...GROUP_RAIL[id], body: bodies[id], id, refused: refusedGroups.has(id) }));
 
   return (
     <>
-      <SectionedDialog
+      <GroupedDialog
         open={open}
         onClose={onClose}
         title={pool ? `Edit pool ${pool.name}` : 'Create pool'}
-        subtitle="Members join at a priority; lower numbers are tried first. Keys bound to the pool can only reach its members."
-        sections={sections}
+        railLabel="Pool settings"
+        groups={groups}
+        chosen={chosen}
+        onChoose={(id) => setChosen(id as PoolGroup)}
+        // The line always explains the current hold: a refusal of the form's own beats a server message left from
+        // before the edit.
+        status={first ? `Save is held: ${first.text}` : (error ?? 'Every group saves together.')}
+        hold={first?.group ?? null}
+        held={first !== null || error !== null}
         footer={
           <>
             <Button variant="ghost" onClick={onClose}>

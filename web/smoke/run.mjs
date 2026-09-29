@@ -65,6 +65,10 @@ function expect(name, text, needles) {
   const missing = needles.filter((n) => !text.includes(n));
   results.push({ name, ok: missing.length === 0, missing, length: text.length });
 }
+/** A grouped dialog's group section by its label; hidden groups stay mounted, so a lookup reaches every one. */
+const group = (dlg, label) => [...(dlg?.querySelectorAll('section.dialog-group') ?? [])].find((s) => s.getAttribute('aria-label') === label);
+/** A rail entry by its group's id, never its text, so a refused entry's annotation cannot hide it. */
+const rail = (dlg, id) => dlg?.querySelector(`.dialog-rail__group[data-group="${id}"]`);
 
 /**
  * `rows` pairs an upstream id with the line drawn under its name, or null where no line is drawn: the line is the
@@ -756,7 +760,7 @@ await m.navigate('/upstreams/spare');
 m.unmount();
 
 m = await mount('/pools');
-expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace', 'Round robin', 'subscription first', 'Within the first tier that has an eligible upstream, the one with the most remaining weekly allowance per hour until its window resets or its subscription ends, whichever comes first; an unsampled upstream counts as untouched; ties are random.', 'Within the first tier that has an eligible upstream, each in turn; a restart starts the round again.', 'Prefer plan quota', 'Allow overage', 'Migrate off', 'Select-below off', 'Affinity 10m', 'Affinity off', 'Keep prompt caches warm', 'cold limit 2', 'idle 1h', 'net-negative stop 2', '$4.00/day cap', 'Traffic, 24h', 'Requests per hour', '3-hour average', 'Members', 'eligible', 'cooldown ends', 'overage', 'P1', 'Console workspace', 'codex', 'Evals workspace', 'desktop', 'laptop', 'ci', 'Active pins', 'Edit']);
+expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace', 'Round robin', 'subscription first', 'Within the first priority tier that has an eligible upstream, the one with the most weekly allowance left per hour until its window resets or its subscription ends; an unsampled upstream counts as untouched, and ties are random.', 'Within the first priority tier that has an eligible upstream, each in turn; a restart starts the round again.', 'Prefer plan quota', 'Allow overage', 'Migrate off', 'Select-below off', 'Affinity 10m', 'Affinity off', 'Keep prompt caches warm', 'cold limit 2', 'idle 1h', 'net-negative stop 2', '$4.00/day cap', 'Traffic, 24h', 'Requests per hour', '3-hour average', 'Members', 'eligible', 'cooldown ends', 'overage', 'P1', 'Console workspace', 'codex', 'Evals workspace', 'desktop', 'laptop', 'ci', 'Active pins', 'Edit']);
 {
   const cardMembers = [...(m.container.querySelector('.pool__members ul')?.querySelectorAll('li') ?? [])].map((li) => `${li.children[0]?.textContent?.trim()} ${li.children[1]?.textContent?.trim()}`);
   results.push({ name: '/pools card orders members by priority then label', ok: JSON.stringify(cardMembers) === JSON.stringify(['P0 business', 'P0 mail', 'P0 personal', 'P1 Console workspace']), missing: cardMembers });
@@ -787,7 +791,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
   results.push({ name: '/pools the next upstream is marked', ok: next.length >= 1 && next.every((t) => t.startsWith('next')), missing: next });
   const cooled = [...(order?.querySelectorAll('.badge') ?? [])].find((b) => (b.getAttribute('title') ?? '').includes('cooldown'));
   results.push({ name: '/pools an ineligible member says why', ok: cooled !== undefined && cooled.textContent.includes('mail'), missing: [cooled?.textContent ?? 'absent'] });
-  expect('/pools the card states the strategy rule', order?.textContent ?? '', ['Within the first tier that has an eligible upstream, the one with the most remaining weekly allowance per hour until its window resets or its subscription ends, whichever comes first; an unsampled upstream counts as untouched; ties are random.']);
+  expect('/pools the card states the strategy rule', order?.textContent ?? '', ['Within the first priority tier that has an eligible upstream, the one with the most weekly allowance left per hour until its window resets or its subscription ends; an unsampled upstream counts as untouched, and ties are random.']);
 }
 {
   // The card reads the pin mode beside the affinity, both placements, the quota header setting when it hides, and
@@ -832,6 +836,22 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
   });
   const codexOrder = cards.get('codex')?.querySelector('.selection-order')?.textContent ?? '';
   results.push({ name: '/pools the selection order names the budget as the reason a member is skipped', ok: codexOrder.includes('Evals workspace (at budget)'), missing: [codexOrder.slice(0, 160)] });
+  // The card's lines take the dialog's words, without the links a title attribute cannot hold.
+  const lines = [
+    cards.get('all')?.querySelector('.selection-order__rule')?.textContent ?? '',
+    dd('all', 'Sessions')?.getAttribute('title') ?? null,
+    dd('all', 'Quota headers')?.getAttribute('title') ?? null,
+    dd('all', 'Keep prompt caches warm')?.querySelector('.chips')?.getAttribute('title') ?? null,
+  ];
+  results.push({
+    name: "/pools the pool card's lines read the dialog's words",
+    ok:
+      lines[0] === 'Within the first priority tier that has an eligible upstream, the one with the most weekly allowance left per hour until its window resets or its subscription ends; an unsampled upstream counts as untouched, and ties are random.' &&
+      lines[1] === 'How long a session stays on its upstream after its last request; off keeps no pins, and a custom value is at least 60 seconds.' &&
+      lines[2] === "Hide drops the anthropic-ratelimit-unified-* headers from every answer but a 429, so an organization's quota never reads as the key holder's own; a 429 keeps them so the client can resume after the reset. request-id passes either way." &&
+      lines[3] === "Cold limit: probes in a row that find the cache already gone, after which the session's probes pause until its next real request. Idle: how long, or how many probes, without a real request before probing stops. Net-negative stop: probes a session still gets after its probes have cost more than the cache reads they saved.",
+    missing: lines.map(String),
+  });
 }
 {
   const del = [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Delete pool all');
@@ -853,25 +873,142 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
   await m.settle(300);
   const dlg = m.container.querySelector('dialog[open]');
   const t = dlg?.textContent ?? '';
-  expect('/pools edit dialog prefilled', t, ['Edit pool all', 'Name', 'Status', 'Strategy', 'Session affinity', "Idle time before a session's pin expires. Off means every request picks an upstream afresh.", 'off', '5m', '10m', '1h', '4h', 'custom', 'Migrate above utilization', 'Prefer plan quota:', 'move sessions to a sibling with plan quota when this upstream starts billing extra usage', 'Allow:', 'ignore extra usage', 'Never:', 'treat an upstream in extra usage as unavailable until its window resets', 'Keep prompt caches warm', 'Daily probe cost cap ($)', 'Estimated at API list prices for every upstream. For subscription upstreams this approximates quota consumption rather than money.', 'Cost reference', 'Probe tuning', 'Members', 'priority', 'Keys', 'Create key', 'desktop', 'laptop', 'phoebis-8f2a', 'active', 'A key belongs to one pool. Move it to another pool to take it off this one.', 'Save pool', 'Model rules', 'Allow', 'Deny', 'Add rule', 'written with a trailing *']);
+  expect('/pools edit dialog prefilled', t, ['Edit pool all', 'Name', 'Status', 'Strategy', 'Session affinity', 'How long a session stays on its upstream after its last request; off keeps no pins, and a custom value is at least 60 seconds.', 'off', '5m', '10m', '1h', '4h', 'custom', 'Migrate above utilization', 'Prefer plan quota:', 'move sessions to a sibling with plan quota when this upstream starts billing extra usage', 'Allow:', 'ignore extra usage', 'Never:', 'treat an upstream in extra usage as unavailable until its window resets', 'Keep prompt caches warm', 'Daily probe cost cap ($)', 'Per UTC day, for probes paid in dollars: on API-key upstreams, on subscription upstreams in overage, and on models the plan table lacks. Plan-funded probes do not count here.', 'Cost reference', 'Probe tuning', 'Members', 'Priority', 'Keys', 'Create key', 'desktop', 'laptop', 'phoebis-8f2a', 'active', "A key reaches only this pool's members. Create key, Move to and Revoke apply at once, without Save pool; rotation and expiry are on the API keys page", 'Save pool', 'Model rules', 'Allow', 'Deny', 'Add rule', 'written with a trailing *']);
   const nameInput = dlg?.querySelector('input[placeholder="research"]');
   results.push({ name: '/pools edit dialog name prefilled', ok: nameInput?.value === 'all', missing: [nameInput?.value] });
   const keysMulti = [...(dlg?.querySelectorAll('.mselect__trigger') ?? [])].map((b) => b.textContent?.trim()).filter((x) => x?.startsWith('Keys'));
   results.push({ name: '/pools keys section is not a multi-select', ok: keysMulti.length === 0, missing: keysMulti });
 
-  // Sectioned dialog: a nav rail beside one scrolling body, one heading per section.
-  const navLabels = [...(dlg?.querySelectorAll('.dialog-nav__link') ?? [])].map((b) => b.textContent?.trim());
-  results.push({ name: '/pools dialog nav lists every section', ok: JSON.stringify(navLabels) === JSON.stringify(['General', 'Routing', 'Overage', 'Caching', 'Capture', 'Members', 'Keys']), missing: navLabels });
-  const headings = [...(dlg?.querySelectorAll('.dialog-section__title') ?? [])].map((h) => h.textContent?.trim());
-  results.push({ name: '/pools dialog body repeats the sections in order', ok: JSON.stringify(headings) === JSON.stringify(navLabels), missing: headings });
-  results.push({ name: '/pools dialog body is the only scroller', ok: (dlg?.querySelectorAll('.dialog__split > .dialog__body').length ?? 0) === 1, missing: [] });
-  results.push({ name: '/pools dialog marks one nav entry active', ok: (dlg?.querySelectorAll('.dialog-nav__link.is-active').length ?? 0) === 1, missing: [] });
-  const footButtons = [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].map((b) => b.textContent?.trim());
+  // Grouped dialog: a two-level rail beside one group at a time, one heading per group.
+  const groupLabels = ['Identity', 'Members', 'Keys', 'Models', 'Selection', 'Placement', 'Pinning', 'Utilization thresholds', 'Load shedding', 'Failover', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Probe tuning', 'Response headers', 'Body capture', 'Cache diagnostics'];
+  const railParents = [...(dlg?.querySelectorAll('.dialog-rail__parent .dialog-rail__label') ?? [])].map((s) => s.textContent?.trim());
+  const railGroups = [...(dlg?.querySelectorAll('.dialog-rail__group .dialog-rail__label') ?? [])].map((s) => s.textContent?.trim());
+  results.push({
+    name: '/pools dialog rail lists the five parents and the seventeen groups in order',
+    ok: JSON.stringify(railParents) === JSON.stringify(['Pool', 'Routing', 'Load', 'Caching', 'Visibility']) && JSON.stringify(railGroups) === JSON.stringify(groupLabels),
+    missing: [...railParents, ...railGroups],
+  });
+  const headings = [...(dlg?.querySelectorAll('.dialog-group__title') ?? [])].map((h) => h.textContent?.trim());
+  results.push({ name: '/pools dialog body repeats the groups in order', ok: JSON.stringify(headings) === JSON.stringify(groupLabels), missing: headings });
+  results.push({ name: '/pools dialog body is the only scroller', ok: (dlg?.querySelectorAll('.dialog__rail-split > .dialog__body').length ?? 0) === 1, missing: [] });
+  results.push({ name: '/pools dialog marks one rail entry current', ok: (dlg?.querySelectorAll('.dialog-rail [aria-current="true"]').length ?? 0) === 1, missing: [] });
+  const footButtons = [...(dlg?.querySelectorAll('.dialog__foot .dialog__actions button') ?? [])].map((b) => b.textContent?.trim());
   results.push({ name: '/pools dialog footer holds Cancel and Save', ok: footButtons.join(',') === 'Cancel,Save pool', missing: footButtons });
-  const keepaliveNav = [...(dlg?.querySelectorAll('.dialog-nav__link') ?? [])].find((b) => b.textContent?.trim() === 'Caching');
-  keepaliveNav?.click();
+  rail(dlg, 'keepalive')?.click();
   await m.settle(120);
-  results.push({ name: '/pools dialog nav click moves the highlight', ok: keepaliveNav?.classList.contains('is-active') === true, missing: [...(dlg?.querySelectorAll('.dialog-nav__link.is-active') ?? [])].map((b) => b.textContent) });
+  results.push({ name: '/pools dialog rail click moves the highlight', ok: rail(dlg, 'keepalive')?.getAttribute('aria-current') === 'true', missing: [...(dlg?.querySelectorAll('.dialog-rail [aria-current="true"]') ?? [])].map((b) => b.textContent) });
+
+  {
+    // One group shows at a time; the rest stay mounted and hidden, and a choice moves focus to the group's heading.
+    const shown = () => [...(dlg?.querySelectorAll('section.dialog-group') ?? [])].filter((s) => !s.hidden).map((s) => s.getAttribute('aria-label'));
+    rail(dlg, 'members')?.click();
+    await m.settle(120);
+    const members = group(dlg, 'Members');
+    results.push({
+      name: '/pools choosing a group hides every other group and marks its rail entry',
+      ok: (dlg?.querySelectorAll('section.dialog-group[hidden]').length ?? 0) === 16 && members?.hidden === false && rail(dlg, 'members')?.getAttribute('aria-current') === 'true',
+      missing: shown(),
+    });
+    results.push({ name: "/pools focus lands on the group's heading", ok: !!members && document.activeElement === members.querySelector('h3'), missing: [document.activeElement?.outerHTML.slice(0, 80) ?? 'nothing focused'] });
+    dlg?.querySelector('.dialog-rail__parent[data-parent="Load"]')?.click();
+    await m.settle(120);
+    results.push({ name: '/pools a parent heading chooses its first group', ok: JSON.stringify(shown()) === '["Utilization thresholds"]', missing: shown() });
+
+    // A refusal typed while another group shows still marks its own group and names itself in the footer.
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+    const type = async (input, value) => {
+      if (!input) return;
+      setter.call(input, value);
+      input.dispatchEvent(new window.Event('input', { bubbles: true }));
+      await m.settle(120);
+    };
+    const threshold = dlg?.querySelector('input[aria-label="Minimum shared prefix, tokens"]');
+    const status = () => dlg?.querySelector('.dialog__status');
+    await type(threshold, '1.5');
+    const marks = [!!rail(dlg, 'placement')?.querySelector('.dialog-rail__dot'), !!dlg?.querySelector('.dialog-rail__parent[data-parent="Routing"] .dialog-rail__dot'), shown()[0]];
+    const held = [status()?.classList.contains('is-held'), status()?.textContent ?? ''];
+    const goTo = [...(status()?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Go to Placement');
+    goTo?.click();
+    await m.settle(120);
+    results.push({
+      name: '/pools a refusal marks its group and its parent and fills the footer line, and Go to focuses the field',
+      ok:
+        JSON.stringify(marks) === '[true,true,"Utilization thresholds"]' &&
+        held[0] === true &&
+        held[1].startsWith('Save is held: The minimum shared prefix is a whole number of tokens, 0 or more.') &&
+        goTo !== undefined &&
+        JSON.stringify(shown()) === '["Placement"]' &&
+        !!threshold &&
+        document.activeElement === threshold,
+      missing: [JSON.stringify(marks), ...held.map(String), goTo ? '' : 'no Go to Placement', ...shown(), document.activeElement?.outerHTML.slice(0, 80) ?? 'nothing focused'],
+    });
+    await type(threshold, '20000');
+    results.push({ name: '/pools a cleared refusal takes its marks off the rail', ok: dlg?.querySelector('.dialog-rail__dot') === null && status()?.textContent === 'Every group saves together.', missing: [status()?.textContent ?? 'no status line'] });
+
+    rail(dlg, 'keepalive')?.click();
+    await m.settle(120);
+    const warning = group(dlg, 'Keepalive')?.querySelector('.callout--warning');
+    [...(warning?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Pinning')?.click();
+    await m.settle(120);
+    results.push({ name: '/pools a group link switches the rail', ok: !!warning && JSON.stringify(shown()) === '["Pinning"]' && rail(dlg, 'pinning')?.getAttribute('aria-current') === 'true', missing: shown() });
+    const upstreams = [...(group(dlg, 'Members')?.querySelectorAll('a') ?? [])].find((a) => (a.textContent ?? '').startsWith('Upstreams page'));
+    results.push({
+      name: '/pools a page link opens in a new tab',
+      ok: upstreams?.getAttribute('target') === '_blank' && (upstreams?.getAttribute('href') ?? '').endsWith('/upstreams') && upstreams?.querySelector('.sr-only')?.textContent?.trim() === '(opens in a new tab)',
+      missing: [upstreams?.outerHTML.slice(0, 160) ?? 'no Upstreams page link'],
+    });
+    expect('/pools the Keys group states that its actions apply at once', group(dlg, 'Keys')?.textContent ?? '', ["A key reaches only this pool's members. Create key, Move to and Revoke apply at once, without Save pool; rotation and expiry are on the API keys page"]);
+    const overageLabels = [...(group(dlg, 'Overage and plan end')?.querySelectorAll('.field__label') ?? [])].map((l) => l.textContent?.trim());
+    results.push({ name: '/pools Overage and plan end holds Overage policy, Overage grace and Wind down', ok: JSON.stringify(overageLabels) === '["Overage policy","Overage grace (min)","Wind down (min)"]', missing: overageLabels });
+    results.push({ name: '/pools the pool dialog carries no subtitle', ok: !!dlg && dlg.querySelector(':scope > .dialog__inner > .dialog__head .dialog__subtitle') === null, missing: [dlg?.querySelector(':scope > .dialog__inner > .dialog__head .dialog__subtitle')?.textContent ?? ''] });
+    const keepalive = group(dlg, 'Keepalive');
+    results.push({ name: '/pools the Keepalive warning closes its group', ok: keepalive?.lastElementChild?.classList.contains('callout--warning') === true, missing: [keepalive?.lastElementChild?.className ?? 'no Keepalive group'] });
+    const cap = keepalive?.querySelector('button[role="switch"][aria-label="Daily probe cost cap ($)"]')?.closest('.switched')?.parentElement;
+    results.push({ name: '/pools the daily probe cost cap keeps to the left column', ok: cap?.classList.contains('cell--half') === true && keepalive?.querySelector('.cells')?.lastElementChild === cap, missing: [cap?.className ?? 'no cost cap block'] });
+    const team = [...(dlg?.querySelectorAll('.members-table tbody tr') ?? [])].find((tr) => tr.querySelector('td:first-child label span:nth-child(2)')?.textContent === 'team');
+    const teamPriority = team?.querySelector('input[aria-label="Priority for team"]');
+    results.push({ name: '/pools a non-member row renders its Priority input disabled', ok: team?.querySelector('input[type="checkbox"]')?.checked === false && teamPriority?.disabled === true, missing: [teamPriority ? String(teamPriority.disabled) : 'no Priority input for team'] });
+
+    // Each switch gates its number, which is drawn whatever the switch reads; warming off gates the cost cap whole.
+    const sw = (label) => dlg?.querySelector(`button[role="switch"][aria-label="${label}"]`);
+    const num = (label) => dlg?.querySelector(`input[aria-label="${label}"]`);
+    const switched = [
+      ['Migrate above utilization', 'Migrate above utilization (%)'],
+      ['Select below utilization', 'Select below utilization (%)'],
+      ['Daily probe cost cap ($)', 'Daily probe cost cap in dollars'],
+    ];
+    const read = () => switched.map(([s, n]) => `${sw(s)?.getAttribute('aria-checked')}/${num(n) ? String(num(n).disabled) : 'absent'}`);
+    const follows = (states) => states.every((x) => x === 'true/false' || x === 'false/true');
+    const before = read();
+    for (const [s] of switched) {
+      sw(s)?.click();
+      await m.settle(80);
+    }
+    const flipped = read();
+    for (const [s] of switched) {
+      sw(s)?.click();
+      await m.settle(80);
+    }
+    const warm = sw('Keep prompt caches warm');
+    const tuning = () => [...(group(dlg, 'Probe tuning')?.querySelectorAll('input[type="number"]') ?? [])].map((i) => i.disabled);
+    const tuningOn = tuning();
+    warm?.click();
+    await m.settle(120);
+    const warmOff = [warm?.getAttribute('aria-checked'), sw('Daily probe cost cap ($)')?.disabled, num('Daily probe cost cap in dollars')?.disabled];
+    const tuningOff = tuning();
+    warm?.click();
+    await m.settle(120);
+    results.push({
+      name: '/pools each switch enables its number, which stays rendered while the switch is off',
+      ok: follows(before) && follows(flipped) && JSON.stringify(before) !== JSON.stringify(flipped) && JSON.stringify(read()) === JSON.stringify(before) && JSON.stringify(warmOff) === '["false",true,true]' && warm?.getAttribute('aria-checked') === 'true',
+      missing: [...before, ...flipped, ...warmOff.map(String)],
+    });
+    results.push({
+      name: '/pools the Probe tuning group lists its nine fields, enabled while warming is on and disabled while it is off',
+      ok: tuningOn.length === 9 && tuningOn.every((d) => d === false) && tuningOff.length === 9 && tuningOff.every((d) => d === true),
+      missing: [JSON.stringify(tuningOn), JSON.stringify(tuningOff)],
+    });
+  }
 
   // The toggle is the operator's alone: no strategy forces it, so switching strategies never touches it.
   {
@@ -889,15 +1026,15 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
     await m.settle(150);
   }
 
-  // Affinity: 10m is a preset chip, custom reveals a seconds input.
+  // Affinity: 10m is a preset chip, custom enables the seconds input drawn beside the chips.
   const chips = [...(dlg?.querySelectorAll('[aria-label="Session affinity"] .pill') ?? [])];
   results.push({ name: '/pools affinity chips are off/5m/10m/1h/4h/custom', ok: JSON.stringify(chips.map((c) => c.textContent?.trim())) === JSON.stringify(['off', '5m', '10m', '1h', '4h', 'custom']), missing: chips.map((c) => c.textContent) });
   results.push({ name: '/pools affinity preset 10m is selected', ok: chips.find((c) => c.textContent?.trim() === '10m')?.getAttribute('aria-pressed') === 'true', missing: [] });
-  results.push({ name: '/pools affinity has no seconds input until custom', ok: dlg?.querySelector('input[aria-label="Session affinity in seconds"]') === null, missing: [] });
+  results.push({ name: '/pools affinity seconds input is disabled until custom', ok: dlg?.querySelector('input[aria-label="Session affinity in seconds"]')?.disabled === true, missing: [] });
   chips.find((c) => c.textContent?.trim() === 'custom')?.click();
   await m.settle(120);
   const custom = dlg?.querySelector('input[aria-label="Session affinity in seconds"]');
-  results.push({ name: '/pools custom affinity reveals the seconds input', ok: custom?.value === '600', missing: [custom?.value] });
+  results.push({ name: '/pools custom affinity enables the seconds input', ok: custom?.value === '600' && custom?.disabled === false, missing: [custom?.value] });
   {
     // The route refuses 1 to 59 seconds, so the dialog holds the save rather than sending it.
     const save = () => [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Save pool');
@@ -906,9 +1043,9 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
     custom?.dispatchEvent(new window.Event('input', { bubbles: true }));
     await m.settle(120);
     results.push({
-      name: '/pools a custom affinity of 30 s holds the save and the hint says what 0 does',
-      ok: save()?.disabled === true && custom?.getAttribute('min') === '60' && (dlg?.textContent ?? '').includes('A custom value is at least 60 seconds; 0 turns affinity off.'),
-      missing: [String(save()?.disabled), custom?.getAttribute('min') ?? 'no min', (dlg?.textContent ?? '').includes('0 turns affinity off') ? '' : 'no hint'],
+      name: '/pools a custom affinity of 30 s holds the save and the hint states the 60-second floor',
+      ok: save()?.disabled === true && custom?.getAttribute('min') === '60' && custom?.getAttribute('aria-invalid') === 'true' && (dlg?.textContent ?? '').includes('a custom value is at least 60 seconds'),
+      missing: [String(save()?.disabled), custom?.getAttribute('min') ?? 'no min', custom?.getAttribute('aria-invalid') ?? 'not invalid', (dlg?.textContent ?? '').includes('a custom value is at least 60 seconds') ? '' : 'no hint'],
     });
     setter.call(custom, '0');
     custom?.dispatchEvent(new window.Event('input', { bubbles: true }));
@@ -918,21 +1055,25 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
   chips.find((c) => c.textContent?.trim() === '10m')?.click();
   await m.settle(120);
 
-  // Migration is off by default and reveals a percent input when switched on.
-  const migrateBox = [...(dlg?.querySelectorAll('input[type="checkbox"]') ?? [])].find((c) => c.closest('label')?.textContent?.includes('Migrate above utilization'));
-  results.push({ name: '/pools migrate starts off', ok: migrateBox?.checked === false && t.includes('Off'), missing: [] });
+  // Migration is off by default; its switch enables the percent input, which is drawn either way.
+  const migrateSwitch = dlg?.querySelector('button[role="switch"][aria-label="Migrate above utilization"]');
+  const migratePercent = () => dlg?.querySelector('input[aria-label="Migrate above utilization (%)"]');
+  results.push({ name: '/pools migrate starts off', ok: migrateSwitch?.getAttribute('aria-checked') === 'false' && migratePercent()?.disabled === true, missing: [String(migrateSwitch?.getAttribute('aria-checked')), String(migratePercent()?.disabled)] });
   {
-    const routing = [...(dlg?.querySelectorAll('.dialog-section') ?? [])].find((s) => s.getAttribute('aria-label') === 'Routing');
-    const card = (label) => routing?.querySelector(`[role="group"][aria-label="${label}"]`);
-    const pills = (group) => [...(routing?.querySelectorAll(`[aria-label="${group}"] .pill`) ?? [])];
-    const pressed = (group) => pills(group).filter((p) => p.getAttribute('aria-pressed') === 'true').map((p) => p.textContent?.trim());
-    const pick = async (group, label) => {
-      pills(group).find((p) => p.textContent?.trim() === label)?.click();
+    const card = (label) => group(dlg, label);
+    const pills = (label) => [...(dlg?.querySelectorAll(`[aria-label="${label}"] .pill`) ?? [])];
+    const pressed = (label) => pills(label).filter((p) => p.getAttribute('aria-pressed') === 'true').map((p) => p.textContent?.trim());
+    const pick = async (label, name) => {
+      pills(label).find((p) => p.textContent?.trim() === name)?.click();
       await m.settle(120);
     };
-    const field = (group, label) => [...(card(group)?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === label)?.querySelector('input');
+    const field = (groupLabel, label) => [...(card(groupLabel)?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === label)?.querySelector('input');
+    const values = (groupLabel, labels) => labels.map((label) => field(groupLabel, label)?.value ?? null);
+    const disabled = (groupLabel, labels) => labels.map((label) => field(groupLabel, label)?.disabled ?? null);
+    const SHED = ['Share (%)', 'Burn window (s)', 'Source dwell (s)'];
+    const FAIL = ['In flight', 'Retry in place (s)', 'Pace floor (%)'];
     const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-    expect('/pools the routing section draws the bar and the shedding and failover cards', routing?.textContent ?? '', [
+    expect('/pools the load groups draw the bar and the shedding, failover and overage controls', ['Utilization thresholds', 'Load shedding', 'Failover', 'Overage and plan end'].map((label) => card(label)?.textContent ?? '').join(' '), [
       'Member utilization',
       'Load shedding',
       'Balanced',
@@ -949,200 +1090,222 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
       'Overage grace',
       'Wind down',
     ]);
-    const names = (group) => JSON.stringify(pills(group).map((p) => p.textContent?.trim()));
+    const names = (label) => JSON.stringify(pills(label).map((p) => p.textContent?.trim()));
     results.push({
-      name: '/pools both cards offer Balanced, Fast, Conservative and Custom with the stored preset pressed and its inputs closed',
+      name: '/pools both presets offer Balanced, Fast, Conservative and Custom with the stored preset pressed and its fields drawn disabled',
       ok:
         names('Load shedding preset') === '["Balanced","Fast","Conservative","Custom"]' &&
         names('Failover preset') === '["Balanced","Fast","Conservative","Custom"]' &&
         JSON.stringify([pressed('Load shedding preset'), pressed('Failover preset')]) === '[["Balanced"],["Balanced"]]' &&
-        field('Load shedding', 'Burn window (s)') === undefined &&
-        field('Failover', 'In flight') === undefined,
-      missing: [names('Load shedding preset'), names('Failover preset'), JSON.stringify([pressed('Load shedding preset'), pressed('Failover preset')])],
+        JSON.stringify(disabled('Load shedding', SHED)) === '[true,true,true]' &&
+        JSON.stringify(disabled('Failover', FAIL)) === '[true,true,true]',
+      missing: [names('Load shedding preset'), names('Failover preset'), JSON.stringify([pressed('Load shedding preset'), pressed('Failover preset')]), JSON.stringify(disabled('Load shedding', SHED)), JSON.stringify(disabled('Failover', FAIL))],
     });
     await pick('Load shedding preset', 'Fast');
-    const fastLine = card('Load shedding')?.textContent ?? '';
+    const fast = [values('Load shedding', SHED), disabled('Load shedding', SHED)];
     await pick('Load shedding preset', 'Custom');
-    const fromFast = ['Share (%)', 'Burn window (s)', 'Source dwell (s)'].map((label) => field('Load shedding', label)?.value);
+    const fromFast = [values('Load shedding', SHED), disabled('Load shedding', SHED)];
     const burnWindow = field('Load shedding', 'Burn window (s)');
-    setter.call(burnWindow, '900');
-    burnWindow?.dispatchEvent(new window.Event('input', { bubbles: true }));
-    await m.settle(120);
+    if (burnWindow) {
+      setter.call(burnWindow, '900');
+      burnWindow.dispatchEvent(new window.Event('input', { bubbles: true }));
+      await m.settle(120);
+    }
     const edited = pressed('Load shedding preset');
     await pick('Load shedding preset', 'Balanced');
+    const balanced = [values('Load shedding', SHED), disabled('Load shedding', SHED)];
     results.push({
-      name: '/pools a shedding pill sets its values, Custom opens them, and an edit stays custom until a preset is picked',
+      name: '/pools a shedding pill writes its values into the disabled fields, Custom enables them, and an edit stays custom until a preset is picked',
       ok:
-        fastLine.includes('Share 50%, burn window 300 s, source dwell 600 s.') &&
-        JSON.stringify(fromFast) === '["50","300","600"]' &&
+        JSON.stringify(fast) === '[["50","300","600"],[true,true,true]]' &&
+        JSON.stringify(fromFast) === '[["50","300","600"],[false,false,false]]' &&
         JSON.stringify(edited) === '["Custom"]' &&
         JSON.stringify(pressed('Load shedding preset')) === '["Balanced"]' &&
-        (card('Load shedding')?.textContent ?? '').includes('Share 50%, burn window 600 s, source dwell 900 s.'),
-      missing: [fastLine.slice(0, 160), JSON.stringify(fromFast), JSON.stringify(edited), JSON.stringify(pressed('Load shedding preset'))],
+        JSON.stringify(balanced) === '[["50","600","900"],[true,true,true]]',
+      missing: [JSON.stringify(fast), JSON.stringify(fromFast), JSON.stringify(edited), JSON.stringify(balanced)],
     });
     await pick('Failover preset', 'Conservative');
-    const conservativeLine = card('Failover')?.textContent ?? '';
+    const conservative = [(card('Failover')?.textContent ?? '').includes('Waits out a longer throttle before moving on.'), values('Failover', FAIL), disabled('Failover', FAIL)];
     await pick('Failover preset', 'Custom');
-    expect('/pools the failover Custom pill opens the cap, the retry bound, and the floor', card('Failover')?.textContent ?? '', [
-      'In flight',
-      'Retry in place',
-      'Pace floor',
-      'Overage grace',
-      'Wind down',
-      'Keep a session on an upstream in overage while its window resets within this many minutes.',
-      'Before a cancelled upstream ends, take new sessions only as the last resort and move cold sessions off.',
-    ]);
-    const fromConservative = ['In flight', 'Retry in place (s)', 'Pace floor (%)'].map((label) => field('Failover', label)?.value);
+    const fromConservative = [values('Failover', FAIL), disabled('Failover', FAIL)];
     await pick('Failover preset', 'Balanced');
     results.push({
-      name: '/pools a failover pill says what it trades and Custom starts from the values it held',
-      ok: conservativeLine.includes('Waits out a longer throttle before moving on.') && conservativeLine.includes('retry in place 20 s') && JSON.stringify(fromConservative) === '["16","20","5"]' && JSON.stringify(pressed('Failover preset')) === '["Balanced"]',
-      missing: [conservativeLine.slice(0, 200), JSON.stringify(fromConservative), JSON.stringify(pressed('Failover preset'))],
+      name: '/pools a failover pill says what it trades and shows its values in the disabled fields, and Custom enables them from there',
+      ok: JSON.stringify(conservative) === '[true,["16","20","5"],[true,true,true]]' && JSON.stringify(fromConservative) === '[["16","20","5"],[false,false,false]]' && JSON.stringify(pressed('Failover preset')) === '["Balanced"]',
+      missing: [JSON.stringify(conservative), JSON.stringify(fromConservative), JSON.stringify(pressed('Failover preset'))],
     });
+    expect('/pools the overage group states the grace and the wind down', card('Overage and plan end')?.textContent ?? '', [
+      'Under Prefer plan quota, a session stays on an upstream in overage while its window resets within this many minutes; 0 moves it at once.',
+      'This long before a cancelled subscription ends, its upstream takes new sessions only as the last resort and cold sessions move off. The end is set on the Upstreams page',
+    ]);
 
-    migrateBox?.click();
+    migrateSwitch?.click();
     await m.settle(120);
-    expect('/pools migrate on reveals a percent field', dlg?.textContent ?? '', ['Utilization (%)', 'A member at or above this line on either window runs a shedding round, which moves part of its burn to siblings reading under the band.']);
-    const handle = () => routing?.querySelector('[role="slider"][aria-label="Migrate threshold"]');
-    const percent = migrateBox?.closest('.capture')?.querySelector('input[type="number"]');
+    const util = card('Utilization thresholds');
+    results.push({
+      name: '/pools migrate on enables its percent field',
+      ok: migrateSwitch?.getAttribute('aria-checked') === 'true' && migratePercent()?.disabled === false && (util?.textContent ?? '').includes('A member at or above this line on its 5-hour or 7-day window starts a shedding round; a sibling counts as cool below the line minus 5%.'),
+      missing: [String(migrateSwitch?.getAttribute('aria-checked')), String(migratePercent()?.disabled)],
+    });
+    const handle = () => util?.querySelector('[role="slider"][aria-label="Migrate threshold"]');
+    const percent = migratePercent();
     const before = [handle()?.getAttribute('aria-valuenow'), percent?.value];
     handle()?.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }));
     await m.settle(120);
     const after = [handle()?.getAttribute('aria-valuenow'), percent?.value];
     handle()?.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
     await m.settle(120);
-    const ticks = [...(routing?.querySelectorAll('.ubar__tick') ?? [])].map((tick) => tick.getAttribute('title'));
+    const ticks = [...(util?.querySelectorAll('.ubar__tick') ?? [])].map((tick) => tick.getAttribute('title'));
     results.push({
       name: '/pools the bar draws each member reading and the migrate handle, which the arrow keys step and the percent field follows',
-      ok: JSON.stringify(before) === '["90","90"]' && JSON.stringify(after) === '["89","89"]' && ticks.length === 6 && ticks.includes('business: 5-hour 62%') && routing?.querySelector('.ubar__band') !== null,
+      ok: JSON.stringify(before) === '["90","90"]' && JSON.stringify(after) === '["89","89"]' && ticks.length === 6 && ticks.includes('business: 5-hour 62%') && util?.querySelector('.ubar__band') !== null,
       missing: [JSON.stringify(before), JSON.stringify(after), ...ticks],
     });
-    expect("/pools the shedding preview replays a round over the hot members' pins", routing?.querySelector('.shed-preview')?.textContent ?? '', ['Would move', 'warm', 'of the burn in meter tokens', 'across 2 upstreams']);
+    expect("/pools the shedding preview replays a round over the hot members' pins", card('Load shedding')?.querySelector('.shed-preview')?.textContent ?? '', ['Would move', 'warm', 'of the burn in meter tokens', 'across 2 upstreams']);
 
     // Select-below inside the band under the migrate threshold holds the save and says why.
     const save = () => [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Save pool');
-    const selectBox = [...(dlg?.querySelectorAll('input[type="checkbox"]') ?? [])].find((c) => c.closest('label')?.textContent?.includes('Select below utilization'));
-    selectBox?.click();
+    const selectSwitch = dlg?.querySelector('button[role="switch"][aria-label="Select below utilization"]');
+    selectSwitch?.click();
     await m.settle(120);
     const selectPercent = dlg?.querySelector('input[aria-label="Select below utilization (%)"]');
-    setter.call(selectPercent, '88');
+    if (selectPercent) setter.call(selectPercent, '88');
     selectPercent?.dispatchEvent(new window.Event('input', { bubbles: true }));
     await m.settle(120);
-    const inBand = [routing?.querySelector('.callout--critical')?.textContent ?? '', save()?.disabled, routing?.querySelector('[role="slider"][aria-label="Select-below threshold"]')?.getAttribute('aria-valuenow')];
-    setter.call(selectPercent, '85');
+    const inBand = [util?.querySelector('.callout--critical')?.textContent ?? '', save()?.disabled, util?.querySelector('[role="slider"][aria-label="Select-below threshold"]')?.getAttribute('aria-valuenow'), selectPercent?.getAttribute('aria-invalid')];
+    if (selectPercent) setter.call(selectPercent, '85');
     selectPercent?.dispatchEvent(new window.Event('input', { bubbles: true }));
     await m.settle(120);
-    const atEdge = [routing?.querySelector('.callout--critical')?.textContent ?? '', save()?.disabled];
+    const atEdge = [util?.querySelector('.callout--critical')?.textContent ?? '', save()?.disabled];
     results.push({
       name: '/pools select-below inside the band holds the save and names the band',
-      ok: inBand[0] === 'Select below must sit at or under migrate above minus 5%, the band a shed session lands under.' && inBand[1] === true && inBand[2] === '88' && atEdge[0] === '' && atEdge[1] === false,
+      ok: inBand[0] === 'Select below must sit at or under migrate above minus 5%, the band a shed session lands under.' && inBand[1] === true && inBand[2] === '88' && inBand[3] === 'true' && atEdge[0] === '' && atEdge[1] === false,
       missing: [...inBand.map(String), ...atEdge.map(String)],
     });
-    setter.call(selectPercent, '80');
+    if (selectPercent) setter.call(selectPercent, '80');
     selectPercent?.dispatchEvent(new window.Event('input', { bubbles: true }));
     await m.settle(120);
-    selectBox?.click();
+    selectSwitch?.click();
     await m.settle(120);
   }
-  migrateBox?.click();
+  migrateSwitch?.click();
   await m.settle(120);
 
-  // The select-below threshold sits beside migration and reads the same way: off, or a percent.
+  // The select-below threshold sits beside migration and reads the same way: a switch over its percent.
   {
-    const selectBox = [...(dlg?.querySelectorAll('input[type="checkbox"]') ?? [])].find((c) => c.closest('label')?.textContent?.includes('Select below utilization'));
-    const rowText = selectBox?.closest('label')?.textContent ?? '';
-    results.push({ name: '/pools select-below starts off beside migration', ok: selectBox?.checked === false && rowText.includes('Off') && selectBox?.closest('.capture')?.previousElementSibling?.textContent?.includes('Migrate above utilization') === true, missing: [String(selectBox?.checked), rowText] });
-    selectBox?.click();
-    await m.settle(120);
-    const percent = dlg?.querySelector('input[aria-label="Select below utilization (%)"]');
+    const util = group(dlg, 'Utilization thresholds');
+    const selectSwitch = util?.querySelector('button[role="switch"][aria-label="Select below utilization"]');
+    const percent = () => dlg?.querySelector('input[aria-label="Select below utilization (%)"]');
     results.push({
-      name: '/pools select-below on reveals a percent field from 0 to 100',
-      ok: percent?.value === '80' && percent?.getAttribute('min') === '0' && percent?.getAttribute('max') === '100' && (dlg?.textContent ?? '').includes('A pick passes over members at or above this 5-hour utilization, unless every member is.'),
-      missing: [percent?.value ?? 'absent', percent?.getAttribute('min') ?? '', percent?.getAttribute('max') ?? ''],
+      name: '/pools select-below starts off beside migration',
+      ok: selectSwitch?.getAttribute('aria-checked') === 'false' && percent()?.disabled === true && !!util?.querySelector('button[role="switch"][aria-label="Migrate above utilization"]'),
+      missing: [String(selectSwitch?.getAttribute('aria-checked')), String(percent()?.disabled)],
     });
-    selectBox?.click();
+    selectSwitch?.click();
+    await m.settle(120);
+    results.push({
+      name: '/pools select-below on enables a percent field from 0 to 100',
+      ok:
+        percent()?.value === '80' &&
+        percent()?.disabled === false &&
+        percent()?.getAttribute('min') === '0' &&
+        percent()?.getAttribute('max') === '100' &&
+        (util?.textContent ?? '').includes('A fresh pick passes over members at or above this 5-hour utilization, unless every member is. With both lines on, it sits at least 5% under the migrate line.'),
+      missing: [percent()?.value ?? 'absent', String(percent()?.disabled), percent()?.getAttribute('min') ?? '', percent()?.getAttribute('max') ?? ''],
+    });
+    selectSwitch?.click();
     await m.settle(120);
   }
 
   // Keepalive gate: 10m clears the 5-minute floor but still warns about 1-hour caches.
-  expect('/pools cache warming warns below one hour', dlg?.textContent ?? '', ['Session affinity is shorter than one hour. One-hour cache entries outlive the pin, so a session can migrate away from a warmed cache.']);
+  expect('/pools cache warming warns below one hour', dlg?.textContent ?? '', ['Session affinity is 10m, shorter than one hour: a one-hour cache entry outlives the pin, so a session can move away from the cache it warmed. Raise it under Pinning.']);
   expect('/pools cache warming stops when probes stop paying', dlg?.textContent ?? '', [
     'Stop when probes cost more than they save',
-    'gross cache savings',
+    "Pauses a session's probes once they have cost more than the cache reads they saved; a real request that lands warm resumes them.",
     'Grace probes after the net turns negative',
   ]);
   {
-    const grace = dlg?.querySelector('input[aria-label="Grace probes after the net turns negative"]');
+    const grace = () => dlg?.querySelector('input[aria-label="Grace probes after the net turns negative"]');
     const netToggle = [...(dlg?.querySelectorAll('button[role="switch"]') ?? [])].find((b) => b.getAttribute('aria-label') === 'Stop when probes cost more than they save');
-    results.push({ name: '/pools net-negative stop is on with two grace probes', ok: netToggle?.getAttribute('aria-checked') === 'true' && grace?.value === '2', missing: [netToggle?.getAttribute('aria-checked'), grace?.value] });
+    results.push({ name: '/pools net-negative stop is on with two grace probes', ok: netToggle?.getAttribute('aria-checked') === 'true' && grace()?.value === '2' && grace()?.disabled === false, missing: [netToggle?.getAttribute('aria-checked'), grace()?.value] });
     netToggle?.click();
     await m.settle(150);
-    results.push({ name: '/pools grace count hides while the stop is off', ok: !(dlg?.textContent ?? '').includes('Grace probes after the net turns negative'), missing: [] });
+    results.push({ name: '/pools grace count is disabled while the stop is off, and its hint stays', ok: grace()?.disabled === true && (dlg?.textContent ?? '').includes('Probes a session still gets after its net turns negative'), missing: [String(grace()?.disabled)] });
     netToggle?.click();
     await m.settle(150);
     expect('/pools grace help says the budget is granted again on every real request', dlg?.textContent ?? '', [
-      'The budget is granted again on every real request while the net stays negative, because a cold streak drags the net down and the net only rises on a request that lands warm, which needs a probe first.',
+      'Probes a session still gets after its net turns negative, granted again on every real request, so one expensive turn does not stop a session about to earn it back.',
     ]);
   }
-  const tuning = [...(dlg?.querySelectorAll('.collapsible__summary') ?? [])].find((b) => b.textContent?.includes('Probe tuning'));
-  results.push({ name: '/pools probe tuning starts collapsed', ok: tuning?.getAttribute('aria-expanded') === 'false' && !(dlg?.textContent ?? '').includes('Cold probe limit'), missing: [] });
-  tuning?.click();
-  await m.settle(120);
-  expect('/pools probe tuning fields', dlg?.textContent ?? '', ['Lead time, 5m cache (s)', 'Lead time, 1h cache (s)', 'Jitter, 5m cache (s)', 'Jitter, 1h cache (s)', 'Cold probe limit', 'Retry backoff base (s)', 'Retry backoff max (s)', 'Max idle seconds', 'Max idle ticks', '0 keeps probing while the pin lives', '0 means no limit']);
+  const tuningGroup = group(dlg, 'Probe tuning');
+  expect('/pools probe tuning fields', tuningGroup?.textContent ?? '', [
+    'Lead time, 5m cache (s)',
+    'Lead time, 1h cache (s)',
+    'Jitter, 5m cache (s)',
+    'Jitter, 1h cache (s)',
+    'Cold probe limit',
+    'Retry backoff base (s)',
+    'Retry backoff max (s)',
+    'Max idle seconds',
+    'Max idle ticks',
+    'How long before an entry expires its probe is due. The lead covers the round trip and the jitter; the 1-hour lead also leaves room for a retry, since a missed refresh costs a full 1-hour write.',
+    'Random seconds taken off each due time, so sessions that started together do not probe at the same instant; wider for 1-hour entries, whose due times cluster on the hour.',
+    'After a failed probe the wait starts at the base and doubles up to the max, so a long outage settles into a steady retry.',
+  ]);
   results.push({
     name: '/pools probe tuning drops the two concurrency caps',
     ok: !(dlg?.textContent ?? '').includes('Max probes in flight') && !(dlg?.textContent ?? '').includes('Max probes per session per hour'),
     missing: [(dlg?.textContent ?? '').includes('Max probes in flight') ? 'in flight still there' : '', (dlg?.textContent ?? '').includes('Max probes per session per hour') ? 'per session per hour still there' : ''].filter(Boolean),
   });
-  expect('/pools probe tuning explains a cold probe and the idle limits', dlg?.textContent ?? '', [
-    'A cold probe is one whose response shows no cache read for the prefix it was meant to keep warm',
-    'After this many cold probes in a row the recipe pauses until the next real request.',
-    'since its own last real request',
-    'subagents stop when their lifecycle ends, at their Stop hook or the end of the session, never by idle time',
-    'It applies to the main conversation agent only',
-    "A cold probe is the expensive kind (it rewrites the entry instead of reading it), so a streak also drags the session's net negative; the grace probes in this section are what lets the next turn recover. A probe that migrated the session does not count.",
+  expect('/pools probe tuning explains a cold probe and the idle limits', tuningGroup?.textContent ?? '', [
+    "Probes in a row that find the cache already gone, after which the session's probes pause until its next real request. A cold probe rewrites the entry, so a streak also pulls the net down; a probe that moved the session does not count.",
+    'Stop probing once this long, or this many probes, passes without a real request: for the main agent while its companion reports, for every agent once the companion falls silent. 0 turns a limit off. The Sessions page',
   ]);
-  const tuningValues = [...(dlg?.querySelectorAll('.collapsible__body input[type="number"]') ?? [])].map((i) => i.value);
+  const tuningValues = [...(tuningGroup?.querySelectorAll('input[type="number"]') ?? [])].map((i) => i.value);
   results.push({ name: '/pools probe tuning defaults', ok: JSON.stringify(tuningValues) === JSON.stringify(['60', '360', '5', '30', '2', '30', '300', '3600', '0']), missing: tuningValues });
   results.push({ name: '/pools cold probe limit defaults to 2', ok: tuningValues[4] === '2', missing: [tuningValues[4] ?? 'absent'] });
   {
-    const inputs = [...(dlg?.querySelectorAll('.collapsible__body input[type="number"]') ?? [])];
+    const inputs = [...(tuningGroup?.querySelectorAll('input[type="number"]') ?? [])];
     const ranges = inputs.map((i) => `${i.getAttribute('min')}-${i.getAttribute('max')}`);
     results.push({ name: '/pools probe tuning inputs carry the policy ranges', ok: JSON.stringify(ranges) === JSON.stringify(['0-299', '0-3599', '0-299', '0-3599', '1-20', '1-3600', '1-604800', '0-31536000', '0-1000000']), missing: ranges });
     const save = () => [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Save pool');
     const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-    setter.call(inputs[4], '0');
+    if (inputs[4]) setter.call(inputs[4], '0');
     inputs[4]?.dispatchEvent(new window.Event('input', { bubbles: true }));
     await m.settle(120);
-    const coldHeld = save()?.disabled === true;
-    setter.call(inputs[4], '2');
+    const coldHeld = save()?.disabled === true && inputs[4]?.getAttribute('aria-invalid') === 'true';
+    if (inputs[4]) setter.call(inputs[4], '2');
     inputs[4]?.dispatchEvent(new window.Event('input', { bubbles: true }));
-    setter.call(inputs[6], '10');
+    if (inputs[6]) setter.call(inputs[6], '10');
     inputs[6]?.dispatchEvent(new window.Event('input', { bubbles: true }));
     await m.settle(120);
     const retryHeld = save()?.disabled === true;
-    setter.call(inputs[6], '300');
+    if (inputs[6]) setter.call(inputs[6], '300');
     inputs[6]?.dispatchEvent(new window.Event('input', { bubbles: true }));
     await m.settle(120);
     results.push({ name: '/pools a cold probe limit of 0 or a retry ceiling under the base holds the save', ok: coldHeld && retryHeld && save()?.disabled === false, missing: [String(coldHeld), String(retryHeld), String(save()?.disabled)] });
   }
-  tuning?.click();
-  await m.settle(120);
-  results.push({ name: '/pools probe tuning collapses again', ok: !(dlg?.textContent ?? '').includes('Cold probe limit'), missing: [] });
 
   {
-    const nav = [...(dlg?.querySelectorAll('.dialog-nav__link') ?? [])].map((b) => b.textContent?.trim());
-    results.push({ name: '/pools dialog carries Capture between Caching and Members', ok: nav.indexOf('Capture') === nav.indexOf('Caching') + 1 && nav.indexOf('Members') === nav.indexOf('Capture') + 1, missing: nav });
-    expect('/pools capture section', dlg?.textContent ?? '', ['Capture request and response bodies', 'Bodies of every key in this pool without an override are stored for this long; admins only; capped by the retention setting.', 'Retention (hours)']);
+    const visibility = [...(dlg?.querySelector('.dialog-rail__parent[data-parent="Visibility"]')?.parentElement?.querySelectorAll('.dialog-rail__group .dialog-rail__label') ?? [])].map((s) => s.textContent?.trim());
+    results.push({ name: '/pools dialog lists Response headers, Body capture and Cache diagnostics under Visibility, in that order', ok: JSON.stringify(visibility) === '["Response headers","Body capture","Cache diagnostics"]', missing: visibility });
+    expect('/pools capture section', group(dlg, 'Body capture')?.textContent ?? '', [
+      'Capture request and response bodies',
+      "Keeps the request and response bodies of this pool's keys for the request drawer on the Requests page",
+      'A key can override it, and only admins read bodies.',
+      'Retention (hours)',
+      "At most the bootstrap's body capture limit, 72 hours here, shown on the Settings page",
+    ]);
     const hours = dlg?.querySelector('input[aria-label="Capture retention in hours"]');
     results.push({ name: '/pools capture prefills the pool retention', ok: hours?.value === '24' && hours?.getAttribute('max') === '72', missing: [hours?.value ?? 'absent', hours?.getAttribute('max') ?? 'absent'] });
   }
 
   {
-    const memberLabels = () => [...(dlg?.querySelectorAll('.member-picker > li') ?? [])].map((li) => li.querySelector('label span:nth-child(2)')?.textContent);
+    const memberRows = () => [...(dlg?.querySelectorAll('.members-table tbody tr') ?? [])];
+    const memberLabels = () => memberRows().map((tr) => tr.querySelector('td:first-child label span:nth-child(2)')?.textContent);
     {
       const byLabel = new Map((await api.listAccounts()).map((a) => [a.label, a.id]));
-      await emailLines('/pools dialog reads each member\'s email beside its label, and nothing beside one without', [...(dlg?.querySelectorAll('.member-picker > li > label') ?? [])].map((l) => [byLabel.get(l.querySelector('span:nth-child(2)')?.textContent ?? '') ?? '', l.querySelector('span:nth-child(3)')?.textContent ?? null]));
+      await emailLines('/pools dialog reads each member\'s email beside its label, and nothing beside one without', memberRows().map((tr) => tr.querySelector('td:first-child label')).map((l) => [byLabel.get(l?.querySelector('span:nth-child(2)')?.textContent ?? '') ?? '', l?.querySelector('span:nth-child(3)')?.textContent ?? null]));
     }
     results.push({ name: '/pools dialog lists members by priority then label', ok: JSON.stringify(memberLabels()) === JSON.stringify(['business', 'mail', 'personal', 'Console workspace', 'Evals workspace', 'team']), missing: memberLabels() });
     const prio = dlg?.querySelector('input[aria-label="Priority for business"]');
@@ -1194,9 +1357,10 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
   results.push({ name: '/pools no label is an inline sibling of its hint', ok: labelled.every((el) => el.tagName === 'P' || el.tagName === 'DIV'), missing: labelled.map((el) => el.tagName) });
 
   // Keys can leave a pool only by moving to another one or being revoked.
-  const keyRows = () => [...(dlg?.querySelectorAll('.key-list li') ?? [])];
-  const rowNames = keyRows().map((li) => li.children[0]?.textContent?.trim());
-  results.push({ name: '/pools key rows have no plain remove', ok: keyRows().every((li) => ![...li.querySelectorAll('button')].some((b) => ['Remove', 'Delete'].includes(b.textContent?.trim() ?? ''))), missing: rowNames });
+  const keyRows = () => [...(dlg?.querySelectorAll('.keys-table tbody tr') ?? [])];
+  const rowNames = keyRows().map((tr) => tr.children[0]?.textContent?.trim());
+  results.push({ name: '/pools the key table lists desktop and laptop', ok: rowNames.includes('desktop') && rowNames.includes('laptop'), missing: rowNames });
+  results.push({ name: '/pools key rows have no plain remove', ok: keyRows().length > 0 && keyRows().every((tr) => ![...tr.querySelectorAll('button')].some((b) => ['Remove', 'Delete'].includes(b.textContent?.trim() ?? ''))), missing: rowNames });
   const desktopRowIdx = rowNames.indexOf('desktop');
   keyRows()[desktopRowIdx]?.querySelector('.menu__trigger')?.click();
   await m.settle(120);
@@ -1209,10 +1373,10 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
   [...(confirmDlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Revoke')?.click();
   // The row waits for the API to accept the revocation, so this covers the call and the reload behind it.
   await m.settle(600);
-  const revokedBadge = keyRows()[rowNames.indexOf('desktop')]?.querySelector('.badge')?.textContent?.trim();
+  const revokedBadge = keyRows()[rowNames.indexOf('desktop')]?.children[2]?.querySelector('.badge')?.textContent?.trim();
   results.push({ name: '/pools revoked key row shows a revoked badge', ok: revokedBadge === 'revoked', missing: [revokedBadge] });
 
-  const laptopIdx = keyRows().map((li) => li.children[0]?.textContent?.trim()).indexOf('laptop');
+  const laptopIdx = keyRows().map((tr) => tr.children[0]?.textContent?.trim()).indexOf('laptop');
   keyRows()[laptopIdx]?.querySelector('.menu__trigger')?.click();
   await m.settle(120);
   [...(keyRows()[laptopIdx]?.querySelectorAll('[role="menuitem"]') ?? [])].find((b) => b.textContent?.trim() === 'Move to…')?.click();
@@ -1223,42 +1387,38 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
   results.push({ name: '/pools move dialog lists the other pools only', ok: [...(moveSelect?.options ?? [])].map((o) => o.value).join(',') === 'codex,studio', missing: [...(moveSelect?.options ?? [])].map((o) => o.value) });
   [...(moveDlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Move key')?.click();
   await m.settle(600);
-  results.push({ name: '/pools moved key leaves the list', ok: !keyRows().some((li) => li.children[0]?.textContent?.trim() === 'laptop'), missing: keyRows().map((li) => li.children[0]?.textContent?.trim()) });
+  results.push({ name: '/pools moved key leaves the list', ok: keyRows().length > 0 && !keyRows().some((tr) => tr.children[0]?.textContent?.trim() === 'laptop'), missing: keyRows().map((tr) => tr.children[0]?.textContent?.trim()) });
 
   // Cache TTL is served per pool, so the block only stands where the pool carries rules.
-  expect('/pools the dialog draws the cache TTL rules the pool carries', dlg?.textContent ?? '', ['Cache TTL', 'Set the cache TTL for this pool', 'Plan writes', 'Metered writes', 'Main conversation', 'Subagents', 'Per-model overrides', 'Also warm subagent caches']);
+  expect('/pools the dialog draws the cache TTL rules the pool carries', dlg?.textContent ?? '', ['Cache TTL', 'Set the cache TTL for this pool', 'Write cost', 'Plan writes', 'Metered writes', 'Main conversation', 'Subagents', 'Also warm subagent caches']);
 
   {
+    const ttl = group(dlg, 'Cache TTL');
+    const gridNames = ['Plan writes', 'Metered writes'].flatMap((set) => ['main conversation', 'subagent', 'keepalive'].map((row) => `${set} ${row} TTL`));
+    const gridSelects = gridNames.map((name) => ttl?.querySelectorAll(`.ttl-grid select[aria-label="${name}"]`).length ?? 0);
     const ruleSets = [...(dlg?.querySelectorAll('[data-rule-set]') ?? [])];
     const names = ruleSets.map((el) => el.getAttribute('data-rule-set')).sort();
-    const labels = ruleSets.map((el) => `${el.getAttribute('data-rule-set')}=${el.querySelector(':scope > .field__label')?.textContent?.trim()}`).sort();
+    const labels = ruleSets.map((el) => `${el.getAttribute('data-rule-set')}=${el.querySelector('.field__label')?.textContent?.trim()}`).sort();
     results.push({
-      name: '/pools the caching section renders one root per rule set, plan and metered, each with its own Main, Subagents and Keepalive selects and its own override picker',
-      ok:
-        names.join(',') === 'metered,plan' &&
-        labels.join(',') === 'metered=Metered writes,plan=Plan writes' &&
-        ruleSets.every(
-          (el) =>
-            el.querySelectorAll('select[aria-label$="main conversation TTL"]').length === 1 &&
-            el.querySelectorAll('select[aria-label$="subagent TTL"]').length === 1 &&
-            el.querySelectorAll('select[aria-label$="keepalive TTL"]').length === 1 &&
-            el.querySelectorAll('select[aria-label^="Model to add"]').length === 1,
-        ),
-      missing: [...names, ...labels],
+      name: '/pools the cache TTL group draws the six TTL selects in one grid and one override root per rule set, plan and metered, each with its own picker',
+      ok: JSON.stringify(gridSelects) === '[1,1,1,1,1,1]' && names.join(',') === 'metered,plan' && labels.join(',') === 'metered=Metered writes,plan=Plan writes' && ruleSets.every((el) => el.querySelectorAll('select[aria-label^="Model to add"]').length === 1),
+      missing: [JSON.stringify(gridSelects), ...names, ...labels],
     });
-    const metered = dlg?.querySelector('[data-rule-set="metered"]');
-    const keepalive = [...(metered?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === 'Keepalive');
+    const writeCost = [...(ttl?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === 'Write cost');
+    const gridHint = ttl?.querySelector('.ttl-grid')?.closest('.field')?.querySelector(':scope > .field__hint')?.textContent ?? '';
+    const meteredKeepalive = ttl?.querySelector('select[aria-label="Metered writes keepalive TTL"]');
     results.push({
-      name: '/pools the metered rule set says what metered means, and the keepalive TTL says which write the next probe follows',
+      name: '/pools the write cost line says when each rule set applies, and the grid says which write a keepalive probe follows',
       ok:
-        (metered?.querySelector(':scope > .field__hint')?.textContent ?? '') === 'Metered: an API-key upstream, or a subscription upstream in overage; a one-hour write costs 2x base input there against 1.25x for five minutes.' &&
-        (keepalive?.querySelector('.field__hint')?.textContent ?? '') === "The first probe after a turn follows that turn's TTL; the probe itself writes with this TTL, which the next probe follows." &&
-        keepalive?.querySelector('select')?.value === '5m',
-      missing: [metered?.querySelector(':scope > .field__hint')?.textContent ?? 'no metered hint', keepalive?.querySelector('.field__hint')?.textContent ?? 'no keepalive hint', keepalive?.querySelector('select')?.value ?? 'no keepalive select'],
+        (writeCost?.querySelector(':scope > .field__hint')?.textContent ?? '') ===
+          'Plan writes apply while an upstream spends plan quota, where a 1-hour write costs the same as a 5-minute one. Metered writes apply while a write costs money, on an API-key upstream or a subscription upstream in overage: 2x input for an hour against 1.25x for five minutes. Reads cost the same either way.' &&
+        gridHint === "The TTL a keepalive probe writes with. The first probe after a turn follows that turn's TTL, and each later probe follows this one." &&
+        meteredKeepalive?.value === '5m',
+      missing: [writeCost?.querySelector(':scope > .field__hint')?.textContent ?? 'no write cost hint', gridHint || 'no grid hint', meteredKeepalive?.value ?? 'no metered keepalive select'],
     });
     // The marker toggle sits under the policy toggle, bound to the pool's injection flag.
     const marker = () => dlg?.querySelector('button[role="switch"][aria-label="Add a cache marker to a request without one"]');
-    const markerHint = [...(dlg?.querySelectorAll('.field__label') ?? [])].find((el) => el.textContent?.trim() === 'Add a cache marker to a request without one')?.nextElementSibling?.textContent?.trim();
+    const markerHint = marker()?.closest('.field')?.querySelector('.field__hint')?.textContent?.trim();
     const before = marker()?.getAttribute('aria-checked');
     marker()?.click();
     await m.settle(120);
@@ -1267,15 +1427,17 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
     await m.settle(120);
     results.push({
       name: '/pools the caching section carries the marker toggle with the stored flag, and it flips',
-      ok: before === 'true' && after === 'false' && marker()?.getAttribute('aria-checked') === 'true' && markerHint === 'Off rewrites the markers a request carries and leaves a marker-less body as sent.',
+      ok: before === 'true' && after === 'false' && marker()?.getAttribute('aria-checked') === 'true' && markerHint === 'Adds a marker to a request that carries none; off leaves such a request as sent. Pin sessions counts an added marker.',
       missing: [String(before), String(after), markerHint ?? 'no hint'],
     });
   }
 
   {
-    // The pin mode and the two placements follow the session affinity, and a warm-prefix placement opens its threshold.
-    const section = (label) => [...(dlg?.querySelectorAll('.dialog-section') ?? [])].find((el) => el.getAttribute('aria-label') === label);
-    const routing = section('Routing');
+    // The pin mode and the two placements follow the session affinity, and either placement that reads the
+    // threshold enables it.
+    const pinning = group(dlg, 'Pinning');
+    const placement = group(dlg, 'Placement');
+    const labelsOf = (section) => [...(section?.querySelectorAll('.field__label') ?? [])].map((l) => l.textContent?.trim()).join('|');
     const options = (select) => [...(select?.options ?? [])].map((o) => o.textContent?.trim());
     const select = (label) => dlg?.querySelector(`select[aria-label="${label}"]`);
     const pick = async (label, value) => {
@@ -1288,18 +1450,19 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
     const drawn = [options(select('Pin sessions')), options(select('Subagent placement')), options(select('Session placement'))];
     const chosen = [select('Pin sessions')?.value, select('Subagent placement')?.value, select('Session placement')?.value];
     results.push({
-      name: '/pools the routing section offers the pin mode and both placements, each at the stored choice',
+      name: '/pools the pinning and placement groups offer the pin mode and both placements, each at the stored choice',
       ok:
         JSON.stringify(drawn) === JSON.stringify([['Always', 'Only when the request caches'], ['By cohort', 'By strategy', 'With the main conversation'], ['By strategy', 'By warm prefix']]) &&
         JSON.stringify(chosen) === '["when_cached","by_cohort","by_warm_prefix"]' &&
-        [...(routing?.querySelectorAll('.field__label') ?? [])].map((l) => l.textContent?.trim()).join('|').includes('Session affinity|Pin sessions|Subagent placement|Session placement|Minimum shared prefix, tokens'),
-      missing: [JSON.stringify(drawn), JSON.stringify(chosen)],
+        labelsOf(pinning) === 'Session affinity|Pin sessions' &&
+        labelsOf(placement) === 'Subagent placement|Session placement|Minimum shared prefix, tokens',
+      missing: [JSON.stringify(drawn), JSON.stringify(chosen), labelsOf(pinning), labelsOf(placement)],
     });
-    expect('/pools the pin and placement hints say what each choice does', routing?.textContent ?? '', [
-      "Under 'only when the request caches' a request with no cache marker that receives none from the TTL policy creates no pin and lands by the strategy; a request bound to its upstream keeps its pin either way.",
-      'By cohort lands subagents that share a static prefix together; with the main conversation lands them on its upstream; by strategy looks nothing up.',
-      'A fresh session lands where its static prefix is warm only when that prefix is at least this large, so a small shared prefix never overrides Pace.',
-      "The size is an estimate from the request's bytes, not a token count the upstream reported.",
+    expect('/pools the pin and placement hints say what each choice does', `${pinning?.textContent ?? ''} ${placement?.textContent ?? ''}`, [
+      'Only when the request caches: a request with no cache marker, and none added by the cache TTL policy, lands by the strategy and takes no pin. A request bound to its upstream keeps its pin either way.',
+      "Where a subagent's first request lands. By cohort: with the subagents that share its static prefix. With the main conversation: on its parent's upstream. By strategy: wherever the strategy picks.",
+      'By warm prefix lands a fresh session where its static prefix is already cached, when the prefix reaches the minimum below; By strategy leaves it to the strategy.',
+      "The smallest shared prefix that places a fresh session, or a subagent by cohort, by warmth; below it the strategy decides. Estimated from the request's bytes, not counted by the upstream.",
     ]);
     const threshold = () => dlg?.querySelector('input[aria-label="Minimum shared prefix, tokens"]');
     const save = () => [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Save pool');
@@ -1313,24 +1476,27 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
     };
     const stored = threshold()?.value;
     await type(threshold(), '1.5');
-    const refused = [save()?.disabled, routing?.querySelector('.callout--critical')?.textContent ?? ''];
+    const refused = [save()?.disabled, placement?.querySelector('.callout--critical')?.textContent ?? ''];
     await pick('Session placement', 'by_strategy');
-    const hidden = [threshold() === null, save()?.disabled];
+    const cohortOnly = [threshold()?.disabled, save()?.disabled];
+    await pick('Subagent placement', 'by_strategy');
+    const neither = [threshold()?.disabled, placement?.querySelector('.callout--critical') === null, save()?.disabled];
+    await pick('Subagent placement', 'by_cohort');
     await pick('Session placement', 'by_warm_prefix');
     await type(threshold(), '20000');
     results.push({
-      name: '/pools a threshold that is not a whole number holds the save, and the strategy placement hides it and frees the save',
-      ok: stored === '20000' && refused[0] === true && refused[1] === 'The minimum shared prefix is a whole number of tokens, 0 or more.' && hidden[0] && hidden[1] === false && save()?.disabled === false,
-      missing: [String(stored), ...refused.map(String), ...hidden.map(String)],
+      name: '/pools a threshold that is not a whole number holds the save while either placement reads it, and with neither it is disabled and frees the save',
+      ok: stored === '20000' && refused[0] === true && refused[1] === 'The minimum shared prefix is a whole number of tokens, 0 or more.' && JSON.stringify(cohortOnly) === '[false,true]' && JSON.stringify(neither) === '[true,true,false]' && save()?.disabled === false,
+      missing: [String(stored), ...refused.map(String), JSON.stringify(cohortOnly), JSON.stringify(neither)],
     });
     const quota = select('Quota headers');
     results.push({
-      name: '/pools the general section offers the quota headers, at the stored setting',
+      name: '/pools the Response headers group offers the quota headers, at the stored setting',
       ok:
         JSON.stringify(options(quota)) === '["Pass through","Hide on committed answers"]' &&
         quota?.value === 'hide' &&
-        (section('General')?.textContent ?? '').includes(
-          'Hide drops the anthropic-ratelimit-unified-* family from every answer but a 429, so an organization-wide quota never reaches a key holder as its own; request-id passes, and the client shows no notice either way.',
+        (group(dlg, 'Response headers')?.textContent ?? '').includes(
+          "Hide drops the anthropic-ratelimit-unified-* headers from every answer but a 429, so an organization's quota never reads as the key holder's own; a 429 keeps them so the client can resume after the reset. request-id passes either way.",
         ),
       missing: [JSON.stringify(options(quota)), String(quota?.value)],
     });
@@ -1339,7 +1505,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
     const period = (label) => dlg?.querySelector(`select[aria-label="Budget period for ${label}"]`);
     const field = budget('Console workspace');
     const rows = [field?.value, period('Console workspace')?.value, field?.getAttribute('placeholder'), field?.getAttribute('min'), field?.getAttribute('step')];
-    const hint = 'An API-key member whose spend reaches its budget is skipped until the UTC day or month ends; spend is priced at API list rates.';
+    const hint = 'API-key members only. A member whose spend reaches its daily or its monthly budget is skipped until that UTC day or month ends, priced at API list rates; a subscription member follows the overage policy instead.';
     results.push({
       name: '/pools an API-key member row carries a budget field and a period select, and a subscription member row carries neither',
       ok:
@@ -1348,11 +1514,11 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
         budget('business') === null &&
         period('business') === null &&
         budget('team') === null &&
-        (section('Members')?.textContent ?? '').includes(hint),
+        (group(dlg, 'Members')?.textContent ?? '').includes(hint),
       missing: [...rows.map(String), `business field ${budget('business') === null ? 'absent' : 'drawn'}`, `business period ${period('business') === null ? 'absent' : 'drawn'}`],
     });
     await type(budget('Console workspace'), '0');
-    const members = section('Members');
+    const members = group(dlg, 'Members');
     const held = [save()?.disabled, members?.querySelector('.callout--critical')?.textContent ?? '', budget('Console workspace')?.getAttribute('aria-invalid')];
     await type(budget('Console workspace'), '50');
     results.push({
@@ -1377,7 +1543,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
     await m.settle(200);
     [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool all')?.click();
     await m.settle(300);
-    [...(dlg?.querySelectorAll('.dialog-nav__link') ?? [])].find((b) => b.textContent?.trim() === 'Caching')?.click();
+    rail(dlg, 'cacheTtl')?.click();
     await m.settle(120);
     const pickedAfterReopen = picker()?.value;
     results.push({
@@ -1388,11 +1554,10 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
   }
 
   // The gateway dials one host, so the hint no longer distinguishes Anthropic upstreams from custom ones.
-  const cacheTtlLabel = [...(dlg?.querySelectorAll('.field__label') ?? [])].find((el) => el.textContent?.trim() === 'Set the cache TTL for this pool');
-  const cacheTtlHint = cacheTtlLabel?.nextElementSibling?.textContent?.trim();
+  const cacheTtlHint = dlg?.querySelector('button[role="switch"][aria-label="Set the cache TTL for this pool"]')?.closest('.field')?.querySelector('.field__hint')?.textContent?.trim();
   results.push({
     name: '/pools cache TTL hint applies to every upstream in the pool',
-    ok: cacheTtlHint === "Every breakpoint the client sends is rewritten to the TTL chosen here. The client's own TTL setting then has no effect through this pool. Applies to every upstream in this pool.",
+    ok: cacheTtlHint === "Rewrites every cache marker a request carries to the TTL below, on every upstream of this pool, so the client's own TTL setting has no effect through it.",
     missing: [cacheTtlHint ?? 'no hint found'],
   });
 
@@ -1401,17 +1566,37 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
   {
     const hours = dlg?.querySelector('input[aria-label="Capture retention in hours"]');
     const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-    setter.call(hours, '999');
+    if (hours) setter.call(hours, '999');
     hours?.dispatchEvent(new window.Event('input', { bubbles: true }));
     await m.settle(150);
     [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Save pool')?.click();
     await m.settle(600);
     const open = [...m.container.querySelectorAll('dialog[open]')].pop();
-    const callout = open?.querySelector('.callout--critical');
+    const status = () => open?.querySelector('.dialog__status');
+    const refused = [status()?.classList.contains('is-held'), status()?.textContent ?? ''];
     results.push({
-      name: '/pools a refused save keeps the dialog open and states why inside it',
-      ok: (open?.textContent ?? '').includes('Edit pool all') && (callout?.textContent ?? '').includes('body_capture_hours exceeds'),
-      missing: [callout?.textContent ?? 'no callout in the dialog'],
+      name: '/pools a refused save keeps the dialog open and states why in the footer line',
+      ok: (open?.textContent ?? '').includes('Edit pool all') && refused[0] === true && refused[1].includes('body_capture_hours exceeds') && !refused[1].includes('Go to'),
+      missing: refused.map(String),
+    });
+    // A later edit to any field takes the server's words away, and a local refusal then leads the line.
+    if (hours) {
+      setter.call(hours, '24');
+      hours.dispatchEvent(new window.Event('input', { bubbles: true }));
+      await m.settle(150);
+    }
+    const cleared = [status()?.textContent ?? '', status()?.classList.contains('is-held')];
+    const threshold = open?.querySelector('input[aria-label="Minimum shared prefix, tokens"]');
+    if (threshold) {
+      setter.call(threshold, '1.5');
+      threshold.dispatchEvent(new window.Event('input', { bubbles: true }));
+      await m.settle(150);
+    }
+    const local = status()?.textContent ?? '';
+    results.push({
+      name: "/pools a corrected field clears the server's refusal and the next local refusal takes the footer",
+      ok: JSON.stringify(cleared) === '["Every group saves together.",false]' && local.startsWith('Save is held: The minimum shared prefix is a whole number of tokens, 0 or more.') && local.includes('Go to Placement') && !local.includes('body_capture_hours'),
+      missing: [...cleared.map(String), local],
     });
   }
   [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
@@ -1424,11 +1609,11 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
   [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool all')?.click();
   await m.settle(600);
   const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
-  const routing = [...(dlg?.querySelectorAll('.dialog-section') ?? [])].find((s) => s.getAttribute('aria-label') === 'Routing');
-  const editor = routing?.querySelector('.pattern-editor');
+  const models = group(dlg, 'Models');
+  const editor = models?.querySelector('.pattern-editor');
   const patterns = () => [...(editor?.querySelectorAll('input[aria-label^="Rule "]') ?? [])];
   const save = () => [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Save pool');
-  const callout = () => routing?.querySelector('.callout--critical')?.textContent ?? '';
+  const callout = () => models?.querySelector('.callout--critical')?.textContent ?? '';
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
   // An editor that never drew leaves nothing to type into, which the checks below then fail by name.
   const type = async (input, value) => {
@@ -1485,12 +1670,29 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
     ok: prefer?.getAttribute('aria-checked') === 'true',
     missing: [prefer ? String(prefer.getAttribute('aria-checked')) : 'absent'],
   });
-  const nameInput = dlg?.querySelector('input');
+  const status = () => dlg?.querySelector('.dialog__status');
+  const goTo = () => [...(status()?.querySelectorAll('button') ?? [])].map((b) => b.textContent?.trim());
+  const unnamed = [status()?.textContent ?? '', JSON.stringify(goTo())];
+  const nameInput = dlg?.querySelector('input[placeholder="research"]');
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
   setter.call(nameInput, 'draft');
   nameInput?.dispatchEvent(new window.Event('input', { bubbles: true }));
   await m.settle(150);
-  [...(dlg?.querySelectorAll('.dialog-nav__link') ?? [])].find((b) => b.textContent?.trim() === 'Keys')?.click();
+  const memberless = [status()?.textContent ?? '', JSON.stringify(goTo())];
+  dlg?.querySelector('.members-table tbody tr input[type="checkbox"]')?.click();
+  await m.settle(150);
+  results.push({
+    name: "/pools a new pool's footer names the missing name, then the missing member",
+    ok:
+      unnamed[0] === 'Save is held: the pool needs a name.Go to Identity' &&
+      unnamed[1] === '["Go to Identity"]' &&
+      memberless[0] === 'Save is held: the pool needs a member.Go to Members' &&
+      memberless[1] === '["Go to Members"]' &&
+      status()?.textContent === 'Every group saves together.' &&
+      status()?.classList.contains('is-held') === false,
+    missing: [...unnamed, ...memberless, status()?.textContent ?? 'no status line'],
+  });
+  rail(dlg, 'keys')?.click();
   await m.settle(150);
   const createKey = [...(dlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Create key');
   results.push({
@@ -1506,13 +1708,20 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
   edit?.click();
   await m.settle(300);
   const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
-  const caching = [...(dlg?.querySelectorAll('.dialog-section') ?? [])].find((s) => s.getAttribute('aria-label') === 'Caching');
-  const ttlToggle = [...(caching?.querySelectorAll('button[role="switch"]') ?? [])].find((b) => b.getAttribute('aria-label') === 'Set the cache TTL for this pool');
-  const diagnostics = [...(caching?.querySelectorAll('select') ?? [])].find((s) => [...s.options].map((o) => o.textContent?.trim()).join('|') === 'Inherit the bootstrap setting|On|Off');
+  const ttlToggle = [...(group(dlg, 'Cache TTL')?.querySelectorAll('button[role="switch"]') ?? [])].find((b) => b.getAttribute('aria-label') === 'Set the cache TTL for this pool');
+  const diagnostics = [...(group(dlg, 'Cache diagnostics')?.querySelectorAll('select') ?? [])].find((s) => [...s.options].map((o) => o.textContent?.trim()).join('|') === 'Inherit the bootstrap setting|On|Off');
   results.push({
     name: '/pools a pool that rewrites no breakpoint still offers the TTL block and the diagnostics override',
     ok: ttlToggle?.getAttribute('aria-checked') === 'false' && diagnostics?.value === 'inherit',
     missing: [ttlToggle ? '' : 'no cache TTL toggle', String(ttlToggle?.getAttribute('aria-checked')), diagnostics ? '' : 'no diagnostics select', String(diagnostics?.value)],
+  });
+  // Subagents by cohort read the threshold too, so it is enabled with sessions by strategy.
+  const placements = [dlg?.querySelector('select[aria-label="Subagent placement"]')?.value, dlg?.querySelector('select[aria-label="Session placement"]')?.value];
+  const threshold = dlg?.querySelector('input[aria-label="Minimum shared prefix, tokens"]');
+  results.push({
+    name: '/pools the threshold is enabled while subagents are placed by cohort and sessions by strategy',
+    ok: JSON.stringify(placements) === '["by_cohort","by_strategy"]' && threshold?.disabled === false,
+    missing: [JSON.stringify(placements), threshold ? String(threshold.disabled) : 'no threshold input'],
   });
   [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
   await m.settle(200);
@@ -1530,11 +1739,9 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
   await m.settle(120);
   warm()?.click();
   await m.settle(120);
-  [...(dlg?.querySelectorAll('.collapsible__summary') ?? [])].find((b) => b.textContent?.includes('Probe tuning'))?.click();
-  await m.settle(120);
-  const cold = [...(dlg?.querySelectorAll('.collapsible__body input[type="number"]') ?? [])][4];
+  const cold = [...(group(dlg, 'Probe tuning')?.querySelectorAll('input[type="number"]') ?? [])][4];
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-  setter.call(cold, '0');
+  if (cold) setter.call(cold, '0');
   cold?.dispatchEvent(new window.Event('input', { bubbles: true }));
   await m.settle(120);
   const heldWhileOn = save()?.disabled === true;

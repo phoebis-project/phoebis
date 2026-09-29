@@ -1,7 +1,7 @@
 import type { AccountPatch, KeyInput, PoolEngineFields, PoolInput } from '@/api/client';
 import { AFFINITY_MODE_VALUES, BUDGET_PERIOD_VALUES, QUOTA_HEADERS_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES } from '@/api/decode';
 import type { Account, AffinitySource, ApiKey, ModelRule, ModelRulesMode, PoolKeepalive } from '@/api/types';
-import { toLocalInput } from './format';
+import { fmtInt, toLocalInput } from './format';
 import { checkPattern } from './patterns';
 import { MIGRATE_BAND } from './presets';
 
@@ -79,39 +79,115 @@ export function prefixThresholdRefusal(value: string): string | null {
   return value.trim() !== '' && whole(Number(value), 0, Number.MAX_SAFE_INTEGER) ? null : 'The minimum shared prefix is a whole number of tokens, 0 or more.';
 }
 
+/** The pool dialog's groups in rail order; a refusal names the one its control sits in. */
+export const POOL_GROUPS = ['identity', 'members', 'keys', 'models', 'selection', 'placement', 'pinning', 'utilization', 'shedding', 'failover', 'overage', 'cacheTtl', 'keepalive', 'probeTuning', 'responseHeaders', 'bodyCapture', 'cacheDiagnostics'] as const;
+export type PoolGroup = (typeof POOL_GROUPS)[number];
+
+export interface PoolRefusal {
+  /** The refused control's accessible name; `priority:<id>`, `budget:<id>`, `period:<id>`, `member:<id>` for a member row; `members` for the missing member. */
+  field: string;
+  group: PoolGroup;
+  /** The words the control's callout and the footer read. */
+  text: string;
+}
+
+/** The labels the dialog draws over each bounded engine field, as the refusals name them. */
+export const ENGINE_FIELD_LABELS: Record<keyof typeof ENGINE_BOUNDS, string> = {
+  burnWindowSeconds: 'Burn window (s)',
+  inFlightCap: 'In flight',
+  overageMoveGraceMinutes: 'Overage grace (min)',
+  retryInPlaceSeconds: 'Retry in place (s)',
+  sourceDwellSeconds: 'Source dwell (s)',
+  windDownMinutes: 'Wind down (min)',
+};
+
+/** The labels the dialog draws over each numeric keepalive field, as the refusals name them. */
+export const KEEPALIVE_FIELD_LABELS: Record<NumericKeepaliveKey, string> = {
+  coldProbeLimit: 'Cold probe limit',
+  jitterSeconds1h: 'Jitter, 1h cache (s)',
+  jitterSeconds5m: 'Jitter, 5m cache (s)',
+  leadSeconds1h: 'Lead time, 1h cache (s)',
+  leadSeconds5m: 'Lead time, 5m cache (s)',
+  maxIdleSeconds: 'Max idle seconds',
+  maxIdleTicks: 'Max idle ticks',
+  netNegativeGraceProbes: 'Grace probes after the net turns negative',
+  retryMaxSeconds: 'Retry backoff max (s)',
+  retrySeconds: 'Retry backoff base (s)',
+};
+
+/** The Probe tuning group's fields in the order it lays them out, so its refusals read in that order too. */
+export const PROBE_TUNING_KEYS = ['leadSeconds5m', 'leadSeconds1h', 'jitterSeconds5m', 'jitterSeconds1h', 'coldProbeLimit', 'retrySeconds', 'retryMaxSeconds', 'maxIdleSeconds', 'maxIdleTicks'] as const satisfies readonly NumericKeepaliveKey[];
+
+/** A bound's sentence: a field with no practical ceiling states its floor alone. */
+const boundText = (label: string, { max, min }: { max: number; min: number }) =>
+  max === Number.MAX_SAFE_INTEGER ? `${label} is a whole number of at least ${fmtInt(min)}.` : `${label} is a whole number from ${fmtInt(min)} to ${fmtInt(max)}.`;
+const listed = (label: string) => `${label} is one of its listed choices.`;
+
+/** Every check of the pool routes the input fails, in rail order and in each group's order below; empty when the routes would take it. */
+export function poolRefusals(input: PoolInput, accountIds: ReadonlySet<string>): PoolRefusal[] {
+  const out: PoolRefusal[] = [];
+  const refuse = (group: PoolGroup, field: string, text: string | null) => {
+    if (text !== null) out.push({ field, group, text });
+  };
+  const k = input.keepalive;
+  const affinity = input.affinityTtlSeconds;
+
+  refuse('identity', 'Name', input.name.length > 0 ? null : 'the pool needs a name.');
+
+  refuse('members', 'members', input.members.length > 0 ? null : 'the pool needs a member.');
+  for (const m of input.members) {
+    const id = m.accountId;
+    refuse('members', `member:${id}`, accountIds.has(id) ? null : `${id} is not an upstream the console lists.`);
+    refuse('members', `priority:${id}`, whole(m.priority, 0, Number.MAX_SAFE_INTEGER) ? null : 'Priority is a whole number of 0 or more.');
+    // A member written without the budget fields has no budget and a month, as the member write reads it.
+    refuse('members', `budget:${id}`, m.budgetUsd == null ? null : budgetRefusal(String(m.budgetUsd)));
+    refuse('members', `period:${id}`, BUDGET_PERIOD_VALUES.some((period) => period === (m.budgetPeriod ?? 'month')) ? null : 'A budget period is a day or a month.');
+  }
+
+  refuse('models', 'Model rules', modelRulesRefusal(input.modelRules));
+
+  refuse('placement', 'Subagent placement', SUBAGENT_PLACEMENT_VALUES.some((placement) => placement === input.subagentPlacement) ? null : listed('Subagent placement'));
+  refuse('placement', 'Session placement', SESSION_PLACEMENT_VALUES.some((placement) => placement === input.sessionPlacement) ? null : listed('Session placement'));
+  refuse('placement', 'Minimum shared prefix, tokens', prefixThresholdRefusal(String(input.minSharedPrefixTokens)));
+
+  refuse('pinning', 'Session affinity in seconds', whole(affinity, 0, Number.MAX_SAFE_INTEGER) && (affinity === 0 || affinity >= 60) ? null : 'Session affinity is off or at least 60 whole seconds.');
+  refuse('pinning', 'Pin sessions', AFFINITY_MODE_VALUES.some((mode) => mode === input.affinityMode) ? null : listed('Pin sessions'));
+
+  // Migration keeps the form's floor of 50 %, above the route's 0.
+  refuse('utilization', 'Migrate above utilization (%)', ratio(input.migrateAboveUtilization, 0.5) ? null : 'Migrate above utilization is from 50 to 100.');
+  refuse('utilization', 'Select below utilization (%)', ratio(input.selectBelowUtilization, 0) ? null : 'Select below utilization is from 0 to 100.');
+  refuse('utilization', 'Select below utilization (%)', bandRefusal(input));
+
+  const engine = (group: PoolGroup, key: keyof typeof ENGINE_BOUNDS) =>
+    refuse(group, ENGINE_FIELD_LABELS[key], whole(input[key], ENGINE_BOUNDS[key].min, ENGINE_BOUNDS[key].max) ? null : boundText(ENGINE_FIELD_LABELS[key], ENGINE_BOUNDS[key]));
+  refuse('shedding', 'Share (%)', ratio(input.shedShare, 0) ? null : 'Share (%) is from 0 to 100.');
+  engine('shedding', 'burnWindowSeconds');
+  engine('shedding', 'sourceDwellSeconds');
+  refuse('shedding', 'Warm sessions', WARM_SESSIONS_VALUES.some((mode) => mode === input.warmSessions) ? null : listed('Warm sessions'));
+
+  refuse('failover', 'Pace floor (%)', ratio(input.paceFloor, 0) ? null : 'Pace floor (%) is from 0 to 100.');
+  engine('failover', 'inFlightCap');
+  engine('failover', 'retryInPlaceSeconds');
+
+  engine('overage', 'overageMoveGraceMinutes');
+  engine('overage', 'windDownMinutes');
+
+  const keepalive = (group: PoolGroup, key: NumericKeepaliveKey) =>
+    refuse(group, KEEPALIVE_FIELD_LABELS[key], whole(k[key], KEEPALIVE_BOUNDS[key].min, KEEPALIVE_BOUNDS[key].max) ? null : boundText(KEEPALIVE_FIELD_LABELS[key], KEEPALIVE_BOUNDS[key]));
+  keepalive('keepalive', 'netNegativeGraceProbes');
+  refuse('keepalive', 'Daily probe cost cap in dollars', k.costCapUsdPerDay === null || (Number.isFinite(k.costCapUsdPerDay) && k.costCapUsdPerDay > 0) ? null : 'Daily probe cost cap ($) is above 0.');
+  refuse('keepalive', 'Keep prompt caches warm', !k.enabled || affinity >= 300 ? null : 'Keep prompt caches warm needs Session affinity of at least 5m.');
+
+  for (const key of PROBE_TUNING_KEYS) keepalive('probeTuning', key);
+  refuse('probeTuning', KEEPALIVE_FIELD_LABELS.retryMaxSeconds, k.retryMaxSeconds >= k.retrySeconds ? null : 'Retry backoff max (s) is at or above Retry backoff base (s).');
+
+  refuse('responseHeaders', 'Quota headers', QUOTA_HEADERS_VALUES.some((headers) => headers === input.quotaHeaders) ? null : listed('Quota headers'));
+  return out;
+}
+
 /** Whether the pool routes would take `input` as it stands, with every member one of `accountIds`. */
 export function validatePoolInput(input: PoolInput, accountIds: ReadonlySet<string>): boolean {
-  const k = input.keepalive;
-  const tuned = (Object.keys(KEEPALIVE_BOUNDS) as NumericKeepaliveKey[]).every((key) => whole(k[key], KEEPALIVE_BOUNDS[key].min, KEEPALIVE_BOUNDS[key].max));
-  const affinity = input.affinityTtlSeconds;
-  // A member written without the budget fields has no budget and a month, as the member write reads it.
-  const budgeted = (m: PoolInput['members'][number]) =>
-    (m.budgetUsd == null || budgetRefusal(String(m.budgetUsd)) === null) && BUDGET_PERIOD_VALUES.some((period) => period === (m.budgetPeriod ?? 'month'));
-  return (
-    input.name.length > 0 &&
-    input.members.length > 0 &&
-    input.members.every((m) => accountIds.has(m.accountId) && whole(m.priority, 0, Number.MAX_SAFE_INTEGER) && budgeted(m)) &&
-    whole(affinity, 0, Number.MAX_SAFE_INTEGER) &&
-    (affinity === 0 || affinity >= 60) &&
-    // Migration keeps the form's floor of 50 %, above the route's 0.
-    ratio(input.migrateAboveUtilization, 0.5) &&
-    ratio(input.selectBelowUtilization, 0) &&
-    bandRefusal(input) === null &&
-    ratio(input.shedShare, 0) &&
-    ratio(input.paceFloor, 0) &&
-    (Object.keys(ENGINE_BOUNDS) as (keyof typeof ENGINE_BOUNDS)[]).every((key) => whole(input[key], ENGINE_BOUNDS[key].min, ENGINE_BOUNDS[key].max)) &&
-    WARM_SESSIONS_VALUES.some((mode) => mode === input.warmSessions) &&
-    AFFINITY_MODE_VALUES.some((mode) => mode === input.affinityMode) &&
-    SUBAGENT_PLACEMENT_VALUES.some((placement) => placement === input.subagentPlacement) &&
-    SESSION_PLACEMENT_VALUES.some((placement) => placement === input.sessionPlacement) &&
-    prefixThresholdRefusal(String(input.minSharedPrefixTokens)) === null &&
-    QUOTA_HEADERS_VALUES.some((headers) => headers === input.quotaHeaders) &&
-    tuned &&
-    k.retryMaxSeconds >= k.retrySeconds &&
-    (k.costCapUsdPerDay === null || (Number.isFinite(k.costCapUsdPerDay) && k.costCapUsdPerDay > 0)) &&
-    (!k.enabled || affinity >= 300) &&
-    modelRulesRefusal(input.modelRules) === null
-  );
+  return poolRefusals(input, accountIds).length === 0;
 }
 
 export type CaptureMode = 'inherit' | 'off' | 'override';

@@ -268,6 +268,76 @@ test('a model rule list is refused in the route\'s order and words, and the refu
   assert.equal(d.validatePoolInput({ ...input, modelRules: rules('claude-*', 'a***') }, accounts), false);
 });
 
+test('a pool refusal names the group its control sits in', () => {
+  assert.deepEqual(d.poolRefusals(input, accounts), [], 'the stored pool is refused nothing');
+  const [first] = input.members;
+  const refused = (field, group, text) => [{ field, group, text }];
+  const cases = [
+    [{ name: '' }, refused('Name', 'identity', 'the pool needs a name.')],
+    [{ members: [] }, refused('members', 'members', 'the pool needs a member.')],
+    [{ members: [...input.members, { accountId: 'ghost', priority: 0 }] }, refused('member:ghost', 'members', 'ghost is not an upstream the console lists.')],
+    [{ members: [{ accountId: first.accountId, priority: 1.5 }] }, refused('priority:business', 'members', 'Priority is a whole number of 0 or more.')],
+    [{ members: [{ ...first, budgetUsd: 0 }] }, refused('budget:business', 'members', 'A budget is a dollar amount above 0; leave it empty for no budget.')],
+    [{ members: [{ ...first, budgetPeriod: 'week', budgetUsd: 5 }] }, refused('period:business', 'members', 'A budget period is a day or a month.')],
+    [{ modelRules: rules('a***') }, refused('Model rules', 'models', 'model_rules[0]: pattern holds three stars in a row')],
+    [{ subagentPlacement: 'alone' }, refused('Subagent placement', 'placement', 'Subagent placement is one of its listed choices.')],
+    [{ sessionPlacement: 'by_luck' }, refused('Session placement', 'placement', 'Session placement is one of its listed choices.')],
+    [{ minSharedPrefixTokens: 1.5 }, refused('Minimum shared prefix, tokens', 'placement', 'The minimum shared prefix is a whole number of tokens, 0 or more.')],
+    [
+      { affinityTtlSeconds: 30 },
+      [
+        { field: 'Session affinity in seconds', group: 'pinning', text: 'Session affinity is off or at least 60 whole seconds.' },
+        { field: 'Keep prompt caches warm', group: 'keepalive', text: 'Keep prompt caches warm needs Session affinity of at least 5m.' },
+      ],
+    ],
+    [{ affinityMode: 'sometimes' }, refused('Pin sessions', 'pinning', 'Pin sessions is one of its listed choices.')],
+    [{ migrateAboveUtilization: 0.4 }, refused('Migrate above utilization (%)', 'utilization', 'Migrate above utilization is from 50 to 100.')],
+    [{ selectBelowUtilization: 1.2 }, refused('Select below utilization (%)', 'utilization', 'Select below utilization is from 0 to 100.')],
+    [
+      { migrateAboveUtilization: 0.9, selectBelowUtilization: 0.86 },
+      refused('Select below utilization (%)', 'utilization', 'Select below must sit at or under migrate above minus 5%, the band a shed session lands under.'),
+    ],
+    [{ shedShare: 1.2 }, refused('Share (%)', 'shedding', 'Share (%) is from 0 to 100.')],
+    [{ burnWindowSeconds: 59 }, refused('Burn window (s)', 'shedding', 'Burn window (s) is a whole number of at least 60.')],
+    [{ sourceDwellSeconds: 59 }, refused('Source dwell (s)', 'shedding', 'Source dwell (s) is a whole number of at least 60.')],
+    [{ warmSessions: 'sometimes' }, refused('Warm sessions', 'shedding', 'Warm sessions is one of its listed choices.')],
+    [{ paceFloor: 1.2 }, refused('Pace floor (%)', 'failover', 'Pace floor (%) is from 0 to 100.')],
+    [{ inFlightCap: 0 }, refused('In flight', 'failover', 'In flight is a whole number from 1 to 4,294,967,295.')],
+    [{ retryInPlaceSeconds: 301 }, refused('Retry in place (s)', 'failover', 'Retry in place (s) is a whole number from 0 to 300.')],
+    [{ overageMoveGraceMinutes: 301 }, refused('Overage grace (min)', 'overage', 'Overage grace (min) is a whole number from 0 to 300.')],
+    [{ windDownMinutes: 10_081 }, refused('Wind down (min)', 'overage', 'Wind down (min) is a whole number from 0 to 10,080.')],
+    [
+      { keepalive: { ...input.keepalive, netNegativeGraceProbes: 101 } },
+      refused('Grace probes after the net turns negative', 'keepalive', 'Grace probes after the net turns negative is a whole number from 0 to 100.'),
+    ],
+    [{ keepalive: { ...input.keepalive, costCapUsdPerDay: 0 } }, refused('Daily probe cost cap in dollars', 'keepalive', 'Daily probe cost cap ($) is above 0.')],
+    [
+      { affinityTtlSeconds: 120, keepalive: { ...input.keepalive, enabled: true } },
+      refused('Keep prompt caches warm', 'keepalive', 'Keep prompt caches warm needs Session affinity of at least 5m.'),
+    ],
+    [{ keepalive: { ...input.keepalive, coldProbeLimit: 0 } }, refused('Cold probe limit', 'probeTuning', 'Cold probe limit is a whole number from 1 to 20.')],
+    [
+      { keepalive: { ...input.keepalive, retryMaxSeconds: 20, retrySeconds: 30 } },
+      refused('Retry backoff max (s)', 'probeTuning', 'Retry backoff max (s) is at or above Retry backoff base (s).'),
+    ],
+    [{ quotaHeaders: 'strip' }, refused('Quota headers', 'responseHeaders', 'Quota headers is one of its listed choices.')],
+  ];
+  for (const [patch, expected] of cases) assert.deepEqual(d.poolRefusals({ ...input, ...patch }, accounts), expected, JSON.stringify(patch));
+});
+
+test("refusals come in rail order, a new pool's first two the name and the member", () => {
+  const refusals = d.poolRefusals({ ...input, name: '', members: [], modelRules: rules('a***'), quotaHeaders: 'strip' }, accounts);
+  assert.deepEqual(
+    refusals.map((r) => r.group),
+    ['identity', 'members', 'models', 'responseHeaders'],
+  );
+  assert.deepEqual(
+    refusals.slice(0, 2).map((r) => r.text),
+    ['the pool needs a name.', 'the pool needs a member.'],
+  );
+  assert.deepEqual(d.POOL_GROUPS, ['identity', 'members', 'keys', 'models', 'selection', 'placement', 'pinning', 'utilization', 'shedding', 'failover', 'overage', 'cacheTtl', 'keepalive', 'probeTuning', 'responseHeaders', 'bodyCapture', 'cacheDiagnostics']);
+});
+
 test('the key dialog carries the rules, the mode, and the twins switch from the stored key to the body', () => {
   const own = rules('claude-sonnet-5', 'NOT *');
   const stored = d.decodeKey({ ...fixture('keys').keys[0], long_context_twins: false, model_rules: own, model_rules_mode: 'replace' });

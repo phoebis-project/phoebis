@@ -1,10 +1,10 @@
 import type { Account, MemberEligibility, Pool, PoolStrategy, Session } from '@/api/types';
 
-/** One sentence per strategy, shown in the dialog's hint and the card; a later strategy adds its entry here. */
+/** One sentence per strategy, the card's rule line and the first sentence of the dialog's Strategy hint; a later strategy adds its entry here. */
 export const STRATEGY_RULE: Record<PoolStrategy, string> = {
-  pace: 'Within the first tier that has an eligible upstream, the one with the most remaining weekly allowance per hour until its window resets or its subscription ends, whichever comes first; an unsampled upstream counts as untouched; ties are random.',
-  priority: 'Within the first tier that has an eligible upstream, any of them at random.',
-  round_robin: 'Within the first tier that has an eligible upstream, each in turn; a restart starts the round again.',
+  pace: 'Within the first priority tier that has an eligible upstream, the one with the most weekly allowance left per hour until its window resets or its subscription ends; an unsampled upstream counts as untouched, and ties are random.',
+  priority: 'Within the first priority tier that has an eligible upstream, any of them at random.',
+  round_robin: 'Within the first priority tier that has an eligible upstream, each in turn; a restart starts the round again.',
 };
 export const STRATEGY_LABEL: Record<PoolStrategy, string> = { pace: 'Pace', priority: 'Priority, then random', round_robin: 'Round robin' };
 /** The kind tiers, in the order selection walks them. */

@@ -85,10 +85,11 @@ export function UtilizationBar({ readings, migrate, migrateMin, selectBelow }: {
         {selectBelow && <Handle kind="select" label="Select-below threshold" min={0} max={100} threshold={selectBelow} track={track} />}
         {migrate && <Handle kind="migrate" label="Migrate threshold" min={migrateMin} max={100} threshold={migrate} track={track} />}
       </div>
+      {/* Placed rather than spread: spreading centres the middle mark between labels of unequal width, off the track's 50%. */}
       <div className="ubar__scale num" aria-hidden="true">
-        <span>0%</span>
-        <span>50%</span>
-        <span>100%</span>
+        <span style={{ left: 0, position: 'absolute' }}>0%</span>
+        <span style={{ left: '50%', position: 'absolute', transform: 'translateX(-50%)' }}>50%</span>
+        <span style={{ position: 'absolute', right: 0 }}>100%</span>
       </div>
       <Legend
         items={[

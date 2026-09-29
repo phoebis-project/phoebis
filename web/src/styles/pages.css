@@ -1224,42 +1224,71 @@
   font-size: 12px;
 }
 
-.member-picker {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+/* A control that waits on a switch or a preset stays drawn, so it reads as waiting rather than as editable. */
+.dialog-group .input:disabled {
+  color: var(--ink-3);
+  cursor: not-allowed;
+  background: var(--surface-2);
+}
+
+.dialog-group .select:has(select:disabled) > svg {
+  opacity: 0.5;
+}
+
+/* A link inside a group's sentence reads as one of its words, so it takes no side padding. */
+.dialog-group .link-btn {
   padding: 0;
-  margin: 0;
-  list-style: none;
 }
 
-.member-picker li {
+/* A member's name lines up with the inputs of its row rather than with their top edge. */
+.members-table td {
+  vertical-align: middle;
+}
+
+.members-table td:first-child label {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
   gap: 10px;
-  padding: 6px 10px;
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius-sm);
+  align-items: center;
 }
 
-.member-picker label {
+.members-table th:nth-child(2),
+.members-table td:nth-child(2) {
+  width: 96px;
+}
+
+.members-table th:nth-child(3),
+.members-table td:nth-child(3) {
+  width: 140px;
+}
+
+.members-table th:nth-child(4),
+.members-table td:nth-child(4) {
+  width: 150px;
+}
+
+/* The grid's selects keep the dialog's type, which the table's smaller size would shrink below the selects around it. */
+.ttl-grid {
+  font-size: inherit;
+}
+
+.ttl-grid th[scope="row"] {
+  font-weight: 500;
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+
+.ttl-grid td .select {
   display: flex;
+}
+
+/* The table clears the last row's cell borders, and a row heading is not a cell. */
+.ttl-grid tbody tr:last-child th {
+  border-bottom: 0;
+}
+
+/* The per-model picker fills what the Add button leaves. */
+[data-rule-set] .row > .select {
   flex: 1;
-  gap: 10px;
-  align-items: center;
-}
-
-.member-picker__prio {
-  display: inline-flex;
-  gap: 8px;
-  align-items: center;
-  font-size: 12px;
-}
-
-.member-picker__budget {
-  flex-basis: 100%;
-  justify-content: flex-end;
 }
 
 .radio-list {
@@ -1434,8 +1463,8 @@
 }
 
 .ubar__scale {
-  display: flex;
-  justify-content: space-between;
+  position: relative;
+  height: 14px;
   font-size: 11px;
   color: var(--ink-3);
 }
@@ -2135,25 +2164,6 @@
 /* The keepalive summary lists several limits, so it takes a row of its own. */
 .pool__policy-wide {
   grid-column: 1 / -1;
-}
-
-.key-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 0;
-  margin: 0;
-  list-style: none;
-}
-
-.key-list li {
-  display: grid;
-  grid-template-columns: 1fr auto auto auto;
-  gap: 10px;
-  align-items: center;
-  padding: 6px 10px;
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius-sm);
 }
 
 /* The processed list of a saved key, one line per entry with the level it came from. */
