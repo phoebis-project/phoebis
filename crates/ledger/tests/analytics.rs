@@ -7,10 +7,10 @@ use phoebis_ledger::{
     fold_account, fold_event, fold_keepalive, key_request_totals, member_spends, moves_by_reason,
     placements, read_account_rollups, read_rollups, rewrite_series, run_retention,
     session_identities, AttemptRecord, EventRecord, Histogram, KeepaliveDelta, LedgerConfig,
-    LedgerDb, LiveKeys, ModelPrice, PlanFactors, PlanWindows, PriceTable, RequestRecord,
-    RollupFilter, RollupRow, SeriesFilter, NO_CLASS, UNATTRIBUTED,
+    LedgerDb, LiveKeys, ModelPrice, PlanTables, PriceTable, RequestRecord, RollupFilter, RollupRow,
+    SeriesFilter, Tiers, NO_CLASS, UNATTRIBUTED,
 };
-use phoebis_routing::{RegistrySnapshot, RoutingState, FIVE_HOUR};
+use phoebis_routing::{RegistrySnapshot, RoutingState, FIVE_HOUR, SEVEN_DAY};
 use phoebis_store::{AccountKind, BudgetPeriod, PoolMember, RegistryLoad, RoutingLoad};
 use rand::{RngExt, SeedableRng};
 
@@ -19,6 +19,20 @@ const DAY_MS: i64 = 86_400_000;
 const WEEKDAY_PEAK: i64 = 1_789_999_200_000;
 /// Monday 2026-09-21 at 20:00 UTC, past the peak band on the same weekday.
 const WEEKDAY_OFF_PEAK: i64 = 1_790_020_800_000;
+/// Monday 2026-09-21 at 12:00 UTC, the peak band's first minute (05:00 in Los Angeles).
+const WEEKDAY_BAND_OPENS: i64 = 1_789_992_000_000;
+const MAX_5X: &str = "default_claude_max_5x";
+
+/// The share of `window` on Max 5x that `input` uncached and `output` tokens of `model` read, summed from the
+/// shipped table's own cells rather than through the pricer the series calls, unbanded.
+fn cells_share(tables: &PlanTables, window: &str, model: &str, input: u64, output: u64) -> f64 {
+    let cells = tables
+        .cost
+        .cells(window, model)
+        .expect("the model has a row");
+    (input as f64 * cells.input.share_per_million + output as f64 * cells.output.share_per_million)
+        / 1_000_000.0
+}
 
 fn synthetic_day(seed: u64) -> Vec<(RequestRecord, Vec<AttemptRecord>)> {
     let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
@@ -736,7 +750,7 @@ fn a_breakdown_by_request_class_splits_conversation_from_overhead() {
 }
 
 #[test]
-fn the_burn_series_prices_a_subscription_row_in_meter_tokens_and_an_api_key_row_in_dollars() {
+fn the_burn_series_prices_a_subscription_row_in_window_share_and_an_api_key_row_in_dollars() {
     let db = LedgerDb::open_in_memory().unwrap();
     let plant = |id: &str, account: &str, kind: &str, usd: f64, cache_read: Option<u64>| {
         db.insert_request(
@@ -776,12 +790,12 @@ fn the_burn_series_prices_a_subscription_row_in_meter_tokens_and_an_api_key_row_
     // Absent from `kinds` below: its tokens must reach neither total, its cache reads included, the one row
     // carrying any so the cached half of the assertion below has something to leave out.
     plant("unknown", "unknown-c", "oauth", 4.0, Some(500));
-    let factors = PlanFactors::shipped();
-    let windows = PlanWindows::shipped();
+    let tables = PlanTables::shipped();
     let kinds = HashMap::from([
         ("oauth-a".to_string(), AccountKind::Oauth),
         ("api-b".to_string(), AccountKind::ApiKey),
     ]);
+    let tiers: Tiers = HashMap::from([("oauth-a".to_string(), Some(MAX_5X.to_string()))]);
     let filter = SeriesFilter {
         from: 0,
         to: 7_200_000,
@@ -789,21 +803,30 @@ fn the_burn_series_prices_a_subscription_row_in_meter_tokens_and_an_api_key_row_
         ..SeriesFilter::default()
     };
     let points = db
-        .read_blocking(|c| burn_series(c, &factors, &windows, &kinds, &filter))
+        .read_blocking(|c| burn_series(c, &tables, &kinds, &tiers, &filter))
         .unwrap();
     let point = points
         .iter()
-        .find(|p| p.meter_tokens > 0.0 || p.usd > 0.0)
+        .find(|p| p.five_hour_share.is_some() || p.usd > 0.0)
         .expect("the bucket every tracked row landed in");
     let hour = phoebis_ledger::hour_of(3_600_000);
-    let expected_meter = factors
-        .meter_tokens("claude-sonnet-5", 1_000, 0, 0, 0, 100)
-        .unwrap()
-        * windows.band_factor(FIVE_HOUR, hour * 1_000);
+    let band = tables.cost.band_factor(FIVE_HOUR, hour * 1_000);
+    let five_hour = cells_share(&tables, FIVE_HOUR, "claude-sonnet-5", 1_000, 100) * band;
+    let seven_day = cells_share(&tables, SEVEN_DAY, "claude-sonnet-5", 1_000, 100);
     assert!(
-        (point.meter_tokens - expected_meter).abs() < 1e-9,
-        "the subscription row alone prices in meter tokens: {} vs {expected_meter}",
-        point.meter_tokens
+        (point.five_hour_share.unwrap() - five_hour).abs() < 1e-6,
+        "the subscription row alone prices its 5-hour share: {:?} vs {five_hour}",
+        point.five_hour_share
+    );
+    assert!(
+        (point.seven_day_share.unwrap() - seven_day).abs() < 1e-6,
+        "the subscription row alone prices its 7-day share: {:?} vs {seven_day}",
+        point.seven_day_share
+    );
+    assert_eq!(
+        (point.five_hour_unmeasured, point.seven_day_unmeasured),
+        (true, true),
+        "every Sonnet cell on both windows is a stand-in"
     );
     assert!(
         (point.usd - 1.25).abs() < 1e-9,
@@ -817,7 +840,7 @@ fn the_burn_series_prices_a_subscription_row_in_meter_tokens_and_an_api_key_row_
 }
 
 #[test]
-fn an_hour_inside_the_peak_band_weighs_a_subscription_rows_meter_tokens_by_the_band_factor() {
+fn an_hour_inside_the_peak_band_weighs_the_five_hour_share_and_leaves_the_seven_day_share() {
     let db = LedgerDb::open_in_memory().unwrap();
     for (id, at) in [("peak", WEEKDAY_PEAK), ("off_peak", WEEKDAY_OFF_PEAK)] {
         db.insert_request(
@@ -848,9 +871,9 @@ fn an_hour_inside_the_peak_band_weighs_a_subscription_rows_meter_tokens_by_the_b
         )
         .unwrap();
     }
-    let factors = PlanFactors::shipped();
-    let windows = PlanWindows::shipped();
+    let tables = PlanTables::shipped();
     let kinds = HashMap::from([("a".to_string(), AccountKind::Oauth)]);
+    let tiers: Tiers = HashMap::from([("a".to_string(), Some(MAX_5X.to_string()))]);
     let filter = SeriesFilter {
         from: WEEKDAY_PEAK - 3_600_000,
         to: WEEKDAY_OFF_PEAK + 3_600_000,
@@ -858,7 +881,7 @@ fn an_hour_inside_the_peak_band_weighs_a_subscription_rows_meter_tokens_by_the_b
         ..SeriesFilter::default()
     };
     let points = db
-        .read_blocking(|c| burn_series(c, &factors, &windows, &kinds, &filter))
+        .read_blocking(|c| burn_series(c, &tables, &kinds, &tiers, &filter))
         .unwrap();
     let peak = points
         .iter()
@@ -868,16 +891,28 @@ fn an_hour_inside_the_peak_band_weighs_a_subscription_rows_meter_tokens_by_the_b
         .iter()
         .find(|p| p.at == phoebis_ledger::hour_of(WEEKDAY_OFF_PEAK) * 1_000)
         .unwrap();
+    let base = cells_share(&tables, FIVE_HOUR, "claude-sonnet-5", 1_000, 100);
+    let week = cells_share(&tables, SEVEN_DAY, "claude-sonnet-5", 1_000, 100);
+    let factor = tables.cost.band_factor(FIVE_HOUR, WEEKDAY_PEAK);
+    assert!(factor > 1.0, "the peak hour lies inside the band");
     assert!(
-        off_peak.meter_tokens > 0.0,
-        "the off-peak row still prices, unweighed"
+        (off_peak.five_hour_share.unwrap() - base).abs() < 1e-6,
+        "the off-peak row still prices, unweighed: {:?} vs {base}",
+        off_peak.five_hour_share
     );
     assert!(
-        (peak.meter_tokens - off_peak.meter_tokens * 1.45).abs() < 1e-6,
-        "the peak hour weighs the same tokens 1.45 times the off-peak hour: {} vs {}",
-        peak.meter_tokens,
-        off_peak.meter_tokens
+        (peak.five_hour_share.unwrap() - base * factor).abs() < 1e-6,
+        "the peak hour weighs the same tokens by the band: {:?} vs {}",
+        peak.five_hour_share,
+        base * factor
     );
+    for point in [peak, off_peak] {
+        assert!(
+            (point.seven_day_share.unwrap() - week).abs() < 1e-6,
+            "the band weighs the 5-hour window alone: {:?} vs {week}",
+            point.seven_day_share
+        );
+    }
     // A daily bucket holds both rows; each still reads its own hour's band rather than the bucket's midnight
     // start, or the peak row would lose its weight entirely once the bucket outgrows the hour.
     let daily_filter = SeriesFilter {
@@ -885,20 +920,206 @@ fn an_hour_inside_the_peak_band_weighs_a_subscription_rows_meter_tokens_by_the_b
         ..filter.clone()
     };
     let daily_points = db
-        .read_blocking(|c| burn_series(c, &factors, &windows, &kinds, &daily_filter))
+        .read_blocking(|c| burn_series(c, &tables, &kinds, &tiers, &daily_filter))
         .unwrap();
     let day = daily_points
         .iter()
-        .find(|p| p.meter_tokens > 0.0)
+        .find(|p| p.five_hour_share.is_some())
         .expect("the day both rows landed in");
-    let base = factors
-        .meter_tokens("claude-sonnet-5", 1_000, 0, 0, 0, 100)
-        .unwrap();
     assert!(
-        (day.meter_tokens - (base * 1.45 + base)).abs() < 1e-6,
-        "the peak row weighs 1.45 and the off-peak row 1.0 in the one daily bucket they share: {} vs {}",
-        day.meter_tokens,
-        base * 1.45 + base
+        (day.five_hour_share.unwrap() - (base * factor + base)).abs() < 1e-6,
+        "the peak row weighs the band and the off-peak row 1.0 in the one daily bucket they share: {:?} vs {}",
+        day.five_hour_share,
+        base * factor + base
+    );
+    assert!(
+        (day.seven_day_share.unwrap() - 2.0 * week).abs() < 1e-6,
+        "the daily bucket's 7-day share is the two rows' unweighed sum: {:?}",
+        day.seven_day_share
+    );
+}
+
+#[test]
+fn a_row_of_an_account_without_a_tier_prices_no_share_and_an_api_key_row_keeps_its_dollars() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    // A million Opus input tokens per account in one off-band hour.
+    let plant = |account: &str, kind: &str, usd: f64| {
+        let id = format!("r-{account}");
+        db.insert_request(
+            &RequestRecord {
+                id: id.clone(),
+                received_at: WEEKDAY_OFF_PEAK,
+                key_id: Some("k".into()),
+                pool_id: Some("p".into()),
+                canonical_model: "claude-opus-5".into(),
+                model: "claude-opus-5".into(),
+                kind: "inference".into(),
+                origin: "client".into(),
+                outcome: "succeeded".into(),
+                attempts: 1,
+                ..Default::default()
+            },
+            &[AttemptRecord {
+                request_id: id,
+                attempt: 1,
+                account_id: account.into(),
+                account_kind: kind.into(),
+                outcome: "succeeded".into(),
+                input_tokens: Some(1_000_000),
+                estimated_usd: Some(usd),
+                ..Default::default()
+            }],
+            None,
+        )
+        .unwrap();
+    };
+    // Every row carries dollars, so only pricing by kind leaves them off the subscription rows.
+    plant("max", "oauth", 5.0);
+    plant("pro", "oauth", 5.0);
+    plant("tierless", "oauth", 5.0);
+    plant("key", "api_key", 5.0);
+    let tables = PlanTables::shipped();
+    let kinds = HashMap::from([
+        ("key".to_string(), AccountKind::ApiKey),
+        ("max".to_string(), AccountKind::Oauth),
+        ("pro".to_string(), AccountKind::Oauth),
+        ("tierless".to_string(), AccountKind::Oauth),
+    ]);
+    let tiers: Tiers = HashMap::from([
+        ("max".to_string(), Some(MAX_5X.to_string())),
+        ("pro".to_string(), Some("default_claude_pro".to_string())),
+        ("tierless".to_string(), None),
+    ]);
+    let hour = phoebis_ledger::hour_of(WEEKDAY_OFF_PEAK) * 1_000;
+    let point_of = |account: &str| {
+        let filter = SeriesFilter {
+            from: hour,
+            to: hour + 3_600_000,
+            bucket_seconds: 3_600,
+            accounts: vec![account.into()],
+            ..SeriesFilter::default()
+        };
+        db.read_blocking(|c| burn_series(c, &tables, &kinds, &tiers, &filter))
+            .unwrap()
+            .into_iter()
+            .find(|p| p.at == hour)
+            .expect("the planted hour")
+    };
+    let max = point_of("max");
+    assert!(
+        (max.five_hour_share.unwrap() - 0.0841).abs() < 1e-4,
+        "a million Opus input tokens read 8.41% of a Max 5x 5-hour window off the band: {max:?}"
+    );
+    assert!(
+        (max.seven_day_share.unwrap() - 0.00610).abs() < 1e-6,
+        "and 0.610% of its 7-day window: {max:?}"
+    );
+    assert_eq!(
+        (max.five_hour_unmeasured, max.seven_day_unmeasured, max.usd),
+        (false, true, 0.0),
+        "the 5-hour Opus input cell is measured and the 7-day one a stand-in; a subscription spends no dollars"
+    );
+    let pro = point_of("pro");
+    assert!(
+        (pro.five_hour_share.unwrap() - 0.0841 / 0.215).abs() < 1e-4
+            && (pro.seven_day_share.unwrap() - 0.00610 / 0.18).abs() < 1e-6,
+        "Pro reads the same tokens over its own windows, 0.215 and 0.18 of Max 5x's: {pro:?}"
+    );
+    let tierless = point_of("tierless");
+    assert_eq!(
+        (
+            tierless.five_hour_share,
+            tierless.seven_day_share,
+            tierless.five_hour_unmeasured,
+            tierless.seven_day_unmeasured,
+            tierless.uncached_tokens,
+            tierless.usd,
+        ),
+        (None, None, false, false, 1_000_000, 0.0),
+        "no tier sizes a window, so the tokens count and no share is priced"
+    );
+    let key = point_of("key");
+    assert_eq!(
+        (
+            key.five_hour_share,
+            key.seven_day_share,
+            key.usd,
+            key.uncached_tokens
+        ),
+        (None, None, 5.0, 1_000_000),
+        "an api_key row keeps its estimated dollars and reads no window"
+    );
+}
+
+#[test]
+fn a_session_attempt_weighs_its_five_hour_share_by_the_band_at_its_completion() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let (started, finished) = (WEEKDAY_BAND_OPENS - 60_000, WEEKDAY_BAND_OPENS + 60_000);
+    db.insert_request(
+        &RequestRecord {
+            id: "r-edge".into(),
+            received_at: started,
+            finished_at: Some(finished),
+            key_id: Some("k".into()),
+            pool_id: Some("p".into()),
+            session_id: Some("s-edge".into()),
+            canonical_model: "claude-sonnet-5".into(),
+            model: "claude-sonnet-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            outcome: "succeeded".into(),
+            attempts: 1,
+            ..Default::default()
+        },
+        &[AttemptRecord {
+            request_id: "r-edge".into(),
+            attempt: 1,
+            account_id: "a".into(),
+            account_kind: "oauth".into(),
+            started_at: started,
+            finished_at: Some(finished),
+            outcome: "succeeded".into(),
+            input_tokens: Some(1_000),
+            output_tokens: Some(100),
+            ..Default::default()
+        }],
+        None,
+    )
+    .unwrap();
+    let tables = PlanTables::shipped();
+    let factor = tables.cost.band_factor(FIVE_HOUR, finished);
+    assert!(
+        tables.cost.band_factor(FIVE_HOUR, started) == 1.0 && factor > 1.0,
+        "the attempt starts before the band and completes inside it"
+    );
+    let kinds = HashMap::from([("a".to_string(), AccountKind::Oauth)]);
+    let tiers: Tiers = HashMap::from([("a".to_string(), Some(MAX_5X.to_string()))]);
+    let filter = SeriesFilter {
+        from: WEEKDAY_BAND_OPENS - 3_600_000,
+        to: WEEKDAY_BAND_OPENS + 3_600_000,
+        bucket_seconds: 3_600,
+        ..SeriesFilter::default()
+    };
+    let sessions = db
+        .read_blocking(|c| phoebis_ledger::session_burn_series(c, &tables, &kinds, &tiers, &filter))
+        .unwrap();
+    let point = sessions
+        .iter()
+        .find(|(id, _)| id == "s-edge")
+        .and_then(|(_, points)| points.iter().find(|p| p.five_hour_share.is_some()))
+        .unwrap_or_else(|| panic!("the session's bucket carries its share: {sessions:?}"));
+    let base = cells_share(&tables, FIVE_HOUR, "claude-sonnet-5", 1_000, 100);
+    assert!(
+        (point.five_hour_share.unwrap() - base * factor).abs() < 1e-6,
+        "priced at the band its completion fell in, not its start's: {point:?} vs {}",
+        base * factor
+    );
+    assert!(
+        (point.seven_day_share.unwrap()
+            - cells_share(&tables, SEVEN_DAY, "claude-sonnet-5", 1_000, 100))
+        .abs()
+            < 1e-6,
+        "the 7-day share carries no band: {point:?}"
     );
 }
 
@@ -910,12 +1131,15 @@ fn the_burn_series_over_one_read_matches_a_read_per_scope() {
     for (request, attempts) in &synthetic_day(5) {
         db.insert_request(request, attempts, None).unwrap();
     }
-    let factors = PlanFactors::shipped();
-    let windows = PlanWindows::shipped();
+    let tables = PlanTables::shipped();
     let kinds = HashMap::from([
         ("a".to_string(), AccountKind::Oauth),
         ("b".to_string(), AccountKind::ApiKey),
         ("c".to_string(), AccountKind::Oauth),
+    ]);
+    let tiers: Tiers = HashMap::from([
+        ("a".to_string(), Some(MAX_5X.to_string())),
+        ("c".to_string(), Some("default_claude_pro".to_string())),
     ]);
     for bucket_seconds in [3_600, 6 * 3_600] {
         // A range that starts mid-bucket, so the read reaches back to the bucket's edge.
@@ -950,11 +1174,12 @@ fn the_burn_series_over_one_read_matches_a_read_per_scope() {
                 ..scope
             };
             let read = db
-                .read_blocking(|c| burn_series(c, &factors, &windows, &kinds, &filter))
+                .read_blocking(|c| burn_series(c, &tables, &kinds, &tiers, &filter))
                 .unwrap();
-            let over = burn_series_over(&rows, &factors, &windows, &kinds, &filter).unwrap();
+            let over = burn_series_over(&rows, &tables, &kinds, &tiers, &filter).unwrap();
             assert!(
-                read.iter().any(|p| p.meter_tokens > 0.0 || p.usd > 0.0),
+                read.iter()
+                    .any(|p| p.five_hour_share.is_some() || p.usd > 0.0),
                 "the scope reads something: {filter:?}"
             );
             assert_eq!(over, read, "{filter:?}");
@@ -1058,10 +1283,9 @@ fn a_zero_bucket_seconds_answers_the_range_error_rather_than_panicking() {
     let filter = SeriesFilter::default();
     assert!(db.read_blocking(|c| moves_by_reason(c, &filter)).is_err());
     assert!(db.read_blocking(|c| rewrite_series(c, &filter)).is_err());
-    let factors = PlanFactors::shipped();
-    let windows = PlanWindows::shipped();
+    let tables = PlanTables::shipped();
     assert!(db
-        .read_blocking(|c| burn_series(c, &factors, &windows, &HashMap::new(), &filter))
+        .read_blocking(|c| burn_series(c, &tables, &HashMap::new(), &HashMap::new(), &filter))
         .is_err());
 }
 

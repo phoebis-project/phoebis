@@ -308,20 +308,20 @@ as the request log's, and under the user agent grouping a pattern list names the
 
 Traffic reports request volume by outcome and the error rate, with a Failovers chart and a Migration rewrites card
 beside it: the cache-write tokens the first request after a move paid to warm its new upstream, and the moves the range
-counted, by reason. Burn reports the plan's burn in meter tokens for a subscription account and in dollars for an
-api-key account, side by side and each split into cached and uncached tokens, grouped by upstream, key, session, or
-request class, beside a Plan meter fit table (see [Plan meter](#plan-meter)); a subscription account's meter tokens
-carry the peak band's weight. The key, request class and upstream groupings read the hourly rollups, which fold a
-request under the hour it arrived in and weigh it by that hour's band, while the live fit weighs a request at its
-completion: a request that starts before the band and completes inside it reads at the off-peak weight in these charts
-and at the band's in the fit, and one that starts inside the band and completes after it the other way round. The
-session grouping weighs each attempt at its completion, as the fit does. Grouped by upstream, it adds a Plan per hour
-chart, the plan-percent view: the share of each subscription upstream's 5-hour window, at its fitted size or else its
-tier's, that its traffic used per hour, weighted by the peak band. Latency reports percentiles read from the merged
-per-hour histograms; Cache reports the hit ratio, tokens that expired between turns, the share of input served from
-cache, and the output split into thinking and plain output; Cost reports the estimated spend for the range; Cache
-warming reports what probes cost against what they saved; and Upstreams reports peak utilization, ineligible time, and
-pin churn per upstream.
+counted, by reason. Burn reports a subscription account's spend as the share of its own 5-hour and 7-day window and an
+api-key account's in dollars, side by side and each split into cached and uncached tokens, grouped by upstream, key,
+session, or request class, beside a Plan meter fit table (see [Plan meter](#plan-meter)); the 5-hour share carries the
+peak band's weight, the 7-day share none. The shares read under the upstream grouping alone, since shares of different
+upstreams' windows do not add, and the Spend per minute chart draws dollars alone. The key, request class and upstream
+groupings read the hourly rollups, which fold a request under the hour it arrived in and weigh it by that hour's band
+rather than at its completion, where the meter charges it. Grouped by upstream, it adds a Plan per hour chart: the share
+of each subscription upstream's 5-hour window, solid, and of its 7-day window, dashed, that its traffic used per hour, a
+share priced through a cell no measurement has filled marked with an asterisk in the legend and the tooltip, and an
+upstream whose tier the tier factor table does not size listed as tier unknown. Latency reports percentiles read from
+the merged per-hour histograms; Cache reports the hit ratio, tokens that expired between turns, the share of input
+served from cache, and the output split into thinking and plain output; Cost reports the estimated spend for the range;
+Cache warming reports what probes cost against what they saved; and Upstreams reports peak utilization, ineligible time,
+and pin churn per upstream.
 
 The Cache section closes with Placements by rung: the attempts in the range the router placed by a warm prefix or beside
 the main conversation rather than by its strategy, counted by rung (by the conversation's own messages, by its static

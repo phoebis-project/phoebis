@@ -654,12 +654,15 @@ async fn a_non_numeric_limit_on_the_request_log_is_refused() {
     );
 }
 
-#[tokio::test]
-async fn the_burn_route_answers_meter_tokens_per_account_with_plan_percent() {
-    let parts = common::admin_parts_full().await;
-    let cookie = login(&parts.app, "admin-secret").await;
-    parts
-        .store
+/// Whether the point answers `field` as null: a key the route left out indexes to null too, which a shape without
+/// the field would pass.
+fn null_field(point: &serde_json::Value, field: &str) -> bool {
+    point.get(field) == Some(&serde_json::Value::Null)
+}
+
+/// Stores the Max 5x tier on `business`, as a profile read does.
+fn set_max_5x(store: &phoebis_store::Store) {
+    store
         .set_profile(
             "business",
             r#"{"account":{"uuid":"u","email_address":"business@example.invalid"},"organization":{}}"#,
@@ -671,77 +674,74 @@ async fn the_burn_route_answers_meter_tokens_per_account_with_plan_percent() {
             },
         )
         .unwrap();
+}
+
+#[tokio::test]
+async fn the_burn_route_answers_each_subscription_points_share_of_both_windows() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
     let now = common::NOW;
-    parts
-        .ledger
-        .record(record("burn-1", now - HOUR, "claude-sonnet-5", "s1"));
+    // An hour of a million Opus input tokens on `business`.
+    let mut opus = record("burn-1", now - HOUR, "claude-opus-5", "s1");
+    if let Record::Request { attempts, .. } = &mut opus {
+        attempts[0].input_tokens = Some(1_000_000);
+        attempts[0].output_tokens = None;
+    }
+    parts.ledger.record(opus);
     fake_upstream::wait_for_async(Duration::from_secs(5), || async {
         parts.db.request("burn-1").await.unwrap()
     })
     .await;
-    let burn = json(
-        get(
-            &parts.app,
-            "/admin/analytics/burn?range=24h&group_by=account",
-            Some(&cookie),
-        )
-        .await,
-    )
-    .await;
+    let business = |v: &serde_json::Value| {
+        v["points"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["group"] == "business" && p["uncached_tokens"].as_u64().unwrap_or(0) > 0)
+            .cloned()
+            .unwrap_or_else(|| panic!("a bucket carries the recorded attempt: {v}"))
+    };
+    let burn_url = "/admin/analytics/burn?range=24h&group_by=account";
+    // No tier on file yet: the upstream is a subscription whose window no table sizes.
+    let tierless = business(&json(get(&parts.app, burn_url, Some(&cookie)).await).await);
+    assert!(
+        tierless["unit"] == "window_share"
+            && null_field(&tierless, "five_hour_share")
+            && null_field(&tierless, "seven_day_share")
+            && tierless["five_hour_unmeasured"] == false
+            && tierless["seven_day_unmeasured"] == false,
+        "a subscription with no tier prices no share: {tierless}"
+    );
+    set_max_5x(&parts.store);
+    let burn = json(get(&parts.app, burn_url, Some(&cookie)).await).await;
     assert_eq!(burn["group_by"], "account");
-    let point = burn["points"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|p| p["group"] == "business" && p["meter_tokens"].as_f64().unwrap_or(0.0) > 0.0)
-        .unwrap_or_else(|| panic!("a bucket carries the recorded attempt: {burn}"));
-    let meter_tokens = point["meter_tokens"].as_f64().unwrap();
-    let expected = meter_tokens / 11_890_000.0;
+    let point = business(&burn);
+    let tables = phoebis_ledger::PlanTables::shipped();
+    let hour = point["at"].as_i64().unwrap();
+    let band = tables.cost.band_factor(phoebis_routing::FIVE_HOUR, hour);
     assert!(
-        (point["plan_percent"].as_f64().unwrap() - expected).abs() < 1e-12,
-        "the fitted 5-hour scale is absent, so the tier's predicted one divides the bucket: {point}"
+        (point["five_hour_share"].as_f64().unwrap() - 0.0841 * band).abs() < 1e-9,
+        "a million Opus input tokens read the table's 5-hour share on Max 5x: {point}"
     );
-    // A fitted scale, other than the tier's row, takes over the division.
-    parts.router.report(phoebis_routing::Report::Fit {
-        row: phoebis_store::FitRow {
-            account_id: "business".into(),
-            window: phoebis_routing::FIVE_HOUR.into(),
-            scale: 5_945_000.0,
-            confidence: 0.8,
-            intervals: 12,
-            corrections_json: "{}".into(),
-            fitted_at: now,
-            incarnation: 1,
-            band_factor: None,
-            ..Default::default()
-        },
-        incarnation: 1,
-    });
-    let expected_fitted = meter_tokens / 5_945_000.0;
-    let burn_fitted = wait_json(
-        &parts.app,
-        "/admin/analytics/burn?range=24h&group_by=account",
-        &cookie,
-        |v| {
-            v["points"].as_array().unwrap().iter().any(|p| {
-                p["group"] == "business"
-                    && p["meter_tokens"].as_f64().unwrap_or(0.0) > 0.0
-                    && (p["plan_percent"].as_f64().unwrap_or(-1.0) - expected_fitted).abs() < 1e-9
-            })
-        },
-    )
-    .await;
-    let fitted_point = burn_fitted["points"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|p| p["group"] == "business" && p["meter_tokens"].as_f64().unwrap_or(0.0) > 0.0)
-        .unwrap();
     assert!(
-        (fitted_point["plan_percent"].as_f64().unwrap() - expected_fitted).abs() < 1e-9,
-        "a fitted 5-hour scale divides the bucket instead of the tier's predicted one: {fitted_point}"
+        (point["seven_day_share"].as_f64().unwrap() - 0.00610).abs() < 1e-9,
+        "and its 7-day share, unbanded: {point}"
     );
-    // An api_key account has no tier on file and no fit row, so its point reads plan_percent null.
+    assert_eq!(
+        (
+            &point["five_hour_unmeasured"],
+            &point["seven_day_unmeasured"],
+            &point["unit"],
+            &point["usd"],
+        ),
+        (
+            &serde_json::json!(false),
+            &serde_json::json!(true),
+            &serde_json::json!("window_share"),
+            &serde_json::json!(0.0),
+        ),
+        "the 7-day Opus cell alone is a stand-in, and a subscription spends no dollars: {point}"
+    );
     parts.ledger.record(Record::Request {
         request: RequestRecord {
             id: "burn-2".into(),
@@ -773,18 +773,13 @@ async fn the_burn_route_answers_meter_tokens_per_account_with_plan_percent() {
         }],
         bodies: None,
     });
-    let with_direct = wait_json(
-        &parts.app,
-        "/admin/analytics/burn?range=24h&group_by=account",
-        &cookie,
-        |v| {
-            v["points"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|p| p["group"] == "direct" && p["usd"].as_f64().unwrap_or(0.0) > 0.0)
-        },
-    )
+    let with_direct = wait_json(&parts.app, burn_url, &cookie, |v| {
+        v["points"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p["group"] == "direct" && p["usd"].as_f64().unwrap_or(0.0) > 0.0)
+    })
     .await;
     assert!(
         with_direct["points"]
@@ -792,8 +787,10 @@ async fn the_burn_route_answers_meter_tokens_per_account_with_plan_percent() {
             .unwrap()
             .iter()
             .filter(|p| p["group"] == "direct")
-            .all(|p| p["plan_percent"].is_null()),
-        "an api_key account has no plan to read a percent of"
+            .all(|p| null_field(p, "five_hour_share")
+                && null_field(p, "seven_day_share")
+                && p["unit"] == "usd"),
+        "an api_key account has no window to read a share of"
     );
     let by_key = json(
         get(
@@ -804,13 +801,20 @@ async fn the_burn_route_answers_meter_tokens_per_account_with_plan_percent() {
         .await,
     )
     .await;
+    let keyed = by_key["points"].as_array().unwrap();
     assert!(
-        by_key["points"]
-            .as_array()
-            .unwrap()
+        keyed
             .iter()
-            .all(|p| p["plan_percent"].is_null()),
-        "plan_percent is an account-grouped figure alone"
+            .any(|p| p["uncached_tokens"].as_u64().unwrap_or(0) >= 1_000_000),
+        "the key's bucket carries the subscription's tokens: {by_key}"
+    );
+    assert!(
+        keyed.iter().all(|p| null_field(p, "five_hour_share")
+            && null_field(p, "seven_day_share")
+            && null_field(p, "five_hour_unmeasured")
+            && null_field(p, "seven_day_unmeasured")
+            && null_field(p, "unit")),
+        "the shares are an account-grouped figure alone, since shares of different accounts' windows do not add"
     );
     assert_eq!(
         get(
@@ -829,6 +833,8 @@ async fn the_burn_route_answers_meter_tokens_per_account_with_plan_percent() {
 async fn the_burn_route_ranks_sessions_by_tokens_and_prices_each_by_its_accounts_kind() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
+    // A tier on file, so the shares the session grouping leaves null are the grouping's and not a missing tier's.
+    set_max_5x(&parts.store);
     let now = common::NOW;
     let session_request = |id: &str,
                            at: i64,
@@ -913,54 +919,8 @@ async fn the_burn_route_ranks_sessions_by_tokens_and_prices_each_by_its_accounts
         1,
         0.0,
     ));
-    // An attempt that goes out a minute before the peak band's first minute inside the range and completes a
-    // minute into it: the meter charges it at its completion, so the series prices it at the band's factor.
-    let windows = phoebis_ledger::PlanWindows::shipped();
-    let band_edge = (1..24)
-        .flat_map(|h| (0..60).map(move |m| now - 24 * HOUR + h * HOUR + m * 60_000))
-        .find(|&at| {
-            windows.band_factor(phoebis_routing::FIVE_HOUR, at) > 1.0
-                && windows.band_factor(phoebis_routing::FIVE_HOUR, at - 60_000) == 1.0
-        })
-        .expect("a band edge inside the range");
-    let (edge_started, edge_finished) = (band_edge - 60_000, band_edge + 60_000);
-    parts.ledger.record(Record::Request {
-        request: RequestRecord {
-            id: "r-edge".into(),
-            received_at: edge_started,
-            finished_at: Some(edge_finished),
-            key_id: Some("desktop".into()),
-            pool_id: Some("main".into()),
-            session_id: Some("s-edge".into()),
-            model: "claude-sonnet-5".into(),
-            canonical_model: "claude-sonnet-5".into(),
-            kind: "inference".into(),
-            origin: "client".into(),
-            status: Some(200),
-            outcome: "succeeded".into(),
-            attempts: 1,
-            ..Default::default()
-        },
-        attempts: vec![AttemptRecord {
-            request_id: "r-edge".into(),
-            attempt: 1,
-            account_id: "business".into(),
-            account_kind: "oauth".into(),
-            started_at: edge_started,
-            finished_at: Some(edge_finished),
-            outcome: "succeeded".into(),
-            input_tokens: Some(100),
-            output_tokens: Some(10),
-            ..Default::default()
-        }],
-        bodies: None,
-    });
     fake_upstream::wait_for_async(Duration::from_secs(5), || async {
         parts.db.request("r-mid").await.unwrap()
-    })
-    .await;
-    fake_upstream::wait_for_async(Duration::from_secs(5), || async {
-        parts.db.request("r-edge").await.unwrap()
     })
     .await;
     let burn = json(
@@ -986,7 +946,7 @@ async fn the_burn_route_ranks_sessions_by_tokens_and_prices_each_by_its_accounts
     );
     let big_buckets: Vec<serde_json::Value> = points
         .iter()
-        .filter(|p| p["group"] == "s-big" && p["meter_tokens"].as_f64().unwrap_or(0.0) > 0.0)
+        .filter(|p| p["group"] == "s-big" && p["uncached_tokens"].as_u64().unwrap_or(0) > 0)
         .cloned()
         .collect();
     assert_eq!(
@@ -996,30 +956,20 @@ async fn the_burn_route_ranks_sessions_by_tokens_and_prices_each_by_its_accounts
     );
     assert!(
         big_buckets.iter().all(|p| p["usd"].as_f64() == Some(0.0)),
-        "an oauth session prices in meter tokens alone: {big_buckets:?}"
+        "an oauth session spends no dollars: {big_buckets:?}"
     );
     let mid_point = points
         .iter()
         .find(|p| p["group"] == "s-mid" && p["usd"].as_f64().unwrap_or(0.0) > 0.0)
         .unwrap_or_else(|| panic!("s-mid's bucket carries its dollar price: {points:?}"));
-    assert_eq!(
-        mid_point["meter_tokens"].as_f64(),
-        Some(0.0),
-        "an api_key session prices in dollars alone"
-    );
-    let edge_point = points
-        .iter()
-        .find(|p| p["group"] == "s-edge" && p["meter_tokens"].as_f64().unwrap_or(0.0) > 0.0)
-        .unwrap_or_else(|| panic!("s-edge's bucket carries its meter tokens: {points:?}"));
-    let plain = phoebis_ledger::PlanFactors::shipped()
-        .meter_tokens("claude-sonnet-5", 100, 0, 0, 0, 10)
-        .unwrap();
-    let factor = windows.band_factor(phoebis_routing::FIVE_HOUR, edge_finished);
-    assert!(factor > 1.0, "the completion falls inside the band");
+    assert_eq!(mid_point["uncached_tokens"].as_u64(), Some(1_000));
+    // A session can move between upstreams, and shares of different accounts' windows do not add.
     assert!(
-        (edge_point["meter_tokens"].as_f64().unwrap() - plain * factor).abs() < 1e-9,
-        "priced at the band's factor its completion fell in, not the start's: {edge_point} vs {}",
-        plain * factor
+        points.iter().all(|p| null_field(p, "five_hour_share")
+            && null_field(p, "seven_day_share")
+            && null_field(p, "five_hour_unmeasured")
+            && null_field(p, "seven_day_unmeasured")),
+        "the session grouping answers no share, a tier on file or not: {points:?}"
     );
 }
 
@@ -1099,6 +1049,7 @@ async fn the_burn_route_answers_only_the_twenty_busiest_sessions() {
 async fn the_session_series_sizes_its_buckets_like_the_account_series_on_long_ranges() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
+    set_max_5x(&parts.store);
     let now = common::NOW;
     // A 7-day range buckets in 6 hours; `now` always falls in the trailing partial bucket the ceiling of the
     // hour leaves, since the newest bucket ends at `now`'s own hour rather than a 6-hour edge.
@@ -1173,9 +1124,21 @@ async fn the_session_series_sizes_its_buckets_like_the_account_series_on_long_ra
         .iter()
         .rfind(|p| p["group"] == "s-trailing")
         .unwrap();
-    assert!(
-        trailing["meter_tokens"].as_f64().unwrap_or(0.0) > 0.0,
+    assert_eq!(
+        trailing["uncached_tokens"].as_u64(),
+        Some(500),
         "the trailing partial bucket still carries the attempt inside it: {trailing}"
+    );
+    let account_trailing = by_account["points"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .rfind(|p| p["group"] == "business")
+        .unwrap();
+    assert!(
+        account_trailing["five_hour_share"].as_f64().unwrap_or(0.0) > 0.0
+            && account_trailing["seven_day_share"].as_f64().unwrap_or(0.0) > 0.0,
+        "the account series prices the same attempt in its trailing bucket: {account_trailing}"
     );
 }
 

@@ -1,6 +1,6 @@
 import type {
-  AccountRollup, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, CacheMissReason, CostSplit, LatencyHistograms, PinMigrationReason, PlacementRow, RequestKind, RequestLog, RewritePoint, WastedProbeReason,
-  WindowFit,
+  AccountRollup, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, CacheMissReason, CostSplit, LatencyHistograms, PinMigrationReason, PlacementRow, PlanModelCells, RequestKind, RequestLog, RewritePoint,
+  TierFactor, WastedProbeReason, WindowFit,
 } from '@/api/types';
 import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons, missCount } from '@/lib/cache';
 import { emptyCounts } from '@/lib/counts';
@@ -10,6 +10,7 @@ import { matchesPattern } from '@/lib/pattern';
 import { ACCOUNTS } from './accounts';
 import { keyById } from './pools';
 import { USER_AGENTS } from './requests';
+import { SETTINGS_SAMPLE } from './samples';
 import { DAY, HOUR, MINUTE, ago, iso } from './time';
 
 /**
@@ -246,11 +247,73 @@ export const FITS: WindowFit[] = [
   { accountId: 'personal', bandDivergent: true, bandFactor: 1.18, bandFactorPredicted: 1.45, confidence: 0.55, corrections: { 'claude-sonnet-5': 1.08 }, drift: 3_420_000 / 2_400_000, fittedAt: ago(47 * MINUTE), intervals: 6, predicted: 2_400_000, scale: 3_420_000, window: 'five_hour' },
 ];
 
-/** The shipped meter factors against Opus, by the model family a canonical id names. */
-const METER_FACTORS: [string, number][] = [['fable', 2], ['haiku', 0.36], ['opus', 1], ['sonnet', 0.54]];
-/** A subscription row's tokens in meter units: the model's factor over the token kinds, each at its own weight. */
-const meterTokensOf = (r: HourlyRollup) =>
-  (METER_FACTORS.find(([family]) => r.model.includes(family))?.[1] ?? 1) * (r.tokens.uncachedInput + r.tokens.cacheRead * 0.1 + r.tokens.cacheWrite5m * 1.25 + r.tokens.cacheWrite1h * 2 + r.tokens.output * 5);
+const TABLES = SETTINGS_SAMPLE.planTables;
+type Window = 'five_hour' | 'seven_day';
+
+/**
+ * The shipped cost table's row for a model, matched by the family its id names: the longest table id the model's
+ * own id includes, so a dated id reads its undated row and Fable 5.1 does not read Fable 5's.
+ */
+function cellsOf(window: Window, model: string): PlanModelCells | undefined {
+  const rows = TABLES.cost.windows[window] ?? {};
+  const id = Object.keys(rows)
+    .filter((k) => model.includes(k))
+    .sort((a, b) => b.length - a.length)[0];
+  return id === undefined ? undefined : rows[id];
+}
+
+/** The mock's tier spellings as the tier factor table keys them; the mock's `pro_5x` is the table's Pro row. */
+function tierFactorOf(tier: string | undefined, window: Window): TierFactor | undefined {
+  if (tier === undefined) return undefined;
+  const row = TABLES.tiers.tiers[`default_claude_${tier === 'pro_5x' ? 'pro' : tier}`];
+  return window === 'five_hour' ? row?.fiveHour : row?.sevenDay;
+}
+
+/** The in-force band row's factor on `window` at `at` when its hours cover it in its zone, else 1, as the route reads it. */
+function bandAt(window: Window, at: number): number {
+  const band = TABLES.cost.bands
+    .filter((b) => b.windows.includes(window) && (b.effectiveFrom === null || Date.parse(b.effectiveFrom) <= at))
+    .sort((a, b) => (b.effectiveFrom ?? '').localeCompare(a.effectiveFrom ?? ''))[0];
+  if (band === undefined) return 1;
+  const parts = new Intl.DateTimeFormat('en-US', { hour: 'numeric', hourCycle: 'h23', timeZone: band.zone, weekday: 'short' }).formatToParts(at);
+  const hour = Number(parts.find((p) => p.type === 'hour')?.value);
+  const weekend = ['Sat', 'Sun'].includes(parts.find((p) => p.type === 'weekday')?.value ?? '');
+  return (!band.weekdays || !weekend) && band.fromHour <= hour && hour < band.toHour ? band.factor : 1;
+}
+
+/**
+ * A subscription row's share of each of its account's windows: the table's cells for its model over the tier's
+ * factor, the 5-hour share weighed by the band at the row's hour; null for a tier or a model the tables lack.
+ */
+function sharesOf(r: HourlyRollup, tier: string | undefined): Record<Window, { share: number; unmeasured: boolean } | null> {
+  const one = (window: Window) => {
+    const cells = cellsOf(window, r.model);
+    const factor = tierFactorOf(tier, window);
+    if (cells === undefined || factor === undefined) return null;
+    const read = [
+      [r.tokens.uncachedInput, cells.input],
+      [r.tokens.cacheRead, cells.cacheRead],
+      [r.tokens.cacheWrite5m, cells.cacheWrite5m],
+      [r.tokens.cacheWrite1h, cells.cacheWrite1h],
+      [r.tokens.output, cells.output],
+    ] as const;
+    const onMax5x = read.reduce((n, [tokens, cell]) => n + (tokens * cell.sharePerMillion) / 1_000_000, 0);
+    const band = window === 'five_hour' ? bandAt(window, Date.parse(r.hour)) : 1;
+    return { share: (onMax5x / factor.factor) * band, unmeasured: factor.unmeasured || read.some(([tokens, cell]) => tokens > 0 && cell.unmeasured) };
+  };
+  return { five_hour: one('five_hour'), seven_day: one('seven_day') };
+}
+
+interface BurnSum {
+  cached: number;
+  fiveHour: number | null;
+  fiveHourUnmeasured: boolean;
+  sevenDay: number | null;
+  sevenDayUnmeasured: boolean;
+  uncached: number;
+  usd: number;
+}
+const emptyBurn = (): BurnSum => ({ cached: 0, fiveHour: null, fiveHourUnmeasured: false, sevenDay: null, sevenDayUnmeasured: false, uncached: 0, usd: 0 });
 
 /** How many sessions the session grouping keeps, the route's cut. */
 const BURN_SESSIONS = 20;
@@ -258,34 +321,56 @@ const BURN_SESSIONS = 20;
 export function burnOf(rows: HourlyRollup[], range: Range, groupBy: BurnGroup): { bucketSeconds: number; points: BurnPoint[] } {
   const { bucketMs, starts } = bucketsOf(range);
   const kinds = new Map(ACCOUNTS.map((a) => [a.id, a.kind]));
+  const tiers = new Map(ACCOUNTS.map((a) => [a.id, a.subscription?.rateLimitTier]));
   const first = starts[0] ?? 0;
   const end = (starts[starts.length - 1] ?? 0) + bucketMs;
   // The route prices a row by its account's kind and skips a row whose account left the registry.
   const kept = rows.filter((r) => Date.parse(r.hour) >= first && Date.parse(r.hour) < end && kinds.has(r.accountId));
   const groupOf = (r: HourlyRollup) => (groupBy === 'account' ? r.accountId : groupBy === 'key' ? r.keyId : groupBy === 'session' ? r.sessionId : r.requestClass);
-  const sums = new Map<string, Map<number, { cached: number; meter: number; uncached: number; usd: number }>>();
+  const sums = new Map<string, Map<number, BurnSum>>();
   for (const r of kept) {
     const at = Math.floor((Date.parse(r.hour) - first) / bucketMs) * bucketMs + first;
     const oauth = kinds.get(r.accountId) === 'oauth';
     const group = groupOf(r);
     const byAt = sums.get(group) ?? new Map();
     sums.set(group, byAt);
-    const s = byAt.get(at) ?? { cached: 0, meter: 0, uncached: 0, usd: 0 };
+    const s = byAt.get(at) ?? emptyBurn();
     byAt.set(at, s);
     s.cached += r.tokens.cacheRead;
     s.uncached += r.tokens.uncachedInput;
-    s.meter += oauth ? meterTokensOf(r) : 0;
     s.usd += oauth ? 0 : r.costUsd;
+    if (!oauth) continue;
+    const shares = sharesOf(r, tiers.get(r.accountId));
+    if (shares.five_hour !== null) {
+      s.fiveHour = (s.fiveHour ?? 0) + shares.five_hour.share;
+      s.fiveHourUnmeasured ||= shares.five_hour.unmeasured;
+    }
+    if (shares.seven_day !== null) {
+      s.sevenDay = (s.sevenDay ?? 0) + shares.seven_day.share;
+      s.sevenDayUnmeasured ||= shares.seven_day.unmeasured;
+    }
   }
   const tokensOf = (group: string) => [...(sums.get(group)?.values() ?? [])].reduce((n, s) => n + s.cached + s.uncached, 0);
   let groups = [...sums.keys()].sort();
   if (groupBy === 'session') groups = [...groups].sort((a, b) => tokensOf(b) - tokensOf(a)).slice(0, BURN_SESSIONS).sort();
-  const scaleOf = (accountId: string) => FITS.find((f) => f.accountId === accountId && f.window === 'five_hour')?.scale ?? null;
+  // The route answers the shares, their flags and the unit under the upstream grouping alone.
+  const byUpstream = groupBy === 'account';
   const points = groups.flatMap((group) =>
     starts.map((at): BurnPoint => {
-      const s = sums.get(group)?.get(at) ?? { cached: 0, meter: 0, uncached: 0, usd: 0 };
-      const scale = groupBy === 'account' ? scaleOf(group) : null;
-      return { at: iso(at), cachedTokens: Math.round(s.cached), group, meterTokens: Math.round(s.meter * 100) / 100, planPercent: scale === null ? null : s.meter / scale, uncachedTokens: Math.round(s.uncached), usd: s.usd };
+      const s = sums.get(group)?.get(at) ?? emptyBurn();
+      const kind = byUpstream ? kinds.get(group) : undefined;
+      return {
+        at: iso(at),
+        cachedTokens: Math.round(s.cached),
+        fiveHourShare: byUpstream ? s.fiveHour : null,
+        fiveHourUnmeasured: byUpstream && s.fiveHourUnmeasured,
+        group,
+        sevenDayShare: byUpstream ? s.sevenDay : null,
+        sevenDayUnmeasured: byUpstream && s.sevenDayUnmeasured,
+        uncachedTokens: Math.round(s.uncached),
+        unit: kind === undefined ? null : kind === 'oauth' ? 'window_share' : 'usd',
+        usd: s.usd,
+      };
     }),
   );
   return { bucketSeconds: bucketMs / 1_000, points };

@@ -10,10 +10,9 @@ use axum::Json;
 use phoebis_ledger::{
     apply_filter, bucket_seconds, burn_rows, burn_series_over, hour_ceil, hour_of, moves_by_reason,
     parse_range, read_account_rollups, read_rollups, rewrite_series, session_burn_series,
-    AccountRollupRow, LiveKeys, PlanFactors, PlanWindows, RollupFilter, RollupRow, SeriesFilter,
+    AccountRollupRow, LiveKeys, PlanWindows, RollupFilter, RollupRow, SeriesFilter, Tiers,
     GROUP_BYS,
 };
-use phoebis_routing::FIVE_HOUR;
 use phoebis_store::AccountKind;
 use serde_json::{json, Value};
 
@@ -278,24 +277,10 @@ pub(crate) async fn accounts(
     Json(json!({ "from": from, "to": to, "accounts": accounts })).into_response()
 }
 
-/// The account's fitted 5-hour scale, else its predicted one, else `None`: the denominator `burn`'s
-/// per-account `plan_percent` divides a bucket's meter tokens by.
-fn plan_scale(
-    state: &AdminState,
-    fits: &[phoebis_store::FitRow],
-    windows: &PlanWindows,
-    account_id: &str,
-) -> Option<f64> {
-    if let Some(fitted) = fits
-        .iter()
-        .find(|f| f.account_id == account_id && f.window == FIVE_HOUR)
-    {
-        return Some(fitted.scale);
-    }
-    let tier = state.store.subscription(account_id).ok().flatten()?.tier?;
-    windows.predicted(&tier, FIVE_HOUR)
-}
-
+/// The burn series per group: a subscription account's tokens as the share of its own 5-hour and 7-day window,
+/// each with its unmeasured flag, and an api_key account's in dollars. The shares, their flags and `unit` are
+/// answered under the `account` grouping alone and read null under every other one, since a key, a class or a
+/// session spans accounts and shares of different accounts' windows do not add.
 pub(crate) async fn burn(
     State(state): State<Arc<AdminState>>,
     Query(q): Query<HashMap<String, String>>,
@@ -321,16 +306,24 @@ pub(crate) async fn burn(
     };
     let kinds: HashMap<String, AccountKind> =
         accounts.iter().map(|a| (a.id.clone(), a.kind)).collect();
-    let fits = state.router.fits().await.unwrap_or_default();
+    let mut tiers = Tiers::new();
+    for account in accounts.iter().filter(|a| a.kind == AccountKind::Oauth) {
+        let tier = match state.store.subscription(&account.id) {
+            Ok(row) => row.and_then(|s| s.tier),
+            Err(e) => return store_failure(e),
+        };
+        tiers.insert(account.id.clone(), tier);
+    }
+    let tables = state.tables.clone();
     let bucket = bucket_seconds(from, to);
     let (from_hour, to_hour) = (hour_of(from), hour_ceil(to));
     let group_by_read = group_by.clone();
+    let kinds_read = kinds.clone();
     let read = state
         .ledger
         .db()
         .read(move |c| {
-            let factors = PlanFactors::shipped();
-            let windows = PlanWindows::shipped();
+            let kinds = kinds_read;
             if group_by_read == "session" {
                 let filter = SeriesFilter {
                     from,
@@ -338,7 +331,7 @@ pub(crate) async fn burn(
                     bucket_seconds: bucket,
                     ..Default::default()
                 };
-                return session_burn_series(c, &factors, &windows, &kinds, &filter);
+                return session_burn_series(c, &tables, &kinds, &tiers, &filter);
             }
             let base = SeriesFilter {
                 from,
@@ -382,7 +375,7 @@ pub(crate) async fn burn(
                     },
                     ..base.clone()
                 };
-                let points = burn_series_over(&rows, &factors, &windows, &kinds, &filter)?;
+                let points = burn_series_over(&rows, &tables, &kinds, &tiers, &filter)?;
                 out.push((group, points));
             }
             Ok(out)
@@ -392,20 +385,30 @@ pub(crate) async fn burn(
         Ok(s) => s,
         Err(e) => return ledger_failure(e),
     };
-    let windows = PlanWindows::shipped();
+    let by_account = group_by == "account";
     let points: Vec<Value> = series
         .into_iter()
         .flat_map(|(group, points)| {
-            // The scale is one per group, read once rather than once per point.
-            let scale = (group_by == "account")
-                .then(|| plan_scale(&state, &fits, &windows, &group))
-                .flatten();
-            let group_for_points = group.clone();
+            // The unit a reader charts the group in, so a subscription whose tier no table sizes reads apart from
+            // an api_key account, both answering no share; an account the registry no longer holds has none.
+            let unit = by_account
+                .then(|| kinds.get(&group))
+                .flatten()
+                .map(|kind| match kind {
+                    AccountKind::Oauth => "window_share",
+                    AccountKind::ApiKey => "usd",
+                });
             points.into_iter().map(move |p| {
+                let (five_hour_unmeasured, seven_day_unmeasured) = if by_account {
+                    (Some(p.five_hour_unmeasured), Some(p.seven_day_unmeasured))
+                } else {
+                    (None, None)
+                };
                 json!({
-                    "at": p.at, "group": group_for_points, "meter_tokens": p.meter_tokens, "usd": p.usd,
+                    "at": p.at, "group": group, "unit": unit, "usd": p.usd,
+                    "five_hour_share": p.five_hour_share.filter(|_| by_account), "five_hour_unmeasured": five_hour_unmeasured,
+                    "seven_day_share": p.seven_day_share.filter(|_| by_account), "seven_day_unmeasured": seven_day_unmeasured,
                     "cached_tokens": p.cached_tokens, "uncached_tokens": p.uncached_tokens,
-                    "plan_percent": scale.filter(|s| *s > 0.0).map(|s| p.meter_tokens / s),
                 })
             })
         })

@@ -133,12 +133,12 @@ test('the burn, rewrite and fit reads send the range and the grouping and answer
   assert.deepEqual([burnUrl.pathname, burnUrl.searchParams.get('range'), burnUrl.searchParams.get('group_by')], ['/admin/analytics/burn', '0,86400000', 'request_class']);
   assert.deepEqual([rewritesUrl.pathname, [...rewritesUrl.searchParams.keys()], rewritesUrl.searchParams.get('range')], ['/admin/analytics/rewrites', ['range'], '0,86400000']);
   assert.deepEqual([fitsUrl.pathname, fitsUrl.search], ['/admin/analytics/fits', ''], 'the fits route reads no query');
-  // A plan point that burned, whose meter tokens and share a misnamed field would read as 0 and null.
-  const planned = bodies['/admin/analytics/burn'].points.findLastIndex((p) => p.plan_percent !== null && p.meter_tokens > 0);
-  assert.ok(planned >= 0, 'the fixture reports a plan point that burned');
+  // A subscription point that burned, whose two shares a misnamed field would read as null.
+  const planned = bodies['/admin/analytics/burn'].points.findLastIndex((p) => p.five_hour_share > 0 && p.seven_day_share > 0);
+  assert.ok(planned >= 0, 'the fixture reports a subscription point that burned');
   assert.deepEqual(
-    [burn.bucketSeconds, burn.points.length, burn.points[planned].meterTokens, burn.points[planned].planPercent],
-    [3_600, bodies['/admin/analytics/burn'].points.length, bodies['/admin/analytics/burn'].points[planned].meter_tokens, bodies['/admin/analytics/burn'].points[planned].plan_percent],
+    [burn.bucketSeconds, burn.points.length, burn.points[planned].fiveHourShare, burn.points[planned].sevenDayShare],
+    [3_600, bodies['/admin/analytics/burn'].points.length, bodies['/admin/analytics/burn'].points[planned].five_hour_share, bodies['/admin/analytics/burn'].points[planned].seven_day_share],
   );
   assert.deepEqual([rewrites.moves, rewrites.points.length], [{ spent: 1 }, bodies['/admin/analytics/rewrites'].points.length]);
   assert.deepEqual(fits.map((f) => [f.accountId, f.window, f.drift]), [['business', 'five_hour', 0.5]]);

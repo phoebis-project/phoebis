@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use phoebis_routing::{MemberSpend, FIVE_HOUR};
+use phoebis_routing::{MemberSpend, PinUsage, SEVEN_DAY};
 use phoebis_store::{AccountKind, BudgetPeriod};
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension, ToSql};
 use serde::{Deserialize, Serialize};
@@ -11,7 +11,7 @@ use serde_json::Value;
 
 use crate::db::{row_to_attempt, row_to_request, ATTEMPT_SELECT, REQUEST_SELECT};
 use crate::histogram::Histogram;
-use crate::plan::{PlanFactors, PlanWindows};
+use crate::plan::PlanTables;
 use crate::pricing::PriceTable;
 use crate::record::{
     AttemptRecord, EventRecord, ExtraUsageSampleRecord, QuotaSampleRecord, RequestRecord,
@@ -1530,16 +1530,26 @@ fn bucket_range(filter: &SeriesFilter) -> Result<(i64, i64), LedgerError> {
     Ok((first, last))
 }
 
-/// One point of the burn series: the row's tokens as meter tokens (a subscription account) and dollars.
+/// One point of the burn series: a subscription row's tokens as the share of its account's own two windows
+/// (the 5-hour share weighed by the band at the row's instant, the 7-day share unbanded), an api_key row's in
+/// dollars; `None` on both shares while no subscription row of the bucket could be priced.
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
 pub struct BurnPoint {
     /// Milliseconds, like every other series' `at`.
     pub at: i64,
-    pub meter_tokens: f64,
-    pub usd: f64,
     pub cached_tokens: u64,
+    pub five_hour_share: Option<f64>,
+    /// Whether any row of the bucket read a 5-hour cell or factor the measurement campaign has not filled.
+    pub five_hour_unmeasured: bool,
+    pub seven_day_share: Option<f64>,
+    /// The same on the 7-day window, whose cells are flagged apart from the 5-hour ones.
+    pub seven_day_unmeasured: bool,
     pub uncached_tokens: u64,
+    pub usd: f64,
 }
+
+/// The tier each account prices under, `None` for an account with none: read once per route call.
+pub type Tiers = HashMap<String, Option<String>>;
 
 /// The columns `burn_series` and `session_burn_series` price into a `BurnPoint`: a rollup row and a session
 /// attempt carry the same five token counts and a dollar estimate under different names.
@@ -1552,31 +1562,41 @@ struct UsageRow<'a> {
     output_tokens: u64,
     estimated_usd: f64,
     /// Milliseconds, the instant the band is read at: the row's own hour for a rollup row, which folds by the
-    /// request's hour and keeps no completion, and the completion for an attempt, where the meter charges it and
-    /// the live fit weighs it. Per row, since a bucket spanning a band edge cannot say which side a charge fell on.
+    /// request's hour and keeps no completion, and the completion for an attempt, where the meter charges it. Per
+    /// row, since a bucket spanning a band edge cannot say which side a charge fell on.
     at: i64,
 }
 
-/// Meter tokens (banded at the row's own instant) for an oauth account, `estimated_usd` for an api_key one; a
-/// row whose account is not in `kinds` carries no price the caller could attribute, so it adds nothing at all.
+/// The shares of an oauth account's two windows (the 5-hour one banded at the row's own instant) when `tier`
+/// names one the tables size, `estimated_usd` for an api_key account; a row whose account is not in `kinds`
+/// carries no price the caller could attribute, so it adds nothing at all.
 fn price_usage(
     point: &mut BurnPoint,
     kind: Option<AccountKind>,
-    factors: &PlanFactors,
-    windows: &PlanWindows,
+    tier: Option<&str>,
+    tables: &PlanTables,
     row: &UsageRow,
 ) {
     match kind {
         Some(AccountKind::Oauth) => {
-            if let Some(tokens) = factors.meter_tokens(
-                row.canonical_model,
-                row.input_tokens,
-                row.cache_read_tokens,
-                row.cache_write_5m_tokens,
-                row.cache_write_1h_tokens,
-                row.output_tokens,
-            ) {
-                point.meter_tokens += tokens * windows.band_factor(FIVE_HOUR, row.at);
+            let usage = PinUsage {
+                input: row.input_tokens,
+                cache_read: row.cache_read_tokens,
+                write_5m: row.cache_write_5m_tokens,
+                write_1h: row.cache_write_1h_tokens,
+                output: row.output_tokens,
+            };
+            if let Some(tier) = tier {
+                if let Some(share) =
+                    tables.five_hour_share_at(tier, row.canonical_model, usage, row.at)
+                {
+                    *point.five_hour_share.get_or_insert(0.0) += share.share;
+                    point.five_hour_unmeasured |= share.unmeasured;
+                }
+                if let Some(share) = tables.share(SEVEN_DAY, tier, row.canonical_model, usage) {
+                    *point.seven_day_share.get_or_insert(0.0) += share.share;
+                    point.seven_day_unmeasured |= share.unmeasured;
+                }
             }
         }
         Some(AccountKind::ApiKey) => point.usd += row.estimated_usd,
@@ -1596,26 +1616,25 @@ pub fn burn_rows(conn: &Connection, filter: &SeriesFilter) -> Result<Vec<RollupR
 /// `burn_series_over` on the rows `burn_rows` reads for `filter`.
 pub fn burn_series(
     conn: &Connection,
-    factors: &PlanFactors,
-    windows: &PlanWindows,
+    tables: &PlanTables,
     kinds: &HashMap<String, AccountKind>,
+    tiers: &Tiers,
     filter: &SeriesFilter,
 ) -> Result<Vec<BurnPoint>, LedgerError> {
     let rows = burn_rows(conn, filter)?;
-    burn_series_over(&rows, factors, windows, kinds, filter)
+    burn_series_over(&rows, tables, kinds, tiers, filter)
 }
 
 /// The burn series of `filter`'s scopes over `rows`, which `burn_rows` read for the same range and bucket. A
-/// subscription row's meter tokens carry `windows.band_factor(FIVE_HOUR, row.hour * 1_000)`, the band of the hour
-/// the rollup folded the request under (the live fit weighs a request at its completion, so a request straddling a
-/// band edge weighs differently here); read per row rather than per bucket, since a six-hour or daily bucket can
-/// straddle a band edge and only the row's own hour says which side of it the row fell on. One pass: each row lands
-/// in its bucket by index.
+/// subscription row's 5-hour share carries the band of the hour the rollup folded the request under, since the
+/// rollup keeps no completion; read per row rather than per bucket, since a six-hour or daily bucket can straddle a
+/// band edge and only the row's own hour says which side of it the row fell on. One pass: each row lands in its
+/// bucket by index.
 pub fn burn_series_over(
     rows: &[RollupRow],
-    factors: &PlanFactors,
-    windows: &PlanWindows,
+    tables: &PlanTables,
     kinds: &HashMap<String, AccountKind>,
+    tiers: &Tiers,
     filter: &SeriesFilter,
 ) -> Result<Vec<BurnPoint>, LedgerError> {
     let (first, last) = bucket_range(filter)?;
@@ -1643,8 +1662,8 @@ pub fn burn_series_over(
         price_usage(
             point,
             kinds.get(&row.account_id).copied(),
-            factors,
-            windows,
+            tiers.get(&row.account_id).and_then(Option::as_deref),
+            tables,
             &UsageRow {
                 canonical_model: &row.canonical_model,
                 input_tokens: row.input_tokens,
@@ -1738,8 +1757,8 @@ struct SessionAttempt {
     account_id: String,
     /// Milliseconds, `attempts.started_at`: the bucket the attempt lands in.
     at: i64,
-    /// Milliseconds: the attempt's completion, `attempts.finished_at`, else the request's, the one the live fit
-    /// books it at; the band that prices it is read here.
+    /// Milliseconds: the attempt's completion, `attempts.finished_at`, else the request's, where the meter charges
+    /// it; the band that prices it is read here.
     completed_at: i64,
     canonical_model: String,
     input_tokens: u64,
@@ -1801,9 +1820,9 @@ fn read_session_attempts(
 /// session re-scanning every attempt for every bucket.
 pub fn session_burn_series(
     conn: &Connection,
-    factors: &PlanFactors,
-    windows: &PlanWindows,
+    tables: &PlanTables,
     kinds: &HashMap<String, AccountKind>,
+    tiers: &Tiers,
     filter: &SeriesFilter,
 ) -> Result<Vec<(String, Vec<BurnPoint>)>, LedgerError> {
     let (first, last) = bucket_range(filter)?;
@@ -1842,8 +1861,8 @@ pub fn session_burn_series(
         price_usage(
             point,
             kinds.get(&a.account_id).copied(),
-            factors,
-            windows,
+            tiers.get(&a.account_id).and_then(Option::as_deref),
+            tables,
             &UsageRow {
                 canonical_model: &a.canonical_model,
                 input_tokens: a.input_tokens,

@@ -436,7 +436,18 @@ export const decodeAnalyticsPoint = (v: unknown): AnalyticsPoint => ({ at: isoOr
 
 export const decodeBurnPoint = (v: unknown): BurnPoint => {
   const p = rec(v);
-  return { at: isoOr(p.at, epoch), cachedTokens: num(p.cached_tokens), group: str(p.group), meterTokens: num(p.meter_tokens), planPercent: numOrNull(p.plan_percent), uncachedTokens: num(p.uncached_tokens), usd: num(p.usd) };
+  return {
+    at: isoOr(p.at, epoch),
+    cachedTokens: num(p.cached_tokens),
+    fiveHourShare: numOrNull(p.five_hour_share),
+    fiveHourUnmeasured: bool(p.five_hour_unmeasured),
+    group: str(p.group),
+    sevenDayShare: numOrNull(p.seven_day_share),
+    sevenDayUnmeasured: bool(p.seven_day_unmeasured),
+    uncachedTokens: num(p.uncached_tokens),
+    unit: burnUnit(p.unit),
+    usd: num(p.usd),
+  };
 };
 export const decodeBurn = (v: unknown): { bucketSeconds: number; points: BurnPoint[] } => ({ bucketSeconds: num(rec(v).bucket_seconds, 3_600), points: list(rec(v).points).map(decodeBurnPoint) });
 export const decodeRewrites = (v: unknown): { moves: Record<string, number>; points: RewritePoint[] } => ({

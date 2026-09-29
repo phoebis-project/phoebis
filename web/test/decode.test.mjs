@@ -528,23 +528,41 @@ test('analytics groups and points keep the histograms and reasons whole', () => 
   assert.ok(rollups.every((r) => isIso(r.hour) && typeof r.peak['5h'] === 'number'));
 });
 
-test('the burn series decodes each point with its instant, both token sides, and a plan share only where the route has one', () => {
+test('the burn series decodes each point with its instant, both token sides, and both window shares only where the route has them', () => {
   const body = fixture('analytics_burn');
   const burn = d.decodeBurn(body);
   assert.equal(burn.bucketSeconds, 3_600);
   assert.equal(burn.points.length, body.points.length);
-  // The last point the fit shares a plan window for, so every field it is read against holds a value a misnamed field
-  // could not stand in for.
-  const at = body.points.findLastIndex((p) => p.plan_percent !== null);
+  // The last point that burned a subscription's windows, so every field it is read against holds a value a misnamed
+  // field could not stand in for.
+  const at = body.points.findLastIndex((p) => p.five_hour_share !== null);
   const [last, wire] = [burn.points[at], body.points[at]];
-  assert.ok(wire.meter_tokens > 0 && wire.plan_percent > 0 && wire.cached_tokens > 0 && wire.uncached_tokens > 0, 'the fixture reports a plan point that burned');
-  assert.deepEqual(last, { at: new Date(wire.at).toISOString(), cachedTokens: wire.cached_tokens, group: 'business', meterTokens: wire.meter_tokens, planPercent: wire.plan_percent, uncachedTokens: wire.uncached_tokens, usd: wire.usd });
+  assert.ok(
+    wire.five_hour_share > 0 && wire.seven_day_share > 0 && wire.five_hour_unmeasured === true && wire.seven_day_unmeasured === true && wire.cached_tokens > 0 && wire.uncached_tokens > 0,
+    'the fixture reports a subscription point that burned through flagged cells',
+  );
+  assert.deepEqual(last, {
+    at: new Date(wire.at).toISOString(),
+    cachedTokens: wire.cached_tokens,
+    fiveHourShare: wire.five_hour_share,
+    fiveHourUnmeasured: true,
+    group: 'business',
+    sevenDayShare: wire.seven_day_share,
+    sevenDayUnmeasured: true,
+    uncachedTokens: wire.uncached_tokens,
+    unit: 'window_share',
+    usd: wire.usd,
+  });
   const direct = burn.points[burn.points.length - 1];
-  assert.deepEqual([direct.group, direct.planPercent, direct.usd], ['direct', null, body.points.at(-1).usd], 'an API-key point spends dollars and shares no plan window');
+  assert.deepEqual(
+    [direct.group, direct.fiveHourShare, direct.sevenDayShare, direct.unit, direct.usd],
+    ['direct', null, null, 'usd', body.points.at(-1).usd],
+    'an API-key point spends dollars and reads no window',
+  );
   assert.ok(burn.points.every((p) => isIso(p.at)));
-  // Every grouping but the upstream one answers the share as null, which is no fit rather than an idle window.
-  const [keyed] = d.decodeBurn({ bucket_seconds: 21_600, points: [{ ...wire, group: 'desktop', plan_percent: null }] }).points;
-  assert.equal(keyed.planPercent, null);
+  // Every grouping but the upstream one answers the shares, their flags and the unit as null.
+  const [keyed] = d.decodeBurn({ bucket_seconds: 21_600, points: [{ ...wire, five_hour_share: null, five_hour_unmeasured: null, group: 'desktop', seven_day_share: null, seven_day_unmeasured: null, unit: null }] }).points;
+  assert.deepEqual([keyed.fiveHourShare, keyed.fiveHourUnmeasured, keyed.sevenDayShare, keyed.sevenDayUnmeasured, keyed.unit], [null, false, null, false, null]);
   assert.equal(d.decodeBurn({ bucket_seconds: 21_600, points: [] }).bucketSeconds, 21_600);
 });
 

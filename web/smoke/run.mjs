@@ -2958,7 +2958,7 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
     [...m.container.querySelectorAll('#burn .segmented button')].find((b) => b.textContent?.trim() === label)?.click();
     await m.settle(700);
   };
-  expect('/analytics burn section', m.text(), ['Burn', 'Tokens per minute', 'Spend per minute', 'Plan per hour', 'Migration rewrites', 'Plan meter fit', 'no fit yet', 'Moves']);
+  expect('/analytics burn section', m.text(), ['Burn', 'Tokens per minute', 'Spend per minute', 'Plan per hour', 'Migration rewrites', 'Plan meter fit', 'Moves']);
   const failovers = card('Failovers');
   results.push({ name: '/analytics the migration rewrites card sits beside Failovers', ok: failovers !== undefined && failovers.nextElementSibling === card('Migration rewrites'), missing: [failovers?.nextElementSibling?.querySelector('.card__title')?.textContent ?? 'no sibling'] });
   const moves = await api.getAnalyticsRewrites({ from: new Date(Date.now() - 24 * 3_600_000).toISOString(), to: new Date().toISOString() });
@@ -2966,10 +2966,36 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
   results.push({ name: '/analytics the rewrites legend names each move reason the range holds', ok: Object.keys(moves.moves).length > 1 && moveLegend.length === Object.keys(moves.moves).length && moveLegend.includes('Rate limited') && moveLegend.includes('Shed'), missing: moveLegend });
 
   const planned = legendOf('Plan per hour');
-  results.push({ name: '/analytics plan per hour draws each subscription upstream and says which has no fit yet', ok: planned.includes('business') && planned.includes('personal') && planned.includes('mail') && !planned.includes('console') && card('Plan per hour')?.textContent?.includes('no fit yet') === true, missing: planned });
+  const windows = ['business', 'mail', 'personal'].flatMap((id) => [`${id} (5-hour)`, `${id} (7-day)`]);
+  const planItems = [...(card('Plan per hour')?.querySelectorAll('.legend li') ?? [])];
+  const dashedOf = (items) => items.filter((li) => li.querySelector('.legend__swatch')?.getAttribute('style')?.includes('repeating-linear-gradient')).map((li) => li.textContent ?? '');
+  // Business sits on Max 20x, whose tier factors are stand-ins, so both its shares carry the unmeasured mark.
+  const marked = planItems.filter((li) => li.querySelector('.legend__value')?.textContent?.endsWith('*')).map((li) => li.textContent ?? '');
+  results.push({
+    name: "/analytics plan per hour draws each subscription upstream's 5-hour and 7-day share and marks an unmeasured one",
+    ok:
+      windows.every((w) => planned.includes(w)) &&
+      !planned.some((t) => t.startsWith('console')) &&
+      dashedOf(planItems).every((t) => t.includes('(7-day)')) &&
+      dashedOf(planItems).length === 3 &&
+      marked.some((t) => t.startsWith('business (5-hour)')) &&
+      marked.some((t) => t.startsWith('business (7-day)')) &&
+      card('Plan per hour')?.textContent?.includes('* priced through an unmeasured cell') === true,
+    missing: [...planned, ...marked],
+  });
   const spend = legendOf('Spend per minute');
-  const dashed = [...(card('Spend per minute')?.querySelectorAll('.legend li') ?? [])].filter((li) => li.querySelector('.legend__swatch')?.getAttribute('style')?.includes('repeating-linear-gradient')).map((li) => li.textContent);
-  results.push({ name: '/analytics spend per minute charts a subscription upstream in meter tokens and an API-key one in dollars', ok: spend.includes('console') && dashed.some((t) => t?.startsWith('business')) && !dashed.some((t) => t?.startsWith('console')), missing: [...spend, ...dashed] });
+  const spendDashed = dashedOf([...(card('Spend per minute')?.querySelectorAll('.legend li') ?? [])]);
+  results.push({
+    name: "/analytics spend per minute charts dollars alone and plan per hour a subscription upstream's two window shares",
+    ok:
+      spend.includes('console') &&
+      spend.includes('evals') &&
+      !spend.some((t) => ['business', 'mail', 'personal'].includes(t)) &&
+      spendDashed.length === 0 &&
+      windows.every((w) => planned.includes(w)) &&
+      marked.length > 0,
+    missing: [...spend, ...spendDashed],
+  });
 
   const fitRows = [...(card('Plan meter fit')?.querySelectorAll('tbody tr') ?? [])].map((tr) => [...tr.children].map((td) => ({ badge: td.querySelector('.badge') !== null, text: td.textContent?.trim() })));
   const fit = (id) => fitRows.find((r) => r[0]?.text === id) ?? [];

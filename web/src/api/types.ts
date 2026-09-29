@@ -766,14 +766,21 @@ export interface BurnPoint {
   at: string;
   /** Cache-read tokens. */
   cachedTokens: number;
+  /** A subscription upstream's spend in the bucket as a fraction of its own 5-hour window, the band weighed in; null
+   *  for an API-key upstream or one whose tier is unknown, and under every other grouping. */
+  fiveHourShare: number | null;
+  /** Whether a row of the bucket was priced through a 5-hour cell or tier factor no measurement has filled. */
+  fiveHourUnmeasured: boolean;
   group: string;
-  /** A subscription upstream's tokens in plan-meter units, weighted by the peak band of the hour they landed in. */
-  meterTokens: number;
-  /** The bucket's meter tokens as a fraction of the upstream's 5-hour window, not a percentage; null under every
-   *  other grouping, and for an upstream with neither a fit nor a predicted window size. */
-  planPercent: number | null;
+  /** The same spend as a fraction of the upstream's 7-day window, unbanded. */
+  sevenDayShare: number | null;
+  /** The same on the 7-day window, whose cells are flagged apart from the 5-hour ones. */
+  sevenDayUnmeasured: boolean;
   /** Uncached input tokens. */
   uncachedTokens: number;
+  /** What the upstream spends in: a subscription's window share, even while no tier prices it, or an API key's
+   *  dollars; null under every other grouping, and for an upstream the registry no longer holds. */
+  unit: BurnUnit | null;
   /** An API-key upstream's estimated cost. */
   usd: number;
 }

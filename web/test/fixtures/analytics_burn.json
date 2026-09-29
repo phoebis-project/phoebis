@@ -9,452 +9,602 @@
       {
         "at": -86400000,
         "group": "business",
-        "meter_tokens": 0.0,
+        "unit": "window_share",
         "usd": 0.0,
+        "five_hour_share": null,
+        "five_hour_unmeasured": false,
+        "seven_day_share": null,
+        "seven_day_unmeasured": false,
         "cached_tokens": 0,
-        "uncached_tokens": 0,
-        "plan_percent": 0.0
+        "uncached_tokens": 0
       },
       {
         "at": -82800000,
         "group": "business",
-        "meter_tokens": 0.0,
+        "unit": "window_share",
         "usd": 0.0,
+        "five_hour_share": null,
+        "five_hour_unmeasured": false,
+        "seven_day_share": null,
+        "seven_day_unmeasured": false,
         "cached_tokens": 0,
-        "uncached_tokens": 0,
-        "plan_percent": 0.0
+        "uncached_tokens": 0
       },
       {
         "at": -79200000,
         "group": "business",
-        "meter_tokens": 0.0,
+        "unit": "window_share",
         "usd": 0.0,
+        "five_hour_share": null,
+        "five_hour_unmeasured": false,
+        "seven_day_share": null,
+        "seven_day_unmeasured": false,
         "cached_tokens": 0,
-        "uncached_tokens": 0,
-        "plan_percent": 0.0
+        "uncached_tokens": 0
       },
       {
         "at": -75600000,
         "group": "business",
-        "meter_tokens": 0.0,
+        "unit": "window_share",
         "usd": 0.0,
+        "five_hour_share": null,
+        "five_hour_unmeasured": false,
+        "seven_day_share": null,
+        "seven_day_unmeasured": false,
         "cached_tokens": 0,
-        "uncached_tokens": 0,
-        "plan_percent": 0.0
+        "uncached_tokens": 0
       },
       {
         "at": -72000000,
         "group": "business",
-        "meter_tokens": 0.0,
+        "unit": "window_share",
         "usd": 0.0,
+        "five_hour_share": null,
+        "five_hour_unmeasured": false,
+        "seven_day_share": null,
+        "seven_day_unmeasured": false,
         "cached_tokens": 0,
-        "uncached_tokens": 0,
-        "plan_percent": 0.0
+        "uncached_tokens": 0
       },
       {
         "at": -68400000,
         "group": "business",
-        "meter_tokens": 0.0,
+        "unit": "window_share",
         "usd": 0.0,
+        "five_hour_share": null,
+        "five_hour_unmeasured": false,
+        "seven_day_share": null,
+        "seven_day_unmeasured": false,
         "cached_tokens": 0,
-        "uncached_tokens": 0,
-        "plan_percent": 0.0
+        "uncached_tokens": 0
       },
       {
         "at": -64800000,
         "group": "business",
-        "meter_tokens": 0.0,
+        "unit": "window_share",
         "usd": 0.0,
+        "five_hour_share": null,
+        "five_hour_unmeasured": false,
+        "seven_day_share": null,
+        "seven_day_unmeasured": false,
         "cached_tokens": 0,
-        "uncached_tokens": 0,
-        "plan_percent": 0.0
+        "uncached_tokens": 0
       },
       {
         "at": -61200000,
         "group": "business",
-        "meter_tokens": 0.0,
+        "unit": "window_share",
         "usd": 0.0,
+        "five_hour_share": null,
+        "five_hour_unmeasured": false,
+        "seven_day_share": null,
+        "seven_day_unmeasured": false,
         "cached_tokens": 0,
-        "uncached_tokens": 0,
-        "plan_percent": 0.0
+        "uncached_tokens": 0
       },
       {
         "at": -57600000,
         "group": "business",
-        "meter_tokens": 0.0,
+        "unit": "window_share",
         "usd": 0.0,
+        "five_hour_share": null,
+        "five_hour_unmeasured": false,
+        "seven_day_share": null,
+        "seven_day_unmeasured": false,
         "cached_tokens": 0,
-        "uncached_tokens": 0,
-        "plan_percent": 0.0
+        "uncached_tokens": 0
       },
       {
         "at": -54000000,
         "group": "business",
-        "meter_tokens": 0.0,
+        "unit": "window_share",
         "usd": 0.0,
+        "five_hour_share": null,
+        "five_hour_unmeasured": false,
+        "seven_day_share": null,
+        "seven_day_unmeasured": false,
         "cached_tokens": 0,
-        "uncached_tokens": 0,
-        "plan_percent": 0.0
+        "uncached_tokens": 0
       },
       {
         "at": -50400000,
         "group": "business",
-        "meter_tokens": 0.0,
+        "unit": "window_share",
         "usd": 0.0,
+        "five_hour_share": null,
+        "five_hour_unmeasured": false,
+        "seven_day_share": null,
+        "seven_day_unmeasured": false,
         "cached_tokens": 0,
-        "uncached_tokens": 0,
-        "plan_percent": 0.0
+        "uncached_tokens": 0
       },
       {
         "at": -46800000,
         "group": "business",
-        "meter_tokens": 0.0,
+        "unit": "window_share",
         "usd": 0.0,
+        "five_hour_share": null,
+        "five_hour_unmeasured": false,
+        "seven_day_share": null,
+        "seven_day_unmeasured": false,
         "cached_tokens": 0,
-        "uncached_tokens": 0,
-        "plan_percent": 0.0
+        "uncached_tokens": 0
       },
       {
         "at": -43200000,
         "group": "business",
-        "meter_tokens": 0.0,
+        "unit": "window_share",
         "usd": 0.0,
+        "five_hour_share": null,
+        "five_hour_unmeasured": false,
+        "seven_day_share": null,
+        "seven_day_unmeasured": false,
         "cached_tokens": 0,
-        "uncached_tokens": 0,
-        "plan_percent": 0.0
+        "uncached_tokens": 0
       },
       {
         "at": -39600000,
         "group": "business",
-        "meter_tokens": 0.0,
+        "unit": "window_share",
         "usd": 0.0,
+        "five_hour_share": null,
+        "five_hour_unmeasured": false,
+        "seven_day_share": null,
+        "seven_day_unmeasured": false,
         "cached_tokens": 0,
-        "uncached_tokens": 0,
-        "plan_percent": 0.0
+        "uncached_tokens": 0
       },
       {
         "at": -36000000,
         "group": "business",
-        "meter_tokens": 0.0,
+        "unit": "window_share",
         "usd": 0.0,
+        "five_hour_share": null,
+        "five_hour_unmeasured": false,
+        "seven_day_share": null,
+        "seven_day_unmeasured": false,
         "cached_tokens": 0,
-        "uncached_tokens": 0,
-        "plan_percent": 0.0
+        "uncached_tokens": 0
       },
       {
         "at": -32400000,
         "group": "business",
-        "meter_tokens": 0.0,
+        "unit": "window_share",
         "usd": 0.0,
+        "five_hour_share": null,
+        "five_hour_unmeasured": false,
+        "seven_day_share": null,
+        "seven_day_unmeasured": false,
         "cached_tokens": 0,
-        "uncached_tokens": 0,
-        "plan_percent": 0.0
+        "uncached_tokens": 0
       },
       {
         "at": -28800000,
         "group": "business",
-        "meter_tokens": 0.0,
+        "unit": "window_share",
         "usd": 0.0,
+        "five_hour_share": null,
+        "five_hour_unmeasured": false,
+        "seven_day_share": null,
+        "seven_day_unmeasured": false,
         "cached_tokens": 0,
-        "uncached_tokens": 0,
-        "plan_percent": 0.0
+        "uncached_tokens": 0
       },
       {
         "at": -25200000,
         "group": "business",
-        "meter_tokens": 0.0,
+        "unit": "window_share",
         "usd": 0.0,
+        "five_hour_share": null,
+        "five_hour_unmeasured": false,
+        "seven_day_share": null,
+        "seven_day_unmeasured": false,
         "cached_tokens": 0,
-        "uncached_tokens": 0,
-        "plan_percent": 0.0
+        "uncached_tokens": 0
       },
       {
         "at": -21600000,
         "group": "business",
-        "meter_tokens": 0.0,
+        "unit": "window_share",
         "usd": 0.0,
+        "five_hour_share": null,
+        "five_hour_unmeasured": false,
+        "seven_day_share": null,
+        "seven_day_unmeasured": false,
         "cached_tokens": 0,
-        "uncached_tokens": 0,
-        "plan_percent": 0.0
+        "uncached_tokens": 0
       },
       {
         "at": -18000000,
         "group": "business",
-        "meter_tokens": 0.0,
+        "unit": "window_share",
         "usd": 0.0,
+        "five_hour_share": null,
+        "five_hour_unmeasured": false,
+        "seven_day_share": null,
+        "seven_day_unmeasured": false,
         "cached_tokens": 0,
-        "uncached_tokens": 0,
-        "plan_percent": 0.0
+        "uncached_tokens": 0
       },
       {
         "at": -14400000,
         "group": "business",
-        "meter_tokens": 0.0,
+        "unit": "window_share",
         "usd": 0.0,
+        "five_hour_share": null,
+        "five_hour_unmeasured": false,
+        "seven_day_share": null,
+        "seven_day_unmeasured": false,
         "cached_tokens": 0,
-        "uncached_tokens": 0,
-        "plan_percent": 0.0
+        "uncached_tokens": 0
       },
       {
         "at": -10800000,
         "group": "business",
-        "meter_tokens": 0.0,
+        "unit": "window_share",
         "usd": 0.0,
+        "five_hour_share": null,
+        "five_hour_unmeasured": false,
+        "seven_day_share": null,
+        "seven_day_unmeasured": false,
         "cached_tokens": 0,
-        "uncached_tokens": 0,
-        "plan_percent": 0.0
+        "uncached_tokens": 0
       },
       {
         "at": -7200000,
         "group": "business",
-        "meter_tokens": 0.0,
+        "unit": "window_share",
         "usd": 0.0,
+        "five_hour_share": null,
+        "five_hour_unmeasured": false,
+        "seven_day_share": null,
+        "seven_day_unmeasured": false,
         "cached_tokens": 0,
-        "uncached_tokens": 0,
-        "plan_percent": 0.0
+        "uncached_tokens": 0
       },
       {
         "at": -3600000,
         "group": "business",
-        "meter_tokens": 1864.08,
+        "unit": "window_share",
         "usd": 0.0,
+        "five_hour_share": 0.00015674,
+        "five_hour_unmeasured": true,
+        "seven_day_share": 0.000011365599999999998,
+        "seven_day_unmeasured": true,
         "cached_tokens": 1000,
-        "uncached_tokens": 2000,
-        "plan_percent": 0.00031355424726661063
+        "uncached_tokens": 2000
       },
       {
         "at": 0,
         "group": "business",
-        "meter_tokens": 1864.08,
+        "unit": "window_share",
         "usd": 0.0,
+        "five_hour_share": 0.00015674,
+        "five_hour_unmeasured": true,
+        "seven_day_share": 0.000011365599999999998,
+        "seven_day_unmeasured": true,
         "cached_tokens": 1000,
-        "uncached_tokens": 2000,
-        "plan_percent": 0.00031355424726661063
+        "uncached_tokens": 2000
       },
       {
         "at": -86400000,
         "group": "direct",
-        "meter_tokens": 0.0,
+        "unit": "usd",
         "usd": 0.0,
+        "five_hour_share": null,
+        "five_hour_unmeasured": false,
+        "seven_day_share": null,
+        "seven_day_unmeasured": false,
         "cached_tokens": 0,
-        "uncached_tokens": 0,
-        "plan_percent": null
+        "uncached_tokens": 0
       },
       {
         "at": -82800000,
         "group": "direct",
-        "meter_tokens": 0.0,
+        "unit": "usd",
         "usd": 0.0,
+        "five_hour_share": null,
+        "five_hour_unmeasured": false,
+        "seven_day_share": null,
+        "seven_day_unmeasured": false,
         "cached_tokens": 0,
-        "uncached_tokens": 0,
-        "plan_percent": null
+        "uncached_tokens": 0
       },
       {
         "at": -79200000,
         "group": "direct",
-        "meter_tokens": 0.0,
+        "unit": "usd",
         "usd": 0.0,
+        "five_hour_share": null,
+        "five_hour_unmeasured": false,
+        "seven_day_share": null,
+        "seven_day_unmeasured": false,
         "cached_tokens": 0,
-        "uncached_tokens": 0,
-        "plan_percent": null
+        "uncached_tokens": 0
       },
       {
         "at": -75600000,
         "group": "direct",
-        "meter_tokens": 0.0,
+        "unit": "usd",
         "usd": 0.0,
+        "five_hour_share": null,
+        "five_hour_unmeasured": false,
+        "seven_day_share": null,
+        "seven_day_unmeasured": false,
         "cached_tokens": 0,
-        "uncached_tokens": 0,
-        "plan_percent": null
+        "uncached_tokens": 0
       },
       {
         "at": -72000000,
         "group": "direct",
-        "meter_tokens": 0.0,
+        "unit": "usd",
         "usd": 0.0,
+        "five_hour_share": null,
+        "five_hour_unmeasured": false,
+        "seven_day_share": null,
+        "seven_day_unmeasured": false,
         "cached_tokens": 0,
-        "uncached_tokens": 0,
-        "plan_percent": null
+        "uncached_tokens": 0
       },
       {
         "at": -68400000,
         "group": "direct",
-        "meter_tokens": 0.0,
+        "unit": "usd",
         "usd": 0.0,
+        "five_hour_share": null,
+        "five_hour_unmeasured": false,
+        "seven_day_share": null,
+        "seven_day_unmeasured": false,
         "cached_tokens": 0,
-        "uncached_tokens": 0,
-        "plan_percent": null
+        "uncached_tokens": 0
       },
       {
         "at": -64800000,
         "group": "direct",
-        "meter_tokens": 0.0,
+        "unit": "usd",
         "usd": 0.0,
+        "five_hour_share": null,
+        "five_hour_unmeasured": false,
+        "seven_day_share": null,
+        "seven_day_unmeasured": false,
         "cached_tokens": 0,
-        "uncached_tokens": 0,
-        "plan_percent": null
+        "uncached_tokens": 0
       },
       {
         "at": -61200000,
         "group": "direct",
-        "meter_tokens": 0.0,
+        "unit": "usd",
         "usd": 0.0,
+        "five_hour_share": null,
+        "five_hour_unmeasured": false,
+        "seven_day_share": null,
+        "seven_day_unmeasured": false,
         "cached_tokens": 0,
-        "uncached_tokens": 0,
-        "plan_percent": null
+        "uncached_tokens": 0
       },
       {
         "at": -57600000,
         "group": "direct",
-        "meter_tokens": 0.0,
+        "unit": "usd",
         "usd": 0.0,
+        "five_hour_share": null,
+        "five_hour_unmeasured": false,
+        "seven_day_share": null,
+        "seven_day_unmeasured": false,
         "cached_tokens": 0,
-        "uncached_tokens": 0,
-        "plan_percent": null
+        "uncached_tokens": 0
       },
       {
         "at": -54000000,
         "group": "direct",
-        "meter_tokens": 0.0,
+        "unit": "usd",
         "usd": 0.0,
+        "five_hour_share": null,
+        "five_hour_unmeasured": false,
+        "seven_day_share": null,
+        "seven_day_unmeasured": false,
         "cached_tokens": 0,
-        "uncached_tokens": 0,
-        "plan_percent": null
+        "uncached_tokens": 0
       },
       {
         "at": -50400000,
         "group": "direct",
-        "meter_tokens": 0.0,
+        "unit": "usd",
         "usd": 0.0,
+        "five_hour_share": null,
+        "five_hour_unmeasured": false,
+        "seven_day_share": null,
+        "seven_day_unmeasured": false,
         "cached_tokens": 0,
-        "uncached_tokens": 0,
-        "plan_percent": null
+        "uncached_tokens": 0
       },
       {
         "at": -46800000,
         "group": "direct",
-        "meter_tokens": 0.0,
+        "unit": "usd",
         "usd": 0.0,
+        "five_hour_share": null,
+        "five_hour_unmeasured": false,
+        "seven_day_share": null,
+        "seven_day_unmeasured": false,
         "cached_tokens": 0,
-        "uncached_tokens": 0,
-        "plan_percent": null
+        "uncached_tokens": 0
       },
       {
         "at": -43200000,
         "group": "direct",
-        "meter_tokens": 0.0,
+        "unit": "usd",
         "usd": 0.0,
+        "five_hour_share": null,
+        "five_hour_unmeasured": false,
+        "seven_day_share": null,
+        "seven_day_unmeasured": false,
         "cached_tokens": 0,
-        "uncached_tokens": 0,
-        "plan_percent": null
+        "uncached_tokens": 0
       },
       {
         "at": -39600000,
         "group": "direct",
-        "meter_tokens": 0.0,
+        "unit": "usd",
         "usd": 0.0,
+        "five_hour_share": null,
+        "five_hour_unmeasured": false,
+        "seven_day_share": null,
+        "seven_day_unmeasured": false,
         "cached_tokens": 0,
-        "uncached_tokens": 0,
-        "plan_percent": null
+        "uncached_tokens": 0
       },
       {
         "at": -36000000,
         "group": "direct",
-        "meter_tokens": 0.0,
+        "unit": "usd",
         "usd": 0.0,
+        "five_hour_share": null,
+        "five_hour_unmeasured": false,
+        "seven_day_share": null,
+        "seven_day_unmeasured": false,
         "cached_tokens": 0,
-        "uncached_tokens": 0,
-        "plan_percent": null
+        "uncached_tokens": 0
       },
       {
         "at": -32400000,
         "group": "direct",
-        "meter_tokens": 0.0,
+        "unit": "usd",
         "usd": 0.0,
+        "five_hour_share": null,
+        "five_hour_unmeasured": false,
+        "seven_day_share": null,
+        "seven_day_unmeasured": false,
         "cached_tokens": 0,
-        "uncached_tokens": 0,
-        "plan_percent": null
+        "uncached_tokens": 0
       },
       {
         "at": -28800000,
         "group": "direct",
-        "meter_tokens": 0.0,
+        "unit": "usd",
         "usd": 0.0,
+        "five_hour_share": null,
+        "five_hour_unmeasured": false,
+        "seven_day_share": null,
+        "seven_day_unmeasured": false,
         "cached_tokens": 0,
-        "uncached_tokens": 0,
-        "plan_percent": null
+        "uncached_tokens": 0
       },
       {
         "at": -25200000,
         "group": "direct",
-        "meter_tokens": 0.0,
+        "unit": "usd",
         "usd": 0.0,
+        "five_hour_share": null,
+        "five_hour_unmeasured": false,
+        "seven_day_share": null,
+        "seven_day_unmeasured": false,
         "cached_tokens": 0,
-        "uncached_tokens": 0,
-        "plan_percent": null
+        "uncached_tokens": 0
       },
       {
         "at": -21600000,
         "group": "direct",
-        "meter_tokens": 0.0,
+        "unit": "usd",
         "usd": 0.0,
+        "five_hour_share": null,
+        "five_hour_unmeasured": false,
+        "seven_day_share": null,
+        "seven_day_unmeasured": false,
         "cached_tokens": 0,
-        "uncached_tokens": 0,
-        "plan_percent": null
+        "uncached_tokens": 0
       },
       {
         "at": -18000000,
         "group": "direct",
-        "meter_tokens": 0.0,
+        "unit": "usd",
         "usd": 0.0,
+        "five_hour_share": null,
+        "five_hour_unmeasured": false,
+        "seven_day_share": null,
+        "seven_day_unmeasured": false,
         "cached_tokens": 0,
-        "uncached_tokens": 0,
-        "plan_percent": null
+        "uncached_tokens": 0
       },
       {
         "at": -14400000,
         "group": "direct",
-        "meter_tokens": 0.0,
+        "unit": "usd",
         "usd": 0.0,
+        "five_hour_share": null,
+        "five_hour_unmeasured": false,
+        "seven_day_share": null,
+        "seven_day_unmeasured": false,
         "cached_tokens": 0,
-        "uncached_tokens": 0,
-        "plan_percent": null
+        "uncached_tokens": 0
       },
       {
         "at": -10800000,
         "group": "direct",
-        "meter_tokens": 0.0,
+        "unit": "usd",
         "usd": 0.0,
+        "five_hour_share": null,
+        "five_hour_unmeasured": false,
+        "seven_day_share": null,
+        "seven_day_unmeasured": false,
         "cached_tokens": 0,
-        "uncached_tokens": 0,
-        "plan_percent": null
+        "uncached_tokens": 0
       },
       {
         "at": -7200000,
         "group": "direct",
-        "meter_tokens": 0.0,
+        "unit": "usd",
         "usd": 0.0,
+        "five_hour_share": null,
+        "five_hour_unmeasured": false,
+        "seven_day_share": null,
+        "seven_day_unmeasured": false,
         "cached_tokens": 0,
-        "uncached_tokens": 0,
-        "plan_percent": null
+        "uncached_tokens": 0
       },
       {
         "at": -3600000,
         "group": "direct",
-        "meter_tokens": 0.0,
+        "unit": "usd",
         "usd": 0.0,
+        "five_hour_share": null,
+        "five_hour_unmeasured": false,
+        "seven_day_share": null,
+        "seven_day_unmeasured": false,
         "cached_tokens": 0,
-        "uncached_tokens": 0,
-        "plan_percent": null
+        "uncached_tokens": 0
       },
       {
         "at": 0,
         "group": "direct",
-        "meter_tokens": 0.0,
+        "unit": "usd",
         "usd": 0.0036,
+        "five_hour_share": null,
+        "five_hour_unmeasured": false,
+        "seven_day_share": null,
+        "seven_day_unmeasured": false,
         "cached_tokens": 500,
-        "uncached_tokens": 1000,
-        "plan_percent": null
+        "uncached_tokens": 1000
       }
     ]
   }

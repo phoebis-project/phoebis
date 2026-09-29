@@ -44,10 +44,11 @@ pub use query::{
     group_of, hour_ceil, key_request_totals, latest_extra_usage, latest_quota, list_requests,
     member_spends, moves_by_reason, parse_range, pin_migrations_by_reason, placements,
     pool_traffic, recent_events_of_kind, request_by_id, request_events, request_totals,
-    rewrite_series, series, session_activity, session_burn_series, session_identities, BurnPoint,
-    Dashboard, GroupRow, LiveKeys, PlacementRow, ProbeCounts, RequestFilter, RollupFilter,
-    SeriesFilter, SeriesPoint, SessionActivity, SessionIdentity, Totals, TrafficBucket, GROUP_BYS,
-    MAX_POINTS, MAX_RANGE_MS,
+    rewrite_series, series,
+    session_activity, session_burn_series, session_identities, BurnPoint, Dashboard, GroupRow,
+    LiveKeys, PlacementRow, ProbeCounts, RequestFilter, RollupFilter, SeriesFilter, SeriesPoint,
+    SessionActivity, SessionIdentity, Tiers, Totals, TrafficBucket, GROUP_BYS, MAX_POINTS,
+    MAX_RANGE_MS,
 };
 pub use quota::{
     samples_from_head, samples_from_poll, QuotaPoll, Sampled, POLL_INTERVAL, PROFILE_EVERY_POLLS,

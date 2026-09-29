@@ -14,7 +14,7 @@ import { Badge, Button, Card, ErrorState, Input, Meter, Segmented, Select, Skele
 import { BAND_TOLERANCE, CONVERSATION_CLASSES, DRIFT_TOLERANCE, FIT_WINDOW_LABEL, driftLabel, driftWide, foldBurn, moveLabel, own, placementCells, placementRungLabel, type BurnLine, type BurnRow } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missCount, missLabel, missReasonOrder } from '@/lib/cache';
-import { fmtAbsolute, fmtCompact, fmtDayShort, fmtDuration, fmtHourTick, fmtInt, fmtMs, fmtPct, fmtPeriodEnd, fmtUsd, shortId, toLocalInput, upperFirst } from '@/lib/format';
+import { fmtAbsolute, fmtCompact, fmtDayShort, fmtDuration, fmtHourTick, fmtInt, fmtMs, fmtPct, fmtPeriodEnd, fmtShare, fmtUsd, shortId, toLocalInput, upperFirst } from '@/lib/format';
 import { BUCKET_COUNT, BUCKET_EDGES, PERCENTILE_HINT, histogramCount } from '@/lib/histogram';
 import { useAsync } from '@/lib/hooks';
 import { scrollToSection, useScrollSpy } from '@/lib/scroll';
@@ -1197,6 +1197,21 @@ const CONVERSATION_HINT = CONVERSATION_CLASSES.join(', ');
 const OVERHEAD_HINT = 'every other class, and requests that named none';
 const CLASS_NOTE = `conversation is ${CONVERSATION_HINT}; overhead is ${OVERHEAD_HINT}`;
 
+const SPEND_NOTE = 'Dollars per minute; a subscription upstream on plan quota spends window share, charted under Plan per hour';
+const PLAN_NOTE =
+  "The share of each subscription upstream's own 5-hour window (solid) and 7-day window (dashed) its traffic used per hour, the 5-hour share weighed by the peak band";
+const UNMEASURED_NOTE = 'priced through an unmeasured cell';
+const UNMEASURED_HINT = 'Priced in part through a cell or a tier factor the measurement campaign has not filled';
+const TIER_UNKNOWN_HINT = 'No tier on file, or one the tier factor table does not size, so no share of its windows is priced';
+
+/** The cost reference's mark on a figure priced in part through a stand-in cell. */
+const markOf = (unmeasured: boolean) =>
+  unmeasured ? (
+    <span className="muted" title={UNMEASURED_HINT}>
+      *
+    </span>
+  ) : null;
+
 /**
  * The burn route's three views of one grouping. A line's colour follows its group within the answer rather than
  * its rank, so a range that reorders the groups does not repaint them; the upstream grouping keeps each upstream's
@@ -1215,13 +1230,16 @@ function BurnCharts({ answer, error, groupBy, loading }: { answer: { bucketSecon
   // Read off the buckets, not the lines: the class grouping draws its two lines even over a range with no traffic.
   const empty = !loading && error === null && rows.length === 0 ? 'No traffic in this range.' : undefined;
   const byUpstream = groupBy === 'account';
-  const meterAxis = byUpstream && lines.some((l) => l.unit === 'window_share');
-  const usdAxis = !meterAxis || lines.some((l) => l.unit === 'usd');
+  // Every other grouping mixes both kinds of upstream, so its lines chart the dollars their API-key traffic spent.
+  const spent = lines.map((l, i) => ({ i, l })).filter(({ l }) => !byUpstream || l.unit === 'usd');
   // One precision for every tick, from the largest figure drawn, so the axis never mixes $0.0070 with $0.01.
-  const usdMax = Math.max(0, ...rows.flatMap((r) => r.usd));
+  const usdMax = Math.max(0, ...rows.flatMap((r) => spent.map(({ i }) => r.usd[i])));
   const usdDigits = usdMax >= 10 ? 0 : usdMax >= 0.1 ? 2 : usdMax >= 0.01 ? 3 : 4;
   const planned = lines.map((l, i) => ({ i, l })).filter(({ l }) => byUpstream && !l.other && l.unit === 'window_share');
-  const spendOf = (l: BurnLine, r: BurnRow, i: number) => (byUpstream ? (l.unit === 'window_share' ? `${fmtCompact(r.meter[i])} meter tokens` : fmtUsd(r.usd[i])) : `${fmtUsd(r.usd[i])}, ${fmtCompact(r.meter[i])} meter tokens`);
+  const unpriced = lines.filter((l) => byUpstream && !l.other && l.unit === 'unknown');
+  const flagged = planned.some(({ l }) => l.fiveHourUnmeasured || l.sevenDayUnmeasured);
+  // A priced upstream's bucket with no share had no priced traffic, which is a share of zero rather than a gap.
+  const shareAt = (shares: (number | null)[], i: number) => shares[i] ?? 0;
   return (
     <div className="grid-2">
       <ChartCard
@@ -1252,45 +1270,95 @@ function BurnCharts({ answer, error, groupBy, loading }: { answer: { bucketSecon
 
       <ChartCard
         title="Spend per minute"
-        subtitle={byUpstream ? 'Dollars per minute on the left; a subscription upstream burns plan-meter tokens, dashed, on the right' : 'Dollars per minute; the tooltip adds the plan-meter tokens'}
+        subtitle={byUpstream ? SPEND_NOTE : `${SPEND_NOTE} when grouped by upstream`}
         error={error}
         loading={loading}
-        empty={empty}
-        legend={lines.map((l) => ({ color: colorOf(l), dashed: byUpstream && l.unit === 'window_share', label: nameOf(l), shape: 'line' as const, title: titleOf(l), value: byUpstream && l.unit === 'window_share' ? `${fmtCompact(l.meterPerMinute)} tokens` : fmtUsd(l.usdPerMinute) }))}
+        empty={empty ?? (spent.length === 0 ? 'No API-key upstream spent dollars in this range.' : undefined)}
+        legend={spent.map(({ l }) => ({ color: colorOf(l), label: nameOf(l), shape: 'line' as const, title: titleOf(l), value: fmtUsd(l.usdPerMinute) }))}
       >
         <LineChart data={rows} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
           <CartesianGrid vertical={false} stroke={ink.grid} />
           <XAxis dataKey="at" tickFormatter={tick} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
-          {usdAxis && <YAxis yAxisId="usd" tickFormatter={(v: number) => `$${v.toFixed(usdDigits)}`} tickLine={false} axisLine={false} width={56} />}
-          {meterAxis && <YAxis yAxisId="meter" orientation="right" tickFormatter={(v: number) => fmtCompact(v)} tickLine={false} axisLine={false} width={44} />}
-          <Tooltip cursor={{ stroke: ink.axis }} content={timeTip<BurnRow>((r) => lines.map((l, i) => ({ color: colorOf(l), label: nameOf(l), title: titleOf(l), value: spendOf(l, r, i) })))} />
-          {lines.map((l, i) => {
-            const meter = byUpstream && l.unit === 'window_share';
-            return <Line key={i} yAxisId={meter ? 'meter' : 'usd'} type="monotone" dataKey={(r: BurnRow) => (meter ? r.meter[i] : r.usd[i])} stroke={colorOf(l)} strokeWidth={2} strokeDasharray={meter ? '5 3' : undefined} dot={false} isAnimationActive={false} />;
-          })}
+          <YAxis tickFormatter={(v: number) => `$${v.toFixed(usdDigits)}`} tickLine={false} axisLine={false} width={56} />
+          <Tooltip cursor={{ stroke: ink.axis }} content={timeTip<BurnRow>((r) => spent.map(({ i, l }) => ({ color: colorOf(l), label: nameOf(l), title: titleOf(l), value: fmtUsd(r.usd[i]) })))} />
+          {spent.map(({ i, l }) => (
+            <Line key={i} type="monotone" dataKey={(r: BurnRow) => r.usd[i]} stroke={colorOf(l)} strokeWidth={2} dot={false} isAnimationActive={false} />
+          ))}
         </LineChart>
       </ChartCard>
 
       {byUpstream && (
         <ChartCard
           title="Plan per hour"
-          subtitle="Share of each subscription upstream's 5-hour window its traffic used per hour, weighted by the peak band"
+          subtitle={PLAN_NOTE}
           error={error}
           loading={loading}
           empty={
             empty ??
-            (planned.length === 0 ? 'No subscription upstream burned in this range.' : planned.every(({ l }) => l.planPeak === null) ? 'No fit yet: no subscription upstream in range has a fitted or predicted window size.' : undefined)
+            (planned.length > 0
+              ? undefined
+              : unpriced.length > 0
+                ? `No subscription upstream in range has a tier the tier factor table sizes: ${unpriced.map(nameOf).join(', ')}.`
+                : 'No subscription upstream burned in this range.')
           }
-          legend={planned.map(({ l }) => ({ color: colorOf(l), label: nameOf(l), shape: 'line' as const, value: l.planPeak === null ? 'no fit yet' : `peak ${fmtPct(l.planPeak, 1)}` }))}
+          legend={[
+            ...planned.flatMap(({ l }) => [
+              {
+                color: colorOf(l),
+                label: `${nameOf(l)} (5-hour)`,
+                shape: 'line' as const,
+                title: l.fiveHourPeak === null ? undefined : `Highest hour ${fmtShare(l.fiveHourPeak)}`,
+                value: (
+                  <>
+                    {fmtShare(l.fiveHourPerHour ?? 0)}
+                    {markOf(l.fiveHourUnmeasured)}
+                  </>
+                ),
+              },
+              {
+                color: colorOf(l),
+                dashed: true,
+                label: `${nameOf(l)} (7-day)`,
+                shape: 'line' as const,
+                value: (
+                  <>
+                    {fmtShare(l.sevenDayPerHour ?? 0)}
+                    {markOf(l.sevenDayUnmeasured)}
+                  </>
+                ),
+              },
+            ]),
+            // Muted, since no line of its own is drawn.
+            ...unpriced.map((l) => ({ color: ink.muted, label: nameOf(l), shape: 'line' as const, title: TIER_UNKNOWN_HINT, value: 'tier unknown' })),
+          ]}
+          footer={
+            flagged && (
+              <ul className="legend" aria-label="Unmeasured">
+                <li className="muted" title={UNMEASURED_HINT}>
+                  * {UNMEASURED_NOTE}
+                </li>
+              </ul>
+            )
+          }
         >
           <LineChart data={rows} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
             <CartesianGrid vertical={false} stroke={ink.grid} />
             <XAxis dataKey="at" tickFormatter={tick} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
-            <YAxis tickFormatter={(v: number) => `${v}%`} tickLine={false} axisLine={false} width={40} />
-            <Tooltip cursor={{ stroke: ink.axis }} content={timeTip<BurnRow>((r) => planned.map(({ i, l }) => ({ color: colorOf(l), label: nameOf(l), value: r.plan[i] === null ? 'no fit yet' : fmtPct(r.plan[i] as number, 1) })))} />
-            {planned.map(({ i, l }) => (
-              <Line key={i} type="monotone" dataKey={(r: BurnRow) => (r.plan[i] === null ? null : (r.plan[i] as number) * 100)} stroke={colorOf(l)} strokeWidth={2} dot={false} isAnimationActive={false} />
-            ))}
+            <YAxis tickFormatter={(v: number) => fmtShare(v)} tickLine={false} axisLine={false} width={52} />
+            <Tooltip
+              cursor={{ stroke: ink.axis }}
+              content={timeTip<BurnRow>((r) => [
+                ...planned.flatMap(({ i, l }) => [
+                  { color: colorOf(l), label: `${nameOf(l)} (5-hour)`, value: `${fmtShare(shareAt(r.fiveHour, i))}${r.fiveHourUnmeasured[i] ? '*' : ''}` },
+                  { color: colorOf(l), label: `${nameOf(l)} (7-day)`, value: `${fmtShare(shareAt(r.sevenDay, i))}${r.sevenDayUnmeasured[i] ? '*' : ''}` },
+                ]),
+                ...(planned.some(({ i }) => r.fiveHourUnmeasured[i] || r.sevenDayUnmeasured[i]) ? [{ label: UNMEASURED_NOTE, title: UNMEASURED_HINT, value: '*' }] : []),
+              ])}
+            />
+            {planned.flatMap(({ i, l }) => [
+              <Line key={`${i}-5h`} type="monotone" dataKey={(r: BurnRow) => shareAt(r.fiveHour, i)} stroke={colorOf(l)} strokeWidth={2} dot={false} isAnimationActive={false} />,
+              <Line key={`${i}-7d`} type="monotone" dataKey={(r: BurnRow) => shareAt(r.sevenDay, i)} stroke={colorOf(l)} strokeWidth={2} strokeDasharray="5 3" dot={false} isAnimationActive={false} />,
+            ])}
           </LineChart>
         </ChartCard>
       )}
