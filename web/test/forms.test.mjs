@@ -268,6 +268,26 @@ test('a model rule list is refused in the route\'s order and words, and the refu
   assert.equal(d.validatePoolInput({ ...input, modelRules: rules('claude-*', 'a***') }, accounts), false);
 });
 
+test("the key dialog's holds agree with its Save condition", () => {
+  assert.deepEqual(d.KEY_GROUPS, ['key', 'access', 'models', 'sessions', 'capture']);
+  const named = { inFlightCap: '', modelRules: [], name: 'workstation', poolId: 'all' };
+  assert.deepEqual(d.keyRefusals(named), [], 'a named key in a pool with no cap and no rules may save');
+  assert.deepEqual(d.keyRefusals({ ...named, name: '' }), [{ field: 'Name', group: 'key', text: 'the key needs a name.' }]);
+  assert.deepEqual(d.keyRefusals({ ...named, name: '   ' }), [{ field: 'Name', group: 'key', text: 'the key needs a name.' }], 'a name of spaces is saved trimmed, so it is no name');
+  assert.deepEqual(d.keyRefusals({ ...named, poolId: '' }), [{ field: 'Pool', group: 'key', text: 'the key needs a pool.' }]);
+  assert.deepEqual(d.keyRefusals({ ...named, inFlightCap: '0' }), [{ field: 'Requests in flight', group: 'access', text: d.inFlightCapRefusal('0') }]);
+  assert.deepEqual(d.keyRefusals({ ...named, modelRules: rules('a***') }), [{ field: 'Model rules', group: 'models', text: d.modelRulesRefusal(rules('a***')) }]);
+  assert.deepEqual(
+    d.keyRefusals({ inFlightCap: '0', modelRules: rules('a***'), name: '', poolId: '' }).map((r) => [r.group, r.field]),
+    [['key', 'Name'], ['key', 'Pool'], ['access', 'Requests in flight'], ['models', 'Model rules']],
+    'every hold at once reads in rail order',
+  );
+  for (const v of ['', '1', '16', '4294967295']) assert.deepEqual(d.keyRefusals({ ...named, inFlightCap: v }), [], `a cap of ${JSON.stringify(v)} holds nothing`);
+  for (const v of ['0', '-1', '1.5', '4294967296', 'x']) assert.deepEqual(d.keyRefusals({ ...named, inFlightCap: v }).map((r) => r.group), ['access'], `a cap of ${v} holds Access`);
+  for (const list of [[], rules('claude-haiku-4-5*', 'NOT *'), rules(...Array(256).fill('*'))]) assert.deepEqual(d.keyRefusals({ ...named, modelRules: list }), [], 'a list the route takes holds nothing');
+  for (const list of [rules('claude-*', 'NOT a***', ''), rules(''), rules(...Array(257).fill(''))]) assert.deepEqual(d.keyRefusals({ ...named, modelRules: list }), [{ field: 'Model rules', group: 'models', text: d.modelRulesRefusal(list) }]);
+});
+
 test('a pool refusal names the group its control sits in', () => {
   assert.deepEqual(d.poolRefusals(input, accounts), [], 'the stored pool is refused nothing');
   const [first] = input.members;

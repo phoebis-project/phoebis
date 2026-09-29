@@ -261,6 +261,30 @@ export function inFlightCapRefusal(value: string): string | null {
   return whole(n, 1, KEY_CAP_MAX) ? null : 'Requests in flight is a whole number of at least 1; leave it empty for no cap.';
 }
 
+/** The key dialog's groups in rail order; a refusal names the one its control sits in. */
+export const KEY_GROUPS = ['key', 'access', 'models', 'sessions', 'capture'] as const;
+export type KeyGroup = (typeof KEY_GROUPS)[number];
+
+export interface KeyRefusal {
+  /** The refused control's accessible name: Name, Pool, Requests in flight, Model rules. */
+  field: string;
+  group: KeyGroup;
+  text: string;
+}
+
+/** The key dialog's holds in rail order: a missing name or pool, the in-flight cap, the model rules; empty when Save may go. */
+export function keyRefusals(form: Pick<KeyForm, 'inFlightCap' | 'modelRules' | 'name' | 'poolId'>): KeyRefusal[] {
+  const out: KeyRefusal[] = [];
+  // Trimmed, as `keyInputOf` sends it: a name of spaces reaches the route empty.
+  if (!form.name.trim()) out.push({ field: 'Name', group: 'key', text: 'the key needs a name.' });
+  if (!form.poolId) out.push({ field: 'Pool', group: 'key', text: 'the key needs a pool.' });
+  const cap = inFlightCapRefusal(form.inFlightCap);
+  if (cap) out.push({ field: 'Requests in flight', group: 'access', text: cap });
+  const rules = modelRulesRefusal(form.modelRules);
+  if (rules) out.push({ field: 'Model rules', group: 'models', text: rules });
+  return out;
+}
+
 /** The identity card's subscription end as the operator leaves it; `endsAt` is a `datetime-local` value, empty for none. */
 export interface SubscriptionEndForm {
   cancelled: boolean;

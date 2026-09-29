@@ -530,35 +530,15 @@ const POOL_DEPENDENTS = {
  * and disabled while its switch is off or its preset is not Custom, the warnings at their ends of their groups, no
  * clipped select, nothing pushed apart or past the frame.
  */
-async function poolDialogGeometry(theme) {
-  const sayIn = (group, what) => failures.push(`${theme} /pools dialog${group ? ` ${group}` : ''}: ${what}`);
-  const dialog = page.locator('dialog[open]');
-  const open = async () => {
-    await page.locator('.pool button[aria-label^="Edit pool"]').first().click();
-    await dialog.waitFor({ state: 'visible', timeout: 15_000 });
-    await settle();
-  };
-  const close = async () => {
-    await page.keyboard.press('Escape');
-    await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => sayIn(null, 'the dialog stayed open after Escape'));
-  };
-  try {
-    await open();
-  } catch (error) {
-    sayIn(null, `never opened (${error instanceof Error ? error.message : String(error)})`);
-    return;
-  }
-  const frame = await dialog.evaluate((el) => {
-    const box = el.getBoundingClientRect();
-    const rail = el.querySelector('.dialog-rail');
-    const body = el.querySelector('.dialog__body--grouped');
-    return { body: body?.clientHeight ?? null, height: box.height, rail: rail ? { clientHeight: rail.clientHeight, scrollHeight: rail.scrollHeight } : null, width: box.width };
-  });
-  measurements.push(`${theme} /pools dialog frame ${JSON.stringify(frame)}`);
-  if (frame.width !== 1040 || frame.height !== 752) sayIn(null, `the frame measures ${frame.width} by ${frame.height}, not 1040 by 752`);
-  if (!frame.rail || frame.rail.scrollHeight > frame.rail.clientHeight) sayIn(null, `the rail scrolls: ${JSON.stringify(frame.rail)}`);
-  const check = (group) =>
-    dialog.evaluate((el, label) => {
+/**
+ * The layout every group of a grouped dialog keeps, read in the shown section: its height against the body's window,
+ * the cells on the body's two columns, each label above its control or beside its switch, every text control and hint
+ * as wide as its field, no select clipping its text, no row pushing its items apart, nothing past the frame, and every
+ * disabled control drawn as waiting. `warning` places the section's own warning callout, when it draws one.
+ */
+const groupGeometry = (dialog, label, maxWindows) =>
+  dialog.evaluate(
+    (el, [label, maxWindows]) => {
       const found = [];
       const dialogBox = el.getBoundingClientRect();
       const body = el.querySelector('.dialog__body--grouped');
@@ -571,7 +551,7 @@ async function poolDialogGeometry(theme) {
       const near = (a, b) => Math.abs(a - b) <= 1;
       const name = (node) => node.querySelector?.('.field__label')?.textContent?.trim() ?? node.getAttribute?.('aria-label') ?? node.className;
       const windows = section.scrollHeight / body.clientHeight;
-      if (windows > 1.7) found.push(`runs ${section.scrollHeight} px, ${windows.toFixed(2)} windows of ${body.clientHeight} px`);
+      if (windows > maxWindows) found.push(`runs ${section.scrollHeight} px, ${windows.toFixed(2)} windows of ${body.clientHeight} px`);
       for (const cells of section.querySelectorAll('.cells')) {
         const box = cells.getBoundingClientRect();
         const gap = parseFloat(getComputedStyle(cells).columnGap);
@@ -619,30 +599,73 @@ async function poolDialogGeometry(theme) {
           break;
         }
       }
-      const warnings = [...section.querySelectorAll(':scope > .callout--warning')];
-      if (label === 'Keys' && warnings.length && section.children[1] !== warnings[0]) found.push('its warning does not lead the group');
-      if (label === 'Keepalive') {
-        if (warnings.length && section.lastElementChild !== warnings[0]) found.push('its warning does not close the group');
-        const cap = section.querySelector('button[role="switch"][aria-label="Daily probe cost cap ($)"]')?.closest('.switched');
-        const cells = section.querySelector('.cells');
+      for (const input of section.querySelectorAll('.input:disabled')) if (getComputedStyle(input).cursor !== 'not-allowed') found.push(`${input.getAttribute('aria-label') ?? name(input.closest('.field') ?? input)} is disabled but not drawn as waiting`);
+      for (const chevron of section.querySelectorAll('.select:has(select:disabled) > svg')) if (getComputedStyle(chevron).opacity !== '0.5') found.push(`${chevron.parentElement?.querySelector('select')?.getAttribute('aria-label') ?? 'a disabled select'} keeps its chevron at full strength`);
+      const first = section.querySelector(':scope > .callout--warning');
+      const warning = first ? { closes: section.lastElementChild === first, leads: section.children[1] === first } : null;
+      return { found, line: { height: section.scrollHeight, window: body.clientHeight }, warning };
+    },
+    [label, maxWindows],
+  );
+
+/** Each selector's controls in the labelled group, drawn and disabled; null for a selector that holds, else why not. */
+const disabledIn = (dialog, label, selectors) =>
+  dialog.evaluate(
+    (el, [label, list]) => {
+      const section = [...el.querySelectorAll('section.dialog-group')].find((s) => s.getAttribute('aria-label') === label);
+      return list.map((selector) => {
+        const nodes = [...(section?.querySelectorAll(selector) ?? [])];
+        return nodes.length > 0 && nodes.every((n) => n.disabled) ? null : `${selector} ${nodes.length ? 'is enabled' : 'is not drawn'}`;
+      });
+    },
+    [label, selectors],
+  );
+
+async function poolDialogGeometry(theme) {
+  const sayIn = (group, what) => failures.push(`${theme} /pools dialog${group ? ` ${group}` : ''}: ${what}`);
+  const dialog = page.locator('dialog[open]');
+  const open = async () => {
+    await page.locator('.pool button[aria-label^="Edit pool"]').first().click();
+    await dialog.waitFor({ state: 'visible', timeout: 15_000 });
+    await settle();
+  };
+  const close = async () => {
+    await page.keyboard.press('Escape');
+    await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => sayIn(null, 'the dialog stayed open after Escape'));
+  };
+  try {
+    await open();
+  } catch (error) {
+    sayIn(null, `never opened (${error instanceof Error ? error.message : String(error)})`);
+    return;
+  }
+  const frame = await dialog.evaluate((el) => {
+    const box = el.getBoundingClientRect();
+    const rail = el.querySelector('.dialog-rail');
+    const body = el.querySelector('.dialog__body--grouped');
+    return { body: body?.clientHeight ?? null, height: box.height, rail: rail ? { clientHeight: rail.clientHeight, scrollHeight: rail.scrollHeight } : null, width: box.width };
+  });
+  measurements.push(`${theme} /pools dialog frame ${JSON.stringify(frame)}`);
+  if (frame.width !== 1040 || frame.height !== 752) sayIn(null, `the frame measures ${frame.width} by ${frame.height}, not 1040 by 752`);
+  if (!frame.rail || frame.rail.scrollHeight > frame.rail.clientHeight) sayIn(null, `the rail scrolls: ${JSON.stringify(frame.rail)}`);
+  const check = async (group) => {
+    const { found, line, warning } = await groupGeometry(dialog, group, 1.7);
+    if (group === 'Keepalive') {
+      if (warning && !warning.closes) found.push('its warning does not close the group');
+      const cap = await dialog.evaluate((el) => {
+        const section = [...el.querySelectorAll('section.dialog-group')].find((s) => s.getAttribute('aria-label') === 'Keepalive');
+        const near = (a, b) => Math.abs(a - b) <= 1;
+        const switched = section?.querySelector('button[role="switch"][aria-label="Daily probe cost cap ($)"]')?.closest('.switched');
+        const cells = section?.querySelector('.cells');
         const column = cells ? (cells.getBoundingClientRect().width - parseFloat(getComputedStyle(cells).columnGap)) / 2 : 0;
-        if (!cap || cells?.lastElementChild !== cap.parentElement || !near(cap.getBoundingClientRect().width, column)) found.push(`the cost cap is not the last field, one ${column} px column wide`);
-      }
-      return { found, line: { height: section.scrollHeight, window: body.clientHeight } };
-    }, group);
+        return !switched || cells?.lastElementChild !== switched.parentElement || !near(switched.getBoundingClientRect().width, column) ? `the cost cap is not the last field, one ${column} px column wide` : null;
+      });
+      if (cap) found.push(cap);
+    }
+    return { found, line };
+  };
   const dependents = async (group) => {
     const found = [];
-    const disabledAll = (selectors) =>
-      dialog.evaluate(
-        (el, [label, list]) => {
-          const section = [...el.querySelectorAll('section.dialog-group')].find((s) => s.getAttribute('aria-label') === label);
-          return list.map((selector) => {
-            const nodes = [...(section?.querySelectorAll(selector) ?? [])];
-            return nodes.length > 0 && nodes.every((n) => n.disabled) ? null : `${selector} ${nodes.length ? 'is enabled' : 'is not drawn'}`;
-          });
-        },
-        [group, selectors],
-      );
     const flip = async (home, toggle) => {
       if (home !== group) await railEntry(dialog, home).click();
       await toggle.click();
@@ -658,7 +681,7 @@ async function poolDialogGeometry(theme) {
       const on = (await toggle.getAttribute('aria-checked')) === 'true';
       if (on && !(await toggle.isEnabled())) continue;
       if (on) await flip(home, toggle);
-      for (const miss of await disabledAll(controls)) if (miss) found.push(`with ${label} off, ${miss}`);
+      for (const miss of await disabledIn(dialog, group, controls)) if (miss) found.push(`with ${label} off, ${miss}`);
       if (on) await flip(home, toggle);
     }
     // The custom seconds wait on the custom pill, and the threshold on a placement that reads it.
@@ -1341,9 +1364,10 @@ const measureSelect = (label) =>
   }, label);
 
 /**
- * The key dialog's Requests in flight field against the Name field in the same section: the same input box and the
- * same hint type as the Pool field's. A cap of 0 raises the refusal and holds the Create button. The
- * Affinity source select below it is the Expiry select's box, and its hint the Pool hint's type.
+ * The key dialog's Requests in flight field under Access against the Name field under Key: the same input box and the
+ * same hint type as the Pool field's. A cap of 0 raises the refusal in Access and holds the Create button. The
+ * Affinity source select under Sessions is the Expiry select's box, on a full row,
+ * and its hint the Pool hint's type.
  */
 async function keyCapField(theme) {
   const say = (what) => failures.push(`${theme} /keys: ${what}`);
@@ -1355,40 +1379,148 @@ async function keyCapField(theme) {
     say(`the create dialog never opened (${error instanceof Error ? error.message : String(error)})`);
     return;
   }
-  const cap = await measureInput('Requests in flight');
-  const name = await measureInput('Name');
-  const hints = await dialog.evaluate((el) => {
-    const hint = (text) => {
+  // A hidden group measures no box, so each control is read while its group shows.
+  const show = async (label) => {
+    await railEntry(dialog, label).click();
+    await settle();
+  };
+  const hintOf = (label) =>
+    dialog.evaluate((el, text) => {
       const node = [...el.querySelectorAll('.field')].find((f) => f.querySelector('.field__label')?.textContent?.trim() === text)?.querySelector('.field__hint');
       return node ? `${getComputedStyle(node).fontSize} ${getComputedStyle(node).color} ${getComputedStyle(node).lineHeight}` : null;
-    };
-    return { cap: hint('Requests in flight'), pool: hint('Pool') };
-  });
+    }, label);
+  await show('Access');
+  const cap = await measureInput('Requests in flight');
+  const expiry = await measureSelect('Expiry');
+  const hints = { cap: await hintOf('Requests in flight') };
+  await show('Key');
+  const name = await measureInput('Name');
+  hints.pool = await hintOf('Pool');
+  await show('Sessions');
+  const source = await measureSelect('Affinity source');
+  hints.source = await hintOf('Affinity source');
   measurements.push(`${theme} /keys cap field ${JSON.stringify({ cap, hints, name })}`);
   for (const finding of compare(cap, name, ['background', 'border', 'font', 'height', 'padding'], 'the Requests in flight input against the Name input')) say(finding);
   if (!hints.cap || hints.cap !== hints.pool) say(`the cap's hint reads ${hints.cap} against the Pool hint's ${hints.pool}`);
-  const expiry = await measureSelect('Expiry');
-  const selectHints = await dialog.evaluate((el) => {
-    const hint = (text) => {
-      const node = [...el.querySelectorAll('.field')].find((f) => f.querySelector('.field__label')?.textContent?.trim() === text)?.querySelector('.field__hint');
-      return node ? `${getComputedStyle(node).fontSize} ${getComputedStyle(node).color} ${getComputedStyle(node).lineHeight}` : null;
-    };
-    return { source: hint('Affinity source') };
-  });
-  for (const label of ['Affinity source']) {
-    const select = await measureSelect(label);
+  for (const [label, select] of [['Affinity source', source]]) {
     measurements.push(`${theme} /keys ${label} select ${JSON.stringify({ expiry, select })}`);
     for (const finding of compare(select, expiry, ['background', 'border', 'font', 'height', 'padding', 'width'], `the ${label} select against the Expiry select`)) say(finding);
   }
-  for (const [label, read] of [['Affinity source', selectHints.source]]) {
+  for (const [label, read] of [['Affinity source', hints.source]]) {
     if (!read || read !== hints.pool) say(`the ${label} hint reads ${read} against the Pool hint's ${hints.pool}`);
   }
-  await dialog.locator('input[aria-label="Requests in flight"]').fill('0');
+  await show('Access');
+  const access = dialog.locator('section.dialog-group[aria-label="Access"]');
+  await access.locator('input[aria-label="Requests in flight"]').fill('0');
   await settle();
-  const refused = await dialog.locator('[role="alert"]', { hasText: 'Requests in flight' }).count();
-  if (refused !== 1) say(`a cap of 0 raised ${refused} refusals, not one`);
+  const refused = await access.locator('[role="alert"]', { hasText: 'Requests in flight' }).count();
+  if (refused !== 1) say(`a cap of 0 raised ${refused} refusals in Access, not one`);
   await page.keyboard.press('Escape');
   await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => say('the dialog stayed open after Escape'));
+}
+
+const KEY_GROUP_LABELS = ['Key', 'Access', 'Models', 'Sessions', 'Capture'];
+
+/**
+ * The key dialog on the grouped frame, on create and on edit: the frame and a flat rail of five groups that fits it,
+ * each group inside one window of the body with the layout `groupGeometry` reads, the moving warning leading Key on an
+ * edit that changes the pool, the bodies warning leading Capture while capture is on, and a revoked key's Enabled
+ * switch drawn and disabled. Nothing is saved: every dialog leaves by Escape.
+ */
+async function keyDialogGeometry(theme) {
+  const sayIn = (where, what) => failures.push(`${theme} /keys dialog${where ? ` ${where}` : ''}: ${what}`);
+  const dialog = page.locator('dialog[open]');
+  const rows = page.locator('.card--table tbody tr');
+  const openBy = async (click) => {
+    await click();
+    await dialog.waitFor({ state: 'visible', timeout: 15_000 });
+    await settle();
+  };
+  const editOf = (row) => async () => {
+    await row.locator('.menu__trigger').click();
+    await page.getByRole('menuitem', { name: 'Edit', exact: true }).click();
+  };
+  const close = async (mode) => {
+    await page.keyboard.press('Escape');
+    await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => sayIn(mode, 'the dialog stayed open after Escape'));
+  };
+  const walk = async (mode) => {
+    const frame = await dialog.evaluate((el) => {
+      const box = el.getBoundingClientRect();
+      const rail = el.querySelector('.dialog-rail');
+      return {
+        height: box.height,
+        labels: [...el.querySelectorAll('.dialog-rail__group .dialog-rail__label')].map((l) => l.textContent?.trim()),
+        parents: el.querySelectorAll('.dialog-rail__parent').length,
+        rail: rail ? { clientHeight: rail.clientHeight, scrollHeight: rail.scrollHeight } : null,
+        width: box.width,
+      };
+    });
+    measurements.push(`${theme} /keys dialog ${mode} frame ${JSON.stringify(frame)}`);
+    if (frame.width !== 1040 || frame.height !== 752) sayIn(mode, `the frame measures ${frame.width} by ${frame.height}, not 1040 by 752`);
+    if (JSON.stringify(frame.labels) !== JSON.stringify(KEY_GROUP_LABELS) || frame.parents !== 0) sayIn(mode, `the rail reads ${JSON.stringify(frame.labels)} under ${frame.parents} parents`);
+    if (!frame.rail || frame.rail.scrollHeight > frame.rail.clientHeight) sayIn(mode, `the rail scrolls: ${JSON.stringify(frame.rail)}`);
+    for (const group of KEY_GROUP_LABELS) {
+      const where = `${mode} ${group}`;
+      try {
+        await railEntry(dialog, group).click();
+        await settle();
+        if (group === 'Key' && mode === 'edit') {
+          // Any other pool moves the key; with one pool there is nothing to move to, and the measurement says so.
+          const pool = dialog.locator('section.dialog-group[aria-label="Key"] select');
+          const other = await pool.evaluate((select) => [...select.options].map((o) => o.value).find((v) => v !== select.value) ?? null);
+          if (other === null) measurements.push(`${theme} /keys dialog ${where} one pool, so no move to warn of`);
+          else {
+            await pool.selectOption(other);
+            await settle();
+          }
+        }
+        // Override turns capture on whatever the pool captures, so the bodies warning is drawn.
+        if (group === 'Capture') {
+          await dialog.locator('section.dialog-group[aria-label="Capture"] .radio-list__item').nth(1).locator('input[type="radio"]').check();
+          await settle();
+        }
+        const { found, line, warning } = await groupGeometry(dialog, group, 1);
+        if (group === 'Capture' && !warning?.leads) found.push('the bodies warning does not lead the group while capture is on');
+        if (group === 'Key' && mode === 'edit') {
+          const moved = await dialog.locator('section.dialog-group[aria-label="Key"] select').evaluate((select) => select.options.length > 1);
+          if (moved && !warning?.leads) found.push('the moving warning does not lead the group once the pool changes');
+        }
+        if (group === 'Key' && mode === 'create' && warning) found.push('a new key draws a moving warning');
+        measurements.push(`${theme} /keys dialog ${where} ${JSON.stringify(line)}`);
+        for (const what of found) sayIn(where, what);
+      } catch (error) {
+        sayIn(where, error instanceof Error ? error.message : String(error));
+      }
+    }
+  };
+  try {
+    await openBy(() => page.getByRole('button', { name: 'Create API key', exact: true }).first().click());
+    await walk('create');
+    await close('create');
+    await openBy(editOf(rows.first()));
+    await walk('edit');
+    await close('edit');
+  } catch (error) {
+    sayIn(null, error instanceof Error ? error.message : String(error));
+    await page.keyboard.press('Escape').catch(() => {});
+  }
+  // The route refuses to re-enable a revoked key, so its dialog draws the switch disabled; a router with no revoked key says so.
+  const revoked = rows.filter({ has: page.locator('td:nth-child(7) .badge', { hasText: /^revoked$/ }) }).first();
+  if ((await revoked.count()) === 0) {
+    measurements.push(`${theme} /keys dialog revoked: no revoked key to open`);
+    return;
+  }
+  try {
+    await openBy(editOf(revoked));
+    await railEntry(dialog, 'Access').click();
+    await settle();
+    for (const miss of await disabledIn(dialog, 'Access', ['button[role="switch"][aria-label="Enabled"]'])) if (miss) sayIn('revoked Access', miss);
+    await close('revoked');
+  } catch (error) {
+    sayIn('revoked', error instanceof Error ? error.message : String(error));
+    await page.keyboard.press('Escape').catch(() => {});
+  }
 }
 
 /**
@@ -1618,7 +1750,10 @@ try {
         await deleteUpstreamButton(theme);
         await subscriptionEndForm(theme);
       }
-      if (view.path === '/keys') await keyCapField(theme);
+      if (view.path === '/keys') {
+        await keyCapField(theme);
+        await keyDialogGeometry(theme);
+      }
       if (view.path === '/alerts') await alertRuleDialog(theme);
       // A shot of a placeholder reviews nothing, so the page is given a moment to replace them; a view that
       // keeps one is still worth the shot, which is why the wait is capped and its expiry ignored.

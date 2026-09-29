@@ -1,13 +1,13 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { api } from '@/api';
 import type { AffinitySource, ApiKey, CreatedApiKey, KeyModels, KeyStatus, ModelRule, ModelRulesMode, Pool } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { PatternEditor, useCatalogSuggestions } from '@/components/PatternEditor';
 import { IconInfo, IconPlus, IconWarning } from '@/components/ui/icons';
-import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, ErrorState, Field, Input, Menu, SearchInput, SectionedDialog, Segmented, Select, Skeleton, Toast, Toggle, type DialogSection } from '@/components/ui/primitives';
+import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, ErrorState, Field, GroupedDialog, Input, Menu, PageLink, SearchInput, Segmented, Select, Skeleton, Toast, Toggle, type DialogGroup } from '@/components/ui/primitives';
 import { fmtAbsolute, fmtCompact, fmtDate, fmtInt, fmtRelative, fmtUsd } from '@/lib/format';
-import { inFlightCapRefusal, keyFormOf, keyInputOf, modelRulesRefusal, type CaptureMode } from '@/lib/forms';
+import { KEY_GROUPS, keyFormOf, keyInputOf, keyRefusals, type CaptureMode, type KeyGroup } from '@/lib/forms';
 import { useAsync, useNow, type Loaded } from '@/lib/hooks';
 
 const STATUS_TONE: Record<KeyStatus, 'critical' | 'good' | 'neutral' | 'warning'> = { active: 'good', disabled: 'warning', expired: 'neutral', revoked: 'critical' };
@@ -20,9 +20,8 @@ const MODES: { label: string; value: ModelRulesMode }[] = [
   { label: 'Replace pool rules', value: 'replace' },
 ];
 const RETIRED_SECRET_HINT = 'Sessions whose newest request presented the previous secret; a session that registered a companion and sent no request since counts as switched.';
-const IN_FLIGHT_CAP_HINT = 'Past this many requests in flight the key is refused with a 429 and a Retry-After until one finishes.';
-const AFFINITY_SOURCE_HINT =
-  'Automatic takes the first of: the session id, a parent id the client sends back, its user id, its own messages, the key. A fixed source uses that alone.';
+// The dialog's hint for the cap, less its page link, so the table's tooltip says the same.
+const IN_FLIGHT_CAP_HINT = 'Past this many requests at once the key is refused with a 429 and a Retry-After until one finishes; empty means no cap.';
 // The climb's own order, which Automatic runs.
 const AFFINITY_SOURCES: { label: string; value: AffinitySource }[] = [
   { label: 'Automatic', value: 'auto' },
@@ -321,12 +320,15 @@ function Tile({ label, value }: { label: string; value: string | null }) {
 /** What the key dialog reads of a pool: its capture default, the rules a key inherits, and whose catalogs to suggest from. */
 export type KeyDialogPool = Pick<Pool, 'bodyCaptureHours' | 'id' | 'modelRules' | 'name'> & { members: Pick<Pool['members'][number], 'accountId'>[] };
 
+const KEY_GROUP_LABEL: Record<KeyGroup, string> = { access: 'Access', capture: 'Capture', key: 'Key', models: 'Models', sessions: 'Sessions' };
+
 /**
  * Create or edit an API key. `existing` switches the dialog to edit mode;
  * `initialPoolId` with `lockPool` pins the pool when the dialog is opened from
  * inside a pool's own dialog.
  */
 export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing = null, initialPoolId, lockPool = false }: { existing?: ApiKey | null; initialPoolId?: string; lockPool?: boolean; onClose: () => void; onCreated: (c: CreatedApiKey) => void; onUpdated?: (k: ApiKey) => void; open: boolean; pools: KeyDialogPool[] }) {
+  const [chosen, setChosen] = useState<KeyGroup>('key');
   const [name, setName] = useState('');
   const [poolId, setPoolId] = useState('all');
   const [longContextTwins, setLongContextTwins] = useState(true);
@@ -342,7 +344,6 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing
   const [enabled, setEnabled] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const errorRef = useRef<HTMLDivElement>(null);
   const settings = useAsync(() => api.getSettings(), []);
   const pool = pools.find((p) => p.id === poolId) ?? null;
   const poolName = pool?.name ?? poolId;
@@ -350,14 +351,21 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing
   const maxHours = settings.data?.retention.bodyCaptureMaxHours ?? 72;
   const effectiveHours = captureMode === 'inherit' ? poolHours : captureMode === 'off' ? 0 : captureHours;
   const suggestions = useCatalogSuggestions(pool?.members.map((m) => m.accountId) ?? [], open);
-  const rulesRefusal = modelRulesRefusal(modelRules);
-  const capRefusal = inFlightCapRefusal(inFlightCap);
+  const refusals = keyRefusals({ inFlightCap, modelRules, name, poolId });
+  const refusedFields = new Set(refusals.map((r) => r.field));
+  const refusedGroups = new Set<KeyGroup>(refusals.map((r) => r.group));
+  const invalid = (field: string) => (refusedFields.has(field) ? true : undefined);
+  const refusalOf = (field: string) => refusals.find((r) => r.field === field)?.text ?? null;
+  const first = refusals[0] ?? null;
+  const rulesRefusal = refusalOf('Model rules');
+  const capRefusal = refusalOf('Requests in flight');
   const processed = useAsync(() => (open && existing ? api.getKeyModels(existing.id) : Promise.resolve(null)), [open, existing?.id]);
 
   useEffect(() => {
     if (!open) return;
     // A key cannot exist without a pool, so the first pool stands in until one is picked.
     const form = keyFormOf(existing, initialPoolId ?? pools[0]?.id ?? '');
+    setChosen('key');
     setName(form.name);
     setPoolId(form.poolId);
     setLongContextTwins(form.longContextTwins);
@@ -375,11 +383,8 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing
     setError(null);
   }, [open, existing, initialPoolId, pools]);
 
-  // The callout leads the first section, and the operator may be reading another one when the save is refused.
-  // jsdom leaves scrollIntoView undefined.
-  useEffect(() => {
-    if (error) errorRef.current?.scrollIntoView?.({ block: 'nearest' });
-  }, [error]);
+  // The server's words leave with the next edit to any field; a failed save changes none, so they stand until then.
+  useEffect(() => setError(null), [affinitySource, captureHours, captureMode, enabled, expiry, inFlightCap, longContextTwins, modelRules, modelRulesMode, name, notes, optOut, poolId]);
 
   const moving = existing !== null && poolId !== existing.poolId;
 
@@ -405,76 +410,44 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing
     }
   };
 
-  const sections: DialogSection[] = [
-    {
-      id: 'general',
-      label: 'General',
-      body: (
-        <>
-          {error && (
-            <div ref={errorRef} className="callout callout--critical" role="alert">
-              <IconWarning size={16} />
-              <div>{error}</div>
-            </div>
-          )}
-          <div className="form-row">
-            <Field label="Name">
-              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="workstation" autoFocus />
-            </Field>
-            <Field label="Pool" hint={lockPool ? `Created in pool ${poolName}` : 'A key reaches only the members of the pool it belongs to.'}>
-              <Select value={poolId} onChange={(e) => setPoolId(e.target.value)} disabled={lockPool}>
-                {pools.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
-              </Select>
-            </Field>
+  const refusalCallout = (text: string) => (
+    <div className="callout callout--critical" role="alert">
+      <IconWarning size={16} />
+      <div>{text}</div>
+    </div>
+  );
+
+  // Keyed by group, so a group without a body fails to compile; `KEY_GROUPS` sets the rail order.
+  const bodies: Record<KeyGroup, ReactNode> = {
+    key: (
+      <>
+        {moving && (
+          <div className="callout callout--warning" role="status">
+            <IconInfo size={16} />
+            <div>Moving this key ends its current session pins.</div>
           </div>
-          {moving && (
-            <div className="callout callout--warning" role="status">
-              <IconInfo size={16} />
-              <div>Moving this key ends its current session pins.</div>
-            </div>
-          )}
-          {existing && (
-            <div className="field--inline field">
-              <span className="field__text">
-                <span className="field__label">Enabled</span>
-                <p className="field__hint">Off refuses the key at routing and keeps it, so it can be switched back on without a new secret.</p>
-              </span>
-              {/* The route refuses to re-enable a revoked key, so its switch says so rather than offering it. */}
-              <span title={existing.status === 'revoked' ? 'a revoked key cannot be re-enabled' : undefined}>
-                <Toggle checked={enabled} onChange={setEnabled} label="Enabled" disabled={existing.status === 'revoked'} />
-              </span>
-            </div>
-          )}
-          <Field label="Expiry">
-            <Select value={expiry} onChange={(e) => setExpiry(e.target.value)} style={{ width: 220 }} aria-label="Expiry">
-              {existing && <option value="keep">Keep the current expiry</option>}
-              {!existing && <option value="never">No expiration</option>}
-              <option value="7">7 days</option>
-              <option value="30">30 days</option>
-              <option value="60">60 days</option>
-              <option value="90">90 days</option>
-              <option value="365">1 year</option>
-              {existing && <option value="never">No expiration</option>}
-            </Select>
+        )}
+        <div className="cells">
+          <Field label="Name" className="cell--half">
+            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="workstation" autoFocus aria-invalid={invalid('Name')} />
           </Field>
-          <Field label="Requests in flight" hint={IN_FLIGHT_CAP_HINT}>
-            <Input type="number" min={1} step={1} value={inFlightCap} onChange={(e) => setInFlightCap(e.target.value)} placeholder="No cap" style={{ width: 120 }} aria-label="Requests in flight" />
-          </Field>
-          {capRefusal && (
-            <div className="callout callout--critical" role="alert">
-              <IconWarning size={16} />
-              <div>{capRefusal}</div>
-            </div>
-          )}
-          <Field label="Affinity source" hint={AFFINITY_SOURCE_HINT}>
-            <Select value={affinitySource} onChange={(e) => setAffinitySource(e.target.value as AffinitySource)} style={{ width: 220 }} aria-label="Affinity source">
-              {AFFINITY_SOURCES.map((s) => (
-                <option key={s.value} value={s.value}>
-                  {s.label}
+          <Field
+            label="Pool"
+            className="cell--half"
+            hint={
+              lockPool ? (
+                `Created in pool ${poolName}`
+              ) : (
+                <>
+                  A key reaches only its pool&apos;s members, and moving it ends its session pins. Members and rules are on the <PageLink to="/pools">Pools page</PageLink>.
+                </>
+              )
+            }
+          >
+            <Select value={poolId} onChange={(e) => setPoolId(e.target.value)} disabled={lockPool} aria-invalid={invalid('Pool')}>
+              {pools.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
                 </option>
               ))}
             </Select>
@@ -482,118 +455,175 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing
           <Field label="Notes">
             <textarea className="input" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Where this key lives and who holds it" />
           </Field>
-        </>
-      ),
-    },
-    {
-      id: 'models',
-      label: 'Models',
-      body: (
-        <>
-          {/* Field's frame without its label element: a label forwards a click on its text to the first control
-              inside, which here would flip the mode. */}
-          <div className="field">
-            <div className="field__control">
-              <span className="field__label">Model rules</span>
-              <div>
-                <Segmented<ModelRulesMode> ariaLabel="How this key's rules meet the pool's" value={modelRulesMode} options={MODES} onChange={setModelRulesMode} />
-              </div>
-              <PatternEditor label="Model rules" value={modelRules} onChange={setModelRules} inherited={modelRulesMode === 'extend' ? (pool?.modelRules ?? []) : []} suggestions={suggestions} />
-            </div>
-            <p className="field__hint">
-              {modelRulesMode === 'extend' ? "Top to bottom, first match wins; the pool's rules, in grey, apply after this key's own." : "Top to bottom, first match wins; the pool's rules do not apply to this key."}
-            </p>
-          </div>
-          {rulesRefusal && (
-            <div className="callout callout--critical" role="alert">
-              <IconWarning size={16} />
-              <div>{rulesRefusal}</div>
-            </div>
-          )}
-          <div className="field--inline field">
-            <span className="field__text">
-              <span className="field__label">List [1m] twins in the models listing</span>
-              <p className="field__hint">Claude Code sizes its context window by the id; the twin lets it use the long-context window the upstream reports.</p>
-            </span>
-            <Toggle checked={longContextTwins} onChange={setLongContextTwins} label="List [1m] twins in the models listing" />
-          </div>
-          {existing && <EffectiveList processed={processed} />}
-        </>
-      ),
-    },
-    {
-      id: 'keepalive',
-      label: 'Cache warming',
-      body: (
-        <div className="capture">
-          <div className="field--inline field">
-            <span className="field__text">
-              <span className="field__label">Cache warming opt-out</span>
-              <p className="field__hint">Sessions on this key never receive cache-warming probes, even when the pool keeps caches warm.</p>
-            </span>
-            <Toggle checked={optOut} onChange={setOptOut} label="Cache warming opt-out" />
-          </div>
         </div>
-      ),
-    },
-    {
-      id: 'capture',
-      label: 'Capture',
-      body: (
-        <div className="capture">
-          <span className="field__label">Capture request and response bodies</span>
-          <p className="field__hint">Stores the full JSON of each exchange so the request drawer can show it.</p>
-          <div className="radio-list" role="radiogroup" aria-label="Capture request and response bodies">
-            <label className={`radio-list__item ${captureMode === 'inherit' ? 'is-active' : ''}`}>
-              <input type="radio" name={`capture-${existing?.id ?? 'new'}`} checked={captureMode === 'inherit'} onChange={() => setCaptureMode('inherit')} />
-              <span>Inherit from pool ({poolHours > 0 ? `${poolHours} h` : 'off'})</span>
-            </label>
-            <label className={`radio-list__item ${captureMode === 'override' ? 'is-active' : ''}`}>
-              <input type="radio" name={`capture-${existing?.id ?? 'new'}`} checked={captureMode === 'override'} onChange={() => setCaptureMode('override')} />
-              <span className="row">
-                Override:
-                <Input
-                  type="number"
-                  min={1}
-                  max={maxHours}
-                  value={captureHours}
-                  onChange={(e) => setCaptureHours(Number(e.target.value))}
-                  onFocus={() => setCaptureMode('override')}
-                  style={{ width: 90 }}
-                  aria-label="Capture hours for this key"
-                />
-                hours
-              </span>
-            </label>
-            <label className={`radio-list__item ${captureMode === 'off' ? 'is-active' : ''}`}>
-              <input type="radio" name={`capture-${existing?.id ?? 'new'}`} checked={captureMode === 'off'} onChange={() => setCaptureMode('off')} />
-              <span>Off for this key</span>
-            </label>
+      </>
+    ),
+    access: (
+      <div className="cells">
+        {existing && (
+          <Field label="Enabled" beside hint="Off refuses the key and keeps it, so it can come back on without a new secret; a revoked key cannot.">
+            {/* The route refuses to re-enable a revoked key, so its switch says so rather than offering it. */}
+            <span title={existing.status === 'revoked' ? 'a revoked key cannot be re-enabled' : undefined}>
+              <Toggle checked={enabled} onChange={setEnabled} label="Enabled" disabled={existing.status === 'revoked'} />
+            </span>
+          </Field>
+        )}
+        <Field label="Expiry" hint="An expired key is refused; its history stays in the ledger.">
+          <Select value={expiry} onChange={(e) => setExpiry(e.target.value)} aria-label="Expiry">
+            {existing && <option value="keep">Keep the current expiry</option>}
+            {!existing && <option value="never">No expiration</option>}
+            <option value="7">7 days</option>
+            <option value="30">30 days</option>
+            <option value="60">60 days</option>
+            <option value="90">90 days</option>
+            <option value="365">1 year</option>
+            {existing && <option value="never">No expiration</option>}
+          </Select>
+        </Field>
+        <Field
+          label="Requests in flight"
+          hint={
+            <>
+              {IN_FLIGHT_CAP_HINT} The pool&apos;s cap per member is under Failover on the <PageLink to="/pools">Pools page</PageLink>.
+            </>
+          }
+        >
+          <Input type="number" min={1} step={1} value={inFlightCap} onChange={(e) => setInFlightCap(e.target.value)} placeholder="No cap" aria-label="Requests in flight" aria-invalid={invalid('Requests in flight')} />
+        </Field>
+        {capRefusal && refusalCallout(capRefusal)}
+      </div>
+    ),
+    models: (
+      <div className="cells">
+        {/* Field's frame without its label element: a label forwards a click on its text to the first control
+            inside, which here would flip the mode. */}
+        <Field
+          label="Model rules"
+          plain
+          hint={
+            <>
+              Top to bottom, first match wins. Under Extend the pool&apos;s rules, in grey, apply after this key&apos;s own; under Replace they do not apply. The <PageLink to="/models">Models page</PageLink> shows the list per key.
+            </>
+          }
+        >
+          {/* Its own block, so the segmented control keeps its content width. */}
+          <div>
+            <Segmented<ModelRulesMode> ariaLabel="How this key's rules meet the pool's" value={modelRulesMode} options={MODES} onChange={setModelRulesMode} />
           </div>
-          {effectiveHours > 0 && (
-            <div className="callout callout--warning">
-              <IconWarning size={16} />
-              <div>Bodies contain the prompts, file contents, and tool results of every session using this key. Only the admin secret can read them.</div>
+          <PatternEditor label="Model rules" value={modelRules} onChange={setModelRules} inherited={modelRulesMode === 'extend' ? (pool?.modelRules ?? []) : []} suggestions={suggestions} />
+        </Field>
+        {rulesRefusal && refusalCallout(rulesRefusal)}
+        <Field label="List [1m] twins in the models listing" beside hint="Claude Code sizes its context window by the id; the twin lets it use the long-context window the upstream reports.">
+          <Toggle checked={longContextTwins} onChange={setLongContextTwins} label="List [1m] twins in the models listing" />
+        </Field>
+        {existing && <EffectiveList processed={processed} />}
+      </div>
+    ),
+    sessions: (
+      <div className="cells">
+        <Field
+          label="Affinity source"
+          hint={
+            <>
+              What names a conversation for pinning. Automatic takes the first of: the session id, a parent id the client sends back, the user id, the messages, the key. A fixed source uses that alone, and a request without it gets no pin. How long a pin lasts is the pool&apos;s Session affinity on the{' '}
+              <PageLink to="/pools">Pools page</PageLink>.
+            </>
+          }
+        >
+          <Select value={affinitySource} onChange={(e) => setAffinitySource(e.target.value as AffinitySource)} aria-label="Affinity source">
+            {AFFINITY_SOURCES.map((s) => (
+              <option key={s.value} value={s.value}>
+                {s.label}
+              </option>
+            ))}
+          </Select>
+        </Field>
+        <Field
+          label="Cache warming opt-out"
+          beside
+          hint={
+            <>
+              Sessions on this key never get cache-warming probes, even when the pool keeps caches warm; the pool&apos;s Keepalive is on the <PageLink to="/pools">Pools page</PageLink>.
+            </>
+          }
+        >
+          <Toggle checked={optOut} onChange={setOptOut} label="Cache warming opt-out" />
+        </Field>
+      </div>
+    ),
+    capture: (
+      <>
+        {effectiveHours > 0 && (
+          <div className="callout callout--warning">
+            <IconWarning size={16} />
+            <div>Bodies contain the prompts, file contents, and tool results of every session using this key. Only the admin secret can read them.</div>
+          </div>
+        )}
+        <div className="cells">
+          {/* Field's frame without its label element, since each choice is a label of its own. */}
+          <Field
+            label="Capture request and response bodies"
+            plain
+            hint={
+              <>
+                Stores the full JSON of each exchange for the request drawer on the <PageLink to="/requests">Requests page</PageLink>. Inherit follows the pool; any value is capped by the bootstrap&apos;s limit.
+              </>
+            }
+          >
+            <div className="radio-list" role="radiogroup" aria-label="Capture request and response bodies">
+              <label className={`radio-list__item ${captureMode === 'inherit' ? 'is-active' : ''}`}>
+                <input type="radio" name={`capture-${existing?.id ?? 'new'}`} checked={captureMode === 'inherit'} onChange={() => setCaptureMode('inherit')} />
+                <span>Inherit from pool ({poolHours > 0 ? `${poolHours} h` : 'off'})</span>
+              </label>
+              <label className={`radio-list__item ${captureMode === 'override' ? 'is-active' : ''}`}>
+                <input type="radio" name={`capture-${existing?.id ?? 'new'}`} checked={captureMode === 'override'} onChange={() => setCaptureMode('override')} />
+                <span className="row">
+                  Override:
+                  <Input
+                    type="number"
+                    min={1}
+                    max={maxHours}
+                    value={captureHours}
+                    onChange={(e) => setCaptureHours(Number(e.target.value))}
+                    onFocus={() => setCaptureMode('override')}
+                    style={{ flex: 1 }}
+                    aria-label="Capture hours for this key"
+                  />
+                  hours
+                </span>
+              </label>
+              <label className={`radio-list__item ${captureMode === 'off' ? 'is-active' : ''}`}>
+                <input type="radio" name={`capture-${existing?.id ?? 'new'}`} checked={captureMode === 'off'} onChange={() => setCaptureMode('off')} />
+                <span>Off for this key</span>
+              </label>
             </div>
-          )}
+          </Field>
         </div>
-      ),
-    },
-  ];
+      </>
+    ),
+  };
+  const groups: DialogGroup[] = KEY_GROUPS.map((id) => ({ body: bodies[id], id, label: KEY_GROUP_LABEL[id], refused: refusedGroups.has(id) }));
 
   return (
-    <SectionedDialog
+    <GroupedDialog
       open={open}
       onClose={onClose}
       title={existing ? `Edit ${existing.name}` : 'Create API key'}
-      subtitle="A key belongs to one pool and can only reach that pool's members."
-      sections={sections}
+      railLabel="Key settings"
+      groups={groups}
+      chosen={chosen}
+      onChoose={(id) => setChosen(id as KeyGroup)}
+      // The line always explains the current hold: a refusal of the form's own beats a server message left from
+      // before the edit.
+      status={first ? `Save is held: ${first.text}` : (error ?? 'Every group saves together.')}
+      hold={first?.group ?? null}
+      held={first !== null || error !== null}
       footer={
         <>
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
-          <Button variant="primary" disabled={!name.trim() || !poolId || busy || rulesRefusal !== null || capRefusal !== null} onClick={submit}>
+          <Button variant="primary" disabled={busy || refusals.length > 0} onClick={submit}>
             {busy ? (existing ? 'Saving…' : 'Creating…') : existing ? 'Save' : 'Create'}
           </Button>
         </>

@@ -1892,46 +1892,72 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
   });
 }
 {
+  // The key table's tooltips carry the dialog's words for the cap, less its page link.
+  const laptop = [...m.container.querySelectorAll('.card--table tbody tr')].find((row) => row.children[0]?.querySelector('b')?.textContent?.trim() === 'laptop');
+  const capTitle = [...(laptop?.children[0]?.querySelectorAll('.sub') ?? [])].find((s) => s.textContent?.trim() === 'at most 8 in flight')?.getAttribute('title');
+  results.push({
+    name: "/keys the table's tooltips read the dialog's words",
+    ok:
+      m.container.querySelector('dialog[open]') === null &&
+      capTitle === 'Past this many requests at once the key is refused with a 429 and a Retry-After until one finishes; empty means no cap.',
+    missing: [String(capTitle)],
+  });
+}
+{
+  // A server refusal holds the footer until the operator edits; then the form's own next hold takes the line.
+  [...m.container.querySelectorAll('button')].find((b) => b.textContent?.includes('Create API key'))?.click();
+  await m.settle(200);
+  const dlg = m.container.querySelector('dialog[open]');
+  const type = async (input, value) => {
+    if (!input) return;
+    Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(input, value);
+    input.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await m.settle(100);
+  };
+  const status = () => dlg?.querySelector('.dialog__status');
+  const read = () => `${status()?.classList.contains('is-held') ? 'held' : 'free'} | ${status()?.textContent ?? ''}`;
+  failNextCall('createKey', '/admin/keys', 'name is taken');
+  await type(dlg?.querySelector('input[placeholder="workstation"]'), 'taken');
+  [...(dlg?.querySelectorAll('.dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Create')?.click();
+  await m.settle(400);
+  const refused = read();
+  await type(dlg?.querySelector('input[placeholder="workstation"]'), 'taken-2');
+  const corrected = read();
+  await type(group(dlg, 'Access')?.querySelector('input[aria-label="Requests in flight"]'), '0');
+  const capped = read();
+  results.push({
+    name: "/keys a corrected field clears the server's refusal and the next local refusal takes the footer",
+    ok:
+      refused === 'held | name is taken' &&
+      status() !== null &&
+      corrected === 'free | Every group saves together.' &&
+      capped === 'held | Save is held: Requests in flight is a whole number of at least 1; leave it empty for no cap.Go to Access' &&
+      (dlg?.open ?? false),
+    missing: [refused, corrected, capped],
+  });
+  [...(dlg?.querySelectorAll('.dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
+  await m.settle(200);
+}
+{
   const btn = [...m.container.querySelectorAll('button')].find((b) => b.textContent?.includes('Create API key'));
   btn?.click();
   await m.settle(200);
   const dlg = m.container.querySelector('dialog[open]');
-  expect('/keys create dialog opens', dlg?.textContent ?? '', ['Create API key', 'Expiry', 'Requests in flight', 'Past this many requests in flight the key is refused with a 429 and a Retry-After until one finishes.', 'Notes', 'Capture request and response bodies', 'Cache warming opt-out', 'Model rules', 'Extend pool rules', 'Replace pool rules', 'from pool', 'List [1m] twins in the models listing', 'written with a trailing *']);
+  // A hint that ends in a page link is read up to the link, whose text carries a hidden "opens in a new tab".
+  const CAP_HINT = "Past this many requests at once the key is refused with a 429 and a Retry-After until one finishes; empty means no cap. The pool's cap per member is under Failover on the";
+  expect('/keys create dialog opens', dlg?.textContent ?? '', ['Create API key', 'Expiry', 'Requests in flight', CAP_HINT, 'Notes', 'Capture request and response bodies', 'Cache warming opt-out', 'Model rules', 'Extend pool rules', 'Replace pool rules', 'from pool', 'List [1m] twins in the models listing', 'written with a trailing *']);
   {
-    // The cap sits with the rows that decide whether the key is let in at all, right after the expiry.
-    const general = [...(dlg?.querySelectorAll('.dialog-section') ?? [])].find((sec) => sec.getAttribute('aria-label') === 'General');
-    const labels = [...(general?.querySelectorAll('.field__label') ?? [])].map((l) => l.textContent?.trim());
-    results.push({ name: '/keys the in-flight cap follows the expiry in the General section', ok: labels.indexOf('Requests in flight') === labels.indexOf('Expiry') + 1 && labels.includes('Expiry'), missing: labels });
-    // What the key identifies a conversation by follows the cap, a select at its default.
-    const optionsOf = (label) => [...(general?.querySelector(`select[aria-label="${label}"]`)?.options ?? [])].map((o) => `${o.value}:${o.textContent?.trim()}`);
-    const valueOf = (label) => general?.querySelector(`select[aria-label="${label}"]`)?.value;
+    // Read while the name is blank, so Key carries its refusal mark; the label span passes over the dot and the note.
+    const railLabels = [...(dlg?.querySelectorAll('.dialog-rail__group .dialog-rail__label') ?? [])].map((l) => l.textContent?.trim());
+    const marked = [...(dlg?.querySelectorAll('.dialog-rail__group') ?? [])].filter((b) => b.querySelector('.dialog-rail__dot') && b.getAttribute('aria-describedby')).map((b) => b.getAttribute('data-group'));
     results.push({
-      name: '/keys the Affinity source select follows the cap with its options and the default',
-      ok:
-        labels.indexOf('Affinity source') === labels.indexOf('Requests in flight') + 1 &&
-        JSON.stringify(optionsOf('Affinity source')) === JSON.stringify(['auto:Automatic', 'session:Session id', 'user_id:User id', 'content:Conversation content', 'whole_key:Whole key']) &&
-        valueOf('Affinity source') === 'auto',
-      missing: [JSON.stringify(labels), JSON.stringify(optionsOf('Affinity source')), String(valueOf('Affinity source'))],
+      name: '/keys dialog lists Key, Access, Models, Sessions and Capture on its rail',
+      ok: JSON.stringify(railLabels) === JSON.stringify(['Key', 'Access', 'Models', 'Sessions', 'Capture']) && dlg?.querySelector('.dialog-rail__parent') === null && JSON.stringify(marked) === '["key"]',
+      missing: [JSON.stringify(railLabels), JSON.stringify(marked)],
     });
-    expect('/keys the Affinity source select carries its hint', general?.textContent ?? '', [
-      'Automatic takes the first of: the session id, a parent id the client sends back, its user id, its own messages, the key. A fixed source uses that alone.',
-    ]);
-    const cap = general?.querySelector('input[aria-label="Requests in flight"]');
-    const set = (v) => {
-      Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(cap, v);
-      cap?.dispatchEvent(new window.Event('input', { bubbles: true }));
-    };
-    const empty = cap?.value;
-    set('0');
-    await m.settle(80);
-    const refused = general?.querySelector('[role="alert"]')?.textContent ?? '';
-    set('3');
-    await m.settle(80);
-    results.push({
-      name: '/keys a cap of 0 is refused in the form, and a whole number from 1 is taken',
-      ok: empty === '' && cap?.getAttribute('placeholder') === 'No cap' && refused.includes('Requests in flight is a whole number of at least 1') && !general?.querySelector('[role="alert"]'),
-      missing: [String(empty), refused || 'no refusal', general?.querySelector('[role="alert"]')?.textContent ?? ''],
-    });
+    const headings = [...(dlg?.querySelectorAll('.dialog-group__title') ?? [])].map((h) => h.textContent?.trim());
+    results.push({ name: '/keys dialog body repeats the groups', ok: JSON.stringify(headings) === JSON.stringify(railLabels), missing: headings });
+    results.push({ name: '/keys the key dialog carries no subtitle', ok: dlg !== null && dlg.querySelector('.dialog__subtitle') === null, missing: [dlg?.querySelector('.dialog__subtitle')?.textContent ?? ''] });
   }
   results.push({ name: '/keys pool field is a single select', ok: dlg?.querySelector('select') !== null && ![...(dlg?.querySelectorAll('.mselect__trigger') ?? [])].some((b) => b.textContent?.startsWith('Pool')), missing: [] });
   {
@@ -1945,14 +1971,95 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
     results.push({ name: '/keys save stays disabled until the key is named', ok: save?.disabled === true, missing: [String(save?.disabled)] });
   }
   {
-    const nav = [...(dlg?.querySelectorAll('.dialog-nav__link') ?? [])].map((b) => b.textContent?.trim());
-    results.push({ name: '/keys dialog is sectioned', ok: JSON.stringify(nav) === JSON.stringify(['General', 'Models', 'Cache warming', 'Capture']), missing: nav });
-    const headings = [...(dlg?.querySelectorAll('.dialog-section__title') ?? [])].map((h) => h.textContent?.trim());
-    results.push({ name: '/keys dialog body repeats the sections', ok: JSON.stringify(headings) === JSON.stringify(nav), missing: headings });
+    // The first hold on open is the blank name: the footer names it, Go to lands on the field, and naming frees Save.
+    const status = dlg?.querySelector('.dialog__status');
+    const nameInput = dlg?.querySelector('input[placeholder="workstation"]');
+    const held = `${status?.classList.contains('is-held')} | ${status?.textContent ?? ''} | ${nameInput?.getAttribute('aria-invalid')}`;
+    group(dlg, 'Key')?.querySelector('.dialog-group__title')?.focus();
+    status?.querySelector('button')?.click();
+    await m.settle(100);
+    const landed = dlg?.ownerDocument.activeElement === nameInput;
+    if (nameInput) {
+      Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(nameInput, 'smoke');
+      nameInput.dispatchEvent(new window.Event('input', { bubbles: true }));
+    }
+    await m.settle(100);
+    const named = `${status?.classList.contains('is-held')} | ${status?.textContent ?? ''} | ${nameInput?.getAttribute('aria-invalid')} | ${rail(dlg, 'key')?.querySelector('.dialog-rail__dot') ? 'marked' : 'clear'}`;
+    const save = [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Create');
+    results.push({
+      name: "/keys the dialog's footer names a missing name",
+      ok: held === 'true | Save is held: the key needs a name.Go to Key | true' && landed && named === 'false | Every group saves together. | null | clear' && save?.disabled === false,
+      missing: [held, `focus on the name: ${landed}`, named, String(save?.disabled)],
+    });
+  }
+  {
+    rail(dlg, 'sessions')?.click();
+    await m.settle(100);
+    const hidden = [...(dlg?.querySelectorAll('section.dialog-group') ?? [])].filter((s) => s.hidden).map((s) => s.getAttribute('aria-label'));
+    const current = [...(dlg?.querySelectorAll('.dialog-rail__group[aria-current="true"]') ?? [])].map((b) => b.getAttribute('data-group'));
+    const focused = dlg?.ownerDocument.activeElement === group(dlg, 'Sessions')?.querySelector('.dialog-group__title');
+    results.push({
+      name: '/keys choosing a group hides the others',
+      ok: JSON.stringify(hidden) === JSON.stringify(['Key', 'Access', 'Models', 'Capture']) && !group(dlg, 'Sessions')?.hidden && JSON.stringify(current) === '["sessions"]' && focused,
+      missing: [JSON.stringify(hidden), JSON.stringify(current), `focus on the heading: ${focused}`],
+    });
+    rail(dlg, 'key')?.click();
+    await m.settle(100);
+  }
+  {
+    // Access holds who may use the key and how much at once: on create, Expiry, then the cap.
+    const access = group(dlg, 'Access');
+    const labels = [...(access?.querySelectorAll('.field__label') ?? [])].map((l) => l.textContent?.trim());
+    results.push({ name: '/keys Requests in flight follows Expiry in Access', ok: JSON.stringify(labels) === JSON.stringify(['Expiry', 'Requests in flight']), missing: labels });
+    // What the key identifies a conversation by moves to Sessions, and keeps its options and default.
+    const sessions = group(dlg, 'Sessions');
+    const selectIn = (section, label) => section?.querySelector(`select[aria-label="${label}"]`);
+    const optionsOf = (section, label) => [...(selectIn(section, label)?.options ?? [])].map((o) => `${o.value}:${o.textContent?.trim()}`);
+    const sessionLabels = [...(sessions?.querySelectorAll('.field__label') ?? [])].map((l) => l.textContent?.trim());
+    results.push({
+      name: '/keys the Affinity source select sits in Sessions, with its options and the default',
+      ok:
+        JSON.stringify(sessionLabels) === JSON.stringify(['Affinity source', 'Cache warming opt-out']) &&
+        JSON.stringify(optionsOf(sessions, 'Affinity source')) === JSON.stringify(['auto:Automatic', 'session:Session id', 'user_id:User id', 'content:Conversation content', 'whole_key:Whole key']) &&
+        selectIn(sessions, 'Affinity source')?.value === 'auto',
+      missing: [JSON.stringify(labels), JSON.stringify(sessionLabels), JSON.stringify(optionsOf(sessions, 'Affinity source')), String(selectIn(sessions, 'Affinity source')?.value)],
+    });
+    expect('/keys the Affinity source select carries its hint', sessions?.textContent ?? '', [
+      "What names a conversation for pinning. Automatic takes the first of: the session id, a parent id the client sends back, the user id, the messages, the key. A fixed source uses that alone, and a request without it gets no pin. How long a pin lasts is the pool's Session affinity on the",
+    ]);
+    const cap = access?.querySelector('input[aria-label="Requests in flight"]');
+    const set = (v) => {
+      if (!cap) return;
+      Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(cap, v);
+      cap.dispatchEvent(new window.Event('input', { bubbles: true }));
+    };
+    const empty = cap?.value;
+    set('0');
+    await m.settle(80);
+    // The name is typed above, so the cap is the first hold and the footer names it.
+    const refused = access?.querySelector('[role="alert"]')?.textContent ?? '';
+    const line = dlg?.querySelector('.dialog__status')?.textContent ?? '';
+    const invalid = cap?.getAttribute('aria-invalid');
+    const marked = rail(dlg, 'access')?.querySelector('.dialog-rail__dot') !== null;
+    set('3');
+    await m.settle(80);
+    results.push({
+      name: '/keys a cap of 0 is refused in the form, and a whole number from 1 is taken',
+      ok:
+        empty === '' &&
+        cap?.getAttribute('placeholder') === 'No cap' &&
+        refused.includes('Requests in flight is a whole number of at least 1') &&
+        line === 'Save is held: Requests in flight is a whole number of at least 1; leave it empty for no cap.Go to Access' &&
+        invalid === 'true' &&
+        marked &&
+        !access?.querySelector('[role="alert"]') &&
+        cap?.getAttribute('aria-invalid') === null,
+      missing: [String(empty), refused || 'no refusal', line, String(invalid), `marked: ${marked}`, access?.querySelector('[role="alert"]')?.textContent ?? ''],
+    });
   }
   {
     // A new key extends its pool's list, drawn read-only after its own rows; replacing the list drops them.
-    const models = [...(dlg?.querySelectorAll('.dialog-section') ?? [])].find((s) => s.getAttribute('aria-label') === 'Models');
+    const models = group(dlg, 'Models');
     const grey = () => [...(models?.querySelectorAll('.pattern-editor__row--inherited') ?? [])].map((li) => [...li.children].map((c) => c.textContent?.trim()).join(' '));
     const mode = (label) => [...(models?.querySelectorAll('.segmented button') ?? [])].find((b) => b.textContent?.trim() === label);
     const extended = grey();
@@ -1965,7 +2072,7 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
     await m.settle(120);
     results.push({
       name: "/keys the pool's rules show in grey under extend and go under replace",
-      ok: JSON.stringify(extended) === JSON.stringify(['Deny claude-3* from pool']) && mode('Extend pool rules')?.getAttribute('aria-pressed') === 'true' && twins === 'true' && replaced.length === 0 && hint.includes('do not apply') && grey().length === 1,
+      ok: JSON.stringify(extended) === JSON.stringify(['Deny claude-3* from pool']) && mode('Extend pool rules')?.getAttribute('aria-pressed') === 'true' && twins === 'true' && replaced.length === 0 && hint.includes("Under Extend the pool's rules, in grey, apply after this key's own; under Replace they do not apply.") && grey().length === 1,
       missing: [JSON.stringify(extended), String(twins), JSON.stringify(replaced), hint],
     });
   }
@@ -2030,15 +2137,16 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
   edit?.click();
   await m.settle(300);
   const editDlg = [...m.container.querySelectorAll('dialog[open]')].pop();
-  expect('/keys edit dialog', editDlg?.textContent ?? '', ['Edit ', 'Cache warming opt-out', 'Save', 'Enabled', 'Off refuses the key at routing']);
+  expect('/keys edit dialog', editDlg?.textContent ?? '', ['Edit ', 'Cache warming opt-out', 'Save', 'Enabled', 'Off refuses the key and keeps it, so it can come back on without a new secret; a revoked key cannot.']);
   {
     const expiry = editDlg?.querySelector('select[aria-label="Expiry"]');
     const toggle = editDlg?.querySelector('button[role="switch"][aria-label="Enabled"]');
     const options = [...(expiry?.options ?? [])].map((o) => o.value);
+    const labels = [...(group(editDlg, 'Access')?.querySelectorAll('.field__label') ?? [])].map((l) => l.textContent?.trim());
     results.push({
       name: '/keys edit dialog draws the Enabled switch and an expiry that keeps the current one by default',
-      ok: toggle !== null && toggle?.disabled === false && expiry?.value === 'keep' && JSON.stringify(options) === JSON.stringify(['keep', '7', '30', '60', '90', '365', 'never']),
-      missing: [toggle ? String(toggle.getAttribute('aria-checked')) : 'no switch', expiry?.value ?? 'no expiry select', options.join(',')],
+      ok: toggle !== null && toggle?.disabled === false && group(editDlg, 'Access')?.contains(toggle) && JSON.stringify(labels) === JSON.stringify(['Enabled', 'Expiry', 'Requests in flight']) && expiry?.value === 'keep' && JSON.stringify(options) === JSON.stringify(['keep', '7', '30', '60', '90', '365', 'never']),
+      missing: [toggle ? String(toggle.getAttribute('aria-checked')) : 'no switch', JSON.stringify(labels), expiry?.value ?? 'no expiry select', options.join(',')],
     });
   }
   {
@@ -2047,11 +2155,20 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
   }
   const sel = editDlg?.querySelector('select');
   if (sel) {
+    const key = group(editDlg, 'Key');
+    const before = key?.querySelector('.callout--warning');
     const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
     setter.call(sel, sel.value === 'all' ? 'codex' : 'all');
     sel.dispatchEvent(new window.Event('change', { bubbles: true }));
     await m.settle(100);
     expect('/keys moving pool shows note', editDlg?.textContent ?? '', ['Moving this key ends its current session pins.']);
+    // The group opens with its heading, so the warning is the first thing under it.
+    const first = key?.children[1];
+    results.push({
+      name: '/keys the moving warning opens the Key group on an edit that changes the pool',
+      ok: before === null && key?.children[0]?.classList.contains('dialog-group__title') === true && first?.classList.contains('callout--warning') === true && (first?.textContent ?? '').includes('Moving this key ends its current session pins.'),
+      missing: [before ? 'a warning before the move' : '', `${key?.children[0]?.className} then ${first?.className}: ${first?.textContent ?? ''}`].filter(Boolean),
+    });
   }
   [...(editDlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
   await m.settle(200);

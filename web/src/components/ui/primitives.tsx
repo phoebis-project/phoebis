@@ -1,7 +1,6 @@
 import { createContext, Fragment, useContext, useEffect, useId, useRef, useState, type ButtonHTMLAttributes, type CSSProperties, type HTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes } from 'react';
 import { Link } from 'react-router-dom';
 import type { BadgeTone } from '@/lib/quota';
-import { scrollToSection, useScrollSpy } from '@/lib/scroll';
 import { IconCheck, IconChevron, IconCopy, IconSearch, IconWarning, IconX } from './icons';
 
 export function Badge({ tone = 'neutral', children, dot = false, title }: { children: ReactNode; dot?: boolean; title?: string; tone?: BadgeTone }) {
@@ -277,81 +276,6 @@ export function Dialog({ open, onClose, title, subtitle, children, footer, width
   );
 }
 
-export interface DialogSection {
-  body: ReactNode;
-  /** Unique within the dialog; combined with a generated prefix to form the DOM id. */
-  id: string;
-  label: string;
-}
-
-/**
- * A long form split into a section list and one scrolling body. Clicking a
- * section scrolls the body to it; scrolling the body moves the highlight.
- */
-export function SectionedDialog({ open, onClose, title, subtitle, sections, footer, width = 860 }: { footer?: ReactNode; onClose: () => void; open: boolean; sections: DialogSection[]; subtitle?: ReactNode; title: ReactNode; width?: number }) {
-  const ref = useModalDialog(open, onClose);
-  const titleId = useId();
-  const prefix = useId().replace(/:/g, '');
-  const bodyRef = useRef<HTMLDivElement>(null);
-  const domId = (id: string) => `${prefix}-${id}`;
-  const ids = sections.map((s) => domId(s.id));
-  const [active, select] = useScrollSpy(ids, { enabled: open, offset: 12, root: bodyRef });
-  const goTo = (id: string) => {
-    select(id);
-    scrollToSection(id, { offset: 12, root: bodyRef });
-  };
-
-  return (
-    <dialog
-      ref={ref}
-      className="dialog dialog--sectioned"
-      aria-labelledby={titleId}
-      style={{ width: `min(${width}px, calc(100vw - 32px))` }}
-      onClick={(e) => {
-        if (e.target === ref.current) onClose();
-      }}
-    >
-      <div className="dialog__inner">
-        <header className="dialog__head">
-          <div>
-            <h2 id={titleId} className="dialog__title">
-              {title}
-            </h2>
-            {subtitle && <p className="dialog__subtitle">{subtitle}</p>}
-          </div>
-          <button type="button" className="dialog__close" onClick={onClose} aria-label="Close">
-            <IconX size={16} />
-          </button>
-        </header>
-        <div className="dialog__split">
-          <nav className="dialog-nav" aria-label="Sections">
-            {sections.map((s) => (
-              <button
-                key={s.id}
-                type="button"
-                className={`dialog-nav__link ${domId(s.id) === active ? 'is-active' : ''}`}
-                aria-current={domId(s.id) === active ? 'true' : undefined}
-                onClick={() => goTo(domId(s.id))}
-              >
-                {s.label}
-              </button>
-            ))}
-          </nav>
-          <div className="dialog__body" ref={bodyRef}>
-            {sections.map((s) => (
-              <section key={s.id} id={domId(s.id)} className="dialog-section" aria-label={s.label}>
-                <h3 className="dialog-section__title">{s.label}</h3>
-                {s.body}
-              </section>
-            ))}
-          </div>
-        </div>
-        {footer && <footer className="dialog__foot">{footer}</footer>}
-      </div>
-    </dialog>
-  );
-}
-
 export interface DialogGroup {
   body: ReactNode;
   /** Unique within the dialog; the rail button, the section and its heading carry it. */
@@ -557,26 +481,6 @@ export function GroupedDialog({
         </div>
       </dialog>
     </GroupChoice.Provider>
-  );
-}
-
-/** A titled group that starts collapsed and keeps its state while mounted. */
-export function Collapsible({ title, hint, children, defaultOpen = false }: { children: ReactNode; defaultOpen?: boolean; hint?: ReactNode; title: ReactNode }) {
-  const [open, setOpen] = useState(defaultOpen);
-  const bodyId = useId();
-  return (
-    <div className={`collapsible ${open ? 'is-open' : ''}`}>
-      <button type="button" className="collapsible__summary" aria-expanded={open} aria-controls={bodyId} onClick={() => setOpen((v) => !v)}>
-        <IconChevron size={14} className="collapsible__chevron" />
-        <span className="collapsible__title">{title}</span>
-        {hint && <span className="collapsible__hint">{hint}</span>}
-      </button>
-      {open && (
-        <div className="collapsible__body" id={bodyId}>
-          {children}
-        </div>
-      )}
-    </div>
   );
 }
 

@@ -1224,22 +1224,6 @@
   font-size: 12px;
 }
 
-/* A control that waits on a switch or a preset stays drawn, so it reads as waiting rather than as editable. */
-.dialog-group .input:disabled {
-  color: var(--ink-3);
-  cursor: not-allowed;
-  background: var(--surface-2);
-}
-
-.dialog-group .select:has(select:disabled) > svg {
-  opacity: 0.5;
-}
-
-/* A link inside a group's sentence reads as one of its words, so it takes no side padding. */
-.dialog-group .link-btn {
-  padding: 0;
-}
-
 /* A member's name lines up with the inputs of its row rather than with their top edge. */
 .members-table td {
   vertical-align: middle;
