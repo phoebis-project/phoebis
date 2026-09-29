@@ -203,7 +203,19 @@ struct ParsedUsage {
 /// first-ever fetch, so the not-before that gates the next attempt is never lost for want of one to attach to.
 enum FetchFailure {
     Message(String),
-    RateLimited(Option<i64>),
+    /// The instant the 429 arrived, which the hold runs from, and the `Retry-After` it asked for.
+    RateLimited {
+        received_at: i64,
+        retry_after: Option<i64>,
+    },
+}
+
+/// Whose reading a fetch or a cache entry is. A deleted id created again draws a new incarnation but starts
+/// over at lifecycle generation 1, so the generation alone would take the old holder's answer for the new one's.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Identity {
+    incarnation: u64,
+    lifecycle_generation: u64,
 }
 
 /// The snapshot cached for a first-ever fetch that failed: no windows to fall back on, but a real snapshot
@@ -229,7 +241,7 @@ fn empty_snapshot(
 
 struct CachedEntry {
     fetched_at: i64,
-    identity_generation: u64,
+    identity: Identity,
     /// Set past `fetched_at` only by a 429, to the ladder's step or the capped `Retry-After`; any other answer
     /// leaves it equal to `fetched_at` so the ordinary cache TTL governs the next retry.
     not_before: i64,
@@ -515,7 +527,7 @@ impl UsageService {
 
 impl Inner {
     fn fresh(&self, account_id: &str, now: i64) -> Option<UsageSnapshot> {
-        let (fetched_at, identity_generation, snapshot) = {
+        let (fetched_at, identity, snapshot) = {
             let cache = self.cache.lock().expect(LOCK_POISONED);
             let entry = cache.get(account_id)?;
             // A hit inside a hold answers the held snapshot, as a miss inside one does: neither is a new reading.
@@ -524,25 +536,28 @@ impl Inner {
             } else {
                 entry.snapshot.clone()
             };
-            (entry.fetched_at, entry.identity_generation, answer)
+            (entry.fetched_at, entry.identity, answer)
         };
         if now - fetched_at >= self.cache_ttl.as_millis() as i64 {
             return None;
         }
-        // A disconnect and re-pairing inside the TTL window must not serve the old identity's cached
-        // windows as if they belonged to the one that replaced it.
-        if self.lifecycle_generation(account_id) != Some(identity_generation) {
+        // A disconnect and re-pairing, or a delete and a new account under the id, inside the TTL window must
+        // not serve the old identity's cached windows as if they belonged to the one that replaced it.
+        if self.identity(account_id) != Some(identity) {
             return None;
         }
         Some(snapshot)
     }
 
-    fn lifecycle_generation(&self, account_id: &str) -> Option<u64> {
+    fn identity(&self, account_id: &str) -> Option<Identity> {
         self.store
             .account(account_id)
             .ok()
             .flatten()
-            .map(|account| account.lifecycle_generation)
+            .map(|account| Identity {
+                incarnation: account.incarnation,
+                lifecycle_generation: account.lifecycle_generation,
+            })
     }
 
     /// The held answer while the account waits out its hold at `now`.
@@ -563,46 +578,54 @@ impl Inner {
         if let Some(held) = self.held(account_id, now) {
             return Ok(held);
         }
-        let started_generation = self.lifecycle_generation(account_id);
-        let result = self.fetch(account_id).await;
-        let ended_generation = self.lifecycle_generation(account_id);
-        self.commit(
-            account_id,
-            now,
-            started_generation != ended_generation,
-            ended_generation,
-            result,
-        )
+        let started = self.identity(account_id);
+        let (read_at, result) = self.fetch(account_id).await;
+        let ended = self.identity(account_id);
+        self.commit(account_id, read_at, started != ended, ended, result)
     }
 
-    async fn fetch(&self, account_id: &str) -> Result<ParsedUsage, FetchFailure> {
-        let token = self
-            .manager
-            .acquire(account_id)
-            .await
-            .map_err(|error| FetchFailure::Message(format!("acquire: {error}")))?;
+    /// The attempt's instant with its result: the send's, read once the credential and the concurrency permit
+    /// are held, since a request that completes during those waits is already in what the endpoint answers and
+    /// the router drops a charge only up to the reading's instant; the failure's own when no request went out.
+    async fn fetch(&self, account_id: &str) -> (i64, Result<ParsedUsage, FetchFailure>) {
+        let token = match self.manager.acquire(account_id).await {
+            Ok(token) => token,
+            Err(error) => {
+                return (
+                    (self.clock)(),
+                    Err(FetchFailure::Message(format!("acquire: {error}"))),
+                )
+            }
+        };
         let permit = self
             .semaphore
             .acquire()
             .await
             .expect("usage semaphore is never closed");
-        let req = control_request(
-            self.profile,
-            ControlKind::Usage,
-            Some(token.secret.expose()),
-            None,
-        );
+        let sent_at = (self.clock)();
+        (
+            sent_at,
+            self.request_usage(token.secret.expose(), permit).await,
+        )
+    }
+
+    async fn request_usage(
+        &self,
+        bearer: &str,
+        permit: tokio::sync::SemaphorePermit<'_>,
+    ) -> Result<ParsedUsage, FetchFailure> {
+        let req = control_request(self.profile, ControlKind::Usage, Some(bearer), None);
         let host = ControlKind::Usage.host(self.profile);
         let sent = self.control.send(req, &host, FETCH_TIMEOUT).await;
         drop(permit);
         let (head, body) =
             sent.map_err(|error| FetchFailure::Message(format!("transport: {error}")))?;
         if head.status == 429 {
-            return Err(FetchFailure::RateLimited(retry_after_ms(
-                &head,
-                (self.clock)(),
-                BACKOFF_CAP_MS,
-            )));
+            let received_at = (self.clock)();
+            return Err(FetchFailure::RateLimited {
+                received_at,
+                retry_after: retry_after_ms(&head, received_at, BACKOFF_CAP_MS),
+            });
         }
         if head.status != 200 {
             return Err(FetchFailure::Message(format!(
@@ -620,19 +643,19 @@ impl Inner {
         })
     }
 
-    /// A result whose lifecycle generation moved between the fetch's start and its completion belongs to an
-    /// identity that has already been replaced (a disconnect or a new pairing), so it is discarded instead
-    /// of cached; the caller gets whatever was cached before, unchanged.
+    /// A result whose identity moved between the fetch's start and its completion belongs to a holder that has
+    /// already been replaced (a disconnect, a new pairing, or a delete and a new account under the id), so it
+    /// is discarded instead of cached; the caller gets whatever was cached before, unchanged.
     fn commit(
         &self,
         account_id: &str,
         fetched_at: i64,
-        generation_changed: bool,
-        ended_generation: Option<u64>,
+        identity_changed: bool,
+        ended: Option<Identity>,
         result: Result<ParsedUsage, FetchFailure>,
     ) -> FetchOutcome {
         let mut cache = self.cache.lock().expect(LOCK_POISONED);
-        if generation_changed {
+        if identity_changed {
             // A hold armed while this fetch was out still marks the answer, as on every other path.
             let now = (self.clock)();
             return match cache.get(account_id) {
@@ -651,7 +674,7 @@ impl Inner {
             Ok(parsed) => {
                 let snapshot = UsageSnapshot {
                     account_id: account_id.to_string(),
-                    identity_generation: ended_generation.unwrap_or_default(),
+                    identity_generation: ended.unwrap_or_default().lifecycle_generation,
                     fetched_at,
                     windows: parsed.windows,
                     fable_window: parsed.fable_window,
@@ -663,7 +686,7 @@ impl Inner {
                     account_id.to_string(),
                     CachedEntry {
                         fetched_at,
-                        identity_generation: snapshot.identity_generation,
+                        identity: ended.unwrap_or_default(),
                         not_before: fetched_at.max(held),
                         snapshot: snapshot.clone(),
                         held_by,
@@ -677,21 +700,26 @@ impl Inner {
             }
             Err(failure) => {
                 let previous = cache.get(account_id);
-                let (backoff_since, last_clean_at, rate_limited_in_a_row) = previous
+                let (backoff_since, last_clean_at, rate_limited_in_a_row, identity) = previous
                     .map(|entry| {
                         (
                             entry.backoff_since,
                             entry.last_clean_at,
                             entry.rate_limited_in_a_row,
+                            entry.identity,
                         )
                     })
-                    .unwrap_or((None, None, 0));
+                    .unwrap_or((None, None, 0, ended.unwrap_or_default()));
                 let previous = previous.map(|entry| entry.snapshot.clone());
-                let (message, retry_after) = match failure {
+                let (message, rate_limited) = match failure {
                     FetchFailure::Message(message) => (message, None),
-                    FetchFailure::RateLimited(retry_after) => {
-                        ("usage request rate-limited".to_string(), Some(retry_after))
-                    }
+                    FetchFailure::RateLimited {
+                        received_at,
+                        retry_after,
+                    } => (
+                        "usage request rate-limited".to_string(),
+                        Some((received_at, retry_after)),
+                    ),
                 };
                 let snapshot = match previous {
                     // The snapshot's timestamp says when its windows were read, and a failed attempt read
@@ -702,11 +730,16 @@ impl Inner {
                         error: Some(message),
                         ..previous
                     },
-                    None => empty_snapshot(account_id, ended_generation, fetched_at, message),
+                    None => empty_snapshot(
+                        account_id,
+                        ended.map(|identity| identity.lifecycle_generation),
+                        fetched_at,
+                        message,
+                    ),
                 };
                 let mut entry = CachedEntry {
                     fetched_at,
-                    identity_generation: snapshot.identity_generation,
+                    identity,
                     not_before: fetched_at.max(held),
                     snapshot: snapshot.clone(),
                     held_by,
@@ -715,8 +748,8 @@ impl Inner {
                     last_outcome: PollOutcome::Failed,
                     rate_limited_in_a_row,
                 };
-                if let Some(retry_after) = retry_after {
-                    entry.rate_limited(account_id, USAGE_ENDPOINT, fetched_at, retry_after);
+                if let Some((received_at, retry_after)) = rate_limited {
+                    entry.rate_limited(account_id, USAGE_ENDPOINT, received_at, retry_after);
                 }
                 cache.insert(account_id.to_string(), entry);
                 Ok(snapshot)
@@ -737,14 +770,14 @@ impl Inner {
         match cache.get_mut(account_id) {
             Some(entry) => entry.rate_limited(account_id, endpoint, at, retry_after),
             None => {
-                let generation = self.lifecycle_generation(account_id).unwrap_or_default();
+                let identity = self.identity(account_id).unwrap_or_default();
                 let mut entry = CachedEntry {
                     fetched_at: at,
-                    identity_generation: generation,
+                    identity,
                     not_before: at,
                     snapshot: empty_snapshot(
                         account_id,
-                        Some(generation),
+                        Some(identity.lifecycle_generation),
                         at,
                         "no usage fetched yet".into(),
                     ),

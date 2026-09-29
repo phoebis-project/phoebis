@@ -670,6 +670,53 @@ async fn an_account_whose_snapshot_holds_no_windows_answers_the_windows_the_rout
     assert_eq!(polled["poll"]["last_outcome"], "rate_limited");
 }
 
+/// Windows the router still routes on after the ledger's last day has no sample of them, persisted from the last
+/// run and read more than a day ago, are the windows the account view lists, as the usage `GET` answers them.
+#[tokio::test]
+async fn an_account_the_ledger_holds_no_sample_of_today_lists_the_windows_the_router_holds() {
+    use phoebis_routing::{
+        Report, UtilizationSample, WindowReading, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
+    };
+    use common::{get, json, login, wait_json, NOW};
+    const HOUR: i64 = 3_600_000;
+    let h = common::admin_parts_polled(std::time::Duration::from_secs(60)).await;
+    let cookie = login(&h.app, "admin-secret").await;
+    let read_at = NOW - 30 * HOUR;
+    let reading = |utilization, reset| WindowReading {
+        utilization,
+        reset,
+        observed_at: read_at,
+    };
+    h.router.report(Report::Sample {
+        account_id: "business".into(),
+        sample: UtilizationSample::default()
+            .with(FIVE_HOUR, reading(0.9, Some(NOW - 25 * HOUR)))
+            .with(SEVEN_DAY, reading(0.5, Some(NOW + 72 * HOUR)))
+            .with(SEVEN_DAY_FABLE, reading(0.2, Some(NOW + 72 * HOUR))),
+        incarnation: 1,
+    });
+    wait_json(&h.app, "/admin/accounts/business/usage", &cookie, |v| {
+        v["error"].is_null()
+    })
+    .await;
+    // The 5-hour window's reset has passed, so the router predicts it empty until the next reading names one.
+    let held = serde_json::json!([
+        { "id": "five_hour", "observed_at": read_at, "resets_at": null, "utilization": 0.0 },
+        { "id": "seven_day", "observed_at": read_at, "resets_at": NOW + 72 * HOUR, "utilization": 0.5 },
+        { "id": "fable", "observed_at": read_at, "resets_at": NOW + 72 * HOUR, "utilization": 0.2 },
+    ]);
+    let account = json(get(&h.app, "/admin/accounts/business", Some(&cookie)).await).await;
+    assert_eq!(account["windows"], held, "{account}");
+    let listed = json(get(&h.app, "/admin/accounts", Some(&cookie)).await).await;
+    let business = listed["accounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["id"] == "business")
+        .unwrap();
+    assert_eq!(business["windows"], held, "{business}");
+}
+
 #[tokio::test]
 async fn re_pairing_to_a_different_upstream_account_is_rejected() {
     use common::{delete, get, json, login, post};

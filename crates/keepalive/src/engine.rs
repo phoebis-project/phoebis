@@ -2003,11 +2003,15 @@ pub(crate) fn gate(
     }
     let in_overage = view.overage.contains(&account.id);
     // The day's plan-funded probes already settled as shares of the account's own 5-hour window, the band
-    // inside each price, so the sum caps against the configured share directly.
+    // inside each price, so the sum caps against the configured share directly. An API-key account has no
+    // window to share and spends dollars, which the dollar cap above bounds; a zero share cap would read its
+    // empty entry as spent.
     if let Some(share) = policy.probe_cap_window_share_per_day {
-        let share_spent = share_spent_today.get(&account.id).copied().unwrap_or(0.0);
-        if share_spent >= share {
-            return Some(Gate::Hold(Reason::CapReached));
+        if account.kind == AccountKind::Oauth {
+            let share_spent = share_spent_today.get(&account.id).copied().unwrap_or(0.0);
+            if share_spent >= share {
+                return Some(Gate::Hold(Reason::CapReached));
+            }
         }
     }
     let default_unit = Funding::of(account.kind, in_overage).unit();

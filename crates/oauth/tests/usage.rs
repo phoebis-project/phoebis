@@ -497,6 +497,99 @@ mod service {
         up.shutdown().await;
     }
 
+    /// The hold a 429 asks for runs from the answer's arrival, so a request that sat at the endpoint does not
+    /// shorten it.
+    #[tokio::test]
+    async fn a_retry_after_hold_starts_when_the_429_arrives() {
+        let now = Arc::new(AtomicI64::new(1_000_000));
+        let up = FakeUpstream::start(vec![Rule {
+            path_prefix: "/api/oauth/usage".into(),
+            respond: Respond::Gated(Box::new(rate_limited("120").respond)),
+        }])
+        .await;
+        let service = Arc::new(service_for(
+            &up,
+            store_with_bundle_until(1_000_000 + 86_400_000),
+            Duration::from_secs(1),
+            &now,
+        ));
+        let polling = {
+            let service = service.clone();
+            tokio::spawn(async move { service.poll("a").await })
+        };
+        wait_for(Duration::from_secs(5), || {
+            (usage_requests(&up) == 1).then_some(())
+        })
+        .await;
+        now.store(1_004_000, Ordering::SeqCst);
+        up.release();
+        assert!(polling.await.unwrap().unwrap().error.is_some());
+        let status = service.poll_status("a").unwrap();
+        assert_eq!(
+            (status.backoff_since, status.next_attempt_at),
+            (Some(1_004_000), Some(1_124_000)),
+            "the backoff and its two minutes start at the 429's arrival"
+        );
+        up.shutdown().await;
+    }
+
+    /// A reading holds whatever the endpoint counted when the request went out, a request that completed while
+    /// the poll waited on its credential among it, so the reading is stamped at the send.
+    #[tokio::test]
+    async fn a_reading_is_stamped_at_its_send_after_the_credential_wait() {
+        let now = Arc::new(AtomicI64::new(1_000_000));
+        let up = FakeUpstream::start(vec![
+            Rule {
+                path_prefix: "/v1/oauth/token".into(),
+                respond: Respond::Gated(Box::new(Respond::Json {
+                    status: 200,
+                    headers: vec![],
+                    body: control_response(ControlFixture::Token).to_vec(),
+                })),
+            },
+            Rule {
+                path_prefix: "/api/oauth/usage".into(),
+                respond: Respond::Json {
+                    status: 200,
+                    headers: vec![],
+                    body: control_response(ControlFixture::Usage).to_vec(),
+                },
+            },
+        ])
+        .await;
+        // An expired access token: the poll's acquire refreshes it before the usage request can go out.
+        let service = Arc::new(service_for(
+            &up,
+            store_with_bundle_until(1),
+            Duration::from_secs(60),
+            &now,
+        ));
+        let polling = {
+            let service = service.clone();
+            tokio::spawn(async move { service.poll("a").await })
+        };
+        wait_for(Duration::from_secs(5), || {
+            up.requests()
+                .iter()
+                .any(|r| r.line.starts_with("POST /v1/oauth/token"))
+                .then_some(())
+        })
+        .await;
+        now.store(1_030_000, Ordering::SeqCst);
+        up.release();
+        let reading = polling.await.unwrap().unwrap();
+        assert!(reading.error.is_none(), "{:?}", reading.error);
+        assert_eq!(
+            (
+                reading.fetched_at,
+                service.poll_status("a").unwrap().last_clean_at
+            ),
+            (1_030_000, Some(1_030_000)),
+            "the reading is stamped when its request went out, after the refresh"
+        );
+        up.shutdown().await;
+    }
+
     #[tokio::test]
     async fn a_429_without_retry_after_backs_off_at_one_two_four_eight_and_then_fifteen_minutes() {
         // The fake answers 429 with no header; the clock is the service's, so each step is one fetch past the
@@ -845,6 +938,76 @@ mod service {
             Some("the profile endpoint rate-limited the account; next attempt at 1970-01-01 00:26:50 UTC"),
             "the discarded fetch answers the held snapshot"
         );
+        up.shutdown().await;
+    }
+
+    /// A holder deleted and created again under its id starts over at lifecycle generation 1, so only its new
+    /// incarnation tells it from the holder whose fetch is still out: that answer is the old credential's, and
+    /// the replacement's poll joined to it must not take it for its own.
+    #[tokio::test]
+    async fn a_fetch_out_across_a_delete_and_a_new_holder_of_the_id_is_discarded() {
+        let now = Arc::new(AtomicI64::new(1_000_000));
+        let up = FakeUpstream::start(vec![Rule {
+            path_prefix: "/api/oauth/usage".into(),
+            respond: Respond::Gated(Box::new(Respond::Json {
+                status: 200,
+                headers: vec![],
+                body: control_response(ControlFixture::Usage).to_vec(),
+            })),
+        }])
+        .await;
+        let store = store_with_bundle_until(1_000_000 + 86_400_000);
+        let service = Arc::new(service_for(
+            &up,
+            store.clone(),
+            Duration::from_secs(60),
+            &now,
+        ));
+        let old = {
+            let service = service.clone();
+            tokio::spawn(async move { service.poll("a").await })
+        };
+        wait_for(Duration::from_secs(5), || {
+            (usage_requests(&up) == 1).then_some(())
+        })
+        .await;
+        store.delete_account("a", "test").unwrap();
+        service.invalidate("a");
+        store
+            .insert_account(&AccountRow {
+                id: "a".into(),
+                kind: AccountKind::Oauth,
+                label: "a".into(),
+                enabled: true,
+                identity: None,
+                lifecycle_generation: 1,
+                incarnation: 1,
+                revision: 1,
+                state: AccountState::Ready,
+            })
+            .unwrap();
+        let replacement = store.account("a").unwrap().unwrap();
+        assert_eq!(
+            (replacement.incarnation, replacement.lifecycle_generation),
+            (2, 1),
+            "the same generation under a new incarnation"
+        );
+        let mut joined = std::pin::pin!(service.poll("a"));
+        assert!(
+            futures::poll!(joined.as_mut()).is_pending(),
+            "the replacement's poll joins the fetch still out"
+        );
+        up.release();
+        assert!(
+            joined.await.is_err(),
+            "the replacement's poll answers no reading of the old holder"
+        );
+        assert!(old.await.unwrap().is_err());
+        assert!(
+            service.latest("a").is_none(),
+            "the cache holds no snapshot of the old holder"
+        );
+        assert_eq!(usage_requests(&up), 1);
         up.shutdown().await;
     }
 

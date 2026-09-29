@@ -241,12 +241,13 @@ that fails after its 200 head keeps that status, so a finished request with an e
 A card per upstream shows one row per rate-limit window, filterable by tabs for all accounts, OAuth accounts, and
 API-key accounts. Each OAuth card's footer says when the poll last asked the endpoint and how it answered, when the
 snapshot it shows was read, and, while the upstream backs off, since when and when the next attempt comes; Refresh reads
-the endpoint now unless the upstream is backing off or a fresh snapshot is cached. A card draws the windows it holds
-whatever the last read said and shows an error in their place only when it holds none; the page counts a card that shows
-an error, whose last poll failed, or that is backing off as needing attention. Each card names the account's plan with
-the date its subscription started and, for an account on the Claude Code trial, when the trial ends; an account marked
-cancelled says when its plan ends, in the serious tone inside a week. Below the cards, a reset timeline lays the same
-windows across a calendar, zoomable between a two-week weekly view and a three-day 5-hour view.
+the endpoint now unless the upstream is backing off or a fresh snapshot is cached. A card draws the windows the ledger
+sampled in the last day, or the ones the router holds when the ledger has none, whatever the last read said, and shows
+an error in their place only when it holds none; the page counts a card that shows an error, whose last poll failed, or
+that is backing off as needing attention. Each card names the account's plan with the date its subscription started and,
+for an account on the Claude Code trial, when the trial ends; an account marked cancelled says when its plan ends, in
+the serious tone inside a week. Below the cards, a reset timeline lays the same windows across a calendar, zoomable
+between a two-week weekly view and a three-day 5-hour view.
 
 ![The Quota view: the cards per upstream and the reset timeline](assets/quota-light.png#only-light)
 ![The Quota view: the cards per upstream and the reset timeline](assets/quota-dark.png#only-dark)

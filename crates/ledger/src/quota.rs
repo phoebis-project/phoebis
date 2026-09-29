@@ -250,11 +250,11 @@ impl QuotaPoll {
     /// polled accounts sorted by id, re-spread when an account joins or leaves), every attempt spawned into
     /// the scheduler's own set and reaped when it completes, so a slow answer or a backoff on one account
     /// delays no other and no finished attempt is kept; a completion moves its slot only while the slot still
-    /// belongs to the incarnation the attempt was drawn for. The next slot is the interval after the last or,
-    /// after a 429, the usage service's next-attempt time when that is later, so a backoff never brings an
-    /// attempt sooner than the cadence; with no slot to wait for, the scheduler wakes after one interval and
-    /// re-reads the registry. Every clean snapshot is recorded to the ledger and reported to the router as
-    /// `poll_account` does with a router.
+    /// belongs to the incarnation the attempt was drawn for. The next slot is an interval after the last slot or
+    /// after the last read, whichever is later, so a late wake reads once, or, after a 429, the usage service's
+    /// next-attempt time when that is later, so a backoff never brings an attempt sooner than the cadence; with
+    /// no slot to wait for, the scheduler wakes after one interval and re-reads the registry. Every clean
+    /// snapshot is recorded to the ledger and reported to the router as `poll_account` does with a router.
     ///
     /// Spawned once the startup step is done: that step has just read every account, so an account the first
     /// pass finds is next read an interval after the start, on its phase, and its profile an hour on.
@@ -329,7 +329,10 @@ impl QuotaPoll {
                             if let Some(slot) = slots.get_mut(&done.account_id) {
                                 if slot.in_flight == Some(id) && slot.incarnation == done.incarnation {
                                     slot.in_flight = None;
-                                    let next = slot.at + POLL_INTERVAL;
+                                    // An interval after the dispatch as well, so a wake that came several slots
+                                    // late reads once rather than replaying every slot it missed.
+                                    let dispatched = slot.last_read.unwrap_or(slot.at);
+                                    let next = slot.at.max(dispatched) + POLL_INTERVAL;
                                     slot.at = done.held.map_or(next, |wait| (Instant::now() + wait).max(next));
                                 }
                             }

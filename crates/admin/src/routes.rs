@@ -24,8 +24,8 @@ use phoebis_oauth::{
 };
 use phoebis_relay::DiscoveryError;
 use phoebis_routing::{
-    MemberSpend, OverageEvidence, ReloadError, UtilizationSample, FIVE_HOUR, SEVEN_DAY,
-    SEVEN_DAY_FABLE,
+    MemberSpend, OverageEvidence, ReloadError, UtilizationSample, WindowReading, FIVE_HOUR,
+    SEVEN_DAY, SEVEN_DAY_FABLE,
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, BudgetPeriod, CooldownRow, Identity, NewBundle,
@@ -1001,6 +1001,8 @@ pub(crate) struct AccountContext {
     pub cooldowns: Vec<CooldownRow>,
     pub day: BTreeMap<String, phoebis_ledger::Totals>,
     pub extra: Vec<phoebis_ledger::ExtraUsageSampleRecord>,
+    /// The router's windows per account, predicted at its clock, as the usage `GET` reads them.
+    pub held: BTreeMap<String, UtilizationSample>,
     pub lifetime: BTreeMap<String, phoebis_ledger::Totals>,
     pub members: Vec<PoolMember>,
     pub overages: BTreeMap<String, OverageEvidence>,
@@ -1041,6 +1043,13 @@ pub(crate) async fn account_context(state: &AdminState) -> AccountContext {
         cooldowns: state.router.cooldowns().await.unwrap_or_default(),
         day,
         extra,
+        held: state
+            .router
+            .samples()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .collect(),
         lifetime,
         members,
         overages: state
@@ -1135,6 +1144,22 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
                 "derived_ends_at": phoebis_routing::term::derived_end(&term, (state.clock)()),
             })
         });
+    let mut windows: Vec<Value> = ctx
+        .quota
+        .iter()
+        .filter(|q| q.account_id == row.id)
+        .map(|q| json!({ "id": q.window, "utilization": q.utilization, "resets_at": q.reset_at, "observed_at": q.bucket * 1_000 }))
+        .collect();
+    // The ledger's samples reach back a day, and the router keeps routing on older windows persisted across a
+    // restart whose startup read was refused; the card shows what selection reads rather than no windows.
+    if windows.is_empty() && row.kind == AccountKind::Oauth {
+        if let Some(sample) = ctx.held.get(&row.id) {
+            windows = held_windows(sample)
+                .into_iter()
+                .map(|(key, reading)| json!({ "id": key, "utilization": reading.utilization, "resets_at": reading.reset, "observed_at": reading.observed_at }))
+                .collect();
+        }
+    }
     json!({
         "id": row.id,
         "kind": match row.kind { AccountKind::ApiKey => "api_key", AccountKind::Oauth => "oauth" },
@@ -1180,7 +1205,7 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
         })),
         "profile": profile,
         "subscription": subscription,
-        "windows": ctx.quota.iter().filter(|q| q.account_id == row.id).map(|q| json!({ "id": q.window, "utilization": q.utilization, "resets_at": q.reset_at, "observed_at": q.bucket * 1_000 })).collect::<Vec<_>>(),
+        "windows": windows,
         "extra_usage": ctx.extra.iter().find(|e| e.account_id == row.id).map(|e| json!({ "currency": e.currency, "disabled_reason": e.disabled_reason, "in_use": e.in_use, "is_enabled": e.is_enabled, "monthly_limit": e.monthly_limit, "used_credits": e.used_credits, "utilization": e.utilization, "observed_at": e.bucket * 1_000 })),
         "pools": ctx.members.iter().filter(|m| m.account_id == row.id).map(|m| json!({ "pool_id": m.pool_id, "priority": m.priority })).collect::<Vec<_>>(),
         "requests": { "last_24h": ctx.day.get(&row.id).map_or(0, |t| t.requests), "last_7d": ctx.week.get(&row.id).map_or(0, |t| t.requests), "lifetime": ctx.lifetime.get(&row.id).map_or(0, |t| t.requests) },
@@ -1193,6 +1218,20 @@ const FABLE_WINDOW_KEY: &str = "fable";
 
 fn has_windows(snapshot: &UsageSnapshot) -> bool {
     !snapshot.windows.is_empty() || snapshot.fable_window.is_some()
+}
+
+/// The router's plan windows under the keys the usage endpoint gives them, in the endpoint's order: what both
+/// the usage `GET` and the account view show when they read the router's windows.
+fn held_windows(sample: &UtilizationSample) -> Vec<(&'static str, WindowReading)> {
+    // The router names the 5-hour and 7-day windows as the endpoint does.
+    [
+        (FIVE_HOUR, FIVE_HOUR),
+        (SEVEN_DAY, SEVEN_DAY),
+        (SEVEN_DAY_FABLE, FABLE_WINDOW_KEY),
+    ]
+    .into_iter()
+    .filter_map(|(name, key)| sample.reading(name).map(|reading| (key, reading)))
+    .collect()
 }
 
 /// What the `GET` answers from the poll's `latest` snapshot and the router's `held` sample of the account.
@@ -1208,30 +1247,26 @@ fn compose_usage(
         });
     }
     // The router reads a utilization as a fraction; the endpoint's windows carry a percentage.
-    let window = |sample: &UtilizationSample, name: &str, key: &str| {
-        sample.reading(name).map(|reading| {
-            (
-                UsageWindow {
-                    key: key.to_string(),
-                    utilization: Some(reading.utilization * 100.0),
-                    resets_at: reading.reset,
-                },
-                reading.observed_at,
-            )
-        })
+    let window = |(key, reading): &(&str, WindowReading)| UsageWindow {
+        key: key.to_string(),
+        utilization: Some(reading.utilization * 100.0),
+        resets_at: reading.reset,
     };
     let held = held.and_then(|sample| {
-        // The router names these two as the endpoint does.
-        let windows: Vec<(UsageWindow, i64)> = [FIVE_HOUR, SEVEN_DAY]
-            .into_iter()
-            .filter_map(|name| window(&sample, name, name))
-            .collect();
-        let fable = window(&sample, SEVEN_DAY_FABLE, FABLE_WINDOW_KEY);
-        let observed_at = windows
+        let readings = held_windows(&sample);
+        let observed_at = readings
             .iter()
-            .chain(fable.iter())
-            .map(|(_, at)| *at)
+            .map(|(_, reading)| reading.observed_at)
             .max()?;
+        let windows: Vec<UsageWindow> = readings
+            .iter()
+            .filter(|(key, _)| *key != FABLE_WINDOW_KEY)
+            .map(window)
+            .collect();
+        let fable = readings
+            .iter()
+            .find(|(key, _)| *key == FABLE_WINDOW_KEY)
+            .map(window);
         Some((windows, fable, observed_at))
     });
     let Some((windows, fable, observed_at)) = held else {
@@ -1241,8 +1276,8 @@ fn compose_usage(
         account_id: id.to_string(),
         identity_generation: latest.as_ref().map_or(0, |s| s.identity_generation),
         fetched_at: observed_at,
-        windows: windows.into_iter().map(|(window, _)| window).collect(),
-        fable_window: fable.map(|(window, _)| window),
+        windows,
+        fable_window: fable,
         extra_usage: latest.as_ref().and_then(|s| s.extra_usage.clone()),
         raw_keys: latest.map(|s| s.raw_keys).unwrap_or_default(),
         error: None,

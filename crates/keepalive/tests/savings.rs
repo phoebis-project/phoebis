@@ -1919,6 +1919,60 @@ async fn the_window_share_cap_stops_probes_for_the_day_and_a_probe_in_the_band_c
     );
 }
 
+/// The window-share cap bounds what a subscription account's probes take of its plan; an API-key account's
+/// probes spend dollars, which the dollar cap bounds, so in one pool a zero share cap holds the first and leaves
+/// the second alone.
+#[tokio::test]
+async fn a_zero_window_share_cap_holds_a_subscription_probe_and_admits_an_api_key_probe() {
+    let mut r = rig(RigSpec {
+        accounts: vec![oauth("o", OAUTH_SECRET, 0), api_key("a", A, 1)],
+        policy: KeepalivePolicy {
+            probe_cap_window_share_per_day: Some(0.0),
+            ..RigSpec::default().policy
+        },
+        ..subscription_spec()
+    })
+    .await;
+    let body = priced_body();
+    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
+    r.observe_with("main", &body).await;
+    assert_eq!(r.status("main").account_id.as_deref(), Some("o"));
+    // The API-key member first from here, so a new session lands on it while `main` keeps its recipe on `o`.
+    let member = |account_id: &str, priority| phoebis_store::MemberWrite {
+        account_id: account_id.to_string(),
+        priority,
+        budget_usd: None,
+        budget_period: phoebis_store::BudgetPeriod::Month,
+    };
+    r.h.store
+        .set_pool_members("main", &[member("a", 0), member("o", 1)], "test")
+        .unwrap();
+    r.h.router.reload().await.unwrap();
+    r.up.push_credential_rule(A, "/v1/messages", cold_answer());
+    r.event(session_start("other")).unwrap();
+    let mut req = r.request_with("main", &body);
+    relay_common::set_header(&mut req, "x-claude-code-session-id", "other");
+    let resp = r.h.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(relay_common::outcome(&resp).account_id, "a");
+    let id = relay_common::outcome(&resp).request_id;
+    let _ = resp.into_body().collect().await.unwrap();
+    r.pump(Some(&id)).await;
+    let other = |r: &Rig| r.engine.agent_status("desktop", "other", "main").unwrap();
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(
+        (r.status("main").probes, r.status("main").reason),
+        (0, Reason::CapReached),
+        "the subscription account's probe is held by the zero share cap"
+    );
+    assert_eq!(
+        other(&r).probes,
+        1,
+        "the API-key account's probe runs: {:?}",
+        other(&r)
+    );
+}
+
 /// A real request on `body` re-arms the recipe on its model, and the due probe runs.
 async fn probe_on(r: &mut Rig, body: &str) {
     r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
