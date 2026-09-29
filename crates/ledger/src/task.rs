@@ -1,6 +1,7 @@
 //! The ledger task: one bounded channel from the assembler and every other producer, one writer that lands
 //! batches through `spawn_blocking`, and the gap event that says what was lost.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -15,11 +16,11 @@ use crate::assemble::{Assembler, Record};
 use crate::bodies::run_retention;
 use crate::db::{insert_event_in, insert_request_in, insert_samples_in};
 use crate::events::spawn_event_mirror;
-use crate::fit::Fitter;
 use crate::metrics::Metrics;
-use crate::plan::{PlanFactors, PlanWindows};
+use crate::plan::PlanTables;
 use crate::pricing::{price_attempts, PriceTable, Pricing};
-use crate::query::member_spends;
+use crate::query::{member_spends, Tiers};
+use crate::reconcile::{reconcile, RECONCILE_INTERVAL};
 use crate::record::{AttemptRecord, EventRecord, QuotaSampleRecord, RequestRecord};
 use crate::{LedgerDb, LedgerError};
 
@@ -42,6 +43,8 @@ pub struct LedgerConfig {
     pub event_poll: Duration,
     /// How often the assembler ages out entries whose completion never arrived.
     pub expire_interval: Duration,
+    /// The router's own copy, so a window is reconciled against the share the router predicted for it.
+    pub tables: Arc<PlanTables>,
 }
 
 impl Default for LedgerConfig {
@@ -53,6 +56,7 @@ impl Default for LedgerConfig {
             purge_interval: Duration::from_secs(3_600),
             event_poll: Duration::from_secs(5),
             expire_interval: EXPIRE_INTERVAL,
+            tables: Arc::new(PlanTables::shipped()),
         }
     }
 }
@@ -250,7 +254,7 @@ async fn assemble(
                 None => break,
             },
             _ = expire.tick() => {
-                land_all(&ledger, assembler.expire(clock()).records).await;
+                assembler.expire(clock());
             }
             _ = stop_requested(&mut stopped) => {
                 while let Ok(event) = subscriber.events.try_recv() {
@@ -263,15 +267,11 @@ async fn assemble(
 }
 
 /// A request record waits for the writer's channel, since the row it names can never be written again once
-/// the request that produced it is gone. So do the attempt records: the fitter never ages an attempt out on its
-/// own, so a lost `AttemptDropped` would hold one open, and every foreign rise on its account would count as the
-/// router's, until a restart. An event or a sample keeps the drop-and-count `record` always used.
+/// the request that produced it is gone. An event or a sample keeps the drop-and-count `record` always used.
 async fn land_all(ledger: &Ledger, records: Vec<Record>) {
     for record in records {
         match record {
-            Record::AttemptDropped { .. }
-            | Record::AttemptStarted { .. }
-            | Record::Request { .. } => ledger.record_request(record).await,
+            Record::Request { .. } => ledger.record_request(record).await,
             other => ledger.record(other),
         }
     }
@@ -307,13 +307,13 @@ async fn writer(
     let mut revision_poll = tokio::time::interval(config.event_poll);
     revision_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     revision_poll.tick().await;
+    // The first pass waits a whole interval, so the alert poller's watermark, taken at its start, lies before
+    // every row this process computes.
+    let mut reconciling = tokio::time::interval(RECONCILE_INTERVAL);
+    reconciling.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    reconciling.tick().await;
     // Drops the writer has not yet reported: the channel's, read from the counter each round, and its own.
     let mut reported: u64 = 0;
-    let mut fitter = Fitter::new(
-        Arc::new(PlanFactors::shipped()),
-        Arc::new(PlanWindows::shipped()),
-        persisted_fits(store).await,
-    );
     let mut member_revision = router.snapshot().revision;
     let mut spend_due =
         refresh_member_spends(&db, &pricing, &router, clock(), None, config.event_poll).await;
@@ -353,6 +353,10 @@ async fn writer(
             }
             // Nothing but the top-of-loop check runs here; see the arm's own comment above.
             _ = revision_poll.tick() => continue,
+            _ = reconciling.tick() => {
+                run_reconcile(&db, &store, &config.tables, clock()).await;
+                continue;
+            }
             // Re-armed after every run: the boundary a budgeted member's period ends on, so a pool whose
             // traffic never touches this writer still turns over its spend at the period's edge.
             _ = sleep_until(spend_due, &clock) => {
@@ -368,7 +372,6 @@ async fn writer(
                 Err(_) => break,
             }
         }
-        fit_batch(&mut fitter, &router, &clock, &batch);
         let priced = wrote_priced_attempt(&batch);
         let landed = land(&db, &pricing, &stats, &metrics, batch).await;
         if landed && priced {
@@ -402,21 +405,6 @@ async fn writer(
         }
     }
     let _ = done.send(());
-}
-
-/// The fit rows the router persisted, the fitter's seed; a store that cannot answer starts every window over.
-async fn persisted_fits(store: Arc<Store>) -> Vec<phoebis_store::FitRow> {
-    match tokio::task::spawn_blocking(move || store.fits()).await {
-        Ok(Ok(rows)) => rows,
-        Ok(Err(error)) => {
-            tracing::warn!(%error, "the window fits could not be read; every window starts over");
-            Vec::new()
-        }
-        Err(error) => {
-            tracing::warn!(%error, "reading the window fits panicked; every window starts over");
-            Vec::new()
-        }
-    }
 }
 
 /// Every pool member with a spend budget, from the snapshot: its pool, account, and configured period.
@@ -484,90 +472,8 @@ fn wrote_priced_attempt(batch: &[Record]) -> bool {
     })
 }
 
-/// Walks a batch through the fitter in the order it arrived, reporting every row it answers to the router,
-/// whose writer persists it. Runs whether or not the batch then lands: the fit reads what happened, not what
-/// the ledger kept.
-fn fit_batch(fitter: &mut Fitter, router: &RouterHandle, clock: &Clock, batch: &[Record]) {
-    for record in batch {
-        match record {
-            Record::AttemptStarted {
-                account_id,
-                request_id,
-                attempt,
-                at,
-            } => fitter.started(account_id, request_id, *attempt, *at),
-            Record::AttemptDropped {
-                account_id,
-                request_id,
-                attempt,
-                ..
-            } => fitter.dropped(account_id, request_id, *attempt),
-            Record::Request {
-                request, attempts, ..
-            } => {
-                // Probes count, since the meter charges them; an attempt that answered no usage closes and
-                // books nothing, and so does one on an API-key account, which has no plan window to fit.
-                for attempt in attempts {
-                    if attempt.account_kind != "oauth" {
-                        fitter.dropped(&attempt.account_id, &attempt.request_id, attempt.attempt);
-                        continue;
-                    }
-                    let completed = attempt
-                        .finished_at
-                        .or(request.finished_at)
-                        .unwrap_or_else(|| clock());
-                    fitter.dispatched(
-                        &attempt.account_id,
-                        &attempt.request_id,
-                        attempt.attempt,
-                        &request.canonical_model,
-                        attempt,
-                        completed,
-                    );
-                }
-            }
-            Record::Samples { quota, carrier, .. } => {
-                let snapshot = router.snapshot();
-                // The record carries only its five-minute bucket; the writer sees it within moments of the
-                // reading, which is the precision the fit's one-minute gate needs.
-                let now = clock();
-                for sample in quota {
-                    let Some(utilization) = sample.utilization else {
-                        continue;
-                    };
-                    let Some(account) = snapshot
-                        .account(&sample.account_id)
-                        .filter(|account| account.kind == AccountKind::Oauth)
-                    else {
-                        continue;
-                    };
-                    if let Some(row) = fitter.sampled(
-                        &sample.account_id,
-                        account.incarnation,
-                        &sample.window,
-                        utilization,
-                        sample.reset_at,
-                        carrier
-                            .as_ref()
-                            .map(|(id, attempt)| (id.as_str(), *attempt)),
-                        now,
-                    ) {
-                        router.report(Report::Fit {
-                            row,
-                            incarnation: account.incarnation,
-                        });
-                    }
-                }
-            }
-            Record::Event(_) | Record::Keepalive(_) => {}
-        }
-    }
-}
-
 fn table_of(record: &Record) -> &'static str {
     match record {
-        Record::AttemptDropped { .. } => "attempts_dropped",
-        Record::AttemptStarted { .. } => "attempts_started",
         Record::Event(_) => "events",
         Record::Keepalive(_) => "rollups",
         Record::Request { .. } => "requests",
@@ -643,14 +549,12 @@ async fn land(
                             attempts,
                         });
                     }
-                    Record::Samples { quota, extra, .. } => {
+                    Record::Samples { quota, extra } => {
                         insert_samples_in(&tx, quota, extra.as_ref())?;
                         observations.push(Observation::Samples {
                             quota: quota.clone(),
                         });
                     }
-                    // The fitter's alone: the writer walked them through it before this batch.
-                    Record::AttemptStarted { .. } | Record::AttemptDropped { .. } => {}
                 }
             }
             tx.commit()?;
@@ -695,6 +599,52 @@ async fn land(
     }
 }
 
+/// One pass: the kinds and tiers read off the store as the analytics read them, the completed windows priced
+/// on a ledger read, and what it answers written in one transaction.
+async fn run_reconcile(db: &Arc<LedgerDb>, store: &Arc<Store>, tables: &Arc<PlanTables>, now: i64) {
+    let store = store.clone();
+    let accounts = tokio::task::spawn_blocking(move || {
+        let accounts = store.accounts()?;
+        let kinds: HashMap<String, AccountKind> =
+            accounts.iter().map(|a| (a.id.clone(), a.kind)).collect();
+        let mut tiers = Tiers::new();
+        for account in accounts.iter().filter(|a| a.kind == AccountKind::Oauth) {
+            let tier = store.subscription(&account.id)?.and_then(|s| s.tier);
+            tiers.insert(account.id.clone(), tier);
+        }
+        Ok::<_, phoebis_store::StoreError>((kinds, tiers))
+    })
+    .await;
+    let (kinds, tiers) = match accounts {
+        Ok(Ok(read)) => read,
+        Ok(Err(error)) => {
+            tracing::warn!(%error, "the accounts could not be read; no window was reconciled");
+            return;
+        }
+        Err(error) => {
+            tracing::error!(%error, "reading the accounts for the reconciliation panicked");
+            return;
+        }
+    };
+    let tables = tables.clone();
+    let rows = match db
+        .read(move |conn| reconcile(conn, &tables, &tiers, &kinds, now))
+        .await
+    {
+        Ok(rows) => rows,
+        Err(error) => {
+            tracing::warn!(%error, "the completed windows could not be reconciled");
+            return;
+        }
+    };
+    if rows.is_empty() {
+        return;
+    }
+    if let Err(error) = db.insert_reconciliations(rows).await {
+        tracing::warn!(%error, "the window reconciliations could not be written");
+    }
+}
+
 async fn run_purge(db: &Arc<LedgerDb>, config: &LedgerConfig, router: &RouterHandle, now: i64) {
     let (db, config) = (db.clone(), config.clone());
     let budgeted = budgeted_members(&router.snapshot());
@@ -726,47 +676,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn attempt_records_wait_for_room_in_the_channel_rather_than_drop() {
+    async fn a_request_record_waits_for_room_in_the_channel_rather_than_drop() {
         let (ledger, mut rx) = stalled();
         ledger.record(Record::Event(EventRecord::default()));
-        let attempt = |started: bool| {
-            let (account_id, request_id, attempt, at) = ("a".to_string(), "r1".to_string(), 1, 5);
-            if started {
-                Record::AttemptStarted {
-                    account_id,
-                    request_id,
-                    attempt,
-                    at,
-                }
-            } else {
-                Record::AttemptDropped {
-                    account_id,
-                    request_id,
-                    attempt,
-                    at,
-                }
-            }
-        };
         let landing = tokio::spawn({
             let ledger = ledger.clone();
-            let records = vec![attempt(true), attempt(false)];
+            let records = vec![Record::Request {
+                request: RequestRecord::default(),
+                attempts: Vec::new(),
+                bodies: None,
+            }];
             async move { land_all(&ledger, records).await }
         });
         tokio::time::sleep(Duration::from_millis(50)).await;
-        assert_eq!(ledger.dropped(), 0, "neither record was dropped");
+        assert_eq!(ledger.dropped(), 0, "the record was not dropped");
         assert!(
             !landing.is_finished(),
             "the landing waits while the channel is full"
         );
         assert!(matches!(rx.recv().await, Some(Record::Event(_))));
-        assert!(matches!(
-            rx.recv().await,
-            Some(Record::AttemptStarted { .. })
-        ));
-        assert!(matches!(
-            rx.recv().await,
-            Some(Record::AttemptDropped { .. })
-        ));
+        assert!(matches!(rx.recv().await, Some(Record::Request { .. })));
         landing.await.unwrap();
         assert_eq!(ledger.dropped(), 0);
     }

@@ -791,28 +791,35 @@ export interface RewritePoint {
   rewriteTokens: number;
 }
 
-/** One upstream's fitted window size against the size its tier predicts, as `GET /admin/analytics/fits` answers it. */
-export interface WindowFit {
+/** One completed 5-hour or 7-day window of a subscription upstream, as `GET /admin/analytics/reconciliations`
+ *  answers it: the rise its readings showed against the share the router predicted for its own requests in it. */
+export interface WindowReconciliation {
   accountId: string;
-  /** `bandFactor` more than 15% off `bandFactorPredicted`, a provisional tolerance; nothing alerts on it. */
-  bandDivergent: boolean;
-  /** The live fit's peak-band weight; null until both sides of the band have folded. */
-  bandFactor: number | null;
-  /** The shipped band row's factor for the window; null where no band names it. */
-  bandFactorPredicted: number | null;
-  confidence: number;
-  /** A factor per model the fit corrected its meter by. */
-  corrections: Record<string, number>;
-  /** `scale` over `predicted`; null without a prediction. */
-  drift: number | null;
-  fittedAt: string;
-  intervals: number;
-  /** The tier's window size; null where the tier has no row for the window. */
-  predicted: number | null;
-  /** The fitted window size in meter tokens. */
-  scale: number;
-  /** `five_hour`, `seven_day`, or `seven_day_fable`, as the route names it. */
+  computedAt: string;
+  /** The instants of the run's first and last readings; the router's requests completed between them. */
+  firstReadingAt: string;
+  lastReadingAt: string;
+  /** The last reading's utilization over the first's, as a fraction of the window. */
+  observedRise: number;
+  /** The share of the window the router priced its own requests at. */
+  predictedShare: number;
+  /** `observedRise` over `predictedShare`: 1.1 means the meter charged 1.1 times the table. */
+  ratio: number;
+  requests: number;
+  /** Whether any request was priced through a cell or factor no measurement has filled. */
+  unmeasured: boolean;
+  /** `five_hour` or `seven_day`. */
   window: string;
+  /** The reset the window's readings named. */
+  windowEnd: string;
+}
+
+/** The reconciliations of the last 30 days, newest first, and the request retention that bounds them. */
+export interface AnalyticsReconciliations {
+  reconciliations: WindowReconciliation[];
+  /** `stats.retention_days` as configured, zero meaning forever: a window older than the kept requests is not
+   *  reconciled. */
+  requestRetentionDays: number;
 }
 
 export type KeepaliveState = 'busy' | 'idle' | 'parked';
@@ -946,6 +953,7 @@ export type AlertKind =
   | 'client_drift'
   | 'funding_required'
   | 'keepalive_cost_cap'
+  | 'meter_drift'
   | 'pool_exhausted'
   | 'reauth_required'
   | 'refresh_failed'
@@ -981,6 +989,18 @@ export interface ClientDriftDetail {
   key: string | null;
   /** Free text: the relay names the check that caught the drift, and a later build may name another one. */
   trigger: string;
+}
+
+/** What a meter_drift event carried: the completed window whose ratio left the band. */
+export interface MeterDriftDetail {
+  account: string;
+  observed_rise: number;
+  predicted_share: number;
+  ratio: number;
+  requests: number;
+  /** `five_hour` or `seven_day`. */
+  window: string;
+  window_end: number;
 }
 
 export interface RefreshFailedDetail {

@@ -6,13 +6,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use phoebis_bus::{
-    AccountSelected, AttemptOutcome, Event as BusEvent, Kind, Origin, Outcome as BusOutcome,
-    RequestComplete, RequestObserved, RequestShape, ResponseChunk, ResponseFacts, ResponseHead,
-    Usage,
+    AccountSelected, Event as BusEvent, Kind, Origin, Outcome as BusOutcome, RequestComplete,
+    RequestObserved, RequestShape, ResponseChunk, ResponseFacts, Usage,
 };
 use phoebis_ledger::{
-    bucket_of, list_requests, Assembler, AttemptRecord, EventRecord, LedgerConfig, LiveKeys,
-    QuotaSampleRecord, Record, RequestFilter, RequestRecord, IN_FLIGHT_TTL_MS,
+    list_requests, Assembler, AttemptRecord, EventRecord, LedgerConfig, LiveKeys, Record,
+    RequestFilter, RequestRecord,
 };
 use phoebis_profile::fixtures::BodyFixture;
 use phoebis_store::{BudgetPeriod, MemberWrite};
@@ -1248,315 +1247,76 @@ fn selected_event_with_trace(
     BusEvent::AccountSelected(selected)
 }
 
-/// A head carrying the account's 5-hour reading, which the assembler turns into a header sample.
-fn head_event(id: &str, utilization: f64, at: i64) -> BusEvent {
-    BusEvent::ResponseHead(ResponseHead {
-        request_id: id.into(),
-        attempt: 1,
-        status: 200,
-        headers: vec![(
-            "anthropic-ratelimit-unified-5h-utilization".into(),
-            utilization.to_string(),
-        )],
-        first_event: None,
-        outcome: AttemptOutcome::Succeeded,
-        cooldown: None,
-        written_at: at - 10,
-        observed_at: at,
-    })
+/// A head that carries the account's 5-hour reading, reset at 4 600 s on the harness clock.
+fn head_with_reading(utilization: &str) -> Respond {
+    let Respond::Json { status, body, .. } = json_200() else {
+        unreachable!()
+    };
+    Respond::Json {
+        status,
+        headers: vec![
+            (
+                "anthropic-ratelimit-unified-status".into(),
+                "allowed".into(),
+            ),
+            (
+                "anthropic-ratelimit-unified-5h-status".into(),
+                "allowed".into(),
+            ),
+            (
+                "anthropic-ratelimit-unified-5h-utilization".into(),
+                utilization.into(),
+            ),
+            ("anthropic-ratelimit-unified-5h-reset".into(), "4600".into()),
+        ],
+        body,
+    }
 }
 
-/// The first attempt on account `a` served the request with 1,000 input and 100 output tokens.
-fn served_event(id: &str, at: i64) -> BusEvent {
-    BusEvent::RequestComplete(RequestComplete {
-        request_id: id.into(),
-        attempt: 1,
-        account_id: Some("a".into()),
-        outcome: BusOutcome::Succeeded,
-        status: 200,
-        usage: Some(Usage {
-            input_tokens: Some(1_000),
-            output_tokens: Some(100),
-            ..Usage::default()
-        }),
-        response: ResponseFacts::default(),
-        ttfb_ms: None,
-        ttfc_ms: None,
-        error_code: None,
-        client_drift: None,
-        client_version: None,
-        response_bytes: None,
-        response_chunks: None,
-        finished_at: at,
-    })
-}
-
-/// Sonnet 5's meter tokens for `served_event`'s usage, over a sixteenth of the window.
-fn served_scale() -> f64 {
-    0.54 * (1_000.0 + 100.0 * 4.67) / 0.0625
-}
-
-/// Lands a 5-hour reading of account `a` at `at` on the harness clock and waits until the writer has taken it,
-/// so the next step's clock never overtakes it.
-async fn reading(h: &Harness, at: i64, utilization: f64) {
-    h.clock.store(at, Ordering::SeqCst);
-    let bucket = bucket_of(at);
-    h.ledger.record(Record::Samples {
-        quota: vec![QuotaSampleRecord {
-            account_id: "a".into(),
-            bucket,
-            window: "5h".into(),
-            utilization: Some(utilization),
-            reset_at: None,
-            source: "header".into(),
-        }],
-        extra: None,
-        carrier: None,
-    });
-    landed_reading(h, bucket, utilization).await;
-}
-
-async fn landed_reading(h: &Harness, bucket: i64, utilization: f64) {
-    wait_for_async(Duration::from_secs(5), || async {
-        h.db.quota_samples("a", bucket, bucket + 1)
+#[tokio::test]
+async fn a_head_sample_before_the_completion_reaches_the_router_through_the_assembler_and_the_writer(
+) {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: head_with_reading("0.3125"),
+    }])
+    .await;
+    let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let id = request_id(&resp);
+    let _ = resp.into_body().collect().await.unwrap();
+    ledgered(&h, &id).await;
+    let samples = h.router.samples().await.unwrap();
+    let reading = samples
+        .iter()
+        .find(|(account, _)| account == "a")
+        .and_then(|(_, sample)| sample.reading(phoebis_routing::FIVE_HOUR))
+        .expect("the router holds the head's 5-hour reading");
+    assert_eq!(
+        (reading.utilization, reading.reset),
+        (0.3125, Some(4_600_000))
+    );
+    let row = wait_for_async(Duration::from_secs(5), || async {
+        h.db.quota_samples("a", 0, i64::MAX)
             .await
             .unwrap()
             .into_iter()
-            .find(|q| q.utilization == Some(utilization))
-    })
-    .await;
-}
-
-fn land(h: &Harness, records: Vec<Record>) {
-    for record in records {
-        h.ledger.record(record);
-    }
-}
-
-/// Rows in the ledger's request, attempt, event and sample tables.
-async fn table_rows(h: &Harness) -> [i64; 4] {
-    h.db.read(|c| {
-        let count = |table: &str| {
-            c.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| {
-                r.get::<_, i64>(0)
-            })
-        };
-        Ok([
-            count("requests")?,
-            count("attempts")?,
-            count("events")?,
-            count("quota_samples")?,
-        ])
-    })
-    .await
-    .unwrap()
-}
-
-#[tokio::test]
-async fn an_attempt_started_record_is_emitted_at_selection_and_stored_nowhere() {
-    let mut assembler = Assembler::new(Arc::new(|| NOW));
-    assembler.observe(observed_event("r1"));
-    let records = assembler.observe(selected_event("r1", 1, "a", minutes(1)));
-    let [Record::AttemptStarted {
-        account_id,
-        request_id,
-        attempt,
-        at,
-    }] = records.as_slice()
-    else {
-        panic!("{} records at the selection", records.len());
-    };
-    assert_eq!(
-        (account_id.as_str(), request_id.as_str(), *attempt, *at),
-        ("a", "r1", 1, minutes(1))
-    );
-
-    let up = FakeUpstream::start(vec![]).await;
-    let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
-    h.bus.publish(observed_event("open"));
-    h.bus.publish(selected_event("open", 1, "a", minutes(1)));
-    // A request that completes behind it on the same path: once its row is in, the selection has been landed.
-    h.bus.publish(observed_event("done"));
-    h.bus.publish(complete_event("done"));
-    listed(&h, "done").await;
-    assert_eq!(
-        table_rows(&h).await,
-        [1, 0, 0, 0],
-        "the selection wrote nothing: one request row, the completed one, and nothing else"
-    );
-    up.shutdown().await;
-}
-
-#[tokio::test]
-async fn an_expired_request_emits_a_dropped_record_per_attempt_and_the_fit_closes_it() {
-    let up = FakeUpstream::start(vec![]).await;
-    let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
-    // The task's own assembler ages entries out on a minute of wall time; this one runs on the harness clock and
-    // hands its records to the same channel the task's tick lands them on.
-    let mut assembler = Assembler::new(clock_of(&h));
-    reading(&h, minutes(0), 0.25).await;
-    h.clock.store(minutes(1), Ordering::SeqCst);
-    land(&h, assembler.observe(observed_event("lost")));
-    land(
-        &h,
-        assembler.observe(selected_event("lost", 1, "a", minutes(1))),
-    );
-    land(
-        &h,
-        assembler.observe(selected_event("lost", 2, "a", minutes(2))),
-    );
-    let expired = assembler.expire(minutes(2) + IN_FLIGHT_TTL_MS);
-    assert_eq!(expired.dropped, 1);
-    let dropped: Vec<(String, String, u32)> = expired
-        .records
-        .iter()
-        .map(|record| match record {
-            Record::AttemptDropped {
-                account_id,
-                request_id,
-                attempt,
-                ..
-            } => (account_id.clone(), request_id.clone(), *attempt),
-            _ => panic!("expire answers dropped attempts only"),
-        })
-        .collect();
-    assert_eq!(
-        dropped,
-        [
-            ("a".into(), "lost".into(), 1),
-            ("a".into(), "lost".into(), 2)
-        ],
-        "one record per attempt the lost request held"
-    );
-    land(&h, expired.records);
-
-    let after = minutes(2) + IN_FLIGHT_TTL_MS;
-    // A rise with nothing open is spend the router did not send; the served request's fold below shows it
-    // was dropped rather than carried.
-    reading(&h, after + 5 * 60_000, 0.3125).await;
-    h.clock.store(after + 6 * 60_000, Ordering::SeqCst);
-    land(&h, assembler.observe(observed_event("served")));
-    land(
-        &h,
-        assembler.observe(selected_event("served", 1, "a", after + 6 * 60_000)),
-    );
-    for record in assembler.observe(served_event("served", after + 7 * 60_000)) {
-        h.ledger.record_request(record).await;
-    }
-    reading(&h, after + 12 * 60_000, 0.375).await;
-    let fits = wait_for_async(Duration::from_secs(5), || async {
-        let fits = h.router.fits().await.unwrap();
-        (!fits.is_empty()).then_some(fits)
-    })
-    .await;
-    assert!(
-        (fits[0].scale - served_scale()).abs() < 1e-6,
-        "the served tokens over their own rise alone, the foreign rise dropped: {}",
-        fits[0].scale
-    );
-    assert_eq!(
-        table_rows(&h).await[..3],
-        [1, 1, 0],
-        "the lost request's records wrote no row: the served request and its attempt, and no event"
-    );
-    up.shutdown().await;
-}
-
-#[tokio::test]
-async fn a_head_sample_before_the_completion_reaches_the_fit_through_the_assembler_and_the_writer()
-{
-    let up = FakeUpstream::start(vec![]).await;
-    let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
-    reading(&h, minutes(0), 0.25).await;
-    h.clock.store(minutes(1), Ordering::SeqCst);
-    h.bus.publish(observed_event("r1"));
-    h.bus.publish(selected_event("r1", 1, "a", minutes(1)));
-    // The stream's head reads the rise before the completion has booked a token.
-    h.clock.store(minutes(6), Ordering::SeqCst);
-    h.bus.publish(head_event("r1", 0.3125, minutes(6)));
-    landed_reading(&h, bucket_of(minutes(6)), 0.3125).await;
-    h.clock.store(minutes(7), Ordering::SeqCst);
-    h.bus.publish(served_event("r1", minutes(7)));
-    listed(&h, "r1").await;
-    reading(&h, minutes(12), 0.3125).await;
-    let fits = wait_for_async(Duration::from_secs(5), || async {
-        let fits = h.router.fits().await.unwrap();
-        (!fits.is_empty()).then_some(fits)
+            .find(|q| q.window == "5h")
     })
     .await;
     assert_eq!(
-        (fits.len(), fits[0].window.as_str(), fits[0].intervals),
-        (1, "five_hour", 1)
+        (row.utilization, row.reset_at, row.source.as_str()),
+        (Some(0.3125), Some(4_600_000), "header")
     );
     assert!(
-        (fits[0].scale - served_scale()).abs() < 1e-6,
-        "the carried rise folds against the attempt's tokens: {}",
-        fits[0].scale
-    );
-    up.shutdown().await;
-}
-
-#[tokio::test]
-async fn the_expire_tick_closes_a_lost_attempt_in_the_fit() {
-    let up = FakeUpstream::start(vec![]).await;
-    let h = harness(
-        &up,
-        &[oauth("a", A, 0)],
-        (0, None),
-        LedgerConfig {
-            expire_interval: Duration::from_millis(20),
-            ..LedgerConfig::default()
-        },
-    )
-    .await;
-    reading(&h, minutes(0), 0.25).await;
-    h.clock.store(minutes(1), Ordering::SeqCst);
-    h.bus.publish(observed_event("lost"));
-    h.bus.publish(selected_event("lost", 1, "a", minutes(1)));
-    // A request that completes behind the lost one on the same path: once its row is in, the assembler holds the
-    // lost request's open attempt.
-    h.bus.publish(observed_event("marker"));
-    h.bus.publish(complete_event("marker"));
-    listed(&h, "marker").await;
-    // The writer counts a batch once it has walked it through the fitter and landed it: so far the anchor
-    // reading, the lost request's start and the marker's request.
-    let stats = h.ledger.stats();
-    let written = || stats.written.load(Ordering::SeqCst);
-    wait_for_async(Duration::from_secs(5), || async {
-        (written() >= 3).then_some(())
-    })
-    .await;
-    let before = written();
-    let after = minutes(1) + IN_FLIGHT_TTL_MS;
-    h.clock.store(after, Ordering::SeqCst);
-    // The next tick ages the lost request out against the harness clock; its dropped attempt is the one record
-    // left to count, and the fitter has closed the attempt by the time it is counted.
-    wait_for_async(Duration::from_secs(5), || async {
-        (written() > before).then_some(())
-    })
-    .await;
-    assert_eq!(
-        written(),
-        before + 1,
-        "the jump adds the dropped attempt and nothing else"
-    );
-    reading(&h, after + 5 * 60_000, 0.3125).await;
-    h.clock.store(after + 6 * 60_000, Ordering::SeqCst);
-    h.bus.publish(observed_event("served"));
-    h.bus
-        .publish(selected_event("served", 1, "a", after + 6 * 60_000));
-    h.bus.publish(served_event("served", after + 7 * 60_000));
-    listed(&h, "served").await;
-    reading(&h, after + 12 * 60_000, 0.375).await;
-    let fits = wait_for_async(Duration::from_secs(5), || async {
-        let fits = h.router.fits().await.unwrap();
-        (!fits.is_empty()).then_some(fits)
-    })
-    .await;
-    assert!(
-        (fits[0].scale - served_scale()).abs() < 1e-6,
-        "the tick closed the lost attempt, so the rise after it was dropped as foreign: {}",
-        fits[0].scale
+        row.observed_at.is_some(),
+        "the head's instant lands beside its bucket"
     );
     up.shutdown().await;
 }
@@ -1581,8 +1341,8 @@ async fn a_rollup_row_from_before_the_class_dimension_reads_under_the_reserved_c
     let path = dir.path().join("ledger.sqlite");
     {
         let db = phoebis_ledger::LedgerDb::open(&path).unwrap();
-        // The four columns migration 18 adds and the five migration 19 adds, each dropped back out so the
-        // replay below has to add them again; `rollups_hourly` keeps the shape the class dimension joins,
+        // The four columns migration 18 adds, the five migration 19 adds and migration 20's column and table,
+        // each dropped back out so the replay below has to add them again; `rollups_hourly` keeps the shape the class dimension joins,
         // since a primary-key column cannot be dropped in place and the rebuild names its own columns
         // regardless of what the source table still carries.
         db.write(|c| {
@@ -1595,7 +1355,9 @@ async fn a_rollup_row_from_before_the_class_dimension_reads_under_the_reserved_c
                  ALTER TABLE requests DROP COLUMN fork_depth; \
                  ALTER TABLE account_rollups_hourly DROP COLUMN rewrite_tokens; \
                  ALTER TABLE account_rollups_hourly DROP COLUMN migrations_json; \
-                 ALTER TABLE attempts DROP COLUMN selection;",
+                 ALTER TABLE attempts DROP COLUMN selection; \
+                 ALTER TABLE quota_samples DROP COLUMN observed_at; \
+                 DROP TABLE window_reconciliations;",
             )?;
             Ok(())
         })
@@ -1620,7 +1382,7 @@ async fn a_rollup_row_from_before_the_class_dimension_reads_under_the_reserved_c
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 19);
+    assert_eq!(db.schema_version().await.unwrap(), 20);
     let rows = db
         .read_blocking(|c| phoebis_ledger::read_rollups(c, 0, i64::MAX))
         .unwrap();
@@ -1707,6 +1469,8 @@ async fn migration_nineteen_adds_the_identity_columns_to_a_version_eighteen_file
                  ALTER TABLE requests DROP COLUMN identity_depth; \
                  ALTER TABLE requests DROP COLUMN forked_from; \
                  ALTER TABLE requests DROP COLUMN fork_depth; \
+                 ALTER TABLE quota_samples DROP COLUMN observed_at; \
+                 DROP TABLE window_reconciliations; \
                  UPDATE meta SET value = '18' WHERE key = 'schema_version';",
             )?;
             Ok(())
@@ -1714,7 +1478,7 @@ async fn migration_nineteen_adds_the_identity_columns_to_a_version_eighteen_file
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 19);
+    assert_eq!(db.schema_version().await.unwrap(), 20);
     let (row, _) = db.request("r0").await.unwrap().unwrap();
     assert_eq!(
         (

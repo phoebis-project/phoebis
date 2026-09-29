@@ -941,7 +941,7 @@ async fn session_idle_takes_a_threshold_in_whole_minutes_and_the_other_kinds_tak
         ),
         (
             r#"{"kind":"subagent_idle","scope":{"type":"all"},"webhook_url":"http://127.0.0.1:1/h"}"#,
-            "kind is one of the twelve alert kinds",
+            "kind is one of the thirteen alert kinds",
         ),
     ] {
         let refused = post(&parts.app, "/admin/alerts/rules", body, Some(&cookie)).await;
@@ -1026,5 +1026,36 @@ async fn a_resolve_whose_row_vanishes_mid_write_never_answers_already_resolved()
             .len(),
         0,
         "nothing was marked resolved"
+    );
+}
+
+#[tokio::test]
+async fn a_meter_drift_rule_takes_an_account_scope_and_refuses_a_pool_scope() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let created = post(
+        &parts.app,
+        "/admin/alerts/rules",
+        r#"{"kind":"meter_drift","scope":{"type":"account","id":"business"},"webhook_url":"http://127.0.0.1:1/hook"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(created.status(), 201);
+    let rule = json(created).await;
+    assert_eq!(
+        (rule["kind"].as_str(), rule["scope"]["type"].as_str()),
+        (Some("meter_drift"), Some("account"))
+    );
+    let refused = post(
+        &parts.app,
+        "/admin/alerts/rules",
+        r#"{"kind":"meter_drift","scope":{"type":"pool","id":"main"},"webhook_url":"http://127.0.0.1:1/h"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(refused.status(), 400);
+    assert_eq!(
+        json(refused).await["error"].as_str(),
+        Some("this kind does not take that scope")
     );
 }

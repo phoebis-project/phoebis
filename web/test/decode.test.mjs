@@ -576,26 +576,26 @@ test('the rewrite series decodes with the moves by reason over the range', () =>
   assert.deepEqual(d.decodeRewrites({ moves: { later_reason: 2, shed: 3 }, points: [] }).moves, { later_reason: 2, shed: 3 });
 });
 
-test('a window fit decodes the scale against the prediction and the band pair', () => {
-  const [fit] = fixture('analytics_fits').fits.map(d.decodeWindowFit);
-  assert.deepEqual(fit, {
+test('a window reconciliation decodes its instants, its rise against the prediction, and the request retention', () => {
+  const body = fixture('analytics_reconciliations');
+  const answer = d.decodeReconciliations(body);
+  assert.equal(answer.requestRetentionDays, 90);
+  const [inside, outside] = answer.reconciliations;
+  assert.deepEqual(inside, {
     accountId: 'business',
-    bandDivergent: false,
-    bandFactor: 1.4,
-    bandFactorPredicted: 1.45,
-    confidence: 0.8,
-    corrections: {},
-    drift: 0.5,
-    fittedAt: new Date(1_000_000).toISOString(),
-    intervals: 12,
-    predicted: 11_890_000,
-    scale: 5_945_000,
+    computedAt: new Date(body.reconciliations[0].computed_at).toISOString(),
+    firstReadingAt: new Date(body.reconciliations[0].first_reading_at).toISOString(),
+    lastReadingAt: new Date(body.reconciliations[0].last_reading_at).toISOString(),
+    observedRise: 0.21,
+    predictedShare: 0.2,
+    ratio: 1.05,
+    requests: 14,
+    unmeasured: false,
     window: 'five_hour',
+    windowEnd: new Date(body.reconciliations[0].window_end).toISOString(),
   });
-  // A tier with no row for the window predicts nothing, so it has no drift, and a fit that has not folded both
-  // sides of the band carries no band factor.
-  const bare = d.decodeWindowFit({ ...fixture('analytics_fits').fits[0], band_factor: null, band_factor_predicted: null, corrections: { 'claude-sonnet-5': 1.08 }, drift: null, predicted: null });
-  assert.deepEqual([bare.predicted, bare.drift, bare.bandFactor, bare.bandFactorPredicted, bare.corrections], [null, null, null, null, { 'claude-sonnet-5': 1.08 }]);
+  assert.deepEqual([outside.window, outside.ratio, outside.unmeasured], ['seven_day', 1.32, true], 'the window outside the band priced through unmeasured cells');
+  assert.deepEqual(d.decodeReconciliations({}), { reconciliations: [], requestRetentionDays: 0 }, 'a missing field reads as none');
 });
 
 test('an attempt carries the selection trace with its skipped members as named objects', () => {
@@ -1103,6 +1103,7 @@ test('alert rules, events, and deliveries decode with the secret reduced to has_
   assert.deepEqual(util.scope, { id: 'main', type: 'pool' });
   assert.ok(isIso(util.createdAt) && !('secret' in util));
   assert.equal(rules.find((r) => r.kind === 'client_drift').enabled, false);
+  assert.deepEqual(rules.find((r) => r.kind === 'meter_drift').scope, { id: 'business', type: 'account' }, 'the drift kind is its own, not read as the fallback');
   const [event] = fixture('alert_events').events.map(d.decodeAlertEvent);
   assert.equal(event.state, 'open');
   assert.equal(event.detail.trigger, 'hash');
@@ -1163,7 +1164,7 @@ test('a session decodes its burn unit, the stand-in flag beside it, and both net
   const unpinned = rows.find((s) => s.session_id === 's1');
   assert.equal(unpinned.burn_unmeasured, null, 'a row with no pin answers null beside its null burn');
   assert.equal(d.decodeSession(unpinned).burnUnmeasured, false);
-  assert.equal(d.decodeSession({ ...rows[0], burn_unit: 'meter_tokens' }).burnUnit, null, 'a unit outside the two reads as none');
+  assert.equal(d.decodeSession({ ...rows[0], burn_unit: 'tokens' }).burnUnit, null, 'a unit outside the two reads as none');
   const k = d.decodeSession({ ...rows[0], keepalive: { net_five_hour_share: -0.0004, net_five_hour_share_unmeasured: true, net_usd: 0.25 } }).keepalive;
   assert.deepEqual([k.netFiveHourShare, k.netFiveHourShareUnmeasured, k.netUsd], [-0.0004, true, 0.25]);
   const recipe = d.decodeRecipe({ ...fixture('keepalive_recipes').recipes[0], net_five_hour_share: -0.0002, net_five_hour_share_unmeasured: true });

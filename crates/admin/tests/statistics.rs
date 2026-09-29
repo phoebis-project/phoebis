@@ -1302,6 +1302,7 @@ async fn the_dashboard_reads_the_last_day_the_latest_quota_and_the_live_pins() {
                     utilization: Some(0.5),
                     reset_at: Some(now + HOUR),
                     source: "header".into(),
+                    observed_at: None,
                 },
                 phoebis_ledger::QuotaSampleRecord {
                     account_id: "business".into(),
@@ -1310,6 +1311,7 @@ async fn the_dashboard_reads_the_last_day_the_latest_quota_and_the_live_pins() {
                     utilization: Some(0.6),
                     reset_at: Some(now + HOUR),
                     source: "poll".into(),
+                    observed_at: None,
                 },
                 phoebis_ledger::QuotaSampleRecord {
                     account_id: "business".into(),
@@ -1318,6 +1320,7 @@ async fn the_dashboard_reads_the_last_day_the_latest_quota_and_the_live_pins() {
                     utilization: Some(0.2),
                     reset_at: None,
                     source: "poll".into(),
+                    observed_at: None,
                 },
             ],
             None,

@@ -1,8 +1,8 @@
 import type {
-  Account, AccountCatalog, AccountRollup, AffinityMode, AffinitySource, AlertEvent, AlertRule, AlertRuleInput, AnalyticsGroup, AnalyticsPoint, ApiKey, AttemptOutcome, AttemptResponse, BudgetPeriod, BurnPoint, BurnUnit, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
+  Account, AccountCatalog, AccountRollup, AffinityMode, AffinitySource, AlertEvent, AlertRule, AlertRuleInput, AnalyticsGroup, AnalyticsPoint, AnalyticsReconciliations, ApiKey, AttemptOutcome, AttemptResponse, BudgetPeriod, BurnPoint, BurnUnit, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
   CohortHold, Delivery, GuardVerdict, KeepaliveOverview, KeepaliveRecipe, KeyModels, LifecycleDelivery, LifecyclePage, LiveAttempt, LiveDelta, LiveMetric, LiveRequest, LiveSnapshot, LiveTick, MemberBudget, MemberEligibility, ModelEvent, ModelPrice, ModelRule, ModelRulesMode,
   ModelsState, Overview, PairingSession, PinMigrationReason, PinReleaseReason, Placement, PlacementRow, PlanBand, PlanCell, PlanModelCells, PlanTables, Pool, PoolCacheTtl, QuotaHeaders, QuotaHistory, QuotaSnapshot, RateLimitWindow, RequestEvent, RequestLog, RequestPage, RequestShape, RewritePoint,
-  RuleCooldown, SelectionTrace, Session, SessionLifecycleDetail, SessionPlacement, Settings, SubagentPlacement, Subscription, TierFactor, TtlRules, WarmSessions, WindowFit, WindowId,
+  RuleCooldown, SelectionTrace, Session, SessionLifecycleDetail, SessionPlacement, Settings, SubagentPlacement, Subscription, TierFactor, TtlRules, WarmSessions, WindowId, WindowReconciliation,
 } from './types';
 import { ACCOUNT_KIND_VALUES } from './types';
 import { CACHE_TTL_DEFAULTS, METERED_TTL_DEFAULTS, PLAN_TTL_DEFAULTS, POOL_AFFINITY_DEFAULTS, POOL_ENGINE_DEFAULTS, type AccountPatch, type KeyInput, type PoolInput } from './client';
@@ -454,13 +454,18 @@ export const decodeRewrites = (v: unknown): { moves: Record<string, number>; poi
   moves: numberMap(rec(v).moves),
   points: list(rec(v).points).map(rec).map((p) => ({ at: isoOr(p.at, epoch), rewriteTokens: num(p.rewrite_tokens) })),
 });
-export function decodeWindowFit(v: unknown): WindowFit {
-  const f = rec(v);
+export function decodeWindowReconciliation(v: unknown): WindowReconciliation {
+  const r = rec(v);
   return {
-    accountId: str(f.account_id), bandDivergent: bool(f.band_divergent), bandFactor: numOrNull(f.band_factor), bandFactorPredicted: numOrNull(f.band_factor_predicted), confidence: num(f.confidence),
-    corrections: numberMap(f.corrections), drift: numOrNull(f.drift), fittedAt: isoOr(f.fitted_at, epoch), intervals: num(f.intervals), predicted: numOrNull(f.predicted), scale: num(f.scale), window: str(f.window),
+    accountId: str(r.account_id), computedAt: isoOr(r.computed_at, epoch), firstReadingAt: isoOr(r.first_reading_at, epoch), lastReadingAt: isoOr(r.last_reading_at, epoch),
+    observedRise: num(r.observed_rise), predictedShare: num(r.predicted_share), ratio: num(r.ratio), requests: num(r.requests), unmeasured: bool(r.unmeasured), window: str(r.window),
+    windowEnd: isoOr(r.window_end, epoch),
   };
 }
+export const decodeReconciliations = (v: unknown): AnalyticsReconciliations => ({
+  reconciliations: list(rec(v).reconciliations).map(decodeWindowReconciliation),
+  requestRetentionDays: num(rec(v).request_retention_days),
+});
 
 export function decodePlacementRow(v: unknown): PlacementRow {
   const r = rec(v);
@@ -515,7 +520,7 @@ export function decodeKeepaliveOverview(v: unknown): KeepaliveOverview {
   return { agents: { busy: num(rec(o.agents).busy), idle: num(rec(o.agents).idle), parked: num(rec(o.agents).parked) }, costToday: list(o.cost_today).map(rec).map((c) => ({ capUsd: numOrNull(c.cap_usd), poolId: str(c.pool_id), usd: num(c.usd) })), expiredBetweenTurns24h: num(o.expired_between_turns_24h), netSaved7dUsd: num(o.net_saved_7d_usd), probes24h: { failed: num(p.failed), migrated: num(p.migrated), ok: num(p.ok), skipped: num(p.skipped) }, sessions: num(o.sessions), sessionsWithCompanion: num(o.sessions_with_companion) };
 }
 
-export const ALERT_KIND_VALUES = ['ask_user_question', 'client_drift', 'funding_required', 'keepalive_cost_cap', 'pool_exhausted', 'reauth_required', 'refresh_failed', 'session_active', 'session_idle', 'session_parked', 'subagent_active', 'utilization_above'] as const;
+export const ALERT_KIND_VALUES = ['ask_user_question', 'client_drift', 'funding_required', 'keepalive_cost_cap', 'meter_drift', 'pool_exhausted', 'reauth_required', 'refresh_failed', 'session_active', 'session_idle', 'session_parked', 'subagent_active', 'utilization_above'] as const;
 export const SCOPE_TYPE_VALUES = ['account', 'all', 'any_account', 'key', 'pool'] as const;
 export const WINDOW_ID_VALUES = ['5h', '7d', '7d_oi'] as const;
 const scopeOf = (v: unknown): AlertRule['scope'] => { const s = rec(v); return { id: strOrNull(s.id), type: SCOPE_TYPE_VALUES.find((t) => t === str(s.type)) ?? 'all' }; };

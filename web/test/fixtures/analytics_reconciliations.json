@@ -1,0 +1,34 @@
+{
+  "route": "GET /admin/analytics/reconciliations",
+  "body": {
+    "reconciliations": [
+      {
+        "account_id": "business",
+        "computed_at": 400000,
+        "first_reading_at": -17000000,
+        "last_reading_at": -2600000,
+        "observed_rise": 0.21,
+        "predicted_share": 0.2,
+        "ratio": 1.05,
+        "requests": 14,
+        "unmeasured": false,
+        "window": "five_hour",
+        "window_end": -800000
+      },
+      {
+        "account_id": "business",
+        "computed_at": 400000,
+        "first_reading_at": -603800000,
+        "last_reading_at": -2600000,
+        "observed_rise": 0.33,
+        "predicted_share": 0.25,
+        "ratio": 1.32,
+        "requests": 212,
+        "unmeasured": true,
+        "window": "seven_day",
+        "window_end": -800000
+      }
+    ],
+    "request_retention_days": 90
+  }
+}

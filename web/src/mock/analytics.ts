@@ -1,6 +1,6 @@
 import type {
-  AccountRollup, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, CacheMissReason, CostSplit, LatencyHistograms, PinMigrationReason, PlacementRow, PlanModelCells, RequestKind, RequestLog, RewritePoint,
-  TierFactor, WastedProbeReason, WindowFit,
+  AccountRollup, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, AnalyticsReconciliations, BurnGroup, BurnPoint, CacheMissReason, CostSplit, LatencyHistograms, PinMigrationReason, PlacementRow, PlanModelCells, RequestKind, RequestLog, RewritePoint,
+  TierFactor, WastedProbeReason,
 } from '@/api/types';
 import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons, missCount } from '@/lib/cache';
 import { emptyCounts } from '@/lib/counts';
@@ -239,13 +239,16 @@ function bucketsOf(range: Range): { bucketMs: number; starts: number[] } {
 }
 
 /**
- * Two fits, one inside the table's prediction and one well past it with its band factor off the provisional row,
- * so the fit table has a drift to colour and a band to mark.
+ * Two completed windows, one inside the band and one past it priced through unmeasured cells, so the table has a
+ * ratio to mark and a flag to show.
  */
-export const FITS: WindowFit[] = [
-  { accountId: 'business', bandDivergent: false, bandFactor: 1.41, bandFactorPredicted: 1.45, confidence: 0.82, corrections: {}, drift: 5_945_000 / 6_120_000, fittedAt: ago(12 * MINUTE), intervals: 14, predicted: 6_120_000, scale: 5_945_000, window: 'five_hour' },
-  { accountId: 'personal', bandDivergent: true, bandFactor: 1.18, bandFactorPredicted: 1.45, confidence: 0.55, corrections: { 'claude-sonnet-5': 1.08 }, drift: 3_420_000 / 2_400_000, fittedAt: ago(47 * MINUTE), intervals: 6, predicted: 2_400_000, scale: 3_420_000, window: 'five_hour' },
-];
+export const RECONCILIATIONS: AnalyticsReconciliations = {
+  reconciliations: [
+    { accountId: 'business', computedAt: ago(12 * MINUTE), firstReadingAt: ago(5 * HOUR + 20 * MINUTE), lastReadingAt: ago(25 * MINUTE), observedRise: 0.24, predictedShare: 0.226, ratio: 0.24 / 0.226, requests: 61, unmeasured: false, window: 'five_hour', windowEnd: ago(20 * MINUTE) },
+    { accountId: 'personal', computedAt: ago(12 * MINUTE), firstReadingAt: ago(7 * DAY + 30 * MINUTE), lastReadingAt: ago(40 * MINUTE), observedRise: 0.38, predictedShare: 0.27, ratio: 0.38 / 0.27, requests: 412, unmeasured: true, window: 'seven_day', windowEnd: ago(35 * MINUTE) },
+  ],
+  requestRetentionDays: 30,
+};
 
 const TABLES = SETTINGS_SAMPLE.planTables;
 type Window = 'five_hour' | 'seven_day';

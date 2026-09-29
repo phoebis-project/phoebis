@@ -7,6 +7,7 @@ use phoebis_alerts::{
     question_subject, spawn_inputs, AlertInputs, BusArm, Kind, Poller, ScopeType, Tracked,
 };
 use phoebis_bus::{Bus, Event, Kind as RequestKind, Origin, Outcome, RequestObserved, ResponseChunk};
+use phoebis_ledger::ReconciliationRow;
 use phoebis_routing::{Report, UtilizationSample, WindowReading, FIVE_HOUR, SEVEN_DAY};
 use phoebis_store::{AccountState, AlertEventRow};
 use common::*;
@@ -1533,5 +1534,207 @@ async fn a_question_signalled_long_after_admission_is_tracked_from_the_signal() 
     assert!(
         rig.store.open_alert_events().unwrap().is_empty(),
         "the next turn still answers the question"
+    );
+}
+
+/// A reconciled window of account `a`, computed at `computed_at`: the rise its readings showed and its ratio to
+/// the router's prediction.
+fn reconciled(window: &str, ratio: f64, rise: f64, computed_at: i64) -> ReconciliationRow {
+    ReconciliationRow {
+        account_id: "a".into(),
+        computed_at,
+        first_reading_at: computed_at - 3_600_000,
+        last_reading_at: computed_at - 1_800_000,
+        observed_rise: rise,
+        predicted_share: rise / ratio,
+        ratio,
+        requests: 3,
+        unmeasured: false,
+        window: window.into(),
+        window_end: computed_at - 60_000,
+    }
+}
+
+async fn drift_rig() -> Rig {
+    let rig = rig().await;
+    rig.store
+        .upsert_alert_rule(
+            &rule("drift", Kind::MeterDrift, ScopeType::AnyAccount, None),
+            None,
+            "test",
+        )
+        .unwrap();
+    rig.alerts.reload().unwrap();
+    rig
+}
+
+/// The subjects of the open drift events.
+fn open_drift(rig: &Rig) -> Vec<String> {
+    let mut subjects: Vec<String> = rig
+        .store
+        .open_alert_events()
+        .unwrap()
+        .into_iter()
+        .filter(|e| e.kind == "meter_drift")
+        .map(|e| e.subject)
+        .collect();
+    subjects.sort();
+    subjects
+}
+
+#[tokio::test]
+async fn a_meter_drift_alert_fires_past_the_threshold_after_a_five_percent_rise_and_resolves_on_the_next_window_inside(
+) {
+    let rig = drift_rig().await;
+    let mut poller = Poller::new(
+        rig.alerts.clone(),
+        &inputs(&rig, BTreeMap::new()),
+        Tracked::default(),
+    );
+    let step = |ratio: f64, rise: f64, n: i64| {
+        let db = rig.db.clone();
+        async move {
+            db.insert_reconciliations(vec![reconciled(FIVE_HOUR, ratio, rise, NOW + n)])
+                .await
+                .unwrap();
+        }
+    };
+    step(1.3, 0.04, 1).await;
+    poller.tick().await;
+    settled(&rig).await;
+    assert_eq!(
+        open_drift(&rig),
+        Vec::<String>::new(),
+        "four percent is a few quanta of the meter"
+    );
+    step(1.3, 0.06, 2).await;
+    poller.tick().await;
+    settled(&rig).await;
+    assert_eq!(open_drift(&rig), ["a:5h"]);
+    let event = &rig.store.open_alert_events().unwrap()[0];
+    let detail: serde_json::Value =
+        serde_json::from_str(event.detail_json.as_deref().unwrap()).unwrap();
+    assert_eq!(
+        (
+            detail["account"].as_str(),
+            detail["window"].as_str(),
+            detail["ratio"].as_f64(),
+            detail["requests"].as_u64()
+        ),
+        (Some("a"), Some(FIVE_HOUR), Some(1.3), Some(3))
+    );
+    step(1.1, 0.06, 3).await;
+    poller.tick().await;
+    settled(&rig).await;
+    assert_eq!(
+        open_drift(&rig),
+        Vec::<String>::new(),
+        "the next window inside the band resolves it"
+    );
+    assert_eq!(
+        rig.store.alert_event(&event.id).unwrap().unwrap().state,
+        "resolved"
+    );
+    step(0.7, 0.06, 4).await;
+    poller.tick().await;
+    settled(&rig).await;
+    assert_eq!(
+        open_drift(&rig),
+        ["a:5h"],
+        "under 0.8 fires as over 1.25 does"
+    );
+}
+
+#[tokio::test]
+async fn each_window_keeps_its_own_drift_event_whatever_order_the_rows_arrive_in() {
+    for (off, inside, expected) in [
+        (FIVE_HOUR, SEVEN_DAY, "a:5h"),
+        (SEVEN_DAY, FIVE_HOUR, "a:7d"),
+    ] {
+        for off_first in [true, false] {
+            for one_tick in [true, false] {
+                let rig = drift_rig().await;
+                let mut poller = Poller::new(
+                    rig.alerts.clone(),
+                    &inputs(&rig, BTreeMap::new()),
+                    Tracked::default(),
+                );
+                let (first, second) = if off_first {
+                    (
+                        reconciled(off, 1.4, 0.1, NOW + 1),
+                        reconciled(inside, 1.0, 0.1, NOW + 2),
+                    )
+                } else {
+                    (
+                        reconciled(inside, 1.0, 0.1, NOW + 1),
+                        reconciled(off, 1.4, 0.1, NOW + 2),
+                    )
+                };
+                rig.db.insert_reconciliations(vec![first]).await.unwrap();
+                if !one_tick {
+                    poller.tick().await;
+                    settled(&rig).await;
+                }
+                rig.db.insert_reconciliations(vec![second]).await.unwrap();
+                poller.tick().await;
+                settled(&rig).await;
+                assert_eq!(
+                    open_drift(&rig),
+                    [expected],
+                    "{off} outside, {inside} inside, the outside row first: {off_first}, in one tick: {one_tick}"
+                );
+            }
+        }
+    }
+
+    // A restart with both windows' events open: the 5-hour window's newest row reads inside, the 7-day window's
+    // newest outside.
+    let rig = drift_rig().await;
+    rig.db
+        .insert_reconciliations(vec![
+            reconciled(FIVE_HOUR, 1.3, 0.1, NOW + 1),
+            reconciled(SEVEN_DAY, 1.0, 0.1, NOW + 1),
+            reconciled(FIVE_HOUR, 1.0, 0.1, NOW + 2),
+            reconciled(SEVEN_DAY, 1.4, 0.1, NOW + 2),
+        ])
+        .await
+        .unwrap();
+    for (id, subject) in [("five", "a:5h"), ("seven", "a:7d")] {
+        assert!(rig
+            .store
+            .insert_alert_event(&AlertEventRow {
+                id: id.into(),
+                rule_id: "drift".into(),
+                kind: "meter_drift".into(),
+                subject: subject.into(),
+                state: "open".into(),
+                opened_at: NOW - 1_000,
+                resolved_at: None,
+                detail_json: None,
+            })
+            .unwrap());
+    }
+    let mut poller = Poller::new(
+        rig.alerts.clone(),
+        &inputs(&rig, BTreeMap::new()),
+        Tracked::default(),
+    );
+    settled(&rig).await;
+    assert_eq!(
+        rig.store.alert_event("five").unwrap().unwrap().state,
+        "resolved",
+        "the 5-hour window's newest row reads inside"
+    );
+    assert_eq!(
+        rig.store.alert_event("seven").unwrap().unwrap().state,
+        "open",
+        "a healthy 5-hour window says nothing about the 7-day one"
+    );
+    poller.tick().await;
+    settled(&rig).await;
+    assert_eq!(
+        open_drift(&rig),
+        ["a:7d"],
+        "the rows from before the poller started fire nothing"
     );
 }

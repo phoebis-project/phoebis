@@ -2958,7 +2958,7 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
     [...m.container.querySelectorAll('#burn .segmented button')].find((b) => b.textContent?.trim() === label)?.click();
     await m.settle(700);
   };
-  expect('/analytics burn section', m.text(), ['Burn', 'Tokens per minute', 'Spend per minute', 'Plan per hour', 'Migration rewrites', 'Plan meter fit', 'Moves']);
+  expect('/analytics burn section', m.text(), ['Burn', 'Tokens per minute', 'Spend per minute', 'Plan per hour', 'Migration rewrites', 'Meter reconciliation', 'Moves']);
   const failovers = card('Failovers');
   results.push({ name: '/analytics the migration rewrites card sits beside Failovers', ok: failovers !== undefined && failovers.nextElementSibling === card('Migration rewrites'), missing: [failovers?.nextElementSibling?.querySelector('.card__title')?.textContent ?? 'no sibling'] });
   const moves = await api.getAnalyticsRewrites({ from: new Date(Date.now() - 24 * 3_600_000).toISOString(), to: new Date().toISOString() });
@@ -2997,14 +2997,24 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
     missing: [...spend, ...spendDashed],
   });
 
-  const fitRows = [...(card('Plan meter fit')?.querySelectorAll('tbody tr') ?? [])].map((tr) => [...tr.children].map((td) => ({ badge: td.querySelector('.badge') !== null, text: td.textContent?.trim() })));
-  const fit = (id) => fitRows.find((r) => r[0]?.text === id) ?? [];
+  const reconciled = [...(card('Meter reconciliation')?.querySelectorAll('tbody tr') ?? [])].map((tr) => [...tr.children].map((td) => ({ badge: td.querySelector('.badge--serious') !== null, text: td.textContent?.trim() })));
+  const windowOf = (id) => reconciled.find((r) => r[0]?.text === id) ?? [];
   results.push({
-    name: '/analytics the fit table colours a drift past 20% and marks a band off the provisional row',
-    ok: fit('personal')[4]?.text === '+42.5%' && fit('personal')[4]?.badge === true && fit('personal')[8]?.badge === true && fit('business')[4]?.text === '-2.9%' && fit('business')[4]?.badge === false && fit('business')[8]?.badge === false && fit('personal')[7]?.text === 'claude-sonnet-5 ×1.08',
-    missing: fitRows.map((r) => r.map((c) => `${c.text}${c.badge ? '*' : ''}`).join(' | ')),
+    name: '/analytics the reconciliation table marks a ratio outside 0.8 to 1.25 and a window priced through an unmeasured cell',
+    ok:
+      JSON.stringify([...(card('Meter reconciliation')?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim())) === JSON.stringify(['Upstream', 'Window', 'Ended', 'Rise', 'Predicted', 'Ratio', 'Requests']) &&
+      windowOf('personal')[1]?.text === '7-day' &&
+      windowOf('personal')[5]?.text === '1.41' &&
+      windowOf('personal')[5]?.badge === true &&
+      windowOf('personal')[4]?.text?.endsWith('*') === true &&
+      windowOf('business')[1]?.text === '5-hour' &&
+      windowOf('business')[5]?.text === '1.06' &&
+      windowOf('business')[5]?.badge === false &&
+      windowOf('business')[4]?.text?.endsWith('*') === false &&
+      windowOf('business')[3]?.text === '24%' &&
+      !card('Meter reconciliation')?.textContent?.includes('Requests are kept'),
+    missing: reconciled.map((r) => r.map((c) => `${c.text}${c.badge ? '!' : ''}`).join(' | ')),
   });
-  results.push({ name: '/analytics the band column names its tolerance and that the row is provisional', ok: (card('Plan meter fit')?.querySelector('th .pct-label')?.getAttribute('title') ?? '').includes('provisional') && (card('Plan meter fit')?.querySelector('th .pct-label')?.getAttribute('title') ?? '').includes('15%'), missing: [] });
 
   await burnGroup('Request class');
   const classes = legendOf('Tokens per minute');
@@ -3492,6 +3502,19 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
   }
 }
 m.unmount();
+
+{
+  // A ledger with no completed window yet, whose requests are kept for less than a 7-day window needs.
+  const { getAnalyticsReconciliations } = api;
+  api.getAnalyticsReconciliations = async () => ({ reconciliations: [], requestRetentionDays: 3 });
+  const empty = await mount('/analytics');
+  api.getAnalyticsReconciliations = getAnalyticsReconciliations;
+  expect('/analytics the reconciliation table says when no window has completed and when the retention is under a week', empty.text(), [
+    'no completed window yet',
+    'Requests are kept 3 days; a window whose oldest requests are gone is not reconciled, so a 7-day window needs 8 or more.',
+  ]);
+  empty.unmount();
+}
 
 {
   // The session view answers from the request log, so the class pattern has to reach its read and its fold
@@ -4102,7 +4125,7 @@ m.unmount();
 api.lifecyclePageSize = 500;
 m = await mount('/alerts');
 expect('/alerts an expired question says so to an admin', m.text(), ['question expired with its captured body']);
-expect('/alerts', m.text(), ['Rules', 'Create rule', 'Re-auth required', 'Utilization above threshold', 'Pool exhausted', 'Waiting for user input', 'Client drift', 'Funding required', 'Probe cost cap reached', 'Credential refresh failed', 'hooks.example.com/phoebis/active', 'hooks.example.com/phoebis/subagent', 'All traffic', 'Signed', 'Unsigned', 'Events', 'Any condition', 'Any state', 'open', 'resolved', 'refused', 'asked: The ledger migration can rewrite rows in place', 'client 2.1.274, caught by the billing-hash check', 'agent main', 'Resolve', '2 in a row, the last refused: invalid_grant', 'Lifecycle', 'Any session condition', 'Session started', 'Subagent ended', 'idle for 30 min', 'parent main']);
+expect('/alerts', m.text(), ['Rules', 'Create rule', 'Re-auth required', 'Utilization above threshold', 'Pool exhausted', 'Waiting for user input', 'Client drift', 'Funding required', 'Probe cost cap reached', 'Credential refresh failed', 'Meter drift', 'personal:5h', '5-hour window, ratio 1.41 after a rise of 31%', 'hooks.example.com/phoebis/active', 'hooks.example.com/phoebis/subagent', 'All traffic', 'Signed', 'Unsigned', 'Events', 'Any condition', 'Any state', 'open', 'resolved', 'refused', 'asked: The ledger migration can rewrite rows in place', 'client 2.1.274, caught by the billing-hash check', 'agent main', 'Resolve', '2 in a row, the last refused: invalid_grant', 'Lifecycle', 'Any session condition', 'Session started', 'Subagent ended', 'idle for 30 min', 'parent main']);
 {
   // An opened run and a resolve run both start at attempt 1, so a row has to say which run it belongs to.
   const row = [...[...m.container.querySelectorAll('table')][1].querySelectorAll('tbody tr')].find((r) => r.textContent.includes('Credential refresh failed'));
@@ -4346,6 +4369,8 @@ expect('/alerts', m.text(), ['Rules', 'Create rule', 'Re-auth required', 'Utiliz
   results.push({ name: '/alerts reauth_required scopes by any upstream or one upstream', ok: reauth[0] === 'Any upstream' && reauth.some((o) => o.startsWith('Upstream ')) && !reauth.includes('All traffic'), missing: reauth });
   const cap = await scopesFor('keepalive_cost_cap');
   results.push({ name: '/alerts keepalive_cost_cap scopes by pool or all', ok: cap.includes('All traffic') && cap.some((o) => o.startsWith('Pool ')) && !cap.some((o) => o.startsWith('Key ')), missing: cap });
+  const meter = await scopesFor('meter_drift');
+  results.push({ name: '/alerts meter_drift scopes by any upstream or one upstream', ok: meter[0] === 'Any upstream' && meter.some((o) => o.startsWith('Upstream ')) && !meter.includes('All traffic') && !meter.some((o) => o.startsWith('Pool ')), missing: meter });
   await scopesFor('utilization_above');
   const windows = [...(dlg?.querySelectorAll('select')[2]?.options ?? [])].map((o) => o.textContent?.trim());
   results.push({ name: '/alerts utilization windows include the Fable window under the shared label', ok: JSON.stringify(windows) === JSON.stringify(['5-hour', '7-day', '7-day Fable']), missing: windows });

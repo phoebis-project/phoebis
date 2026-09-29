@@ -1025,7 +1025,7 @@ pub fn dashboard(conn: &Connection, now: i64) -> Result<Dashboard, LedgerError> 
 
 pub fn latest_quota(conn: &Connection, now: i64) -> Result<Vec<QuotaSampleRecord>, LedgerError> {
     let since = now / 1_000 - 86_400;
-    let mut stmt = conn.prepare("SELECT q.account_id, q.bucket, q.window, q.utilization, q.reset_at, q.source FROM quota_samples q WHERE q.bucket >= ?1 AND q.bucket = (SELECT MAX(bucket) FROM quota_samples WHERE account_id = q.account_id AND window = q.window AND bucket >= ?1) ORDER BY q.account_id, q.window")?;
+    let mut stmt = conn.prepare("SELECT q.account_id, q.bucket, q.window, q.utilization, q.reset_at, q.source, q.observed_at FROM quota_samples q WHERE q.bucket >= ?1 AND q.bucket = (SELECT MAX(bucket) FROM quota_samples WHERE account_id = q.account_id AND window = q.window AND bucket >= ?1) ORDER BY q.account_id, q.window")?;
     let rows = stmt.query_map(params![since], |r| {
         Ok(QuotaSampleRecord {
             account_id: r.get(0)?,
@@ -1034,6 +1034,7 @@ pub fn latest_quota(conn: &Connection, now: i64) -> Result<Vec<QuotaSampleRecord
             utilization: r.get(3)?,
             reset_at: r.get(4)?,
             source: r.get(5)?,
+            observed_at: r.get(6)?,
         })
     })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -1553,24 +1554,24 @@ pub type Tiers = HashMap<String, Option<String>>;
 
 /// The columns `burn_series` and `session_burn_series` price into a `BurnPoint`: a rollup row and a session
 /// attempt carry the same five token counts and a dollar estimate under different names.
-struct UsageRow<'a> {
-    canonical_model: &'a str,
-    input_tokens: u64,
-    cache_read_tokens: u64,
-    cache_write_5m_tokens: u64,
-    cache_write_1h_tokens: u64,
-    output_tokens: u64,
-    estimated_usd: f64,
+pub(crate) struct UsageRow<'a> {
+    pub(crate) canonical_model: &'a str,
+    pub(crate) input_tokens: u64,
+    pub(crate) cache_read_tokens: u64,
+    pub(crate) cache_write_5m_tokens: u64,
+    pub(crate) cache_write_1h_tokens: u64,
+    pub(crate) output_tokens: u64,
+    pub(crate) estimated_usd: f64,
     /// Milliseconds, the instant the band is read at: the row's own hour for a rollup row, which folds by the
     /// request's hour and keeps no completion, and the completion for an attempt, where the meter charges it. Per
     /// row, since a bucket spanning a band edge cannot say which side a charge fell on.
-    at: i64,
+    pub(crate) at: i64,
 }
 
 /// The shares of an oauth account's two windows (the 5-hour one banded at the row's own instant) when `tier`
 /// names one the tables size, `estimated_usd` for an api_key account; a row whose account is not in `kinds`
 /// carries no price the caller could attribute, so it adds nothing at all.
-fn price_usage(
+pub(crate) fn price_usage(
     point: &mut BurnPoint,
     kind: Option<AccountKind>,
     tier: Option<&str>,

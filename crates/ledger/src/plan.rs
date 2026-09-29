@@ -1,7 +1,6 @@
 //! The plan side's dated tables, shipped beside the price table and read like it: the cost table, the share of a
-//! Max 5x window one million tokens of each model and type consume, and the tier factor table that turns it into a
-//! share of another tier's window; the per-type weights on the 5-hour meter and each tier's window sizes; and when
-//! the meter weighs a dispatch more.
+//! Max 5x window one million tokens of each model and type consume, with the peak band that weighs a 5-hour charge
+//! more; and the tier factor table that turns it into a share of another tier's window.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -12,118 +11,8 @@ use jiff::Timestamp;
 
 use crate::LedgerError;
 
-const SHIPPED_FACTORS: &str = include_str!("../plan_factors.yaml");
-const SHIPPED_WINDOWS: &str = include_str!("../plan_windows.yaml");
 const SHIPPED_COST_TABLE: &str = include_str!("../cost_table.yaml");
 const SHIPPED_TIER_FACTORS: &str = include_str!("../tier_factors.yaml");
-
-/// Meter tokens per token, by model and token type, dated; `factor` is the model's weight against the reference.
-#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
-pub struct ModelFactor {
-    pub factor: f64,
-    pub input: f64,
-    pub cache_read: f64,
-    pub cache_write_5m: f64,
-    pub cache_write_1h: f64,
-    pub output: f64,
-    pub measured: Option<String>,
-    #[serde(default)]
-    pub unmeasured: bool,
-}
-
-impl ModelFactor {
-    /// The counts weighted by the type columns alone, without the model factor: the unit a Fable-scoped window
-    /// is sized in.
-    pub(crate) fn typed_tokens(
-        &self,
-        input: u64,
-        cache_read: u64,
-        write_5m: u64,
-        write_1h: u64,
-        output: u64,
-    ) -> f64 {
-        input as f64 * self.input
-            + cache_read as f64 * self.cache_read
-            + write_5m as f64 * self.cache_write_5m
-            + write_1h as f64 * self.cache_write_1h
-            + output as f64 * self.output
-    }
-
-    fn rates(&self) -> Rates {
-        Rates {
-            input: self.factor * self.input,
-            cache_read: self.factor * self.cache_read,
-            write_5m: self.factor * self.cache_write_5m,
-            write_1h: self.factor * self.cache_write_1h,
-            output: self.factor * self.output,
-        }
-    }
-}
-
-/// The meter-token table: one plain input token of `reference` on the 5-hour meter is the unit.
-#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
-pub struct PlanFactors {
-    pub measured: String,
-    pub reference: String,
-    pub models: BTreeMap<String, ModelFactor>,
-}
-
-impl PlanFactors {
-    pub fn shipped() -> PlanFactors {
-        PlanFactors::from_yaml(SHIPPED_FACTORS).expect("the shipped plan factors parse")
-    }
-
-    pub fn from_yaml(text: &str) -> Result<PlanFactors, LedgerError> {
-        serde_norway::from_str(text).map_err(|e| LedgerError::Plan(e.to_string()))
-    }
-
-    /// `phoebis_routing::listing::row_for(canonical_model, |k| self.models.get(k))`: the row for the id, else for
-    /// the id with its `-YYYYMMDD` removed.
-    pub fn factor(&self, canonical_model: &str) -> Option<&ModelFactor> {
-        phoebis_routing::listing::row_for(canonical_model, |k| self.models.get(k))
-    }
-
-    /// `factor * (input + 0.026 * cache_read + ...)` for the model, `None` for a model the table lacks.
-    pub fn meter_tokens(
-        &self,
-        canonical_model: &str,
-        input: u64,
-        cache_read: u64,
-        write_5m: u64,
-        write_1h: u64,
-        output: u64,
-    ) -> Option<f64> {
-        let row = self.factor(canonical_model)?;
-        Some(row.factor * row.typed_tokens(input, cache_read, write_5m, write_1h, output))
-    }
-
-    /// The same numbers as a per-token table for the routing task's burn; the fallback row is the reference's.
-    pub fn rate_table(&self) -> RateTable {
-        RateTable {
-            rows: self
-                .models
-                .iter()
-                .map(|(model, row)| (model.clone(), row.rates()))
-                .collect::<HashMap<_, _>>(),
-            fallback: self
-                .models
-                .get(&self.reference)
-                .map_or(RateTable::unit().fallback, ModelFactor::rates),
-        }
-    }
-}
-
-/// The shared windows in meter tokens; `seven_day_fable` in Fable tokens, since the weekly meter may weigh Fable
-/// differently from the 5-hour one and no single conversion factor exists.
-#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
-pub struct TierWindows {
-    pub five_hour: Option<f64>,
-    pub seven_day: Option<f64>,
-    pub seven_day_fable: Option<f64>,
-    pub measured: Option<String>,
-    #[serde(default)]
-    pub unmeasured: bool,
-}
 
 /// A time band in which the meter weighs a charge more, read at the request's completion, where the charge lands;
 /// `factor` 1.0 turns it off. The hours and weekdays are read in `zone` (an IANA name), from `from_hour` up to
@@ -192,53 +81,6 @@ impl Band {
     }
 }
 
-/// The window sizes per subscription tier, the cold-start prior of the live fit, and the peak bands.
-#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
-pub struct PlanWindows {
-    pub measured: String,
-    pub tiers: BTreeMap<String, TierWindows>,
-    pub bands: Vec<Band>,
-}
-
-impl PlanWindows {
-    pub fn shipped() -> PlanWindows {
-        PlanWindows::from_yaml(SHIPPED_WINDOWS).expect("the shipped plan windows parse")
-    }
-
-    /// Refuses a band whose zone the bundled time-zone database does not know or whose `effective_from` is not
-    /// a date, and resolves every other band's once, so a lookup never meets either.
-    pub fn from_yaml(text: &str) -> Result<PlanWindows, LedgerError> {
-        let mut windows: PlanWindows =
-            serde_norway::from_str(text).map_err(|e| LedgerError::Plan(e.to_string()))?;
-        resolve_bands(&mut windows.bands)?;
-        Ok(windows)
-    }
-
-    /// The tier's size of `window` (`five_hour`, `seven_day` or `seven_day_fable`), `None` where the tier has
-    /// no row or the row no cell; the tier is looked up as `tier_row` does.
-    pub fn predicted(&self, tier: &str, window: &str) -> Option<f64> {
-        let row = tier_row(&self.tiers, tier)?;
-        match window {
-            FIVE_HOUR => row.five_hour,
-            SEVEN_DAY => row.seven_day,
-            SEVEN_DAY_FABLE => row.seven_day_fable,
-            _ => None,
-        }
-    }
-
-    /// The weight the meter puts on a charge landing on `window` at `at`: the in-force row's factor when its
-    /// hours cover `at`, else 1.
-    pub fn band_factor(&self, window: &str, at: i64) -> f64 {
-        weight_at(&self.bands, window, at)
-    }
-
-    /// The factor `band_factor` would apply while in force, whether or not `now` falls inside its hours: the
-    /// fit table's prediction for `window`, `None` when no band names it.
-    pub fn band_factor_of(&self, window: &str, now: i64) -> Option<f64> {
-        in_force(&self.bands, window, now).map(|(band, _)| band.factor)
-    }
-}
-
 /// Resolves every band once; refuses a zone the bundled time-zone database does not know and an `effective_from`
 /// that is not a date, so a lookup never meets either.
 fn resolve_bands(bands: &mut [Band]) -> Result<(), LedgerError> {
@@ -250,8 +92,8 @@ fn resolve_bands(bands: &mut [Band]) -> Result<(), LedgerError> {
 
 /// The row in force at `at` among those naming `window`: the latest `effective_from` at or before it, a row
 /// without one being the oldest, the later in the file among equals. The one lookup every reader of the band goes
-/// through, whichever table the rows ship in, so how the rows spell their edges stays this function's business. A
-/// row `resolve_bands` did not resolve is never in force.
+/// through, so how the rows spell their edges stays this function's business. A row `resolve_bands` did not
+/// resolve is never in force.
 fn in_force<'a>(bands: &'a [Band], window: &str, at: i64) -> Option<(&'a Band, &'a Resolved)> {
     bands
         .iter()

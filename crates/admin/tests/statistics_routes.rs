@@ -110,8 +110,8 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
             system["ledger"]["dropped"].as_u64(),
             system["ledger"]["channel_depth"].as_u64()
         ),
-        (Some(19), Some(0), Some(4_096)),
-        "the ledger schema is at the migration that adds the identity columns"
+        (Some(20), Some(0), Some(4_096)),
+        "the ledger schema is at the migration that adds the reconciliation table"
     );
     assert_eq!(system["gaps"][0]["detail"]["dropped"].as_u64(), Some(7));
     assert!(
@@ -147,6 +147,7 @@ async fn quota_history_pool_traffic_and_sessions_read_the_ledger() {
                     utilization: Some(0.4),
                     reset_at: Some(now + HOUR),
                     source: "header".into(),
+                    observed_at: None,
                 },
                 phoebis_ledger::QuotaSampleRecord {
                     account_id: "business".into(),
@@ -155,6 +156,7 @@ async fn quota_history_pool_traffic_and_sessions_read_the_ledger() {
                     utilization: Some(0.5),
                     reset_at: Some(now + HOUR),
                     source: "poll".into(),
+                    observed_at: None,
                 },
                 phoebis_ledger::QuotaSampleRecord {
                     account_id: "business".into(),
@@ -163,6 +165,7 @@ async fn quota_history_pool_traffic_and_sessions_read_the_ledger() {
                     utilization: Some(0.1),
                     reset_at: None,
                     source: "poll".into(),
+                    observed_at: None,
                 },
             ],
             Some(&phoebis_ledger::ExtraUsageSampleRecord {
@@ -1218,112 +1221,78 @@ async fn the_rewrites_route_answers_the_series_and_the_moves_by_reason() {
 }
 
 #[tokio::test]
-async fn the_fits_route_answers_the_drift_against_the_tiers_row() {
+async fn the_reconciliations_route_answers_the_rows_newest_first_and_the_request_retention() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
-    parts
-        .store
-        .set_profile(
-            "business",
-            r#"{"account":{"uuid":"u","email_address":"business@example.invalid"},"organization":{}}"#,
-            &phoebis_store::SubscriptionRow {
-                plan: Some("max".into()),
-                tier: Some("default_claude_max_5x".into()),
-                since: Some(1_000_000),
-                trial_ends_at: None,
-            },
-        )
-        .unwrap();
-    parts.router.report(phoebis_routing::Report::Fit {
-        row: phoebis_store::FitRow {
-            account_id: "business".into(),
-            window: phoebis_routing::FIVE_HOUR.into(),
-            scale: 5_945_000.0,
-            confidence: 0.8,
-            intervals: 12,
-            corrections_json: "{}".into(),
-            fitted_at: common::NOW,
-            incarnation: 1,
-            band_factor: None,
-            ..Default::default()
-        },
-        incarnation: 1,
-    });
-    let fits = wait_json(&parts.app, "/admin/analytics/fits", &cookie, |v| {
-        v["fits"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|f| f["account_id"] == "business")
-    })
-    .await;
-    let row = fits["fits"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|f| f["account_id"] == "business")
-        .unwrap();
-    assert_eq!(row["predicted"].as_f64(), Some(11_890_000.0));
-    assert!(
-        (row["drift"].as_f64().unwrap() - 0.5).abs() < 1e-9,
-        "scale over predicted: {row}"
-    );
-    assert_eq!(row["band_factor_predicted"].as_f64(), Some(1.45));
-}
-
-#[tokio::test]
-async fn the_fits_route_marks_a_band_factor_more_than_fifteen_percent_off_the_row() {
-    let parts = common::admin_parts_full().await;
-    let cookie = login(&parts.app, "admin-secret").await;
-    let fit = |account: &str, window: &str, band_factor: Option<f64>| phoebis_store::FitRow {
-        account_id: account.into(),
+    let row = |window: &str, window_end: i64, ratio: f64| phoebis_ledger::ReconciliationRow {
+        account_id: "business".into(),
+        computed_at: window_end + 900_000,
+        first_reading_at: window_end - 4 * HOUR,
+        last_reading_at: window_end - HOUR,
+        observed_rise: 0.2,
+        predicted_share: 0.2 / ratio,
+        ratio,
+        requests: 4,
+        unmeasured: window == phoebis_routing::SEVEN_DAY,
         window: window.into(),
-        scale: 1.0,
-        confidence: 0.5,
-        intervals: 1,
-        corrections_json: "{}".into(),
-        fitted_at: common::NOW,
-        incarnation: 1,
-        band_factor,
-        ..Default::default()
+        window_end,
     };
-    parts.router.report(phoebis_routing::Report::Fit {
-        row: fit("business", phoebis_routing::FIVE_HOUR, Some(1.0)),
-        incarnation: 1,
-    });
-    parts.router.report(phoebis_routing::Report::Fit {
-        row: fit("direct", phoebis_routing::FIVE_HOUR, Some(1.4)),
-        incarnation: 1,
-    });
-    parts.router.report(phoebis_routing::Report::Fit {
-        row: fit("business", phoebis_routing::SEVEN_DAY, None),
-        incarnation: 1,
-    });
-    let fits = wait_json(&parts.app, "/admin/analytics/fits", &cookie, |v| {
-        v["fits"].as_array().unwrap().len() >= 3
-    })
+    parts
+        .db
+        .insert_reconciliations(vec![
+            row(phoebis_routing::FIVE_HOUR, common::NOW - 2 * HOUR, 1.1),
+            row(phoebis_routing::SEVEN_DAY, common::NOW - HOUR, 1.4),
+            row(phoebis_routing::FIVE_HOUR, common::NOW - 40 * 24 * HOUR, 1.0),
+        ])
+        .await
+        .unwrap();
+    let body = json(
+        get(
+            &parts.app,
+            "/admin/analytics/reconciliations",
+            Some(&cookie),
+        )
+        .await,
+    )
     .await;
-    let row = |account: &str, window: &str| {
-        fits["fits"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|f| f["account_id"] == account && f["window"] == window)
-            .unwrap()
-            .clone()
-    };
-    assert_eq!(row("business", "five_hour")["band_divergent"], true);
-    assert_eq!(row("direct", "five_hour")["band_divergent"], false);
-    let seven = row("business", "seven_day");
+    assert_eq!(body["request_retention_days"].as_u64(), Some(90));
+    let rows = body["reconciliations"].as_array().unwrap();
+    assert_eq!(
+        rows.iter()
+            .map(|r| (
+                r["window"].as_str().unwrap(),
+                r["window_end"].as_i64().unwrap()
+            ))
+            .collect::<Vec<_>>(),
+        [
+            (phoebis_routing::SEVEN_DAY, common::NOW - HOUR),
+            (phoebis_routing::FIVE_HOUR, common::NOW - 2 * HOUR)
+        ],
+        "newest first, and a window older than 30 days is not answered"
+    );
     assert_eq!(
         (
-            seven["band_factor"].as_f64(),
-            seven["band_factor_predicted"].as_f64(),
-            seven["band_divergent"].as_bool()
+            rows[0]["account_id"].as_str(),
+            rows[0]["ratio"].as_f64(),
+            rows[0]["observed_rise"].as_f64(),
+            rows[0]["requests"].as_u64(),
+            rows[0]["unmeasured"].as_bool(),
+            rows[0]["first_reading_at"].as_i64(),
+            rows[0]["last_reading_at"].as_i64(),
+            rows[0]["computed_at"].as_i64(),
         ),
-        (None, None, Some(false)),
-        "no band lists the seven-day window"
+        (
+            Some("business"),
+            Some(1.4),
+            Some(0.2),
+            Some(4),
+            Some(true),
+            Some(common::NOW - 5 * HOUR),
+            Some(common::NOW - 2 * HOUR),
+            Some(common::NOW - HOUR + 900_000),
+        )
     );
+    assert!(rows[0]["predicted_share"].as_f64().is_some());
 }
 
 #[tokio::test]

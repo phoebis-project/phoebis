@@ -22,6 +22,7 @@ pub struct Purged {
     pub events: usize,
     pub extra_usage_samples: usize,
     pub quota_samples: usize,
+    pub reconciliations: usize,
     pub requests: usize,
     pub rollups: usize,
 }
@@ -61,6 +62,12 @@ pub fn run_retention(
                 .execute("DELETE FROM extra_usage_samples WHERE bucket < ?1", params![sample_cutoff])?,
             rollups: purge_hourly_rollups(&tx, rollup_cutoff, budgeted, now)?
                 + purge("DELETE FROM account_rollups_hourly WHERE hour < ?1", rollup_cutoff)?,
+            // Kept as long as the rollups, the ledger's other per-window aggregate: the requests they were
+            // computed from may be gone sooner than the analytics read them.
+            reconciliations: purge(
+                "DELETE FROM window_reconciliations WHERE computed_at < ?1",
+                rollup_cutoff.map(|at| at * 1_000),
+            )?,
         };
         tx.commit()?;
         Ok(purged)

@@ -12,9 +12,9 @@ use phoebis_routing::{
 };
 use phoebis_store::{
     key_prefix, AccountKind, AccountRow, AccountState, Affinity, AffinitySource, ApiKeyRow,
-    CooldownRow, Failover, FitRow, MemberWrite, ModelRule, OveragePolicy, PinBurn,
-    PoolRow, QuotaHeaders, RoutingLoad, RulesMode, Shedding, StorageKey, Store, Strategy,
-    SubscriptionRow, WindowRow,
+    CooldownRow, Failover, MemberWrite, ModelRule, OveragePolicy, PinBurn, PoolRow,
+    QuotaHeaders, RoutingLoad, RulesMode, Shedding, StorageKey, Store, Strategy, SubscriptionRow,
+    WindowRow,
 };
 use fake_upstream::{stays_for, wait_for, wait_for_async};
 
@@ -3171,91 +3171,6 @@ async fn a_renewal_inside_the_band_folds_a_heavier_banded_copy_and_the_same_plai
         pin("s1").burn,
         pin("s2").burn,
         "the plain rates are not weighted by the band"
-    );
-}
-
-#[tokio::test]
-async fn a_fit_report_lands_in_the_store_and_reloads() {
-    let store = seeded_oauth(&["a"]);
-    let now = Arc::new(AtomicI64::new(1_000));
-    let row = FitRow {
-        account_id: "a".into(),
-        window: FIVE_HOUR.into(),
-        scale: 11_890_000.0,
-        confidence: 0.6,
-        intervals: 3,
-        corrections_json: "{}".into(),
-        fitted_at: 2_000,
-        incarnation: 1,
-        band_factor: Some(1.45),
-        carry_weighted: 100_000.0,
-        carry_outside: 100_000.0,
-        carry_delta: 0.01,
-        carry_since: Some(2_000),
-        carry_utilization: Some(0.26),
-        ..FitRow::default()
-    };
-    {
-        let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
-        handle.report(Report::Fit {
-            row: row.clone(),
-            incarnation: 1,
-        });
-        handle.report(Report::Fit {
-            row: FitRow {
-                scale: 1.0,
-                fitted_at: 1_500,
-                ..row.clone()
-            },
-            incarnation: 1,
-        });
-        handle.report(Report::Fit {
-            row: FitRow {
-                window: SEVEN_DAY.into(),
-                ..row.clone()
-            },
-            incarnation: 2,
-        });
-        assert_eq!(
-            handle.fits().await.unwrap(),
-            vec![row.clone()],
-            "an older fold loses, and a report for a holder the id moved past lands nowhere"
-        );
-        wait_for(WRITTEN, || {
-            (store.fits().unwrap() == vec![row.clone()]).then_some(())
-        })
-        .await;
-        handle.shutdown().await.unwrap();
-    }
-    let again = spawn(store, clock(&now), RouterConfig::default()).unwrap();
-    assert_eq!(
-        again.fits().await.unwrap(),
-        vec![row],
-        "a restart reads the fit back"
-    );
-}
-
-#[tokio::test]
-async fn a_stored_fit_the_fitter_would_refuse_is_not_served() {
-    let store = seeded_oauth(&["a"]);
-    let refused = FitRow {
-        account_id: "a".into(),
-        window: FIVE_HOUR.into(),
-        scale: 0.0,
-        confidence: 0.6,
-        intervals: 3,
-        corrections_json: "{}".into(),
-        fitted_at: 2_000,
-        incarnation: 1,
-        ..FitRow::default()
-    };
-    assert!(!refused.sound());
-    store.upsert_fit(&refused).unwrap();
-    let now = Arc::new(AtomicI64::new(1_000));
-    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
-    assert!(
-        handle.fits().await.unwrap().is_empty(),
-        "a zero scale is no window size to serve"
     );
 }
 

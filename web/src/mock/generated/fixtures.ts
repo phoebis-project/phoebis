@@ -446,7 +446,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "created_at": 1000000,
           "enabled": false,
           "has_secret": false,
-          "id": "rule_0b755621978c75e8",
+          "id": "rule_b14e90b35b9d0d38",
           "kind": "client_drift",
           "scope": {
             "id": null,
@@ -461,7 +461,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "created_at": 1000000,
           "enabled": true,
           "has_secret": true,
-          "id": "rule_8ef3aea11442a603",
+          "id": "rule_d8ba6b2c37be3018",
           "kind": "utilization_above",
           "scope": {
             "id": "main",
@@ -471,6 +471,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "updated_at": 1000000,
           "webhook_url": "http://127.0.0.1:1/hook",
           "window": "7d_oi"
+        },
+        {
+          "created_at": 1000000,
+          "enabled": true,
+          "has_secret": false,
+          "id": "rule_d3e6976462e33389",
+          "kind": "meter_drift",
+          "scope": {
+            "id": "business",
+            "type": "account"
+          },
+          "threshold": null,
+          "updated_at": 1000000,
+          "webhook_url": "http://127.0.0.1:1/meter",
+          "window": null
         }
       ]
     }
@@ -1892,27 +1907,6 @@ export const FIXTURES: Record<string, Fixture> = {
       ]
     }
   },
-  "analytics_fits": {
-    "route": "GET /admin/analytics/fits",
-    "body": {
-      "fits": [
-        {
-          "account_id": "business",
-          "window": "five_hour",
-          "scale": 5945000,
-          "confidence": 0.8,
-          "intervals": 12,
-          "corrections": {},
-          "fitted_at": 1000000,
-          "predicted": 11890000,
-          "drift": 0.5,
-          "band_factor": 1.4,
-          "band_factor_predicted": 1.45,
-          "band_divergent": false
-        }
-      ]
-    }
-  },
   "analytics_placements": {
     "route": "GET /admin/analytics/placements?range=24h",
     "body": {
@@ -1928,6 +1922,40 @@ export const FIXTURES: Record<string, Fixture> = {
           "promised_tokens": 1000
         }
       ]
+    }
+  },
+  "analytics_reconciliations": {
+    "route": "GET /admin/analytics/reconciliations",
+    "body": {
+      "reconciliations": [
+        {
+          "account_id": "business",
+          "computed_at": 400000,
+          "first_reading_at": -17000000,
+          "last_reading_at": -2600000,
+          "observed_rise": 0.21,
+          "predicted_share": 0.2,
+          "ratio": 1.05,
+          "requests": 14,
+          "unmeasured": false,
+          "window": "five_hour",
+          "window_end": -800000
+        },
+        {
+          "account_id": "business",
+          "computed_at": 400000,
+          "first_reading_at": -603800000,
+          "last_reading_at": -2600000,
+          "observed_rise": 0.33,
+          "predicted_share": 0.25,
+          "ratio": 1.32,
+          "requests": 212,
+          "unmeasured": true,
+          "window": "seven_day",
+          "window_end": -800000
+        }
+      ],
+      "request_retention_days": 90
     }
   },
   "analytics_rewrites": {
@@ -7004,7 +7032,7 @@ export const FIXTURES: Record<string, Fixture> = {
       "uptime_seconds": 0,
       "storage_ok": true,
       "ledger": {
-        "schema_version": 19,
+        "schema_version": 20,
         "written": 15,
         "dropped": 0,
         "write_failures": 0,
@@ -7041,7 +7069,7 @@ export const FIXTURES: Record<string, Fixture> = {
         "deliveries_failed": 0,
         "deliveries_ok": 2,
         "open": 1,
-        "rules": 2
+        "rules": 3
       }
     }
   }

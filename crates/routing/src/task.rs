@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use phoebis_oauth::{Clock, UsageSnapshot};
 use phoebis_store::{
-    AccountState, CooldownRow, FitRow, PinBurn, PinKey, PinRow, RekeyWrite, Store, StoreError,
+    AccountState, CooldownRow, PinBurn, PinKey, PinRow, RekeyWrite, Store, StoreError,
 };
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
@@ -202,13 +202,6 @@ pub enum Report {
         lifecycle_generation: u64,
         credential_generation: u64,
     },
-    Fit {
-        row: FitRow,
-        /// The account holder's incarnation, the guard every report carries. `row.incarnation` holds the same
-        /// value as the ledger saw it; the report's is the one checked here, and the row's is the one `purge`
-        /// checks later.
-        incarnation: u64,
-    },
     /// The ledger's latest read of a pool member's spend, replacing every row it names.
     MemberSpend(Vec<MemberSpend>),
     Overage {
@@ -282,9 +275,6 @@ enum Command {
     },
     Cooldowns {
         reply: oneshot::Sender<Vec<CooldownRow>>,
-    },
-    Fits {
-        reply: oneshot::Sender<Vec<FitRow>>,
     },
     MemberSpends {
         reply: oneshot::Sender<Vec<MemberSpend>>,
@@ -443,11 +433,6 @@ impl RouterHandle {
     }
     pub async fn cooldowns(&self) -> Result<Vec<CooldownRow>, RouterGone> {
         self.ask(|reply| Command::Cooldowns { reply }).await
-    }
-    /// One ask for every account's fit rows, so a reader never queues one command per account in front of
-    /// selection.
-    pub async fn fits(&self) -> Result<Vec<FitRow>, RouterGone> {
-        self.ask(|reply| Command::Fits { reply }).await
     }
     /// Every budgeted member's spend as the ledger last reported it, from the state's table alone: the
     /// analytics route reads this rather than querying the ledger a second time.
@@ -739,7 +724,6 @@ fn apply(store: &Store, batch: Vec<StateWrite>) -> Result<bool, Failed> {
             }
             StateWrite::UpsertAffinity(rows) => store.upsert_affinity(&rows)?,
             StateWrite::UpsertCooldown(row) => store.upsert_cooldown(&row)?,
-            StateWrite::UpsertFit(row) => store.upsert_fit(&row)?,
             StateWrite::UpsertOverage(row) => {
                 store.upsert_overage(&row)?;
             }
@@ -1031,9 +1015,6 @@ impl Task {
             }
             Command::Cooldowns { reply } => {
                 let _ = reply.send(self.state.cooldowns());
-            }
-            Command::Fits { reply } => {
-                let _ = reply.send(self.state.fits());
             }
             Command::MemberSpends { reply } => {
                 let snapshot = self
@@ -1427,14 +1408,6 @@ impl Task {
                     .flatten();
                 self.state
                     .charge(&account_id, at, five_hour, seven_day, fable);
-            }
-            Report::Fit { row, incarnation } => {
-                if self.moved_past(&row.account_id, incarnation) {
-                    return;
-                }
-                if self.state.record_fit(row.clone()) {
-                    self.write(vec![StateWrite::UpsertFit(row)]);
-                }
             }
             Report::AccountState {
                 account_id,

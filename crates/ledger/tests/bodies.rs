@@ -4,7 +4,9 @@
 mod common;
 use std::time::Duration;
 
-use phoebis_ledger::{run_retention, LedgerConfig, Purged, MAX_CAPTURED_BODY};
+use phoebis_ledger::{
+    run_retention, LedgerConfig, LedgerDb, Purged, ReconciliationRow, MAX_CAPTURED_BODY,
+};
 use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
 use http_body_util::BodyExt;
@@ -374,4 +376,46 @@ async fn a_zero_retention_keeps_the_raw_rows_and_a_zero_rollup_retention_keeps_t
     );
     assert_eq!(purged.rollups, 0, "nothing in the rollups goes under 0");
     up.shutdown().await;
+}
+
+#[tokio::test]
+async fn the_retention_purge_deletes_expired_reconciliation_rows_and_keeps_the_rest() {
+    let day = 86_400_000i64;
+    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    let row = |window: &str, computed_at: i64| ReconciliationRow {
+        account_id: "a".into(),
+        computed_at,
+        first_reading_at: computed_at - day,
+        last_reading_at: computed_at - day + 600_000,
+        observed_rise: 0.2,
+        predicted_share: 0.2,
+        ratio: 1.0,
+        requests: 1,
+        unmeasured: false,
+        window: window.into(),
+        window_end: computed_at - 60_000,
+    };
+    // The cutoff at 401 days under the default 400 is the end of day one: the first row lies before it.
+    db.insert_reconciliations(vec![row("five_hour", day / 2), row("seven_day", 2 * day)])
+        .await
+        .unwrap();
+    let forever = LedgerConfig {
+        rollup_retention_days: 0,
+        ..LedgerConfig::default()
+    };
+    let purged = run_retention(&db, &forever, 401 * day, &[]).unwrap();
+    assert_eq!(purged.reconciliations, 0, "nothing goes under 0");
+    assert_eq!(db.reconciliations(0).await.unwrap().len(), 2);
+    let purged = run_retention(&db, &LedgerConfig::default(), 401 * day, &[]).unwrap();
+    assert_eq!(purged.reconciliations, 1);
+    assert_eq!(
+        db.reconciliations(0)
+            .await
+            .unwrap()
+            .iter()
+            .map(|r| r.window.as_str())
+            .collect::<Vec<_>>(),
+        ["seven_day"],
+        "the row computed past the rollup cutoff stays"
+    );
 }

@@ -5,7 +5,6 @@ mod assemble;
 mod bodies;
 mod db;
 mod events;
-mod fit;
 mod generations;
 mod histogram;
 mod metrics;
@@ -14,6 +13,7 @@ mod plan;
 mod pricing;
 mod query;
 mod quota;
+mod reconcile;
 mod record;
 mod rollup;
 mod schema;
@@ -24,7 +24,6 @@ pub use assemble::{Assembler, Expired, Record, IN_FLIGHT_TTL_MS};
 pub use bodies::{run_retention, Purged, MAX_CAPTURED_BODY};
 pub use db::LedgerDb;
 pub use events::{event_of, spawn_event_mirror};
-pub use fit::{Fitter, MIN_INTERVAL_MS};
 pub use generations::{reconcile_key_generations, LiveKeyLifetime, GENERATIONS_RECONCILED_KEY};
 pub use histogram::{bucket_edges, bucket_index, Histogram, BUCKET_COUNT};
 pub use metrics::{
@@ -35,8 +34,7 @@ pub use pattern::{
     within_bounds as patterns_within_bounds, MAX_PATTERNS, MAX_PATTERN_CHARS, PATTERNS_TOO_LONG,
 };
 pub use plan::{
-    Band, Cell, CostTable, Factor, ModelCells, ModelFactor, PlanFactors, PlanTables, PlanWindows,
-    Share, TierFactor, TierFactors, TierWindows,
+    Band, Cell, CostTable, Factor, ModelCells, PlanTables, Share, TierFactor, TierFactors,
 };
 pub use pricing::{price_attempts, ModelPrice, PriceTable, Pricing};
 pub use query::{
@@ -52,6 +50,10 @@ pub use query::{
 };
 pub use quota::{
     samples_from_head, samples_from_poll, QuotaPoll, Sampled, POLL_INTERVAL, PROFILE_EVERY_POLLS,
+};
+pub use reconcile::{
+    read_reconciliations, reconcile, ReconciliationRow, MIN_RISE, RATIO_HIGH, RATIO_LOW,
+    RECONCILE_INTERVAL, RESET_TOLERANCE_MS,
 };
 pub use record::{
     AttemptRecord, BodyRecord, EventRecord, ExtraUsageSampleRecord, KeepaliveDelta,

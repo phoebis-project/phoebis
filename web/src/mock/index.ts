@@ -10,7 +10,7 @@ import { modelRulesRefusal, type NumericKeepaliveKey } from '@/lib/forms';
 import { matchesPattern } from '@/lib/pattern';
 import { matchesPattern as matchesModelPattern, processRules } from '@/lib/patterns';
 import { ACCOUNTS, QUOTA_HISTORY, QUOTA_SNAPSHOTS } from './accounts';
-import { FITS, breakdownOf, burnOf, placementsOf, rewritesOf, seriesOf } from './analytics';
+import { RECONCILIATIONS, breakdownOf, burnOf, placementsOf, rewritesOf, seriesOf } from './analytics';
 import { CATALOG } from './catalog';
 import { liveFeed } from './live';
 import { ALERT_EVENTS, ALERT_RULES, KEEPALIVE_OVERVIEW, LIFECYCLE_DELIVERIES, RECIPES, SESSIONS, SETTINGS } from './operations';
@@ -573,8 +573,8 @@ export class MockApi implements Api {
     return latency(burnOf(ALL_ROLLUPS, range, groupBy));
   }
 
-  getAnalyticsFits() {
-    return latency(FITS.map((f) => ({ ...f, corrections: { ...f.corrections } })));
+  getAnalyticsReconciliations() {
+    return latency({ ...RECONCILIATIONS, reconciliations: RECONCILIATIONS.reconciliations.map((r) => ({ ...r })) });
   }
 
   getAnalyticsRewrites(range: Pick<AnalyticsQuery, 'from' | 'to'>) {

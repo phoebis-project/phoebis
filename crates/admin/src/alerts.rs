@@ -158,7 +158,7 @@ fn destination_refusal(url: &Url) -> Option<&'static str> {
 fn validate(state: &AdminState, row: &AlertRuleRow) -> Result<(), Response> {
     let bad = |m: &str| Err(failure(StatusCode::BAD_REQUEST, m));
     let Some(kind) = Kind::parse(&row.kind) else {
-        return bad("kind is one of the twelve alert kinds");
+        return bad("kind is one of the thirteen alert kinds");
     };
     let Ok(scope) = serde_json::from_value::<ScopeType>(Value::String(row.scope_type.clone()))
     else {

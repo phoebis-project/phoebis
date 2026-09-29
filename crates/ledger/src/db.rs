@@ -7,6 +7,10 @@ use std::sync::{Arc, Mutex, PoisonError};
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension, Transaction};
 
 use crate::query::request_by_id;
+use crate::reconcile::{
+    insert_reconciliations_in, read_reconciliations, read_reconciliations_computed_after,
+    ReconciliationRow,
+};
 use crate::record::{
     AttemptRecord, BodyRecord, EventRecord, ExtraUsageSampleRecord, QuotaSampleRecord,
     RequestRecord,
@@ -191,7 +195,7 @@ impl LedgerDb {
     ) -> Result<Vec<QuotaSampleRecord>, LedgerError> {
         let account_id = account_id.to_string();
         self.read(move |conn| {
-            let mut stmt = conn.prepare("SELECT account_id, bucket, window, utilization, reset_at, source FROM quota_samples WHERE account_id = ?1 AND bucket >= ?2 AND bucket < ?3 ORDER BY window, bucket")?;
+            let mut stmt = conn.prepare("SELECT account_id, bucket, window, utilization, reset_at, source, observed_at FROM quota_samples WHERE account_id = ?1 AND bucket >= ?2 AND bucket < ?3 ORDER BY window, bucket")?;
             let rows = stmt.query_map(params![account_id, from, to], |r| {
                 Ok(QuotaSampleRecord {
                     account_id: r.get(0)?,
@@ -200,10 +204,39 @@ impl LedgerDb {
                     utilization: r.get(3)?,
                     reset_at: r.get(4)?,
                     source: r.get(5)?,
+                    observed_at: r.get(6)?,
                 })
             })?;
             Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
         }).await
+    }
+
+    pub async fn insert_reconciliations(
+        self: &Arc<Self>,
+        rows: Vec<ReconciliationRow>,
+    ) -> Result<(), LedgerError> {
+        let db = Arc::clone(self);
+        tokio::task::spawn_blocking(move || db.write(|conn| insert_reconciliations_in(conn, &rows)))
+            .await
+            .map_err(|e| LedgerError::Io(std::io::Error::other(e)))?
+    }
+
+    /// Newest first per account and window, `window_end` at or after `since`.
+    pub async fn reconciliations(
+        self: &Arc<Self>,
+        since: i64,
+    ) -> Result<Vec<ReconciliationRow>, LedgerError> {
+        self.read(move |conn| read_reconciliations(conn, since))
+            .await
+    }
+
+    /// Every row computed after `computed_at`, oldest first: the alert engine's watermark read.
+    pub async fn reconciliations_computed_after(
+        self: &Arc<Self>,
+        computed_at: i64,
+    ) -> Result<Vec<ReconciliationRow>, LedgerError> {
+        self.read(move |conn| read_reconciliations_computed_after(conn, computed_at))
+            .await
     }
 
     pub async fn extra_usage_samples(
@@ -249,9 +282,9 @@ pub(crate) fn insert_samples_in(
         };
         conn.execute(
             &format!(
-                "{verb} INTO quota_samples (account_id, bucket, window, utilization, reset_at, source) VALUES (?1, ?2, ?3, ?4, ?5, ?6)"
+                "{verb} INTO quota_samples (account_id, bucket, window, utilization, reset_at, source, observed_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"
             ),
-            params![q.account_id, q.bucket, q.window, q.utilization, q.reset_at, q.source],
+            params![q.account_id, q.bucket, q.window, q.utilization, q.reset_at, q.source, q.observed_at],
         )?;
     }
     if let Some(e) = extra {
@@ -617,7 +650,7 @@ mod tests {
     async fn the_schema_opens_in_wal_mode_with_a_version_and_rows_round_trip() {
         let dir = tempfile::tempdir().unwrap();
         let db = Arc::new(LedgerDb::open(&dir.path().join("data").join("ledger.sqlite")).unwrap());
-        assert_eq!(db.read_blocking(read_version).unwrap(), 19);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 20);
         let mode: String = db
             .read_blocking(|c| Ok(c.query_row("PRAGMA journal_mode", [], |r| r.get(0))?))
             .unwrap();
@@ -703,7 +736,7 @@ mod tests {
             .await
             .unwrap();
         assert_ne!(worker, caller, "the closure ran on a blocking worker");
-        assert_eq!(version, 19, "and answered what the connection holds");
+        assert_eq!(version, 20, "and answered what the connection holds");
     }
 
     #[tokio::test]
@@ -718,7 +751,7 @@ mod tests {
         assert!(matches!(panicked, Err(LedgerError::ReadCancelled)));
         assert_eq!(
             db.read_blocking(read_version).unwrap(),
-            19,
+            20,
             "the poisoned guard recovered rather than turning every later read into ReadCancelled too"
         );
     }

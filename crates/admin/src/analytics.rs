@@ -10,8 +10,7 @@ use axum::Json;
 use phoebis_ledger::{
     apply_filter, bucket_seconds, burn_rows, burn_series_over, hour_ceil, hour_of, moves_by_reason,
     parse_range, read_account_rollups, read_rollups, rewrite_series, session_burn_series,
-    AccountRollupRow, LiveKeys, PlanWindows, RollupFilter, RollupRow, SeriesFilter, Tiers,
-    GROUP_BYS,
+    AccountRollupRow, LiveKeys, RollupFilter, RollupRow, SeriesFilter, Tiers, GROUP_BYS,
 };
 use phoebis_store::AccountKind;
 use serde_json::{json, Value};
@@ -448,56 +447,20 @@ pub(crate) async fn rewrites(
     .into_response()
 }
 
-pub(crate) async fn fits(State(state): State<Arc<AdminState>>) -> Response {
-    let now = (state.clock)();
-    let Ok(fits) = state.router.fits().await else {
-        return failure(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "the router is not available",
-        );
+/// How far back the reconciliation table reads: a month of 5-hour windows and four 7-day ones.
+const RECONCILIATIONS_MS: i64 = 30 * 86_400_000;
+
+/// The windows reconciled over the last 30 days, newest first, beside the request retention as configured, so the
+/// page can say which windows the retention leaves unreconciled.
+pub(crate) async fn reconciliations(State(state): State<Arc<AdminState>>) -> Response {
+    let since = (state.clock)() - RECONCILIATIONS_MS;
+    let rows = match state.ledger.db().reconciliations(since).await {
+        Ok(rows) => rows,
+        Err(e) => return ledger_failure(e),
     };
-    let accounts = match state.store.accounts() {
-        Ok(a) => a,
-        Err(e) => return store_failure(e),
-    };
-    let windows = PlanWindows::shipped();
-    let tier_by_account: HashMap<String, Option<String>> = accounts
-        .iter()
-        .filter(|a| a.kind == AccountKind::Oauth)
-        .map(|a| {
-            (
-                a.id.clone(),
-                state
-                    .store
-                    .subscription(&a.id)
-                    .ok()
-                    .flatten()
-                    .and_then(|s| s.tier),
-            )
-        })
-        .collect();
-    let rows: Vec<Value> = fits
-        .iter()
-        .map(|f| {
-            let tier = tier_by_account.get(&f.account_id).cloned().flatten();
-            let predicted = tier.as_deref().and_then(|t| windows.predicted(t, &f.window));
-            let drift = predicted.filter(|p| *p != 0.0).map(|p| f.scale / p);
-            let band_factor_predicted = windows.band_factor_of(&f.window, now);
-            // A provisional tolerance until the owner's next measurements tighten the row; no alert fires on
-            // it, the table only shows it.
-            let band_divergent = matches!(
-                (f.band_factor, band_factor_predicted),
-                (Some(fitted), Some(predicted)) if (fitted - predicted).abs() > predicted.abs() * 0.15
-            );
-            json!({
-                "account_id": f.account_id, "window": f.window, "scale": f.scale, "confidence": f.confidence,
-                "intervals": f.intervals,
-                "corrections": serde_json::from_str::<Value>(&f.corrections_json).unwrap_or_else(|_| json!({})),
-                "fitted_at": f.fitted_at, "predicted": predicted, "drift": drift,
-                "band_factor": f.band_factor, "band_factor_predicted": band_factor_predicted,
-                "band_divergent": band_divergent,
-            })
-        })
-        .collect();
-    Json(json!({ "fits": rows })).into_response()
+    Json(json!({
+        "reconciliations": rows,
+        "request_retention_days": state.settings.retention_days,
+    }))
+    .into_response()
 }

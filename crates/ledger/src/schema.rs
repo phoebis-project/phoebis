@@ -1,6 +1,6 @@
 //! The ledger schema: `requests`, `attempts`, `bodies`, `quota_samples`, `extra_usage_samples`,
-//! `rollups_hourly`, `account_rollups_hourly`, `cooldown_spans`, `cooldown_segments`, `kept_warm_marks`, and
-//! `events`, plus `meta` for the schema marker.
+//! `rollups_hourly`, `account_rollups_hourly`, `cooldown_spans`, `cooldown_segments`, `kept_warm_marks`,
+//! `events`, and `window_reconciliations`, plus `meta` for the schema marker.
 
 pub const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -254,6 +254,12 @@ CREATE INDEX IF NOT EXISTS events_at ON events (at);
 /// Version 19: the request row records how the climb identified it, the conversation's root and, for a
 /// continuation, the matched depth, and for a session that branched from another conversation, that
 /// conversation's root and depth; a `(pool_id, account_id, hour)` index speeds a budgeted member's spend read.
+///
+/// Version 20: the instant a reading was observed, kept beside its bucket so a reconciliation compares the rise
+/// between two readings with the requests completed between those same instants; and one row per completed
+/// window of a subscription account: the rise its readings showed against the share the router predicted for
+/// its own requests in it, resets excluded by construction (a run names one reset). A reading from before this
+/// version reads NULL and bounds no run.
 pub const MIGRATIONS: &[(u32, &str)] = &[
     (
         2,
@@ -636,5 +642,17 @@ ALTER TABLE requests ADD COLUMN identity_depth INTEGER;
 ALTER TABLE requests ADD COLUMN forked_from TEXT;
 ALTER TABLE requests ADD COLUMN fork_depth INTEGER;
 CREATE INDEX IF NOT EXISTS rollups_hourly_member ON rollups_hourly (pool_id, account_id, hour);",
+    ),
+    (
+        20,
+        "ALTER TABLE quota_samples ADD COLUMN observed_at INTEGER;
+CREATE TABLE window_reconciliations (
+  account_id TEXT NOT NULL, window TEXT NOT NULL, window_end INTEGER NOT NULL,
+  first_reading_at INTEGER NOT NULL, last_reading_at INTEGER NOT NULL,
+  observed_rise REAL NOT NULL, predicted_share REAL NOT NULL, ratio REAL NOT NULL,
+  requests INTEGER NOT NULL, unmeasured INTEGER NOT NULL, computed_at INTEGER NOT NULL,
+  PRIMARY KEY (account_id, window, window_end)
+);
+CREATE INDEX window_reconciliations_computed ON window_reconciliations (computed_at, account_id);",
     ),
 ];

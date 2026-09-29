@@ -613,6 +613,7 @@ async fn the_account_view_carries_its_profile_windows_pools_totals_and_models() 
                     utilization: Some(0.62),
                     reset_at: Some(now + 3_600_000),
                     source: "poll".into(),
+                    observed_at: None,
                 },
                 QuotaSampleRecord {
                     account_id: "business".into(),
@@ -621,6 +622,7 @@ async fn the_account_view_carries_its_profile_windows_pools_totals_and_models() 
                     utilization: Some(0.1),
                     reset_at: None,
                     source: "poll".into(),
+                    observed_at: None,
                 },
             ],
             Some(&ExtraUsageSampleRecord {

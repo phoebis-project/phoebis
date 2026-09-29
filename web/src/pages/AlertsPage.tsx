@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { api } from '@/api';
-import type { Account, AlertEvent, AlertEventDetail, AlertKind, AlertRule, AlertRuleInput, ApiKey, AskUserQuestionDetail, ClientDriftDetail, LifecycleDelivery, LifecycleEventName, Pool, RefreshFailedDetail, WindowId } from '@/api/types';
+import type { Account, AlertEvent, AlertEventDetail, AlertKind, AlertRule, AlertRuleInput, ApiKey, AskUserQuestionDetail, ClientDriftDetail, LifecycleDelivery, LifecycleEventName, MeterDriftDetail, Pool, RefreshFailedDetail, WindowId } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
 import { Badge, Button, Card, ConfirmDialog, Dialog, ErrorState, Field, Input, Menu, Select, Skeleton, Toast, Toggle } from '@/components/ui/primitives';
 import { IconPlus } from '@/components/ui/icons';
 import { questionLine } from '@/lib/alerts';
-import { fmtAbsolute, fmtPct, fmtRelative, shortId, urlHost } from '@/lib/format';
+import { RECONCILED_WINDOW_LABEL, own } from '@/lib/analytics';
+import { fmtAbsolute, fmtPct, fmtRelative, fmtShare, shortId, urlHost } from '@/lib/format';
 import { useAsync, useNow } from '@/lib/hooks';
 import { WINDOW_LABEL } from '@/lib/windows';
 
@@ -14,6 +15,7 @@ const KIND_LABEL: Record<AlertKind, string> = {
   client_drift: 'Client drift',
   funding_required: 'Funding required',
   keepalive_cost_cap: 'Probe cost cap reached',
+  meter_drift: 'Meter drift',
   pool_exhausted: 'Pool exhausted',
   reauth_required: 'Re-auth required',
   refresh_failed: 'Credential refresh failed',
@@ -31,6 +33,8 @@ const KIND_HINT: Record<AlertKind, string> = {
     'Fires when the billing-hash self-check fails for a client request: the client stamps a hash this build cannot reproduce. Re-pin the router to that client build, then resolve the event here.',
   funding_required: 'Fires when an API-key upstream is refused for billing reasons. It resolves when an operator clears the funding flag.',
   keepalive_cost_cap: "Fires when a pool's daily probe cost cap is reached; probes pause until the next UTC day, which resolves it.",
+  meter_drift:
+    "Fires when a completed 5-hour or 7-day window's readings rose by at least 5% of the window and the rise was under 0.8 or over 1.25 times the share the router predicted for its own requests. It resolves when the upstream's next completed window of that kind reads inside.",
   pool_exhausted: 'Fires when a request finds no eligible upstream in the pool. It resolves on the next request the pool serves.',
   reauth_required: 'Fires when an upstream enters reauth_required. It resolves once the upstream is paired or verified again.',
   refresh_failed: 'Fires when a credential refresh fails twice in a row. It resolves on the next refresh that succeeds.',
@@ -52,6 +56,7 @@ const ALLOWED_SCOPES: Record<AlertKind, AlertRule['scope']['type'][]> = {
   client_drift: ['all'],
   funding_required: ['any_account', 'account'],
   keepalive_cost_cap: ['all', 'pool'],
+  meter_drift: ['any_account', 'account'],
   pool_exhausted: ['all', 'pool'],
   reauth_required: ['any_account', 'account'],
   refresh_failed: ['any_account', 'account'],
@@ -560,6 +565,14 @@ function EventDetail({ kind, detail, now }: { detail: AlertEventDetail; kind: Al
         </span>
         <span className={line.muted ? 'sub muted' : 'sub'}>{line.text}</span>
       </>
+    );
+  }
+  if (kind === 'meter_drift' && typeof detail.ratio === 'number' && typeof detail.observed_rise === 'number') {
+    const drift = detail as unknown as MeterDriftDetail;
+    return (
+      <span className="sub">
+        {own(RECONCILED_WINDOW_LABEL, drift.window) ? RECONCILED_WINDOW_LABEL[drift.window] : drift.window} window, ratio {drift.ratio.toFixed(2)} after a rise of {fmtShare(drift.observed_rise)}
+      </span>
     );
   }
   if (kind === 'refresh_failed' && typeof detail.failures === 'number') {

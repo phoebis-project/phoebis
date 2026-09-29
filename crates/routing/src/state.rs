@@ -6,8 +6,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 
 use phoebis_store::{
-    AccountKind, AccountState, AffinityRow, BudgetPeriod, CooldownRow, FitRow, OverageRow, PinBurn,
-    PinKey, PinRow, PoolMember, RekeyWrite, ResolutionRow, RoutingLoad, WindowRow,
+    AccountKind, AccountState, AffinityRow, BudgetPeriod, CooldownRow, OverageRow, PinBurn, PinKey,
+    PinRow, PoolMember, RekeyWrite, ResolutionRow, RoutingLoad, WindowRow,
 };
 use tokio::sync::Notify;
 use tokio::time::Instant;
@@ -123,6 +123,9 @@ impl UtilizationSample {
     }
 }
 
+// A pin write goes out on nearly every placement and moves once into the writer's batch; boxing it would put an
+// allocation on that path to shrink the rarer writes queued beside it.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq)]
 pub enum StateWrite {
     /// The relay's verdict on an account, fenced by the incarnation and the generations the attempt that
@@ -145,7 +148,6 @@ pub enum StateWrite {
     Rekey(RekeyWrite),
     UpsertAffinity(Vec<AffinityRow>),
     UpsertCooldown(CooldownRow),
-    UpsertFit(FitRow),
     UpsertOverage(OverageRow),
     UpsertPin(PinRow),
     UpsertWindow(WindowRow),
@@ -588,8 +590,6 @@ pub struct RoutingState {
     /// restart loads the newest readings and predicts from them alone until the next request completes.
     charges: HashMap<String, Charges>,
     cooldowns: HashMap<(String, String), CooldownRow>,
-    /// The ledger's live fit per account and window, kept here because the routing writer persists it.
-    fits: HashMap<(String, String), FitRow>,
     in_flight: InFlight,
     /// The ledger's last-answered spend per pool member, by `(pool_id, account_id)`; memory only.
     member_spend: HashMap<(String, String), MemberSpend>,
@@ -640,13 +640,6 @@ impl RoutingState {
                 .cooldowns
                 .into_iter()
                 .map(|c| ((c.account_id.clone(), c.scope.clone()), c))
-                .collect(),
-            // The row the ledger's fitter refuses on load is refused here too, so no reader divides by it.
-            fits: load
-                .fits
-                .into_iter()
-                .filter(FitRow::sound)
-                .map(|f| ((f.account_id.clone(), f.window.clone()), f))
                 .collect(),
             in_flight: InFlight::default(),
             member_spend: HashMap::new(),
@@ -1119,28 +1112,6 @@ impl RoutingState {
         self.charges.remove(account_id);
     }
 
-    /// Keeps the row unless the one held for its account and window has folded later; a row written for the
-    /// carry alone keeps its fold's `fitted_at`, so an equal time replaces too.
-    pub fn record_fit(&mut self, row: FitRow) -> bool {
-        let key = (row.account_id.clone(), row.window.clone());
-        if self
-            .fits
-            .get(&key)
-            .is_some_and(|held| held.fitted_at > row.fitted_at)
-        {
-            return false;
-        }
-        self.fits.insert(key, row);
-        true
-    }
-
-    /// Every account's fit rows, by account and window.
-    pub fn fits(&self) -> Vec<FitRow> {
-        let mut out: Vec<FitRow> = self.fits.values().cloned().collect();
-        out.sort_by(|a, b| (&a.account_id, &a.window).cmp(&(&b.account_id, &b.window)));
-        out
-    }
-
     /// Every account's latest reading, by id: one snapshot for a caller that evaluates thresholds over all of them.
     pub fn samples(&self) -> Vec<(String, UtilizationSample)> {
         let mut out: Vec<_> = self
@@ -1487,16 +1458,14 @@ impl RoutingState {
         for (key, _) in &pins {
             self.take_pin(key);
         }
-        // None of these needs a deletion written: the overage and fit rows cascade with the account and the next
-        // holder's first reading replaces one left under another incarnation, the window rows cascade too and the
+        // None of these needs a deletion written: the overage rows cascade with the account and the next holder's
+        // first reading replaces one left under another incarnation, the window rows cascade too and the
         // purge tick drops one of another incarnation, and charges, round-robin cursors and shedding rounds are
         // held in memory only. Samples, charges and cursors are keyed by id alone, so the reload drops those of a
         // holder the id has moved past.
         let absent = |account_id: &str| snapshot.account(account_id).is_none();
         self.overage
             .retain(|account_id, evidence| !gone(account_id, evidence.incarnation));
-        self.fits
-            .retain(|(account_id, _), fit| !gone(account_id, fit.incarnation));
         self.samples.retain(|account_id, _| !absent(account_id));
         self.charges.retain(|account_id, _| !absent(account_id));
         self.round_robin.retain(|(pool_id, _, cohort), _| {

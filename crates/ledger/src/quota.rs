@@ -76,6 +76,7 @@ pub(crate) fn samples_from_unified(
                 utilization,
                 reset_at,
                 source: "header".into(),
+                observed_at: Some(observed_at),
             });
         }
     }
@@ -107,6 +108,7 @@ pub fn samples_from_poll(
         utilization: utilization.map(|u| u / 100.0),
         reset_at,
         source: "poll".into(),
+        observed_at: Some(snapshot.fetched_at),
     };
     let mut quota: Vec<QuotaSampleRecord> = snapshot
         .windows
@@ -361,11 +363,7 @@ impl QuotaPoll {
         match usage.poll(&account.id).await {
             Ok(snapshot) if snapshot.error.is_none() => {
                 let (quota, extra) = samples_from_poll(&snapshot);
-                ledger.record(Record::Samples {
-                    quota,
-                    extra,
-                    carrier: None,
-                });
+                ledger.record(Record::Samples { quota, extra });
                 if let Some(router) = router {
                     // Reported before the profile refresh, so a stalled profile endpoint holds no sample back
                     // from selection; both halves go, as the selection's own pull sends them, so the first

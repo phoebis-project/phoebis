@@ -456,6 +456,19 @@ export const ALERT_RULES: AlertRule[] = [
     hasSecret: true,
     updatedAt: daysAgo(12),
   },
+  {
+    ...ALERT_RULE_SAMPLE,
+    createdAt: daysAgo(2),
+    id: 'rule_meter',
+    kind: 'meter_drift',
+    scope: { type: 'any_account', id: null },
+    threshold: null,
+    windowId: null,
+    webhookUrl: 'https://hooks.example.com/phoebis/meter',
+    enabled: true,
+    hasSecret: false,
+    updatedAt: daysAgo(2),
+  },
 ];
 
 export const ALERT_EVENTS: AlertEvent[] = [
@@ -671,6 +684,18 @@ export const ALERT_EVENTS: AlertEvent[] = [
       { ...DELIVERY_SAMPLE, at: daysAgo(13), attempt: 1, error: null, state: 'opened', status: 200 },
       { ...DELIVERY_SAMPLE, at: daysAgo(12), attempt: 1, error: null, state: 'resolved', status: 200 },
     ],
+  },
+  {
+    ...ALERT_EVENT_SAMPLE,
+    id: 'evt_17',
+    ruleId: 'rule_meter',
+    kind: 'meter_drift',
+    subject: 'personal:5h',
+    detail: { account: 'personal', observed_rise: 0.31, predicted_share: 0.22, ratio: 0.31 / 0.22, requests: 48, window: 'five_hour', window_end: NOW - 40 * MINUTE },
+    state: 'open',
+    openedAt: ago(27 * MINUTE),
+    resolvedAt: null,
+    deliveries: [{ ...DELIVERY_SAMPLE, at: ago(27 * MINUTE), attempt: 1, error: null, state: 'opened', status: 200 }],
   },
 ];
 

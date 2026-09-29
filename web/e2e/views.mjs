@@ -1095,7 +1095,7 @@ const measureInput = (label) =>
  * threshold pair for a minutes field as the condition changes. The minutes input is measured against the
  * threshold input it stands in for, since a control that reads smaller than the one it replaces is the defect
  * this dialog would show first. It also reads the body's headings, Rule, Condition and Delivery in that order,
- * with Enabled the first field.
+ * with Enabled the first field. A meter drift rule names an upstream or any upstream and nothing else.
  */
 async function alertRuleDialog(theme) {
   const say = (what) => failures.push(`${theme} /alerts: ${what}`);
@@ -1121,6 +1121,10 @@ async function alertRuleDialog(theme) {
     if ((await control('Window', 'select').count()) !== 1) say('the utilization condition draws no window select');
     if ((await control('Idle after (minutes)', 'input').count()) !== 0) say('the utilization condition still offers the minutes input');
     const threshold = await measureInput('Threshold (%)');
+    await condition.selectOption({ label: 'Meter drift' });
+    const scopes = await control('Scope', 'select').locator('option').allTextContents();
+    if (scopes[0] !== 'Any upstream' || scopes.some((o) => o === 'All traffic' || o.startsWith('Pool ') || o.startsWith('Key '))) say(`the meter drift condition offers ${JSON.stringify(scopes)} rather than the upstream scopes`);
+    if ((await control('Window', 'select').count()) !== 0 || (await control('Threshold (%)', 'input').count()) !== 0) say('the meter drift condition offers a threshold or a window, which its fixed band leaves no room for');
     if (!minutes || !threshold) say('the minutes input and the threshold input are not both drawn to compare');
     else {
       measurements.push(`${theme} /alerts idle after minutes ${JSON.stringify(minutes)}`);
@@ -1273,7 +1277,7 @@ async function wastedProbeRows(theme) {
  */
 async function burnCards(theme) {
   try {
-    await page.waitForFunction(() => [...document.querySelectorAll('.card__title')].some((t) => t.textContent === 'Plan meter fit') && !document.querySelector('#burn .skeleton'), null, { timeout: 15_000 });
+    await page.waitForFunction(() => [...document.querySelectorAll('.card__title')].some((t) => t.textContent === 'Meter reconciliation') && !document.querySelector('#burn .skeleton'), null, { timeout: 15_000 });
   } catch {
     failures.push(`${theme} /analytics: the burn section never finished loading`);
     return;
@@ -1305,10 +1309,11 @@ async function burnCards(theme) {
 
 /**
  * The two analytics tables each against the table card before it in its section: Placements by rung against Cache
- * by model, Member budgets against Plan meter fit. The title and head types and the card width match, and where both
- * cards draw figures, their type too, and a placements row is as tall as a cache row. Every budget row draws its
- * bar; in the mock's story the member past its budget carries the at-budget badge in the box of the fit table's drift
- * badge. The router's seed places nothing and budgets no member, so there the tables draw their empty rows.
+ * by model, Member budgets against Meter reconciliation. The title and head types and the card width match, and where
+ * both cards draw figures, their type too, and a placements row is as tall as a cache row. Every budget row draws its
+ * bar; in the mock's story the member past its budget carries the at-budget badge in the box of the reconciliation
+ * table's ratio badge. The router's seed places nothing and budgets no member, so there the tables draw their empty
+ * rows.
  */
 async function analyticsTables(theme) {
   const say = (what) => failures.push(`${theme} /analytics: ${what}`);
@@ -1354,15 +1359,15 @@ async function analyticsTables(theme) {
       }),
       budgets: box('Member budgets'),
       cache: box('Cache by model'),
-      driftBadge: badge(card('Plan meter fit')?.querySelector('tbody .badge')),
-      fit: box('Plan meter fit'),
+      ratioBadge: badge(card('Meter reconciliation')?.querySelector('tbody .badge')),
+      reconciliation: box('Meter reconciliation'),
       placements: box('Placements by rung'),
     };
   });
   measurements.push(`${theme} /analytics placement and budget tables ${JSON.stringify(read)}`);
   const drawn = (a, b, keys) => (a?.rows && b?.rows ? keys : []);
   failures.push(...compare(read.placements, read.cache, ['title', 'head', 'width', ...drawn(read.placements, read.cache, ['figure', 'row'])], `${theme} /analytics: "Placements by rung" against "Cache by model"`));
-  failures.push(...compare(read.budgets, read.fit, ['title', 'head', 'width', ...drawn(read.budgets, read.fit, ['figure'])], `${theme} /analytics: "Member budgets" against "Plan meter fit"`));
+  failures.push(...compare(read.budgets, read.reconciliation, ['title', 'head', 'width', ...drawn(read.budgets, read.reconciliation, ['figure'])], `${theme} /analytics: "Member budgets" against "Meter reconciliation"`));
   if (read.placements?.section !== 'cache') say(`the placements card sits in ${read.placements?.section}, not the Cache section`);
   if (read.budgets?.section !== 'burn') say(`the member budgets card sits in ${read.budgets?.section}, not the Burn section`);
   for (const bar of read.bars.filter((b) => b === null || !/^[0-9]{3,}x4$/.test(b))) say(`a member budget row draws its bar as ${bar}`);
@@ -1370,7 +1375,7 @@ async function analyticsTables(theme) {
     if (!read.placements?.rows) say('the story places requests by rung, yet the placements card draws no figure');
     if (read.bars.length === 0) say('the story budgets two members, yet the card lists none');
     if (JSON.stringify(read.atBudget.map((r) => r.upstream)) !== JSON.stringify(['evals'])) say(`the at-budget mark sits on ${JSON.stringify(read.atBudget.map((r) => r.upstream))}, not on evals alone`);
-    for (const r of read.atBudget.filter((x) => x.badge !== read.driftBadge)) say(`the at-budget badge measures ${r.badge} against the drift badge's ${read.driftBadge}`);
+    for (const r of read.atBudget.filter((x) => x.badge !== read.ratioBadge)) say(`the at-budget badge measures ${r.badge} against the ratio badge's ${read.ratioBadge}`);
   }
 }
 

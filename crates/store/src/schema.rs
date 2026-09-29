@@ -63,11 +63,12 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
     (31, V31),
     (32, V32),
     (33, V33),
+    (34, V34),
 ];
 
 /// The newest schema version this build knows how to read. `prepare` refuses a registry stamped past it
 /// rather than skip migrations it does not carry and misread the tables that follow.
-pub const SCHEMA_VERSION: u32 = 33;
+pub const SCHEMA_VERSION: u32 = 34;
 
 const V2: &str = r#"
 CREATE TABLE IF NOT EXISTS account_models (
@@ -526,3 +527,6 @@ ALTER TABLE keepalive_budgets DROP COLUMN meter_tokens;
 ALTER TABLE keepalive_budgets ADD COLUMN five_hour_share REAL NOT NULL DEFAULT 0;
 ALTER TABLE keepalive_budgets ADD COLUMN five_hour_share_unmeasured INTEGER NOT NULL DEFAULT 0;
 "#;
+
+// The ledger's per-window reconciliation replaced the one reader these rows had.
+const V34: &str = "DROP TABLE IF EXISTS plan_fits;";
