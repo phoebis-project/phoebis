@@ -19,9 +19,10 @@ use crate::record::{ExtraUsageSampleRecord, QuotaSampleRecord};
 use crate::rollup::bucket_of;
 use crate::task::Ledger;
 
-/// How often every polled OAuth account's usage endpoint is read: often enough that a routing decision lags
-/// use of the account outside the router by at most this, rare enough that the poll alone never reaches the
-/// endpoint's per-account limit; the first live run moves it to ten minutes if the 429 warnings say so.
+/// How often every polled OAuth account's usage endpoint is read: often enough that a routing decision lags use of
+/// the account outside the router by about this, longer while the endpoint rate-limits the poll, rare enough that
+/// the poll alone never reaches the endpoint's per-account limit; the first live run moves it to ten minutes if the
+/// 429 warnings say so.
 pub const POLL_INTERVAL: Duration = Duration::from_secs(300);
 
 /// The profile is read again on every twelfth poll of an account, an hour apart: a tier moves rarely, and the
