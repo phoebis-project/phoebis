@@ -667,21 +667,26 @@ function AddAccountDialog({ open, onClose, onDone }: { onClose: () => void; onDo
         </>
       }
     >
-      <Segmented<'api_key' | 'oauth'>
-        ariaLabel="Upstream type"
-        value={kind}
-        onChange={setKind}
-        options={[
-          { value: 'oauth', label: 'OAuth login' },
-          { value: 'api_key', label: 'API key' },
-        ]}
-      />
-      <Field label="Id" hint="Lowercase letters, digits, and dashes; it names the upstream in every log and URL">
-        <Input value={id} onChange={(e) => setId(e.target.value)} placeholder="work" className="mono" />
-      </Field>
-      <Field label="Label" hint="Short name used in pools and logs.">
-        <Input value={label} onChange={(e) => setLabel(e.target.value)} placeholder={kind === 'oauth' ? 'work' : 'Console workspace'} />
-      </Field>
+      {/* The body is a flex column, which would stretch the segmented control across it. */}
+      <div className="row">
+        <Segmented<'api_key' | 'oauth'>
+          ariaLabel="Upstream type"
+          value={kind}
+          onChange={setKind}
+          options={[
+            { value: 'oauth', label: 'OAuth login' },
+            { value: 'api_key', label: 'API key' },
+          ]}
+        />
+      </div>
+      <div className="form-row">
+        <Field label="Id" hint="Lowercase letters, digits, and dashes; it names the upstream in every log and URL">
+          <Input value={id} onChange={(e) => setId(e.target.value)} placeholder="work" className="mono" />
+        </Field>
+        <Field label="Label" hint="Short name used in pools and logs.">
+          <Input value={label} onChange={(e) => setLabel(e.target.value)} placeholder={kind === 'oauth' ? 'work' : 'Console workspace'} />
+        </Field>
+      </div>
       {kind === 'api_key' && (
         <Field label="API key">
           <Input type="password" autoComplete="off" value={secret} onChange={(e) => setSecret(e.target.value)} placeholder="sk-ant-…" className="mono" />

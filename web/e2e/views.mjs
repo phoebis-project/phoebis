@@ -968,7 +968,8 @@ const measureInput = (label) =>
  * The create-rule dialog on Alerts: an idle rule counts minutes and takes no window, so the dialog swaps the
  * threshold pair for a minutes field as the condition changes. The minutes input is measured against the
  * threshold input it stands in for, since a control that reads smaller than the one it replaces is the defect
- * this dialog would show first.
+ * this dialog would show first. It also reads the body's headings, Rule, Condition and Delivery in that order,
+ * with Enabled the first field.
  */
 async function alertRuleDialog(theme) {
   const say = (what) => failures.push(`${theme} /alerts: ${what}`);
@@ -979,6 +980,12 @@ async function alertRuleDialog(theme) {
   try {
     await page.getByRole('button', { name: 'Create rule', exact: true }).first().click();
     await dialog.waitFor({ state: 'visible', timeout: 15_000 });
+    const heads = await dialog.evaluate((el) => ({
+      first: el.querySelector('.field__label')?.textContent?.trim() ?? null,
+      titles: [...el.querySelectorAll('.dialog__body > .dialog-group__title')].map((h) => h.textContent?.trim() ?? ''),
+    }));
+    if (heads.first !== 'Enabled') say(`the rule dialog's first field reads ${JSON.stringify(heads.first)} rather than Enabled`);
+    if (JSON.stringify(heads.titles) !== JSON.stringify(['Rule', 'Condition', 'Delivery'])) say(`the rule dialog's body headings read ${JSON.stringify(heads.titles)} rather than Rule, Condition, Delivery`);
     const condition = control('Condition', 'select');
     await condition.selectOption({ label: 'Session idle' });
     if ((await control('Idle after (minutes)', 'input').count()) !== 1) say('the session idle condition draws no minutes input');
@@ -1344,6 +1351,50 @@ async function subscriptionEndForm(theme) {
   // Closed again, so the view's shot is the card as it loaded.
   await identity.getByRole('button', { name: 'Cancel', exact: true }).click();
   await settle();
+}
+
+/**
+ * The Add upstream dialog on Upstreams: the type control keeps its content width, which the body's flex column
+ * would otherwise stretch across the dialog, and Id and Label sit side by side as two equal inputs.
+ */
+async function addUpstreamDialog(theme) {
+  const say = (what) => failures.push(`${theme} /upstreams add upstream: ${what}`);
+  const dialog = page.locator('dialog[open]');
+  try {
+    await page.getByRole('button', { name: 'Add upstream', exact: true }).click();
+    await dialog.waitFor({ state: 'visible', timeout: 15_000 });
+    const read = await dialog.evaluate((el) => {
+      const body = el.querySelector('.dialog__body');
+      const style = body ? getComputedStyle(body) : null;
+      const input = (text) => {
+        const field = [...el.querySelectorAll('.field')].find((f) => f.querySelector('.field__label')?.textContent?.trim() === text);
+        const box = field?.querySelector('input')?.getBoundingClientRect();
+        return box ? { left: Math.round(box.left), top: Math.round(box.top), width: Math.round(box.width) } : null;
+      };
+      const type = el.querySelector('[aria-label="Upstream type"]')?.getBoundingClientRect();
+      return {
+        body: body && style ? Math.round(body.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)) : null,
+        id: input('Id'),
+        label: input('Label'),
+        type: type ? Math.round(type.width) : null,
+      };
+    });
+    measurements.push(`${theme} /upstreams add upstream ${JSON.stringify(read)}`);
+    if (!read.type || !read.body) say('the type control and the body are not both drawn to measure');
+    else if (read.type >= read.body) say(`the type control is ${read.type} px across a ${read.body} px body rather than its content width`);
+    if (!read.id || !read.label) say('the Id and Label inputs are not both drawn to compare');
+    else {
+      if (read.id.top !== read.label.top) say(`the Id input's top at ${read.id.top} px differs from the Label input's at ${read.label.top} px`);
+      if (read.id.width !== read.label.width) say(`the Id input is ${read.id.width} px wide against the Label input's ${read.label.width} px`);
+    }
+  } catch (error) {
+    say(`the dialog never opened (${error instanceof Error ? error.message : String(error)})`);
+  }
+  await page.keyboard.press('Escape');
+  await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => say('the dialog stayed open after Escape'));
+  // The pointer and the focus Escape hands back leave Add upstream, so the view's shot draws it at rest.
+  await page.mouse.move(0, 0);
+  await page.evaluate(() => (document.activeElement instanceof HTMLElement ? document.activeElement.blur() : undefined));
 }
 
 /** A select's box in the open dialog, found by its field's label, in the terms `measureInput` reads an input. */
@@ -1749,6 +1800,7 @@ try {
       if (view.path === '/upstreams') {
         await deleteUpstreamButton(theme);
         await subscriptionEndForm(theme);
+        await addUpstreamDialog(theme);
       }
       if (view.path === '/keys') {
         await keyCapField(theme);

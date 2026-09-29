@@ -1026,6 +1026,15 @@ textarea.input {
   box-shadow: 0 0 0 3px var(--accent-ring);
 }
 
+/* In a plain body the 14 px gap would float a heading halfway between runs, so it sits nearer the rows it heads. */
+.dialog__body > .dialog-group__title + * {
+  margin-top: -4px;
+}
+
+.dialog__body > .dialog-group__title:not(:first-child) {
+  margin-top: 6px;
+}
+
 .dialog-group__intro {
   margin: 0;
   font-size: 12.5px;

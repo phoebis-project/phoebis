@@ -539,6 +539,13 @@ await emailLines('/upstreams/business the head reads the email under the name', 
     ok: JSON.stringify(fields) === JSON.stringify(['Id', 'Label', 'API key']) && JSON.stringify(choices) === JSON.stringify(['Upstream type']) && inputs === 3 && (dlg?.textContent ?? '').includes(subtitle),
     missing: [...fields, ...choices, `${inputs} inputs`, (dlg?.textContent ?? '').includes(subtitle) ? 'subtitle' : 'no subtitle'],
   });
+  const pairs = [...(dlg?.querySelectorAll('.form-row') ?? [])].map((r) => [...r.querySelectorAll('.field__label')].map((l) => l.textContent?.trim() ?? ''));
+  const typeBox = dlg?.querySelector('[aria-label="Upstream type"]')?.parentElement;
+  results.push({
+    name: '/upstreams Id and Label share a row and the type control keeps its content width',
+    ok: pairs.length === 1 && JSON.stringify(pairs[0]) === JSON.stringify(['Id', 'Label']) && typeBox?.classList.contains('row') === true,
+    missing: [JSON.stringify(pairs), `type control in ${typeBox?.className ?? 'nothing'}`],
+  });
   [...(dlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
   await m.settle(200);
 }
@@ -4239,6 +4246,17 @@ expect('/alerts', m.text(), ['Rules', 'Create rule', 'Re-auth required', 'Utiliz
   await m.settle(300);
   const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
   expect('/alerts edit dialog is prefilled', dlg?.textContent ?? '', ['Edit alert rule', 'Leave empty to keep the stored secret', 'X-Router-Signature', 'Enabled', 'Save rule']);
+  const titles = [...(dlg?.querySelectorAll('.dialog-group__title') ?? [])];
+  const first = dlg?.querySelector('.field__label')?.textContent?.trim() ?? null;
+  const delivery = titles.find((t) => t.textContent?.trim() === 'Delivery');
+  const webhook = [...(dlg?.querySelectorAll('.field__label') ?? [])].find((l) => l.textContent?.trim() === 'Webhook URL');
+  const after = Boolean(delivery && webhook && delivery.compareDocumentPosition(webhook) & window.Node.DOCUMENT_POSITION_FOLLOWING);
+  const read = titles.map((t) => t.textContent?.trim() ?? '');
+  results.push({
+    name: '/alerts the rule dialog reads Enabled first under Rule, then the Condition and Delivery headings',
+    ok: JSON.stringify(read) === JSON.stringify(['Rule', 'Condition', 'Delivery']) && first === 'Enabled' && after,
+    missing: [...read, `first ${first}`, after ? '' : 'Webhook URL not after Delivery'],
+  });
   const url = dlg?.querySelector('input[placeholder="https://hooks.example.com/phoebis"]');
   results.push({ name: '/alerts edit dialog carries the webhook URL', ok: (url?.value ?? '').startsWith('https://hooks.example.com/phoebis/'), missing: [url?.value ?? 'absent'] });
   [...(dlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();

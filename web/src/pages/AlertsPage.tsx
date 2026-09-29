@@ -692,6 +692,11 @@ function RuleDialog({
         </>
       }
     >
+      <h3 className="dialog-group__title">Rule</h3>
+      <Field label="Enabled" beside>
+        <Toggle checked={enabled} onChange={setEnabled} label="Enabled" />
+      </Field>
+      <h3 className="dialog-group__title">Condition</h3>
       <Field label="Condition" hint={KIND_HINT[kind]}>
         <Select value={kind} onChange={(e) => setKind(e.target.value as AlertKind)}>
           {KINDS.map((k) => (
@@ -731,6 +736,7 @@ function RuleDialog({
           <Input type="number" min={1} max={10080} step={1} value={idleMinutes} onChange={(e) => setIdleMinutes(Number(e.target.value))} />
         </Field>
       )}
+      <h3 className="dialog-group__title">Delivery</h3>
       <Field label="Webhook URL">
         <Input placeholder="https://hooks.example.com/phoebis" value={url} onChange={(e) => setUrl(e.target.value)} />
       </Field>
@@ -746,12 +752,6 @@ function RuleDialog({
           <span className="field__label">Remove the stored secret</span>
         </label>
       )}
-      <div className="field--inline field">
-        <span className="field__text">
-          <span className="field__label">Enabled</span>
-        </span>
-        <Toggle checked={enabled} onChange={setEnabled} label="Enabled" />
-      </div>
     </Dialog>
   );
 }
