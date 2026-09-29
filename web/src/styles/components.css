@@ -1044,11 +1044,10 @@ textarea.input {
   padding: 0;
 }
 
-/* A scrolling wrapper clips on both axes and would cut off a key row's menu, which opens below the table. Both tables
-   fit the frame at 1280 and 720 px; where a narrower frame is too tight for the members table, the group's body
-   scrolls sideways instead. The child combinators leave a dialog opened from a group, such as the cost reference,
-   scrolling its own table. */
-.dialog-group > .cells > .table-wrap {
+/* A scrolling wrapper clips on both axes, and the key table's row menu must extend below its last row. The members
+   table draws nothing outside itself, so it keeps its sideways scroll for a frame too narrow for it. The child
+   combinators leave a dialog opened from a group, such as the cost reference, scrolling its own table. */
+.dialog-group > .cells > .table-wrap:has(> .keys-table) {
   overflow: visible;
 }
 
