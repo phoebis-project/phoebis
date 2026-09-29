@@ -111,14 +111,14 @@ with keys cannot be deleted: `409 pool still has keys`.
 Each strategy's rule, as the console states it on the pool card (the pool dialog's "Prioritize subscription
 upstreams" toggle sets `prefer_subscription`):
 
-**`pace`**: Within the first tier that has an eligible upstream, the one with the most remaining weekly allowance
-per hour until its window resets or its subscription ends, whichever comes first; an unsampled upstream counts as
-untouched; ties are random.
+**`pace`**: Within the first priority tier that has an eligible upstream, the one with the most weekly allowance left
+per hour until its window resets or its subscription ends; an unsampled upstream counts as untouched, and ties are
+random.
 
-**`priority`**: Within the first tier that has an eligible upstream, any of them at random.
+**`priority`**: Within the first priority tier that has an eligible upstream, any of them at random.
 
-**`round_robin`**: Within the first tier that has an eligible upstream, each in turn; a restart starts the round
-again.
+**`round_robin`**: Within the first priority tier that has an eligible upstream, each in turn; a restart starts the
+round again.
 
 ### Cache TTL
 
@@ -183,9 +183,9 @@ key cannot be re-enabled (`409`). Delete removes the key outright. The console's
 for a key: "Bodies contain the prompts, file contents, and tool results of every session using this key. Only
 the admin secret can read them."
 
-The key form sets `affinity_source` as
-**Affinity source** (Automatic, Session id, User id, Conversation content, or Whole key) in its General
-section after Requests in flight.
+The key form sets
+`affinity_source` as **Affinity source** (Automatic, Session id, User id, Conversation content, or Whole key) in its
+Sessions group.
 
 ![The API keys view: stat tiles and the table of keys with prefix, pool, usage, and actions][kl]
 ![The API keys view: stat tiles and the table of keys with prefix, pool, usage, and actions][kd]

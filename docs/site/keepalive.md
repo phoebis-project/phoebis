@@ -71,8 +71,8 @@ stay off until `keepalive.oauth_prewarm_verified` is set in the bootstrap file, 
 expiry-crossing keepalive experiment (see [Operations](operations.md)) passed for the combinations in use. A key
 with `keepalive_opt_out` is never retained.
 
-In the console: Pools, Edit, the Caching tab, "Keep prompt caches warm," the daily probe cost cap, and the
-collapsed "Probe tuning" group.
+In the console: Pools, Edit, the Keepalive group under Caching for "Keep prompt caches warm" and the daily probe cost
+cap, and the Probe tuning group beside it.
 
 ## Which requests re-arm a recipe
 

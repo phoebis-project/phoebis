@@ -108,11 +108,11 @@ export function ErrorState({ title = 'Could not load', body, action }: { action?
  * Every other prop lands on the root `div.field` (`data-rule-set`, `id`, `title`), so a caller can mark the root the
  * selectors and the CSS read; the hint is a `div` because a hint may hold a dialog, which a `p` cannot.
  */
-export function Field({ label, hint, children, inline = false, beside = false, plain = false, className, ...rest }: Omit<HTMLAttributes<HTMLDivElement>, 'children'> & { beside?: boolean; children: ReactNode; hint?: ReactNode; inline?: boolean; label: ReactNode; plain?: boolean }) {
+export function Field({ label, hint, children, beside = false, plain = false, className, ...rest }: Omit<HTMLAttributes<HTMLDivElement>, 'children'> & { beside?: boolean; children: ReactNode; hint?: ReactNode; label: ReactNode; plain?: boolean }) {
   const Frame = plain ? 'div' : 'label';
   const text = <span className="field__label">{label}</span>;
   return (
-    <div {...rest} className={`field ${inline ? 'field--inline' : ''} ${beside ? 'field--beside' : ''} ${className ?? ''}`}>
+    <div {...rest} className={`field ${beside ? 'field--beside' : ''} ${className ?? ''}`}>
       <Frame className="field__control">
         {beside ? children : text}
         {beside ? text : children}

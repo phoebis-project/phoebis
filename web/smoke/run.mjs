@@ -4251,11 +4251,17 @@ expect('/alerts', m.text(), ['Rules', 'Create rule', 'Re-auth required', 'Utiliz
   const delivery = titles.find((t) => t.textContent?.trim() === 'Delivery');
   const webhook = [...(dlg?.querySelectorAll('.field__label') ?? [])].find((l) => l.textContent?.trim() === 'Webhook URL');
   const after = Boolean(delivery && webhook && delivery.compareDocumentPosition(webhook) & window.Node.DOCUMENT_POSITION_FOLLOWING);
+  // The first label alone passes with Enabled above every heading, so its place between Rule and Condition is read.
+  const ruleTitle = titles.find((t) => t.textContent?.trim() === 'Rule');
+  const conditionTitle = titles.find((t) => t.textContent?.trim() === 'Condition');
+  const enabled = [...(dlg?.querySelectorAll('.field__label') ?? [])].find((l) => l.textContent?.trim() === 'Enabled');
+  const underRule = Boolean(ruleTitle && enabled && ruleTitle.compareDocumentPosition(enabled) & window.Node.DOCUMENT_POSITION_FOLLOWING);
+  const beforeCondition = Boolean(enabled && conditionTitle && conditionTitle.compareDocumentPosition(enabled) & window.Node.DOCUMENT_POSITION_PRECEDING);
   const read = titles.map((t) => t.textContent?.trim() ?? '');
   results.push({
     name: '/alerts the rule dialog reads Enabled first under Rule, then the Condition and Delivery headings',
-    ok: JSON.stringify(read) === JSON.stringify(['Rule', 'Condition', 'Delivery']) && first === 'Enabled' && after,
-    missing: [...read, `first ${first}`, after ? '' : 'Webhook URL not after Delivery'],
+    ok: JSON.stringify(read) === JSON.stringify(['Rule', 'Condition', 'Delivery']) && first === 'Enabled' && underRule && beforeCondition && after,
+    missing: [...read, `first ${first}`, underRule ? '' : 'Enabled not after Rule', beforeCondition ? '' : 'Condition not after Enabled', after ? '' : 'Webhook URL not after Delivery'],
   });
   const url = dlg?.querySelector('input[placeholder="https://hooks.example.com/phoebis"]');
   results.push({ name: '/alerts edit dialog carries the webhook URL', ok: (url?.value ?? '').startsWith('https://hooks.example.com/phoebis/'), missing: [url?.value ?? 'absent'] });

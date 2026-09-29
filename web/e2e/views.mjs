@@ -178,6 +178,16 @@ async function advance(ms) {
 }
 
 /**
+ * Escape hands the focus back to the control that opened the dialog, drawn with its ring, and the pointer stays where
+ * the last click left it, hovering whatever lies there now; every dialog helper ends here so the view's shot draws
+ * its controls at rest.
+ */
+async function atRest() {
+  await page.mouse.move(0, 0);
+  await page.evaluate(() => (document.activeElement instanceof HTMLElement ? document.activeElement.blur() : undefined));
+}
+
+/**
  * The grouped dialog on a mock-only fixture that carries the pool dialog's seventeen groups under five parents: the
  * frame keeps its fixed size, no rail row wraps and the rail holds all 22 entries without scrolling at the pass's
  * viewport. The two longest labels are read chosen, refused, and both, since the chosen weight and the refusal dot
@@ -345,6 +355,7 @@ async function poolCachingControls(theme) {
   compare('marker', 'policy', ['border', 'height', 'radius', 'width']);
   await page.keyboard.press('Escape');
   await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => say('the dialog stayed open after Escape'));
+  await atRest();
 }
 
 /**
@@ -397,6 +408,7 @@ async function poolSelectBelow(theme) {
   }
   await page.keyboard.press('Escape');
   await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => say('the dialog stayed open after Escape'));
+  await atRest();
 }
 
 /**
@@ -502,6 +514,7 @@ async function poolRoutingCards(theme) {
   if (!read.preview || !/^(Would (move|mark)|No member is above the threshold)/.test(read.preview)) say(`the shedding preview reads ${JSON.stringify(read.preview)}`);
   await page.keyboard.press('Escape');
   await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => say('the dialog stayed open after Escape'));
+  await atRest();
 }
 
 /** The pool dialog's groups in rail order. */
@@ -528,7 +541,8 @@ const POOL_DEPENDENTS = {
  * chosen and read while it shows: its height against the body's window, every cell against the two columns, every
  * label beside its switch or above its control, every control and hint as wide as its field, every dependent drawn
  * and disabled while its switch is off or its preset is not Custom, the warnings at their ends of their groups, no
- * clipped select, nothing pushed apart or past the frame.
+ * clipped select, nothing pushed apart or past the frame, and the mono Name input as tall as the Status select beside
+ * it.
  */
 /**
  * The layout every group of a grouped dialog keeps, read in the shown section: its height against the body's window,
@@ -650,6 +664,16 @@ async function poolDialogGeometry(theme) {
   if (!frame.rail || frame.rail.scrollHeight > frame.rail.clientHeight) sayIn(null, `the rail scrolls: ${JSON.stringify(frame.rail)}`);
   const check = async (group) => {
     const { found, line, warning } = await groupGeometry(dialog, group, 1.7);
+    if (group === 'Identity') {
+      const heights = await dialog.evaluate((el) => {
+        const section = [...el.querySelectorAll('section.dialog-group')].find((s) => s.getAttribute('aria-label') === 'Identity');
+        const control = (text, tag) => [...(section?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === text)?.querySelector(tag)?.getBoundingClientRect().height ?? null;
+        return { name: control('Name', 'input'), status: control('Status', 'select') };
+      });
+      measurements.push(`${theme} /pools dialog Identity heights ${JSON.stringify(heights)}`);
+      if (heights.name === null || heights.status === null) found.push('the Name input and the Status select are not both drawn to compare');
+      else if (Math.abs(heights.name - heights.status) > 1) found.push(`the Name input is ${heights.name} px tall against the Status select's ${heights.status} px`);
+    }
     if (group === 'Keepalive') {
       if (warning && !warning.closes) found.push('its warning does not close the group');
       const cap = await dialog.evaluate((el) => {
@@ -762,6 +786,7 @@ async function poolDialogGeometry(theme) {
   }
   await page.setViewportSize({ height: 800, width: 1280 });
   await settle();
+  await atRest();
 }
 
 /**
@@ -945,6 +970,7 @@ async function upstreamLines(theme, path) {
   if (path === '/pools') {
     await page.keyboard.press('Escape');
     await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => say('the dialog stayed open after Escape'));
+    await atRest();
   }
 }
 
@@ -1007,6 +1033,7 @@ async function alertRuleDialog(theme) {
   }
   await page.keyboard.press('Escape');
   await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => say('the dialog stayed open after Escape'));
+  await atRest();
 }
 
 /**
@@ -1355,7 +1382,8 @@ async function subscriptionEndForm(theme) {
 
 /**
  * The Add upstream dialog on Upstreams: the type control keeps its content width, which the body's flex column
- * would otherwise stretch across the dialog, and Id and Label sit side by side as two equal inputs.
+ * would otherwise stretch across the dialog, and Id and Label sit side by side as two equal inputs, the mono Id as
+ * tall as the Label.
  */
 async function addUpstreamDialog(theme) {
   const say = (what) => failures.push(`${theme} /upstreams add upstream: ${what}`);
@@ -1369,7 +1397,7 @@ async function addUpstreamDialog(theme) {
       const input = (text) => {
         const field = [...el.querySelectorAll('.field')].find((f) => f.querySelector('.field__label')?.textContent?.trim() === text);
         const box = field?.querySelector('input')?.getBoundingClientRect();
-        return box ? { left: Math.round(box.left), top: Math.round(box.top), width: Math.round(box.width) } : null;
+        return box ? { height: box.height, left: Math.round(box.left), top: Math.round(box.top), width: Math.round(box.width) } : null;
       };
       const type = el.querySelector('[aria-label="Upstream type"]')?.getBoundingClientRect();
       return {
@@ -1386,15 +1414,14 @@ async function addUpstreamDialog(theme) {
     else {
       if (read.id.top !== read.label.top) say(`the Id input's top at ${read.id.top} px differs from the Label input's at ${read.label.top} px`);
       if (read.id.width !== read.label.width) say(`the Id input is ${read.id.width} px wide against the Label input's ${read.label.width} px`);
+      if (Math.abs(read.id.height - read.label.height) > 1) say(`the Id input is ${read.id.height} px tall against the Label input's ${read.label.height} px`);
     }
   } catch (error) {
     say(`the dialog never opened (${error instanceof Error ? error.message : String(error)})`);
   }
   await page.keyboard.press('Escape');
   await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => say('the dialog stayed open after Escape'));
-  // The pointer and the focus Escape hands back leave Add upstream, so the view's shot draws it at rest.
-  await page.mouse.move(0, 0);
-  await page.evaluate(() => (document.activeElement instanceof HTMLElement ? document.activeElement.blur() : undefined));
+  await atRest();
 }
 
 /** A select's box in the open dialog, found by its field's label, in the terms `measureInput` reads an input. */
@@ -1468,6 +1495,7 @@ async function keyCapField(theme) {
   if (refused !== 1) say(`a cap of 0 raised ${refused} refusals in Access, not one`);
   await page.keyboard.press('Escape');
   await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => say('the dialog stayed open after Escape'));
+  await atRest();
 }
 
 const KEY_GROUP_LABELS = ['Key', 'Access', 'Models', 'Sessions', 'Capture'];
@@ -1560,6 +1588,7 @@ async function keyDialogGeometry(theme) {
   const revoked = rows.filter({ has: page.locator('td:nth-child(7) .badge', { hasText: /^revoked$/ }) }).first();
   if ((await revoked.count()) === 0) {
     measurements.push(`${theme} /keys dialog revoked: no revoked key to open`);
+    await atRest();
     return;
   }
   try {
@@ -1572,6 +1601,7 @@ async function keyDialogGeometry(theme) {
     sayIn('revoked', error instanceof Error ? error.message : String(error));
     await page.keyboard.press('Escape').catch(() => {});
   }
+  await atRest();
 }
 
 /**
@@ -1632,6 +1662,7 @@ async function costReference(theme) {
   } else if (read.badge !== read.pageBadge) say(`the unmeasured badge measures ${read.badge} against the companion badge's ${read.pageBadge}`);
   await page.keyboard.press('Escape');
   await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => say('the dialog stayed open after Escape'));
+  await atRest();
 }
 
 /**
