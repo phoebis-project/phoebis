@@ -178,9 +178,9 @@ async function advance(ms) {
 }
 
 /**
- * Escape hands the focus back to the control that opened the dialog, drawn with its ring, and the pointer stays where
- * the last click left it, hovering whatever lies there now; every dialog helper ends here so the view's shot draws
- * its controls at rest.
+ * Escape hands the focus back to the control that opened a dialog, drawn with its ring, and the pointer stays where
+ * the last click left it, hovering whatever lies there now; every helper whose clicks precede a view's shot ends
+ * here, so the shot draws its controls at rest.
  */
 async function atRest() {
   await page.mouse.move(0, 0);
@@ -241,15 +241,15 @@ async function groupedDialogFixture(theme) {
   try {
     await load('');
     await check('Identity chosen');
-    await choose('overage-and-plan-end');
+    await choose('overage');
     await check('Overage and plan end chosen');
-    await choose('utilization-thresholds');
+    await choose('utilization');
     await check('Utilization thresholds chosen');
-    await load('?refused=overage-and-plan-end,utilization-thresholds');
+    await load('?refused=overage,utilization');
     await check('Identity chosen, both refused');
-    await choose('overage-and-plan-end');
+    await choose('overage');
     await check('Overage and plan end chosen, both refused');
-    await choose('utilization-thresholds');
+    await choose('utilization');
     await check('Utilization thresholds chosen, both refused');
   } catch (error) {
     say(error instanceof Error ? error.message : String(error));
@@ -537,14 +537,6 @@ const POOL_DEPENDENTS = {
 };
 
 /**
- * The pool dialog's frame and every group's layout at the pass's viewport, then the frame at 720 px. Every group is
- * chosen and read while it shows: its height against the body's window, every cell against the two columns, every
- * label beside its switch or above its control, every control and hint as wide as its field, every dependent drawn
- * and disabled while its switch is off or its preset is not Custom, the warnings at their ends of their groups, no
- * clipped select, nothing pushed apart or past the frame, and the mono Name input as tall as the Status select beside
- * it.
- */
-/**
  * The layout every group of a grouped dialog keeps, read in the shown section: its height against the body's window,
  * the cells on the body's two columns, each label above its control or beside its switch, every text control and hint
  * as wide as its field, no select clipping its text, no row pushing its items apart, nothing past the frame, and every
@@ -635,6 +627,14 @@ const disabledIn = (dialog, label, selectors) =>
     [label, selectors],
   );
 
+/**
+ * The pool dialog's frame and every group's layout at the pass's viewport, then the frame at 720 px. Every group is
+ * chosen and read while it shows: its height against the body's window, every cell against the two columns, every
+ * label beside its switch or above its control, every control and hint as wide as its field, every dependent drawn
+ * and disabled while its switch is off or its preset is not Custom, the warnings at their ends of their groups, no
+ * clipped select, nothing pushed apart or past the frame, and the mono Name input as tall as the Status select beside
+ * it.
+ */
 async function poolDialogGeometry(theme) {
   const sayIn = (group, what) => failures.push(`${theme} /pools dialog${group ? ` ${group}` : ''}: ${what}`);
   const dialog = page.locator('dialog[open]');
@@ -1695,9 +1695,7 @@ async function agentLines(theme) {
     say(`agent ${line.agent}'s state badge ends at ${line.stateRight}px, past the table's visible edge at ${read.edge}px`);
   }
   await page.getByRole('button', { name: 'Collapse all', exact: true }).click();
-  // The pointer and the focus leave the toggle, so the view's shot draws it at rest rather than hovered.
-  await page.mouse.move(0, 0);
-  await page.evaluate(() => (document.activeElement instanceof HTMLElement ? document.activeElement.blur() : undefined));
+  await atRest();
   await settle();
 }
 

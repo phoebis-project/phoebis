@@ -1991,7 +1991,8 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
       nameInput.dispatchEvent(new window.Event('input', { bubbles: true }));
     }
     await m.settle(100);
-    const named = `${status?.classList.contains('is-held')} | ${status?.textContent ?? ''} | ${nameInput?.getAttribute('aria-invalid')} | ${rail(dlg, 'key')?.querySelector('.dialog-rail__dot') ? 'marked' : 'clear'}`;
+    const keyEntry = rail(dlg, 'key');
+    const named = `${status?.classList.contains('is-held')} | ${status?.textContent ?? ''} | ${nameInput?.getAttribute('aria-invalid')} | ${keyEntry ? (keyEntry.querySelector('.dialog-rail__dot') ? 'marked' : 'clear') : 'no rail entry'}`;
     const save = [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Create');
     results.push({
       name: "/keys the dialog's footer names a missing name",
@@ -2018,7 +2019,7 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
     const access = group(dlg, 'Access');
     const labels = [...(access?.querySelectorAll('.field__label') ?? [])].map((l) => l.textContent?.trim());
     results.push({ name: '/keys Requests in flight follows Expiry in Access', ok: JSON.stringify(labels) === JSON.stringify(['Expiry', 'Requests in flight']), missing: labels });
-    // What the key identifies a conversation by moves to Sessions, and keeps its options and default.
+    // What names a conversation sits in Sessions; it keeps its options and defaults.
     const sessions = group(dlg, 'Sessions');
     const selectIn = (section, label) => section?.querySelector(`select[aria-label="${label}"]`);
     const optionsOf = (section, label) => [...(selectIn(section, label)?.options ?? [])].map((o) => `${o.value}:${o.textContent?.trim()}`);
@@ -2047,7 +2048,8 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
     const refused = access?.querySelector('[role="alert"]')?.textContent ?? '';
     const line = dlg?.querySelector('.dialog__status')?.textContent ?? '';
     const invalid = cap?.getAttribute('aria-invalid');
-    const marked = rail(dlg, 'access')?.querySelector('.dialog-rail__dot') !== null;
+    const accessEntry = rail(dlg, 'access');
+    const marked = Boolean(accessEntry?.querySelector('.dialog-rail__dot'));
     set('3');
     await m.settle(80);
     results.push({
@@ -2061,7 +2063,7 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
         marked &&
         !access?.querySelector('[role="alert"]') &&
         cap?.getAttribute('aria-invalid') === null,
-      missing: [String(empty), refused || 'no refusal', line, String(invalid), `marked: ${marked}`, access?.querySelector('[role="alert"]')?.textContent ?? ''],
+      missing: [String(empty), refused || 'no refusal', line, String(invalid), accessEntry ? `marked: ${marked}` : 'no rail entry', access?.querySelector('[role="alert"]')?.textContent ?? ''],
     });
   }
   {

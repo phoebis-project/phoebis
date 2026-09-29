@@ -19,6 +19,7 @@ import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, ErrorState, Fie
 import { fmtAbsolute, fmtCompact, fmtHourTick, fmtInt, fmtPct, fmtPeriodEnd, fmtRelative, fmtUsd } from '@/lib/format';
 import { ENGINE_BOUNDS, ENGINE_FIELD_LABELS, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_LABELS, POOL_GROUPS, PROBE_TUNING_ROWS, bandRefusal, poolRefusals, type PoolGroup } from '@/lib/forms';
 import { useAsync, useNow } from '@/lib/hooks';
+import { POOL_RAIL } from '@/lib/poolRail';
 import { FAILOVER_PRESETS, SHEDDING_PRESETS, failoverPresetOf, sheddingPresetOf, shedPreview, shedPreviewLine, type FailoverPreset, type SheddingPreset } from '@/lib/presets';
 import { windowOf } from '@/lib/quota';
 import { STRATEGY_LABEL, kindOrdered } from '@/lib/selection';
@@ -114,26 +115,6 @@ function PresetPills({ label, value, onPick, hints }: { hints: Record<SheddingPr
 const AFFINITY_MODE_LABEL: Record<AffinityMode, string> = { always: 'always', when_cached: 'when cached' };
 const SUBAGENT_PLACEMENT_LABEL: Record<SubagentPlacement, string> = { by_cohort: 'by cohort', by_strategy: 'by strategy', with_main: 'with the main conversation' };
 const fmtTokens = (n: number) => fmtCompact(n).toLowerCase();
-/** Each group's rail label and the parent it sits under; `POOL_GROUPS` holds their order. */
-const GROUP_RAIL: Record<PoolGroup, { label: string; parent: string }> = {
-  bodyCapture: { label: 'Body capture', parent: 'Visibility' },
-  cacheDiagnostics: { label: 'Cache diagnostics', parent: 'Visibility' },
-  cacheTtl: { label: 'Cache TTL', parent: 'Caching' },
-  failover: { label: 'Failover', parent: 'Load' },
-  identity: { label: 'Identity', parent: 'Pool' },
-  keepalive: { label: 'Keepalive', parent: 'Caching' },
-  keys: { label: 'Keys', parent: 'Pool' },
-  members: { label: 'Members', parent: 'Pool' },
-  models: { label: 'Models', parent: 'Pool' },
-  overage: { label: 'Overage and plan end', parent: 'Load' },
-  pinning: { label: 'Pinning', parent: 'Routing' },
-  placement: { label: 'Placement', parent: 'Routing' },
-  probeTuning: { label: 'Probe tuning', parent: 'Caching' },
-  responseHeaders: { label: 'Response headers', parent: 'Visibility' },
-  selection: { label: 'Selection', parent: 'Routing' },
-  shedding: { label: 'Load shedding', parent: 'Load' },
-  utilization: { label: 'Utilization thresholds', parent: 'Load' },
-};
 /** The Strategy hint follows the chosen strategy; its first sentence is the card's rule, `STRATEGY_RULE`. */
 const STRATEGY_HINT: Record<PoolStrategy, ReactNode> = {
   pace: (
@@ -1827,7 +1808,7 @@ export function PoolDialog({
       </div>
     ),
   };
-  const groups: DialogGroup[] = POOL_GROUPS.map((id) => ({ ...GROUP_RAIL[id], body: bodies[id], id, refused: refusedGroups.has(id) }));
+  const groups: DialogGroup[] = POOL_GROUPS.map((id) => ({ ...POOL_RAIL[id], body: bodies[id], id, refused: refusedGroups.has(id) }));
 
   return (
     <>

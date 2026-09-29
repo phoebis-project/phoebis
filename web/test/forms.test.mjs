@@ -365,6 +365,14 @@ test("refusals come in rail order, a new pool's first two the name and the membe
   assert.deepEqual(d.POOL_GROUPS, ['identity', 'members', 'keys', 'models', 'selection', 'placement', 'pinning', 'utilization', 'shedding', 'failover', 'overage', 'cacheTtl', 'keepalive', 'probeTuning', 'responseHeaders', 'bodyCapture', 'cacheDiagnostics']);
 });
 
+test('every bounded engine field is refused once it leaves its bound', () => {
+  // A bound added to ENGINE_BOUNDS gets its label through the Record type; this keeps it from escaping the refusals.
+  const below = Object.fromEntries(Object.entries(d.ENGINE_BOUNDS).map(([key, { min }]) => [key, min - 1]));
+  const keyOf = Object.fromEntries(Object.entries(d.ENGINE_FIELD_LABELS).map(([key, label]) => [label, key]));
+  const refused = d.poolRefusals({ ...input, ...below }, accounts).map((r) => keyOf[r.field] ?? r.field);
+  assert.deepEqual(refused.sort(), Object.keys(d.ENGINE_FIELD_LABELS).sort());
+});
+
 test('the key dialog carries the rules, the mode, and the twins switch from the stored key to the body', () => {
   const own = rules('claude-sonnet-5', 'NOT *');
   const stored = d.decodeKey({ ...fixture('keys').keys[0], long_context_twins: false, model_rules: own, model_rules_mode: 'replace' });
