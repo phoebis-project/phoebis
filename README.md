@@ -3,9 +3,12 @@
 A local relay for Claude Code. A downstream client points at `phoebis` with a key the router issued; `phoebis` puts the
 request on the wire to Anthropic, under credentials it holds itself, and picks
 those credentials from a pool of accounts with sticky sessions, quota-driven failover, prompt-cache keepalive,
-per-request statistics down to the request's shape and the answer's own facts, and a web console. One process
-serves three listeners: the proxy that relays
-`/v1/messages`, the admin API with the embedded console, and a metrics endpoint in Prometheus text format.
+per-request statistics down to the request's shape and the answer's own facts, and a web console. Failover reads each
+account's usage windows from response heads and from a five-minute poll of the usage endpoint and predicts between them,
+so a routing decision can lag heavy use of an account outside the router by up to five minutes; the
+[routing page](docs/site/routing.md#the-windows-the-router-works-from) says what the router reads and how it carries a
+reading forward. One process serves three listeners: the proxy that relays `/v1/messages`, the admin API with the
+embedded console, and a metrics endpoint in Prometheus text format.
 
 The documentation lives under [`docs/site/`](docs/site/index.md) and is published at
 <https://daystrom-labs.github.io/phoebis/> once GitHub Pages is enabled for the repository

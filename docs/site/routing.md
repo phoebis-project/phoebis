@@ -314,7 +314,10 @@ stored tier: a tier change is read at the next profile refresh, within the hour,
 tier changed while the router was down is read at start. The newest reading per account and window is kept in the
 registry and loaded at startup, so a restart, and an account whose first poll the endpoint refuses, route from the last
 known windows. The router never fetches usage at a selection; use of an account outside the router shows in the next
-head or poll, so a decision can lag it by up to five minutes plus any backoff.
+head or poll, so a decision can lag it by up to five minutes plus any backoff. The [Quota view](statistics.md#quota)
+shows when the poll last asked the endpoint for each OAuth account and how it answered, and while an account backs off,
+since when and when its next attempt comes; a `poll_backoff` [alert](statistics.md#alerts) fires once an account has
+backed off for thirty minutes.
 
 ### Moves
 

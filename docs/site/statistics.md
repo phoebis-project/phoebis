@@ -445,7 +445,7 @@ The detail names the parent agent when the client sent `x-claude-code-parent-age
 polls as the [routing page](routing.md#the-windows-the-router-works-from) says, reaches the threshold and resolves once
 a sample reads five points below it.
 
-For the other nine kinds at most one open event exists per rule and subject; an event resolves either on the
+For the other ten kinds at most one open event exists per rule and subject; an event resolves either on the
 condition its description names or by hand, through Resolve. A webhook may not point at `localhost` or a
 `.localhost` name, a loopback, link-local, or unspecified address; the refusal reads `webhook_url must not point
 at {reason}`, and the same check runs again on every delivery against whatever address DNS actually answers with,
