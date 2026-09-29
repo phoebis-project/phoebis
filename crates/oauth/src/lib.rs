@@ -19,4 +19,7 @@ pub use pkce::{generate_pkce, generate_state, Pkce};
 pub use session::{
     CallbackInput, PairingError, PairingSession, PairingSessions, PairingStatus, PendingIdentity,
 };
-pub use usage::{parse_usage, ExtraUsage, UsageError, UsageService, UsageSnapshot, UsageWindow};
+pub use usage::{
+    parse_usage, ExtraUsage, PollOutcome, PollStatus, UsageError, UsageService, UsageSnapshot,
+    UsageWindow, BACKOFF_CAP_MS,
+};

@@ -56,11 +56,10 @@ fn main() -> anyhow::Result<()> {
             println!("ledger at {}", config.stats.ledger_path.display());
             let days = |n: u32| if n == 0 { "forever".to_string() } else { format!("{n} days") };
             println!(
-                "retention {}, rollups {}, samples {} days, quota poll every {}s",
+                "retention {}, rollups {}, samples {} days",
                 days(config.stats.retention_days),
                 days(config.stats.rollup_retention_days),
-                config.quota.sample_retention_days,
-                config.quota.poll_interval_seconds
+                config.quota.sample_retention_days
             );
             println!(
                 "keepalive: lease {}s, {} sessions, {} agents, {} workers, {} MiB retained, oauth prewarm {}",

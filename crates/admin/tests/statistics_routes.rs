@@ -64,11 +64,12 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
     );
     assert_eq!(
         (
-            settings["quota"]["poll_interval_seconds"].as_u64(),
+            settings["quota"]["sample_retention_days"].as_u64(),
+            settings["quota"].as_object().map(|quota| quota.len()),
             settings["sessions"]["expire_after_seconds"].as_u64(),
             settings["listeners"]["metrics"].as_str()
         ),
-        (Some(3_600), Some(86_400), Some("127.0.0.1:9464"))
+        (Some(30), Some(1), Some(86_400), Some("127.0.0.1:9464"))
     );
     assert_eq!(settings["pricing"]["version"], "2026-09-08");
     assert_eq!(settings["pricing"]["source"], "shipped");

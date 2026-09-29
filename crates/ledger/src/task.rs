@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use phoebis_bus::{spawn_subscriber, Bus, Subscriber};
-use phoebis_oauth::{Clock, UsageService};
+use phoebis_oauth::Clock;
 use phoebis_routing::{RegistrySnapshot, Report, RouterHandle};
 use phoebis_store::{AccountKind, BudgetPeriod, Store};
 use tokio::sync::{mpsc, oneshot, watch, Mutex};
@@ -20,7 +20,6 @@ use crate::metrics::Metrics;
 use crate::plan::{PlanFactors, PlanWindows};
 use crate::pricing::{price_attempts, PriceTable, Pricing};
 use crate::query::member_spends;
-use crate::quota::QuotaPoll;
 use crate::record::{AttemptRecord, EventRecord, QuotaSampleRecord, RequestRecord};
 use crate::{LedgerDb, LedgerError};
 
@@ -40,7 +39,6 @@ pub struct LedgerConfig {
     pub rollup_retention_days: u32,
     pub sample_retention_days: u32,
     pub purge_interval: Duration,
-    pub quota_poll_interval: Duration,
     pub event_poll: Duration,
     /// How often the assembler ages out entries whose completion never arrived.
     pub expire_interval: Duration,
@@ -53,7 +51,6 @@ impl Default for LedgerConfig {
             rollup_retention_days: 400,
             sample_retention_days: 30,
             purge_interval: Duration::from_secs(3_600),
-            quota_poll_interval: Duration::from_secs(3_600),
             event_poll: Duration::from_secs(5),
             expire_interval: EXPIRE_INTERVAL,
         }
@@ -102,11 +99,18 @@ impl Ledger {
         self.stats.dropped.load(Ordering::Relaxed)
     }
 
-    /// Registers a task the ledger owns beyond the writer, so `shutdown` aborts it the same way it aborts the
-    /// periodic poll: a fetch still running when the process stops must not keep a strong reference (the
-    /// store, for instance) alive past that.
-    pub(crate) fn track(&self, handle: tokio::task::JoinHandle<()>) {
+    /// Registers a task the ledger owns beyond the writer, so `shutdown` aborts it before the channel closes:
+    /// a fetch still running when the process stops must not keep a strong reference (the store, for
+    /// instance) alive past that, and the quota poll must not record into a channel that is closing.
+    pub fn track(&self, handle: tokio::task::JoinHandle<()>) {
         self.tasks.lock().expect(TASKS_POISONED).push(handle);
+    }
+
+    /// How many handles `shutdown` would abort now: every handle ever tracked, finished or not, the event
+    /// mirror, the quota poll's scheduler and the startup step's fetches among them. A scheduled attempt is the
+    /// scheduler's own, reaped when it completes, and never counts here.
+    pub fn tracked(&self) -> usize {
+        self.tasks.lock().expect(TASKS_POISONED).len()
     }
 
     /// Never waits: the relay's body task and the assembler both call this for an event or a sample, and
@@ -150,7 +154,6 @@ pub fn spawn(
     db: Arc<LedgerDb>,
     pricing: Arc<Pricing>,
     store: Arc<Store>,
-    usage: Option<Arc<UsageService>>,
     bus: &Bus,
     router: RouterHandle,
     clock: Clock,
@@ -170,17 +173,6 @@ pub fn spawn(
         done: Arc::new(Mutex::new(Some(done_rx))),
         tasks: Arc::new(std::sync::Mutex::new(Vec::new())),
     };
-    if let Some(usage) = usage {
-        let poll = QuotaPoll::spawn(
-            db.clone(),
-            store.clone(),
-            usage,
-            ledger.clone(),
-            clock.clone(),
-            config.quota_poll_interval,
-        );
-        ledger.tasks.lock().expect(TASKS_POISONED).push(poll);
-    }
     let mirror = spawn_event_mirror(
         db.clone(),
         ledger.clone(),

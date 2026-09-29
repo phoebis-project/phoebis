@@ -15,7 +15,6 @@ phoebis-routing = { path = "../routing" }
 phoebis-store = { path = "../store" }
 phoebis-transport = { path = "../transport" }
 jiff = { workspace = true }
-rand = { workspace = true }
 rusqlite = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -29,5 +28,8 @@ phoebis-cch = { path = "../cch" }
 phoebis-profile = { path = "../profile" }
 fake-upstream = { path = "../../tests/fake_upstream" }
 http-body-util = { workspace = true }
+rand = { workspace = true }
 tempfile = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
 tower = { workspace = true }
+tracing-subscriber = { workspace = true }

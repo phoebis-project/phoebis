@@ -1087,7 +1087,7 @@ export interface Settings {
   planFactors: PlanFactors;
   /** The price table shown to the user and used to cost the ledger. */
   pricing: { effectiveDate: string; models: ModelPrice[]; source: string };
-  quota: { pollIntervalSeconds: number; sampleRetentionDays: number };
+  quota: { sampleRetentionDays: number };
   retention: { bodyCaptureMaxHours: number; ledgerDays: number; quotaSamplesDays: number; rollupDays: number };
   routing: { catalogCacheSeconds: number; catalogRefreshSeconds: number; cooldownFallbackSeconds: number; maxAttempts: number; modelRejectionSeconds: number; startupFetchSeconds: number };
   /** How long a session stays listed after its last activity. */

@@ -1133,13 +1133,7 @@ fn stats_and_quota_settings_are_validated_with_the_specs_bounds() {
         ),
         (90, "127.0.0.1:9464", "./data/ledger.sqlite")
     );
-    assert_eq!(
-        (
-            config.quota.poll_interval_seconds,
-            config.quota.sample_retention_days
-        ),
-        (3_600, 30)
-    );
+    assert_eq!(config.quota.sample_retention_days, 30);
     assert_eq!(
         config
             .stats
@@ -1148,20 +1142,15 @@ fn stats_and_quota_settings_are_validated_with_the_specs_bounds() {
             .and_then(|p| p.to_str()),
         Some("./pricing.yaml")
     );
-    let full = load(&with("full", "stats:\n  body_capture_max_hours: 24\n  ledger_path: ./data/l.sqlite\n  metrics_listen: 127.0.0.1:9999\n  pricing_path: ./p.yaml\n  retention_days: 7\n  rollup_retention_days: 500\nquota:\n  poll_interval_seconds: 900\n  sample_retention_days: 3\n")).unwrap();
+    let full = load(&with("full", "stats:\n  body_capture_max_hours: 24\n  ledger_path: ./data/l.sqlite\n  metrics_listen: 127.0.0.1:9999\n  pricing_path: ./p.yaml\n  retention_days: 7\n  rollup_retention_days: 500\nquota:\n  sample_retention_days: 3\n")).unwrap();
     assert_eq!(
         (
             full.stats.retention_days,
             full.stats.rollup_retention_days,
-            full.quota.poll_interval_seconds,
             full.quota.sample_retention_days
         ),
-        (7, 500, 900, 3)
+        (7, 500, 3)
     );
-    assert!(matches!(
-        load(&with("poll", "quota:\n  poll_interval_seconds: 899\n")),
-        Err(ConfigError::PollIntervalTooShort)
-    ));
     let zero_retention = load(&with("retention", "stats:\n  retention_days: 0\n")).unwrap();
     assert_eq!(zero_retention.stats.retention_days, 0);
     let zero_rollup = load(&with("rollup", "stats:\n  rollup_retention_days: 0\n")).unwrap();

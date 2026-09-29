@@ -1,3 +1,5 @@
+mod common;
+
 use phoebis_oauth::parse_usage;
 use phoebis_profile::fixtures::{control_response, ControlFixture};
 
@@ -43,7 +45,7 @@ fn the_fable_window_comes_from_limits_regardless_of_the_named_key() {
 }
 
 mod service {
-    use phoebis_oauth::{Clock, CredentialManager, UsageService};
+    use phoebis_oauth::{Clock, CredentialManager, PollOutcome, UsageService};
     use phoebis_profile::{
         claude_code_2_1_269_linux_x64,
         fixtures::{control_response, ControlFixture},
@@ -260,14 +262,17 @@ mod service {
             fetching.await.unwrap().is_ok(),
             "the fetch that was already out commits its snapshot"
         );
-        // Past the 60 s cache TTL, well inside the hour the profile endpoint asked for.
-        now.store(1_090_000, Ordering::SeqCst);
-        assert!(service.snapshot("a").await.is_ok());
+        // Past the 60 s cache TTL, one second short of the fifteen minutes the hour asked for is capped to.
+        now.store(1_000_000 + 899_000, Ordering::SeqCst);
+        assert!(service.snapshot("a").await.unwrap().error.is_some());
         assert_eq!(
             usage_requests(),
             1,
             "the commit behind the hold did not shorten it"
         );
+        now.store(1_000_000 + 900_000, Ordering::SeqCst);
+        assert!(service.snapshot("a").await.unwrap().error.is_none());
+        assert_eq!(usage_requests(), 2, "the hold ends at the cap");
         up.shutdown().await;
     }
 
@@ -280,6 +285,25 @@ mod service {
                 body: b"{}".to_vec(),
             },
         }
+    }
+
+    /// `rate_limited` without the header, so the wait is the ladder's.
+    fn rate_limited_bare() -> Rule {
+        Rule {
+            path_prefix: "/api/oauth/usage".into(),
+            respond: Respond::Json {
+                status: 429,
+                headers: vec![],
+                body: b"{}".to_vec(),
+            },
+        }
+    }
+
+    fn usage_requests(up: &FakeUpstream) -> usize {
+        up.requests()
+            .iter()
+            .filter(|r| r.line.starts_with("GET /api/oauth/usage"))
+            .count()
     }
 
     #[tokio::test]
@@ -448,10 +472,9 @@ mod service {
     }
 
     #[tokio::test]
-    async fn an_hour_long_retry_after_is_honored_in_full() {
-        // The credential refresh clamps a Retry-After to fifteen minutes because it races a token's expiry; a
-        // usage fetch races nothing, so ignoring the hour the endpoint asked for would only earn a harder
-        // rate limit.
+    async fn a_retry_after_past_fifteen_minutes_waits_fifteen() {
+        // An hour asked for parks the account's readings for an hour; fifteen minutes is the most the poll
+        // waits, as the token refresh does, and a 429 that keeps coming keeps it there.
         let now = Arc::new(AtomicI64::new(1_000_000));
         let up = FakeUpstream::start(vec![rate_limited("3600")]).await;
         let service = service_for(
@@ -460,32 +483,364 @@ mod service {
             Duration::from_secs(1),
             &now,
         );
-        let requests = || {
+
+        service.snapshot("a").await.unwrap();
+        assert_eq!(usage_requests(&up), 1);
+
+        now.store(1_000_000 + 899_000, Ordering::SeqCst);
+        assert!(service.snapshot("a").await.unwrap().error.is_some());
+        assert_eq!(usage_requests(&up), 1, "held one second short of the cap");
+
+        now.store(1_000_000 + 900_000, Ordering::SeqCst);
+        service.snapshot("a").await.unwrap();
+        assert_eq!(usage_requests(&up), 2, "the wait ends at the cap");
+        up.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_429_without_retry_after_backs_off_at_one_two_four_eight_and_then_fifteen_minutes() {
+        // The fake answers 429 with no header; the clock is the service's, so each step is one fetch past the
+        // cache TTL of one second and one more inside the wait.
+        let now = Arc::new(AtomicI64::new(1_000_000));
+        let up = FakeUpstream::start(vec![rate_limited_bare()]).await;
+        let service = service_for(
+            &up,
+            store_with_bundle_until(1_000_000 + 86_400_000),
+            Duration::from_secs(1),
+            &now,
+        );
+        let (lines, _sink) = crate::common::capture_tracing();
+        let mut at = 1_000_000;
+        for (step, wait_ms) in [60_000, 120_000, 240_000, 480_000, 900_000, 900_000]
+            .into_iter()
+            .enumerate()
+        {
+            now.store(at, Ordering::SeqCst);
+            service.snapshot("a").await.unwrap();
+            let status = service.poll_status("a").unwrap();
+            assert_eq!(
+                (
+                    status.last_outcome,
+                    status.rate_limited_in_a_row,
+                    status.next_attempt_at,
+                    status.backoff_since
+                ),
+                (
+                    PollOutcome::RateLimited,
+                    step as u32 + 1,
+                    Some(at + wait_ms),
+                    Some(1_000_000)
+                ),
+                "step {step}"
+            );
+            now.store(at + wait_ms - 1, Ordering::SeqCst);
+            assert!(
+                service.snapshot("a").await.unwrap().error.is_some(),
+                "held one ms short of the wait"
+            );
+            assert_eq!(usage_requests(&up), step + 1, "no request inside the wait");
+            at += wait_ms;
+        }
+        let warnings = lines
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|l| l.contains("rate-limited") && l.contains("account=a"))
+            .count();
+        assert_eq!(warnings, 6, "one warning per 429, naming the account");
+        assert!(
+            !lines
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|l| l.contains("sk-ant-oat01")),
+            "no token reaches a line"
+        );
+        up.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_clean_answer_ends_the_backoff_and_a_transport_failure_keeps_the_cadence() {
+        let now = Arc::new(AtomicI64::new(1_000_000));
+        let up = FakeUpstream::start(vec![rate_limited_bare()]).await;
+        up.set_rule_after(
+            2,
+            "/api/oauth/usage",
+            Respond::Json {
+                status: 200,
+                headers: vec![],
+                body: control_response(ControlFixture::Usage).to_vec(),
+            },
+        );
+        let service = service_for(
+            &up,
+            store_with_bundle_until(1_000_000 + 86_400_000),
+            Duration::from_secs(1),
+            &now,
+        );
+
+        service.snapshot("a").await.unwrap();
+        now.store(1_060_000, Ordering::SeqCst);
+        service.snapshot("a").await.unwrap();
+        assert_eq!(
+            service.poll_status("a").unwrap().rate_limited_in_a_row,
+            2,
+            "two 429s in a row"
+        );
+        now.store(1_180_000, Ordering::SeqCst);
+        assert!(service.snapshot("a").await.unwrap().error.is_none());
+        let status = service.poll_status("a").unwrap();
+        assert_eq!(
+            (
+                status.last_outcome,
+                status.rate_limited_in_a_row,
+                status.next_attempt_at,
+                status.backoff_since,
+                status.last_clean_at
+            ),
+            (PollOutcome::Clean, 0, None, None, Some(1_180_000)),
+            "the clean answer ends the run"
+        );
+        assert_eq!(service.held_for("a"), None);
+
+        up.set_rule_after(
+            3,
+            "/api/oauth/usage",
+            Respond::Json {
+                status: 500,
+                headers: vec![],
+                body: b"{}".to_vec(),
+            },
+        );
+        now.store(1_181_000, Ordering::SeqCst);
+        assert!(service.snapshot("a").await.unwrap().error.is_some());
+        let status = service.poll_status("a").unwrap();
+        assert_eq!(
+            (
+                status.last_outcome,
+                status.rate_limited_in_a_row,
+                status.next_attempt_at,
+                status.last_clean_at
+            ),
+            (PollOutcome::Failed, 0, None, Some(1_180_000)),
+            "a 5xx is a failed attempt, not a backoff"
+        );
+        assert_eq!(service.held_for("a"), None);
+
+        up.set_rule_after(4, "/api/oauth/usage", Respond::CloseAfterRequest);
+        now.store(1_182_000, Ordering::SeqCst);
+        assert!(service.snapshot("a").await.unwrap().error.is_some());
+        let status = service.poll_status("a").unwrap();
+        assert_eq!(
+            (
+                status.last_outcome,
+                status.rate_limited_in_a_row,
+                status.next_attempt_at,
+                status.last_attempt_at
+            ),
+            (PollOutcome::Failed, 0, None, 1_182_000),
+            "a transport failure is a failed attempt, not a backoff"
+        );
+        assert_eq!(service.held_for("a"), None);
+        assert_eq!(usage_requests(&up), 5);
+        up.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_profile_429_leaves_the_next_usage_answer_marked_as_no_new_reading() {
+        let now = Arc::new(AtomicI64::new(1_000_000));
+        let up = FakeUpstream::start(vec![
+            Rule {
+                path_prefix: "/api/oauth/profile".into(),
+                respond: Respond::Json {
+                    status: 429,
+                    headers: vec![("retry-after".into(), "120".into())],
+                    body: b"{}".to_vec(),
+                },
+            },
+            Rule {
+                path_prefix: "/api/oauth/usage".into(),
+                respond: Respond::Json {
+                    status: 200,
+                    headers: vec![],
+                    body: control_response(ControlFixture::Usage).to_vec(),
+                },
+            },
+        ])
+        .await;
+        let service = service_for(
+            &up,
+            store_with_bundle_until(1_000_000 + 86_400_000),
+            Duration::from_secs(3_600),
+            &now,
+        );
+        let clean = service.snapshot("a").await.unwrap();
+        assert!(clean.error.is_none());
+        assert!(
+            service.profile("a").await.is_err(),
+            "the profile is rate-limited"
+        );
+
+        // Inside both the cache TTL and the profile's hold: the cached windows are no new reading.
+        now.store(1_060_000, Ordering::SeqCst);
+        let held = service.snapshot("a").await.unwrap();
+        assert!(
+            held.error.is_some(),
+            "a cache hit inside the hold carries the error"
+        );
+        assert_eq!(held.windows.len(), clean.windows.len(), "the old windows");
+        assert_eq!(held.fetched_at, 1_000_000, "read when they were read");
+        assert_eq!(usage_requests(&up), 1, "no request inside the hold");
+        let latest = service.latest("a").unwrap();
+        assert!(
+            latest.error.is_none(),
+            "the snapshot held is still the clean one"
+        );
+
+        // Past both the 120 s hold and the 3 600 s cache TTL: the endpoint is read again.
+        now.store(1_000_000 + 3_601_000, Ordering::SeqCst);
+        let fresh = service.snapshot("a").await.unwrap();
+        assert!(fresh.error.is_none());
+        assert_eq!(fresh.fetched_at, 1_000_000 + 3_601_000);
+        assert_eq!(
+            usage_requests(&up),
+            2,
+            "a fresh request past the hold and the TTL"
+        );
+        assert!(service.latest("a").unwrap().error.is_none());
+        up.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_profile_retry_after_past_fifteen_minutes_holds_the_account_fifteen() {
+        let now = Arc::new(AtomicI64::new(1_000_000));
+        let up = FakeUpstream::start(vec![
+            Rule {
+                path_prefix: "/api/oauth/profile".into(),
+                respond: Respond::Json {
+                    status: 429,
+                    headers: vec![("retry-after".into(), "7200".into())],
+                    body: b"{}".to_vec(),
+                },
+            },
+            Rule {
+                path_prefix: "/api/oauth/usage".into(),
+                respond: Respond::Json {
+                    status: 200,
+                    headers: vec![],
+                    body: control_response(ControlFixture::Usage).to_vec(),
+                },
+            },
+        ])
+        .await;
+        let service = service_for(
+            &up,
+            store_with_bundle_until(1_000_000 + 86_400_000),
+            Duration::from_secs(1),
+            &now,
+        );
+        let profile_requests = || {
             up.requests()
                 .iter()
-                .filter(|r| r.line.starts_with("GET /api/oauth/usage"))
+                .filter(|r| r.line.starts_with("GET /api/oauth/profile"))
                 .count()
         };
+        assert!(service.profile("a").await.is_err());
+        assert_eq!(profile_requests(), 1);
 
-        service.snapshot("a").await.unwrap();
-        assert_eq!(requests(), 1);
-
-        // Past the refresh path's fifteen-minute ceiling, and one second short of the hour that was asked for.
-        now.store(1_000_000 + 3_599_000, Ordering::SeqCst);
+        now.store(1_000_000 + 899_000, Ordering::SeqCst);
         assert!(service.snapshot("a").await.unwrap().error.is_some());
+        assert!(service.profile("a").await.is_err());
         assert_eq!(
-            requests(),
-            1,
-            "the whole hour is waited out, not the refresh path's fifteen minutes"
+            (usage_requests(&up), profile_requests()),
+            (0, 1),
+            "both endpoints are held one second short of the cap"
         );
 
-        now.store(1_000_000 + 3_600_000, Ordering::SeqCst);
+        now.store(1_000_000 + 901_000, Ordering::SeqCst);
+        assert!(service.snapshot("a").await.unwrap().error.is_none());
+        assert_eq!(
+            usage_requests(&up),
+            1,
+            "the two hours asked for are capped to fifteen minutes"
+        );
+        up.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_poll_reads_the_endpoint_inside_the_cache_ttl_and_joins_a_fetch_already_out() {
+        let now = Arc::new(AtomicI64::new(1_000_000));
+        let up = FakeUpstream::start(vec![Rule {
+            path_prefix: "/api/oauth/usage".into(),
+            respond: Respond::Json {
+                status: 200,
+                headers: vec![],
+                body: control_response(ControlFixture::Usage).to_vec(),
+            },
+        }])
+        .await;
+        let service = service_for(
+            &up,
+            store_with_bundle_until(1_000_000 + 86_400_000),
+            Duration::from_secs(3_600),
+            &now,
+        );
+        service.snapshot("a").await.unwrap();
+        now.store(1_010_000, Ordering::SeqCst);
         service.snapshot("a").await.unwrap();
         assert_eq!(
-            requests(),
-            2,
-            "the wait ends when the endpoint said it would"
+            usage_requests(&up),
+            1,
+            "a snapshot inside the TTL is the cache's"
         );
+        let polled = service.poll("a").await.unwrap();
+        assert_eq!(
+            (
+                usage_requests(&up),
+                polled.error.is_none(),
+                polled.fetched_at
+            ),
+            (2, true, 1_010_000),
+            "a poll inside the TTL reads the endpoint"
+        );
+        assert_eq!(
+            service.snapshot("a").await.unwrap().fetched_at,
+            1_010_000,
+            "the poll's answer is the cache's"
+        );
+
+        now.store(1_020_000, Ordering::SeqCst);
+        let (first, second) = tokio::join!(service.poll("a"), service.poll("a"));
+        assert!(first.is_ok() && second.is_ok());
+        assert_eq!(
+            usage_requests(&up),
+            3,
+            "two polls at once share one request"
+        );
+
+        up.set_rule_after(
+            3,
+            "/api/oauth/usage",
+            Respond::Json {
+                status: 429,
+                headers: vec![("retry-after".into(), "120".into())],
+                body: b"{}".to_vec(),
+            },
+        );
+        now.store(1_030_000, Ordering::SeqCst);
+        service.poll("a").await.unwrap();
+        assert_eq!(usage_requests(&up), 4);
+        now.store(1_040_000, Ordering::SeqCst);
+        let held = service.poll("a").await.unwrap();
+        assert!(
+            held.error.is_some(),
+            "a held poll answers the held snapshot"
+        );
+        assert_eq!(
+            held.fetched_at, 1_020_000,
+            "the windows of the last clean read"
+        );
+        assert_eq!(usage_requests(&up), 4, "and makes no request");
         up.shutdown().await;
     }
 
@@ -581,6 +936,11 @@ mod service {
             },
         );
         assert!(service.profile("business").await.is_err());
+        assert_eq!(
+            service.poll_status("business").unwrap().next_attempt_at,
+            Some(1_000_000 + 900_000),
+            "the hour asked for is held to the fifteen-minute cap"
+        );
         let usage = service.snapshot("business").await.unwrap();
         assert!(
             usage.error.is_some(),

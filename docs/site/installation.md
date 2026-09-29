@@ -154,7 +154,7 @@ so it is safe to run against a production file while the router is up. It prints
 5. `profile {config.compatibility.profile}`
 6. `routing: max_attempts {n}, cooldown_fallback {n}s, model_rejection {n}s, catalog cache {n}s`
 7. `ledger at {config.stats.ledger_path}`
-8. `retention {n days|forever}, rollups {n days|forever}, samples {n} days, quota poll every {n}s`
+8. `retention {n days|forever}, rollups {n days|forever}, samples {n} days`
 9. `keepalive: lease {n}s, {n} sessions, {n} agents, {n} workers, {n} MiB retained, oauth prewarm
    {verified|unverified}`
 
@@ -225,10 +225,7 @@ keepalive:
 proxy:
   listen: 127.0.0.1:8317
 quota:
-  # How often every OAuth account's usage endpoint is polled for a quota sample, at least 900 s. Response
-  # headers sample active accounts for free; the poll fills idle gaps and is the only source of extra-usage
-  # credit totals.
-  poll_interval_seconds: 3600
+  # How long quota and extra-usage samples are kept.
   sample_retention_days: 30
 routing:
   # How long an upstream's model list is held before it is read again for the console and the models listing.
@@ -349,16 +346,14 @@ Required: `listen`, a socket address, refused with a YAML error.
 
 ### quota
 
-Defaults whole.
+Defaults whole. A key this build does not carry under `quota` is refused at load, as under every other block.
 
 | Key | Default | Accepts |
 | --- | --- | --- |
-| `poll_interval_seconds` | `3600` | at least 900 |
 | `sample_retention_days` | `30` | at least 1 |
 
 Refused with:
 
-- `poll_interval_seconds`: `quota.poll_interval_seconds must be at least 900`
 - `sample_retention_days`: `quota.sample_retention_days must be at least 1`
 
 ### routing
@@ -461,9 +456,9 @@ The checks above run in a fixed order at load, not block by block: `compatibilit
 `admin`'s loopback-or-origin rule, then `usage.refresh_concurrency`, `storage.path`, `routing.max_attempts`, the
 `keepalive` bounds, `routing.catalog_cache_seconds`, `routing.startup_fetch_seconds`,
 `routing.catalog_refresh_seconds`, the four `sessions` keys,
-`stats.body_capture_max_hours`, `quota.poll_interval_seconds`, `stats.rollup_retention_days`,
-`quota.sample_retention_days`, `stats.ledger_path`, and last whether `stats.ledger_path` and `storage.path` name
-the same file. The first failure is the one reported, so fix the file top to bottom to find the next one.
+`stats.body_capture_max_hours`, `stats.rollup_retention_days`, `quota.sample_retention_days`, `stats.ledger_path`,
+and last whether `stats.ledger_path` and `storage.path` name the same file. The first failure is the one reported,
+so fix the file top to bottom to find the next one.
 
 `stats.ledger_path` and `storage.path` cannot name the same file because two schemas in one file open quietly
 and lose the ledger's columns: the ledger's tables would open inside the registry file, read its schema

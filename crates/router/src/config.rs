@@ -92,10 +92,7 @@ pub struct UsageConfig {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct QuotaConfig {
-    /// How often every OAuth account's usage endpoint is polled for a quota sample. At least 900 s: the
-    /// endpoint rate-limits per account, and header samples already cover active accounts.
-    #[serde(default = "default_poll_interval")]
-    pub poll_interval_seconds: u64,
+    /// How long quota and extra-usage samples are kept, in days.
     #[serde(default = "default_sample_retention")]
     pub sample_retention_days: u32,
 }
@@ -203,8 +200,6 @@ pub enum ConfigError {
     ModelRejectionOutOfRange { value: u64 },
     #[error("environment variable {name} still holds the example placeholder")]
     PlaceholderSecret { name: String },
-    #[error("quota.poll_interval_seconds must be at least 900")]
-    PollIntervalTooShort,
     #[error("cannot read {path}")]
     Read {
         path: PathBuf,
@@ -262,7 +257,6 @@ impl fmt::Debug for AdminConfig {
 impl Default for QuotaConfig {
     fn default() -> Self {
         QuotaConfig {
-            poll_interval_seconds: default_poll_interval(),
             sample_retention_days: default_sample_retention(),
         }
     }
@@ -379,9 +373,6 @@ fn check_shape(config: &Config) -> Result<(), ConfigError> {
         return Err(ConfigError::BodyCaptureMaxOutOfRange {
             value: config.stats.body_capture_max_hours,
         });
-    }
-    if config.quota.poll_interval_seconds < 900 {
-        return Err(ConfigError::PollIntervalTooShort);
     }
     // Zero is "forever" on both keys; otherwise a rollup must outlive the rows it was folded from.
     let (raw, rollup) = (
@@ -538,10 +529,6 @@ fn default_metrics_listen() -> SocketAddr {
 }
 
 fn default_model_rejection() -> u64 {
-    3_600
-}
-
-fn default_poll_interval() -> u64 {
     3_600
 }
 
@@ -790,6 +777,34 @@ mod tests {
                 Err(ConfigError::Syntax(_))
             ),
             "an unknown upstream key is refused"
+        );
+    }
+
+    #[test]
+    fn a_key_no_block_carries_is_refused_at_load() {
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("TEST_CFG_ADMIN", "admin-secret-001");
+        assert_eq!(
+            load(&file(
+                dir.path(),
+                "quota",
+                "quota:\n  sample_retention_days: 7\n"
+            ))
+            .unwrap()
+            .quota
+            .sample_retention_days,
+            7
+        );
+        assert!(
+            matches!(
+                load(&file(
+                    dir.path(),
+                    "quota-unknown",
+                    "quota:\n  sample_retention_days: 7\n  refresh_minutes: 5\n"
+                )),
+                Err(ConfigError::Syntax(_))
+            ),
+            "refresh_minutes is a key no build has ever carried under quota, so it is refused"
         );
     }
 

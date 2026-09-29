@@ -163,7 +163,6 @@ pub async fn rig(spec: RigSpec) -> Rig {
         db.clone(),
         pricing.clone(),
         h.store.clone(),
-        None,
         &bus,
         h.router.clone(),
         clock.clone(),

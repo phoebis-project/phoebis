@@ -795,7 +795,7 @@ export const SETTINGS: Settings = {
   // The route answers the table the ledger ships, so the captured answer is the table itself.
   planFactors: SETTINGS_SAMPLE.planFactors,
   pricing: { effectiveDate: '2026-09-08', models: PRICES, source: 'shipped' },
-  quota: { pollIntervalSeconds: 3_600, sampleRetentionDays: 30 },
+  quota: { sampleRetentionDays: 30 },
   retention: { bodyCaptureMaxHours: 72, ledgerDays: 90, quotaSamplesDays: 30, rollupDays: 400 },
   routing: { catalogCacheSeconds: 60, catalogRefreshSeconds: 21_600, cooldownFallbackSeconds: 60, maxAttempts: 3, modelRejectionSeconds: 3_600, startupFetchSeconds: 5 },
   sessions: { expireAfterSeconds: 86_400 },

@@ -26,10 +26,6 @@ keepalive:
 proxy:
   listen: 127.0.0.1:8317
 quota:
-  # How often every OAuth account's usage endpoint is polled for a quota sample, at least 900 s. Response
-  # headers sample active accounts for free; the poll fills idle gaps and is the only source of extra-usage
-  # credit totals.
-  poll_interval_seconds: 3600
   sample_retention_days: 30
 routing:
   # How long an upstream's model list is held before it is read again for the console and the models listing.

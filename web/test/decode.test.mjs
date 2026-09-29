@@ -935,7 +935,7 @@ test('a settings answer with no compatibility block reads the defaults the route
 test('settings decode the quota, routing, storage, and usage blocks the route answers', () => {
   const wire = fixture('settings');
   const s = d.decodeSettings(wire);
-  assert.deepEqual(s.quota, { pollIntervalSeconds: wire.quota.poll_interval_seconds, sampleRetentionDays: wire.quota.sample_retention_days });
+  assert.deepEqual(s.quota, { sampleRetentionDays: wire.quota.sample_retention_days });
   assert.deepEqual(s.routing, { catalogCacheSeconds: wire.routing.catalog_cache_seconds, catalogRefreshSeconds: wire.routing.catalog_refresh_seconds, cooldownFallbackSeconds: wire.routing.cooldown_fallback_seconds, maxAttempts: wire.routing.max_attempts, modelRejectionSeconds: wire.routing.model_rejection_seconds, startupFetchSeconds: wire.routing.startup_fetch_seconds });
   assert.deepEqual(s.storage, { ledgerPath: wire.storage.ledger_path, path: wire.storage.path, pricingPath: null }, 'no override file is a null path, never an empty one');
   assert.deepEqual(s.usage, { cacheTtlSeconds: wire.usage.cache_ttl_seconds, refreshConcurrency: wire.usage.refresh_concurrency });

@@ -67,12 +67,17 @@ the request runtime, so a slow analytics query never delays proxy traffic.
 
 Quota samples arrive from two sources. Every response head from an OAuth account carries the unified rate-limit
 headers, which cost nothing to read and cover whichever accounts are in use at the moment; a poll of the usage
-endpoint, every `quota.poll_interval_seconds`, fills the gaps an idle account leaves and is the only source of
-extra-usage credit totals.
+endpoint, every five minutes per OAuth account with each account on its own phase across the interval, fills the gaps
+an idle account leaves, is the only source of extra-usage credit totals, and hands every clean reading to the router.
 
 The usage endpoint is also read once at startup for every OAuth account with a credential, before the proxy listener
 accepts requests and bounded by `routing.startup_fetch_seconds`, so selection holds a sample per account from the
 first request after a restart; the poll then keeps its interval.
+
+An account the endpoint answers 429 backs off alone: one, two, four and eight minutes between attempts, then fifteen,
+a `Retry-After` honoured up to the same fifteen; each 429 is logged as a warning naming the account, and the next clean
+answer returns it to the five minutes. A transport failure or another error keeps the cadence. The other accounts keep
+theirs throughout.
 
 ## Pricing
 
@@ -326,9 +331,9 @@ its subtitle says so.
 
 Settings covers appearance, access (the admin and viewer secrets and what each may do), pricing, sessions, retention,
 keepalive, listeners, the downstream client block, compatibility, and an about panel. Four more cards show the
-bootstrap file's quota, routing, storage, and usage blocks: the quota poll interval and sample retention, the
-catalog cache window, the cooldown fallback, the model rejection window, and the attempt limit, the ledger,
-pricing, and storage paths, and the usage cache TTL and refresh concurrency.
+bootstrap file's quota, routing, storage, and usage blocks: the sample retention, the catalog cache window, the
+cooldown fallback, the model rejection window, and the attempt limit, the ledger, pricing, and storage paths, and the
+usage cache TTL and refresh concurrency.
 
 ## Alerts
 

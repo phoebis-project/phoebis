@@ -6521,7 +6521,6 @@ export const FIXTURES: Record<string, Fixture> = {
         ]
       },
       "quota": {
-        "poll_interval_seconds": 3600,
         "sample_retention_days": 30
       },
       "retention": {

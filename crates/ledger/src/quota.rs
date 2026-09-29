@@ -1,21 +1,36 @@
-//! Quota samples from two sources: every response head of an OAuth account, and the hourly poll of the usage
-//! endpoint. Heads cost nothing and cover active accounts; the poll fills idle gaps and is the only source of
-//! extra-usage credit totals.
+//! Quota samples from two sources: every response head of an OAuth account, and a poll of the usage endpoint
+//! every five minutes per account. Heads cost nothing and cover active accounts; the poll fills idle gaps and is
+//! the only source of extra-usage credit totals.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use phoebis_oauth::{Clock, UsageService, UsageSnapshot};
+use phoebis_oauth::{UsageService, UsageSnapshot};
 use phoebis_relay::UnifiedHeaders;
 use phoebis_routing::{sample_from_usage, Report, RouterHandle};
 use phoebis_store::{AccountKind, AccountRow, AccountState, Store};
 use phoebis_transport::response::ResponseHead;
+use tokio::task::JoinSet;
+use tokio::time::Instant;
 
 use crate::assemble::Record;
 use crate::record::{ExtraUsageSampleRecord, QuotaSampleRecord};
 use crate::rollup::bucket_of;
 use crate::task::Ledger;
-use crate::LedgerDb;
+
+/// How often every polled OAuth account's usage endpoint is read: often enough that a routing decision lags
+/// use of the account outside the router by at most this, rare enough that the poll alone never reaches the
+/// endpoint's per-account limit; the first live run moves it to ten minutes if the 429 warnings say so.
+pub const POLL_INTERVAL: Duration = Duration::from_secs(300);
+
+/// The profile is read again on every twelfth poll of an account, an hour apart: a tier moves rarely, and the
+/// profile endpoint shares the usage endpoint's per-account limit.
+pub const PROFILE_EVERY_POLLS: u32 = 12;
+
+/// The earliest a slot is drawn after the pass that spreads it: the scheduler starts right after the startup
+/// step read every account, so the account at phase zero is not asked again in the same instant.
+const SLOT_FLOOR: Duration = Duration::from_secs(1);
 
 pub fn samples_from_head(
     account_id: &str,
@@ -140,27 +155,171 @@ pub struct Sampled {
     pub pending: usize,
 }
 
+/// One polled account's place in the schedule.
+struct Slot {
+    /// The row the attempt is made with, kept so a registry read that fails leaves the schedule as it was.
+    account: AccountRow,
+    /// The account's incarnation the slot was drawn for: a re-pairing is a new account to the schedule, and a
+    /// completion drawn for another incarnation moves nothing here.
+    incarnation: u64,
+    /// The attempt out on this slot, by its task id; `None` between attempts.
+    in_flight: Option<tokio::task::Id>,
+    /// The next attempt's instant, or the slot the attempt in flight was drawn at.
+    at: Instant,
+    /// Attempts made on this slot's incarnation; the profile is read when it is a multiple of
+    /// `PROFILE_EVERY_POLLS`, the first attempt included.
+    polls: u32,
+}
+
+/// What an attempt answers the scheduler with: whose slot, drawn for which incarnation, and the wait the
+/// service asks for after it, if any.
+struct Completion {
+    account_id: String,
+    incarnation: u64,
+    held: Option<Duration>,
+}
+
+/// Draws the schedule again when the polled accounts differ from the ones it was drawn for: a pairing, a
+/// re-pairing or a delete re-spreads the phases, an attempt in flight keeps its slot, and a backoff keeps the
+/// service's time.
+fn spread(
+    slots: &mut BTreeMap<String, Slot>,
+    rows: Vec<AccountRow>,
+    usage: &UsageService,
+    now: Instant,
+) {
+    let accounts: Vec<AccountRow> = rows
+        .into_iter()
+        .filter(|a| polled(a.kind, a.state))
+        .collect();
+    let known: BTreeSet<(String, u64)> = accounts
+        .iter()
+        .map(|a| (a.id.clone(), a.incarnation))
+        .collect();
+    let drawn: BTreeSet<(String, u64)> = slots
+        .iter()
+        .map(|(id, slot)| (id.clone(), slot.incarnation))
+        .collect();
+    if drawn == known {
+        return;
+    }
+    slots.retain(|id, slot| known.contains(&(id.clone(), slot.incarnation)));
+    for (index, account) in accounts.iter().enumerate() {
+        let slot = slots.entry(account.id.clone()).or_insert_with(|| Slot {
+            account: account.clone(),
+            incarnation: account.incarnation,
+            in_flight: None,
+            at: now,
+            polls: 0,
+        });
+        slot.account = account.clone();
+        if slot.in_flight.is_none() {
+            slot.at = now
+                + usage
+                    .held_for(&account.id)
+                    .unwrap_or_else(|| QuotaPoll::phase(index, accounts.len()).max(SLOT_FLOOR));
+        }
+    }
+}
+
 pub struct QuotaPoll;
 
 impl QuotaPoll {
+    /// The `index`-th of `count` phases spread evenly across `POLL_INTERVAL`, so no two accounts ask in the
+    /// same second while fewer than three hundred are polled.
+    pub fn phase(index: usize, count: usize) -> Duration {
+        let interval_ms = POLL_INTERVAL.as_millis() as u64;
+        Duration::from_millis(interval_ms * index as u64 / count.max(1) as u64)
+    }
+
+    /// Every account `polled` accepts, each on its own phase within `POLL_INTERVAL` (its position among the
+    /// polled accounts sorted by id, re-spread when an account joins or leaves), every attempt spawned into
+    /// the scheduler's own set and reaped when it completes, so a slow answer or a backoff on one account
+    /// delays no other and no finished attempt is kept; a completion moves its slot only while the slot still
+    /// belongs to the incarnation the attempt was drawn for. The next slot is the interval after the last, or
+    /// the usage service's next-attempt time after a 429; with no slot to wait for, the scheduler wakes after
+    /// one interval and re-reads the registry. Every clean snapshot is recorded to the ledger and reported to
+    /// the router as `poll_account` does with a router.
+    ///
+    /// Spawned once the startup step is done: that step has just read every account, so a first slot is its
+    /// phase from the scheduler's start and never less than a second.
     pub fn spawn(
-        _db: Arc<LedgerDb>,
         store: Arc<Store>,
         usage: Arc<UsageService>,
         ledger: Ledger,
-        _clock: Clock,
-        interval: Duration,
+        router: RouterHandle,
     ) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
+            let mut slots: BTreeMap<String, Slot> = BTreeMap::new();
+            // The scheduler owns its attempts: a completion is reaped here, and dropping the set when the
+            // scheduler is aborted aborts what is still out.
+            let mut attempts: JoinSet<Completion> = JoinSet::new();
             loop {
-                let jitter = 0.9 + rand::random::<f64>() * 0.2;
-                tokio::time::sleep(interval.mul_f64(jitter)).await;
-                let Ok(accounts) = store.accounts() else {
-                    continue;
-                };
-                for account in accounts.into_iter().filter(|a| polled(a.kind, a.state)) {
-                    Self::poll_account(&usage, &ledger, None, &account).await;
-                    Self::refresh_profile(&store, &usage, &account).await;
+                let now = Instant::now();
+                match store.accounts() {
+                    Ok(rows) => spread(&mut slots, rows, &usage, now),
+                    // The slots stand: a registry that cannot be read is no reason to stop polling the
+                    // accounts it last listed, and the next pass reads it again.
+                    Err(error) => {
+                        tracing::warn!(%error, "the registry could not be read for the poll")
+                    }
+                }
+                for slot in slots.values_mut() {
+                    if slot.in_flight.is_some() || slot.at > now {
+                        continue;
+                    }
+                    let profile_due = slot.polls % PROFILE_EVERY_POLLS == 0;
+                    slot.polls = slot.polls.wrapping_add(1);
+                    let (account, incarnation) = (slot.account.clone(), slot.incarnation);
+                    let (store, usage, ledger, router) =
+                        (store.clone(), usage.clone(), ledger.clone(), router.clone());
+                    let handle = attempts.spawn(async move {
+                        Self::poll_account(&usage, &ledger, Some(&router), &account).await;
+                        if profile_due {
+                            Self::refresh_profile(&store, &usage, &account).await;
+                        }
+                        Completion {
+                            held: usage.held_for(&account.id),
+                            account_id: account.id,
+                            incarnation,
+                        }
+                    });
+                    slot.in_flight = Some(handle.id());
+                }
+                // With nothing idle to wait for, one interval: a pairing into an empty schedule is found on the
+                // next pass. A backoff longer than that still lets the registry be read once an interval.
+                let wake = slots
+                    .values()
+                    .filter(|slot| slot.in_flight.is_none())
+                    .map(|slot| slot.at)
+                    .min()
+                    .map_or(now + POLL_INTERVAL, |at| at.min(now + POLL_INTERVAL));
+                tokio::select! {
+                    _ = tokio::time::sleep_until(wake) => {}
+                    Some(joined) = attempts.join_next_with_id() => match joined {
+                        Ok((id, done)) => {
+                            // A completion drawn for a holder the slot no longer belongs to moves nothing: the
+                            // replacement's own attempt keeps its own time.
+                            if let Some(slot) = slots.get_mut(&done.account_id) {
+                                if slot.in_flight == Some(id) && slot.incarnation == done.incarnation {
+                                    slot.in_flight = None;
+                                    slot.at = match done.held {
+                                        Some(wait) => Instant::now() + wait,
+                                        None => slot.at + POLL_INTERVAL,
+                                    };
+                                }
+                            }
+                        }
+                        Err(error) => {
+                            tracing::warn!(%error, "a poll attempt ended without completing");
+                            if let Some(slot) =
+                                slots.values_mut().find(|slot| slot.in_flight == Some(error.id()))
+                            {
+                                slot.in_flight = None;
+                                slot.at = Instant::now() + POLL_INTERVAL;
+                            }
+                        }
+                    },
                 }
             }
         })
@@ -168,16 +327,17 @@ impl QuotaPoll {
 
     /// One account's snapshot: recorded to the ledger when it is clean and, when `router` is given, reported
     /// to it as `Report::Sample` and, when the snapshot carries the evidence, `Report::Overage`, before this
-    /// returns; the clean snapshot is answered. The profile is `refresh_profile`'s.
+    /// returns; the clean snapshot is answered. The scheduler and the startup step both call it with the
+    /// router. The profile is `refresh_profile`'s.
     pub async fn poll_account(
         usage: &UsageService,
         ledger: &Ledger,
         router: Option<&RouterHandle>,
         account: &AccountRow,
     ) -> Option<UsageSnapshot> {
-        // The service's own cache, cap, and Retry-After apply; a snapshot with an error is a stale one, and a
-        // stale sample must not be written under a fresh bucket.
-        match usage.snapshot(&account.id).await {
+        // The service's hold, concurrency cap and coalescing apply and its cache TTL does not; a snapshot with
+        // an error is a stale one, and a stale sample must not be written under a fresh bucket.
+        match usage.poll(&account.id).await {
             Ok(snapshot) if snapshot.error.is_none() => {
                 let (quota, extra) = samples_from_poll(&snapshot);
                 ledger.record(Record::Samples {
@@ -213,7 +373,7 @@ impl QuotaPoll {
         }
     }
 
-    /// The profile row's refresh, made after every snapshot; a failure is logged and nothing else.
+    /// The profile row's refresh; a failure is logged and nothing else.
     pub async fn refresh_profile(store: &Store, usage: &UsageService, account: &AccountRow) {
         // The profile row is the poll's to refresh: nothing else reads the endpoint after pairing, and the
         // admin views show what it says.

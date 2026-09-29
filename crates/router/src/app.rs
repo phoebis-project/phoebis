@@ -208,7 +208,6 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         ledger_db.clone(),
         pricing.clone(),
         store.clone(),
-        Some(usage.clone()),
         &bus,
         router_task.clone(),
         clock.clone(),
@@ -218,7 +217,6 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             rollup_retention_days: config.stats.rollup_retention_days,
             sample_retention_days: config.quota.sample_retention_days,
             purge_interval: Duration::from_secs(3_600),
-            quota_poll_interval: Duration::from_secs(config.quota.poll_interval_seconds),
             event_poll: Duration::from_secs(5),
             expire_interval: Duration::from_secs(60),
         },
@@ -374,7 +372,6 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
                 .map(|p| p.display().to_string()),
             profile: config.compatibility.profile.clone(),
             proxy_listen: config.proxy.listen.to_string(),
-            quota_poll_interval_seconds: config.quota.poll_interval_seconds,
             quota_sample_retention_days: config.quota.sample_retention_days,
             retention_days: config.stats.retention_days,
             rollup_retention_days: config.stats.rollup_retention_days,
@@ -416,6 +413,14 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         bound_seconds = config.routing.startup_fetch_seconds,
         "startup fetch finished"
     );
+    // Started only now: the startup step has just read every account, so the scheduler's first slots are
+    // phases from here. The ledger aborts it before its channel closes.
+    ledger.track(QuotaPoll::spawn(
+        admin.store.clone(),
+        admin.usage.clone(),
+        ledger.clone(),
+        router_task.clone(),
+    ));
     let refresh = catalog.spawn_refresh(
         Duration::from_secs(config.routing.catalog_refresh_seconds),
         REFRESH_TICK,

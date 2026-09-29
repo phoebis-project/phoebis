@@ -268,7 +268,6 @@ async fn rig_over(store: Arc<Store>, webhook: Arc<dyn Webhook>, hook: Option<Clo
         db.clone(),
         pricing,
         store.clone(),
-        None,
         &bus,
         router.clone(),
         clock.clone(),

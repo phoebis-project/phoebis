@@ -301,7 +301,6 @@ export function SettingsPage() {
         {s ? (
           <KeyValue
             rows={[
-              { label: 'Poll interval (seconds)', value: fmtInt(s.quota.pollIntervalSeconds), mono: true, title: bootstrapNote('quota.poll_interval_seconds') },
               { label: 'Sample retention (days)', value: fmtInt(s.quota.sampleRetentionDays), mono: true, title: bootstrapNote('quota.sample_retention_days') },
             ]}
           />

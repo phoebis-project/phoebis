@@ -46,7 +46,9 @@ pub use query::{
     SeriesFilter, SeriesPoint, SessionActivity, SessionIdentity, Totals, TrafficBucket, GROUP_BYS,
     MAX_POINTS, MAX_RANGE_MS,
 };
-pub use quota::{samples_from_head, samples_from_poll, QuotaPoll, Sampled};
+pub use quota::{
+    samples_from_head, samples_from_poll, QuotaPoll, Sampled, POLL_INTERVAL, PROFILE_EVERY_POLLS,
+};
 pub use record::{
     AttemptRecord, BodyRecord, EventRecord, ExtraUsageSampleRecord, KeepaliveDelta,
     QuotaSampleRecord, RequestRecord,

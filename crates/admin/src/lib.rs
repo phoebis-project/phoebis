@@ -104,7 +104,6 @@ pub struct SettingsView {
     pub pricing_path: Option<String>,
     pub profile: String,
     pub proxy_listen: String,
-    pub quota_poll_interval_seconds: u64,
     pub quota_sample_retention_days: u32,
     pub retention_days: u32,
     pub rollup_retention_days: u32,

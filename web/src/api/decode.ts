@@ -555,7 +555,7 @@ export function decodeSettings(v: unknown): Settings {
     listeners: { admin: str(l.admin), metrics: str(l.metrics), proxy: str(l.proxy) },
     planFactors: decodePlanFactors(s.plan_factors),
     pricing: decodePricing(s.pricing),
-    quota: { pollIntervalSeconds: num(q.poll_interval_seconds), sampleRetentionDays: num(q.sample_retention_days) },
+    quota: { sampleRetentionDays: num(q.sample_retention_days) },
     retention: { bodyCaptureMaxHours: num(r.body_capture_max_hours), ledgerDays: num(r.ledger_days), quotaSamplesDays: num(r.quota_samples_days), rollupDays: num(r.rollup_days) },
     routing: { catalogCacheSeconds: num(route.catalog_cache_seconds), catalogRefreshSeconds: num(route.catalog_refresh_seconds), cooldownFallbackSeconds: num(route.cooldown_fallback_seconds), maxAttempts: num(route.max_attempts), modelRejectionSeconds: num(route.model_rejection_seconds), startupFetchSeconds: num(route.startup_fetch_seconds) },
     sessions: { expireAfterSeconds: num(rec(s.sessions).expire_after_seconds) },
