@@ -95,9 +95,6 @@ fn attempt_json(a: &AttemptRecord) -> Value {
         "overage_in_use": a.overage_in_use, "estimated_usd": a.estimated_usd, "pricing_version": a.pricing_version,
         "selection": a.selection.as_deref().and_then(|s| serde_json::from_str::<Value>(s).ok()),
         "response": {
-            "auto_mode_detail": a.auto_mode_detail,
-            "auto_mode_tool_uses": a.auto_mode_tool_uses.as_deref().and_then(|s| serde_json::from_str::<Value>(s).ok()),
-            "auto_mode_verdict": a.auto_mode_verdict,
             "cleared_input_tokens": a.cleared_input_tokens, "inference_geo": a.inference_geo,
             "refusal_category": a.refusal_category, "refusal_recommended_model": a.refusal_recommended_model,
             "served_model": a.served_model, "speed": a.speed, "stop_reason": a.stop_reason, "stop_sequence": a.stop_sequence,

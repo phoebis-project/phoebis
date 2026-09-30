@@ -6,9 +6,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use phoebis_bus::{
-    AccountSelected, AttemptOutcome, AutoMode, ClassifierAnswer, Event as BusEvent, Kind, Origin,
+    AccountSelected, AttemptOutcome, AutoMode, Event as BusEvent, Kind, Origin,
     Outcome as BusOutcome, RequestComplete, RequestObserved, RequestShape, ResponseChunk,
-    ResponseFacts, SafeguardResults, ToolUseVerdict, Usage,
+    ResponseFacts, Usage,
 };
 use phoebis_ledger::{
     list_requests, Assembler, AttemptRecord, EventRecord, LedgerConfig, LiveKeys, Record,
@@ -1041,77 +1041,39 @@ fn answered_event(id: &str, status: u16, response: ResponseFacts) -> BusEvent {
     })
 }
 
-fn tool_use(outcome: &str, explanation: Option<&str>) -> ToolUseVerdict {
-    ToolUseVerdict {
-        outcome: outcome.into(),
-        reason: None,
-        explanation: explanation.map(String::from),
-    }
-}
-
 #[tokio::test]
-async fn the_auto_mode_facts_round_trip_through_the_write_and_select_lists() {
+async fn the_auto_mode_standing_round_trips_and_a_body_shape_refusal_reads_body_shape() {
     let up = FakeUpstream::start(vec![]).await;
     let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
-    let flagged = SafeguardResults {
-        verdict: "flagged".into(),
-        detail: None,
-        tool_uses: [
-            ("toolu_01".to_string(), tool_use("not_flagged", None)),
-            (
-                "toolu_02".to_string(),
-                tool_use("flagged", Some("Deletes a file the task never named.")),
-            ),
-        ]
-        .into_iter()
-        .collect(),
-    };
-    let stage1 = ResponseFacts {
-        classifier: Some(ClassifierAnswer {
-            verdict: "not_flagged".into(),
-            category: None,
-        }),
-        ..Default::default()
-    };
-    let refused = ResponseFacts {
-        stop_reason: Some("refusal".into()),
-        refusal_category: Some("reasoning_extraction".into()),
-        classifier: Some(ClassifierAnswer {
-            verdict: "unreadable".into(),
-            category: None,
-        }),
-        ..Default::default()
-    };
-    let checked = ResponseFacts {
-        safeguards: Some(flagged.clone()),
-        ..Default::default()
-    };
     let requests = [
-        ("am-server", Some(AutoMode::Server), 200, checked.clone()),
-        (
-            "am-silent",
-            Some(AutoMode::Server),
-            200,
-            ResponseFacts::default(),
-        ),
-        ("am-failed", Some(AutoMode::Server), 502, checked.clone()),
-        (
-            "am-stripped",
-            Some(AutoMode::Stripped),
-            200,
-            ResponseFacts::default(),
-        ),
-        ("am-stage1", Some(AutoMode::ClientStage1), 200, stage1),
-        ("am-stage2", Some(AutoMode::ClientStage2), 200, refused),
-        ("am-plain", None, 200, checked),
+        ("am-server", Some(AutoMode::Server)),
+        ("am-stripped", Some(AutoMode::Stripped)),
+        ("am-plain", None),
     ];
-    for (id, auto_mode, status, response) in requests {
+    for (id, auto_mode) in requests {
         h.bus.publish(auto_mode_observed(id, auto_mode));
         h.bus.publish(selected_event(id, 1, "a", 10));
-        h.bus.publish(head_event(id, status, 20));
-        h.bus.publish(answered_event(id, status, response));
+        h.bus.publish(head_event(id, 200, 20));
+        h.bus
+            .publish(answered_event(id, 200, ResponseFacts::default()));
     }
-    // A 200 head whose body the caller left before the stop: the delta that carries the verdict never came.
+    // Two refusals before any account: the off setting's unreachable member and the cache TTL rule's marker.
+    for (id, auto_mode) in [
+        ("am-refused-off", Some(AutoMode::Stripped)),
+        ("am-refused-ttl", None),
+    ] {
+        h.bus.publish(auto_mode_observed(id, auto_mode));
+        let BusEvent::RequestComplete(refused) = complete_event(id) else {
+            unreachable!()
+        };
+        h.bus.publish(BusEvent::RequestComplete(RequestComplete {
+            outcome: BusOutcome::Rejected,
+            status: 400,
+            error_code: Some("body_shape".into()),
+            ..refused
+        }));
+    }
+    // A 200 head whose body the caller left before the stop.
     h.bus
         .publish(auto_mode_observed("am-canceled", Some(AutoMode::Server)));
     h.bus.publish(selected_event("am-canceled", 1, "a", 10));
@@ -1127,74 +1089,33 @@ async fn the_auto_mode_facts_round_trip_through_the_write_and_select_lists() {
         ..canceled
     }));
     let harness = &h;
-    let read = |id: &'static str| async move {
-        let (row, attempts) = ledgered(harness, id).await;
-        let attempt = attempts.into_iter().next().expect("one attempt");
-        (
-            row.auto_mode,
-            attempt.auto_mode_verdict,
-            attempt.auto_mode_detail,
-            attempt
-                .auto_mode_tool_uses
-                .map(|m| serde_json::from_str::<serde_json::Value>(&m).unwrap()),
-        )
-    };
-    assert_eq!(
-        read("am-server").await,
-        (
-            Some("server".into()),
-            Some("flagged".into()),
-            None,
-            Some(serde_json::json!({
-                "toolu_01": { "outcome": "not_flagged" },
-                "toolu_02": { "outcome": "flagged", "explanation": "Deletes a file the task never named." },
-            }))
-        ),
-        "a null member is left out of an entry"
-    );
-    assert_eq!(
-        read("am-silent").await,
-        (Some("server".into()), Some("none".into()), None, None),
-        "an answer without the member gave no verdict"
-    );
-    assert_eq!(
-        read("am-failed").await,
-        (Some("server".into()), None, None, None),
-        "a failed leg never reads as a verdict"
-    );
-    assert_eq!(
-        read("am-stripped").await,
-        (Some("stripped".into()), None, None, None)
-    );
-    assert_eq!(
-        read("am-stage1").await,
-        (
-            Some("client_stage1".into()),
-            Some("not_flagged".into()),
-            None,
-            None
-        )
-    );
-    assert_eq!(
-        read("am-stage2").await,
-        (
-            Some("client_stage2".into()),
-            Some("refused".into()),
-            Some("reasoning_extraction".into()),
-            None
-        ),
-        "a refusal wins over the text reading"
-    );
+    let read = |id: &'static str| async move { ledgered(harness, id).await.0.auto_mode };
+    assert_eq!(read("am-server").await, Some("server".into()));
+    assert_eq!(read("am-stripped").await, Some("stripped".into()));
     assert_eq!(
         read("am-plain").await,
-        (None, None, None, None),
-        "a request that asked for nothing records no verdict whatever the answer carried"
+        None,
+        "a request that asked for nothing records no standing"
     );
     assert_eq!(
         read("am-canceled").await,
-        (Some("server".into()), None, None, None),
-        "an answer the relay never finished reading gave no verdict"
+        Some("server".into()),
+        "an answer cut short keeps the standing admission read"
     );
+    for id in ["am-refused-off", "am-refused-ttl"] {
+        let (row, attempts) = ledgered(harness, id).await;
+        assert_eq!(
+            row.auto_mode.as_deref(),
+            Some("body_shape"),
+            "a body-shape refusal reads body_shape whatever admission read ({id})"
+        );
+        assert_eq!(
+            (row.outcome.as_str(), row.error_code.as_deref()),
+            ("rejected", Some("body_shape")),
+            "the refusal's outcome and code are recorded as before ({id})"
+        );
+        assert!(attempts.is_empty(), "a refusal has no attempt ({id})");
+    }
     up.shutdown().await;
 }
 
@@ -1545,7 +1466,7 @@ async fn a_rollup_row_from_before_the_class_dimension_reads_under_the_reserved_c
     {
         let db = phoebis_ledger::LedgerDb::open(&path).unwrap();
         // The four columns migration 18 adds, the five migration 19 adds, migration 20's column and table and
-        // migration 21's four columns, each dropped back out so the replay below has to add them again;
+        // migration 21's column, each dropped back out so the replay below has to add them again;
         // `rollups_hourly` keeps the shape the class dimension joins, since a primary-key column cannot be
         // dropped in place and the rebuild names its own columns regardless of what the source table still
         // carries.
@@ -1563,9 +1484,7 @@ async fn a_rollup_row_from_before_the_class_dimension_reads_under_the_reserved_c
                  ALTER TABLE quota_samples DROP COLUMN observed_at; \
                  DROP TABLE window_reconciliations; \
                  ALTER TABLE requests DROP COLUMN auto_mode; \
-                 ALTER TABLE attempts DROP COLUMN auto_mode_verdict; \
-                 ALTER TABLE attempts DROP COLUMN auto_mode_detail; \
-                 ALTER TABLE attempts DROP COLUMN auto_mode_tool_uses_json;",
+",
             )?;
             Ok(())
         })
@@ -1680,9 +1599,6 @@ async fn migration_nineteen_adds_the_identity_columns_to_a_version_eighteen_file
                  ALTER TABLE quota_samples DROP COLUMN observed_at; \
                  DROP TABLE window_reconciliations; \
                  ALTER TABLE requests DROP COLUMN auto_mode; \
-                 ALTER TABLE attempts DROP COLUMN auto_mode_verdict; \
-                 ALTER TABLE attempts DROP COLUMN auto_mode_detail; \
-                 ALTER TABLE attempts DROP COLUMN auto_mode_tool_uses_json; \
                  UPDATE meta SET value = '18' WHERE key = 'schema_version';",
             )?;
             Ok(())
@@ -1723,7 +1639,7 @@ async fn migration_nineteen_adds_the_identity_columns_to_a_version_eighteen_file
 }
 
 #[tokio::test]
-async fn a_ledger_from_before_the_auto_mode_columns_gains_them() {
+async fn a_ledger_from_before_the_auto_mode_column_gains_it() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("ledger.sqlite");
     {
@@ -1731,9 +1647,6 @@ async fn a_ledger_from_before_the_auto_mode_columns_gains_them() {
         db.write(|c| {
             c.execute_batch(
                 "ALTER TABLE requests DROP COLUMN auto_mode; \
-                 ALTER TABLE attempts DROP COLUMN auto_mode_verdict; \
-                 ALTER TABLE attempts DROP COLUMN auto_mode_detail; \
-                 ALTER TABLE attempts DROP COLUMN auto_mode_tool_uses_json; \
                  UPDATE meta SET value = '20' WHERE key = 'schema_version';",
             )?;
             Ok(())
@@ -1742,25 +1655,16 @@ async fn a_ledger_from_before_the_auto_mode_columns_gains_them() {
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
     assert_eq!(db.schema_version().await.unwrap(), 21);
-    let columns = |table: &'static str| {
-        db.read_blocking(move |c| {
-            let mut stmt = c.prepare(&format!("SELECT name FROM pragma_table_info('{table}')"))?;
+    let columns = db
+        .read_blocking(|c| {
+            let mut stmt = c.prepare("SELECT name FROM pragma_table_info('requests')")?;
             let names = stmt
                 .query_map([], |r| r.get::<_, String>(0))?
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(names)
         })
-        .unwrap()
-    };
-    assert!(columns("requests").contains(&"auto_mode".to_string()));
-    let attempts = columns("attempts");
-    for column in [
-        "auto_mode_detail",
-        "auto_mode_tool_uses_json",
-        "auto_mode_verdict",
-    ] {
-        assert!(attempts.contains(&column.to_string()), "{column}");
-    }
+        .unwrap();
+    assert!(columns.contains(&"auto_mode".to_string()));
 }
 
 #[test]

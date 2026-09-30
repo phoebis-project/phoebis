@@ -2,12 +2,12 @@
 //! but interleaved across requests, so each request's partial rows wait in a map keyed by id until its
 //! completion, and a request that goes silent is aged out rather than kept forever.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
 use bytes::Bytes;
 use phoebis_bus::{
     user_agent_of, AccountSelected, AutoMode, Event, Outcome, RequestComplete, RequestObserved,
-    ResponseChunk, ResponseFacts, ResponseHead, ToolUseVerdict,
+    ResponseChunk, ResponseHead,
 };
 use phoebis_oauth::Clock;
 use phoebis_relay::UnifiedHeaders;
@@ -414,59 +414,6 @@ fn terminal_outcome(complete: &RequestComplete) -> Option<&'static str> {
     }
 }
 
-/// One vocabulary for both checks. Null for a request that asked for nothing and for an attempt no answer
-/// reached, so a failed leg never reads as a verdict.
-fn auto_mode_verdict(
-    auto_mode: Option<AutoMode>,
-    answered: bool,
-    response: &ResponseFacts,
-) -> (Option<String>, Option<String>, Option<String>) {
-    match auto_mode {
-        Some(AutoMode::Server) if answered => match &response.safeguards {
-            Some(s) => (
-                Some(s.verdict.clone()),
-                s.detail.clone(),
-                Some(tool_uses_json(&s.tool_uses)),
-            ),
-            None => (Some("none".into()), None, None),
-        },
-        Some(AutoMode::ClientStage1 | AutoMode::ClientStage2) if answered => {
-            if response.stop_reason.as_deref() == Some("refusal") {
-                (
-                    Some("refused".into()),
-                    response.refusal_category.clone(),
-                    None,
-                )
-            } else {
-                match &response.classifier {
-                    Some(c) => (Some(c.verdict.clone()), c.category.clone(), None),
-                    None => (Some("unreadable".into()), None, None),
-                }
-            }
-        }
-        _ => (None, None, None),
-    }
-}
-
-/// `{"<id>":{"outcome":...}}`, a member the entry does not carry left out rather than written null.
-fn tool_uses_json(tool_uses: &BTreeMap<String, ToolUseVerdict>) -> String {
-    let entries: serde_json::Map<String, serde_json::Value> = tool_uses
-        .iter()
-        .map(|(id, call)| {
-            let mut entry = serde_json::Map::new();
-            entry.insert("outcome".into(), json!(call.outcome));
-            if let Some(reason) = &call.reason {
-                entry.insert("reason".into(), json!(reason));
-            }
-            if let Some(explanation) = &call.explanation {
-                entry.insert("explanation".into(), json!(explanation));
-            }
-            (id.clone(), serde_json::Value::Object(entry))
-        })
-        .collect();
-    serde_json::Value::Object(entries).to_string()
-}
-
 fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> {
     let InFlight {
         observed,
@@ -545,17 +492,6 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
         last.cleared_input_tokens = response.cleared_input_tokens;
         last.refusal_category = response.refusal_category.clone();
         last.refusal_recommended_model = response.refusal_recommended_model.clone();
-        (
-            last.auto_mode_verdict,
-            last.auto_mode_detail,
-            last.auto_mode_tool_uses,
-        ) = auto_mode_verdict(
-            observed.auto_mode,
-            // A 200 head whose body then failed or was left: the relay did not finish reading the answer, so what
-            // it carries is not a verdict.
-            last.upstream_status == Some(200) && terminal_outcome(complete).is_none(),
-            response,
-        );
         if last.upstream_status.is_none()
             && complete.error_code.as_deref() == Some("account_cancelled")
         {
@@ -679,7 +615,13 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
         request_class: observed.client.request_class.clone(),
         forked_from: observed.fork.forked_from.clone(),
         fork_depth: observed.fork.fork_depth,
-        auto_mode: observed.auto_mode.map(|m| m.as_str().to_string()),
+        // A body refused for its shape never reached an upstream, whatever admission read of its member; the
+        // standing says so beside the outcome's code.
+        auto_mode: if complete.error_code.as_deref() == Some("body_shape") {
+            Some(AutoMode::BodyShape.as_str().to_string())
+        } else {
+            observed.auto_mode.map(|m| m.as_str().to_string())
+        },
     };
     records.push(Record::Request {
         request,

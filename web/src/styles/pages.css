@@ -1716,29 +1716,6 @@
   text-align: right;
 }
 
-/* The windows list's type and rhythm; the tool-use ids run longer than a window's label, so the first column takes
-   the id's own width, and an explanation of up to 2,000 characters wraps on a line of its own. */
-.attempt__verdicts {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  padding: 0;
-  margin: 0;
-  font-size: 12.5px;
-  list-style: none;
-}
-
-.attempt__verdicts li {
-  display: grid;
-  grid-template-columns: max-content 1fr;
-  gap: 0 10px;
-}
-
-.attempt__verdicts li span:nth-child(3) {
-  grid-column: 1 / -1;
-  overflow-wrap: anywhere;
-}
-
 .attempt__response {
   display: flex;
   flex-wrap: wrap;

@@ -73,7 +73,7 @@ pub struct RequestRecord {
     /// A request that continued another conversation: that conversation's root and the matched depth.
     pub forked_from: Option<String>,
     pub fork_depth: Option<u32>,
-    /// `server`, `stripped`, `client_stage1`, `client_stage2`; null for every other request.
+    /// `server`, `stripped`, `body_shape`; null for every other request.
     pub auto_mode: Option<String>,
 }
 
@@ -129,15 +129,6 @@ pub struct AttemptRecord {
     pub refusal_recommended_model: Option<String>,
     /// The trace as stored, `cache_read` folded in at completion.
     pub selection: Option<String>,
-    /// One vocabulary for both checks: a server check's `not_flagged`, `flagged`, `skipped`, `unsupported`,
-    /// `unavailable`, `none`, `unrecognized`; a classifier request's `not_flagged`, `flagged`, `refused`,
-    /// `unreadable`. Null when the request asked for nothing, no answer reached the attempt, or the answer did
-    /// not finish.
-    pub auto_mode_verdict: Option<String>,
-    /// The `unavailable` reason, the refusal category, or the stage-2 `<category>` slug.
-    pub auto_mode_detail: Option<String>,
-    /// A server check's map, `{"<tool_use_id>": {"outcome", "reason", "explanation"}}` with null members left out.
-    pub auto_mode_tool_uses: Option<String>,
 }
 
 impl AttemptRecord {

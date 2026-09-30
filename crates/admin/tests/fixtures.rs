@@ -429,14 +429,6 @@ async fn every_route_is_captured_and_holds_its_shape() {
             AttemptRecord {
                 selection: Some(trace_json.clone()),
                 stop_reason: Some("tool_use".into()),
-                auto_mode_verdict: Some("flagged".into()),
-                auto_mode_tool_uses: Some(
-                    j!({
-                        "toolu_01": { "outcome": "not_flagged" },
-                        "toolu_02": { "outcome": "flagged", "explanation": "Deletes a file the task never named." },
-                    })
-                    .to_string(),
-                ),
                 ..attempt(
                     "r-failover",
                     2,
@@ -550,8 +542,6 @@ async fn every_route_is_captured_and_holds_its_shape() {
     parts.ledger.record(Record::Request {
         request: RequestRecord {
             bodies_captured: true,
-            auto_mode: Some("client_stage1".into()),
-            stream: false,
             ..request(
                 key_generation,
                 "r-captured",
@@ -562,13 +552,14 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 "succeeded",
             )
         },
-        attempts: vec![AttemptRecord {
-            auto_mode_verdict: Some("not_flagged".into()),
-            // A stage-1 classifier answer stops on its closing tag.
-            stop_reason: Some("stop_sequence".into()),
-            stop_sequence: Some("</block>".into()),
-            ..attempt("r-captured", 1, "business", 200, "succeeded", now - 60_000)
-        }],
+        attempts: vec![attempt(
+            "r-captured",
+            1,
+            "business",
+            200,
+            "succeeded",
+            now - 60_000,
+        )],
         bodies: Some(BodyRecord {
             request_id: "r-captured".into(),
             request_body: br#"{"model":"claude-sonnet-5","messages":[]}"#.to_vec(),

@@ -268,8 +268,8 @@ export const KEYS: ApiKey[] = [
     ...KEY_SAMPLE,
     id: 'notebook',
     affinitySource: 'auto',
-    // On under a pool that is off, so the key dialog reads an override against the pool's setting.
-    autoModeServer: true,
+    // Off under a pool that is off, so the key dialog reads an explicit key value beside the pool's.
+    autoModeServer: false,
     name: 'notebook',
     prefix: 'phoebis-a07c',
     poolId: 'studio',

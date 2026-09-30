@@ -1,8 +1,6 @@
 //! The owned, serializable events the relay publishes. Nothing here borrows from the relay, so a consumer can
 //! keep an event for as long as it likes without holding a request open.
 
-use std::collections::BTreeMap;
-
 use bytes::Bytes;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -37,12 +35,11 @@ impl Kind {
     }
 }
 
-/// What a request has to do with auto mode, decided at admission: it asked for a server-side check and the
-/// router let the member through or dropped it, or it is one of the client's own classifier requests.
+/// What a request had to do with auto mode. Admission reads `Server` or `Stripped` from the `safeguards` member
+/// and the key's effective setting; the ledger reads `BodyShape` off a `body_shape` refusal, whatever admission read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AutoMode {
-    ClientStage1,
-    ClientStage2,
+    BodyShape,
     Server,
     Stripped,
 }
@@ -50,8 +47,7 @@ pub enum AutoMode {
 impl AutoMode {
     pub fn as_str(self) -> &'static str {
         match self {
-            AutoMode::ClientStage1 => "client_stage1",
-            AutoMode::ClientStage2 => "client_stage2",
+            AutoMode::BodyShape => "body_shape",
             AutoMode::Server => "server",
             AutoMode::Stripped => "stripped",
         }
@@ -117,48 +113,6 @@ impl Usage {
     }
 }
 
-/// One tool use's entry in `safeguard_results`.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ToolUseVerdict {
-    /// `flagged`, `not_flagged`, `skipped`, `unavailable`, `unrecognized`.
-    pub outcome: String,
-    /// An `unavailable` entry's reason: `timeout`, `error`, `refused`, `input_too_long`, `truncated`, else `other`.
-    pub reason: Option<String>,
-    /// A `flagged` entry's explanation, cut to 2,000 characters.
-    pub explanation: Option<String>,
-}
-
-/// The server-side check's answer, folded from `safeguard_results` by the client's own schemas.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SafeguardResults {
-    /// `not_flagged`, `flagged`, `skipped`, `unsupported`, `unavailable`, `none`, `unrecognized`.
-    pub verdict: String,
-    /// An `unavailable` verdict's reason: the status's (`disabled`, `error`, else `other`) or the first unavailable
-    /// call's.
-    pub detail: Option<String>,
-    /// Per tool-use id; empty under a status verdict and on an `end_turn` answer.
-    pub tool_uses: BTreeMap<String, ToolUseVerdict>,
-}
-
-impl SafeguardResults {
-    /// An answer that evaluated nothing while calling tools gave no verdict for them.
-    pub fn with_tool_calls(mut self, any: bool) -> Self {
-        if any && self.tool_uses.is_empty() && self.verdict == "not_flagged" {
-            self.verdict = "none".into();
-        }
-        self
-    }
-}
-
-/// What a whole JSON answer's text says as a client classifier answer.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ClassifierAnswer {
-    /// `not_flagged` (`<block>no`), `flagged` (`<block>yes`), `unreadable` (neither, or both anywhere).
-    pub verdict: String,
-    /// The one `<category>` slug the answer carries.
-    pub category: Option<String>,
-}
-
 /// What the answer said about itself beyond its usage, read from `message_start` (the served model), from
 /// `message_delta` (the stop, the context edits, the refusal), or from the whole JSON answer. A member the
 /// upstream did not send stays `None`.
@@ -174,11 +128,6 @@ pub struct ResponseFacts {
     pub cleared_input_tokens: Option<u64>,
     pub refusal_category: Option<String>,
     pub refusal_recommended_model: Option<String>,
-    /// The server-side check's `safeguard_results`, `None` when the answer carried no member.
-    pub safeguards: Option<SafeguardResults>,
-    /// A whole JSON answer's text read as a client classifier answer; the ledger keeps it only for a request
-    /// admission recognised as one.
-    pub classifier: Option<ClassifierAnswer>,
 }
 
 impl ResponseFacts {
@@ -208,12 +157,6 @@ impl ResponseFacts {
         }
         if later.refusal_recommended_model.is_some() {
             self.refusal_recommended_model = later.refusal_recommended_model.clone();
-        }
-        if later.safeguards.is_some() {
-            self.safeguards = later.safeguards.clone();
-        }
-        if later.classifier.is_some() {
-            self.classifier = later.classifier.clone();
         }
     }
 
@@ -303,8 +246,6 @@ pub struct RequestShape {
     pub service_tier: Option<String>,
     /// The body carries a top-level `safeguards` member, read through escapes.
     pub safeguards: bool,
-    /// The client's own classifier request at stage 1 or 2, by its body markers.
-    pub classifier_stage: Option<u8>,
 }
 
 /// The class of a caller that is not Claude Code: a request's label is `claude-code/<entrypoint>` or `other`.
@@ -390,9 +331,9 @@ pub struct RequestObserved {
     /// The class and hint facts read at admission, structured; `headers` carries the same hint headers
     /// unstructured, as the caller spelled them.
     pub client: ClientFacts,
-    /// Decided at admission from the body and the key's effective setting; `None` for a request that neither
-    /// asked for a server-side check nor is a classifier request, and for a refusal published before the body
-    /// was read.
+    /// Decided at admission from the body and the key's effective setting; `None` for a request that did not ask
+    /// for a server-side check and for a refusal published before the body was read. The ledger records a
+    /// `body_shape` refusal as `BodyShape` whatever this says.
     pub auto_mode: Option<AutoMode>,
     /// What the fork detection read, both members `None` for a refusal published before the climb ran.
     pub fork: Fork,
@@ -657,33 +598,6 @@ mod tests {
         );
         assert!(!facts.is_empty());
         assert!(ResponseFacts::default().is_empty());
-    }
-
-    #[test]
-    fn a_later_read_carries_the_safeguards_and_the_classifier_answer_and_neither_is_unsaid() {
-        let verdict = SafeguardResults {
-            verdict: "not_flagged".into(),
-            detail: None,
-            tool_uses: BTreeMap::new(),
-        };
-        let mut facts = ResponseFacts::default();
-        facts.merge(&ResponseFacts {
-            safeguards: Some(verdict.clone()),
-            ..Default::default()
-        });
-        assert!(!facts.is_empty(), "a verdict alone is something said");
-        facts.merge(&ResponseFacts {
-            classifier: Some(ClassifierAnswer {
-                verdict: "flagged".into(),
-                category: None,
-            }),
-            ..Default::default()
-        });
-        assert_eq!(facts.safeguards, Some(verdict));
-        assert_eq!(
-            facts.classifier.as_ref().map(|c| c.verdict.as_str()),
-            Some("flagged")
-        );
     }
 
     #[test]

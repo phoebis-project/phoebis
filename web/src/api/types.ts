@@ -421,17 +421,10 @@ export interface CreatedApiKey {
 
 /**
  * A request's auto-mode standing: a server-side check it asked for (`server`) or one the key's setting dropped
- * (`stripped`), or one of the client's own classifier requests at stage 1 or 2.
+ * (`stripped`), or a refusal for its body shape before any upstream saw it (`body_shape`).
  */
-export type AutoMode = 'client_stage1' | 'client_stage2' | 'server' | 'stripped';
-export const AUTO_MODE_VALUES = ['client_stage1', 'client_stage2', 'server', 'stripped'] as const satisfies readonly AutoMode[];
-/** One tool use's outcome under a server-side check, in id order. */
-export interface ToolUseVerdict {
-  explanation: string | null;
-  id: string;
-  outcome: string;
-  reason: string | null;
-}
+export type AutoMode = 'body_shape' | 'server' | 'stripped';
+export const AUTO_MODE_VALUES = ['body_shape', 'server', 'stripped'] as const satisfies readonly AutoMode[];
 export type RequestKind = 'count_tokens' | 'inference' | 'probe';
 export type Transport = 'json' | 'sse';
 export type AttemptOutcome = 'auth_failed' | 'canceled' | 'rate_limited' | 'succeeded' | 'transport_error' | 'upstream_error';
@@ -451,15 +444,6 @@ export type CacheMissReason = string;
 
 /** What the answer said about itself; `servedModel` only when it differs from the resolved model. */
 export interface AttemptResponse {
-  /** The `unavailable` reason, the refusal category, or the stage-2 category. */
-  autoModeDetail: string | null;
-  /** Empty for a classifier request and for a request that asked for nothing. */
-  autoModeToolUses: ToolUseVerdict[];
-  /**
-   * One vocabulary for both checks; null when the request asked for nothing, no answer reached the attempt, or the
-   * answer did not finish.
-   */
-  autoModeVerdict: string | null;
   clearedInputTokens: number | null;
   inferenceGeo: string | null;
   refusalCategory: string | null;

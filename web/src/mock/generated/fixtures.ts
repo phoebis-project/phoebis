@@ -3512,9 +3512,6 @@ export const FIXTURES: Record<string, Fixture> = {
                 }
               },
               "response": {
-                "auto_mode_detail": null,
-                "auto_mode_tool_uses": null,
-                "auto_mode_verdict": null,
                 "cleared_input_tokens": null,
                 "inference_geo": "us",
                 "refusal_category": null,
@@ -3542,9 +3539,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "canonical_model": "claude-sonnet-5",
           "kind": "inference",
           "origin": "client",
-          "transport": "json",
+          "transport": "sse",
           "request_class": null,
-          "auto_mode": "client_stage1",
+          "auto_mode": null,
           "forked_from": null,
           "fork_depth": null,
           "status": 200,
@@ -3621,17 +3618,14 @@ export const FIXTURES: Record<string, Fixture> = {
               "pricing_version": "2026-09-08",
               "selection": null,
               "response": {
-                "auto_mode_detail": null,
-                "auto_mode_tool_uses": null,
-                "auto_mode_verdict": "not_flagged",
                 "cleared_input_tokens": null,
                 "inference_geo": "us",
                 "refusal_category": null,
                 "refusal_recommended_model": null,
                 "served_model": null,
                 "speed": "standard",
-                "stop_reason": "stop_sequence",
-                "stop_sequence": "</block>"
+                "stop_reason": "end_turn",
+                "stop_sequence": null
               }
             }
           ]
@@ -3730,9 +3724,6 @@ export const FIXTURES: Record<string, Fixture> = {
               "pricing_version": "2026-09-08",
               "selection": null,
               "response": {
-                "auto_mode_detail": null,
-                "auto_mode_tool_uses": null,
-                "auto_mode_verdict": null,
                 "cleared_input_tokens": null,
                 "inference_geo": "us",
                 "refusal_category": null,
@@ -3839,9 +3830,6 @@ export const FIXTURES: Record<string, Fixture> = {
               "pricing_version": "2026-09-08",
               "selection": null,
               "response": {
-                "auto_mode_detail": null,
-                "auto_mode_tool_uses": null,
-                "auto_mode_verdict": null,
                 "cleared_input_tokens": null,
                 "inference_geo": "us",
                 "refusal_category": null,
@@ -3968,9 +3956,6 @@ export const FIXTURES: Record<string, Fixture> = {
                 }
               },
               "response": {
-                "auto_mode_detail": null,
-                "auto_mode_tool_uses": null,
-                "auto_mode_verdict": null,
                 "cleared_input_tokens": null,
                 "inference_geo": "us",
                 "refusal_category": null,
@@ -4025,17 +4010,6 @@ export const FIXTURES: Record<string, Fixture> = {
                 "cohort_hold": null
               },
               "response": {
-                "auto_mode_detail": null,
-                "auto_mode_tool_uses": {
-                  "toolu_01": {
-                    "outcome": "not_flagged"
-                  },
-                  "toolu_02": {
-                    "outcome": "flagged",
-                    "explanation": "Deletes a file the task never named."
-                  }
-                },
-                "auto_mode_verdict": "flagged",
                 "cleared_input_tokens": null,
                 "inference_geo": "us",
                 "refusal_category": null,
@@ -5622,9 +5596,6 @@ export const FIXTURES: Record<string, Fixture> = {
               }
             },
             "response": {
-              "auto_mode_detail": null,
-              "auto_mode_tool_uses": null,
-              "auto_mode_verdict": null,
               "cleared_input_tokens": null,
               "inference_geo": "us",
               "refusal_category": null,
@@ -5679,17 +5650,6 @@ export const FIXTURES: Record<string, Fixture> = {
               "cohort_hold": null
             },
             "response": {
-              "auto_mode_detail": null,
-              "auto_mode_tool_uses": {
-                "toolu_01": {
-                  "outcome": "not_flagged"
-                },
-                "toolu_02": {
-                  "outcome": "flagged",
-                  "explanation": "Deletes a file the task never named."
-                }
-              },
-              "auto_mode_verdict": "flagged",
               "cleared_input_tokens": null,
               "inference_geo": "us",
               "refusal_category": null,
@@ -5895,9 +5855,6 @@ export const FIXTURES: Record<string, Fixture> = {
                 }
               },
               "response": {
-                "auto_mode_detail": null,
-                "auto_mode_tool_uses": null,
-                "auto_mode_verdict": null,
                 "cleared_input_tokens": null,
                 "inference_geo": "us",
                 "refusal_category": null,
@@ -5925,9 +5882,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "canonical_model": "claude-sonnet-5",
           "kind": "inference",
           "origin": "client",
-          "transport": "json",
+          "transport": "sse",
           "request_class": null,
-          "auto_mode": "client_stage1",
+          "auto_mode": null,
           "forked_from": null,
           "fork_depth": null,
           "status": 200,
@@ -6004,17 +5961,14 @@ export const FIXTURES: Record<string, Fixture> = {
               "pricing_version": "2026-09-08",
               "selection": null,
               "response": {
-                "auto_mode_detail": null,
-                "auto_mode_tool_uses": null,
-                "auto_mode_verdict": "not_flagged",
                 "cleared_input_tokens": null,
                 "inference_geo": "us",
                 "refusal_category": null,
                 "refusal_recommended_model": null,
                 "served_model": null,
                 "speed": "standard",
-                "stop_reason": "stop_sequence",
-                "stop_sequence": "</block>"
+                "stop_reason": "end_turn",
+                "stop_sequence": null
               }
             }
           ]
@@ -6113,9 +6067,6 @@ export const FIXTURES: Record<string, Fixture> = {
               "pricing_version": "2026-09-08",
               "selection": null,
               "response": {
-                "auto_mode_detail": null,
-                "auto_mode_tool_uses": null,
-                "auto_mode_verdict": null,
                 "cleared_input_tokens": null,
                 "inference_geo": "us",
                 "refusal_category": null,
@@ -6222,9 +6173,6 @@ export const FIXTURES: Record<string, Fixture> = {
               "pricing_version": "2026-09-08",
               "selection": null,
               "response": {
-                "auto_mode_detail": null,
-                "auto_mode_tool_uses": null,
-                "auto_mode_verdict": null,
                 "cleared_input_tokens": null,
                 "inference_geo": "us",
                 "refusal_category": null,
@@ -6351,9 +6299,6 @@ export const FIXTURES: Record<string, Fixture> = {
                 }
               },
               "response": {
-                "auto_mode_detail": null,
-                "auto_mode_tool_uses": null,
-                "auto_mode_verdict": null,
                 "cleared_input_tokens": null,
                 "inference_geo": "us",
                 "refusal_category": null,
@@ -6408,17 +6353,6 @@ export const FIXTURES: Record<string, Fixture> = {
                 "cohort_hold": null
               },
               "response": {
-                "auto_mode_detail": null,
-                "auto_mode_tool_uses": {
-                  "toolu_01": {
-                    "outcome": "not_flagged"
-                  },
-                  "toolu_02": {
-                    "outcome": "flagged",
-                    "explanation": "Deletes a file the task never named."
-                  }
-                },
-                "auto_mode_verdict": "flagged",
                 "cleared_input_tokens": null,
                 "inference_geo": "us",
                 "refusal_category": null,

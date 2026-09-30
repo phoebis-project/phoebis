@@ -30,7 +30,7 @@ sent and received; whether the response was served kept warm; whether its body w
 user agent and class (`claude-code/<entrypoint>` or `other`), the gateway hints it sent (the agent
 type, the compaction and context-compacted markers, and the summed tool durations of the turn before), the turn origin
 off its attribution line, its auto-mode standing (a server-side check the router passed through or dropped under the
-key's setting, or one of the client's own classifier requests at stage 1 or 2), and the request's shape: the effort, the
+key's setting, or a refusal for the body's shape before any upstream saw it), and the request's shape: the effort, the
 thinking mode and budget, the output limit, the tool, system-block, and message counts, the context edits, the
 temperature, and the requested speed and service tier.
 A session that branched from
@@ -38,10 +38,9 @@ another conversation carries that conversation's root and the matched depth as w
 The attempt row names the account and its kind; the upstream status and request id; the outcome; the
 cooldown the attempt set; the stop reason, the model the answer names when it differs from the one the router
 resolved, the speed, the region inference ran in, the tokens a context edit cleared, and a refusal's category and
-recommended model; the auto-mode verdict with its detail and, for a server-side check, the outcome per tool use; the
-five token counts, with the thinking share of the output and the web search and fetch calls the answer made;
-the cache miss reason the diagnostics beta reports; the unified rate-limit window readings; overage; the cost
-split across input, cache read, cache write, and output; and the pricing version the estimate used.
+recommended model; the five token counts, with the thinking share of the output and the web search and fetch calls the
+answer made; the cache miss reason the diagnostics beta reports; the unified rate-limit window readings; overage; the
+cost split across input, cache read, cache write, and output; and the pricing version the estimate used.
 
 Placements are counted by rung, with a hit share from the trace and the response's cache-read tokens: a
 placement by the conversation's own messages is a hit when the response read the prefix the entry promised; one
@@ -274,28 +273,25 @@ takes a pattern over the class (`claude-code/*`), and the agent type and turn or
 client's hint headers and attribution line carry. Selecting a row opens a drawer with the request's detail, which shows
 the user agent, the model as the client spelled it and, when it
 differs, the canonical id the router recorded, its auto-mode standing (a server-side check requested, one dropped by the
-key's setting, a client classifier request at stage 1 or 2, or not requested), and the client hints: the agent type, the
+key's setting, a request refused for its body shape, or not requested), and the client hints: the agent type, the
 compaction and context-compacted markers, the turn origin, and the tool time before the turn; the trail names an
-upstream that rejected the model and the one that served it, and each attempt shows the auto mode verdict with its
-detail (`auto mode: flagged`, `unavailable (timeout)`, `refused (reasoning_extraction)`, `no verdict returned`) and, for
-a server-side check, one line per tool use with its outcome and, when flagged, the classifier's explanation. The table
-holds the requests up to the moment you opened it, so paging does not
-shift as new ones arrive; Refresh brings it up to now. When the session moved during the request, the drawer says from
-which upstream to which and why: rate limited, wound down, upstream marked, over its plan, back to plan, load shed, or
-window spent. When its pin was released without a move, the drawer says from which upstream and every reason the router
-found, among: already tried this request, the upstream at its spend budget, the creating request's own client error, an
-account cooldown, the account deleted, disconnected, idle past the affinity window, funding required, in overage,
-paused, needing reauthorization, released outright, window spent, the subscription ended, never paired, or no longer
-serving the model. The drawer also shows the strategy the selection used, the tier it drew from, whether the pin
-continued and was renewed, moved (naming the rule), or was placed afresh, whether the cache answered the request and by
-how many of its input tokens, and every candidate the selection passed over with the obstacle in its way: already tried,
-above the ceiling, at its in-flight cap, at its spend budget, an account cooldown, at the pace floor, an operator hold,
-in overage, ranked behind another candidate, its subscription ended, its window spent, or winding down. A placement
-names where it landed: by its messages or by its static prefix at the depth that matched, or with the main conversation.
-A request held while every upstream was at its cap names the upstream it was held on: its cohort's, or else the last
-one it waited on. The cache line reads a placement as a hit or a miss against the prefix it was promised: a placement
-by its messages is a hit when the response read at least that prefix, one by its static prefix when it read anything,
-and one with the main conversation keeps the plain cache line.
+upstream that rejected the model and the one that served it. The table holds the requests up to the moment you opened
+it, so paging does not shift as new ones arrive; Refresh brings it up to now. When the session moved during the request,
+the drawer says from which upstream to which and why: rate limited, wound down, upstream marked, over its plan, back to
+plan, load shed, or window spent. When its pin was released without a move, the drawer says from which upstream and
+every reason the router found, among: already tried this request, the upstream at its spend budget, the creating
+request's own client error, an account cooldown, the account deleted, disconnected, idle past the affinity window,
+funding required, in overage, paused, needing reauthorization, released outright, window spent, the subscription ended,
+never paired, or no longer serving the model. The drawer also shows the strategy the selection used, the tier it drew
+from, whether the pin continued and was renewed, moved (naming the rule), or was placed afresh, whether the cache
+answered the request and by how many of its input tokens, and every candidate the selection passed over with the
+obstacle in its way: already tried, above the ceiling, at its in-flight cap, at its spend budget, an account cooldown,
+at the pace floor, an operator hold, in overage, ranked behind another candidate, its subscription ended, its window
+spent, or winding down. A placement names where it landed: by its messages or by its static prefix at the depth that
+matched, or with the main conversation. A request held while every upstream was at its cap names the upstream it was
+held on: its cohort's, or else the last one it waited on. The cache line reads a placement as a hit or a miss against
+the prefix it was promised: a placement by its messages is a hit when the response read at least that prefix, one by its
+static prefix when it read anything, and one with the main conversation keeps the plain cache line.
 
 ![The Requests view: the filterable table with its client column](assets/requests-light.png#only-light)
 ![The Requests view: the filterable table with its client column](assets/requests-dark.png#only-dark)

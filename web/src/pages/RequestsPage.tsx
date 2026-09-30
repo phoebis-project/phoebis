@@ -10,7 +10,7 @@ import { MultiSelect } from '@/components/ui/MultiSelect';
 import { IconChevronLeft, IconChevronRight, IconChevronsLeft, IconColumns, IconRefresh, IconX } from '@/components/ui/icons';
 import { Badge, Button, Card, CopyButton, EmptyState, ErrorState, Input, KeyValue, SearchInput, Select, Skeleton } from '@/components/ui/primitives';
 import { moveLabel } from '@/lib/analytics';
-import { autoModeLabel, verdictLabel } from '@/lib/autoMode';
+import { autoModeLabel } from '@/lib/autoMode';
 import { isDivergence, missLabel } from '@/lib/cache';
 import { AGENT_TYPES, CLIENT_CLASS_CHARS, TURN_ORIGINS } from '@/lib/client';
 import { bytesDropped, fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortAgent, shortId, tokensTotal } from '@/lib/format';
@@ -505,33 +505,14 @@ function RequestDrawer({ request, requestId, now, onClose }: { now: number; onCl
                     <CacheRow attempt={a} usage={r.usage} />
                   </ul>
                   {a.selection && <SelectionTrace trace={a.selection} usage={r.usage} />}
-                  {(a.response.stopReason || a.response.servedModel || (a.response.clearedInputTokens !== null && a.response.clearedInputTokens > 0) || a.response.autoModeVerdict) && (
+                  {(a.response.stopReason || a.response.servedModel || (a.response.clearedInputTokens !== null && a.response.clearedInputTokens > 0)) && (
                     <div className="attempt__response secondary">
                       {a.response.stopReason && <span>stopped: {a.response.stopReason}{a.response.refusalCategory ? ` (${a.response.refusalCategory}${a.response.refusalRecommendedModel ? `, try ${a.response.refusalRecommendedModel}` : ''})` : ''}</span>}
-                      {a.response.autoModeVerdict && (
-                        <span title="The auto mode check's verdict for this answer">
-                          auto mode: {verdictLabel(r.autoMode, a.response.autoModeVerdict, a.response.autoModeDetail)}
-                        </span>
-                      )}
                       {a.response.servedModel && <span className="mono">served by {a.response.servedModel}</span>}
                       {a.response.speed && <span>{a.response.speed}</span>}
                       {a.response.inferenceGeo && <span>{a.response.inferenceGeo}</span>}
                       {a.response.clearedInputTokens !== null && a.response.clearedInputTokens > 0 && <span>{fmtInt(a.response.clearedInputTokens)} tokens cleared by context edits</span>}
                     </div>
-                  )}
-                  {a.response.autoModeToolUses.length > 0 && (
-                    <ul className="attempt__verdicts">
-                      {a.response.autoModeToolUses.map((t) => (
-                        <li key={t.id}>
-                          <span className="mono">{t.id}</span>
-                          <span className={t.outcome === 'flagged' ? '' : 'muted'}>
-                            {t.outcome.replace('_', ' ')}
-                            {t.reason ? ` (${t.reason})` : ''}
-                          </span>
-                          {t.explanation && <span className="secondary">{t.explanation}</span>}
-                        </li>
-                      ))}
-                    </ul>
                   )}
                   {a.cooldownSet && (
                     <div className="attempt__cooldown">

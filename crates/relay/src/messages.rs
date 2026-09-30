@@ -912,16 +912,11 @@ impl Relay {
         };
         let facts = BodyFacts::read(&raw);
         let auto_mode_server = snapshot.auto_mode_server(&key);
-        let auto_mode = match facts.shape.classifier_stage {
-            Some(1) => Some(AutoMode::ClientStage1),
-            Some(_) => Some(AutoMode::ClientStage2),
-            None if facts.shape.safeguards => Some(if auto_mode_server {
-                AutoMode::Server
-            } else {
-                AutoMode::Stripped
-            }),
-            None => None,
-        };
+        let auto_mode = facts.shape.safeguards.then_some(if auto_mode_server {
+            AutoMode::Server
+        } else {
+            AutoMode::Stripped
+        });
         let stream = wants_stream(&raw);
         // Admission and the body edit both act on the first spelling of a member; a second one would reach
         // the wire untouched and a last-wins parser upstream would act on it instead. Refused whole rather
@@ -2896,7 +2891,6 @@ impl Relay {
                 bytes: 0,
                 first_content_at: None,
                 saw_tool_use: false,
-                saw_tool_use_block: false,
                 stream_error: None,
                 status: head.status,
                 message_id: None,

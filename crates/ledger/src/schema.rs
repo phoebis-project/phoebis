@@ -261,9 +261,8 @@ CREATE INDEX IF NOT EXISTS events_at ON events (at);
 /// its own requests in it, resets excluded by construction (a run names one reset). A reading from before this
 /// version reads NULL and bounds no run.
 ///
-/// Version 21: the request row records what it had to do with auto mode (a server-side check passed through or
-/// stripped, or one of the client's own classifier requests), and the attempt row the verdict its answer gave,
-/// the verdict's detail and a server-side check's outcome per tool use; a row from before reads NULL.
+/// Version 21: the request row records its auto-mode standing (a server-side check passed through or stripped
+/// under the key's setting, or a refusal for the body's shape before any dispatch); a row from before reads NULL.
 pub const MIGRATIONS: &[(u32, &str)] = &[
     (
         2,
@@ -661,9 +660,6 @@ CREATE INDEX window_reconciliations_computed ON window_reconciliations (computed
     ),
     (
         21,
-        "ALTER TABLE requests ADD COLUMN auto_mode TEXT;
-ALTER TABLE attempts ADD COLUMN auto_mode_verdict TEXT;
-ALTER TABLE attempts ADD COLUMN auto_mode_detail TEXT;
-ALTER TABLE attempts ADD COLUMN auto_mode_tool_uses_json TEXT;",
+        "ALTER TABLE requests ADD COLUMN auto_mode TEXT;",
     ),
 ];

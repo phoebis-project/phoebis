@@ -7,10 +7,6 @@ use serde_json::Value;
 
 use crate::chains::Chains;
 
-/// The opening of the client's own classifier instruction, the one marker both stages share.
-pub const SECURITY_MONITOR_PREFIX: &str =
-    "You are a security monitor for autonomous AI coding agents.";
-
 pub struct BodyFacts {
     /// The last `messages` entry has role `user` and carries no `tool_result` block.
     pub fresh_user_turn: bool,
@@ -97,35 +93,6 @@ impl BodyFacts {
         let count = |v: Option<&Value>| v.and_then(Value::as_array).map_or(0, |a| a.len() as u32);
         let text = |v: Option<&Value>| v.and_then(Value::as_str).map(str::to_string);
         let thinking = root.get("thinking");
-        // The client's own classifier request, by its body alone: the classifier beta and the `auxiliary` class
-        // header appear in first-party mode only. Stage 1 stops at a closing tag; stage 2 runs it to the end.
-        let monitor = root
-            .get("system")
-            .and_then(Value::as_array)
-            .is_some_and(|blocks| {
-                blocks.iter().take(2).any(|block| {
-                    block
-                        .get("text")
-                        .and_then(Value::as_str)
-                        .is_some_and(|text| text.starts_with(SECURITY_MONITOR_PREFIX))
-                })
-            });
-        let classifier_stage = (monitor
-            && root.get("stream").is_none()
-            && root.get("tools").is_none()
-            && root.get("max_tokens").is_some())
-        .then(|| match root.get("stop_sequences") {
-            None => Some(2),
-            Some(Value::Array(stops))
-                if stops
-                    .iter()
-                    .any(|s| matches!(s.as_str(), Some("</block>" | "</severity>"))) =>
-            {
-                Some(1)
-            }
-            Some(_) => None,
-        })
-        .flatten();
         let shape = RequestShape {
             effort: text(root.get("output_config").and_then(|o| o.get("effort"))),
             thinking_type: text(thinking.and_then(|t| t.get("type"))),
@@ -150,7 +117,6 @@ impl BodyFacts {
             speed: text(root.get("speed")),
             service_tier: text(root.get("service_tier")),
             safeguards,
-            classifier_stage,
         };
         let chains = Chains::read(&root);
         let markers_ttl_ms = markers_ttl_ms(&root);
@@ -556,115 +522,12 @@ mod tests {
         );
     }
 
-    /// A classifier request as the client builds one: the billing line, the monitor instruction, the session's
-    /// context, one user turn, and no `stream` or `tools`.
-    fn classifier_body(billing: Option<&str>, max_tokens: u64, stops: Option<&[&str]>) -> Value {
-        let mut system = Vec::new();
-        if let Some(line) = billing {
-            system.push(serde_json::json!({ "type": "text", "text": line }));
-        }
-        system.push(serde_json::json!({
-            "type": "text",
-            "text": format!("{SECURITY_MONITOR_PREFIX}\n\n## Context\n\nThe agent you are monitoring is an autonomous coding agent."),
-            "cache_control": { "type": "ephemeral", "ttl": "1h" },
-        }));
-        system.push(
-            serde_json::json!({ "type": "text", "text": "\n\n## Session Context\n\n<context>" }),
-        );
-        let mut body = serde_json::json!({
-            "model": "claude-sonnet-5-5",
-            "max_tokens": max_tokens,
-            "system": system,
-            "messages": [{ "role": "user", "content": [{ "type": "text", "text": "<transcript>" }] }],
-            "metadata": { "user_id": "{\"device_id\":\"<device>\",\"account_uuid\":\"\",\"session_id\":\"<uuid>\"}" },
-        });
-        if let Some(stops) = stops {
-            body["stop_sequences"] = serde_json::json!(stops);
-        }
-        body
-    }
-
-    fn stage(body: &Value) -> Option<u8> {
-        BodyFacts::read(&serde_json::to_vec(body).unwrap())
-            .shape
-            .classifier_stage
-    }
-
-    const THIRD_PARTY_LINE: &str =
-        "x-anthropic-billing-header: cc_version=2.1.284.e3c; cc_entrypoint=sdk-cli;";
-    const FIRST_PARTY_LINE: &str =
-        "x-anthropic-billing-header: cc_version=2.1.284.e3c; cc_entrypoint=sdk-cli; cch=00000;";
-
     #[test]
-    fn the_clients_classifier_request_is_read_by_its_body_markers_at_either_stage() {
-        for line in [THIRD_PARTY_LINE, FIRST_PARTY_LINE] {
-            assert_eq!(
-                stage(&classifier_body(Some(line), 2112, Some(&["</block>"]))),
-                Some(1),
-                "stage 1 stops at its closing tag, whichever billing line it carries"
-            );
-        }
-        assert_eq!(
-            stage(&classifier_body(
-                Some(THIRD_PARTY_LINE),
-                2112,
-                Some(&["</severity>"])
-            )),
-            Some(1),
-            "the severity protocol's stop is stage 1's as well"
-        );
-        assert_eq!(
-            stage(&classifier_body(Some(THIRD_PARTY_LINE), 10240, None)),
-            Some(2),
-            "stage 2 runs to the end"
-        );
-        assert_eq!(
-            stage(&classifier_body(None, 2112, Some(&["</block>"]))),
-            Some(1),
-            "the instruction may open the system list when no billing line precedes it"
-        );
-    }
-
-    #[test]
-    fn a_body_that_is_not_the_classifiers_reads_no_stage() {
-        let mut session = serde_json::from_slice::<Value>(phoebis_profile::fixtures::body(
-            phoebis_profile::fixtures::BodyFixture::Oauth,
-        ))
-        .unwrap();
-        session["stop_sequences"] = serde_json::json!(["</block>"]);
-        assert_eq!(
-            stage(&session),
-            None,
-            "a session post with tools and a stop"
-        );
-        let mut streamed = classifier_body(Some(THIRD_PARTY_LINE), 2112, Some(&["</block>"]));
-        streamed["stream"] = serde_json::json!(true);
-        assert_eq!(stage(&streamed), None, "the classifier never streams");
-        let mut with_tools = classifier_body(Some(THIRD_PARTY_LINE), 2112, Some(&["</block>"]));
-        with_tools["tools"] = serde_json::json!([{ "name": "Bash" }]);
-        assert_eq!(stage(&with_tools), None, "nor does it offer tools");
-        assert_eq!(
-            stage(&classifier_body(Some(THIRD_PARTY_LINE), 2112, Some(&["x"]))),
-            None,
-            "a stop that is neither closing tag belongs to no stage"
-        );
-        let mut unbounded = classifier_body(Some(THIRD_PARTY_LINE), 2112, Some(&["</block>"]));
-        unbounded.as_object_mut().unwrap().remove("max_tokens");
-        assert_eq!(
-            stage(&unbounded),
-            None,
-            "the classifier always bounds its output"
-        );
-    }
-
-    #[test]
-    fn a_body_with_the_safeguards_member_asks_for_the_server_check_and_is_no_classifier_request() {
+    fn a_body_with_the_safeguards_member_asks_for_the_server_check() {
         let body = phoebis_profile::fixtures::with_safeguards(phoebis_profile::fixtures::body(
             phoebis_profile::fixtures::BodyFixture::Oauth,
         ));
-        let shape = BodyFacts::read(&body).shape;
-        assert!(shape.safeguards);
-        assert_eq!(shape.classifier_stage, None);
+        assert!(BodyFacts::read(&body).shape.safeguards);
     }
 
     #[test]

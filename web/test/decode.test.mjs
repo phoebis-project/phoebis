@@ -467,23 +467,7 @@ test('a request page carries the trail with zero-based attempt indexes and the c
   assert.equal(failover.usage.thinking, 40);
   assert.deepEqual(failover.shape, { contextEdits: ['clear_thinking_20251015'], effort: 'high', maxTokens: 32_000, messageCount: 1, requestedServiceTier: null, requestedSpeed: null, systemBlocks: 4, temperature: null, thinkingBudget: 31_999, thinkingType: 'enabled', toolCount: 12 });
   assert.equal(failover.autoMode, 'server');
-  assert.deepEqual(failover.attempts[1].response, {
-    autoModeDetail: null,
-    autoModeToolUses: [
-      { explanation: null, id: 'toolu_01', outcome: 'not_flagged', reason: null },
-      { explanation: 'Deletes a file the task never named.', id: 'toolu_02', outcome: 'flagged', reason: null },
-    ],
-    autoModeVerdict: 'flagged',
-    clearedInputTokens: null,
-    inferenceGeo: 'us',
-    refusalCategory: null,
-    refusalRecommendedModel: null,
-    servedModel: null,
-    speed: 'standard',
-    stopReason: 'tool_use',
-    stopSequence: null,
-  });
-  assert.deepEqual([failover.attempts[0].response.autoModeVerdict, failover.attempts[0].response.autoModeToolUses], [null, []], 'the leg no answer reached carries no verdict and a null map');
+  assert.deepEqual(failover.attempts[1].response, { clearedInputTokens: null, inferenceGeo: 'us', refusalCategory: null, refusalRecommendedModel: null, servedModel: null, speed: 'standard', stopReason: 'tool_use', stopSequence: null });
   assert.equal(failover.responseTruncated, false);
   const failed = page.requests.find((r) => r.id === 'r-failed');
   assert.equal(failed.errorCode, 'upstream_error');
@@ -498,19 +482,11 @@ test('a request page carries the trail with zero-based attempt indexes and the c
   assert.equal(d.decodeRequest(fixture('request').request).canonicalModel, 'claude-sonnet-5');
 });
 
-test('a classifier request reads its stage and its verdict, and an unknown spelling or an absent map reads empty', () => {
+test('a request reads its auto-mode standing, and a spelling the console does not know reads as none', () => {
   const captured = d.decodeRequestPage(fixture('requests')).requests.find((r) => r.id === 'r-captured');
-  assert.equal(captured.autoMode, 'client_stage1');
-  assert.deepEqual(
-    [captured.attempts[0].response.autoModeVerdict, captured.attempts[0].response.autoModeToolUses, captured.attempts[0].response.stopReason, captured.attempts[0].response.stopSequence],
-    ['not_flagged', [], 'stop_sequence', '</block>'],
-    'a stage-1 answer ends on its closing tag',
-  );
-  const bare = d.decodeRequest({ attempts: [{ response: {} }], auto_mode: 'client_stage3' });
-  assert.equal(bare.autoMode, null, 'a spelling the console does not know reads as no auto mode');
-  assert.deepEqual([bare.attempts[0].response.autoModeDetail, bare.attempts[0].response.autoModeToolUses, bare.attempts[0].response.autoModeVerdict], [null, [], null]);
-  const unordered = d.decodeRequest({ attempts: [{ response: { auto_mode_tool_uses: { toolu_b: { outcome: 'unavailable', reason: 'timeout' }, toolu_a: { outcome: 'flagged', explanation: 'x' } } } }] });
-  assert.deepEqual(unordered.attempts[0].response.autoModeToolUses.map((t) => [t.id, t.outcome, t.reason, t.explanation]), [['toolu_a', 'flagged', null, 'x'], ['toolu_b', 'unavailable', 'timeout', null]], 'the entries read in id order');
+  assert.equal(captured.autoMode, null, 'a request that asked for nothing');
+  assert.deepEqual(['body_shape', 'server', 'stripped'].map((m) => d.decodeRequest({ attempts: [], auto_mode: m }).autoMode), ['body_shape', 'server', 'stripped']);
+  assert.equal(d.decodeRequest({ attempts: [], auto_mode: 'unknown' }).autoMode, null);
 });
 
 test('a request row carries the generation of the key it was read under', () => {

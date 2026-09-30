@@ -2284,7 +2284,7 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
   });
   foot(ci, 'Cancel')?.click();
   await m.settle(200);
-  // A new key opens on its first pool, which is on; notebook overrides its pool, which is off.
+  // A new key opens on its first pool, which is on; notebook sets its own off under a pool that is off.
   const autoModeOf = (dlg) => group(dlg, 'Access')?.querySelector('select[aria-label="Server-side auto mode"]');
   [...m.container.querySelectorAll('button')].find((b) => b.textContent?.includes('Create API key'))?.click();
   await m.settle(200);
@@ -2300,7 +2300,7 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
   await m.settle(200);
   results.push({
     name: "/keys Server-side auto mode offers Inherit, On and Off and starts on Inherit naming the pool's value",
-    ok: JSON.stringify(freshOptions) === JSON.stringify(["inherit:Inherit (on, the pool's setting)", 'on:On', 'off:Off']) && freshValue === 'inherit' && notebookValue === 'on',
+    ok: JSON.stringify(freshOptions) === JSON.stringify(["inherit:Inherit (on, the pool's setting)", 'on:On', 'off:Off']) && freshValue === 'inherit' && notebookValue === 'off',
     missing: [JSON.stringify(freshOptions), String(freshValue), String(notebookValue)],
   });
   results.push({
@@ -2704,43 +2704,17 @@ if (failoverRow) {
 }
 {
   const row = (label) => [...(m.container.querySelector('.drawer')?.querySelectorAll('.kv__row') ?? [])].find((r) => r.querySelector('dt')?.textContent?.trim() === label)?.querySelector('dd');
-  const verdictSpans = () => [...m.container.querySelectorAll('.drawer .attempt__response span')].map((s) => s.textContent?.trim() ?? '').filter((t) => t.startsWith('auto mode:'));
-  const server = requests.find((r) => r.autoMode === 'server' && r.attempts.some((a) => a.response.autoModeVerdict === 'flagged'));
-  const stage2 = requests.find((r) => r.autoMode === 'client_stage2');
+  const server = requests.find((r) => r.autoMode === 'server');
   const dropped = requests.find((r) => r.autoMode === 'stripped');
-  results.push({ name: 'fixture: a flagged server-side check, a stage-2 classifier request and a dropped check', ok: server !== undefined && stage2 !== undefined && dropped !== undefined, missing: [server?.id ?? 'no server row', stage2?.id ?? 'no stage-2 row', dropped?.id ?? 'no dropped row'] });
-  if (server) {
-    await m.navigate(`/requests/${server.id}`);
+  results.push({ name: 'fixture: a server-side check and a dropped check', ok: server !== undefined && dropped !== undefined, missing: [server?.id ?? 'no server row', dropped?.id ?? 'no dropped row'] });
+  for (const [r, name, words] of [
+    [server, '/requests drawer reads a server-side check requested', 'server-side check requested'],
+    [dropped, '/requests drawer reads a dropped check', "server-side check dropped by this key's setting"],
+  ]) {
+    if (!r) continue;
+    await m.navigate(`/requests/${r.id}`);
     await m.settle(300);
-    const entries = [...m.container.querySelectorAll('.drawer .attempt__verdicts li')].map((li) => li.textContent ?? '');
-    const flagged = [...m.container.querySelectorAll('.drawer .attempt__verdicts li')].find((li) => li.children[1]?.textContent?.trim() === 'flagged');
-    results.push({
-      name: '/requests drawer reads a flagged server verdict per tool use',
-      ok:
-        row('Auto mode')?.textContent?.trim() === 'server-side check requested' &&
-        verdictSpans().includes('auto mode: flagged') &&
-        entries.length === 2 &&
-        (flagged?.textContent ?? '').includes('Deletes notes.md, a file the task never asked to remove.'),
-      missing: [row('Auto mode')?.textContent ?? 'no Auto mode row', JSON.stringify(verdictSpans()), JSON.stringify(entries)],
-    });
-  }
-  if (stage2) {
-    await m.navigate(`/requests/${stage2.id}`);
-    await m.settle(300);
-    results.push({
-      name: "/requests drawer reads a classifier request's stage and verdict",
-      ok: row('Auto mode')?.textContent?.trim() === 'client classifier, stage 2' && verdictSpans().includes('auto mode: refused (reasoning_extraction)') && m.container.querySelector('.drawer .attempt__verdicts') === null,
-      missing: [row('Auto mode')?.textContent ?? 'no Auto mode row', JSON.stringify(verdictSpans())],
-    });
-  }
-  if (dropped) {
-    await m.navigate(`/requests/${dropped.id}`);
-    await m.settle(300);
-    results.push({
-      name: '/requests drawer reads a dropped check',
-      ok: row('Auto mode')?.textContent?.trim() === "server-side check dropped by this key's setting" && verdictSpans().length === 0 && m.container.querySelector('.drawer .attempt__verdicts') === null,
-      missing: [row('Auto mode')?.textContent ?? 'no Auto mode row', JSON.stringify(verdictSpans())],
-    });
+    results.push({ name, ok: row('Auto mode')?.textContent?.trim() === words, missing: [row('Auto mode')?.textContent ?? 'no Auto mode row'] });
   }
 }
 {
