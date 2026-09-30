@@ -11,6 +11,11 @@ const PREFIX: &str = "anthropic-ratelimit-unified-";
 const BUCKET_PREFIX: &str = "anthropic-ratelimit-";
 const FAST_PREFIX: &str = "anthropic-fast-";
 
+/// The fast lane's two buckets, per organization and shared by every fast-capable model, so the names carry no
+/// model suffix and neither `worst_bucket`'s prefixes nor the plan-window persistence match them.
+pub const FAST_INPUT: &str = "fast_input";
+pub const FAST_OUTPUT: &str = "fast_output";
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct UnifiedHeaders {
     pub status: Option<String>,
@@ -183,7 +188,8 @@ fn rfc3339_millis(value: &str) -> Option<i64> {
 }
 
 /// The selection sample a head implies: the unified windows for an OAuth account, the buckets under `rpm:`,
-/// `itpm:`, `otpm:` plus the canonical model for an api_key account; `None` when the head carries neither.
+/// `itpm:`, `otpm:` plus the canonical model for an api_key account, and for either kind the fast lane's two
+/// buckets under `FAST_INPUT` and `FAST_OUTPUT`; `None` when the head carries none of them.
 pub fn head_sample(
     head: &ResponseHead,
     kind: AccountKind,
@@ -196,64 +202,76 @@ pub fn head_sample(
     };
     match kind {
         AccountKind::Oauth => {
-            let unified = UnifiedHeaders::parse(head)?;
-            if let Some(utilization) = unified.five_hour_utilization {
-                sample = sample.with(
-                    FIVE_HOUR,
-                    WindowReading {
-                        utilization,
-                        reset: unified.five_hour_reset,
-                        observed_at,
-                    },
-                );
-            }
-            if let Some(utilization) = unified.seven_day_utilization {
-                sample = sample.with(
-                    SEVEN_DAY,
-                    WindowReading {
-                        utilization,
-                        reset: unified.seven_day_reset,
-                        observed_at,
-                    },
-                );
-            }
-            // Unlike the shared windows, the overage-included 7-day reading carries no status of its own to
-            // gate on, only the utilization header itself.
-            if let Some(utilization) = unified.seven_day_oi_utilization {
-                sample = sample.with(
-                    SEVEN_DAY_FABLE,
-                    WindowReading {
-                        utilization,
-                        reset: unified.seven_day_oi_reset,
-                        observed_at,
-                    },
-                );
-            }
-        }
-        AccountKind::ApiKey => {
-            let buckets = BucketHeaders::parse(head)?;
-            for (prefix, bucket) in [
-                ("itpm", buckets.input_tokens),
-                ("otpm", buckets.output_tokens),
-                ("rpm", buckets.requests),
-            ] {
-                if let Some(b) = bucket {
-                    // `limit` is never 0 here (`BucketHeaders::parse` drops that family), but `remaining` past
-                    // `limit` is still a reading the provider could send; clamped rather than read negative.
-                    let utilization = (1.0 - (b.remaining as f64 / b.limit as f64)).clamp(0.0, 1.0);
+            if let Some(unified) = UnifiedHeaders::parse(head) {
+                if let Some(utilization) = unified.five_hour_utilization {
                     sample = sample.with(
-                        &format!("{prefix}:{canonical_model}"),
+                        FIVE_HOUR,
                         WindowReading {
                             utilization,
-                            reset: b.reset,
+                            reset: unified.five_hour_reset,
+                            observed_at,
+                        },
+                    );
+                }
+                if let Some(utilization) = unified.seven_day_utilization {
+                    sample = sample.with(
+                        SEVEN_DAY,
+                        WindowReading {
+                            utilization,
+                            reset: unified.seven_day_reset,
+                            observed_at,
+                        },
+                    );
+                }
+                // Unlike the shared windows, the overage-included 7-day reading carries no status of its own to
+                // gate on, only the utilization header itself.
+                if let Some(utilization) = unified.seven_day_oi_utilization {
+                    sample = sample.with(
+                        SEVEN_DAY_FABLE,
+                        WindowReading {
+                            utilization,
+                            reset: unified.seven_day_oi_reset,
                             observed_at,
                         },
                     );
                 }
             }
         }
+        AccountKind::ApiKey => {
+            if let Some(buckets) = BucketHeaders::parse(head) {
+                for (prefix, bucket) in [
+                    ("itpm", buckets.input_tokens),
+                    ("otpm", buckets.output_tokens),
+                    ("rpm", buckets.requests),
+                ] {
+                    if let Some(b) = bucket {
+                        sample = sample.with(
+                            &format!("{prefix}:{canonical_model}"),
+                            bucket_reading(b, observed_at),
+                        );
+                    }
+                }
+            }
+        }
+    }
+    if let Some(fast) = FastHeaders::parse(head) {
+        for (window, bucket) in [(FAST_INPUT, fast.input), (FAST_OUTPUT, fast.output)] {
+            if let Some(b) = bucket {
+                sample = sample.with(window, bucket_reading(b, observed_at));
+            }
+        }
     }
     (!sample.windows.is_empty()).then_some(sample)
+}
+
+/// A bucket's share used. `limit` is never 0 here (the family parse drops it), but `remaining` past `limit` is
+/// still a reading the provider could send; clamped rather than read negative.
+fn bucket_reading(bucket: Bucket, observed_at: i64) -> WindowReading {
+    WindowReading {
+        utilization: (1.0 - (bucket.remaining as f64 / bucket.limit as f64)).clamp(0.0, 1.0),
+        reset: bucket.reset,
+        observed_at,
+    }
 }
 
 pub fn upstream_date(head: &ResponseHead) -> Option<i64> {

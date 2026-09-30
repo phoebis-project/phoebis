@@ -237,10 +237,12 @@ function questionFor(e: AlertEvent, viewer: boolean): AlertEvent {
 
 /** A flag outranks the enabled bit and the cooldowns in the status the account view folds, so pausing never hides one. */
 const FLAGGED: Account['status'][] = ['funding_required', 'reauth_required', 'unpaired'];
+/** A fast-lane row holds fast-mode requests alone, so the upstream cools only under another scope's row. */
+const cooling = (cooldowns: Account['cooldowns']) => cooldowns.some((c) => c.scope !== 'fast');
 const statusOf = (a: Account, enabled: boolean): Account['status'] => {
   if (FLAGGED.includes(a.status)) return a.status;
   if (!enabled) return 'paused';
-  return a.cooldowns.length ? 'cooldown' : 'ready';
+  return cooling(a.cooldowns) ? 'cooldown' : 'ready';
 };
 
 /**
@@ -397,7 +399,7 @@ export class MockApi implements Api {
     this.mutation();
     const a = this.account(accountId);
     const cooldowns = a.cooldowns.filter((c) => c.scope !== scope);
-    this.putAccount({ ...a, cooldowns, status: cooldowns.length ? a.status : 'ready' });
+    this.putAccount({ ...a, cooldowns, status: cooling(cooldowns) ? a.status : 'ready' });
     return latency(undefined, 200);
   }
 
@@ -434,6 +436,7 @@ export class MockApi implements Api {
       email: null,
       extraUsage: null,
       fableWindow: null,
+      fastLane: null,
       id: input.id,
       kind: input.kind,
       label: input.label,

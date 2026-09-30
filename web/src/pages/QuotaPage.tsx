@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { api } from '@/api';
 import type { Account, PollOutcome, QuotaPoll, QuotaSnapshot, RateLimitWindow } from '@/api/types';
 import { accountColor } from '@/components/charts/theme';
+import { FastLane } from '@/components/FastLane';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { IconAnthropic, IconChevronLeft, IconChevronRight, IconRefresh, IconServer, IconWarning } from '@/components/ui/icons';
 import { Badge, ErrorState, Meter, Pill, Segmented, Select, Skeleton, Tabs } from '@/components/ui/primitives';
@@ -224,6 +225,8 @@ function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshe
             <QuotaWindow name="Fable" window={account.fableWindow} now={now} soon={soonest === '7d_fable'} />
           </div>
         )}
+        {/* Outside the ternary, so an API-key card, which has no windows, shows its fast lane too. */}
+        {status !== 'loading' && <FastLane account={account} now={now} />}
       </div>
 
       {status !== 'loading' && (account.plan || endsAt || trialEndsAt || extra?.enabled) && (

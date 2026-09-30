@@ -1160,6 +1160,7 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
                 .collect();
         }
     }
+    let fast_lane = ctx.held.get(&row.id).and_then(fast_lane_json);
     json!({
         "id": row.id,
         "kind": match row.kind { AccountKind::ApiKey => "api_key", AccountKind::Oauth => "oauth" },
@@ -1206,6 +1207,7 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
         "profile": profile,
         "subscription": subscription,
         "windows": windows,
+        "fast_lane": fast_lane,
         "extra_usage": ctx.extra.iter().find(|e| e.account_id == row.id).map(|e| json!({ "currency": e.currency, "disabled_reason": e.disabled_reason, "in_use": e.in_use, "is_enabled": e.is_enabled, "monthly_limit": e.monthly_limit, "used_credits": e.used_credits, "utilization": e.utilization, "observed_at": e.bucket * 1_000 })),
         "pools": ctx.members.iter().filter(|m| m.account_id == row.id).map(|m| json!({ "pool_id": m.pool_id, "priority": m.priority })).collect::<Vec<_>>(),
         "requests": { "last_24h": ctx.day.get(&row.id).map_or(0, |t| t.requests), "last_7d": ctx.week.get(&row.id).map_or(0, |t| t.requests), "lifetime": ctx.lifetime.get(&row.id).map_or(0, |t| t.requests) },
@@ -1232,6 +1234,21 @@ fn held_windows(sample: &UtilizationSample) -> Vec<(&'static str, WindowReading)
     .into_iter()
     .filter_map(|(name, key)| sample.reading(name).map(|reading| (key, reading)))
     .collect()
+}
+
+/// The fast lane's input and output buckets as the router last read them off an answer's head; `None` while it
+/// holds neither, since only an answer to a fast request carries them.
+fn fast_lane_json(sample: &UtilizationSample) -> Option<Value> {
+    let reading = |window: &str| {
+        sample.reading(window).map(|r| {
+            json!({ "utilization": r.utilization, "resets_at": r.reset, "observed_at": r.observed_at })
+        })
+    };
+    let (input, output) = (
+        reading(phoebis_relay::FAST_INPUT),
+        reading(phoebis_relay::FAST_OUTPUT),
+    );
+    (input.is_some() || output.is_some()).then(|| json!({ "input": input, "output": output }))
 }
 
 /// What the `GET` answers from the poll's `latest` snapshot and the router's `held` sample of the account.

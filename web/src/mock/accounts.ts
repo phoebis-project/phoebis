@@ -16,6 +16,12 @@ function win(id: WindowId, utilization: number, resetsInMs: number, observedAgoM
   };
 }
 
+/** The fast lane's two buckets as the last answer to a fast request on the upstream reported them. */
+function fastLane(input: number, output: number, resetsInMs: number): Account['fastLane'] {
+  const reading = (utilization: number) => ({ observedAt: ago(40_000), resetsAt: ahead(resetsInMs), utilization });
+  return { input: reading(input), output: reading(output) };
+}
+
 // Each plan label derives from the entry's subscription by the decoder's own rule, so the mock and the served
 // console draw one name.
 export const ACCOUNTS: Account[] = ([
@@ -34,6 +40,7 @@ export const ACCOUNTS: Account[] = ([
     windows: [win('5h', 0.62, 2 * HOUR + 14 * MINUTE), win('7d', 0.41, 3 * DAY + 5 * HOUR + 40 * MINUTE)],
     fableWindow: win('7d_fable', 0.12, 3 * DAY + 5 * HOUR + 40 * MINUTE),
     extraUsage: { disabledReason: null, enabled: true, inUse: false, monthlyLimitCredits: 5000, usedCredits: 1234 },
+    fastLane: fastLane(1, 0.64, 12 * MINUTE),
     credential: {
       accessTokenExpiresAt: ahead(6 * HOUR + 22 * MINUTE),
       lastError: null,
@@ -44,8 +51,17 @@ export const ACCOUNTS: Account[] = ([
     subscription: { billingType: 'annual', organizationType: 'claude_max', plan: 'max', rateLimitTier: 'max_20x', since: ago(200 * DAY), trialEndsAt: null, endsAt: null, derivedEndsAt: ahead(160 * DAY) },
     requests: { last24h: 1187, last7d: 7420, lifetime: 184_211 },
     // A live model-scoped cooldown, which the pool eligibility check leaves alone (that reads the account-wide
-    // scope alone) but which the Models view and this account's own status fold in like any other cooldown.
+    // scope alone) but which the Models view and this account's own status fold in like any other cooldown. The
+    // fast-lane row ahead of it holds fast-mode requests alone, so neither the status nor the header's cooldown
+    // badge reads it, and it lifts sooner, so a page reading the first row would name the wrong reset.
     cooldowns: [
+      {
+        reason: 'fast_rate_limit',
+        scope: 'fast',
+        setAt: ago(3 * MINUTE),
+        until: ahead(12 * MINUTE),
+        windowId: null,
+      },
       {
         reason: 'model_rejected',
         scope: 'model:claude-haiku-4-5-20251001',
@@ -70,6 +86,7 @@ export const ACCOUNTS: Account[] = ([
     windows: [win('5h', 1, 1 * HOUR + 12 * MINUTE), win('7d', 0.88, 5 * DAY + 2 * HOUR + 5 * MINUTE)],
     fableWindow: null,
     extraUsage: null,
+    fastLane: null,
     credential: {
       accessTokenExpiresAt: ahead(3 * HOUR + 2 * MINUTE),
       lastError: null,
@@ -109,6 +126,7 @@ export const ACCOUNTS: Account[] = ([
     windows: [win('5h', 0.97, 3 * HOUR + 41 * MINUTE), win('7d', 0.35, 1 * DAY + 18 * HOUR + 12 * MINUTE)],
     fableWindow: win('7d_fable', 0.41, 1 * DAY + 18 * HOUR + 12 * MINUTE),
     extraUsage: { disabledReason: 'Payment method declined on 02 Sep; overage paused by the provider', enabled: true, inUse: true, monthlyLimitCredits: 2000, usedCredits: 612 },
+    fastLane: null,
     overage: { inUse: true, observedAt: ago(40_000), reset: ahead(1 * DAY + 18 * HOUR + 12 * MINUTE), since: ago(3 * HOUR) },
     credential: {
       accessTokenExpiresAt: ahead(5 * HOUR + 50 * MINUTE),
@@ -133,6 +151,7 @@ export const ACCOUNTS: Account[] = ([
     windows: [],
     fableWindow: null,
     extraUsage: null,
+    fastLane: fastLane(0.18, 0.05, 40_000),
     credential: { accessTokenExpiresAt: null, lastError: null, lastRefreshAt: null, quarantined: false, refreshTokenExpiresAt: null },
     subscription: null,
     requests: { last24h: 41, last7d: 233, lifetime: 3_104 },
@@ -150,6 +169,7 @@ export const ACCOUNTS: Account[] = ([
     windows: [],
     fableWindow: null,
     extraUsage: null,
+    fastLane: null,
     credential: { accessTokenExpiresAt: null, lastError: null, lastRefreshAt: null, quarantined: false, refreshTokenExpiresAt: null },
     subscription: null,
     requests: { last24h: 128, last7d: 902, lifetime: 6_517 },
@@ -167,6 +187,7 @@ export const ACCOUNTS: Account[] = ([
     windows: [win('5h', 0.18, -2 * DAY, 2 * DAY + 3 * HOUR), win('7d', 0.52, 2 * DAY, 2 * DAY + 3 * HOUR)],
     fableWindow: null,
     extraUsage: null,
+    fastLane: null,
     credential: {
       accessTokenExpiresAt: ago(2 * DAY + 2 * HOUR),
       lastError: 'refresh_token rejected: invalid_grant',
@@ -191,6 +212,7 @@ export const ACCOUNTS: Account[] = ([
     windows: [],
     fableWindow: null,
     extraUsage: null,
+    fastLane: null,
     credential: { accessTokenExpiresAt: null, lastError: null, lastRefreshAt: null, quarantined: false, refreshTokenExpiresAt: null },
     subscription: null,
     requests: { last24h: 0, last7d: 0, lifetime: 0 },

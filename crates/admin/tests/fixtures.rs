@@ -491,6 +491,22 @@ async fn every_route_is_captured_and_holds_its_shape() {
         credential_generation: 1,
         incarnation: 1,
     });
+    // An answer to a fast request carried the fast lane's two buckets, so the account rows show the pair.
+    let fast_reading = |utilization: f64| phoebis_routing::WindowReading {
+        utilization,
+        reset: Some(now + 30_000),
+        observed_at: now - 5_000,
+    };
+    parts.router.report(phoebis_routing::Report::Sample {
+        account_id: "business".into(),
+        sample: phoebis_routing::UtilizationSample {
+            observed_at: now - 5_000,
+            ..Default::default()
+        }
+        .with(phoebis_relay::FAST_INPUT, fast_reading(0.42))
+        .with(phoebis_relay::FAST_OUTPUT, fast_reading(0.08)),
+        incarnation: 1,
+    });
     // Two completed windows: a 5-hour one inside the band, and a 7-day one outside it, priced through cells no
     // measurement has filled.
     parts

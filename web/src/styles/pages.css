@@ -1087,6 +1087,14 @@
   border-top: 1px solid var(--hairline);
 }
 
+/* A section of its own under the upstream page's usage bars, as extra usage is; the quota card spaces it by its
+   body's gap instead. */
+.card .fast-lane {
+  padding-top: 14px;
+  margin-top: 14px;
+  border-top: 1px solid var(--hairline);
+}
+
 .req-totals {
   display: grid;
   grid-template-columns: repeat(3, 1fr);

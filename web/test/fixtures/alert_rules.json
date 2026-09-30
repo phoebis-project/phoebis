@@ -6,7 +6,7 @@
         "created_at": 1000000,
         "enabled": false,
         "has_secret": false,
-        "id": "rule_b14e90b35b9d0d38",
+        "id": "rule_6f93c40d39f5bc31",
         "kind": "client_drift",
         "scope": {
           "id": null,
@@ -21,7 +21,7 @@
         "created_at": 1000000,
         "enabled": true,
         "has_secret": true,
-        "id": "rule_d8ba6b2c37be3018",
+        "id": "rule_d950c00a2042382e",
         "kind": "utilization_above",
         "scope": {
           "id": "main",
@@ -36,7 +36,7 @@
         "created_at": 1000000,
         "enabled": true,
         "has_secret": false,
-        "id": "rule_d3e6976462e33389",
+        "id": "rule_cefd0ae94ee7b355",
         "kind": "meter_drift",
         "scope": {
           "id": "business",

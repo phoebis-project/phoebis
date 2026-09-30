@@ -257,8 +257,11 @@ sampled in the last day, or the ones the router holds when the ledger has none, 
 an error in their place only when it holds none; the page counts a card that shows an error, whose last poll failed, or
 that is backing off as needing attention. Each card names the account's plan with the date its subscription started and,
 for an account on the Claude Code trial, when the trial ends; an account marked cancelled says when its plan ends, in
-the serious tone inside a week. Below the cards, a reset timeline lays the same windows across a calendar, zoomable
-between a two-week weekly view and a three-day 5-hour view.
+the serious tone inside a week. A card whose upstream answered a fast-mode request shows a Fast mode line: the share of
+the fast lane's input and output buckets used, as the last answer reported them, with the reset, and a chip while the
+upstream's fast lane cools, naming the reason (rate limited, or credits unavailable) and when it lifts; the upstream
+page's Usage card shows the same line and chip. Below the cards, a reset timeline lays the same windows across a
+calendar, zoomable between a two-week weekly view and a three-day 5-hour view.
 
 ![The Quota view: the cards per upstream and the reset timeline](assets/quota-light.png#only-light)
 ![The Quota view: the cards per upstream and the reset timeline](assets/quota-dark.png#only-dark)

@@ -36,7 +36,7 @@ test('an account decodes with its windows, plan, pools, and models', () => {
   assert.equal(a.email, 'test@example.invalid');
   assert.deepEqual(
     Object.keys(a).sort(),
-    ['cancelled', 'cooldowns', 'credential', 'email', 'extraUsage', 'fableWindow', 'id', 'kind', 'label', 'overage', 'plan', 'pools', 'requests', 'routingEnabled', 'status', 'subscription', 'windows'],
+    ['cancelled', 'cooldowns', 'credential', 'email', 'extraUsage', 'fableWindow', 'fastLane', 'id', 'kind', 'label', 'overage', 'plan', 'pools', 'requests', 'routingEnabled', 'status', 'subscription', 'windows'],
     'an account decodes to the fields the console draws and nothing more',
   );
 });
@@ -93,6 +93,18 @@ test('an account cooling on its fast lane alone reads ready, and one with an acc
   assert.equal(alone.status, 'ready', 'its standard lane still serves');
   assert.deepEqual(alone.cooldowns.map((c) => c.scope), ['fast'], 'the row itself is still decoded');
   assert.equal(d.decodeAccount({ ...fixture('account'), cooldowns: [fast, account] }).status, 'cooldown');
+});
+
+test("an account decodes its fast lane's two readings, a missing one as null, and no pair as null", () => {
+  const body = fixture('account');
+  const lane = d.decodeAccount(body).fastLane;
+  assert.deepEqual(lane, {
+    input: { observedAt: d.iso(body.fast_lane.input.observed_at), resetsAt: d.iso(body.fast_lane.input.resets_at), utilization: 0.42 },
+    output: { observedAt: d.iso(body.fast_lane.output.observed_at), resetsAt: d.iso(body.fast_lane.output.resets_at), utilization: 0.08 },
+  });
+  const halved = d.decodeAccount({ ...body, fast_lane: { input: { ...body.fast_lane.input, resets_at: null }, output: null } }).fastLane;
+  assert.deepEqual([halved.input.resetsAt, halved.output], [null, null], 'a reading with no reset, and a bucket no answer reported');
+  assert.equal(d.decodeAccount({ ...body, fast_lane: null }).fastLane, null, 'no answer to a fast request yet');
 });
 
 test('a window both samplers wrote folds to one entry carrying the newer reading', () => {

@@ -551,6 +551,88 @@ async fn cooldowns_and_funding_are_cleared_by_an_operator_and_shown_on_the_accou
 }
 
 #[tokio::test]
+async fn an_account_row_answers_the_fast_lane_the_router_holds_and_null_before_any_reading() {
+    use phoebis_relay::{FAST_INPUT, FAST_OUTPUT};
+    use phoebis_routing::{UtilizationSample, WindowReading, FIVE_HOUR};
+    let (app, _up, _store, router) = common::admin_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+    let row = |id: &'static str| {
+        let app = app.clone();
+        let cookie = cookie.clone();
+        async move { json(get(&app, &format!("/admin/accounts/{id}"), Some(&cookie)).await).await }
+    };
+    assert!(
+        row("direct").await["fast_lane"].is_null(),
+        "no answer has carried the fast headers yet"
+    );
+    let reading = |utilization: f64, reset: i64| WindowReading {
+        utilization,
+        reset: Some(common::NOW + reset),
+        observed_at: common::NOW,
+    };
+    let sample = |windows: &[(&str, WindowReading)]| {
+        windows.iter().fold(
+            UtilizationSample {
+                observed_at: common::NOW,
+                ..UtilizationSample::default()
+            },
+            |sample, (window, r)| sample.with(window, *r),
+        )
+    };
+    router.report(phoebis_routing::Report::Sample {
+        account_id: "direct".into(),
+        sample: sample(&[
+            (FAST_INPUT, reading(0.42, 30_000)),
+            (FAST_OUTPUT, reading(0.08, 20_000)),
+        ]),
+        incarnation: 1,
+    });
+    // A plan window alone is no fast reading, so this account's row keeps its null.
+    router.report(phoebis_routing::Report::Sample {
+        account_id: "business".into(),
+        sample: sample(&[(FIVE_HOUR, reading(0.5, 60_000))]),
+        incarnation: 1,
+    });
+    fake_upstream::wait_for_async(std::time::Duration::from_secs(2), || {
+        let router = router.clone();
+        async move {
+            let samples = router.samples().await.unwrap();
+            let held = |id: &str, window: &str| {
+                samples
+                    .iter()
+                    .any(|(a, s)| a == id && s.reading(window).is_some())
+            };
+            (held("direct", FAST_OUTPUT) && held("business", FIVE_HOUR)).then_some(())
+        }
+    })
+    .await;
+    let lane = row("direct").await["fast_lane"].clone();
+    assert_eq!(
+        lane,
+        serde_json::json!({
+            "input": { "utilization": 0.42, "resets_at": common::NOW + 30_000, "observed_at": common::NOW },
+            "output": { "utilization": 0.08, "resets_at": common::NOW + 20_000, "observed_at": common::NOW },
+        })
+    );
+    assert!(row("business").await["fast_lane"].is_null());
+    let listed = json(get(&app, "/admin/accounts", Some(&cookie)).await).await;
+    let listed_lane = |id: &str| {
+        listed["accounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|a| a["id"] == id)
+            .map(|a| a["fast_lane"].clone())
+    };
+    assert_eq!(
+        listed_lane("direct"),
+        Some(lane),
+        "the list answers the same pair"
+    );
+    assert_eq!(listed_lane("business"), Some(serde_json::Value::Null));
+}
+
+#[tokio::test]
 async fn a_second_slot_cannot_be_paired_to_an_upstream_account_the_first_holds() {
     // The same login the pairing test drives, against a slot whose upstream account is already bound to `business`.
     let (app, _up) = common::admin_app_paired().await;

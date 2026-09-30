@@ -67,6 +67,18 @@
         "observed_at": 900000
       }
     ],
+    "fast_lane": {
+      "input": {
+        "utilization": 0.42,
+        "resets_at": 1030000,
+        "observed_at": 995000
+      },
+      "output": {
+        "utilization": 0.08,
+        "resets_at": 1030000,
+        "observed_at": 995000
+      }
+    },
     "extra_usage": {
       "currency": "USD",
       "disabled_reason": null,

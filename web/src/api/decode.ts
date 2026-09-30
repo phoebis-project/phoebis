@@ -1,6 +1,6 @@
 import type {
   Account, AccountCatalog, AccountRollup, AffinityMode, AffinitySource, AlertEvent, AlertRule, AlertRuleInput, AnalyticsGroup, AnalyticsPoint, AnalyticsReconciliations, ApiKey, AttemptOutcome, AttemptResponse, BudgetPeriod, BurnPoint, BurnUnit, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
-  CohortHold, Delivery, FastPrice, GuardVerdict, KeepaliveOverview, KeepaliveRecipe, KeyModels, LifecycleDelivery, LifecyclePage, LiveAttempt, LiveDelta, LiveMetric, LiveRequest, LiveSnapshot, LiveTick, MemberBudget, MemberEligibility, ModelEvent, ModelPrice, ModelRule, ModelRulesMode,
+  CohortHold, Delivery, FastLaneReading, FastPrice, GuardVerdict, KeepaliveOverview, KeepaliveRecipe, KeyModels, LifecycleDelivery, LifecyclePage, LiveAttempt, LiveDelta, LiveMetric, LiveRequest, LiveSnapshot, LiveTick, MemberBudget, MemberEligibility, ModelEvent, ModelPrice, ModelRule, ModelRulesMode,
   ModelsState, Overview, PairingSession, PinMigrationReason, PinReleaseReason, Placement, PlacementRow, PlanBand, PlanCell, PlanModelCells, PlanTables, Pool, PoolCacheTtl, QuotaHeaders, QuotaHistory, QuotaPoll, QuotaSnapshot, RateLimitWindow, RequestEvent, RequestLog, RequestPage, RequestShape, RewritePoint,
   RuleCooldown, SelectionTrace, Session, SessionLifecycleDetail, SessionPlacement, Settings, SubagentPlacement, Subscription, TierFactor, TtlRules, WarmSessions, WindowId, WindowReconciliation,
 } from './types';
@@ -121,6 +121,7 @@ export function decodeAccount(v: unknown): Account {
   const a = rec(v);
   const cooldowns = list(a.cooldowns).map(rec);
   const windows = foldWindows(list(a.windows).map(rec).map(decodeWindow).filter((w): w is RateLimitWindow => w !== null));
+  const fastLane = a.fast_lane === null || a.fast_lane === undefined ? null : rec(a.fast_lane);
   const extra = a.extra_usage === null || a.extra_usage === undefined ? null : rec(a.extra_usage);
   const overage = a.overage === null || a.overage === undefined ? null : rec(a.overage);
   const profile = a.profile === null || a.profile === undefined ? null : rec(a.profile);
@@ -136,6 +137,7 @@ export function decodeAccount(v: unknown): Account {
     // Kept when the provider switched extra usage off: the reason it gave exists for exactly that account.
     extraUsage: extra ? { disabledReason: strOrNull(extra.disabled_reason), enabled: bool(extra.is_enabled), inUse: bool(extra.in_use), monthlyLimitCredits: num(extra.monthly_limit), usedCredits: num(extra.used_credits) } : null,
     fableWindow: windows.find((w) => w.id === '7d_fable') ?? null,
+    fastLane: fastLane ? { input: fastLaneReading(fastLane.input), output: fastLaneReading(fastLane.output) } : null,
     id: str(a.id),
     kind: ACCOUNT_KIND_VALUES.find((k) => k === str(a.kind)) ?? 'oauth',
     label: str(a.label),
@@ -148,6 +150,12 @@ export function decodeAccount(v: unknown): Account {
     subscription,
     windows: windows.filter((w) => w.id !== '7d_fable'),
   };
+}
+
+function fastLaneReading(v: unknown): FastLaneReading | null {
+  if (v === null || v === undefined) return null;
+  const r = rec(v);
+  return { observedAt: isoOr(r.observed_at, epoch), resetsAt: isoOrNull(r.resets_at), utilization: num(r.utilization) };
 }
 
 /** "Max" or "Pro" from the typed subscription's plan; the tier's own label when the document has no flags. */

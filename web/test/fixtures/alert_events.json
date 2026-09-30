@@ -34,11 +34,11 @@
           "key": "desktop",
           "trigger": "hash"
         },
-        "id": "evt_7296847a20f81393",
+        "id": "evt_dadfda67d335b03d",
         "kind": "client_drift",
         "opened_at": 1000000,
         "resolved_at": null,
-        "rule_id": "rule_0b755621978c75e8",
+        "rule_id": "rule_6f93c40d39f5bc31",
         "state": "open",
         "subject": "client 2.1.274"
       }

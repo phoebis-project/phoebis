@@ -129,6 +129,8 @@ function RemainingCard({ title, subtitle, windowId, accounts }: { accounts: Acco
 }
 
 function AccountMini({ account, now }: { account: Account; now: number }) {
+  // A fast-lane row holds fast-mode requests alone, so the line reads a row that cools the upstream.
+  const cooldown = account.cooldowns.find((c) => c.scope !== 'fast');
   return (
     <Link to={`/upstreams/${account.id}`} className="card card--padded account-mini">
       <div className="account-mini__head">
@@ -141,9 +143,9 @@ function AccountMini({ account, now }: { account: Account; now: number }) {
       <WindowTriple account={account} now={now} compact />
       <div className="account-mini__foot">
         {account.extraUsage?.inUse && <Badge tone="serious">Overage active</Badge>}
-        {account.status === 'cooldown' && account.cooldowns[0] && (
-          <span className="muted" title={fmtAbsolute(account.cooldowns[0].until)}>
-            cooldown ends {fmtRelative(account.cooldowns[0].until, now)}
+        {account.status === 'cooldown' && cooldown && (
+          <span className="muted" title={fmtAbsolute(cooldown.until)}>
+            cooldown ends {fmtRelative(cooldown.until, now)}
           </span>
         )}
         {account.kind === 'api_key' && <span className="muted">API key upstream</span>}

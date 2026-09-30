@@ -28,7 +28,7 @@ export interface ExtraUsage {
 
 export interface Cooldown {
   reason: string;
-  /** What the cooldown covers, as the router spells it: `account`, or `model:<id>`. Clearing one names this. */
+  /** What the cooldown covers, as the router spells it: `account`, `fast` (the fast lane), or `model:<id>`. Clearing one names this. */
   scope: string;
   setAt: string;
   until: string;
@@ -66,6 +66,13 @@ export interface PoolMembership {
   priority: number;
 }
 
+/** One fast-lane bucket's share used, as an answer's `anthropic-fast-*` headers reported it. */
+export interface FastLaneReading {
+  observedAt: string;
+  resetsAt: string | null;
+  utilization: number;
+}
+
 export interface Account {
   /** Set only on an OAuth account; an api_key account always reads false. */
   cancelled: boolean;
@@ -75,6 +82,8 @@ export interface Account {
   extraUsage: ExtraUsage | null;
   /** Null when the provider reports no Fable window for this plan. */
   fableWindow: RateLimitWindow | null;
+  /** The fast lane's input and output buckets as the router last read them; null until an answer to a fast request carried them. */
+  fastLane: { input: FastLaneReading | null; output: FastLaneReading | null } | null;
   id: string;
   kind: AccountKind;
   label: string;

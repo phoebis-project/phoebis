@@ -8,6 +8,7 @@ import { CatalogDialog } from '@/components/CatalogDialog';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { ChartTooltip, Legend } from '@/components/charts/Tooltip';
 import { CoolingDown } from '@/components/CoolingDown';
+import { FastLane } from '@/components/FastLane';
 import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, EmptyState, ErrorState, Field, Input, KeyValue, Meter, SearchInput, Segmented, Select, Skeleton, Toast } from '@/components/ui/primitives';
 import { WindowTriple } from '@/components/ui/QuotaBars';
@@ -184,7 +185,8 @@ function AccountDetail({ account, now, onToast, onPair, onChanged }: { account: 
   const isOauth = account.kind === 'oauth';
   // A flagged upstream reports its flag as the status, so routing is the only honest read of whether it takes requests.
   const paused = !account.routingEnabled;
-  const cooldown = account.cooldowns[0] ?? null;
+  // A fast-lane row holds fast-mode requests alone, so the header counts the rows that cool the upstream.
+  const cooldown = account.cooldowns.find((c) => c.scope !== 'fast') ?? null;
   const extra = account.extraUsage;
   const overage = account.overage;
   const run = async <T,>(action: () => Promise<T>, done: string | ((result: T) => string)) => {
@@ -479,6 +481,7 @@ function AccountDetail({ account, now, onToast, onPair, onChanged }: { account: 
               )}
             </div>
           )}
+          <FastLane account={account} now={now} />
         </Card>
       </div>
 

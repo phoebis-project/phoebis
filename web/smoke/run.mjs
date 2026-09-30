@@ -148,6 +148,10 @@ results.push({ name: 'data-theme set', ok: document.documentElement.getAttribute
   const triples = [...m.container.querySelectorAll('.account-mini .wbars--3')].filter((el) => el.querySelectorAll('.wbar').length === 3).length;
   results.push({ name: '/ account chips draw three bars', ok: triples >= 4, missing: [String(triples)] });
   await emailLines('/ each upstream card reads its email under the name, and draws no line without one', [...m.container.querySelectorAll('a.account-mini')].map((c) => [idOf(c), c.querySelector('.account-mini__sub')?.textContent ?? null]));
+  // business cools on its fast lane, the first of its rows and the sooner to lift, and on one model.
+  const business = [...m.container.querySelectorAll('a.account-mini')].find((c) => idOf(c) === 'business');
+  const cooldownLine = [...(business?.querySelectorAll('.account-mini__foot .muted') ?? [])].map((e) => e.textContent?.trim() ?? '').find((t) => t.startsWith('cooldown ends'));
+  results.push({ name: "/ an upstream's cooldown line reads the row that cools it, never its fast lane's", ok: /^cooldown ends in 5[34]m$/.test(cooldownLine ?? ''), missing: [cooldownLine ?? 'no cooldown line on business'] });
 }
 m.unmount();
 
@@ -402,6 +406,25 @@ expect('/quota', m.text(), ['7 credentials', '7 loaded', '3 need attention', 'Re
     missing: backoff.map((b) => `${b.textContent?.trim()} | ${b.getAttribute('title')}`),
   });
 }
+{
+  // The story's business answered a fast request and cools on its fast lane's rate limit, the Console workspace
+  // answered one with room left, and mail never answered one.
+  const cardOf = (label) => [...m.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === label);
+  const lineOf = (label) => cardOf(label)?.querySelector('.fast-lane__line')?.textContent?.trim() ?? '';
+  const chip = cardOf('business')?.querySelector('.fast-lane__cooldown');
+  results.push({
+    name: '/quota a card whose upstream answered a fast request reads its fast lane, both shares used and the reset, an API-key card too',
+    ok: /^Fast modeinput 100% used, output 64% used, resets in 1[12]m$/.test(lineOf('business')) && /^Fast modeinput 18% used, output 5% used, resets /.test(lineOf('Console workspace')),
+    missing: [lineOf('business') || 'no line on business', lineOf('Console workspace') || 'no line on the Console workspace'],
+  });
+  results.push({
+    name: '/quota a card whose fast lane cools carries a serious chip naming the reason and the lift, the time on hover',
+    ok: /^Fast moderate limited, until in 1[12]m$/.test(chip?.textContent?.trim() ?? '') && chip.classList.contains('chip--serious') && Boolean(chip.getAttribute('title')),
+    missing: [chip ? `${chip.textContent?.trim()} | ${chip.className} | ${chip.getAttribute('title')}` : 'no chip on business'],
+  });
+  const mail = cardOf('mail');
+  results.push({ name: '/quota a card whose upstream never answered a fast request draws no Fast mode line', ok: mail !== undefined && mail.querySelector('.fast-lane') === null && !(mail.textContent ?? '').includes('Fast mode'), missing: [mail?.textContent?.slice(0, 160) ?? 'no mail card'] });
+}
 m.unmount();
 
 // The route answers no error beside windows, but a read of it that failed does; the card draws what it holds.
@@ -443,6 +466,37 @@ results.push({ name: 'nav calls the page Upstreams', ok: [...m.container.querySe
 expect('/upstreams (redirect to first)', m.text(), ['business@example.com', 'Identity', 'OAuth login', 'Max since', 'max_20x', 'Billing type', 'Organization', 'Renewal date is not reported by the provider', 'Usage', 'Fable', '7-day trend', 'Pools', 'priority 0', 'Credential', 'Requests', 'Re-pair', 'Pause', 'Disconnect', 'Delete upstream', 'Extra usage this month', 'Add upstream']);
 await emailLines('/upstreams each row reads its email under the name, and draws no line without one', [...m.container.querySelectorAll('a.account-row')].map((r) => [idOf(r), r.querySelector('.account-row__sub')?.textContent ?? null]));
 await emailLines('/upstreams/business the head reads the email under the name', [['business', m.container.querySelector('.detail__ident > .detail__sub.mono')?.textContent ?? null]]);
+{
+  // business cools on its fast lane, the first of its rows and lifting in 12m, and on one model, lifting in 54m.
+  const cardOf = (title) => [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === title);
+  const line = cardOf('Usage')?.querySelector('.fast-lane__line')?.textContent?.trim() ?? '';
+  const chip = cardOf('Usage')?.querySelector('.fast-lane__cooldown');
+  results.push({
+    name: '/upstreams/business the Usage card reads the fast lane line and its cooldown chip',
+    ok: /^Fast modeinput 100% used, output 64% used, resets in 1[12]m$/.test(line) && /^Fast moderate limited, until in 1[12]m$/.test(chip?.textContent?.trim() ?? '') && chip.classList.contains('chip--serious'),
+    missing: [line || 'no line', chip?.textContent?.trim() ?? 'no chip'],
+  });
+  const scopes = [...(cardOf('Cooling down')?.querySelectorAll('tbody tr') ?? [])].map((tr) => `${tr.children[0]?.textContent?.trim()} | ${tr.children[1]?.textContent?.trim()}`);
+  results.push({ name: '/upstreams/business the cooling-down block names the fast lane Fast mode', ok: JSON.stringify(scopes) === JSON.stringify(['Fast mode | fast_rate_limit', 'claude-haiku-4-5-20251001 | model_rejected']), missing: scopes });
+  const badge = [...m.container.querySelectorAll('.detail__badges .badge')].map((b) => b.textContent?.trim() ?? '').find((t) => t.startsWith('cooldown ends'));
+  results.push({ name: "/upstreams/business the header's cooldown badge reads the model row, never the fast lane's", ok: /^cooldown ends in 5[34]m$/.test(badge ?? ''), missing: [badge ?? 'no cooldown badge'] });
+}
+{
+  // The router answers an upstream cooling on its fast lane alone as ready (the decoder's rule, which its unit test
+  // holds), so the page draws it that way: no cooldown badge, the fast row still listed and chipped.
+  const { listAccounts } = api;
+  api.listAccounts = async () => (await listAccounts.call(api)).map((a) => (a.id === 'business' ? { ...a, cooldowns: a.cooldowns.filter((c) => c.scope === 'fast'), status: 'ready' } : a));
+  const alone = await mount('/upstreams/business');
+  const badges = [...alone.container.querySelectorAll('.detail__badges .badge')].map((b) => b.textContent?.trim() ?? '');
+  const t = alone.text();
+  results.push({
+    name: '/upstreams an upstream cooling on its fast lane alone reads ready with no cooldown badge, its fast row still listed',
+    ok: badges[0] === 'Ready' && !badges.some((b) => b.startsWith('cooldown ends')) && t.includes('1 scope cooling') && t.includes('Fast mode') && alone.container.querySelector('.fast-lane__cooldown') !== null,
+    missing: badges,
+  });
+  api.listAccounts = listAccounts;
+  alone.unmount();
+}
 {
   const head = m.container.querySelector('.detail__head');
   const headButtons = [...(head?.querySelectorAll('button') ?? [])].map((b) => b.textContent?.trim());
@@ -2784,6 +2838,16 @@ if (failoverRow) {
     await m.navigate(`/requests/${releasedId}`);
     expect('/requests/:released drawer names the release and every reason', m.text(), ['Session released from', 'account cooled, window spent']);
   }
+  // No story row releases a pin off a fast lane, so one row carries the two reasons while this check reads it.
+  const fastReleased = requests.find((r) => r.routingSessionId !== null && r.kind !== 'probe' && r.status === 200 && !requestEvents.has(r.id));
+  results.push({ name: 'fixture: a request to plant a fast-lane release on', ok: fastReleased !== undefined, missing: [] });
+  if (fastReleased) {
+    requestEvents.set(fastReleased.id, [{ accountId: fastReleased.accountId, at: fastReleased.at, detail: { agent_id: fastReleased.agentId, reasons: ['fast_credits', 'fast_rate_limit'] }, keyId: fastReleased.keyId, kind: 'pin_expired', model: fastReleased.canonicalModel, sessionId: fastReleased.routingSessionId }]);
+    await m.navigate(`/requests/${fastReleased.id}`);
+    await m.settle(300);
+    expect('/requests/:released drawer words both fast-lane reasons', m.text(), ['Session released from', 'usage credits unavailable for fast mode, fast lane rate limited']);
+    requestEvents.delete(fastReleased.id);
+  }
   for (const [reason, label] of [['client_error', 'client error'], ['subscription_ended', 'subscription ended']]) {
     const id = [...requestEvents.entries()].find(([, events]) => events.some((e) => e.kind === 'pin_expired' && e.detail?.reasons?.includes(reason)))?.[0];
     results.push({ name: `fixture: a request whose pin was released for ${reason}`, ok: id !== undefined, missing: [] });
@@ -2839,6 +2903,16 @@ if (failoverRow) {
     await m.settle(300);
     const drawn = traceOf(m.container.querySelector('.drawer .selection-trace'));
     results.push({ name: '/requests drawer reads a fresh placement', ok: drawn.head.includes('fresh placement') && drawn.skipped.length === fresh.attempts[0].selection.skipped.length, missing: [drawn.head, ...drawn.skipped] });
+    // No story trace passes a member over for its credits, so this one carries such a member while the check reads it.
+    const selection = fresh.attempts[0].selection;
+    const skipped = selection.skipped;
+    selection.skipped = [...skipped, { accountId: 'credits-probe', obstacle: 'credits' }];
+    await m.navigate('/requests');
+    await m.navigate(`/requests/${fresh.id}`);
+    await m.settle(300);
+    const credits = [...m.container.querySelectorAll('.drawer .selection-trace .badge')].find((b) => b.textContent?.trim() === 'credits-probe: credits');
+    results.push({ name: '/requests drawer hints why a member was passed over for its credits', ok: credits?.getAttribute('title') === 'its usage credits unavailable for fast mode', missing: [credits ? String(credits.getAttribute('title')) : 'no credits badge'] });
+    selection.skipped = skipped;
   }
   // A placement by a warm prefix reads its rung and depth, and the cache read against the prefix it was promised.
   const placedBy = (verdict) =>
