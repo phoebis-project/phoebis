@@ -188,10 +188,11 @@ instead of money." A recipe's own net follows the same split: the share of the a
 each probe's price, on a subscription account outside overage, and dollars on an api_key account or one in overage; a
 plan-funded probe whose token types the cost table cannot price on the account's tier (no row, or a cell left unmeasured
 under a type the probe carries: input, cache reads, output, the 5-minute write, and the 1-hour write when the recipe
-keeps an hour's cache), or on an account whose tier the table does not size, settles in dollars too, counts toward the
-dollar cap and never toward the window-share cap. Whatever the upstream's funding, a fast-mode session's net is a dollar
-net, since its probes draw usage credits. Each agent line of the Sessions view shows its net, as "N% of the 5-hour
-window", in dollars, or both for an agent whose upstream changed funding while it was warmed.
+keeps an hour's cache or marks any part of its prefix for an hour), or on an account whose tier the table does not size,
+settles in dollars too, counts toward the dollar cap and never toward the window-share cap; so does a probe whose answer
+carries a type the table cannot price, which never books a share. Whatever the upstream's funding, a fast-mode session's
+net is a dollar net, since its probes draw usage credits. Each agent line of the Sessions view shows its net, as "N% of
+the 5-hour window", in dollars, or both for an agent whose upstream changed funding while it was warmed.
 
 The four shipped rows, all prices in USD per million tokens:
 

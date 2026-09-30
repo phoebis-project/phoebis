@@ -15,6 +15,9 @@ pub struct Recipe {
     pub model: String,
     /// What the body's own markers ask for; 0 when it carries none, and the response decides.
     pub ttl_ms: i64,
+    /// The longest TTL a marker in the body asks for, 0 with none: a probe that finds the prefix cold writes each
+    /// marked part at its own TTL, so one hour marker anywhere means the probe can write for an hour.
+    pub longest_ttl_ms: i64,
     pub size: usize,
     /// The observation's own two hashes, stamped by the caller: `make_recipe` always leaves them `None`, since
     /// it never sees the request facts they come from.
@@ -157,7 +160,7 @@ pub fn make_recipe(
     if strict {
         return Err("structured_output");
     }
-    let ttl_ms = request_ttl_ms(&root).ok_or("invalid_cache_control")?;
+    let (ttl_ms, longest_ttl_ms) = marker_ttls(&root).ok_or("invalid_cache_control")?;
     if !valid_opaque(model) {
         return Err("invalid_model");
     }
@@ -212,6 +215,7 @@ pub fn make_recipe(
         headers: kept,
         model: model.to_string(),
         ttl_ms,
+        longest_ttl_ms,
         size,
         static_hash: None,
         tail_hash: None,
@@ -222,7 +226,13 @@ pub fn make_recipe(
 /// The shortest TTL any cache marker in the body asks for: `Some(0)` when there is none, `None` when a marker
 /// is not an ephemeral one with a known TTL.
 pub fn request_ttl_ms(root: &Value) -> Option<i64> {
-    let mut ttl = 0i64;
+    marker_ttls(root).map(|(shortest, _)| shortest)
+}
+
+/// The shortest and the longest TTL the body's cache markers ask for, `Some((0, 0))` with none and `None` when a
+/// marker is not an ephemeral one with a known TTL.
+fn marker_ttls(root: &Value) -> Option<(i64, i64)> {
+    let (mut shortest, mut longest) = (0i64, 0i64);
     let mut visit = |marker: Option<&Value>| -> bool {
         let Some(marker) = marker else { return true };
         if marker.get("type").and_then(Value::as_str) != Some("ephemeral") {
@@ -233,9 +243,10 @@ pub fn request_ttl_ms(root: &Value) -> Option<i64> {
             "1h" => ONE_HOUR_MS,
             _ => return false,
         };
-        if ttl == 0 || this < ttl {
-            ttl = this;
+        if shortest == 0 || this < shortest {
+            shortest = this;
         }
+        longest = longest.max(this);
         true
     };
     if !visit(root.get("cache_control")) {
@@ -270,5 +281,5 @@ pub fn request_ttl_ms(root: &Value) -> Option<i64> {
             }
         }
     }
-    Some(ttl)
+    Some((shortest, longest))
 }

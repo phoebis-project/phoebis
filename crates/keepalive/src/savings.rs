@@ -62,52 +62,76 @@ pub(crate) fn probe_cost(
     usage: ProbeUsage,
     at: i64,
 ) -> Option<f64> {
-    // An answer that reports the aggregate `cache_creation_input_tokens` and no TTL breakdown is priced as
-    // five-minute writes, which is how the relay's own usage parser reads the same answer; the estimate here
-    // would otherwise miss a charge the request ledger recognises.
-    let (five_minutes, one_hour) = match (usage.five_minutes, usage.one_hour) {
-        (0, 0) => (usage.write, 0),
-        split => split,
-    };
+    let typed = typed(usage);
     match unit {
         SavingsUnit::Usd => table
             .estimate(
                 canonical_model,
                 usage.speed.unwrap_or(Speed::Standard),
-                usage.input,
-                usage.read,
-                five_minutes,
-                one_hour,
-                usage.output,
+                typed.input,
+                typed.cache_read,
+                typed.write_5m,
+                typed.write_1h,
+                typed.output,
             )
             .map(|(total, _)| total),
-        SavingsUnit::WindowShare => tables.five_hour_share_at(
-            tier?,
-            canonical_model,
-            PinUsage {
-                input: usage.input,
-                cache_read: usage.read,
-                write_5m: five_minutes,
-                write_1h: one_hour,
-                output: usage.output,
-            },
-            at,
-        ),
+        SavingsUnit::WindowShare => tables.five_hour_share_at(tier?, canonical_model, typed, at),
     }
 }
 
-/// One token of each type a probe of a recipe keeping `ttl_ms` warm can carry: the uncached tail, the kept-warm
-/// prefix, output (a probe asks for none, yet an answer can carry some), the five-minute write (an answer reporting
-/// its write in aggregate alone is priced as one) and, on an hour recipe, the one-hour write. Known before the probe
-/// runs, so the gate and the settlement decide on the same usage.
-pub(crate) fn probe_types(ttl_ms: i64) -> PinUsage {
+/// A probe answer's tokens by type. An answer that reports the aggregate `cache_creation_input_tokens` and no TTL
+/// breakdown is priced as five-minute writes, which is how the relay's own usage parser reads the same answer; the
+/// estimate would otherwise miss a charge the request ledger recognises.
+fn typed(usage: ProbeUsage) -> PinUsage {
+    let (write_5m, write_1h) = match (usage.five_minutes, usage.one_hour) {
+        (0, 0) => (usage.write, 0),
+        split => split,
+    };
+    PinUsage {
+        input: usage.input,
+        cache_read: usage.read,
+        write_5m,
+        write_1h,
+        output: usage.output,
+    }
+}
+
+/// One token of each type a probe of a recipe can carry: the uncached tail, the kept-warm prefix, output (a probe
+/// asks for none, yet an answer can carry some), the five-minute write (an answer reporting its write in aggregate
+/// alone is priced as one) and the one-hour write when the TTL in force (`ttl_ms`) or any marker of the recipe
+/// (`longest_ttl_ms`) is above five minutes, since a probe that finds the prefix cold writes each marked part at its
+/// own TTL. Known before the probe runs, so the gate and the settlement decide on the same usage.
+pub(crate) fn probe_types(ttl_ms: i64, longest_ttl_ms: i64) -> PinUsage {
     PinUsage {
         input: 1,
         cache_read: 1,
         write_5m: 1,
-        write_1h: u64::from(ttl_ms > FIVE_MINUTES_MS),
+        write_1h: u64::from(ttl_ms.max(longest_ttl_ms) > FIVE_MINUTES_MS),
         output: 1,
     }
+}
+
+/// The first token type `usage` carries that the model's 5-hour row leaves unmeasured, for a log line: `row` when
+/// the table lists no row for the model and `tier` when the row prices and the tier's factor does not.
+pub(crate) fn unpriced_type(
+    tables: &PlanTables,
+    canonical_model: &str,
+    usage: ProbeUsage,
+) -> &'static str {
+    let Some(cells) = tables.cost.cells(FIVE_HOUR, canonical_model) else {
+        return "row";
+    };
+    let typed = typed(usage);
+    [
+        (typed.input, cells.input, "input"),
+        (typed.cache_read, cells.cache_read, "cache_read"),
+        (typed.write_5m, cells.cache_write_5m, "cache_write_5m"),
+        (typed.write_1h, cells.cache_write_1h, "cache_write_1h"),
+        (typed.output, cells.output, "output"),
+    ]
+    .into_iter()
+    .find(|(tokens, cell, _)| *tokens > 0 && cell.is_none())
+    .map_or("tier", |(_, _, name)| name)
 }
 
 /// The unit a probe is gated in, settles in and earns its savings in: `default_unit`, unless that is the window share

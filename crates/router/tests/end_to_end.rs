@@ -2137,8 +2137,8 @@ fn seed_oauth_account(db_path: &std::path::Path, key_path: &std::path::Path) {
     }
 }
 
-/// The fixture head, with an Opus-5 body instead of the captured fixture's own model: the shipped cost table and
-/// the shipped price table both name `claude-opus-5`, and neither names the fixture's `claude-sonnet-4-5`.
+/// The fixture head with an Opus 5 body in place of the captured fixture's own model; a test that needs a model the
+/// cost table measures names it through `request_on`.
 fn opus_request(
     client: &reqwest::Client,
     proxy_port: u16,

@@ -252,6 +252,8 @@ fn the_shipped_cost_table_is_the_v2_file_with_null_for_unmeasured() {
 
 /// A v1 field under the v2 reader, one line to a case; the refusal names it.
 const V1_CELL: &str = "      input: {share_per_million: 0.01461, measured: 2026-09-19}"; // v1 field
+/// A row's five cells with a v1 flag beside them.
+const V1_FLAG: &str = "      output: 0.07279\n      unmeasured: true"; // v1 field
 
 #[test]
 fn a_file_with_a_v1_field_is_refused_naming_it() {
@@ -270,6 +272,7 @@ fn a_file_with_a_v1_field_is_refused_naming_it() {
         (top("reference: default_claude_max_20x\n"), "reference"),
         (top("measured: 2026-09-24\n"), "measured"), // v1 field
         (file.replace("      input: 0.01461", V1_CELL), "input"),
+        (file.replace("      output: 0.07279", V1_FLAG), "unmeasured"),
         (band("    measured: 2026-09-24\n"), "measured"), // v1 field
         (band("    provisional: true\n"), "provisional"), // v1 field
         (band("    effective_from: 2026-10-01\n"), "effective_from"), // v1 field

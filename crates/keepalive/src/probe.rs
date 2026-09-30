@@ -11,13 +11,14 @@ use axum::http::{header, Request};
 use bytes::{Bytes, BytesMut};
 use phoebis_ledger::{PlanTables, PriceTable};
 use phoebis_relay::{RelayOutcome, ServedUnder};
+use phoebis_routing::PinUsage;
 use phoebis_store::{AccountKind, BudgetRow, BudgetScope};
 use http_body_util::BodyExt;
 use serde_json::Value;
 
 use crate::engine::{Engine, Funding, Inner, Reason, SavingsUnit, SessionKey, Wasted};
 use crate::recipe::Recipe;
-use crate::savings::{probe_cost, probe_types, settlement_unit};
+use crate::savings::{probe_cost, probe_types, settlement_unit, unpriced_type};
 use crate::usage::{ProbeUsage, MAX_USAGE_BYTES};
 
 /// The engine's own bound on one exchange. A probe with `max_tokens = 0` answers in seconds; the relay's idle
@@ -125,17 +126,18 @@ pub(crate) enum Applied {
 }
 
 /// The unit and the cost a non-migrated probe settles in: the unit `settlement_unit` decides from the probe's
-/// typed usage, the same decision the gate took, and the probe's own usage priced in it. A migrated probe costs
-/// nothing in either unit.
+/// typed usage `types`, the same decision the gate took, and the probe's own usage priced in it. A migrated probe
+/// costs nothing in either unit.
 #[allow(clippy::too_many_arguments)]
 fn settled_cost(
     default_unit: SavingsUnit,
     table: &PriceTable,
     tables: &PlanTables,
     tier: Option<&str>,
+    account: &str,
     canonical_model: &str,
     usage: ProbeUsage,
-    ttl_ms: i64,
+    types: PinUsage,
     outcome: ProbeOutcome,
     cost_usd: f64,
     at: i64,
@@ -143,24 +145,34 @@ fn settled_cost(
     if outcome == ProbeOutcome::Migrated {
         return (default_unit, 0.0);
     }
-    let unit = settlement_unit(
-        default_unit,
-        tables,
-        tier,
-        canonical_model,
-        probe_types(ttl_ms),
-    );
-    // The typed usage covers every type a probe carries, so the share side prices here; the dollar side falls back
-    // to the ledger's own dollar cost, zero for a model the price table lacks.
-    let cost = probe_cost(unit, table, tables, tier, canonical_model, usage, at);
-    (
-        unit,
-        cost.unwrap_or(if unit == SavingsUnit::Usd {
-            cost_usd
-        } else {
-            0.0
-        }),
-    )
+    let unit = settlement_unit(default_unit, tables, tier, canonical_model, types);
+    let dollars = || {
+        probe_cost(
+            SavingsUnit::Usd,
+            table,
+            tables,
+            tier,
+            canonical_model,
+            usage,
+            at,
+        )
+        .unwrap_or(cost_usd)
+    };
+    match probe_cost(unit, table, tables, tier, canonical_model, usage, at) {
+        Some(cost) => (unit, cost),
+        // The answer carried a type the typed usage did not foresee, such as a write at a TTL a pool rule
+        // dispatched; a null cell never books a share, so the probe settles in dollars and its savings follow.
+        None if unit == SavingsUnit::WindowShare => {
+            tracing::debug!(
+                account,
+                model = canonical_model,
+                unpriced = unpriced_type(tables, canonical_model, usage),
+                "a probe the cost table cannot price on the window share settles in dollars"
+            );
+            (SavingsUnit::Usd, dollars())
+        }
+        None => (unit, dollars()),
+    }
 }
 
 /// A pool-at-its-cap 429's `Retry-After` seconds, `None` for anything else or a header that does not parse.
@@ -299,9 +311,10 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
             &table,
             &tables,
             tier.as_deref(),
+            &record.account,
             &record.canonical_model,
             record.usage,
-            job.ttl_ms,
+            probe_types(job.ttl_ms, job.recipe.longest_ttl_ms),
             record.outcome,
             record.cost_usd,
             now,
@@ -962,9 +975,10 @@ mod tests {
             &table,
             &tables,
             MAX_20X,
+            "o",
             "unlisted-model",
             usage,
-            FIVE_MINUTES_MS,
+            probe_types(FIVE_MINUTES_MS, FIVE_MINUTES_MS),
             ProbeOutcome::Ok,
             0.0,
             OFF_BAND,
@@ -998,9 +1012,10 @@ mod tests {
                 &table,
                 &tables,
                 MAX_20X,
+                "o",
                 "claude-opus-5-5",
                 million_input(),
-                FIVE_MINUTES_MS,
+                probe_types(FIVE_MINUTES_MS, FIVE_MINUTES_MS),
                 ProbeOutcome::Ok,
                 0.0,
                 at,
@@ -1028,9 +1043,10 @@ mod tests {
             &table,
             &tables,
             None,
+            "o",
             "claude-opus-5",
             million_input(),
-            FIVE_MINUTES_MS,
+            probe_types(FIVE_MINUTES_MS, FIVE_MINUTES_MS),
             ProbeOutcome::Ok,
             0.0,
             OFF_BAND,
@@ -1062,9 +1078,10 @@ mod tests {
             &table,
             &tables,
             MAX_20X,
+            "o",
             "claude-opus-5",
             million_input(),
-            FIVE_MINUTES_MS,
+            probe_types(FIVE_MINUTES_MS, FIVE_MINUTES_MS),
             ProbeOutcome::Ok,
             0.0,
             OFF_BAND,
@@ -1105,9 +1122,10 @@ mod tests {
                 &table,
                 &tables,
                 MAX_20X,
+                "o",
                 "claude-opus-5-5",
                 million_input(),
-                ttl_ms,
+                probe_types(ttl_ms, ttl_ms),
                 ProbeOutcome::Ok,
                 0.0,
                 OFF_BAND,
@@ -1128,6 +1146,69 @@ mod tests {
     }
 
     #[test]
+    fn a_share_decided_probe_whose_answer_meets_a_null_cell_settles_in_dollars_and_books_no_share()
+    {
+        let table = PriceTable::shipped();
+        let mut tables = PlanTables::shipped();
+        tables
+            .cost
+            .windows
+            .get_mut(phoebis_routing::FIVE_HOUR)
+            .unwrap()
+            .get_mut("claude-fable-5-1")
+            .unwrap()
+            .cache_write_1h = None;
+        // A five-minute recipe, so the typed usage prices on the share; the answer still reports an hour write, as
+        // one dispatched under a longer TTL than the recipe's markers does.
+        let types = probe_types(FIVE_MINUTES_MS, FIVE_MINUTES_MS);
+        assert_eq!(
+            settlement_unit(
+                SavingsUnit::WindowShare,
+                &tables,
+                MAX_20X,
+                "claude-fable-5-1",
+                types
+            ),
+            SavingsUnit::WindowShare
+        );
+        let usage = ProbeUsage {
+            input: 1_000_000,
+            write: 2_000,
+            one_hour: 2_000,
+            ..ProbeUsage::default()
+        };
+        let (unit, cost) = settled_cost(
+            SavingsUnit::WindowShare,
+            &table,
+            &tables,
+            MAX_20X,
+            "o",
+            "claude-fable-5-1",
+            usage,
+            types,
+            ProbeOutcome::Ok,
+            0.0,
+            OFF_BAND,
+        );
+        let dollars = probe_cost(
+            SavingsUnit::Usd,
+            &table,
+            &tables,
+            MAX_20X,
+            "claude-fable-5-1",
+            usage,
+            OFF_BAND,
+        )
+        .unwrap();
+        assert_eq!(
+            (unit, cost),
+            (SavingsUnit::Usd, dollars),
+            "a null cell never books a share, zero or otherwise, so the probe settles in dollars"
+        );
+        assert!(dollars > 0.0);
+    }
+
+    #[test]
     fn a_migrated_probe_settles_at_zero_in_its_funding_unit() {
         let table = PriceTable::shipped();
         let tables = PlanTables::shipped();
@@ -1136,9 +1217,10 @@ mod tests {
             &table,
             &tables,
             MAX_20X,
+            "o",
             "claude-sonnet-5",
             ProbeUsage::default(),
-            FIVE_MINUTES_MS,
+            probe_types(FIVE_MINUTES_MS, FIVE_MINUTES_MS),
             ProbeOutcome::Migrated,
             0.0,
             OFF_BAND,

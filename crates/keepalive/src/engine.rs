@@ -2056,12 +2056,16 @@ pub(crate) fn gate(
     // Decided before the share cap and taken again by the settlement: a probe the table cannot price on the
     // account's tier settles in dollars, so a zero share cap never holds it and the stop reads its dollar balance.
     let tier = view.tiers.get(&account.id).map(String::as_str);
+    let longest_ttl_ms = agent
+        .current
+        .as_ref()
+        .map_or(0, |o| o.recipe.longest_ttl_ms);
     let unit = settlement_unit(
         default_unit,
         tables,
         tier,
         &agent.canonical_model,
-        probe_types(agent.ttl_ms),
+        probe_types(agent.ttl_ms, longest_ttl_ms),
     );
     // A share-settled probe's day already sums shares of the account's own 5-hour window, the band inside each
     // price, so the sum caps against the configured share directly.
@@ -2544,6 +2548,76 @@ mod tests {
             }
         }
         assert_eq!(answers.len(), 2, "the table reaches both answers");
+    }
+
+    #[test]
+    fn a_recipe_with_an_hour_marker_on_a_row_whose_hour_cell_is_null_gates_in_dollars() {
+        let mut tables = PlanTables::shipped();
+        tables
+            .cost
+            .windows
+            .get_mut(FIVE_HOUR)
+            .unwrap()
+            .get_mut("claude-opus-5-5")
+            .unwrap()
+            .cache_write_1h = None;
+        let gated = |view: &RouterView, longest_ttl_ms: i64| {
+            let mut agent = Agent::new("main", "k", 1, 0);
+            agent.account = Some("o".into());
+            agent.canonical_model = "claude-opus-5-5".into();
+            // The shortest marker is the TTL in force; the recipe also marks a part for an hour.
+            agent.ttl_ms = FIVE_MINUTES_MS;
+            agent.current = Some(Observation {
+                id: "obs".into(),
+                attempt: 0,
+                started: 0,
+                recipe: Recipe {
+                    body: Vec::new(),
+                    headers: Vec::new(),
+                    model: "claude-opus-5-5".into(),
+                    ttl_ms: FIVE_MINUTES_MS,
+                    longest_ttl_ms,
+                    size: 0,
+                    static_hash: None,
+                    tail_hash: None,
+                    fast: false,
+                },
+                ready: true,
+                expected: 1,
+                ttl_ms: FIVE_MINUTES_MS,
+                prior: None,
+                poisoned: false,
+                dispatched_ms: None,
+            });
+            agent.net = Net {
+                five_hour_share: -0.01,
+                usd: 0.50,
+            };
+            agent.grace_left = 0;
+            gate(
+                view,
+                &mut agent,
+                "s",
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+                &tables,
+            )
+        };
+        assert_eq!(
+            gated(&stop_view(false), ONE_HOUR_MS),
+            None,
+            "a cold probe writes the hour-marked part, which the row cannot price, so the positive dollar balance decides"
+        );
+        assert_eq!(
+            gated(&stop_view_capped(false, Some(0.0)), ONE_HOUR_MS),
+            None,
+            "and a zero share cap never holds it"
+        );
+        assert_eq!(
+            gated(&stop_view(false), FIVE_MINUTES_MS),
+            Some(Gate::Hold(Reason::NetNegative)),
+            "with five-minute markers alone the probe settles in the share"
+        );
     }
 
     #[test]

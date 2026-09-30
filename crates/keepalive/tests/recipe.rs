@@ -178,6 +178,7 @@ fn a_body_without_the_member_yields_the_recipe_it_did() {
             headers: headers(),
             model: "routing-alias".into(),
             ttl_ms: FIVE_MINUTES_MS,
+            longest_ttl_ms: FIVE_MINUTES_MS,
             static_hash: None,
             tail_hash: None,
             fast: false,
@@ -452,10 +453,11 @@ fn ttl_is_read_only_evidence_and_mixed_markers_take_the_shorter() {
     root["messages"][0]["content"] =
         json!([{"type": "text", "text": "test", "cache_control": {"type": "ephemeral"}}]);
     body = serde_json::to_vec(&root).unwrap();
+    let mixed = make_recipe(&headers(), &body, "m", 1 << 20).unwrap();
     assert_eq!(
-        make_recipe(&headers(), &body, "m", 1 << 20).unwrap().ttl_ms,
-        FIVE_MINUTES_MS,
-        "mixed markers"
+        (mixed.ttl_ms, mixed.longest_ttl_ms),
+        (FIVE_MINUTES_MS, ONE_HOUR_MS),
+        "mixed markers keep the entry for five minutes, and a cold probe still writes the hour-marked part"
     );
     assert_eq!(
         request_ttl_ms(&serde_json::from_str::<Value>(r#"{"messages":[]}"#).unwrap()),

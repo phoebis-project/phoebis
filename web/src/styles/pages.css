@@ -2348,8 +2348,8 @@
 }
 
 /* Net closes the line so State keeps its place in a 1280px window. The track holds the common shares of the 5-hour
-   window with their unmeasured mark; the longest, such as -0.000123%, run into the row's padding unclipped, and two
-   balances stack rather than widen it further. */
+   window; the longest, such as -0.000123%, run into the row's padding unclipped, and two balances stack rather than
+   widen it further. */
 .agents__net {
   display: flex;
   flex-direction: column;
