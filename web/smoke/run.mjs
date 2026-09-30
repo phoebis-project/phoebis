@@ -4043,6 +4043,7 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
     'Without warming, the 1-hour entry wins after a 5-minute pause.',
     'claude-fable-5-1',
     'claude-fable-5',
+    'claude-opus-5-5',
     'claude-opus-4-8',
     'claude-opus-4-7',
     'claude-sonnet-4-6',
@@ -4061,15 +4062,28 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
   const shareTable = costDlg?.querySelector('.cost-ref__shares');
   const rowOf = (table, model) => [...(table?.querySelectorAll('tbody tr') ?? [])].find((row) => row.children[0]?.textContent?.trim() === model);
   const priceRow = (model) => [...(rowOf(priceTable, model)?.children ?? [])].map((td) => td.textContent?.trim());
-  const modelsOf = (table) => [...(table?.querySelectorAll('tbody tr') ?? [])].map((row) => row.children[0]?.textContent?.trim() ?? '');
+  const modelsOf = (table) => [...(table?.querySelectorAll('tbody tr:not(.cost-ref__fast)') ?? [])].map((row) => row.children[0]?.textContent?.trim() ?? '');
   const models = modelsOf(priceTable);
-  results.push({ name: '/sessions cost reference lists Anthropic models only', ok: models.length === 9 && models.every((n) => n.startsWith('claude-')), missing: models });
+  results.push({ name: '/sessions cost reference lists Anthropic models only', ok: models.length === 10 && models.every((n) => n.startsWith('claude-')), missing: models });
   results.push({
     name: '/sessions cost reference keeps the dollar table to its eleven columns and lists its models again below in the window share table',
-    ok: models.length === 9 && [...(priceTable?.querySelectorAll('tbody tr') ?? [])].every((row) => row.children.length === 11) && JSON.stringify(modelsOf(shareTable)) === JSON.stringify(models),
+    ok: models.length === 10 && [...(priceTable?.querySelectorAll('tbody tr') ?? [])].every((row) => row.children.length === 11) && JSON.stringify(modelsOf(shareTable)) === JSON.stringify(models),
     missing: modelsOf(shareTable),
   });
-  results.push({ name: '/sessions cost reference groups a class newest first', ok: models.slice(2, 5).join(',') === 'claude-opus-5,claude-opus-4-8,claude-opus-4-7', missing: models });
+  results.push({ name: '/sessions cost reference groups a class newest first', ok: models.slice(2, 6).join(',') === 'claude-opus-5-5,claude-opus-5,claude-opus-4-8,claude-opus-4-7', missing: models });
+  {
+    // The fast-mode row sits right under the model it prices, and only a model with fast cells has one.
+    const fastUnder = (model) => {
+      const next = rowOf(priceTable, model)?.nextElementSibling;
+      return next?.classList.contains('cost-ref__fast') ? [...next.children].map((td) => td.textContent?.trim()) : null;
+    };
+    const opus = fastUnder('claude-opus-5-5');
+    results.push({
+      name: '/sessions cost reference lists Opus 5.5 with a fast-mode row at its fast cells',
+      ok: opus !== null && opus[0] === 'fast mode' && opus[1] === '$8.00' && opus[5] === '$40.00' && fastUnder('claude-sonnet-5') === null && shareTable?.querySelector('.cost-ref__fast') === null,
+      missing: opus ?? ['no fast-mode row under claude-opus-5-5'],
+    });
+  }
   const fable = priceRow('claude-fable-5-1');
   results.push({ name: '/sessions cost reference turns to pay off on cheap-read Fable', ok: fable[6] === '0.3' && fable[7] === '1.0', missing: fable });
   const sonnet = priceRow('claude-sonnet-5');
@@ -4625,7 +4639,7 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
     results.push({ name: `/settings price row ${model}`, ok: got !== null && want.every((v) => got.includes(v)), missing: got ?? ['row missing', ...heads] });
   }
   const shippedModels = [...m.container.querySelectorAll('tbody tr')].map((row) => row.children[0]?.textContent?.trim() ?? '').filter((n) => n.includes('-'));
-  results.push({ name: '/settings price table is the shipped Anthropic table', ok: shippedModels.length === 9 && shippedModels.every((n) => n.startsWith('claude-')), missing: shippedModels });
+  results.push({ name: '/settings price table is the shipped Anthropic table', ok: shippedModels.length === 10 && shippedModels.every((n) => n.startsWith('claude-')), missing: shippedModels });
   results.push({
     name: '/settings no longer carries the other upstream prices section',
     ok: !m.text().includes('Other upstream prices') && !/gpt-\d/.test(m.text()) && m.container.querySelectorAll('.price-extra').length === 0,
@@ -4656,6 +4670,15 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
     ok: m.text().includes('source: edited by hand') && m.text().includes('$11.50') && m.container.querySelector('.save-bar') === null,
     missing: [m.container.querySelector('.card__subtitle')?.textContent ?? 'absent'],
   });
+  {
+    const opus = [...m.container.querySelectorAll('.price-table tbody tr')].find((tr) => tr.children[0]?.textContent?.trim() === 'claude-opus-5-5');
+    const fast = opus?.nextElementSibling?.classList.contains('price-table__fast') ? [...opus.nextElementSibling.children].map((td) => td.textContent?.trim()) : null;
+    results.push({
+      name: '/settings a hand edit keeps the read-only fast-mode row under Opus 5.5',
+      ok: fast !== null && fast[0] === 'fast mode' && fast[1] === '$8.00' && fast[5] === '$40.00' && opus?.nextElementSibling?.querySelector('button') === null,
+      missing: fast ?? ['no fast-mode row under claude-opus-5-5'],
+    });
+  }
   [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Add model')?.click();
   await m.settle(200);
   results.push({ name: '/settings Add model appends a row with an empty model id', ok: m.container.querySelector('input[aria-label="Model id"]') !== null, missing: [] });

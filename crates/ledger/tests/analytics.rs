@@ -7,7 +7,7 @@ use phoebis_ledger::{
     fold_account, fold_event, fold_keepalive, key_request_totals, list_requests, member_spends,
     moves_by_reason, placements, read_account_rollups, read_rollups, rewrite_series, run_retention,
     session_identities, AttemptRecord, EventRecord, Histogram, KeepaliveDelta, LedgerConfig,
-    LedgerDb, LiveKeys, ModelPrice, PlanTables, PriceTable, RequestFilter, RequestRecord,
+    LedgerDb, LiveKeys, ModelPrice, ModelRow, PlanTables, PriceTable, RequestFilter, RequestRecord,
     RollupFilter, RollupRow, SeriesFilter, Tiers, NO_CLASS, UNATTRIBUTED,
 };
 use phoebis_routing::{RegistrySnapshot, RoutingState, FIVE_HOUR, SEVEN_DAY};
@@ -109,6 +109,7 @@ fn synthetic_day(seed: u64) -> Vec<(RequestRecord, Vec<AttemptRecord>)> {
                 }),
                 estimated_usd: last.then(|| rng.random_range(0.0..0.5)),
                 ratelimit_5h_utilization: Some(rng.random_range(0.0..1.0)),
+                speed: (last && rng.random_bool(0.5)).then(|| "fast".into()),
                 ..Default::default()
             });
         }
@@ -190,6 +191,10 @@ fn rollups_for_a_synthetic_day_equal_a_direct_aggregation_for_every_group_by() {
         if let Some(last) = earlier.last_mut() {
             last.output_tokens = last.output_tokens.map(|n| n + 999);
             last.account_id = "z".into();
+            last.speed = match last.speed {
+                Some(_) => None,
+                None => Some("fast".into()),
+            };
         }
         db.insert_request(request, &earlier, None).unwrap();
     }
@@ -230,6 +235,7 @@ fn rollups_for_a_synthetic_day_equal_a_direct_aggregation_for_every_group_by() {
         ("user_agent", Box::new(|r| r.user_agent.clone())),
         ("client", Box::new(|r| r.client.clone())),
         ("effort", Box::new(|r| r.effort.clone())),
+        ("speed", Box::new(|r| r.speed.clone())),
         ("hour", Box::new(|r| r.hour.to_string())),
     ];
     for (name, group) in &groups {
@@ -960,6 +966,63 @@ fn the_burn_series_prices_a_subscription_row_in_window_share_and_an_api_key_row_
 }
 
 #[test]
+fn a_fast_row_adds_dollars_and_no_share_to_a_subscription_burn_point() {
+    let tables = PlanTables::shipped();
+    let kinds = HashMap::from([("a".to_string(), AccountKind::Oauth)]);
+    let tiers: Tiers = HashMap::from([("a".to_string(), Some(MAX_5X.to_string()))]);
+    let filter = SeriesFilter {
+        from: 0,
+        to: 7_200_000,
+        bucket_seconds: 3_600,
+        ..SeriesFilter::default()
+    };
+    let point = |speed: &str| {
+        let row = RollupRow {
+            input_tokens: 1_000,
+            output_tokens: 100,
+            estimated_usd: 0.25,
+            ..RollupRow::key(
+                3_600,
+                "k",
+                0,
+                "p",
+                "a",
+                "claude-opus-5",
+                "inference",
+                UNATTRIBUTED,
+                UNATTRIBUTED,
+                "none",
+                NO_CLASS,
+                speed,
+            )
+        };
+        burn_series_over(&[row], &tables, &kinds, &tiers, &filter)
+            .unwrap()
+            .into_iter()
+            .find(|p| p.at == 3_600_000)
+            .unwrap()
+    };
+    let standard = point("standard");
+    assert!(
+        standard.five_hour_share.is_some()
+            && standard.seven_day_share.is_some()
+            && standard.usd == 0.0,
+        "a standard row on a subscription reads a share and no dollars: {standard:?}"
+    );
+    let fast = point("fast");
+    assert_eq!(
+        (
+            fast.usd,
+            fast.five_hour_share,
+            fast.seven_day_share,
+            fast.uncached_tokens
+        ),
+        (0.25, None, None, 1_000),
+        "a fast row draws usage credits: its dollars and its tokens, and no share of either window"
+    );
+}
+
+#[test]
 fn an_hour_inside_the_peak_band_weighs_the_five_hour_share_and_leaves_the_seven_day_share() {
     let db = LedgerDb::open_in_memory().unwrap();
     for (id, at) in [("peak", WEEKDAY_PEAK), ("off_peak", WEEKDAY_OFF_PEAK)] {
@@ -1426,12 +1489,15 @@ fn priced_table(model: &str, rate_per_token: f64) -> PriceTable {
     let mut models = std::collections::BTreeMap::new();
     models.insert(
         model.to_string(),
-        ModelPrice {
-            input: rate,
-            cache_write_5m: rate,
-            cache_write_1h: rate,
-            cache_read: rate,
-            output: rate,
+        ModelRow {
+            standard: ModelPrice {
+                input: rate,
+                cache_write_5m: rate,
+                cache_write_1h: rate,
+                cache_read: rate,
+                output: rate,
+            },
+            fast: None,
         },
     );
     PriceTable {
@@ -1450,12 +1516,15 @@ fn priced_table_distinct(model: &str) -> PriceTable {
     let mut models = std::collections::BTreeMap::new();
     models.insert(
         model.to_string(),
-        ModelPrice {
-            input: per_m(1.0),
-            cache_read: per_m(2.0),
-            cache_write_5m: per_m(3.0),
-            cache_write_1h: per_m(4.0),
-            output: per_m(5.0),
+        ModelRow {
+            standard: ModelPrice {
+                input: per_m(1.0),
+                cache_read: per_m(2.0),
+                cache_write_5m: per_m(3.0),
+                cache_write_1h: per_m(4.0),
+                output: per_m(5.0),
+            },
+            fast: None,
         },
     );
     PriceTable {
@@ -1543,6 +1612,53 @@ fn a_members_spend_prices_every_token_kind_at_its_own_rate() {
         rows[0].spent_usd,
         10.0 * 1.0 + 20.0 * 2.0 + 30.0 * 3.0 + 40.0 * 4.0 + 50.0 * 5.0,
         "each token kind is priced at its own rate; a transposition of the five sums would answer a different total"
+    );
+}
+
+#[test]
+fn a_members_spend_prices_a_fast_row_at_the_fast_cells() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let now = ms(2026, 1, 15, 10, 0);
+    for (id, speed) in [("standard", None), ("fast", Some("fast"))] {
+        let request = RequestRecord {
+            id: id.into(),
+            received_at: ms(2026, 1, 15, 1, 0),
+            key_id: Some("desktop".into()),
+            pool_id: Some("p".into()),
+            canonical_model: "claude-opus-5".into(),
+            model: "claude-opus-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            outcome: "succeeded".into(),
+            attempts: 1,
+            ..Default::default()
+        };
+        let attempt = AttemptRecord {
+            request_id: id.into(),
+            attempt: 1,
+            account_id: "a".into(),
+            account_kind: "api_key".into(),
+            outcome: "succeeded".into(),
+            input_tokens: Some(1_000_000),
+            speed: speed.map(String::from),
+            ..Default::default()
+        };
+        db.insert_request(&request, &[attempt], None).unwrap();
+    }
+    let rows = db
+        .read_blocking(|c| {
+            member_spends(
+                c,
+                &[("p".into(), "a".into(), BudgetPeriod::Day)],
+                now,
+                &PriceTable::shipped(),
+            )
+        })
+        .unwrap();
+    assert_eq!(
+        rows[0].spent_usd,
+        5.0 + 10.0,
+        "a million Opus 5 input tokens at the $5 standard cell and a million at the $10 fast cell"
     );
 }
 

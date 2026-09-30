@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { api, MOCK } from '@/api';
-import type { ModelPrice, Settings } from '@/api/types';
+import type { FastPrice, ModelPrice, Settings } from '@/api/types';
 import { useSession } from '@/app/session';
 import { useAppSettings, type ThemeChoice } from '@/app/settings';
 import { IconMonitor, IconMoon, IconSun, IconX } from '@/components/ui/icons';
@@ -399,6 +399,8 @@ function PricingCard({ canMutate, error: failed, onToast, pricing: served }: { c
     setError(null);
   };
 
+  // A hand edit changes the standard cells alone, so each row keeps the fast cells of the served row it came from.
+  const fastOf = (id: string) => pricing?.models.find((m) => m.model === id)?.fast ?? null;
   const save = () => {
     const next: ModelPrice[] = [];
     const seen = new Set<string>();
@@ -413,7 +415,7 @@ function PricingCard({ canMutate, error: failed, onToast, pricing: served }: { c
         return;
       }
       seen.add(model);
-      const price = { model } as ModelPrice;
+      const price = { fast: fastOf(row.id), model } as ModelPrice;
       for (const f of PRICE_FIELDS) {
         const raw = row[f.key].trim();
         const value = Number(raw);
@@ -469,7 +471,7 @@ function PricingCard({ canMutate, error: failed, onToast, pricing: served }: { c
           </thead>
           <tbody>
             {pricing ? (
-              rows.map((row) => (
+              rows.flatMap((row) => [
                 <tr key={row.id}>
                   <td className="mono">
                     {row.isNew ? (
@@ -503,8 +505,9 @@ function PricingCard({ canMutate, error: failed, onToast, pricing: served }: { c
                       />
                     </td>
                   )}
-                </tr>
-              ))
+                </tr>,
+                ...fastRow(row.id, fastOf(row.id), handEdit),
+              ])
             ) : (
               <tr>
                 <td colSpan={6}>
@@ -546,6 +549,24 @@ function PricingCard({ canMutate, error: failed, onToast, pricing: served }: { c
       />
     </Card>
   );
+}
+
+/** The read-only fast-mode sub-row under a model that has the cells, in the table's column order. */
+function fastRow(id: string, fast: FastPrice | null, handEdit: boolean) {
+  if (!fast) return [];
+  return [
+    <tr key={`${id} fast`} className="price-table__fast">
+      <td className="muted" style={{ paddingLeft: 28 }}>
+        fast mode
+      </td>
+      {PRICE_FIELDS.map((f) => (
+        <td className="right num" key={f.key}>
+          {fmtPrice(fast[f.key])}
+        </td>
+      ))}
+      {handEdit && <td />}
+    </tr>,
+  ];
 }
 
 function PriceCell({

@@ -8,7 +8,7 @@ use phoebis_bus::{
     user_agent_of, AccountSelected, AttemptOutcome, Event, Phase, RequestComplete, RequestObserved,
     ResponseChunk, ResponseHead, Usage,
 };
-use phoebis_ledger::Pricing;
+use phoebis_ledger::{Pricing, Speed};
 use phoebis_oauth::Clock;
 use phoebis_relay::{SseEvent, SseParser, UnifiedHeaders, INSPECT_BUFFER};
 use phoebis_transport::response::ResponseHead as WireHead;
@@ -382,6 +382,7 @@ impl LiveState {
                 .current()
                 .estimate(
                     &t.entry.canonical_model,
+                    Speed::Standard,
                     u.input,
                     u.cache_read,
                     u.cache_write_5m,
@@ -442,6 +443,7 @@ impl LiveState {
         e.cost_usd = table
             .estimate(
                 &e.canonical_model,
+                Speed::Standard,
                 e.usage.input,
                 e.usage.cache_read,
                 e.usage.cache_write_5m,

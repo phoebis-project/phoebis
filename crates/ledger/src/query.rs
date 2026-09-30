@@ -12,7 +12,7 @@ use serde_json::Value;
 use crate::db::{row_to_attempt, row_to_request, ATTEMPT_SELECT, REQUEST_SELECT};
 use crate::histogram::Histogram;
 use crate::plan::PlanTables;
-use crate::pricing::PriceTable;
+use crate::pricing::{PriceTable, Speed};
 use crate::record::{
     AttemptRecord, EventRecord, ExtraUsageSampleRecord, QuotaSampleRecord, RequestRecord,
 };
@@ -1330,10 +1330,10 @@ pub fn member_spends(
     // Prepared once outside the per-member loop: a monthly member's period scans up to a month of rows, and
     // re-parsing the same statement text for every member in a pool would add nothing but overhead.
     let mut stmt = conn.prepare(
-        "SELECT canonical_model, SUM(input_tokens), SUM(cache_read_tokens), SUM(cache_write_5m_tokens), \
+        "SELECT canonical_model, speed, SUM(input_tokens), SUM(cache_read_tokens), SUM(cache_write_5m_tokens), \
          SUM(cache_write_1h_tokens), SUM(output_tokens) FROM rollups_hourly \
          WHERE pool_id = ?1 AND account_id = ?2 AND hour >= ?3 AND hour < ?4 \
-         GROUP BY canonical_model",
+         GROUP BY canonical_model, speed",
     )?;
     for (pool_id, account_id, period) in members {
         let (period_start, period_end) = period_bounds(*period, now);
@@ -1347,22 +1347,29 @@ pub fn member_spends(
             |r| {
                 Ok((
                     r.get::<_, String>(0)?,
-                    r.get::<_, i64>(1)? as u64,
+                    r.get::<_, String>(1)?,
                     r.get::<_, i64>(2)? as u64,
                     r.get::<_, i64>(3)? as u64,
                     r.get::<_, i64>(4)? as u64,
                     r.get::<_, i64>(5)? as u64,
+                    r.get::<_, i64>(6)? as u64,
                 ))
             },
         )?;
         let mut spent_usd = 0.0;
         for row in rows {
-            let (model, input, cache_read, write_5m, write_1h, output) = row?;
+            let (model, speed, input, cache_read, write_5m, write_1h, output) = row?;
             // A model the table cannot price contributes nothing: the analytics already read such a row as
             // unpriced, and a budget must not be tripped by a sum it cannot itself account for.
-            if let Some((usd, _)) =
-                table.estimate(&model, input, cache_read, write_5m, write_1h, output)
-            {
+            if let Some((usd, _)) = table.estimate(
+                &model,
+                Speed::of(Some(&speed)),
+                input,
+                cache_read,
+                write_5m,
+                write_1h,
+                output,
+            ) {
                 spent_usd += usd;
             }
         }
@@ -1585,11 +1592,14 @@ pub(crate) struct UsageRow<'a> {
     /// request's hour and keeps no completion, and the completion for an attempt, where the meter charges it. Per
     /// row, since a bucket spanning a band edge cannot say which side a charge fell on.
     pub(crate) at: i64,
+    /// The row's rollup speed, or the attempt's, read `fast`.
+    pub(crate) fast: bool,
 }
 
 /// The shares of an oauth account's two windows (the 5-hour one banded at the row's own instant) when `tier`
 /// names one the tables size, `estimated_usd` for an api_key account; a row whose account is not in `kinds`
-/// carries no price the caller could attribute, so it adds nothing at all.
+/// carries no price the caller could attribute, so it adds nothing at all. A fast row on an oauth account adds
+/// its `estimated_usd` and no share: fast mode spends usage credits and draws no plan window.
 pub(crate) fn price_usage(
     point: &mut BurnPoint,
     kind: Option<AccountKind>,
@@ -1598,6 +1608,7 @@ pub(crate) fn price_usage(
     row: &UsageRow,
 ) {
     match kind {
+        Some(AccountKind::Oauth) if row.fast => point.usd += row.estimated_usd,
         Some(AccountKind::Oauth) => {
             let usage = PinUsage {
                 input: row.input_tokens,
@@ -1693,6 +1704,7 @@ pub fn burn_series_over(
                 output_tokens: row.output_tokens,
                 estimated_usd: row.estimated_usd,
                 at: row.hour * 1_000,
+                fast: row.speed == "fast",
             },
         );
     }
@@ -1787,6 +1799,8 @@ struct SessionAttempt {
     cache_write_1h_tokens: u64,
     output_tokens: u64,
     estimated_usd: f64,
+    /// `attempts.speed`, the speed the answer reported.
+    speed: Option<String>,
 }
 
 fn read_session_attempts(
@@ -1803,7 +1817,7 @@ fn read_session_attempts(
         "SELECT r.session_id, a.account_id, a.started_at, \
          COALESCE(a.finished_at, r.finished_at, a.started_at), r.canonical_model, \
          a.input_tokens, a.cache_read_tokens, a.cache_write_5m_tokens, a.cache_write_1h_tokens, \
-         a.output_tokens, a.estimated_usd \
+         a.output_tokens, a.estimated_usd, a.speed \
          FROM attempts a JOIN requests r ON r.id = a.request_id \
          WHERE r.session_id IN ({placeholders}) AND a.started_at >= ? AND a.started_at < ?"
     );
@@ -1828,6 +1842,7 @@ fn read_session_attempts(
             cache_write_1h_tokens: tokens(row.get(8)?),
             output_tokens: tokens(row.get(9)?),
             estimated_usd: row.get::<_, Option<f64>>(10)?.unwrap_or(0.0),
+            speed: row.get(11)?,
         })
     })?;
     rows.collect::<Result<Vec<_>, _>>()
@@ -1892,6 +1907,7 @@ pub fn session_burn_series(
                 output_tokens: a.output_tokens,
                 estimated_usd: a.estimated_usd,
                 at: a.completed_at,
+                fast: a.speed.as_deref() == Some("fast"),
             },
         );
     }

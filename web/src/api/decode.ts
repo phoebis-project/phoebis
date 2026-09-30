@@ -1,6 +1,6 @@
 import type {
   Account, AccountCatalog, AccountRollup, AffinityMode, AffinitySource, AlertEvent, AlertRule, AlertRuleInput, AnalyticsGroup, AnalyticsPoint, AnalyticsReconciliations, ApiKey, AttemptOutcome, AttemptResponse, BudgetPeriod, BurnPoint, BurnUnit, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
-  CohortHold, Delivery, GuardVerdict, KeepaliveOverview, KeepaliveRecipe, KeyModels, LifecycleDelivery, LifecyclePage, LiveAttempt, LiveDelta, LiveMetric, LiveRequest, LiveSnapshot, LiveTick, MemberBudget, MemberEligibility, ModelEvent, ModelPrice, ModelRule, ModelRulesMode,
+  CohortHold, Delivery, FastPrice, GuardVerdict, KeepaliveOverview, KeepaliveRecipe, KeyModels, LifecycleDelivery, LifecyclePage, LiveAttempt, LiveDelta, LiveMetric, LiveRequest, LiveSnapshot, LiveTick, MemberBudget, MemberEligibility, ModelEvent, ModelPrice, ModelRule, ModelRulesMode,
   ModelsState, Overview, PairingSession, PinMigrationReason, PinReleaseReason, Placement, PlacementRow, PlanBand, PlanCell, PlanModelCells, PlanTables, Pool, PoolCacheTtl, QuotaHeaders, QuotaHistory, QuotaPoll, QuotaSnapshot, RateLimitWindow, RequestEvent, RequestLog, RequestPage, RequestShape, RewritePoint,
   RuleCooldown, SelectionTrace, Session, SessionLifecycleDetail, SessionPlacement, Settings, SubagentPlacement, Subscription, TierFactor, TtlRules, WarmSessions, WindowId, WindowReconciliation,
 } from './types';
@@ -559,7 +559,8 @@ export function decodeAlertEvent(v: unknown): AlertEvent {
   return { deliveries: list(e.deliveries).map(decodeDelivery), detail: e.detail && typeof e.detail === 'object' ? (e.detail as Record<string, unknown>) : null, id: str(e.id), kind: ALERT_KIND_VALUES.find((k) => k === str(e.kind)) ?? 'utilization_above', openedAt: isoOr(e.opened_at, epoch), resolvedAt: isoOrNull(e.resolved_at), ruleId: str(e.rule_id), state: str(e.state) === 'resolved' ? 'resolved' : 'open', subject: str(e.subject) };
 }
 
-const price = (m: Rec): ModelPrice => ({ cacheReadPerM: num(m.cache_read_per_m), cacheWrite1hPerM: num(m.cache_write_1h_per_m), cacheWrite5mPerM: num(m.cache_write_5m_per_m), inputPerM: num(m.input_per_m), model: str(m.model), outputPerM: num(m.output_per_m) });
+const priceCells = (m: Rec): FastPrice => ({ cacheReadPerM: num(m.cache_read_per_m), cacheWrite1hPerM: num(m.cache_write_1h_per_m), cacheWrite5mPerM: num(m.cache_write_5m_per_m), inputPerM: num(m.input_per_m), outputPerM: num(m.output_per_m) });
+const price = (m: Rec): ModelPrice => ({ ...priceCells(m), fast: m.fast && typeof m.fast === 'object' ? priceCells(rec(m.fast)) : null, model: str(m.model) });
 export const decodePricing = (v: unknown): Settings['pricing'] => ({ effectiveDate: new Date(str(rec(v).effective, '1970-01-01')).toISOString(), models: list(rec(v).models).map(rec).map(price), source: str(rec(v).source) });
 
 const planCell = (v: unknown): PlanCell => ({ measured: strOrNull(rec(v).measured), sharePerMillion: num(rec(v).share_per_million), unmeasured: bool(rec(v).unmeasured) });

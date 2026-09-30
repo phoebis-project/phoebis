@@ -71,7 +71,7 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
         ),
         (Some(30), Some(1), Some(86_400), Some("127.0.0.1:9464"))
     );
-    assert_eq!(settings["pricing"]["version"], "2026-09-08");
+    assert_eq!(settings["pricing"]["version"], "2026-09-30");
     assert_eq!(settings["pricing"]["source"], "shipped");
     let tables = &settings["plan_tables"];
     assert_eq!(tables["cost"]["tier"], "default_claude_max_5x");
@@ -128,6 +128,52 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
     );
     assert_eq!(system["live"]["clients"].as_u64(), Some(0));
     assert_eq!(system["storage_ok"], true);
+}
+
+#[tokio::test]
+async fn the_price_routes_answer_the_fast_cells_beside_the_standard_ones() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let settings = json(get(&parts.app, "/admin/settings", Some(&cookie)).await).await;
+    let pricing = json(get(&parts.app, "/admin/pricing", Some(&cookie)).await).await;
+    let costs = json(get(&parts.app, "/admin/sessions/costs", Some(&cookie)).await).await;
+    for (route, models) in [
+        ("settings", &settings["pricing"]["models"]),
+        ("pricing", &pricing["models"]),
+        ("sessions/costs", &costs["models"]),
+    ] {
+        let row = |model: &str| {
+            models
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|m| m["model"] == model)
+                .cloned()
+                .unwrap_or_else(|| panic!("{route} lists {model}: {models}"))
+        };
+        let opus = row("claude-opus-5-5");
+        assert_eq!(
+            (&opus["input_per_m"], &opus["output_per_m"]),
+            (&serde_json::json!(4.0), &serde_json::json!(20.0)),
+            "{route}: the standard cells stay where they were"
+        );
+        assert_eq!(
+            opus["fast"],
+            serde_json::json!({
+                "input_per_m": 8.0,
+                "cache_write_5m_per_m": 10.0,
+                "cache_write_1h_per_m": 16.0,
+                "cache_read_per_m": 0.4,
+                "output_per_m": 40.0,
+            }),
+            "{route}: a model that serves fast mode answers its five fast cells"
+        );
+        assert_eq!(
+            row("claude-sonnet-5").get("fast"),
+            Some(&serde_json::Value::Null),
+            "{route}: a model without them answers null"
+        );
+    }
 }
 
 #[tokio::test]
@@ -831,6 +877,46 @@ async fn the_burn_route_answers_each_subscription_points_share_of_both_windows()
         .status(),
         400,
         "pool is not one of the burn route's own group_by values"
+    );
+}
+
+#[tokio::test]
+async fn a_fast_answer_moves_a_subscription_groups_dollars_and_no_share() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    set_max_5x(&parts.store);
+    let mut fast = record("fast-1", common::NOW - HOUR, "claude-opus-5", "s1");
+    if let Record::Request { attempts, .. } = &mut fast {
+        attempts[0].input_tokens = Some(1_000_000);
+        attempts[0].output_tokens = None;
+        attempts[0].speed = Some("fast".into());
+    }
+    parts.ledger.record(fast);
+    let burn_url = "/admin/analytics/burn?range=24h&group_by=account";
+    let burn = wait_json(&parts.app, burn_url, &cookie, |v| {
+        v["points"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p["group"] == "business" && p["uncached_tokens"].as_u64().unwrap_or(0) > 0)
+    })
+    .await;
+    let point = burn["points"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["group"] == "business" && p["uncached_tokens"].as_u64().unwrap_or(0) > 0)
+        .cloned()
+        .unwrap();
+    assert!(
+        (point["usd"].as_f64().unwrap() - 10.0).abs() < 1e-9,
+        "a million Opus 5 input tokens served fast read the $10 fast cell in dollars: {point}"
+    );
+    assert!(
+        point["unit"] == "window_share"
+            && null_field(&point, "five_hour_share")
+            && null_field(&point, "seven_day_share"),
+        "the account still charts in its window unit, and the fast answer adds no share: {point}"
     );
 }
 

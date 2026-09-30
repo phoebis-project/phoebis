@@ -127,12 +127,15 @@ impl Default for RouterConfig {
     }
 }
 
-/// The two tables a reader prices a pin's burn through: dollars per token, and the Max 5x share of the 5-hour
-/// window per token. Both default to `RateTable::unit`, so a burn read through the default is a token count.
+/// The two tables a reader prices a pin's burn through, dollars per token and the Max 5x share of the 5-hour
+/// window per token, and the fast cells a fast renewal is weighed by. All three default to `RateTable::unit`, so a
+/// burn read through the default is a token count and a fast renewal folds unweighed.
 #[derive(Clone, Debug, PartialEq)]
 pub struct BurnRates {
     pub dollars: RateTable,
     pub five_hour: RateTable,
+    /// Dollars per token at the fast cells; over `dollars` it is the weight a fast renewal folds with.
+    pub fast: RateTable,
 }
 
 impl Default for BurnRates {
@@ -140,7 +143,28 @@ impl Default for BurnRates {
         BurnRates {
             dollars: RateTable::unit(),
             five_hour: RateTable::unit(),
+            fast: RateTable::unit(),
         }
+    }
+}
+
+/// Per token type, the fast cell over the standard cell of `model`: 1 where the standard rate is 0, since no
+/// weight can carry a charge the standard table prices at nothing.
+fn fast_over_standard(rates: &BurnRates, model: &str) -> PinBurn {
+    let (fast, standard) = (rates.fast.rates_for(model), rates.dollars.rates_for(model));
+    let weight = |fast: f64, standard: f64| {
+        if standard == 0.0 {
+            1.0
+        } else {
+            fast / standard
+        }
+    };
+    PinBurn {
+        cache_read: weight(fast.cache_read, standard.cache_read),
+        input: weight(fast.input, standard.input),
+        output: weight(fast.output, standard.output),
+        write_1h: weight(fast.write_1h, standard.write_1h),
+        write_5m: weight(fast.write_5m, standard.write_5m),
     }
 }
 
@@ -233,6 +257,8 @@ pub enum Report {
         origin: &'static str,
         /// The cache TTL the relay resolved for the attempt: the policy's rewrite, else the client's marker.
         cache_ttl_ms: i64,
+        /// The answer reported `usage.speed` `fast`.
+        fast: bool,
     },
     Sample {
         account_id: String,
@@ -247,6 +273,8 @@ pub enum Report {
         canonical_model: String,
         incarnation: u64,
         usage: PinUsage,
+        /// The answer reported `usage.speed` `fast`.
+        fast: bool,
     },
 }
 
@@ -1289,6 +1317,7 @@ impl Task {
                 usage,
                 origin,
                 cache_ttl_ms,
+                fast,
             } => {
                 pin.model = self.state.canonical(&pin.model).to_string();
                 let key = PinKey {
@@ -1321,15 +1350,31 @@ impl Task {
                             let fold = |rate: f64, tokens: u64, weight: f64| {
                                 burn_folded(rate, at, now, window_ms, tokens as f64 * weight)
                             };
-                            let folded = |copy: PinBurn, weight: f64| PinBurn {
-                                cache_read: fold(copy.cache_read, usage.cache_read, weight),
-                                input: fold(copy.input, usage.input, weight),
-                                output: fold(copy.output, usage.output, weight),
-                                write_1h: fold(copy.write_1h, usage.write_1h, weight),
-                                write_5m: fold(copy.write_5m, usage.write_5m, weight),
+                            let folded = |copy: PinBurn, w: PinBurn| PinBurn {
+                                cache_read: fold(copy.cache_read, usage.cache_read, w.cache_read),
+                                input: fold(copy.input, usage.input, w.input),
+                                output: fold(copy.output, usage.output, w.output),
+                                write_1h: fold(copy.write_1h, usage.write_1h, w.write_1h),
+                                write_5m: fold(copy.write_5m, usage.write_5m, w.write_5m),
                             };
-                            renewed.burn = folded(renewed.burn, 1.0);
-                            renewed.burn_banded = folded(renewed.burn_banded, band);
+                            let uniform = |w: f64| PinBurn {
+                                cache_read: w,
+                                input: w,
+                                output: w,
+                                write_1h: w,
+                                write_5m: w,
+                            };
+                            // A fast answer is usage credits at the fast cells: the plain copy carries each type
+                            // weighed by fast over standard, so pricing it at the standard table reads the fast
+                            // dollars, and the banded copy, the plan share, only decays.
+                            let plain = if fast {
+                                fast_over_standard(&self.config.rates, &pin.model)
+                            } else {
+                                uniform(1.0)
+                            };
+                            renewed.burn = folded(renewed.burn, plain);
+                            renewed.burn_banded =
+                                folded(renewed.burn_banded, uniform(if fast { 0.0 } else { band }));
                             renewed.burn_at = Some(now);
                             renewed.last_input_tokens =
                                 usage.input + usage.cache_read + usage.write_5m + usage.write_1h;
@@ -1373,8 +1418,10 @@ impl Task {
                 canonical_model,
                 incarnation,
                 usage,
+                fast,
             } => {
-                if self.moved_past(&account_id, incarnation) {
+                // A fast completion draws usage credits and no plan window.
+                if self.moved_past(&account_id, incarnation) || fast {
                     return;
                 }
                 let snapshot = self

@@ -2296,10 +2296,10 @@ export const FIXTURES: Record<string, Fixture> = {
           "at": -3600000,
           "group": "business",
           "unit": "window_share",
-          "usd": 0,
-          "five_hour_share": 0.00015674,
+          "usd": 0.0072,
+          "five_hour_share": 0.00007837,
           "five_hour_unmeasured": true,
-          "seven_day_share": 0.000011365599999999998,
+          "seven_day_share": 0.000005682799999999999,
           "seven_day_unmeasured": true,
           "cached_tokens": 1000,
           "uncached_tokens": 2000
@@ -6144,8 +6144,8 @@ export const FIXTURES: Record<string, Fixture> = {
   "pricing": {
     "route": "GET /admin/pricing",
     "body": {
-      "version": "2026-09-08",
-      "effective": "2026-09-08",
+      "version": "2026-09-30",
+      "effective": "2026-09-30",
       "source": "shipped",
       "models": [
         {
@@ -6154,7 +6154,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "cache_write_5m_per_m": 12.5,
           "cache_write_1h_per_m": 20,
           "cache_read_per_m": 0.25,
-          "output_per_m": 50
+          "output_per_m": 50,
+          "fast": null
         },
         {
           "model": "claude-haiku-4-5-20251001",
@@ -6162,7 +6163,23 @@ export const FIXTURES: Record<string, Fixture> = {
           "cache_write_5m_per_m": 1.25,
           "cache_write_1h_per_m": 2,
           "cache_read_per_m": 0.1,
-          "output_per_m": 5
+          "output_per_m": 5,
+          "fast": null
+        },
+        {
+          "model": "claude-opus-4-8",
+          "input_per_m": 5,
+          "cache_write_5m_per_m": 6.25,
+          "cache_write_1h_per_m": 10,
+          "cache_read_per_m": 0.5,
+          "output_per_m": 25,
+          "fast": {
+            "input_per_m": 10,
+            "cache_write_5m_per_m": 12.5,
+            "cache_write_1h_per_m": 20,
+            "cache_read_per_m": 1,
+            "output_per_m": 50
+          }
         },
         {
           "model": "claude-opus-5",
@@ -6170,7 +6187,29 @@ export const FIXTURES: Record<string, Fixture> = {
           "cache_write_5m_per_m": 6.25,
           "cache_write_1h_per_m": 10,
           "cache_read_per_m": 0.5,
-          "output_per_m": 25
+          "output_per_m": 25,
+          "fast": {
+            "input_per_m": 10,
+            "cache_write_5m_per_m": 12.5,
+            "cache_write_1h_per_m": 20,
+            "cache_read_per_m": 1,
+            "output_per_m": 50
+          }
+        },
+        {
+          "model": "claude-opus-5-5",
+          "input_per_m": 4,
+          "cache_write_5m_per_m": 5,
+          "cache_write_1h_per_m": 8,
+          "cache_read_per_m": 0.2,
+          "output_per_m": 20,
+          "fast": {
+            "input_per_m": 8,
+            "cache_write_5m_per_m": 10,
+            "cache_write_1h_per_m": 16,
+            "cache_read_per_m": 0.4,
+            "output_per_m": 40
+          }
         },
         {
           "model": "claude-sonnet-5",
@@ -6178,7 +6217,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "cache_write_5m_per_m": 2.5,
           "cache_write_1h_per_m": 4,
           "cache_read_per_m": 0.2,
-          "output_per_m": 10
+          "output_per_m": 10,
+          "fast": null
         }
       ]
     }
@@ -7270,8 +7310,8 @@ export const FIXTURES: Record<string, Fixture> = {
   "sessions_costs": {
     "route": "GET /admin/sessions/costs",
     "body": {
-      "version": "2026-09-08",
-      "effective": "2026-09-08",
+      "version": "2026-09-30",
+      "effective": "2026-09-30",
       "models": [
         {
           "model": "claude-fable-5-1",
@@ -7280,7 +7320,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "cache_write_1h_per_m": 20,
           "cache_read_per_m": 0.25,
           "output_per_m": 50,
-          "reads_per_write_5m": 50
+          "reads_per_write_5m": 50,
+          "fast": null
         },
         {
           "model": "claude-haiku-4-5-20251001",
@@ -7289,7 +7330,24 @@ export const FIXTURES: Record<string, Fixture> = {
           "cache_write_1h_per_m": 2,
           "cache_read_per_m": 0.1,
           "output_per_m": 5,
-          "reads_per_write_5m": 12.5
+          "reads_per_write_5m": 12.5,
+          "fast": null
+        },
+        {
+          "model": "claude-opus-4-8",
+          "input_per_m": 5,
+          "cache_write_5m_per_m": 6.25,
+          "cache_write_1h_per_m": 10,
+          "cache_read_per_m": 0.5,
+          "output_per_m": 25,
+          "reads_per_write_5m": 12.5,
+          "fast": {
+            "input_per_m": 10,
+            "cache_write_5m_per_m": 12.5,
+            "cache_write_1h_per_m": 20,
+            "cache_read_per_m": 1,
+            "output_per_m": 50
+          }
         },
         {
           "model": "claude-opus-5",
@@ -7298,7 +7356,30 @@ export const FIXTURES: Record<string, Fixture> = {
           "cache_write_1h_per_m": 10,
           "cache_read_per_m": 0.5,
           "output_per_m": 25,
-          "reads_per_write_5m": 12.5
+          "reads_per_write_5m": 12.5,
+          "fast": {
+            "input_per_m": 10,
+            "cache_write_5m_per_m": 12.5,
+            "cache_write_1h_per_m": 20,
+            "cache_read_per_m": 1,
+            "output_per_m": 50
+          }
+        },
+        {
+          "model": "claude-opus-5-5",
+          "input_per_m": 4,
+          "cache_write_5m_per_m": 5,
+          "cache_write_1h_per_m": 8,
+          "cache_read_per_m": 0.2,
+          "output_per_m": 20,
+          "reads_per_write_5m": 25,
+          "fast": {
+            "input_per_m": 8,
+            "cache_write_5m_per_m": 10,
+            "cache_write_1h_per_m": 16,
+            "cache_read_per_m": 0.4,
+            "output_per_m": 40
+          }
         },
         {
           "model": "claude-sonnet-5",
@@ -7307,7 +7388,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "cache_write_1h_per_m": 4,
           "cache_read_per_m": 0.2,
           "output_per_m": 10,
-          "reads_per_write_5m": 12.5
+          "reads_per_write_5m": 12.5,
+          "fast": null
         }
       ]
     }
@@ -7683,8 +7765,8 @@ export const FIXTURES: Record<string, Fixture> = {
         }
       },
       "pricing": {
-        "version": "2026-09-08",
-        "effective": "2026-09-08",
+        "version": "2026-09-30",
+        "effective": "2026-09-30",
         "source": "shipped",
         "models": [
           {
@@ -7693,7 +7775,8 @@ export const FIXTURES: Record<string, Fixture> = {
             "cache_write_5m_per_m": 12.5,
             "cache_write_1h_per_m": 20,
             "cache_read_per_m": 0.25,
-            "output_per_m": 50
+            "output_per_m": 50,
+            "fast": null
           },
           {
             "model": "claude-haiku-4-5-20251001",
@@ -7701,7 +7784,23 @@ export const FIXTURES: Record<string, Fixture> = {
             "cache_write_5m_per_m": 1.25,
             "cache_write_1h_per_m": 2,
             "cache_read_per_m": 0.1,
-            "output_per_m": 5
+            "output_per_m": 5,
+            "fast": null
+          },
+          {
+            "model": "claude-opus-4-8",
+            "input_per_m": 5,
+            "cache_write_5m_per_m": 6.25,
+            "cache_write_1h_per_m": 10,
+            "cache_read_per_m": 0.5,
+            "output_per_m": 25,
+            "fast": {
+              "input_per_m": 10,
+              "cache_write_5m_per_m": 12.5,
+              "cache_write_1h_per_m": 20,
+              "cache_read_per_m": 1,
+              "output_per_m": 50
+            }
           },
           {
             "model": "claude-opus-5",
@@ -7709,7 +7808,29 @@ export const FIXTURES: Record<string, Fixture> = {
             "cache_write_5m_per_m": 6.25,
             "cache_write_1h_per_m": 10,
             "cache_read_per_m": 0.5,
-            "output_per_m": 25
+            "output_per_m": 25,
+            "fast": {
+              "input_per_m": 10,
+              "cache_write_5m_per_m": 12.5,
+              "cache_write_1h_per_m": 20,
+              "cache_read_per_m": 1,
+              "output_per_m": 50
+            }
+          },
+          {
+            "model": "claude-opus-5-5",
+            "input_per_m": 4,
+            "cache_write_5m_per_m": 5,
+            "cache_write_1h_per_m": 8,
+            "cache_read_per_m": 0.2,
+            "output_per_m": 20,
+            "fast": {
+              "input_per_m": 8,
+              "cache_write_5m_per_m": 10,
+              "cache_write_1h_per_m": 16,
+              "cache_read_per_m": 0.4,
+              "output_per_m": 40
+            }
           },
           {
             "model": "claude-sonnet-5",
@@ -7717,7 +7838,8 @@ export const FIXTURES: Record<string, Fixture> = {
             "cache_write_5m_per_m": 2.5,
             "cache_write_1h_per_m": 4,
             "cache_read_per_m": 0.2,
-            "output_per_m": 10
+            "output_per_m": 10,
+            "fast": null
           }
         ]
       },

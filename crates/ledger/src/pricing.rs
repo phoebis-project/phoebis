@@ -22,18 +22,55 @@ pub struct ModelPrice {
     pub output: f64,
 }
 
+/// Which cells price an answer: the ones its reported `usage.speed` selects. `Copy`, so a record that carries a
+/// speed holds this rather than a `String`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Speed {
+    Fast,
+    Standard,
+}
+
+impl Speed {
+    /// `fast` reads `Fast`; any other value, and none, reads `Standard`.
+    pub fn of(reported: Option<&str>) -> Speed {
+        match reported {
+            Some("fast") => Speed::Fast,
+            _ => Speed::Standard,
+        }
+    }
+}
+
+/// One model's row: the standard cells, and the fast cells on a model that serves fast mode.
+#[derive(Clone, Debug, Default, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct ModelRow {
+    #[serde(flatten)]
+    pub standard: ModelPrice,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fast: Option<ModelPrice>,
+}
+
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct PriceTable {
     pub version: String,
     pub effective: String,
     pub source: String,
-    pub models: BTreeMap<String, ModelPrice>,
+    pub models: BTreeMap<String, ModelRow>,
 }
 
 #[derive(serde::Deserialize)]
 struct PriceFile {
     effective: String,
-    models: BTreeMap<String, ModelPrice>,
+    models: BTreeMap<String, ModelRow>,
+}
+
+fn per_token(p: &ModelPrice) -> phoebis_routing::Rates {
+    phoebis_routing::Rates {
+        input: p.input / 1_000_000.0,
+        cache_read: p.cache_read / 1_000_000.0,
+        write_5m: p.cache_write_5m / 1_000_000.0,
+        write_1h: p.cache_write_1h / 1_000_000.0,
+        output: p.output / 1_000_000.0,
+    }
 }
 
 impl PriceTable {
@@ -55,18 +92,27 @@ impl PriceTable {
     /// The row for the id, else the row for the id with a trailing `-YYYYMMDD` removed, with the key it sits
     /// under: a dated id the catalog lists prices as the undated id the table ships. `price` and `model_label`
     /// both read this, so a label never names another row than the one that priced the request.
-    fn entry(&self, canonical_model: &str) -> Option<(&str, &ModelPrice)> {
+    fn entry(&self, canonical_model: &str) -> Option<(&str, &ModelRow)> {
         self.models
             .get_key_value(canonical_model)
             .or_else(|| {
                 phoebis_routing::listing::undated(canonical_model)
                     .and_then(|base| self.models.get_key_value(base))
             })
-            .map(|(key, price)| (key.as_str(), price))
+            .map(|(key, row)| (key.as_str(), row))
     }
 
+    /// The standard cells of the row `entry` finds.
     pub fn price(&self, canonical_model: &str) -> Option<&ModelPrice> {
-        self.entry(canonical_model).map(|(_, price)| price)
+        self.entry(canonical_model).map(|(_, row)| &row.standard)
+    }
+
+    /// The cells `speed` selects: the `fast` block for a fast answer when the row has one, else the standard cells.
+    pub fn price_at(&self, canonical_model: &str, speed: Speed) -> Option<&ModelPrice> {
+        self.entry(canonical_model).map(|(_, row)| match speed {
+            Speed::Fast => row.fast.as_ref().unwrap_or(&row.standard),
+            Speed::Standard => &row.standard,
+        })
     }
 
     /// The metrics label: a priced model reads as the table key that priced it, everything else is one bucket,
@@ -78,18 +124,7 @@ impl PriceTable {
     /// Dollars per token, the routing task's api_key burn unit. A model the table lacks prices at the dearest
     /// listed rate of each type, so a model the table has not learned never looks cheap to the shedding order.
     pub fn rate_table(&self) -> phoebis_routing::RateTable {
-        let per_token = |p: &ModelPrice| phoebis_routing::Rates {
-            input: p.input / 1_000_000.0,
-            cache_read: p.cache_read / 1_000_000.0,
-            write_5m: p.cache_write_5m / 1_000_000.0,
-            write_1h: p.cache_write_1h / 1_000_000.0,
-            output: p.output / 1_000_000.0,
-        };
-        let rows: std::collections::HashMap<String, phoebis_routing::Rates> = self
-            .models
-            .iter()
-            .map(|(model, price)| (model.clone(), per_token(price)))
-            .collect();
+        let rows = self.per_token_rows(|row| &row.standard);
         let dearest =
             |of: fn(&phoebis_routing::Rates) -> f64| rows.values().map(of).fold(0.0, f64::max);
         let fallback = phoebis_routing::Rates {
@@ -102,16 +137,37 @@ impl PriceTable {
         phoebis_routing::RateTable { rows, fallback }
     }
 
+    /// Dollars per token at the fast cells; a model without a `fast` block reads its standard cells, and the
+    /// fallback is `rate_table`'s, so a weight of fast over standard reads 1 wherever no fast price is known.
+    pub fn fast_rate_table(&self) -> phoebis_routing::RateTable {
+        phoebis_routing::RateTable {
+            rows: self.per_token_rows(|row| row.fast.as_ref().unwrap_or(&row.standard)),
+            fallback: self.rate_table().fallback,
+        }
+    }
+
+    fn per_token_rows(
+        &self,
+        cells: fn(&ModelRow) -> &ModelPrice,
+    ) -> std::collections::HashMap<String, phoebis_routing::Rates> {
+        self.models
+            .iter()
+            .map(|(model, row)| (model.clone(), per_token(cells(row))))
+            .collect()
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub fn estimate(
         &self,
         model: &str,
+        speed: Speed,
         input: u64,
         cache_read: u64,
         write_5m: u64,
         write_1h: u64,
         output: u64,
     ) -> Option<(f64, CostSplit)> {
-        let p = self.price(model)?;
+        let p = self.price_at(model, speed)?;
         let per_m = |tokens: u64, price: f64| tokens as f64 * price / 1_000_000.0;
         let split = CostSplit {
             input_usd: per_m(input, p.input),
@@ -177,6 +233,7 @@ pub fn price_attempts(
         }
         match table.estimate(
             canonical_model,
+            Speed::of(a.speed.as_deref()),
             a.input_tokens.unwrap_or(0),
             a.cache_read_tokens.unwrap_or(0),
             a.cache_write_5m_tokens.unwrap_or(0),
@@ -227,9 +284,40 @@ mod tests {
                 table.effective.as_str(),
                 table.source.as_str()
             ),
-            ("2026-09-08", "2026-09-08", "shipped")
+            ("2026-09-30", "2026-09-30", "shipped")
         );
-        assert_eq!(table.models.len(), 4);
+        assert_eq!(table.models.len(), 6);
+        let cells = |p: &ModelPrice| {
+            (
+                p.input,
+                p.cache_write_5m,
+                p.cache_write_1h,
+                p.cache_read,
+                p.output,
+            )
+        };
+        let row = |model: &str| table.models.get(model).unwrap();
+        assert_eq!(
+            cells(&row("claude-opus-5-5").standard),
+            (4.0, 5.0, 8.0, 0.2, 20.0)
+        );
+        assert_eq!(
+            row("claude-opus-5-5").fast.as_ref().map(cells),
+            Some((8.0, 10.0, 16.0, 0.4, 40.0))
+        );
+        assert_eq!(
+            row("claude-opus-5").fast.as_ref().map(cells),
+            Some((10.0, 12.5, 20.0, 1.0, 50.0))
+        );
+        assert_eq!(
+            cells(&row("claude-opus-4-8").standard),
+            (5.0, 6.25, 10.0, 0.5, 25.0)
+        );
+        assert_eq!(
+            row("claude-opus-4-8").fast.as_ref().map(cells),
+            Some((10.0, 12.5, 20.0, 1.0, 50.0))
+        );
+        assert_eq!(row("claude-sonnet-5").fast, None);
         let sonnet = table.price("claude-sonnet-5").unwrap();
         assert_eq!(
             (
@@ -242,7 +330,15 @@ mod tests {
             (2.0, 2.5, 4.0, 0.2, 10.0)
         );
         let (usd, split) = table
-            .estimate("claude-sonnet-5", 1_000_000, 500_000, 100_000, 0, 10_000)
+            .estimate(
+                "claude-sonnet-5",
+                Speed::Standard,
+                1_000_000,
+                500_000,
+                100_000,
+                0,
+                10_000,
+            )
             .unwrap();
         assert!(
             (split.input_usd - 2.0).abs() < 1e-9
@@ -251,13 +347,63 @@ mod tests {
                 && (split.output_usd - 0.1).abs() < 1e-9
         );
         assert!((usd - 2.45).abs() < 1e-9);
-        assert!(table.estimate("gpt-5", 1, 0, 0, 0, 1).is_none());
+        assert!(table
+            .estimate("gpt-5", Speed::Standard, 1, 0, 0, 0, 1)
+            .is_none());
         assert_eq!(
             (
                 table.model_label("claude-opus-5"),
                 table.model_label("gpt-5")
             ),
             ("claude-opus-5", "other")
+        );
+    }
+
+    #[test]
+    fn a_fast_answer_prices_at_the_fast_cells_and_a_model_without_them_at_the_standard_cells() {
+        let table = PriceTable::shipped();
+        let input = |model: &str, speed: Speed| {
+            table
+                .estimate(model, speed, 1_000_000, 0, 0, 0, 0)
+                .unwrap()
+                .0
+        };
+        assert_eq!(input("claude-opus-5-5", Speed::Standard), 4.0);
+        assert_eq!(input("claude-opus-5-5", Speed::Fast), 8.0);
+        assert_eq!(
+            input("claude-sonnet-5", Speed::Fast),
+            2.0,
+            "a model without fast cells prices a fast answer at its standard cells"
+        );
+        assert_eq!(
+            (
+                Speed::of(Some("fast")),
+                Speed::of(Some("standard")),
+                Speed::of(Some("turbo")),
+                Speed::of(None)
+            ),
+            (
+                Speed::Fast,
+                Speed::Standard,
+                Speed::Standard,
+                Speed::Standard
+            )
+        );
+        let (fast, standard) = (table.fast_rate_table(), table.rate_table());
+        let one_input = phoebis_routing::PinUsage {
+            input: 1,
+            ..phoebis_routing::PinUsage::default()
+        };
+        assert_eq!(fast.price("claude-opus-5-5", one_input), 8.0 / 1_000_000.0);
+        assert_eq!(
+            fast.price("claude-sonnet-5", one_input),
+            standard.price("claude-sonnet-5", one_input),
+            "the fast table prices a model without fast cells as the standard table does"
+        );
+        assert_eq!(
+            fast.price("gpt-5", one_input),
+            standard.price("gpt-5", one_input),
+            "and an unlisted model at the standard table's fallback, so its weight reads 1"
         );
     }
 
@@ -292,22 +438,28 @@ mod tests {
         let mut models = BTreeMap::new();
         models.insert(
             "claude-sonnet-4-5".to_string(),
-            ModelPrice {
-                input: 3.0,
-                cache_write_5m: 3.75,
-                cache_write_1h: 6.0,
-                cache_read: 0.3,
-                output: 15.0,
+            ModelRow {
+                standard: ModelPrice {
+                    input: 3.0,
+                    cache_write_5m: 3.75,
+                    cache_write_1h: 6.0,
+                    cache_read: 0.3,
+                    output: 15.0,
+                },
+                fast: None,
             },
         );
         models.insert(
             "claude-haiku-4-5-20251001".to_string(),
-            ModelPrice {
-                input: 1.0,
-                cache_write_5m: 1.25,
-                cache_write_1h: 2.0,
-                cache_read: 0.1,
-                output: 5.0,
+            ModelRow {
+                standard: ModelPrice {
+                    input: 1.0,
+                    cache_write_5m: 1.25,
+                    cache_write_1h: 2.0,
+                    cache_read: 0.1,
+                    output: 5.0,
+                },
+                fast: None,
             },
         );
         let table = PriceTable {
@@ -334,12 +486,15 @@ mod tests {
 
     #[test]
     fn a_metric_label_names_the_table_key_that_priced_the_model() {
-        let price = ModelPrice {
-            input: 1.0,
-            cache_write_5m: 1.25,
-            cache_write_1h: 2.0,
-            cache_read: 0.1,
-            output: 5.0,
+        let price = ModelRow {
+            standard: ModelPrice {
+                input: 1.0,
+                cache_write_5m: 1.25,
+                cache_write_1h: 2.0,
+                cache_read: 0.1,
+                output: 5.0,
+            },
+            fast: None,
         };
         let table = PriceTable {
             version: "test".into(),
@@ -390,7 +545,7 @@ mod tests {
             "no usage, no estimate"
         );
         assert!((attempts[1].estimated_usd.unwrap() - 0.0015).abs() < 1e-12);
-        assert_eq!(attempts[1].pricing_version.as_deref(), Some("2026-09-08"));
+        assert_eq!(attempts[1].pricing_version.as_deref(), Some("2026-09-30"));
         assert!((split.total() - 0.0015).abs() < 1e-12);
         let split = price_attempts(&table, "gpt-5", &mut attempts, &unknown);
         assert_eq!(

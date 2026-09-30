@@ -328,8 +328,7 @@ async fn after_the_named_reset_passes_the_probe_is_no_longer_held_for_overage_an
 /// rather than a number the test invented.
 fn spend_of(id: &str, now: i64, usd: f64) -> (RequestRecord, AttemptRecord) {
     let rate = PriceTable::shipped()
-        .models
-        .get("claude-sonnet-5")
+        .price("claude-sonnet-5")
         .expect("the shipped table prices claude-sonnet-5")
         .input;
     let request = RequestRecord {

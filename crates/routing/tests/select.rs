@@ -8204,6 +8204,7 @@ fn a_subscription_pin_in_overage_orders_the_round_by_the_dollar_average_and_leav
     st.set_rates(BurnRates {
         dollars: input_prices(&[("claude-opus-5", 1.0), ("claude-sonnet-5", 9.0)]),
         five_hour: input_prices(&[("claude-opus-5", 9.0), ("claude-sonnet-5", 1.0)]),
+        fast: RateTable::unit(),
     });
     let opus_key = PinKey {
         model: "claude-opus-5".into(),

@@ -1409,6 +1409,7 @@ async fn a_pinned_sessions_burn_reads_its_share_rate_on_the_account_it_sits_on()
         }),
         origin: "client",
         cache_ttl_ms: 300_000,
+        fast: false,
     });
     let window = 600.0;
     let on_max_5x = 0.0841 * 3_600.0 / window;

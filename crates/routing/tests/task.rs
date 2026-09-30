@@ -1608,6 +1608,11 @@ fn with_tier(store: &Store, account: &str) {
 }
 
 fn a_million_input(account: &str, at: i64) -> Report {
+    a_million_input_served(account, at, false)
+}
+
+/// `a_million_input` whose answer reported `usage.speed` `fast` when `fast` is set.
+fn a_million_input_served(account: &str, at: i64, fast: bool) -> Report {
     Report::Usage {
         account_id: account.into(),
         at,
@@ -1617,6 +1622,7 @@ fn a_million_input(account: &str, at: i64) -> Report {
             input: 1_000_000,
             ..PinUsage::default()
         },
+        fast,
     }
 }
 
@@ -1708,6 +1714,36 @@ async fn a_completed_requests_share_is_added_to_the_reading_until_the_next_readi
 }
 
 #[tokio::test]
+async fn a_fast_completion_charges_no_window() {
+    let store = seeded_oauth(&["a"]);
+    with_tier(&store, "a");
+    let now = Arc::new(AtomicI64::new(3_000));
+    let handle = spawn(
+        store.clone(),
+        clock(&now),
+        RouterConfig {
+            share: a_tenth_per_million(),
+            ..RouterConfig::default()
+        },
+    )
+    .unwrap();
+    handle.report(observed(
+        "a",
+        sample_with(1_000, FIVE_HOUR, 0.5, Some(10 * HOUR)),
+    ));
+    handle.report(a_million_input_served("a", 2_000, false));
+    assert!(
+        close(read(&handle, "a", FIVE_HOUR).await, 0.6),
+        "a standard completion adds its share to the reading"
+    );
+    handle.report(a_million_input_served("a", 2_500, true));
+    assert!(
+        close(read(&handle, "a", FIVE_HOUR).await, 0.6),
+        "a fast completion draws usage credits and leaves the window where the standard one left it"
+    );
+}
+
+#[tokio::test]
 async fn a_usage_report_charges_the_fable_week_for_a_fable_model_and_nothing_unpriced_or_moved_past(
 ) {
     let store = seeded_oauth(&["a"]);
@@ -1757,6 +1793,7 @@ async fn a_usage_report_charges_the_fable_week_for_a_fable_model_and_nothing_unp
             input: 1_000_000,
             ..PinUsage::default()
         },
+        fast: false,
     };
     let windows = || async {
         let mut read_all = Vec::new();
@@ -3019,6 +3056,7 @@ async fn a_probe_after_a_compacted_request_refreshes_warmth() {
         usage: None,
         origin: "keepalive",
         cache_ttl_ms: 300_000,
+        fast: false,
     });
     let pin = handle.pins().await.unwrap().remove(0);
     assert_eq!(
@@ -3031,18 +3069,24 @@ async fn a_probe_after_a_compacted_request_refreshes_warmth() {
 /// A dollar table weighing every token a quarter beside a unit share table, so a fold that priced anything
 /// would read a quarter of the tokens on one side.
 fn quarter_dollar_rates() -> BurnRates {
-    let mut dollars = RateTable::unit();
-    dollars.fallback = Rates {
-        input: 0.25,
-        cache_read: 0.25,
-        write_5m: 0.25,
-        write_1h: 0.25,
-        output: 0.25,
-    };
     BurnRates {
-        dollars,
+        dollars: flat_rates(0.25),
         five_hour: RateTable::unit(),
+        fast: RateTable::unit(),
     }
+}
+
+/// Every token of every model at `rate`.
+fn flat_rates(rate: f64) -> RateTable {
+    let mut table = RateTable::unit();
+    table.fallback = Rates {
+        input: rate,
+        cache_read: rate,
+        write_5m: rate,
+        write_1h: rate,
+        output: rate,
+    };
+    table
 }
 
 fn renewal(
@@ -3058,6 +3102,7 @@ fn renewal(
         usage: Some(usage),
         origin,
         cache_ttl_ms,
+        fast: false,
     }
 }
 
@@ -3116,6 +3161,7 @@ async fn a_renewal_with_usage_folds_the_typed_rates_and_the_banded_copy_and_a_pr
         usage: None,
         origin: "client",
         cache_ttl_ms: 3_600_000,
+        fast: false,
     });
     let pins = handle.pins().await.unwrap();
     // The pool's burn window is the default 600 s, and the second fold lands 60 s after the first.
@@ -3176,6 +3222,69 @@ async fn a_renewal_with_usage_folds_the_typed_rates_and_the_banded_copy_and_a_pr
         ),
         (PinBurn::default(), PinBurn::default(), None, 0),
         "and folds nothing"
+    );
+}
+
+#[tokio::test]
+async fn a_fast_renewal_weighs_the_plain_copy_by_the_fast_cells_and_lets_the_banded_copy_decay() {
+    let store = seeded(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    // The fast cells read twice the dollar ones, so a fast token weighs two standard tokens in the plain copy.
+    let config = RouterConfig {
+        rates: BurnRates {
+            fast: flat_rates(0.5),
+            ..quarter_dollar_rates()
+        },
+        ..RouterConfig::default()
+    };
+    let handle = spawn(store, clock(&now), config).unwrap();
+    let fast = selected_pin(
+        handle
+            .select(request(&handle, Some("s1"), 1_000))
+            .await
+            .unwrap(),
+    );
+    let standard = selected_pin(
+        handle
+            .select(request(&handle, Some("s2"), 1_000))
+            .await
+            .unwrap(),
+    );
+    let input = |tokens: u64| PinUsage {
+        input: tokens,
+        ..PinUsage::default()
+    };
+    handle.report(renewal(fast.clone(), 2_000, input(600), "client", 300_000));
+    handle.report(Report::PinRenewed {
+        pin: fast,
+        now: 62_000,
+        usage: Some(input(1_000)),
+        origin: "client",
+        cache_ttl_ms: 300_000,
+        fast: true,
+    });
+    handle.report(renewal(standard, 62_000, input(1_000), "client", 300_000));
+    let pins = handle.pins().await.unwrap();
+    // The pool's burn window is the default 600 s, and the fast fold lands 60 s after the standard one.
+    let window = 600.0_f64;
+    let decayed = 600.0 / window * (-60.0_f64 / window).exp();
+    let s1 = pins.iter().find(|p| p.session_id == "s1").unwrap();
+    assert!(
+        (s1.burn.input - (decayed + 2_000.0 / window)).abs() < 1e-9,
+        "the plain copy folds the thousand fast tokens as two thousand standard ones: {:?}",
+        s1.burn
+    );
+    assert!(
+        (s1.burn_banded.input - decayed).abs() < 1e-9,
+        "the banded copy, the plan share, only decays: {:?}",
+        s1.burn_banded
+    );
+    assert_eq!((s1.burn_at, s1.last_input_tokens), (Some(62_000), 1_000));
+    let s2 = pins.iter().find(|p| p.session_id == "s2").unwrap();
+    assert_eq!(
+        (s2.burn.input, s2.burn_banded.input),
+        (1_000.0 / window, 1_000.0 / window),
+        "a standard renewal folds its tokens unweighed into both copies"
     );
 }
 

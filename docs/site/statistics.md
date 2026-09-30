@@ -88,15 +88,22 @@ failure or another error keeps the cadence. The other accounts keep theirs throu
 
 Every attempt is stamped with a cost estimate at list prices per million tokens: an estimate rather than a bill,
 since tier and batch modifiers are not known here and subscription quota is the rate-limit windows, never this
-number. The shipped price table is embedded in the binary and dated 2026-09-08; `stats.pricing_path` overrides it
+number. The shipped price table is embedded in the binary and dated 2026-09-30; `stats.pricing_path` overrides it
 with a file of the operator's own, and Settings shows the table in force with its version and its source. An
 attempt on a model the table does not price carries no cost estimate and is counted in
 `phoebis_pricing_unknown_model_total`.
+
+A model that serves fast mode carries a second set of five cells at the fast rates under the same date; an attempt
+whose answer reports `speed: fast` is priced at them, in dollars, as spend from usage credits, and one on a model
+without them at the standard cells.
 
 ## Plan meter
 
 A subscription account's plan-side figures read as a share of its own 5-hour window and of its 7-day window, a percent
 with the window named; an API-key account, and a subscription account in overage, read dollars.
+
+A fast answer draws no plan window: it adds nothing to the share, the prediction, the burn a shedding round ranks by, or
+the reconciliation, and reads as dollars wherever the account's other requests read as a share.
 
 The cost table (`crates/ledger/cost_table.yaml`) ships beside the price table: per window, model and token type, the
 share of a Max 5x subscription's window that one million tokens consume, each cell dated with the day it was measured or

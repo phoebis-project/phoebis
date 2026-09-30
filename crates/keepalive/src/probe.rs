@@ -923,12 +923,15 @@ mod tests {
             source: "test".into(),
             models: BTreeMap::from([(
                 "unlisted-model".to_string(),
-                phoebis_ledger::ModelPrice {
-                    input: 2.0,
-                    cache_write_5m: 2.5,
-                    cache_write_1h: 4.0,
-                    cache_read: 0.2,
-                    output: 10.0,
+                phoebis_ledger::ModelRow {
+                    standard: phoebis_ledger::ModelPrice {
+                        input: 2.0,
+                        cache_write_5m: 2.5,
+                        cache_write_1h: 4.0,
+                        cache_read: 0.2,
+                        output: 10.0,
+                    },
+                    fast: None,
                 },
             )]),
         }

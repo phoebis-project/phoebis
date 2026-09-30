@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import { api } from '@/api';
-import type { CostTable, ModelPrice, PlanModelCells, TierFactors } from '@/api/types';
+import type { CostTable, FastPrice, PlanModelCells, TierFactors } from '@/api/types';
 import { own } from '@/lib/analytics';
 import { fmtShare } from '@/lib/format';
 import { useAsync } from '@/lib/hooks';
@@ -50,23 +50,47 @@ const usd = (n: number) => `$${n.toFixed(2)}`;
  * the write's premium over plain input, divided by what each cached read saves
  * against sending the same token uncached.
  */
-const payoffTurns = (p: ModelPrice, write: number) => {
+const payoffTurns = (p: FastPrice, write: number) => {
   const saved = p.inputPerM - p.cacheReadPerM;
   return write > 0 && saved > 0 ? ((write - p.inputPerM) / saved).toFixed(1) : null;
 };
 /** Two decimals at most, trailing zeros dropped: 2.75x, 2.1x, 1.63x. */
 const multiple = (n: number) => `${Number(n.toFixed(2))}x`;
 
-const idleHour = (p: ModelPrice, write: number, probes: number) => (p.inputPerM > 0 && write > 0 ? multiple((write + probes * p.cacheReadPerM) / p.inputPerM) : null);
+const idleHour = (p: FastPrice, write: number, probes: number) => (p.inputPerM > 0 && write > 0 ? multiple((write + probes * p.cacheReadPerM) / p.inputPerM) : null);
 
 /** Idle minutes at which the probes a 5m entry needs have cost as much as one 1h write. */
-const payoffMinutes = (p: ModelPrice) => {
+const payoffMinutes = (p: FastPrice) => {
   if (!p.cacheWrite5mPerM || !p.cacheWrite1hPerM || p.cacheReadPerM <= 0) return null;
   const minutes = Math.round((4 * (p.cacheWrite1hPerM - p.cacheWrite5mPerM)) / p.cacheReadPerM);
   return minutes >= 60 ? 'never within 1h' : `${minutes} min`;
 };
 
 const dash = <span className="muted">-</span>;
+
+const FAST_MODE = 'What an answer served in fast mode costs, in dollars; a subscription upstream pays it from usage credits, not its window';
+
+/** One row of the dollar table: the five cells and what they make a kept-warm prefix cost. */
+function PriceRow({ cells, className, label }: { cells: FastPrice; className?: string; label: ReactNode }) {
+  const idle5m = idleHour(cells, cells.cacheWrite5mPerM, PROBES_PER_IDLE_HOUR);
+  const idle1h = idleHour(cells, cells.cacheWrite1hPerM, 1);
+  const payoff = payoffMinutes(cells);
+  return (
+    <tr className={className}>
+      {label}
+      <td className="right num">{usd(cells.inputPerM)}</td>
+      <td className="right num">{cells.cacheWrite5mPerM ? usd(cells.cacheWrite5mPerM) : dash}</td>
+      <td className="right num">{cells.cacheWrite1hPerM ? usd(cells.cacheWrite1hPerM) : dash}</td>
+      <td className="right num">{usd(cells.cacheReadPerM)}</td>
+      <td className="right num">{usd(cells.outputPerM)}</td>
+      <td className="right num cost-ref__sep">{payoffTurns(cells, cells.cacheWrite5mPerM) ?? dash}</td>
+      <td className="right num">{payoffTurns(cells, cells.cacheWrite1hPerM) ?? dash}</td>
+      <td className="right num cost-ref__sep">{idle5m ?? dash}</td>
+      <td className="right num">{idle1h ?? dash}</td>
+      <td className="right num">{payoff ?? dash}</td>
+    </tr>
+  );
+}
 
 /** The model's cells on a window, exact first and then undated, since the price table lists dated ids and the cost table ships undated. */
 const cellsOf = (table: CostTable, window: string, model: string): PlanModelCells | null => {
@@ -150,26 +174,23 @@ function PriceTable() {
           </thead>
           <tbody>
             {prices ? (
-              prices.map((p) => {
-                const idle5m = idleHour(p, p.cacheWrite5mPerM, PROBES_PER_IDLE_HOUR);
-                const idle1h = idleHour(p, p.cacheWrite1hPerM, 1);
-                const payoff = payoffMinutes(p);
-                return (
-                  <tr key={p.model}>
-                    <td className="mono">{p.model}</td>
-                    <td className="right num">{usd(p.inputPerM)}</td>
-                    <td className="right num">{p.cacheWrite5mPerM ? usd(p.cacheWrite5mPerM) : dash}</td>
-                    <td className="right num">{p.cacheWrite1hPerM ? usd(p.cacheWrite1hPerM) : dash}</td>
-                    <td className="right num">{usd(p.cacheReadPerM)}</td>
-                    <td className="right num">{usd(p.outputPerM)}</td>
-                    <td className="right num cost-ref__sep">{payoffTurns(p, p.cacheWrite5mPerM) ?? dash}</td>
-                    <td className="right num">{payoffTurns(p, p.cacheWrite1hPerM) ?? dash}</td>
-                    <td className="right num cost-ref__sep">{idle5m ?? dash}</td>
-                    <td className="right num">{idle1h ?? dash}</td>
-                    <td className="right num">{payoff ?? dash}</td>
-                  </tr>
-                );
-              })
+              prices.flatMap((p) => [
+                <PriceRow key={p.model} cells={p} label={<td className="mono">{p.model}</td>} />,
+                ...(p.fast
+                  ? [
+                      <PriceRow
+                        key={`${p.model} fast`}
+                        cells={p.fast}
+                        className="cost-ref__fast"
+                        label={
+                          <td className="muted" style={{ paddingLeft: 28 }} title={FAST_MODE}>
+                            fast mode
+                          </td>
+                        }
+                      />,
+                    ]
+                  : []),
+              ])
             ) : (
               <tr>
                 <td colSpan={11}>

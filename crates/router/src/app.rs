@@ -672,6 +672,7 @@ fn router_config(
         rates: phoebis_routing::BurnRates {
             dollars: prices.rate_table(),
             five_hour: tables.rate_table(phoebis_routing::FIVE_HOUR),
+            fast: prices.fast_rate_table(),
         },
         share: phoebis_routing::SharePricer::new(move |window, tier, model, usage, at| {
             let share = match window {
@@ -856,7 +857,15 @@ mod tests {
             "the share table, not the unit table's token count"
         );
         let (usd, _) = prices
-            .estimate("claude-sonnet-5", 1_000, 10_000, 100, 200, 500)
+            .estimate(
+                "claude-sonnet-5",
+                phoebis_ledger::Speed::Standard,
+                1_000,
+                10_000,
+                100,
+                200,
+                500,
+            )
             .unwrap();
         assert!(
             (config.rates.dollars.price("claude-sonnet-5", usage) - usd).abs() < 1e-12,

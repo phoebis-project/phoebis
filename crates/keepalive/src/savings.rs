@@ -5,7 +5,7 @@
 
 use std::collections::BTreeMap;
 
-use phoebis_ledger::{KeepaliveDelta, PlanTables, PriceTable, Record, Share, UNATTRIBUTED};
+use phoebis_ledger::{KeepaliveDelta, PlanTables, PriceTable, Record, Share, Speed, UNATTRIBUTED};
 use phoebis_routing::PinUsage;
 use phoebis_store::{BudgetRow, BudgetScope};
 
@@ -77,6 +77,7 @@ pub(crate) fn probe_cost(
         SavingsUnit::Usd => table
             .estimate(
                 canonical_model,
+                Speed::Standard,
                 usage.input,
                 usage.read,
                 five_minutes,

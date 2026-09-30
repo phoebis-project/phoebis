@@ -1864,6 +1864,42 @@ fn an_attempt_keeps_its_selection_trace_with_the_cache_read_folded_in() {
     assert_eq!(selection["cache_read"], 42);
 }
 
+#[test]
+fn a_fast_attempt_prices_at_the_fast_cells_beside_a_standard_one() {
+    let table = phoebis_ledger::PriceTable::shipped();
+    let attempt = |attempt: u32, speed: Option<&str>| AttemptRecord {
+        request_id: "r1".into(),
+        attempt,
+        input_tokens: Some(1_000_000),
+        output_tokens: Some(100_000),
+        speed: speed.map(String::from),
+        ..Default::default()
+    };
+    let mut attempts = vec![attempt(1, Some("fast")), attempt(2, None)];
+    let unknown = std::sync::atomic::AtomicU64::new(0);
+    let split = phoebis_ledger::price_attempts(&table, "claude-opus-5-5", &mut attempts, &unknown);
+    let priced = |a: &AttemptRecord| (a.estimated_usd, a.input_usd, a.output_usd);
+    // Opus 5.5 lists $8 input and $40 output per million at the fast cells, $4 and $20 at the standard ones.
+    assert_eq!(
+        priced(&attempts[0]),
+        (Some(12.0), Some(8.0), Some(4.0)),
+        "the answer that reported speed fast prices at the fast cells"
+    );
+    assert_eq!(
+        priced(&attempts[1]),
+        (Some(6.0), Some(4.0), Some(2.0)),
+        "the one that reported none at the standard cells"
+    );
+    assert_eq!(split.total(), 18.0);
+    assert_eq!(
+        (
+            attempts[0].pricing_version.as_deref(),
+            unknown.load(Ordering::SeqCst)
+        ),
+        (Some("2026-09-30"), 0)
+    );
+}
+
 /// The account's rewrite tokens over the whole table, for a test that checks the figure after each write.
 fn rewrite_tokens_of(db: &phoebis_ledger::LedgerDb, account_id: &str) -> u64 {
     db.read_blocking(|c| phoebis_ledger::read_account_rollups(c, 0, i64::MAX))

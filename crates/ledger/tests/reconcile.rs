@@ -79,6 +79,19 @@ fn opus_attempt(db: &LedgerDb, id: &str, completed: i64, input: u64) {
 /// One request on `account` whose single attempt completed at `completed` with `input` plain input tokens of
 /// `model`.
 fn attempt_on(db: &LedgerDb, account: &str, id: &str, model: &str, completed: i64, input: u64) {
+    attempt_served(db, account, id, model, completed, input, None);
+}
+
+/// `attempt_on` whose answer reported `speed`.
+fn attempt_served(
+    db: &LedgerDb,
+    account: &str,
+    id: &str,
+    model: &str,
+    completed: i64,
+    input: u64,
+    speed: Option<&str>,
+) {
     let started = completed - 30_000;
     db.insert_request(
         &RequestRecord {
@@ -103,6 +116,7 @@ fn attempt_on(db: &LedgerDb, account: &str, id: &str, model: &str, completed: i6
             outcome: "succeeded".into(),
             input_tokens: Some(input),
             output_tokens: Some(0),
+            speed: speed.map(String::from),
             ..Default::default()
         }],
         None,
@@ -626,6 +640,42 @@ fn an_attempt_on_a_model_the_cost_table_lacks_marks_the_window_unmeasured() {
         close(rows[0].ratio, 0.20 / opus_share(FIVE_HOUR)),
         "{}",
         rows[0].ratio
+    );
+}
+
+#[test]
+fn a_fast_attempt_adds_nothing_to_the_predicted_share() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    seed_request(&db, "seed", SATURDAY - MINUTE);
+    db.insert_samples(
+        &[
+            head("5h", SATURDAY, 0.10, STEADY_RESET),
+            head("5h", SATURDAY + 20 * MINUTE, 0.30, STEADY_RESET),
+        ],
+        None,
+    )
+    .unwrap();
+    opus_attempt(&db, "standard", SATURDAY + 5 * MINUTE, MILLION);
+    attempt_served(
+        &db,
+        "a",
+        "fast",
+        OPUS,
+        SATURDAY + 15 * MINUTE,
+        MILLION,
+        Some("fast"),
+    );
+    let rows = run(&db, Some(MAX_5X), STEADY_DONE);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        (rows[0].requests, rows[0].unmeasured),
+        (1, false),
+        "the standard attempt is predicted; the fast one draws usage credits and no window"
+    );
+    assert!(
+        close(rows[0].predicted_share, opus_share(FIVE_HOUR)),
+        "{}",
+        rows[0].predicted_share
     );
 }
 

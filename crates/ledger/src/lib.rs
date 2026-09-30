@@ -36,7 +36,7 @@ pub use pattern::{
 pub use plan::{
     Band, Cell, CostTable, Factor, ModelCells, PlanTables, Share, TierFactor, TierFactors,
 };
-pub use pricing::{price_attempts, ModelPrice, PriceTable, Pricing};
+pub use pricing::{price_attempts, ModelPrice, ModelRow, PriceTable, Pricing, Speed};
 pub use query::{
     apply_filter, breakdown, bucket_seconds, burn_rows, burn_series, burn_series_over, dashboard,
     group_of, hour_ceil, key_request_totals, latest_extra_usage, latest_quota, list_requests,

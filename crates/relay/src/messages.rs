@@ -2996,11 +2996,18 @@ impl Relay {
             Some(answer) => (Some(answer.usage), answer.response),
             None => (None, ResponseFacts::default()),
         };
+        let fast = facts.speed.as_deref() == Some("fast");
         if let Some(renewal) = renewal {
-            renewal.send((self.clock)(), head.status, usage.as_ref());
+            renewal.send((self.clock)(), head.status, usage.as_ref(), fast);
         }
         if let Some(affinity) = affinity {
-            affinity.send((self.clock)(), head.status, message_id, usage.as_ref());
+            affinity.send(
+                (self.clock)(),
+                head.status,
+                message_id,
+                usage.as_ref(),
+                fast,
+            );
         }
         let response = built(builder, Body::from(payload.clone()));
         // Not built through `self.answer`: that helper carries no relayed chunks for every other caller, but

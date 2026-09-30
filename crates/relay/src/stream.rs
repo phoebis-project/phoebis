@@ -123,7 +123,8 @@ impl Renewal {
         self.fresh && RELEASING_STATUSES.contains(&status)
     }
 
-    pub(crate) fn send(self, now: i64, status: u16, usage: Option<&Usage>) {
+    /// `fast` is whether the answer reported `usage.speed` `fast`.
+    pub(crate) fn send(self, now: i64, status: u16, usage: Option<&Usage>, fast: bool) {
         if self.releases(status) {
             let (incarnation, lifecycle_generation, credential_generation) = self.generations;
             self.router.report(Report::PinReleased {
@@ -143,6 +144,7 @@ impl Renewal {
             usage: usage.filter(|u| !u.is_empty()).map(pin_usage),
             origin: self.origin,
             cache_ttl_ms: self.cache_ttl_ms,
+            fast,
         });
     }
 }
@@ -183,6 +185,7 @@ impl AffinityFacts {
         status: u16,
         message_id: Option<String>,
         usage: Option<&Usage>,
+        fast: bool,
     ) {
         // A rejection continues no conversation, so it leaves no link to resolve a later request by.
         if status != 200 {
@@ -195,6 +198,7 @@ impl AffinityFacts {
                 canonical_model: self.canonical_model.clone(),
                 incarnation: self.incarnation,
                 usage: pin_usage(counted),
+                fast,
             });
         }
         let cached = |field: fn(&Usage) -> Option<u64>| usage.and_then(field).unwrap_or(0);
@@ -393,8 +397,9 @@ impl Publish {
             .first_content_at
             .map(|at| at - self.outcome.received_at);
         let usage = (!self.usage.is_empty()).then(|| self.usage.clone());
+        let fast = self.response.speed.as_deref() == Some("fast");
         if let Some(renewal) = self.renewal.take() {
-            renewal.send((self.clock)(), self.status, usage.as_ref());
+            renewal.send((self.clock)(), self.status, usage.as_ref(), fast);
         }
         if let Some(affinity) = self.affinity.take() {
             affinity.send(
@@ -402,6 +407,7 @@ impl Publish {
                 self.status,
                 self.message_id.clone(),
                 usage.as_ref(),
+                fast,
             );
         }
         self.trace

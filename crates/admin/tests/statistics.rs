@@ -756,6 +756,20 @@ async fn the_analytics_group_by_client_and_narrow_to_client_patterns() {
         0,
         "the request log reads the speeds filter"
     );
+    let served_standard = json(
+        get(
+            &parts.app,
+            "/admin/requests?speeds=standard&limit=500",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        served_standard["requests"].as_array().unwrap().len(),
+        6,
+        "an answer that named no speed lists under standard"
+    );
     let too_many_clients = get(
         &parts.app,
         &format!(

@@ -264,7 +264,7 @@ fn predicted(
     let mut stmt = conn.prepare(
         "SELECT r.canonical_model, a.input_tokens, a.cache_read_tokens, a.cache_write_5m_tokens, \
          a.cache_write_1h_tokens, a.output_tokens, a.estimated_usd, \
-         COALESCE(a.finished_at, r.finished_at, a.started_at) AS completed \
+         COALESCE(a.finished_at, r.finished_at, a.started_at) AS completed, a.speed \
          FROM attempts a JOIN requests r ON r.id = a.request_id \
          WHERE a.account_id = ?1 AND a.started_at > ?2 - ?4 AND a.started_at <= ?3 \
          AND completed > ?2 AND completed <= ?3 \
@@ -286,11 +286,17 @@ fn predicted(
             ],
             r.get::<_, Option<f64>>(6)?.unwrap_or(0.0),
             r.get::<_, i64>(7)?,
+            r.get::<_, Option<String>>(8)?,
         ))
     })?;
     let (mut share, mut requests, mut unmeasured) = (0.0, 0, false);
     for attempt in attempts {
-        let (model, [input, cache_read, write_5m, write_1h, output], usd, completed) = attempt?;
+        let (model, [input, cache_read, write_5m, write_1h, output], usd, completed, speed) =
+            attempt?;
+        // A fast answer draws usage credits and no window, so the meter's rise carries none of it.
+        if speed.as_deref() == Some("fast") {
+            continue;
+        }
         let mut point = BurnPoint::default();
         price_usage(
             &mut point,
@@ -306,6 +312,7 @@ fn predicted(
                 output_tokens: output,
                 estimated_usd: usd,
                 at: completed,
+                fast: false,
             },
         );
         let priced = if window == FIVE_HOUR {

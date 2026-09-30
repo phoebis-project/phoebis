@@ -1137,10 +1137,15 @@ export interface AlertEvent {
   subject: string;
 }
 
+/** A model's fast-mode cells, USD per million tokens, which an answer served fast is priced at. */
+export interface FastPrice { cacheReadPerM: number; cacheWrite1hPerM: number; cacheWrite5mPerM: number; inputPerM: number; outputPerM: number }
+
 export interface ModelPrice {
   cacheReadPerM: number;
   cacheWrite1hPerM: number;
   cacheWrite5mPerM: number;
+  /** The fast cells, null on a model that serves no fast mode. */
+  fast: FastPrice | null;
   inputPerM: number;
   model: string;
   outputPerM: number;
