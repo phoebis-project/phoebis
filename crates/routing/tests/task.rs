@@ -3131,6 +3131,34 @@ async fn an_enabled_credits_state_with_room_lifts_a_fast_credits_row_and_a_plan_
 }
 
 #[tokio::test]
+async fn a_restart_judges_fast_eligibility_on_the_credits_state_the_last_poll_read() {
+    let store = seeded_oauth(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    handle.report(credits_at(false, Some("out_of_credits"), None, 1_000));
+    wait_for(WRITTEN, || {
+        let credits = store.load_routing().unwrap().credits;
+        (!credits.is_empty()).then_some(credits)
+    })
+    .await;
+    handle.shutdown().await.unwrap();
+    now.store(2_000, Ordering::SeqCst);
+    let again = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let fast = SelectRequest {
+        fast: true,
+        lane: lane_key("claude-sonnet-5", "fast", "none", "-"),
+        ..request(&again, None, 2_000)
+    };
+    assert_eq!(
+        again.select(fast).await.unwrap().result,
+        SelectResult::Exhausted(Exhaustion::FastCredits {
+            reason: "out_of_credits".into()
+        }),
+        "before any poll, the restored state keeps a fast request off the account"
+    );
+}
+
+#[tokio::test]
 async fn a_credits_state_older_than_the_held_one_is_dropped() {
     let mut state = RoutingState::from_load(RoutingLoad::default());
     let reading = |enabled: bool, observed_at: i64| CreditsState {

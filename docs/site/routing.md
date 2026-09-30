@@ -669,8 +669,11 @@ none stands for the cooldown fallback (`routing.cooldown_fallback_seconds`) past
 re-read against the same rule.
 
 The poll's `extra_usage` state also decides fast eligibility: an upstream whose credits read disabled, name a reason,
-or stand at their limit serves no fast request until a later reading shows room. A request sent fast draws usage
-credits and no plan window, so neither `prefer_plan` nor `never` holds it off an upstream in overage.
+or stand at their limit serves no fast request until a later reading shows room. The newest reading per upstream is kept
+in the registry beside its windows and loaded at startup, so a restart judges fast requests on the credits the last poll
+read; it goes with the windows when the upstream is deleted, and an upstream created again under the same id starts with
+none. A request sent fast draws usage credits and no plan window, so neither `prefer_plan` nor `never` holds it off an
+upstream in overage.
 
 ## Subscription end
 

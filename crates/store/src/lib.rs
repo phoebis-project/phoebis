@@ -44,8 +44,8 @@ pub use registry::{
     ROTATION_GRACE_MS,
 };
 pub use routing::{
-    AffinityChain, AffinityRow, CooldownRow, OverageRow, PinBurn, PinKey, PinRow, RekeyWrite,
-    ResolutionRow, RoutingLoad, WindowRow,
+    AffinityChain, AffinityRow, CooldownRow, CreditsRow, OverageRow, PinBurn, PinKey, PinRow,
+    RekeyWrite, ResolutionRow, RoutingLoad, WindowRow,
 };
 
 // A poisoned store mutex means a prior panic happened while a write was in flight; the store's

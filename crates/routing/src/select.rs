@@ -495,8 +495,9 @@ pub fn release_reasons(
         });
     }
     if request.fast
-        && state
-            .credits(&pin.account_id)
+        && snapshot
+            .account(&pin.account_id)
+            .and_then(|account| state.credits_of(&pin.account_id, account.incarnation))
             .and_then(CreditsState::blocked)
             .is_some()
         && !reasons.contains(&FAST_CREDITS_REASON)
@@ -1408,7 +1409,7 @@ fn obstacle(
     }
     if fast {
         if let Some(reason) = state
-            .credits(&candidate.account_id)
+            .credits_of(&candidate.account_id, account.incarnation)
             .and_then(CreditsState::blocked)
         {
             return Some(Obstacle::Credits {

@@ -66,11 +66,12 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
     (34, V34),
     (35, V35),
     (36, V36),
+    (37, V37),
 ];
 
 /// The newest schema version this build knows how to read. `prepare` refuses a registry stamped past it
 /// rather than skip migrations it does not carry and misread the tables that follow.
-pub const SCHEMA_VERSION: u32 = 36;
+pub const SCHEMA_VERSION: u32 = 37;
 
 const V2: &str = r#"
 CREATE TABLE IF NOT EXISTS account_models (
@@ -545,3 +546,14 @@ ALTER TABLE api_keys ADD COLUMN auto_mode_server INTEGER;
 // before reads `''`, which adopts the lane of the next request that reads it.
 const V36: &str = "ALTER TABLE pins ADD COLUMN lane TEXT NOT NULL DEFAULT ''; \
 ALTER TABLE affinity ADD COLUMN lane TEXT NOT NULL DEFAULT '';";
+
+// The newest extra-usage state the poll read for an OAuth account, as the routing state last held it, so a restart
+// judges fast eligibility on the credits the last poll saw rather than admitting fast requests an account refuses.
+// Kept and dropped as the usage windows are: under the holder's incarnation, deleted with the account.
+const V37: &str = r#"
+CREATE TABLE usage_credits (
+  account_id TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+  enabled INTEGER NOT NULL, disabled_reason TEXT, utilization REAL, observed_at INTEGER NOT NULL,
+  incarnation INTEGER NOT NULL
+);
+"#;

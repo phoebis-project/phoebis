@@ -1746,6 +1746,54 @@ fn a_fast_rate_limit_answers_its_reset_only_where_it_is_the_candidates_one_block
 }
 
 #[test]
+fn an_api_key_account_that_took_a_credits_blocked_ids_place_never_inherits_the_block() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.record_credits("a", credits(false, Some("out_of_credits"), None, 500));
+    assert_eq!(
+        select(
+            &mut st,
+            &s,
+            &fast(request(&s, None, "claude-opus-5", true, &[], 1_000)),
+            &mut rng()
+        )
+        .0,
+        SelectResult::Exhausted(Exhaustion::FastCredits {
+            reason: "out_of_credits".into()
+        })
+    );
+    // The OAuth holder deleted and an api_key account created under its id, before any purge has run.
+    let mut load = load_of(
+        Pool {
+            members: vec![("a", 0)],
+            kinds: vec![("a", AccountKind::ApiKey)],
+            ..Pool::default()
+        },
+        &[],
+    );
+    for account in &mut load.accounts {
+        account.incarnation = 2;
+    }
+    let replaced = RegistrySnapshot::from_load(load, [0; 32], 0, 2);
+    assert_eq!(
+        picked(
+            &select(
+                &mut st,
+                &replaced,
+                &fast(request(&replaced, None, "claude-opus-5", true, &[], 2_000)),
+                &mut rng()
+            )
+            .0
+        ),
+        "a",
+        "the previous holder's credits say nothing about the account the id now names"
+    );
+}
+
+#[test]
 fn a_mixed_fast_credits_and_model_cooldown_set_answers_the_timed_exhaustion_as_before() {
     let s = snapshot(Pool {
         members: vec![("a", 0), ("b", 1)],

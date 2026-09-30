@@ -760,6 +760,9 @@ fn apply(store: &Store, batch: Vec<StateWrite>) -> Result<bool, Failed> {
             }
             StateWrite::UpsertAffinity(rows) => store.upsert_affinity(&rows)?,
             StateWrite::UpsertCooldown(row) => store.upsert_cooldown(&row)?,
+            StateWrite::UpsertCredits(row) => {
+                store.upsert_credits(&row)?;
+            }
             StateWrite::UpsertOverage(row) => {
                 store.upsert_overage(&row)?;
             }
@@ -1213,7 +1216,12 @@ impl Task {
                 state.incarnation = incarnation;
                 let observed_at = state.observed_at;
                 let room = state.blocked().is_none();
-                if !self.state.record_credits(&account_id, state) || !room {
+                let row = RoutingState::credits_row(&account_id, &state);
+                if !self.state.record_credits(&account_id, state) {
+                    return;
+                }
+                self.write(vec![StateWrite::UpsertCredits(row)]);
+                if !room {
                     return;
                 }
                 // Credits with room lift a refusal only when read after it: an earlier reading says nothing about

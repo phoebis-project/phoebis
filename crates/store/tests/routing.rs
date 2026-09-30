@@ -1,8 +1,8 @@
 use phoebis_routing::lane_key;
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, AffinityChain, AffinityRow, BudgetRow, BudgetScope,
-    CooldownRow, OverageRow, PinBurn, PinKey, PinRow, RekeyWrite, ResolutionRow, StorageKey, Store,
-    WindowRow,
+    CooldownRow, CreditsRow, OverageRow, PinBurn, PinKey, PinRow, RekeyWrite, ResolutionRow,
+    StorageKey, Store, WindowRow,
 };
 
 const SPELLING: &str = "claude-sonnet-4-5";
@@ -488,6 +488,105 @@ fn a_window_of_another_holder_of_the_id_is_never_written_loaded_or_kept() {
         store.load_routing().unwrap().windows.is_empty(),
         "the previous holder's row is never loaded"
     );
+    assert_eq!(store.purge_stale_windows().unwrap(), 1);
+    assert_eq!(
+        store.purge_stale_windows().unwrap(),
+        0,
+        "and the purge deleted it"
+    );
+}
+
+fn credits_row(enabled: bool, observed_at: i64, incarnation: u64) -> CreditsRow {
+    CreditsRow {
+        account_id: "a".into(),
+        incarnation,
+        enabled,
+        disabled_reason: (!enabled).then(|| "out_of_credits".to_string()),
+        utilization: enabled.then_some(0.2),
+        observed_at,
+    }
+}
+
+#[test]
+fn the_credits_state_survives_a_reopen_moves_only_forward_and_stays_with_its_holder() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("router.sqlite");
+    let storage_key = StorageKey::generate();
+    let blocked = credits_row(false, 1_000, 1);
+    {
+        let store = Store::open(&path, &storage_key).unwrap();
+        seed_accounts(&store, &["a"]);
+        assert!(store.upsert_credits(&blocked).unwrap());
+    }
+    let store = Store::open(&path, &storage_key).unwrap();
+    assert_eq!(
+        store.load_routing().unwrap().credits,
+        std::slice::from_ref(&blocked),
+        "the state reopens as written"
+    );
+    assert!(
+        !store.upsert_credits(&credits_row(true, 900, 1)).unwrap(),
+        "an older reading writes nothing"
+    );
+    let newer = credits_row(true, 2_000, 1);
+    assert!(store.upsert_credits(&newer).unwrap());
+    assert_eq!(
+        store.load_routing().unwrap().credits,
+        [newer],
+        "a newer reading replaces it"
+    );
+    store.delete_account("a", "test").unwrap();
+    seed_accounts(&store, &["a"]);
+    assert!(
+        store.load_routing().unwrap().credits.is_empty(),
+        "the state left with its account"
+    );
+    assert!(
+        !store.upsert_credits(&blocked).unwrap(),
+        "a write queued for the deleted holder lands nowhere"
+    );
+    drop(store);
+    // A row the replacement never wrote, as a write from before the incarnation fence would have left it.
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute(
+        "INSERT INTO usage_credits (account_id, enabled, disabled_reason, utilization, observed_at, incarnation) \
+         VALUES ('a', 0, 'out_of_credits', NULL, 5000, 1)",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+    let store = Store::open(&path, &storage_key).unwrap();
+    assert!(
+        store.load_routing().unwrap().credits.is_empty(),
+        "the previous holder's state is never loaded"
+    );
+    let replacement = credits_row(true, 3_000, 2);
+    assert!(
+        store.upsert_credits(&replacement).unwrap(),
+        "the replacement's own reading replaces a stale row, however new its date"
+    );
+    assert_eq!(store.load_routing().unwrap().credits, [replacement]);
+}
+
+#[test]
+fn the_purge_drops_a_credits_state_of_another_holder() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("router.sqlite");
+    let storage_key = StorageKey::generate();
+    let store = Store::open(&path, &storage_key).unwrap();
+    seed_accounts(&store, &["a"]);
+    store.delete_account("a", "test").unwrap();
+    seed_accounts(&store, &["a"]);
+    drop(store);
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute(
+        "INSERT INTO usage_credits (account_id, enabled, disabled_reason, utilization, observed_at, incarnation) \
+         VALUES ('a', 0, 'out_of_credits', NULL, 1000, 1)",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+    let store = Store::open(&path, &storage_key).unwrap();
     assert_eq!(store.purge_stale_windows().unwrap(), 1);
     assert_eq!(
         store.purge_stale_windows().unwrap(),

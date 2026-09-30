@@ -109,6 +109,18 @@ pub struct WindowRow {
     pub window: String,
 }
 
+/// The poll's newest extra-usage state of an OAuth account: what the fast eligibility reads.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CreditsRow {
+    pub account_id: String,
+    pub incarnation: u64,
+    pub enabled: bool,
+    pub disabled_reason: Option<String>,
+    /// A fraction of the monthly limit, as the plan windows read.
+    pub utilization: Option<f64>,
+    pub observed_at: i64,
+}
+
 /// A folded spelling and the dated id the API listed for it; the routing state keys that spelling's rows on
 /// the dated id from the moment the row exists, and the row is loaded before any request is served.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -226,6 +238,7 @@ fn affinity_of(r: &rusqlite::Row<'_>) -> rusqlite::Result<AffinityRow> {
 pub struct RoutingLoad {
     pub affinity: Vec<AffinityRow>,
     pub cooldowns: Vec<CooldownRow>,
+    pub credits: Vec<CreditsRow>,
     pub overage: Vec<OverageRow>,
     pub pins: Vec<PinRow>,
     pub resolutions: Vec<ResolutionRow>,
@@ -239,6 +252,12 @@ impl Store {
         let load = RoutingLoad {
             cooldowns: tx.prepare("SELECT account_id, scope, until, set_at, reason, window, source_request_id, incarnation FROM cooldowns ORDER BY account_id, scope")?
                 .query_map([], |r| Ok(CooldownRow { account_id: r.get(0)?, scope: r.get(1)?, until: r.get(2)?, set_at: r.get(3)?, reason: r.get(4)?, window: r.get(5)?, source_request_id: r.get(6)?, incarnation: r.get::<_, i64>(7)? as u64 }))?
+                .collect::<rusqlite::Result<Vec<_>>>()?,
+            // As with the windows, a previous holder's state is never loaded.
+            credits: tx.prepare("SELECT c.account_id, c.incarnation, c.enabled, c.disabled_reason, c.utilization, c.observed_at \
+                 FROM usage_credits c JOIN accounts ON accounts.id = c.account_id AND accounts.incarnation = c.incarnation \
+                 ORDER BY c.account_id")?
+                .query_map([], |r| Ok(CreditsRow { account_id: r.get(0)?, incarnation: r.get::<_, i64>(1)? as u64, enabled: r.get(2)?, disabled_reason: r.get(3)?, utilization: r.get(4)?, observed_at: r.get(5)? }))?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
             overage: tx.prepare("SELECT account_id, in_use, since, reset, observed_at, source, incarnation FROM overage_state ORDER BY account_id")?
                 .query_map([], |r| Ok(OverageRow { account_id: r.get(0)?, in_use: r.get(1)?, since: r.get(2)?, reset: r.get(3)?, observed_at: r.get(4)?, source: r.get(5)?, incarnation: r.get::<_, i64>(6)? as u64 }))?
@@ -378,14 +397,45 @@ impl Store {
         Ok(written > 0)
     }
 
-    /// Drops every row whose incarnation is not its account's; the router's purge tick calls it.
+    /// Written as `upsert_window` writes a window: only for the account's current incarnation, and only when
+    /// newer than the stored row or when that row is a previous holder's. Answers whether a row was written.
+    pub fn upsert_credits(&self, row: &CreditsRow) -> Result<bool, StoreError> {
+        let conn = self.conn.lock().expect(LOCK_POISONED);
+        let written = conn.execute(
+            "INSERT INTO usage_credits (account_id, enabled, disabled_reason, utilization, observed_at, incarnation) \
+             SELECT ?1, ?2, ?3, ?4, ?5, ?6 FROM accounts WHERE id = ?1 AND incarnation = ?6 \
+             ON CONFLICT(account_id) DO UPDATE SET enabled = excluded.enabled, \
+               disabled_reason = excluded.disabled_reason, utilization = excluded.utilization, \
+               observed_at = excluded.observed_at, incarnation = excluded.incarnation \
+             WHERE excluded.observed_at > usage_credits.observed_at \
+               OR excluded.incarnation <> usage_credits.incarnation",
+            params![
+                row.account_id,
+                row.enabled,
+                row.disabled_reason,
+                row.utilization,
+                row.observed_at,
+                row.incarnation as i64
+            ],
+        )?;
+        Ok(written > 0)
+    }
+
+    /// Drops every window and credits row whose incarnation is not its account's; the router's purge tick calls
+    /// it.
     pub fn purge_stale_windows(&self) -> Result<usize, StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
-        Ok(conn.execute(
+        let windows = conn.execute(
             "DELETE FROM usage_windows WHERE NOT EXISTS (SELECT 1 FROM accounts \
              WHERE accounts.id = usage_windows.account_id AND accounts.incarnation = usage_windows.incarnation)",
             [],
-        )?)
+        )?;
+        let credits = conn.execute(
+            "DELETE FROM usage_credits WHERE NOT EXISTS (SELECT 1 FROM accounts \
+             WHERE accounts.id = usage_credits.account_id AND accounts.incarnation = usage_credits.incarnation)",
+            [],
+        )?;
+        Ok(windows + credits)
     }
 
     /// All or nothing: a crash or a failed statement part way through would leave rows under the dated id with no
