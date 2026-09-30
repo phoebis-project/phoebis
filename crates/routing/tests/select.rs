@@ -1691,6 +1691,61 @@ fn the_local_answer_is_fast_credits_unavailable_with_the_pinned_accounts_reason_
 }
 
 #[test]
+fn a_fast_rate_limit_answers_its_reset_only_where_it_is_the_candidates_one_blocker() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let at = |now: i64| fast(request(&s, None, "claude-opus-5", true, &[], now));
+    st.record_cooldown(cooled("a", "fast", 5_000, "fast", FAST_RATE_LIMIT_REASON));
+    st.record_credits("a", credits(true, None, Some(0.4), 500));
+    assert_eq!(
+        select(&mut st, &s, &at(1_000), &mut rng()).0,
+        SelectResult::Exhausted(Exhaustion::FastLane { deadline: 5_000 }),
+        "with credits to draw, the rate limit is the one blocker and its reset the wait"
+    );
+    st.record_credits("a", credits(false, Some("org_level_disabled"), None, 1_500));
+    assert_eq!(
+        select(&mut st, &s, &at(2_000), &mut rng()).0,
+        SelectResult::Exhausted(Exhaustion::FastCredits {
+            reason: "org_level_disabled".into()
+        }),
+        "no wait for the fast reset clears the credits block beside it"
+    );
+
+    let budgeted = with_member_budget(&s, "a", Some(5.0), BudgetPeriod::Month);
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.record_cooldown(cooled("a", "fast", 5_000, "fast", FAST_RATE_LIMIT_REASON));
+    st.record_member_spend(
+        &budgeted,
+        vec![MemberSpend {
+            pool_id: "p".into(),
+            account_id: "a".into(),
+            period: BudgetPeriod::Month,
+            period_start: 0,
+            period_end: 50_000,
+            spent_usd: 5.0,
+            observed_at: 1_000,
+        }],
+    );
+    assert_eq!(
+        select(
+            &mut st,
+            &budgeted,
+            &fast(request(&budgeted, None, "claude-opus-5", true, &[], 2_000)),
+            &mut rng()
+        )
+        .0,
+        SelectResult::Exhausted(Exhaustion::Timed {
+            deadline: 50_000,
+            window: "overage".into(),
+        }),
+        "nor a budget at its limit, whose period's end is the wait"
+    );
+}
+
+#[test]
 fn a_mixed_fast_credits_and_model_cooldown_set_answers_the_timed_exhaustion_as_before() {
     let s = snapshot(Pool {
         members: vec![("a", 0), ("b", 1)],

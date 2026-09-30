@@ -1,8 +1,8 @@
 //! One selection: the spec's seven steps over the snapshot and the routing state.
 
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, AffinityMode, OveragePolicy, PinBurn, PinKey, PinRow,
-    PoolRow, SessionPlacement, Strategy, SubagentPlacement, WarmSessions,
+    AccountKind, AccountRow, AccountState, AffinityMode, CooldownRow, OveragePolicy, PinBurn,
+    PinKey, PinRow, PoolRow, SessionPlacement, Strategy, SubagentPlacement, WarmSessions,
 };
 use rand::{Rng, RngExt};
 
@@ -1393,12 +1393,18 @@ fn obstacle(
     {
         return Some(Obstacle::Ended);
     }
-    if let Some(cooldown) = state.blocking_cooldown(&candidate.account_id, model, now, fast) {
-        return Some(Obstacle::Cooldown {
-            reason: cooldown.reason.clone(),
-            until: cooldown.until,
-            window: cooldown.window.clone(),
-        });
+    let cooldown = |row: &CooldownRow| Obstacle::Cooldown {
+        reason: row.reason.clone(),
+        until: row.until,
+        window: row.window.clone(),
+    };
+    let blocking = state.blocking_cooldown(&candidate.account_id, model, now, fast);
+    // A fast rate limit dates the fast lane alone: where the account's credits or its budget block the request
+    // too, that blocker answers, since the fast reset would pass with the request still refused.
+    let fast_limited =
+        blocking.filter(|row| row.scope == "fast" && row.reason == FAST_RATE_LIMIT_REASON);
+    if let Some(row) = blocking.filter(|_| fast_limited.is_none()) {
+        return Some(cooldown(row));
     }
     if fast {
         if let Some(reason) = state
@@ -1412,6 +1418,9 @@ fn obstacle(
     }
     if let Some(until) = budget_exhausted(state, snapshot, &pool.id, &candidate.account_id, now) {
         return Some(Obstacle::Budget { until });
+    }
+    if let Some(row) = fast_limited {
+        return Some(cooldown(row));
     }
     // Plan overage is a plan window's state, which a fast request does not draw.
     if !fast && pool.overage_policy == OveragePolicy::Never {
@@ -1841,8 +1850,9 @@ fn choose<'a>(
 
 /// The answer for a request nothing can serve, the pinned account's obstacle first when it has one. A fast rate
 /// limit anywhere answers the earliest fast reset, since the client waits for the fast lane rather than for a
-/// window it does not draw; a set whose every timed obstacle is a credits block answers the first one's reason,
-/// which no wait clears before the poll reads credits again.
+/// window it does not draw (`obstacle` names one only where it is the account's one blocker); a set whose every
+/// timed obstacle is a credits block answers the first one's reason, which no wait clears before the poll reads
+/// credits again.
 fn exhaustion_of(obstacles: Vec<Obstacle>) -> Exhaustion {
     let fast_reset = obstacles
         .iter()
