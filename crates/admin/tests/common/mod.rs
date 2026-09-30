@@ -1056,7 +1056,7 @@ async fn fake_control_plane(upstream_uuid: &str) -> FakeUpstream {
         ),
         json_rule(
             "/v1/models",
-            br#"{"data":[{"id":"claude-sonnet-4-5","type":"model"}]}"#.to_vec(),
+            br#"{"data":[{"id":"claude-sonnet-4-5","type":"model","capabilities":{"effort":{"low":{"supported":true},"medium":{"supported":true},"high":{"supported":true}}}}]}"#.to_vec(),
         ),
         json_rule(
             "/v1/oauth/token",

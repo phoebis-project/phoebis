@@ -63,7 +63,7 @@ export function CatalogDialog({ accountId, label, now, onClose, open }: { accoun
       open={open}
       onClose={onClose}
       title={`Catalog of ${label}`}
-      width={760}
+      width={960}
       footer={
         <Button variant="primary" onClick={onClose}>
           Close
@@ -96,6 +96,7 @@ export function CatalogDialog({ accountId, label, now, onClose, open }: { accoun
                 <th>Released</th>
                 <th className="right">Input tokens</th>
                 <th className="right">Output tokens</th>
+                <th>Effort levels</th>
               </tr>
             </thead>
             <tbody>
@@ -114,6 +115,7 @@ export function CatalogDialog({ accountId, label, now, onClose, open }: { accoun
                   <td className="num">{released(m.createdAt)}</td>
                   <td className="right num">{tokens(m.maxInputTokens)}</td>
                   <td className="right num">{tokens(m.maxTokens)}</td>
+                  <td className="catalog__levels">{m.effortLevels.length ? m.effortLevels.join(', ') : '-'}</td>
                 </tr>
               ))}
             </tbody>

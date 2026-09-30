@@ -419,13 +419,34 @@ expect('/quota', m.text(), ['7 credentials', '7 loaded', '3 need attention', 'Re
   });
   results.push({
     name: '/quota a card whose fast lane cools carries a serious chip naming the reason and the lift, the time on hover',
-    ok: /^Fast moderate limited, until in 1[12]m$/.test(chip?.textContent?.trim() ?? '') && chip.classList.contains('chip--serious') && Boolean(chip.getAttribute('title')),
+    ok: /^Fast moderate limited, lifts in 1[12]m$/.test(chip?.textContent?.trim() ?? '') && chip.classList.contains('chip--serious') && Boolean(chip.getAttribute('title')),
     missing: [chip ? `${chip.textContent?.trim()} | ${chip.className} | ${chip.getAttribute('title')}` : 'no chip on business'],
   });
   const mail = cardOf('mail');
   results.push({ name: '/quota a card whose upstream never answered a fast request draws no Fast mode line', ok: mail !== undefined && mail.querySelector('.fast-lane') === null && !(mail.textContent ?? '').includes('Fast mode'), missing: [mail?.textContent?.slice(0, 160) ?? 'no mail card'] });
 }
 m.unmount();
+
+// The router holds the fast pair in memory until the next fast answer, and its buckets reset within minutes, so a
+// reading past its reset reads as refilled rather than as the share the last answer reported.
+{
+  const { listAccounts } = api;
+  const past = new Date(Date.now() - 2 * 3_600_000).toISOString();
+  const soon = new Date(Date.now() + 5 * 60_000).toISOString();
+  api.listAccounts = async () =>
+    (await listAccounts.call(api)).map((a) =>
+      a.id === 'business' ? { ...a, fastLane: { input: { ...a.fastLane.input, resetsAt: past }, output: { ...a.fastLane.output, resetsAt: past } } } : a.id === 'console' ? { ...a, fastLane: { input: { ...a.fastLane.input, resetsAt: past }, output: { ...a.fastLane.output, resetsAt: soon } } } : a,
+    );
+  const stale = await mount('/quota');
+  const lineOf = (label) => [...stale.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === label)?.querySelector('.fast-lane__line')?.textContent?.trim() ?? '';
+  results.push({
+    name: '/quota a fast lane reading past its reset reads refilled, and a lane past both says when it refilled',
+    ok: /^Fast modeinput 0% used, output 0% used, refilled 2h 0m ago$/.test(lineOf('business')) && /^Fast modeinput 0% used, output 5% used, resets in [45]m$/.test(lineOf('Console workspace')),
+    missing: [lineOf('business') || 'no line on business', lineOf('Console workspace') || 'no line on the Console workspace'],
+  });
+  api.listAccounts = listAccounts;
+  stale.unmount();
+}
 
 // The route answers no error beside windows, but a read of it that failed does; the card draws what it holds.
 {
@@ -473,7 +494,7 @@ await emailLines('/upstreams/business the head reads the email under the name', 
   const chip = cardOf('Usage')?.querySelector('.fast-lane__cooldown');
   results.push({
     name: '/upstreams/business the Usage card reads the fast lane line and its cooldown chip',
-    ok: /^Fast modeinput 100% used, output 64% used, resets in 1[12]m$/.test(line) && /^Fast moderate limited, until in 1[12]m$/.test(chip?.textContent?.trim() ?? '') && chip.classList.contains('chip--serious'),
+    ok: /^Fast modeinput 100% used, output 64% used, resets in 1[12]m$/.test(line) && /^Fast moderate limited, lifts in 1[12]m$/.test(chip?.textContent?.trim() ?? '') && chip.classList.contains('chip--serious'),
     missing: [line || 'no line', chip?.textContent?.trim() ?? 'no chip'],
   });
   const scopes = [...(cardOf('Cooling down')?.querySelectorAll('tbody tr') ?? [])].map((tr) => `${tr.children[0]?.textContent?.trim()} | ${tr.children[1]?.textContent?.trim()}`);
@@ -482,20 +503,21 @@ await emailLines('/upstreams/business the head reads the email under the name', 
   results.push({ name: "/upstreams/business the header's cooldown badge reads the model row, never the fast lane's", ok: /^cooldown ends in 5[34]m$/.test(badge ?? ''), missing: [badge ?? 'no cooldown badge'] });
 }
 {
-  // The router answers an upstream cooling on its fast lane alone as ready (the decoder's rule, which its unit test
-  // holds), so the page draws it that way: no cooldown badge, the fast row still listed and chipped.
-  const { listAccounts } = api;
-  api.listAccounts = async () => (await listAccounts.call(api)).map((a) => (a.id === 'business' ? { ...a, cooldowns: a.cooldowns.filter((c) => c.scope === 'fast'), status: 'ready' } : a));
+  // Clearing business's other rows leaves its fast row alone, and the mock's clear derives the status by the
+  // router's rule (a fast row cools no upstream), so the Ready badge is the rule's answer, not a value set here.
+  const story = (await api.listAccounts()).find((a) => a.id === 'business');
+  for (const c of story.cooldowns.filter((c) => c.scope !== 'fast')) await api.clearCooldown('business', c.scope);
   const alone = await mount('/upstreams/business');
   const badges = [...alone.container.querySelectorAll('.detail__badges .badge')].map((b) => b.textContent?.trim() ?? '');
   const t = alone.text();
   results.push({
     name: '/upstreams an upstream cooling on its fast lane alone reads ready with no cooldown badge, its fast row still listed',
-    ok: badges[0] === 'Ready' && !badges.some((b) => b.startsWith('cooldown ends')) && t.includes('1 scope cooling') && t.includes('Fast mode') && alone.container.querySelector('.fast-lane__cooldown') !== null,
-    missing: badges,
+    ok: story.status === 'cooldown' && badges[0] === 'Ready' && !badges.some((b) => b.startsWith('cooldown ends')) && t.includes('1 scope cooling') && t.includes('Fast mode') && alone.container.querySelector('.fast-lane__cooldown') !== null,
+    missing: [story.status, ...badges],
   });
-  api.listAccounts = listAccounts;
   alone.unmount();
+  // The checks after this one read the story's business with its model row, so the cleared rows go back.
+  api.putAccount(story);
 }
 {
   const head = m.container.querySelector('.detail__head');
@@ -783,10 +805,19 @@ expect('/upstreams/personal', m.text(), ['in use', 'Clear funding flag', 'Paymen
   const ids = [...(listed?.querySelectorAll('tbody tr') ?? [])].map((tr) => tr.querySelector('td')?.firstChild?.textContent ?? '');
   expect('/upstreams/business the catalog popup lists the live catalog', listed?.textContent ?? '', ['As of', 'Refresh', 'claude-sonnet-5', 'Claude Sonnet 5', 'long context', '1,000,000', '128,000']);
   results.push({
-    name: '/upstreams/business the catalog popup reads five columns, sorted by id',
-    ok: JSON.stringify(heads) === JSON.stringify(['Model', 'Name', 'Released', 'Input tokens', 'Output tokens']) && ids.length > 1 && ids.every((id, i) => i === 0 || ids[i - 1].localeCompare(id) <= 0),
+    name: '/upstreams/business the catalog popup reads six columns, sorted by id',
+    ok: JSON.stringify(heads) === JSON.stringify(['Model', 'Name', 'Released', 'Input tokens', 'Output tokens', 'Effort levels']) && ids.length > 1 && ids.every((id, i) => i === 0 || ids[i - 1].localeCompare(id) <= 0),
     missing: [...heads, ...ids],
   });
+  {
+    const effort = (id) => [...(listed?.querySelectorAll('tbody tr') ?? [])].find((tr) => tr.querySelector('td')?.firstChild?.textContent === id)?.lastElementChild?.textContent?.trim() ?? null;
+    const read = { haiku: effort('claude-haiku-4-5-20251001'), opus: effort('claude-opus-5') };
+    results.push({
+      name: '/upstreams/business the catalog popup ends each row with the effort levels it lists, a dash for none',
+      ok: read.haiku === '-' && read.opus === 'low, medium, high, xhigh, max',
+      missing: [JSON.stringify(read)],
+    });
+  }
   [...(listed?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Refresh')?.click();
   await m.settle(400);
   delete api.getAccountCatalog;
@@ -3255,6 +3286,23 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
   const keys = legendOf('Spend per minute');
   results.push({ name: '/analytics the key grouping charts each key in dollars and draws no plan share', ok: keys.includes('desktop') && keys.includes('laptop') && card('Plan per hour') === undefined, missing: keys });
   await burnGroup('Upstream');
+  {
+    // Past the seven lines a chart draws, subscription upstreams fold into one plan line; its fast-mode dollars
+    // are no one upstream's, and a line labelled plan has no place on a dollars chart.
+    const at = new Date(Date.now() - 3_600_000).toISOString();
+    api.getAnalyticsBurn = async () => ({ bucketSeconds: 3_600, points: Array.from({ length: 9 }, (_, i) => ({ at, cachedTokens: 0, fiveHourShare: 0.01, fiveHourUnmeasured: false, group: `plan-${i}`, sevenDayShare: 0.001, sevenDayUnmeasured: false, uncachedTokens: 1_000 * (9 - i), unit: 'window_share', usd: 0.5 })) });
+    await burnGroup('Key');
+    await burnGroup('Upstream');
+    const folded = legendOf('Spend per minute');
+    delete api.getAnalyticsBurn;
+    await burnGroup('Key');
+    await burnGroup('Upstream');
+    results.push({
+      name: '/analytics spend per minute under the upstream grouping draws the upstreams that spent dollars and no folded plan line',
+      ok: folded.length === 7 && folded.every((t) => t.startsWith('plan-')),
+      missing: folded,
+    });
+  }
 
   // Placements by rung sit in the Cache section, each budgeted member's spend in the Burn section.
   const tableOf = (t) => ({

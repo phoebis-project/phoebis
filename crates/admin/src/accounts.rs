@@ -328,6 +328,7 @@ pub(crate) async fn catalog(
             "created_at": m.created_at,
             "max_input_tokens": m.max_input_tokens,
             "max_tokens": m.max_tokens,
+            "effort_levels": m.effort_levels,
         })).collect::<Vec<_>>(),
         "fetched_at": fetched.fetched_at,
         "error": fetched.error,

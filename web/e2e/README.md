@@ -10,10 +10,10 @@ caching controls, the select-below threshold, the routing cards, the compatibili
 upstream button, the upstream lines, the alert rule dialog, the remaining cards, the error state, the cost-cap rows, the
 live feed, the wasted-probe rows, the burn cards, the placement and budget tables, the speed
 filter, the traffic cards, the fast lane, the request drawer, which opens once the request list's shot is taken, the
-subscription end editor, the key dialog's cap field and selects, the cost reference, the agent lines, the fork badge's
-face, the fork link, which is followed once the session list's shot is taken). A check that opens an editor, a
-dialog or a row closes it again before the view's shot. The script exits non-zero with the list of failures when any of
-that does not hold.
+subscription end editor, the catalog popup, the key dialog's cap field and selects, the cost reference, the agent lines,
+the fork badge's face, the fork link, which is followed once the session list's shot is taken). A check that opens
+an editor, a dialog or a row closes it again before the view's shot. The script exits non-zero with the list of failures
+when any of that does not hold.
 
 The screenshot directory has to lie outside the repository, which the script enforces against every worktree `git
 worktree list` reports, and against the tree holding the nearest `Cargo.toml` when git cannot answer.
@@ -45,14 +45,15 @@ npx playwright install chromium
 PHOEBIS_SCREENSHOT_DIR=/tmp/phoebis-mock-shots npm run e2e:mock
 ```
 
-`e2e:mock` builds the console with the fixture-backed mock into `dist-mock/` (`npm run build:mock`), serves that
-bundle from a static server on a loopback port, and runs `mock-pass.mjs`, which drives `views.mjs` against it with
-the mock's admin secret and the clock pinned at `2026-09-16T14:30:00Z`, the weekday afternoon the smoke run pins.
-The mock's random draws are seeded, so two runs write the same screenshots byte for byte, which `diff -r` over the
-two directories shows. The dashboard's remaining cards and its empty state are checked against the router's seeded
-registry alone (`PHOEBIS_E2E_MOCK=1` skips them), since the mock's story has subscription upstreams and no empty list on
-the dashboard. The subscription end editor needs the story's OAuth upstream, so against the router's seed that part
-stands down.
+`e2e:mock` builds the console with the fixture-backed mock into `dist-mock/` (`npm run build:mock`), serves that bundle
+from a static server on a loopback port, and runs `mock-pass.mjs`, which drives `views.mjs` against it with the mock's
+admin secret and the clock pinned at `2026-09-16T14:30:00Z`, the weekday afternoon the smoke run pins. The mock's random
+draws are seeded, so two runs write the same screenshots byte for byte, which `diff -r` over the two directories shows.
+Beside the views' shots it writes the open catalog popup's as `<theme>/upstreams-catalog.png`; the router's pass writes
+one shot per view, which its test counts. The dashboard's remaining cards and its empty state are checked against the
+router's seeded registry alone (`PHOEBIS_E2E_MOCK=1` skips them), since the mock's story has subscription upstreams and no
+empty list on the dashboard. The subscription end editor needs the story's OAuth upstream, so against the router's seed
+that part stands down.
 
 ## On a host without Chromium
 

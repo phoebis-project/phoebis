@@ -120,6 +120,8 @@ export interface PairingPreview {
 export interface CatalogModel {
   createdAt: string;
   displayName: string;
+  /** The effort levels the listing says the model supports, in the API's order; empty when it names none. */
+  effortLevels: string[];
   id: string;
   maxInputTokens: number | null;
   maxTokens: number | null;

@@ -176,7 +176,7 @@ export function planLabel(tier: string): string {
 
 export function decodeCatalogModel(v: unknown): CatalogModel {
   const m = rec(v);
-  return { createdAt: str(m.created_at), displayName: str(m.display_name), id: str(m.id), maxInputTokens: numOrNull(m.max_input_tokens), maxTokens: numOrNull(m.max_tokens) };
+  return { createdAt: str(m.created_at), displayName: str(m.display_name), effortLevels: strings(m.effort_levels), id: str(m.id), maxInputTokens: numOrNull(m.max_input_tokens), maxTokens: numOrNull(m.max_tokens) };
 }
 
 export function decodeAccountCatalog(v: unknown): AccountCatalog {

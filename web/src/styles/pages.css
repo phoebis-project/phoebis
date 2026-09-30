@@ -1095,6 +1095,22 @@
   border-top: 1px solid var(--hairline);
 }
 
+/* Text that wraps rather than a chip: both shares and the reset run past a pill's width on a quota card. */
+.fast-lane__line {
+  font-size: 12.5px;
+}
+
+.fast-lane__label {
+  margin-right: 6px;
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+
+/* A model's levels read as one list; the id and the name beside them wrap first. */
+.catalog__levels {
+  white-space: nowrap;
+}
+
 .req-totals {
   display: grid;
   grid-template-columns: repeat(3, 1fr);

@@ -29,11 +29,12 @@ the dated id from the stored mapping even before the listings arrive, and only a
 unreachable at startup runs requests under the spelling, until the listing arrives. A listing that later lacks the dated
 entry never takes a resolution back.
 
-The listings are refreshed every `routing.catalog_refresh_seconds` (six hours by default), once more within a minute
-of an upstream answering under a different snapshot than the router resolved (the alias moved), and on demand from
-the Upstreams view's catalog popup and `GET /admin/accounts/{id}/catalog?refresh=1`. A refresh that finds a newer
-snapshot for a spelling names the next requests by it; the pins and cooldowns already keyed on the previous dated id
-stay where they are, since a snapshot is a model of its own, and the stored mapping is updated in the same transaction.
+The listings are refreshed every `routing.catalog_refresh_seconds` (six hours by default), once more within a minute of
+an upstream answering under a different snapshot than the router resolved (the alias moved), and on demand from the
+Upstreams view's catalog popup and `GET /admin/accounts/{id}/catalog?refresh=1`. The popup lists the effort levels each
+model reports supporting, when the listing names them. A refresh that finds a newer snapshot for a spelling names the
+next requests by it; the pins and cooldowns already keyed on the previous dated id stay where they are, since a snapshot
+is a model of its own, and the stored mapping is updated in the same transaction.
 
 ## Pools
 

@@ -945,10 +945,46 @@ fn parse_models(body: &[u8]) -> Result<Discovered, DiscoveryError> {
                 created_at,
                 max_input_tokens,
                 max_tokens,
+                effort_levels: effort_levels(entry),
             })
         })
         .collect();
     Ok(Discovered { models })
+}
+
+/// The API's own effort order, which a row's levels are shown in; a name outside it follows, as listed.
+const EFFORT_ORDER: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
+
+/// The effort levels a listing row says its model supports. The inner shape of `capabilities` is unrecorded, so
+/// an object of levels (each kept unless its `supported` is other than true) and an array of names both read, and
+/// any other shape reads as none rather than failing the row.
+fn effort_levels(entry: &serde_json::Value) -> Vec<String> {
+    let listed: Vec<&str> = match entry.get("capabilities").and_then(|c| c.get("effort")) {
+        Some(serde_json::Value::Object(levels)) => levels
+            .iter()
+            .filter(|(_, level)| {
+                level
+                    .get("supported")
+                    .is_none_or(|supported| supported.as_bool() == Some(true))
+            })
+            .map(|(name, _)| name.as_str())
+            .collect(),
+        Some(serde_json::Value::Array(levels)) => {
+            levels.iter().filter_map(|level| level.as_str()).collect()
+        }
+        _ => Vec::new(),
+    };
+    let mut out: Vec<String> = EFFORT_ORDER
+        .iter()
+        .filter(|level| listed.contains(level))
+        .map(|level| level.to_string())
+        .collect();
+    for level in listed {
+        if !out.iter().any(|kept| kept == level) {
+            out.push(level.to_string());
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -962,7 +998,47 @@ mod tests {
             created_at: String::new(),
             max_input_tokens: None,
             max_tokens: None,
+            effort_levels: Vec::new(),
         }
+    }
+
+    #[test]
+    fn the_effort_levels_read_from_a_capabilities_object_or_array_and_an_unknown_shape_reads_none()
+    {
+        let body = serde_json::json!({ "data": [
+            { "id": "object", "capabilities": { "effort": {
+                "low": { "supported": true },
+                "medium": { "supported": true },
+                "max": { "supported": false },
+            } } },
+            { "id": "array", "capabilities": { "effort": ["high", "low"] } },
+            { "id": "unknown", "capabilities": { "effort": "all" } },
+            { "id": "absent" },
+            { "id": "others", "capabilities": { "effort": {
+                "turbo": {},
+                "max": {},
+                "eco": { "supported": true },
+                "low": { "supported": true },
+            } } },
+        ] });
+        let models = parse_models(body.to_string().as_bytes()).unwrap().models;
+        assert_eq!(models.len(), 5, "no shape of capabilities drops its row");
+        let levels = |id: &str| {
+            models
+                .iter()
+                .find(|m| m.id == id)
+                .map(|m| m.effort_levels.clone())
+                .unwrap()
+        };
+        assert_eq!(levels("object"), vec!["low", "medium"]);
+        assert_eq!(levels("array"), vec!["low", "high"]);
+        assert!(levels("unknown").is_empty());
+        assert!(levels("absent").is_empty());
+        assert_eq!(
+            levels("others"),
+            vec!["low", "max", "turbo", "eco"],
+            "the API's levels first, an absent supported keeps its level, other names as listed"
+        );
     }
 
     #[test]

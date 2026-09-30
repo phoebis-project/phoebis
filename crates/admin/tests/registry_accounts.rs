@@ -465,6 +465,42 @@ async fn the_catalog_route_answers_the_live_list_caches_it_and_refreshes_on_dema
 }
 
 #[tokio::test]
+async fn the_catalog_route_answers_the_effort_levels_a_row_lists_and_an_empty_list_without() {
+    let (app, up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    let listed = json(get(&app, "/admin/accounts/direct/catalog", Some(&cookie)).await).await;
+    assert_eq!(listed["models"][0]["id"], "claude-sonnet-4-5");
+    assert_eq!(
+        listed["models"][0]["effort_levels"],
+        serde_json::json!(["low", "medium", "high"])
+    );
+
+    up.set_rule_after(
+        0,
+        "/v1/models",
+        Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: br#"{"data":[{"id":"claude-sonnet-4-5","type":"model"}]}"#.to_vec(),
+        },
+    );
+    let refreshed = json(
+        get(
+            &app,
+            "/admin/accounts/direct/catalog?refresh=1",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        refreshed["models"][0]["effort_levels"],
+        serde_json::json!([]),
+        "a listing that names no levels answers an empty list, never null"
+    );
+}
+
+#[tokio::test]
 async fn cooldowns_and_funding_are_cleared_by_an_operator_and_shown_on_the_account() {
     let (app, _up, store, router) = common::admin_parts().await;
     let cookie = login(&app, "admin-secret").await;

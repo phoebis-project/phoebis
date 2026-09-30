@@ -140,8 +140,11 @@ function usageFor(model: string, kind: RequestKind): Usage {
   };
 }
 
-export function costSplitOf(model: string, u: Usage): CostSplit {
-  const p = priceFor(model);
+/** An answer served fast prices at the model's fast cells, and at its standard cells when it has none, as the ledger
+ *  prices it. */
+export function costSplitOf(model: string, u: Usage, fast = false): CostSplit {
+  const standard = priceFor(model);
+  const p = fast ? (standard.fast ?? standard) : standard;
   return {
     cacheRead: (u.cacheRead * p.cacheReadPerM) / 1_000_000,
     cacheWrite: (u.cacheWrite5m * p.cacheWrite5mPerM + u.cacheWrite1h * p.cacheWrite1hPerM) / 1_000_000,
@@ -150,8 +153,8 @@ export function costSplitOf(model: string, u: Usage): CostSplit {
   };
 }
 
-export function costOf(model: string, u: Usage): number {
-  const c = costSplitOf(model, u);
+export function costOf(model: string, u: Usage, fast = false): number {
+  const c = costSplitOf(model, u, fast);
   return c.input + c.cacheRead + c.cacheWrite + c.output;
 }
 
@@ -402,6 +405,7 @@ function buildRequests(): RequestLog[] {
     if (!fastTurn(r.keyId, r.model, r.kind)) continue;
     r.shape = { ...r.shape, requestedSpeed: 'fast' };
     r.attempts = r.attempts.map((a, i, all) => (i === all.length - 1 ? { ...a, response: { ...a.response, speed: 'fast' } } : a));
+    r.costUsd = Math.round(costOf(r.model, r.usage, true) * 10_000) / 10_000;
   }
   return rows;
 }
@@ -754,7 +758,7 @@ function rollups(): HourlyRollup[] {
       expiredBetweenTurns: okRows.filter((r) => r.usage.cacheRead === 0 && r.attempts[r.attempts.length - 1].cacheMissReason === 'none').length,
       uncached: okRows.filter((r) => r.usage.cacheRead === 0 && r.usage.cacheWrite5m + r.usage.cacheWrite1h === 0).length,
       costUsd: list.reduce((s, r) => s + r.costUsd, 0),
-      cost: sumSplit(list.map((r) => costSplitOf(r.model, r.usage))),
+      cost: sumSplit(list.map((r) => costSplitOf(r.model, r.usage, r.attempts[r.attempts.length - 1]?.response.speed === 'fast'))),
       histograms: histogramsOf(list),
       keptWarm: { requests: kept.length, tokens: kept.reduce((s, r) => s + r.usage.cacheRead, 0) },
       probes: isProbe ? { ok: okRows.length, failed: list.length - okRows.length, skipped: h.int(0, 2) } : { ok: 0, failed: 0, skipped: 0 },
@@ -861,6 +865,7 @@ function historicalRollups(): HourlyRollup[] {
       // the edge of the synthesized month, where a range bound would cut it.
       const takesMaxEffort = lane.keyId === 'laptop' && maxEffortOwed && t >= startOfHour(NOW) - 6 * DAY;
       if (takesMaxEffort) maxEffortOwed = false;
+      const fast = fastTurn(lane.keyId, model, 'inference') && hf.chance(0.5);
       const inference: HourlyRollup = {
         hour: iso(t),
         client: CLIENTS[lane.keyId] ?? '-',
@@ -873,7 +878,7 @@ function historicalRollups(): HourlyRollup[] {
         model,
         requestClass: classOfHour(`${t}|${lane.keyId}|${sessionId}`),
         sessionId,
-        speed: fastTurn(lane.keyId, model, 'inference') && hf.chance(0.5) ? 'fast' : 'standard',
+        speed: fast ? 'fast' : 'standard',
         requests: { ok, rate_limited: err > 0 && h.chance(0.6) ? err : 0, overloaded: err > 0 && h.chance(0.3) ? 1 : 0, upstream_error: 0 },
         failovers: err > 0 ? h.int(1, 3) : h.chance(0.12) ? 1 : 0,
         migrations: h.chance(0.08) ? 1 : 0,
@@ -882,8 +887,8 @@ function historicalRollups(): HourlyRollup[] {
         cacheMisses: Math.round(ok * h.float(0.1, 0.25)),
         ...synthesizeMissReasons(hm, ok, lane.keyId !== 'ci'),
         uncached: Math.max(0, ok - Math.round(ok * 0.85)),
-        costUsd: costOf(model, usage),
-        cost: costSplitOf(model, usage),
+        costUsd: costOf(model, usage, fast),
+        cost: costSplitOf(model, usage, fast),
         histograms: {
           durationMs: histogramOf(duration),
           outputTps: histogramOf(sampled(h, ok, big ? 55 : 80, 0.35)),

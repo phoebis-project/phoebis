@@ -1485,10 +1485,12 @@ async function trafficCards(theme) {
 }
 
 /**
- * An upstream's fast lane against the card it sits in: on the Quota view the Fast mode line and a cooldown chip
- * are the Plan chip's box (type, height, padding, corners), so the line never wraps past one chip's height; on the
- * upstream page the lane is a section of the Usage card as extra usage is, with the same rule and spacing. The
- * router's seed answers no fast request, so there the check stands down; the mock's story draws both.
+ * An upstream's fast lane against the card it sits in: on the Quota view the Fast mode line takes the Plan chip's
+ * type and label colour, and a cooldown chip is the Plan chip's box (type, height, padding, corners); on the
+ * upstream page the lane is a section of the Usage card as extra usage is, with the same rule and spacing. Only a
+ * subscription card draws a Plan chip and only an upstream with extra usage draws its section, so the check measures
+ * a lane on a card with a Plan chip, compares each part where drawn, and stands down where the neighbour is missing,
+ * as it does against the router's seed, which answers no fast request; the mock's story draws every part.
  */
 async function fastLane(theme, path) {
   const read = await page.evaluate(() => {
@@ -1502,10 +1504,18 @@ async function fastLane(theme, path) {
       const s = getComputedStyle(el);
       return { border: `${s.borderTopWidth} ${s.borderTopStyle} ${s.borderTopColor}`, margin: s.marginTop, padding: s.paddingTop };
     };
-    const lane = document.querySelector('.fast-lane');
+    const text = (el, label) => {
+      if (!el || !label) return null;
+      const s = getComputedStyle(el);
+      return { font: `${s.fontFamily}/${s.fontSize}`, label: getComputedStyle(label).color };
+    };
+    const planOf = (lane) => [...(lane.closest('.qcard, .card')?.querySelectorAll('.qcard__chips .chip') ?? [])].find((c) => c.querySelector('.chip__label')?.textContent?.trim() === 'Plan') ?? null;
+    const lanes = [...document.querySelectorAll('.fast-lane')];
+    const lane = lanes.find((l) => planOf(l) !== null) ?? lanes[0] ?? null;
     const card = lane?.closest('.qcard, .card');
-    const plan = [...(card?.querySelectorAll('.qcard__chips .chip') ?? [])].find((c) => c.querySelector('.chip__label')?.textContent?.trim() === 'Plan');
-    return { cooldown: chip(lane?.querySelector('.fast-lane__cooldown')), drawn: lane !== null, extra: section(card?.querySelector('.extra-usage')), lane: section(lane), line: chip(lane?.querySelector('.fast-lane__line')), plan: chip(plan) };
+    const plan = lane ? planOf(lane) : null;
+    const line = lane?.querySelector('.fast-lane__line');
+    return { cooldown: chip(lane?.querySelector('.fast-lane__cooldown')), drawn: lane !== null, extra: section(card?.querySelector('.extra-usage')), lane: section(lane), line: text(line, line?.querySelector('.fast-lane__label')), plan: chip(plan), planText: text(plan, plan?.querySelector('.chip__label')) };
   });
   measurements.push(`${theme} ${path} fast lane ${JSON.stringify(read)}`);
   if (!read.drawn) {
@@ -1513,9 +1523,18 @@ async function fastLane(theme, path) {
     return;
   }
   if (path === '/quota') {
-    failures.push(...compare(read.line, read.plan, ['font', 'height', 'padding', 'radius'], `${theme} /quota: the Fast mode line against the Plan chip`));
-    failures.push(...compare(read.cooldown, read.plan, ['font', 'height', 'padding', 'radius'], `${theme} /quota: the fast cooldown chip against the Plan chip`));
+    if (read.plan === null) {
+      if (mock) failures.push(`${theme} /quota: the story's business holds a fast lane beside its Plan chip, yet no drawn lane sits on a card with one`);
+      return;
+    }
+    if (read.line) failures.push(...compare(read.line, read.planText, ['font', 'label'], `${theme} /quota: the Fast mode line against the Plan chip`));
+    if (read.cooldown) failures.push(...compare(read.cooldown, read.plan, ['font', 'height', 'padding', 'radius'], `${theme} /quota: the fast cooldown chip against the Plan chip`));
+    if (mock && !read.cooldown) failures.push(`${theme} /quota: the story's business cools on its fast lane, yet no cooldown chip is drawn`);
   } else {
+    if (read.extra === null) {
+      if (mock) failures.push(`${theme} ${path}: the story's business draws extra usage beside its fast lane, yet no extra-usage section is drawn`);
+      return;
+    }
     failures.push(...compare(read.lane, read.extra, ['border', 'margin', 'padding'], `${theme} ${path}: the fast lane section against the extra-usage section`));
   }
 }
@@ -1668,6 +1687,63 @@ async function addUpstreamDialog(theme) {
   }
   await page.keyboard.press('Escape');
   await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => say('the dialog stayed open after Escape'));
+  await atRest();
+}
+
+/**
+ * The upstream page's catalog popup: the Effort levels column closes the table, its heading the box of the Output
+ * tokens heading beside it and its cells the type of the Name cells, the other plain text column; no row's levels
+ * wrap and the table fits the dialog without scrolling. The mock pass writes the open popup's shot beside the
+ * view's; the router's pass keeps to one shot per view, which its test counts.
+ */
+async function catalogDialog(theme) {
+  const say = (what) => failures.push(`${theme} /upstreams catalog: ${what}`);
+  const dialog = page.locator('dialog[open]');
+  try {
+    await page.locator('.detail__head button', { hasText: 'Catalog' }).click();
+    await dialog.waitFor({ state: 'visible', timeout: 15_000 });
+    await advance(LOAD_MS);
+    await dialog.locator('table').waitFor({ timeout: 15_000 });
+    const read = await dialog.evaluate((el) => {
+      const cell = (c) => {
+        if (!c) return null;
+        const s = getComputedStyle(c);
+        return { color: s.color, font: `${s.fontFamily}/${s.fontSize}/${s.fontWeight}`, height: Math.round(c.getBoundingClientRect().height), padding: `${s.paddingTop} ${s.paddingRight} ${s.paddingBottom} ${s.paddingLeft}` };
+      };
+      const lines = (c) => {
+        const range = document.createRange();
+        range.selectNodeContents(c);
+        return new Set([...range.getClientRects()].map((b) => Math.round(b.top))).size;
+      };
+      const heads = [...el.querySelectorAll('thead th')];
+      const rows = [...el.querySelectorAll('tbody tr')];
+      const wrap = el.querySelector('.table-wrap');
+      return {
+        effortCell: cell(rows[0]?.lastElementChild),
+        effortHead: cell(heads.at(-1)),
+        headings: heads.map((h) => h.textContent?.trim()),
+        levels: rows.map((r) => r.lastElementChild?.textContent?.trim()),
+        nameCell: cell(rows[0]?.children[1]),
+        outputHead: cell(heads.find((h) => h.textContent?.trim() === 'Output tokens')),
+        overflow: wrap ? wrap.scrollWidth - wrap.clientWidth : null,
+        wrapped: rows.filter((r) => lines(r.lastElementChild) > 1).map((r) => r.firstElementChild?.textContent?.trim()),
+      };
+    });
+    measurements.push(`${theme} /upstreams catalog ${JSON.stringify(read)}`);
+    if (read.headings.at(-1) !== 'Effort levels') say(`the last heading reads ${JSON.stringify(read.headings.at(-1))}, not "Effort levels"`);
+    failures.push(...compare(read.effortHead, read.outputHead, ['color', 'font', 'height', 'padding'], `${theme} /upstreams catalog: the Effort levels heading against Output tokens`));
+    failures.push(...compare(read.effortCell, read.nameCell, ['color', 'font', 'padding'], `${theme} /upstreams catalog: an Effort levels cell against its Name cell`));
+    if (read.wrapped.length) say(`the effort levels wrap on ${read.wrapped.join(', ')}`);
+    if (read.overflow === null || read.overflow > 0) say(`the table runs ${read.overflow} px past the dialog`);
+    if (mock) {
+      await atRest();
+      await dialog.screenshot({ path: join(shots, theme, 'upstreams-catalog.png') });
+    }
+  } catch (error) {
+    say(`the popup never drew its table (${error instanceof Error ? error.message : String(error)})`);
+  }
+  await page.keyboard.press('Escape');
+  await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => say('the popup stayed open after Escape'));
   await atRest();
 }
 
@@ -2139,6 +2215,7 @@ try {
         await deleteUpstreamButton(theme);
         await subscriptionEndForm(theme);
         await addUpstreamDialog(theme);
+        await catalogDialog(theme);
       }
       if (view.path === '/keys') {
         await keyCapField(theme);

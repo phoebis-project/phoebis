@@ -120,7 +120,12 @@ export const FIXTURES: Record<string, Fixture> = {
           "display_name": "",
           "created_at": "",
           "max_input_tokens": null,
-          "max_tokens": null
+          "max_tokens": null,
+          "effort_levels": [
+            "low",
+            "medium",
+            "high"
+          ]
         }
       ],
       "fetched_at": 1000000,

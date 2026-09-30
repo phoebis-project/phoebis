@@ -125,6 +125,22 @@ test("the mock files its hourly rows under the speed each hour's answers reporte
   assert.deepEqual(groups.map((g) => g.requests), [served(fast), served(d.ALL_ROLLUPS.filter((r) => r.speed === 'standard'))]);
 });
 
+test("the mock prices a fast hour and a fast answer at the model's fast cells", async () => {
+  const api = new d.MockApi();
+  const cells = new Map((await api.getSettings()).pricing.models.map((p) => [p.model, p.fast]));
+  const priced = (fast, u) => (u.input * fast.inputPerM + u.cacheRead * fast.cacheReadPerM + u.cacheWrite5m * fast.cacheWrite5mPerM + u.cacheWrite1h * fast.cacheWrite1hPerM + u.output * fast.outputPerM) / 1_000_000;
+  // A synthesized hour prices its tokens whole; one folded from the log sums its requests, each rounded to 1e-4.
+  const hours = d.ALL_ROLLUPS.filter((r) => r.speed === 'fast');
+  assert.ok(hours.length > 0);
+  for (const r of hours) {
+    const want = priced(cells.get(r.model), { ...r.tokens, input: r.tokens.uncachedInput });
+    assert.ok(Math.abs(r.costUsd - want) <= 0.001 + want * 0.001, `${r.hour} ${r.model}: ${r.costUsd} against ${want}`);
+  }
+  const { requests } = await api.listRequests({ speeds: ['fast'] });
+  assert.ok(requests.length > 0);
+  for (const r of requests) assert.equal(r.costUsd, Math.round(priced(cells.get(r.model), r.usage) * 10_000) / 10_000, r.id);
+});
+
 test('the session fold files a request under the speed its serving attempt reported, standard when it named none', () => {
   const rows = d.decodeRequestPage(fixture('requests')).requests;
   const served = (r) => r.attempts.at(-1)?.response.speed;

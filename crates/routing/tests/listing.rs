@@ -9,6 +9,7 @@ fn row(id: &str, max_input: u64) -> CatalogRow {
         created_at: "2025-01-01T00:00:00Z".into(),
         max_input_tokens: Some(max_input),
         max_tokens: Some(8_192),
+        effort_levels: Vec::new(),
     }
 }
 

@@ -5,8 +5,9 @@ use std::collections::HashSet;
 
 use crate::rules::{allows, ProcessedRule};
 
-/// One row of an upstream's `GET /v1/models` answer, the five fields the listing repeats. No serde derive: the
-/// routing crate carries none, and the two routes that answer it build their JSON by hand.
+/// One row of an upstream's `GET /v1/models` answer: the five fields the listing repeats and the effort levels
+/// its capabilities name. No serde derive: the routing crate carries none, and the two routes that answer it
+/// build their JSON by hand.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CatalogRow {
     pub id: String,
@@ -14,6 +15,9 @@ pub struct CatalogRow {
     pub created_at: String,
     pub max_input_tokens: Option<u64>,
     pub max_tokens: Option<u64>,
+    /// The effort levels the listing says the model supports, in the API's order (`low`, `medium`, `high`,
+    /// `xhigh`, `max`, then any other name as listed); empty when the listing names none. Shown, never routed on.
+    pub effort_levels: Vec<String>,
 }
 
 /// The id with a trailing `-YYYYMMDD` removed, `None` when it carries none: a dated id's undated base, which

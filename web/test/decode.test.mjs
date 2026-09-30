@@ -1070,12 +1070,13 @@ test('settings, pricing, pairing, quota, and usage decode', () => {
   assert.equal(d.decodeSnapshot('spare', { error: 'the poll has not read this account yet', fetched_at: null, poll: null }).poll, null, 'no poll before the first ask');
   assert.equal(d.decodeSnapshot('a', { poll: { last_outcome: 'somewhere_new' } }).poll.lastOutcome, 'failed', 'an outcome this build does not know reads as a failure');
   assert.deepEqual(
-    d.decodeCatalogModel({ id: 'claude-opus-5', display_name: 'Opus', created_at: '2026-01-01', max_input_tokens: 1_000_000, max_tokens: 128_000 }),
-    { id: 'claude-opus-5', displayName: 'Opus', createdAt: '2026-01-01', maxInputTokens: 1_000_000, maxTokens: 128_000 },
-    'a catalog row decodes with its two numbers',
+    d.decodeCatalogModel({ id: 'claude-opus-5', display_name: 'Opus', created_at: '2026-01-01', max_input_tokens: 1_000_000, max_tokens: 128_000, effort_levels: ['low', 'high', 7] }),
+    { id: 'claude-opus-5', displayName: 'Opus', createdAt: '2026-01-01', effortLevels: ['low', 'high'], maxInputTokens: 1_000_000, maxTokens: 128_000 },
+    'a catalog row decodes with its two numbers and its effort levels, an entry that is not a name dropped',
   );
+  assert.deepEqual(d.decodeCatalogModel({ id: 'claude-haiku-4-5' }).effortLevels, [], 'a row without effort levels reads an empty list');
   const catalog = d.decodeAccountCatalog(fixture('account_catalog'));
-  assert.deepEqual(catalog.models[0], { id: 'claude-sonnet-4-5', displayName: '', createdAt: '', maxInputTokens: null, maxTokens: null }, 'and without them');
+  assert.deepEqual(catalog.models[0], { id: 'claude-sonnet-4-5', displayName: '', createdAt: '', effortLevels: ['low', 'medium', 'high'], maxInputTokens: null, maxTokens: null }, 'and without the numbers');
   assert.equal(catalog.error, null);
   assert.ok(isIso(catalog.fetchedAt));
 });

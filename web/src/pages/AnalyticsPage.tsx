@@ -1305,8 +1305,9 @@ function BurnCharts({ answer, error, groupBy, loading }: { answer: { bucketSecon
   const byUpstream = groupBy === 'account';
   // Every other grouping mixes both kinds of upstream, so its lines chart the dollars their API-key traffic and
   // fast-mode answers spent; under the upstream grouping a subscription upstream draws a dollar line only for the
-  // usage credits its fast-mode answers spent.
-  const spent = lines.map((l, i) => ({ i, l })).filter(({ l }) => !byUpstream || l.unit === 'usd' || l.usdPerMinute > 0);
+  // usage credits its fast-mode answers spent, and a folded rest of subscription upstreams draws none, since its
+  // label names a plan unit the dollars axis does not chart.
+  const spent = lines.map((l, i) => ({ i, l })).filter(({ l }) => !byUpstream || l.unit === 'usd' || (!l.other && l.usdPerMinute > 0));
   // One precision for every tick, from the largest figure drawn, so the axis never mixes $0.0070 with $0.01.
   const usdMax = Math.max(0, ...rows.flatMap((r) => spent.map(({ i }) => r.usd[i])));
   const usdDigits = usdMax >= 10 ? 0 : usdMax >= 0.1 ? 2 : usdMax >= 0.01 ? 3 : 4;
