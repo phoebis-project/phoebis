@@ -18,9 +18,9 @@ failover loop a real request takes: the same body with `max_tokens` set to `0`, 
 `safeguards` member removed (the request for a server-side auto mode check on the turn's tool use, which a replayed turn
 has no use for, whatever the pool's `auto_mode_server` says); the request's `anthropic-beta` line travels as kept, and a
 pool or key set off drops the `dangerous-tool-use-2026-09-03` beta from a probe as from any request. The probe follows
-the session's pin, renews it, and migrates to another account on a 429. A probe whose pinned
-member is at its spend budget is not sent, and one that reaches the selector anyway is answered with the budget's
-deadline rather than placed on a sibling, so a probe never moves a session's pin on that account.
+the session's pin, renews it, and migrates to another account on a 429. A probe whose pinned member is at its spend
+budget is not sent, and one that reaches the selector anyway is answered with the budget's deadline rather than placed
+on a sibling, so a probe never moves a session's pin on that account.
 
 A probe costs a cache read at list price. The ledger credits the gross saving a later kept-warm request earns
 against that cost, per pool and per hour, and `GET /admin/keepalive/overview` reports the net of the two, which

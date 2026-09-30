@@ -87,8 +87,9 @@ says; `null` inherits it.
 
 `auto_mode_server` is whether the client's server-side auto mode checks travel to the upstream. On, the default,
 the router passes the request for a check and its verdict through unchanged; off, it drops the request so the
-client reviews each tool use with a classifier request of its own. The [client page](client.md) says what the
-client does in each case, and a key can override the pool (below).
+client reviews each tool use with a classifier request of its own. The [client
+page](client.md#auto-mode-behind-the-router) says what the client does in each case, and a key can override the pool
+(below).
 
 On `hide` every answer but a 429 loses the `anthropic-ratelimit-unified-*` family, so an organization-wide quota
 never reaches a key holder as its own; a 429 keeps the family so the client's continue-when-reset arms;
@@ -137,17 +138,17 @@ set carries `main` and `subagent` in `5m` or `1h`, `keepalive` (the TTL a keepal
 minutes, and a plan-funded upstream the same window share either way. With the policy on, every `cache_control` marker
 in the body is rewritten to the TTL the request's set and branch choose, the ones inside a tool result's own content
 included, the `extended-cache-ttl-2025-04-11` beta travels exactly when the body is one hour, and the `cch` hash is
-restamped. A body whose marker the relay's cache TTL guard cannot reach (the `cache_control` key spelled with escapes)
-is refused `400` with the error code `body_shape`, so a TTL the policy could not enforce never travels unreported. On
-every other body the client's own `CLAUDE_CODE_PROMPT_CACHE_TTL` has no effect through the pool. A body that carries no
-marker is left as it came unless `inject_when_absent` is on, in which case the top-level `cache_control` member is added
-with the TTL, before `stream`; a token count is never edited by the policy: its markers travel as the client sent them
-and no beta follows it. The metered set applies while the write costs money: the serving upstream is in overage, or is
-an API-key upstream. A keepalive probe's replay writes with the chosen set's `keepalive` TTL; any other request reads
-`main` or `subagent` by its agent, and one without an agent id reads as the main conversation. The TTL is priced per
-attempt, so a request that fails over reads its destination's state. Mixed TTLs across a session's requests are fine:
-the cache is keyed on the prefix, and the TTL sets an entry's lifetime and price alone.
-The cost of each choice is on the [keepalive page](keepalive.md#the-cost-reference).
+restamped. A body whose marker the relay's cache TTL guard cannot reach (a key on the marker's path spelled with an
+escape) is refused `400` with the error code `body_shape`, so a TTL the policy could not enforce never travels
+unreported. On every other body the client's own `CLAUDE_CODE_PROMPT_CACHE_TTL` has no effect through the pool. A body
+that carries no marker is left as it came unless `inject_when_absent` is on, in which case the top-level `cache_control`
+member is added with the TTL, before `stream`; a token count is never edited by the policy: its markers travel as the
+client sent them and no beta follows it. The metered set applies while the write costs money: the serving upstream is in
+overage, or is an API-key upstream. A keepalive probe's replay writes with the chosen set's `keepalive` TTL; any other
+request reads `main` or `subagent` by its agent, and one without an agent id reads as the main conversation. The TTL is
+priced per attempt, so a request that fails over reads its destination's state. Mixed TTLs across a session's requests
+are fine: the cache is keyed on the prefix, and the TTL sets an entry's lifetime and price alone. The cost of each
+choice is on the [keepalive page](keepalive.md#the-cost-reference).
 
 ![The Pools view: one card per pool with its strategy, affinity, overage policy, keepalive state, members, and keys;
 the codex pool reads exhausted because its one member is at its daily budget][pl]
@@ -216,9 +217,9 @@ tool use. With the pool's `auto_mode_server` on (the default), or a key's overri
 verdict comes back unchanged. Off, the router cuts the member and removes the beta from every request of the key, a
 token count and a keepalive probe included, and restamps a first-party body's billing hash; the answer is copied as it
 comes, never edited. The client then reviews each tool use with a classifier request of its own for the rest of its
-process, billed to the upstream's windows, as the [client page](client.md) describes. A body whose `safeguards` member
-the router cannot cut under an off setting (spelled with an escape, or carried twice) is refused `400` with the error
-code `body_shape` before anything reaches the upstream.
+process, billed to the upstream's windows, as the [client page](client.md#auto-mode-behind-the-router) describes. A body
+whose `safeguards` member the router cannot cut under an off setting (spelled with an escape, or carried twice) is
+refused `400` with the error code `body_shape` before anything reaches the upstream.
 
 A conversation is identified by its session header: the session id the client sends names it.
 A key's `affinity_source` fixes one of these rungs instead of walking the whole

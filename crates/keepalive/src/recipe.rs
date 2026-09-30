@@ -1,5 +1,5 @@
-//! What a probe replays: the request body with its output controls zeroed, the headers the bus published, and
-//! the TTL the body asks for. The body exclusions are the Go engine's.
+//! What a probe replays: the request body with its output controls zeroed and its `safeguards` member cut, the headers
+//! the bus published, and the TTL the body asks for. The output-control exclusions are the Go engine's.
 
 use serde_json::Value;
 

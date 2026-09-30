@@ -37,22 +37,24 @@ shape, and the router restores, toward `api.anthropic.com`, the fields the reduc
 the client sent: the `cch` billing hash, `x-client-request-id`, `cc_prev_req`, and `cc_prompt_id`, each only when
 absent. A request that carries no attribution line, as under `CLAUDE_CODE_ATTRIBUTION_HEADER=0`, is relayed as sent: the
 router never writes a line the client did not. The auto-mode classifier requests are the client's own: they keep the
-attribution block, the router fills them like any other line, and they carry the `auxiliary` request class in
-`x-claude-code-request-class`. The router reads the class header whenever the client sends it; the other hints are under
-[CLAUDE_CODE_GATEWAY_HINT_HEADERS](#claude_code_gateway_hint_headers). A main, subagent or compaction class keeps the
-session's pin warm and re-arms its keepalive recipe, and any other class does neither. The previous request id and the
-prompt id come from the router's session memory, which survives a restart: they are kept on disk for
-`sessions.memory_retention_days` ([installation](installation.md#sessions)). Three things are not restored, because the
-router cannot: the `advanced-tool-use-2025-11-20` beta (the client has to run its tool search; `ENABLE_TOOL_SEARCH=true`
-selects it), the global cache scope on the static system block, and `cc_turn_origin`, who started the turn, which the
-router records when the line carries it and never writes. The restoration applies to a request whose `User-Agent` is
-`claude-cli/` followed by a version the client itself would spell (digits and dots, optionally `-` and a prerelease
-suffix of letters, digits, dots, and hyphens) and to the client's own inference requests;
-a keepalive probe replays a request as the client sent it. Two self-checks guard the
-restoration against a client build the router was not pinned to: a stamped `cch` hash the router cannot reproduce, and a
-`cc_version` suffix that does not reproduce from the prompt and the client's version. Either refuses the request as
-client drift before anything is sent, and the request log names which (`hash` or `version_suffix`). The variable is an
-internal one that a later client build may drop.
+attribution block and the router fills them like any other line; in first-party mode only they carry the
+`auto-mode-classifier-2026-07-16` beta and the `auxiliary` request class in `x-claude-code-request-class`, and behind a
+plain base URL neither appears, so the router records and pins them as ordinary requests of their session ([Auto mode
+behind the router](#auto-mode-behind-the-router)). The router reads the class header whenever the client sends it; the
+other hints are under [CLAUDE_CODE_GATEWAY_HINT_HEADERS](#claude_code_gateway_hint_headers). A main, subagent or
+compaction class keeps the session's pin warm and re-arms its keepalive recipe, and any other class does neither. The
+previous request id and the prompt id come from the router's session memory, which survives a restart: they are kept on
+disk for `sessions.memory_retention_days` ([installation](installation.md#sessions)). Three things are not restored,
+because the router cannot: the `advanced-tool-use-2025-11-20` beta (the client has to run its tool search;
+`ENABLE_TOOL_SEARCH=true` selects it), the global cache scope on the static system block, and `cc_turn_origin`, who
+started the turn, which the router records when the line carries it and never writes. The restoration applies to a
+request whose `User-Agent` is `claude-cli/` followed by a version the client itself would spell (digits and dots,
+optionally `-` and a prerelease suffix of letters, digits, dots, and hyphens) and to the client's own inference
+requests; a keepalive probe replays a request as the client sent it.
+Two self-checks guard the restoration against a client build the router was not pinned to: a stamped `cch` hash the
+router cannot reproduce, and a `cc_version` suffix that does not reproduce from the prompt and the client's version.
+Either refuses the request as client drift before anything is sent, and the request log names which (`hash` or
+`version_suffix`). The variable is an internal one that a later client build may drop.
 
 The router also reads two cumulative boundary-hash chains off every request's body: a static chain over the
 tools array and the system blocks, and a message chain with one boundary per entry of `messages`, both computed
@@ -98,6 +100,57 @@ $CC_KEEPALIVE_OWNER_ID"`, hardens what the router already fences: cache warming 
 registration, and this pair binds each request to the process that registered, so a second process resuming the same
 session id cannot inherit its recipes. When both sides name an owner they must agree. It needs a wrapper script, since
 the settings file's environment block holds only static values.
+
+## Auto mode behind the router
+
+Claude Code in auto mode reviews each tool use before it runs. Behind the router, with or without
+`_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL` and in `-p` mode alike, the client asks the upstream to do that review on
+the model's own turn: every session post carries a `safeguards` member near the end of its body (the machine's
+permission rules with their literal text, the working and home directories, the trusted directories, the git state
+and the user identity) and the `dangerous-tool-use-2026-09-03` beta, and the answer's `message_delta` carries one
+verdict per tool use. A Max account answered a verdict for every reviewed tool use through the router; an API-key
+account has not been measured. A session post that asks takes two to four seconds against one to two for one that
+does not, and the client's own classifier request about 1.3 seconds.
+
+What the router does with that request is the pool's **Support server-side auto mode** setting, on by default,
+which a key can override ([routing](routing.md#pools)):
+
+- On, the router passes the member, the beta and the verdict through unchanged, and the request log and the drawer
+  record the request as a server-side check ([statistics](statistics.md#requests)).
+- Off, the router drops the member and the beta from every request of the key and restamps a first-party body's
+  billing hash. The upstream then evaluates nothing, and one completed answer without a verdict latches the client
+  for the rest of its process, subagents included, across `/clear` and `/compact`: from then on it sends one
+  classifier request of its own per reviewed tool use, on its Sonnet default rather than the session's model, about
+  52,000 cached input tokens each, billed to the upstream's windows and absent from the client's own cost line, while
+  the beta stays in its header and the router keeps dropping it. The first session post under the off state still
+  asks, so a session that starts there costs one asking round. The request log records each request whose member the
+  router dropped as `stripped`, and the client's classifier requests as ordinary requests of their session
+  ([statistics](statistics.md#requests)).
+
+`CLAUDE_CODE_AUTO_MODE_SERVER=0` in the client's environment is the client-side equivalent of the off state, with no
+first asking round; `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1` does the same in first-party mode.
+
+The client's own classifier runs in two stages: a stage-1 request that stops at `</block>` and answers `<block>no` or
+`<block>yes`, and, after a `yes` or an unreadable answer, a stage-2 request with no stop sequence that reasons in
+`<thinking>` before its `<block>` answer, with an optional `<reason>` and `<category>`. A stage-1 block followed by a
+refused stage 2 stands as a block; the one stage 2 measured through the router was refused by the upstream with the
+category `reasoning_extraction`. These requests carry no beta of their own behind a plain base URL; in first-party mode
+they add `auto-mode-classifier-2026-07-16` and the `auxiliary` request class. Their bodies carry no `stream` and no
+`tools`, a security-monitor system block, and `stop_sequences` at stage 1. They carry the session's own id and pin like
+any request, on the Sonnet default, so a session on another model takes a second pin beside its own.
+
+**The notice.** The client can show a one-line notice that its classifier requests are billed because the gateway
+does not support the server-side check. A Pro, Max or Team login never sees it; a key or token login sees it once per
+process after the latch, naming the router's `host:port`, and acknowledges it for 24 hours. The text, from the
+client's own strings, since no run through the router has shown it: "We're changing auto mode to no longer charge
+for classifier requests in Claude Code. However, this session isn't eligible because your requests go through
+`<host>`, which isn't compatible with this update. Nothing breaks: auto mode keeps working, and its classifier
+requests are billed as before. To fix it and access the new version of auto mode, ask your gateway to implement:
+`<url>`".
+
+The router never adds the member or the beta to a request that did not carry them, and never answers a verdict
+itself; a body it cannot cut under an off setting is refused as [What the proxy accepts](#what-the-proxy-accepts)
+says.
 
 ## What the proxy accepts
 
@@ -151,9 +204,10 @@ id, between admission and routing.
 
 A request body whose top-level object carries `model`, `metadata` or `stream` more than once, raw or escaped, whose
 `safeguards` member cannot be cut while its key's server-side auto mode is off (carried twice, or spelled with an
-escape), or whose `cache_control` marker the pool's cache TTL policy cannot reach (the key spelled with an escape), is
-refused before anything reaches the upstream: `400` with the error code `body_shape` and a message naming the member. A
-body whose top-level object nests deeper than the relay reads is refused `400` with the error code `invalid_body`.
+escape), or whose `cache_control` marker the pool's cache TTL policy cannot reach (a key on the marker's path spelled
+with an escape), is refused before anything reaches the upstream: `400` with the error code `body_shape` and a message
+naming the member. A body whose top-level object nests deeper than the relay reads is refused `400` with the error code
+`invalid_body`.
 
 A request body that does not finish arriving within the compiled-in wait after authentication is refused `408`
 with the error code `request_timeout` and the message `the request body did not arrive in time`.

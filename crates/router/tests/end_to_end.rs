@@ -2,7 +2,8 @@
 //! bootstrap rules that refuse a configuration nobody should be able to start.
 
 use phoebis_profile::fixtures::{
-    body, control_response, inference_head, BodyFixture, ControlFixture, FixtureKind,
+    body, control_response, inference_head, with_dangerous_tool_use_beta, with_safeguards,
+    BodyFixture, ControlFixture, FixtureKind, SAFEGUARDS_MEMBER,
 };
 use fake_upstream::{FakeUpstream, Respond, Rule};
 use std::net::TcpListener;
@@ -167,14 +168,13 @@ fn fixture_request(
 /// replaced. Answers the response's status.
 async fn replay_fixture(
     proxy_port: u16,
-    head: FixtureKind,
-    fixture: BodyFixture,
+    head: &[u8],
+    body: &[u8],
     secret: &str,
     session: &str,
 ) -> u16 {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    let body = body(fixture).to_vec();
-    let (request_line, headers) = phoebis_transport::request::parse_head(inference_head(head)).unwrap();
+    let (request_line, headers) = phoebis_transport::request::parse_head(head).unwrap();
     let mut wire = format!("{request_line}\r\n");
     for (name, value) in &headers {
         // Matched on the lowercase name, written back under the fixture's own spelling.
@@ -194,7 +194,7 @@ async fn replay_fixture(
         .await
         .unwrap();
     socket.write_all(wire.as_bytes()).await.unwrap();
-    socket.write_all(&body).await.unwrap();
+    socket.write_all(body).await.unwrap();
     // Read to the end of the response head and no further: the connection is keep-alive, as the fixture's own
     // `Connection` line says, so nothing closes it for us.
     let mut answer = Vec::new();
@@ -449,6 +449,222 @@ usage:
             .any(|p| p.session_id == "e2e-1"),
         "acknowledged routing state survives shutdown"
     );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_key_set_off_through_the_admin_api_strips_the_next_request_and_set_back_on_passes_it_through(
+) {
+    let up = FakeUpstream::start(vec![
+        Rule {
+            path_prefix: "/v1/messages".into(),
+            respond: Respond::Json {
+                status: 200,
+                headers: vec![],
+                body: br#"{"id":"msg_1","type":"message","usage":{"input_tokens":12,"output_tokens":3}}"#
+                    .to_vec(),
+            },
+        },
+        Rule {
+            path_prefix: "/v1/models".into(),
+            respond: Respond::Json {
+                status: 200,
+                headers: vec![],
+                body: br#"{"data":[{"id":"claude-sonnet-4-5","type":"model"}]}"#.to_vec(),
+            },
+        },
+    ])
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("ca.pem"), up.ca_pem()).unwrap();
+    std::fs::write(
+        dir.path().join("storage.key"),
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    )
+    .unwrap();
+    let (proxy_port, admin_port, metrics_port) = (free_port(), free_port(), free_port());
+    let yaml = format!(
+        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\n  plain_http: true\ncompatibility:\n  profile: claude-code-2.1.269-linux-x64\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
+        ledger = dir.path().join("ledger.sqlite").display(),
+        key = dir.path().join("storage.key").display(),
+        db = dir.path().join("phoebis.sqlite").display(),
+        addr = up.addr(),
+        ca = dir.path().join("ca.pem").display(),
+    );
+    let cfg_path = dir.path().join("config.yaml");
+    std::fs::write(&cfg_path, yaml).unwrap();
+    let config = {
+        let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        std::env::set_var("TEST_ADMIN_SECRET", "admin-secret-001");
+        phoebis_router::config::load(&cfg_path).unwrap()
+    };
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(phoebis_router::app::run(config, async {
+        let _ = stop_rx.await;
+    }));
+    let client = reqwest::Client::builder()
+        .cookie_store(true)
+        .build()
+        .unwrap();
+    let admin = |path: &str| format!("http://127.0.0.1:{admin_port}/admin{path}");
+    logged_in(&client, &admin("/session")).await;
+    assert_eq!(client.post(admin("/accounts")).json(&serde_json::json!({ "id": "console", "kind": "api_key", "label": "Console", "secret": "sk-ant-api03-PLACEHOLDER" })).send().await.unwrap().status(), 201);
+    let pool = client
+        .post(admin("/pools"))
+        .json(&serde_json::json!({ "id": "main", "label": "Main", "strategy": "priority", "members": [{ "account_id": "console", "priority": 0 }] }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(pool.status(), 201);
+    let pool: serde_json::Value = pool.json().await.unwrap();
+    assert_eq!(pool["auto_mode_server"], true, "on by default");
+    let key: serde_json::Value = client
+        .post(admin("/keys"))
+        .json(&serde_json::json!({ "id": "desktop", "label": "Desktop", "pool_id": "main" }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        (&key["auto_mode_server"], &key["effective_auto_mode_server"]),
+        (&serde_json::Value::Null, &serde_json::json!(true)),
+        "a new key inherits the pool's setting"
+    );
+    let secret = key["secret"].as_str().unwrap().to_string();
+    let set = |value: serde_json::Value| {
+        let client = client.clone();
+        async move {
+            let answer = client
+                .patch(admin("/keys/desktop"))
+                .json(&serde_json::json!({ "auto_mode_server": value }))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(answer.status(), 200);
+            let key: serde_json::Value = answer.json().await.unwrap();
+            (
+                key["auto_mode_server"].clone(),
+                key["effective_auto_mode_server"].clone(),
+            )
+        }
+    };
+
+    // First-party, so the off state's restamp has a client stamp to replace.
+    let head = with_dangerous_tool_use_beta(inference_head(FixtureKind::OauthFirstParty));
+    let sent = phoebis_cch::sign(&with_safeguards(body(BodyFixture::FirstParty9b244))).unwrap();
+    let member = SAFEGUARDS_MEMBER.as_bytes();
+    let posts = || -> Vec<fake_upstream::RecordedRequest> {
+        up.requests()
+            .into_iter()
+            .filter(|r| r.line.starts_with("POST /v1/messages"))
+            .collect()
+    };
+    let asks = |r: &fake_upstream::RecordedRequest| {
+        let betas: Vec<String> = r
+            .headers
+            .iter()
+            .filter(|(n, _)| n.eq_ignore_ascii_case("anthropic-beta"))
+            .flat_map(|(_, v)| v.split(',').map(|b| b.trim().to_string()))
+            .collect();
+        (
+            r.body.windows(member.len()).any(|w| w == member),
+            betas
+                .iter()
+                .any(|b| b == phoebis_relay::DANGEROUS_TOOL_USE_BETA),
+        )
+    };
+
+    assert_eq!(
+        replay_fixture(proxy_port, &head, &sent, &secret, "auto-1").await,
+        200
+    );
+    assert_eq!(
+        asks(&posts()[0]),
+        (true, true),
+        "on by inheritance, the member and the beta reach the upstream"
+    );
+
+    assert_eq!(
+        set(serde_json::json!(false)).await,
+        (serde_json::json!(false), serde_json::json!(false))
+    );
+    assert_eq!(
+        replay_fixture(proxy_port, &head, &sent, &secret, "auto-2").await,
+        200
+    );
+    let stripped = &posts()[1];
+    assert_eq!(
+        asks(stripped),
+        (false, false),
+        "off on the key, the next request loses both"
+    );
+    assert!(phoebis_cch::find_cch(&stripped.body).is_some());
+    assert_eq!(
+        phoebis_cch::sign(&stripped.body).unwrap(),
+        stripped.body,
+        "the body was restamped over the cut"
+    );
+
+    assert_eq!(
+        set(serde_json::Value::Null).await,
+        (serde_json::Value::Null, serde_json::json!(true))
+    );
+    assert_eq!(
+        replay_fixture(proxy_port, &head, &sent, &secret, "auto-3").await,
+        200
+    );
+    assert_eq!(
+        asks(&posts()[2]),
+        (true, true),
+        "back to inherit, both travel again"
+    );
+
+    // The ledger lands on its own task; the request log shows the rows once it has.
+    let give_up = std::time::Instant::now() + SETTLE;
+    let log = loop {
+        let log: serde_json::Value = client
+            .get(admin("/requests"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        if log["requests"].as_array().unwrap().len() == 3 {
+            break log;
+        }
+        assert!(
+            std::time::Instant::now() < give_up,
+            "the ledger never landed the three requests: {log}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    };
+    let mut standing: Vec<(String, String)> = log["requests"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| {
+            (
+                row["session_id"].as_str().unwrap().to_string(),
+                row["auto_mode"].as_str().unwrap_or("null").to_string(),
+            )
+        })
+        .collect();
+    standing.sort();
+    assert_eq!(
+        standing,
+        [
+            ("auto-1", "server"),
+            ("auto-2", "stripped"),
+            ("auto-3", "server")
+        ]
+        .map(|(session, auto_mode)| (session.to_string(), auto_mode.to_string()))
+    );
+
+    let _ = stop_tx.send(());
+    server.await.unwrap().unwrap();
     up.shutdown().await;
 }
 
@@ -3397,8 +3613,14 @@ usage:
         ),
     ];
     for (i, (head, fixture, secret)) in runs.into_iter().enumerate() {
-        let status =
-            replay_fixture(proxy_port, head, fixture, secret, &format!("capture-{i}")).await;
+        let status = replay_fixture(
+            proxy_port,
+            inference_head(head),
+            body(fixture),
+            secret,
+            &format!("capture-{i}"),
+        )
+        .await;
         assert_eq!(status, 200, "run {i}");
     }
     let posts: Vec<_> = up
