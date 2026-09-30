@@ -230,6 +230,60 @@ async fn with_the_toggle_off_a_marker_less_body_goes_as_sent_and_asks_for_no_bet
 }
 
 #[tokio::test]
+async fn a_marker_the_rewrite_cannot_reach_is_refused_rather_than_sent_unenforced() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let h = harness(
+        &up,
+        &[api_key("acct", A, 0)],
+        policy(r#"{"enabled":true,"metered":{"main":"5m"}}"#),
+    )
+    .await;
+    let native = body(BodyFixture::Oauth);
+    assert_eq!(
+        markers(native),
+        vec![r#"{"type":"ephemeral","ttl":"1h"}"#.to_string(); 3]
+    );
+    let escaped = String::from_utf8(native.to_vec())
+        .unwrap()
+        .replacen(r#""cache_control""#, r#""cache_contr\u006fl""#, 1)
+        .into_bytes();
+    assert!(
+        escaped.windows(6).any(|w| w == br"\u006f"),
+        "the escape is in the raw bytes"
+    );
+    assert_eq!(
+        markers(&escaped).len(),
+        2,
+        "the walk no longer reaches the first marker, which a decoder still reads as an hour"
+    );
+
+    let req = request_from_fixture(inference_head(FixtureKind::ApiKey), &escaped, KEY);
+    let resp = h.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), 400);
+    assert_eq!(
+        resp.headers()
+            .get("x-phoebis-error-code")
+            .and_then(|v| v.to_str().ok()),
+        Some("body_shape")
+    );
+    let answer: serde_json::Value =
+        serde_json::from_slice(&resp.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(
+        answer["error"]["message"],
+        "the request body carries a cache_control marker the relay cannot place, so the pool's cache TTL policy cannot be applied to it"
+    );
+    assert!(
+        up.requests().is_empty(),
+        "no hour the policy could not enforce reached the upstream"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
 async fn with_the_toggle_on_a_marker_less_body_takes_the_member() {
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),

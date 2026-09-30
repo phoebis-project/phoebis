@@ -318,6 +318,36 @@ async fn a_count_under_off_loses_the_beta_as_an_inference_does() {
 }
 
 #[tokio::test]
+async fn a_count_carrying_the_member_under_an_off_key_reaches_the_upstream_as_the_native_count() {
+    let head = head_with_beta(FixtureKind::CountApiKey);
+    let native = body(BodyFixture::CountApiKey);
+    let sent_body = with_safeguards(native);
+    assert_eq!(count(&sent_body, br#""safeguards":["#), 1);
+    let r = relay(
+        &[api_key("acct", A, 0)],
+        key_off(),
+        Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: br#"{"input_tokens":7}"#.to_vec(),
+        },
+        &head,
+        &sent_body,
+    )
+    .await;
+    assert_eq!(r.status, 200);
+    let sent = &r.sent[0];
+    assert!(sent.line.starts_with("POST /v1/messages/count_tokens"));
+    assert!(
+        sent.body == native,
+        "the member left with one comma, so the count body is the native one"
+    );
+    let mut expected_betas = caller_betas(&head);
+    expected_betas.retain(|b| b != DANGEROUS_TOOL_USE_BETA);
+    assert_eq!(beta_list(sent), expected_betas);
+}
+
+#[tokio::test]
 async fn off_refuses_a_body_whose_member_the_walk_cannot_place() {
     let head = head_with_beta(FixtureKind::OauthNonFirstParty);
     let spliced = with_safeguards(body(BodyFixture::Oauth));

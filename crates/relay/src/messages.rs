@@ -1205,9 +1205,7 @@ impl Relay {
             safeguards: if auto_mode_server {
                 SafeguardsEdit::Keep
             } else {
-                SafeguardsEdit::Drop {
-                    present: facts.shape.safeguards,
-                }
+                SafeguardsEdit::Drop
             },
             target: &target,
             trace: &trace,
@@ -1557,9 +1555,7 @@ impl Relay {
             // already carried a marker claims the rewrite's TTL even where the marker already read that way,
             // so a leg does not lose its report to a rewrite that had nothing left to change. A beta naming an
             // hour the body does not carry would be the relay's to answer for on a 400.
-            let claims_its_ttl = |edits: &BodyEdits| {
-                !edits.cache_ttl_refused && (carries_a_marker || edits.cache_ttl_edited)
-            };
+            let claims_its_ttl = |edits: &BodyEdits| carries_a_marker || edits.cache_ttl_edited;
             // Isolated per account, so a failover never carries one account's previous request id, or the
             // previous message id a diagnostics member names, into another account's memory.
             let previous = memory_key

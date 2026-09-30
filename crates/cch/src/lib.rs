@@ -111,14 +111,12 @@ fn scan_object(s: &mut Scanner<'_>, mut matches: impl FnMut(&[u8]) -> bool) -> O
     }
 }
 
-/// The first of `names` whose decoded key appears more than once among the top-level object's members. Keys
-/// are decoded before they are compared, so an escaped spelling of a name counts as that name: a parser
-/// upstream would read it that way, and the span helpers above match raw bytes on purpose (they edit what
-/// they find and never a decoded copy).
-pub fn repeated_top_level_member(
-    body: &[u8],
-    names: &[&'static str],
-) -> Result<Option<&'static str>, CchError> {
+/// Hands `visit` each top-level member's key in body order, decoded, until `visit` answers true. Keys are
+/// decoded before they are compared, so an escaped spelling of a name counts as that name: a parser upstream
+/// would read it that way, and the span helpers above match raw bytes on purpose (they edit what they find and
+/// never a decoded copy). Values are skipped by the scanner the span helpers walk, so a body a strict decoder
+/// refuses as a whole (a lone surrogate escape in a string value) is still read to its end.
+fn visit_top_level_keys(body: &[u8], mut visit: impl FnMut(&str) -> bool) -> Result<(), CchError> {
     let mut s = Scanner {
         body,
         pos: 0,
@@ -129,19 +127,15 @@ pub fn repeated_top_level_member(
     if !s.eat(b'{') {
         return Err(CchError::Json(s.pos));
     }
-    let mut seen: Vec<&'static str> = Vec::new();
     loop {
         s.ws();
         if s.eat(b'}') {
-            return Ok(None);
+            return Ok(());
         }
         let (ks, ke) = s.string()?;
         let key: String = serde_json::from_slice(&body[ks..ke]).map_err(|_| CchError::Json(ks))?;
-        if let Some(name) = names.iter().copied().find(|n| *n == key) {
-            if seen.contains(&name) {
-                return Ok(Some(name));
-            }
-            seen.push(name);
+        if visit(&key) {
+            return Ok(());
         }
         s.ws();
         if !s.eat(b':') {
@@ -153,10 +147,41 @@ pub fn repeated_top_level_member(
             continue;
         }
         if s.eat(b'}') {
-            return Ok(None);
+            return Ok(());
         }
         return Err(CchError::Json(s.pos));
     }
+}
+
+/// The first of `names` whose decoded key appears more than once among the top-level object's members.
+pub fn repeated_top_level_member(
+    body: &[u8],
+    names: &[&'static str],
+) -> Result<Option<&'static str>, CchError> {
+    let mut seen: Vec<&'static str> = Vec::new();
+    let mut repeated = None;
+    visit_top_level_keys(body, |key| {
+        let Some(name) = names.iter().copied().find(|n| *n == key) else {
+            return false;
+        };
+        if seen.contains(&name) {
+            repeated = Some(name);
+            return true;
+        }
+        seen.push(name);
+        false
+    })?;
+    Ok(repeated)
+}
+
+/// How many of the top-level object's members carry `name` once their keys are decoded.
+pub fn top_level_member_count(body: &[u8], name: &str) -> Result<usize, CchError> {
+    let mut count = 0;
+    visit_top_level_keys(body, |key| {
+        count += usize::from(key == name);
+        false
+    })?;
+    Ok(count)
 }
 
 /// Raw span, quotes included, of the string value at `path` from the top-level object. Array indexes are decimal
@@ -1058,6 +1083,27 @@ mod tests {
         assert_eq!(
             repeated_top_level_member(body, &["metadata", "model", "stream"]).unwrap(),
             Some("model")
+        );
+    }
+
+    #[test]
+    fn a_top_level_key_is_counted_by_its_decoded_spelling() {
+        assert_eq!(
+            top_level_member_count(br#"{"model":"m","safeguards":[]}"#, "safeguards").unwrap(),
+            1
+        );
+        assert_eq!(
+            top_level_member_count(br#"{"model":"m","safeg\u0075ards":[]}"#, "safeguards").unwrap(),
+            1,
+            "an escaped spelling counts as the name"
+        );
+        assert_eq!(
+            top_level_member_count(
+                br#"{"safeguards":[1],"model":"m","safeguards":[2]}"#,
+                "safeguards"
+            )
+            .unwrap(),
+            2
         );
     }
 

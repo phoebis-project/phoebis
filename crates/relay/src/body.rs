@@ -14,9 +14,6 @@ pub struct BodyEdits {
     pub cch_restamped: bool,
     pub restored: Vec<Injected>,
     pub cache_ttl_edited: bool,
-    /// The TTL rewrite was undone: the body carries the TTL it arrived with, so the leg that sends it asks
-    /// for no beta, drops none, and reports no TTL of its own.
-    pub cache_ttl_refused: bool,
     pub safeguards_dropped: bool,
 }
 
@@ -27,15 +24,6 @@ pub enum Markerless {
     TakesTheMember,
     /// The body travels as sent: the client asked for no cache, and the operator's toggle leaves it that way.
     GoesAsSent,
-}
-
-/// What a TTL rewrite did to the body.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TtlEdit {
-    /// The body carries the policy's TTL; the flag says whether any byte moved.
-    Applied(bool),
-    /// The body carries a marker the rewrite could not reach, so it goes as it arrived.
-    Refused,
 }
 
 /// The native edit's inputs: the account identity and model every request needs, the restoration a
@@ -63,9 +51,9 @@ pub struct NativeEdit<'a> {
 pub enum SafeguardsEdit {
     /// The setting is on: the member travels as sent.
     Keep,
-    /// The setting is off: the member is cut with one comma. `present` is what the decoded root said at
-    /// admission, so a member the raw walk cannot reach refuses the request rather than travelling.
-    Drop { present: bool },
+    /// The setting is off: the member is cut with one comma, and a member the raw walk cannot reach refuses the
+    /// request rather than travelling.
+    Drop,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -88,6 +76,8 @@ pub const DANGEROUS_TOOL_USE_BETA: &str = "dangerous-tool-use-2026-09-03";
 /// resolved.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BodyMember {
+    /// A `cache_control` marker the decoder reads and the raw walk cannot reach.
+    CacheControl,
     MetadataUserId,
     Model,
     /// A top-level member the caller's body carries more than once, raw or escaped; the name is one of the
@@ -100,6 +90,7 @@ pub enum BodyMember {
 impl BodyMember {
     pub fn path(self) -> &'static str {
         match self {
+            BodyMember::CacheControl => "cache_control",
             BodyMember::MetadataUserId => "metadata.user_id",
             BodyMember::Model => "model",
             BodyMember::Repeated(name) => name,
@@ -107,11 +98,14 @@ impl BodyMember {
         }
     }
 
-    /// `RelayError::BodyShape`'s `Display` text: a repeated member, or a `safeguards` member the cut cannot
-    /// place, was found rather than absent, so neither reads like the other two variants' "has no ... member to
-    /// edit".
+    /// `RelayError::BodyShape`'s `Display` text: a `cache_control` marker the rewrite cannot place, a repeated
+    /// member, or a `safeguards` member the cut cannot place, was found rather than absent, so none reads like the
+    /// other two variants' "has no ... member to edit".
     pub(crate) fn shape_message(self) -> String {
         match self {
+            BodyMember::CacheControl => {
+                "request body carries a cache_control marker the router cannot place".into()
+            }
             BodyMember::Repeated(name) => {
                 format!("request body carries the top-level member \"{name}\" more than once")
             }
@@ -164,17 +158,18 @@ pub fn edit_body(body: &mut Vec<u8>, edit: &NativeEdit<'_>) -> Result<BodyEdits,
     }
     let safeguards_dropped = match edit.safeguards {
         SafeguardsEdit::Keep => false,
-        SafeguardsEdit::Drop { present } => {
+        SafeguardsEdit::Drop => {
             // A second spelling would reach the upstream after the first is cut and a last-wins parser would act
             // on it; an escaped spelling is one the raw walk never finds. Both refuse rather than send a body
-            // the operator asked to have stripped.
-            if present {
-                if let Some(name) = phoebis_cch::repeated_top_level_member(body, &["safeguards"])? {
-                    return Err(RelayError::BodyShape(BodyMember::Repeated(name)));
-                }
+            // the operator asked to have stripped. Presence is counted over decoded keys, not read from a parse of
+            // the whole body: a body a strict decoder refuses (a lone surrogate escape in a string value) is one
+            // the cut below still walks.
+            let spellings = phoebis_cch::top_level_member_count(body, "safeguards")?;
+            if spellings > 1 {
+                return Err(RelayError::BodyShape(BodyMember::Repeated("safeguards")));
             }
             let cut = phoebis_cch::remove_top_level_member(body, "safeguards").is_some();
-            if present && !cut {
+            if spellings == 1 && !cut {
                 return Err(RelayError::BodyShape(BodyMember::Safeguards));
             }
             cut
@@ -218,9 +213,9 @@ pub fn edit_body(body: &mut Vec<u8>, edit: &NativeEdit<'_>) -> Result<BodyEdits,
             restored.push(Injected::Diagnostics);
         }
     }
-    let cache_ttl = match edit.cache_ttl {
+    let cache_ttl_edited = match edit.cache_ttl {
         Some(ttl) => set_cache_ttl(body, ttl, edit.markerless)?,
-        None => TtlEdit::Applied(false),
+        None => false,
     };
     let cch_restamped = phoebis_cch::restamp_if_present(body)?;
     Ok(BodyEdits {
@@ -229,8 +224,7 @@ pub fn edit_body(body: &mut Vec<u8>, edit: &NativeEdit<'_>) -> Result<BodyEdits,
         model_replaced,
         cch_restamped,
         restored,
-        cache_ttl_edited: cache_ttl == TtlEdit::Applied(true),
-        cache_ttl_refused: cache_ttl == TtlEdit::Refused,
+        cache_ttl_edited,
         safeguards_dropped,
     })
 }
@@ -238,23 +232,21 @@ pub fn edit_body(body: &mut Vec<u8>, edit: &NativeEdit<'_>) -> Result<BodyEdits,
 /// The rewrite with its fail-closed guard. The walk reads the client's own spelling of `cache_control` and a
 /// decoder reads it through its escapes, so a body spelling the key any other way carries a marker the rewrite
 /// never reaches: its hour would outlive a five-minute policy, unenforced and unreported. Where the two
-/// readings disagree the edit is undone, and the body travels with the TTL it arrived with.
+/// readings disagree the request is refused. Answers whether any byte moved.
 pub fn set_cache_ttl(
     body: &mut Vec<u8>,
     ttl: CacheTtl,
     markerless: Markerless,
-) -> Result<TtlEdit, RelayError> {
-    let as_sent = body.clone();
+) -> Result<bool, RelayError> {
     let changed = rewrite_cache_ttl(body, ttl, markerless)?;
     let enforced = match (schema_markers(body), phoebis_cch::cache_control_spans(body)) {
         (Some(decoded), Ok(walked)) => decoded == walked.len(),
         _ => false,
     };
     if !enforced {
-        *body = as_sent;
-        return Ok(TtlEdit::Refused);
+        return Err(RelayError::BodyShape(BodyMember::CacheControl));
     }
-    Ok(TtlEdit::Applied(changed))
+    Ok(changed)
 }
 
 /// How many `cache_control` members a decoder reads at the positions the Messages API takes them from. `None`
@@ -750,9 +742,8 @@ mod tests {
     #[test]
     fn set_cache_ttl_rewrites_a_bare_marker_both_ways() {
         let mut to_hour = br#"{"cache_control":{"type":"ephemeral"}}"#.to_vec();
-        assert_eq!(
-            set_cache_ttl(&mut to_hour, CacheTtl::OneHour, Markerless::TakesTheMember).unwrap(),
-            TtlEdit::Applied(true)
+        assert!(
+            set_cache_ttl(&mut to_hour, CacheTtl::OneHour, Markerless::TakesTheMember).unwrap()
         );
         assert_eq!(
             to_hour,
@@ -760,14 +751,13 @@ mod tests {
         );
 
         let mut stays_five = br#"{"cache_control":{"type":"ephemeral"}}"#.to_vec();
-        assert_eq!(
-            set_cache_ttl(
+        assert!(
+            !set_cache_ttl(
                 &mut stays_five,
                 CacheTtl::FiveMinutes,
                 Markerless::TakesTheMember
             )
             .unwrap(),
-            TtlEdit::Applied(false),
             "already the requested shape"
         );
         assert_eq!(stays_five, br#"{"cache_control":{"type":"ephemeral"}}"#);
@@ -777,15 +767,12 @@ mod tests {
     fn set_cache_ttl_rewrites_an_hour_marker_both_ways_and_keeps_a_third_members_place() {
         let mut to_five =
             br#"{"cache_control":{"type":"ephemeral","ttl":"1h","scope":"global"}}"#.to_vec();
-        assert_eq!(
-            set_cache_ttl(
-                &mut to_five,
-                CacheTtl::FiveMinutes,
-                Markerless::TakesTheMember
-            )
-            .unwrap(),
-            TtlEdit::Applied(true)
-        );
+        assert!(set_cache_ttl(
+            &mut to_five,
+            CacheTtl::FiveMinutes,
+            Markerless::TakesTheMember
+        )
+        .unwrap());
         assert_eq!(
             to_five, br#"{"cache_control":{"type":"ephemeral","scope":"global"}}"#,
             "ttl is dropped, scope keeps its place after type"
@@ -793,9 +780,8 @@ mod tests {
 
         let mut to_hour =
             br#"{"cache_control":{"type":"ephemeral","ttl":"1h","scope":"global"}}"#.to_vec();
-        assert_eq!(
-            set_cache_ttl(&mut to_hour, CacheTtl::OneHour, Markerless::TakesTheMember).unwrap(),
-            TtlEdit::Applied(false),
+        assert!(
+            !set_cache_ttl(&mut to_hour, CacheTtl::OneHour, Markerless::TakesTheMember).unwrap(),
             "already an hour"
         );
     }
@@ -803,40 +789,31 @@ mod tests {
     #[test]
     fn set_cache_ttl_leaves_a_marker_of_another_type_as_sent() {
         let mut body = br#"{"cache_control":{"type":"persistent"}}"#.to_vec();
-        assert_eq!(
-            set_cache_ttl(&mut body, CacheTtl::OneHour, Markerless::TakesTheMember).unwrap(),
-            TtlEdit::Applied(false)
-        );
+        assert!(!set_cache_ttl(&mut body, CacheTtl::OneHour, Markerless::TakesTheMember).unwrap());
         assert_eq!(body, br#"{"cache_control":{"type":"persistent"}}"#);
     }
 
     #[test]
     fn set_cache_ttl_adds_the_top_level_member_before_stream_when_no_marker_is_present() {
         let mut with_stream = br#"{"model":"m","stream":true}"#.to_vec();
-        assert_eq!(
-            set_cache_ttl(
-                &mut with_stream,
-                CacheTtl::OneHour,
-                Markerless::TakesTheMember
-            )
-            .unwrap(),
-            TtlEdit::Applied(true)
-        );
+        assert!(set_cache_ttl(
+            &mut with_stream,
+            CacheTtl::OneHour,
+            Markerless::TakesTheMember
+        )
+        .unwrap());
         assert_eq!(
             with_stream,
             br#"{"model":"m","cache_control":{"type":"ephemeral","ttl":"1h"},"stream":true}"#
         );
 
         let mut without_stream = br#"{"model":"m"}"#.to_vec();
-        assert_eq!(
-            set_cache_ttl(
-                &mut without_stream,
-                CacheTtl::FiveMinutes,
-                Markerless::TakesTheMember
-            )
-            .unwrap(),
-            TtlEdit::Applied(true)
-        );
+        assert!(set_cache_ttl(
+            &mut without_stream,
+            CacheTtl::FiveMinutes,
+            Markerless::TakesTheMember
+        )
+        .unwrap());
         assert_eq!(
             without_stream,
             br#"{"model":"m","cache_control":{"type":"ephemeral"}}"#
@@ -846,10 +823,7 @@ mod tests {
     #[test]
     fn set_cache_ttl_leaves_a_body_with_no_marker_as_sent_where_the_member_is_not_accepted() {
         let mut body = br#"{"model":"m","messages":[],"tools":[]}"#.to_vec();
-        assert_eq!(
-            set_cache_ttl(&mut body, CacheTtl::OneHour, Markerless::GoesAsSent).unwrap(),
-            TtlEdit::Applied(false)
-        );
+        assert!(!set_cache_ttl(&mut body, CacheTtl::OneHour, Markerless::GoesAsSent).unwrap());
         assert_eq!(body, br#"{"model":"m","messages":[],"tools":[]}"#);
     }
 
@@ -858,15 +832,42 @@ mod tests {
         // No fixture body carries a marker inside `tools[]`; this synthetic body covers all three container
         // positions in one pass.
         let mut body = br#"{"system":[{"type":"text","cache_control":{"type":"ephemeral"}}],"tools":[{"name":"t","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":[{"type":"text","cache_control":{"type":"ephemeral"}}]}]}"#.to_vec();
-        assert_eq!(
-            set_cache_ttl(&mut body, CacheTtl::OneHour, Markerless::TakesTheMember).unwrap(),
-            TtlEdit::Applied(true)
-        );
+        assert!(set_cache_ttl(&mut body, CacheTtl::OneHour, Markerless::TakesTheMember).unwrap());
         let spans = phoebis_cch::cache_control_spans(&body).unwrap();
         assert_eq!(spans.len(), 3, "the rewrite adds and removes no marker");
         for (start, end) in spans {
             assert_eq!(&body[start..end], br#"{"type":"ephemeral","ttl":"1h"}"#);
         }
+    }
+
+    #[test]
+    fn set_cache_ttl_refuses_a_marker_the_walk_cannot_reach() {
+        let escaped = br#"{"system":[{"type":"text","text":"s","cache_contr\u006fl":{"type":"ephemeral","ttl":"1h"}}],"messages":[]}"#;
+        assert!(
+            escaped.windows(6).any(|w| w == br"\u006f"),
+            "the escape is in the raw bytes"
+        );
+        assert_eq!(
+            schema_markers(escaped),
+            Some(1),
+            "the decoder reads the marker"
+        );
+        assert!(
+            phoebis_cch::cache_control_spans(escaped).unwrap().is_empty(),
+            "the walk does not reach it"
+        );
+        let mut body = escaped.to_vec();
+        assert!(matches!(
+            set_cache_ttl(&mut body, CacheTtl::FiveMinutes, Markerless::TakesTheMember),
+            Err(RelayError::BodyShape(BodyMember::CacheControl))
+        ));
+
+        let repeated = br#"{"system":[{"type":"text","text":"s","cache_control":{"type":"ephemeral"},"cache_control":{"type":"ephemeral","ttl":"1h"}}],"messages":[]}"#;
+        let mut body = repeated.to_vec();
+        assert!(matches!(
+            set_cache_ttl(&mut body, CacheTtl::FiveMinutes, Markerless::TakesTheMember),
+            Err(RelayError::BodyShape(BodyMember::CacheControl))
+        ));
     }
 
     #[test]
@@ -924,11 +925,8 @@ mod tests {
     #[test]
     fn edit_body_cuts_the_safeguards_member_under_drop_and_restamps() {
         let mut body = stamped_with_safeguards();
-        let edits = edit_body(
-            &mut body,
-            &drop_edit(SafeguardsEdit::Drop { present: true }),
-        )
-        .expect("the member is cut");
+        let edits =
+            edit_body(&mut body, &drop_edit(SafeguardsEdit::Drop)).expect("the member is cut");
         assert!(edits.safeguards_dropped);
         assert!(edits.cch_restamped);
         let root: serde_json::Value = serde_json::from_slice(&body).expect("the cut body parses");
@@ -966,10 +964,7 @@ mod tests {
         );
         let mut body = escaped.clone();
         assert!(matches!(
-            edit_body(
-                &mut body,
-                &drop_edit(SafeguardsEdit::Drop { present: true })
-            ),
+            edit_body(&mut body, &drop_edit(SafeguardsEdit::Drop)),
             Err(RelayError::BodyShape(BodyMember::Safeguards))
         ));
 
@@ -978,22 +973,46 @@ mod tests {
             .into_bytes();
         let mut body = twice;
         assert!(matches!(
-            edit_body(
-                &mut body,
-                &drop_edit(SafeguardsEdit::Drop { present: true })
-            ),
+            edit_body(&mut body, &drop_edit(SafeguardsEdit::Drop)),
             Err(RelayError::BodyShape(BodyMember::Repeated("safeguards")))
         ));
 
         let without = fixture_body(BodyFixture::Oauth);
         let mut body = without.to_vec();
-        let edits = edit_body(
-            &mut body,
-            &drop_edit(SafeguardsEdit::Drop { present: false }),
-        )
-        .expect("nothing to cut");
+        let edits = edit_body(&mut body, &drop_edit(SafeguardsEdit::Drop)).expect("nothing to cut");
         assert!(!edits.safeguards_dropped);
         assert!(body == without);
+    }
+
+    #[test]
+    fn a_member_in_a_body_the_decoder_refuses_is_cut_or_refused_never_passed_through() {
+        let surrogate = String::from_utf8(fixture_body(BodyFixture::Oauth).to_vec())
+            .unwrap()
+            .replacen(r#""text":""#, r#""text":"\udc00"#, 1);
+        assert!(
+            serde_json::from_slice::<serde_json::Value>(surrogate.as_bytes()).is_err(),
+            "a lone surrogate escape is one the decoder refuses"
+        );
+        let spliced = with_safeguards(surrogate.as_bytes());
+
+        let mut body = spliced.clone();
+        let edits =
+            edit_body(&mut body, &drop_edit(SafeguardsEdit::Drop)).expect("the member is cut");
+        assert!(edits.safeguards_dropped);
+        assert!(
+            body == surrogate.as_bytes(),
+            "the member left with one comma"
+        );
+
+        let escaped = String::from_utf8(spliced)
+            .unwrap()
+            .replacen(r#""safeguards""#, r#""safeg\u0075ards""#, 1)
+            .into_bytes();
+        let mut body = escaped;
+        assert!(matches!(
+            edit_body(&mut body, &drop_edit(SafeguardsEdit::Drop)),
+            Err(RelayError::BodyShape(BodyMember::Safeguards))
+        ));
     }
 
     #[test]
