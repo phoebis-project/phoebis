@@ -936,6 +936,309 @@ usage:
     up.shutdown().await;
 }
 
+/// The API-key fixture body on `claude-opus-5-5`, whose price table row carries fast cells, with `"speed":"fast"`
+/// spliced at the top level when `fast`.
+fn opus_5_5_body(fast: bool) -> Vec<u8> {
+    let speed = if fast { r#""speed":"fast","# } else { "" };
+    let spliced = String::from_utf8(body(BodyFixture::ApiKey).to_vec())
+        .unwrap()
+        .replacen(
+            r#"{"model":"claude-sonnet-4-5""#,
+            &format!(r#"{{{speed}"model":"claude-opus-5-5""#),
+            1,
+        );
+    assert!(spliced.contains(r#""model":"claude-opus-5-5""#));
+    spliced.into_bytes()
+}
+
+/// A 200 served fast under the upstream id `request_id`: the six `anthropic-fast-*` headers, both buckets with
+/// room and resetting a minute out, and 1,000 input and 100 output tokens at speed `fast`.
+fn served_fast(request_id: &str) -> Respond {
+    let reset = (jiff::Timestamp::now().as_second() + 60).to_string();
+    let mut headers = vec![("request-id".to_string(), request_id.to_string())];
+    for (family, limit) in [("input", "400000"), ("output", "80000")] {
+        let name = |part: &str| format!("anthropic-fast-{family}-tokens-{part}");
+        headers.push((name("limit"), limit.into()));
+        headers.push((name("remaining"), "200000".into()));
+        headers.push((name("reset"), reset.clone()));
+    }
+    Respond::Json {
+        status: 200,
+        headers,
+        body: br#"{"id":"msg_fast","type":"message","model":"claude-opus-5-5","content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":1000,"output_tokens":100,"speed":"fast"}}"#.to_vec(),
+    }
+}
+
+/// A fast request's 429 for the fast lane's own limit with no overage-disabled reason, timed by `Retry-After`
+/// alone, past the pool's retry-in-place bound.
+fn fast_rate_limited() -> Respond {
+    Respond::Json {
+        status: 429,
+        headers: vec![("retry-after".into(), "120".into())],
+        body: br#"{"type":"error","error":{"type":"rate_limit_error","message":"fast limit"}}"#
+            .to_vec(),
+    }
+}
+
+#[tokio::test]
+async fn a_fast_session_is_served_fast_walked_on_a_fast_429_and_refused_locally_when_no_account_can(
+) {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/models".into(),
+        respond: Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: br#"{"data":[{"id":"claude-opus-5-5","type":"model"},{"id":"claude-sonnet-4-5","type":"model"}]}"#.to_vec(),
+        },
+    }])
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("ca.pem"), up.ca_pem()).unwrap();
+    std::fs::write(
+        dir.path().join("storage.key"),
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    )
+    .unwrap();
+    let (proxy_port, admin_port, metrics_port) = (free_port(), free_port(), free_port());
+    let yaml = format!(
+        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_FAST_ADMIN_SECRET\n  plain_http: true\ncompatibility:\n  profile: claude-code-2.1.269-linux-x64\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nrouting:\n  cooldown_fallback_seconds: 3600\n  max_attempts: 2\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
+        key = dir.path().join("storage.key").display(),
+        db = dir.path().join("phoebis.sqlite").display(),
+        ledger = dir.path().join("ledger.sqlite").display(),
+        addr = up.addr(),
+        ca = dir.path().join("ca.pem").display()
+    );
+    let cfg_path = dir.path().join("config.yaml");
+    std::fs::write(&cfg_path, yaml).unwrap();
+    let config = {
+        let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        std::env::set_var("TEST_FAST_ADMIN_SECRET", "admin-secret-001");
+        phoebis_router::config::load(&cfg_path).unwrap()
+    };
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(phoebis_router::app::run(config, async {
+        let _ = stop_rx.await;
+    }));
+    let client = reqwest::Client::builder()
+        .cookie_store(true)
+        .build()
+        .unwrap();
+    let admin = |path: &str| format!("http://127.0.0.1:{admin_port}/admin{path}");
+    logged_in(&client, &admin("/session")).await;
+
+    // Each account answers a standard request by default; every fast answer below is queued for its request.
+    const A: &str = "sk-ant-api03-AAAA";
+    const B: &str = "sk-ant-api03-BBBB";
+    for (id, secret) in [("a", A), ("b", B)] {
+        assert_eq!(
+            client
+                .post(admin("/accounts"))
+                .json(&serde_json::json!({ "id": id, "kind": "api_key", "label": id, "secret": secret }))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            201
+        );
+        up.add_credential_rule(
+            secret,
+            "/v1/messages",
+            Respond::Json {
+                status: 200,
+                headers: vec![("request-id".into(), format!("req_standard_{id}"))],
+                body: br#"{"id":"msg_std","type":"message","model":"claude-opus-5-5","content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":10,"output_tokens":1}}"#.to_vec(),
+            },
+        );
+    }
+    // `pace` orders candidates within a tier alone, so the priorities make `a` the fresh placement.
+    assert_eq!(
+        client
+            .post(admin("/pools"))
+            .json(&serde_json::json!({ "id": "main", "label": "Main", "strategy": "pace", "members": [{ "account_id": "a", "priority": 0 }, { "account_id": "b", "priority": 1 }] }))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        201
+    );
+    let key: serde_json::Value = client
+        .post(admin("/keys"))
+        .json(&serde_json::json!({ "id": "desktop", "label": "Desktop", "pool_id": "main" }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let secret = key["secret"].as_str().unwrap().to_string();
+    let send = |fast: bool| {
+        fixture_request(&client, proxy_port, &secret, "fast-e2e")
+            .body(opus_5_5_body(fast))
+            .send()
+    };
+    // The ledger's row for the attempt the upstream answered under `upstream_id`, once it has landed.
+    let attempt_of = |upstream_id: &'static str| {
+        let client = client.clone();
+        let url = admin("/requests?limit=50");
+        async move {
+            let log = wait_json(&client, &url, |v| {
+                v["requests"].as_array().is_some_and(|rows| {
+                    rows.iter().any(|row| {
+                        row["attempts"].as_array().is_some_and(|attempts| {
+                            attempts
+                                .iter()
+                                .any(|a| a["upstream_request_id"] == upstream_id)
+                        })
+                    })
+                })
+            })
+            .await;
+            log["requests"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| {
+                    row["attempts"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|a| a["upstream_request_id"] == upstream_id)
+                })
+                .cloned()
+                .unwrap()
+        }
+    };
+    let dialed = || {
+        up.requests()
+            .iter()
+            .filter(|r| r.line.starts_with("POST /v1/messages"))
+            .count()
+    };
+
+    // Served fast: the first fast request lands on `a` and is priced at the fast cells.
+    up.push_credential_rule(A, "/v1/messages", served_fast("req_fast_a1"));
+    assert_eq!(send(true).await.unwrap().status(), 200);
+    let row = attempt_of("req_fast_a1").await;
+    let attempt = &row["attempts"][0];
+    assert_eq!(
+        (
+            attempt["account_id"].as_str(),
+            attempt["response"]["speed"].as_str()
+        ),
+        (Some("a"), Some("fast"))
+    );
+    // 1,000 input tokens at 8 and 100 output tokens at 40 per million, the fast cells of `claude-opus-5-5`.
+    let usd = attempt["estimated_usd"].as_f64().unwrap();
+    assert!((usd - 0.012).abs() < 1e-9, "{usd}");
+    wait_json(&client, &admin("/accounts"), |v| {
+        v["accounts"].as_array().is_some_and(|rows| {
+            rows.iter()
+                .any(|r| r["id"] == "a" && r["fast_lane"].is_object())
+        })
+    })
+    .await;
+
+    // Walked: `a`'s fast 429 cools its fast lane alone and the request moves to `b` under `fast_lane`.
+    up.push_credential_rule(A, "/v1/messages", fast_rate_limited());
+    up.push_credential_rule(B, "/v1/messages", served_fast("req_fast_b1"));
+    assert_eq!(send(true).await.unwrap().status(), 200);
+    let row = attempt_of("req_fast_b1").await;
+    assert_eq!(
+        row["attempts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|a| (a["account_id"].as_str(), a["upstream_status"].as_u64()))
+            .collect::<Vec<_>>(),
+        [(Some("a"), Some(429)), (Some("b"), Some(200))]
+    );
+    wait_json(
+        &client,
+        &admin(&format!("/requests/{}", row["id"].as_str().unwrap())),
+        |v| {
+            v["events"].as_array().is_some_and(|events| {
+                events
+                    .iter()
+                    .any(|e| e["kind"] == "pin_migrated" && e["detail"]["reason"] == "fast_lane")
+            })
+        },
+    )
+    .await;
+    let a: serde_json::Value = client
+        .get(admin("/accounts/a"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        a["cooldowns"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| (c["scope"].as_str(), c["reason"].as_str()))
+            .collect::<Vec<_>>(),
+        [(Some("fast"), Some("fast_rate_limit"))]
+    );
+
+    // Refused locally: `b`'s own fast 429 leaves no fast-eligible account, so the request that met it is
+    // refused, and the next fast request is refused before any dial.
+    up.push_credential_rule(B, "/v1/messages", fast_rate_limited());
+    let before = dialed();
+    let met = send(true).await.unwrap();
+    assert_eq!(dialed(), before + 1, "the request dialled `b` alone");
+    assert_eq!(
+        (
+            met.status().as_u16(),
+            met.headers()["x-phoebis-error-code"].to_str().unwrap()
+        ),
+        (429, "fast_lane_exhausted")
+    );
+    let before = dialed();
+    let refused = send(true).await.unwrap();
+    assert_eq!(
+        (
+            refused.status().as_u16(),
+            refused.headers()["x-phoebis-error-code"].to_str().unwrap()
+        ),
+        (429, "fast_lane_exhausted")
+    );
+    let retry_after: u64 = refused.headers()["retry-after"]
+        .to_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    // The earlier fast deadline, `a`'s 120 seconds plus the second of margin a `Retry-After` row keeps.
+    assert!((1..=121).contains(&retry_after), "{retry_after}");
+    assert_eq!(dialed(), before, "the refusal dialled no upstream");
+
+    // A standard request of the same session holds no pin and places afresh on `a`, whose fast-lane row holds
+    // fast requests alone.
+    assert_eq!(send(false).await.unwrap().status(), 200);
+    let row = attempt_of("req_standard_a").await;
+    assert_eq!(row["attempts"][0]["account_id"], "a");
+
+    // Clearing `a`'s fast lane lets the next fast request land there.
+    assert_eq!(
+        client
+            .delete(admin("/accounts/a/cooldowns/fast"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        204
+    );
+    up.push_credential_rule(A, "/v1/messages", served_fast("req_fast_a2"));
+    assert_eq!(send(true).await.unwrap().status(), 200);
+    let row = attempt_of("req_fast_a2").await;
+    assert_eq!(row["attempts"][0]["account_id"], "a");
+
+    let _ = stop_tx.send(());
+    server.await.unwrap().unwrap();
+    up.shutdown().await;
+}
+
 /// The plan-quota sibling takes a session once its
 /// current account reports overage, under the pool's default `prefer_plan` policy.
 #[tokio::test]

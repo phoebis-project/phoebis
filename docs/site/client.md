@@ -12,6 +12,7 @@ CLAUDE_CODE_OAUTH_TOKEN=<key secret>
 _CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1
 CLAUDE_CODE_GATEWAY_HINT_HEADERS=1
 DISABLE_TELEMETRY=1
+CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1
 ```
 
 ### ANTHROPIC_BASE_URL
@@ -82,6 +83,16 @@ Optional. Set to `1`, it switches off the client's event logger, which otherwise
 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` does the same and also stops update checks and the bootstrap lookup. The
 policy and settings lookups the client makes at start still go to `api.anthropic.com` with the secret under either
 setting; they fail there and the client tolerates that.
+
+### CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK
+
+Optional; needed to use fast mode behind the router. The client checks whether fast mode is available for the
+organization by asking `api.anthropic.com` directly with the session's credential, ignoring `ANTHROPIC_BASE_URL`;
+with a router key that check fails as a connectivity error and fast mode stays off. With this variable set the
+client skips the check and sends `speed: "fast"` when you switch fast mode on. The router reads the speed from
+the request and the answer: a fast request is served on an upstream whose fast lane is open, priced in dollars
+from usage credits, and moved to a sibling when an upstream's fast lane cools (see
+[Cooldowns and failover](routing.md#cooldowns-and-failover)); it draws no plan window.
 
 ### For the keepalive companion
 
@@ -231,6 +242,16 @@ list. Every one of these hints is optional: a client that sends none of them is 
 A client that forks a session under a new id, whose messages
 continue an earlier conversation of the same key, keeps the new id as that session's own identity; the fork is
 recorded beside it, visible in the console, without moving the new session off the account its own history names.
+
+### The per-turn effort form
+
+On a model the client marks for it, the client sends `per-turn-control-2026-07-01` on `anthropic-beta` and
+carries the effort of each turn in a `role: "system"` entry appended to `messages`, beside the top-level
+`output_config.effort`. The router relays both as sent and never rewrites one form into the other. It reads the
+last such entry's level as the request's effort, treats the turn before the entry as the user's turn, and treats
+the entry as one more message of the conversation, so an effort change under this form keeps the session's cache
+lane; on a model the client sends no such entry for, the effort is part of the cache lane and a change of it
+reads the session's prefix as cold (see [Selection](routing.md#selection)).
 
 ## Your key's usage
 

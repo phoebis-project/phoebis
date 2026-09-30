@@ -415,19 +415,21 @@ marks, so the next request after it may start a fresh round.
 
 **Warmth** A pin stays warm while its last refresh is younger than the cache TTL in force for it. A `main`, `subagent`
 or `compaction` request ([`x-claude-code-request-class`](client.md#claude_code_gateway_hint_headers)) refreshes it, and
-any other class leaves it alone. A request on another cache lane than the pin's last (a speed change, a thinking change,
-or an effort change on a model the client sends no per-turn control entry for) reads cold whatever its messages
-continue, and the pin takes the new lane; a per-turn control entry is one more message and continues the conversation.
-Without the class header, a request whose messages extend the session's conversation refreshes the pin; one that repeats
-the session's static prefix (tools and system prompt) without extending its messages restarted the conversation and
-reads cold; one that matches neither changes nothing. Where one session holds several conversations,
+any other class leaves it alone. A request that would refresh the pin reads it cold instead when it is on another cache
+lane than the pin's last (a speed change, a thinking change, or an effort change on a model the client sends no per-turn
+control entry for), whatever its messages continue, and the pin takes the new lane; a request that leaves the pin alone
+leaves its lane as it was, and a per-turn control entry is one more message and continues the conversation. Without the
+class header, a request whose messages extend the session's conversation refreshes the pin; one that repeats the
+session's static prefix (tools and system prompt) without extending its messages restarted the conversation and reads
+cold; one that matches neither changes nothing. Where one session holds several conversations,
 a request that extends any conversation the pin
 has served refreshes it.
 A request that carries `x-claude-code-context-compacted` reads cold whatever else it says, so a compacted
 session goes first in the round's order on the request that carries the fact. A body the router cannot read refreshes
-the pin on every request. A keepalive probe replays another request's headers and body, so the router judges none of
-them: a probe never colds a session, and its renewal counts as a refresh. A `count_tokens` request creates no cache
-entry, so it neither refreshes nor colds the pin and leaves its cache TTL as it was.
+the pin on every request on the pin's lane; the first one after a request on another lane reads it cold, as any lane
+change does. A keepalive probe replays another request's headers and body, so the router judges none of them: a probe
+never colds a session, and its renewal counts as a refresh. A `count_tokens` request creates no cache entry, so it
+neither refreshes nor colds the pin and leaves its cache TTL as it was.
 
 **Burn** Each pin keeps its usage over `burn_window_seconds` as typed tokens per hour (input, cache read, 5-minute and
 1-hour cache writes, output) for the pin's one model, in two copies: one plain and one weighed by the peak band at each
@@ -481,11 +483,11 @@ evidence that the window is fine, and the rejection cools the whole account.
 
 **fast mode** (either kind, read ahead of the two tables above)
 
-| Upstream result to a fast request | Cooldown | Failover |
+| 429 or SSE `rate_limit_error` to a fast request | Cooldown | Failover |
 | --- | --- | --- |
-| 429 or SSE `rate_limit_error`, overage-disabled reason on the head | Fast lane, reason `fast_credits` | Yes |
-| 429 or SSE `rate_limit_error`, no such reason, 5h and 7d not rejected | Fast lane, reason `fast_rate_limit` | Yes |
-| 429, no such reason, the 5h or 7d window rejected, or an api_key spend cap | The rows above | Yes |
+| Overage-disabled reason on the head | Fast lane, reason `fast_credits` | Yes |
+| No such reason, 5h and 7d not rejected, no api_key spend cap | Fast lane, reason `fast_rate_limit` | Yes |
+| No such reason, the 5h or 7d window rejected, or an api_key spend cap | The rows above | Yes |
 
 The overage-disabled reason decides first, whatever the shared windows read, since a fast request draws usage credits
 and no plan window; a rejected top-level `status` that names neither shared window leaves the rate limit on the fast
