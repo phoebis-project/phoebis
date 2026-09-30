@@ -394,8 +394,11 @@ pin's last prompt size in tokens), and marks them in that order until the marked
 (default 0.5) of the account's burn over `burn_window_seconds` (default 600). It never marks the account's last
 unmarked pin, so an account with one session sheds nothing and no round takes all of an account's burn. A pin
 whose burn carries the total past the share stays marked, and the round stops there. `warm_sessions` bounds the
-order: `never` stops after the cold pins, `when_needed` (the default) goes on to the warm ones, and `always`
-orders every pin by burn over rewrite cost, cold or warm.
+order: `never` stops after the cold pins, `when_needed` (the default) goes on to the warm ones, and `always` orders
+every pin by burn over rewrite cost, cold or warm. While the account runs on its plan, a pin whose session last sent a
+request in fast mode is out of the round: fast mode draws usage credits and no plan window, so the pin has no share to
+shed. In dollars, on an API-key account or one in overage, it stays in the round. A session that returns to standard
+requests brings its pin back with the plan burn it still carries.
 
 The console's Pools form offers `shed_share`, `burn_window_seconds`, and `source_dwell_seconds` together as three
 presets beside custom: balanced (0.5, 600 s, 900 s, the default), fast (0.5, 300 s, 600 s), and conservative (0.3,
@@ -403,11 +406,12 @@ presets beside custom: balanced (0.5, 600 s, 900 s, the default), fast (0.5, 300
 whose tier is not known, which the round still sheds.
 
 A marked session moves at its next request, onto a cool sibling (see above) that did not shed this pin within
-`source_dwell_seconds`. A marked pin whose account is cooling for the session's model is released instead, with
-`cooldown` among its reasons, and its mark goes with it; the round on the account still runs, since a cooldown can hold
-one model alone. An unmarked pin never moves for utilization. The marks live in memory for the dwell: a marked session
-that stays idle never moves, no new round runs on the account until the dwell passes, and a restart forgets the marks,
-so the next request after it may start a fresh round.
+`source_dwell_seconds`. A mark from a round on plan quota moves a standard request alone: a fast-mode request of the
+marked session stays where it is. A marked pin whose account is cooling for the session's model is released instead,
+with `cooldown` among its reasons, and its mark goes with it; the round on the account still runs, since a cooldown can
+hold one model alone. An unmarked pin never moves for utilization. The marks live in memory for the dwell: a marked
+session that stays idle never moves, no new round runs on the account until the dwell passes, and a restart forgets the
+marks, so the next request after it may start a fresh round.
 
 **Warmth** A pin stays warm while its last refresh is younger than the cache TTL in force for it. A `main`, `subagent`
 or `compaction` request ([`x-claude-code-request-class`](client.md#claude_code_gateway_hint_headers)) refreshes it, and

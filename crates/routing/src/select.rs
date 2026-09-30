@@ -90,6 +90,11 @@ pub(crate) fn same_lane(stored: &str, lane: &str) -> bool {
     stored.is_empty() || stored == lane
 }
 
+/// Whether `lane` is a fast one: its speed part, the second of the three after the model, reads `fast`.
+fn lane_is_fast(lane: &str) -> bool {
+    lane.rsplit('|').nth(2) == Some("fast")
+}
+
 /// Where a fresh placement's account came from, for the trace and the console's hit-or-miss reading.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct Placement {
@@ -671,10 +676,16 @@ pub fn select(
             .is_some_and(|term| term::ended(term, request.now))
     }) {
         let cold = !warm_on(current, verdict, request.now);
+        // The lane the pin carries once this request renews it: a request that leaves the pin alone stamps none.
+        let fast = if verdict == Warmth::Untouched {
+            lane_is_fast(&current.lane)
+        } else {
+            request.fast
+        };
         // A hold is for a fresh placement: with every destination at its cap the move is not made, the pin
         // renews in place at step 5, and the next request judges the move again.
         if let Some((reason, set)) = move_of(
-            state, snapshot, pool, request, current, &eligible, window, cold,
+            state, snapshot, pool, request, current, &eligible, window, cold, fast,
         )
         .filter(|(_, set)| {
             set.iter()
@@ -1107,6 +1118,7 @@ fn move_of<'a>(
     eligible: &[&'a Candidate],
     window: &str,
     cold: bool,
+    fast: bool,
 ) -> Option<(MigrateReason, Vec<&'a Candidate>)> {
     let (now, fallback_ms) = (request.now, request.fallback_ms);
     let prefer_plan = pool.overage_policy == OveragePolicy::PreferPlan;
@@ -1238,7 +1250,7 @@ fn move_of<'a>(
         .last_shed(&current.account_id)
         .is_none_or(|at| now - at >= dwell_ms)
     {
-        let marks = shed_round(state, snapshot, pool, current, cold, now, fallback_ms);
+        let marks = shed_round(state, snapshot, pool, current, cold, fast, now, fallback_ms);
         state.record_shed(&current.account_id, now, marks);
     }
     // A pin on an account cooled for this model is not renewed at step 5, so the fresh placement replaces it:
@@ -1256,8 +1268,13 @@ fn move_of<'a>(
         return None;
     }
     // A pin moves only when its session asks, so an unmarked pin never moves for utilization and a marked one
-    // moves at its next request.
-    if !state.shed_marked(&current.key(), now, dwell_ms) {
+    // moves at its next request. A plan-quota round sheds window share, which a fast request does not draw, so
+    // its mark moves a standard request alone; a dollar round's mark moves a fast one too.
+    if !state.shed_marked(&current.key(), now, dwell_ms)
+        || (request.fast
+            && burn_unit(state, snapshot, &current.account_id, now, fallback_ms)
+                == BurnUnit::WindowShare)
+    {
         return None;
     }
     let set = destinations(state, &|c| {
@@ -1268,26 +1285,41 @@ fn move_of<'a>(
     (!set.is_empty()).then_some((MigrateReason::Shed, set))
 }
 
+/// The unit the account's burn is shed in: the plan window's share on a subscription account on plan quota,
+/// dollars on an api_key account or one in overage.
+fn burn_unit(
+    state: &RoutingState,
+    snapshot: &RegistrySnapshot,
+    account_id: &str,
+    now: i64,
+    fallback_ms: i64,
+) -> BurnUnit {
+    let kind = snapshot
+        .account(account_id)
+        .map_or(AccountKind::Oauth, |a| a.kind);
+    BurnUnit::of(kind, state.in_overage(account_id, now, fallback_ms))
+}
+
 /// A shedding round over the account `current` sits on: every pin of it, cold first by burn, then warm by burn
 /// over rewrite cost, bounded by `warm_sessions`, marked in that order up to `shed_share` of the account's burn
 /// in the unit its funding selects. On plan quota each burn is the Max 5x 5-hour share rate: the tier's factor
-/// divides every pin of the account alike, so neither the order nor the share of the sum needs it. The current
-/// pin's warmth is this request's verdict; every other pin's is the stored one.
+/// divides every pin of the account alike, so neither the order nor the share of the sum needs it, and a pin on
+/// a fast lane is out of the round, since it draws no window and has nothing to shed there; in dollars it stays.
+/// The current pin's warmth and lane are this request's; every other pin's are the stored ones.
+#[allow(clippy::too_many_arguments)]
 fn shed_round(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
     pool: &PoolRow,
     current: &PinRow,
     current_cold: bool,
+    current_fast: bool,
     now: i64,
     fallback_ms: i64,
 ) -> Vec<PinKey> {
     let account_id = &current.account_id;
-    let kind = snapshot
-        .account(account_id)
-        .map_or(AccountKind::Oauth, |a| a.kind);
-    let unit = BurnUnit::of(kind, state.in_overage(account_id, now, fallback_ms));
-    let (pins, sum) = state.burn_of(
+    let unit = burn_unit(state, snapshot, account_id, now, fallback_ms);
+    let (mut pins, mut sum) = state.burn_of(
         account_id,
         unit,
         state.rates(),
@@ -1295,6 +1327,17 @@ fn shed_round(
         seconds_ms(pool.shedding.burn_window_seconds),
     );
     let is_current = |p: &PinRow| p.key() == current.key();
+    if unit == BurnUnit::WindowShare {
+        let on_fast_lane = |p: &PinRow| {
+            if is_current(p) {
+                current_fast
+            } else {
+                lane_is_fast(&p.lane)
+            }
+        };
+        pins.retain(|(p, _)| !on_fast_lane(p));
+        sum = pins.iter().map(|(_, burn)| burn).sum();
+    }
     let (mut cold, mut warm_pins): (Vec<_>, Vec<_>) = pins.into_iter().partition(|(p, _)| {
         if is_current(p) {
             current_cold

@@ -9327,6 +9327,120 @@ fn a_compacted_request_on_a_warm_pin_is_first_in_the_order_on_that_request() {
 }
 
 #[test]
+fn a_fast_pin_leaves_a_plan_quota_round_and_stays_in_a_dollar_round() {
+    let fast_lane = lane_key("claude-sonnet-5", "fast", "none", "-");
+    let pins = || {
+        vec![
+            PinRow {
+                lane: fast_lane.clone(),
+                ..burning("fast-3", "a", 3.0, false, T)
+            },
+            burning("warm-2", "a", 2.0, true, T),
+            burning("warm-1", "a", 1.0, true, T),
+        ]
+    };
+    let marks = |st: &RoutingState| -> Vec<&str> {
+        ["fast-3", "warm-2", "warm-1"]
+            .into_iter()
+            .filter(|session| marked(st, session, T))
+            .collect()
+    };
+    let s = snapshot(shedding_pool(Shedding::default()));
+    let mut st = loaded(pins());
+    hot_a_cool_b(&mut st, T - 500);
+    assert_eq!(
+        landed(select(&mut st, &s, &main_turn(&s, "warm-1", T), &mut rng()).0),
+        ("a".into(), None)
+    );
+    assert_eq!(
+        marks(&st),
+        ["warm-2"],
+        "the cold fast pin draws no window, so the round weighs the two standard pins alone"
+    );
+
+    let s = snapshot(Pool {
+        policy: OveragePolicy::Allow,
+        ..shedding_pool(Shedding::default())
+    });
+    let mut st = loaded(pins());
+    hot_a_cool_b(&mut st, T - 500);
+    st.record_overage("a", overage(true, T - 500, Some(T + 10 * MINUTE)));
+    select(&mut st, &s, &main_turn(&s, "warm-1", T), &mut rng());
+    assert_eq!(
+        marks(&st),
+        ["fast-3"],
+        "in overage the round reads dollars, which the fast pin spends too"
+    );
+    assert_eq!(
+        landed(
+            select(
+                &mut st,
+                &s,
+                &fast(main_turn(&s, "fast-3", T + 1_000)),
+                &mut rng()
+            )
+            .0
+        ),
+        ("b".into(), Some(MigrateReason::Shed)),
+        "and a dollar round's mark moves its fast request"
+    );
+}
+
+#[test]
+fn a_pin_turned_fast_leaves_the_round_and_its_standard_burn_counts_again_once_it_returns() {
+    let s = snapshot(shedding_pool(Shedding::default()));
+    let mut st = loaded(vec![
+        burning("mover", "a", 3.0, true, T),
+        burning("warm-2", "a", 2.0, true, T),
+        burning("warm-1", "a", 1.0, true, T),
+    ]);
+    hot_a_cool_b(&mut st, T - 500);
+    assert_eq!(
+        landed(select(&mut st, &s, &fast(main_turn(&s, "mover", T)), &mut rng()).0),
+        ("a".into(), None),
+        "on the fast lane the pin draws no window, so the round passes it over"
+    );
+    assert!(!marked(&st, "mover", T) && marked(&st, "warm-2", T));
+    let later = T + 900_000;
+    hot_a_cool_b(&mut st, later - 500);
+    assert_eq!(
+        landed(select(&mut st, &s, &main_turn(&s, "mover", later), &mut rng()).0),
+        ("b".into(), Some(MigrateReason::Shed)),
+        "back on the standard lane its earlier burn is the account's largest and the round sheds it"
+    );
+}
+
+#[test]
+fn a_plan_quota_rounds_mark_moves_a_standard_request_of_the_pin_and_never_a_fast_one() {
+    let s = snapshot(shedding_pool(Shedding::default()));
+    let mut st = loaded(vec![
+        burning("cold-3", "a", 3.0, false, T),
+        burning("warm-1", "a", 1.0, true, T),
+    ]);
+    hot_a_cool_b(&mut st, T - 500);
+    select(&mut st, &s, &main_turn(&s, "warm-1", T), &mut rng());
+    assert!(marked(&st, "cold-3", T));
+    assert_eq!(
+        landed(
+            select(
+                &mut st,
+                &s,
+                &fast(auxiliary(&s, "cold-3", T + 1_000)),
+                &mut rng()
+            )
+            .0
+        ),
+        ("a".into(), None),
+        "a fast request draws no window, so the plan round's mark leaves it in place"
+    );
+    assert_eq!(
+        landed(select(&mut st, &s, &auxiliary(&s, "cold-3", T + 2_000), &mut rng()).0),
+        ("b".into(), Some(MigrateReason::Shed)),
+        "while a standard request of the same pin moves on it"
+    );
+}
+
+#[test]
 fn a_lane_changed_pin_sorts_among_the_cold_ones_in_the_shed_round() {
     // A small share: the round marks exactly the first pin in its order.
     let s = snapshot(shedding_pool(Shedding {
