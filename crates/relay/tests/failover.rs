@@ -1288,6 +1288,54 @@ async fn a_committed_answer_the_relay_drained_renews_its_pin_where_the_answer_en
 }
 
 #[tokio::test]
+async fn a_fast_answers_renewal_folds_its_dollars_and_leaves_the_plan_copy_of_the_burn_at_zero() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: br#"{"id":"msg_1","type":"message","content":[],"usage":{"input_tokens":100,"output_tokens":20,"speed":"fast"}}"#
+                .to_vec(),
+        },
+    }])
+    .await;
+    let h = harness(
+        &up,
+        &[api_key("k1", "sk-ant-api03-KEY1", 0)],
+        PoolSpec::default(),
+    )
+    .await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    resp.into_body().collect().await.unwrap();
+    let pin = wait_for_async(Duration::from_secs(5), || async {
+        h.router
+            .pins()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|p| p.burn_at.is_some())
+    })
+    .await;
+    assert!(
+        pin.burn.input > 0.0 && pin.burn.output > 0.0,
+        "the answer's usage folds into the dollar copy: {:?}",
+        pin.burn
+    );
+    assert_eq!(
+        pin.burn_banded,
+        phoebis_store::PinBurn::default(),
+        "an answer reporting usage.speed fast draws no plan window, so the banded copy folds nothing"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
 async fn the_renewal_report_carries_the_usage_the_origin_and_the_ttl_and_a_probe_folds_no_burn() {
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),

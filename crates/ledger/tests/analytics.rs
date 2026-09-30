@@ -976,7 +976,7 @@ fn a_fast_row_adds_dollars_and_no_share_to_a_subscription_burn_point() {
         bucket_seconds: 3_600,
         ..SeriesFilter::default()
     };
-    let point = |speed: &str| {
+    let point = |speed: &str, tiers: &Tiers| {
         let row = RollupRow {
             input_tokens: 1_000,
             output_tokens: 100,
@@ -996,29 +996,42 @@ fn a_fast_row_adds_dollars_and_no_share_to_a_subscription_burn_point() {
                 speed,
             )
         };
-        burn_series_over(&[row], &tables, &kinds, &tiers, &filter)
+        burn_series_over(&[row], &tables, &kinds, tiers, &filter)
             .unwrap()
             .into_iter()
             .find(|p| p.at == 3_600_000)
             .unwrap()
     };
-    let standard = point("standard");
+    let standard = point("standard", &tiers);
     assert!(
         standard.five_hour_share.is_some()
             && standard.seven_day_share.is_some()
             && standard.usd == 0.0,
         "a standard row on a subscription reads a share and no dollars: {standard:?}"
     );
-    let fast = point("fast");
+    let fast = point("fast", &tiers);
     assert_eq!(
         (
             fast.usd,
             fast.five_hour_share,
             fast.seven_day_share,
+            fast.five_hour_unmeasured,
+            fast.seven_day_unmeasured,
             fast.uncached_tokens
         ),
-        (0.25, None, None, 1_000),
-        "a fast row draws usage credits: its dollars and its tokens, and no share of either window"
+        (0.25, Some(0.0), Some(0.0), false, false, 1_000),
+        "a fast row draws usage credits: its dollars and its tokens, and a zero share of either window that \
+         still says the tier is sized"
+    );
+    let tierless = point("fast", &Tiers::new());
+    assert_eq!(
+        (
+            tierless.usd,
+            tierless.five_hour_share,
+            tierless.seven_day_share
+        ),
+        (0.25, None, None),
+        "without a tier the tables size, a fast row reads its dollars and no share"
     );
 }
 
@@ -1303,6 +1316,82 @@ fn a_session_attempt_weighs_its_five_hour_share_by_the_band_at_its_completion() 
         .abs()
             < 1e-6,
         "the 7-day share carries no band: {point:?}"
+    );
+}
+
+#[test]
+fn a_sessions_fast_attempt_reads_its_dollars_at_a_zero_share() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    for (session, speed) in [("s-standard", None), ("s-fast", Some("fast"))] {
+        let id = format!("r-{session}");
+        db.insert_request(
+            &RequestRecord {
+                id: id.clone(),
+                received_at: WEEKDAY_OFF_PEAK,
+                finished_at: Some(WEEKDAY_OFF_PEAK + 500),
+                key_id: Some("k".into()),
+                pool_id: Some("p".into()),
+                session_id: Some(session.into()),
+                canonical_model: "claude-opus-5".into(),
+                model: "claude-opus-5".into(),
+                kind: "inference".into(),
+                origin: "client".into(),
+                outcome: "succeeded".into(),
+                attempts: 1,
+                ..Default::default()
+            },
+            &[AttemptRecord {
+                request_id: id,
+                attempt: 1,
+                account_id: "a".into(),
+                account_kind: "oauth".into(),
+                started_at: WEEKDAY_OFF_PEAK,
+                finished_at: Some(WEEKDAY_OFF_PEAK + 500),
+                outcome: "succeeded".into(),
+                input_tokens: Some(1_000_000),
+                estimated_usd: Some(10.0),
+                speed: speed.map(String::from),
+                ..Default::default()
+            }],
+            None,
+        )
+        .unwrap();
+    }
+    let tables = PlanTables::shipped();
+    let kinds = HashMap::from([("a".to_string(), AccountKind::Oauth)]);
+    let tiers: Tiers = HashMap::from([("a".to_string(), Some(MAX_5X.to_string()))]);
+    let hour = phoebis_ledger::hour_of(WEEKDAY_OFF_PEAK) * 1_000;
+    let filter = SeriesFilter {
+        from: hour,
+        to: hour + 3_600_000,
+        bucket_seconds: 3_600,
+        ..SeriesFilter::default()
+    };
+    let sessions = db
+        .read_blocking(|c| phoebis_ledger::session_burn_series(c, &tables, &kinds, &tiers, &filter))
+        .unwrap();
+    let point = |session: &str| {
+        sessions
+            .iter()
+            .find(|(id, _)| id == session)
+            .and_then(|(_, points)| points.iter().find(|p| p.at == hour).cloned())
+            .unwrap_or_else(|| panic!("{session} has the planted hour: {sessions:?}"))
+    };
+    let standard = point("s-standard");
+    assert!(
+        standard.five_hour_share.is_some_and(|s| s > 0.0) && standard.usd == 0.0,
+        "the standard attempt reads a share and no dollars: {standard:?}"
+    );
+    let fast = point("s-fast");
+    assert_eq!(
+        (
+            fast.usd,
+            fast.five_hour_share,
+            fast.seven_day_share,
+            fast.uncached_tokens
+        ),
+        (10.0, Some(0.0), Some(0.0), 1_000_000),
+        "the attempt that reported speed fast reads its dollars and a zero share"
     );
 }
 

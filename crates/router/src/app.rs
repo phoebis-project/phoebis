@@ -871,6 +871,21 @@ mod tests {
             (config.rates.dollars.price("claude-sonnet-5", usage) - usd).abs() < 1e-12,
             "the dollar table prices a usage as the price table estimates it"
         );
+        let (fast_usd, _) = prices
+            .estimate(
+                "claude-opus-5-5",
+                phoebis_ledger::Speed::Fast,
+                1_000,
+                10_000,
+                100,
+                200,
+                500,
+            )
+            .unwrap();
+        assert!(
+            (config.rates.fast.price("claude-opus-5-5", usage) - fast_usd).abs() < 1e-12,
+            "the fast table prices a usage as the price table estimates a fast answer"
+        );
         // Monday 2026-09-21 at 14:00 and at 20:00 UTC.
         assert_eq!(
             config.band.at(phoebis_routing::FIVE_HOUR, 1_789_999_200_000),

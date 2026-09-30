@@ -103,7 +103,8 @@ A subscription account's plan-side figures read as a share of its own 5-hour win
 with the window named; an API-key account, and a subscription account in overage, read dollars.
 
 A fast answer draws no plan window: it adds nothing to the share, the prediction, the burn a shedding round ranks by, or
-the reconciliation, and reads as dollars wherever the account's other requests read as a share.
+the reconciliation. It reads as a zero share in Plan per hour, and its dollars count toward the member budgets and the
+burn route's `usd`, which Spend per minute charts when grouped by key, request class or session.
 
 The cost table (`crates/ledger/cost_table.yaml`) ships beside the price table: per window, model and token type, the
 share of a Max 5x subscription's window that one million tokens consume, each cell dated with the day it was measured or

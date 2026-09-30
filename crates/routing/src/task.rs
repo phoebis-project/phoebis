@@ -107,8 +107,8 @@ pub struct RouterConfig {
     pub band: BandWeight,
     pub purge_interval: Duration,
     /// The dollar table and the Max 5x 5-hour share table the shedding round prices each pin's burn through
-    /// when it reads it. The task holds them because neither this crate nor the relay can see the ledger's
-    /// tables.
+    /// when it reads it, and the fast table a renewal of a fast answer weighs the plain copy's fold by. The task
+    /// holds them because neither this crate nor the relay can see the ledger's tables.
     pub rates: BurnRates,
     /// The share of an account's windows a completed request consumed; the default prices nothing.
     pub share: SharePricer,

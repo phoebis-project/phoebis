@@ -859,7 +859,7 @@ export const SETTINGS: Settings = {
   listeners: { admin: '127.0.0.1:8081', metrics: '127.0.0.1:9464', proxy: '127.0.0.1:8080' },
   // The route answers the table the ledger ships, so the captured answer is the table itself.
   planTables: SETTINGS_SAMPLE.planTables,
-  pricing: { effectiveDate: '2026-09-08', models: PRICES, source: 'shipped' },
+  pricing: { effectiveDate: '2026-09-30', models: PRICES, source: 'shipped' },
   quota: { sampleRetentionDays: 30 },
   retention: { bodyCaptureMaxHours: 72, ledgerDays: 90, quotaSamplesDays: 30, rollupDays: 400 },
   routing: { catalogCacheSeconds: 60, catalogRefreshSeconds: 21_600, cooldownFallbackSeconds: 60, maxAttempts: 3, modelRejectionSeconds: 3_600, startupFetchSeconds: 5 },

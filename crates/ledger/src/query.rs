@@ -1599,7 +1599,8 @@ pub(crate) struct UsageRow<'a> {
 /// The shares of an oauth account's two windows (the 5-hour one banded at the row's own instant) when `tier`
 /// names one the tables size, `estimated_usd` for an api_key account; a row whose account is not in `kinds`
 /// carries no price the caller could attribute, so it adds nothing at all. A fast row on an oauth account adds
-/// its `estimated_usd` and no share: fast mode spends usage credits and draws no plan window.
+/// its `estimated_usd` and a zero share where the tables size its tier: fast mode spends usage credits and draws no
+/// plan window, and the zero still tells a reader the account is priced in its window unit.
 pub(crate) fn price_usage(
     point: &mut BurnPoint,
     kind: Option<AccountKind>,
@@ -1608,8 +1609,10 @@ pub(crate) fn price_usage(
     row: &UsageRow,
 ) {
     match kind {
-        Some(AccountKind::Oauth) if row.fast => point.usd += row.estimated_usd,
         Some(AccountKind::Oauth) => {
+            if row.fast {
+                point.usd += row.estimated_usd;
+            }
             let usage = PinUsage {
                 input: row.input_tokens,
                 cache_read: row.cache_read_tokens,
@@ -1621,12 +1624,18 @@ pub(crate) fn price_usage(
                 if let Some(share) =
                     tables.five_hour_share_at(tier, row.canonical_model, usage, row.at)
                 {
-                    *point.five_hour_share.get_or_insert(0.0) += share.share;
-                    point.five_hour_unmeasured |= share.unmeasured;
+                    let total = point.five_hour_share.get_or_insert(0.0);
+                    if !row.fast {
+                        *total += share.share;
+                        point.five_hour_unmeasured |= share.unmeasured;
+                    }
                 }
                 if let Some(share) = tables.share(SEVEN_DAY, tier, row.canonical_model, usage) {
-                    *point.seven_day_share.get_or_insert(0.0) += share.share;
-                    point.seven_day_unmeasured |= share.unmeasured;
+                    let total = point.seven_day_share.get_or_insert(0.0);
+                    if !row.fast {
+                        *total += share.share;
+                        point.seven_day_unmeasured |= share.unmeasured;
+                    }
                 }
             }
         }

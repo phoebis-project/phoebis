@@ -443,7 +443,7 @@ impl LiveState {
         e.cost_usd = table
             .estimate(
                 &e.canonical_model,
-                Speed::Standard,
+                Speed::of(c.response.speed.as_deref()),
                 e.usage.input,
                 e.usage.cache_read,
                 e.usage.cache_write_5m,
@@ -883,6 +883,41 @@ mod tests {
                 .as_deref(),
             Some("failed")
         );
+    }
+
+    /// The finished row prices at the cells the answer's speed selects, as the ledger books the request.
+    #[test]
+    fn a_finished_fast_answer_prices_at_the_fast_cells() {
+        let mut state = state();
+        let mut cost = |id: &str, speed: Option<&str>| {
+            let Event::RequestObserved(mut o) = observed(id) else {
+                unreachable!()
+            };
+            o.model = "claude-opus-5-5".into();
+            o.canonical_model = "claude-opus-5-5".into();
+            o.wire_model = "claude-opus-5-5".into();
+            state.apply(Event::RequestObserved(o));
+            state.apply(selected(id));
+            state.apply(head(id));
+            let Event::RequestComplete(mut c) = complete(id, Outcome::Succeeded, None) else {
+                unreachable!()
+            };
+            c.usage = Some(Usage {
+                input_tokens: Some(1_000_000),
+                ..Usage::default()
+            });
+            c.response.speed = speed.map(String::from);
+            state
+                .apply(Event::RequestComplete(c))
+                .into_iter()
+                .find_map(|d| match d {
+                    Delta::Finished { cost_usd, .. } => Some(cost_usd),
+                    _ => None,
+                })
+        };
+        // Opus 5.5 lists $4 per million input tokens at the standard cells and $8 at the fast ones.
+        assert_eq!(cost("standard", None), Some(4.0));
+        assert_eq!(cost("fast", Some("fast")), Some(8.0));
     }
 
     fn chunk(id: &str, index: u32, body: &[u8]) -> Event {

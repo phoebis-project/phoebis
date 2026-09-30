@@ -912,11 +912,23 @@ async fn a_fast_answer_moves_a_subscription_groups_dollars_and_no_share() {
         (point["usd"].as_f64().unwrap() - 10.0).abs() < 1e-9,
         "a million Opus 5 input tokens served fast read the $10 fast cell in dollars: {point}"
     );
-    assert!(
-        point["unit"] == "window_share"
-            && null_field(&point, "five_hour_share")
-            && null_field(&point, "seven_day_share"),
-        "the account still charts in its window unit, and the fast answer adds no share: {point}"
+    assert_eq!(
+        (
+            &point["unit"],
+            &point["five_hour_share"],
+            &point["seven_day_share"],
+            &point["five_hour_unmeasured"],
+            &point["seven_day_unmeasured"],
+        ),
+        (
+            &serde_json::json!("window_share"),
+            &serde_json::json!(0.0),
+            &serde_json::json!(0.0),
+            &serde_json::json!(false),
+            &serde_json::json!(false),
+        ),
+        "the account still charts in its window unit at a zero share, so it reads as priced beside its dollars: \
+         {point}"
     );
 }
 
