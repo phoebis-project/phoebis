@@ -134,7 +134,7 @@ pub(crate) fn answer_from_json(body: &[u8], path: &[&str]) -> Answer {
     Answer { usage, response }
 }
 
-/// The length the client shows a flagged call's explanation at.
+/// The client's bound on a flagged call's explanation; the client counts UTF-16 units, this counts characters.
 const EXPLANATION_MAX_CHARS: usize = 2_000;
 /// A per-call `unavailable` entry's reasons the client names; any other folds to `other`.
 const CALL_UNAVAILABLE_REASONS: &[&str] =

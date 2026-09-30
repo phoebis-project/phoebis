@@ -189,7 +189,7 @@
             "refusal_recommended_model": null,
             "served_model": null,
             "speed": "standard",
-            "stop_reason": "end_turn",
+            "stop_reason": "tool_use",
             "stop_sequence": null
           }
         }

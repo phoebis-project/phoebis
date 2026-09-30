@@ -124,7 +124,7 @@ pub struct ToolUseVerdict {
     pub outcome: String,
     /// An `unavailable` entry's reason: `timeout`, `error`, `refused`, `input_too_long`, `truncated`, else `other`.
     pub reason: Option<String>,
-    /// A `flagged` entry's explanation, cut to 2,000 characters as the client cuts it.
+    /// A `flagged` entry's explanation, cut to 2,000 characters.
     pub explanation: Option<String>,
 }
 
@@ -133,7 +133,8 @@ pub struct ToolUseVerdict {
 pub struct SafeguardResults {
     /// `not_flagged`, `flagged`, `skipped`, `unsupported`, `unavailable`, `none`, `unrecognized`.
     pub verdict: String,
-    /// A status `unavailable`'s reason: `disabled`, `error`, else `other`.
+    /// An `unavailable` verdict's reason: the status's (`disabled`, `error`, else `other`) or the first unavailable
+    /// call's.
     pub detail: Option<String>,
     /// Per tool-use id; empty under a status verdict and on an `end_turn` answer.
     pub tool_uses: BTreeMap<String, ToolUseVerdict>,

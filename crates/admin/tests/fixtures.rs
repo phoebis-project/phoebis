@@ -428,6 +428,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             },
             AttemptRecord {
                 selection: Some(trace_json.clone()),
+                stop_reason: Some("tool_use".into()),
                 auto_mode_verdict: Some("flagged".into()),
                 auto_mode_tool_uses: Some(
                     j!({
@@ -550,6 +551,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
         request: RequestRecord {
             bodies_captured: true,
             auto_mode: Some("client_stage1".into()),
+            stream: false,
             ..request(
                 key_generation,
                 "r-captured",

@@ -3542,7 +3542,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "canonical_model": "claude-sonnet-5",
           "kind": "inference",
           "origin": "client",
-          "transport": "sse",
+          "transport": "json",
           "request_class": null,
           "auto_mode": "client_stage1",
           "forked_from": null,
@@ -4042,7 +4042,7 @@ export const FIXTURES: Record<string, Fixture> = {
                 "refusal_recommended_model": null,
                 "served_model": null,
                 "speed": "standard",
-                "stop_reason": "end_turn",
+                "stop_reason": "tool_use",
                 "stop_sequence": null
               }
             }
@@ -5696,7 +5696,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "refusal_recommended_model": null,
               "served_model": null,
               "speed": "standard",
-              "stop_reason": "end_turn",
+              "stop_reason": "tool_use",
               "stop_sequence": null
             }
           }
@@ -5925,7 +5925,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "canonical_model": "claude-sonnet-5",
           "kind": "inference",
           "origin": "client",
-          "transport": "sse",
+          "transport": "json",
           "request_class": null,
           "auto_mode": "client_stage1",
           "forked_from": null,
@@ -6425,7 +6425,7 @@ export const FIXTURES: Record<string, Fixture> = {
                 "refusal_recommended_model": null,
                 "served_model": null,
                 "speed": "standard",
-                "stop_reason": "end_turn",
+                "stop_reason": "tool_use",
                 "stop_sequence": null
               }
             }

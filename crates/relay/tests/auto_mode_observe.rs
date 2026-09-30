@@ -226,6 +226,11 @@ async fn a_server_check_under_an_off_key_is_observed_stripped_and_answers_no_ver
     )
     .await;
     assert_eq!(r.observed.auto_mode, Some(AutoMode::Stripped));
+    let received = String::from_utf8_lossy(&r.sent[0].body).into_owned();
+    assert!(
+        !received.contains("safeguards"),
+        "the member the row calls dropped did not reach the upstream"
+    );
     assert_eq!(
         r.complete.response.safeguards, None,
         "the upstream was asked for no check"

@@ -1111,6 +1111,21 @@ async fn the_auto_mode_facts_round_trip_through_the_write_and_select_lists() {
         h.bus.publish(head_event(id, status, 20));
         h.bus.publish(answered_event(id, status, response));
     }
+    // A 200 head whose body the caller left before the stop: the delta that carries the verdict never came.
+    h.bus
+        .publish(auto_mode_observed("am-canceled", Some(AutoMode::Server)));
+    h.bus.publish(selected_event("am-canceled", 1, "a", 10));
+    h.bus.publish(head_event("am-canceled", 200, 20));
+    let BusEvent::RequestComplete(canceled) =
+        answered_event("am-canceled", 200, ResponseFacts::default())
+    else {
+        unreachable!()
+    };
+    h.bus.publish(BusEvent::RequestComplete(RequestComplete {
+        outcome: BusOutcome::Canceled,
+        error_code: Some("client_gone".into()),
+        ..canceled
+    }));
     let harness = &h;
     let read = |id: &'static str| async move {
         let (row, attempts) = ledgered(harness, id).await;
@@ -1174,6 +1189,11 @@ async fn the_auto_mode_facts_round_trip_through_the_write_and_select_lists() {
         read("am-plain").await,
         (None, None, None, None),
         "a request that asked for nothing records no verdict whatever the answer carried"
+    );
+    assert_eq!(
+        read("am-canceled").await,
+        (Some("server".into()), None, None, None),
+        "an answer the relay never finished reading gave no verdict"
     );
     up.shutdown().await;
 }

@@ -5,7 +5,6 @@
 use std::collections::{BTreeMap, HashMap};
 
 use bytes::Bytes;
-
 use phoebis_bus::{
     user_agent_of, AccountSelected, AutoMode, Event, Outcome, RequestComplete, RequestObserved,
     ResponseChunk, ResponseFacts, ResponseHead, ToolUseVerdict,
@@ -552,7 +551,9 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
             last.auto_mode_tool_uses,
         ) = auto_mode_verdict(
             observed.auto_mode,
-            last.upstream_status == Some(200),
+            // A 200 head whose body then failed or was left carries no verdict: the check's answer rides the
+            // stop, which never came.
+            last.upstream_status == Some(200) && terminal_outcome(complete).is_none(),
             response,
         );
         if last.upstream_status.is_none()
