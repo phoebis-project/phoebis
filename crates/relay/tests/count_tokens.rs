@@ -46,14 +46,6 @@ fn markers(body: &[u8]) -> Vec<String> {
         .collect()
 }
 
-fn beta_list(r: &fake_upstream::RecordedRequest) -> Vec<String> {
-    r.headers
-        .iter()
-        .find(|(n, _)| n.eq_ignore_ascii_case("anthropic-beta"))
-        .map(|(_, v)| v.split(',').map(str::trim).map(String::from).collect())
-        .unwrap_or_default()
-}
-
 /// The recorded count with its one message turned into a marked text block: the shape the client would send if
 /// it ever cached a count. The recorded bodies carry no marker at all, so nothing else can prove the rewrite.
 fn marked_count(fixture: BodyFixture) -> Vec<u8> {

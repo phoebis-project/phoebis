@@ -17,6 +17,7 @@ pub struct BodyEdits {
     /// The TTL rewrite was undone: the body carries the TTL it arrived with, so the leg that sends it asks
     /// for no beta, drops none, and reports no TTL of its own.
     pub cache_ttl_refused: bool,
+    pub safeguards_dropped: bool,
 }
 
 /// What a body carrying no `cache_control` marker of its own does under a cache TTL policy.
@@ -54,6 +55,17 @@ pub struct NativeEdit<'a> {
     /// The `claude-cli/` version of the user agent and the prompt units `BodyFacts` read, for the
     /// version-suffix check; `None` for a caller the check does not apply to.
     pub version_check: Option<VersionCheck<'a>>,
+    pub safeguards: SafeguardsEdit,
+}
+
+/// What the edit does to the client's `safeguards` member under the pool's or key's auto-mode setting.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SafeguardsEdit {
+    /// The setting is on: the member travels as sent.
+    Keep,
+    /// The setting is off: the member is cut with one comma. `present` is what the decoded root said at
+    /// admission, so a member the raw walk cannot reach refuses the request rather than travelling.
+    Drop { present: bool },
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -67,6 +79,9 @@ pub struct VersionCheck<'a> {
 pub const CACHE_DIAGNOSIS_BETA: &str = Injected::CacheDiagnosisBeta.wire_name();
 /// The beta a one-hour cache TTL pairs with; dropped from the caller's list for a five-minute body.
 pub const EXTENDED_TTL_BETA: &str = Injected::ExtendedTtlBeta.wire_name();
+/// The beta that asks the upstream to review each tool use; dropped with the `safeguards` member under an off
+/// auto-mode setting.
+pub const DANGEROUS_TOOL_USE_BETA: &str = "dangerous-tool-use-2026-09-03";
 
 /// A member an edit needs to find. A body toward the measured host that lacks one is refused rather than sent
 /// on: the account it would be billed against, or the model it would be served by, is not the one the router
@@ -78,6 +93,8 @@ pub enum BodyMember {
     /// A top-level member the caller's body carries more than once, raw or escaped; the name is one of the
     /// members admission and the body edit act on.
     Repeated(&'static str),
+    /// A `safeguards` member the decoded root carries and the raw walk cannot reach.
+    Safeguards,
 }
 
 impl BodyMember {
@@ -86,15 +103,20 @@ impl BodyMember {
             BodyMember::MetadataUserId => "metadata.user_id",
             BodyMember::Model => "model",
             BodyMember::Repeated(name) => name,
+            BodyMember::Safeguards => "safeguards",
         }
     }
 
-    /// `RelayError::BodyShape`'s `Display` text: a repeated member was found, not absent, so it reads
-    /// nothing like the other two variants' "has no ... member to edit".
+    /// `RelayError::BodyShape`'s `Display` text: a repeated member, or a `safeguards` member the cut cannot
+    /// place, was found rather than absent, so neither reads like the other two variants' "has no ... member to
+    /// edit".
     pub(crate) fn shape_message(self) -> String {
         match self {
             BodyMember::Repeated(name) => {
                 format!("request body carries the top-level member \"{name}\" more than once")
+            }
+            BodyMember::Safeguards => {
+                "request body carries a safeguards member the router cannot place".into()
             }
             other => format!("request body has no {} member to edit", other.path()),
         }
@@ -140,6 +162,24 @@ pub fn edit_body(body: &mut Vec<u8>, edit: &NativeEdit<'_>) -> Result<BodyEdits,
             }
         }
     }
+    let safeguards_dropped = match edit.safeguards {
+        SafeguardsEdit::Keep => false,
+        SafeguardsEdit::Drop { present } => {
+            // A second spelling would reach the upstream after the first is cut and a last-wins parser would act
+            // on it; an escaped spelling is one the raw walk never finds. Both refuse rather than send a body
+            // the operator asked to have stripped.
+            if present {
+                if let Some(name) = phoebis_cch::repeated_top_level_member(body, &["safeguards"])? {
+                    return Err(RelayError::BodyShape(BodyMember::Repeated(name)));
+                }
+            }
+            let cut = phoebis_cch::remove_top_level_member(body, "safeguards").is_some();
+            if present && !cut {
+                return Err(RelayError::BodyShape(BodyMember::Safeguards));
+            }
+            cut
+        }
+    };
     // An API-key account has no identity to splice: the measured client never carried one for it.
     let account_uuid_replaced = match edit.account_uuid {
         None => false,
@@ -191,6 +231,7 @@ pub fn edit_body(body: &mut Vec<u8>, edit: &NativeEdit<'_>) -> Result<BodyEdits,
         restored,
         cache_ttl_edited: cache_ttl == TtlEdit::Applied(true),
         cache_ttl_refused: cache_ttl == TtlEdit::Refused,
+        safeguards_dropped,
     })
 }
 
@@ -520,6 +561,7 @@ fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use phoebis_profile::fixtures::{body as fixture_body, with_safeguards, BodyFixture};
 
     const UUID: &str = "00000000-0000-4000-8000-000000000001";
 
@@ -544,6 +586,7 @@ mod tests {
                 cache_ttl: None,
                 markerless: Markerless::TakesTheMember,
                 version_check: None,
+                safeguards: SafeguardsEdit::Keep,
             },
         )
         .expect("a JSON object is editable");
@@ -567,6 +610,7 @@ mod tests {
                     cache_ttl: None,
                     markerless: Markerless::TakesTheMember,
                     version_check: None,
+                    safeguards: SafeguardsEdit::Keep,
                 },
             ),
             Err(RelayError::BodyShape(BodyMember::MetadataUserId))
@@ -587,6 +631,7 @@ mod tests {
                     cache_ttl: None,
                     markerless: Markerless::TakesTheMember,
                     version_check: None,
+                    safeguards: SafeguardsEdit::Keep,
                 },
             ),
             Err(RelayError::BodyShape(BodyMember::Model))
@@ -606,6 +651,7 @@ mod tests {
                     cache_ttl: None,
                     markerless: Markerless::TakesTheMember,
                     version_check: None,
+                    safeguards: SafeguardsEdit::Keep,
                 },
             ),
             Err(RelayError::BodyShape(BodyMember::Model))
@@ -625,6 +671,7 @@ mod tests {
                 cache_ttl: None,
                 markerless: Markerless::TakesTheMember,
                 version_check: None,
+                safeguards: SafeguardsEdit::Keep,
             },
         )
         .expect("an api-key account never carried an identity");
@@ -644,6 +691,7 @@ mod tests {
                 cache_ttl: None,
                 markerless: Markerless::TakesTheMember,
                 version_check: None,
+                safeguards: SafeguardsEdit::Keep,
             },
         )
         .expect("a JSON object is editable");
@@ -668,6 +716,7 @@ mod tests {
                     cache_ttl: None,
                     markerless: Markerless::TakesTheMember,
                     version_check: None,
+                    safeguards: SafeguardsEdit::Keep,
                 },
             ),
             Err(RelayError::NotAnObject)
@@ -852,6 +901,99 @@ mod tests {
             Some(300_000),
             "the usual member order reads the same"
         );
+    }
+
+    fn drop_edit(safeguards: SafeguardsEdit) -> NativeEdit<'static> {
+        NativeEdit {
+            account_uuid: None,
+            upstream_model: "claude-sonnet-4-5",
+            restore: None,
+            diagnostics: None,
+            cache_ttl: None,
+            markerless: Markerless::TakesTheMember,
+            version_check: None,
+            safeguards,
+        }
+    }
+
+    /// The recorded first-party body with the member spliced in and re-signed, as a client in auto mode sends it.
+    fn stamped_with_safeguards() -> Vec<u8> {
+        phoebis_cch::sign(&with_safeguards(fixture_body(BodyFixture::FirstParty9b244))).unwrap()
+    }
+
+    #[test]
+    fn edit_body_cuts_the_safeguards_member_under_drop_and_restamps() {
+        let mut body = stamped_with_safeguards();
+        let edits = edit_body(
+            &mut body,
+            &drop_edit(SafeguardsEdit::Drop { present: true }),
+        )
+        .expect("the member is cut");
+        assert!(edits.safeguards_dropped);
+        assert!(edits.cch_restamped);
+        let root: serde_json::Value = serde_json::from_slice(&body).expect("the cut body parses");
+        assert!(root.get("safeguards").is_none());
+        assert_eq!(phoebis_cch::sign(&body).unwrap(), body, "the stamp is current");
+        assert!(
+            body == fixture_body(BodyFixture::FirstParty9b244),
+            "one comma went with the member, so the body is the recording again"
+        );
+    }
+
+    #[test]
+    fn edit_body_keeps_the_member_under_keep() {
+        let stamped = stamped_with_safeguards();
+        let mut body = stamped.clone();
+        let edits = edit_body(&mut body, &drop_edit(SafeguardsEdit::Keep)).expect("editable");
+        assert!(!edits.safeguards_dropped);
+        assert!(body == stamped, "no byte moved");
+    }
+
+    #[test]
+    fn edit_body_refuses_a_present_member_the_walk_cannot_reach() {
+        let spliced = String::from_utf8(with_safeguards(fixture_body(BodyFixture::Oauth))).unwrap();
+        let escaped = spliced
+            .replacen(r#""safeguards""#, r#""safeg\u0075ards""#, 1)
+            .into_bytes();
+        assert!(
+            escaped.windows(6).any(|w| w == br"\u0075"),
+            "the escape is in the raw bytes"
+        );
+        let root: serde_json::Value = serde_json::from_slice(&escaped).unwrap();
+        assert!(
+            root.get("safeguards").is_some(),
+            "the decoder reads the escaped key as the plain one"
+        );
+        let mut body = escaped.clone();
+        assert!(matches!(
+            edit_body(
+                &mut body,
+                &drop_edit(SafeguardsEdit::Drop { present: true })
+            ),
+            Err(RelayError::BodyShape(BodyMember::Safeguards))
+        ));
+
+        let twice = spliced
+            .replacen(r#""stream":"#, r#""safeguards":[],"stream":"#, 1)
+            .into_bytes();
+        let mut body = twice;
+        assert!(matches!(
+            edit_body(
+                &mut body,
+                &drop_edit(SafeguardsEdit::Drop { present: true })
+            ),
+            Err(RelayError::BodyShape(BodyMember::Repeated("safeguards")))
+        ));
+
+        let without = fixture_body(BodyFixture::Oauth);
+        let mut body = without.to_vec();
+        let edits = edit_body(
+            &mut body,
+            &drop_edit(SafeguardsEdit::Drop { present: false }),
+        )
+        .expect("nothing to cut");
+        assert!(!edits.safeguards_dropped);
+        assert!(body == without);
     }
 
     #[test]

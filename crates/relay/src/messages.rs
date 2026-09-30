@@ -71,7 +71,8 @@ use crate::stream::{
 };
 use crate::{
     edit_body, is_portable, presented_key, BodyEdits, BodyMember, CacheTtl, CacheTtlPolicy,
-    DriftGuard, Markerless, NativeEdit, RelayError, TtlBranch, VersionCheck, EXTENDED_TTL_BETA,
+    DriftGuard, Markerless, NativeEdit, RelayError, SafeguardsEdit, TtlBranch, VersionCheck,
+    DANGEROUS_TOOL_USE_BETA, EXTENDED_TTL_BETA,
 };
 
 /// How often the session memory's changes reach the store; a crash loses at most this much of it, and the
@@ -903,6 +904,7 @@ impl Relay {
             }
         };
         let facts = BodyFacts::read(&raw);
+        let auto_mode_server = snapshot.auto_mode_server(&key);
         let stream = wants_stream(&raw);
         // Admission and the body edit both act on the first spelling of a member; a second one would reach
         // the wire untouched and a last-wins parser upstream would act on it instead. Refused whole rather
@@ -1182,6 +1184,7 @@ impl Relay {
             "relaying a Messages request",
         );
         let admitted = Admitted {
+            auto_mode_server,
             cache_ttl_policy,
             caller: &parts.headers,
             chains: facts.chains.as_ref(),
@@ -1199,6 +1202,13 @@ impl Relay {
             request_id: &trace.request_id,
             restore,
             retry_in_place: Duration::from_secs(failover.retry_in_place_seconds),
+            safeguards: if auto_mode_server {
+                SafeguardsEdit::Keep
+            } else {
+                SafeguardsEdit::Drop {
+                    present: facts.shape.safeguards,
+                }
+            },
             target: &target,
             trace: &trace,
         };
@@ -1570,6 +1580,7 @@ impl Relay {
                         client_version: &r.cli_version,
                         prompt_units: r.prompt_units,
                     }),
+                    safeguards: admitted.safeguards,
                 },
             )?;
             if !claims_its_ttl(&edits) {
@@ -1691,11 +1702,16 @@ impl Relay {
             // find, and only the builder's own report joins `body_injected` in what a 400 may be matched against.
             // A five-minute body carries no extended beta, whichever leg wrote it: the caller's own
             // (`CLAUDE_CODE_PROMPT_CACHE_TTL=1h`) or one an earlier attempt injected.
-            let drop_betas: &[&str] = if ttl == Some(CacheTtl::FiveMinutes) {
-                &[EXTENDED_TTL_BETA]
-            } else {
-                &[]
-            };
+            let mut drop_betas: Vec<&str> = Vec::new();
+            if ttl == Some(CacheTtl::FiveMinutes) {
+                drop_betas.push(EXTENDED_TTL_BETA);
+            }
+            // Off drops the beta on every request of the key, member or no member: after the client's own
+            // fallback latch the beta stays in its header with nothing behind it. A caller-sent beta, so the
+            // drop is never reported as the relay's own and a 400 naming it is the caller's.
+            if !admitted.auto_mode_server {
+                drop_betas.push(DANGEROUS_TOOL_USE_BETA);
+            }
             // A latched or freshly stripped `ClientRequestId` means this leg generates none: the id is the
             // relay's own addition, and the account has already refused it once.
             let client_request_id = admitted
@@ -1711,7 +1727,7 @@ impl Relay {
                 edited.len(),
                 client_request_id.as_deref(),
                 &inject_betas,
-                drop_betas,
+                &drop_betas,
             );
             let injected: Vec<Injected> = body_injected
                 .iter()
@@ -3127,6 +3143,8 @@ struct RestoreContext {
 /// What the same-account leg reads about the request it is part of: fixed at admission and shared by every
 /// account the request tries.
 struct Admitted<'a> {
+    /// The key's override else the pool's, read once at admission.
+    auto_mode_server: bool,
     /// The pool's own policy, off by default; read once at admission since a migrated attempt still prices the
     /// same request against the same policy, only the account's overage state changes per destination.
     cache_ttl_policy: CacheTtlPolicy,
@@ -3161,6 +3179,7 @@ struct Admitted<'a> {
     /// The pool's `retry_in_place_seconds`: the longest throttle waited out on the same account, and the
     /// longest a held selection waits for a slot.
     retry_in_place: Duration,
+    safeguards: SafeguardsEdit,
     target: &'a str,
     trace: &'a Trace,
 }

@@ -39,14 +39,6 @@ fn markers(body: &[u8]) -> Vec<String> {
         .collect()
 }
 
-fn beta_list(r: &fake_upstream::RecordedRequest) -> Vec<String> {
-    r.headers
-        .iter()
-        .find(|(n, _)| n.eq_ignore_ascii_case("anthropic-beta"))
-        .map(|(_, v)| v.split(',').map(str::trim).map(String::from).collect())
-        .unwrap_or_default()
-}
-
 /// Every `cache_control` member removed, so a policy sees a body with no marker anywhere.
 fn without_markers(native: &[u8]) -> Vec<u8> {
     let mut value: serde_json::Value = serde_json::from_slice(native).unwrap();

@@ -59,6 +59,52 @@ pub fn body(kind: BodyFixture) -> &'static [u8] {
     }
 }
 
+/// The documented member with the redaction's placeholder for every machine-shaped value.
+pub const SAFEGUARDS_MEMBER: &str = r#""safeguards":[{"type":"dangerous_tool_use","classifier_context":{"v":1,"permission_mode":"auto","platform":"linux","live_cwd":"<cwd>","home_dir":"<home>","git_state":{"origin":"<remote>"},"rules":{"allow":[{"rule":"<rule>","source":"<source>"}],"deny":[],"ask":[]}}}]"#;
+
+/// The member spliced before the body's top-level `"stream":` (each recorded inference body carries it once, last),
+/// else before the closing brace. Never signs: a stamped body keeps the client's `cch` until the test re-signs it
+/// with `phoebis_cch::sign`, so this crate needs no dependency on the signer.
+pub fn with_safeguards(body: &[u8]) -> Vec<u8> {
+    const STREAM: &[u8] = br#""stream":"#;
+    let (at, splice) = match body.windows(STREAM.len()).rposition(|w| w == STREAM) {
+        Some(at) => (at, format!("{SAFEGUARDS_MEMBER},")),
+        None => (
+            body.iter()
+                .rposition(|b| *b == b'}')
+                .expect("a body fixture is a JSON object"),
+            format!(",{SAFEGUARDS_MEMBER}"),
+        ),
+    };
+    [&body[..at], splice.as_bytes(), &body[at..]].concat()
+}
+
+/// A raw fixture head (`inference_head` answers `&'static [u8]`) with the beta appended to its `anthropic-beta`
+/// line; the relay suites hand it to `request_from_fixture`, the router suite to `parse_head`.
+pub fn with_dangerous_tool_use_beta(head: &[u8]) -> Vec<u8> {
+    const NAME: &[u8] = b"anthropic-beta:";
+    let mut out = Vec::with_capacity(head.len() + 32);
+    let mut found = false;
+    for line in head.split_inclusive(|b| *b == b'\n') {
+        if !found && line.len() >= NAME.len() && line[..NAME.len()].eq_ignore_ascii_case(NAME) {
+            let end = line.len()
+                - line
+                    .iter()
+                    .rev()
+                    .take_while(|b| matches!(b, b'\r' | b'\n'))
+                    .count();
+            out.extend_from_slice(&line[..end]);
+            out.extend_from_slice(b",dangerous-tool-use-2026-09-03");
+            out.extend_from_slice(&line[end..]);
+            found = true;
+        } else {
+            out.extend_from_slice(line);
+        }
+    }
+    assert!(found, "the head carries no anthropic-beta line to extend");
+    out
+}
+
 pub fn client_hello(plane: Plane) -> Vec<u8> {
     let hex = match plane {
         Plane::Inference => include_str!("../fixtures/hello_inference.hex"),

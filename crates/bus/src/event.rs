@@ -225,6 +225,8 @@ pub struct RequestShape {
     pub temperature: Option<f64>,
     pub speed: Option<String>,
     pub service_tier: Option<String>,
+    /// The body carries a top-level `safeguards` member, read through escapes.
+    pub safeguards: bool,
 }
 
 /// The class of a caller that is not Claude Code: a request's label is `claude-code/<entrypoint>` or `other`.

@@ -118,7 +118,7 @@ pub(crate) fn auth_failure(error: &AuthError) -> Failure {
     }
 }
 
-/// `Failure.message` is `&'static str`, so the three spellings `BodyMember::Repeated` names are constants
+/// `Failure.message` is `&'static str`, so the four spellings `BodyMember::Repeated` names are constants
 /// rather than a formatted string.
 const REPEATED_METADATA: &str =
     "the request body carries the top-level member \"metadata\" more than once";
@@ -126,6 +126,7 @@ const REPEATED_MODEL: &str =
     "the request body carries the top-level member \"model\" more than once";
 const REPEATED_STREAM: &str =
     "the request body carries the top-level member \"stream\" more than once";
+const REPEATED_SAFEGUARDS: &str = "the request body carries safeguards more than once";
 
 pub(crate) fn relay_failure(error: &RelayError) -> Failure {
     match error {
@@ -158,11 +159,15 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
                 BodyMember::Repeated(name) => match *name {
                     "metadata" => REPEATED_METADATA,
                     "model" => REPEATED_MODEL,
+                    "safeguards" => REPEATED_SAFEGUARDS,
                     "stream" => REPEATED_STREAM,
                     _ => unreachable!(
-                        "repeated_top_level_member is only ever called with model, metadata or stream"
+                        "repeated_top_level_member is only ever called with model, metadata, safeguards or stream"
                     ),
                 },
+                BodyMember::Safeguards => {
+                    "the request body carries a safeguards member the relay cannot cut under this key's auto-mode setting"
+                }
             },
             retry_after: None,
         },

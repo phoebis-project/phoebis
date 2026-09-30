@@ -109,6 +109,7 @@ impl BodyFacts {
             temperature: root.get("temperature").and_then(Value::as_f64),
             speed: text(root.get("speed")),
             service_tier: text(root.get("service_tier")),
+            safeguards: root.get("safeguards").is_some(),
         };
         let chains = Chains::read(&root);
         let markers_ttl_ms = markers_ttl_ms(&root);

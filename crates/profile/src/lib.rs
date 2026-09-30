@@ -133,4 +133,49 @@ mod tests {
             80404
         );
     }
+
+    #[test]
+    fn the_safeguards_splice_lands_before_stream_and_the_beta_joins_the_list() {
+        use fixtures::{BodyFixture, FixtureKind, SAFEGUARDS_MEMBER};
+        let member = SAFEGUARDS_MEMBER.as_bytes();
+        for fixture in [
+            BodyFixture::ApiKey,
+            BodyFixture::FirstParty9b244,
+            BodyFixture::FirstPartyE142e,
+            BodyFixture::Oauth,
+        ] {
+            let native = fixtures::body(fixture);
+            let spliced = fixtures::with_safeguards(native);
+            assert!(spliced.ends_with(&[b",", member, br#","stream":true}"#].concat()));
+            assert_eq!(spliced.len(), native.len() + member.len() + 1);
+        }
+        for fixture in [
+            BodyFixture::CountApiKey,
+            BodyFixture::CountOauth,
+            BodyFixture::CountOauthFirstParty,
+        ] {
+            let native = fixtures::body(fixture);
+            let spliced = fixtures::with_safeguards(native);
+            assert!(spliced.ends_with(&[b",", member, b"}"].concat()));
+            assert_eq!(spliced.len(), native.len() + member.len() + 1);
+        }
+        for kind in [
+            FixtureKind::ApiKey,
+            FixtureKind::CountApiKey,
+            FixtureKind::CountOauthFirstParty,
+            FixtureKind::CountOauthNonFirstParty,
+            FixtureKind::OauthFirstParty,
+            FixtureKind::OauthNonFirstParty,
+        ] {
+            let head = String::from_utf8(fixtures::with_dangerous_tool_use_beta(
+                fixtures::inference_head(kind),
+            ))
+            .unwrap();
+            let line = head
+                .split("\r\n")
+                .find(|line| line.to_ascii_lowercase().starts_with("anthropic-beta:"))
+                .expect("every request head carries the beta line");
+            assert!(line.ends_with(",dangerous-tool-use-2026-09-03"), "{line}");
+        }
+    }
 }

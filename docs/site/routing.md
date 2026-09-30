@@ -210,6 +210,16 @@ Every request carries a class, read off its user agent: `claude-code/<entrypoint
 entrypoint token it names, `cli` when it names none)
 and `other` for anything else.
 
+A Claude Code session in auto mode asks the upstream to review each tool use on the model's own turn: a `safeguards`
+member near the end of its body and the `dangerous-tool-use-2026-09-03` beta in its header, answered by a verdict per
+tool use. With the pool's `auto_mode_server` on (the default), or a key's override on, both travel as sent and the
+verdict comes back unchanged. Off, the router cuts the member and removes the beta from every request of the key, a
+token count and a keepalive probe included, and restamps a first-party body's billing hash; the answer is copied as it
+comes, never edited. The client then reviews each tool use with a classifier request of its own for the rest of its
+process, billed to the upstream's windows, as the [client page](client.md) describes. A body whose `safeguards` member
+the router cannot cut under an off setting (spelled with an escape, or carried twice) is refused `400` with the error
+code `body_shape` before anything reaches the upstream.
+
 A conversation is identified by its session header: the session id the client sends names it.
 A key's `affinity_source` fixes one of these rungs instead of walking the whole
 ladder, and a request that does not fit a fixed rung has no identity and no pin. A new session id whose messages

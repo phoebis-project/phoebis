@@ -293,6 +293,25 @@ pub fn object_member_span(body: &[u8], path: &[&str]) -> Option<(usize, usize)> 
     Some((member_start, s.pos))
 }
 
+/// Cuts the top-level member `key` with one comma by the hash view's rules (the following comma when something
+/// follows, else the preceding one when something precedes, else neither) and answers the span it removed;
+/// `None` when the walk finds no such member. Matches the raw key bytes as `object_member_span` does, so an
+/// escaped spelling is not found and a second spelling survives the cut: the caller decides both.
+pub fn remove_top_level_member(body: &mut Vec<u8>, key: &str) -> Option<(usize, usize)> {
+    let (start, end) = object_member_span(body, &[key])?;
+    let ws = |b: &u8| matches!(b, b' ' | b'\t' | b'\r' | b'\n');
+    let after = body[end..].iter().position(|b| !ws(b)).map(|i| end + i);
+    let (cut_start, cut_end) = match after {
+        Some(i) if body[i] == b',' => (start, i + 1),
+        _ => match body[..start].iter().rposition(|b| !ws(b)) {
+            Some(i) if body[i] == b',' => (i, end),
+            _ => (start, end),
+        },
+    };
+    body.drain(cut_start..cut_end);
+    Some((cut_start, cut_end))
+}
+
 fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
     hay.windows(needle.len()).position(|w| w == needle)
 }
@@ -887,6 +906,82 @@ mod tests {
             &string_decoy[start..end],
             br#""diagnostics":{"previous_message_id":"x"}"#,
             "the key's bytes sitting inside an earlier string value is not a match"
+        );
+    }
+
+    #[test]
+    fn removing_a_top_level_member_cuts_it_with_one_comma_wherever_it_sits() {
+        let cut = |body: &[u8]| {
+            let mut body = body.to_vec();
+            let span = remove_top_level_member(&mut body, "safeguards");
+            (String::from_utf8(body).unwrap(), span)
+        };
+        assert_eq!(
+            cut(br#"{"safeguards":[],"model":"m"}"#),
+            (r#"{"model":"m"}"#.into(), Some((1, 17))),
+            "first: the following comma goes"
+        );
+        assert_eq!(
+            cut(br#"{"model":"m","safeguards":[]}"#),
+            (r#"{"model":"m"}"#.into(), Some((12, 28))),
+            "last: the preceding comma goes"
+        );
+        assert_eq!(
+            cut(br#"{"model":"m","safeguards":[],"stream":true}"#),
+            (r#"{"model":"m","stream":true}"#.into(), Some((13, 29))),
+            "middle: the following comma goes"
+        );
+        assert_eq!(
+            cut(br#"{"safeguards":[]}"#),
+            ("{}".into(), Some((1, 16))),
+            "alone: no comma to take"
+        );
+        assert_eq!(
+            cut(b"{ \"model\":\"m\" ,\n \"safeguards\" : [ ] ,\t\"stream\":true }").0,
+            "{ \"model\":\"m\" ,\n \t\"stream\":true }",
+            "whitespace before the following comma is cut with it"
+        );
+        assert_eq!(
+            cut(b"{\"model\":\"m\" ,\r\n \"safeguards\":[] }").0,
+            "{\"model\":\"m\"  }",
+            "whitespace after the preceding comma is cut with it"
+        );
+    }
+
+    #[test]
+    fn removing_a_top_level_member_skips_a_decoy_in_a_string_and_one_nested_under_another_object() {
+        let mut body = br#"{"note":"\"safeguards\":[]","outer":{"safeguards":[1]},"safeguards":[2],"stream":true}"#.to_vec();
+        assert!(remove_top_level_member(&mut body, "safeguards").is_some());
+        assert_eq!(
+            String::from_utf8(body).unwrap(),
+            r#"{"note":"\"safeguards\":[]","outer":{"safeguards":[1]},"stream":true}"#
+        );
+    }
+
+    #[test]
+    fn removing_an_absent_member_answers_none_and_leaves_the_bytes() {
+        let before = br#"{"model":"m","outer":{"safeguards":[]}}"#.to_vec();
+        let mut body = before.clone();
+        assert_eq!(remove_top_level_member(&mut body, "safeguards"), None);
+        assert_eq!(body, before);
+    }
+
+    #[test]
+    fn a_second_top_level_spelling_survives_the_first_cut() {
+        let mut body = br#"{"safeguards":[1],"model":"m","safeguards":[2]}"#.to_vec();
+        assert!(remove_top_level_member(&mut body, "safeguards").is_some());
+        assert_eq!(
+            String::from_utf8(body.clone()).unwrap(),
+            r#"{"model":"m","safeguards":[2]}"#,
+            "the caller decides what a second spelling means"
+        );
+        assert_eq!(
+            repeated_top_level_member(
+                br#"{"safeguards":[1],"model":"m","safeguards":[2]}"#,
+                &["safeguards"]
+            )
+            .unwrap(),
+            Some("safeguards")
         );
     }
 

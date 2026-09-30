@@ -96,9 +96,12 @@ pub fn test_account_row(account: &TestAccount) -> AccountRow {
 
 pub struct PoolSpec {
     pub affinity_ttl_seconds: u64,
+    pub auto_mode_server: bool,
     pub cache_diagnostics: Option<bool>,
     pub cache_ttl: &'static str,
     pub failover: Failover,
+    /// The harness key's own override of `auto_mode_server`; `None` inherits the pool's.
+    pub key_auto_mode_server: Option<bool>,
     /// The harness key's own `in_flight_cap`; the pool's rows are the rest of this spec.
     pub key_in_flight_cap: Option<u32>,
     pub migrate_above_utilization: Option<f64>,
@@ -112,9 +115,11 @@ impl Default for PoolSpec {
     fn default() -> Self {
         PoolSpec {
             affinity_ttl_seconds: 3600,
+            auto_mode_server: true,
             cache_diagnostics: None,
             cache_ttl: "{}",
             failover: Failover::default(),
+            key_auto_mode_server: None,
             key_in_flight_cap: None,
             migrate_above_utilization: None,
             model_rules: Vec::new(),
@@ -657,7 +662,7 @@ async fn build(
                     failover: pool.failover,
                     cache_ttl_json: pool.cache_ttl.into(),
                     cache_diagnostics: pool.cache_diagnostics,
-                    auto_mode_server: true,
+                    auto_mode_server: pool.auto_mode_server,
                     affinity: Affinity::default(),
                     quota_headers: pool.quota_headers,
                     created_at: NOW,
@@ -704,7 +709,7 @@ async fn build(
                     retired_secret_last_used_at: None,
                     in_flight_cap: pool.key_in_flight_cap,
                     affinity_source: AffinitySource::Auto,
-                    auto_mode_server: None,
+                    auto_mode_server: pool.key_auto_mode_server,
                 },
                 "test",
             )
@@ -1079,6 +1084,15 @@ pub fn credentials_seen(up: &FakeUpstream) -> Vec<String> {
         .filter(|r| r.line.starts_with("POST /v1/messages"))
         .filter_map(|r| r.credential().map(String::from))
         .collect()
+}
+
+/// The `anthropic-beta` list a recorded request carried, in its order.
+pub fn beta_list(r: &fake_upstream::RecordedRequest) -> Vec<String> {
+    r.headers
+        .iter()
+        .find(|(n, _)| n.eq_ignore_ascii_case("anthropic-beta"))
+        .map(|(_, v)| v.split(',').map(str::trim).map(String::from).collect())
+        .unwrap_or_default()
 }
 
 pub fn wire_of(r: &fake_upstream::RecordedRequest) -> Vec<u8> {
