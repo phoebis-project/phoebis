@@ -180,6 +180,7 @@ fn a_body_without_the_member_yields_the_recipe_it_did() {
             ttl_ms: FIVE_MINUTES_MS,
             static_hash: None,
             tail_hash: None,
+            fast: false,
         }
     );
     let plain = stamped_adaptive();
