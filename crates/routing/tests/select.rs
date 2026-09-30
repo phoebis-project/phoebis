@@ -1724,6 +1724,27 @@ fn a_mixed_fast_credits_and_model_cooldown_set_answers_the_timed_exhaustion_as_b
             window: "retry_after".into()
         })
     );
+    st.record_cooldown(cooled(
+        "b",
+        "model:claude-opus-5",
+        6 * HOUR,
+        "retry_after",
+        "rate_limit",
+    ));
+    assert_eq!(
+        select(
+            &mut st,
+            &s,
+            &fast(request(&s, None, "claude-opus-5", true, &[], 1_000)),
+            &mut rng()
+        )
+        .0,
+        SelectResult::Exhausted(Exhaustion::Timed {
+            deadline: 5 * HOUR,
+            window: "overage".into()
+        }),
+        "the credits row the earliest deadline claims `overage`, a window the client knows"
+    );
 }
 
 #[test]

@@ -126,7 +126,7 @@ The Upstreams view offers these actions, each calling its own route:
 | Action | What it does |
 | --- | --- |
 | Catalog | Opens the upstream's live model list, as of the last fetch, with a refresh. |
-| Clear cooldown | Clears one cooling scope, the whole upstream or one model, from the cooling-down block. |
+| Clear cooldown | Clears one scope of the cooling-down block: the whole upstream, its fast lane, or one model. |
 | Clear funding | Clears a `funding_required` account back to `ready`. |
 | Delete upstream | Removes the account from every pool and deletes it; request history stays in the ledger. |
 | Disconnect | Removes the credential; request history stays in the ledger. |

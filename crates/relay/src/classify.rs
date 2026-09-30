@@ -131,15 +131,21 @@ pub fn classify(head: &ResponseHead, ctx: &HeadContext<'_>) -> Verdict {
             mark: None,
         };
     }
-    // A fast request's throttle is the fast lane's, whatever the account kind, unless the head says a shared plan
-    // window rejected or an api_key spend cap did: those are the account's and keep their own rows.
-    let plan_rejected = unified.as_ref().is_some_and(shared_window_rejected)
-        || (ctx.kind == AccountKind::ApiKey && ctx.body_prefix.is_some_and(names_spend_limit));
-    if ctx.fast && rate_limited && !plan_rejected {
-        return Verdict::FailOver {
-            cooldown: Some(fast_cooldown(head, unified.as_ref(), ctx)),
-            mark: None,
-        };
+    // A fast request draws usage credits and no plan window: a credits refusal cools its fast lane whatever the plan
+    // statuses read, and so does a rate limit, whatever the account kind, unless the 5-hour or 7-day window or an
+    // api_key spend cap rejected it, which are the account's and keep their own rows.
+    if ctx.fast && rate_limited {
+        let credits_refused = unified
+            .as_ref()
+            .is_some_and(|u| u.overage_disabled_reason.is_some());
+        let plan_rejected = unified.as_ref().is_some_and(plan_window_rejected)
+            || (ctx.kind == AccountKind::ApiKey && ctx.body_prefix.is_some_and(names_spend_limit));
+        if credits_refused || !plan_rejected {
+            return Verdict::FailOver {
+                cooldown: Some(fast_cooldown(head, unified.as_ref(), ctx)),
+                mark: None,
+            };
+        }
     }
     match ctx.kind {
         AccountKind::Oauth if rate_limited => {
@@ -269,10 +275,14 @@ fn oauth_cooldown(
 /// A shared plan window rejected: the 5-hour or the 7-day status, or the top-level status unless the model-scoped
 /// window is the only one that rejected.
 fn shared_window_rejected(u: &UnifiedHeaders) -> bool {
+    plan_window_rejected(u) || (u.status.as_deref() == Some("rejected") && !fable_only(u))
+}
+
+/// The 5-hour or the 7-day status rejected. The top-level status is left out for a fast request: it draws neither
+/// window, so a rejection neither window names is not theirs.
+fn plan_window_rejected(u: &UnifiedHeaders) -> bool {
     let rejected = |s: &Option<String>| s.as_deref() == Some("rejected");
-    rejected(&u.five_hour_status)
-        || rejected(&u.seven_day_status)
-        || (rejected(&u.status) && !fable_only(u))
+    rejected(&u.five_hour_status) || rejected(&u.seven_day_status)
 }
 
 fn fast_cooldown(
@@ -991,6 +1001,23 @@ mod tests {
             ),
             "without a reset, an hour"
         );
+        for rejected in [
+            vec![("anthropic-ratelimit-unified-status", "rejected")],
+            vec![
+                ("anthropic-ratelimit-unified-status", "rejected"),
+                ("anthropic-ratelimit-unified-5h-status", "rejected"),
+                ("anthropic-ratelimit-unified-5h-reset", "1790000000"),
+            ],
+        ] {
+            let mut headers = rejected.clone();
+            headers.push((reason, "out_of_credits"));
+            let c = cooldown_of(classify(&head(429, &headers), &ctx));
+            assert_eq!(
+                (c.scope, c.reason, c.window.as_str()),
+                (Scope::Fast, FAST_CREDITS_REASON, "out_of_credits"),
+                "the reason decides whatever the plan statuses read: {rejected:?}"
+            );
+        }
     }
 
     #[test]
@@ -1030,6 +1057,21 @@ mod tests {
                 NOW + 600_000 + MARGIN_MS
             )
         );
+        let c = cooldown_of(classify(
+            &head(
+                429,
+                &[
+                    ("anthropic-ratelimit-unified-status", "rejected"),
+                    ("retry-after", "20"),
+                ],
+            ),
+            &ctx,
+        ));
+        assert_eq!(
+            (c.scope, c.reason, c.window.as_str()),
+            (Scope::Fast, FAST_RATE_LIMIT_REASON, "retry_after"),
+            "a top-level rejection that names neither shared window is the fast lane's"
+        );
     }
 
     #[test]
@@ -1042,11 +1084,8 @@ mod tests {
                 429,
                 &[
                     shared,
+                    ("anthropic-ratelimit-unified-status", "rejected"),
                     ("anthropic-ratelimit-unified-reset", "1700003600"),
-                    (
-                        "anthropic-ratelimit-unified-overage-disabled-reason",
-                        "out_of_credits",
-                    ),
                     ("retry-after", "5"),
                 ],
             );

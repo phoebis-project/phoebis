@@ -479,13 +479,15 @@ evidence that the window is fine, and the rejection cools the whole account.
 | Upstream result to a fast request | Cooldown | Failover |
 | --- | --- | --- |
 | 429 or SSE `rate_limit_error`, overage-disabled reason on the head | Fast lane, reason `fast_credits` | Yes |
-| 429 or SSE `rate_limit_error`, no such reason, no shared window rejected | Fast lane, reason `fast_rate_limit` | Yes |
-| 429 with a shared window rejected, or an api_key spend cap | The rows above | Yes |
+| 429 or SSE `rate_limit_error`, no such reason, 5h and 7d not rejected | Fast lane, reason `fast_rate_limit` | Yes |
+| 429, no such reason, the 5h or 7d window rejected, or an api_key spend cap | The rows above | Yes |
 
-A `fast_credits` row holds until the month starts for `org_spend_cap_reached`, else until the overage reset the head
-names, else for one hour, and the poll's next enabled reading lifts it earlier. A `fast_rate_limit` row holds until the
-later fast window reset the head names, else until `Retry-After`, else for ten minutes. A fast-lane cooldown holds fast
-requests alone; standard requests on the account are unaffected, and `DELETE /admin/accounts/{id}/cooldowns/fast`
+The overage-disabled reason decides first, whatever the shared windows read, since a fast request draws usage credits
+and no plan window; a rejected top-level `status` that names neither shared window leaves the rate limit on the fast
+lane. A `fast_credits` row holds until the month starts for `org_spend_cap_reached`, else until the overage reset the
+head names, else for one hour, and the poll's next enabled reading lifts it earlier. A `fast_rate_limit` row holds until
+the later fast window reset the head names, else until `Retry-After`, else for ten minutes. A fast-lane cooldown holds
+fast requests alone; standard requests on the account are unaffected, and `DELETE /admin/accounts/{id}/cooldowns/fast`
 clears it.
 
 **shared** (either kind)

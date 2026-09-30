@@ -1828,6 +1828,11 @@ fn exhaustion_of(obstacles: Vec<Obstacle>) -> Exhaustion {
         .into_iter()
         .filter_map(|o| match o {
             Obstacle::Budget { until } => Some((until, "overage".into(), "budget".into())),
+            // A credits row's window is the upstream's refusal reason, a claim the client does not know; the
+            // credits it refused are the overage the client does.
+            Obstacle::Cooldown { until, reason, .. } if reason == FAST_CREDITS_REASON => {
+                Some((until, "overage".into(), reason))
+            }
             Obstacle::Cooldown {
                 until,
                 window,
