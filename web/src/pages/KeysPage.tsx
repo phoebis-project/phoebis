@@ -565,7 +565,7 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing
         {effectiveHours > 0 && (
           <div className="callout callout--warning">
             <IconWarning size={16} />
-            <div>Bodies contain the prompts, file contents, and tool results of every session using this key. Only the admin secret can read them.</div>
+            <div>Bodies contain the prompts, file contents, and tool results of every session using this key, and a session in auto mode sends the machine&apos;s permission rules with their literal text, its working and home directories and its git remotes with every request. Only the admin secret can read them.</div>
           </div>
         )}
         <div className="cells">

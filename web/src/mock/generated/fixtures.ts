@@ -3630,8 +3630,8 @@ export const FIXTURES: Record<string, Fixture> = {
                 "refusal_recommended_model": null,
                 "served_model": null,
                 "speed": "standard",
-                "stop_reason": "end_turn",
-                "stop_sequence": null
+                "stop_reason": "stop_sequence",
+                "stop_sequence": "</block>"
               }
             }
           ]
@@ -6013,8 +6013,8 @@ export const FIXTURES: Record<string, Fixture> = {
                 "refusal_recommended_model": null,
                 "served_model": null,
                 "speed": "standard",
-                "stop_reason": "end_turn",
-                "stop_sequence": null
+                "stop_reason": "stop_sequence",
+                "stop_sequence": "</block>"
               }
             }
           ]

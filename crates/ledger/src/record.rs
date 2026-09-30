@@ -131,7 +131,8 @@ pub struct AttemptRecord {
     pub selection: Option<String>,
     /// One vocabulary for both checks: a server check's `not_flagged`, `flagged`, `skipped`, `unsupported`,
     /// `unavailable`, `none`, `unrecognized`; a classifier request's `not_flagged`, `flagged`, `refused`,
-    /// `unreadable`. Null for a request that asked for nothing and for an attempt no answer reached.
+    /// `unreadable`. Null when the request asked for nothing, no answer reached the attempt, or the answer did
+    /// not finish.
     pub auto_mode_verdict: Option<String>,
     /// The `unavailable` reason, the refusal category, or the stage-2 `<category>` slug.
     pub auto_mode_detail: Option<String>,

@@ -1,5 +1,5 @@
 import type {
-  AccountRollup, Attempt, AttemptOutcome, AttemptWindow, CacheMissReason, CapturedBodies, CohortHold, CostSplit, LatencyHistograms, PinMigrationReason, Placement,
+  AccountRollup, Attempt, AttemptOutcome, AttemptResponse, AttemptWindow, AutoMode, CacheMissReason, CapturedBodies, CohortHold, CostSplit, LatencyHistograms, PinMigrationReason, Placement,
   RateLimitWindow, RequestEvent, RequestKind, RequestLog, SelectionTrace, Usage, WastedProbeReason,
 } from '@/api/types';
 import { emptyCacheMissReasons, emptyWastedProbeReasons, missCount } from '@/lib/cache';
@@ -220,7 +220,7 @@ function buildAttempts(lane: Lane, atMs: number, finalStatus: number, attemptsWa
       durationMs,
       index: i,
       outcome,
-      response: { clearedInputTokens: null, inferenceGeo: 'us', refusalCategory: null, refusalRecommendedModel: null, servedModel: null, speed: 'standard', stopReason: 'end_turn', stopSequence: null },
+      response: { autoModeDetail: null, autoModeToolUses: [], autoModeVerdict: null, clearedInputTokens: null, inferenceGeo: 'us', refusalCategory: null, refusalRecommendedModel: null, servedModel: null, speed: 'standard', stopReason: 'end_turn', stopSequence: null },
       // Drawn once the events exist, since a trace names the move an event records.
       selection: null,
       startedAt: iso(cursor),
@@ -232,12 +232,31 @@ function buildAttempts(lane: Lane, atMs: number, finalStatus: number, attemptsWa
   return attempts;
 }
 
+/** Each seeded auto-mode row's last answer; `stripped` asked for nothing, so it carries no verdict. */
+const AUTO_MODE_ANSWERS: Record<AutoMode, Partial<AttemptResponse>> = {
+  client_stage1: { autoModeVerdict: 'not_flagged', stopReason: 'stop_sequence', stopSequence: '</block>' },
+  client_stage2: { autoModeDetail: 'reasoning_extraction', autoModeVerdict: 'refused', refusalCategory: 'reasoning_extraction', refusalRecommendedModel: null, stopReason: 'refusal' },
+  server: {
+    autoModeToolUses: [
+      { explanation: null, id: 'toolu_01', outcome: 'not_flagged', reason: null },
+      { explanation: 'Deletes notes.md, a file the task never asked to remove.', id: 'toolu_02', outcome: 'flagged', reason: null },
+    ],
+    autoModeVerdict: 'flagged',
+    stopReason: 'tool_use',
+  },
+  stripped: {},
+};
+
 function buildRequests(): RequestLog[] {
   const rows: RequestLog[] = [];
   const span = 24 * HOUR;
   // The drawer's refusal line needs one answer that carries a refusal, so the first eligible row takes it
   // rather than leaving it to the draw below.
   let refusalOwed = true;
+  // The drawer, the Sessions view and the Analytics section read auto-mode rows off one session. The eligible rows
+  // after the refusal take them in turn and override values they already drew, so no later draw moves.
+  const autoModeOwed: AutoMode[] = ['server', 'client_stage1', 'client_stage2', 'stripped'];
+  let refusalSession: string | null = null;
   // A separate stream so the hint draws do not shift the rest of the row's draws.
   const hints = createRng(6_061);
   for (let i = 0; i < 232; i += 1) {
@@ -257,9 +276,11 @@ function buildRequests(): RequestLog[] {
     const diagnosis = diagnosed(tried, kind);
     const refused = refusalOwed && lane.keyId === 'laptop' && kind === 'inference' && finalStatus === 200;
     if (refused) refusalOwed = false;
+    const autoMode = !refused && refusalSession !== null && lane.keyId === 'laptop' && kind === 'inference' && finalStatus === 200 ? (autoModeOwed.shift() ?? null) : null;
+    const answered = autoMode === null ? diagnosis : diagnosis.map((a, at) => (at === diagnosis.length - 1 ? { ...a, response: { ...a.response, ...AUTO_MODE_ANSWERS[autoMode] } } : a));
     const attempts = refused
-      ? diagnosis.map((a, at) => (at === diagnosis.length - 1 ? { ...a, response: { ...a.response, refusalCategory: 'cyber', refusalRecommendedModel: 'claude-opus-5', stopReason: 'refusal' } } : a))
-      : diagnosis;
+      ? answered.map((a, at) => (at === answered.length - 1 ? { ...a, response: { ...a.response, refusalCategory: 'cyber', refusalRecommendedModel: 'claude-opus-5', stopReason: 'refusal' } } : a))
+      : answered;
     const transport = kind === 'inference' ? (rng.chance(0.86) ? 'sse' : 'json') : 'json';
     const durationMs = attempts.reduce((s, a) => s + (a.durationMs ?? 0), 0);
     const errorCode = finalStatus === 200 ? null : finalStatus === 429 ? 'rate_limit_error' : finalStatus === 529 ? 'overloaded_error' : 'api_error';
@@ -268,12 +289,15 @@ function buildRequests(): RequestLog[] {
     // little after the first byte; JSON responses arrive whole.
     const ttftMs = ttfbMs === null || kind !== 'inference' ? ttfbMs : ttfbMs + (transport === 'sse' ? rng.int(40, 600) : 0);
     const id = `req_${rng.uuid().slice(0, 12)}`;
-    const sessionId = rng.pick(SESSION_IDS);
+    const drawn = rng.pick(SESSION_IDS);
+    if (refused) refusalSession = drawn;
+    const sessionId = autoMode === null ? drawn : autoMode !== 'stripped' ? refusalSession! : drawn !== refusalSession ? drawn : SESSION_IDS.find((s) => s !== refusalSession)!;
     const agentId = rng.pick(AGENT_IDS);
     rows.push({
       ...REQUEST_SAMPLE,
       id,
       at: iso(atMs),
+      autoMode,
       keyGeneration: Date.parse(keyById.get(lane.keyId)!.createdAt),
       keyId: lane.keyId,
       poolId: lane.poolId,
@@ -355,7 +379,7 @@ function buildRequests(): RequestLog[] {
       durationMs: REJECTION_MS,
       index: 0,
       outcome: 'upstream_error',
-      response: { clearedInputTokens: null, inferenceGeo: null, refusalCategory: null, refusalRecommendedModel: null, servedModel: null, speed: null, stopReason: null, stopSequence: null },
+      response: { autoModeDetail: null, autoModeToolUses: [], autoModeVerdict: null, clearedInputTokens: null, inferenceGeo: null, refusalCategory: null, refusalRecommendedModel: null, servedModel: null, speed: null, stopReason: null, stopSequence: null },
       selection: null,
       startedAt: story.at,
       upstreamStatus: 404,

@@ -189,8 +189,9 @@ A key's `auto_mode_server` refuses a value of another type with `auto_mode_serve
 
 Rotate issues a new secret under the same id; a revoked key cannot be rotated. Revoke is permanent; a revoked
 key cannot be re-enabled (`409`). Delete removes the key outright. The console's warning when body capture is on
-for a key: "Bodies contain the prompts, file contents, and tool results of every session using this key. Only
-the admin secret can read them."
+for a key: "Bodies contain the prompts, file contents, and tool results of every session using this key, and a
+session in auto mode sends the machine's permission rules with their literal text, its working and home directories
+and its git remotes with every request. Only the admin secret can read them."
 
 The key form sets
 `auto_mode_server` as **Server-side auto mode** (Inherit, naming the pool's value, On, or Off) in its Access group, and

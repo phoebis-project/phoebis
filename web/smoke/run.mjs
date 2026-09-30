@@ -813,6 +813,12 @@ m.unmount();
 m = await mount('/pools');
 expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace', 'Round robin', 'subscription first', 'Within the first priority tier that has an eligible upstream, the one with the most weekly allowance left per hour until its window resets or its subscription ends; an unsampled upstream counts as untouched, and ties are random.', 'Within the first priority tier that has an eligible upstream, each in turn; a restart starts the round again.', 'Prefer plan quota', 'Allow overage', 'Migrate off', 'Select-below off', 'Affinity 10m', 'Affinity off', 'Keep prompt caches warm', 'cold limit 2', 'idle 1h', 'net-negative stop 2', '$4.00/day cap', 'Traffic, 24h', 'Requests per hour', '3-hour average', 'Members', 'eligible', 'cooldown ends', 'overage', 'P1', 'Console workspace', 'codex', 'Evals workspace', 'desktop', 'laptop', 'ci', 'Active pins', 'Edit']);
 {
+  const badged = [...m.container.querySelectorAll('.pool')]
+    .filter((card) => [...card.querySelectorAll('.badge')].some((b) => b.textContent?.trim() === 'server-side auto mode off'))
+    .map((card) => card.querySelector('.card__title')?.textContent?.trim());
+  results.push({ name: '/pools the card of a pool with server-side auto mode off carries the badge, and no other card does', ok: JSON.stringify(badged) === '["studio"]', missing: badged });
+}
+{
   const cardMembers = [...(m.container.querySelector('.pool__members ul')?.querySelectorAll('li') ?? [])].map((li) => `${li.children[0]?.textContent?.trim()} ${li.children[1]?.textContent?.trim()}`);
   results.push({ name: '/pools card orders members by priority then label', ok: JSON.stringify(cardMembers) === JSON.stringify(['P0 business', 'P0 mail', 'P0 personal', 'P1 Console workspace']), missing: cardMembers });
   // The route's verdict per member, which the selection-order strip beside it reads too: personal is in overage on
@@ -941,15 +947,6 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
   });
   const headings = [...(dlg?.querySelectorAll('.dialog-group__title') ?? [])].map((h) => h.textContent?.trim());
   results.push({ name: '/pools dialog body repeats the groups in order', ok: JSON.stringify(headings) === JSON.stringify(groupLabels), missing: headings });
-  {
-    const autoMode = group(dlg, 'Auto mode');
-    const toggle = autoMode?.querySelector('[role="switch"][aria-label="Support server-side auto mode"]');
-    results.push({
-      name: '/pools Auto mode group holds the switch on by default with its hint',
-      ok: toggle !== null && toggle !== undefined && toggle.getAttribute('aria-checked') === 'true' && (autoMode?.textContent ?? '').includes('classifier requests of its own'),
-      missing: [toggle ? String(toggle.getAttribute('aria-checked')) : 'no switch', (autoMode?.textContent ?? 'no group').slice(0, 120)],
-    });
-  }
   results.push({ name: '/pools dialog body is the only scroller', ok: (dlg?.querySelectorAll('.dialog__rail-split > .dialog__body').length ?? 0) === 1, missing: [] });
   results.push({ name: '/pools dialog marks one rail entry current', ok: (dlg?.querySelectorAll('.dialog-rail [aria-current="true"]').length ?? 0) === 1, missing: [] });
   const footButtons = [...(dlg?.querySelectorAll('.dialog__foot .dialog__actions button') ?? [])].map((b) => b.textContent?.trim());
@@ -1764,6 +1761,15 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
     ok: prefer?.getAttribute('aria-checked') === 'true',
     missing: [prefer ? String(prefer.getAttribute('aria-checked')) : 'absent'],
   });
+  {
+    const autoMode = group(dlg, 'Auto mode');
+    const toggle = autoMode?.querySelector('[role="switch"][aria-label="Support server-side auto mode"]');
+    results.push({
+      name: '/pools Auto mode group holds the switch on by default with its hint',
+      ok: toggle !== null && toggle !== undefined && toggle.getAttribute('aria-checked') === 'true' && (autoMode?.textContent ?? '').includes('classifier requests of its own'),
+      missing: [toggle ? String(toggle.getAttribute('aria-checked')) : 'no switch', (autoMode?.textContent ?? 'no group').slice(0, 120)],
+    });
+  }
   const status = () => dlg?.querySelector('.dialog__status');
   const goTo = () => [...(status()?.querySelectorAll('button') ?? [])].map((b) => b.textContent?.trim());
   const unnamed = [status()?.textContent ?? '', JSON.stringify(goTo())];
@@ -2068,10 +2074,11 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
     await m.settle(100);
   }
   {
-    // Access holds who may use the key and how much at once: on create, Expiry, then the cap.
+    // Access holds who may use the key and how much at once: on create, Expiry, Server-side auto mode, then
+    // the cap.
     const access = group(dlg, 'Access');
     const labels = [...(access?.querySelectorAll('.field__label') ?? [])].map((l) => l.textContent?.trim());
-    results.push({ name: '/keys Requests in flight follows Expiry in Access', ok: JSON.stringify(labels) === JSON.stringify(['Expiry', 'Server-side auto mode', 'Requests in flight']), missing: labels });
+    results.push({ name: '/keys Requests in flight follows Server-side auto mode in Access', ok: JSON.stringify(labels) === JSON.stringify(['Expiry', 'Server-side auto mode', 'Requests in flight']), missing: labels });
     // What names a conversation sits in Sessions; it keeps its options and defaults.
     const sessions = group(dlg, 'Sessions');
     const selectIn = (section, label) => section?.querySelector(`select[aria-label="${label}"]`);
@@ -2259,6 +2266,12 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
   });
   const laptopDlg = await editOf('laptop');
   const laptopCap = laptopDlg?.querySelector('input[aria-label="Requests in flight"]')?.value;
+  const captureWarning = group(laptopDlg, 'Capture')?.querySelector('.callout--warning')?.textContent ?? '';
+  results.push({
+    name: "/keys the capture warning names what a session in auto mode sends with every request",
+    ok: captureWarning.includes("a session in auto mode sends the machine's permission rules with their literal text, its working and home directories and its git remotes with every request. Only the admin secret can read them."),
+    missing: [captureWarning || 'no capture warning'],
+  });
   foot(laptopDlg, 'Cancel')?.click();
   await m.settle(200);
   results.push({ name: "/keys the edit dialog opens with the key's in-flight cap", ok: laptopCap === '8', missing: [String(laptopCap)] });
@@ -2282,12 +2295,18 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
   await m.settle(200);
   const notebook = await editOf('notebook');
   const notebookValue = autoModeOf(notebook)?.value;
+  const notebookInherit = autoModeOf(notebook)?.options[0]?.textContent?.trim();
   foot(notebook, 'Cancel')?.click();
   await m.settle(200);
   results.push({
     name: "/keys Server-side auto mode offers Inherit, On and Off and starts on Inherit naming the pool's value",
     ok: JSON.stringify(freshOptions) === JSON.stringify(["inherit:Inherit (on, the pool's setting)", 'on:On', 'off:Off']) && freshValue === 'inherit' && notebookValue === 'on',
     missing: [JSON.stringify(freshOptions), String(freshValue), String(notebookValue)],
+  });
+  results.push({
+    name: "/keys Server-side auto mode's Inherit names off for a key under a pool that turned it off",
+    ok: notebookInherit === "Inherit (off, the pool's setting)",
+    missing: [String(notebookInherit)],
   });
 }
 {
@@ -2682,6 +2701,47 @@ if (failoverRow) {
   });
 } else {
   results.push({ name: '/requests a failover row whose attempts reported quota windows', ok: false, missing: ['fixture'] });
+}
+{
+  const row = (label) => [...(m.container.querySelector('.drawer')?.querySelectorAll('.kv__row') ?? [])].find((r) => r.querySelector('dt')?.textContent?.trim() === label)?.querySelector('dd');
+  const verdictSpans = () => [...m.container.querySelectorAll('.drawer .attempt__response span')].map((s) => s.textContent?.trim() ?? '').filter((t) => t.startsWith('auto mode:'));
+  const server = requests.find((r) => r.autoMode === 'server' && r.attempts.some((a) => a.response.autoModeVerdict === 'flagged'));
+  const stage2 = requests.find((r) => r.autoMode === 'client_stage2');
+  const dropped = requests.find((r) => r.autoMode === 'stripped');
+  results.push({ name: 'fixture: a flagged server-side check, a stage-2 classifier request and a dropped check', ok: server !== undefined && stage2 !== undefined && dropped !== undefined, missing: [server?.id ?? 'no server row', stage2?.id ?? 'no stage-2 row', dropped?.id ?? 'no dropped row'] });
+  if (server) {
+    await m.navigate(`/requests/${server.id}`);
+    await m.settle(300);
+    const entries = [...m.container.querySelectorAll('.drawer .attempt__verdicts li')].map((li) => li.textContent ?? '');
+    const flagged = [...m.container.querySelectorAll('.drawer .attempt__verdicts li')].find((li) => li.children[1]?.textContent?.trim() === 'flagged');
+    results.push({
+      name: '/requests drawer reads a flagged server verdict per tool use',
+      ok:
+        row('Auto mode')?.textContent?.trim() === 'server-side check requested' &&
+        verdictSpans().includes('auto mode: flagged') &&
+        entries.length === 2 &&
+        (flagged?.textContent ?? '').includes('Deletes notes.md, a file the task never asked to remove.'),
+      missing: [row('Auto mode')?.textContent ?? 'no Auto mode row', JSON.stringify(verdictSpans()), JSON.stringify(entries)],
+    });
+  }
+  if (stage2) {
+    await m.navigate(`/requests/${stage2.id}`);
+    await m.settle(300);
+    results.push({
+      name: "/requests drawer reads a classifier request's stage and verdict",
+      ok: row('Auto mode')?.textContent?.trim() === 'client classifier, stage 2' && verdictSpans().includes('auto mode: refused (reasoning_extraction)') && m.container.querySelector('.drawer .attempt__verdicts') === null,
+      missing: [row('Auto mode')?.textContent ?? 'no Auto mode row', JSON.stringify(verdictSpans())],
+    });
+  }
+  if (dropped) {
+    await m.navigate(`/requests/${dropped.id}`);
+    await m.settle(300);
+    results.push({
+      name: '/requests drawer reads a dropped check',
+      ok: row('Auto mode')?.textContent?.trim() === "server-side check dropped by this key's setting" && verdictSpans().length === 0 && m.container.querySelector('.drawer .attempt__verdicts') === null,
+      missing: [row('Auto mode')?.textContent ?? 'no Auto mode row', JSON.stringify(verdictSpans())],
+    });
+  }
 }
 {
   // The rejection story: the client spelled the model without its date, one pool member refused it, and another

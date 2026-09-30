@@ -157,7 +157,9 @@ the row keeping the length it ran to so the drawer can say how much was dropped,
 once its hours run out. `stats.body_capture_max_hours` is the ceiling a key or pool may ask for, because the
 bodies are prompts and how long they are kept is the operator's call rather than the caller's. Only the admin role
 reads bodies: a viewer's request for them is answered `403 captured bodies are for administrators`. The console
-shows a captured body in the request drawer, with a control to copy it.
+shows a captured body in the request drawer, with a control to copy it. A captured request body is the body as the
+client sent it, so a session in auto mode shows its `safeguards` member whole, the machine's permission rules and paths
+included, whether or not the router dropped it on the way upstream.
 
 ## Retention
 
@@ -271,9 +273,13 @@ characters, `?` for one, a backslash quoting either, and a value with no wildcar
 takes a pattern over the class (`claude-code/*`), and the agent type and turn origin filters pick from the values the
 client's hint headers and attribution line carry. Selecting a row opens a drawer with the request's detail, which shows
 the user agent, the model as the client spelled it and, when it
-differs, the canonical id the router recorded, and the client hints: the agent type, the compaction and
-context-compacted markers, the turn origin, and the tool time before the turn; the trail names an upstream that rejected
-the model and the one that served it. The table holds the requests up to the moment you opened it, so paging does not
+differs, the canonical id the router recorded, its auto-mode standing (a server-side check requested, one dropped by the
+key's setting, a client classifier request at stage 1 or 2, or not requested), and the client hints: the agent type, the
+compaction and context-compacted markers, the turn origin, and the tool time before the turn; the trail names an
+upstream that rejected the model and the one that served it, and each attempt shows the auto mode verdict with its
+detail (`auto mode: flagged`, `unavailable (timeout)`, `refused (reasoning_extraction)`, `no verdict returned`) and, for
+a server-side check, one line per tool use with its outcome and, when flagged, the classifier's explanation. The table
+holds the requests up to the moment you opened it, so paging does not
 shift as new ones arrive; Refresh brings it up to now. When the session moved during the request, the drawer says from
 which upstream to which and why: rate limited, wound down, upstream marked, over its plan, back to plan, load shed, or
 window spent. When its pin was released without a move, the drawer says from which upstream and every reason the router

@@ -564,6 +564,9 @@ async fn every_route_is_captured_and_holds_its_shape() {
         },
         attempts: vec![AttemptRecord {
             auto_mode_verdict: Some("not_flagged".into()),
+            // A stage-1 classifier answer stops on its closing tag.
+            stop_reason: Some("stop_sequence".into()),
+            stop_sequence: Some("</block>".into()),
             ..attempt("r-captured", 1, "business", 200, "succeeded", now - 60_000)
         }],
         bodies: Some(BodyRecord {
