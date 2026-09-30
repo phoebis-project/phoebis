@@ -36,31 +36,25 @@ pub struct BudgetRow {
     pub usd: f64,
     /// The share of the account's 5-hour window its plan-funded probes consumed on `day`.
     pub five_hour_share: f64,
-    /// Set once any share added on `day` was priced through a stand-in cell or factor, and kept for the day.
-    pub five_hour_share_unmeasured: bool,
 }
 
 impl Store {
     /// Adds a settled probe's charge to its row for `day`, a UTC date as `YYYY-MM-DD`. Additive, so two probes
-    /// settling at once land both whichever writes first; the stand-in flag only ever turns on, since a day's
-    /// share with one estimate in it is an estimate.
+    /// settling at once land both whichever writes first.
     pub fn add_keepalive_budget(&self, day: &str, charge: &BudgetRow) -> Result<(), StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
         conn.execute(
-            "INSERT INTO keepalive_budgets (day, scope, id, usd, five_hour_share, five_hour_share_unmeasured) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
+            "INSERT INTO keepalive_budgets (day, scope, id, usd, five_hour_share) \
+             VALUES (?1, ?2, ?3, ?4, ?5) \
              ON CONFLICT(day, scope, id) DO UPDATE SET \
                usd = keepalive_budgets.usd + excluded.usd, \
-               five_hour_share = keepalive_budgets.five_hour_share + excluded.five_hour_share, \
-               five_hour_share_unmeasured = \
-                 keepalive_budgets.five_hour_share_unmeasured OR excluded.five_hour_share_unmeasured",
+               five_hour_share = keepalive_budgets.five_hour_share + excluded.five_hour_share",
             params![
                 day,
                 charge.scope.as_str(),
                 charge.id,
                 charge.usd,
-                charge.five_hour_share,
-                charge.five_hour_share_unmeasured
+                charge.five_hour_share
             ],
         )?;
         Ok(())
@@ -70,7 +64,7 @@ impl Store {
         let conn = self.conn.lock().expect(LOCK_POISONED);
         let rows = conn
             .prepare(
-                "SELECT scope, id, usd, five_hour_share, five_hour_share_unmeasured FROM keepalive_budgets \
+                "SELECT scope, id, usd, five_hour_share FROM keepalive_budgets \
                  WHERE day = ?1 ORDER BY scope, id",
             )?
             .query_map(params![day], |r| {
@@ -79,23 +73,19 @@ impl Store {
                     r.get::<_, String>(1)?,
                     r.get::<_, f64>(2)?,
                     r.get::<_, f64>(3)?,
-                    r.get::<_, bool>(4)?,
                 ))
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows
             .into_iter()
-            .filter_map(
-                |(scope, id, usd, five_hour_share, five_hour_share_unmeasured)| {
-                    Some(BudgetRow {
-                        scope: BudgetScope::parse(&scope)?,
-                        id,
-                        usd,
-                        five_hour_share,
-                        five_hour_share_unmeasured,
-                    })
-                },
-            )
+            .filter_map(|(scope, id, usd, five_hour_share)| {
+                Some(BudgetRow {
+                    scope: BudgetScope::parse(&scope)?,
+                    id,
+                    usd,
+                    five_hour_share,
+                })
+            })
             .collect())
     }
 

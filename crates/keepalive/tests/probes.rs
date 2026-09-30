@@ -1145,11 +1145,7 @@ async fn a_fast_recipes_probe_settles_in_dollars_at_the_fast_cells_on_a_plan_fun
         "the probe settled in dollars at the fast cells: {status:?}"
     );
     assert_eq!(
-        (
-            status.net_five_hour_share,
-            status.net_five_hour_share_unmeasured
-        ),
-        (0.0, false),
+        status.net_five_hour_share, 0.0,
         "the account's share balance is unchanged"
     );
     assert_eq!(

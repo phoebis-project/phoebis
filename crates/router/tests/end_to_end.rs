@@ -2145,10 +2145,21 @@ fn opus_request(
     secret: &str,
     session: &str,
 ) -> reqwest::RequestBuilder {
+    request_on("claude-opus-5", client, proxy_port, secret, session)
+}
+
+/// The fixture head with a body on `model` in place of the captured fixture's own.
+fn request_on(
+    model: &str,
+    client: &reqwest::Client,
+    proxy_port: u16,
+    secret: &str,
+    session: &str,
+) -> reqwest::RequestBuilder {
     let head = inference_head(FixtureKind::ApiKey);
     let (_, headers) = phoebis_transport::request::parse_head(head).unwrap();
     let mut body: serde_json::Value = serde_json::from_slice(body(BodyFixture::ApiKey)).unwrap();
-    body["model"] = serde_json::json!("claude-opus-5");
+    body["model"] = serde_json::json!(model);
     let mut req = client
         .post(format!(
             "http://127.0.0.1:{proxy_port}/v1/messages?beta=true"
@@ -2177,7 +2188,7 @@ async fn a_client_request_folds_the_pins_typed_burn_and_the_sessions_route_price
             respond: Respond::Json {
                 status: 200,
                 headers: vec![],
-                body: br#"{"id":"msg_1","type":"message","model":"claude-opus-5","usage":{"input_tokens":1000,"output_tokens":100}}"#.to_vec(),
+                body: br#"{"id":"msg_1","type":"message","model":"claude-opus-5-5","usage":{"input_tokens":1000,"output_tokens":100}}"#.to_vec(),
             },
         },
         Rule {
@@ -2185,7 +2196,7 @@ async fn a_client_request_folds_the_pins_typed_burn_and_the_sessions_route_price
             respond: Respond::Json {
                 status: 200,
                 headers: vec![],
-                body: br#"{"data":[{"id":"claude-opus-5","type":"model"}]}"#.to_vec(),
+                body: br#"{"data":[{"id":"claude-opus-5-5","type":"model"}]}"#.to_vec(),
             },
         },
     ])
@@ -2212,7 +2223,7 @@ async fn a_client_request_folds_the_pins_typed_burn_and_the_sessions_route_price
         "{}",
         &phoebis_store::SubscriptionRow {
             plan: None,
-            tier: Some("default_claude_max_5x".into()),
+            tier: Some("default_claude_max_20x".into()),
             since: None,
             trial_ends_at: None,
         },
@@ -2264,7 +2275,7 @@ async fn a_client_request_folds_the_pins_typed_burn_and_the_sessions_route_price
         .await
         .unwrap();
     let secret = key["secret"].as_str().unwrap().to_string();
-    let resp = opus_request(&client, proxy_port, &secret, "burn-e2e")
+    let resp = request_on("claude-opus-5-5", &client, proxy_port, &secret, "burn-e2e")
         .send()
         .await
         .unwrap();
@@ -2276,9 +2287,8 @@ async fn a_client_request_folds_the_pins_typed_burn_and_the_sessions_route_price
     .await;
     let row = &sessions["sessions"][0];
     assert_eq!(
-        (&row["burn_unit"], &row["burn_unmeasured"]),
-        (&serde_json::json!("window_share"), &serde_json::json!(false)),
-        "an oauth account funded by its plan reads the share of its window, through measured Opus cells: {row}"
+        row["burn_unit"], "window_share",
+        "an oauth account funded by its plan reads the share of its window: {row}"
     );
     let burn_at = row["burn_at"].as_i64().unwrap();
     let tables = phoebis_ledger::PlanTables::shipped();
@@ -2288,11 +2298,10 @@ async fn a_client_request_folds_the_pins_typed_burn_and_the_sessions_route_price
         ..Default::default()
     };
     // The default `burn_window_seconds` (no pool override above): a single renewal from a cold average is the
-    // usage spread over that window, weighed by the band at the renewal, read per hour on Max 5x.
+    // usage spread over that window, weighed by the band at the renewal, read per hour on Max 20x.
     let share = tables
-        .five_hour_share_at("default_claude_max_5x", "claude-opus-5", usage, burn_at)
-        .unwrap()
-        .share;
+        .five_hour_share_at("default_claude_max_20x", "claude-opus-5-5", usage, burn_at)
+        .unwrap();
     let expected_burn = share / 600.0 * 3_600.0;
     assert!(
         (row["burn"].as_f64().unwrap() - expected_burn).abs() < 1e-12,

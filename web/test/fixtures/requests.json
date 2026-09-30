@@ -7,7 +7,7 @@
         "at": 970000,
         "finished_at": 970900,
         "key_id": "desktop",
-        "key_generation": 1790794448321,
+        "key_generation": 1790807751645,
         "pool_id": "main",
         "account_id": "direct",
         "session_id": "s3",
@@ -119,14 +119,14 @@
         "at": 940000,
         "finished_at": 940900,
         "key_id": "desktop",
-        "key_generation": 1790794448321,
+        "key_generation": 1790807751645,
         "pool_id": "main",
         "account_id": "business",
         "session_id": "s1",
         "agent_id": "main",
         "parent_agent_id": null,
-        "model": "claude-sonnet-5",
-        "canonical_model": "claude-sonnet-5",
+        "model": "claude-sonnet-5-5",
+        "canonical_model": "claude-sonnet-5-5",
         "kind": "inference",
         "origin": "client",
         "transport": "sse",
@@ -179,7 +179,7 @@
           "web_fetch": 0,
           "web_search": 0
         },
-        "cost_usd": 0.0036,
+        "cost_usd": 0.0,
         "attempts": [
           {
             "index": 1,
@@ -204,8 +204,8 @@
               }
             ],
             "overage_in_use": null,
-            "estimated_usd": 0.0036,
-            "pricing_version": "2026-09-30",
+            "estimated_usd": null,
+            "pricing_version": null,
             "selection": null,
             "response": {
               "cleared_input_tokens": null,
@@ -225,14 +225,14 @@
         "at": 880000,
         "finished_at": 880900,
         "key_id": "desktop",
-        "key_generation": 1790794448321,
+        "key_generation": 1790807751645,
         "pool_id": "main",
         "account_id": "business",
         "session_id": "s2",
         "agent_id": "main",
         "parent_agent_id": null,
-        "model": "claude-sonnet-5",
-        "canonical_model": "claude-sonnet-5",
+        "model": "claude-sonnet-5-5",
+        "canonical_model": "claude-sonnet-5-5",
         "kind": "inference",
         "origin": "client",
         "transport": "sse",
@@ -285,7 +285,7 @@
           "web_fetch": 0,
           "web_search": 0
         },
-        "cost_usd": 0.0036,
+        "cost_usd": 0.0,
         "attempts": [
           {
             "index": 1,
@@ -310,8 +310,8 @@
               }
             ],
             "overage_in_use": null,
-            "estimated_usd": 0.0036,
-            "pricing_version": "2026-09-30",
+            "estimated_usd": null,
+            "pricing_version": null,
             "selection": null,
             "response": {
               "cleared_input_tokens": null,
@@ -337,8 +337,8 @@
         "session_id": "s0",
         "agent_id": "main",
         "parent_agent_id": null,
-        "model": "claude-sonnet-5",
-        "canonical_model": "claude-sonnet-5",
+        "model": "claude-sonnet-5-5",
+        "canonical_model": "claude-sonnet-5-5",
         "kind": "inference",
         "origin": "client",
         "transport": "sse",
@@ -391,7 +391,7 @@
           "web_fetch": 0,
           "web_search": 0
         },
-        "cost_usd": 0.0036,
+        "cost_usd": 0.0,
         "attempts": [
           {
             "index": 1,
@@ -416,8 +416,8 @@
               }
             ],
             "overage_in_use": null,
-            "estimated_usd": 0.0036,
-            "pricing_version": "2026-09-30",
+            "estimated_usd": null,
+            "pricing_version": null,
             "selection": null,
             "response": {
               "cleared_input_tokens": null,
@@ -437,14 +437,14 @@
         "at": -2600000,
         "finished_at": -2599100,
         "key_id": "desktop",
-        "key_generation": 1790794448321,
+        "key_generation": 1790807751645,
         "pool_id": "main",
         "account_id": "business",
         "session_id": "s1",
         "agent_id": "main",
         "parent_agent_id": null,
-        "model": "claude-sonnet-5",
-        "canonical_model": "claude-sonnet-5",
+        "model": "claude-sonnet-5-5",
+        "canonical_model": "claude-sonnet-5-5",
         "kind": "inference",
         "origin": "client",
         "transport": "sse",
@@ -497,7 +497,7 @@
           "web_fetch": 0,
           "web_search": 0
         },
-        "cost_usd": 0.0072,
+        "cost_usd": 0.0,
         "attempts": [
           {
             "index": 1,
@@ -525,8 +525,8 @@
               }
             ],
             "overage_in_use": null,
-            "estimated_usd": 0.0036,
-            "pricing_version": "2026-09-30",
+            "estimated_usd": null,
+            "pricing_version": null,
             "selection": {
               "strategy": "pace",
               "tier": null,
@@ -579,8 +579,8 @@
               }
             ],
             "overage_in_use": null,
-            "estimated_usd": 0.0036,
-            "pricing_version": "2026-09-30",
+            "estimated_usd": null,
+            "pricing_version": null,
             "selection": {
               "strategy": "pace",
               "tier": [

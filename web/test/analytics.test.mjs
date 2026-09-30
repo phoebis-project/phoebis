@@ -6,7 +6,7 @@ import * as d from './dist/api.js';
 const fixture = (name) => JSON.parse(readFileSync(new URL(`./fixtures/${name}.json`, import.meta.url), 'utf8')).body;
 
 const HOUR = 3_600_000;
-const point = (at, group, over = {}) => ({ at: new Date(at).toISOString(), cachedTokens: 0, fiveHourShare: null, fiveHourUnmeasured: false, group, sevenDayShare: null, sevenDayUnmeasured: false, uncachedTokens: 0, unit: null, usd: 0, ...over });
+const point = (at, group, over = {}) => ({ at: new Date(at).toISOString(), cachedTokens: 0, fiveHourShare: null, group, sevenDayShare: null, uncachedTokens: 0, unit: null, usd: 0, ...over });
 
 test('a conversation class and an overhead class split as the legend says', () => {
   for (const conversation of ['compaction', 'main', 'subagent']) assert.equal(d.classLegendOf(conversation), 'conversation', conversation);
@@ -60,16 +60,6 @@ test('an upstream burns in the unit its figures come in, a subscription with no 
   assert.ok(d.foldBurn(answered.map((p) => ({ ...p, group: `k-${p.group}` })), 'key', 3_600).lines.every((l) => l.unit === 'usd'));
 });
 
-test("a bucket's unmeasured flags stay per window, and a line carries each window's", () => {
-  const { lines, rows } = d.foldBurn(
-    [point(0, 'max', { fiveHourShare: 0.08, sevenDayShare: 0.006, sevenDayUnmeasured: true, unit: 'window_share' }), point(HOUR, 'max', { fiveHourShare: 0.04, sevenDayShare: 0.003, unit: 'window_share' })],
-    'account',
-    3_600,
-  );
-  assert.deepEqual([rows[0].fiveHourUnmeasured[0], rows[0].sevenDayUnmeasured[0], rows[1].sevenDayUnmeasured[0]], [false, true, false]);
-  assert.deepEqual([lines[0].fiveHourUnmeasured, lines[0].sevenDayUnmeasured], [false, true], 'one flagged bucket marks the window it read');
-});
-
 test('the burn fold keeps the groups that burn the most tokens and sums the rest as other', () => {
   const answered = Array.from({ length: 9 }, (_, i) => point(0, `s${i}`, { cachedTokens: (i + 1) * 60, usd: 0.6 }));
   const { lines, rows } = d.foldBurn(answered, 'session', 60);
@@ -85,7 +75,7 @@ test('under the upstream grouping the rest folds into one other per unit, so no 
   const kept = Array.from({ length: 7 }, (_, i) => point(0, `u${i}`, { cachedTokens: 1_000 * (i + 2), fiveHourShare: 0.001, unit: 'window_share' }));
   const answered = [
     ...kept,
-    point(0, 'small-plan', { cachedTokens: 120, fiveHourShare: 0.01, fiveHourUnmeasured: true, sevenDayShare: 0.002, unit: 'window_share' }),
+    point(0, 'small-plan', { cachedTokens: 120, fiveHourShare: 0.01, sevenDayShare: 0.002, unit: 'window_share' }),
     point(0, 'small-tierless', { cachedTokens: 90, unit: 'window_share' }),
     point(0, 'small-key', { cachedTokens: 60, unit: 'usd', usd: 0.6 }),
   ];
@@ -95,7 +85,7 @@ test('under the upstream grouping the rest folds into one other per unit, so no 
   assert.equal(new Set(lines.map((l) => l.key)).size, lines.length, 'each line keeps a key of its own');
   assert.deepEqual([rows[0].cached[7], rows[0].cached[8], rows[0].cached[9]], [120, 90, 60], 'each rest carries its own unit\'s upstreams');
   assert.deepEqual([rows[0].usd[7], rows[0].usd[8], rows[0].usd[9]], [0, 0, 0.6], 'the dollar side keeps the API-key upstream\'s dollars');
-  assert.deepEqual([rows[0].fiveHour[7], rows[0].sevenDay[7], rows[0].fiveHourUnmeasured[7]], [null, null, false], 'a folded rest draws no share, flagged or not');
+  assert.deepEqual([rows[0].fiveHour[7], rows[0].sevenDay[7]], [null, null], 'a folded rest draws no share');
   const oneUnit = d.foldBurn([...kept, point(0, 'small-key', { cachedTokens: 60, unit: 'usd', usd: 0.6 }), point(0, 'tiny-key', { cachedTokens: 30, unit: 'usd', usd: 0.3 })], 'account', 60);
   assert.deepEqual(oneUnit.lines.slice(7).map((l) => l.label), ['Other (dollars)'], 'a rest of one unit folds into that unit alone');
 });

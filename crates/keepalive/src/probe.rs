@@ -9,7 +9,7 @@ use std::time::Duration;
 use axum::body::Body;
 use axum::http::{header, Request};
 use bytes::{Bytes, BytesMut};
-use phoebis_ledger::{PlanTables, PriceTable, Share};
+use phoebis_ledger::{PlanTables, PriceTable};
 use phoebis_relay::{RelayOutcome, ServedUnder};
 use phoebis_store::{AccountKind, BudgetRow, BudgetScope};
 use http_body_util::BodyExt;
@@ -17,7 +17,7 @@ use serde_json::Value;
 
 use crate::engine::{Engine, Funding, Inner, Reason, SavingsUnit, SessionKey, Wasted};
 use crate::recipe::Recipe;
-use crate::savings::probe_cost;
+use crate::savings::{probe_cost, probe_types, settlement_unit};
 use crate::usage::{ProbeUsage, MAX_USAGE_BYTES};
 
 /// The engine's own bound on one exchange. A probe with `max_tokens = 0` answers in seconds; the relay's idle
@@ -39,6 +39,8 @@ pub(crate) struct ProbeJob {
     pub canonical_model: String,
     pub recipe: Recipe,
     pub expected: u64,
+    /// The TTL the recipe kept warm when the job was cut, which fixes the probe's typed usage for its settlement.
+    pub ttl_ms: i64,
 }
 
 pub(crate) struct ProbeResult {
@@ -122,10 +124,9 @@ pub(crate) enum Applied {
     Orphaned,
 }
 
-/// The unit and the cost a non-migrated probe settles in: `default_unit` (the serving account's own funding)
-/// when the tables price the model on the account's `tier` there, dollars instead when they do not, so a later
-/// credit for the same coverage never splits from the cost that earned it, and a model or a tier the tables
-/// lack never drains a share balance it can never repay. A migrated probe costs nothing in either unit.
+/// The unit and the cost a non-migrated probe settles in: the unit `settlement_unit` decides from the probe's
+/// typed usage, the same decision the gate took, and the probe's own usage priced in it. A migrated probe costs
+/// nothing in either unit.
 #[allow(clippy::too_many_arguments)]
 fn settled_cost(
     default_unit: SavingsUnit,
@@ -134,46 +135,32 @@ fn settled_cost(
     tier: Option<&str>,
     canonical_model: &str,
     usage: ProbeUsage,
+    ttl_ms: i64,
     outcome: ProbeOutcome,
     cost_usd: f64,
     at: i64,
-) -> (SavingsUnit, Share) {
+) -> (SavingsUnit, f64) {
     if outcome == ProbeOutcome::Migrated {
-        return (
-            default_unit,
-            Share {
-                share: 0.0,
-                unmeasured: false,
-            },
-        );
+        return (default_unit, 0.0);
     }
-    match probe_cost(
+    let unit = settlement_unit(
         default_unit,
-        table,
         tables,
         tier,
         canonical_model,
-        usage,
-        at,
-    ) {
-        Some(cost) => (default_unit, cost),
-        None => (
-            SavingsUnit::Usd,
-            probe_cost(
-                SavingsUnit::Usd,
-                table,
-                tables,
-                tier,
-                canonical_model,
-                usage,
-                at,
-            )
-            .unwrap_or(Share {
-                share: cost_usd,
-                unmeasured: false,
-            }),
-        ),
-    }
+        probe_types(ttl_ms),
+    );
+    // The typed usage covers every type a probe carries, so the share side prices here; the dollar side falls back
+    // to the ledger's own dollar cost, zero for a model the price table lacks.
+    let cost = probe_cost(unit, table, tables, tier, canonical_model, usage, at);
+    (
+        unit,
+        cost.unwrap_or(if unit == SavingsUnit::Usd {
+            cost_usd
+        } else {
+            0.0
+        }),
+    )
 }
 
 /// A pool-at-its-cap 429's `Retry-After` seconds, `None` for anything else or a header that does not parse.
@@ -314,6 +301,7 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
             tier.as_deref(),
             &record.canonical_model,
             record.usage,
+            job.ttl_ms,
             record.outcome,
             record.cost_usd,
             now,
@@ -321,9 +309,9 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
         let mut charge = None;
         if record.outcome != ProbeOutcome::Migrated {
             // The dollar cap counts what actually settles in dollars: an api_key account, a subscription
-            // account in overage, or a plan-funded probe on a model or a tier the tables lack, which `unit` (the
-            // post-fallback settlement) already reads as `Usd`. That last case is the only cap bounding such a
-            // probe at all, since the plan-side cap below counts `WindowShare` alone.
+            // account in overage, or a plan-funded probe the cost table cannot price on the account's tier,
+            // which `unit` (the settlement's decision) already reads as `Usd`. That last case is the only cap
+            // bounding such a probe at all, since the plan-side cap below counts `WindowShare` alone.
             if unit == SavingsUnit::Usd {
                 *inner
                     .spent_today
@@ -334,20 +322,18 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
                     id: record.pool_id.clone(),
                     usd: record.cost_usd,
                     five_hour_share: 0.0,
-                    five_hour_share_unmeasured: false,
                 });
             }
             if unit == SavingsUnit::WindowShare {
                 *inner
                     .share_spent_today
                     .entry(record.account.clone())
-                    .or_insert(0.0) += cost.share;
+                    .or_insert(0.0) += cost;
                 charge = Some(BudgetRow {
                     scope: BudgetScope::Account,
                     id: record.account.clone(),
                     usd: 0.0,
-                    five_hour_share: cost.share,
-                    five_hour_share_unmeasured: cost.unmeasured,
+                    five_hour_share: cost,
                 });
             }
         }
@@ -433,7 +419,7 @@ impl Inner {
                 usage,
                 0,
             )
-            .map_or(0.0, |cost| cost.share);
+            .unwrap_or(0.0);
         }
         if result
             .account
@@ -457,7 +443,7 @@ impl Inner {
         record: &ProbeRecord,
         covered_unit: Option<SavingsUnit>,
         unit: SavingsUnit,
-        cost: Share,
+        cost: f64,
         now: i64,
     ) -> Applied {
         let key = &job.key;
@@ -569,7 +555,7 @@ impl Inner {
             .push(if migrated { 0.0 } else { record.cost_usd });
         if !migrated {
             let was_negative = agent.net.in_unit(unit) < 0.0;
-            agent.net.add(unit, -cost.share, cost.unmeasured);
+            agent.net.add(unit, -cost);
             // The grace budget is granted on the way into a negative net, so the first paid probe leaves the
             // configured allowance; each further paid probe while negative spends one.
             if agent.net.in_unit(unit) < 0.0 && !was_negative {
@@ -824,6 +810,7 @@ pub(crate) fn wasted_label(reason: Reason) -> Option<Wasted> {
 mod tests {
     use std::collections::BTreeMap;
 
+    use crate::config::{FIVE_MINUTES_MS, ONE_HOUR_MS};
     use crate::engine::{Agent, Session};
 
     use super::*;
@@ -948,7 +935,7 @@ mod tests {
         }
     }
 
-    const MAX_5X: Option<&str> = Some("default_claude_max_5x");
+    const MAX_20X: Option<&str> = Some("default_claude_max_20x");
     /// 1970-01-01 00:00 UTC, a Wednesday afternoon in the band's zone and outside its hours.
     const OFF_BAND: i64 = 0;
     /// Monday 2026-09-21 at 14:00 UTC, 07:00 in the band's zone and inside its hours.
@@ -974,9 +961,10 @@ mod tests {
             SavingsUnit::WindowShare,
             &table,
             &tables,
-            MAX_5X,
+            MAX_20X,
             "unlisted-model",
             usage,
+            FIVE_MINUTES_MS,
             ProbeOutcome::Ok,
             0.0,
             OFF_BAND,
@@ -990,13 +978,13 @@ mod tests {
             SavingsUnit::Usd,
             &table,
             &tables,
-            MAX_5X,
+            MAX_20X,
             "unlisted-model",
             usage,
             OFF_BAND,
         )
         .unwrap();
-        assert!(expected.share > 0.0, "{expected:?}");
+        assert!(expected > 0.0, "{expected}");
         assert_eq!(cost, expected);
     }
 
@@ -1009,9 +997,10 @@ mod tests {
                 SavingsUnit::WindowShare,
                 &table,
                 &tables,
-                MAX_5X,
-                "claude-opus-5",
+                MAX_20X,
+                "claude-opus-5-5",
                 million_input(),
+                FIVE_MINUTES_MS,
                 ProbeOutcome::Ok,
                 0.0,
                 at,
@@ -1020,13 +1009,13 @@ mod tests {
         let (unit, cost) = settle(OFF_BAND);
         assert_eq!(unit, SavingsUnit::WindowShare);
         assert!(
-            (cost.share - 0.0841).abs() < 1e-12 && !cost.unmeasured,
-            "a million Opus input tokens are 8.41% of the Max 5x window, a measured cell: {cost:?}"
+            (cost - 0.01461).abs() < 1e-12,
+            "a million Opus 5.5 input tokens are 1.461% of the Max 20x window: {cost}"
         );
         let (_, banded) = settle(IN_BAND);
         assert!(
-            (banded.share - 0.0841 * 1.45).abs() < 1e-12,
-            "the band is inside the price at the settlement instant: {banded:?}"
+            (banded - 0.01461 * 1.435).abs() < 1e-12,
+            "the band is inside the price at the settlement instant: {banded}"
         );
     }
 
@@ -1041,6 +1030,7 @@ mod tests {
             None,
             "claude-opus-5",
             million_input(),
+            FIVE_MINUTES_MS,
             ProbeOutcome::Ok,
             0.0,
             OFF_BAND,
@@ -1060,7 +1050,81 @@ mod tests {
             (SavingsUnit::Usd, dollars),
             "no tier names the window the share would be of, so the probe settles in dollars"
         );
-        assert!(dollars.share > 0.0 && !dollars.unmeasured, "{dollars:?}");
+        assert!(dollars > 0.0, "{dollars}");
+    }
+
+    #[test]
+    fn a_plan_funded_probe_on_a_model_with_an_unmeasured_cell_settles_in_dollars() {
+        let table = PriceTable::shipped();
+        let tables = PlanTables::shipped();
+        let (unit, cost) = settled_cost(
+            SavingsUnit::WindowShare,
+            &table,
+            &tables,
+            MAX_20X,
+            "claude-opus-5",
+            million_input(),
+            FIVE_MINUTES_MS,
+            ProbeOutcome::Ok,
+            0.0,
+            OFF_BAND,
+        );
+        let dollars = probe_cost(
+            SavingsUnit::Usd,
+            &table,
+            &tables,
+            None,
+            "claude-opus-5",
+            million_input(),
+            OFF_BAND,
+        )
+        .unwrap();
+        assert_eq!(
+            (unit, cost),
+            (SavingsUnit::Usd, dollars),
+            "every 5-hour cell of Opus 5 is null, so the share is unpriced and the dollar unit governs"
+        );
+        assert!(dollars > 0.0);
+    }
+
+    #[test]
+    fn a_null_cell_the_probe_never_carries_leaves_it_on_the_window_share() {
+        let table = PriceTable::shipped();
+        let mut tables = PlanTables::shipped();
+        tables
+            .cost
+            .windows
+            .get_mut(phoebis_routing::FIVE_HOUR)
+            .unwrap()
+            .get_mut("claude-opus-5-5")
+            .unwrap()
+            .cache_write_1h = None;
+        let settle = |ttl_ms| {
+            settled_cost(
+                SavingsUnit::WindowShare,
+                &table,
+                &tables,
+                MAX_20X,
+                "claude-opus-5-5",
+                million_input(),
+                ttl_ms,
+                ProbeOutcome::Ok,
+                0.0,
+                OFF_BAND,
+            )
+        };
+        let (unit, cost) = settle(FIVE_MINUTES_MS);
+        assert_eq!(
+            unit,
+            SavingsUnit::WindowShare,
+            "a five-minute probe never writes for an hour"
+        );
+        assert!((cost - 0.01461).abs() < 1e-12, "{cost}");
+        assert_eq!(
+            settle(ONE_HOUR_MS).0,
+            SavingsUnit::Usd,
+            "an hour recipe's probe can, and the row cannot price it"
+        );
     }
 
     #[test]
@@ -1071,22 +1135,14 @@ mod tests {
             SavingsUnit::WindowShare,
             &table,
             &tables,
-            MAX_5X,
+            MAX_20X,
             "claude-sonnet-5",
             ProbeUsage::default(),
+            FIVE_MINUTES_MS,
             ProbeOutcome::Migrated,
             0.0,
             OFF_BAND,
         );
-        assert_eq!(
-            (unit, cost),
-            (
-                SavingsUnit::WindowShare,
-                Share {
-                    share: 0.0,
-                    unmeasured: false
-                }
-            )
-        );
+        assert_eq!((unit, cost), (SavingsUnit::WindowShare, 0.0));
     }
 }

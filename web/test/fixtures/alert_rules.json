@@ -6,7 +6,7 @@
         "created_at": 1000000,
         "enabled": true,
         "has_secret": false,
-        "id": "rule_48997a99fff8661f",
+        "id": "rule_64ee0f14b8038145",
         "kind": "poll_backoff",
         "scope": {
           "id": "business",
@@ -21,7 +21,7 @@
         "created_at": 1000000,
         "enabled": false,
         "has_secret": false,
-        "id": "rule_155484da872a66f4",
+        "id": "rule_0889b0240663ae28",
         "kind": "client_drift",
         "scope": {
           "id": null,
@@ -36,7 +36,7 @@
         "created_at": 1000000,
         "enabled": true,
         "has_secret": true,
-        "id": "rule_f616554d6601a2a6",
+        "id": "rule_e50f7dc9bbdbd68e",
         "kind": "utilization_above",
         "scope": {
           "id": "main",

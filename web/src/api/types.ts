@@ -814,13 +814,9 @@ export interface BurnPoint {
   /** A subscription upstream's spend in the bucket as a fraction of its own 5-hour window, the band weighed in; null
    *  for an API-key upstream or one whose tier is unknown, and under every other grouping. */
   fiveHourShare: number | null;
-  /** Whether a row of the bucket was priced through a 5-hour cell or tier factor no measurement has filled. */
-  fiveHourUnmeasured: boolean;
   group: string;
   /** The same spend as a fraction of the upstream's 7-day window, unbanded. */
   sevenDayShare: number | null;
-  /** The same on the 7-day window, whose cells are flagged apart from the 5-hour ones. */
-  sevenDayUnmeasured: boolean;
   /** Every token of the bucket, all five types: zero only for a bucket with no traffic. */
   tokens: number;
   /** Uncached input tokens. */
@@ -852,14 +848,13 @@ export interface Session {
   agentId: string | null;
   agents: number;
   /** The pin's typed burn per hour in `burnUnit`, priced when read; 0 for a pin never renewed with usage, null with
-   *  no pin at all, with one whose account left the registry, or on a subscription upstream whose tier is unknown. */
+   *  no pin at all, with one whose account left the registry, on a subscription upstream whose tier is unknown, or
+   *  on a model with a cell the table leaves unmeasured. */
   burn: number | null;
   /** When `burn` was last folded, the instant the shedding preview decays it forward from; null with `burn`. */
   burnAt: string | null;
   /** Null for a session with no pin, or one whose account left the registry: no kind is left to pick a unit from. */
   burnUnit: BurnUnit | null;
-  /** True when `burn` was priced through a cell or a factor the measurement campaign has not filled. */
-  burnUnmeasured: boolean;
   /** The cache TTL in force at the pin's last refresh; null for a session with no pin. */
   cacheTtlMs: number | null;
   companion: CompanionState;
@@ -877,8 +872,6 @@ export interface Session {
   keepalive: {
     lastGuard: GuardVerdict | null;
     netFiveHourShare: number | null;
-    /** True once any share in `netFiveHourShare` was priced through a stand-in cell or factor. */
-    netFiveHourShareUnmeasured: boolean;
     netUsd: number | null;
     nextProbeAt: string | null;
     state: KeepaliveState | null;
@@ -942,8 +935,6 @@ export interface KeepaliveRecipe {
   model: string;
   /** The share of the upstream's 5-hour window the agent's probes saved minus what they cost. */
   netFiveHourShare: number;
-  /** True once any share in `netFiveHourShare` was priced through a stand-in cell or factor. */
-  netFiveHourShareUnmeasured: boolean;
   netUsd: number;
   nextProbeAt: string | null;
   poolId: string;
@@ -1123,18 +1114,15 @@ export interface ModelPrice {
   outputPerM: number;
 }
 
-/** The fraction of a Max 5x window one million tokens of one type consume; `measured` is null on a flagged cell,
- *  whose share is a stand-in derived from earlier meter readings. */
-export interface PlanCell { measured: string | null; sharePerMillion: number; unmeasured: boolean }
-export interface PlanModelCells { cacheRead: PlanCell; cacheWrite1h: PlanCell; cacheWrite5m: PlanCell; input: PlanCell; output: PlanCell }
+/** The fraction of a Max 20x window one million tokens of each type consume; null for a cell the plan meter has not
+ *  measured, through which no share is priced. */
+export interface PlanModelCells { cacheRead: number | null; cacheWrite1h: number | null; cacheWrite5m: number | null; input: number | null; output: number | null }
 /** The peak band on the 5-hour cells: a charge landing inside its hours in `zone` is weighed by `factor`. */
-export interface PlanBand { effectiveFrom: string | null; factor: number; fromHour: number; measured: string; provisional: boolean; toHour: number; weekdays: boolean; windows: string[]; zone: string }
-/** The share of the Max 5x window per million tokens, per window (`five_hour`, `seven_day`) and model. */
-export interface CostTable { bands: PlanBand[]; effective: string; tier: string; version: string; windows: Record<string, Record<string, PlanModelCells>> }
-/** A tier's capacity of one window over Max 5x's, dated or flagged like a cell. */
-export interface TierFactor { factor: number; measured: string | null; unmeasured: boolean }
-export interface TierFactors { measured: string; reference: string; tiers: Record<string, { fiveHour: TierFactor; sevenDay: TierFactor }> }
-export interface PlanTables { cost: CostTable; tiers: TierFactors }
+export interface PlanBand { factor: number; fromHour: number; toHour: number; weekdays: boolean; windows: string[]; zone: string }
+/** The share of the Max 20x window per million tokens, per window (`five_hour`, `seven_day`) and model, and each
+ *  tier's capacity of each window over Max 20x's, null where unmeasured. */
+export interface CostTable { bands: PlanBand[]; effective: string; tiers: Record<string, { fiveHour: number | null; sevenDay: number | null }>; windows: Record<string, Record<string, PlanModelCells>> }
+export interface PlanTables { cost: CostTable }
 
 export interface Settings {
   about: { profile: string; publicUrl: string | null; version: string };

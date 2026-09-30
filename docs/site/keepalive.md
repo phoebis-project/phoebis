@@ -167,31 +167,31 @@ spent by then.</dd>
 1-hour entry for any idle span; a session with cache warming on may set `CLAUDE_CODE_PROMPT_CACHE_TTL=5m` on the
 client. Without warming, the 1-hour entry wins after a 5-minute pause.</dd>
 <dt>Window share</dt>
-<dd>Each plan column is the share of a Max 5x subscription's 5-hour or 7-day window that one million tokens of the type
+<dd>Each plan column is the share of a Max 20x subscription's 5-hour or 7-day window that one million tokens of the type
 consume, from the cost table the ledger ships. An account on another tier spends that share over its tier's factor from
-the tier factor table, so a Pro account spends more of its own window and a Max 20x account less, by the multiples a
-group header's tooltip gives. A share marked with an asterisk is not yet measured on its window and carries a stand-in
-derived from earlier meter readings. A 1-hour write spends the same share as a 5-minute one, so on plan-funded traffic
-the long TTL is free and the pool's plan rule set keeps `1h` for the main conversation and subagents alike; while a
-write costs money a 1-hour write is 2x against 1.25x, so the metered rule set's `keepalive` TTL defaults to `5m`.</dd>
+the same table, so a Max 5x account spends four times as much of its own window and a Pro account twenty times, by the
+multiples a group header's tooltip gives. A dash is a cell the plan meter has not measured, through which no share is
+priced. A 1-hour write spends the same share as a 5-minute one, so on plan-funded traffic the long TTL is free and the
+pool's plan rule set keeps `1h` for the main conversation and subagents alike; while a write costs money a 1-hour write
+is 2x against 1.25x, so the metered rule set's `keepalive` TTL defaults to `5m`.</dd>
 </dl>
 
 Below the prices, a second table reads the cost table the ledger ships (`crates/ledger/cost_table.yaml`) in two column
-groups: the share of a Max 5x subscription's 5-hour window and of its 7-day window that one million tokens of each type
-consume, per model. An account on another tier spends the share over its tier's factor
-(`crates/ledger/tier_factors.yaml`: Pro 0.215 and 0.18, Max 20x 4.03 and 2.14 of Max 5x's two windows, Max 20x's not yet
-measured). A cell no measurement has filled is marked with an asterisk and carries a stand-in derived from earlier meter
-readings. A dated model id reads the cells of its undated name; a model the table has no cells for leaves both groups
-blank.
+groups: the share of a Max 20x subscription's 5-hour window and of its 7-day window that one million tokens of each type
+consume, one row per model either table lists, sorted by id. An account on another tier spends the share over its
+tier's factor from the same file (Max 5x 0.25 and Pro 0.05 of Max 20x's 5-hour window; their 7-day factors are
+unmeasured). A cell the plan meter has not measured shows a dash; a dated model id reads the cells of its undated name;
+a model the cost table has no row for shows a dash in every cell.
 
 The prices carry one caveat: "API list prices. A subscription upstream on plan quota spends the window share columns
 instead of money." A recipe's own net follows the same split: the share of the account's 5-hour window, the band inside
 each probe's price, on a subscription account outside overage, and dollars on an api_key account or one in overage; a
-plan-funded probe on a model the cost table lacks, or on an account whose tier the factor table lacks, settles in
-dollars too. Whatever the upstream's funding, a fast-mode session's net is a dollar net, since its probes draw usage
-credits. Each agent line of the Sessions view shows its net, as "N% of the 5-hour window", in dollars, or both for
-an agent whose upstream changed funding while it was warmed. A balance with a share priced through a stand-in cell or
-factor in it keeps the asterisk.
+plan-funded probe whose token types the cost table cannot price on the account's tier (no row, or a cell left unmeasured
+under a type the probe carries: input, cache reads, output, the 5-minute write, and the 1-hour write when the recipe
+keeps an hour's cache), or on an account whose tier the table does not size, settles in dollars too, counts toward the
+dollar cap and never toward the window-share cap. Whatever the upstream's funding, a fast-mode session's net is a dollar
+net, since its probes draw usage credits. Each agent line of the Sessions view shows its net, as "N% of the 5-hour
+window", in dollars, or both for an agent whose upstream changed funding while it was warmed.
 
 The four shipped rows, all prices in USD per million tokens:
 

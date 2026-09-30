@@ -1,9 +1,9 @@
 {
   "route": "POST /admin/oauth/sessions",
   "body": {
-    "id": "Yk7av_U7HD85GWuhgTg-VMQuuXft3CldddRVv7PDxQU",
-    "authorization_url": "https://claude.com/cai/oauth/authorize?code=true&client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e&response_type=code&redirect_uri=http%3A%2F%2Flocalhost%3A55369%2Fcallback&scope=org%3Acreate_api_key%20user%3Aprofile%20user%3Ainference%20user%3Asessions%3Aclaude_code%20user%3Amcp_servers%20user%3Afile_upload&code_challenge=qA8i2rFqRcFVnwspgMDsYperpyHJNO_O-gootakwctY&code_challenge_method=S256&state=snNMXei7-j3llVUBFGrOCfrnl2zMfCaGGKUHQ3-h7CU",
-    "redirect_uri": "http://localhost:55369/callback",
+    "id": "j9ZqFhgvFc48DVbnoMpxJyNGh2x9ODUpOVxvkq3tvgQ",
+    "authorization_url": "https://claude.com/cai/oauth/authorize?code=true&client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e&response_type=code&redirect_uri=http%3A%2F%2Flocalhost%3A52159%2Fcallback&scope=org%3Acreate_api_key%20user%3Aprofile%20user%3Ainference%20user%3Asessions%3Aclaude_code%20user%3Amcp_servers%20user%3Afile_upload&code_challenge=nG0U9Ui5XvGSP3MLCl_U4VAqqr-XNgFPXC4qK85u0F4&code_challenge_method=S256&state=FBbtwglVQw7lCSYSr0zLpw5bMhlZP3BfY-3S3alg82o",
+    "redirect_uri": "http://localhost:52159/callback",
     "expires_at": 1600000
   }
 }

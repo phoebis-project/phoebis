@@ -107,42 +107,45 @@ the reconciliation. It reads as a zero share in Plan per hour, and its dollars c
 which Spend per minute charts under every grouping; on an API-key member, its budget counts them at the fast cells.
 
 The cost table (`crates/ledger/cost_table.yaml`) ships beside the price table: per window, model and token type, the
-share of a Max 5x subscription's window that one million tokens consume, each cell dated with the day it was measured or
-flagged as not measured. A flagged cell carries a stand-in derived from earlier meter readings, and every view that
-shows it marks it. A dated model id reads the cells of its undated name. The 5-hour input and output cells, as a percent
-of the window per million tokens:
+share of a Max 20x subscription's window that one million tokens consume, a number where the plan meter measured the
+cell and `null` where it did not. No reader prices a share through an unmeasured cell: the prediction adds no charge
+for it, the shedding round ranks the pin after every priced one, a plan-funded probe settles in dollars, the analytics
+list the share under model unlisted and the cost reference shows a dash. The table carries one date, `effective`; a
+dated model id reads the cells of its undated name. The 5-hour input and output cells, as a percent of the window per
+million tokens:
 
-| Model | Input | Output | Measured |
-| --- | --- | --- | --- |
-| `claude-fable-5` | 16.8% | 78.6% | Not measured: derived |
-| `claude-fable-5-1` | 30.4% | 142% | 2026-09-19 |
-| `claude-haiku-4-5` | 3.03% | 14.1% | Not measured: derived |
-| `claude-opus-5` | 8.41% | 39.3% | 2026-09-19 |
-| `claude-sonnet-5` | 4.54% | 21.2% | Not measured: derived |
+| Model | Input | Output |
+| --- | --- | --- |
+| `claude-fable-5` | - | - |
+| `claude-fable-5-1` | 6.65% | 32.9% |
+| `claude-haiku-4-5` | 0.659% | 3.29% |
+| `claude-opus-5` | - | - |
+| `claude-opus-5-5` | 1.46% | 7.28% |
+| `claude-sonnet-5` | - | - |
+| `claude-sonnet-5-5` | 0.999% | 4.98% |
 
-Every 7-day cell is derived until the 7-day window is measured per model. The peak band is one provisional factor on the
+Every 7-day cell is unmeasured until the 7-day window is read per model. The peak band is one measured factor on the
 5-hour cells, applied at a request's completion; the 7-day cells are unbanded.
 
-The tier factor table (`crates/ledger/tier_factors.yaml`) holds each subscription tier's capacity of each window over
-Max 5x's, so a share of a Max 5x window over the tier's factor is that share of the account's own window:
+The same file holds each subscription tier's capacity of each window over Max 20x's under `tiers`, so a share of a
+Max 20x window over the tier's factor is that share of the account's own window:
 
-| Tier | 5-hour | 7-day | Measured |
-| --- | --- | --- | --- |
-| `default_claude_max_20x` | 4.03 | 2.14 | Not measured |
-| `default_claude_max_5x` | 1 | 1 | 2026-09-19, the reference |
-| `default_claude_pro` | 0.215 | 0.18 | 2026-09-24 |
+| Tier | 5-hour | 7-day |
+| --- | --- | --- |
+| `default_claude_max_20x` | 1, the reference | 1 |
+| `default_claude_max_5x` | 0.25 | - |
+| `default_claude_pro` | 0.05 | - |
 
 The Fable-scoped week is half the 7-day window on every tier, so a Fable request's share of it is twice its 7-day share.
-An account whose tier the table does not list is priced at no share.
+An account whose tier the table does not list, or whose factor on a window is unmeasured, is priced at no share on that
+window.
 
 **Peak band** On weekdays from 5 to 11 AM Pacific time, 12:00 to 18:00 UTC while daylight time holds and 13:00 to 19:00
-UTC from 2026-11-01, the 5-hour meter charges a request about 1.45 times as much. Output read 1.44 on 2026-09-24 and
-input 1.33 on 2026-09-25, so the factor lies between 1.3 and 1.45 until one window reads both; the edges are steps, and
-a weekend probe read the off-peak rate on 2026-09-26, so the band is weekdays only; the row stays provisional for its
-factor until one in-band window reads both input and output. The meter charges a request when it completes, so the
-prediction weighs a request's 5-hour share by the band in force at its completion, and a session's burn keeps a copy
-weighed by the band at each renewal, which the shedding round prices on plan quota so the order reads what the meter
-charges. A band row with a later date takes over from that date and never re-weights an earlier request.
+UTC from 2026-11-01, the 5-hour meter charges a request 1.435 times as much, measured on Max 20x on 2026-09-30 and the
+same for every token type; whether the 7-day meter has a band is unmeasured, so the row weighs the 5-hour window alone.
+The edges are steps, and the band is weekdays only. The meter charges a request when it completes, so the prediction
+weighs a request's 5-hour share by the band in force at its completion, and a session's burn keeps a copy weighed by the
+band at each renewal, which the shedding round prices on plan quota so the order reads what the meter charges.
 
 ## Body capture
 
@@ -321,12 +324,11 @@ upstream, key, session, or request class; the 5-hour share carries the peak band
 shares read under the upstream grouping alone, since shares of different upstreams' windows do not add, and the Spend
 per minute chart draws dollars alone, a subscription upstream's among them only for its fast-mode answers; past the
 seven lines a chart draws, the subscription upstreams folded into the rest draw their fast-mode dollars as Other (fast
-mode), or Other (fast mode, tier unknown) for those whose tier the tier factor table does not size. The key, request
-class and upstream groupings read the hourly rollups, which fold a request under the hour it arrived in and weigh it by
-that hour's band rather than at its completion, where the meter charges it. Grouped by upstream, it adds a Plan per hour
+mode), or Other (fast mode, tier unknown) for those whose tier the cost table does not size. The key, request class and
+upstream groupings read the hourly rollups, which fold a request under the hour it arrived in and weigh it by that
+hour's band rather than at its completion, where the meter charges it. Grouped by upstream, it adds a Plan per hour
 chart: the share of each subscription upstream's 5-hour window, solid, and of its 7-day window, dashed, that its traffic
-used per hour, a share priced through a cell no measurement has filled marked with an asterisk in the legend and the
-tooltip, and an upstream whose tier the tier factor table does not size listed as tier unknown. Latency reports
+used per hour, and an upstream whose tier the cost table does not size listed as tier unknown. Latency reports
 percentiles read from the merged per-hour histograms; Cache reports the hit ratio, tokens that expired between turns,
 the share of input served from cache, and the output split into thinking and plain output; Cost reports the estimated
 spend for the range and a Fast mode spend tile, the dollars fast-mode answers drew from usage credits; Cache warming

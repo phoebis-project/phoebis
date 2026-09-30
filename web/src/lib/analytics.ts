@@ -34,7 +34,7 @@ export const MAX_BURN_LINES = 7;
 export const OTHER_KEY = 'other';
 /**
  * The unit a burn line charts in. `unknown` is a subscription upstream the route priced no share for, its tier
- * missing or one the tier factor table does not size: it has no share to draw, and dollars only for what its
+ * missing or one the cost table does not size: it has no share to draw, and dollars only for what its
  * fast-mode answers spent.
  */
 export type BurnLineUnit = BurnUnit | 'unknown';
@@ -45,14 +45,11 @@ export interface BurnLine {
   fiveHourPeak: number | null;
   /** The range's 5-hour share per hour, a bucket without a share counting as none; null with no share at all. */
   fiveHourPerHour: number | null;
-  /** Whether a bucket's 5-hour share was priced through a cell or tier factor no measurement has filled. */
-  fiveHourUnmeasured: boolean;
   key: string;
   label: string;
   /** Whether this is the folded rest rather than one group. */
   other: boolean;
   sevenDayPerHour: number | null;
-  sevenDayUnmeasured: boolean;
   tokensPerMinute: number;
   /**
    * The unit the line is charted in: under the upstream grouping a subscription upstream burns window share and an
@@ -68,9 +65,7 @@ export interface BurnRow {
   cached: number[];
   /** Null where no priced row landed in the slot, so a missing figure never reads as a zero share. */
   fiveHour: (number | null)[];
-  fiveHourUnmeasured: boolean[];
   sevenDay: (number | null)[];
-  sevenDayUnmeasured: boolean[];
   uncached: number[];
   usd: number[];
 }
@@ -78,9 +73,7 @@ export interface BurnRow {
 interface Sum {
   cached: number;
   fiveHour: number | null;
-  fiveHourUnmeasured: boolean;
   sevenDay: number | null;
-  sevenDayUnmeasured: boolean;
   uncached: number;
   usd: number;
 }
@@ -114,7 +107,7 @@ export function foldBurn(points: BurnPoint[], groupBy: BurnGroup, bucketSeconds:
   const byAt = new Map<number, Sum[]>();
   for (const p of points) {
     const at = Date.parse(p.at);
-    const sums = byAt.get(at) ?? Array.from({ length: slots }, (): Sum => ({ cached: 0, fiveHour: null, fiveHourUnmeasured: false, sevenDay: null, sevenDayUnmeasured: false, uncached: 0, usd: 0 }));
+    const sums = byAt.get(at) ?? Array.from({ length: slots }, (): Sum => ({ cached: 0, fiveHour: null, sevenDay: null, uncached: 0, usd: 0 }));
     byAt.set(at, sums);
     const slot = slotOf(p.group);
     const s = sums[slot];
@@ -122,14 +115,8 @@ export function foldBurn(points: BurnPoint[], groupBy: BurnGroup, bucketSeconds:
     s.uncached += p.uncachedTokens;
     s.usd += p.usd;
     if (slot >= kept.length) continue;
-    if (p.fiveHourShare !== null) {
-      s.fiveHour = (s.fiveHour ?? 0) + p.fiveHourShare;
-      s.fiveHourUnmeasured ||= p.fiveHourUnmeasured;
-    }
-    if (p.sevenDayShare !== null) {
-      s.sevenDay = (s.sevenDay ?? 0) + p.sevenDayShare;
-      s.sevenDayUnmeasured ||= p.sevenDayUnmeasured;
-    }
+    if (p.fiveHourShare !== null) s.fiveHour = (s.fiveHour ?? 0) + p.fiveHourShare;
+    if (p.sevenDayShare !== null) s.sevenDay = (s.sevenDay ?? 0) + p.sevenDayShare;
   }
   const minutes = bucketSeconds / 60;
   const hours = bucketSeconds / 3_600;
@@ -139,9 +126,7 @@ export function foldBurn(points: BurnPoint[], groupBy: BurnGroup, bucketSeconds:
       at,
       cached: sums.map((s) => s.cached / minutes),
       fiveHour: sums.map((s) => (s.fiveHour === null ? null : s.fiveHour / hours)),
-      fiveHourUnmeasured: sums.map((s) => s.fiveHourUnmeasured),
       sevenDay: sums.map((s) => (s.sevenDay === null ? null : s.sevenDay / hours)),
-      sevenDayUnmeasured: sums.map((s) => s.sevenDayUnmeasured),
       uncached: sums.map((s) => s.uncached / minutes),
       usd: sums.map((s) => s.usd / minutes),
     }));
@@ -154,9 +139,7 @@ export function foldBurn(points: BurnPoint[], groupBy: BurnGroup, bucketSeconds:
     const figures = {
       fiveHourPeak: shares.length ? Math.max(...shares) : null,
       fiveHourPerHour: perHour((r) => r.fiveHour[i]),
-      fiveHourUnmeasured: rows.some((r) => r.fiveHourUnmeasured[i]),
       sevenDayPerHour: perHour((r) => r.sevenDay[i]),
-      sevenDayUnmeasured: rows.some((r) => r.sevenDayUnmeasured[i]),
       tokensPerMinute: mean((r) => r.cached[i] + r.uncached[i]),
       usdPerMinute: mean((r) => r.usd[i]),
     };

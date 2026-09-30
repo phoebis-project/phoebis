@@ -46,11 +46,11 @@ export const FIXTURES: Record<string, Fixture> = {
         "has_extra_usage_enabled": true,
         "organization_name": "Biz Org",
         "organization_type": "claude_max",
-        "rate_limit_tier": "default_claude_max_5x"
+        "rate_limit_tier": "default_claude_max_20x"
       },
       "subscription": {
         "plan": "max",
-        "tier": "default_claude_max_5x",
+        "tier": "default_claude_max_20x",
         "since": 1773482400000,
         "trial_ends_at": null,
         "ends_at": null,
@@ -275,11 +275,11 @@ export const FIXTURES: Record<string, Fixture> = {
             "has_extra_usage_enabled": true,
             "organization_name": "Biz Org",
             "organization_type": "claude_max",
-            "rate_limit_tier": "default_claude_max_5x"
+            "rate_limit_tier": "default_claude_max_20x"
           },
           "subscription": {
             "plan": "max",
-            "tier": "default_claude_max_5x",
+            "tier": "default_claude_max_20x",
             "since": 1773482400000,
             "trial_ends_at": null,
             "ends_at": null,
@@ -438,11 +438,11 @@ export const FIXTURES: Record<string, Fixture> = {
             "key": "desktop",
             "trigger": "hash"
           },
-          "id": "evt_3bf2c3c3f5de940c",
+          "id": "evt_29f196ae775ee0a5",
           "kind": "client_drift",
           "opened_at": 1000000,
           "resolved_at": null,
-          "rule_id": "rule_155484da872a66f4",
+          "rule_id": "rule_0889b0240663ae28",
           "state": "open",
           "subject": "client 2.1.274"
         }
@@ -467,7 +467,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "event": "session_started",
           "id": 4,
           "kind": "session_active",
-          "rule_id": "rule_e0d7513cbbeeabb7",
+          "rule_id": "rule_b63927571da90d12",
           "state": "event",
           "status": 200,
           "subject": "desktop, session e2e-ui"
@@ -484,7 +484,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "created_at": 1000000,
           "enabled": true,
           "has_secret": false,
-          "id": "rule_48997a99fff8661f",
+          "id": "rule_64ee0f14b8038145",
           "kind": "poll_backoff",
           "scope": {
             "id": "business",
@@ -499,7 +499,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "created_at": 1000000,
           "enabled": false,
           "has_secret": false,
-          "id": "rule_155484da872a66f4",
+          "id": "rule_0889b0240663ae28",
           "kind": "client_drift",
           "scope": {
             "id": null,
@@ -514,7 +514,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "created_at": 1000000,
           "enabled": true,
           "has_secret": true,
-          "id": "rule_f616554d6601a2a6",
+          "id": "rule_e50f7dc9bbdbd68e",
           "kind": "utilization_above",
           "scope": {
             "id": "main",
@@ -648,12 +648,12 @@ export const FIXTURES: Record<string, Fixture> = {
             "web_search": 0
           },
           "cost": {
-            "cache_read": 0.0005,
-            "cache_write": 0.0025,
-            "input": 0.01,
-            "output": 0.005
+            "cache_read": 0.0001,
+            "cache_write": 0.0005,
+            "input": 0.002,
+            "output": 0.001
           },
-          "cost_usd": 0.018,
+          "cost_usd": 0.0036,
           "errors": {
             "upstream_error": 1
           },
@@ -996,12 +996,12 @@ export const FIXTURES: Record<string, Fixture> = {
             "web_search": 0
           },
           "cost": {
-            "cache_read": 0.0001,
-            "cache_write": 0.0005,
-            "input": 0.002,
-            "output": 0.001
+            "cache_read": 0,
+            "cache_write": 0,
+            "input": 0,
+            "output": 0
           },
-          "cost_usd": 0.0036,
+          "cost_usd": 0,
           "errors": {},
           "cache_miss_reasons": {
             "none": 1
@@ -2052,9 +2052,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "unit": "window_share",
           "usd": 0,
           "five_hour_share": null,
-          "five_hour_unmeasured": false,
           "seven_day_share": null,
-          "seven_day_unmeasured": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -2065,9 +2063,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "unit": "window_share",
           "usd": 0,
           "five_hour_share": null,
-          "five_hour_unmeasured": false,
           "seven_day_share": null,
-          "seven_day_unmeasured": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -2078,9 +2074,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "unit": "window_share",
           "usd": 0,
           "five_hour_share": null,
-          "five_hour_unmeasured": false,
           "seven_day_share": null,
-          "seven_day_unmeasured": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -2091,9 +2085,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "unit": "window_share",
           "usd": 0,
           "five_hour_share": null,
-          "five_hour_unmeasured": false,
           "seven_day_share": null,
-          "seven_day_unmeasured": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -2104,9 +2096,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "unit": "window_share",
           "usd": 0,
           "five_hour_share": null,
-          "five_hour_unmeasured": false,
           "seven_day_share": null,
-          "seven_day_unmeasured": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -2117,9 +2107,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "unit": "window_share",
           "usd": 0,
           "five_hour_share": null,
-          "five_hour_unmeasured": false,
           "seven_day_share": null,
-          "seven_day_unmeasured": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -2130,9 +2118,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "unit": "window_share",
           "usd": 0,
           "five_hour_share": null,
-          "five_hour_unmeasured": false,
           "seven_day_share": null,
-          "seven_day_unmeasured": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -2143,9 +2129,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "unit": "window_share",
           "usd": 0,
           "five_hour_share": null,
-          "five_hour_unmeasured": false,
           "seven_day_share": null,
-          "seven_day_unmeasured": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -2156,9 +2140,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "unit": "window_share",
           "usd": 0,
           "five_hour_share": null,
-          "five_hour_unmeasured": false,
           "seven_day_share": null,
-          "seven_day_unmeasured": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -2169,9 +2151,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "unit": "window_share",
           "usd": 0,
           "five_hour_share": null,
-          "five_hour_unmeasured": false,
           "seven_day_share": null,
-          "seven_day_unmeasured": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -2182,9 +2162,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "unit": "window_share",
           "usd": 0,
           "five_hour_share": null,
-          "five_hour_unmeasured": false,
           "seven_day_share": null,
-          "seven_day_unmeasured": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -2195,9 +2173,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "unit": "window_share",
           "usd": 0,
           "five_hour_share": null,
-          "five_hour_unmeasured": false,
           "seven_day_share": null,
-          "seven_day_unmeasured": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -2208,9 +2184,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "unit": "window_share",
           "usd": 0,
           "five_hour_share": null,
-          "five_hour_unmeasured": false,
           "seven_day_share": null,
-          "seven_day_unmeasured": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -2221,9 +2195,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "unit": "window_share",
           "usd": 0,
           "five_hour_share": null,
-          "five_hour_unmeasured": false,
           "seven_day_share": null,
-          "seven_day_unmeasured": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -2234,9 +2206,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "unit": "window_share",
           "usd": 0,
           "five_hour_share": null,
-          "five_hour_unmeasured": false,
           "seven_day_share": null,
-          "seven_day_unmeasured": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -2247,9 +2217,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "unit": "window_share",
           "usd": 0,
           "five_hour_share": null,
-          "five_hour_unmeasured": false,
           "seven_day_share": null,
-          "seven_day_unmeasured": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -2260,9 +2228,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "unit": "window_share",
           "usd": 0,
           "five_hour_share": null,
-          "five_hour_unmeasured": false,
           "seven_day_share": null,
-          "seven_day_unmeasured": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -2273,9 +2239,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "unit": "window_share",
           "usd": 0,
           "five_hour_share": null,
-          "five_hour_unmeasured": false,
           "seven_day_share": null,
-          "seven_day_unmeasured": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -2286,9 +2250,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "unit": "window_share",
           "usd": 0,
           "five_hour_share": null,
-          "five_hour_unmeasured": false,
           "seven_day_share": null,
-          "seven_day_unmeasured": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -2299,9 +2261,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "unit": "window_share",
           "usd": 0,
           "five_hour_share": null,
-          "five_hour_unmeasured": false,
           "seven_day_share": null,
-          "seven_day_unmeasured": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -2312,9 +2272,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "unit": "window_share",
           "usd": 0,
           "five_hour_share": null,
-          "five_hour_unmeasured": false,
           "seven_day_share": null,
-          "seven_day_unmeasured": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -2325,9 +2283,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "unit": "window_share",
           "usd": 0,
           "five_hour_share": null,
-          "five_hour_unmeasured": false,
           "seven_day_share": null,
-          "seven_day_unmeasured": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -2338,9 +2294,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "unit": "window_share",
           "usd": 0,
           "five_hour_share": null,
-          "five_hour_unmeasured": false,
           "seven_day_share": null,
-          "seven_day_unmeasured": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -2349,11 +2303,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "at": -3600000,
           "group": "business",
           "unit": "window_share",
-          "usd": 0.0072,
-          "five_hour_share": 0.00007837,
-          "five_hour_unmeasured": true,
-          "seven_day_share": 0.000005682799999999999,
-          "seven_day_unmeasured": true,
+          "usd": 0,
+          "five_hour_share": 0.000035185,
+          "seven_day_share": null,
           "cached_tokens": 1000,
           "tokens": 3600,
           "uncached_tokens": 2000
@@ -2363,10 +2315,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "group": "business",
           "unit": "window_share",
           "usd": 0,
-          "five_hour_share": 0.00015674,
-          "five_hour_unmeasured": true,
-          "seven_day_share": 0.000011365599999999998,
-          "seven_day_unmeasured": true,
+          "five_hour_share": 0.000035185,
+          "seven_day_share": null,
           "cached_tokens": 1000,
           "tokens": 3600,
           "uncached_tokens": 2000
@@ -2377,9 +2327,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "unit": "usd",
           "usd": 0,
           "five_hour_share": null,
-          "five_hour_unmeasured": false,
           "seven_day_share": null,
-          "seven_day_unmeasured": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -2390,9 +2338,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "unit": "usd",
           "usd": 0,
           "five_hour_share": null,
-          "five_hour_unmeasured": false,
           "seven_day_share": null,
-          "seven_day_unmeasured": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -2403,9 +2349,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "unit": "usd",
           "usd": 0,
           "five_hour_share": null,
-          "five_hour_unmeasured": false,
           "seven_day_share": null,
-          "seven_day_unmeasured": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -2416,9 +2360,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "unit": "usd",
           "usd": 0,
           "five_hour_share": null,
-          "five_hour_unmeasured": false,
           "seven_day_share": null,
-          "seven_day_unmeasured": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -2429,9 +2371,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "unit": "usd",
           "usd": 0,
           "five_hour_share": null,
-          "five_hour_unmeasured": false,
           "seven_day_share": null,
-          "seven_day_unmeasured": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -2442,9 +2382,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "unit": "usd",
           "usd": 0,
           "five_hour_share": null,
-          "five_hour_unmeasured": false,
           "seven_day_share": null,
-          "seven_day_unmeasured": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -2455,9 +2393,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "unit": "usd",
           "usd": 0,
           "five_hour_share": null,
-          "five_hour_unmeasured": false,
           "seven_day_share": null,
-          "seven_day_unmeasured": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -2468,9 +2404,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "unit": "usd",
           "usd": 0,
           "five_hour_share": null,
-          "five_hour_unmeasured": false,
           "seven_day_share": null,
-          "seven_day_unmeasured": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -2481,9 +2415,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "unit": "usd",
           "usd": 0,
           "five_hour_share": null,
-          "five_hour_unmeasured": false,
           "seven_day_share": null,
-          "seven_day_unmeasured": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -2494,9 +2426,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "unit": "usd",
           "usd": 0,
           "five_hour_share": null,
-          "five_hour_unmeasured": false,
           "seven_day_share": null,
-          "seven_day_unmeasured": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -2507,9 +2437,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "unit": "usd",
           "usd": 0,
           "five_hour_share": null,
-          "five_hour_unmeasured": false,
           "seven_day_share": null,
-          "seven_day_unmeasured": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -2520,9 +2448,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "unit": "usd",
           "usd": 0,
           "five_hour_share": null,
-          "five_hour_unmeasured": false,
           "seven_day_share": null,
-          "seven_day_unmeasured": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -2533,9 +2459,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "unit": "usd",
           "usd": 0,
           "five_hour_share": null,
-          "five_hour_unmeasured": false,
           "seven_day_share": null,
-          "seven_day_unmeasured": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -2546,9 +2470,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "unit": "usd",
           "usd": 0,
           "five_hour_share": null,
-          "five_hour_unmeasured": false,
           "seven_day_share": null,
-          "seven_day_unmeasured": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -2559,9 +2481,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "unit": "usd",
           "usd": 0,
           "five_hour_share": null,
-          "five_hour_unmeasured": false,
           "seven_day_share": null,
-          "seven_day_unmeasured": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -2572,9 +2492,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "unit": "usd",
           "usd": 0,
           "five_hour_share": null,
-          "five_hour_unmeasured": false,
           "seven_day_share": null,
-          "seven_day_unmeasured": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -2585,9 +2503,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "unit": "usd",
           "usd": 0,
           "five_hour_share": null,
-          "five_hour_unmeasured": false,
           "seven_day_share": null,
-          "seven_day_unmeasured": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -2598,9 +2514,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "unit": "usd",
           "usd": 0,
           "five_hour_share": null,
-          "five_hour_unmeasured": false,
           "seven_day_share": null,
-          "seven_day_unmeasured": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -2611,9 +2525,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "unit": "usd",
           "usd": 0,
           "five_hour_share": null,
-          "five_hour_unmeasured": false,
           "seven_day_share": null,
-          "seven_day_unmeasured": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -2624,9 +2536,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "unit": "usd",
           "usd": 0,
           "five_hour_share": null,
-          "five_hour_unmeasured": false,
           "seven_day_share": null,
-          "seven_day_unmeasured": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -2637,9 +2547,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "unit": "usd",
           "usd": 0,
           "five_hour_share": null,
-          "five_hour_unmeasured": false,
           "seven_day_share": null,
-          "seven_day_unmeasured": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -2650,9 +2558,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "unit": "usd",
           "usd": 0,
           "five_hour_share": null,
-          "five_hour_unmeasured": false,
           "seven_day_share": null,
-          "seven_day_unmeasured": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -2663,9 +2569,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "unit": "usd",
           "usd": 0,
           "five_hour_share": null,
-          "five_hour_unmeasured": false,
           "seven_day_share": null,
-          "seven_day_unmeasured": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -2676,9 +2580,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "unit": "usd",
           "usd": 0,
           "five_hour_share": null,
-          "five_hour_unmeasured": false,
           "seven_day_share": null,
-          "seven_day_unmeasured": false,
           "cached_tokens": 0,
           "tokens": 0,
           "uncached_tokens": 0
@@ -2689,9 +2591,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "unit": "usd",
           "usd": 0.0036,
           "five_hour_share": null,
-          "five_hour_unmeasured": false,
           "seven_day_share": null,
-          "seven_day_unmeasured": false,
           "cached_tokens": 500,
           "tokens": 1800,
           "uncached_tokens": 1000
@@ -2958,12 +2858,12 @@ export const FIXTURES: Record<string, Fixture> = {
                 "web_search": 0
               },
               "cost": {
-                "cache_read": 0.0002,
-                "cache_write": 0.001,
-                "input": 0.004,
-                "output": 0.002
+                "cache_read": 0,
+                "cache_write": 0,
+                "input": 0,
+                "output": 0
               },
-              "cost_usd": 0.0072,
+              "cost_usd": 0,
               "errors": {},
               "cache_miss_reasons": {
                 "none": 1
@@ -3304,12 +3204,12 @@ export const FIXTURES: Record<string, Fixture> = {
                 "web_search": 0
               },
               "cost": {
-                "cache_read": 0.0001,
-                "cache_write": 0.0005,
-                "input": 0.002,
-                "output": 0.001
+                "cache_read": 0,
+                "cache_write": 0,
+                "input": 0,
+                "output": 0
               },
-              "cost_usd": 0.0036,
+              "cost_usd": 0,
               "errors": {},
               "cache_miss_reasons": {
                 "none": 1
@@ -3655,12 +3555,12 @@ export const FIXTURES: Record<string, Fixture> = {
                 "web_search": 0
               },
               "cost": {
-                "cache_read": 0.00030000000000000003,
-                "cache_write": 0.0015,
-                "input": 0.006,
-                "output": 0.003
+                "cache_read": 0.0001,
+                "cache_write": 0.0005,
+                "input": 0.002,
+                "output": 0.001
               },
-              "cost_usd": 0.0108,
+              "cost_usd": 0.0036,
               "errors": {
                 "upstream_error": 1
               },
@@ -3988,7 +3888,7 @@ export const FIXTURES: Record<string, Fixture> = {
       "requests_24h": 5,
       "tokens_24h": 9000,
       "tokens_cached_24h": 2500,
-      "cost_24h": 0.0216,
+      "cost_24h": 0.0036,
       "error_rate_24h": 0.2,
       "top_error_code": "upstream_error",
       "hourly": [
@@ -4148,14 +4048,14 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "at": -3600000,
-          "cost": 0.0108,
+          "cost": 0,
           "errors": 0,
           "requests": 2,
           "tokens": 3600
         },
         {
           "at": 0,
-          "cost": 0.0108,
+          "cost": 0.0036,
           "errors": 1,
           "requests": 3,
           "tokens": 5400
@@ -4167,7 +4067,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "at": 970000,
           "finished_at": 970900,
           "key_id": "desktop",
-          "key_generation": 1790794448321,
+          "key_generation": 1790807751645,
           "pool_id": "main",
           "account_id": "direct",
           "session_id": "s3",
@@ -4279,14 +4179,14 @@ export const FIXTURES: Record<string, Fixture> = {
           "at": 940000,
           "finished_at": 940900,
           "key_id": "desktop",
-          "key_generation": 1790794448321,
+          "key_generation": 1790807751645,
           "pool_id": "main",
           "account_id": "business",
           "session_id": "s1",
           "agent_id": "main",
           "parent_agent_id": null,
-          "model": "claude-sonnet-5",
-          "canonical_model": "claude-sonnet-5",
+          "model": "claude-sonnet-5-5",
+          "canonical_model": "claude-sonnet-5-5",
           "kind": "inference",
           "origin": "client",
           "transport": "sse",
@@ -4339,7 +4239,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "web_fetch": 0,
             "web_search": 0
           },
-          "cost_usd": 0.0036,
+          "cost_usd": 0,
           "attempts": [
             {
               "index": 1,
@@ -4364,8 +4264,8 @@ export const FIXTURES: Record<string, Fixture> = {
                 }
               ],
               "overage_in_use": null,
-              "estimated_usd": 0.0036,
-              "pricing_version": "2026-09-30",
+              "estimated_usd": null,
+              "pricing_version": null,
               "selection": null,
               "response": {
                 "cleared_input_tokens": null,
@@ -4385,14 +4285,14 @@ export const FIXTURES: Record<string, Fixture> = {
           "at": 880000,
           "finished_at": 880900,
           "key_id": "desktop",
-          "key_generation": 1790794448321,
+          "key_generation": 1790807751645,
           "pool_id": "main",
           "account_id": "business",
           "session_id": "s2",
           "agent_id": "main",
           "parent_agent_id": null,
-          "model": "claude-sonnet-5",
-          "canonical_model": "claude-sonnet-5",
+          "model": "claude-sonnet-5-5",
+          "canonical_model": "claude-sonnet-5-5",
           "kind": "inference",
           "origin": "client",
           "transport": "sse",
@@ -4445,7 +4345,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "web_fetch": 0,
             "web_search": 0
           },
-          "cost_usd": 0.0036,
+          "cost_usd": 0,
           "attempts": [
             {
               "index": 1,
@@ -4470,8 +4370,8 @@ export const FIXTURES: Record<string, Fixture> = {
                 }
               ],
               "overage_in_use": null,
-              "estimated_usd": 0.0036,
-              "pricing_version": "2026-09-30",
+              "estimated_usd": null,
+              "pricing_version": null,
               "selection": null,
               "response": {
                 "cleared_input_tokens": null,
@@ -4497,8 +4397,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "session_id": "s0",
           "agent_id": "main",
           "parent_agent_id": null,
-          "model": "claude-sonnet-5",
-          "canonical_model": "claude-sonnet-5",
+          "model": "claude-sonnet-5-5",
+          "canonical_model": "claude-sonnet-5-5",
           "kind": "inference",
           "origin": "client",
           "transport": "sse",
@@ -4551,7 +4451,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "web_fetch": 0,
             "web_search": 0
           },
-          "cost_usd": 0.0036,
+          "cost_usd": 0,
           "attempts": [
             {
               "index": 1,
@@ -4576,8 +4476,8 @@ export const FIXTURES: Record<string, Fixture> = {
                 }
               ],
               "overage_in_use": null,
-              "estimated_usd": 0.0036,
-              "pricing_version": "2026-09-30",
+              "estimated_usd": null,
+              "pricing_version": null,
               "selection": null,
               "response": {
                 "cleared_input_tokens": null,
@@ -4597,14 +4497,14 @@ export const FIXTURES: Record<string, Fixture> = {
           "at": -2600000,
           "finished_at": -2599100,
           "key_id": "desktop",
-          "key_generation": 1790794448321,
+          "key_generation": 1790807751645,
           "pool_id": "main",
           "account_id": "business",
           "session_id": "s1",
           "agent_id": "main",
           "parent_agent_id": null,
-          "model": "claude-sonnet-5",
-          "canonical_model": "claude-sonnet-5",
+          "model": "claude-sonnet-5-5",
+          "canonical_model": "claude-sonnet-5-5",
           "kind": "inference",
           "origin": "client",
           "transport": "sse",
@@ -4657,7 +4557,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "web_fetch": 0,
             "web_search": 0
           },
-          "cost_usd": 0.0072,
+          "cost_usd": 0,
           "attempts": [
             {
               "index": 1,
@@ -4685,8 +4585,8 @@ export const FIXTURES: Record<string, Fixture> = {
                 }
               ],
               "overage_in_use": null,
-              "estimated_usd": 0.0036,
-              "pricing_version": "2026-09-30",
+              "estimated_usd": null,
+              "pricing_version": null,
               "selection": {
                 "strategy": "pace",
                 "tier": null,
@@ -4739,8 +4639,8 @@ export const FIXTURES: Record<string, Fixture> = {
                 }
               ],
               "overage_in_use": null,
-              "estimated_usd": 0.0036,
-              "pricing_version": "2026-09-30",
+              "estimated_usd": null,
+              "pricing_version": null,
               "selection": {
                 "strategy": "pace",
                 "tier": [
@@ -4842,9 +4742,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "last_request_at": 1000000,
           "model": "claude-sonnet-5",
           "net_five_hour_share": 0,
-          "net_five_hour_share_unmeasured": false,
           "net_usd": 0,
-          "next_probe_at": 1236834,
+          "next_probe_at": 1236457,
           "pool_id": "main",
           "reason": null,
           "session_id": "s1",
@@ -4879,8 +4778,8 @@ export const FIXTURES: Record<string, Fixture> = {
       "affinity_source": "auto",
       "auto_mode_server": null,
       "effective_auto_mode_server": true,
-      "prefix": "MRpvw4TC",
-      "created_at": 1790794448321,
+      "prefix": "nRWUa2u2",
+      "created_at": 1790807751645,
       "rotated_at": null,
       "last_used_at": null,
       "retired_secret_last_used_at": null,
@@ -4947,19 +4846,19 @@ export const FIXTURES: Record<string, Fixture> = {
           "affinity_source": "auto",
           "auto_mode_server": null,
           "effective_auto_mode_server": true,
-          "prefix": "MRpvw4TC",
-          "created_at": 1790794448321,
+          "prefix": "nRWUa2u2",
+          "created_at": 1790807751645,
           "rotated_at": null,
           "last_used_at": null,
           "retired_secret_last_used_at": null,
           "sessions_on_retired_secret": 0,
           "usage_7d": {
-            "cost_usd": 0.018,
+            "cost_usd": 0.0036,
             "requests": 4,
             "tokens": 7200
           },
           "lifetime": {
-            "cost_usd": 0.018,
+            "cost_usd": 0.0036,
             "requests": 4
           }
         }
@@ -5711,9 +5610,9 @@ export const FIXTURES: Record<string, Fixture> = {
   "pairing_started": {
     "route": "POST /admin/oauth/sessions",
     "body": {
-      "id": "Yk7av_U7HD85GWuhgTg-VMQuuXft3CldddRVv7PDxQU",
-      "authorization_url": "https://claude.com/cai/oauth/authorize?code=true&client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e&response_type=code&redirect_uri=http%3A%2F%2Flocalhost%3A55369%2Fcallback&scope=org%3Acreate_api_key%20user%3Aprofile%20user%3Ainference%20user%3Asessions%3Aclaude_code%20user%3Amcp_servers%20user%3Afile_upload&code_challenge=qA8i2rFqRcFVnwspgMDsYperpyHJNO_O-gootakwctY&code_challenge_method=S256&state=snNMXei7-j3llVUBFGrOCfrnl2zMfCaGGKUHQ3-h7CU",
-      "redirect_uri": "http://localhost:55369/callback",
+      "id": "j9ZqFhgvFc48DVbnoMpxJyNGh2x9ODUpOVxvkq3tvgQ",
+      "authorization_url": "https://claude.com/cai/oauth/authorize?code=true&client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e&response_type=code&redirect_uri=http%3A%2F%2Flocalhost%3A52159%2Fcallback&scope=org%3Acreate_api_key%20user%3Aprofile%20user%3Ainference%20user%3Asessions%3Aclaude_code%20user%3Amcp_servers%20user%3Afile_upload&code_challenge=nG0U9Ui5XvGSP3MLCl_U4VAqqr-XNgFPXC4qK85u0F4&code_challenge_method=S256&state=FBbtwglVQw7lCSYSr0zLpw5bMhlZP3BfY-3S3alg82o",
+      "redirect_uri": "http://localhost:52159/callback",
       "expires_at": 1600000
     }
   },
@@ -5891,14 +5790,14 @@ export const FIXTURES: Record<string, Fixture> = {
           "requests": 2,
           "failed": 0,
           "tokens": 3600,
-          "cost_usd": 0.0108
+          "cost_usd": 0
         },
         {
           "at": 0,
           "requests": 3,
           "failed": 1,
           "tokens": 5400,
-          "cost_usd": 0.0108
+          "cost_usd": 0.0036
         }
       ]
     }
@@ -5977,8 +5876,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "cache_diagnostics": null,
           "auto_mode_server": true,
           "body_capture_hours": 24,
-          "created_at": 1790794448318,
-          "updated_at": 1790794448318,
+          "created_at": 1790807751642,
+          "updated_at": 1790807751642,
           "members": [
             {
               "account_id": "business",
@@ -6005,13 +5904,13 @@ export const FIXTURES: Record<string, Fixture> = {
             {
               "id": "desktop",
               "label": "Desktop",
-              "prefix": "MRpvw4TC",
+              "prefix": "nRWUa2u2",
               "enabled": true
             }
           ],
           "status": "active",
           "requests_24h": 5,
-          "cost_24h": 0.0216,
+          "cost_24h": 0.0036,
           "active_pins": 1,
           "traffic_24h": [
             {
@@ -6173,14 +6072,14 @@ export const FIXTURES: Record<string, Fixture> = {
               "requests": 2,
               "failed": 0,
               "tokens": 3600,
-              "cost_usd": 0.0108
+              "cost_usd": 0
             },
             {
               "at": 0,
               "requests": 3,
               "failed": 1,
               "tokens": 5400,
-              "cost_usd": 0.0108
+              "cost_usd": 0.0036
             }
           ]
         }
@@ -6277,14 +6176,14 @@ export const FIXTURES: Record<string, Fixture> = {
         "at": -2600000,
         "finished_at": -2599100,
         "key_id": "desktop",
-        "key_generation": 1790794448321,
+        "key_generation": 1790807751645,
         "pool_id": "main",
         "account_id": "business",
         "session_id": "s1",
         "agent_id": "main",
         "parent_agent_id": null,
-        "model": "claude-sonnet-5",
-        "canonical_model": "claude-sonnet-5",
+        "model": "claude-sonnet-5-5",
+        "canonical_model": "claude-sonnet-5-5",
         "kind": "inference",
         "origin": "client",
         "transport": "sse",
@@ -6337,7 +6236,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "web_fetch": 0,
           "web_search": 0
         },
-        "cost_usd": 0.0072,
+        "cost_usd": 0,
         "attempts": [
           {
             "index": 1,
@@ -6365,8 +6264,8 @@ export const FIXTURES: Record<string, Fixture> = {
               }
             ],
             "overage_in_use": null,
-            "estimated_usd": 0.0036,
-            "pricing_version": "2026-09-30",
+            "estimated_usd": null,
+            "pricing_version": null,
             "selection": {
               "strategy": "pace",
               "tier": null,
@@ -6419,8 +6318,8 @@ export const FIXTURES: Record<string, Fixture> = {
               }
             ],
             "overage_in_use": null,
-            "estimated_usd": 0.0036,
-            "pricing_version": "2026-09-30",
+            "estimated_usd": null,
+            "pricing_version": null,
             "selection": {
               "strategy": "pace",
               "tier": [
@@ -6550,7 +6449,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "at": 970000,
           "finished_at": 970900,
           "key_id": "desktop",
-          "key_generation": 1790794448321,
+          "key_generation": 1790807751645,
           "pool_id": "main",
           "account_id": "direct",
           "session_id": "s3",
@@ -6662,14 +6561,14 @@ export const FIXTURES: Record<string, Fixture> = {
           "at": 940000,
           "finished_at": 940900,
           "key_id": "desktop",
-          "key_generation": 1790794448321,
+          "key_generation": 1790807751645,
           "pool_id": "main",
           "account_id": "business",
           "session_id": "s1",
           "agent_id": "main",
           "parent_agent_id": null,
-          "model": "claude-sonnet-5",
-          "canonical_model": "claude-sonnet-5",
+          "model": "claude-sonnet-5-5",
+          "canonical_model": "claude-sonnet-5-5",
           "kind": "inference",
           "origin": "client",
           "transport": "sse",
@@ -6722,7 +6621,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "web_fetch": 0,
             "web_search": 0
           },
-          "cost_usd": 0.0036,
+          "cost_usd": 0,
           "attempts": [
             {
               "index": 1,
@@ -6747,8 +6646,8 @@ export const FIXTURES: Record<string, Fixture> = {
                 }
               ],
               "overage_in_use": null,
-              "estimated_usd": 0.0036,
-              "pricing_version": "2026-09-30",
+              "estimated_usd": null,
+              "pricing_version": null,
               "selection": null,
               "response": {
                 "cleared_input_tokens": null,
@@ -6768,14 +6667,14 @@ export const FIXTURES: Record<string, Fixture> = {
           "at": 880000,
           "finished_at": 880900,
           "key_id": "desktop",
-          "key_generation": 1790794448321,
+          "key_generation": 1790807751645,
           "pool_id": "main",
           "account_id": "business",
           "session_id": "s2",
           "agent_id": "main",
           "parent_agent_id": null,
-          "model": "claude-sonnet-5",
-          "canonical_model": "claude-sonnet-5",
+          "model": "claude-sonnet-5-5",
+          "canonical_model": "claude-sonnet-5-5",
           "kind": "inference",
           "origin": "client",
           "transport": "sse",
@@ -6828,7 +6727,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "web_fetch": 0,
             "web_search": 0
           },
-          "cost_usd": 0.0036,
+          "cost_usd": 0,
           "attempts": [
             {
               "index": 1,
@@ -6853,8 +6752,8 @@ export const FIXTURES: Record<string, Fixture> = {
                 }
               ],
               "overage_in_use": null,
-              "estimated_usd": 0.0036,
-              "pricing_version": "2026-09-30",
+              "estimated_usd": null,
+              "pricing_version": null,
               "selection": null,
               "response": {
                 "cleared_input_tokens": null,
@@ -6880,8 +6779,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "session_id": "s0",
           "agent_id": "main",
           "parent_agent_id": null,
-          "model": "claude-sonnet-5",
-          "canonical_model": "claude-sonnet-5",
+          "model": "claude-sonnet-5-5",
+          "canonical_model": "claude-sonnet-5-5",
           "kind": "inference",
           "origin": "client",
           "transport": "sse",
@@ -6934,7 +6833,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "web_fetch": 0,
             "web_search": 0
           },
-          "cost_usd": 0.0036,
+          "cost_usd": 0,
           "attempts": [
             {
               "index": 1,
@@ -6959,8 +6858,8 @@ export const FIXTURES: Record<string, Fixture> = {
                 }
               ],
               "overage_in_use": null,
-              "estimated_usd": 0.0036,
-              "pricing_version": "2026-09-30",
+              "estimated_usd": null,
+              "pricing_version": null,
               "selection": null,
               "response": {
                 "cleared_input_tokens": null,
@@ -6980,14 +6879,14 @@ export const FIXTURES: Record<string, Fixture> = {
           "at": -2600000,
           "finished_at": -2599100,
           "key_id": "desktop",
-          "key_generation": 1790794448321,
+          "key_generation": 1790807751645,
           "pool_id": "main",
           "account_id": "business",
           "session_id": "s1",
           "agent_id": "main",
           "parent_agent_id": null,
-          "model": "claude-sonnet-5",
-          "canonical_model": "claude-sonnet-5",
+          "model": "claude-sonnet-5-5",
+          "canonical_model": "claude-sonnet-5-5",
           "kind": "inference",
           "origin": "client",
           "transport": "sse",
@@ -7040,7 +6939,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "web_fetch": 0,
             "web_search": 0
           },
-          "cost_usd": 0.0072,
+          "cost_usd": 0,
           "attempts": [
             {
               "index": 1,
@@ -7068,8 +6967,8 @@ export const FIXTURES: Record<string, Fixture> = {
                 }
               ],
               "overage_in_use": null,
-              "estimated_usd": 0.0036,
-              "pricing_version": "2026-09-30",
+              "estimated_usd": null,
+              "pricing_version": null,
               "selection": {
                 "strategy": "pace",
                 "tier": null,
@@ -7122,8 +7021,8 @@ export const FIXTURES: Record<string, Fixture> = {
                 }
               ],
               "overage_in_use": null,
-              "estimated_usd": 0.0036,
-              "pricing_version": "2026-09-30",
+              "estimated_usd": null,
+              "pricing_version": null,
               "selection": {
                 "strategy": "pace",
                 "tier": [
@@ -7163,7 +7062,7 @@ export const FIXTURES: Record<string, Fixture> = {
     "route": "GET /admin/session",
     "body": {
       "role": "admin",
-      "session_id": "qezxvXaKCLzSh6u0XP4x2RlQGUQpq823msPebN7m9ZY"
+      "session_id": "T7wOYbiBkvyYgDcpYey7RGT26d_5fHv4Dlo6co7-kzA"
     }
   },
   "sessions": {
@@ -7172,7 +7071,7 @@ export const FIXTURES: Record<string, Fixture> = {
       "sessions": [
         {
           "key_id": "desktop",
-          "key_generation": 1790794448321,
+          "key_generation": 1790807751645,
           "session_id": "s-fixture",
           "agent_id": "main",
           "model": "claude-sonnet-5",
@@ -7185,7 +7084,6 @@ export const FIXTURES: Record<string, Fixture> = {
           "pinned": true,
           "burn": 0,
           "burn_unit": "window_share",
-          "burn_unmeasured": true,
           "burn_at": null,
           "cache_ttl_ms": 300000,
           "last_input_tokens": 0,
@@ -7198,7 +7096,6 @@ export const FIXTURES: Record<string, Fixture> = {
           "keepalive": {
             "last_guard": null,
             "net_five_hour_share": null,
-            "net_five_hour_share_unmeasured": false,
             "net_usd": null,
             "next_probe_at": null,
             "state": null
@@ -7208,7 +7105,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "key_id": "desktop",
-          "key_generation": 1790794448321,
+          "key_generation": 1790807751645,
           "session_id": "s3",
           "agent_id": null,
           "model": "claude-sonnet-5",
@@ -7221,7 +7118,6 @@ export const FIXTURES: Record<string, Fixture> = {
           "pinned": false,
           "burn": null,
           "burn_unit": null,
-          "burn_unmeasured": null,
           "burn_at": null,
           "cache_ttl_ms": null,
           "last_input_tokens": null,
@@ -7234,7 +7130,6 @@ export const FIXTURES: Record<string, Fixture> = {
           "keepalive": {
             "last_guard": null,
             "net_five_hour_share": null,
-            "net_five_hour_share_unmeasured": false,
             "net_usd": null,
             "next_probe_at": null,
             "state": null
@@ -7244,10 +7139,10 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "key_id": "desktop",
-          "key_generation": 1790794448321,
+          "key_generation": 1790807751645,
           "session_id": "s1",
           "agent_id": null,
-          "model": "claude-sonnet-5",
+          "model": "claude-sonnet-5-5",
           "account_id": "business",
           "epoch": null,
           "created_at": null,
@@ -7257,7 +7152,6 @@ export const FIXTURES: Record<string, Fixture> = {
           "pinned": false,
           "burn": null,
           "burn_unit": null,
-          "burn_unmeasured": null,
           "burn_at": null,
           "cache_ttl_ms": null,
           "last_input_tokens": null,
@@ -7269,9 +7163,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "keepalive": {
             "last_guard": "rearm",
             "net_five_hour_share": 0,
-            "net_five_hour_share_unmeasured": false,
             "net_usd": 0,
-            "next_probe_at": 1236834,
+            "next_probe_at": 1236457,
             "state": "busy"
           },
           "historical": false,
@@ -7280,10 +7173,10 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "key_id": "desktop",
-          "key_generation": 1790794448321,
+          "key_generation": 1790807751645,
           "session_id": "s2",
           "agent_id": null,
-          "model": "claude-sonnet-5",
+          "model": "claude-sonnet-5-5",
           "account_id": "business",
           "epoch": null,
           "created_at": null,
@@ -7293,7 +7186,6 @@ export const FIXTURES: Record<string, Fixture> = {
           "pinned": false,
           "burn": null,
           "burn_unit": null,
-          "burn_unmeasured": null,
           "burn_at": null,
           "cache_ttl_ms": null,
           "last_input_tokens": null,
@@ -7306,7 +7198,6 @@ export const FIXTURES: Record<string, Fixture> = {
           "keepalive": {
             "last_guard": null,
             "net_five_hour_share": null,
-            "net_five_hour_share_unmeasured": false,
             "net_usd": null,
             "next_probe_at": null,
             "state": null
@@ -7319,7 +7210,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "key_generation": 940000,
           "session_id": "s0",
           "agent_id": null,
-          "model": "claude-sonnet-5",
+          "model": "claude-sonnet-5-5",
           "account_id": "business",
           "epoch": null,
           "created_at": null,
@@ -7329,7 +7220,6 @@ export const FIXTURES: Record<string, Fixture> = {
           "pinned": false,
           "burn": null,
           "burn_unit": null,
-          "burn_unmeasured": null,
           "burn_at": null,
           "cache_ttl_ms": null,
           "last_input_tokens": null,
@@ -7342,7 +7232,6 @@ export const FIXTURES: Record<string, Fixture> = {
           "keepalive": {
             "last_guard": null,
             "net_five_hour_share": null,
-            "net_five_hour_share_unmeasured": false,
             "net_usd": null,
             "next_probe_at": null,
             "state": null
@@ -7477,334 +7366,129 @@ export const FIXTURES: Record<string, Fixture> = {
               "weekdays": true,
               "from_hour": 5,
               "to_hour": 11,
-              "factor": 1.45,
+              "factor": 1.435,
               "windows": [
                 "five_hour"
               ],
-              "measured": "2026-09-24",
-              "provisional": true,
-              "zone": "America/Los_Angeles",
-              "effective_from": null
+              "zone": "America/Los_Angeles"
             }
           ],
-          "effective": "2026-09-29",
-          "tier": "default_claude_max_5x",
-          "version": "2026-09-29",
+          "effective": "2026-10-01",
+          "tiers": {
+            "default_claude_max_20x": {
+              "five_hour": 1,
+              "seven_day": 1
+            },
+            "default_claude_max_5x": {
+              "five_hour": 0.25,
+              "seven_day": null
+            },
+            "default_claude_pro": {
+              "five_hour": 0.05,
+              "seven_day": null
+            }
+          },
           "windows": {
             "five_hour": {
               "claude-fable-5": {
-                "cache_read": {
-                  "measured": null,
-                  "share_per_million": 0.00437,
-                  "unmeasured": true
-                },
-                "cache_write_1h": {
-                  "measured": null,
-                  "share_per_million": 0.207,
-                  "unmeasured": true
-                },
-                "cache_write_5m": {
-                  "measured": null,
-                  "share_per_million": 0.207,
-                  "unmeasured": true
-                },
-                "input": {
-                  "measured": null,
-                  "share_per_million": 0.168,
-                  "unmeasured": true
-                },
-                "output": {
-                  "measured": null,
-                  "share_per_million": 0.786,
-                  "unmeasured": true
-                }
+                "cache_read": null,
+                "cache_write_1h": null,
+                "cache_write_5m": null,
+                "input": null,
+                "output": null
               },
               "claude-fable-5-1": {
-                "cache_read": {
-                  "measured": "2026-09-19",
-                  "share_per_million": 0.00789,
-                  "unmeasured": false
-                },
-                "cache_write_1h": {
-                  "measured": "2026-09-19",
-                  "share_per_million": 0.373,
-                  "unmeasured": false
-                },
-                "cache_write_5m": {
-                  "measured": "2026-09-19",
-                  "share_per_million": 0.373,
-                  "unmeasured": false
-                },
-                "input": {
-                  "measured": "2026-09-19",
-                  "share_per_million": 0.304,
-                  "unmeasured": false
-                },
-                "output": {
-                  "measured": "2026-09-19",
-                  "share_per_million": 1.42,
-                  "unmeasured": false
-                }
+                "cache_read": 0.001675,
+                "cache_write_1h": 0.084,
+                "cache_write_5m": 0.08326,
+                "input": 0.06647,
+                "output": 0.3292
               },
               "claude-haiku-4-5": {
-                "cache_read": {
-                  "measured": null,
-                  "share_per_million": 0.000787,
-                  "unmeasured": true
-                },
-                "cache_write_1h": {
-                  "measured": null,
-                  "share_per_million": 0.0372,
-                  "unmeasured": true
-                },
-                "cache_write_5m": {
-                  "measured": null,
-                  "share_per_million": 0.0372,
-                  "unmeasured": true
-                },
-                "input": {
-                  "measured": null,
-                  "share_per_million": 0.0303,
-                  "unmeasured": true
-                },
-                "output": {
-                  "measured": null,
-                  "share_per_million": 0.141,
-                  "unmeasured": true
-                }
+                "cache_read": 0.000167,
+                "cache_write_1h": 0.00823,
+                "cache_write_5m": 0.00824,
+                "input": 0.00659,
+                "output": 0.03294
               },
               "claude-opus-5": {
-                "cache_read": {
-                  "measured": "2026-09-19",
-                  "share_per_million": 0.00219,
-                  "unmeasured": false
-                },
-                "cache_write_1h": {
-                  "measured": "2026-09-19",
-                  "share_per_million": 0.103,
-                  "unmeasured": false
-                },
-                "cache_write_5m": {
-                  "measured": "2026-09-19",
-                  "share_per_million": 0.103,
-                  "unmeasured": false
-                },
-                "input": {
-                  "measured": "2026-09-19",
-                  "share_per_million": 0.0841,
-                  "unmeasured": false
-                },
-                "output": {
-                  "measured": "2026-09-19",
-                  "share_per_million": 0.393,
-                  "unmeasured": false
-                }
+                "cache_read": null,
+                "cache_write_1h": null,
+                "cache_write_5m": null,
+                "input": null,
+                "output": null
+              },
+              "claude-opus-5-5": {
+                "cache_read": 0.000365,
+                "cache_write_1h": 0.01824,
+                "cache_write_5m": 0.0183,
+                "input": 0.01461,
+                "output": 0.07279
               },
               "claude-sonnet-5": {
-                "cache_read": {
-                  "measured": null,
-                  "share_per_million": 0.00118,
-                  "unmeasured": true
-                },
-                "cache_write_1h": {
-                  "measured": null,
-                  "share_per_million": 0.0559,
-                  "unmeasured": true
-                },
-                "cache_write_5m": {
-                  "measured": null,
-                  "share_per_million": 0.0559,
-                  "unmeasured": true
-                },
-                "input": {
-                  "measured": null,
-                  "share_per_million": 0.0454,
-                  "unmeasured": true
-                },
-                "output": {
-                  "measured": null,
-                  "share_per_million": 0.212,
-                  "unmeasured": true
-                }
+                "cache_read": null,
+                "cache_write_1h": null,
+                "cache_write_5m": null,
+                "input": null,
+                "output": null
+              },
+              "claude-sonnet-5-5": {
+                "cache_read": 0.000249,
+                "cache_write_1h": 0.01251,
+                "cache_write_5m": 0.01247,
+                "input": 0.00999,
+                "output": 0.04984
               }
             },
             "seven_day": {
               "claude-fable-5": {
-                "cache_read": {
-                  "measured": null,
-                  "share_per_million": 0.000317,
-                  "unmeasured": true
-                },
-                "cache_write_1h": {
-                  "measured": null,
-                  "share_per_million": 0.015,
-                  "unmeasured": true
-                },
-                "cache_write_5m": {
-                  "measured": null,
-                  "share_per_million": 0.015,
-                  "unmeasured": true
-                },
-                "input": {
-                  "measured": null,
-                  "share_per_million": 0.0122,
-                  "unmeasured": true
-                },
-                "output": {
-                  "measured": null,
-                  "share_per_million": 0.057,
-                  "unmeasured": true
-                }
+                "cache_read": null,
+                "cache_write_1h": null,
+                "cache_write_5m": null,
+                "input": null,
+                "output": null
               },
               "claude-fable-5-1": {
-                "cache_read": {
-                  "measured": null,
-                  "share_per_million": 0.000572,
-                  "unmeasured": true
-                },
-                "cache_write_1h": {
-                  "measured": null,
-                  "share_per_million": 0.0271,
-                  "unmeasured": true
-                },
-                "cache_write_5m": {
-                  "measured": null,
-                  "share_per_million": 0.0271,
-                  "unmeasured": true
-                },
-                "input": {
-                  "measured": null,
-                  "share_per_million": 0.022,
-                  "unmeasured": true
-                },
-                "output": {
-                  "measured": null,
-                  "share_per_million": 0.103,
-                  "unmeasured": true
-                }
+                "cache_read": null,
+                "cache_write_1h": null,
+                "cache_write_5m": null,
+                "input": null,
+                "output": null
               },
               "claude-haiku-4-5": {
-                "cache_read": {
-                  "measured": null,
-                  "share_per_million": 0.0000571,
-                  "unmeasured": true
-                },
-                "cache_write_1h": {
-                  "measured": null,
-                  "share_per_million": 0.0027,
-                  "unmeasured": true
-                },
-                "cache_write_5m": {
-                  "measured": null,
-                  "share_per_million": 0.0027,
-                  "unmeasured": true
-                },
-                "input": {
-                  "measured": null,
-                  "share_per_million": 0.0022,
-                  "unmeasured": true
-                },
-                "output": {
-                  "measured": null,
-                  "share_per_million": 0.0103,
-                  "unmeasured": true
-                }
+                "cache_read": null,
+                "cache_write_1h": null,
+                "cache_write_5m": null,
+                "input": null,
+                "output": null
               },
               "claude-opus-5": {
-                "cache_read": {
-                  "measured": null,
-                  "share_per_million": 0.000159,
-                  "unmeasured": true
-                },
-                "cache_write_1h": {
-                  "measured": null,
-                  "share_per_million": 0.0075,
-                  "unmeasured": true
-                },
-                "cache_write_5m": {
-                  "measured": null,
-                  "share_per_million": 0.0075,
-                  "unmeasured": true
-                },
-                "input": {
-                  "measured": null,
-                  "share_per_million": 0.0061,
-                  "unmeasured": true
-                },
-                "output": {
-                  "measured": null,
-                  "share_per_million": 0.0285,
-                  "unmeasured": true
-                }
+                "cache_read": null,
+                "cache_write_1h": null,
+                "cache_write_5m": null,
+                "input": null,
+                "output": null
+              },
+              "claude-opus-5-5": {
+                "cache_read": null,
+                "cache_write_1h": null,
+                "cache_write_5m": null,
+                "input": null,
+                "output": null
               },
               "claude-sonnet-5": {
-                "cache_read": {
-                  "measured": null,
-                  "share_per_million": 0.0000856,
-                  "unmeasured": true
-                },
-                "cache_write_1h": {
-                  "measured": null,
-                  "share_per_million": 0.00405,
-                  "unmeasured": true
-                },
-                "cache_write_5m": {
-                  "measured": null,
-                  "share_per_million": 0.00405,
-                  "unmeasured": true
-                },
-                "input": {
-                  "measured": null,
-                  "share_per_million": 0.00329,
-                  "unmeasured": true
-                },
-                "output": {
-                  "measured": null,
-                  "share_per_million": 0.0154,
-                  "unmeasured": true
-                }
-              }
-            }
-          }
-        },
-        "tiers": {
-          "measured": "2026-09-24",
-          "reference": "default_claude_max_5x",
-          "tiers": {
-            "default_claude_max_20x": {
-              "five_hour": {
-                "factor": 4.03,
-                "measured": null,
-                "unmeasured": true
+                "cache_read": null,
+                "cache_write_1h": null,
+                "cache_write_5m": null,
+                "input": null,
+                "output": null
               },
-              "seven_day": {
-                "factor": 2.14,
-                "measured": null,
-                "unmeasured": true
-              }
-            },
-            "default_claude_max_5x": {
-              "five_hour": {
-                "factor": 1,
-                "measured": "2026-09-19",
-                "unmeasured": false
-              },
-              "seven_day": {
-                "factor": 1,
-                "measured": "2026-09-19",
-                "unmeasured": false
-              }
-            },
-            "default_claude_pro": {
-              "five_hour": {
-                "factor": 0.215,
-                "measured": "2026-09-24",
-                "unmeasured": false
-              },
-              "seven_day": {
-                "factor": 0.18,
-                "measured": "2026-09-24",
-                "unmeasured": false
+              "claude-sonnet-5-5": {
+                "cache_read": null,
+                "cache_write_1h": null,
+                "cache_write_5m": null,
+                "input": null,
+                "output": null
               }
             }
           }
@@ -7952,7 +7636,7 @@ export const FIXTURES: Record<string, Fixture> = {
         "clients": 0,
         "in_flight": 0
       },
-      "pricing_unknown_models": 0,
+      "pricing_unknown_models": 4,
       "gaps": [],
       "keepalive": {
         "agents": 1,

@@ -50,8 +50,9 @@ export const LANES: Lane[] = [
     accountIds: ['business', 'personal', 'mail', 'console'],
     models: [
       { value: 'claude-fable-5-1', weight: 8 },
-      { value: 'claude-sonnet-5', weight: 6 },
-      { value: 'claude-opus-5', weight: 1.5 },
+      { value: 'claude-sonnet-5-5', weight: 5 },
+      { value: 'claude-sonnet-5', weight: 1 },
+      { value: 'claude-opus-5-5', weight: 1.5 },
       { value: 'claude-haiku-4-5-20251001', weight: 2 },
     ],
   },
@@ -60,7 +61,8 @@ export const LANES: Lane[] = [
     poolId: 'all',
     accountIds: ['business', 'personal', 'mail'],
     models: [
-      { value: 'claude-sonnet-5', weight: 7 },
+      { value: 'claude-sonnet-5-5', weight: 6 },
+      { value: 'claude-sonnet-5', weight: 1 },
       { value: 'claude-haiku-4-5-20251001', weight: 3 },
     ],
   },

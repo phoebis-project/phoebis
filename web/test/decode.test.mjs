@@ -13,8 +13,8 @@ test('an account decodes with its windows, plan, pools, and models', () => {
   assert.equal(a.id, 'business');
   assert.equal(a.kind, 'oauth');
   assert.equal(a.plan, 'Max', "the profile's plan flag names the plan, so the badge, the search and the chips read one name");
-  assert.equal(d.decodeAccount({ ...body, subscription: { ...body.subscription, plan: null } }).plan, 'Max 5x', "a document without the flags reads the tier's own label");
-  assert.equal(a.subscription.rateLimitTier, 'default_claude_max_5x');
+  assert.equal(d.decodeAccount({ ...body, subscription: { ...body.subscription, plan: null } }).plan, 'Max 20x', "a document without the flags reads the tier's own label");
+  assert.equal(a.subscription.rateLimitTier, 'default_claude_max_20x');
   assert.deepEqual(
     Object.keys(a.subscription).sort(),
     ['billingType', 'derivedEndsAt', 'endsAt', 'organizationType', 'plan', 'rateLimitTier', 'since', 'trialEndsAt'],
@@ -509,7 +509,7 @@ test('a request page carries the trail with zero-based attempt indexes and the c
   assert.deepEqual([moved[0].keyId, moved[0].sessionId, moved[0].model], ['desktop', 's1', 'claude-sonnet-5'], 'the pin the event belongs to');
   assert.ok(isIso(moved[0].at));
   assert.deepEqual([moved[1].kind, moved[1].accountId, moved[1].detail.reasons], ['pin_expired', 'business', ['cooldown', 'spent']]);
-  assert.equal(d.decodeRequest(fixture('request').request).canonicalModel, 'claude-sonnet-5');
+  assert.equal(d.decodeRequest(fixture('request').request).canonicalModel, 'claude-sonnet-5-5');
 });
 
 test('a request reads its auto-mode standing, and a spelling the console does not know reads as none', () => {
@@ -601,17 +601,15 @@ test('the burn series decodes each point with its instant, both token sides, and
   const at = body.points.findLastIndex((p) => p.five_hour_share !== null);
   const [last, wire] = [burn.points[at], body.points[at]];
   assert.ok(
-    wire.five_hour_share > 0 && wire.seven_day_share > 0 && wire.five_hour_unmeasured === true && wire.seven_day_unmeasured === true && wire.cached_tokens > 0 && wire.uncached_tokens > 0 && wire.tokens > wire.cached_tokens + wire.uncached_tokens,
-    'the fixture reports a subscription point that burned through flagged cells, output tokens among its count',
+    wire.five_hour_share > 0 && wire.seven_day_share === null && wire.cached_tokens > 0 && wire.uncached_tokens > 0 && wire.tokens > wire.cached_tokens + wire.uncached_tokens,
+    'the fixture reports a subscription point with a priced 5-hour share and no 7-day one, every 7-day cell being unmeasured, output tokens among its count',
   );
   assert.deepEqual(last, {
     at: new Date(wire.at).toISOString(),
     cachedTokens: wire.cached_tokens,
     fiveHourShare: wire.five_hour_share,
-    fiveHourUnmeasured: true,
     group: 'business',
-    sevenDayShare: wire.seven_day_share,
-    sevenDayUnmeasured: true,
+    sevenDayShare: null,
     tokens: wire.tokens,
     uncachedTokens: wire.uncached_tokens,
     unit: 'window_share',
@@ -624,9 +622,9 @@ test('the burn series decodes each point with its instant, both token sides, and
     'an API-key point spends dollars and reads no window',
   );
   assert.ok(burn.points.every((p) => isIso(p.at)));
-  // Every grouping but the upstream one answers the shares, their flags and the unit as null.
-  const [keyed] = d.decodeBurn({ bucket_seconds: 21_600, points: [{ ...wire, five_hour_share: null, five_hour_unmeasured: null, group: 'desktop', seven_day_share: null, seven_day_unmeasured: null, unit: null }] }).points;
-  assert.deepEqual([keyed.fiveHourShare, keyed.fiveHourUnmeasured, keyed.sevenDayShare, keyed.sevenDayUnmeasured, keyed.unit], [null, false, null, false, null]);
+  // Every grouping but the upstream one answers the shares and the unit as null.
+  const [keyed] = d.decodeBurn({ bucket_seconds: 21_600, points: [{ ...wire, five_hour_share: null, group: 'desktop', seven_day_share: null, unit: null }] }).points;
+  assert.deepEqual([keyed.fiveHourShare, keyed.sevenDayShare, keyed.unit], [null, null, null]);
   const { tokens: _, ...untold } = wire;
   assert.equal(d.decodeBurn({ bucket_seconds: 3_600, points: [untold] }).points[0].tokens, 0, 'a point without the count decodes it as zero');
   assert.equal(d.decodeBurn({ bucket_seconds: 21_600, points: [] }).bucketSeconds, 21_600);
@@ -959,7 +957,7 @@ test('the dashboard, sessions, recipes, and overview decode', () => {
   const [recipe] = fixture('keepalive_recipes').recipes.map(d.decodeRecipe);
   assert.equal(recipe.state, 'armed');
   assert.equal(recipe.reason, null);
-  assert.deepEqual([recipe.netFiveHourShare, recipe.netFiveHourShareUnmeasured], [0, false], 'no probe has settled into the recipe yet');
+  assert.equal(recipe.netFiveHourShare, 0, 'no probe has settled into the recipe yet');
   const ov = d.decodeKeepaliveOverview(fixture('keepalive_overview'));
   assert.equal(ov.sessionsWithCompanion, 1);
   assert.equal(ov.costToday[0].capUsd, 4);
@@ -1005,26 +1003,23 @@ test('settings decode the quota, routing, storage, and usage blocks the route an
   assert.equal(d.decodeSettings({ ...wire, storage: { ...wire.storage, pricing_path: './pricing.yaml' } }).storage.pricingPath, './pricing.yaml');
 });
 
-test('settings decode the cost table and the tier factor table', () => {
+test('settings decode the cost table with its tiers and null for unmeasured', () => {
   const wire = fixture('settings');
-  const { cost, tiers } = d.decodeSettings(wire).planTables;
-  assert.deepEqual([cost.effective, cost.version, cost.tier], [wire.plan_tables.cost.effective, wire.plan_tables.cost.version, 'default_claude_max_5x']);
+  const { cost } = d.decodeSettings(wire).planTables;
+  assert.equal(cost.effective, wire.plan_tables.cost.effective);
+  assert.deepEqual(Object.keys(cost).sort(), ['bands', 'effective', 'tiers', 'windows']);
   assert.deepEqual(Object.keys(cost.windows).sort(), ['five_hour', 'seven_day']);
   assert.deepEqual(Object.keys(cost.windows.five_hour).sort(), Object.keys(wire.plan_tables.cost.windows.five_hour).sort());
-  assert.deepEqual(cost.windows.five_hour['claude-opus-5'].input, { measured: '2026-09-19', sharePerMillion: 0.0841, unmeasured: false }, 'a measured cell names its date');
-  assert.deepEqual(cost.windows.seven_day['claude-opus-5'].cacheWrite1h, { measured: null, sharePerMillion: 0.0075, unmeasured: true }, 'a flagged cell names no date');
-  assert.deepEqual(Object.keys(cost.windows.five_hour['claude-opus-5']).sort(), ['cacheRead', 'cacheWrite1h', 'cacheWrite5m', 'input', 'output']);
-  assert.deepEqual(cost.bands, [{ effectiveFrom: null, factor: 1.45, fromHour: 5, measured: '2026-09-24', provisional: true, toHour: 11, weekdays: true, windows: ['five_hour'], zone: 'America/Los_Angeles' }]);
-  assert.deepEqual([tiers.measured, tiers.reference], [wire.plan_tables.tiers.measured, 'default_claude_max_5x']);
-  assert.deepEqual(tiers.tiers.default_claude_pro.fiveHour, { factor: 0.215, measured: '2026-09-24', unmeasured: false });
-  assert.deepEqual(tiers.tiers.default_claude_max_20x.sevenDay, { factor: 2.14, measured: null, unmeasured: true });
+  assert.equal(cost.windows.five_hour['claude-opus-5-5'].input, 0.01461, 'a measured cell is its share');
+  assert.equal(cost.windows.five_hour['claude-opus-5'].input, null, 'an unmeasured cell reads null');
+  assert.equal(cost.windows.seven_day['claude-opus-5-5'].output, null, 'every 7-day cell is unmeasured');
+  assert.deepEqual(Object.keys(cost.windows.five_hour['claude-opus-5-5']).sort(), ['cacheRead', 'cacheWrite1h', 'cacheWrite5m', 'input', 'output']);
+  assert.deepEqual(cost.bands, [{ factor: 1.435, fromHour: 5, toHour: 11, weekdays: true, windows: ['five_hour'], zone: 'America/Los_Angeles' }]);
+  assert.deepEqual(cost.tiers.default_claude_pro, { fiveHour: 0.05, sevenDay: null });
+  assert.deepEqual(cost.tiers.default_claude_max_20x, { fiveHour: 1, sevenDay: 1 });
   const bare = { ...wire };
   delete bare.plan_tables;
-  assert.deepEqual(
-    d.decodeSettings(bare).planTables,
-    { cost: { bands: [], effective: '', tier: '', version: '', windows: {} }, tiers: { measured: '', reference: '', tiers: {} } },
-    'an answer without the tables reads as empty ones',
-  );
+  assert.deepEqual(d.decodeSettings(bare).planTables, { cost: { bands: [], effective: '', tiers: {}, windows: {} } }, 'an answer without the tables reads as empty ones');
 });
 
 test('an account patch encodes the cancelled flag and its end', () => {
@@ -1214,16 +1209,16 @@ test('a session lifecycle rule keeps its threshold in minutes and a lifecycle ev
   assert.deepEqual(started.detail, detail, 'a detail is the free-form object the signal built and is passed through undecoded');
 });
 
-test('a session decodes its burn unit, the stand-in flag beside it, and both net balances', () => {
+test('a session decodes its burn unit and both net balances, and a pin the table cannot price reads no burn', () => {
   const rows = fixture('sessions').sessions;
-  const pinned = d.decodeSession(rows.find((s) => s.session_id === 's-fixture'));
-  assert.deepEqual([pinned.burnUnit, pinned.burnUnmeasured, typeof pinned.burn], ['window_share', true, 'number'], 'the fixture pins Sonnet on a subscription account, whose 5-hour cells are stand-ins');
-  const unpinned = rows.find((s) => s.session_id === 's1');
-  assert.equal(unpinned.burn_unmeasured, null, 'a row with no pin answers null beside its null burn');
-  assert.equal(d.decodeSession(unpinned).burnUnmeasured, false);
+  const wire = rows.find((s) => s.session_id === 's-fixture');
+  assert.equal(wire.model, 'claude-sonnet-5', 'the fixture pins Sonnet 5, whose every cell the cost table leaves unmeasured');
+  const pinned = d.decodeSession(wire);
+  assert.deepEqual([pinned.burnUnit, pinned.burn], ['window_share', 0], 'a pin never renewed with usage burns nothing, whatever its cells');
+  assert.deepEqual([d.decodeSession({ ...wire, burn: null }).burnUnit, d.decodeSession({ ...wire, burn: null }).burn], ['window_share', null], 'a burn the table cannot price reads null beside its unit');
   assert.equal(d.decodeSession({ ...rows[0], burn_unit: 'tokens' }).burnUnit, null, 'a unit outside the two reads as none');
-  const k = d.decodeSession({ ...rows[0], keepalive: { net_five_hour_share: -0.0004, net_five_hour_share_unmeasured: true, net_usd: 0.25 } }).keepalive;
-  assert.deepEqual([k.netFiveHourShare, k.netFiveHourShareUnmeasured, k.netUsd], [-0.0004, true, 0.25]);
-  const recipe = d.decodeRecipe({ ...fixture('keepalive_recipes').recipes[0], net_five_hour_share: -0.0002, net_five_hour_share_unmeasured: true });
-  assert.deepEqual([recipe.netFiveHourShare, recipe.netFiveHourShareUnmeasured], [-0.0002, true]);
+  const k = d.decodeSession({ ...rows[0], keepalive: { net_five_hour_share: -0.0004, net_usd: 0.25 } }).keepalive;
+  assert.deepEqual([k.netFiveHourShare, k.netUsd], [-0.0004, 0.25]);
+  const recipe = d.decodeRecipe({ ...fixture('keepalive_recipes').recipes[0], net_five_hour_share: -0.0002 });
+  assert.equal(recipe.netFiveHourShare, -0.0002);
 });

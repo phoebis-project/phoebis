@@ -1566,11 +1566,7 @@ pub struct BurnPoint {
     pub at: i64,
     pub cached_tokens: u64,
     pub five_hour_share: Option<f64>,
-    /// Whether any row of the bucket read a 5-hour cell or factor the measurement campaign has not filled.
-    pub five_hour_unmeasured: bool,
     pub seven_day_share: Option<f64>,
-    /// The same on the 7-day window, whose cells are flagged apart from the 5-hour ones.
-    pub seven_day_unmeasured: bool,
     /// Every token of the bucket's rows, all five types, so a reader tells a bucket with no traffic from one whose
     /// traffic no table priced.
     pub tokens: u64,
@@ -1636,12 +1632,10 @@ fn price_usage(
                 if let Some(share) =
                     tables.five_hour_share_at(tier, row.canonical_model, usage, row.at)
                 {
-                    *point.five_hour_share.get_or_insert(0.0) += share.share;
-                    point.five_hour_unmeasured |= share.unmeasured;
+                    *point.five_hour_share.get_or_insert(0.0) += share;
                 }
                 if let Some(share) = tables.share(SEVEN_DAY, tier, row.canonical_model, usage) {
-                    *point.seven_day_share.get_or_insert(0.0) += share.share;
-                    point.seven_day_unmeasured |= share.unmeasured;
+                    *point.seven_day_share.get_or_insert(0.0) += share;
                 }
             }
         }

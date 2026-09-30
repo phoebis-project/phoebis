@@ -20,7 +20,7 @@ pub(crate) async fn show(State(state): State<Arc<AdminState>>) -> Response {
         "compatibility": { "cache_diagnostics": s.cache_diagnostics, "profile": s.profile },
         "keepalive": s.keepalive,
         "listeners": { "admin": s.admin_listen, "metrics": s.metrics_listen, "proxy": s.proxy_listen },
-        "plan_tables": { "cost": tables.cost, "tiers": tables.tiers },
+        "plan_tables": { "cost": tables.cost },
         "pricing": crate::pricing::table_json(&table),
         "quota": { "sample_retention_days": s.quota_sample_retention_days },
         "retention": { "body_capture_max_hours": s.body_capture_max_hours, "ledger_days": s.retention_days, "quota_samples_days": s.quota_sample_retention_days, "rollup_days": s.rollup_retention_days },

@@ -74,18 +74,29 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
     assert_eq!(settings["pricing"]["version"], "2026-09-30");
     assert_eq!(settings["pricing"]["source"], "shipped");
     let tables = &settings["plan_tables"];
-    assert_eq!(tables["cost"]["tier"], "default_claude_max_5x");
+    let cost = &tables["cost"];
+    assert_eq!(cost["effective"], "2026-10-01");
     assert_eq!(
-        tables["cost"]["windows"]["five_hour"]["claude-opus-5"]["input"]["measured"],
-        "2026-09-19"
+        cost["tiers"]["default_claude_pro"]["five_hour"].as_f64(),
+        Some(0.05)
     );
+    assert!(cost["tiers"]["default_claude_pro"]["seven_day"].is_null());
     assert_eq!(
-        tables["cost"]["windows"]["seven_day"]["claude-opus-5"]["input"]["unmeasured"],
-        true
+        cost["windows"]["five_hour"]["claude-opus-5-5"]["input"].as_f64(),
+        Some(0.01461)
     );
+    assert!(cost["windows"]["five_hour"]["claude-opus-5"]["input"].is_null());
+    assert!(cost["windows"]["seven_day"]["claude-opus-5-5"]["input"].is_null());
+    assert_eq!(cost["bands"][0]["factor"].as_f64(), Some(1.435));
     assert_eq!(
-        tables["tiers"]["tiers"]["default_claude_pro"]["five_hour"]["factor"].as_f64(),
-        Some(0.215)
+        (
+            cost.get("tier"),
+            cost.get("version"),
+            cost["bands"][0].get("measured"),
+            tables.get("tiers")
+        ),
+        (None, None, None, None),
+        "the one table answers its v2 shape alone: {tables}"
     );
     let text = settings.to_string();
     assert!(
@@ -711,15 +722,15 @@ fn null_field(point: &serde_json::Value, field: &str) -> bool {
     point.get(field) == Some(&serde_json::Value::Null)
 }
 
-/// Stores the Max 5x tier on `business`, as a profile read does.
-fn set_max_5x(store: &phoebis_store::Store) {
+/// Stores the Max 20x tier on `business`, as a profile read does.
+fn set_max_20x(store: &phoebis_store::Store) {
     store
         .set_profile(
             "business",
             r#"{"account":{"uuid":"u","email_address":"business@example.invalid"},"organization":{}}"#,
             &phoebis_store::SubscriptionRow {
                 plan: Some("max".into()),
-                tier: Some("default_claude_max_5x".into()),
+                tier: Some("default_claude_max_20x".into()),
                 since: Some(1_000_000),
                 trial_ends_at: None,
             },
@@ -732,8 +743,8 @@ async fn the_burn_route_answers_each_subscription_points_share_of_both_windows()
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
     let now = common::NOW;
-    // An hour of a million Opus input tokens on `business`.
-    let mut opus = record("burn-1", now - HOUR, "claude-opus-5", "s1");
+    // An hour of a million Opus 5.5 input tokens on `business`.
+    let mut opus = record("burn-1", now - HOUR, "claude-opus-5-5", "s1");
     if let Record::Request { attempts, .. } = &mut opus {
         attempts[0].input_tokens = Some(1_000_000);
         attempts[0].output_tokens = None;
@@ -758,12 +769,10 @@ async fn the_burn_route_answers_each_subscription_points_share_of_both_windows()
     assert!(
         tierless["unit"] == "window_share"
             && null_field(&tierless, "five_hour_share")
-            && null_field(&tierless, "seven_day_share")
-            && tierless["five_hour_unmeasured"] == false
-            && tierless["seven_day_unmeasured"] == false,
+            && null_field(&tierless, "seven_day_share"),
         "a subscription with no tier prices no share: {tierless}"
     );
-    set_max_5x(&parts.store);
+    set_max_20x(&parts.store);
     let burn = json(get(&parts.app, burn_url, Some(&cookie)).await).await;
     assert_eq!(burn["group_by"], "account");
     let counts_every_token = |v: &serde_json::Value| {
@@ -782,27 +791,39 @@ async fn the_burn_route_answers_each_subscription_points_share_of_both_windows()
     let hour = point["at"].as_i64().unwrap();
     let band = tables.cost.band_factor(phoebis_routing::FIVE_HOUR, hour);
     assert!(
-        (point["five_hour_share"].as_f64().unwrap() - 0.0841 * band).abs() < 1e-9,
-        "a million Opus input tokens read the table's 5-hour share on Max 5x: {point}"
+        (point["five_hour_share"].as_f64().unwrap() - 0.01461 * band).abs() < 1e-9,
+        "a million Opus 5.5 input tokens read the table's 5-hour share on Max 20x: {point}"
     );
     assert!(
-        (point["seven_day_share"].as_f64().unwrap() - 0.00610).abs() < 1e-9,
-        "and its 7-day share, unbanded: {point}"
+        null_field(&point, "seven_day_share"),
+        "every 7-day cell is unmeasured, so the 7-day share reads null: {point}"
     );
     assert_eq!(
-        (
-            &point["five_hour_unmeasured"],
-            &point["seven_day_unmeasured"],
-            &point["unit"],
-            &point["usd"],
-        ),
-        (
-            &serde_json::json!(false),
-            &serde_json::json!(true),
-            &serde_json::json!("window_share"),
-            &serde_json::json!(0.0),
-        ),
-        "the 7-day Opus cell alone is a stand-in, and a subscription spends no dollars: {point}"
+        (&point["unit"], &point["usd"]),
+        (&serde_json::json!("window_share"), &serde_json::json!(0.0)),
+        "a subscription spends no dollars: {point}"
+    );
+    let mut keys: Vec<&str> = point
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        [
+            "at",
+            "cached_tokens",
+            "five_hour_share",
+            "group",
+            "seven_day_share",
+            "tokens",
+            "uncached_tokens",
+            "unit",
+            "usd"
+        ],
+        "a point carries its shares with no flag beside them: {point}"
     );
     parts.ledger.record(Record::Request {
         request: RequestRecord {
@@ -877,8 +898,6 @@ async fn the_burn_route_answers_each_subscription_points_share_of_both_windows()
     assert!(
         keyed.iter().all(|p| null_field(p, "five_hour_share")
             && null_field(p, "seven_day_share")
-            && null_field(p, "five_hour_unmeasured")
-            && null_field(p, "seven_day_unmeasured")
             && null_field(p, "unit")),
         "the shares are an account-grouped figure alone, since shares of different accounts' windows do not add"
     );
@@ -899,7 +918,7 @@ async fn the_burn_route_answers_each_subscription_points_share_of_both_windows()
 async fn a_fast_answer_moves_a_subscription_groups_dollars_and_no_share() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
-    set_max_5x(&parts.store);
+    set_max_20x(&parts.store);
     let mut fast = record("fast-1", common::NOW - HOUR, "claude-opus-5", "s1");
     if let Record::Request { attempts, .. } = &mut fast {
         attempts[0].input_tokens = Some(1_000_000);
@@ -932,15 +951,11 @@ async fn a_fast_answer_moves_a_subscription_groups_dollars_and_no_share() {
             &point["unit"],
             &point["five_hour_share"],
             &point["seven_day_share"],
-            &point["five_hour_unmeasured"],
-            &point["seven_day_unmeasured"],
         ),
         (
             &serde_json::json!("window_share"),
             &serde_json::json!(0.0),
             &serde_json::json!(0.0),
-            &serde_json::json!(false),
-            &serde_json::json!(false),
         ),
         "the account still charts in its window unit at a zero share, so it reads as priced beside its dollars: \
          {point}"
@@ -952,7 +967,7 @@ async fn the_burn_route_ranks_sessions_by_tokens_and_prices_each_by_its_accounts
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
     // A tier on file, so the shares the session grouping leaves null are the grouping's and not a missing tier's.
-    set_max_5x(&parts.store);
+    set_max_20x(&parts.store);
     let now = common::NOW;
     let session_request = |id: &str,
                            at: i64,
@@ -1085,8 +1100,6 @@ async fn the_burn_route_ranks_sessions_by_tokens_and_prices_each_by_its_accounts
     assert!(
         points.iter().all(|p| null_field(p, "five_hour_share")
             && null_field(p, "seven_day_share")
-            && null_field(p, "five_hour_unmeasured")
-            && null_field(p, "seven_day_unmeasured")
             && null_field(p, "unit")),
         "the session grouping answers no share, a tier on file or not: {points:?}"
     );
@@ -1168,7 +1181,7 @@ async fn the_burn_route_answers_only_the_twenty_busiest_sessions() {
 async fn the_session_series_sizes_its_buckets_like_the_account_series_on_long_ranges() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
-    set_max_5x(&parts.store);
+    set_max_20x(&parts.store);
     let now = common::NOW;
     // A 7-day range buckets in 6 hours; `now` always falls in the trailing partial bucket the ceiling of the
     // hour leaves, since the newest bucket ends at `now`'s own hour rather than a 6-hour edge.
@@ -1180,8 +1193,8 @@ async fn the_session_series_sizes_its_buckets_like_the_account_series_on_long_ra
             key_id: Some("desktop".into()),
             pool_id: Some("main".into()),
             session_id: Some("s-trailing".into()),
-            model: "claude-sonnet-5".into(),
-            canonical_model: "claude-sonnet-5".into(),
+            model: "claude-sonnet-5-5".into(),
+            canonical_model: "claude-sonnet-5-5".into(),
             kind: "inference".into(),
             origin: "client".into(),
             status: Some(200),
@@ -1256,8 +1269,9 @@ async fn the_session_series_sizes_its_buckets_like_the_account_series_on_long_ra
         .unwrap();
     assert!(
         account_trailing["five_hour_share"].as_f64().unwrap_or(0.0) > 0.0
-            && account_trailing["seven_day_share"].as_f64().unwrap_or(0.0) > 0.0,
-        "the account series prices the same attempt in its trailing bucket: {account_trailing}"
+            && account_trailing["seven_day_share"].is_null(),
+        "the account series prices the same attempt's 5-hour share in its trailing bucket, and every 7-day cell \
+         is unmeasured: {account_trailing}"
     );
 }
 

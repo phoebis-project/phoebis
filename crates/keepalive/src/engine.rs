@@ -14,7 +14,7 @@ use phoebis_bus::{
 use phoebis_ledger::{Ledger, Metrics, PlanTables, Pricing, Speed};
 use phoebis_oauth::Clock;
 use phoebis_relay::Relay;
-use phoebis_routing::{budget_deadline, RegistrySnapshot, RouterHandle, FIVE_HOUR};
+use phoebis_routing::{budget_deadline, RegistrySnapshot, RouterHandle};
 use phoebis_store::{AccountKind, AccountState, OveragePolicy, Store};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
@@ -23,7 +23,7 @@ use tokio_util::task::TaskTracker;
 use crate::config::{KeepaliveLimits, KeepalivePolicy, MIN_AFFINITY_SECONDS};
 use crate::probe::{run_job, wasted_label, ProbeJob};
 use crate::recipe::{make_recipe, Recipe};
-use crate::savings::gross_saving;
+use crate::savings::{gross_saving, probe_types, settlement_unit};
 use crate::usage::ProbeUsage;
 
 const LOCK_POISONED: &str = "keepalive engine poisoned by a prior panic";
@@ -241,9 +241,6 @@ impl Funding {
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Net {
     pub five_hour_share: f64,
-    /// Set once any share added was priced through a stand-in cell or factor, and never cleared: a balance with
-    /// one estimate in it is an estimate.
-    pub five_hour_share_unmeasured: bool,
     pub usd: f64,
 }
 
@@ -255,14 +252,10 @@ impl Net {
         }
     }
 
-    /// `unmeasured` marks the share balance alone; a dollar figure is never an estimate of this kind.
-    pub(crate) fn add(&mut self, unit: SavingsUnit, delta: f64, unmeasured: bool) {
+    pub(crate) fn add(&mut self, unit: SavingsUnit, delta: f64) {
         match unit {
             SavingsUnit::Usd => self.usd += delta,
-            SavingsUnit::WindowShare => {
-                self.five_hour_share += delta;
-                self.five_hour_share_unmeasured |= unmeasured;
-            }
+            SavingsUnit::WindowShare => self.five_hour_share += delta,
         }
     }
 }
@@ -285,7 +278,7 @@ pub struct EngineParts {
     /// The registry's own store, read for a subscription account's tier: the window a plan-funded probe or
     /// saving is a share of, and the budgets a restart resumes.
     pub store: Arc<Store>,
-    /// The shipped cost table and tier factors, for a probe or a kept-warm saving on a plan-funded attempt.
+    /// The shipped cost table, for a probe or a kept-warm saving on a plan-funded attempt.
     pub tables: Arc<PlanTables>,
 }
 
@@ -909,7 +902,6 @@ pub struct AgentStatus {
     pub last_activity: i64,
     pub migrations: u64,
     pub net_five_hour_share: f64,
-    pub net_five_hour_share_unmeasured: bool,
     pub net_usd: f64,
     pub next_probe_at: Option<i64>,
     pub paused: bool,
@@ -1012,7 +1004,6 @@ impl Engine {
             last_activity: agent.last_activity,
             migrations: agent.migrations,
             net_five_hour_share: agent.net.five_hour_share,
-            net_five_hour_share_unmeasured: agent.net.five_hour_share_unmeasured,
             net_usd: agent.net.usd,
             next_probe_at: agent.due_at(),
             paused: agent.paused,
@@ -1455,7 +1446,7 @@ impl Engine {
                 speed,
             );
             let saving_ledger = if unit == SavingsUnit::Usd {
-                saving_net.map_or(0.0, |s| s.share)
+                saving_net.unwrap_or(0.0)
             } else {
                 gross_saving(
                     SavingsUnit::Usd,
@@ -1467,7 +1458,7 @@ impl Engine {
                     now,
                     speed,
                 )
-                .map_or(0.0, |s| s.share)
+                .unwrap_or(0.0)
             };
             inner
                 .sessions
@@ -1477,11 +1468,7 @@ impl Engine {
                 .get_mut(&agent_id)
                 .unwrap()
                 .net
-                .add(
-                    unit,
-                    saving_net.map_or(0.0, |s| s.share),
-                    saving_net.is_some_and(|s| s.unmeasured),
-                );
+                .add(unit, saving_net.unwrap_or(0.0));
             credited = Some((
                 read,
                 key_generation,
@@ -1770,6 +1757,7 @@ impl Engine {
                     canonical_model: agent.canonical_model.clone(),
                     recipe: observation.recipe.clone(),
                     expected: observation.expected,
+                    ttl_ms: agent.ttl_ms,
                 };
                 agent.in_flight = true;
                 agent.hold_counted = false;
@@ -1833,8 +1821,8 @@ pub(crate) struct RouterView {
     /// on, so a sibling's pin never overwrites an agent's own.
     pub pins: BTreeMap<(String, String, String, String), String>,
     pub snapshot: Arc<RegistrySnapshot>,
-    /// A subscription account's own `organization.rate_limit_tier`: an account the factor table cannot size
-    /// settles its probes in dollars, so the stop reads that balance.
+    /// A subscription account's own `organization.rate_limit_tier`: an account the cost table cannot size settles
+    /// its probes in dollars, so the stop reads that balance.
     pub tiers: HashMap<String, String>,
 }
 
@@ -2059,42 +2047,32 @@ pub(crate) fn gate(
         return Some(Gate::Hold(Reason::CapReached));
     }
     let in_overage = view.overage.contains(&account.id);
-    // The day's plan-funded probes already settled as shares of the account's own 5-hour window, the band
-    // inside each price, so the sum caps against the configured share directly. An API-key account has no
-    // window to share and spends dollars, which the dollar cap above bounds; a zero share cap would read its
-    // empty entry as spent. A fast recipe's probes settle in dollars too, so the share cap never reads them.
-    if let Some(share) = policy.probe_cap_window_share_per_day.filter(|_| !fast) {
-        if account.kind == AccountKind::Oauth {
+    // A fast recipe draws usage credits, so its probes settle in dollars whatever the funding.
+    let default_unit = if fast {
+        SavingsUnit::Usd
+    } else {
+        Funding::of(account.kind, in_overage).unit()
+    };
+    // Decided before the share cap and taken again by the settlement: a probe the table cannot price on the
+    // account's tier settles in dollars, so a zero share cap never holds it and the stop reads its dollar balance.
+    let tier = view.tiers.get(&account.id).map(String::as_str);
+    let unit = settlement_unit(
+        default_unit,
+        tables,
+        tier,
+        &agent.canonical_model,
+        probe_types(agent.ttl_ms),
+    );
+    // A share-settled probe's day already sums shares of the account's own 5-hour window, the band inside each
+    // price, so the sum caps against the configured share directly.
+    if let Some(share) = policy.probe_cap_window_share_per_day {
+        if unit == SavingsUnit::WindowShare {
             let share_spent = share_spent_today.get(&account.id).copied().unwrap_or(0.0);
             if share_spent >= share {
                 return Some(Gate::Hold(Reason::CapReached));
             }
         }
     }
-    let default_unit = if fast {
-        SavingsUnit::Usd
-    } else {
-        Funding::of(account.kind, in_overage).unit()
-    };
-    // A model the cost table lacks, or an account whose tier the factor table cannot size, settles every probe
-    // in dollars whatever the funding, the same fall-back `settled_cost` takes; the stop has to read the balance
-    // in that unit too, or a zero share balance masks a negative dollar one, which the share cap never catches
-    // and the dollar cap catches only when set.
-    let sized = view
-        .tiers
-        .get(&account.id)
-        .is_some_and(|tier| tables.tier_factor(tier, FIVE_HOUR).is_some());
-    let unit = if default_unit == SavingsUnit::WindowShare
-        && (tables
-            .cost
-            .cells(FIVE_HOUR, &agent.canonical_model)
-            .is_none()
-            || !sized)
-    {
-        SavingsUnit::Usd
-    } else {
-        default_unit
-    };
     if policy.stop_when_net_negative && agent.net.in_unit(unit) < 0.0 && agent.grace_left == 0 {
         return Some(Gate::Hold(Reason::NetNegative));
     }
@@ -2103,6 +2081,10 @@ pub(crate) fn gate(
 
 #[cfg(test)]
 mod tests {
+    use phoebis_routing::FIVE_HOUR;
+
+    use crate::config::{FIVE_MINUTES_MS, ONE_HOUR_MS};
+
     use super::*;
 
     #[test]
@@ -2170,18 +2152,33 @@ mod tests {
         );
     }
 
-    /// One pool holding one key and two members, subscription account `o` on Max 5x and api_key account `a`,
+    /// One pool holding one key and two members, subscription account `o` on Max 20x and api_key account `a`,
     /// with the stop on and no grace, so a negative balance in the unit the next probe settles in holds at once.
     fn stop_view(o_in_overage: bool) -> RouterView {
-        stop_view_under(o_in_overage, OveragePolicy::Allow)
+        stop_view_with(o_in_overage, OveragePolicy::Allow, None)
     }
 
     /// `stop_view` with the pool's overage policy named, for a case the overage hold has to reach.
     fn stop_view_under(o_in_overage: bool, overage_policy: OveragePolicy) -> RouterView {
+        stop_view_with(o_in_overage, overage_policy, None)
+    }
+
+    /// `stop_view` with the pool's daily window-share cap at `share_cap`.
+    fn stop_view_capped(o_in_overage: bool, share_cap: Option<f64>) -> RouterView {
+        stop_view_with(o_in_overage, OveragePolicy::Allow, share_cap)
+    }
+
+    /// `stop_view` with the pool's overage policy and daily window-share cap named.
+    fn stop_view_with(
+        o_in_overage: bool,
+        overage_policy: OveragePolicy,
+        share_cap: Option<f64>,
+    ) -> RouterView {
         let policy = KeepalivePolicy {
             enabled: true,
             stop_when_net_negative: true,
             net_negative_grace_probes: 0,
+            probe_cap_window_share_per_day: share_cap,
             ..KeepalivePolicy::default()
         };
         let account = |id: &str, kind| phoebis_store::AccountRow {
@@ -2267,17 +2264,18 @@ mod tests {
             },
             pins: BTreeMap::new(),
             snapshot: Arc::new(RegistrySnapshot::from_load(load, [0; 32], 0, 1)),
-            tiers: HashMap::from([("o".to_string(), "default_claude_max_5x".to_string())]),
+            tiers: HashMap::from([("o".to_string(), "default_claude_max_20x".to_string())]),
         }
     }
 
     #[test]
     fn the_net_negative_stop_reads_the_five_hour_share() {
         let tables = PlanTables::shipped();
-        let gated_in = |view: &RouterView, account: &str, net: Net| {
+        let gated_on = |view: &RouterView, account: &str, model: &str, net: Net| {
             let mut agent = Agent::new("main", "k", 1, 0);
             agent.account = Some(account.into());
-            agent.canonical_model = "claude-opus-5".into();
+            agent.canonical_model = model.into();
+            agent.ttl_ms = FIVE_MINUTES_MS;
             agent.net = net;
             agent.grace_left = 0;
             gate(
@@ -2289,18 +2287,19 @@ mod tests {
                 &tables,
             )
         };
+        let gated_in = |view: &RouterView, account: &str, net: Net| {
+            gated_on(view, account, "claude-opus-5-5", net)
+        };
         let gated = |account: &str, o_in_overage: bool, net: Net| {
             gated_in(&stop_view(o_in_overage), account, net)
         };
         let share_short = Net {
             five_hour_share: -0.01,
             usd: 0.50,
-            ..Net::default()
         };
         let dollars_short = Net {
             five_hour_share: 0.01,
             usd: -0.50,
-            ..Net::default()
         };
         assert_eq!(
             gated("o", false, share_short),
@@ -2337,15 +2336,86 @@ mod tests {
             (None, Some(Gate::Hold(Reason::NetNegative))),
             "on plan without a tier a probe settles in dollars, so the dollar balance decides"
         );
+        let unmeasured = |net: Net| gated_on(&stop_view(false), "o", "claude-opus-5", net);
+        assert_eq!(
+            unmeasured(Net {
+                five_hour_share: 0.0,
+                usd: -0.50,
+            }),
+            Some(Gate::Hold(Reason::NetNegative)),
+            "every Opus 5 cell is null, so its probe settles in dollars and the dollar balance decides"
+        );
+        assert_eq!(
+            unmeasured(Net {
+                five_hour_share: -0.01,
+                usd: 0.0,
+            }),
+            None,
+            "a negative share balance says nothing about a probe that settles in dollars"
+        );
+    }
+
+    #[test]
+    fn a_row_whose_hour_cell_is_null_gates_a_five_minute_probe_on_the_share() {
+        let mut tables = PlanTables::shipped();
+        tables
+            .cost
+            .windows
+            .get_mut(FIVE_HOUR)
+            .unwrap()
+            .get_mut("claude-opus-5-5")
+            .unwrap()
+            .cache_write_1h = None;
+        let net = Net {
+            five_hour_share: -0.01,
+            usd: 0.50,
+        };
+        let gated = |view: &RouterView, ttl_ms: i64| {
+            let mut agent = Agent::new("main", "k", 1, 0);
+            agent.account = Some("o".into());
+            agent.canonical_model = "claude-opus-5-5".into();
+            agent.ttl_ms = ttl_ms;
+            agent.net = net;
+            agent.grace_left = 0;
+            gate(
+                view,
+                &mut agent,
+                "s",
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+                &tables,
+            )
+        };
+        assert_eq!(
+            gated(&stop_view(false), FIVE_MINUTES_MS),
+            Some(Gate::Hold(Reason::NetNegative)),
+            "a five-minute probe never writes for an hour, so it settles in the share and the share balance decides"
+        );
+        assert_eq!(
+            gated(&stop_view(false), ONE_HOUR_MS),
+            None,
+            "an hour recipe's probe can, so it settles in dollars and the dollar balance is positive"
+        );
+        let capped = stop_view_capped(false, Some(0.0));
+        assert_eq!(
+            gated(&capped, FIVE_MINUTES_MS),
+            Some(Gate::Hold(Reason::CapReached)),
+            "a zero share cap holds a probe that settles in the share"
+        );
+        assert_eq!(
+            gated(&capped, ONE_HOUR_MS),
+            None,
+            "and never one that settles in dollars"
+        );
     }
 
     /// An observation whose recipe `make_recipe` built from a body sent in fast mode, or at standard speed.
     fn observation(fast: bool) -> Observation {
         let speed = if fast { r#""speed":"fast","# } else { "" };
         let body = format!(
-            r#"{{"model":"claude-opus-5",{speed}"max_tokens":1024,"messages":[{{"role":"user","content":"hi"}}]}}"#
+            r#"{{"model":"claude-opus-5-5",{speed}"max_tokens":1024,"messages":[{{"role":"user","content":"hi"}}]}}"#
         );
-        let recipe = make_recipe(&[], body.as_bytes(), "claude-opus-5", 1 << 20).unwrap();
+        let recipe = make_recipe(&[], body.as_bytes(), "claude-opus-5-5", 1 << 20).unwrap();
         assert_eq!(recipe.fast, fast, "{body}");
         Observation {
             id: "r".into(),
@@ -2365,7 +2435,7 @@ mod tests {
     fn gated_at(view: &RouterView, account: &str, fast: bool, net: Net) -> Option<Gate> {
         let mut agent = Agent::new("main", "k", 1, 0);
         agent.account = Some(account.into());
-        agent.canonical_model = "claude-opus-5".into();
+        agent.canonical_model = "claude-opus-5-5".into();
         agent.net = net;
         agent.grace_left = 0;
         agent.current = Some(observation(fast));
@@ -2384,12 +2454,10 @@ mod tests {
         let share_short = Net {
             five_hour_share: -0.01,
             usd: 0.50,
-            ..Net::default()
         };
         let dollars_short = Net {
             five_hour_share: 0.01,
             usd: -0.50,
-            ..Net::default()
         };
         let view = stop_view(false);
         assert_eq!(
@@ -2453,7 +2521,7 @@ mod tests {
             ("account", "seven_day_fable"),
             ("account", "retry_after"),
             ("fast", "fast"),
-            ("model:claude-opus-5", "retry_after"),
+            ("model:claude-opus-5-5", "retry_after"),
             ("model:claude-sonnet-5", "retry_after"),
         ];
         let mut answers = BTreeSet::new();
@@ -2466,7 +2534,7 @@ mod tests {
                     )]),
                     ..stop_view(false)
                 };
-                let holds = phoebis_routing::cooldown_holds(scope, window, "claude-opus-5", fast);
+                let holds = phoebis_routing::cooldown_holds(scope, window, "claude-opus-5-5", fast);
                 assert_eq!(
                     gated_at(&view, "o", fast, Net::default()) == Some(Gate::Hold(Reason::Cooled)),
                     holds,

@@ -1,6 +1,6 @@
 import type {
   AccountRollup, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, CacheMissReason, CostSplit, LatencyHistograms, PinMigrationReason, PlacementRow, PlanModelCells, RequestKind, RequestLog, RewritePoint,
-  TierFactor, WastedProbeReason,
+  WastedProbeReason,
 } from '@/api/types';
 import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons, missCount } from '@/lib/cache';
 import { emptyCounts } from '@/lib/counts';
@@ -256,18 +256,19 @@ function cellsOf(window: Window, model: string): PlanModelCells | undefined {
   return id === undefined ? undefined : rows[id];
 }
 
-/** The mock's tier spellings as the tier factor table keys them; the mock's `pro_5x` is the table's Pro row. */
-function tierFactorOf(tier: string | undefined, window: Window): TierFactor | undefined {
-  if (tier === undefined) return undefined;
-  const row = TABLES.tiers.tiers[`default_claude_${tier === 'pro_5x' ? 'pro' : tier}`];
-  return window === 'five_hour' ? row?.fiveHour : row?.sevenDay;
+/** The mock's tier spellings as the cost table keys its tiers; the mock's `pro_5x` is the table's Pro row. Null for a
+ *  tier the table lacks or a factor it leaves unmeasured. */
+function tierFactorOf(tier: string | undefined, window: Window): number | null {
+  if (tier === undefined) return null;
+  const row = TABLES.cost.tiers[`default_claude_${tier === 'pro_5x' ? 'pro' : tier}`];
+  if (row === undefined) return null;
+  return window === 'five_hour' ? row.fiveHour : row.sevenDay;
 }
 
-/** The in-force band row's factor on `window` at `at` when its hours cover it in its zone, else 1, as the route reads it. */
+/** The factor of the last band row naming `window` when its hours cover `at` in its zone, else 1, as the route reads it. */
 function bandAt(window: Window, at: number): number {
-  const band = TABLES.cost.bands
-    .filter((b) => b.windows.includes(window) && (b.effectiveFrom === null || Date.parse(b.effectiveFrom) <= at))
-    .sort((a, b) => (b.effectiveFrom ?? '').localeCompare(a.effectiveFrom ?? ''))[0];
+  const naming = TABLES.cost.bands.filter((b) => b.windows.includes(window));
+  const band = naming[naming.length - 1];
   if (band === undefined) return 1;
   const parts = new Intl.DateTimeFormat('en-US', { hour: 'numeric', hourCycle: 'h23', timeZone: band.zone, weekday: 'short' }).formatToParts(at);
   const hour = Number(parts.find((p) => p.type === 'hour')?.value);
@@ -276,14 +277,15 @@ function bandAt(window: Window, at: number): number {
 }
 
 /**
- * A subscription row's share of each of its account's windows: the table's cells for its model over the tier's
- * factor, the 5-hour share weighed by the band at the row's hour; null for a tier or a model the tables lack.
+ * A subscription row's share of each of its account's windows: the table's Max 20x cells for its model over the
+ * tier's factor, the 5-hour share weighed by the band at the row's hour; null for a tier or a model the table lacks,
+ * a factor it leaves unmeasured, or a token type the row holds whose cell is unmeasured.
  */
-function sharesOf(r: HourlyRollup, tier: string | undefined): Record<Window, { share: number; unmeasured: boolean } | null> {
+function sharesOf(r: HourlyRollup, tier: string | undefined): Record<Window, number | null> {
   const one = (window: Window) => {
     const cells = cellsOf(window, r.model);
     const factor = tierFactorOf(tier, window);
-    if (cells === undefined || factor === undefined) return null;
+    if (cells === undefined || factor === null) return null;
     const read = [
       [r.tokens.uncachedInput, cells.input],
       [r.tokens.cacheRead, cells.cacheRead],
@@ -291,9 +293,14 @@ function sharesOf(r: HourlyRollup, tier: string | undefined): Record<Window, { s
       [r.tokens.cacheWrite1h, cells.cacheWrite1h],
       [r.tokens.output, cells.output],
     ] as const;
-    const onMax5x = read.reduce((n, [tokens, cell]) => n + (tokens * cell.sharePerMillion) / 1_000_000, 0);
+    let onMax20x = 0;
+    for (const [tokens, cell] of read) {
+      if (tokens === 0) continue;
+      if (cell === null) return null;
+      onMax20x += (tokens * cell) / 1_000_000;
+    }
     const band = window === 'five_hour' ? bandAt(window, Date.parse(r.hour)) : 1;
-    return { share: (onMax5x / factor.factor) * band, unmeasured: factor.unmeasured || read.some(([tokens, cell]) => tokens > 0 && cell.unmeasured) };
+    return (onMax20x / factor) * band;
   };
   return { five_hour: one('five_hour'), seven_day: one('seven_day') };
 }
@@ -301,14 +308,12 @@ function sharesOf(r: HourlyRollup, tier: string | undefined): Record<Window, { s
 interface BurnSum {
   cached: number;
   fiveHour: number | null;
-  fiveHourUnmeasured: boolean;
   sevenDay: number | null;
-  sevenDayUnmeasured: boolean;
   tokens: number;
   uncached: number;
   usd: number;
 }
-const emptyBurn = (): BurnSum => ({ cached: 0, fiveHour: null, fiveHourUnmeasured: false, sevenDay: null, sevenDayUnmeasured: false, tokens: 0, uncached: 0, usd: 0 });
+const emptyBurn = (): BurnSum => ({ cached: 0, fiveHour: null, sevenDay: null, tokens: 0, uncached: 0, usd: 0 });
 
 /** How many sessions the session grouping keeps, the route's cut. */
 const BURN_SESSIONS = 20;
@@ -340,19 +345,13 @@ export function burnOf(rows: HourlyRollup[], range: Range, groupBy: BurnGroup): 
     s.usd += oauth && !fast ? 0 : r.costUsd;
     if (!oauth) continue;
     const shares = sharesOf(r, tiers.get(r.accountId));
-    if (shares.five_hour !== null) {
-      s.fiveHour = (s.fiveHour ?? 0) + (fast ? 0 : shares.five_hour.share);
-      s.fiveHourUnmeasured ||= !fast && shares.five_hour.unmeasured;
-    }
-    if (shares.seven_day !== null) {
-      s.sevenDay = (s.sevenDay ?? 0) + (fast ? 0 : shares.seven_day.share);
-      s.sevenDayUnmeasured ||= !fast && shares.seven_day.unmeasured;
-    }
+    if (shares.five_hour !== null) s.fiveHour = (s.fiveHour ?? 0) + (fast ? 0 : shares.five_hour);
+    if (shares.seven_day !== null) s.sevenDay = (s.sevenDay ?? 0) + (fast ? 0 : shares.seven_day);
   }
   const tokensOf = (group: string) => [...(sums.get(group)?.values() ?? [])].reduce((n, s) => n + s.cached + s.uncached, 0);
   let groups = [...sums.keys()].sort();
   if (groupBy === 'session') groups = [...groups].sort((a, b) => tokensOf(b) - tokensOf(a)).slice(0, BURN_SESSIONS).sort();
-  // The route answers the shares, their flags and the unit under the upstream grouping alone.
+  // The route answers the shares and the unit under the upstream grouping alone.
   const byUpstream = groupBy === 'account';
   const points = groups.flatMap((group) =>
     starts.map((at): BurnPoint => {
@@ -362,10 +361,8 @@ export function burnOf(rows: HourlyRollup[], range: Range, groupBy: BurnGroup): 
         at: iso(at),
         cachedTokens: Math.round(s.cached),
         fiveHourShare: byUpstream ? s.fiveHour : null,
-        fiveHourUnmeasured: byUpstream && s.fiveHourUnmeasured,
         group,
         sevenDayShare: byUpstream ? s.sevenDay : null,
-        sevenDayUnmeasured: byUpstream && s.sevenDayUnmeasured,
         tokens: Math.round(s.tokens),
         uncachedTokens: Math.round(s.uncached),
         unit: kind === undefined ? null : kind === 'oauth' ? 'window_share' : 'usd',

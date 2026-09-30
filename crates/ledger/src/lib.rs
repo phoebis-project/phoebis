@@ -32,9 +32,7 @@ pub use pattern::{
     matches as pattern_matches, to_like as pattern_to_like,
     within_bounds as patterns_within_bounds, MAX_PATTERNS, MAX_PATTERN_CHARS, PATTERNS_TOO_LONG,
 };
-pub use plan::{
-    Band, Cell, CostTable, Factor, ModelCells, PlanTables, Share, TierFactor, TierFactors,
-};
+pub use plan::{Band, CostTable, Factors, ModelCells, PlanTables};
 pub use pricing::{price_attempts, ModelPrice, ModelRow, PriceTable, Pricing, Speed};
 pub use query::{
     apply_filter, breakdown, bucket_seconds, burn_rows, burn_series, burn_series_over, dashboard,

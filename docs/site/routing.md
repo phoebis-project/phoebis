@@ -440,8 +440,8 @@ was.
 renewal. Nothing is priced until it is read: the round prices the banded copy as a share of the account's 5-hour window
 while a subscription account runs on its plan, and the plain copy in dollars on an API-key account or a subscription
 account in overage, so leaving overage switches the reading without a reset and a session that moves between tiers reads
-the right share on both. A keepalive probe's usage never counts. A figure priced through a cell or a factor the
-measurement campaign has not filled is marked as the cost reference marks the cell.
+the right share on both. A keepalive probe's usage never counts. A burn the table cannot price, for a model it lacks or
+a cell it leaves unmeasured, reads as none.
 
 Any move records a `pin_migrated` event with reason `cooldown`, `drain`, `fast_lane`, `mark`, `overage`,
 `return_to_plan`, `shed`, or `spent`: `cooldown` and `mark` when a failover or a credential mark moved the session,

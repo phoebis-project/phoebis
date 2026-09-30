@@ -67,11 +67,12 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
     (35, V35),
     (36, V36),
     (37, V37),
+    (38, V38),
 ];
 
 /// The newest schema version this build knows how to read. `prepare` refuses a registry stamped past it
 /// rather than skip migrations it does not carry and misread the tables that follow.
-pub const SCHEMA_VERSION: u32 = 37;
+pub const SCHEMA_VERSION: u32 = 38;
 
 const V2: &str = r#"
 CREATE TABLE IF NOT EXISTS account_models (
@@ -556,4 +557,15 @@ CREATE TABLE usage_credits (
   enabled INTEGER NOT NULL, disabled_reason TEXT, utilization REAL, observed_at INTEGER NOT NULL,
   incarnation INTEGER NOT NULL
 );
+"#;
+
+// The share a plan-funded probe settles in is measured or not priced at all, so the day's row carries no flag. No
+// code evaluates, patches or resolves an alert of the retired drift kind, and the console would show one under
+// another kind's label, so its deliveries, events and rules go with it.
+const V38: &str = r#"
+ALTER TABLE keepalive_budgets DROP COLUMN five_hour_share_unmeasured;
+DELETE FROM alert_deliveries WHERE kind = 'meter_drift'
+  OR event_id IN (SELECT id FROM alert_events WHERE kind = 'meter_drift');
+DELETE FROM alert_events WHERE kind = 'meter_drift';
+DELETE FROM alert_rules WHERE kind = 'meter_drift';
 "#;

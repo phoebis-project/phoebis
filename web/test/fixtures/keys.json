@@ -25,19 +25,19 @@
         "affinity_source": "auto",
         "auto_mode_server": null,
         "effective_auto_mode_server": true,
-        "prefix": "MRpvw4TC",
-        "created_at": 1790794448321,
+        "prefix": "nRWUa2u2",
+        "created_at": 1790807751645,
         "rotated_at": null,
         "last_used_at": null,
         "retired_secret_last_used_at": null,
         "sessions_on_retired_secret": 0,
         "usage_7d": {
-          "cost_usd": 0.018,
+          "cost_usd": 0.0036,
           "requests": 4,
           "tokens": 7200
         },
         "lifetime": {
-          "cost_usd": 0.018,
+          "cost_usd": 0.0036,
           "requests": 4
         }
       }

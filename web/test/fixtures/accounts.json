@@ -39,11 +39,11 @@
           "has_extra_usage_enabled": true,
           "organization_name": "Biz Org",
           "organization_type": "claude_max",
-          "rate_limit_tier": "default_claude_max_5x"
+          "rate_limit_tier": "default_claude_max_20x"
         },
         "subscription": {
           "plan": "max",
-          "tier": "default_claude_max_5x",
+          "tier": "default_claude_max_20x",
           "since": 1773482400000,
           "trial_ends_at": null,
           "ends_at": null,

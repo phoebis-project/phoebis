@@ -277,9 +277,9 @@ pub(crate) async fn accounts(
 }
 
 /// The burn series per group: a subscription account's tokens as the share of its own 5-hour and 7-day window,
-/// each with its unmeasured flag, and an api_key account's in dollars. The shares, their flags and `unit` are
-/// answered under the `account` grouping alone and read null under every other one, since a key, a class or a
-/// session spans accounts and shares of different accounts' windows do not add. Each point's `tokens` counts
+/// and an api_key account's in dollars. The shares and `unit` are answered under the `account` grouping alone and
+/// read null under every other one, since a key, a class or a session spans accounts and shares of different
+/// accounts' windows do not add. Each point's `tokens` counts
 /// every token type, so a reader tells a bucket with no traffic from one whose traffic no table priced.
 pub(crate) async fn burn(
     State(state): State<Arc<AdminState>>,
@@ -399,15 +399,10 @@ pub(crate) async fn burn(
                     AccountKind::ApiKey => "usd",
                 });
             points.into_iter().map(move |p| {
-                let (five_hour_unmeasured, seven_day_unmeasured) = if by_account {
-                    (Some(p.five_hour_unmeasured), Some(p.seven_day_unmeasured))
-                } else {
-                    (None, None)
-                };
                 json!({
                     "at": p.at, "group": group, "unit": unit, "usd": p.usd,
-                    "five_hour_share": p.five_hour_share.filter(|_| by_account), "five_hour_unmeasured": five_hour_unmeasured,
-                    "seven_day_share": p.seven_day_share.filter(|_| by_account), "seven_day_unmeasured": seven_day_unmeasured,
+                    "five_hour_share": p.five_hour_share.filter(|_| by_account),
+                    "seven_day_share": p.seven_day_share.filter(|_| by_account),
                     "cached_tokens": p.cached_tokens, "tokens": p.tokens, "uncached_tokens": p.uncached_tokens,
                 })
             })

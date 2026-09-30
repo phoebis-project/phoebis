@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import { api } from '@/api';
-import type { CostTable, FastPrice, PlanModelCells, TierFactors } from '@/api/types';
+import { planLabel } from '@/api/decode';
+import type { CostTable, FastPrice, ModelPrice, PlanModelCells } from '@/api/types';
 import { own } from '@/lib/analytics';
 import { fmtShare } from '@/lib/format';
 import { useAsync } from '@/lib/hooks';
@@ -30,16 +31,15 @@ const NOTES: { body: ReactNode; term: string }[] = [
     term: 'Window share',
     body: (
       <>
-        Each plan column is the share of a Max 5x subscription's 5-hour or 7-day window that one million tokens of the type consume, from the cost table the ledger ships. An account on
-        another tier spends that share over its tier's factor from the tier factor table, so a Pro account spends more of its own window and a Max 20x account less, by the multiples a group
-        header's tooltip gives. A share marked * is not yet measured on its window and carries a stand-in derived from earlier meter readings. A 1-hour write spends the same share as a 5-minute
+        Each plan column is the share of a Max 20x subscription's 5-hour or 7-day window that one million tokens of the type consume, from the cost table the ledger ships. An account on
+        another tier spends that share over its tier's factor from the same table, so a Max 5x account spends four times as much of its own window and a Pro account twenty times, by the
+        multiples a group header's tooltip gives. A dash is a cell the plan meter has not measured, through which no share is priced. A 1-hour write spends the same share as a 5-minute
         one, so on plan-funded traffic the long TTL is free and the pool's plan rule set keeps <code>1h</code> for the main conversation and subagents alike; while a write costs money a
         1-hour write is 2x against 1.25x, so the metered rule set's <code>keepalive</code> TTL defaults to <code>5m</code>.
       </>
     ),
   },
 ];
-const UNMEASURED = 'not measured on this window; derived from earlier meter readings';
 // An idle 5m entry is rewritten by a probe about every four minutes; a 1h entry once an hour.
 const PROBES_PER_IDLE_HOUR = 15;
 
@@ -92,10 +92,12 @@ function PriceRow({ cells, className, label }: { cells: FastPrice; className?: s
   );
 }
 
-/** The model's cells on a window, exact first and then undated, since the price table lists dated ids and the cost table ships undated. */
+/** A dated model id's undated name; the price table lists dated ids and the cost table ships undated ones. */
+const undatedOf = (model: string) => model.replace(/-\d{8}$/, '');
+/** The model's cells on a window, exact first and then undated. */
 const cellsOf = (table: CostTable, window: string, model: string): PlanModelCells | null => {
   const models = own(table.windows, window) ? table.windows[window] : {};
-  const undated = model.replace(/-\d{8}$/, '');
+  const undated = undatedOf(model);
   return own(models, model) ? models[model] : own(models, undated) ? models[undated] : null;
 };
 const PLAN_COLUMNS: { key: keyof PlanModelCells; label: string }[] = [
@@ -110,16 +112,28 @@ const WINDOWS = [
   { factor: 'sevenDay', key: 'seven_day', label: '7-day window' },
 ] as const;
 
-/** What a Pro and a Max 20x account spend of their own window against the Max 5x share the group shows. */
-const groupTitle = (tiers: TierFactors, window: (typeof WINDOWS)[number]['factor']) => {
-  const spends = (tier: string, words: (times: number | string) => string) => {
-    const factor = own(tiers.tiers, tier) ? tiers.tiers[tier][window] : null;
-    const times = factor && factor.factor > 0 ? Number((1 / factor.factor).toPrecision(3)) : '-';
-    return `${words(times)}${factor?.unmeasured ? ' (not measured)' : ''}`;
-  };
-  const pro = spends('default_claude_pro', (times) => `a Pro account spends ${times} times as much of its own`);
-  const max20x = spends('default_claude_max_20x', (times) => `a Max 20x ${times} times`);
-  return `Share of a Max 5x window per million tokens; ${pro}, ${max20x}`;
+/** The tier every cell is measured on, whose factors the table carries as 1. */
+const REFERENCE_TIER = 'default_claude_max_20x';
+/** What each other tier spends of its own window against the reference share the group shows. */
+const groupTitle = (tiers: CostTable['tiers'], window: (typeof WINDOWS)[number]['factor']) => {
+  const spends = Object.keys(tiers)
+    .filter((tier) => tier !== REFERENCE_TIER)
+    .sort()
+    .map((tier) => {
+      const factor = tiers[tier][window];
+      return factor !== null && factor > 0
+        ? `a ${planLabel(tier)} account spends ${Number((1 / factor).toPrecision(3))} times as much of its own`
+        : `a ${planLabel(tier)} account's factor is not measured on this window`;
+    });
+  return `Share of a ${planLabel(REFERENCE_TIER)} window per million tokens; ${spends.join(', ')}`;
+};
+/** The share table's rows: every price table model, plus every cost table model no price id reads (a dated price
+ *  id reads the cost row of its undated name, as `cellsOf` reads it), sorted by id. */
+const shareModels = (prices: ModelPrice[], table: CostTable): string[] => {
+  const priced = prices.map((p) => p.model);
+  const undated = new Set(priced.map(undatedOf));
+  const costed = Object.values(table.windows).flatMap((models) => Object.keys(models));
+  return [...new Set([...priced, ...costed.filter((m) => !undated.has(m))])].sort();
 };
 
 /** Opens the shipped price table next to anything that spends tokens on the user's behalf. */
@@ -207,7 +221,7 @@ function PriceTable() {
             <tr>
               <th rowSpan={2}>Model</th>
               {WINDOWS.map((w) => (
-                <th key={w.key} colSpan={PLAN_COLUMNS.length} className="cost-ref__sep" title={tables ? groupTitle(tables.tiers, w.factor) : undefined}>
+                <th key={w.key} colSpan={PLAN_COLUMNS.length} className="cost-ref__sep" title={tables ? groupTitle(tables.cost.tiers, w.factor) : undefined}>
                   {w.label}
                 </th>
               ))}
@@ -223,28 +237,20 @@ function PriceTable() {
             </tr>
           </thead>
           <tbody>
-            {prices ? (
-              prices.map((p) => (
-                <tr key={p.model}>
-                  <td className="mono">{p.model}</td>
+            {prices && tables ? (
+              shareModels(prices, tables.cost).map((model) => (
+                <tr key={model}>
+                  <td className="mono">{model}</td>
                   {WINDOWS.map((w) => {
-                    const cells = tables ? cellsOf(tables.cost, w.key, p.model) : null;
-                    return PLAN_COLUMNS.map((c, i) => (
-                      <td key={`${w.key}-${c.key}`} className={`right num ${i === 0 ? 'cost-ref__sep' : ''}`}>
-                        {cells ? (
-                          <>
-                            {fmtShare(cells[c.key].sharePerMillion)}
-                            {cells[c.key].unmeasured && (
-                              <span className="muted cost-ref__flag" title={UNMEASURED}>
-                                *
-                              </span>
-                            )}
-                          </>
-                        ) : (
-                          dash
-                        )}
-                      </td>
-                    ));
+                    const cells = cellsOf(tables.cost, w.key, model);
+                    return PLAN_COLUMNS.map((c, i) => {
+                      const cell = cells === null ? null : cells[c.key];
+                      return (
+                        <td key={`${w.key}-${c.key}`} className={`right num ${i === 0 ? 'cost-ref__sep' : ''}`}>
+                          {cell === null ? dash : fmtShare(cell)}
+                        </td>
+                      );
+                    });
                   })}
                 </tr>
               ))
@@ -258,9 +264,6 @@ function PriceTable() {
           </tbody>
         </table>
       </div>
-      <p className="secondary cost-ref__legend">
-        <span className="muted">*</span> {UNMEASURED}
-      </p>
       <dl className="cost-ref__notes">
         {NOTES.map((n) => (
           <div className="cost-ref__notes-row" key={n.term}>

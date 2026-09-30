@@ -58,15 +58,8 @@ for (const r of REQUESTS) {
   else ledgered.set(r.sessionId, { last: r.at > seen.last ? r.at : seen.last, requests: seen.requests + 1 });
 }
 
-// The shipped cost table's 5-hour rows: a model whose row has a flagged cell, or no row at all, is priced through
-// stand-ins, so its share carries the unmeasured mark.
-const FIVE_HOUR_CELLS = SETTINGS_SAMPLE.planTables.cost.windows.five_hour ?? {};
-const standIn = (model: string): boolean => {
-  const row = FIVE_HOUR_CELLS[model] ?? FIVE_HOUR_CELLS[model.replace(/-\d{8}$/, '')];
-  return row === undefined || Object.values(row).some((cell) => cell.unmeasured);
-};
-/** A 20k-token prefix read back at Fable 5.1's cache-read cell, 0.00789 of the Max 5x window per million. */
-const PROBE_SHARE = 0.00016;
+/** A 20k-token prefix read back at Fable 5.1's cache-read cell, 0.001675 of the Max 20x window per million, rounded. */
+const PROBE_SHARE = 0.00003;
 
 export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
   // The last entry deliberately falls outside the ledgered ids.
@@ -114,7 +107,6 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
     burn: pinned ? (unit === 'usd' ? burnUsdRoll : burnRoll) : null,
     burnAt: pinned ? burnAtRoll : null,
     burnUnit: unit,
-    burnUnmeasured: unit === 'window_share' && standIn(spec.model),
     cacheTtlMs: pinned ? 5 * MINUTE : null,
     lastInputTokens: pinned ? lastInputRoll : null,
     lastRefreshAt: pinned ? lastRefreshRoll : null,
@@ -127,7 +119,6 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
       // Filled in from the recipes below, so a row and its agents cannot disagree.
       lastGuard: null,
       netFiveHourShare: null,
-      netFiveHourShareUnmeasured: false,
       netUsd: null,
       nextProbeAt: null,
     },
@@ -140,7 +131,6 @@ SESSIONS.push({
   ...SESSION_SAMPLE,
   accountId: null,
   agents: 0,
-  burnUnmeasured: false,
   companion: 'reporting',
   companionSince: null,
   createdAt: null,
@@ -148,7 +138,7 @@ SESSIONS.push({
   forkDepth: null,
   forkedFrom: null,
   historical: false,
-  keepalive: { lastGuard: null, netFiveHourShare: null, netFiveHourShareUnmeasured: false, netUsd: null, nextProbeAt: null, state: null },
+  keepalive: { lastGuard: null, netFiveHourShare: null, netUsd: null, nextProbeAt: null, state: null },
   keyGeneration: Date.parse(keyById.get('laptop')!.createdAt),
   keyId: 'laptop',
   lastRequestAt: null,
@@ -224,7 +214,6 @@ export const RECIPES: KeepaliveRecipe[] = SESSIONS.flatMap((pin, i) => {
       // A freshly-armed agent has paid one probe's cost and earned no credit back yet; a held one has paid
       // nothing further since its last hold began.
       netFiveHourShare: crossed ? 3 * PROBE_SHARE : onPlan ? -PROBE_SHARE * probes : 0,
-      netFiveHourShareUnmeasured: (crossed || (onPlan && probes > 0)) && standIn(model),
       netUsd: crossed ? -0.012 : onPlan ? 0 : -0.004 * probes,
       nextProbeAt: state === 'armed' && reason === null ? ahead(rng.int(20, 280) * 1000) : null,
       poolId: keyById.get(pin.keyId)?.poolId ?? 'all',
@@ -248,7 +237,6 @@ for (const pin of SESSIONS) {
   const main = RECIPES.find((r) => r.sessionId === pin.sessionId && r.agentId === 'main');
   pin.keepalive.lastGuard = main?.lastGuard ?? null;
   pin.keepalive.netFiveHourShare = main?.netFiveHourShare ?? null;
-  pin.keepalive.netFiveHourShareUnmeasured = main?.netFiveHourShareUnmeasured ?? false;
   pin.keepalive.netUsd = main?.netUsd ?? null;
 }
 
@@ -264,7 +252,7 @@ SESSIONS.push({
   companionSince: null,
   createdAt: null,
   historical: true,
-  keepalive: { lastGuard: null, netFiveHourShare: null, netFiveHourShareUnmeasured: false, netUsd: null, nextProbeAt: null, state: null },
+  keepalive: { lastGuard: null, netFiveHourShare: null, netUsd: null, nextProbeAt: null, state: null },
   keyGeneration: DELETED_HOLDER_GENERATION,
   lastUsedAt: null,
   pinned: false,

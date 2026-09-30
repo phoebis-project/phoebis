@@ -1,8 +1,8 @@
 import type {
   Account, AccountCatalog, AccountRollup, AffinityMode, AffinitySource, AlertEvent, AlertRule, AlertRuleInput, AnalyticsGroup, AnalyticsPoint, ApiKey, AttemptOutcome, AttemptResponse, BudgetPeriod, BurnPoint, BurnUnit, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
   CohortHold, Delivery, FastLaneReading, FastPrice, GuardVerdict, KeepaliveOverview, KeepaliveRecipe, KeyModels, LifecycleDelivery, LifecyclePage, LiveAttempt, LiveDelta, LiveMetric, LiveRequest, LiveSnapshot, LiveTick, MemberBudget, MemberEligibility, ModelEvent, ModelPrice, ModelRule, ModelRulesMode,
-  ModelsState, Overview, PairingSession, PinMigrationReason, PinReleaseReason, Placement, PlacementRow, PlanBand, PlanCell, PlanModelCells, PlanTables, Pool, PoolCacheTtl, QuotaHeaders, QuotaHistory, QuotaPoll, QuotaSnapshot, RateLimitWindow, RequestEvent, RequestLog, RequestPage, RequestShape, RewritePoint,
-  RuleCooldown, SelectionTrace, Session, SessionLifecycleDetail, SessionPlacement, Settings, SubagentPlacement, Subscription, TierFactor, TtlRules, WarmSessions, WindowId,
+  ModelsState, Overview, PairingSession, PinMigrationReason, PinReleaseReason, Placement, PlacementRow, PlanBand, PlanModelCells, PlanTables, Pool, PoolCacheTtl, QuotaHeaders, QuotaHistory, QuotaPoll, QuotaSnapshot, RateLimitWindow, RequestEvent, RequestLog, RequestPage, RequestShape, RewritePoint,
+  RuleCooldown, SelectionTrace, Session, SessionLifecycleDetail, SessionPlacement, Settings, SubagentPlacement, Subscription, TtlRules, WarmSessions, WindowId,
 } from './types';
 import { ACCOUNT_KIND_VALUES, AUTO_MODE_VALUES } from './types';
 import { CACHE_TTL_DEFAULTS, METERED_TTL_DEFAULTS, PLAN_TTL_DEFAULTS, POOL_AFFINITY_DEFAULTS, POOL_ENGINE_DEFAULTS, type AccountPatch, type KeyInput, type PoolInput } from './client';
@@ -469,10 +469,8 @@ export const decodeBurnPoint = (v: unknown): BurnPoint => {
     at: isoOr(p.at, epoch),
     cachedTokens: num(p.cached_tokens),
     fiveHourShare: numOrNull(p.five_hour_share),
-    fiveHourUnmeasured: bool(p.five_hour_unmeasured),
     group: str(p.group),
     sevenDayShare: numOrNull(p.seven_day_share),
-    sevenDayUnmeasured: bool(p.seven_day_unmeasured),
     tokens: num(p.tokens),
     uncachedTokens: num(p.uncached_tokens),
     unit: burnUnit(p.unit),
@@ -522,14 +520,14 @@ const burnUnit = (v: unknown): BurnUnit | null => BURN_UNIT_VALUES.find((u) => u
 export function decodeSession(v: unknown): Session {
   const s = rec(v);
   const k = rec(s.keepalive);
-  return { accountId: strOrNull(s.account_id), agentId: strOrNull(s.agent_id), agents: num(s.agents), burn: numOrNull(s.burn), burnAt: isoOrNull(s.burn_at), burnUnit: burnUnit(s.burn_unit), burnUnmeasured: bool(s.burn_unmeasured), cacheTtlMs: numOrNull(s.cache_ttl_ms), companion: companion(s.companion), companionSince: isoOrNull(s.companion_since), createdAt: isoOrNull(s.created_at), epoch: numOrNull(s.epoch), forkDepth: numOrNull(s.fork_depth), forkedFrom: strOrNull(s.forked_from), historical: bool(s.historical), keepalive: { lastGuard: guardVerdict(k.last_guard), netFiveHourShare: numOrNull(k.net_five_hour_share), netFiveHourShareUnmeasured: bool(k.net_five_hour_share_unmeasured), netUsd: numOrNull(k.net_usd), nextProbeAt: isoOrNull(k.next_probe_at), state: agentState(k.state) }, keyGeneration: num(s.key_generation), keyId: str(s.key_id), lastInputTokens: numOrNull(s.last_input_tokens), lastRefreshAt: isoOrNull(s.last_refresh_at), lastRequestAt: isoOrNull(s.last_request_at), lastUsedAt: isoOrNull(s.last_used_at) ?? isoOrNull(s.last_request_at), model: strOrNull(s.model), pinned: bool(s.pinned), requests: num(s.requests), sessionId: str(s.session_id), shedFrom: strOrNull(s.shed_from) };
+  return { accountId: strOrNull(s.account_id), agentId: strOrNull(s.agent_id), agents: num(s.agents), burn: numOrNull(s.burn), burnAt: isoOrNull(s.burn_at), burnUnit: burnUnit(s.burn_unit), cacheTtlMs: numOrNull(s.cache_ttl_ms), companion: companion(s.companion), companionSince: isoOrNull(s.companion_since), createdAt: isoOrNull(s.created_at), epoch: numOrNull(s.epoch), forkDepth: numOrNull(s.fork_depth), forkedFrom: strOrNull(s.forked_from), historical: bool(s.historical), keepalive: { lastGuard: guardVerdict(k.last_guard), netFiveHourShare: numOrNull(k.net_five_hour_share), netUsd: numOrNull(k.net_usd), nextProbeAt: isoOrNull(k.next_probe_at), state: agentState(k.state) }, keyGeneration: num(s.key_generation), keyId: str(s.key_id), lastInputTokens: numOrNull(s.last_input_tokens), lastRefreshAt: isoOrNull(s.last_refresh_at), lastRequestAt: isoOrNull(s.last_request_at), lastUsedAt: isoOrNull(s.last_used_at) ?? isoOrNull(s.last_request_at), model: strOrNull(s.model), pinned: bool(s.pinned), requests: num(s.requests), sessionId: str(s.session_id), shedFrom: strOrNull(s.shed_from) };
 }
 
 export const RECIPE_REASON_VALUES = ['affinity_too_short', 'awaiting_cache_evidence', 'budget', 'cap_reached', 'cold_probes', 'cooled', 'idle_limit', 'net_negative', 'oauth_unverified', 'overage', 'paused', 'pool_exhausted', 'probe_error', 'quota_exhausted', 'reauth', 'retrying', 'storage_limit', 'unsupported_shape'] as const;
 export const RECIPE_STATE_VALUES = ['armed', 'held', 'probing'] as const;
 export function decodeRecipe(v: unknown): KeepaliveRecipe {
   const r = rec(v);
-  return { accountId: strOrNull(r.account_id), agentId: str(r.agent_id), keyId: str(r.key_id), lastGuard: guardVerdict(r.last_guard), lastRequestAt: isoOrNull(r.last_request_at), model: str(r.model), netFiveHourShare: num(r.net_five_hour_share), netFiveHourShareUnmeasured: bool(r.net_five_hour_share_unmeasured), netUsd: num(r.net_usd), nextProbeAt: isoOrNull(r.next_probe_at), poolId: str(r.pool_id), reason: RECIPE_REASON_VALUES.find((x) => x === str(r.reason)) ?? null, sessionId: str(r.session_id), state: RECIPE_STATE_VALUES.find((x) => x === str(r.state)) ?? 'armed', ttlSeconds: num(r.ttl_seconds) };
+  return { accountId: strOrNull(r.account_id), agentId: str(r.agent_id), keyId: str(r.key_id), lastGuard: guardVerdict(r.last_guard), lastRequestAt: isoOrNull(r.last_request_at), model: str(r.model), netFiveHourShare: num(r.net_five_hour_share), netUsd: num(r.net_usd), nextProbeAt: isoOrNull(r.next_probe_at), poolId: str(r.pool_id), reason: RECIPE_REASON_VALUES.find((x) => x === str(r.reason)) ?? null, sessionId: str(r.session_id), state: RECIPE_STATE_VALUES.find((x) => x === str(r.state)) ?? 'armed', ttlSeconds: num(r.ttl_seconds) };
 }
 
 export function decodeKeepaliveOverview(v: unknown): KeepaliveOverview {
@@ -562,24 +560,18 @@ const priceCells = (m: Rec): FastPrice => ({ cacheReadPerM: num(m.cache_read_per
 const price = (m: Rec): ModelPrice => ({ ...priceCells(m), fast: m.fast && typeof m.fast === 'object' ? priceCells(rec(m.fast)) : null, model: str(m.model) });
 export const decodePricing = (v: unknown): Settings['pricing'] => ({ effectiveDate: new Date(str(rec(v).effective, '1970-01-01')).toISOString(), models: list(rec(v).models).map(rec).map(price), source: str(rec(v).source) });
 
-const planCell = (v: unknown): PlanCell => ({ measured: strOrNull(rec(v).measured), sharePerMillion: num(rec(v).share_per_million), unmeasured: bool(rec(v).unmeasured) });
 const planModelCells = (v: unknown): PlanModelCells => {
   const m = rec(v);
-  return { cacheRead: planCell(m.cache_read), cacheWrite1h: planCell(m.cache_write_1h), cacheWrite5m: planCell(m.cache_write_5m), input: planCell(m.input), output: planCell(m.output) };
+  return { cacheRead: numOrNull(m.cache_read), cacheWrite1h: numOrNull(m.cache_write_1h), cacheWrite5m: numOrNull(m.cache_write_5m), input: numOrNull(m.input), output: numOrNull(m.output) };
 };
 const planBand = (v: unknown): PlanBand => {
   const b = rec(v);
-  return { effectiveFrom: strOrNull(b.effective_from), factor: num(b.factor, 1), fromHour: num(b.from_hour), measured: str(b.measured), provisional: bool(b.provisional), toHour: num(b.to_hour), weekdays: bool(b.weekdays), windows: list(b.windows).map((w) => str(w)), zone: str(b.zone) };
+  return { factor: num(b.factor, 1), fromHour: num(b.from_hour), toHour: num(b.to_hour), weekdays: bool(b.weekdays), windows: list(b.windows).map((w) => str(w)), zone: str(b.zone) };
 };
-const tierFactor = (v: unknown): TierFactor => ({ factor: num(rec(v).factor), measured: strOrNull(rec(v).measured), unmeasured: bool(rec(v).unmeasured) });
 const byKey = <T>(v: unknown, of: (row: unknown) => T): Record<string, T> => Object.fromEntries(Object.entries(rec(v)).map(([key, row]) => [key, of(row)]));
 const decodePlanTables = (v: unknown): PlanTables => {
   const cost = rec(rec(v).cost);
-  const tiers = rec(rec(v).tiers);
-  return {
-    cost: { bands: list(cost.bands).map(planBand), effective: str(cost.effective), tier: str(cost.tier), version: str(cost.version), windows: byKey(cost.windows, (models) => byKey(models, planModelCells)) },
-    tiers: { measured: str(tiers.measured), reference: str(tiers.reference), tiers: byKey(tiers.tiers, (t) => ({ fiveHour: tierFactor(rec(t).five_hour), sevenDay: tierFactor(rec(t).seven_day) })) },
-  };
+  return { cost: { bands: list(cost.bands).map(planBand), effective: str(cost.effective), tiers: byKey(cost.tiers, (t) => ({ fiveHour: numOrNull(rec(t).five_hour), sevenDay: numOrNull(rec(t).seven_day) })), windows: byKey(cost.windows, (models) => byKey(models, planModelCells)) } };
 };
 
 export function decodeSettings(v: unknown): Settings {

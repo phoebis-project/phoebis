@@ -1928,7 +1928,7 @@ async function keyDialogGeometry(theme) {
  * The cost reference dialog from Sessions: the dollar table and the window share table below it each fit the dialog
  * without a sideways scroll, and their Model columns end at one edge; the window groups' heads, their column heads
  * and their cells read in the type of the price columns above them; a row the cost table covers is the height of
- * one it does not and of a price row; an unmeasured mark reads in its cell's face and size.
+ * one it does not and of a price row.
  */
 async function costReference(theme) {
   const say = (what) => failures.push(`${theme} /sessions: ${what}`);
@@ -1944,8 +1944,6 @@ async function costReference(theme) {
   }
   const read = await page.evaluate(() => {
     const type = (el) => (el ? `${getComputedStyle(el).fontFamily} ${getComputedStyle(el).fontSize} ${getComputedStyle(el).fontWeight} ${getComputedStyle(el).color}` : null);
-    // The mark is muted, so its colour is the one thing it does not share with the cell around it.
-    const face = (el) => (el ? `${getComputedStyle(el).fontFamily} ${getComputedStyle(el).fontSize} ${getComputedStyle(el).fontWeight}` : null);
     const height = (el) => (el ? Math.round(el.getBoundingClientRect().height) : null);
     const dlg = [...document.querySelectorAll('dialog[open]')].pop();
     const prices = dlg.querySelector('.cost-ref__prices');
@@ -1960,12 +1958,9 @@ async function costReference(theme) {
     const covered = rows.find((r) => r.children.length === 11 && r.children[1].textContent?.trim() !== '-');
     const bare = rows.find((r) => r.children.length === 11 && r.children[1].textContent?.trim() === '-');
     const priceRow = prices?.querySelector('tbody tr') ?? null;
-    const flag = shares?.querySelector('tbody .cost-ref__flag') ?? null;
     return {
       bareHeight: height(bare),
       coveredHeight: height(covered),
-      flag: face(flag),
-      flagCell: face(flag?.closest('td')),
       groups: [...(shares?.querySelectorAll('thead th') ?? [])].filter((th) => ['5-hour window', '7-day window'].includes(th.textContent?.trim() ?? '')).map(type),
       modelEdges: [prices, shares].map((table) => {
         const th = table?.querySelector('thead th');
@@ -1988,8 +1983,6 @@ async function costReference(theme) {
   if (read.planCell === null || read.planCell !== read.priceCell) say(`a window share cell reads ${read.planCell} against a price cell's ${read.priceCell}`);
   if (read.coveredHeight === null || read.coveredHeight !== read.priceHeight) say(`a row with window shares is ${read.coveredHeight}px tall against a price row's ${read.priceHeight}px`);
   if (read.bareHeight !== null && read.coveredHeight !== read.bareHeight) say(`a row with window shares is ${read.coveredHeight}px tall against ${read.bareHeight}px without`);
-  // Every shipped 7-day cell is a stand-in, so the router's seed draws the mark as the mock's story does.
-  if (read.flag === null || read.flag !== read.flagCell) say(`the unmeasured mark reads ${read.flag} against its cell's ${read.flagCell}`);
   await page.keyboard.press('Escape');
   await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => say('the dialog stayed open after Escape'));
   await atRest();
@@ -1998,9 +1991,7 @@ async function costReference(theme) {
 /**
  * The agent lines Expand all opens on Sessions: every line's state badge ends inside the table's visible width, which
  * at 1280px already scrolls for the session row's own last columns, and Net closes the line after State. A reason
- * badge is measured and logged; the longest ones ran past that edge before Net joined the line too. The Net column's
- * unmeasured mark reads at WCAG's 3:1 or better against the backdrop of its row, the minimum for a mark that carries
- * meaning, since it is the only sign a balance was priced through a stand-in cell.
+ * badge is measured and logged; the longest ones ran past that edge before Net joined the line too.
  */
 async function agentLines(theme) {
   const say = (what) => failures.push(`${theme} /sessions: ${what}`);
@@ -2025,48 +2016,6 @@ async function agentLines(theme) {
   if (mock && read.lines.length === 0) say('Expand all opened no agent line');
   for (const line of read.lines.filter((l) => read.edge === null || l.stateRight === null || l.stateRight > read.edge)) {
     say(`agent ${line.agent}'s state badge ends at ${line.stateRight}px, past the table's visible edge at ${read.edge}px`);
-  }
-  const mark = await page.evaluate(() => {
-    const parse = (text) => {
-      const rgb = text.match(/^rgba?\(([^)]+)\)$/);
-      const srgb = text.match(/^color\(srgb ([^)]+)\)$/);
-      const parts = (rgb ?? srgb)?.[1].split(/[\s,/]+/).filter(Boolean).map(Number);
-      if (!parts || parts.length < 3) return null;
-      const [r, g, b, a = 1] = parts;
-      return srgb ? [r * 255, g * 255, b * 255, a] : [r, g, b, a];
-    };
-    const over = (top, bottom) => [...top.slice(0, 3).map((c, i) => c * top[3] + bottom[i] * (1 - top[3])), 1];
-    // A row's background may be translucent, so the backdrop is every layer down to the first opaque one.
-    const backdrop = (el) => {
-      const layers = [];
-      for (let at = el; at; at = at.parentElement) {
-        const layer = parse(getComputedStyle(at).backgroundColor);
-        if (layer && layer[3] > 0) layers.push(layer);
-        if (layer && layer[3] >= 1) break;
-      }
-      return layers.reduceRight((below, layer) => over(layer, below), [255, 255, 255, 1]);
-    };
-    const luminance = (color) => {
-      const [r, g, b] = color.map((c) => {
-        const s = c / 255;
-        return s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
-      });
-      return 0.2126 * r + 0.7152 * g + 0.0722 * b;
-    };
-    const el = [...document.querySelectorAll('.agents__row .agents__net > span > .muted')].find((m) => m.textContent?.trim() === '*');
-    if (!el) return null;
-    const ground = backdrop(el);
-    const ink = parse(getComputedStyle(el).color);
-    const shown = `rgb(${ground.slice(0, 3).map(Math.round).join(', ')})`;
-    if (!ink) return { ground: shown, ink: getComputedStyle(el).color, ratio: null };
-    const [light, dark] = [luminance(over(ink, ground)), luminance(ground)].sort((x, y) => y - x);
-    return { ground: shown, ink: getComputedStyle(el).color, ratio: Math.round(((light + 0.05) / (dark + 0.05)) * 100) / 100 };
-  });
-  if (mark === null) {
-    if (mock) say('the story prices a Net share through a stand-in cell, yet no agent line carries the mark');
-  } else {
-    measurements.push(`${theme} /sessions net mark contrast ${JSON.stringify(mark)}`);
-    if (mark.ratio === null || mark.ratio < 3) say(`the Net mark's ink ${mark.ink} reads ${mark.ratio}:1 on its row's ${mark.ground}, under 3:1`);
   }
   await page.getByRole('button', { name: 'Collapse all', exact: true }).click();
   await atRest();

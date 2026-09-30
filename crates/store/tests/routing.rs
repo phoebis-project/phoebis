@@ -311,33 +311,25 @@ fn a_pins_lane_and_an_affinity_entrys_lane_survive_a_reopen() {
 }
 
 #[test]
-fn a_days_budget_keeps_its_stand_in_flag_once_set() {
+fn a_days_budget_adds_each_settled_share() {
     let store = store_with(&["a"]);
-    let charge = |five_hour_share, five_hour_share_unmeasured| BudgetRow {
+    let charge = |five_hour_share| BudgetRow {
         scope: BudgetScope::Account,
         id: "a".into(),
         usd: 0.0,
         five_hour_share,
-        five_hour_share_unmeasured,
     };
     store
-        .add_keepalive_budget("2026-09-29", &charge(0.25, true))
+        .add_keepalive_budget("2026-09-29", &charge(0.25))
         .unwrap();
     store
-        .add_keepalive_budget("2026-09-29", &charge(0.5, false))
+        .add_keepalive_budget("2026-09-29", &charge(0.1))
         .unwrap();
-    assert_eq!(
-        store.keepalive_budgets("2026-09-29").unwrap(),
-        vec![charge(0.75, true)],
-        "the shares add and a measured charge never clears an estimate already in the day"
-    );
-    store
-        .add_keepalive_budget("2026-09-30", &charge(0.5, false))
-        .unwrap();
-    assert_eq!(
-        store.keepalive_budgets("2026-09-30").unwrap(),
-        vec![charge(0.5, false)],
-        "the next day starts measured"
+    let read = store.keepalive_budgets("2026-09-29").unwrap();
+    assert_eq!(read.len(), 1, "one row per day and account: {read:?}");
+    assert!(
+        (read[0].five_hour_share - 0.35).abs() < 1e-12,
+        "the shares add: {read:?}"
     );
 }
 

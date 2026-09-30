@@ -5,18 +5,19 @@
 
 use std::collections::BTreeMap;
 
-use phoebis_ledger::{KeepaliveDelta, PlanTables, PriceTable, Record, Share, Speed, UNATTRIBUTED};
-use phoebis_routing::PinUsage;
+use phoebis_ledger::{KeepaliveDelta, PlanTables, PriceTable, Record, Speed, UNATTRIBUTED};
+use phoebis_routing::{PinUsage, FIVE_HOUR};
 use phoebis_store::{BudgetRow, BudgetScope};
 
+use crate::config::FIVE_MINUTES_MS;
 use crate::engine::{Engine, SavingsUnit, SessionKey, Settlement};
 use crate::probe::{Applied, ProbeOutcome, ProbeRecord};
 use crate::usage::ProbeUsage;
 
 /// The gross saving of a request that read `cache_read_tokens` it would otherwise have paid as input, in the
-/// unit the covering probe was funded under: dollars at the list prices of the cells `speed` selects, or the
-/// share of the `tier`'s 5-hour window at `at` (the band inside the price). `None` for a model the table lacks,
-/// or on the share side a missing or unlisted tier; a dollar figure is never flagged.
+/// unit the covering probe settled in: dollars at the list prices of the cells `speed` selects, or the share of
+/// the `tier`'s 5-hour window at `at` (the band inside the price). `None` for a model the table lacks or a cell it
+/// leaves `null`, or on the share side a tier the table does not size.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn gross_saving(
     unit: SavingsUnit,
@@ -27,14 +28,11 @@ pub(crate) fn gross_saving(
     cache_read_tokens: u64,
     at: i64,
     speed: Speed,
-) -> Option<Share> {
+) -> Option<f64> {
     match unit {
         SavingsUnit::Usd => {
             let price = table.price_at(canonical_model, speed)?;
-            Some(Share {
-                share: cache_read_tokens as f64 * (price.input - price.cache_read) / 1_000_000.0,
-                unmeasured: false,
-            })
+            Some(cache_read_tokens as f64 * (price.input - price.cache_read) / 1_000_000.0)
         }
         SavingsUnit::WindowShare => {
             let tier = tier?;
@@ -47,18 +45,14 @@ pub(crate) fn gross_saving(
                 cache_read: cache_read_tokens,
                 ..PinUsage::default()
             })?;
-            Some(Share {
-                share: as_input.share - as_read.share,
-                unmeasured: as_input.unmeasured || as_read.unmeasured,
-            })
+            Some(as_input - as_read)
         }
     }
 }
 
-/// A probe's estimated cost, in the unit the account serving it is funded under: dollars at the list prices of
-/// the cells the answer's `usage.speed` selects for an api_key account, a subscription account in overage, or a
-/// fast recipe, the share of the `tier`'s 5-hour window at `at` on plan (the band inside the price). `None` for a
-/// model the table lacks, or on the share side a missing or unlisted tier; a dollar figure is never flagged.
+/// A probe's estimated cost in `unit`: dollars at the list prices of the cells the answer's `usage.speed` selects,
+/// or the share of the `tier`'s 5-hour window at `at` (the band inside the price). `None` for a model the table
+/// lacks or a cell it leaves `null`, or on the share side a tier the table does not size.
 pub(crate) fn probe_cost(
     unit: SavingsUnit,
     table: &PriceTable,
@@ -67,7 +61,7 @@ pub(crate) fn probe_cost(
     canonical_model: &str,
     usage: ProbeUsage,
     at: i64,
-) -> Option<Share> {
+) -> Option<f64> {
     // An answer that reports the aggregate `cache_creation_input_tokens` and no TTL breakdown is priced as
     // five-minute writes, which is how the relay's own usage parser reads the same answer; the estimate here
     // would otherwise miss a charge the request ledger recognises.
@@ -86,10 +80,7 @@ pub(crate) fn probe_cost(
                 one_hour,
                 usage.output,
             )
-            .map(|(total, _)| Share {
-                share: total,
-                unmeasured: false,
-            }),
+            .map(|(total, _)| total),
         SavingsUnit::WindowShare => tables.five_hour_share_at(
             tier?,
             canonical_model,
@@ -102,6 +93,43 @@ pub(crate) fn probe_cost(
             },
             at,
         ),
+    }
+}
+
+/// One token of each type a probe of a recipe keeping `ttl_ms` warm can carry: the uncached tail, the kept-warm
+/// prefix, output (a probe asks for none, yet an answer can carry some), the five-minute write (an answer reporting
+/// its write in aggregate alone is priced as one) and, on an hour recipe, the one-hour write. Known before the probe
+/// runs, so the gate and the settlement decide on the same usage.
+pub(crate) fn probe_types(ttl_ms: i64) -> PinUsage {
+    PinUsage {
+        input: 1,
+        cache_read: 1,
+        write_5m: 1,
+        write_1h: u64::from(ttl_ms > FIVE_MINUTES_MS),
+        output: 1,
+    }
+}
+
+/// The unit a probe is gated in, settles in and earns its savings in: `default_unit`, unless that is the window share
+/// and the table cannot price `types` on the account's tier (no row, a `null` cell under a carried type, no tier or a
+/// `null` factor), in which case dollars. One decision for the three, so the stop and the caps read the balance the
+/// probes move.
+pub(crate) fn settlement_unit(
+    default_unit: SavingsUnit,
+    tables: &PlanTables,
+    tier: Option<&str>,
+    canonical_model: &str,
+    types: PinUsage,
+) -> SavingsUnit {
+    let priced = tier.is_some_and(|tier| {
+        tables
+            .share(FIVE_HOUR, tier, canonical_model, types)
+            .is_some()
+    });
+    if default_unit == SavingsUnit::WindowShare && !priced {
+        SavingsUnit::Usd
+    } else {
+        default_unit
     }
 }
 
@@ -379,7 +407,7 @@ mod tests {
             )
         };
         let priced = cost(split).expect("a priced model");
-        assert!(priced.share > 0.0, "{priced:?}");
+        assert!(priced > 0.0, "{priced}");
         assert_eq!(cost(aggregate), Some(priced));
     }
 
@@ -391,19 +419,16 @@ mod tests {
             SavingsUnit::WindowShare,
             &PriceTable::shipped(),
             &PlanTables::shipped(),
-            Some("default_claude_max_5x"),
-            "claude-opus-5",
+            Some("default_claude_max_20x"),
+            "claude-opus-5-5",
             1_000_000,
             SATURDAY_AFTERNOON,
             Speed::Standard,
         )
         .expect("a priced model on a known tier");
-        // The shipped table's Opus 5-hour cells, per million tokens: input 0.0841, cache read 0.00219.
-        assert!(
-            (saved.share - (0.0841 - 0.00219)).abs() < 1e-12,
-            "{saved:?}"
-        );
-        assert!(!saved.unmeasured, "both cells are dated");
+        // The shipped table's Opus 5.5 cells on Max 20x's 5-hour window, per million tokens: input 0.01461, cache
+        // read 0.000365.
+        assert!((saved - (0.01461 - 0.000365)).abs() < 1e-12, "{saved}");
     }
 
     #[test]
@@ -424,12 +449,12 @@ mod tests {
         // The shipped Opus 5 row, per million tokens: input 10 and cache read 1 at the fast cells, 5 and 0.5
         // at the standard ones.
         assert!(
-            (saved(Speed::Fast).share - (10.0 - 1.0)).abs() < 1e-12,
+            (saved(Speed::Fast) - (10.0 - 1.0)).abs() < 1e-12,
             "{:?}",
             saved(Speed::Fast)
         );
         assert!(
-            (saved(Speed::Standard).share - (5.0 - 0.5)).abs() < 1e-12,
+            (saved(Speed::Standard) - (5.0 - 0.5)).abs() < 1e-12,
             "{:?}",
             saved(Speed::Standard)
         );

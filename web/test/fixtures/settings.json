@@ -35,334 +35,129 @@
             "weekdays": true,
             "from_hour": 5,
             "to_hour": 11,
-            "factor": 1.45,
+            "factor": 1.435,
             "windows": [
               "five_hour"
             ],
-            "measured": "2026-09-24",
-            "provisional": true,
-            "zone": "America/Los_Angeles",
-            "effective_from": null
+            "zone": "America/Los_Angeles"
           }
         ],
-        "effective": "2026-09-29",
-        "tier": "default_claude_max_5x",
-        "version": "2026-09-29",
+        "effective": "2026-10-01",
+        "tiers": {
+          "default_claude_max_20x": {
+            "five_hour": 1.0,
+            "seven_day": 1.0
+          },
+          "default_claude_max_5x": {
+            "five_hour": 0.25,
+            "seven_day": null
+          },
+          "default_claude_pro": {
+            "five_hour": 0.05,
+            "seven_day": null
+          }
+        },
         "windows": {
           "five_hour": {
             "claude-fable-5": {
-              "cache_read": {
-                "measured": null,
-                "share_per_million": 0.00437,
-                "unmeasured": true
-              },
-              "cache_write_1h": {
-                "measured": null,
-                "share_per_million": 0.207,
-                "unmeasured": true
-              },
-              "cache_write_5m": {
-                "measured": null,
-                "share_per_million": 0.207,
-                "unmeasured": true
-              },
-              "input": {
-                "measured": null,
-                "share_per_million": 0.168,
-                "unmeasured": true
-              },
-              "output": {
-                "measured": null,
-                "share_per_million": 0.786,
-                "unmeasured": true
-              }
+              "cache_read": null,
+              "cache_write_1h": null,
+              "cache_write_5m": null,
+              "input": null,
+              "output": null
             },
             "claude-fable-5-1": {
-              "cache_read": {
-                "measured": "2026-09-19",
-                "share_per_million": 0.00789,
-                "unmeasured": false
-              },
-              "cache_write_1h": {
-                "measured": "2026-09-19",
-                "share_per_million": 0.373,
-                "unmeasured": false
-              },
-              "cache_write_5m": {
-                "measured": "2026-09-19",
-                "share_per_million": 0.373,
-                "unmeasured": false
-              },
-              "input": {
-                "measured": "2026-09-19",
-                "share_per_million": 0.304,
-                "unmeasured": false
-              },
-              "output": {
-                "measured": "2026-09-19",
-                "share_per_million": 1.42,
-                "unmeasured": false
-              }
+              "cache_read": 0.001675,
+              "cache_write_1h": 0.084,
+              "cache_write_5m": 0.08326,
+              "input": 0.06647,
+              "output": 0.3292
             },
             "claude-haiku-4-5": {
-              "cache_read": {
-                "measured": null,
-                "share_per_million": 0.000787,
-                "unmeasured": true
-              },
-              "cache_write_1h": {
-                "measured": null,
-                "share_per_million": 0.0372,
-                "unmeasured": true
-              },
-              "cache_write_5m": {
-                "measured": null,
-                "share_per_million": 0.0372,
-                "unmeasured": true
-              },
-              "input": {
-                "measured": null,
-                "share_per_million": 0.0303,
-                "unmeasured": true
-              },
-              "output": {
-                "measured": null,
-                "share_per_million": 0.141,
-                "unmeasured": true
-              }
+              "cache_read": 0.000167,
+              "cache_write_1h": 0.00823,
+              "cache_write_5m": 0.00824,
+              "input": 0.00659,
+              "output": 0.03294
             },
             "claude-opus-5": {
-              "cache_read": {
-                "measured": "2026-09-19",
-                "share_per_million": 0.00219,
-                "unmeasured": false
-              },
-              "cache_write_1h": {
-                "measured": "2026-09-19",
-                "share_per_million": 0.103,
-                "unmeasured": false
-              },
-              "cache_write_5m": {
-                "measured": "2026-09-19",
-                "share_per_million": 0.103,
-                "unmeasured": false
-              },
-              "input": {
-                "measured": "2026-09-19",
-                "share_per_million": 0.0841,
-                "unmeasured": false
-              },
-              "output": {
-                "measured": "2026-09-19",
-                "share_per_million": 0.393,
-                "unmeasured": false
-              }
+              "cache_read": null,
+              "cache_write_1h": null,
+              "cache_write_5m": null,
+              "input": null,
+              "output": null
+            },
+            "claude-opus-5-5": {
+              "cache_read": 0.000365,
+              "cache_write_1h": 0.01824,
+              "cache_write_5m": 0.0183,
+              "input": 0.01461,
+              "output": 0.07279
             },
             "claude-sonnet-5": {
-              "cache_read": {
-                "measured": null,
-                "share_per_million": 0.00118,
-                "unmeasured": true
-              },
-              "cache_write_1h": {
-                "measured": null,
-                "share_per_million": 0.0559,
-                "unmeasured": true
-              },
-              "cache_write_5m": {
-                "measured": null,
-                "share_per_million": 0.0559,
-                "unmeasured": true
-              },
-              "input": {
-                "measured": null,
-                "share_per_million": 0.0454,
-                "unmeasured": true
-              },
-              "output": {
-                "measured": null,
-                "share_per_million": 0.212,
-                "unmeasured": true
-              }
+              "cache_read": null,
+              "cache_write_1h": null,
+              "cache_write_5m": null,
+              "input": null,
+              "output": null
+            },
+            "claude-sonnet-5-5": {
+              "cache_read": 0.000249,
+              "cache_write_1h": 0.01251,
+              "cache_write_5m": 0.01247,
+              "input": 0.00999,
+              "output": 0.04984
             }
           },
           "seven_day": {
             "claude-fable-5": {
-              "cache_read": {
-                "measured": null,
-                "share_per_million": 0.000317,
-                "unmeasured": true
-              },
-              "cache_write_1h": {
-                "measured": null,
-                "share_per_million": 0.015,
-                "unmeasured": true
-              },
-              "cache_write_5m": {
-                "measured": null,
-                "share_per_million": 0.015,
-                "unmeasured": true
-              },
-              "input": {
-                "measured": null,
-                "share_per_million": 0.0122,
-                "unmeasured": true
-              },
-              "output": {
-                "measured": null,
-                "share_per_million": 0.057,
-                "unmeasured": true
-              }
+              "cache_read": null,
+              "cache_write_1h": null,
+              "cache_write_5m": null,
+              "input": null,
+              "output": null
             },
             "claude-fable-5-1": {
-              "cache_read": {
-                "measured": null,
-                "share_per_million": 0.000572,
-                "unmeasured": true
-              },
-              "cache_write_1h": {
-                "measured": null,
-                "share_per_million": 0.0271,
-                "unmeasured": true
-              },
-              "cache_write_5m": {
-                "measured": null,
-                "share_per_million": 0.0271,
-                "unmeasured": true
-              },
-              "input": {
-                "measured": null,
-                "share_per_million": 0.022,
-                "unmeasured": true
-              },
-              "output": {
-                "measured": null,
-                "share_per_million": 0.103,
-                "unmeasured": true
-              }
+              "cache_read": null,
+              "cache_write_1h": null,
+              "cache_write_5m": null,
+              "input": null,
+              "output": null
             },
             "claude-haiku-4-5": {
-              "cache_read": {
-                "measured": null,
-                "share_per_million": 0.0000571,
-                "unmeasured": true
-              },
-              "cache_write_1h": {
-                "measured": null,
-                "share_per_million": 0.0027,
-                "unmeasured": true
-              },
-              "cache_write_5m": {
-                "measured": null,
-                "share_per_million": 0.0027,
-                "unmeasured": true
-              },
-              "input": {
-                "measured": null,
-                "share_per_million": 0.0022,
-                "unmeasured": true
-              },
-              "output": {
-                "measured": null,
-                "share_per_million": 0.0103,
-                "unmeasured": true
-              }
+              "cache_read": null,
+              "cache_write_1h": null,
+              "cache_write_5m": null,
+              "input": null,
+              "output": null
             },
             "claude-opus-5": {
-              "cache_read": {
-                "measured": null,
-                "share_per_million": 0.000159,
-                "unmeasured": true
-              },
-              "cache_write_1h": {
-                "measured": null,
-                "share_per_million": 0.0075,
-                "unmeasured": true
-              },
-              "cache_write_5m": {
-                "measured": null,
-                "share_per_million": 0.0075,
-                "unmeasured": true
-              },
-              "input": {
-                "measured": null,
-                "share_per_million": 0.0061,
-                "unmeasured": true
-              },
-              "output": {
-                "measured": null,
-                "share_per_million": 0.0285,
-                "unmeasured": true
-              }
+              "cache_read": null,
+              "cache_write_1h": null,
+              "cache_write_5m": null,
+              "input": null,
+              "output": null
+            },
+            "claude-opus-5-5": {
+              "cache_read": null,
+              "cache_write_1h": null,
+              "cache_write_5m": null,
+              "input": null,
+              "output": null
             },
             "claude-sonnet-5": {
-              "cache_read": {
-                "measured": null,
-                "share_per_million": 0.0000856,
-                "unmeasured": true
-              },
-              "cache_write_1h": {
-                "measured": null,
-                "share_per_million": 0.00405,
-                "unmeasured": true
-              },
-              "cache_write_5m": {
-                "measured": null,
-                "share_per_million": 0.00405,
-                "unmeasured": true
-              },
-              "input": {
-                "measured": null,
-                "share_per_million": 0.00329,
-                "unmeasured": true
-              },
-              "output": {
-                "measured": null,
-                "share_per_million": 0.0154,
-                "unmeasured": true
-              }
-            }
-          }
-        }
-      },
-      "tiers": {
-        "measured": "2026-09-24",
-        "reference": "default_claude_max_5x",
-        "tiers": {
-          "default_claude_max_20x": {
-            "five_hour": {
-              "factor": 4.03,
-              "measured": null,
-              "unmeasured": true
+              "cache_read": null,
+              "cache_write_1h": null,
+              "cache_write_5m": null,
+              "input": null,
+              "output": null
             },
-            "seven_day": {
-              "factor": 2.14,
-              "measured": null,
-              "unmeasured": true
-            }
-          },
-          "default_claude_max_5x": {
-            "five_hour": {
-              "factor": 1.0,
-              "measured": "2026-09-19",
-              "unmeasured": false
-            },
-            "seven_day": {
-              "factor": 1.0,
-              "measured": "2026-09-19",
-              "unmeasured": false
-            }
-          },
-          "default_claude_pro": {
-            "five_hour": {
-              "factor": 0.215,
-              "measured": "2026-09-24",
-              "unmeasured": false
-            },
-            "seven_day": {
-              "factor": 0.18,
-              "measured": "2026-09-24",
-              "unmeasured": false
+            "claude-sonnet-5-5": {
+              "cache_read": null,
+              "cache_write_1h": null,
+              "cache_write_5m": null,
+              "input": null,
+              "output": null
             }
           }
         }

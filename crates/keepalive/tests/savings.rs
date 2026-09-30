@@ -786,8 +786,8 @@ async fn the_share_cap_ignores_a_fast_probe_and_the_dollar_cap_counts_it() {
         1,
         "the fast recipe probes past the share cap"
     );
-    // Opus 5's fast cache read is 1.00 per million.
-    let cost = 2_000.0 * 1.0 / 1_000_000.0;
+    // Opus 5.5's fast cache read is 0.40 per million.
+    let cost = 2_000.0 * 0.4 / 1_000_000.0;
     assert!(
         (r.engine.spent_today().get("main").copied().unwrap_or(0.0) - cost).abs() < 1e-12,
         "the day's dollar figure: {:?}",
@@ -828,8 +828,8 @@ async fn a_fast_probe_keeps_a_fast_request_warm_at_the_fast_cells_and_a_switch_o
     {
         on_fast.add(row);
     }
-    // Opus 5's fast cells: input 10 and cache read 1.00 per million.
-    let saving = 2_000.0 * (10.0 - 1.0) / 1_000_000.0;
+    // Opus 5.5's fast cells: input 8 and cache read 0.40 per million.
+    let saving = 2_000.0 * (8.0 - 0.4) / 1_000_000.0;
     assert_eq!(
         (on_fast.kept_warm_requests, on_fast.kept_warm_tokens),
         (1, 2_000),
@@ -885,8 +885,8 @@ async fn a_request_asked_fast_and_served_standard_credits_the_standard_cells() {
     r.up.push_credential_rule(A, "/v1/messages", warm_answer());
     let kept = r.observe_with("main", &fast).await;
     let rows = rollups(&r, |rows| inference_rows(rows).kept_warm_requests == 1).await;
-    // Opus 5's standard cells: input 5 and cache read 0.50 per million.
-    let saving = 2_000.0 * (5.0 - 0.5) / 1_000_000.0;
+    // Opus 5.5's standard cells: input 4 and cache read 0.20 per million.
+    let saving = 2_000.0 * (4.0 - 0.2) / 1_000_000.0;
     let credited = inference_rows(&rows).saved_usd_gross;
     assert!((credited - saving).abs() < 1e-12, "{credited}");
     assert!(row(&r, &kept).await.kept_warm);
@@ -1242,11 +1242,20 @@ async fn an_unpriced_model_costs_nothing_and_still_lands_a_probe_row() {
 fn plan_pricing_no_model() -> phoebis_ledger::PlanTables {
     phoebis_ledger::PlanTables {
         cost: phoebis_ledger::CostTable::from_yaml(
-            "effective: 2026-09-29\ntier: default_claude_max_5x\nbands: []\nwindows:\n  five_hour: {}\n  seven_day: {}\n",
+            "effective: 2026-10-01\ntiers:\n  default_claude_max_20x: {five_hour: 1, seven_day: 1}\nbands: []\nwindows:\n  five_hour: {}\n  seven_day: {}\n",
         )
         .unwrap(),
-        tiers: phoebis_ledger::TierFactors::shipped(),
     }
+}
+
+/// The shipped tables with Sonnet 5 priced on the 5-hour window at Sonnet 5.5's cells: the subscription tests settle
+/// `PRICED`'s probes in the share, while the price table keeps pricing it in dollars for the credit.
+fn plan_pricing_sonnet() -> phoebis_ledger::PlanTables {
+    let mut tables = phoebis_ledger::PlanTables::shipped();
+    let five_hour = tables.cost.windows.get_mut("five_hour").unwrap();
+    let cells = five_hour["claude-sonnet-5-5"].clone();
+    five_hour.insert(PRICED.to_string(), cells);
+    tables
 }
 
 /// A model the dollar table prices but the cost table lacks settles a plan-funded probe in dollars, the same
@@ -1283,6 +1292,38 @@ async fn a_plan_funded_recipe_on_an_unlisted_model_stops_on_a_negative_dollar_ne
         Reason::NetNegative,
         "a negative dollar net stops the recipe even though the funding is plan: {:?}",
         r.status("main")
+    );
+}
+
+/// A model the table lists with every 5-hour cell null prices no share, so its probe settles in dollars, counts
+/// toward the dollar cap alone and leaves the window-share cap unapplied, as a model the table lacks does.
+#[tokio::test]
+async fn a_plan_funded_probe_on_a_model_with_an_unmeasured_cell_settles_in_dollars_and_never_reaches_the_share_cap(
+) {
+    let mut r = rig(RigSpec {
+        policy: KeepalivePolicy {
+            probe_cap_window_share_per_day: Some(0.0),
+            ..RigSpec::default().policy
+        },
+        ..subscription_spec()
+    })
+    .await;
+    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
+    r.observe_with("main", &body_on("claude-opus-5")).await;
+    r.advance(270_000);
+    r.step().await;
+    let status = r.status("main");
+    assert_eq!(
+        status.probes, 1,
+        "a zero share cap holds nothing on a probe that never settles in share: {status:?}"
+    );
+    assert!(
+        status.net_usd < 0.0 && status.net_five_hour_share == 0.0,
+        "{status:?}"
+    );
+    assert!(
+        !r.engine.share_spent_today().contains_key("o")
+            && r.engine.spent_today().get("main").copied().unwrap_or(0.0) > 0.0
     );
 }
 
@@ -1651,7 +1692,8 @@ fn subscription_spec() -> RigSpec {
             overage_policy: phoebis_store::OveragePolicy::Allow,
             ..PoolSpec::default()
         },
-        tier: Some("default_claude_max_5x"),
+        tables: plan_pricing_sonnet(),
+        tier: Some("default_claude_max_20x"),
         ..RigSpec::default()
     }
 }
@@ -1953,10 +1995,14 @@ async fn a_probe_settles_in_the_funding_captured_with_its_serving_attempt() {
     );
 }
 
-const OPUS: &str = "claude-opus-5";
+const OPUS: &str = "claude-opus-5-5";
 
 fn opus_body() -> String {
-    BODY.replace("claude-sonnet-4-5", OPUS)
+    body_on(OPUS)
+}
+
+fn body_on(model: &str) -> String {
+    BODY.replace("claude-sonnet-4-5", model)
 }
 
 /// A probe answer that reads the 2,000-token prefix back and bills a million input tokens beside it, so the
@@ -1965,9 +2011,9 @@ fn million_input_answer() -> Respond {
     Respond::Json { status: 200, headers: vec![], body: br#"{"id":"msg_p","type":"message","content":[],"usage":{"input_tokens":1000000,"cache_read_input_tokens":2000,"cache_creation_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0},"output_tokens":0}}"#.to_vec() }
 }
 
-/// That probe's share of the Max 5x 5-hour window outside the band: a million input tokens at 0.0841 and 2,000
-/// cache reads at 0.00219 per million, both measured cells.
-const OPUS_PROBE_SHARE: f64 = 0.0841 + 2_000.0 * 0.00219 / 1_000_000.0;
+/// That probe's share of the Max 20x 5-hour window outside the band: a million input tokens at 0.01461 and 2,000
+/// cache reads at 0.000365 per million, both measured cells.
+const OPUS_PROBE_SHARE: f64 = 0.01461 + 2_000.0 * 0.000365 / 1_000_000.0;
 
 /// One such probe on account `o` settled at `at`, and the share of the day it spent there.
 async fn one_opus_probe(spec: RigSpec, at: i64) -> (Rig, f64) {
@@ -2010,20 +2056,18 @@ async fn the_window_share_cap_stops_probes_for_the_day_and_a_probe_in_the_band_c
     let (r, outside) = one_opus_probe(subscription_spec(), out_of_band).await;
     assert!(
         (outside - OPUS_PROBE_SHARE).abs() < 1e-12,
-        "a million Opus input tokens on Max 5x outside the band: {outside} against {OPUS_PROBE_SHARE}"
+        "a million Opus 5.5 input tokens on Max 20x outside the band: {outside} against {OPUS_PROBE_SHARE}"
     );
     let status = r.status("main");
     assert!(
-        (status.net_five_hour_share + OPUS_PROBE_SHARE).abs() < 1e-12
-            && !status.net_five_hour_share_unmeasured
-            && status.net_usd == 0.0,
-        "the probe's cost is the agent's share balance, measured: {status:?}"
+        (status.net_five_hour_share + OPUS_PROBE_SHARE).abs() < 1e-12 && status.net_usd == 0.0,
+        "the probe's cost is the agent's share balance: {status:?}"
     );
 
     let (_, inside) = one_opus_probe(subscription_spec(), in_band).await;
     assert!(
-        (inside - OPUS_PROBE_SHARE * 1.45).abs() < 1e-12,
-        "the same probe inside the band counts 1.45 times: {inside}"
+        (inside - OPUS_PROBE_SHARE * 1.435).abs() < 1e-12,
+        "the same probe inside the band counts 1.435 times: {inside}"
     );
 
     let (_, on_pro) = one_opus_probe(
@@ -2035,14 +2079,14 @@ async fn the_window_share_cap_stops_probes_for_the_day_and_a_probe_in_the_band_c
     )
     .await;
     assert!(
-        (on_pro - OPUS_PROBE_SHARE / 0.215).abs() < 1e-12,
+        (on_pro - OPUS_PROBE_SHARE / 0.05).abs() < 1e-12,
         "on Pro the same tokens are that share over Pro's 5-hour factor: {on_pro}"
     );
 
     let (mut r, spent) = one_opus_probe(
         RigSpec {
             policy: KeepalivePolicy {
-                probe_cap_window_share_per_day: Some(0.08),
+                probe_cap_window_share_per_day: Some(OPUS_PROBE_SHARE / 2.0),
                 ..RigSpec::default().policy
             },
             ..subscription_spec()
@@ -2051,7 +2095,7 @@ async fn the_window_share_cap_stops_probes_for_the_day_and_a_probe_in_the_band_c
     )
     .await;
     assert!(
-        spent >= 0.08,
+        spent >= OPUS_PROBE_SHARE / 2.0,
         "the first probe alone reaches the cap: {spent}"
     );
     r.advance(270_000);
@@ -2114,70 +2158,5 @@ async fn a_zero_window_share_cap_holds_a_subscription_probe_and_admits_an_api_ke
         1,
         "the API-key account's probe runs: {:?}",
         other(&r)
-    );
-}
-
-/// A real request on `body` re-arms the recipe on its model, and the due probe runs.
-async fn probe_on(r: &mut Rig, body: &str) {
-    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
-    r.observe_with("main", body).await;
-    r.advance(270_000);
-    r.step().await;
-}
-
-/// A share priced through a cell the measurement campaign has not filled marks the agent's balance and the
-/// day's budget row, and a measured probe after it clears neither: a figure with one estimate in it is an
-/// estimate. The next day's row starts measured; the balance keeps its mark.
-#[tokio::test]
-async fn a_stand_in_share_marks_the_balance_and_the_days_budget_until_the_day_ends() {
-    let mut r = rig(RigSpec {
-        // The clock crosses a UTC midnight below, which the idle limit would read as an abandoned session.
-        policy: KeepalivePolicy {
-            max_idle_seconds: 0,
-            ..RigSpec::default().policy
-        },
-        ..subscription_spec()
-    })
-    .await;
-    let marks = |r: &Rig| {
-        let day =
-            r.h.store
-                .keepalive_budgets(&budget_day(r.now()))
-                .unwrap()
-                .into_iter()
-                .find(|row| row.id == "o")
-                .map(|row| row.five_hour_share_unmeasured);
-        (r.status("main").net_five_hour_share_unmeasured, day)
-    };
-    probe_on(&mut r, &opus_body()).await;
-    assert_eq!(r.status("main").probes, 1);
-    assert_eq!(
-        marks(&r),
-        (false, Some(false)),
-        "an Opus probe reads measured cells alone"
-    );
-    probe_on(&mut r, &priced_body()).await;
-    assert_eq!(r.status("main").probes, 2);
-    assert_eq!(
-        marks(&r),
-        (true, Some(true)),
-        "a Sonnet probe reads a cell the campaign has not filled"
-    );
-    probe_on(&mut r, &opus_body()).await;
-    assert_eq!(r.status("main").probes, 3);
-    assert_eq!(
-        marks(&r),
-        (true, Some(true)),
-        "a measured probe after it clears neither mark"
-    );
-    let midnight = (r.now() / 86_400_000 + 1) * 86_400_000;
-    r.clock
-        .store(midnight + 1_000, std::sync::atomic::Ordering::SeqCst);
-    r.step().await;
-    assert_eq!(r.status("main").probes, 4, "the Opus recipe probed again");
-    assert_eq!(
-        marks(&r),
-        (true, Some(false)),
-        "the new day's row starts measured, and the balance keeps its mark"
     );
 }

@@ -35,7 +35,6 @@ const pin = (sessionId, burn, warm, over = {}) => ({
   burn,
   burnAt: at(NOW),
   burnUnit: 'window_share',
-  burnUnmeasured: false,
   cacheTtlMs: 5 * MINUTE,
   keyId: 'desktop',
   lastInputTokens: 1_000,
@@ -138,15 +137,4 @@ test('with no member under the band the preview marks sessions it cannot move', 
   assert.deepEqual([open.cool, d.shedPreviewLine(open, true)], [true, 'Would move 2 sessions, 1 warm, 70% of the burn in window share.']);
   assert.equal(d.shedPreviewLine(open, false), 'No round runs while migrate above utilization is off.');
   assert.equal(d.shedPreviewLine(replay([cool], []), true), 'No member is above the threshold.');
-});
-
-test('a burn priced through a stand-in cell marks the share with the cost reference asterisk', () => {
-  const measured = replay([hot, cool], four);
-  assert.equal(measured.unmeasured, false);
-  const flagged = replay([hot, cool], four.map((p, i) => (i === 3 ? { ...p, burnUnmeasured: true } : p)));
-  assert.equal(flagged.unmeasured, true, 'one flagged pin among the summed burns marks the whole share');
-  assert.equal(
-    d.shedPreviewLine(flagged, true),
-    'Would move 2 sessions, 1 warm, 70%* of the burn in window share. *Part of the burn is priced through a cell not measured yet.',
-  );
 });

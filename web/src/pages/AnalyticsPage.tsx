@@ -1274,17 +1274,7 @@ const SPEND_NOTE = "Dollars per minute: API-key traffic, and a subscription upst
 const SPEND_REST_LABEL: Record<Exclude<BurnLineUnit, 'usd'>, string> = { unknown: 'Other (fast mode, tier unknown)', window_share: 'Other (fast mode)' };
 const PLAN_NOTE =
   "The share of each subscription upstream's own 5-hour window (solid) and 7-day window (dashed) its traffic used per hour, the 5-hour share weighed by the peak band";
-const UNMEASURED_NOTE = 'priced through an unmeasured cell';
-const UNMEASURED_HINT = 'Priced in part through a cell or a tier factor the measurement campaign has not filled';
-const TIER_UNKNOWN_HINT = 'No tier on file, or one the tier factor table does not size, so no share of its windows is priced';
-
-/** The cost reference's mark on a figure priced in part through a stand-in cell. */
-const markOf = (unmeasured: boolean) =>
-  unmeasured ? (
-    <span className="muted" title={UNMEASURED_HINT}>
-      *
-    </span>
-  ) : null;
+const TIER_UNKNOWN_HINT = 'No tier on file, or one the cost table does not size, so no share of its windows is priced';
 
 /**
  * The burn route's three views of one grouping. A line's colour follows its group within the answer rather than
@@ -1314,7 +1304,6 @@ function BurnCharts({ answer, error, groupBy, loading }: { answer: { bucketSecon
   const usdDigits = usdMax >= 10 ? 0 : usdMax >= 0.1 ? 2 : usdMax >= 0.01 ? 3 : 4;
   const planned = lines.map((l, i) => ({ i, l })).filter(({ l }) => byUpstream && !l.other && l.unit === 'window_share');
   const unpriced = lines.filter((l) => byUpstream && !l.other && l.unit === 'unknown');
-  const flagged = planned.some(({ l }) => l.fiveHourUnmeasured || l.sevenDayUnmeasured);
   // A priced upstream's bucket with no share had no priced traffic, which is a share of zero rather than a gap.
   const shareAt = (shares: (number | null)[], i: number) => shares[i] ?? 0;
   return (
@@ -1375,7 +1364,7 @@ function BurnCharts({ answer, error, groupBy, loading }: { answer: { bucketSecon
             (planned.length > 0
               ? undefined
               : unpriced.length > 0
-                ? `No subscription upstream in range has a tier the tier factor table sizes: ${unpriced.map(nameOf).join(', ')}.`
+                ? `No subscription upstream in range has a tier the cost table sizes: ${unpriced.map(nameOf).join(', ')}.`
                 : 'No subscription upstream burned in this range.')
           }
           legend={[
@@ -1385,38 +1374,19 @@ function BurnCharts({ answer, error, groupBy, loading }: { answer: { bucketSecon
                 label: `${nameOf(l)} (5-hour)`,
                 shape: 'line' as const,
                 title: l.fiveHourPeak === null ? undefined : `Highest hour ${fmtShare(l.fiveHourPeak)}`,
-                value: (
-                  <>
-                    {fmtShare(l.fiveHourPerHour ?? 0)}
-                    {markOf(l.fiveHourUnmeasured)}
-                  </>
-                ),
+                value: fmtShare(l.fiveHourPerHour ?? 0),
               },
               {
                 color: colorOf(l),
                 dashed: true,
                 label: `${nameOf(l)} (7-day)`,
                 shape: 'line' as const,
-                value: (
-                  <>
-                    {fmtShare(l.sevenDayPerHour ?? 0)}
-                    {markOf(l.sevenDayUnmeasured)}
-                  </>
-                ),
+                value: fmtShare(l.sevenDayPerHour ?? 0),
               },
             ]),
             // Muted, since no line of its own is drawn.
             ...unpriced.map((l) => ({ color: ink.muted, label: nameOf(l), shape: 'line' as const, title: TIER_UNKNOWN_HINT, value: 'tier unknown' })),
           ]}
-          footer={
-            flagged && (
-              <ul className="legend" aria-label="Unmeasured">
-                <li className="muted" title={UNMEASURED_HINT}>
-                  * {UNMEASURED_NOTE}
-                </li>
-              </ul>
-            )
-          }
         >
           <LineChart data={rows} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
             <CartesianGrid vertical={false} stroke={ink.grid} />
@@ -1426,10 +1396,9 @@ function BurnCharts({ answer, error, groupBy, loading }: { answer: { bucketSecon
               cursor={{ stroke: ink.axis }}
               content={timeTip<BurnRow>((r) => [
                 ...planned.flatMap(({ i, l }) => [
-                  { color: colorOf(l), label: `${nameOf(l)} (5-hour)`, value: `${fmtShare(shareAt(r.fiveHour, i))}${r.fiveHourUnmeasured[i] ? '*' : ''}` },
-                  { color: colorOf(l), label: `${nameOf(l)} (7-day)`, value: `${fmtShare(shareAt(r.sevenDay, i))}${r.sevenDayUnmeasured[i] ? '*' : ''}` },
+                  { color: colorOf(l), label: `${nameOf(l)} (5-hour)`, value: fmtShare(shareAt(r.fiveHour, i)) },
+                  { color: colorOf(l), label: `${nameOf(l)} (7-day)`, value: fmtShare(shareAt(r.sevenDay, i)) },
                 ]),
-                ...(planned.some(({ i }) => r.fiveHourUnmeasured[i] || r.sevenDayUnmeasured[i]) ? [{ label: UNMEASURED_NOTE, title: UNMEASURED_HINT, value: '*' }] : []),
               ])}
             />
             {planned.flatMap(({ i, l }) => [

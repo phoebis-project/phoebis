@@ -99,8 +99,8 @@ fn request(
         pool_id: Some("main".into()),
         session_id: Some(session.into()),
         agent_id: Some("main".into()),
-        model: "claude-sonnet-5".into(),
-        canonical_model: "claude-sonnet-5".into(),
+        model: "claude-sonnet-5-5".into(),
+        canonical_model: "claude-sonnet-5-5".into(),
         stream: true,
         kind: "inference".into(),
         origin: "client".into(),
@@ -202,10 +202,10 @@ async fn every_route_is_captured_and_holds_its_shape() {
         .unwrap();
     parts.store.set_profile(
         "business",
-        r#"{"account":{"uuid":"u","email_address":"business@example.invalid","display_name":"Biz","has_extra_usage_enabled":true,"has_claude_max":true},"organization":{"uuid":"o","name":"Biz Org","organization_type":"claude_max","billing_type":"stripe_subscription","rate_limit_tier":"default_claude_max_5x","subscription_created_at":"2026-03-14T10:00:00Z"}}"#,
+        r#"{"account":{"uuid":"u","email_address":"business@example.invalid","display_name":"Biz","has_extra_usage_enabled":true,"has_claude_max":true},"organization":{"uuid":"o","name":"Biz Org","organization_type":"claude_max","billing_type":"stripe_subscription","rate_limit_tier":"default_claude_max_20x","subscription_created_at":"2026-03-14T10:00:00Z"}}"#,
         &SubscriptionRow {
             plan: Some("max".into()),
-            tier: Some("default_claude_max_5x".into()),
+            tier: Some("default_claude_max_20x".into()),
             since: Some(1_773_482_400_000),
             trial_ends_at: None,
         },
@@ -284,8 +284,8 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 .incarnation,
             key_id: "desktop".into(),
             key_generation,
-            canonical_model: "claude-sonnet-5".into(),
-            lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
+            canonical_model: "claude-sonnet-5-5".into(),
+            lane: lane_key("claude-sonnet-5-5", "standard", "none", "-"),
             root: Some("s0".into()),
             static_boundaries: Vec::new(),
             message_boundaries: boundaries.clone(),
@@ -306,14 +306,14 @@ async fn every_route_is_captured_and_holds_its_shape() {
             agent_id: "main".into(),
             // No session, so the placement writes no pin and `sessions.json` keeps the one pinned row above.
             session_id: None,
-            canonical_model: "claude-sonnet-5".into(),
+            canonical_model: "claude-sonnet-5-5".into(),
             candidates: phoebis_routing::resolve(
                 &snapshot,
                 &key_row,
-                "claude-sonnet-5",
-                "claude-sonnet-5",
+                "claude-sonnet-5-5",
+                "claude-sonnet-5-5",
             )
-            .expect("the pool's model rules allow claude-sonnet-5"),
+            .expect("the pool's model rules allow claude-sonnet-5-5"),
             portable: true,
             attempted: Vec::new(),
             now,
@@ -333,7 +333,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 account_id: "direct".into(),
                 cohort: Some("direct".into()),
             }],
-            lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
+            lane: lane_key("claude-sonnet-5-5", "standard", "none", "-"),
             fast: false,
         })
         .await
@@ -581,9 +581,12 @@ async fn every_route_is_captured_and_holds_its_shape() {
         bodies: None,
     });
     // A row whose serving attempt carries a placement, so the placements route has a rung to answer rather
-    // than an empty list.
+    // than an empty list. It stays on a model the price table lists, since its API-key upstream spends dollars the
+    // spend fixtures read.
     parts.ledger.record(Record::Request {
         request: RequestRecord {
+            model: "claude-sonnet-5".into(),
+            canonical_model: "claude-sonnet-5".into(),
             ..request(
                 key_generation,
                 "r-placed",

@@ -1362,7 +1362,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
       ok: JSON.stringify(before) === '["90","90"]' && JSON.stringify(after) === '["89","89"]' && ticks.length === 6 && ticks.includes('business: 5-hour 62%') && util?.querySelector('.ubar__band') !== null,
       missing: [JSON.stringify(before), JSON.stringify(after), ...ticks],
     });
-    expect("/pools the shedding preview replays a round over the hot members' pins, its share marked where a replayed burn is a stand-in", card('Load shedding')?.querySelector('.shed-preview')?.textContent ?? '', ['Would move', 'warm', '%* of the burn in window share', 'across 2 upstreams', '*Part of the burn is priced through a cell not measured yet.']);
+    expect("/pools the shedding preview replays a round over the hot members' pins", card('Load shedding')?.querySelector('.shed-preview')?.textContent ?? '', ['Would move', 'warm', '% of the burn in window share', 'across 2 upstreams']);
 
     // Select-below inside the band under the migrate threshold holds the save and says why.
     const save = () => [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Save pool');
@@ -3266,19 +3266,14 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
   const windows = ['business', 'mail', 'personal'].flatMap((id) => [`${id} (5-hour)`, `${id} (7-day)`]);
   const planItems = [...(card('Plan per hour')?.querySelectorAll('.legend li') ?? [])];
   const dashedOf = (items) => items.filter((li) => li.querySelector('.legend__swatch')?.getAttribute('style')?.includes('repeating-linear-gradient')).map((li) => li.textContent ?? '');
-  // Business sits on Max 20x, whose tier factors are stand-ins, so both its shares carry the unmeasured mark.
-  const marked = planItems.filter((li) => li.querySelector('.legend__value')?.textContent?.endsWith('*')).map((li) => li.textContent ?? '');
   results.push({
-    name: "/analytics plan per hour draws each subscription upstream's 5-hour and 7-day share and marks an unmeasured one",
+    name: "/analytics plan per hour draws each subscription upstream's 5-hour and 7-day share",
     ok:
       windows.every((w) => planned.includes(w)) &&
       !planned.some((t) => t.startsWith('console')) &&
       dashedOf(planItems).every((t) => t.includes('(7-day)')) &&
-      dashedOf(planItems).length === 3 &&
-      marked.some((t) => t.startsWith('business (5-hour)')) &&
-      marked.some((t) => t.startsWith('business (7-day)')) &&
-      card('Plan per hour')?.textContent?.includes('* priced through an unmeasured cell') === true,
-    missing: [...planned, ...marked],
+      dashedOf(planItems).length === 3,
+    missing: planned,
   });
   const spend = legendOf('Spend per minute');
   const spendDashed = dashedOf([...(card('Spend per minute')?.querySelectorAll('.legend li') ?? [])]);
@@ -3294,8 +3289,7 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
       fastSpenders.length < 3 &&
       JSON.stringify(spend.filter((t) => ['business', 'mail', 'personal'].includes(t)).sort()) === JSON.stringify(fastSpenders) &&
       spendDashed.length === 0 &&
-      windows.every((w) => planned.includes(w)) &&
-      marked.length > 0,
+      windows.every((w) => planned.includes(w)),
     missing: [...spend, ...spendDashed, `fast spenders ${fastSpenders.join(',')}`],
   });
 
@@ -4186,14 +4180,8 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
     const nets = [...m.container.querySelectorAll('.agents__row .agents__net')].map((cell) => [...cell.children].map((part) => part.textContent?.trim()).join(' | '));
     results.push({
       name: "/sessions an agent's net reads in the unit it settled in, and one that crossed a funding change carries both",
-      ok: nets.includes('-0.016% of the 5-hour window') && nets.includes('0.048% of the 5-hour window | -$0.01') && nets.includes('0') && nets.every((n) => n === '0' || /of the 5-hour window|\$/.test(n)),
+      ok: nets.includes('-0.003% of the 5-hour window') && nets.includes('0.009% of the 5-hour window | -$0.01') && nets.includes('0') && nets.every((n) => n === '0' || /of the 5-hour window|\$/.test(n)),
       missing: [...new Set(nets)],
-    });
-    const marks = [...m.container.querySelectorAll('.agents__row .agents__net span[title]')].filter((mark) => mark.textContent?.trim() === '*');
-    results.push({
-      name: '/sessions a net share priced through a stand-in cell carries the cost reference asterisk and says why',
-      ok: nets.includes('-0.016% of the 5-hour window*') && marks.length > 0 && marks.every((mark) => (mark.getAttribute('title') ?? '').includes('not filled')),
-      missing: [...marks.map((mark) => mark.getAttribute('title') ?? 'untitled'), ...new Set(nets)],
     });
   }
   const collapseAll = [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Collapse all');
@@ -4225,7 +4213,6 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
     '7-day window',
     '5m write',
     '1h write',
-    'not measured on this window; derived from earlier meter readings',
     'Window share',
     'number of later turns that must read the prefix before writing it into the cache was cheaper than sending it uncached each turn',
     'A 5-minute entry needs a probe about every 4 minutes to survive an idle hour, 15 in all; a 1-hour entry needs one.',
@@ -4257,9 +4244,22 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
   const modelsOf = (table) => [...(table?.querySelectorAll('tbody tr:not(.cost-ref__fast)') ?? [])].map((row) => row.children[0]?.textContent?.trim() ?? '');
   const models = modelsOf(priceTable);
   results.push({ name: '/sessions cost reference lists Anthropic models only', ok: models.length === 10 && models.every((n) => n.startsWith('claude-')), missing: models });
+  const shareModels = [
+    'claude-fable-5',
+    'claude-fable-5-1',
+    'claude-haiku-4-5-20251001',
+    'claude-opus-4-7',
+    'claude-opus-4-8',
+    'claude-opus-5',
+    'claude-opus-5-5',
+    'claude-sonnet-4-5',
+    'claude-sonnet-4-6',
+    'claude-sonnet-5',
+    'claude-sonnet-5-5',
+  ];
   results.push({
-    name: '/sessions cost reference keeps the dollar table to its eleven columns and lists its models again below in the window share table',
-    ok: models.length === 10 && [...(priceTable?.querySelectorAll('tbody tr') ?? [])].every((row) => row.children.length === 11) && JSON.stringify(modelsOf(shareTable)) === JSON.stringify(models),
+    name: '/sessions cost reference keeps the dollar table to its eleven columns and lists every model either table names below it in the window share table, sorted by id',
+    ok: models.length === 10 && [...(priceTable?.querySelectorAll('tbody tr') ?? [])].every((row) => row.children.length === 11) && JSON.stringify(modelsOf(shareTable)) === JSON.stringify(shareModels),
     missing: modelsOf(shareTable),
   });
   results.push({ name: '/sessions cost reference groups a class newest first', ok: models.slice(2, 6).join(',') === 'claude-opus-5-5,claude-opus-5,claude-opus-4-8,claude-opus-4-7', missing: models });
@@ -4286,37 +4286,25 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
   results.push({ name: '/sessions cost reference prices Haiku 4.5 from the shipped table', ok: haiku[1] === '$1.00' && haiku[2] === '$1.25' && haiku[3] === '$2.00' && haiku[4] === '$0.10' && haiku[5] === '$5.00', missing: haiku });
   // Input, cache read, 5m write, 1h write and output on the 5-hour window, then the same five on the 7-day one.
   const plan = (model) => [...(rowOf(shareTable, model)?.children ?? [])].slice(1).map((td) => td.textContent?.trim());
+  const dashes = Array(10).fill('-');
   results.push({
-    name: '/sessions cost reference prices every token type as a share of both windows',
+    name: '/sessions cost reference prices every measured token type as a share of the 5-hour window and dashes the unmeasured 7-day cells',
     ok:
-      JSON.stringify(plan('claude-opus-5')) === JSON.stringify(['8.41%', '0.219%', '10.3%', '10.3%', '39.3%', '0.61%*', '0.0159%*', '0.75%*', '0.75%*', '2.85%*']) &&
-      JSON.stringify(plan('claude-fable-5-1')) === JSON.stringify(['30.4%', '0.789%', '37.3%', '37.3%', '142%', '2.2%*', '0.0572%*', '2.71%*', '2.71%*', '10.3%*']),
-    missing: [JSON.stringify(plan('claude-opus-5')), JSON.stringify(plan('claude-fable-5-1'))],
+      JSON.stringify(plan('claude-opus-5-5')) === JSON.stringify(['1.46%', '0.0365%', '1.83%', '1.82%', '7.28%', '-', '-', '-', '-', '-']) &&
+      JSON.stringify(plan('claude-fable-5-1')) === JSON.stringify(['6.65%', '0.168%', '8.33%', '8.4%', '32.9%', '-', '-', '-', '-', '-']),
+    missing: [JSON.stringify(plan('claude-opus-5-5')), JSON.stringify(plan('claude-fable-5-1'))],
   });
-  results.push({ name: '/sessions cost reference finds the undated cells for a dated model', ok: JSON.stringify(plan('claude-haiku-4-5-20251001')) === JSON.stringify(['3.03%*', '0.0787%*', '3.72%*', '3.72%*', '14.1%*', '0.22%*', '0.00571%*', '0.27%*', '0.27%*', '1.03%*']), missing: plan('claude-haiku-4-5-20251001') });
-  {
-    const hint = 'not measured on this window; derived from earlier meter readings';
-    const cells = (model) => [...(rowOf(shareTable, model)?.children ?? [])].slice(1);
-    const mark = (td) => td.querySelector('.cost-ref__flag');
-    const flagged = (tds) => tds.length === 5 && tds.every((td) => mark(td)?.textContent === '*' && mark(td)?.getAttribute('title') === hint);
-    const sevenDay = ['claude-fable-5-1', 'claude-fable-5', 'claude-opus-5', 'claude-sonnet-5', 'claude-haiku-4-5-20251001'].map((model) => cells(model).slice(5));
-    const opusFiveHour = cells('claude-opus-5').slice(0, 5);
-    const legend = costDlg?.querySelector('.cost-ref__legend')?.textContent?.trim() ?? '';
-    results.push({
-      name: '/sessions cost reference flags a cell no measurement filled',
-      ok: flagged(cells('claude-sonnet-5').slice(0, 5)) && sevenDay.every(flagged) && opusFiveHour.length === 5 && opusFiveHour.every((td) => mark(td) === null) && legend === `* ${hint}`,
-      missing: [legend, ...sevenDay.map((tds) => tds.map((td) => td.textContent).join(' '))],
-    });
-  }
+  results.push({ name: '/sessions cost reference finds the undated cells for a dated model', ok: JSON.stringify(plan('claude-haiku-4-5-20251001')) === JSON.stringify(['0.659%', '0.0167%', '0.824%', '0.823%', '3.29%', '-', '-', '-', '-', '-']), missing: plan('claude-haiku-4-5-20251001') });
+  results.push({ name: '/sessions cost reference dashes a listed model whose cells are unmeasured', ok: JSON.stringify(plan('claude-opus-5')) === JSON.stringify(dashes), missing: plan('claude-opus-5') });
   {
     const groups = [...(shareTable?.querySelectorAll('thead tr:first-child th') ?? [])].slice(1).map((th) => [th.textContent?.trim(), th.getAttribute('title')]);
     results.push({
-      name: "/sessions cost reference titles each window group with that window's tier factors and marks the unmeasured ones",
+      name: "/sessions cost reference titles each window group with that window's tier factors on Max 20x",
       ok:
         JSON.stringify(groups) ===
         JSON.stringify([
-          ['5-hour window', 'Share of a Max 5x window per million tokens; a Pro account spends 4.65 times as much of its own, a Max 20x 0.248 times (not measured)'],
-          ['7-day window', 'Share of a Max 5x window per million tokens; a Pro account spends 5.56 times as much of its own, a Max 20x 0.467 times (not measured)'],
+          ['5-hour window', 'Share of a Max 20x window per million tokens; a Max 5x account spends 4 times as much of its own, a Pro account spends 20 times as much of its own'],
+          ['7-day window', "Share of a Max 20x window per million tokens; a Max 5x account's factor is not measured on this window, a Pro account's factor is not measured on this window"],
         ]),
       missing: groups.map((g) => g.join(': ')),
     });
