@@ -1199,6 +1199,9 @@ impl Relay {
             session = ?identity.session_id,
             "relaying a Messages request",
         );
+        // Read once and reused on every attempt of this request: neither fact changes across a failover.
+        let hints = ClientHints::read(&parts.headers);
+        let lane = crate::lane::lane_of(&identity.canonical_model, &facts, hints.per_turn_effort);
         let admitted = Admitted {
             auto_mode_server,
             cache_ttl_policy,
@@ -1209,6 +1212,7 @@ impl Relay {
             fallback_ms,
             identity: &identity,
             key: &key,
+            lane,
             markers_ttl_ms: facts.markers_ttl_ms,
             memory_key,
             original,
@@ -1231,8 +1235,6 @@ impl Relay {
         // is a pool at its cap, which frees on its own, not one only an operator can clear.
         let mut held_out = false;
         let mut dialed = false;
-        // Read once and reused on every attempt of this request: neither fact changes across a failover.
-        let hints = ClientHints::read(&parts.headers);
 
         loop {
             // A backstop: every failover point already checks the budget before it comes back here, and
@@ -1290,6 +1292,7 @@ impl Relay {
                             && admitted.cache_ttl_policy.inject_when_absent),
                     parent_agent_id: identity.parent_agent_id.clone(),
                     holds: holds.clone(),
+                    lane: admitted.lane.clone(),
                 })
                 .await
             {
@@ -1762,6 +1765,7 @@ impl Relay {
                 injected: &injected,
                 key: admitted.key,
                 key_permit: &mut *key_permit,
+                lane: &admitted.lane,
                 markers_ttl_ms: admitted.markers_ttl_ms,
                 // A probe's answer is never remembered: the id it was given belongs to the turn it replayed,
                 // and recording it would make the next real turn name a probe.
@@ -2513,6 +2517,7 @@ impl Relay {
             key_id: ctx.key.id.clone(),
             key_generation: ctx.key.created_at,
             canonical_model: ctx.identity.canonical_model.clone(),
+            lane: ctx.lane.to_string(),
             root,
             static_boundaries: ctx
                 .chains
@@ -3087,6 +3092,8 @@ struct Responding<'a> {
     key: &'a ApiKeyRow,
     /// The request's permit, which a committed stream takes into its body.
     key_permit: &'a mut Option<KeyPermit>,
+    /// The cache lane the request writes to, for the affinity report.
+    lane: &'a str,
     markers_ttl_ms: Option<i64>,
     memory_key: Option<&'a MemoryKey>,
     pin: Option<&'a PinRef>,
@@ -3171,6 +3178,8 @@ struct Admitted<'a> {
     fallback_ms: i64,
     identity: &'a RequestIdentity,
     key: &'a ApiKeyRow,
+    /// The cache lane the request writes to, composed once at admission since no failover changes the body.
+    lane: String,
     /// The largest TTL of the client's own cache markers, the renewal's TTL when no rewrite applied.
     markers_ttl_ms: Option<i64>,
     /// The session memory key this request reads under, absent when the request carries no session; a probe

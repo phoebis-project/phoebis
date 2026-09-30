@@ -9,7 +9,7 @@ use std::time::Duration;
 use phoebis_bus::{Bus, Event, Outcome};
 use phoebis_ledger::{Assembler, Record};
 use phoebis_routing::{
-    resolve, ClientClass, RouterEvent, SelectRequest, SelectResult, SelectionTrace,
+    lane_key, resolve, ClientClass, RouterEvent, SelectRequest, SelectResult, SelectionTrace,
 };
 use phoebis_store::AccountState;
 use common::*;
@@ -65,6 +65,7 @@ async fn next_trace(h: &Harness, session: &str) -> SelectionTrace {
     let key = snapshot.key("desktop").expect("the harness key");
     let canonical = h.catalog.canonical_for(MODEL).await;
     let candidates = resolve(&snapshot, key, &canonical, MODEL).unwrap();
+    let lane = lane_key(&canonical, "standard", "none", "-");
     let answer = h
         .router
         .select(SelectRequest {
@@ -90,6 +91,7 @@ async fn next_trace(h: &Harness, session: &str) -> SelectionTrace {
             marker: false,
             parent_agent_id: None,
             holds: Vec::new(),
+            lane,
         })
         .await
         .unwrap();

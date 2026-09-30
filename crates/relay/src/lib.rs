@@ -17,6 +17,7 @@ mod facts;
 mod headers;
 mod hold;
 mod identity;
+mod lane;
 mod memory;
 mod messages;
 mod models;

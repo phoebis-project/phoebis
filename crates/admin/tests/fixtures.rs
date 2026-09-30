@@ -11,7 +11,7 @@ use phoebis_ledger::{
     AttemptRecord, BodyRecord, EventRecord, ExtraUsageSampleRecord, QuotaSampleRecord, Record,
     RequestRecord,
 };
-use phoebis_routing::ClientClass;
+use phoebis_routing::{lane_key, ClientClass};
 use phoebis_store::{AccountState, Identity, NewBundle, Secret, SubscriptionRow};
 use common::{delete, deltas_until, get, json, login, next_text, patch, post, serve, wait_json};
 use serde_json::{json as j, Value};
@@ -260,6 +260,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             marker: false,
             parent_agent_id: None,
             holds: Vec::new(),
+            lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
         })
         .await
         .unwrap();
@@ -283,6 +284,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             key_id: "desktop".into(),
             key_generation,
             canonical_model: "claude-sonnet-5".into(),
+            lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
             root: Some("s0".into()),
             static_boundaries: Vec::new(),
             message_boundaries: boundaries.clone(),
@@ -330,6 +332,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 account_id: "direct".into(),
                 cohort: Some("direct".into()),
             }],
+            lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
         })
         .await
         .unwrap();

@@ -65,11 +65,12 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
     (33, V33),
     (34, V34),
     (35, V35),
+    (36, V36),
 ];
 
 /// The newest schema version this build knows how to read. `prepare` refuses a registry stamped past it
 /// rather than skip migrations it does not carry and misread the tables that follow.
-pub const SCHEMA_VERSION: u32 = 35;
+pub const SCHEMA_VERSION: u32 = 36;
 
 const V2: &str = r#"
 CREATE TABLE IF NOT EXISTS account_models (
@@ -538,3 +539,8 @@ const V35: &str = r#"
 ALTER TABLE pools ADD COLUMN auto_mode_server INTEGER NOT NULL DEFAULT 1;
 ALTER TABLE api_keys ADD COLUMN auto_mode_server INTEGER;
 "#;
+
+// The cache lane a pin's last request and an entry's writer wrote to: a filter beside the `(model, hash)` key, so
+// neither table is rebuilt. A row from before reads `''`, which no request's lane matches: its pin reads cold once.
+const V36: &str = "ALTER TABLE pins ADD COLUMN lane TEXT NOT NULL DEFAULT ''; \
+ALTER TABLE affinity ADD COLUMN lane TEXT NOT NULL DEFAULT '';";

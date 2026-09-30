@@ -72,6 +72,14 @@ pub struct SelectRequest {
     /// The holds this request already waited through, oldest first: the relay carries each `Held` answer's
     /// facts into the next selection, so the attempt that follows a hold names it.
     pub holds: Vec<HoldFacts>,
+    /// The cache lane the request writes to, as the relay composed it; a pin or an entry of another lane is cold.
+    pub lane: String,
+}
+
+/// The cache lane key, `<model>|<speed>|<thinking>|<effort>`: the one spelling the relay composes and every pin,
+/// affinity entry and request compares, so no reader spells it twice.
+pub fn lane_key(model: &str, speed: &str, thinking: &str, effort: &str) -> String {
+    format!("{model}|{speed}|{thinking}|{effort}")
 }
 
 /// Where a fresh placement's account came from, for the trace and the console's hit-or-miss reading.
@@ -143,16 +151,17 @@ pub enum Warmth {
     Untouched,
 }
 
-/// The verdict of `request` on the pin it arrives for. The compacted flag is cold whatever else the request
-/// says; the class decides when present; without it, a request whose boundaries contain the pin's tail or name
-/// an entry the pin's key and generation wrote on the pin's account and incarnation continues the conversation
-/// (so where one session holds several conversations, a continuation of any of them refreshes the pin), one
-/// that matches the static prefix without such a boundary restarted it,
-/// and one matching neither is foreign. A body without a chain refreshes, the
-/// fallback for a request that carries no fact. A keepalive probe replays the recipe's headers and body
-/// verbatim, the re-arming request's rather than its own, so it is judged by none of this: its renewal report
-/// stamps the refresh instead. A token count is judged by none of it either, since it creates no cache entry to
-/// be warm about.
+/// The verdict of `request` on the pin it arrives for. The compacted flag is cold whatever else the request says; a
+/// request on another cache lane than the pin's last is cold whatever its messages continue, unless its class
+/// leaves the pin alone; the class decides when present; without it, a request whose boundaries contain the pin's
+/// tail or name an entry the pin's key and generation wrote on the pin's account and incarnation continues the
+/// conversation (so where one session holds several conversations, a continuation of any of them refreshes the
+/// pin), one that matches the static prefix without such a boundary restarted it,
+/// and one matching neither is foreign. A body without a chain
+/// refreshes, the fallback for a request that carries no fact. A keepalive probe replays the recipe's headers and
+/// body verbatim, the re-arming request's rather than its own, so it is judged by none of this: its renewal report
+/// stamps the refresh instead. A token count is judged by none of it either, since it creates no cache entry to be
+/// warm about.
 pub fn warmth_of(current: &PinRow, request: &SelectRequest, affinity: &AffinityMap) -> Warmth {
     if request.probe || request.count {
         return Warmth::Untouched;
@@ -160,12 +169,20 @@ pub fn warmth_of(current: &PinRow, request: &SelectRequest, affinity: &AffinityM
     if request.context_compacted {
         return Warmth::Cold;
     }
+    // Another lane is another cache: a refreshing turn on it reads the pin cold, whatever its boundaries. A class
+    // that leaves the pin alone still does, since such a request never touched the conversation's prefix.
+    let lane_changed = request.lane != current.lane;
     if let Some(class) = request.request_class.as_deref() {
-        return if REFRESHING_CLASSES.contains(&class) {
-            Warmth::Refresh
-        } else {
+        return if !REFRESHING_CLASSES.contains(&class) {
             Warmth::Untouched
+        } else if lane_changed {
+            Warmth::Cold
+        } else {
+            Warmth::Refresh
         };
+    }
+    if lane_changed {
+        return Warmth::Cold;
     }
     if request.static_hash.is_none() && request.boundaries.is_empty() {
         return Warmth::Refresh;
@@ -910,6 +927,7 @@ fn fresh_pin(
         shed_from,
         static_hash: None,
         tail_hash: None,
+        lane: request.lane.clone(),
     };
     stamp_hashes(&mut row, request);
     row
@@ -1311,7 +1329,8 @@ fn obstacle(
 /// Renews the pin and persists the request's verdict on it: a refreshing request stamps its refresh and its
 /// hashes, a cold one zeroes the refresh and stamps its hashes so the next continuation re-warms the pin, and
 /// a foreign one leaves both alone. A request that carries no chain has no hashes to stamp, so the pin keeps
-/// the last conversation it was judged against.
+/// the last conversation it was judged against; its lane is stamped all the same, or a chainless body on a new
+/// lane would leave the pin cold for good.
 fn renew(
     state: &mut RoutingState,
     snapshot: &RegistrySnapshot,
@@ -1332,8 +1351,11 @@ fn renew(
         Warmth::Cold => renewed.last_refresh_at = 0,
         Warmth::Untouched => {}
     }
-    if verdict != Warmth::Untouched && chained {
-        stamp_hashes(&mut renewed, request);
+    if verdict != Warmth::Untouched {
+        renewed.lane = request.lane.clone();
+        if chained {
+            stamp_hashes(&mut renewed, request);
+        }
     }
     state.put_pin(renewed.clone());
     state.mark_renewed(&current.key());
@@ -1475,7 +1497,7 @@ fn placement_of<'a>(
 
     if let Some((depth, entry)) =
         affinity.deepest(&request.canonical_model, &request.boundaries, |e| {
-            account_ok(state, snapshot, allowed, window, now, e)
+            e.lane == request.lane && account_ok(state, snapshot, allowed, window, now, e)
         })
     {
         if let Some(candidate) = candidate_of(&entry.account_id) {
@@ -1535,7 +1557,8 @@ fn placement_of<'a>(
     };
     let (depth, entry) =
         affinity.deepest(&request.canonical_model, &request.static_boundaries, |e| {
-            account_ok(state, snapshot, allowed, window, now, e)
+            e.lane == request.lane
+                && account_ok(state, snapshot, allowed, window, now, e)
                 && size_gate(e)
                 && !blocked(state, snapshot, pool, window, now, &e.account_id)
         })?;
@@ -1593,7 +1616,9 @@ fn subagent_cohort<'a>(
     }
     let (_, entry) =
         affinity.deepest(&request.canonical_model, &request.static_boundaries, |e| {
-            e.prefix_tokens > 0 && account_ok(state, snapshot, allowed, window, request.now, e)
+            e.lane == request.lane
+                && e.prefix_tokens > 0
+                && account_ok(state, snapshot, allowed, window, request.now, e)
         })?;
     allowed
         .iter()

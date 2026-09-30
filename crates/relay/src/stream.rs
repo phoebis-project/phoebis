@@ -158,6 +158,7 @@ pub(crate) struct AffinityFacts {
     pub key_id: String,
     pub key_generation: i64,
     pub canonical_model: String,
+    pub lane: String,
     /// The identity's `session_id`, `None` for a request with no identity (the first message boundary is the
     /// root then).
     pub root: Option<String>,
@@ -206,6 +207,7 @@ impl AffinityFacts {
             key_id: self.key_id,
             key_generation: self.key_generation,
             canonical_model: self.canonical_model,
+            lane: self.lane,
             root: self.root,
             static_boundaries: self.static_boundaries,
             message_boundaries: self.message_boundaries,

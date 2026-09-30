@@ -332,6 +332,7 @@ async fn a_pin_the_ledger_has_no_row_for_reports_no_request_count() {
                 shed_at: None,
                 static_hash: None,
                 tail_hash: None,
+                lane: phoebis_routing::lane_key("claude-sonnet-5", "standard", "none", "-"),
             })
             .unwrap();
     }

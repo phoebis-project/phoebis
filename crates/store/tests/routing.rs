@@ -1,3 +1,4 @@
+use phoebis_routing::lane_key;
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, AffinityChain, AffinityRow, BudgetRow, BudgetScope,
     CooldownRow, OverageRow, PinBurn, PinKey, PinRow, RekeyWrite, ResolutionRow, StorageKey, Store,
@@ -31,6 +32,7 @@ fn pin(key_id: &str, session_id: &str, model: &str, account_id: &str) -> PinRow 
         shed_at: None,
         static_hash: None,
         tail_hash: None,
+        lane: lane_key(model, "standard", "none", "-"),
     }
 }
 
@@ -255,6 +257,56 @@ fn a_pins_typed_burn_and_its_banded_copy_survive_a_reopen() {
             .collect::<Vec<_>>(),
         vec![(burning.burn, Some(7), burning.burn_banded)],
         "every type of both copies reads back as written"
+    );
+}
+
+#[test]
+fn a_pins_lane_and_an_affinity_entrys_lane_survive_a_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("router.sqlite");
+    let storage_key = StorageKey::generate();
+    let standard = pin("k", "s", "claude-opus-5-5", "a");
+    let fast = lane_key("claude-opus-5-5", "fast", "adaptive", "*");
+    {
+        let store = Store::open(&path, &storage_key).unwrap();
+        seed_accounts(&store, &["a"]);
+        store.upsert_pin(&standard).unwrap();
+        store
+            .upsert_pin(&PinRow {
+                lane: fast.clone(),
+                ..standard.clone()
+            })
+            .unwrap();
+        let entry = affinity_row("claude-opus-5-5", "hash-1", "a");
+        store.upsert_affinity(std::slice::from_ref(&entry)).unwrap();
+        store
+            .upsert_affinity(&[AffinityRow {
+                lane: fast.clone(),
+                ..entry
+            }])
+            .unwrap();
+    }
+    let reopened = Store::open(&path, &storage_key)
+        .unwrap()
+        .load_routing()
+        .unwrap();
+    assert_eq!(
+        reopened
+            .pins
+            .iter()
+            .map(|p| p.lane.as_str())
+            .collect::<Vec<_>>(),
+        vec![fast.as_str()],
+        "the pin's second lane replaced its first"
+    );
+    assert_eq!(
+        reopened
+            .affinity
+            .iter()
+            .map(|r| r.lane.as_str())
+            .collect::<Vec<_>>(),
+        vec![fast.as_str()],
+        "so did the entry's"
     );
 }
 
@@ -604,6 +656,7 @@ fn affinity_row(model: &str, hash: &str, account_id: &str) -> AffinityRow {
         key_id: "k".into(),
         key_generation: 1,
         root: "root-1".into(),
+        lane: lane_key(model, "standard", "none", "-"),
     }
 }
 

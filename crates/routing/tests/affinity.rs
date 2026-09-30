@@ -4,7 +4,8 @@
 //! fork facts the relay reads from a match are the relay's own.
 
 use phoebis_routing::{
-    AffinityMap, AffinityReport, ConversationLookup, ConversationMatch, ConversationQuery,
+    lane_key, AffinityMap, AffinityReport, ConversationLookup, ConversationMatch,
+    ConversationQuery,
 };
 
 fn boundaries(hashes: &[&str]) -> Vec<String> {
@@ -18,6 +19,7 @@ fn report(key_id: &str, account_id: &str, message_boundaries: &[&str], now: i64)
         key_id: key_id.into(),
         key_generation: 0,
         canonical_model: "claude-sonnet-5".into(),
+        lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
         root: None,
         static_boundaries: Vec::new(),
         message_boundaries: boundaries(message_boundaries),
@@ -139,4 +141,43 @@ fn a_subagents_first_request_matches_its_cohorts_static_prefix_and_no_message_bo
         .deepest("claude-sonnet-5", &statics, |_| true)
         .expect("the cohort's static prefix is known");
     assert_eq!(depth, 2);
+}
+
+#[test]
+fn a_report_stamps_its_lane_and_a_refresh_from_another_lane_rewrites_it() {
+    let standard = lane_key("claude-sonnet-5", "standard", "none", "-");
+    let fast = lane_key("claude-sonnet-5", "fast", "none", "-");
+    let mut map = AffinityMap::default();
+    map.record(&report("k", "a", &["b1", "b2"], 1_000));
+    assert_eq!(
+        map.entry("claude-sonnet-5", "b2").map(|e| e.lane.as_str()),
+        Some(standard.as_str())
+    );
+    let refreshed = map.record(&AffinityReport {
+        lane: fast.clone(),
+        ..report("k", "a", &["b1", "b2"], 2_000)
+    });
+    assert!(refreshed.is_empty(), "the same holder refreshes in place");
+    assert_eq!(
+        map.entry("claude-sonnet-5", "b2").map(|e| e.lane.as_str()),
+        Some(fast.as_str()),
+        "one entry holds one lane, the last writer's"
+    );
+    assert!(
+        map.drain().iter().all(|row| row.lane == fast),
+        "the refreshed rows persist the new lane"
+    );
+}
+
+#[test]
+fn the_conversation_lookup_finds_a_root_across_lanes() {
+    let mut map = AffinityMap::default();
+    map.record(&AffinityReport {
+        lane: lane_key("claude-sonnet-5", "fast", "none", "-"),
+        ..report("k", "a", &["b1", "b2", "b3"], 1_000)
+    });
+    // A speed switch hashes the same message bytes, so the identity must find the conversation whatever lane
+    // its entries were written under; the lane only filters where the cache is warm.
+    let q = boundaries(&["b1", "b2", "b3", "b4"]);
+    content_match(map.conversation(&query("k", &q)), 3);
 }

@@ -1,9 +1,10 @@
 use phoebis_routing::{
-    effective_warm, release_reasons, resolve, select, warm, AffinityChain, AffinityMap,
-    AffinityRow, BurnRates, ClientClass, CohortHold, EvidenceSource, Exhaustion, HoldFacts,
-    MemberSpend, MigrateReason, OverageEvidence, PinRef, Placement,
-    RateTable, Rates, RegistrySnapshot, RoutingState, SelectRequest, SelectResult, StateWrite,
-    UtilizationSample, WindowReading, FIVE_HOUR, MODEL_REJECTED_REASON, SEVEN_DAY, SEVEN_DAY_FABLE,
+    effective_warm, lane_key, release_reasons, resolve, select, warm, warmth_of, AffinityChain,
+    AffinityMap, AffinityRow, BurnRates, ClientClass, CohortHold, EvidenceSource, Exhaustion,
+    HoldFacts, MemberSpend, MigrateReason, OverageEvidence, PinRef,
+    Placement, RateTable, Rates, RegistrySnapshot, RoutingState, SelectRequest, SelectResult,
+    StateWrite, UtilizationSample, Warmth, WindowReading, FIVE_HOUR, MODEL_REJECTED_REASON,
+    SEVEN_DAY, SEVEN_DAY_FABLE,
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, Affinity, AffinityMode, AffinitySource, ApiKeyRow,
@@ -246,6 +247,7 @@ fn affinity_row(
         key_id: "k".into(),
         key_generation: s.key("k").unwrap().created_at,
         root: root.into(),
+        lane: lane_key(model, "standard", "none", "-"),
     }
 }
 
@@ -331,6 +333,7 @@ fn request(
         marker: false,
         parent_agent_id: None,
         holds: Vec::new(),
+        lane: lane_key(model, "standard", "none", "-"),
     }
 }
 
@@ -2993,6 +2996,7 @@ fn two_pools_sharing_an_account_share_its_entries() {
         key_id: "k1".into(),
         key_generation: s.key("k1").unwrap().created_at,
         root: "root".into(),
+        lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
     };
     seed_affinity(&st, vec![row]);
     let req_for = |key_id: &str, session: &str, now: i64| SelectRequest {
@@ -3024,6 +3028,7 @@ fn two_pools_sharing_an_account_share_its_entries() {
         marker: false,
         parent_agent_id: None,
         holds: Vec::new(),
+        lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
     };
     let SelectResult::Selected(sel1) =
         select(&mut st, &s, &req_for("k1", "s1", 1_500), &mut rng()).0
@@ -5283,6 +5288,7 @@ fn an_overage_whose_named_reset_has_passed_no_longer_counts_for_the_release_reas
         shed_at: None,
         static_hash: None,
         tail_hash: None,
+        lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
     };
     st.record_overage("a", overage(true, 1_000, Some(1_999)));
     let req = request(&s, Some("s1"), "claude-sonnet-5", true, &[], 2_000);
@@ -6343,6 +6349,240 @@ fn a_probe_never_colds_a_pin() {
     }
 }
 
+#[test]
+fn a_request_on_another_lane_is_cold_whatever_its_boundaries_and_its_continuation_there_refreshes()
+{
+    let s = snapshot(Pool {
+        members: vec![("a", 0)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let standard = lane_key("claude-sonnet-5", "standard", "none", "-");
+    let fast = lane_key("claude-sonnet-5", "fast", "none", "-");
+    let at = |now: i64, lane: &str, class: Option<&str>, boundaries: &[&str]| SelectRequest {
+        lane: lane.to_string(),
+        ..with_facts(
+            request(&s, Some("s1"), "claude-sonnet-5", true, &[], now),
+            class,
+            false,
+            Some("s0"),
+            boundaries,
+        )
+    };
+    select(
+        &mut st,
+        &s,
+        &at(T + 1_000, &standard, None, &["m1", "m2"]),
+        &mut rng(),
+    );
+    assert_eq!(
+        pinned(&st, "s1").lane,
+        standard,
+        "a fresh pin takes the request's lane"
+    );
+    select(
+        &mut st,
+        &s,
+        &at(T + 2_000, &fast, None, &["m1", "m2", "m3"]),
+        &mut rng(),
+    );
+    let pin = pinned(&st, "s1");
+    assert_eq!(
+        (
+            pin.last_refresh_at,
+            pin.lane.as_str(),
+            pin.tail_hash.as_deref()
+        ),
+        (0, fast.as_str(), Some("m3")),
+        "the boundaries continue the pin's tail, but another lane is another cache"
+    );
+    select(
+        &mut st,
+        &s,
+        &at(T + 3_000, &fast, None, &["m1", "m2", "m3", "m4"]),
+        &mut rng(),
+    );
+    let pin = pinned(&st, "s1");
+    assert_eq!(
+        (pin.last_refresh_at, pin.tail_hash.as_deref()),
+        (T + 3_000, Some("m4")),
+        "the continuation on the new lane refreshes"
+    );
+    let five = ["m1", "m2", "m3", "m4", "m5"];
+    select(
+        &mut st,
+        &s,
+        &at(T + 4_000, &standard, Some("quota"), &five),
+        &mut rng(),
+    );
+    let pin = pinned(&st, "s1");
+    assert_eq!(
+        (
+            pin.last_refresh_at,
+            pin.lane.as_str(),
+            pin.tail_hash.as_deref()
+        ),
+        (T + 3_000, fast.as_str(), Some("m4")),
+        "an auxiliary class on another lane leaves the pin as it was"
+    );
+    select(
+        &mut st,
+        &s,
+        &at(T + 5_000, &standard, Some("main"), &five),
+        &mut rng(),
+    );
+    let pin = pinned(&st, "s1");
+    assert_eq!(
+        (
+            pin.last_refresh_at,
+            pin.lane.as_str(),
+            pin.tail_hash.as_deref()
+        ),
+        (0, standard.as_str(), Some("m5")),
+        "a main turn on another lane reads cold too"
+    );
+}
+
+#[test]
+fn a_control_entry_after_the_tail_continues_the_conversation() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let per_turn = lane_key("claude-sonnet-5", "standard", "adaptive", "*");
+    let at = |now: i64, boundaries: &[&str]| SelectRequest {
+        lane: per_turn.clone(),
+        ..with_facts(
+            request(&s, Some("s1"), "claude-sonnet-5", true, &[], now),
+            None,
+            false,
+            Some("s0"),
+            boundaries,
+        )
+    };
+    select(&mut st, &s, &at(T + 1_000, &["m1", "m2"]), &mut rng());
+    let with_control_entry = at(T + 2_000, &["m1", "m2", "c1"]);
+    assert_eq!(
+        warmth_of(
+            &pinned(&st, "s1"),
+            &with_control_entry,
+            &st.affinity().read().unwrap()
+        ),
+        Warmth::Refresh,
+        "the control entry is one more message past the pin's tail"
+    );
+    select(&mut st, &s, &with_control_entry, &mut rng());
+    let pin = pinned(&st, "s1");
+    assert_eq!(
+        (pin.last_refresh_at, pin.tail_hash.as_deref()),
+        (T + 2_000, Some("c1"))
+    );
+}
+
+#[test]
+fn a_fresh_request_finds_no_warm_entry_of_another_lane_and_lands_by_the_strategy() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let standard = lane_key("claude-sonnet-5", "standard", "none", "-");
+    let fast = lane_key("claude-sonnet-5", "fast", "none", "-");
+    // The entry sits on b, behind a by priority, so only a placement lands the request there.
+    let warm_on_b = || {
+        let st = RoutingState::from_load(RoutingLoad::default());
+        seed_affinity(
+            &st,
+            vec![affinity_row(
+                &s,
+                "claude-sonnet-5",
+                "m1",
+                AffinityChain::Message,
+                "b",
+                1_000,
+                300_000,
+                12_345,
+                "root",
+            )],
+        );
+        st
+    };
+    let fresh = |lane: &str| SelectRequest {
+        lane: lane.to_string(),
+        ..with_facts(
+            request(&s, Some("s1"), "claude-sonnet-5", true, &[], 1_500),
+            None,
+            false,
+            None,
+            &["m1", "m2"],
+        )
+    };
+    let SelectResult::Selected(sel) = select(&mut warm_on_b(), &s, &fresh(&fast), &mut rng()).0
+    else {
+        panic!("a lands the request")
+    };
+    assert_eq!(
+        (sel.account.id.as_str(), sel.trace.placement),
+        ("a", None),
+        "the standard lane's entry is no warm prefix for a fast request"
+    );
+    let SelectResult::Selected(sel) = select(&mut warm_on_b(), &s, &fresh(&standard), &mut rng()).0
+    else {
+        panic!("b lands the request")
+    };
+    assert_eq!(
+        (sel.account.id.as_str(), sel.trace.placement.map(|p| p.rung)),
+        ("b", Some("content")),
+        "on its own lane the entry places the request"
+    );
+
+    let static_subagent = |lane: &str| SelectRequest {
+        lane: lane.to_string(),
+        ..subagent(
+            placement_req(
+                request(&s, Some("session"), "claude-sonnet-5", true, &[], 1_500),
+                &[],
+                &["s1"],
+                true,
+            ),
+            "worker",
+        )
+    };
+    let (s, mut st) = capped_cohort_on_b(SubagentPlacement::ByCohort);
+    let SelectResult::Selected(sel) = select(&mut st, &s, &static_subagent(&fast), &mut rng()).0
+    else {
+        panic!("a lands the subagent")
+    };
+    assert_eq!(
+        (sel.account.id.as_str(), sel.trace.placement),
+        ("a", None),
+        "nor is a static entry of another lane"
+    );
+    let (s, mut st) = capped_cohort_on_b(SubagentPlacement::ByCohort);
+    let SelectResult::Selected(sel) =
+        select(&mut st, &s, &static_subagent(&standard), &mut rng()).0
+    else {
+        panic!("b lands the subagent")
+    };
+    assert_eq!(
+        (sel.account.id.as_str(), sel.trace.placement.map(|p| p.rung)),
+        ("b", Some("static"))
+    );
+    let (s, mut st) = capped_cohort_on_b(SubagentPlacement::ByCohort);
+    let _a = st.in_flight().dispatched("a", 1_000);
+    let _b = st.in_flight().dispatched("b", 1_000);
+    let SelectResult::Held { account_id, hold } =
+        select(&mut st, &s, &static_subagent(&fast), &mut rng()).0
+    else {
+        panic!("held on the strategy's choice")
+    };
+    assert_eq!(
+        (account_id.as_str(), hold.cohort),
+        ("a", None),
+        "a cohort of another lane holds no subagent on its account"
+    );
+}
+
 /// A state whose session "s1" already holds a pin on "a", made by a real selection with static prefix "s0" and
 /// tail "old-tail": the fixture the warmth tests below build on.
 fn pinned_state(s: &RegistrySnapshot, now: i64) -> RoutingState {
@@ -7141,6 +7381,7 @@ fn seeded_pin(session: &str, account: &str, now: i64) -> PinRow {
         shed_at: None,
         static_hash: None,
         tail_hash: None,
+        lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
     }
 }
 
@@ -8356,5 +8597,43 @@ fn a_compacted_request_on_a_warm_pin_is_first_in_the_order_on_that_request() {
         landed(select(&mut st, &s, &compacted, &mut rng()).0),
         ("b".into(), Some(MigrateReason::Shed)),
         "compacted, it is cold on this request, first in the order, and moves on it"
+    );
+}
+
+#[test]
+fn a_lane_changed_pin_sorts_among_the_cold_ones_in_the_shed_round() {
+    // A small share: the round marks exactly the first pin in its order.
+    let s = snapshot(shedding_pool(Shedding {
+        shed_share: 0.1,
+        ..Shedding::default()
+    }));
+    let pins = || {
+        vec![
+            burning("warm-9", "a", 9.0, true, T),
+            burning("cold-2", "a", 2.0, false, T),
+            burning("warm-1", "a", 1.0, true, T),
+        ]
+    };
+    let mut st = loaded(pins());
+    hot_a_cool_b(&mut st, T - 500);
+    assert_eq!(
+        landed(select(&mut st, &s, &main_turn(&s, "warm-9", T), &mut rng()).0),
+        ("a".into(), None),
+        "on its own lane the hottest pin is warm, ranks behind the cold one and stays"
+    );
+    let mut st = loaded(pins());
+    hot_a_cool_b(&mut st, T - 500);
+    let switched = SelectRequest {
+        lane: lane_key("claude-sonnet-5", "fast", "none", "-"),
+        ..main_turn(&s, "warm-9", T)
+    };
+    assert!(
+        warm(&pinned(&st, "warm-9"), T),
+        "the stored refresh reads warm"
+    );
+    assert_eq!(
+        landed(select(&mut st, &s, &switched, &mut rng()).0),
+        ("b".into(), Some(MigrateReason::Shed)),
+        "on another lane it is cold on this request, first in the order, and moves on it"
     );
 }

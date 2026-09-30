@@ -33,5 +33,7 @@ phoebis-store = { path = ".", features = ["debug-hooks"] }
 # The migration test reads a stored cache TTL policy the way the relay does, so the two crates' readings of the
 # same JSON cannot drift apart unnoticed.
 phoebis-relay = { path = "../relay" }
+# A lane is built with the routing crate's one constructor, the spelling every pin and entry compares.
+phoebis-routing = { path = "../routing" }
 rusqlite = { workspace = true }
 tempfile = { workspace = true }

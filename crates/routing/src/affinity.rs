@@ -19,6 +19,9 @@ pub struct AffinityEntry {
     pub key_id: String,
     pub key_generation: i64,
     pub root: String,
+    /// The cache lane of the last report that wrote the entry: the placement reads an entry of another lane as
+    /// no warm prefix, while the conversation climb reads across lanes.
+    pub lane: String,
 }
 
 impl AffinityEntry {
@@ -37,6 +40,8 @@ pub struct AffinityReport {
     pub key_id: String,
     pub key_generation: i64,
     pub canonical_model: String,
+    /// The writing request's lane.
+    pub lane: String,
     /// The conversation the request belonged to, its session id. A report without one is rooted at its first
     /// message boundary.
     pub root: Option<String>,
@@ -100,6 +105,7 @@ fn row_of(key: &EntryKey, entry: &AffinityEntry) -> AffinityRow {
         key_id: entry.key_id.clone(),
         key_generation: entry.key_generation,
         root: entry.root.clone(),
+        lane: entry.lane.clone(),
     }
 }
 
@@ -137,6 +143,7 @@ impl AffinityMap {
                     key_id: row.key_id,
                     key_generation: row.key_generation,
                     root: row.root,
+                    lane: row.lane,
                 },
             );
         }
@@ -356,6 +363,9 @@ impl AffinityMap {
             // own turns landing on the same account) refreshes the links and the warmth, never re-roots the
             // conversation that got here first.
             entry.incarnation = report.incarnation;
+            // One entry holds one lane: a conversation that switched lanes forgets the earlier lane's cache here,
+            // which a lane change reads as cold anyway.
+            entry.lane = report.lane.clone();
             self.dirty.insert(key);
             return None;
         }
@@ -376,6 +386,7 @@ impl AffinityMap {
             key_id: report.key_id.clone(),
             key_generation: report.key_generation,
             root: inherited_root.unwrap_or_else(|| root.to_string()),
+            lane: report.lane.clone(),
         };
         let row = row_of(&key, &entry);
         self.dirty.remove(&key);
@@ -420,6 +431,7 @@ mod tests {
             key_id: key_id.into(),
             key_generation: 0,
             canonical_model: "m".into(),
+            lane: crate::lane_key("m", "standard", "none", "-"),
             root: None,
             static_boundaries: Vec::new(),
             message_boundaries: vec!["b1".into(), "b2".into()],
@@ -655,6 +667,7 @@ mod tests {
             key_id: "k".into(),
             key_generation: 0,
             root: "b1".into(),
+            lane: crate::lane_key("m", "standard", "none", "-"),
         };
         assert!(!entry.live(1_000));
         let warm = AffinityEntry {

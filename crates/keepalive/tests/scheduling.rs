@@ -7,7 +7,7 @@ use phoebis_ledger::{
     hour_of, member_spends, read_rollups, AttemptRecord, PriceTable, Record, RequestRecord,
 };
 use phoebis_routing::{
-    resolve, ClientClass, EvidenceSource, OverageEvidence, PinRef, Report, SelectRequest,
+    lane_key, resolve, ClientClass, EvidenceSource, OverageEvidence, PinRef, Report, SelectRequest,
     SelectResult,
 };
 use phoebis_store::{AccountState, BudgetPeriod, CooldownRow, MemberWrite, OveragePolicy};
@@ -203,6 +203,7 @@ async fn select_main(r: &Rig) -> SelectResult {
     let snapshot = r.h.router.snapshot();
     let key = snapshot.key("desktop").unwrap();
     let candidates = resolve(&snapshot, key, &model, &model).unwrap();
+    let lane = lane_key(&model, "standard", "none", "-");
     r.h.router
         .select(SelectRequest {
             key_id: "desktop".into(),
@@ -227,6 +228,7 @@ async fn select_main(r: &Rig) -> SelectResult {
             marker: false,
             parent_agent_id: None,
             holds: Vec::new(),
+            lane,
         })
         .await
         .unwrap()
@@ -540,6 +542,7 @@ async fn a_budget_crossed_between_the_gate_and_the_selection_holds_the_probe_and
             marker: false,
             parent_agent_id: None,
             holds: Vec::new(),
+            lane: lane_key("claude-sonnet-4-5", "standard", "none", "-"),
         })
         .await
         .unwrap();
@@ -919,6 +922,7 @@ async fn a_pin_the_router_moved_on_the_agents_own_request_moves_the_next_probe()
                 marker: false,
                 parent_agent_id: None,
                 holds: Vec::new(),
+                lane: lane_key(&pin.model, "standard", "none", "-"),
             })
             .await
             .unwrap();

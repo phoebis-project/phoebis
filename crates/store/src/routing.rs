@@ -57,6 +57,8 @@ pub struct PinRow {
     pub shed_at: Option<i64>,
     pub static_hash: Option<String>,
     pub tail_hash: Option<String>,
+    /// The lane of the last request that refreshed or colded the pin, `""` before any did.
+    pub lane: String,
 }
 
 impl PinRow {
@@ -195,10 +197,12 @@ pub struct AffinityRow {
     /// The conversation the writing request belonged to: its resolved session under an identity, its own first
     /// message boundary for a request with none.
     pub root: String,
+    /// The cache lane of the writing request: a filter beside the `(model, hash)` key, never part of it.
+    pub lane: String,
 }
 
 const AFFINITY_COLUMNS: &str =
-    "model, hash, chain, account_id, incarnation, written_at, ttl_ms, prefix_tokens, key_id, key_generation, root";
+    "model, hash, chain, account_id, incarnation, written_at, ttl_ms, prefix_tokens, key_id, key_generation, root, lane";
 
 fn affinity_of(r: &rusqlite::Row<'_>) -> rusqlite::Result<AffinityRow> {
     Ok(AffinityRow {
@@ -213,6 +217,7 @@ fn affinity_of(r: &rusqlite::Row<'_>) -> rusqlite::Result<AffinityRow> {
         key_id: r.get(8)?,
         key_generation: r.get(9)?,
         root: r.get(10)?,
+        lane: r.get(11)?,
     })
 }
 
@@ -237,7 +242,7 @@ impl Store {
             overage: tx.prepare("SELECT account_id, in_use, since, reset, observed_at, source, incarnation FROM overage_state ORDER BY account_id")?
                 .query_map([], |r| Ok(OverageRow { account_id: r.get(0)?, in_use: r.get(1)?, since: r.get(2)?, reset: r.get(3)?, observed_at: r.get(4)?, source: r.get(5)?, incarnation: r.get::<_, i64>(6)? as u64 }))?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
-            pins: tx.prepare(&format!("SELECT key_id, session_id, agent_id, model, account_id, epoch, created_at, last_used_at, key_generation, incarnation, burn_at, last_input_tokens, last_refresh_at, cache_ttl_ms, shed_from, shed_at, static_hash, tail_hash, {BURN_COLUMNS} FROM pins ORDER BY key_id, session_id, agent_id, model"))?
+            pins: tx.prepare(&format!("SELECT key_id, session_id, agent_id, model, account_id, epoch, created_at, last_used_at, key_generation, incarnation, burn_at, last_input_tokens, last_refresh_at, cache_ttl_ms, shed_from, shed_at, static_hash, tail_hash, lane, {BURN_COLUMNS} FROM pins ORDER BY key_id, session_id, agent_id, model"))?
                 .query_map([], |r| Ok(PinRow {
                     key_id: r.get(0)?, session_id: r.get(1)?, agent_id: r.get(2)?, model: r.get(3)?, account_id: r.get(4)?,
                     epoch: r.get::<_, i64>(5)? as u64, created_at: r.get(6)?, last_used_at: r.get(7)?,
@@ -245,7 +250,7 @@ impl Store {
                     burn_at: r.get(10)?, last_input_tokens: r.get::<_, i64>(11)? as u64,
                     last_refresh_at: r.get(12)?, cache_ttl_ms: r.get(13)?,
                     shed_from: r.get(14)?, shed_at: r.get(15)?, static_hash: r.get(16)?, tail_hash: r.get(17)?,
-                    burn: burn_from(r, 18)?, burn_banded: burn_from(r, 23)?,
+                    lane: r.get(18)?, burn: burn_from(r, 19)?, burn_banded: burn_from(r, 24)?,
                 }))?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
             resolutions: tx.prepare("SELECT spelling, dated_id, resolved_at FROM model_resolutions ORDER BY spelling")?
@@ -279,11 +284,12 @@ impl Store {
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         {
             let mut stmt = tx.prepare(&format!(
-                "INSERT INTO affinity ({AFFINITY_COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11) \
+                "INSERT INTO affinity ({AFFINITY_COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12) \
                  ON CONFLICT(model, hash) DO UPDATE SET \
                    chain = excluded.chain, account_id = excluded.account_id, incarnation = excluded.incarnation, \
                    written_at = excluded.written_at, ttl_ms = excluded.ttl_ms, prefix_tokens = excluded.prefix_tokens, \
-                   key_id = excluded.key_id, key_generation = excluded.key_generation, root = excluded.root"
+                   key_id = excluded.key_id, key_generation = excluded.key_generation, root = excluded.root, \
+                   lane = excluded.lane"
             ))?;
             for row in rows {
                 stmt.execute(params![
@@ -297,7 +303,8 @@ impl Store {
                     row.prefix_tokens as i64,
                     row.key_id,
                     row.key_generation,
-                    row.root
+                    row.root,
+                    row.lane
                 ])?;
             }
         }
@@ -446,15 +453,15 @@ fn burn_from(r: &rusqlite::Row<'_>, first: usize) -> rusqlite::Result<PinBurn> {
 fn upsert_pin_on(conn: &Connection, pin: &PinRow) -> Result<(), StoreError> {
     conn.execute(
         &format!(
-            "INSERT INTO pins (key_id, session_id, agent_id, model, account_id, epoch, created_at, last_used_at, key_generation, incarnation, burn_at, last_input_tokens, last_refresh_at, cache_ttl_ms, shed_from, shed_at, static_hash, tail_hash, {BURN_COLUMNS}) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28) \
+            "INSERT INTO pins (key_id, session_id, agent_id, model, account_id, epoch, created_at, last_used_at, key_generation, incarnation, burn_at, last_input_tokens, last_refresh_at, cache_ttl_ms, shed_from, shed_at, static_hash, tail_hash, lane, {BURN_COLUMNS}) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29) \
              ON CONFLICT(key_id, session_id, agent_id, model) DO UPDATE SET \
                account_id = excluded.account_id, epoch = excluded.epoch, created_at = excluded.created_at, \
                last_used_at = excluded.last_used_at, key_generation = excluded.key_generation, \
                incarnation = excluded.incarnation, burn_at = excluded.burn_at, \
                last_input_tokens = excluded.last_input_tokens, last_refresh_at = excluded.last_refresh_at, \
                cache_ttl_ms = excluded.cache_ttl_ms, shed_from = excluded.shed_from, shed_at = excluded.shed_at, \
-               static_hash = excluded.static_hash, tail_hash = excluded.tail_hash, \
+               static_hash = excluded.static_hash, tail_hash = excluded.tail_hash, lane = excluded.lane, \
                burn_cache_read = excluded.burn_cache_read, burn_input = excluded.burn_input, \
                burn_output = excluded.burn_output, burn_write_1h = excluded.burn_write_1h, \
                burn_write_5m = excluded.burn_write_5m, burn_banded_cache_read = excluded.burn_banded_cache_read, \
@@ -480,6 +487,7 @@ fn upsert_pin_on(conn: &Connection, pin: &PinRow) -> Result<(), StoreError> {
             pin.shed_at,
             pin.static_hash,
             pin.tail_hash,
+            pin.lane,
             pin.burn.cache_read,
             pin.burn.input,
             pin.burn.output,

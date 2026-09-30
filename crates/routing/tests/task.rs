@@ -4,11 +4,11 @@ use std::time::Duration;
 
 use phoebis_oauth::{Clock, ExtraUsage, UsageSnapshot, UsageWindow};
 use phoebis_routing::{
-    resolve, sample_from_usage, spawn, AffinityReport, BandWeight, BurnRates, ClientClass,
-    Exhaustion, KeyRefusal, MemberSpend, PinRef, PinUsage, Presented, RateTable, Rates,
-    Refusal, ReloadError, Report, ResolveError, RouterConfig, RouterHandle, RoutingState,
-    SelectRequest, SelectResult, SharePricer, UtilizationSample, WindowReading, FIVE_HOUR,
-    SEVEN_DAY, SEVEN_DAY_FABLE,
+    lane_key, resolve, sample_from_usage, spawn, AffinityReport, BandWeight, BurnRates,
+    ClientClass, Exhaustion, KeyRefusal, MemberSpend, PinRef, PinUsage, Presented,
+    RateTable, Rates, Refusal, ReloadError, Report, ResolveError, RouterConfig, RouterHandle,
+    RoutingState, SelectRequest, SelectResult, SharePricer, UtilizationSample, WindowReading,
+    FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
 };
 use phoebis_store::{
     key_prefix, AccountKind, AccountRow, AccountState, Affinity, AffinitySource, ApiKeyRow,
@@ -155,6 +155,7 @@ fn request(handle: &phoebis_routing::RouterHandle, session: Option<&str>, now: i
         marker: false,
         parent_agent_id: None,
         holds: Vec::new(),
+        lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
     }
 }
 
@@ -185,6 +186,7 @@ fn affinity_report(
         key_id: "k".into(),
         key_generation: s.key("k").unwrap().created_at,
         canonical_model: "claude-sonnet-5".into(),
+        lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
         root: None,
         static_boundaries: Vec::new(),
         message_boundaries: vec!["b1".into()],
@@ -603,6 +605,7 @@ async fn a_persisted_resolution_keys_the_dated_pin_after_a_restart_before_any_re
             marker: false,
             parent_agent_id: None,
             holds: Vec::new(),
+            lane: lane_key("claude-sonnet-4-5", "standard", "none", "-"),
         }
     };
     let epoch;
@@ -728,6 +731,7 @@ async fn resolve_answers_once_the_state_holds_the_spellings_pins_and_cooldowns_u
             marker: false,
             parent_agent_id: None,
             holds: Vec::new(),
+            lane: lane_key("claude-sonnet-4-5", "standard", "none", "-"),
         })
         .await
         .unwrap();

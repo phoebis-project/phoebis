@@ -1581,6 +1581,7 @@ mod tests {
             shed_at: None,
             static_hash: None,
             tail_hash: None,
+            lane: crate::lane_key("m", "standard", "none", "-"),
         };
         (pin, burn)
     }
@@ -1597,6 +1598,7 @@ mod tests {
             key_id: "k".into(),
             key_generation: 1,
             canonical_model: model.into(),
+            lane: crate::lane_key(model, "standard", "none", "-"),
             root: None,
             static_boundaries: Vec::new(),
             message_boundaries: vec!["b1".into()],

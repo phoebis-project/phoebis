@@ -24,6 +24,9 @@ pub struct BodyFacts {
     /// Whether `system[0]` is an attribution line at all, stamped or reduced: what the restoration fills.
     pub carries_line: bool,
     pub shape: RequestShape,
+    /// The top-level `output_config.effort` alone, whatever a control entry says: the lane of a request without
+    /// the per-turn beta reads it, since a control entry left in the history sets no level there.
+    pub top_level_effort: Option<String>,
     /// `None` for a body that is not a JSON object; the same parse `shape` and the rest above read.
     pub chains: Option<Chains>,
     /// The largest `cache_control.ttl` at the API's marker positions, `None` without a marker there.
@@ -36,6 +39,8 @@ pub struct ClientHints {
     pub agent_type: Option<String>,
     pub compaction: Option<String>,
     pub context_compacted: Option<String>,
+    /// `anthropic-beta` carries `per-turn-control-2026-07-01`, on any of its lines.
+    pub per_turn_effort: bool,
     /// `<name>=<ms>;...` summed; absent when no entry parses or the value runs past 4 KiB.
     pub prev_tool_ms: Option<i64>,
     /// `x-claude-code-request-class`.
@@ -59,6 +64,7 @@ impl BodyFacts {
                     safeguards,
                     ..RequestShape::default()
                 },
+                top_level_effort: None,
                 chains: None,
                 markers_ttl_ms: None,
             };
@@ -75,8 +81,7 @@ impl BodyFacts {
             m.iter()
                 .rev()
                 .filter(|entry| is_system(entry))
-                .find_map(|entry| entry.get("output_config").and_then(|o| o.get("effort")))
-                .and_then(Value::as_str)
+                .find_map(|entry| entry.get("output_config")?.get("effort")?.as_str())
                 .map(str::to_string)
         });
         let prompt_units = messages
@@ -106,9 +111,9 @@ impl BodyFacts {
         let count = |v: Option<&Value>| v.and_then(Value::as_array).map_or(0, |a| a.len() as u32);
         let text = |v: Option<&Value>| v.and_then(Value::as_str).map(str::to_string);
         let thinking = root.get("thinking");
+        let top_level_effort = text(root.get("output_config").and_then(|o| o.get("effort")));
         let shape = RequestShape {
-            effort: control_effort
-                .or_else(|| text(root.get("output_config").and_then(|o| o.get("effort")))),
+            effort: control_effort.or_else(|| top_level_effort.clone()),
             thinking_type: text(thinking.and_then(|t| t.get("type"))),
             thinking_budget: thinking
                 .and_then(|t| t.get("budget_tokens"))
@@ -141,6 +146,7 @@ impl BodyFacts {
             turn_origin,
             carries_line,
             shape,
+            top_level_effort,
             chains,
             markers_ttl_ms,
         }
@@ -174,6 +180,12 @@ impl ClientHints {
                 headers,
                 "x-claude-code-context-compacted",
             ),
+            per_turn_effort: headers
+                .get_all("anthropic-beta")
+                .iter()
+                .filter_map(|line| line.to_str().ok())
+                .flat_map(|line| line.split(','))
+                .any(|token| token.trim() == crate::lane::PER_TURN_BETA),
             prev_tool_ms: headers
                 .get("x-claude-code-prev-tool-durations")
                 .and_then(|v| v.to_str().ok())
@@ -374,6 +386,30 @@ mod tests {
         );
         let neither = br#"{"messages":[{"role":"user","content":"hi"}]}"#;
         assert_eq!(BodyFacts::read(neither).shape.effort, None);
+        let config_less_last = br#"{"messages":[
+            {"role":"user","content":"hi"},
+            {"role":"system","content":[{"type":"text","text":"a"}],"output_config":{"effort":"low"}},
+            {"role":"system","content":[{"type":"text","text":"b"}]}
+        ]}"#;
+        assert_eq!(
+            BodyFacts::read(config_less_last).shape.effort.as_deref(),
+            Some("low"),
+            "a system entry without a config steps back to the earlier control entry"
+        );
+        let null_last = br#"{"messages":[
+            {"role":"user","content":"hi"},
+            {"role":"system","content":[{"type":"text","text":"a"}],"output_config":{"effort":"low"}},
+            {"role":"system","content":[{"type":"text","text":"b"}],"output_config":{"effort":null}}
+        ]}"#;
+        assert_eq!(
+            BodyFacts::read(null_last).shape.effort.as_deref(),
+            Some("low"),
+            "a level that is no string steps back as well"
+        );
+        let system_alone = br#"{"messages":[
+            {"role":"system","content":[{"type":"text","text":"a"}],"output_config":{"effort":"low"}}
+        ]}"#;
+        assert!(!BodyFacts::read(system_alone).fresh_user_turn);
     }
 
     #[test]
@@ -494,6 +530,26 @@ mod tests {
                 hints.prev_tool_ms
             ),
             (None, None, None, None)
+        );
+        assert!(!hints.per_turn_effort);
+        let mut betas = HeaderMap::new();
+        betas.append(
+            "anthropic-beta",
+            "effort-2025-11-24,mid-conversation-system-2026-04-07"
+                .parse()
+                .unwrap(),
+        );
+        assert!(
+            !ClientHints::read(&betas).per_turn_effort,
+            "a line without the per-turn beta"
+        );
+        betas.append(
+            "anthropic-beta",
+            "per-turn-control-2026-07-01".parse().unwrap(),
+        );
+        assert!(
+            ClientHints::read(&betas).per_turn_effort,
+            "the per-turn beta on a line of its own"
         );
     }
 

@@ -274,17 +274,20 @@ state and answers every request over a channel, so two concurrent first requests
 different accounts. The identity a pin is held under is the session header [Clients](#clients) names.
 
 A fresh request with no live pin lands where its prefix is already warm. The deepest message boundary any account still
-holds wins first, for a main conversation and a subagent alike. Failing that, the deepest static boundary places a
-subagent under `by_cohort` or a main conversation under `by_warm_prefix`, when the shared prefix, sized by the relay's
-estimate from the request's bytes, is at least `min_shared_prefix_tokens`, the request carries or receives a cache
-marker, and the account is not at its cap, at or above the ceiling (`select_below_utilization`), at or above the migrate
-threshold less its 0.05 band (`migrate_above_utilization`), under the Pace floor, or winding down. A cooling account
-never reaches either rung, since the eligible set excludes it; a spent account is in the eligible set, and both rungs
-refuse it through the allowance check. A subagent under `with_main` lands its first request on its parent agent's pin in
-place of the static walk, and one under `by_strategy` skips the static walk; every case that finds no live match lands
-by the strategy. A held request of a subagent cohort waits where its cohort already is rather than on the strategy's own
-pick; a session already on an account, under any of its agents, is never held while that account can still serve. A
-token count is never placed and takes neither exemption from a hold: its pin or the strategy decides it.
+holds wins first, for a main conversation and a subagent alike. Both rungs read entries of the request's own cache lane
+alone: the model, the speed, the thinking configuration and, on a model without the per-turn effort form, the effort;
+the upstream shares no cached prefix across those, so an entry of another lane is no warm prefix. Failing that, the
+deepest static boundary places a subagent under `by_cohort` or a main conversation under `by_warm_prefix`, when the
+shared prefix, sized by the relay's estimate from the request's bytes, is at least `min_shared_prefix_tokens`, the
+request carries or receives a cache marker, and the account is not at its cap, at or above the ceiling
+(`select_below_utilization`), at or above the migrate threshold less its 0.05 band (`migrate_above_utilization`), under
+the Pace floor, or winding down. A cooling account never reaches either rung, since the eligible set excludes it; a
+spent account is in the eligible set, and both rungs refuse it through the allowance check. A subagent under `with_main`
+lands its first request on its parent agent's pin in place of the static walk, and one under `by_strategy` skips the
+static walk; every case that finds no live match lands by the strategy. A held request of a subagent cohort waits where
+its cohort already is rather than on the strategy's own pick; a session already on an account, under any of its agents,
+is never held while that account can still serve. A token count is never placed and takes neither exemption from a hold:
+its pin or the strategy decides it.
 
 The eligible set starts from every account that can serve the canonical model: enabled, paired or keyed, not
 `reauth_required` or `funding_required`, off cooldown, and not already tried by this request.
@@ -403,16 +406,19 @@ so the next request after it may start a fresh round.
 
 **Warmth** A pin stays warm while its last refresh is younger than the cache TTL in force for it. A `main`, `subagent`
 or `compaction` request ([`x-claude-code-request-class`](client.md#claude_code_gateway_hint_headers)) refreshes it, and
-any other class leaves it alone. Without the class header, a request whose messages extend the session's conversation
-refreshes the pin; one that repeats the session's static prefix (tools and system prompt) without extending its messages
-restarted the conversation and reads cold; one that matches neither changes nothing. Where one session holds several
-conversations, a request that extends any
-conversation the pin has served refreshes it.
-A request that carries `x-claude-code-context-compacted` reads cold whatever else it
-says, so a compacted session goes first in the round's order on the request that carries the fact. A body the router
-cannot read refreshes the pin on every request. A keepalive probe replays another request's headers and body, so
-the router judges none of them: a probe never colds a session, and its renewal counts as a refresh. A `count_tokens`
-request creates no cache entry, so it neither refreshes nor colds the pin and leaves its cache TTL as it was.
+any other class leaves it alone. A request on another cache lane than the pin's last (a speed change, a thinking change,
+or an effort change on a model the client sends no per-turn control entry for) reads cold whatever its messages
+continue, and the pin takes the new lane; a per-turn control entry is one more message and continues the conversation.
+Without the class header, a request whose messages extend the session's conversation refreshes the pin; one that repeats
+the session's static prefix (tools and system prompt) without extending its messages restarted the conversation and
+reads cold; one that matches neither changes nothing. Where one session holds several conversations,
+a request that extends any conversation the pin
+has served refreshes it.
+A request that carries `x-claude-code-context-compacted` reads cold whatever else it says, so a compacted
+session goes first in the round's order on the request that carries the fact. A body the router cannot read refreshes
+the pin on every request. A keepalive probe replays another request's headers and body, so the router judges none of
+them: a probe never colds a session, and its renewal counts as a refresh. A `count_tokens` request creates no cache
+entry, so it neither refreshes nor colds the pin and leaves its cache TTL as it was.
 
 **Burn** Each pin keeps its usage over `burn_window_seconds` as typed tokens per hour (input, cache read, 5-minute and
 1-hour cache writes, output) for the pin's one model, in two copies: one plain and one weighed by the peak band at each
