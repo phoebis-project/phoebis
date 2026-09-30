@@ -16,7 +16,7 @@
         "event": "session_started",
         "id": 4,
         "kind": "session_active",
-        "rule_id": "rule_f8d4d654b2d9feee",
+        "rule_id": "rule_67f2ad1b2e838676",
         "state": "event",
         "status": 200,
         "subject": "desktop, session e2e-ui"
