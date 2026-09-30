@@ -2707,6 +2707,7 @@ if (failoverRow) {
   const server = requests.find((r) => r.autoMode === 'server');
   const dropped = requests.find((r) => r.autoMode === 'stripped');
   results.push({ name: 'fixture: a server-side check and a dropped check', ok: server !== undefined && dropped !== undefined, missing: [server?.id ?? 'no server row', dropped?.id ?? 'no dropped row'] });
+  results.push({ name: 'fixture: the dropped check sits under notebook, the key whose setting is off', ok: dropped?.keyId === 'notebook' && dropped?.poolId === 'studio', missing: [`${dropped?.keyId} under ${dropped?.poolId}`] });
   for (const [r, name, words] of [
     [server, '/requests drawer reads a server-side check requested', 'server-side check requested'],
     [dropped, '/requests drawer reads a dropped check', "server-side check dropped by this key's setting"],

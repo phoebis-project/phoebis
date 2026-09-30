@@ -280,6 +280,7 @@ export const KEYS: ApiKey[] = [
     status: 'active',
     createdAt: daysAgo(3),
     expiresAt: null,
+    // The request log's one notebook row sets the last use and the usage below, since its time and cost are drawn.
     lastUsedAt: null,
     retiredSecretLastUsedAt: null,
     sessionsOnRetiredSecret: 0,

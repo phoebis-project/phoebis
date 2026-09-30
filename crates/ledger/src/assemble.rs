@@ -615,9 +615,12 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
         request_class: observed.client.request_class.clone(),
         forked_from: observed.fork.forked_from.clone(),
         fork_depth: observed.fork.fork_depth,
-        // A body refused for its shape never reached an upstream, whatever admission read of its member; the
-        // standing says so beside the outcome's code.
-        auto_mode: if complete.error_code.as_deref() == Some("body_shape") {
+        // A body refused for its shape before any dispatch never reached an upstream, whatever admission read of
+        // its member; the standing says so beside the outcome's code. A failover leg refused for its shape comes
+        // after a leg that did reach one, so that row keeps what admission read.
+        auto_mode: if complete.outcome == Outcome::Rejected
+            && complete.error_code.as_deref() == Some("body_shape")
+        {
             Some(AutoMode::BodyShape.as_str().to_string())
         } else {
             observed.auto_mode.map(|m| m.as_str().to_string())

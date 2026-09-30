@@ -36,7 +36,8 @@ impl Kind {
 }
 
 /// What a request had to do with auto mode. Admission reads `Server` or `Stripped` from the `safeguards` member
-/// and the key's effective setting; the ledger reads `BodyShape` off a `body_shape` refusal, whatever admission read.
+/// and the key's effective setting; the ledger reads `BodyShape` off a `body_shape` refusal before any dispatch,
+/// whatever admission read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AutoMode {
     BodyShape,
@@ -333,7 +334,7 @@ pub struct RequestObserved {
     pub client: ClientFacts,
     /// Decided at admission from the body and the key's effective setting; `None` for a request that did not ask
     /// for a server-side check and for a refusal published before the body was read. The ledger records a
-    /// `body_shape` refusal as `BodyShape` whatever this says.
+    /// `body_shape` refusal before any dispatch as `BodyShape` whatever this says.
     pub auto_mode: Option<AutoMode>,
     /// What the fork detection read, both members `None` for a refusal published before the climb ran.
     pub fork: Fork,

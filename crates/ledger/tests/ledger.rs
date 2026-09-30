@@ -1088,6 +1088,25 @@ async fn the_auto_mode_standing_round_trips_and_a_body_shape_refusal_reads_body_
         error_code: Some("client_gone".into()),
         ..canceled
     }));
+    // A failover leg refused for its shape after an earlier leg reached an upstream (an account whose credential the
+    // body edit cannot serve): the request did reach one, so the row keeps what admission read.
+    h.bus.publish(auto_mode_observed(
+        "am-failover-refused",
+        Some(AutoMode::Server),
+    ));
+    h.bus
+        .publish(selected_event("am-failover-refused", 1, "a", 10));
+    h.bus.publish(head_event("am-failover-refused", 429, 20));
+    let BusEvent::RequestComplete(refused) = complete_event("am-failover-refused") else {
+        unreachable!()
+    };
+    h.bus.publish(BusEvent::RequestComplete(RequestComplete {
+        attempt: 1,
+        outcome: BusOutcome::Failed,
+        status: 400,
+        error_code: Some("body_shape".into()),
+        ..refused
+    }));
     let harness = &h;
     let read = |id: &'static str| async move { ledgered(harness, id).await.0.auto_mode };
     assert_eq!(read("am-server").await, Some("server".into()));
@@ -1116,6 +1135,24 @@ async fn the_auto_mode_standing_round_trips_and_a_body_shape_refusal_reads_body_
         );
         assert!(attempts.is_empty(), "a refusal has no attempt ({id})");
     }
+    let (row, attempts) = ledgered(harness, "am-failover-refused").await;
+    assert_eq!(
+        row.auto_mode.as_deref(),
+        Some("server"),
+        "a leg refused for its shape after one reached an upstream keeps the standing admission read"
+    );
+    assert_eq!(
+        (row.outcome.as_str(), row.error_code.as_deref()),
+        ("failed", Some("body_shape"))
+    );
+    assert_eq!(
+        attempts
+            .iter()
+            .map(|a| a.upstream_status)
+            .collect::<Vec<_>>(),
+        vec![Some(429)],
+        "the leg that reached an upstream"
+    );
     up.shutdown().await;
 }
 
@@ -1483,8 +1520,7 @@ async fn a_rollup_row_from_before_the_class_dimension_reads_under_the_reserved_c
                  ALTER TABLE attempts DROP COLUMN selection; \
                  ALTER TABLE quota_samples DROP COLUMN observed_at; \
                  DROP TABLE window_reconciliations; \
-                 ALTER TABLE requests DROP COLUMN auto_mode; \
-",
+                 ALTER TABLE requests DROP COLUMN auto_mode;",
             )?;
             Ok(())
         })

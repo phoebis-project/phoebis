@@ -4,6 +4,7 @@ import type {
 } from '@/api/types';
 import { emptyCacheMissReasons, emptyWastedProbeReasons, missCount } from '@/lib/cache';
 import { AGENT_TYPES } from '@/lib/client';
+import { tokensTotal } from '@/lib/format';
 import { emptyHistogram, histogramOf } from '@/lib/histogram';
 import { ACCOUNTS, QUOTA_HISTORY } from './accounts';
 import type { HourlyRollup } from './analytics';
@@ -324,16 +325,26 @@ function buildRequests(): RequestLog[] {
       responseTruncated: lane.keyId === 'laptop' && i % 7 === 0,
     });
     // A dropped check belongs under notebook, the one key under a pool that turned the check off, and that pool's
-    // one member served it. The row keeps every other value it drew on the laptop lane, so the generator's later
-    // draws stay where they were.
+    // one member served it; notebook captures no bodies. The row keeps every other value it drew on the laptop
+    // lane, so this loop's later draws stay where they were. The passes after the loop draw per row by its key and
+    // pool (a lane in `LANES`, which has none for notebook, and the pool's cache warming), so they draw less for
+    // this row and their later draws move.
     if (autoMode === 'stripped') {
       const moved = rows[rows.length - 1];
       Object.assign(moved, {
         accountId: 'business',
         attempts: moved.attempts.map((a) => ({ ...a, accountId: 'business' })),
+        capturedBodies: false,
         keyGeneration: Date.parse(keyById.get('notebook')!.createdAt),
         keyId: 'notebook',
         poolId: 'studio',
+        responseTruncated: false,
+      });
+      // The key's own figures are its one request's.
+      Object.assign(keyById.get('notebook')!, {
+        lastUsedAt: moved.at,
+        lifetime: { cost: moved.costUsd, requests: 1 },
+        usage7d: { cost: moved.costUsd, requests: 1, tokens: tokensTotal(moved.usage) },
       });
     }
   }
