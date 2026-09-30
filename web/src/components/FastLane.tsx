@@ -31,7 +31,7 @@ export function FastLane({ account, now }: { account: Account; now: number }): J
   return (
     <div className="chips fast-lane">
       {used.length > 0 && (
-        <span className="fast-lane__line" title={reset ? fmtAbsolute(reset) : undefined}>
+        <span className="fast-lane__line" title={reset !== null && when.length > 0 ? fmtAbsolute(reset) : undefined}>
           <span className="fast-lane__label">Fast mode</span>
           {[...used, ...when].join(', ')}
         </span>

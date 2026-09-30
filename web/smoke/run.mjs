@@ -444,7 +444,9 @@ m.unmount();
             : a,
     );
   const stale = await mount('/quota');
-  const lineOf = (label) => [...stale.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === label)?.querySelector('.fast-lane__line')?.textContent?.trim() ?? '';
+  const laneOf = (label) => [...stale.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === label)?.querySelector('.fast-lane__line');
+  const lineOf = (label) => laneOf(label)?.textContent?.trim() ?? '';
+  const titleOf = (label) => laneOf(label)?.getAttribute('title') ?? null;
   results.push({
     name: '/quota a fast lane reading past its reset reads refilled, a lane past both says when it refilled, and one beside a reading with no reset says nothing of when',
     ok:
@@ -452,6 +454,12 @@ m.unmount();
       /^Fast modeinput 0% used, output 5% used, resets in [45]m$/.test(lineOf('Console workspace')) &&
       lineOf('mail') === 'Fast modeinput 50% used, output 0% used',
     missing: [lineOf('business') || 'no line on business', lineOf('Console workspace') || 'no line on the Console workspace', lineOf('mail') || 'no line on mail'],
+  });
+  // The hover names the reset the line's suffix speaks of, so a line that says nothing of when carries none.
+  results.push({
+    name: '/quota a fast lane line carries the reset on hover only where it names a reset or a refill',
+    ok: titleOf('business') !== null && titleOf('Console workspace') !== null && titleOf('mail') === null,
+    missing: [`business: ${titleOf('business')}`, `Console workspace: ${titleOf('Console workspace')}`, `mail: ${titleOf('mail')}`],
   });
   api.listAccounts = listAccounts;
   stale.unmount();
