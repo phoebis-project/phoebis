@@ -8,7 +8,8 @@ use serde_json::Value;
 use crate::chains::Chains;
 
 pub struct BodyFacts {
-    /// The last `messages` entry has role `user` and carries no `tool_result` block.
+    /// The last `messages` entry whose role is not `system` has role `user` and carries no `tool_result`
+    /// block: a per-turn control entry after the user's turn is the client's, not a turn of its own.
     pub fresh_user_turn: bool,
     /// UTF-16 code units 4, 7, and 20 of the user's own prompt (the last `text` block of the first `user`
     /// message; the system-reminder blocks precede it), matching the client's own JavaScript string indexing;
@@ -63,9 +64,21 @@ impl BodyFacts {
             };
         };
         let messages = root.get("messages").and_then(Value::as_array);
+        let is_system = |entry: &Value| entry.get("role").and_then(Value::as_str) == Some("system");
+        // The client appends its per-turn control entry after the user's turn, so the turn is judged on the last
+        // entry the user or the assistant wrote, not on the client's own.
         let fresh_user_turn = messages
-            .and_then(|m| m.last())
+            .and_then(|m| m.iter().rev().find(|entry| !is_system(entry)))
             .is_some_and(is_fresh_user_turn);
+        // The upstream applies the newest control entry's effort over the top-level member.
+        let control_effort = messages.and_then(|m| {
+            m.iter()
+                .rev()
+                .filter(|entry| is_system(entry))
+                .find_map(|entry| entry.get("output_config").and_then(|o| o.get("effort")))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        });
         let prompt_units = messages
             .and_then(|m| {
                 m.iter()
@@ -94,7 +107,8 @@ impl BodyFacts {
         let text = |v: Option<&Value>| v.and_then(Value::as_str).map(str::to_string);
         let thinking = root.get("thinking");
         let shape = RequestShape {
-            effort: text(root.get("output_config").and_then(|o| o.get("effort"))),
+            effort: control_effort
+                .or_else(|| text(root.get("output_config").and_then(|o| o.get("effort")))),
             thinking_type: text(thinking.and_then(|t| t.get("type"))),
             thinking_budget: thinking
                 .and_then(|t| t.get("budget_tokens"))
@@ -303,6 +317,63 @@ mod tests {
             {"role":"assistant","content":"hello"}
         ]}"#;
         assert!(!BodyFacts::read(body).fresh_user_turn);
+    }
+
+    #[test]
+    fn a_control_entry_after_the_user_turn_keeps_it_a_fresh_turn() {
+        let body = br#"{"messages":[
+            {"role":"user","content":"say hi again"},
+            {"role":"system","content":[{"type":"text","text":"hook context"}],"output_config":{"effort":"high"}}
+        ]}"#;
+        assert!(BodyFacts::read(body).fresh_user_turn);
+    }
+
+    #[test]
+    fn a_control_entry_after_a_tool_result_is_not_a_fresh_turn() {
+        let body = br#"{"messages":[
+            {"role":"user","content":"hi"},
+            {"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"x","input":{}}]},
+            {"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]},
+            {"role":"system","content":[{"type":"text","text":"hook context"}],"output_config":{"effort":"low"}}
+        ]}"#;
+        assert!(!BodyFacts::read(body).fresh_user_turn);
+    }
+
+    #[test]
+    fn the_last_control_entrys_effort_is_the_effective_one_and_the_top_level_member_is_the_fallback(
+    ) {
+        let two_entries = br#"{"output_config":{"effort":"medium"},"messages":[
+            {"role":"user","content":"first"},
+            {"role":"system","content":[{"type":"text","text":"a"}],"output_config":{"effort":"low"}},
+            {"role":"assistant","content":"hi"},
+            {"role":"user","content":"say hi again"},
+            {"role":"system","content":[{"type":"text","text":"b"}],"output_config":{"effort":"high"}}
+        ]}"#;
+        assert_eq!(
+            BodyFacts::read(two_entries).shape.effort.as_deref(),
+            Some("high")
+        );
+        let control_only_differs = br#"{"output_config":{"effort":"low"},"messages":[
+            {"role":"user","content":"hi"},
+            {"role":"system","content":[{"type":"text","text":"a"}],"output_config":{"effort":"max"}}
+        ]}"#;
+        assert_eq!(
+            BodyFacts::read(control_only_differs)
+                .shape
+                .effort
+                .as_deref(),
+            Some("max")
+        );
+        let top_level_alone = br#"{"output_config":{"effort":"medium"},"messages":[
+            {"role":"user","content":"hi"},
+            {"role":"system","content":[{"type":"text","text":"a"}]}
+        ]}"#;
+        assert_eq!(
+            BodyFacts::read(top_level_alone).shape.effort.as_deref(),
+            Some("medium")
+        );
+        let neither = br#"{"messages":[{"role":"user","content":"hi"}]}"#;
+        assert_eq!(BodyFacts::read(neither).shape.effort, None);
     }
 
     #[test]

@@ -873,6 +873,22 @@ pub fn request_from_fixture(head: &[u8], body: &[u8], key: &str) -> Request<Body
     req
 }
 
+/// `body` with a per-turn control entry appended to `messages`, as client 2.1.284 sends one: a `system` entry
+/// whose content is one text block and whose `output_config.effort` is `effort`.
+pub fn with_control_entry(body: &[u8], effort: &str) -> Vec<u8> {
+    let mut value: serde_json::Value =
+        serde_json::from_slice(body).expect("the body is valid JSON");
+    value["messages"]
+        .as_array_mut()
+        .expect("the body carries a messages array")
+        .push(serde_json::json!({
+            "role": "system",
+            "content": [{"type": "text", "text": "hook context"}],
+            "output_config": {"effort": effort},
+        }));
+    serde_json::to_vec(&value).expect("a Value always re-encodes")
+}
+
 /// Sets a header on a fixture request the way a caller that sent it would have: on the map the relay reads
 /// and on the recorded head the outbound builder walks, so the two never disagree about what arrived.
 pub fn set_header(req: &mut Request<Body>, name: &str, value: &str) {

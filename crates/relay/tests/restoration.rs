@@ -186,6 +186,39 @@ async fn absent_fields_are_restored_in_native_order_and_present_ones_are_left_al
 }
 
 #[tokio::test]
+async fn a_turn_that_ends_with_a_control_entry_mints_its_own_prompt_id() {
+    let up = FakeUpstream::start(vec![ok_with_request_id("req_up_0001")]).await;
+    let app = relay_with(AccountKind::Oauth, &up).await;
+    let turn = |bytes: &[u8]| {
+        let mut req =
+            request_from_fixture(inference_head(FixtureKind::OauthNonFirstParty), bytes, KEY);
+        set_header(&mut req, "x-claude-code-session-id", "s-1");
+        req
+    };
+    app.clone()
+        .oneshot(turn(body(BodyFixture::Oauth)))
+        .await
+        .unwrap();
+    let mut next: serde_json::Value = serde_json::from_slice(body(BodyFixture::Oauth)).unwrap();
+    next["messages"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({"role": "user", "content": "say hi again"}));
+    let next = with_control_entry(&serde_json::to_vec(&next).unwrap(), "high");
+    app.clone().oneshot(turn(&next)).await.unwrap();
+    let first = billing_line(&up.requests()[0].body);
+    let second = billing_line(&up.requests()[1].body);
+    let first_id = field(&first, "cc_prompt_id");
+    let second_id = field(&second, "cc_prompt_id");
+    assert!(first_id.is_some() && second_id.is_some());
+    assert_ne!(
+        second_id, first_id,
+        "the control entry after the user's message leaves the turn the user's, so it mints its own id"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
 async fn cc_prev_req_names_the_previous_request_id_on_the_same_session_agent_and_account() {
     let up = FakeUpstream::start(vec![ok_with_request_id("req_up_0001")]).await;
     let app = relay_with(AccountKind::Oauth, &up).await;

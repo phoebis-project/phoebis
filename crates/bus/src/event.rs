@@ -235,7 +235,8 @@ pub struct CooldownSet {
 /// restoration. Absent members stay `None`; the counts are 0 for a body with no such member.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct RequestShape {
-    /// `output_config.effort`.
+    /// The effort the upstream applies: the `output_config.effort` of the last `messages` entry with role
+    /// `system` that carries one, else the top-level `output_config.effort`.
     pub effort: Option<String>,
     /// `thinking.type` and `thinking.budget_tokens`.
     pub thinking_type: Option<String>,
