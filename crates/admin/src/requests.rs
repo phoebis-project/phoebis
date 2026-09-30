@@ -148,6 +148,7 @@ pub(crate) async fn list(
         client: q.get("client").cloned(),
         agent_types: list_param(&q, "agent_types"),
         turn_origins: list_param(&q, "turn_origins"),
+        speeds: list_param(&q, "speeds"),
         from,
         to,
         include_probes: q

@@ -4,11 +4,11 @@ use std::collections::{BTreeMap, HashMap};
 
 use phoebis_ledger::{
     apply_filter, breakdown, bucket_index, burn_rows, burn_series, burn_series_over, delta_of,
-    fold_account, fold_event, fold_keepalive, key_request_totals, member_spends, moves_by_reason,
-    placements, read_account_rollups, read_rollups, rewrite_series, run_retention,
+    fold_account, fold_event, fold_keepalive, key_request_totals, list_requests, member_spends,
+    moves_by_reason, placements, read_account_rollups, read_rollups, rewrite_series, run_retention,
     session_identities, AttemptRecord, EventRecord, Histogram, KeepaliveDelta, LedgerConfig,
-    LedgerDb, LiveKeys, ModelPrice, PlanTables, PriceTable, RequestRecord, RollupFilter, RollupRow,
-    SeriesFilter, Tiers, NO_CLASS, UNATTRIBUTED,
+    LedgerDb, LiveKeys, ModelPrice, PlanTables, PriceTable, RequestFilter, RequestRecord,
+    RollupFilter, RollupRow, SeriesFilter, Tiers, NO_CLASS, UNATTRIBUTED,
 };
 use phoebis_routing::{RegistrySnapshot, RoutingState, FIVE_HOUR, SEVEN_DAY};
 use phoebis_store::{AccountKind, BudgetPeriod, PoolMember, RegistryLoad, RoutingLoad};
@@ -746,6 +746,126 @@ fn a_breakdown_by_request_class_splits_conversation_from_overhead() {
     assert!(
         keys.contains(&"main") && keys.contains(&"compaction") && keys.contains(&NO_CLASS),
         "the named classes and the classless overhead land in their own groups: {keys:?}"
+    );
+}
+
+/// One inference request of key `k` whose attempts answered with the given `usage.speed`s, in order; the last
+/// is the serving attempt, and an earlier one is a 429.
+fn served_at(id: &str, speeds: &[Option<&str>]) -> (RequestRecord, Vec<AttemptRecord>) {
+    let request = RequestRecord {
+        id: id.into(),
+        received_at: 3_600_000,
+        key_id: Some("k".into()),
+        pool_id: Some("p".into()),
+        canonical_model: "claude-opus-5".into(),
+        model: "claude-opus-5".into(),
+        kind: "inference".into(),
+        origin: "client".into(),
+        status: Some(200),
+        outcome: "succeeded".into(),
+        attempts: speeds.len() as u32,
+        ..Default::default()
+    };
+    let attempts = speeds
+        .iter()
+        .enumerate()
+        .map(|(i, speed)| {
+            let serving = i + 1 == speeds.len();
+            AttemptRecord {
+                request_id: id.into(),
+                attempt: i as u32 + 1,
+                account_id: "a".into(),
+                account_kind: "oauth".into(),
+                started_at: 3_600_000 + i as i64,
+                upstream_status: Some(if serving { 200 } else { 429 }),
+                outcome: if serving { "succeeded" } else { "rate_limited" }.into(),
+                output_tokens: serving.then_some(10),
+                speed: speed.map(String::from),
+                ..Default::default()
+            }
+        })
+        .collect();
+    (request, attempts)
+}
+
+#[test]
+fn a_fast_answer_files_its_request_under_speed_fast_and_a_silent_answer_under_standard() {
+    let fast = served_at("r-fast", &[Some("fast")]);
+    let silent = served_at("r-silent", &[None]);
+    assert_eq!(delta_of(&fast.0, &fast.1).speed, "fast");
+    assert_eq!(
+        delta_of(&silent.0, &silent.1).speed,
+        "standard",
+        "an answer that named no speed files under standard"
+    );
+    let db = LedgerDb::open_in_memory().unwrap();
+    for (request, attempts) in [&fast, &silent] {
+        db.insert_request(request, attempts, None).unwrap();
+    }
+    let rows = db.read_blocking(|c| read_rollups(c, 0, i64::MAX)).unwrap();
+    assert_eq!(
+        rows.iter()
+            .map(|r| (r.speed.as_str(), r.requests))
+            .collect::<Vec<_>>(),
+        vec![("fast", 1), ("standard", 1)],
+        "every other key part is equal, so the speed alone keeps the two requests on rows of their own"
+    );
+}
+
+#[test]
+fn group_by_speed_splits_the_rows_by_served_speed() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    for (id, speed) in [
+        ("r1", Some("fast")),
+        ("r2", Some("fast")),
+        ("r3", Some("standard")),
+        ("r4", None),
+    ] {
+        let (request, attempts) = served_at(id, &[speed]);
+        db.insert_request(&request, &attempts, None).unwrap();
+    }
+    let live = LiveKeys(BTreeMap::from([("k".to_string(), 0)]));
+    let rows = db.read_blocking(|c| read_rollups(c, 0, i64::MAX)).unwrap();
+    let filtered = apply_filter(rows, &RollupFilter::default(), &live);
+    let groups = breakdown(&filtered, "speed", false, &live, &[]);
+    assert_eq!(
+        groups
+            .iter()
+            .map(|g| (g.key.as_str(), g.requests))
+            .collect::<Vec<_>>(),
+        vec![("fast", 2), ("standard", 2)],
+        "a named standard and a silent answer share one group"
+    );
+}
+
+#[test]
+fn the_speed_filter_reads_the_serving_attempts_speed() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let (request, attempts) = served_at("r-moved", &[None, Some("fast")]);
+    db.insert_request(&request, &attempts, None).unwrap();
+    let (request, attempts) = served_at("r-plain", &[None]);
+    db.insert_request(&request, &attempts, None).unwrap();
+    let listed = |speeds: &[&str]| {
+        let filter = RequestFilter {
+            speeds: speeds.iter().map(|s| s.to_string()).collect(),
+            ..Default::default()
+        };
+        db.read_blocking(|c| list_requests(c, &filter, &LiveKeys::default(), None, 10))
+            .unwrap()
+            .0
+            .into_iter()
+            .map(|(r, _)| r.id)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        listed(&["fast"]),
+        vec!["r-moved"],
+        "the serving attempt answered fast"
+    );
+    assert_eq!(
+        listed(&["standard"]),
+        vec!["r-plain"],
+        "the 429 before it named no speed, which must not read as standard"
     );
 }
 

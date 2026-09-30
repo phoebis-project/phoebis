@@ -107,6 +107,8 @@ pub struct RequestFilter {
     pub client: Option<String>,
     pub agent_types: Vec<String>,
     pub turn_origins: Vec<String>,
+    /// `fast`, `standard`: the serving attempt's `speed`, NULL read as `standard`.
+    pub speeds: Vec<String>,
     pub from: Option<i64>,
     pub to: Option<i64>,
     pub include_probes: bool,
@@ -267,6 +269,21 @@ pub fn list_requests(
         } else {
             clauses.push(served);
         }
+    }
+    if !filter.speeds.is_empty() {
+        let marks: Vec<String> = filter
+            .speeds
+            .iter()
+            .map(|v| {
+                args.push(Box::new(v.clone()));
+                format!("?{}", args.len())
+            })
+            .collect();
+        // The serving attempt is the last: an earlier 429 carries no speed and must not read as standard.
+        clauses.push(format!(
+            "COALESCE((SELECT a.speed FROM attempts a WHERE a.request_id = requests.id ORDER BY a.attempt DESC LIMIT 1), 'standard') IN ({})",
+            marks.join(", ")
+        ));
     }
     // The rollups and the console's fold already read an absent agent or client as `-`; `pattern_any`'s
     // coalesce keeps a nullable column from excluding such a row from both the wildcard and the exact marker.
@@ -618,6 +635,7 @@ pub const GROUP_BYS: &[&str] = &[
     "model",
     "pool",
     "request_class",
+    "speed",
     "user_agent",
 ];
 
@@ -708,6 +726,7 @@ pub fn group_of(
         "client" => row.client.clone(),
         "effort" => row.effort.clone(),
         "request_class" => row.request_class.clone(),
+        "speed" => row.speed.clone(),
         "user_agent" => {
             if agent_groups.is_empty() {
                 return row.user_agent.clone();
@@ -861,8 +880,8 @@ fn sum_groups(
         let key = group_of(row, group_by, live, agent_groups);
         let entry = sums.entry(key.clone()).or_insert_with(|| {
             (
-                RollupRow::key(0, &key, 0, "", "", "", "", "", "", "", ""),
-                RollupRow::key(0, &key, 0, "", "", "", "", "", "", "", ""),
+                RollupRow::key(0, &key, 0, "", "", "", "", "", "", "", "", ""),
+                RollupRow::key(0, &key, 0, "", "", "", "", "", "", "", "", ""),
                 false,
             )
         });

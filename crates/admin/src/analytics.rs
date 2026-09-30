@@ -85,7 +85,7 @@ async fn rows_for(state: &AdminState, q: &HashMap<String, String>) -> Result<Sel
     if !GROUP_BYS.contains(&group_by.as_str()) {
         return Err(failure(
             StatusCode::BAD_REQUEST,
-            "group_by is account, all, client, effort, key, kind, model, pool, request_class, or user_agent",
+            "group_by is account, all, client, effort, key, kind, model, pool, request_class, speed, or user_agent",
         ));
     }
     let filter = filter_of(q);

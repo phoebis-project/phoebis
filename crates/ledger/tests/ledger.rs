@@ -1545,7 +1545,7 @@ async fn a_rollup_row_from_before_the_class_dimension_reads_under_the_reserved_c
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 21);
+    assert_eq!(db.schema_version().await.unwrap(), 23);
     let rows = db
         .read_blocking(|c| phoebis_ledger::read_rollups(c, 0, i64::MAX))
         .unwrap();
@@ -1642,7 +1642,7 @@ async fn migration_nineteen_adds_the_identity_columns_to_a_version_eighteen_file
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 21);
+    assert_eq!(db.schema_version().await.unwrap(), 23);
     let (row, _) = db.request("r0").await.unwrap().unwrap();
     assert_eq!(
         (
@@ -1690,7 +1690,7 @@ async fn a_ledger_from_before_the_auto_mode_column_gains_it() {
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 21);
+    assert_eq!(db.schema_version().await.unwrap(), 23);
     let columns = db
         .read_blocking(|c| {
             let mut stmt = c.prepare("SELECT name FROM pragma_table_info('requests')")?;
@@ -1701,6 +1701,97 @@ async fn a_ledger_from_before_the_auto_mode_column_gains_it() {
         })
         .unwrap();
     assert!(columns.contains(&"auto_mode".to_string()));
+}
+
+#[tokio::test]
+async fn migration_twenty_three_files_every_rollup_row_under_standard_speed_and_keys_by_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ledger.sqlite");
+    let request = |id: &str| RequestRecord {
+        id: id.into(),
+        received_at: 3_600_000,
+        key_id: Some("desktop".into()),
+        pool_id: Some("main".into()),
+        canonical_model: "claude-opus-5".into(),
+        model: "claude-opus-5".into(),
+        kind: "inference".into(),
+        origin: "client".into(),
+        outcome: "succeeded".into(),
+        attempts: 1,
+        ..Default::default()
+    };
+    let attempt = |id: &str, speed: Option<&str>| phoebis_ledger::AttemptRecord {
+        request_id: id.into(),
+        attempt: 1,
+        account_id: "a".into(),
+        account_kind: "oauth".into(),
+        outcome: "succeeded".into(),
+        output_tokens: Some(5),
+        speed: speed.map(String::from),
+        ..Default::default()
+    };
+    {
+        let db = phoebis_ledger::LedgerDb::open(&path).unwrap();
+        db.insert_request(&request("r0"), &[attempt("r0", None)], None)
+            .unwrap();
+        // SQLite cannot drop a primary-key column, so the version-21 table is rebuilt from the live one with
+        // the speed left out; the indexes go with the table it replaces, and the migration has to add them back.
+        db.write(|c| {
+            let columns: String = c.query_row(
+                "SELECT group_concat(name, ', ') FROM pragma_table_info('rollups_hourly') WHERE name != 'speed'",
+                [],
+                |r| r.get(0),
+            )?;
+            c.execute_batch(&format!(
+                "CREATE TABLE rollups_hourly_prev AS SELECT {columns} FROM rollups_hourly; \
+                 DROP TABLE rollups_hourly; \
+                 ALTER TABLE rollups_hourly_prev RENAME TO rollups_hourly; \
+                 UPDATE meta SET value = '21' WHERE key = 'schema_version';"
+            ))?;
+            Ok(())
+        })
+        .unwrap();
+    }
+    let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
+    assert_eq!(db.schema_version().await.unwrap(), 23);
+    let speeds = |ledger: &phoebis_ledger::LedgerDb| {
+        ledger
+            .read_blocking(|c| {
+                let mut stmt =
+                    c.prepare("SELECT speed, requests FROM rollups_hourly ORDER BY speed")?;
+                let rows = stmt
+                    .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok(rows)
+            })
+            .unwrap()
+    };
+    assert_eq!(
+        speeds(&db),
+        vec![("standard".to_string(), 1)],
+        "a row folded before the column existed files under standard and keeps its count"
+    );
+    db.insert_request(&request("r1"), &[attempt("r1", Some("fast"))], None)
+        .unwrap();
+    assert_eq!(
+        speeds(&db),
+        vec![("fast".to_string(), 1), ("standard".to_string(), 1)],
+        "the key admits a second row that differs from the first in its speed alone"
+    );
+    for index in ["rollups_hourly_key", "rollups_hourly_member"] {
+        let present = db
+            .read_blocking(|c| {
+                Ok(c
+                    .query_row(
+                        "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?1 AND tbl_name = 'rollups_hourly'",
+                        [index],
+                        |_| Ok(()),
+                    )
+                    .is_ok())
+            })
+            .unwrap();
+        assert!(present, "{index} stands on the rebuilt table");
+    }
 }
 
 #[test]

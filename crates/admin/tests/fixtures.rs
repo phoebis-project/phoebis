@@ -432,6 +432,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             AttemptRecord {
                 selection: Some(trace_json.clone()),
                 stop_reason: Some("tool_use".into()),
+                speed: Some("fast".into()),
                 ..attempt(
                     "r-failover",
                     2,
@@ -760,6 +761,10 @@ async fn every_route_is_captured_and_holds_its_shape() {
         (
             "analytics_breakdown",
             "/admin/analytics/breakdown?range=24h&group_by=key",
+        ),
+        (
+            "analytics_breakdown_speed",
+            "/admin/analytics/breakdown?range=24h&group_by=speed",
         ),
         ("analytics_budgets", "/admin/analytics/budgets"),
         (

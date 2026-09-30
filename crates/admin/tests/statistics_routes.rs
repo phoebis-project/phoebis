@@ -110,8 +110,8 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
             system["ledger"]["dropped"].as_u64(),
             system["ledger"]["channel_depth"].as_u64()
         ),
-        (Some(21), Some(0), Some(4_096)),
-        "the ledger schema is at the migration that adds the auto mode column"
+        (Some(23), Some(0), Some(4_096)),
+        "the ledger schema is at the migration that keys the rollups by speed"
     );
     assert_eq!(system["gaps"][0]["detail"]["dropped"].as_u64(), Some(7));
     assert!(

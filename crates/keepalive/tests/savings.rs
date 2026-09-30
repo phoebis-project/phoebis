@@ -22,7 +22,7 @@ async fn rollups(r: &Rig, want: impl Fn(&[RollupRow]) -> bool) -> Vec<RollupRow>
 }
 
 fn probe_rows(rows: &[RollupRow]) -> RollupRow {
-    let mut sum = RollupRow::key(0, "", 0, "", "", "", "probe", "", "", "", "");
+    let mut sum = RollupRow::key(0, "", 0, "", "", "", "probe", "", "", "", "", "");
     for row in rows.iter().filter(|r| r.kind == "probe") {
         sum.add(row);
     }
@@ -30,7 +30,7 @@ fn probe_rows(rows: &[RollupRow]) -> RollupRow {
 }
 
 fn inference_rows(rows: &[RollupRow]) -> RollupRow {
-    let mut sum = RollupRow::key(0, "", 0, "", "", "", "inference", "", "", "", "");
+    let mut sum = RollupRow::key(0, "", 0, "", "", "", "inference", "", "", "", "", "");
     for row in rows.iter().filter(|r| r.kind == "inference") {
         sum.add(row);
     }

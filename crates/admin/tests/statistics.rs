@@ -723,7 +723,38 @@ async fn the_analytics_group_by_client_and_narrow_to_client_patterns() {
     assert_eq!(bad_group.status(), 400);
     assert_eq!(
         json(bad_group).await["error"],
-        "group_by is account, all, client, effort, key, kind, model, pool, request_class, or user_agent"
+        "group_by is account, all, client, effort, key, kind, model, pool, request_class, speed, or user_agent"
+    );
+    let by_speed = get(
+        &parts.app,
+        "/admin/analytics/breakdown?range=24h&group_by=speed",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(by_speed.status(), 200);
+    assert_eq!(
+        json(by_speed).await["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["key"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        vec!["standard"],
+        "no seeded answer named a speed"
+    );
+    let served_fast = json(
+        get(
+            &parts.app,
+            "/admin/requests?speeds=fast&limit=500",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        served_fast["requests"].as_array().unwrap().len(),
+        0,
+        "the request log reads the speeds filter"
     );
     let too_many_clients = get(
         &parts.app,
