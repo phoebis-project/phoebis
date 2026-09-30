@@ -396,8 +396,18 @@ function buildRequests(): RequestLog[] {
     story.canonicalModel = 'claude-sonnet-4-5-20250929';
     story.costUsd = Math.round(costOf(story.model, story.usage) * 10_000) / 10_000;
   }
+  // Fast mode is the client's own toggle and serves Opus: the desktop key's Opus turns asked for it and were
+  // answered fast by whichever upstream served them.
+  for (const r of rows) {
+    if (!fastTurn(r.keyId, r.model, r.kind)) continue;
+    r.shape = { ...r.shape, requestedSpeed: 'fast' };
+    r.attempts = r.attempts.map((a, i, all) => (i === all.length - 1 ? { ...a, response: { ...a.response, speed: 'fast' } } : a));
+  }
   return rows;
 }
+
+/** A turn the story runs in fast mode: the desktop key's Opus inference. */
+const fastTurn = (keyId: string | null, model: string, kind: RequestKind) => keyId === 'desktop' && model.includes('opus') && kind === 'inference';
 
 /** The rejection story's refused attempt: an upstream refuses a model it does not serve before any inference runs. */
 const REJECTION_MS = 180;
@@ -716,6 +726,8 @@ function rollups(): HourlyRollup[] {
       model,
       requestClass: isProbe ? '-' : classOfRows(list),
       sessionId,
+      // A lane's rows share its key, model and kind, which is what decides fast mode in this story.
+      speed: list[0].attempts[list[0].attempts.length - 1]?.response.speed === 'fast' ? 'fast' : 'standard',
       requests: {
         ok: okRows.length,
         rate_limited: list.filter((r) => r.status === 429).length,
@@ -792,6 +804,8 @@ function historicalRollups(): HourlyRollup[] {
   const h = createRng(99);
   // A separate stream so the reason split does not shift the rest of the hour's draws.
   const hm = createRng(521);
+  // Its own stream as well: the desktop key's Opus hours ran part in fast mode.
+  const hf = createRng(7_373);
   // The desktop key asks for high effort throughout; one laptop hour asked for the most, so a grouping on
   // effort has a third group to show. The first eligible hour takes it rather than leaving it to a draw.
   let maxEffortOwed = true;
@@ -859,6 +873,7 @@ function historicalRollups(): HourlyRollup[] {
         model,
         requestClass: classOfHour(`${t}|${lane.keyId}|${sessionId}`),
         sessionId,
+        speed: fastTurn(lane.keyId, model, 'inference') && hf.chance(0.5) ? 'fast' : 'standard',
         requests: { ok, rate_limited: err > 0 && h.chance(0.6) ? err : 0, overloaded: err > 0 && h.chance(0.3) ? 1 : 0, upstream_error: 0 },
         failovers: err > 0 ? h.int(1, 3) : h.chance(0.12) ? 1 : 0,
         migrations: h.chance(0.08) ? 1 : 0,
@@ -906,6 +921,7 @@ function historicalRollups(): HourlyRollup[] {
           model,
           requestClass: '-',
           sessionId,
+          speed: 'standard',
           requests: { ok: probes, rate_limited: 0, overloaded: 0, upstream_error: failed },
           failovers: 0,
           migrations: 0,

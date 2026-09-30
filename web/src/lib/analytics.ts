@@ -34,7 +34,8 @@ export const MAX_BURN_LINES = 7;
 export const OTHER_KEY = 'other';
 /**
  * The unit a burn line charts in. `unknown` is a subscription upstream the route priced no share for, its tier
- * missing or one the tier factor table does not size: neither a share nor dollars, so it is drawn on no axis.
+ * missing or one the tier factor table does not size: it has no share to draw, and dollars only for what its
+ * fast-mode answers spent.
  */
 export type BurnLineUnit = BurnUnit | 'unknown';
 const OTHER_LABEL: Record<BurnLineUnit, string> = { unknown: 'Other (tier unknown)', usd: 'Other (dollars)', window_share: 'Other (plan)' };
@@ -97,7 +98,7 @@ export function foldBurn(points: BurnPoint[], groupBy: BurnGroup, bucketSeconds:
   const tokens = new Map<string, number>();
   for (const p of points) tokens.set(lineOf(p.group), (tokens.get(lineOf(p.group)) ?? 0) + p.cachedTokens + p.uncachedTokens);
   // A share marks a subscription upstream the tables price; the route answers the unit for one they cannot, whose
-  // points carry neither a share nor dollars.
+  // points carry no share, and dollars only for its fast-mode answers.
   const byUpstream = groupBy === 'account';
   const priced = new Set(byUpstream ? points.filter((p) => p.fiveHourShare !== null).map((p) => p.group) : []);
   const subscribed = new Set(byUpstream ? points.filter((p) => p.unit === 'window_share').map((p) => p.group) : []);

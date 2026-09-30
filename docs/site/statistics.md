@@ -103,8 +103,8 @@ A subscription account's plan-side figures read as a share of its own 5-hour win
 with the window named; an API-key account, and a subscription account in overage, read dollars.
 
 A fast answer draws no plan window: it adds nothing to the share, the prediction, the burn a shedding round ranks by, or
-the reconciliation. It reads as a zero share in Plan per hour, and its dollars count toward the member budgets and the
-burn route's `usd`, which Spend per minute charts when grouped by key, request class or session.
+the reconciliation. It reads as a zero share in Plan per hour, and its dollars count toward the burn route's `usd`,
+which Spend per minute charts under every grouping; on an API-key member, its budget counts them at the fast cells.
 
 The cost table (`crates/ledger/cost_table.yaml`) ships beside the price table: per window, model and token type, the
 share of a Max 5x subscription's window that one million tokens consume, each cell dated with the day it was measured or
@@ -281,32 +281,33 @@ One row is one client request however many attempts it took, and
 the attempt trail reads as "mail 429, business 200" when a 429 on the first account failed over to a 200 on the second.
 Filters narrow the table: the user agent filter takes a pattern (`claude-cli/2.1.*`, `*sdk-cli*`; `*` for any run of
 characters, `?` for one, a backslash quoting either, and a value with no wildcard matching in full), the client filter
-takes a pattern over the class (`claude-code/*`), and the agent type and turn origin filters pick from the values the
-client's hint headers and attribution line carry. Selecting a row opens a drawer with the request's detail, which shows
-the user agent, the model as the client spelled it and, when it
-differs, the canonical id the router recorded, its auto-mode standing (asked for a server-side check under an on
-setting; carried the safeguards member under an off setting, which the dispatch drops; refused for its body shape; or
-not requested), and the client hints: the agent type, the compaction and context-compacted markers, the turn origin, and
-the tool time before the turn; the trail names an upstream that rejected the model and the one that served it. The
-drawer's effort is the level the upstream applies: when the client sends a per-turn control entry, the last entry's
-level, else the request's top-level `output_config.effort`; a turn that ends with such an entry still counts as the
-user's turn, so it starts its own prompt. The table holds the requests up to the moment you opened it, so paging does
-not shift as new ones arrive; Refresh brings it up to now. When the session moved during the request, the drawer says
-from which upstream to which and why: rate limited, wound down, upstream marked, over its plan, back to plan, load shed,
-or window spent. When its pin was released without a move, the drawer says from which upstream and every reason the
-router found, among: already tried this request, the upstream at its spend budget, the creating request's own client
-error, an account cooldown, the account deleted, disconnected, idle past the affinity window, funding required, in
-overage, paused, needing reauthorization, released outright, window spent, the subscription ended, never paired, or no
-longer serving the model. The drawer also shows the strategy the selection used, the tier it drew from, whether the pin
-continued and was renewed, moved (naming the rule), or was placed afresh, whether the cache answered the request and by
-how many of its input tokens, and every candidate the selection passed over with the obstacle in its way: already tried,
-above the ceiling, at its in-flight cap, at its spend budget, an account cooldown, at the pace floor, an operator hold,
-in overage, ranked behind another candidate, its subscription ended, its window spent, or winding down. A placement
-names where it landed: by its messages or by its static prefix at the depth that matched, or with the main conversation.
-A request held while every upstream was at its cap names the upstream it was held on: its cohort's, or else the last one
-it waited on. The cache line reads a placement as a hit or a miss against the prefix it was promised: a placement by its
-messages is a hit when the response read at least that prefix, one by its static prefix when it read anything, and one
-with the main conversation keeps the plain cache line.
+takes a pattern over the class (`claude-code/*`), the agent type and turn origin filters pick from the values the
+client's hint headers and attribution line carry, and the speed filter picks `fast` or `standard` by the speed the
+answer reported. Selecting a row opens a drawer with the request's detail, which shows
+the user agent, the model as the client spelled it and, when it differs, the canonical id the router
+recorded, its auto-mode standing (asked for a server-side check under an on setting; carried the safeguards member under
+an off setting, which the dispatch drops; refused for its body shape; or not requested), and the client hints: the agent
+type, the compaction and context-compacted markers, the turn origin, and the tool time before the turn; the trail names
+an upstream that rejected the model and the one that served it. The drawer's effort is the level the upstream applies:
+when the client sends a per-turn control entry, the last entry's level, else the request's top-level
+`output_config.effort`; a turn that ends with such an entry still counts as the user's turn, so it starts its own
+prompt. The table holds the requests up to the moment you opened it, so paging does not shift as new ones arrive;
+Refresh brings it up to now. When the session moved during the request, the drawer says from which upstream to which and
+why: rate limited, wound down, upstream marked, over its plan, back to plan, load shed, or window spent. When its pin
+was released without a move, the drawer says from which upstream and every reason the router found, among: already tried
+this request, the upstream at its spend budget, the creating request's own client error, an account cooldown, the
+account deleted, disconnected, idle past the affinity window, funding required, in overage, paused, needing
+reauthorization, released outright, window spent, the subscription ended, never paired, or no longer serving the model.
+The drawer also shows the strategy the selection used, the tier it drew from, whether the pin continued and was renewed,
+moved (naming the rule), or was placed afresh, whether the cache answered the request and by how many of its input
+tokens, and every candidate the selection passed over with the obstacle in its way: already tried, above the ceiling, at
+its in-flight cap, at its spend budget, an account cooldown, at the pace floor, an operator hold, in overage, ranked
+behind another candidate, its subscription ended, its window spent, or winding down. A placement names where it landed:
+by its messages or by its static prefix at the depth that matched, or with the main conversation. A request held while
+every upstream was at its cap names the upstream it was held on: its cohort's, or else the last one it waited on. The
+cache line reads a placement as a hit or a miss against the prefix it was promised: a placement by its messages is a hit
+when the response read at least that prefix, one by its static prefix when it read anything, and one with the main
+conversation keeps the plain cache line.
 
 ![The Requests view: the filterable table with its client column](assets/requests-light.png#only-light)
 ![The Requests view: the filterable table with its client column](assets/requests-dark.png#only-dark)
@@ -327,20 +328,22 @@ as the request log's, and under the user agent grouping a pattern list names the
 
 Traffic reports request volume by outcome and the error rate, with a Failovers chart and a Migration rewrites card
 beside it: the cache-write tokens the first request after a move paid to warm its new upstream, and the moves the range
-counted, by reason. Burn reports a subscription account's spend as the share of its own 5-hour and 7-day window and an
-api-key account's in dollars, side by side and each split into cached and uncached tokens, grouped by upstream, key,
-session, or request class, beside a Meter reconciliation table (see [Plan meter](#plan-meter)); the 5-hour share carries
-the peak band's weight, the 7-day share none. The shares read under the upstream grouping alone, since shares of
-different upstreams' windows do not add, and the Spend per minute chart draws dollars alone. The key, request class and
-upstream groupings read the hourly rollups, which fold a request under the hour it arrived in and weigh it by that
-hour's band rather than at its completion, where the meter charges it. Grouped by upstream, it adds a Plan per hour
-chart: the share of each subscription upstream's 5-hour window, solid, and of its 7-day window, dashed, that its traffic
-used per hour, a share priced through a cell no measurement has filled marked with an asterisk in the legend and the
-tooltip, and an upstream whose tier the tier factor table does not size listed as tier unknown. Latency reports
-percentiles read from the merged per-hour histograms; Cache reports the hit ratio, tokens that expired between turns,
-the share of input served from cache, and the output split into thinking and plain output; Cost reports the estimated
-spend for the range; Cache warming reports what probes cost against what they saved; and Upstreams reports peak
-utilization, ineligible time, and pin churn per upstream.
+counted, by reason; then a Requests by speed chart, standard and fast per bucket, and an Effort levels card with a bar
+per level the requests asked for. Burn reports a subscription account's spend as the share of its own 5-hour and 7-day
+window and an api-key account's in dollars, side by side and each split into cached and uncached tokens, grouped by
+upstream, key, session, or request class, beside a Meter reconciliation table (see [Plan meter](#plan-meter)); the
+5-hour share carries the peak band's weight, the 7-day share none. The shares read under the upstream grouping alone,
+since shares of different upstreams' windows do not add, and the Spend per minute chart draws dollars alone, a
+subscription upstream's among them only for its fast-mode answers. The key, request class and upstream groupings read
+the hourly rollups, which fold a request under the hour it arrived in and weigh it by that hour's band rather than at
+its completion, where the meter charges it. Grouped by upstream, it adds a Plan per hour chart: the share of each
+subscription upstream's 5-hour window, solid, and of its 7-day window, dashed, that its traffic used per hour, a share
+priced through a cell no measurement has filled marked with an asterisk in the legend and the tooltip, and an upstream
+whose tier the tier factor table does not size listed as tier unknown. Latency reports percentiles read from the merged
+per-hour histograms; Cache reports the hit ratio, tokens that expired between turns, the share of input served from
+cache, and the output split into thinking and plain output; Cost reports the estimated spend for the range and a Fast
+mode spend tile, the dollars fast-mode answers drew from usage credits; Cache warming reports what probes cost against
+what they saved; and Upstreams reports peak utilization, ineligible time, and pin churn per upstream.
 
 The Cache section closes with Placements by rung: the attempts in the range the router placed by a warm prefix or beside
 the main conversation rather than by its strategy, counted by rung (by the conversation's own messages, by its static

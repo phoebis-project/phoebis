@@ -100,6 +100,7 @@ export function RequestsPage() {
   const [clientPattern, setClientPattern] = useState('');
   const [agentTypes, setAgentTypes] = useState<string[]>([]);
   const [turnOrigins, setTurnOrigins] = useState<string[]>([]);
+  const [speeds, setSpeeds] = useState<string[]>([]);
   const [keyIds, setKeyIds] = useState<string[]>([]);
   const [poolIds, setPoolIds] = useState<string[]>([]);
   const [accountIds, setAccountIds] = useState<string[]>([]);
@@ -119,8 +120,8 @@ export function RequestsPage() {
   const query = useMemo<RequestQuery>(() => {
     const r = RANGES.find((x) => x.value === range) ?? RANGES[2];
     // Probes are off the log unless they are what the filter asks for.
-    return { accountIds, agentTypes, client: clientPattern, cursor, from: new Date(loadedAt - r.ms).toISOString(), includeProbes: kind === 'probe', keyIds, kind: kind || null, limit: pageSize, models, poolIds, search, statuses: statuses.map(Number), to: new Date(loadedAt).toISOString(), turnOrigins, userAgent };
-  }, [search, userAgent, clientPattern, agentTypes, turnOrigins, keyIds, poolIds, accountIds, models, statuses, kind, range, pageSize, cursor, loadedAt]);
+    return { accountIds, agentTypes, client: clientPattern, cursor, from: new Date(loadedAt - r.ms).toISOString(), includeProbes: kind === 'probe', keyIds, kind: kind || null, limit: pageSize, models, poolIds, search, speeds, statuses: statuses.map(Number), to: new Date(loadedAt).toISOString(), turnOrigins, userAgent };
+  }, [search, userAgent, clientPattern, agentTypes, turnOrigins, speeds, keyIds, poolIds, accountIds, models, statuses, kind, range, pageSize, cursor, loadedAt]);
   const requests = useAsync(() => api.listRequests(query), [query]);
 
   const resetPaging = () => {
@@ -131,7 +132,7 @@ export function RequestsPage() {
     resetPaging();
     setLoadedAt(Date.now());
   };
-  useEffect(resetPaging, [search, userAgent, clientPattern, agentTypes, turnOrigins, keyIds, poolIds, accountIds, models, statuses, kind, range, pageSize]);
+  useEffect(resetPaging, [search, userAgent, clientPattern, agentTypes, turnOrigins, speeds, keyIds, poolIds, accountIds, models, statuses, kind, range, pageSize]);
 
   const rows = requests.data?.requests ?? [];
   // Sized to the longest class the loaded rows actually carry, floored at the header label so the column never
@@ -150,13 +151,14 @@ export function RequestsPage() {
     setStack(copy);
     setCursor(previous);
   };
-  const active = search || userAgent || clientPattern || agentTypes.length || turnOrigins.length || keyIds.length || poolIds.length || accountIds.length || models.length || statuses.length || kind || range !== '24h';
+  const active = search || userAgent || clientPattern || agentTypes.length || turnOrigins.length || speeds.length || keyIds.length || poolIds.length || accountIds.length || models.length || statuses.length || kind || range !== '24h';
   const reset = () => {
     setSearch('');
     setUserAgent('');
     setClientPattern('');
     setAgentTypes([]);
     setTurnOrigins([]);
+    setSpeeds([]);
     setKeyIds([]);
     setPoolIds([]);
     setAccountIds([]);
@@ -205,6 +207,16 @@ export function RequestsPage() {
             <option value="count_tokens">Count tokens</option>
             <option value="probe">Probe</option>
           </Select>
+          <MultiSelect
+            label="Speed"
+            options={[
+              { label: 'fast', value: 'fast' },
+              { label: 'standard', value: 'standard' },
+            ]}
+            value={speeds}
+            onChange={setSpeeds}
+            mono
+          />
           {active ? (
             <button type="button" className="link-btn" onClick={reset}>
               Reset

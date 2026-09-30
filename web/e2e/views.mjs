@@ -1420,6 +1420,107 @@ async function analyticsTables(theme) {
 }
 
 /**
+ * The Speed control at the end of the request log's filter bar against the Turn origin control it follows: the
+ * same trigger box, type and border, on the same row of the bar or at the start of the next one.
+ */
+async function speedFilter(theme) {
+  const read = await page.evaluate(() => {
+    const trigger = (label) => [...document.querySelectorAll('.filters .mselect__trigger')].find((t) => t.textContent?.trim().startsWith(label));
+    const box = (el) => {
+      if (!el) return null;
+      const s = getComputedStyle(el);
+      return { border: `${s.borderTopWidth} ${s.borderTopStyle} ${s.borderTopColor}`, font: `${s.fontFamily}/${s.fontSize}/${s.fontWeight}`, height: Math.round(el.getBoundingClientRect().height), padding: `${s.paddingTop} ${s.paddingLeft}`, radius: s.borderRadius };
+    };
+    return { speed: box(trigger('Speed')), turn: box(trigger('Turn origin')) };
+  });
+  measurements.push(`${theme} /requests speed filter ${JSON.stringify(read)}`);
+  failures.push(...compare(read.speed, read.turn, ['border', 'font', 'height', 'padding', 'radius'], `${theme} /requests: the Speed control against Turn origin`));
+}
+
+/**
+ * The Traffic section's speed chart and effort bars and the Cost section's fast-mode tile, each against the
+ * neighbour it copies: Requests by speed against Requests by outcome (title type, card width, chart height),
+ * Effort levels against Errors by code (title type, card width, and where both draw bars, the bar row, its label
+ * type and its track), Fast mode spend against Estimated cost (the tile box and its figure's type).
+ */
+async function trafficCards(theme) {
+  try {
+    await page.waitForFunction(() => ['Requests by speed', 'Effort levels'].every((t) => [...document.querySelectorAll('.card__title')].some((x) => x.textContent === t)) && !document.querySelector('#traffic .skeleton, #cost .skeleton'), null, { timeout: 15_000 });
+  } catch {
+    failures.push(`${theme} /analytics: the speed and effort cards never finished loading`);
+    return;
+  }
+  const read = await page.evaluate(() => {
+    const card = (t) => [...document.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === t);
+    const type = (el) => (el ? `${getComputedStyle(el).fontFamily}/${getComputedStyle(el).fontSize}/${getComputedStyle(el).fontWeight}` : null);
+    const box = (title) => {
+      const el = card(title);
+      if (!el) return null;
+      const chart = el.querySelector('.recharts-responsive-container');
+      const bar = el.querySelector('.hbars li');
+      return {
+        bar: bar ? Math.round(bar.getBoundingClientRect().height) : null,
+        chart: chart ? Math.round(chart.getBoundingClientRect().height) : null,
+        label: type(bar?.children[0]),
+        section: el.closest('.analytics-section')?.id ?? null,
+        title: type(el.querySelector('.card__title')),
+        track: bar ? Math.round(bar.querySelector('.hbars__track').getBoundingClientRect().height) : null,
+        width: Math.round(el.getBoundingClientRect().width),
+      };
+    };
+    const tile = (label) => {
+      const el = [...document.querySelectorAll('#cost .stat')].find((t) => t.querySelector('.stat__label')?.textContent?.trim() === label);
+      if (!el) return null;
+      const b = el.getBoundingClientRect();
+      return { height: Math.round(b.height), value: type(el.querySelector('.stat__value')), width: Math.round(b.width) };
+    };
+    return { effort: box('Effort levels'), errors: box('Errors by code'), estimated: tile('Estimated cost'), fastSpend: tile('Fast mode spend'), outcome: box('Requests by outcome'), speed: box('Requests by speed') };
+  });
+  measurements.push(`${theme} /analytics speed and effort ${JSON.stringify(read)}`);
+  failures.push(...compare(read.speed, read.outcome, ['chart', 'section', 'title', 'width'], `${theme} /analytics: "Requests by speed" against "Requests by outcome"`));
+  const bars = read.effort?.bar !== null && read.errors?.bar !== null ? ['bar', 'label', 'track'] : [];
+  failures.push(...compare(read.effort, read.errors, ['section', 'title', 'width', ...bars], `${theme} /analytics: "Effort levels" against "Errors by code"`));
+  failures.push(...compare(read.fastSpend, read.estimated, ['height', 'value', 'width'], `${theme} /analytics: the Fast mode spend tile against Estimated cost`));
+  if (read.effort?.bar === null) failures.push(`${theme} /analytics: the Effort levels card draws no bar, though every request asks for a level or none`);
+}
+
+/**
+ * An upstream's fast lane against the card it sits in: on the Quota view the Fast mode line and a cooldown chip
+ * are the Plan chip's box (type, height, padding, corners), so the line never wraps past one chip's height; on the
+ * upstream page the lane is a section of the Usage card as extra usage is, with the same rule and spacing. The
+ * router's seed answers no fast request, so there the check stands down; the mock's story draws both.
+ */
+async function fastLane(theme, path) {
+  const read = await page.evaluate(() => {
+    const chip = (el) => {
+      if (!el) return null;
+      const s = getComputedStyle(el);
+      return { font: `${s.fontFamily}/${s.fontSize}`, height: Math.round(el.getBoundingClientRect().height), padding: `${s.paddingTop} ${s.paddingLeft}`, radius: s.borderRadius };
+    };
+    const section = (el) => {
+      if (!el) return null;
+      const s = getComputedStyle(el);
+      return { border: `${s.borderTopWidth} ${s.borderTopStyle} ${s.borderTopColor}`, margin: s.marginTop, padding: s.paddingTop };
+    };
+    const lane = document.querySelector('.fast-lane');
+    const card = lane?.closest('.qcard, .card');
+    const plan = [...(card?.querySelectorAll('.qcard__chips .chip') ?? [])].find((c) => c.querySelector('.chip__label')?.textContent?.trim() === 'Plan');
+    return { cooldown: chip(lane?.querySelector('.fast-lane__cooldown')), drawn: lane !== null, extra: section(card?.querySelector('.extra-usage')), lane: section(lane), line: chip(lane?.querySelector('.fast-lane__line')), plan: chip(plan) };
+  });
+  measurements.push(`${theme} ${path} fast lane ${JSON.stringify(read)}`);
+  if (!read.drawn) {
+    if (mock) failures.push(`${theme} ${path}: the story's first upstream holds a fast lane, yet none is drawn`);
+    return;
+  }
+  if (path === '/quota') {
+    failures.push(...compare(read.line, read.plan, ['font', 'height', 'padding', 'radius'], `${theme} /quota: the Fast mode line against the Plan chip`));
+    failures.push(...compare(read.cooldown, read.plan, ['font', 'height', 'padding', 'radius'], `${theme} /quota: the fast cooldown chip against the Plan chip`));
+  } else {
+    failures.push(...compare(read.lane, read.extra, ['border', 'margin', 'padding'], `${theme} ${path}: the fast lane section against the extra-usage section`));
+  }
+}
+
+/**
  * The newest request's drawer: every attempt draws its selection trace, and each badge the trace and the summary
  * add (a member passed over, the request class) is the same box as the status badge beside them. It runs after the
  * list view's shot, so that shot stays the list alone.
@@ -2027,12 +2128,14 @@ try {
         await wastedProbeRows(theme);
         await burnCards(theme);
         await analyticsTables(theme);
+        await trafficCards(theme);
       }
       if (view.path === '/settings') {
         await compatibilityCard(theme);
         await bootstrapCards(theme);
       }
       if (view.path === '/upstreams') {
+        await fastLane(theme, view.path);
         await deleteUpstreamButton(theme);
         await subscriptionEndForm(theme);
         await addUpstreamDialog(theme);
@@ -2041,8 +2144,14 @@ try {
         await keyCapField(theme);
         await keyDialogGeometry(theme);
       }
+      if (view.path === '/requests') {
+        await speedFilter(theme);
+      }
       if (view.path === '/alerts') await alertRuleDialog(theme);
-      if (view.path === '/quota') await quotaPollLines(theme);
+      if (view.path === '/quota') {
+        await quotaPollLines(theme);
+        await fastLane(theme, view.path);
+      }
       // A shot of a placeholder reviews nothing, so the page is given a moment to replace them; a view that
       // keeps one is still worth the shot, which is why the wait is capped and its expiry ignored.
       await page.waitForFunction(() => !document.querySelector('.skeleton'), null, { timeout: 3_000 }).catch(() => {});

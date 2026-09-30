@@ -29,7 +29,12 @@ type Dim = QueryDim | 'sessionId';
 
 const HOUR = 3_600_000;
 const RANGE_MS: Record<Exclude<Range, 'custom'>, number> = { '1h': HOUR, '24h': 24 * HOUR, '7d': 7 * 24 * HOUR, '30d': 30 * 24 * HOUR };
-const GROUP_LABEL: Record<GroupBy, string> = { account: 'Upstream', client: 'Client', key: 'Key', effort: 'Effort', kind: 'Kind', model: 'Model', pool: 'Pool', request_class: 'Request class', user_agent: 'User agent' };
+const GROUP_LABEL: Record<GroupBy, string> = { account: 'Upstream', client: 'Client', key: 'Key', effort: 'Effort', kind: 'Kind', model: 'Model', pool: 'Pool', request_class: 'Request class', speed: 'Speed', user_agent: 'User agent' };
+/** The two speeds the rollups file an answer under, standard at the foot of each stacked bar. */
+const SPEED_SERIES = [
+  { key: 'standard', label: 'standard', slot: 0 },
+  { key: 'fast', label: 'fast', slot: 4 },
+] as const;
 const BURN_GROUP_LABEL: Record<BurnGroup, string> = { account: 'Upstream', key: 'Key', request_class: 'Request class', session: 'Session' };
 // Upstream first: the route's default, and the one grouping that draws the plan share.
 const BURN_GROUPS: BurnGroup[] = ['account', 'key', 'session', 'request_class'];
@@ -193,6 +198,9 @@ export function AnalyticsPage() {
   const accountRollups = useAsync(() => api.listAccountRollups(fromIso, toIso), [fromIso, toIso]);
   const burn = useAsync(() => api.getAnalyticsBurn({ from: fromIso, to: toIso }, burnGroup), [fromIso, toIso, burnGroup]);
   const rewrites = useAsync(() => api.getAnalyticsRewrites({ from: fromIso, to: toIso }), [fromIso, toIso]);
+  // Side groupings on the page's own query, as byModel and byPool are; a session view folds them from the log.
+  const bySpeed = useAsync(() => (sessionId === null ? api.getAnalyticsSeries({ ...query, groupBy: 'speed' }) : Promise.resolve<AnalyticsPoint[]>([])), [query, sessionId]);
+  const byEffort = useAsync(() => (sessionId === null ? api.getAnalyticsBreakdown({ ...query, groupBy: 'effort' }) : Promise.resolve<AnalyticsGroup[]>([])), [query, sessionId]);
   const reconciliations = useAsync(() => api.getAnalyticsReconciliations(), []);
   const placements = useAsync(
     () => (sessionId === null ? api.analyticsPlacements({ from: fromIso, keyIds: filters.keyId, poolIds: filters.poolId, to: toIso }) : Promise.resolve<PlacementRow[]>([])),
@@ -216,7 +224,7 @@ export function AnalyticsPage() {
   // An outage of the ledger fails the section and filter-choice reads with these three, and this is the one
   // control that reads again, so it reads everything the view draws from.
   const retry = () => {
-    for (const read of [accountKeys, accountRollups, breakdown, budgets, burn, byModel, byPool, keyKeys, log, modelKeys, placements, poolKeys, reconciliations, rewrites, series]) read.reload();
+    for (const read of [accountKeys, accountRollups, breakdown, budgets, burn, byEffort, byModel, byPool, bySpeed, keyKeys, log, modelKeys, placements, poolKeys, reconciliations, rewrites, series]) read.reload();
   };
   const rows = useMemo(() => (log.stale ? [] : (log.data?.requests ?? [])), [log.stale, log.data]);
   const points = useMemo(() => (stale ? [] : sessionId === null ? (series.data ?? []) : foldRequests(rows, rangeBucketMs, fromIso, toIso, groupBy, foldOptions)), [stale, sessionId, series.data, rows, rangeBucketMs, fromIso, toIso, groupBy, foldOptions]);
@@ -233,6 +241,11 @@ export function AnalyticsPage() {
   const bucketMs = buckets.length > 1 ? buckets[1].at - buckets[0].at : rangeBucketMs;
   const groups = useMemo(() => (stale ? [] : sessionId === null ? (breakdown.data ?? []) : foldGroups(rows, groupBy, foldOptions)), [stale, sessionId, breakdown.data, rows, groupBy, foldOptions]);
   const poolGroups = useMemo(() => (sessionId === null ? (byPool.stale ? [] : (byPool.data ?? [])) : foldGroups(rows, 'pool', foldOptions)), [sessionId, byPool.stale, byPool.data, rows, foldOptions]);
+  const speedPoints = useMemo(
+    () => (sessionId === null ? (bySpeed.stale ? [] : (bySpeed.data ?? [])) : foldRequests(rows, rangeBucketMs, fromIso, toIso, 'speed', foldOptions)),
+    [sessionId, bySpeed.stale, bySpeed.data, rows, rangeBucketMs, fromIso, toIso, foldOptions],
+  );
+  const effortGroups = useMemo(() => (sessionId === null ? (byEffort.stale ? [] : (byEffort.data ?? [])) : foldGroups(rows, 'effort', foldOptions)), [sessionId, byEffort.stale, byEffort.data, rows, foldOptions]);
   const totals = useMemo(() => {
     const summed = sumGroups(groups);
     return { ...summed, tokens: withPlainOutput(summed.tokens) };
@@ -258,6 +271,11 @@ export function AnalyticsPage() {
   const shown = failure === null;
   const loading = shown && (stale || (sessionId === null ? series.data === null || breakdown.data === null : log.data === null));
   const empty = shown && !loading && groups.length === 0;
+  const speedLoading = sessionId === null ? bySpeed.data === null || bySpeed.stale : loading;
+  const effortLoading = sessionId === null ? byEffort.data === null || byEffort.stale : loading;
+  const speedError = sessionId === null ? bySpeed.error : null;
+  // Usage credits alone fund a fast answer, on a subscription upstream as on an API key.
+  const fastSpend = speedPoints.reduce((n, p) => n + (p.groups.find((g) => g.key === 'fast')?.costUsd ?? 0), 0);
   const groupLabel = GROUP_LABEL[groupBy];
 
   return (
@@ -401,6 +419,18 @@ export function AnalyticsPage() {
           </ChartCard>
 
           <RewritesCard answer={rewrites.stale ? null : rewrites.data} error={rewrites.error} loading={rewrites.data === null || rewrites.stale} tick={tick} unfiltered={unfiltered} />
+
+          <SpeedCard points={speedPoints} error={speedError} loading={speedLoading} tick={tick} />
+
+          <Card title="Effort levels" subtitle="Requests per effort level in range">
+            {sessionId === null && byEffort.error !== null ? (
+              <ErrorState title="Could not load effort levels" body={byEffort.error} />
+            ) : effortLoading ? (
+              <Skeleton height={90} />
+            ) : (
+              <EffortBars groups={effortGroups} color={ink.series[2]} />
+            )}
+          </Card>
         </div>
         <BreakdownTable
           title={`Traffic by ${groupLabel.toLowerCase()}`}
@@ -548,6 +578,7 @@ export function AnalyticsPage() {
           <Tile label="Estimated cost" value={loading ? null : fmtUsd(totals.costUsd)} note="at the effective price list" />
           <Tile label="Cost per request" value={loading ? null : fmtUsd(totals.requests ? totals.costUsd / totals.requests : 0)} note={`${fmtInt(totals.requests)} requests`} />
           <Tile label="Cost per 1k output tokens" value={loading ? null : fmtUsd(totals.tokens.output ? (totals.costUsd / totals.tokens.output) * 1000 : 0)} note={`${fmtCompact(totals.tokens.output)} output tokens`} />
+          <Tile label="Fast mode spend" value={speedError !== null ? '-' : speedLoading ? null : fmtUsd(fastSpend)} note="usage credits, at the fast cells" />
         </div>
         <div className="grid-2">
           <CostByGroup points={points} groupBy={groupBy} groupSlot={groupSlot} loading={loading} tick={tick} />
@@ -872,18 +903,16 @@ function BreakdownTable({
   );
 }
 
-function ErrorBars({ errors, color }: { color: string; errors: Record<string, number> }) {
-  const rows = Object.entries(errors)
-    .map(([code, count]) => ({ code, count }))
-    .sort((a, b) => b.count - a.count || a.code.localeCompare(b.code));
+/** Horizontal bars of counts in the order given, each with its share of the total; `empty` when every count is zero. */
+function CountBars({ color, empty, rows }: { color: string; empty: string; rows: { count: number; label: string }[] }) {
   const max = Math.max(1, ...rows.map((r) => r.count));
   const total = rows.reduce((s, r) => s + r.count, 0);
-  if (total === 0) return <p className="muted">No errors in range.</p>;
+  if (total === 0) return <p className="muted">{empty}</p>;
   return (
     <ul className="hbars hbars--errors">
       {rows.map((r) => (
-        <li key={r.code}>
-          <span className="mono">{r.code}</span>
+        <li key={r.label}>
+          <span className="mono">{r.label}</span>
           <div className="hbars__track">
             <span className="hbars__fill" style={{ width: `${(r.count / max) * 100}%`, background: color }} />
           </div>
@@ -894,6 +923,22 @@ function ErrorBars({ errors, color }: { color: string; errors: Record<string, nu
       ))}
     </ul>
   );
+}
+
+function ErrorBars({ errors, color }: { color: string; errors: Record<string, number> }) {
+  const rows = Object.entries(errors)
+    .map(([label, count]) => ({ count, label }))
+    .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
+  return <CountBars color={color} empty="No errors in range." rows={rows} />;
+}
+
+/** Requests per effort level, each named as the rollups file it; `none`, the requests that asked for no level, last. */
+function EffortBars({ groups, color }: { color: string; groups: AnalyticsGroup[] }) {
+  const rows = groups
+    .filter((g) => g.requests > 0)
+    .map((g) => ({ count: g.requests, label: g.key }))
+    .sort((a, b) => Number(a.label === 'none') - Number(b.label === 'none') || b.count - a.count || a.label.localeCompare(b.label));
+  return <CountBars color={color} empty="No requests in range." rows={rows} />;
 }
 
 const MISS_REASON_BLURB =
@@ -1154,6 +1199,34 @@ function CostByGroup({ points, groupBy, groupSlot, loading, tick }: { groupBy: G
 const UNFILTERED_NOTE = '; the filters above do not apply here';
 const tickFor = (bucketMs: number) => (v: number) => (bucketMs >= 6 * HOUR ? fmtDayShort(v) : fmtHourTick(v));
 
+type SpeedRow = { at: number; fast: number; standard: number };
+const requestsIn = (p: AnalyticsPoint, key: string) => p.groups.find((g) => g.key === key)?.requests ?? 0;
+
+/** Requests per bucket by the speed their answers reported, stacked as Requests by outcome stacks its outcomes. */
+function SpeedCard({ points, error, loading, tick }: { error: string | null; loading: boolean; points: AnalyticsPoint[]; tick: (v: number) => string }) {
+  const ink = useChartInk();
+  const data = useMemo(() => points.map((p): SpeedRow => ({ at: Date.parse(p.at), fast: requestsIn(p, 'fast'), standard: requestsIn(p, 'standard') })), [points]);
+  return (
+    <ChartCard
+      title="Requests by speed"
+      subtitle="Standard and fast per bucket, stacked"
+      error={error}
+      loading={loading}
+      legend={SPEED_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, value: fmtInt(data.reduce((n, d) => n + d[s.key], 0)) }))}
+    >
+      <BarChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} barCategoryGap={2}>
+        <CartesianGrid vertical={false} stroke={ink.grid} />
+        <XAxis dataKey="at" tickFormatter={tick} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
+        <YAxis tickLine={false} axisLine={false} width={36} allowDecimals={false} />
+        <Tooltip cursor={{ fill: ink.grid, opacity: 0.6 }} content={timeTip<SpeedRow>((p) => SPEED_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, value: fmtInt(p[s.key]) })))} />
+        {SPEED_SERIES.map((s, i) => (
+          <Bar key={s.key} dataKey={s.key} stackId="a" fill={ink.series[s.slot]} stroke={ink.surface} strokeWidth={1} maxBarSize={22} radius={i === SPEED_SERIES.length - 1 ? [3, 3, 0, 0] : 0} isAnimationActive={false} />
+        ))}
+      </BarChart>
+    </ChartCard>
+  );
+}
+
 function RewritesCard({ answer, error, loading, tick, unfiltered }: { answer: { moves: Record<string, number>; points: RewritePoint[] } | null; error: string | null; loading: boolean; tick: (v: number) => string; unfiltered: boolean }) {
   const ink = useChartInk();
   const data = useMemo(() => (answer?.points ?? []).map((p) => ({ at: Date.parse(p.at), rewriteTokens: p.rewriteTokens })), [answer]);
@@ -1197,7 +1270,7 @@ const CONVERSATION_HINT = CONVERSATION_CLASSES.join(', ');
 const OVERHEAD_HINT = 'every other class, and requests that named none';
 const CLASS_NOTE = `conversation is ${CONVERSATION_HINT}; overhead is ${OVERHEAD_HINT}`;
 
-const SPEND_NOTE = 'Dollars per minute; a subscription upstream on plan quota spends window share, charted under Plan per hour';
+const SPEND_NOTE = "Dollars per minute: API-key traffic, and a subscription upstream's fast-mode answers; its plan quota spends window share, charted under Plan per hour";
 const PLAN_NOTE =
   "The share of each subscription upstream's own 5-hour window (solid) and 7-day window (dashed) its traffic used per hour, the 5-hour share weighed by the peak band";
 const UNMEASURED_NOTE = 'priced through an unmeasured cell';
@@ -1230,8 +1303,10 @@ function BurnCharts({ answer, error, groupBy, loading }: { answer: { bucketSecon
   // Read off the buckets, not the lines: the class grouping draws its two lines even over a range with no traffic.
   const empty = !loading && error === null && rows.length === 0 ? 'No traffic in this range.' : undefined;
   const byUpstream = groupBy === 'account';
-  // Every other grouping mixes both kinds of upstream, so its lines chart the dollars their API-key traffic spent.
-  const spent = lines.map((l, i) => ({ i, l })).filter(({ l }) => !byUpstream || l.unit === 'usd');
+  // Every other grouping mixes both kinds of upstream, so its lines chart the dollars their API-key traffic and
+  // fast-mode answers spent; under the upstream grouping a subscription upstream draws a dollar line only for the
+  // usage credits its fast-mode answers spent.
+  const spent = lines.map((l, i) => ({ i, l })).filter(({ l }) => !byUpstream || l.unit === 'usd' || l.usdPerMinute > 0);
   // One precision for every tick, from the largest figure drawn, so the axis never mixes $0.0070 with $0.01.
   const usdMax = Math.max(0, ...rows.flatMap((r) => spent.map(({ i }) => r.usd[i])));
   const usdDigits = usdMax >= 10 ? 0 : usdMax >= 0.1 ? 2 : usdMax >= 0.01 ? 3 : 4;
@@ -1273,7 +1348,7 @@ function BurnCharts({ answer, error, groupBy, loading }: { answer: { bucketSecon
         subtitle={byUpstream ? SPEND_NOTE : `${SPEND_NOTE} when grouped by upstream`}
         error={error}
         loading={loading}
-        empty={empty ?? (spent.length === 0 ? 'No API-key upstream spent dollars in this range.' : undefined)}
+        empty={empty ?? (spent.length === 0 ? 'No upstream spent dollars in this range.' : undefined)}
         legend={spent.map(({ l }) => ({ color: colorOf(l), label: nameOf(l), shape: 'line' as const, title: titleOf(l), value: fmtUsd(l.usdPerMinute) }))}
       >
         <LineChart data={rows} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>

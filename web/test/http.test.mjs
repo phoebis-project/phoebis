@@ -96,6 +96,14 @@ test('listRequests passes the client pattern, the agent types, and the turn orig
   for (const part of ['client=claude-code%2F*', 'agent_types=Explore%2CPlan', 'turn_origins=human']) assert.ok(url.includes(part), `${part} in ${url}`);
 });
 
+test('listRequests passes the speeds as one comma list', async () => {
+  const calls = stub(() => answer(200, { next_cursor: null, requests: [] }));
+  await new HttpApi().listRequests({ speeds: ['fast', 'standard'] });
+  assert.equal(new URL(calls[0].url, 'http://x').searchParams.get('speeds'), 'fast,standard');
+  await new HttpApi().listRequests({});
+  assert.ok(!String(calls[1].url).includes('speeds'), 'no speed filter, no parameter');
+});
+
 test('the analytics reads encode the range, the dimension, and every id list', async () => {
   const calls = stub((url) => answer(200, url.startsWith('/admin/analytics/series') ? { points: [] } : { rows: [] }));
   const api = new HttpApi();

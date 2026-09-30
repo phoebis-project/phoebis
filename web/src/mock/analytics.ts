@@ -58,6 +58,8 @@ export interface HourlyRollup {
   savings: { grossUsd: number; probeCostUsd: number };
   /** The fixture rolls up per session, which keeps its lanes as fine as the ledger's; no route groups on one. */
   sessionId: string;
+  /** The speed the hour's answers reported; the rollups file an answer that named none as `standard`. */
+  speed: 'fast' | 'standard';
   tokens: { cacheRead: number; cacheWrite1h: number; cacheWrite5m: number; output: number; thinking: number; uncachedInput: number; webFetch: number; webSearch: number };
   uncached: number;
   /** Probes no real request ever followed, settled when the recipe stopped. */
@@ -84,6 +86,7 @@ const GROUP_KEY: Record<AnalyticsGroupBy, (r: HourlyRollup) => string> = {
   model: (r) => r.model,
   pool: (r) => r.poolId,
   request_class: (r) => r.requestClass,
+  speed: (r) => r.speed,
   // Each key runs one client in this story, so the key names the client its rows were sent by.
   user_agent: (r) => USER_AGENTS[r.keyId] ?? '-',
 };
@@ -193,7 +196,7 @@ const labelOf = (key: string, groupBy: AnalyticsGroupBy) => {
   return earlierHolderLabel(id, Number(generation));
 };
 
-function groupsOf(rows: HourlyRollup[], q: AnalyticsQuery): AnalyticsGroup[] {
+export function groupsOf(rows: HourlyRollup[], q: AnalyticsQuery): AnalyticsGroup[] {
   const named = q.userAgentGroups ?? [];
   // A pattern list names the groups under the client dimension; every client none of them names falls under
   // the one bucket, as the breakdown route files it.
@@ -336,6 +339,9 @@ export function burnOf(rows: HourlyRollup[], range: Range, groupBy: BurnGroup): 
   for (const r of kept) {
     const at = Math.floor((Date.parse(r.hour) - first) / bucketMs) * bucketMs + first;
     const oauth = kinds.get(r.accountId) === 'oauth';
+    // A fast answer spends usage credits in dollars on either kind and draws no plan window: on a tier the tables
+    // size it reads as a zero share, so the upstream is still a priced one.
+    const fast = r.speed === 'fast';
     const group = groupOf(r);
     const byAt = sums.get(group) ?? new Map();
     sums.set(group, byAt);
@@ -343,16 +349,16 @@ export function burnOf(rows: HourlyRollup[], range: Range, groupBy: BurnGroup): 
     byAt.set(at, s);
     s.cached += r.tokens.cacheRead;
     s.uncached += r.tokens.uncachedInput;
-    s.usd += oauth ? 0 : r.costUsd;
+    s.usd += oauth && !fast ? 0 : r.costUsd;
     if (!oauth) continue;
     const shares = sharesOf(r, tiers.get(r.accountId));
     if (shares.five_hour !== null) {
-      s.fiveHour = (s.fiveHour ?? 0) + shares.five_hour.share;
-      s.fiveHourUnmeasured ||= shares.five_hour.unmeasured;
+      s.fiveHour = (s.fiveHour ?? 0) + (fast ? 0 : shares.five_hour.share);
+      s.fiveHourUnmeasured ||= !fast && shares.five_hour.unmeasured;
     }
     if (shares.seven_day !== null) {
-      s.sevenDay = (s.sevenDay ?? 0) + shares.seven_day.share;
-      s.sevenDayUnmeasured ||= shares.seven_day.unmeasured;
+      s.sevenDay = (s.sevenDay ?? 0) + (fast ? 0 : shares.seven_day.share);
+      s.sevenDayUnmeasured ||= !fast && shares.seven_day.unmeasured;
     }
   }
   const tokensOf = (group: string) => [...(sums.get(group)?.values() ?? [])].reduce((n, s) => n + s.cached + s.uncached, 0);

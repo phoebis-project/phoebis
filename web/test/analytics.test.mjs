@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import * as d from './dist/api.js';
+
+const fixture = (name) => JSON.parse(readFileSync(new URL(`./fixtures/${name}.json`, import.meta.url), 'utf8')).body;
 
 const HOUR = 3_600_000;
 const point = (at, group, over = {}) => ({ at: new Date(at).toISOString(), cachedTokens: 0, fiveHourShare: null, fiveHourUnmeasured: false, group, sevenDayShare: null, sevenDayUnmeasured: false, uncachedTokens: 0, unit: null, usd: 0, ...over });
@@ -111,4 +114,24 @@ test("the placements table's hit share formats", () => {
   assert.equal(d.placementCells({ ...row, hitShare: null, hits: 0, placements: 0 })[2], '-', 'a rung with no placement has no share to read');
   assert.equal(d.placementCells({ ...row, promisedTokens: 0, rung: 'with_main' })[4], '-', 'a placement beside the main conversation promises no size');
   assert.deepEqual(['content', 'static', 'with_main', 'by_moonlight'].map(d.placementRungLabel), ['by its messages', 'by its static prefix', 'with the main conversation', 'by_moonlight']);
+});
+
+test("the mock files its hourly rows under the speed each hour's answers reported, one key's Opus hours fast", () => {
+  const groups = d.groupsOf(d.ALL_ROLLUPS, { from: d.ALL_ROLLUPS[0].hour, groupBy: 'speed', to: d.ALL_ROLLUPS.at(-1).hour });
+  assert.deepEqual(groups.map((g) => g.key), ['fast', 'standard']);
+  const fast = d.ALL_ROLLUPS.filter((r) => r.speed === 'fast');
+  assert.ok(fast.length > 0 && fast.every((r) => r.keyId === 'desktop' && r.model.includes('opus') && r.kind === 'inference'));
+  const served = (rows) => rows.filter((r) => r.kind !== 'probe').reduce((n, r) => n + r.requests.ok + r.requests.rate_limited + r.requests.overloaded + r.requests.upstream_error, 0);
+  assert.deepEqual(groups.map((g) => g.requests), [served(fast), served(d.ALL_ROLLUPS.filter((r) => r.speed === 'standard'))]);
+});
+
+test('the session fold files a request under the speed its serving attempt reported, standard when it named none', () => {
+  const rows = d.decodeRequestPage(fixture('requests')).requests;
+  const served = (r) => r.attempts.at(-1)?.response.speed;
+  assert.deepEqual(d.foldGroups(rows, 'speed').map((g) => [g.key, g.requests]).sort(), [['fast', rows.filter((r) => served(r) === 'fast').length], ['standard', rows.filter((r) => served(r) !== 'fast').length]]);
+  const named = rows.find((r) => served(r) === 'fast');
+  const unnamed = { ...named, attempts: named.attempts.map((a) => ({ ...a, response: { ...a.response, speed: null } })) };
+  assert.deepEqual(d.foldGroups([unnamed], 'speed').map((g) => g.key), ['standard'], 'an answer that named no speed files as standard, as the rollups file it');
+  // The fixture's fast request failed over: its first attempt was standard and its serving one fast.
+  assert.equal(named.attempts[0].response.speed, 'standard');
 });

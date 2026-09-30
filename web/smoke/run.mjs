@@ -2623,6 +2623,32 @@ expect('/requests', m.text(), ['Columns (13)', 'Rows', 'SSE', 'Details', 'Client
   await m.settle(150);
   agentType?.querySelector('.mselect__trigger')?.click();
   await m.settle(700);
+
+  const speedCheck = '/requests the speed filter keeps the requests whose serving attempt answered fast';
+  const speed = [...m.container.querySelectorAll('.filters .mselect')].find((d) => d.querySelector('.mselect__trigger')?.textContent?.trim().startsWith('Speed'));
+  if (!speed) controlMissing(speedCheck, 'Speed');
+  speed?.querySelector('.mselect__trigger')?.click();
+  await m.settle(150);
+  const speedOptions = [...(speed?.querySelectorAll('.mselect__option') ?? [])].map((o) => o.textContent?.trim());
+  results.push({ name: '/requests the Speed control offers fast and standard', ok: JSON.stringify(speedOptions) === JSON.stringify(['fast', 'standard']), missing: speedOptions });
+  [...(speed?.querySelectorAll('.mselect__option') ?? [])].find((o) => o.textContent?.trim() === 'fast')?.click();
+  await m.settle(700);
+  speed?.querySelector('.mselect__trigger')?.click();
+  await m.settle(150);
+  // Each row opens its drawer in turn, so the check reads the serving attempt's own line rather than the story's rule.
+  const servedAs = [];
+  for (const tr of [...m.container.querySelectorAll('.requests__table tbody tr')]) {
+    tr.click();
+    await m.settle(300);
+    const lines = [...m.container.querySelectorAll('.drawer .attempt .attempt__response')];
+    servedAs.push([...(lines.at(-1)?.children ?? [])].map((span) => span.textContent?.trim()).includes('fast') ? 'fast' : (lines.at(-1)?.textContent ?? 'no response line'));
+  }
+  const fastDay = (await api.listRequests({ from: new Date(Date.now() - 24 * 3_600_000).toISOString(), limit: 25, speeds: ['fast'], to: new Date().toISOString() })).requests.length;
+  results.push({ name: speedCheck, ok: servedAs.length > 0 && servedAs.length === fastDay && servedAs.every((s) => s === 'fast'), missing: [`${servedAs.length} rows against ${fastDay}`, ...new Set(servedAs)] });
+  speed?.querySelector('.mselect__clear')?.click();
+  await m.settle(700);
+  await m.navigate('/requests');
+  await m.settle(300);
 }
 {
   const hinted = requests.find((r) => r.turnOrigin !== null && r.userAgent !== null);
@@ -3121,9 +3147,9 @@ m.unmount();
       tables.every((row) => !row.endsWith(' 0')) &&
       upChoices.length === 4 &&
       upChoices.every((c) => !c.endsWith(' 0')) &&
-      reads.breakdown === 'account,key,key,model,model,pool,pool' &&
+      reads.breakdown === 'account,effort,key,key,model,model,pool,pool' &&
       reads.rollups === 1 &&
-      reads.series === 1,
+      reads.series === 2,
     missing: [`down ${downChoices.join(',')}`, `up ${upChoices.join(',')}`, `sections missing ${sections.join(',')}`, ...tables, JSON.stringify(reads), t.includes('Could not load this breakdown') ? 'a breakdown still failed' : ''],
   });
   page.unmount();
@@ -3139,6 +3165,24 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
     await m.settle(700);
   };
   expect('/analytics burn section', m.text(), ['Burn', 'Tokens per minute', 'Spend per minute', 'Plan per hour', 'Migration rewrites', 'Meter reconciliation', 'Moves']);
+  {
+    expect('/analytics speed and effort', m.text(), ['Requests by speed', 'Standard and fast per bucket, stacked', 'Effort levels', 'Requests per effort level in range', 'Fast mode spend', 'usage credits, at the fast cells']);
+    // The two cards close the Traffic section's grid, after the rewrites card.
+    const grid = card('Migration rewrites')?.parentElement;
+    const titles = [...(grid?.children ?? [])].map((c) => c.querySelector('.card__title')?.textContent?.trim());
+    results.push({ name: "/analytics the speed chart and the effort bars close the Traffic section's grid", ok: JSON.stringify(titles.slice(-3)) === JSON.stringify(['Migration rewrites', 'Requests by speed', 'Effort levels']), missing: titles });
+    const day = await api.getAnalyticsBreakdown({ from: new Date(Date.now() - 24 * 3_600_000).toISOString(), groupBy: 'speed', to: new Date().toISOString() });
+    const fastDay = day.find((g) => g.key === 'fast');
+    const speedLegend = [...(card('Requests by speed')?.querySelectorAll('.legend li') ?? [])].map((li) => li.textContent?.trim() ?? '');
+    results.push({
+      name: '/analytics requests by speed stacks standard under fast, each total in the legend',
+      ok: fastDay !== undefined && fastDay.requests > 0 && speedLegend.length === 2 && speedLegend[0].startsWith('standard') && speedLegend[1] === `fast${fastDay.requests}`,
+      missing: [...speedLegend, `fast ${fastDay?.requests}`],
+    });
+    const tile = [...m.container.querySelectorAll('#cost .stat')].find((t) => t.querySelector('.stat__label')?.textContent?.trim() === 'Fast mode spend');
+    const drawn = Number((tile?.querySelector('.stat__value')?.textContent ?? '').replace(/[$,]/g, ''));
+    results.push({ name: "/analytics the Fast mode spend tile reads the fast answers' dollars in range", ok: fastDay !== undefined && fastDay.costUsd > 0 && Math.abs(drawn - fastDay.costUsd) < 0.01, missing: [tile?.textContent ?? 'no tile', String(fastDay?.costUsd)] });
+  }
   const failovers = card('Failovers');
   results.push({ name: '/analytics the migration rewrites card sits beside Failovers', ok: failovers !== undefined && failovers.nextElementSibling === card('Migration rewrites'), missing: [failovers?.nextElementSibling?.querySelector('.card__title')?.textContent ?? 'no sibling'] });
   const moves = await api.getAnalyticsRewrites({ from: new Date(Date.now() - 24 * 3_600_000).toISOString(), to: new Date().toISOString() });
@@ -3165,16 +3209,21 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
   });
   const spend = legendOf('Spend per minute');
   const spendDashed = dashedOf([...(card('Spend per minute')?.querySelectorAll('.legend li') ?? [])]);
+  // A subscription upstream spends dollars only on its fast-mode answers, which the story's desktop key sends on Opus.
+  const burned = await api.getAnalyticsBurn({ from: new Date(Date.now() - 24 * 3_600_000).toISOString(), to: new Date().toISOString() }, 'account');
+  const fastSpenders = ['business', 'mail', 'personal'].filter((id) => burned.points.some((p) => p.group === id && p.usd > 0));
   results.push({
-    name: "/analytics spend per minute charts dollars alone and plan per hour a subscription upstream's two window shares",
+    name: "/analytics spend per minute charts dollars alone, a subscription upstream's fast-mode dollars among them, and plan per hour a subscription upstream's two window shares",
     ok:
       spend.includes('console') &&
       spend.includes('evals') &&
-      !spend.some((t) => ['business', 'mail', 'personal'].includes(t)) &&
+      fastSpenders.length > 0 &&
+      fastSpenders.length < 3 &&
+      JSON.stringify(spend.filter((t) => ['business', 'mail', 'personal'].includes(t)).sort()) === JSON.stringify(fastSpenders) &&
       spendDashed.length === 0 &&
       windows.every((w) => planned.includes(w)) &&
       marked.length > 0,
-    missing: [...spend, ...spendDashed],
+    missing: [...spend, ...spendDashed, `fast spenders ${fastSpenders.join(',')}`],
   });
 
   const reconciled = [...(card('Meter reconciliation')?.querySelectorAll('tbody tr') ?? [])].map((tr) => [...tr.children].map((td) => ({ badge: td.querySelector('.badge--serious') !== null, text: td.textContent?.trim() })));
@@ -3288,6 +3337,7 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
     const group = [...m.container.querySelectorAll('.filters select')].find((s) => [...s.options].some((o) => o.textContent === 'Client'));
     const offered = [...(group?.options ?? [])].map((o) => o.textContent);
     results.push({ name: '/analytics group-by offers the client class and the user agent', ok: offered.includes('Client') && offered.includes('User agent'), missing: offered });
+    results.push({ name: '/analytics group-by offers the speed', ok: offered.includes('Speed'), missing: offered });
   }
   {
     const setArea = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
@@ -3356,6 +3406,17 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
     await groupBy('Effort');
     const efforts = trafficRows('effort').map((row) => row[0]);
     results.push({ name: '/analytics the effort grouping lists every effort the range holds', ok: JSON.stringify([...efforts].sort()) === JSON.stringify(['high', 'max', 'none']), missing: efforts });
+    {
+      // The card reads its own effort breakdown whatever the grouping, a bar per level, the most asked first and none last.
+      const levels = [...(m.container.querySelectorAll('.card') ?? [])].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Effort levels');
+      const bars = [...(levels?.querySelectorAll('.hbars li') ?? [])].map((li) => li.children[0]?.textContent?.trim());
+      const month = await api.getAnalyticsBreakdown({ from: new Date(Date.now() - 30 * 24 * 3_600_000).toISOString(), groupBy: 'effort', to: new Date().toISOString() });
+      const wanted = month.filter((g) => g.requests > 0 && g.key !== 'none').sort((a, b) => b.requests - a.requests).map((g) => g.key).concat(month.some((g) => g.key === 'none' && g.requests > 0) ? ['none'] : []);
+      results.push({ name: '/analytics the Effort levels card draws a bar per level the rows carry, none last', ok: bars.length === 3 && JSON.stringify(bars) === JSON.stringify(wanted), missing: [JSON.stringify(bars), JSON.stringify(wanted)] });
+    }
+    await groupBy('Speed');
+    const speeds = trafficRows('speed').map((row) => row[0]);
+    results.push({ name: '/analytics the speed grouping heads the traffic table by speed with a fast and a standard row', ok: JSON.stringify(speeds) === JSON.stringify(['fast', 'standard']), missing: speeds });
     range('24h')?.click();
     await m.settle(900);
     await groupBy('Key');

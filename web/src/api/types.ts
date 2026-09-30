@@ -673,6 +673,8 @@ export interface RequestQuery {
   models?: string[];
   poolIds?: string[];
   search?: string;
+  /** `fast`, `standard`: the serving attempt's speed. */
+  speeds?: string[];
   statuses?: number[];
   to?: string;
   turnOrigins?: string[];
@@ -685,7 +687,7 @@ export interface RequestPage {
   requests: RequestLog[];
 }
 
-export type AnalyticsGroupBy = 'account' | 'all' | 'client' | 'effort' | 'key' | 'kind' | 'model' | 'pool' | 'request_class' | 'user_agent';
+export type AnalyticsGroupBy = 'account' | 'all' | 'client' | 'effort' | 'key' | 'kind' | 'model' | 'pool' | 'request_class' | 'speed' | 'user_agent';
 
 export interface AnalyticsQuery {
   accountIds?: string[];
