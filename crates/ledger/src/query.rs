@@ -1571,6 +1571,9 @@ pub struct BurnPoint {
     pub seven_day_share: Option<f64>,
     /// The same on the 7-day window, whose cells are flagged apart from the 5-hour ones.
     pub seven_day_unmeasured: bool,
+    /// Every token of the bucket's rows, all five types, so a reader tells a bucket with no traffic from one whose
+    /// traffic no table priced.
+    pub tokens: u64,
     pub uncached_tokens: u64,
     pub usd: f64,
 }
@@ -1646,6 +1649,11 @@ fn price_usage(
         None => return,
     }
     point.cached_tokens += row.cache_read_tokens;
+    point.tokens += row.input_tokens
+        + row.cache_read_tokens
+        + row.cache_write_5m_tokens
+        + row.cache_write_1h_tokens
+        + row.output_tokens;
     point.uncached_tokens += row.input_tokens;
 }
 

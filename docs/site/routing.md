@@ -335,18 +335,19 @@ The router judges a subscription account by three windows, the 5-hour, the 7-day
 two sources: every response head the account answers, and a poll of the usage endpoint every five minutes per account,
 each account on its own phase, backed off alone on a 429 (see the [statistics page](statistics.md#quota-samples)).
 Between readings the router predicts: a reading stands until its window's reset, plus the share of the window the
-router's own requests consumed since the reading (priced through the cost table and the account's tier factor); at the
-reset it reads zero and counts the requests since, a weekly window's reset advanced by whole weeks, the 5-hour window's
-next reset named by the next reading. A reading that names no reset stands until the next reading; an API-key account's
-rate-limit buckets stand until their reset or, without one, for a minute. The share is priced through the account's
-stored tier: a tier change is read at the next profile refresh, within the hour, and applied when the router reloads; a
-tier changed while the router was down is read at start. The newest reading per account and window is kept in the
-registry and loaded at startup, so a restart, and an account whose first poll the endpoint refuses, route from the last
-known windows. The router never fetches usage at a selection; use of an account outside the router shows in the next
-head or poll, so a decision can lag it by up to five minutes plus any backoff, and by up to one more interval after a
-failed poll or a restart. The [Quota view](statistics.md#quota) shows when the poll last asked the endpoint for each
-OAuth account and how it answered, and while an account backs off, since when and when its next attempt comes; a
-`poll_backoff` [alert](statistics.md#alerts) fires once an account has backed off for thirty minutes.
+router's own requests consumed since the reading (priced through the cost table and the account's tier factor); a window
+the table cannot price for the request's model adds nothing and holds its reading; at the reset it reads zero and counts
+the requests since, a weekly window's reset advanced by whole weeks, the 5-hour window's next reset named by the next
+reading. A reading that names no reset stands until the next reading; an API-key account's rate-limit buckets stand
+until their reset or, without one, for a minute. The share is priced through the account's stored tier: a tier change is
+read at the next profile refresh, within the hour, and applied when the router reloads; a tier changed while the router
+was down is read at start. The newest reading per account and window is kept in the registry and loaded at startup, so a
+restart, and an account whose first poll the endpoint refuses, route from the last known windows. The router never
+fetches usage at a selection; use of an account outside the router shows in the next head or poll, so a decision can lag
+it by up to five minutes plus any backoff, and by up to one more interval after a failed poll or a restart. The
+[Quota view](statistics.md#quota) shows when the poll last asked the endpoint for each OAuth account and how it
+answered, and while an account backs off, since when and when its next attempt comes; a `poll_backoff`
+[alert](statistics.md#alerts) fires once an account has backed off for thirty minutes.
 
 ### Moves
 
@@ -393,12 +394,13 @@ The round orders every pin on the account, cold ones first by burn, then warm on
 pin's last prompt size in tokens), and marks them in that order until the marked burn reaches `shed_share`
 (default 0.5) of the account's burn over `burn_window_seconds` (default 600). It never marks the account's last
 unmarked pin, so an account with one session sheds nothing and no round takes all of an account's burn. A pin
-whose burn carries the total past the share stays marked, and the round stops there. `warm_sessions` bounds the
-order: `never` stops after the cold pins, `when_needed` (the default) goes on to the warm ones, and `always` orders
-every pin by burn over rewrite cost, cold or warm. While the account runs on its plan, a pin whose last refreshing
-request was sent in fast mode is out of the round: fast mode draws usage credits and no plan window, so the pin has no
-share to shed. In dollars, on an API-key account or one in overage, it stays in the round. A session that returns to
-standard requests brings its pin back with the plan burn it still carries.
+whose burn carries the total past the share stays marked, and the round stops there. A pin whose burn the table cannot
+price ranks after every priced pin of its group, counts nothing toward the share, and is never marked, so a session is
+never shed on a guess. `warm_sessions` bounds the order: `never` stops after the cold pins, `when_needed` (the default)
+goes on to the warm ones, and `always` orders every pin by burn over rewrite cost, cold or warm. While the account runs
+on its plan, a pin whose last refreshing request was sent in fast mode is out of the round: fast mode draws usage
+credits and no plan window, so the pin has no share to shed. In dollars, on an API-key account or one in overage, it
+stays in the round. A session that returns to standard requests brings its pin back with the plan burn it still carries.
 
 The console's Pools form offers `shed_share`, `burn_window_seconds`, and `source_dwell_seconds` together as three
 presets beside custom: balanced (0.5, 600 s, 900 s, the default), fast (0.5, 300 s, 600 s), and conservative (0.3,

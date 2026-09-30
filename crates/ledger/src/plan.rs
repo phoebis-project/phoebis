@@ -351,16 +351,16 @@ impl PlanTables {
         })
     }
 
-    /// The Max 5x share per token of `window` as the routing crate's table; a model the window lacks prices at
-    /// its dearest cells, as the dollar table's `rate_table` does, so a burn never reads zero for an unknown
-    /// model. A window the cost table lacks has no rows and prices every model at zero.
+    /// The share per token of `window` as the routing crate's table; a model the window does not list has no
+    /// rate, so a burn on it is unpriced rather than a guess that could order a shed. A window the cost table
+    /// lacks has no rows and prices nothing.
     pub fn rate_table(&self, window: &str) -> RateTable {
         let per_token = |cells: &ModelCells| Rates {
-            input: cells.input.share_per_million / 1_000_000.0,
-            cache_read: cells.cache_read.share_per_million / 1_000_000.0,
-            write_5m: cells.cache_write_5m.share_per_million / 1_000_000.0,
-            write_1h: cells.cache_write_1h.share_per_million / 1_000_000.0,
-            output: cells.output.share_per_million / 1_000_000.0,
+            input: Some(cells.input.share_per_million / 1_000_000.0),
+            cache_read: Some(cells.cache_read.share_per_million / 1_000_000.0),
+            write_5m: Some(cells.cache_write_5m.share_per_million / 1_000_000.0),
+            write_1h: Some(cells.cache_write_1h.share_per_million / 1_000_000.0),
+            output: Some(cells.output.share_per_million / 1_000_000.0),
         };
         let rows: HashMap<String, Rates> = self
             .cost
@@ -370,13 +370,12 @@ impl PlanTables {
             .flatten()
             .map(|(model, cells)| (model.clone(), per_token(cells)))
             .collect();
-        let dearest = |of: fn(&Rates) -> f64| rows.values().map(of).fold(0.0, f64::max);
         let fallback = Rates {
-            input: dearest(|r| r.input),
-            cache_read: dearest(|r| r.cache_read),
-            write_5m: dearest(|r| r.write_5m),
-            write_1h: dearest(|r| r.write_1h),
-            output: dearest(|r| r.output),
+            input: None,
+            cache_read: None,
+            write_5m: None,
+            write_1h: None,
+            output: None,
         };
         RateTable { rows, fallback }
     }
@@ -387,8 +386,8 @@ impl PlanTables {
 
     /// Whether a figure priced on `window` (`seven_day_fable` reads the 7-day row) for the model on `tier` rests
     /// on a stand-in: any of the model's five cells or the tier's factor flagged, or a model the window lacks,
-    /// which `rate_table` prices at the dearest cells. False for a tier the factor table lacks, since no share
-    /// is priced there and every reader nulls the figure first.
+    /// which `rate_table` leaves unpriced. False for a tier the factor table lacks, since no share is priced
+    /// there and every reader nulls the figure first.
     pub fn unmeasured(&self, window: &str, tier: &str, canonical_model: &str) -> bool {
         let priced = match window {
             SEVEN_DAY_FABLE => SEVEN_DAY,

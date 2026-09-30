@@ -106,9 +106,9 @@ pub struct RouterConfig {
     /// copy does not.
     pub band: BandWeight,
     pub purge_interval: Duration,
-    /// The dollar table and the Max 5x 5-hour share table the shedding round prices each pin's burn through
-    /// when it reads it, and the fast table a renewal of a fast answer weighs the plain copy's fold by. The task
-    /// holds them because neither this crate nor the relay can see the ledger's tables.
+    /// The dollar table and the cost table's 5-hour share table the shedding round prices each pin's burn
+    /// through when it reads it, and the fast table a renewal of a fast answer weighs the plain copy's fold by. The
+    /// task holds them because neither this crate nor the relay can see the ledger's tables.
     pub rates: BurnRates,
     /// The share of an account's windows a completed request consumed; the default prices nothing.
     pub share: SharePricer,
@@ -127,9 +127,9 @@ impl Default for RouterConfig {
     }
 }
 
-/// The two tables a reader prices a pin's burn through, dollars per token and the Max 5x share of the 5-hour
-/// window per token, and the fast cells a fast renewal is weighed by. All three default to `RateTable::unit`, so a
-/// burn read through the default is a token count and a fast renewal folds unweighed.
+/// The two tables a reader prices a pin's burn through, dollars per token and the cost table's 5-hour share on
+/// its reference tier per token, and the fast cells a fast renewal is weighed by. All three default to
+/// `RateTable::unit`, so a burn read through the default is a token count and a fast renewal folds unweighed.
 #[derive(Clone, Debug, PartialEq)]
 pub struct BurnRates {
     pub dollars: RateTable,
@@ -149,15 +149,13 @@ impl Default for BurnRates {
 }
 
 /// Per token type, the fast cell over the standard cell of `model`: 1 where the standard rate is 0, since no
-/// weight can carry a charge the standard table prices at nothing.
+/// weight can carry a charge the standard table prices at nothing, and 1 where either table has no rate for the
+/// type, as for a model with no fast price.
 fn fast_over_standard(rates: &BurnRates, model: &str) -> PinBurn {
     let (fast, standard) = (rates.fast.rates_for(model), rates.dollars.rates_for(model));
-    let weight = |fast: f64, standard: f64| {
-        if standard == 0.0 {
-            1.0
-        } else {
-            fast / standard
-        }
+    let weight = |fast: Option<f64>, standard: Option<f64>| match (fast, standard) {
+        (Some(fast), Some(standard)) if standard != 0.0 => fast / standard,
+        _ => 1.0,
     };
     PinBurn {
         cache_read: weight(fast.cache_read, standard.cache_read),
@@ -1527,15 +1525,11 @@ impl Task {
                         .share
                         .price(window, tier, &canonical_model, usage, at)
                 };
-                let (Some(five_hour), Some(seven_day)) = (price(FIVE_HOUR), price(SEVEN_DAY))
-                else {
-                    return;
-                };
                 let fable = (window_for(&canonical_model) == SEVEN_DAY_FABLE)
                     .then(|| price(SEVEN_DAY_FABLE))
                     .flatten();
                 self.state
-                    .charge(&account_id, at, five_hour, seven_day, fable);
+                    .charge(&account_id, at, price(FIVE_HOUR), price(SEVEN_DAY), fable);
             }
             Report::AccountState {
                 account_id,

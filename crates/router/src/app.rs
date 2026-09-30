@@ -657,10 +657,10 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
     served
 }
 
-/// The routing task's burn prices and peak band: the cost table's Max 5x 5-hour share per token and its band,
-/// and for dollars `prices`, the table `Pricing::load` chose at startup; the share of an account's window a
-/// completed request consumed, priced through the cost table and the tier factor table. All are fixed for the
-/// life of the process.
+/// The routing task's burn prices and peak band: the cost table's 5-hour share per token on its reference tier
+/// and its band, and for dollars `prices`, the table `Pricing::load` chose at startup; the share of an account's
+/// window a completed request consumed, priced through the cost table and the tier factor table. All are fixed
+/// for the life of the process.
 fn router_config(
     prices: &phoebis_ledger::PriceTable,
     tables: Arc<phoebis_ledger::PlanTables>,
@@ -836,7 +836,11 @@ mod tests {
             write_1h: 200,
             output: 500,
         };
-        let share = config.rates.five_hour.price("claude-opus-5", usage);
+        let share = config
+            .rates
+            .five_hour
+            .price("claude-opus-5", usage)
+            .expect("a priced model");
         let expected = tables
             .share(
                 phoebis_routing::FIVE_HOUR,
@@ -852,8 +856,23 @@ mod tests {
         );
         assert_ne!(
             share,
-            phoebis_routing::RateTable::unit().price("claude-opus-5", usage),
+            phoebis_routing::RateTable::unit()
+                .price("claude-opus-5", usage)
+                .expect("a priced model"),
             "the share table, not the unit table's token count"
+        );
+        assert_eq!(
+            config.rates.five_hour.price("claude-opus-4-8", usage),
+            None,
+            "the share table prices no model the cost table does not list"
+        );
+        assert!(
+            config
+                .rates
+                .dollars
+                .price("gpt-5", usage)
+                .is_some_and(|usd| usd > 0.0),
+            "the dollar table keeps its dearest-price fallback"
         );
         let (usd, _) = prices
             .estimate(
@@ -867,7 +886,14 @@ mod tests {
             )
             .unwrap();
         assert!(
-            (config.rates.dollars.price("claude-sonnet-5", usage) - usd).abs() < 1e-12,
+            (config
+                .rates
+                .dollars
+                .price("claude-sonnet-5", usage)
+                .expect("a priced model")
+                - usd)
+                .abs()
+                < 1e-12,
             "the dollar table prices a usage as the price table estimates it"
         );
         let (fast_usd, _) = prices
@@ -882,7 +908,14 @@ mod tests {
             )
             .unwrap();
         assert!(
-            (config.rates.fast.price("claude-opus-5-5", usage) - fast_usd).abs() < 1e-12,
+            (config
+                .rates
+                .fast
+                .price("claude-opus-5-5", usage)
+                .expect("a priced model")
+                - fast_usd)
+                .abs()
+                < 1e-12,
             "the fast table prices a usage as the price table estimates a fast answer"
         );
         // Monday 2026-09-21 at 14:00 and at 20:00 UTC.

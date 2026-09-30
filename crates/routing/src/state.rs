@@ -250,7 +250,8 @@ type Price = dyn Fn(&str, &str, &str, PinUsage, i64) -> Option<f64> + Send + Syn
 
 impl SharePricer {
     /// `price(window, tier, canonical_model, usage, at)`: the share of `window` on `tier` at `at` (the band
-    /// weighs the 5-hour window at a completion), `None` for a model or a tier the tables lack.
+    /// weighs the 5-hour window at a completion), `None` for a window the tables cannot price for the model on
+    /// the tier.
     pub fn new(
         price: impl Fn(&str, &str, &str, PinUsage, i64) -> Option<f64> + Send + Sync + 'static,
     ) -> SharePricer {
@@ -312,14 +313,24 @@ impl Charges {
     }
 }
 
-/// The price of one token of each type.
+/// The price of one token of each type; `None` for a type the table cannot price on this model.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Rates {
-    pub input: f64,
-    pub cache_read: f64,
-    pub write_5m: f64,
-    pub write_1h: f64,
-    pub output: f64,
+    pub input: Option<f64>,
+    pub cache_read: Option<f64>,
+    pub write_5m: Option<f64>,
+    pub write_1h: Option<f64>,
+    pub output: Option<f64>,
+}
+
+/// `count` tokens (or tokens a second) at `rate`: nothing burned prices at zero whatever the rate, and a burned
+/// type without a rate has no price.
+fn priced(count: f64, rate: Option<f64>) -> Option<f64> {
+    match rate {
+        Some(rate) => Some(count * rate),
+        None if count == 0.0 => Some(0.0),
+        None => None,
+    }
 }
 
 /// A price per token by model and token type; `fallback` prices a model the table does not list.
@@ -335,11 +346,11 @@ impl RateTable {
         RateTable {
             rows: HashMap::new(),
             fallback: Rates {
-                input: 1.0,
-                cache_read: 1.0,
-                write_5m: 1.0,
-                write_1h: 1.0,
-                output: 1.0,
+                input: Some(1.0),
+                cache_read: Some(1.0),
+                write_5m: Some(1.0),
+                write_1h: Some(1.0),
+                output: Some(1.0),
             },
         }
     }
@@ -349,24 +360,28 @@ impl RateTable {
         *row_for(canonical_model, |k| self.rows.get(k)).unwrap_or(&self.fallback)
     }
 
-    /// Each rate times its price, summed: the price of one second of a pin's burn.
-    pub fn price_burn(&self, canonical_model: &str, burn: &PinBurn) -> f64 {
+    /// The price of one second of a pin's burn; `None` when a type the pin burns has no rate.
+    pub fn price_burn(&self, canonical_model: &str, burn: &PinBurn) -> Option<f64> {
         let rates = self.rates_for(canonical_model);
-        burn.input * rates.input
-            + burn.cache_read * rates.cache_read
-            + burn.write_5m * rates.write_5m
-            + burn.write_1h * rates.write_1h
-            + burn.output * rates.output
+        Some(
+            priced(burn.input, rates.input)?
+                + priced(burn.cache_read, rates.cache_read)?
+                + priced(burn.write_5m, rates.write_5m)?
+                + priced(burn.write_1h, rates.write_1h)?
+                + priced(burn.output, rates.output)?,
+        )
     }
 
-    /// Each count times its rate, summed.
-    pub fn price(&self, canonical_model: &str, usage: PinUsage) -> f64 {
+    /// Each count times its rate, summed; `None` when a type with a count has no rate.
+    pub fn price(&self, canonical_model: &str, usage: PinUsage) -> Option<f64> {
         let rates = self.rates_for(canonical_model);
-        usage.input as f64 * rates.input
-            + usage.cache_read as f64 * rates.cache_read
-            + usage.write_5m as f64 * rates.write_5m
-            + usage.write_1h as f64 * rates.write_1h
-            + usage.output as f64 * rates.output
+        Some(
+            priced(usage.input as f64, rates.input)?
+                + priced(usage.cache_read as f64, rates.cache_read)?
+                + priced(usage.write_5m as f64, rates.write_5m)?
+                + priced(usage.write_1h as f64, rates.write_1h)?
+                + priced(usage.output as f64, rates.output)?,
+        )
     }
 }
 
@@ -433,8 +448,9 @@ pub fn warm(pin: &PinRow, now: i64) -> bool {
     now - pin.last_refresh_at < pin.cache_ttl_ms
 }
 
-/// The pins a round marks, in the round's order: never the last unmarked pin, nothing for a zero target.
-pub fn shed_marks(ordered: &[(PinRow, f64)], target: f64) -> Vec<PinKey> {
+/// The pins a round marks, in the round's order: never the last unmarked pin, never an unpriced pin, nothing for
+/// a zero target.
+pub fn shed_marks(ordered: &[(PinRow, Option<f64>)], target: f64) -> Vec<PinKey> {
     let mut marks = Vec::new();
     if target.is_nan() || target <= 0.0 {
         return marks;
@@ -446,6 +462,11 @@ pub fn shed_marks(ordered: &[(PinRow, f64)], target: f64) -> Vec<PinKey> {
         if marked >= target || marks.len() + 1 >= ordered.len() {
             break;
         }
+        // An unpriced burn moves the marked sum nowhere, so marking the pin would shed a session on a guess: it
+        // stays, and it still counts as one of the account's pins for the last-pin rule.
+        let Some(burn) = burn else {
+            continue;
+        };
         marks.push(pin.key());
         marked += burn;
     }
@@ -1110,21 +1131,21 @@ impl RoutingState {
         moved
     }
 
-    /// Books a completed request's share on the account's windows at `at`: the 5-hour and the 7-day window
-    /// always, the Fable week when the request's model has one. A charge lives until a reading observed after it
-    /// lands on its window, or a week.
+    /// Books a completed request's share on the account's windows at `at`: each window's share that is `Some`
+    /// (the Fable week's only for a model that has one); a `None` window keeps its reading. A charge lives until a
+    /// reading observed after it lands on its window, or a week.
     pub fn charge(
         &mut self,
         account_id: &str,
         at: i64,
-        five_hour: f64,
-        seven_day: f64,
+        five_hour: Option<f64>,
+        seven_day: Option<f64>,
         seven_day_fable: Option<f64>,
     ) {
         let charges = self.charges.entry(account_id.to_string()).or_default();
         let shares = [
-            (FIVE_HOUR, Some(five_hour)),
-            (SEVEN_DAY, Some(seven_day)),
+            (FIVE_HOUR, five_hour),
+            (SEVEN_DAY, seven_day),
             (SEVEN_DAY_FABLE, seven_day_fable),
         ];
         for (window, share) in shares {
@@ -1310,8 +1331,9 @@ impl RoutingState {
         }
     }
 
-    /// The pins of an account, each priced in `unit` through `rates` and decayed to `now`, and the sum; under
-    /// `WindowShare` the Max 5x share per second, which orders the account's pins as the tier's share does.
+    /// The pins of an account, each priced in `unit` through `rates` and decayed to `now`, and the sum over the
+    /// priced pins; under `WindowShare` the cost table's reference share per second, which orders the account's
+    /// pins as the tier's share does; `None` for a pin burning a type its row cannot price.
     pub fn burn_of(
         &self,
         account_id: &str,
@@ -1319,16 +1341,18 @@ impl RoutingState {
         rates: &BurnRates,
         now: i64,
         window_ms: i64,
-    ) -> (Vec<(PinRow, f64)>, f64) {
+    ) -> (Vec<(PinRow, Option<f64>)>, f64) {
         let table = unit.table(rates);
-        let mut pins: Vec<(PinRow, f64)> = self
+        let mut pins: Vec<(PinRow, Option<f64>)> = self
             .pins
             .values()
             .filter(|p| p.account_id == account_id)
             .map(|p| {
                 // Every type decays by the same factor, so decaying the price equals pricing the decayed rates.
-                let priced = table.price_burn(&p.model, &unit.read(p));
-                (p.clone(), burn_decayed(priced, p.burn_at, now, window_ms))
+                let burn = table
+                    .price_burn(&p.model, &unit.read(p))
+                    .map(|priced| burn_decayed(priced, p.burn_at, now, window_ms));
+                (p.clone(), burn)
             })
             .collect();
         pins.sort_by(|a, b| {
@@ -1339,7 +1363,7 @@ impl RoutingState {
                 &b.0.model,
             ))
         });
-        let sum = pins.iter().map(|(_, burn)| burn).sum();
+        let sum = pins.iter().filter_map(|(_, burn)| *burn).sum();
         (pins, sum)
     }
 
@@ -1698,7 +1722,7 @@ fn since_of(current: Option<&OverageEvidence>, evidence: &OverageEvidence) -> Op
 mod tests {
     use super::*;
 
-    fn burning(session: &str, burn: f64) -> (PinRow, f64) {
+    fn burning(session: &str, burn: f64) -> (PinRow, Option<f64>) {
         let pin = PinRow {
             key_id: "k".into(),
             session_id: session.into(),
@@ -1728,7 +1752,11 @@ mod tests {
             tail_hash: None,
             lane: crate::lane_key("m", "standard", "none", "-"),
         };
-        (pin, burn)
+        (pin, Some(burn))
+    }
+
+    fn unpriced(session: &str) -> (PinRow, Option<f64>) {
+        (burning(session, 0.0).0, None)
     }
 
     fn sessions(marks: &[PinKey]) -> Vec<&str> {
@@ -1847,34 +1875,124 @@ mod tests {
     }
 
     #[test]
+    fn an_unpriced_pin_adds_nothing_to_the_marked_burn_is_never_marked_and_still_counts_as_a_pin() {
+        let mixed = [
+            burning("cold-3", 3.0),
+            unpriced("cold-guess"),
+            burning("warm-4", 4.0),
+            unpriced("warm-guess"),
+        ];
+        assert_eq!(
+            sessions(&shed_marks(&mixed, 0.5 * 7.0)),
+            ["cold-3", "warm-4"],
+            "the target is half the priced burn; the unpriced pins are skipped, not marked"
+        );
+        assert_eq!(
+            sessions(&shed_marks(
+                &[burning("cold-5", 5.0), unpriced("guess")],
+                0.5 * 5.0
+            )),
+            ["cold-5"],
+            "the unpriced pin is the last unmarked one, so the priced pin can be marked"
+        );
+        assert!(
+            shed_marks(&[unpriced("a"), unpriced("b"), unpriced("c")], 1.0).is_empty(),
+            "a positive target the loop reaches marks no unpriced pin"
+        );
+    }
+
+    #[test]
+    fn a_rate_left_none_prices_a_burn_only_when_the_pin_burns_none_of_that_type() {
+        let table = RateTable {
+            rows: HashMap::from([(
+                "claude-guess".to_string(),
+                Rates {
+                    input: Some(2.0),
+                    cache_read: None,
+                    write_5m: Some(0.0),
+                    write_1h: Some(0.0),
+                    output: Some(1.0),
+                },
+            )]),
+            fallback: RateTable::unit().fallback,
+        };
+        let input_only = PinBurn {
+            input: 3.0,
+            ..PinBurn::default()
+        };
+        assert_eq!(table.price_burn("claude-guess", &input_only), Some(6.0));
+        let with_reads = PinBurn {
+            input: 3.0,
+            cache_read: 1.0,
+            ..PinBurn::default()
+        };
+        assert_eq!(
+            table.price_burn("claude-guess", &with_reads),
+            None,
+            "a burned type without a rate"
+        );
+        assert_eq!(
+            table.price(
+                "claude-guess",
+                PinUsage {
+                    input: 1,
+                    ..PinUsage::default()
+                }
+            ),
+            Some(2.0)
+        );
+        assert_eq!(
+            table.price(
+                "claude-guess",
+                PinUsage {
+                    cache_read: 1,
+                    ..PinUsage::default()
+                }
+            ),
+            None
+        );
+        assert_eq!(
+            table.price(
+                "gpt-5",
+                PinUsage {
+                    cache_read: 1,
+                    ..PinUsage::default()
+                }
+            ),
+            Some(1.0),
+            "the fallback"
+        );
+    }
+
+    #[test]
     fn a_dated_model_id_prices_at_its_undated_row_and_an_unlisted_one_at_the_fallback() {
         let flat = |r: f64| Rates {
-            input: r,
-            cache_read: r,
-            write_5m: r,
-            write_1h: r,
-            output: r,
+            input: Some(r),
+            cache_read: Some(r),
+            write_5m: Some(r),
+            write_1h: Some(r),
+            output: Some(r),
         };
         let table = RateTable {
             rows: [
                 (
                     "claude-sonnet-4-5".to_string(),
                     Rates {
-                        input: 3.0,
-                        cache_read: 0.25,
-                        write_5m: 3.75,
-                        write_1h: 6.0,
-                        output: 15.0,
+                        input: Some(3.0),
+                        cache_read: Some(0.25),
+                        write_5m: Some(3.75),
+                        write_1h: Some(6.0),
+                        output: Some(15.0),
                     },
                 ),
                 (
                     "claude-fable-5-1".to_string(),
                     Rates {
-                        input: 5.0,
-                        cache_read: 0.5,
-                        write_5m: 6.25,
-                        write_1h: 10.0,
-                        output: 25.0,
+                        input: Some(5.0),
+                        cache_read: Some(0.5),
+                        write_5m: Some(6.25),
+                        write_1h: Some(10.0),
+                        output: Some(25.0),
                     },
                 ),
             ]
@@ -1891,17 +2009,17 @@ mod tests {
         };
         assert_eq!(
             table.price("claude-sonnet-4-5-20250929", usage),
-            30.0 + 25.0 + 15.0 + 12.0 + 45.0,
+            Some(30.0 + 25.0 + 15.0 + 12.0 + 45.0),
             "the dated id prices at the undated sonnet row"
         );
         assert_eq!(
             table.price("claude-fable-5-1-20260601", usage),
-            50.0 + 50.0 + 25.0 + 20.0 + 75.0,
+            Some(50.0 + 50.0 + 25.0 + 20.0 + 75.0),
             "and the dated fable id at its own row, not the fallback"
         );
         assert_eq!(
             table.price("claude-opus-5-20260101", usage),
-            10.0 + 100.0 + 4.0 + 2.0 + 3.0,
+            Some(10.0 + 100.0 + 4.0 + 2.0 + 3.0),
             "a model no row names prices at the fallback"
         );
     }
@@ -2083,7 +2201,7 @@ mod tests {
     fn a_five_hour_reading_past_its_reset_reads_zero_with_no_successor() {
         let mut state = RoutingState::from_load(RoutingLoad::default());
         read(&mut state, FIVE_HOUR, 0.5, Some(5_000), 1_000);
-        state.charge("a", 3_000, 0.25, 0.0, None);
+        state.charge("a", 3_000, Some(0.25), Some(0.0), None);
         assert!((utilization(&state, FIVE_HOUR, 4_000) - 0.75).abs() < CLOSE);
         assert_eq!(
             state.predicted("a", FIVE_HOUR, 5_000),
@@ -2094,7 +2212,7 @@ mod tests {
             }),
             "at the reset the window reads zero, and the next reading names the reset after it"
         );
-        state.charge("a", 6_000, 0.125, 0.0, None);
+        state.charge("a", 6_000, Some(0.125), Some(0.0), None);
         assert!(
             (utilization(&state, FIVE_HOUR, 7_000) - 0.125).abs() < CLOSE,
             "a request completed since the reset counts; the one before it does not"
@@ -2106,7 +2224,7 @@ mod tests {
         let mut state = RoutingState::from_load(RoutingLoad::default());
         read(&mut state, FIVE_HOUR, 0.5, Some(HOUR_MS), 1_000);
         read(&mut state, SEVEN_DAY, 0.3, Some(WEEK_MS), 1_000);
-        state.charge("a", 2_000, 0.1, 0.1, None);
+        state.charge("a", 2_000, Some(0.1), Some(0.1), None);
         assert!((utilization(&state, FIVE_HOUR, 3_000) - 0.6).abs() < CLOSE);
         let moved = state.record_sample(
             "a",
@@ -2132,7 +2250,7 @@ mod tests {
             (utilization(&state, SEVEN_DAY, 3_000) - 0.4).abs() < CLOSE,
             "the 7-day window read nothing newer and keeps it"
         );
-        state.charge("a", 2_600, 0.1, 0.1, None);
+        state.charge("a", 2_600, Some(0.1), Some(0.1), None);
         assert!(
             (utilization(&state, FIVE_HOUR, 3_000) - 0.65).abs() < CLOSE,
             "a charge after the reading reads on top of it"

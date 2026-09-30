@@ -2056,6 +2056,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_share": null,
           "seven_day_unmeasured": false,
           "cached_tokens": 0,
+          "tokens": 0,
           "uncached_tokens": 0
         },
         {
@@ -2068,6 +2069,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_share": null,
           "seven_day_unmeasured": false,
           "cached_tokens": 0,
+          "tokens": 0,
           "uncached_tokens": 0
         },
         {
@@ -2080,6 +2082,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_share": null,
           "seven_day_unmeasured": false,
           "cached_tokens": 0,
+          "tokens": 0,
           "uncached_tokens": 0
         },
         {
@@ -2092,6 +2095,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_share": null,
           "seven_day_unmeasured": false,
           "cached_tokens": 0,
+          "tokens": 0,
           "uncached_tokens": 0
         },
         {
@@ -2104,6 +2108,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_share": null,
           "seven_day_unmeasured": false,
           "cached_tokens": 0,
+          "tokens": 0,
           "uncached_tokens": 0
         },
         {
@@ -2116,6 +2121,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_share": null,
           "seven_day_unmeasured": false,
           "cached_tokens": 0,
+          "tokens": 0,
           "uncached_tokens": 0
         },
         {
@@ -2128,6 +2134,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_share": null,
           "seven_day_unmeasured": false,
           "cached_tokens": 0,
+          "tokens": 0,
           "uncached_tokens": 0
         },
         {
@@ -2140,6 +2147,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_share": null,
           "seven_day_unmeasured": false,
           "cached_tokens": 0,
+          "tokens": 0,
           "uncached_tokens": 0
         },
         {
@@ -2152,6 +2160,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_share": null,
           "seven_day_unmeasured": false,
           "cached_tokens": 0,
+          "tokens": 0,
           "uncached_tokens": 0
         },
         {
@@ -2164,6 +2173,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_share": null,
           "seven_day_unmeasured": false,
           "cached_tokens": 0,
+          "tokens": 0,
           "uncached_tokens": 0
         },
         {
@@ -2176,6 +2186,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_share": null,
           "seven_day_unmeasured": false,
           "cached_tokens": 0,
+          "tokens": 0,
           "uncached_tokens": 0
         },
         {
@@ -2188,6 +2199,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_share": null,
           "seven_day_unmeasured": false,
           "cached_tokens": 0,
+          "tokens": 0,
           "uncached_tokens": 0
         },
         {
@@ -2200,6 +2212,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_share": null,
           "seven_day_unmeasured": false,
           "cached_tokens": 0,
+          "tokens": 0,
           "uncached_tokens": 0
         },
         {
@@ -2212,6 +2225,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_share": null,
           "seven_day_unmeasured": false,
           "cached_tokens": 0,
+          "tokens": 0,
           "uncached_tokens": 0
         },
         {
@@ -2224,6 +2238,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_share": null,
           "seven_day_unmeasured": false,
           "cached_tokens": 0,
+          "tokens": 0,
           "uncached_tokens": 0
         },
         {
@@ -2236,6 +2251,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_share": null,
           "seven_day_unmeasured": false,
           "cached_tokens": 0,
+          "tokens": 0,
           "uncached_tokens": 0
         },
         {
@@ -2248,6 +2264,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_share": null,
           "seven_day_unmeasured": false,
           "cached_tokens": 0,
+          "tokens": 0,
           "uncached_tokens": 0
         },
         {
@@ -2260,6 +2277,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_share": null,
           "seven_day_unmeasured": false,
           "cached_tokens": 0,
+          "tokens": 0,
           "uncached_tokens": 0
         },
         {
@@ -2272,6 +2290,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_share": null,
           "seven_day_unmeasured": false,
           "cached_tokens": 0,
+          "tokens": 0,
           "uncached_tokens": 0
         },
         {
@@ -2284,6 +2303,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_share": null,
           "seven_day_unmeasured": false,
           "cached_tokens": 0,
+          "tokens": 0,
           "uncached_tokens": 0
         },
         {
@@ -2296,6 +2316,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_share": null,
           "seven_day_unmeasured": false,
           "cached_tokens": 0,
+          "tokens": 0,
           "uncached_tokens": 0
         },
         {
@@ -2308,6 +2329,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_share": null,
           "seven_day_unmeasured": false,
           "cached_tokens": 0,
+          "tokens": 0,
           "uncached_tokens": 0
         },
         {
@@ -2320,6 +2342,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_share": null,
           "seven_day_unmeasured": false,
           "cached_tokens": 0,
+          "tokens": 0,
           "uncached_tokens": 0
         },
         {
@@ -2332,6 +2355,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_share": 0.000005682799999999999,
           "seven_day_unmeasured": true,
           "cached_tokens": 1000,
+          "tokens": 3600,
           "uncached_tokens": 2000
         },
         {
@@ -2344,6 +2368,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_share": 0.000011365599999999998,
           "seven_day_unmeasured": true,
           "cached_tokens": 1000,
+          "tokens": 3600,
           "uncached_tokens": 2000
         },
         {
@@ -2356,6 +2381,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_share": null,
           "seven_day_unmeasured": false,
           "cached_tokens": 0,
+          "tokens": 0,
           "uncached_tokens": 0
         },
         {
@@ -2368,6 +2394,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_share": null,
           "seven_day_unmeasured": false,
           "cached_tokens": 0,
+          "tokens": 0,
           "uncached_tokens": 0
         },
         {
@@ -2380,6 +2407,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_share": null,
           "seven_day_unmeasured": false,
           "cached_tokens": 0,
+          "tokens": 0,
           "uncached_tokens": 0
         },
         {
@@ -2392,6 +2420,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_share": null,
           "seven_day_unmeasured": false,
           "cached_tokens": 0,
+          "tokens": 0,
           "uncached_tokens": 0
         },
         {
@@ -2404,6 +2433,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_share": null,
           "seven_day_unmeasured": false,
           "cached_tokens": 0,
+          "tokens": 0,
           "uncached_tokens": 0
         },
         {
@@ -2416,6 +2446,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_share": null,
           "seven_day_unmeasured": false,
           "cached_tokens": 0,
+          "tokens": 0,
           "uncached_tokens": 0
         },
         {
@@ -2428,6 +2459,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_share": null,
           "seven_day_unmeasured": false,
           "cached_tokens": 0,
+          "tokens": 0,
           "uncached_tokens": 0
         },
         {
@@ -2440,6 +2472,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_share": null,
           "seven_day_unmeasured": false,
           "cached_tokens": 0,
+          "tokens": 0,
           "uncached_tokens": 0
         },
         {
@@ -2452,6 +2485,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_share": null,
           "seven_day_unmeasured": false,
           "cached_tokens": 0,
+          "tokens": 0,
           "uncached_tokens": 0
         },
         {
@@ -2464,6 +2498,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_share": null,
           "seven_day_unmeasured": false,
           "cached_tokens": 0,
+          "tokens": 0,
           "uncached_tokens": 0
         },
         {
@@ -2476,6 +2511,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_share": null,
           "seven_day_unmeasured": false,
           "cached_tokens": 0,
+          "tokens": 0,
           "uncached_tokens": 0
         },
         {
@@ -2488,6 +2524,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_share": null,
           "seven_day_unmeasured": false,
           "cached_tokens": 0,
+          "tokens": 0,
           "uncached_tokens": 0
         },
         {
@@ -2500,6 +2537,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_share": null,
           "seven_day_unmeasured": false,
           "cached_tokens": 0,
+          "tokens": 0,
           "uncached_tokens": 0
         },
         {
@@ -2512,6 +2550,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_share": null,
           "seven_day_unmeasured": false,
           "cached_tokens": 0,
+          "tokens": 0,
           "uncached_tokens": 0
         },
         {
@@ -2524,6 +2563,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_share": null,
           "seven_day_unmeasured": false,
           "cached_tokens": 0,
+          "tokens": 0,
           "uncached_tokens": 0
         },
         {
@@ -2536,6 +2576,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_share": null,
           "seven_day_unmeasured": false,
           "cached_tokens": 0,
+          "tokens": 0,
           "uncached_tokens": 0
         },
         {
@@ -2548,6 +2589,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_share": null,
           "seven_day_unmeasured": false,
           "cached_tokens": 0,
+          "tokens": 0,
           "uncached_tokens": 0
         },
         {
@@ -2560,6 +2602,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_share": null,
           "seven_day_unmeasured": false,
           "cached_tokens": 0,
+          "tokens": 0,
           "uncached_tokens": 0
         },
         {
@@ -2572,6 +2615,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_share": null,
           "seven_day_unmeasured": false,
           "cached_tokens": 0,
+          "tokens": 0,
           "uncached_tokens": 0
         },
         {
@@ -2584,6 +2628,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_share": null,
           "seven_day_unmeasured": false,
           "cached_tokens": 0,
+          "tokens": 0,
           "uncached_tokens": 0
         },
         {
@@ -2596,6 +2641,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_share": null,
           "seven_day_unmeasured": false,
           "cached_tokens": 0,
+          "tokens": 0,
           "uncached_tokens": 0
         },
         {
@@ -2608,6 +2654,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_share": null,
           "seven_day_unmeasured": false,
           "cached_tokens": 0,
+          "tokens": 0,
           "uncached_tokens": 0
         },
         {
@@ -2620,6 +2667,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_share": null,
           "seven_day_unmeasured": false,
           "cached_tokens": 0,
+          "tokens": 0,
           "uncached_tokens": 0
         },
         {
@@ -2632,6 +2680,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_share": null,
           "seven_day_unmeasured": false,
           "cached_tokens": 0,
+          "tokens": 0,
           "uncached_tokens": 0
         },
         {
@@ -2644,6 +2693,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "seven_day_share": null,
           "seven_day_unmeasured": false,
           "cached_tokens": 500,
+          "tokens": 1800,
           "uncached_tokens": 1000
         }
       ]

@@ -152,7 +152,7 @@ fn per_million(rates: Rates) -> [f64; 5] {
         rates.write_1h,
         rates.output,
     ]
-    .map(|rate| rate * 1_000_000.0)
+    .map(|rate| rate.expect("a priced rate") * 1_000_000.0)
 }
 
 fn all_close(got: [f64; 5], want: [f64; 5]) -> bool {
@@ -622,7 +622,7 @@ fn the_band_weighs_a_five_hour_charge_at_completion_and_never_a_seven_day_one() 
 }
 
 #[test]
-fn the_share_rate_table_prices_a_dated_id_at_its_undated_row_and_an_unknown_model_at_the_dearest_cells(
+fn the_share_rate_table_prices_a_dated_id_at_its_undated_row_and_a_model_it_does_not_list_at_no_rate(
 ) {
     let tables = PlanTables::shipped();
     let five = tables.rate_table(FIVE_HOUR);
@@ -634,22 +634,23 @@ fn the_share_rate_table_prices_a_dated_id_at_its_undated_row_and_an_unknown_mode
         "a dated id reads its undated row's cells: {:?}",
         per_million(five.rates_for("claude-haiku-4-5-20251001"))
     );
-    assert!(
-        all_close(
-            per_million(five.rates_for("gpt-5")),
-            [0.304, 0.00789, 0.373, 0.373, 1.42]
-        ),
-        "an unknown model reads the dearest 5-hour cell of each type: {:?}",
-        per_million(five.rates_for("gpt-5"))
+    let unpriced = Rates {
+        input: None,
+        cache_read: None,
+        write_5m: None,
+        write_1h: None,
+        output: None,
+    };
+    assert_eq!(
+        five.rates_for("gpt-5"),
+        unpriced,
+        "a model the 5-hour window does not list has no rate"
     );
     let seven = tables.rate_table(SEVEN_DAY);
-    assert!(
-        all_close(
-            per_million(seven.rates_for("gpt-5")),
-            [0.0220, 0.000572, 0.0271, 0.0271, 0.103]
-        ),
-        "an unknown model reads the dearest 7-day cell of each type: {:?}",
-        per_million(seven.rates_for("gpt-5"))
+    assert_eq!(
+        seven.rates_for("gpt-5"),
+        unpriced,
+        "nor on the 7-day window"
     );
     let mixed = PinUsage {
         input: 100,
@@ -658,7 +659,7 @@ fn the_share_rate_table_prices_a_dated_id_at_its_undated_row_and_an_unknown_mode
         write_1h: 20,
         output: 50,
     };
-    let priced = five.price("claude-fable-5-1", mixed);
+    let priced = five.price("claude-fable-5-1", mixed).unwrap();
     let share = tables
         .cost
         .max_5x_share(FIVE_HOUR, "claude-fable-5-1", mixed)
@@ -705,49 +706,6 @@ fn a_flagged_cell_flags_a_charge_only_when_the_usage_reads_it() {
     assert!(
         with_output.unmeasured,
         "a flagged cell the usage reads flags the charge"
-    );
-}
-
-/// One model's five cells, flagged, in the order input, cache read, 5-minute write, 1-hour write, output.
-fn flagged_cells(shares: [f64; 5]) -> String {
-    let [input, read, write_5m, write_1h, output] = shares;
-    format!(
-        "
-      input: {{share_per_million: {input}, unmeasured: true}}
-      cache_read: {{share_per_million: {read}, unmeasured: true}}
-      cache_write_5m: {{share_per_million: {write_5m}, unmeasured: true}}
-      cache_write_1h: {{share_per_million: {write_1h}, unmeasured: true}}
-      output: {{share_per_million: {output}, unmeasured: true}}"
-    )
-}
-
-#[test]
-fn an_unknown_model_prices_at_the_dearest_cell_of_each_type_across_the_models() {
-    // Each model is the dearer on some types and the cheaper on others, so the dearest cells come from both rows
-    // and match neither.
-    let a = [0.5, 0.001, 0.4, 0.2, 1.0];
-    let b = [0.1, 0.003, 0.3, 0.6, 2.0];
-    let window = format!(
-        "    claude-a:{}\n    claude-b:{}\n",
-        flagged_cells(a),
-        flagged_cells(b)
-    );
-    let tables = PlanTables {
-        cost: CostTable::from_yaml(&format!(
-            "effective: 2026-09-29\ntier: default_claude_max_5x\nwindows:\n  five_hour:\n{window}  seven_day:\n{window}bands: []\n"
-        ))
-        .unwrap(),
-        tiers: TierFactors::shipped(),
-    };
-    let rates = tables.rate_table(FIVE_HOUR);
-    assert!(
-        all_close(per_million(rates.rates_for("claude-a")), a),
-        "a listed model reads its own cells"
-    );
-    let dearest = per_million(rates.rates_for("gpt-5"));
-    assert!(
-        all_close(dearest, [0.5, 0.003, 0.4, 0.6, 2.0]),
-        "{dearest:?}"
     );
 }
 

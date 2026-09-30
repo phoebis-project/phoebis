@@ -1,10 +1,11 @@
 use phoebis_routing::{
     effective_warm, lane_key, release_reasons, resolve, select, warm, warmth_of, AffinityChain,
-    AffinityMap, AffinityRow, BurnRates, ClientClass, CohortHold, CreditsState, EvidenceSource,
-    Exhaustion, HoldFacts, MemberSpend, MigrateReason, OverageEvidence,
-    PinRef, Placement, RateTable, Rates, RegistrySnapshot, RoutingState, SelectRequest,
-    SelectResult, StateWrite, UtilizationSample, Warmth, WindowReading, FAST_CREDITS_REASON,
-    FAST_RATE_LIMIT_REASON, FIVE_HOUR, MODEL_REJECTED_REASON, SEVEN_DAY, SEVEN_DAY_FABLE,
+    AffinityMap, AffinityRow, BurnRates, BurnUnit, ClientClass, CohortHold, CreditsState,
+    EvidenceSource, Exhaustion, HoldFacts, MemberSpend, MigrateReason,
+    OverageEvidence, PinRef, Placement, RateTable, Rates, RegistrySnapshot, RoutingState,
+    SelectRequest, SelectResult, StateWrite, UtilizationSample, Warmth, WindowReading,
+    FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR, MODEL_REJECTED_REASON, SEVEN_DAY,
+    SEVEN_DAY_FABLE,
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, Affinity, AffinityMode, AffinitySource, ApiKeyRow,
@@ -8244,21 +8245,22 @@ fn input_rate(input: f64) -> PinBurn {
     }
 }
 
-/// A table pricing each listed model's input tokens at its rate and every other token at nothing.
-fn input_prices(rows: &[(&str, f64)]) -> RateTable {
-    let only_input = |input: f64| Rates {
+/// A table pricing each listed model's input tokens at its rate (`None` for an input rate the table lacks) and
+/// every other token at nothing.
+fn input_prices(rows: &[(&str, Option<f64>)]) -> RateTable {
+    let only_input = |input: Option<f64>| Rates {
         input,
-        cache_read: 0.0,
-        write_5m: 0.0,
-        write_1h: 0.0,
-        output: 0.0,
+        cache_read: Some(0.0),
+        write_5m: Some(0.0),
+        write_1h: Some(0.0),
+        output: Some(0.0),
     };
     RateTable {
         rows: rows
             .iter()
             .map(|(model, input)| (model.to_string(), only_input(*input)))
             .collect(),
-        fallback: only_input(0.0),
+        fallback: only_input(Some(0.0)),
     }
 }
 
@@ -9042,8 +9044,8 @@ fn a_subscription_pin_in_overage_orders_the_round_by_the_dollar_average_and_leav
     let sonnet = burning("sonnet", "a", 1.0, false, T);
     let mut st = loaded(vec![opus, sonnet]);
     st.set_rates(BurnRates {
-        dollars: input_prices(&[("claude-opus-5", 1.0), ("claude-sonnet-5", 9.0)]),
-        five_hour: input_prices(&[("claude-opus-5", 9.0), ("claude-sonnet-5", 1.0)]),
+        dollars: input_prices(&[("claude-opus-5", Some(1.0)), ("claude-sonnet-5", Some(9.0))]),
+        five_hour: input_prices(&[("claude-opus-5", Some(9.0)), ("claude-sonnet-5", Some(1.0))]),
         fast: RateTable::unit(),
     });
     let opus_key = PinKey {
@@ -9100,7 +9102,7 @@ fn the_shedding_round_orders_cold_pins_first_then_warm_by_burn_over_rewrite_and_
     // Sonnet's measured-scale share per token: one table's rate scales every pin of the account alike, so the
     // order and the share of the sum read as the token counts would.
     st.set_rates(BurnRates {
-        five_hour: input_prices(&[("claude-sonnet-5", 0.0454e-6)]),
+        five_hour: input_prices(&[("claude-sonnet-5", Some(0.0454e-6))]),
         ..BurnRates::default()
     });
     hot_a_cool_b(&mut st, T - 500);
@@ -9137,6 +9139,94 @@ fn the_shedding_round_orders_cold_pins_first_then_warm_by_burn_over_rewrite_and_
         st.last_shed("a"),
         Some(T),
         "a second request inside the dwell runs no new round, so warm-2 is still unmarked"
+    );
+}
+
+#[test]
+fn an_unpriced_pin_is_never_marked_and_stays_out_of_the_shed_share_sum() {
+    let s = snapshot(shedding_pool(Shedding::default()));
+    let guess = |session: &str, warm: bool| PinRow {
+        model: "claude-guess".into(),
+        ..burning(session, "a", 9.0, warm, T)
+    };
+    let mut st = loaded(vec![
+        guess("cold-guess", false),
+        burning("cold-3", "a", 3.0, false, T),
+        guess("warm-guess", true),
+        burning("warm-4", "a", 4.0, true, T),
+        burning("warm-1", "a", 1.0, true, T),
+    ]);
+    // The guess model's input rate is unknown, so its two pins burn nine tokens a second that price to nothing.
+    st.set_rates(BurnRates {
+        five_hour: input_prices(&[("claude-sonnet-5", Some(1.0)), ("claude-guess", None)]),
+        ..BurnRates::default()
+    });
+    hot_a_cool_b(&mut st, T - 500);
+    assert_eq!(
+        landed(select(&mut st, &s, &main_turn(&s, "warm-1", T), &mut rng()).0),
+        ("a".into(), None)
+    );
+    let marks: Vec<&str> = ["cold-guess", "cold-3", "warm-guess", "warm-4", "warm-1"]
+        .into_iter()
+        .filter(|session| marked(&st, session, T))
+        .collect();
+    assert_eq!(
+        marks,
+        ["cold-3", "warm-4"],
+        "the priced burn is 8 and the target 4: cold-3 then warm-4 reach it, and neither guess is marked"
+    );
+}
+
+/// The share table the router builds from the cost table prices a model it does not list at no rate, so a pin on
+/// such a model reads no burn, adds nothing to the account's sum and is never marked beside a priced pin.
+#[test]
+fn a_pin_on_a_model_the_share_table_does_not_list_burns_nothing_and_is_never_marked() {
+    let s = snapshot(shedding_pool(Shedding::default()));
+    let mut st = loaded(vec![
+        PinRow {
+            model: "claude-opus-4-8".into(),
+            ..burning("cold-unlisted", "a", 9.0, false, T)
+        },
+        burning("cold-3", "a", 3.0, false, T),
+        burning("warm-1", "a", 1.0, true, T),
+    ]);
+    let none = Rates {
+        input: None,
+        cache_read: None,
+        write_5m: None,
+        write_1h: None,
+        output: None,
+    };
+    st.set_rates(BurnRates {
+        five_hour: RateTable {
+            fallback: none,
+            ..input_prices(&[("claude-sonnet-5", Some(1.0))])
+        },
+        ..BurnRates::default()
+    });
+    hot_a_cool_b(&mut st, T - 500);
+    let (pins, sum) = st.burn_of("a", BurnUnit::WindowShare, st.rates(), T, HOUR);
+    let unlisted = pins
+        .iter()
+        .find(|(p, _)| p.model == "claude-opus-4-8")
+        .map(|(_, burn)| *burn);
+    assert_eq!(
+        unlisted,
+        Some(None),
+        "the unlisted pin is one of the account's pins and reads no burn"
+    );
+    assert_eq!(
+        sum,
+        pins.iter().filter_map(|(_, burn)| *burn).sum::<f64>(),
+        "the sum is the priced pins' alone"
+    );
+    assert_eq!(
+        landed(select(&mut st, &s, &main_turn(&s, "warm-1", T), &mut rng()).0),
+        ("a".into(), None)
+    );
+    assert!(
+        marked(&st, "cold-3", T) && !marked(&st, "cold-unlisted", T),
+        "the priced pin is marked, the guess never"
     );
 }
 

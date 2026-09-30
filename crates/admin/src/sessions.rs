@@ -117,7 +117,9 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
         let (burn, burn_unmeasured) = match unit {
             None => (None, false),
             Some(BurnUnit::Usd) => (
-                Some(dollar_rates.price_burn(&p.model, &p.burn) * 3_600.0),
+                dollar_rates
+                    .price_burn(&p.model, &p.burn)
+                    .map(|b| b * 3_600.0),
                 false,
             ),
             Some(BurnUnit::WindowShare) => {
@@ -135,7 +137,9 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
                 // An unknown or unlisted tier sizes no window, so the figure reads null rather than a guess.
                 match tier.and_then(|t| Some((t, state.tables.tier_factor(t, FIVE_HOUR)?))) {
                     Some((tier, factor)) => (
-                        Some(share_rates.price_burn(&p.model, &p.burn_banded) * 3_600.0 / factor),
+                        share_rates
+                            .price_burn(&p.model, &p.burn_banded)
+                            .map(|b| b * 3_600.0 / factor),
                         state.tables.unmeasured(FIVE_HOUR, tier, &p.model),
                     ),
                     None => (None, false),

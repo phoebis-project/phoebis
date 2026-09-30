@@ -65,11 +65,11 @@ struct PriceFile {
 
 fn per_token(p: &ModelPrice) -> phoebis_routing::Rates {
     phoebis_routing::Rates {
-        input: p.input / 1_000_000.0,
-        cache_read: p.cache_read / 1_000_000.0,
-        write_5m: p.cache_write_5m / 1_000_000.0,
-        write_1h: p.cache_write_1h / 1_000_000.0,
-        output: p.output / 1_000_000.0,
+        input: Some(p.input / 1_000_000.0),
+        cache_read: Some(p.cache_read / 1_000_000.0),
+        write_5m: Some(p.cache_write_5m / 1_000_000.0),
+        write_1h: Some(p.cache_write_1h / 1_000_000.0),
+        output: Some(p.output / 1_000_000.0),
     }
 }
 
@@ -125,14 +125,15 @@ impl PriceTable {
     /// listed rate of each type, so a model the table has not learned never looks cheap to the shedding order.
     pub fn rate_table(&self) -> phoebis_routing::RateTable {
         let rows = self.per_token_rows(|row| &row.standard);
-        let dearest =
-            |of: fn(&phoebis_routing::Rates) -> f64| rows.values().map(of).fold(0.0, f64::max);
+        let dearest = |of: fn(&phoebis_routing::Rates) -> Option<f64>| {
+            rows.values().filter_map(of).fold(0.0, f64::max)
+        };
         let fallback = phoebis_routing::Rates {
-            input: dearest(|r| r.input),
-            cache_read: dearest(|r| r.cache_read),
-            write_5m: dearest(|r| r.write_5m),
-            write_1h: dearest(|r| r.write_1h),
-            output: dearest(|r| r.output),
+            input: Some(dearest(|r| r.input)),
+            cache_read: Some(dearest(|r| r.cache_read)),
+            write_5m: Some(dearest(|r| r.write_5m)),
+            write_1h: Some(dearest(|r| r.write_1h)),
+            output: Some(dearest(|r| r.output)),
         };
         phoebis_routing::RateTable { rows, fallback }
     }
@@ -394,7 +395,10 @@ mod tests {
             input: 1,
             ..phoebis_routing::PinUsage::default()
         };
-        assert_eq!(fast.price("claude-opus-5-5", one_input), 8.0 / 1_000_000.0);
+        assert_eq!(
+            fast.price("claude-opus-5-5", one_input),
+            Some(8.0 / 1_000_000.0)
+        );
         assert_eq!(
             fast.price("claude-sonnet-5", one_input),
             standard.price("claude-sonnet-5", one_input),
@@ -416,19 +420,19 @@ mod tests {
             usage
         };
         let sonnet = |usage| rates.price("claude-sonnet-5", usage);
-        assert_eq!(sonnet(one(|u| u.input = 1)), 2.0 / 1_000_000.0);
-        assert_eq!(sonnet(one(|u| u.cache_read = 1)), 0.2 / 1_000_000.0);
-        assert_eq!(sonnet(one(|u| u.write_5m = 1)), 2.5 / 1_000_000.0);
-        assert_eq!(sonnet(one(|u| u.write_1h = 1)), 4.0 / 1_000_000.0);
-        assert_eq!(sonnet(one(|u| u.output = 1)), 10.0 / 1_000_000.0);
+        assert_eq!(sonnet(one(|u| u.input = 1)), Some(2.0 / 1_000_000.0));
+        assert_eq!(sonnet(one(|u| u.cache_read = 1)), Some(0.2 / 1_000_000.0));
+        assert_eq!(sonnet(one(|u| u.write_5m = 1)), Some(2.5 / 1_000_000.0));
+        assert_eq!(sonnet(one(|u| u.write_1h = 1)), Some(4.0 / 1_000_000.0));
+        assert_eq!(sonnet(one(|u| u.output = 1)), Some(10.0 / 1_000_000.0));
         assert_eq!(
             rates.price("claude-haiku-4-5-20251001", one(|u| u.input = 1)),
-            1.0 / 1_000_000.0,
+            Some(1.0 / 1_000_000.0),
             "a dated row prices as itself"
         );
         assert_eq!(
             rates.price("gpt-5", one(|u| u.output = 1)),
-            50.0 / 1_000_000.0,
+            Some(50.0 / 1_000_000.0),
             "a model the table lacks prices at the dearest listed rate of each type"
         );
     }

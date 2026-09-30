@@ -766,6 +766,17 @@ async fn the_burn_route_answers_each_subscription_points_share_of_both_windows()
     set_max_5x(&parts.store);
     let burn = json(get(&parts.app, burn_url, Some(&cookie)).await).await;
     assert_eq!(burn["group_by"], "account");
+    let counts_every_token = |v: &serde_json::Value| {
+        v["points"].as_array().unwrap().iter().all(|p| {
+            let sides = p["cached_tokens"].as_u64().unwrap_or(0)
+                + p["uncached_tokens"].as_u64().unwrap_or(0);
+            p["tokens"].as_u64().is_some_and(|tokens| tokens >= sides)
+        })
+    };
+    assert!(
+        counts_every_token(&burn),
+        "each point counts every token type, its cached and uncached input among them: {burn}"
+    );
     let point = business(&burn);
     let tables = phoebis_ledger::PlanTables::shipped();
     let hour = point["at"].as_i64().unwrap();
@@ -852,6 +863,10 @@ async fn the_burn_route_answers_each_subscription_points_share_of_both_windows()
         .await,
     )
     .await;
+    assert!(
+        counts_every_token(&by_key),
+        "under every grouping: {by_key}"
+    );
     let keyed = by_key["points"].as_array().unwrap();
     assert!(
         keyed

@@ -821,6 +821,8 @@ export interface BurnPoint {
   sevenDayShare: number | null;
   /** The same on the 7-day window, whose cells are flagged apart from the 5-hour ones. */
   sevenDayUnmeasured: boolean;
+  /** Every token of the bucket, all five types: zero only for a bucket with no traffic. */
+  tokens: number;
   /** Uncached input tokens. */
   uncachedTokens: number;
   /** What the upstream spends in: a subscription's window share, even while no tier prices it, or an API key's

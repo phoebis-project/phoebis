@@ -1,5 +1,7 @@
 //! One selection: the spec's seven steps over the snapshot and the routing state.
 
+use std::cmp::Ordering;
+
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, AffinityMode, CooldownRow, OveragePolicy, PinBurn,
     PinKey, PinRow, PoolRow, SessionPlacement, Strategy, SubagentPlacement, WarmSessions,
@@ -1313,10 +1315,10 @@ fn burn_unit(
 
 /// A shedding round over the account `current` sits on: every pin of it, cold first by burn, then warm by burn
 /// over rewrite cost, bounded by `warm_sessions`, marked in that order up to `shed_share` of the account's burn
-/// in the unit its funding selects. On plan quota each burn is the Max 5x 5-hour share rate: the tier's factor
-/// divides every pin of the account alike, so neither the order nor the share of the sum needs it, and a pin on
-/// a fast lane is out of the round, since it draws no window and has nothing to shed there; in dollars it stays.
-/// The current pin's warmth and lane are this request's; every other pin's are the stored ones.
+/// in the unit its funding selects. On plan quota each burn is the cost table's 5-hour share rate on its reference
+/// tier: the tier's factor divides every pin of the account alike, so neither the order nor the share of the sum
+/// needs it, and a pin on a fast lane is out of the round, since it draws no window and has nothing to shed there;
+/// in dollars it stays. The current pin's warmth and lane are this request's; every other pin's are the stored ones.
 #[allow(clippy::too_many_arguments)]
 fn shed_round(
     state: &RoutingState,
@@ -1347,7 +1349,7 @@ fn shed_round(
             }
         };
         pins.retain(|(p, _)| !on_fast_lane(p));
-        sum = pins.iter().map(|(_, burn)| burn).sum();
+        sum = pins.iter().filter_map(|(_, burn)| *burn).sum();
     }
     let (mut cold, mut warm_pins): (Vec<_>, Vec<_>) = pins.into_iter().partition(|(p, _)| {
         if is_current(p) {
@@ -1356,13 +1358,23 @@ fn shed_round(
             !warm(p, now)
         }
     });
+    // A pin whose burn cannot be priced ranks after every priced pin of its group: a guess never orders a shed.
+    let priced_first =
+        |a: &Option<f64>, b: &Option<f64>, desc: fn(f64, f64) -> Ordering| match (a, b) {
+            (Some(a), Some(b)) => desc(*a, *b),
+            (Some(_), None) => Ordering::Less,
+            (None, Some(_)) => Ordering::Greater,
+            (None, None) => Ordering::Equal,
+        };
     // A pin with no prompt size reported yet ranks as the cheapest rewrite.
-    let per_rewrite = |(p, burn): &(PinRow, f64)| *burn / p.last_input_tokens.max(1) as f64;
-    let by_rewrite =
-        |a: &(PinRow, f64), b: &(PinRow, f64)| per_rewrite(b).total_cmp(&per_rewrite(a));
-    cold.sort_by(|a, b| b.1.total_cmp(&a.1));
+    let per_rewrite =
+        |(p, burn): &(PinRow, Option<f64>)| burn.map(|b| b / p.last_input_tokens.max(1) as f64);
+    let by_rewrite = |a: &(PinRow, Option<f64>), b: &(PinRow, Option<f64>)| {
+        priced_first(&per_rewrite(a), &per_rewrite(b), |x, y| y.total_cmp(&x))
+    };
+    cold.sort_by(|a, b| priced_first(&a.1, &b.1, |x, y| y.total_cmp(&x)));
     warm_pins.sort_by(by_rewrite);
-    let cold_count = cold.len();
+    let cold_priced = cold.iter().filter(|(_, burn)| burn.is_some()).count();
     let mut ordered = cold;
     ordered.extend(warm_pins);
     if pool.shedding.warm_sessions == WarmSessions::Always {
@@ -1370,9 +1382,10 @@ fn shed_round(
     }
     let mut marks = shed_marks(&ordered, pool.shedding.shed_share * sum);
     // `never` stops after the cold pins. The warm ones stay in the order all the same, so the last-pin rule
-    // still counts them among the account's pins.
+    // still counts them among the account's pins; the marks are priced pins alone, so the cold group's marks are
+    // its priced count at most.
     if pool.shedding.warm_sessions == WarmSessions::Never {
-        marks.truncate(cold_count);
+        marks.truncate(cold_priced);
     }
     marks
 }

@@ -473,6 +473,7 @@ export const decodeBurnPoint = (v: unknown): BurnPoint => {
     group: str(p.group),
     sevenDayShare: numOrNull(p.seven_day_share),
     sevenDayUnmeasured: bool(p.seven_day_unmeasured),
+    tokens: num(p.tokens),
     uncachedTokens: num(p.uncached_tokens),
     unit: burnUnit(p.unit),
     usd: num(p.usd),

@@ -304,10 +304,11 @@ interface BurnSum {
   fiveHourUnmeasured: boolean;
   sevenDay: number | null;
   sevenDayUnmeasured: boolean;
+  tokens: number;
   uncached: number;
   usd: number;
 }
-const emptyBurn = (): BurnSum => ({ cached: 0, fiveHour: null, fiveHourUnmeasured: false, sevenDay: null, sevenDayUnmeasured: false, uncached: 0, usd: 0 });
+const emptyBurn = (): BurnSum => ({ cached: 0, fiveHour: null, fiveHourUnmeasured: false, sevenDay: null, sevenDayUnmeasured: false, tokens: 0, uncached: 0, usd: 0 });
 
 /** How many sessions the session grouping keeps, the route's cut. */
 const BURN_SESSIONS = 20;
@@ -334,6 +335,7 @@ export function burnOf(rows: HourlyRollup[], range: Range, groupBy: BurnGroup): 
     const s = byAt.get(at) ?? emptyBurn();
     byAt.set(at, s);
     s.cached += r.tokens.cacheRead;
+    s.tokens += r.tokens.uncachedInput + r.tokens.cacheRead + r.tokens.cacheWrite5m + r.tokens.cacheWrite1h + r.tokens.output;
     s.uncached += r.tokens.uncachedInput;
     s.usd += oauth && !fast ? 0 : r.costUsd;
     if (!oauth) continue;
@@ -364,6 +366,7 @@ export function burnOf(rows: HourlyRollup[], range: Range, groupBy: BurnGroup): 
         group,
         sevenDayShare: byUpstream ? s.sevenDay : null,
         sevenDayUnmeasured: byUpstream && s.sevenDayUnmeasured,
+        tokens: Math.round(s.tokens),
         uncachedTokens: Math.round(s.uncached),
         unit: kind === undefined ? null : kind === 'oauth' ? 'window_share' : 'usd',
         usd: s.usd,

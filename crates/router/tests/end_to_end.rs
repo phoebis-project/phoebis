@@ -2335,11 +2335,13 @@ async fn a_client_request_folds_the_pins_typed_burn_and_the_sessions_route_price
     );
     let dollars = phoebis_ledger::PriceTable::shipped()
         .rate_table()
-        .price("claude-opus-5", usage);
+        .price("claude-opus-5", usage)
+        .unwrap();
     assert!(
         (phoebis_ledger::PriceTable::shipped()
             .rate_table()
             .price_burn("claude-opus-5", &pin.burn)
+            .unwrap()
             - dollars / 600.0)
             .abs()
             < 1e-12,

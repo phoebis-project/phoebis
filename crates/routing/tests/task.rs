@@ -1749,18 +1749,19 @@ async fn a_fast_completion_charges_no_window() {
 }
 
 #[tokio::test]
-async fn a_usage_report_charges_the_fable_week_for_a_fable_model_and_nothing_unpriced_or_moved_past(
-) {
+async fn a_usage_report_charges_each_window_the_pricer_prices_and_the_fable_week_for_a_fable_model()
+{
     let store = seeded_oauth(&["a"]);
     with_tier(&store, "a");
     let now = Arc::new(AtomicI64::new(3_000));
     // A tenth of a shared window per million input tokens, and twice that of the Fable week, which is half the
-    // 7-day window. The unpriced model has no 7-day cell, so it prices on the 5-hour window alone: only the rule
-    // that both shared windows price keeps its 5-hour share out.
+    // 7-day window. A window the pricer cannot price keeps its reading while the others charge: the first
+    // unpriced model has no 7-day cell and prices on the 5-hour window alone, the second prices on neither.
     let share = SharePricer::new(|window, _, model, usage, _| {
         let tenth = usage.input as f64 / 1_000_000.0 * 0.1;
         match (window, model) {
             (SEVEN_DAY, "claude-unpriced-1") => None,
+            (FIVE_HOUR | SEVEN_DAY, "claude-unpriced-2") => None,
             (SEVEN_DAY_FABLE, _) => Some(2.0 * tenth),
             _ => Some(tenth),
         }
@@ -1828,10 +1829,16 @@ async fn a_usage_report_charges_the_fable_week_for_a_fable_model_and_nothing_unp
         "any other model leaves the Fable week alone: {sonnet:?}"
     );
     handle.report(used("claude-unpriced-1", 1));
-    let unpriced = windows().await;
+    let five_hour_alone = windows().await;
     assert!(
-        reads(unpriced.clone(), [0.7, 0.7, 0.7]),
-        "a model the pricer cannot price on both shared windows charges neither: {unpriced:?}"
+        reads(five_hour_alone.clone(), [0.8, 0.7, 0.7]),
+        "a model priced on the 5-hour window alone charges that window and leaves the 7-day one: {five_hour_alone:?}"
+    );
+    handle.report(used("claude-unpriced-2", 1));
+    let neither = windows().await;
+    assert!(
+        reads(neither.clone(), [0.8, 0.7, 0.7]),
+        "a model priced on neither window charges nothing: {neither:?}"
     );
 
     // The id held again under a new incarnation, with its own readings: a report from the old holder is late.
@@ -3552,11 +3559,11 @@ fn quarter_dollar_rates() -> BurnRates {
 fn flat_rates(rate: f64) -> RateTable {
     let mut table = RateTable::unit();
     table.fallback = Rates {
-        input: rate,
-        cache_read: rate,
-        write_5m: rate,
-        write_1h: rate,
-        output: rate,
+        input: Some(rate),
+        cache_read: Some(rate),
+        write_5m: Some(rate),
+        write_1h: Some(rate),
+        output: Some(rate),
     };
     table
 }

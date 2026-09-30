@@ -1184,6 +1184,62 @@ fn an_hour_inside_the_peak_band_weighs_the_five_hour_share_and_leaves_the_seven_
 }
 
 #[test]
+fn a_bucket_counts_every_token_type_its_rows_carry() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    // A cold-cache request: cache writes and output, no uncached input and no cache read.
+    db.insert_request(
+        &RequestRecord {
+            id: "cold".into(),
+            received_at: WEEKDAY_OFF_PEAK,
+            key_id: Some("k".into()),
+            pool_id: Some("p".into()),
+            canonical_model: "claude-sonnet-5".into(),
+            model: "claude-sonnet-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            outcome: "succeeded".into(),
+            attempts: 1,
+            ..Default::default()
+        },
+        &[AttemptRecord {
+            request_id: "cold".into(),
+            attempt: 1,
+            account_id: "a".into(),
+            account_kind: "oauth".into(),
+            outcome: "succeeded".into(),
+            input_tokens: Some(0),
+            cache_write_5m_tokens: Some(3_000),
+            cache_write_1h_tokens: Some(1_000),
+            output_tokens: Some(200),
+            ..Default::default()
+        }],
+        None,
+    )
+    .unwrap();
+    let tables = PlanTables::shipped();
+    let kinds = HashMap::from([("a".to_string(), AccountKind::Oauth)]);
+    let tiers: Tiers = HashMap::from([("a".to_string(), None)]);
+    let hour = phoebis_ledger::hour_of(WEEKDAY_OFF_PEAK) * 1_000;
+    let filter = SeriesFilter {
+        from: hour,
+        to: hour + 3_600_000,
+        bucket_seconds: 3_600,
+        ..SeriesFilter::default()
+    };
+    let point = db
+        .read_blocking(|c| burn_series(c, &tables, &kinds, &tiers, &filter))
+        .unwrap()
+        .into_iter()
+        .find(|p| p.at == hour)
+        .unwrap();
+    assert_eq!(
+        (point.cached_tokens, point.uncached_tokens, point.tokens),
+        (0, 0, 4_200),
+        "every type counts"
+    );
+}
+
+#[test]
 fn a_row_of_an_account_without_a_tier_prices_no_share_and_an_api_key_row_keeps_its_dollars() {
     let db = LedgerDb::open_in_memory().unwrap();
     // A million Opus input tokens per account in one off-band hour.

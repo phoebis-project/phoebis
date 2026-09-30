@@ -601,8 +601,8 @@ test('the burn series decodes each point with its instant, both token sides, and
   const at = body.points.findLastIndex((p) => p.five_hour_share !== null);
   const [last, wire] = [burn.points[at], body.points[at]];
   assert.ok(
-    wire.five_hour_share > 0 && wire.seven_day_share > 0 && wire.five_hour_unmeasured === true && wire.seven_day_unmeasured === true && wire.cached_tokens > 0 && wire.uncached_tokens > 0,
-    'the fixture reports a subscription point that burned through flagged cells',
+    wire.five_hour_share > 0 && wire.seven_day_share > 0 && wire.five_hour_unmeasured === true && wire.seven_day_unmeasured === true && wire.cached_tokens > 0 && wire.uncached_tokens > 0 && wire.tokens > wire.cached_tokens + wire.uncached_tokens,
+    'the fixture reports a subscription point that burned through flagged cells, output tokens among its count',
   );
   assert.deepEqual(last, {
     at: new Date(wire.at).toISOString(),
@@ -612,6 +612,7 @@ test('the burn series decodes each point with its instant, both token sides, and
     group: 'business',
     sevenDayShare: wire.seven_day_share,
     sevenDayUnmeasured: true,
+    tokens: wire.tokens,
     uncachedTokens: wire.uncached_tokens,
     unit: 'window_share',
     usd: wire.usd,
@@ -626,6 +627,8 @@ test('the burn series decodes each point with its instant, both token sides, and
   // Every grouping but the upstream one answers the shares, their flags and the unit as null.
   const [keyed] = d.decodeBurn({ bucket_seconds: 21_600, points: [{ ...wire, five_hour_share: null, five_hour_unmeasured: null, group: 'desktop', seven_day_share: null, seven_day_unmeasured: null, unit: null }] }).points;
   assert.deepEqual([keyed.fiveHourShare, keyed.fiveHourUnmeasured, keyed.sevenDayShare, keyed.sevenDayUnmeasured, keyed.unit], [null, false, null, false, null]);
+  const { tokens: _, ...untold } = wire;
+  assert.equal(d.decodeBurn({ bucket_seconds: 3_600, points: [untold] }).points[0].tokens, 0, 'a point without the count decodes it as zero');
   assert.equal(d.decodeBurn({ bucket_seconds: 21_600, points: [] }).bucketSeconds, 21_600);
 });
 
