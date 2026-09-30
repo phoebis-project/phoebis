@@ -434,6 +434,9 @@ async fn migration_five_adds_the_skipped_column_and_the_marks_table_to_a_version
         // never reads that one.
         let mut sql = String::from("ALTER TABLE requests DROP COLUMN key_generation; ALTER TABLE rollups_hourly DROP COLUMN probes_skipped; DROP TABLE kept_warm_marks; ALTER TABLE bodies DROP COLUMN request_len_seen; ALTER TABLE bodies DROP COLUMN response_len_seen; ALTER TABLE account_rollups_hourly DROP COLUMN rewrite_tokens; ALTER TABLE account_rollups_hourly DROP COLUMN migrations_json; ");
         for column in [
+            "auto_mode_detail",
+            "auto_mode_tool_uses_json",
+            "auto_mode_verdict",
             "cleared_input_tokens",
             "inference_geo",
             "refusal_category",
@@ -451,6 +454,7 @@ async fn migration_five_adds_the_skipped_column_and_the_marks_table_to_a_version
         }
         for column in [
             "agent_type",
+            "auto_mode",
             "client",
             "client_drift",
             "compaction",
@@ -491,7 +495,7 @@ async fn migration_five_adds_the_skipped_column_and_the_marks_table_to_a_version
         .unwrap();
     }
     let db = std::sync::Arc::new(LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 20);
+    assert_eq!(db.schema_version().await.unwrap(), 21);
     let (_, attempts) = db.request("r0").await.unwrap().unwrap();
     assert_eq!(
         attempts.len(),

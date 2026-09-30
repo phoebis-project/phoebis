@@ -22,7 +22,9 @@ use tokio_util::task::TaskTracker;
 use crate::catalog::CatalogService;
 use crate::hold::Inspect;
 use crate::messages::{Guards, RelayOutcome, Trace};
-use crate::observe::{answer_from_json, is_tool_use_delta, message_id_from_json};
+use crate::observe::{
+    answer_from_json, is_tool_use_block_start, is_tool_use_delta, message_id_from_json,
+};
 use crate::sse::{SseEvent, SseParser};
 
 /// Chunks held between the upstream reader and the caller's socket. Deep enough that a caller pausing for a
@@ -77,6 +79,9 @@ pub(crate) struct Publish {
     pub bytes: u64,
     pub first_content_at: Option<i64>,
     pub saw_tool_use: bool,
+    /// A `content_block_start` opened a `tool_use` block: a call without arguments may stream no
+    /// `input_json_delta`, so `saw_tool_use` alone can miss it.
+    pub saw_tool_use_block: bool,
     /// The error type of an SSE `error` event seen after the head, which turns a clean end into a failure.
     pub stream_error: Option<String>,
     /// The status the client was answered with, for the completion.
@@ -329,8 +334,19 @@ impl Publish {
                 }
                 None
             }
+            Some(b"content_block_start") => {
+                if !self.saw_tool_use_block && is_tool_use_block_start(&event.data) {
+                    self.saw_tool_use_block = true;
+                }
+                None
+            }
             Some(b"message_delta") => {
-                let answer = answer_from_json(&event.data, &[]);
+                let mut answer = answer_from_json(&event.data, &[]);
+                let called = self.saw_tool_use || self.saw_tool_use_block;
+                answer.response.safeguards = answer
+                    .response
+                    .safeguards
+                    .map(|s| s.with_tool_calls(called));
                 self.usage.merge(&answer.usage);
                 self.response.merge(&answer.response);
                 Some(Phase::MessageDelta {

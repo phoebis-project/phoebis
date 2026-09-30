@@ -28,17 +28,18 @@ The request row names the key, the pool, the session, the agent, and the model; 
 call; the status and outcome; the error code; the time to first byte and to first token; the duration; the bytes
 sent and received; whether the response was served kept warm; whether its body was captured; and the client's
 user agent and class (`claude-code/<entrypoint>` or `other`), the gateway hints it sent (the agent
-type, the compaction and context-compacted markers, and the summed tool durations of the turn before), the turn
-origin off its attribution line, and the request's shape: the effort, the thinking mode and budget, the output
-limit, the tool, system-block, and message counts, the context edits, the temperature, and the requested speed
-and service tier.
-A session that branched from another
-conversation carries that conversation's root and the matched depth as well.
+type, the compaction and context-compacted markers, and the summed tool durations of the turn before), the turn origin
+off its attribution line, its auto-mode standing (a server-side check the router passed through or dropped under the
+key's setting, or one of the client's own classifier requests at stage 1 or 2), and the request's shape: the effort, the
+thinking mode and budget, the output limit, the tool, system-block, and message counts, the context edits, the
+temperature, and the requested speed and service tier.
+A session that branched from
+another conversation carries that conversation's root and the matched depth as well.
 The attempt row names the account and its kind; the upstream status and request id; the outcome; the
 cooldown the attempt set; the stop reason, the model the answer names when it differs from the one the router
-resolved, the speed, the region inference ran in, the tokens a context edit cleared, and a refusal's category
-and recommended model; the five token counts, with the thinking share of the output and the web search and
-fetch calls the answer made;
+resolved, the speed, the region inference ran in, the tokens a context edit cleared, and a refusal's category and
+recommended model; the auto-mode verdict with its detail and, for a server-side check, the outcome per tool use; the
+five token counts, with the thinking share of the output and the web search and fetch calls the answer made;
 the cache miss reason the diagnostics beta reports; the unified rate-limit window readings; overage; the cost
 split across input, cache read, cache write, and output; and the pricing version the estimate used.
 

@@ -407,6 +407,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             turn_origin: Some("human".into()),
             forked_from: Some("s0".into()),
             fork_depth: Some(2),
+            auto_mode: Some("server".into()),
             ..request(
                 key_generation,
                 "r-failover",
@@ -427,6 +428,14 @@ async fn every_route_is_captured_and_holds_its_shape() {
             },
             AttemptRecord {
                 selection: Some(trace_json.clone()),
+                auto_mode_verdict: Some("flagged".into()),
+                auto_mode_tool_uses: Some(
+                    j!({
+                        "toolu_01": { "outcome": "not_flagged" },
+                        "toolu_02": { "outcome": "flagged", "explanation": "Deletes a file the task never named." },
+                    })
+                    .to_string(),
+                ),
                 ..attempt(
                     "r-failover",
                     2,
@@ -540,6 +549,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
     parts.ledger.record(Record::Request {
         request: RequestRecord {
             bodies_captured: true,
+            auto_mode: Some("client_stage1".into()),
             ..request(
                 key_generation,
                 "r-captured",
@@ -550,14 +560,10 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 "succeeded",
             )
         },
-        attempts: vec![attempt(
-            "r-captured",
-            1,
-            "business",
-            200,
-            "succeeded",
-            now - 60_000,
-        )],
+        attempts: vec![AttemptRecord {
+            auto_mode_verdict: Some("not_flagged".into()),
+            ..attempt("r-captured", 1, "business", 200, "succeeded", now - 60_000)
+        }],
         bodies: Some(BodyRecord {
             request_id: "r-captured".into(),
             request_body: br#"{"model":"claude-sonnet-5","messages":[]}"#.to_vec(),
@@ -649,7 +655,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             },
         )
         .unwrap();
-    parts.keepalive.observe(Event::RequestObserved(RequestObserved { request_id: "k1".into(), origin: Origin::Client, kind: Kind::Inference, key_id: Some("desktop".into()), key_generation, pool_id: Some("main".into()), session_id: Some("s1".into()), agent_id: Some("main".into()), parent_agent_id: None, owner_id: None, model: "claude-sonnet-5".into(), canonical_model: "claude-sonnet-5".into(), wire_model: "claude-sonnet-5".into(), stream: false, headers: vec![], body: bytes::Bytes::from(r#"{"model":"claude-sonnet-5","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}"#), body_capture_hours: 0, shape: RequestShape::default(), static_hash: None, boundaries: Vec::new(), client: phoebis_bus::ClientFacts::default(), fork: phoebis_bus::Fork::default(), presented_retired: false, rotation_at: None, received_at: now }));
+    parts.keepalive.observe(Event::RequestObserved(RequestObserved { request_id: "k1".into(), origin: Origin::Client, kind: Kind::Inference, key_id: Some("desktop".into()), key_generation, pool_id: Some("main".into()), session_id: Some("s1".into()), agent_id: Some("main".into()), parent_agent_id: None, owner_id: None, model: "claude-sonnet-5".into(), canonical_model: "claude-sonnet-5".into(), wire_model: "claude-sonnet-5".into(), stream: false, headers: vec![], body: bytes::Bytes::from(r#"{"model":"claude-sonnet-5","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}"#), body_capture_hours: 0, shape: RequestShape::default(), static_hash: None, boundaries: Vec::new(), client: phoebis_bus::ClientFacts::default(), auto_mode: None, fork: phoebis_bus::Fork::default(), presented_retired: false, rotation_at: None, received_at: now }));
     parts
         .keepalive
         .observe(Event::AccountSelected(AccountSelected {
@@ -871,6 +877,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
         static_hash: None,
         boundaries: Vec::new(),
         client: phoebis_bus::ClientFacts::default(),
+        auto_mode: None,
         fork: phoebis_bus::Fork::default(),
         presented_retired: false,
         rotation_at: None,

@@ -14,9 +14,9 @@ use axum::routing::{get, head, post};
 use axum::Router;
 use bytes::Bytes;
 use phoebis_bus::{
-    AccountSelected, AttemptOutcome, Bus, ClientFacts, CooldownSet, Event, Fork, Kind,
-    Origin, Outcome, RequestComplete, RequestObserved, RequestShape, ResponseChunk, ResponseFacts,
-    ResponseHead as BusHead, Usage,
+    AccountSelected, AttemptOutcome, AutoMode, Bus, ClientFacts, CooldownSet, Event, Fork,
+    Kind, Origin, Outcome, RequestComplete, RequestObserved, RequestShape, ResponseChunk,
+    ResponseFacts, ResponseHead as BusHead, Usage,
 };
 use phoebis_oauth::{AccessToken, AcquireError, Clock, CredentialManager};
 use phoebis_routing::{
@@ -378,6 +378,7 @@ impl Trace {
         static_hash: Option<String>,
         boundaries: Vec<String>,
         client: ClientFacts,
+        auto_mode: Option<AutoMode>,
         presented_retired: bool,
         rotation_at: Option<i64>,
     ) {
@@ -412,6 +413,7 @@ impl Trace {
             static_hash,
             boundaries,
             client,
+            auto_mode,
             fork: identity
                 .map(|i| Fork {
                     forked_from: i.forked_from.clone(),
@@ -755,6 +757,7 @@ impl Relay {
                             None,
                             Vec::new(),
                             client_facts(&parts.headers, None, None),
+                            None,
                             false,
                             None,
                         )
@@ -779,6 +782,7 @@ impl Relay {
                             None,
                             Vec::new(),
                             client_facts(&parts.headers, None, None),
+                            None,
                             false,
                             None,
                         )
@@ -804,6 +808,7 @@ impl Relay {
                                 None,
                                 Vec::new(),
                                 client_facts(&parts.headers, None, None),
+                                None,
                                 false,
                                 None,
                             )
@@ -829,6 +834,7 @@ impl Relay {
                                 None,
                                 Vec::new(),
                                 client_facts(&parts.headers, None, None),
+                                None,
                                 false,
                                 None,
                             )
@@ -887,6 +893,7 @@ impl Relay {
                         None,
                         Vec::new(),
                         client_facts(&parts.headers, None, None),
+                        None,
                         presented == Presented::Retired,
                         key.rotated_at,
                     )
@@ -905,6 +912,16 @@ impl Relay {
         };
         let facts = BodyFacts::read(&raw);
         let auto_mode_server = snapshot.auto_mode_server(&key);
+        let auto_mode = match facts.shape.classifier_stage {
+            Some(1) => Some(AutoMode::ClientStage1),
+            Some(_) => Some(AutoMode::ClientStage2),
+            None if facts.shape.safeguards => Some(if auto_mode_server {
+                AutoMode::Server
+            } else {
+                AutoMode::Stripped
+            }),
+            None => None,
+        };
         let stream = wants_stream(&raw);
         // Admission and the body edit both act on the first spelling of a member; a second one would reach
         // the wire untouched and a last-wins parser upstream would act on it instead. Refused whole rather
@@ -930,6 +947,7 @@ impl Relay {
                     None,
                     Vec::new(),
                     client_facts(&parts.headers, None, Some(&facts)),
+                    auto_mode,
                     presented == Presented::Retired,
                     key.rotated_at,
                 )
@@ -975,6 +993,7 @@ impl Relay {
                         None,
                         Vec::new(),
                         client_facts(&parts.headers, None, Some(&facts)),
+                        auto_mode,
                         presented == Presented::Retired,
                         key.rotated_at,
                     )
@@ -1007,6 +1026,7 @@ impl Relay {
                         None,
                         Vec::new(),
                         client_facts(&parts.headers, None, Some(&facts)),
+                        auto_mode,
                         presented == Presented::Retired,
                         key.rotated_at,
                     )
@@ -1055,6 +1075,7 @@ impl Relay {
                     .map(|c| c.message_boundaries.clone())
                     .unwrap_or_default(),
                 client_facts(&parts.headers, Some(&identity), Some(&facts)),
+                auto_mode,
                 presented == Presented::Retired,
                 key.rotated_at,
             )
@@ -2875,6 +2896,7 @@ impl Relay {
                 bytes: 0,
                 first_content_at: None,
                 saw_tool_use: false,
+                saw_tool_use_block: false,
                 stream_error: None,
                 status: head.status,
                 message_id: None,

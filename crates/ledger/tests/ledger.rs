@@ -6,8 +6,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use phoebis_bus::{
-    AccountSelected, Event as BusEvent, Kind, Origin, Outcome as BusOutcome, RequestComplete,
-    RequestObserved, RequestShape, ResponseChunk, ResponseFacts, Usage,
+    AccountSelected, AttemptOutcome, AutoMode, ClassifierAnswer, Event as BusEvent, Kind, Origin,
+    Outcome as BusOutcome, RequestComplete, RequestObserved, RequestShape, ResponseChunk,
+    ResponseFacts, SafeguardResults, ToolUseVerdict, Usage,
 };
 use phoebis_ledger::{
     list_requests, Assembler, AttemptRecord, EventRecord, LedgerConfig, LiveKeys, Record,
@@ -895,6 +896,7 @@ fn observed_event(id: &str) -> BusEvent {
         static_hash: None,
         boundaries: Vec::new(),
         client: phoebis_bus::ClientFacts::default(),
+        auto_mode: None,
         fork: phoebis_bus::Fork::default(),
         presented_retired: false,
         rotation_at: None,
@@ -991,6 +993,188 @@ async fn a_short_capture_reads_back_truncated_through_the_database() {
     .await;
     let detail: serde_json::Value = serde_json::from_str(gap.detail.as_deref().unwrap()).unwrap();
     assert_eq!(detail["reason"].as_str(), Some("chunk_dropped"));
+    up.shutdown().await;
+}
+
+fn auto_mode_observed(id: &str, auto_mode: Option<AutoMode>) -> BusEvent {
+    let BusEvent::RequestObserved(mut observed) = observed_event(id) else {
+        unreachable!()
+    };
+    observed.auto_mode = auto_mode;
+    BusEvent::RequestObserved(observed)
+}
+
+fn head_event(id: &str, status: u16, at: i64) -> BusEvent {
+    BusEvent::ResponseHead(phoebis_bus::ResponseHead {
+        request_id: id.into(),
+        attempt: 1,
+        status,
+        headers: vec![],
+        first_event: None,
+        outcome: if status == 200 {
+            AttemptOutcome::Succeeded
+        } else {
+            AttemptOutcome::UpstreamError
+        },
+        cooldown: None,
+        written_at: at,
+        observed_at: at,
+    })
+}
+
+/// The completion of attempt 1 on account `a` with the answer's facts.
+fn answered_event(id: &str, status: u16, response: ResponseFacts) -> BusEvent {
+    BusEvent::RequestComplete(RequestComplete {
+        attempt: 1,
+        account_id: Some("a".into()),
+        outcome: if status == 200 {
+            BusOutcome::Succeeded
+        } else {
+            BusOutcome::Failed
+        },
+        status,
+        response,
+        ..match complete_event(id) {
+            BusEvent::RequestComplete(complete) => complete,
+            _ => unreachable!(),
+        }
+    })
+}
+
+fn tool_use(outcome: &str, explanation: Option<&str>) -> ToolUseVerdict {
+    ToolUseVerdict {
+        outcome: outcome.into(),
+        reason: None,
+        explanation: explanation.map(String::from),
+    }
+}
+
+#[tokio::test]
+async fn the_auto_mode_facts_round_trip_through_the_write_and_select_lists() {
+    let up = FakeUpstream::start(vec![]).await;
+    let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let flagged = SafeguardResults {
+        verdict: "flagged".into(),
+        detail: None,
+        tool_uses: [
+            ("toolu_01".to_string(), tool_use("not_flagged", None)),
+            (
+                "toolu_02".to_string(),
+                tool_use("flagged", Some("Deletes a file the task never named.")),
+            ),
+        ]
+        .into_iter()
+        .collect(),
+    };
+    let stage1 = ResponseFacts {
+        classifier: Some(ClassifierAnswer {
+            verdict: "not_flagged".into(),
+            category: None,
+        }),
+        ..Default::default()
+    };
+    let refused = ResponseFacts {
+        stop_reason: Some("refusal".into()),
+        refusal_category: Some("reasoning_extraction".into()),
+        classifier: Some(ClassifierAnswer {
+            verdict: "unreadable".into(),
+            category: None,
+        }),
+        ..Default::default()
+    };
+    let checked = ResponseFacts {
+        safeguards: Some(flagged.clone()),
+        ..Default::default()
+    };
+    let requests = [
+        ("am-server", Some(AutoMode::Server), 200, checked.clone()),
+        (
+            "am-silent",
+            Some(AutoMode::Server),
+            200,
+            ResponseFacts::default(),
+        ),
+        ("am-failed", Some(AutoMode::Server), 502, checked.clone()),
+        (
+            "am-stripped",
+            Some(AutoMode::Stripped),
+            200,
+            ResponseFacts::default(),
+        ),
+        ("am-stage1", Some(AutoMode::ClientStage1), 200, stage1),
+        ("am-stage2", Some(AutoMode::ClientStage2), 200, refused),
+        ("am-plain", None, 200, checked),
+    ];
+    for (id, auto_mode, status, response) in requests {
+        h.bus.publish(auto_mode_observed(id, auto_mode));
+        h.bus.publish(selected_event(id, 1, "a", 10));
+        h.bus.publish(head_event(id, status, 20));
+        h.bus.publish(answered_event(id, status, response));
+    }
+    let harness = &h;
+    let read = |id: &'static str| async move {
+        let (row, attempts) = ledgered(harness, id).await;
+        let attempt = attempts.into_iter().next().expect("one attempt");
+        (
+            row.auto_mode,
+            attempt.auto_mode_verdict,
+            attempt.auto_mode_detail,
+            attempt
+                .auto_mode_tool_uses
+                .map(|m| serde_json::from_str::<serde_json::Value>(&m).unwrap()),
+        )
+    };
+    assert_eq!(
+        read("am-server").await,
+        (
+            Some("server".into()),
+            Some("flagged".into()),
+            None,
+            Some(serde_json::json!({
+                "toolu_01": { "outcome": "not_flagged" },
+                "toolu_02": { "outcome": "flagged", "explanation": "Deletes a file the task never named." },
+            }))
+        ),
+        "a null member is left out of an entry"
+    );
+    assert_eq!(
+        read("am-silent").await,
+        (Some("server".into()), Some("none".into()), None, None),
+        "an answer without the member gave no verdict"
+    );
+    assert_eq!(
+        read("am-failed").await,
+        (Some("server".into()), None, None, None),
+        "a failed leg never reads as a verdict"
+    );
+    assert_eq!(
+        read("am-stripped").await,
+        (Some("stripped".into()), None, None, None)
+    );
+    assert_eq!(
+        read("am-stage1").await,
+        (
+            Some("client_stage1".into()),
+            Some("not_flagged".into()),
+            None,
+            None
+        )
+    );
+    assert_eq!(
+        read("am-stage2").await,
+        (
+            Some("client_stage2".into()),
+            Some("refused".into()),
+            Some("reasoning_extraction".into()),
+            None
+        ),
+        "a refusal wins over the text reading"
+    );
+    assert_eq!(
+        read("am-plain").await,
+        (None, None, None, None),
+        "a request that asked for nothing records no verdict whatever the answer carried"
+    );
     up.shutdown().await;
 }
 
@@ -1340,10 +1524,11 @@ async fn a_rollup_row_from_before_the_class_dimension_reads_under_the_reserved_c
     let path = dir.path().join("ledger.sqlite");
     {
         let db = phoebis_ledger::LedgerDb::open(&path).unwrap();
-        // The four columns migration 18 adds, the five migration 19 adds and migration 20's column and table,
-        // each dropped back out so the replay below has to add them again; `rollups_hourly` keeps the shape the
-        // class dimension joins, since a primary-key column cannot be dropped in place and the rebuild names its
-        // own columns regardless of what the source table still carries.
+        // The four columns migration 18 adds, the five migration 19 adds, migration 20's column and table and
+        // migration 21's four columns, each dropped back out so the replay below has to add them again;
+        // `rollups_hourly` keeps the shape the class dimension joins, since a primary-key column cannot be
+        // dropped in place and the rebuild names its own columns regardless of what the source table still
+        // carries.
         db.write(|c| {
             c.execute_batch(
                 "ALTER TABLE requests DROP COLUMN request_class; \
@@ -1356,7 +1541,11 @@ async fn a_rollup_row_from_before_the_class_dimension_reads_under_the_reserved_c
                  ALTER TABLE account_rollups_hourly DROP COLUMN migrations_json; \
                  ALTER TABLE attempts DROP COLUMN selection; \
                  ALTER TABLE quota_samples DROP COLUMN observed_at; \
-                 DROP TABLE window_reconciliations;",
+                 DROP TABLE window_reconciliations; \
+                 ALTER TABLE requests DROP COLUMN auto_mode; \
+                 ALTER TABLE attempts DROP COLUMN auto_mode_verdict; \
+                 ALTER TABLE attempts DROP COLUMN auto_mode_detail; \
+                 ALTER TABLE attempts DROP COLUMN auto_mode_tool_uses_json;",
             )?;
             Ok(())
         })
@@ -1381,7 +1570,7 @@ async fn a_rollup_row_from_before_the_class_dimension_reads_under_the_reserved_c
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 20);
+    assert_eq!(db.schema_version().await.unwrap(), 21);
     let rows = db
         .read_blocking(|c| phoebis_ledger::read_rollups(c, 0, i64::MAX))
         .unwrap();
@@ -1470,6 +1659,10 @@ async fn migration_nineteen_adds_the_identity_columns_to_a_version_eighteen_file
                  ALTER TABLE requests DROP COLUMN fork_depth; \
                  ALTER TABLE quota_samples DROP COLUMN observed_at; \
                  DROP TABLE window_reconciliations; \
+                 ALTER TABLE requests DROP COLUMN auto_mode; \
+                 ALTER TABLE attempts DROP COLUMN auto_mode_verdict; \
+                 ALTER TABLE attempts DROP COLUMN auto_mode_detail; \
+                 ALTER TABLE attempts DROP COLUMN auto_mode_tool_uses_json; \
                  UPDATE meta SET value = '18' WHERE key = 'schema_version';",
             )?;
             Ok(())
@@ -1477,7 +1670,7 @@ async fn migration_nineteen_adds_the_identity_columns_to_a_version_eighteen_file
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 20);
+    assert_eq!(db.schema_version().await.unwrap(), 21);
     let (row, _) = db.request("r0").await.unwrap().unwrap();
     assert_eq!(
         (
@@ -1507,6 +1700,47 @@ async fn migration_nineteen_adds_the_identity_columns_to_a_version_eighteen_file
         has_member_index(&phoebis_ledger::LedgerDb::open_in_memory().unwrap()),
         "a fresh database carries the same index"
     );
+}
+
+#[tokio::test]
+async fn a_ledger_from_before_the_auto_mode_columns_gains_them() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ledger.sqlite");
+    {
+        let db = phoebis_ledger::LedgerDb::open(&path).unwrap();
+        db.write(|c| {
+            c.execute_batch(
+                "ALTER TABLE requests DROP COLUMN auto_mode; \
+                 ALTER TABLE attempts DROP COLUMN auto_mode_verdict; \
+                 ALTER TABLE attempts DROP COLUMN auto_mode_detail; \
+                 ALTER TABLE attempts DROP COLUMN auto_mode_tool_uses_json; \
+                 UPDATE meta SET value = '20' WHERE key = 'schema_version';",
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    }
+    let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
+    assert_eq!(db.schema_version().await.unwrap(), 21);
+    let columns = |table: &'static str| {
+        db.read_blocking(move |c| {
+            let mut stmt = c.prepare(&format!("SELECT name FROM pragma_table_info('{table}')"))?;
+            let names = stmt
+                .query_map([], |r| r.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(names)
+        })
+        .unwrap()
+    };
+    assert!(columns("requests").contains(&"auto_mode".to_string()));
+    let attempts = columns("attempts");
+    for column in [
+        "auto_mode_detail",
+        "auto_mode_tool_uses_json",
+        "auto_mode_verdict",
+    ] {
+        assert!(attempts.contains(&column.to_string()), "{column}");
+    }
 }
 
 #[test]

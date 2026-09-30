@@ -3429,6 +3429,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "origin": "client",
           "transport": "sse",
           "request_class": null,
+          "auto_mode": null,
           "forked_from": null,
           "fork_depth": null,
           "status": 200,
@@ -3511,6 +3512,9 @@ export const FIXTURES: Record<string, Fixture> = {
                 }
               },
               "response": {
+                "auto_mode_detail": null,
+                "auto_mode_tool_uses": null,
+                "auto_mode_verdict": null,
                 "cleared_input_tokens": null,
                 "inference_geo": "us",
                 "refusal_category": null,
@@ -3540,6 +3544,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "origin": "client",
           "transport": "sse",
           "request_class": null,
+          "auto_mode": "client_stage1",
           "forked_from": null,
           "fork_depth": null,
           "status": 200,
@@ -3616,6 +3621,9 @@ export const FIXTURES: Record<string, Fixture> = {
               "pricing_version": "2026-09-08",
               "selection": null,
               "response": {
+                "auto_mode_detail": null,
+                "auto_mode_tool_uses": null,
+                "auto_mode_verdict": "not_flagged",
                 "cleared_input_tokens": null,
                 "inference_geo": "us",
                 "refusal_category": null,
@@ -3645,6 +3653,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "origin": "client",
           "transport": "sse",
           "request_class": null,
+          "auto_mode": null,
           "forked_from": null,
           "fork_depth": null,
           "status": 502,
@@ -3721,6 +3730,9 @@ export const FIXTURES: Record<string, Fixture> = {
               "pricing_version": "2026-09-08",
               "selection": null,
               "response": {
+                "auto_mode_detail": null,
+                "auto_mode_tool_uses": null,
+                "auto_mode_verdict": null,
                 "cleared_input_tokens": null,
                 "inference_geo": "us",
                 "refusal_category": null,
@@ -3750,6 +3762,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "origin": "client",
           "transport": "sse",
           "request_class": null,
+          "auto_mode": null,
           "forked_from": null,
           "fork_depth": null,
           "status": 200,
@@ -3826,6 +3839,9 @@ export const FIXTURES: Record<string, Fixture> = {
               "pricing_version": "2026-09-08",
               "selection": null,
               "response": {
+                "auto_mode_detail": null,
+                "auto_mode_tool_uses": null,
+                "auto_mode_verdict": null,
                 "cleared_input_tokens": null,
                 "inference_geo": "us",
                 "refusal_category": null,
@@ -3855,6 +3871,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "origin": "client",
           "transport": "sse",
           "request_class": null,
+          "auto_mode": "server",
           "forked_from": "s0",
           "fork_depth": 2,
           "status": 200,
@@ -3951,6 +3968,9 @@ export const FIXTURES: Record<string, Fixture> = {
                 }
               },
               "response": {
+                "auto_mode_detail": null,
+                "auto_mode_tool_uses": null,
+                "auto_mode_verdict": null,
                 "cleared_input_tokens": null,
                 "inference_geo": "us",
                 "refusal_category": null,
@@ -4005,6 +4025,17 @@ export const FIXTURES: Record<string, Fixture> = {
                 "cohort_hold": null
               },
               "response": {
+                "auto_mode_detail": null,
+                "auto_mode_tool_uses": {
+                  "toolu_01": {
+                    "outcome": "not_flagged"
+                  },
+                  "toolu_02": {
+                    "outcome": "flagged",
+                    "explanation": "Deletes a file the task never named."
+                  }
+                },
+                "auto_mode_verdict": "flagged",
                 "cleared_input_tokens": null,
                 "inference_geo": "us",
                 "refusal_category": null,
@@ -5494,6 +5525,7 @@ export const FIXTURES: Record<string, Fixture> = {
         "origin": "client",
         "transport": "sse",
         "request_class": null,
+        "auto_mode": "server",
         "forked_from": "s0",
         "fork_depth": 2,
         "status": 200,
@@ -5590,6 +5622,9 @@ export const FIXTURES: Record<string, Fixture> = {
               }
             },
             "response": {
+              "auto_mode_detail": null,
+              "auto_mode_tool_uses": null,
+              "auto_mode_verdict": null,
               "cleared_input_tokens": null,
               "inference_geo": "us",
               "refusal_category": null,
@@ -5644,6 +5679,17 @@ export const FIXTURES: Record<string, Fixture> = {
               "cohort_hold": null
             },
             "response": {
+              "auto_mode_detail": null,
+              "auto_mode_tool_uses": {
+                "toolu_01": {
+                  "outcome": "not_flagged"
+                },
+                "toolu_02": {
+                  "outcome": "flagged",
+                  "explanation": "Deletes a file the task never named."
+                }
+              },
+              "auto_mode_verdict": "flagged",
               "cleared_input_tokens": null,
               "inference_geo": "us",
               "refusal_category": null,
@@ -5766,6 +5812,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "origin": "client",
           "transport": "sse",
           "request_class": null,
+          "auto_mode": null,
           "forked_from": null,
           "fork_depth": null,
           "status": 200,
@@ -5848,6 +5895,9 @@ export const FIXTURES: Record<string, Fixture> = {
                 }
               },
               "response": {
+                "auto_mode_detail": null,
+                "auto_mode_tool_uses": null,
+                "auto_mode_verdict": null,
                 "cleared_input_tokens": null,
                 "inference_geo": "us",
                 "refusal_category": null,
@@ -5877,6 +5927,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "origin": "client",
           "transport": "sse",
           "request_class": null,
+          "auto_mode": "client_stage1",
           "forked_from": null,
           "fork_depth": null,
           "status": 200,
@@ -5953,6 +6004,9 @@ export const FIXTURES: Record<string, Fixture> = {
               "pricing_version": "2026-09-08",
               "selection": null,
               "response": {
+                "auto_mode_detail": null,
+                "auto_mode_tool_uses": null,
+                "auto_mode_verdict": "not_flagged",
                 "cleared_input_tokens": null,
                 "inference_geo": "us",
                 "refusal_category": null,
@@ -5982,6 +6036,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "origin": "client",
           "transport": "sse",
           "request_class": null,
+          "auto_mode": null,
           "forked_from": null,
           "fork_depth": null,
           "status": 502,
@@ -6058,6 +6113,9 @@ export const FIXTURES: Record<string, Fixture> = {
               "pricing_version": "2026-09-08",
               "selection": null,
               "response": {
+                "auto_mode_detail": null,
+                "auto_mode_tool_uses": null,
+                "auto_mode_verdict": null,
                 "cleared_input_tokens": null,
                 "inference_geo": "us",
                 "refusal_category": null,
@@ -6087,6 +6145,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "origin": "client",
           "transport": "sse",
           "request_class": null,
+          "auto_mode": null,
           "forked_from": null,
           "fork_depth": null,
           "status": 200,
@@ -6163,6 +6222,9 @@ export const FIXTURES: Record<string, Fixture> = {
               "pricing_version": "2026-09-08",
               "selection": null,
               "response": {
+                "auto_mode_detail": null,
+                "auto_mode_tool_uses": null,
+                "auto_mode_verdict": null,
                 "cleared_input_tokens": null,
                 "inference_geo": "us",
                 "refusal_category": null,
@@ -6192,6 +6254,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "origin": "client",
           "transport": "sse",
           "request_class": null,
+          "auto_mode": "server",
           "forked_from": "s0",
           "fork_depth": 2,
           "status": 200,
@@ -6288,6 +6351,9 @@ export const FIXTURES: Record<string, Fixture> = {
                 }
               },
               "response": {
+                "auto_mode_detail": null,
+                "auto_mode_tool_uses": null,
+                "auto_mode_verdict": null,
                 "cleared_input_tokens": null,
                 "inference_geo": "us",
                 "refusal_category": null,
@@ -6342,6 +6408,17 @@ export const FIXTURES: Record<string, Fixture> = {
                 "cohort_hold": null
               },
               "response": {
+                "auto_mode_detail": null,
+                "auto_mode_tool_uses": {
+                  "toolu_01": {
+                    "outcome": "not_flagged"
+                  },
+                  "toolu_02": {
+                    "outcome": "flagged",
+                    "explanation": "Deletes a file the task never named."
+                  }
+                },
+                "auto_mode_verdict": "flagged",
                 "cleared_input_tokens": null,
                 "inference_geo": "us",
                 "refusal_category": null,
@@ -7045,7 +7122,7 @@ export const FIXTURES: Record<string, Fixture> = {
       "uptime_seconds": 0,
       "storage_ok": true,
       "ledger": {
-        "schema_version": 20,
+        "schema_version": 21,
         "written": 15,
         "dropped": 0,
         "write_failures": 0,

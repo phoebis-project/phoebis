@@ -18,6 +18,7 @@
       "origin": "client",
       "transport": "sse",
       "request_class": null,
+      "auto_mode": "server",
       "forked_from": "s0",
       "fork_depth": 2,
       "status": 200,
@@ -114,6 +115,9 @@
             }
           },
           "response": {
+            "auto_mode_detail": null,
+            "auto_mode_tool_uses": null,
+            "auto_mode_verdict": null,
             "cleared_input_tokens": null,
             "inference_geo": "us",
             "refusal_category": null,
@@ -168,6 +172,17 @@
             "cohort_hold": null
           },
           "response": {
+            "auto_mode_detail": null,
+            "auto_mode_tool_uses": {
+              "toolu_01": {
+                "outcome": "not_flagged"
+              },
+              "toolu_02": {
+                "outcome": "flagged",
+                "explanation": "Deletes a file the task never named."
+              }
+            },
+            "auto_mode_verdict": "flagged",
             "cleared_input_tokens": null,
             "inference_geo": "us",
             "refusal_category": null,

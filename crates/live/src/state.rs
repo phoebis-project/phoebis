@@ -752,6 +752,7 @@ mod tests {
             static_hash: None,
             boundaries: Vec::new(),
             client: phoebis_bus::ClientFacts::default(),
+            auto_mode: None,
             fork: phoebis_bus::Fork::default(),
             presented_retired: false,
             rotation_at: None,

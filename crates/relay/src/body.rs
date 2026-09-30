@@ -83,7 +83,7 @@ pub enum BodyMember {
     /// A top-level member the caller's body carries more than once, raw or escaped; the name is one of the
     /// members admission and the body edit act on.
     Repeated(&'static str),
-    /// A `safeguards` member the decoded root carries and the raw walk cannot reach.
+    /// A `safeguards` member the decoded top-level key count finds and the raw walk cannot reach.
     Safeguards,
 }
 

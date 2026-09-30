@@ -110,8 +110,8 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
             system["ledger"]["dropped"].as_u64(),
             system["ledger"]["channel_depth"].as_u64()
         ),
-        (Some(20), Some(0), Some(4_096)),
-        "the ledger schema is at the migration that adds the reconciliation table"
+        (Some(21), Some(0), Some(4_096)),
+        "the ledger schema is at the migration that adds the auto mode columns"
     );
     assert_eq!(system["gaps"][0]["detail"]["dropped"].as_u64(), Some(7));
     assert!(
@@ -462,6 +462,7 @@ async fn the_live_route_is_gated_and_the_preview_follows_the_role() {
         static_hash: None,
         boundaries: Vec::new(),
         client: phoebis_bus::ClientFacts::default(),
+        auto_mode: None,
         fork: phoebis_bus::Fork::default(),
         presented_retired: false,
         rotation_at: None,

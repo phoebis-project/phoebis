@@ -166,7 +166,7 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
                     "safeguards" => REPEATED_SAFEGUARDS,
                     "stream" => REPEATED_STREAM,
                     _ => unreachable!(
-                        "BodyMember::Repeated only ever names model, metadata, safeguards or stream"
+                        "BodyMember::Repeated only ever names metadata, model, safeguards or stream"
                     ),
                 },
                 BodyMember::Safeguards => {
