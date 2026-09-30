@@ -129,22 +129,40 @@ async fn a_speed_switch_reads_the_pin_cold_and_stamps_the_lane_on_the_pin_and_th
         "the entries the fast answer wrote carry its lane: {second_rows:?}"
     );
 
-    let mut per_turn = turn(&with_control_entry(&next, "low"));
-    let betas = per_turn.headers()["anthropic-beta"]
-        .to_str()
-        .unwrap()
-        .to_string();
-    set_header(
-        &mut per_turn,
-        "anthropic-beta",
-        &format!("{betas},per-turn-control-2026-07-01"),
-    );
+    let third = with_control_entry(&next, "low");
+    let per_turn = |body: &[u8]| {
+        let mut req = turn(body);
+        let betas = req.headers()["anthropic-beta"]
+            .to_str()
+            .unwrap()
+            .to_string();
+        set_header(
+            &mut req,
+            "anthropic-beta",
+            &format!("{betas},per-turn-control-2026-07-01"),
+        );
+        req
+    };
     let third_at = h.clock.fetch_add(1_000, Ordering::SeqCst) + 1_000;
-    let resp = h.app.clone().oneshot(per_turn).await.unwrap();
+    let resp = h.app.clone().oneshot(per_turn(&third)).await.unwrap();
     assert_eq!(resp.status(), 200);
     assert_eq!(
         pin_at(&store, third_at).await.lane,
         lane_key(SPELLING, "fast", "enabled:31999", "*"),
         "under the per-turn beta the effort leaves the lane"
+    );
+
+    let mut fourth: serde_json::Value = serde_json::from_slice(&third).unwrap();
+    let messages = fourth["messages"].as_array_mut().unwrap();
+    messages.push(serde_json::json!({"role": "assistant", "content": "done"}));
+    messages.push(serde_json::json!({"role": "user", "content": "and now"}));
+    let fourth = with_control_entry(&serde_json::to_vec(&fourth).unwrap(), "high");
+    let fourth_at = h.clock.fetch_add(1_000, Ordering::SeqCst) + 1_000;
+    let resp = h.app.clone().oneshot(per_turn(&fourth)).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        pin_at(&store, fourth_at).await.last_refresh_at,
+        fourth_at,
+        "another per-turn level under the beta keeps the session warm"
     );
 }

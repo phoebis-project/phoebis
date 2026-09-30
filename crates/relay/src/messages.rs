@@ -637,6 +637,7 @@ fn cooldown_set(cooldown: Option<&Cooldown>, canonical_model: &str) -> Option<Co
     cooldown.map(|c| CooldownSet {
         scope: match c.scope {
             Scope::Account => "account".into(),
+            Scope::Fast => "fast".into(),
             Scope::Model => format!("model:{canonical_model}"),
         },
         until: c.until,
@@ -1210,6 +1211,7 @@ impl Relay {
             client_version,
             diagnostics,
             fallback_ms,
+            fast: facts.shape.speed.as_deref() == Some("fast"),
             identity: &identity,
             key: &key,
             lane,
@@ -1293,6 +1295,7 @@ impl Relay {
                     parent_agent_id: identity.parent_agent_id.clone(),
                     holds: holds.clone(),
                     lane: admitted.lane.clone(),
+                    fast: admitted.fast,
                 })
                 .await
             {
@@ -1432,6 +1435,14 @@ impl Relay {
             ),
             Exhaustion::Untimed => (
                 "accounts_unavailable",
+                exhaustion_response(exhaustion, now, admitted.request_id),
+            ),
+            Exhaustion::FastLane { .. } => (
+                "fast_lane_exhausted",
+                exhaustion_response(exhaustion, now, admitted.request_id),
+            ),
+            Exhaustion::FastCredits { .. } => (
+                "fast_credits_unavailable",
                 exhaustion_response(exhaustion, now, admitted.request_id),
             ),
         };
@@ -1760,6 +1771,7 @@ impl Relay {
                 client_version: admitted.client_version.clone(),
                 credential_generation: credential.generation,
                 fallback_ms: admitted.fallback_ms,
+                fast: admitted.fast,
                 fresh_pin: selection.pin.is_some() && !selection.trace.renewed,
                 identity: admitted.identity,
                 injected: &injected,
@@ -2132,6 +2144,7 @@ impl Relay {
                 can_strip: ctx.can_strip,
                 wire_model: &ctx.identity.folded_model,
                 model_rejection_ms: self.limits.model_rejection.as_millis() as i64,
+                fast: ctx.fast,
             },
         );
         let committing = match held.as_ref().map(|h| &h.commit) {
@@ -2280,6 +2293,7 @@ impl Relay {
                     Some(Held { bytes, inspect, .. }) => {
                         let fallback_ms = ctx.fallback_ms;
                         let model_rejection_ms = self.limits.model_rejection.as_millis() as i64;
+                        let fast = ctx.fast;
                         // Two spellings captured for two purposes that diverge once a resolution lands: the
                         // canonical id is the cooldown's scope and `report_failover`'s model, the folded
                         // spelling is the wire model `classify`'s rejection arm matches the upstream's own
@@ -2329,6 +2343,7 @@ impl Relay {
                                     can_strip: false,
                                     wire_model: &wire_model,
                                     model_rejection_ms,
+                                    fast,
                                 },
                             ) {
                                 report_failover(
@@ -3091,6 +3106,8 @@ struct Responding<'a> {
     client_version: Option<String>,
     credential_generation: u64,
     fallback_ms: i64,
+    /// The request carried `speed: "fast"`, which a throttle's classification reads.
+    fast: bool,
     /// Whether this selection created `pin` rather than renewing one that already served.
     fresh_pin: bool,
     identity: &'a RequestIdentity,
@@ -3183,6 +3200,9 @@ struct Admitted<'a> {
     /// there, and a 400 on that path must never latch the account for its inference requests.
     diagnostics: bool,
     fallback_ms: i64,
+    /// The request carried `speed: "fast"`: fast eligibility applies to its selections and its throttles cool the
+    /// fast lane.
+    fast: bool,
     identity: &'a RequestIdentity,
     key: &'a ApiKeyRow,
     /// The cache lane the request writes to, composed once at admission since no failover changes the body.
@@ -3235,6 +3255,7 @@ pub(crate) fn report_failover(
     if let Some(cooldown) = cooldown {
         let scope = match cooldown.scope {
             Scope::Account => "account".to_string(),
+            Scope::Fast => "fast".to_string(),
             Scope::Model => format!("model:{canonical_model}"),
         };
         let row = CooldownRow {

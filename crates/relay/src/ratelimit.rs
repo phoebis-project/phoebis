@@ -9,6 +9,7 @@ use phoebis_transport::response::ResponseHead;
 
 const PREFIX: &str = "anthropic-ratelimit-unified-";
 const BUCKET_PREFIX: &str = "anthropic-ratelimit-";
+const FAST_PREFIX: &str = "anthropic-fast-";
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct UnifiedHeaders {
@@ -42,11 +43,7 @@ impl UnifiedHeaders {
             head.get(&format!("{PREFIX}{suffix}"))
                 .map(|v| v.trim().to_string())
         };
-        let secs = |suffix: &str| {
-            text(suffix)
-                .and_then(|v| v.parse::<i64>().ok())
-                .map(|s| s.saturating_mul(1_000))
-        };
+        let secs = |suffix: &str| text(suffix).as_deref().and_then(epoch_millis);
         let float = |suffix: &str| {
             text(suffix)
                 .and_then(|v| v.parse::<f64>().ok())
@@ -103,28 +100,8 @@ pub struct BucketHeaders {
 
 impl BucketHeaders {
     pub fn parse(head: &ResponseHead) -> Option<BucketHeaders> {
-        let bucket = |family: &str| {
-            let limit = head
-                .get(&format!("{BUCKET_PREFIX}{family}-limit"))?
-                .trim()
-                .parse::<u64>()
-                .ok()
-                .filter(|&limit| limit != 0)?;
-            let remaining = head
-                .get(&format!("{BUCKET_PREFIX}{family}-remaining"))?
-                .trim()
-                .parse::<u64>()
-                .ok()?;
-            let reset = head
-                .get(&format!("{BUCKET_PREFIX}{family}-reset"))
-                .and_then(|v| jiff::Timestamp::from_str(v.trim()).ok())
-                .map(|t| t.as_millisecond());
-            Some(Bucket {
-                limit,
-                remaining,
-                reset,
-            })
-        };
+        let bucket =
+            |family: &str| bucket_family(head, &format!("{BUCKET_PREFIX}{family}"), rfc3339_millis);
         let headers = BucketHeaders {
             requests: bucket("requests"),
             input_tokens: bucket("input-tokens"),
@@ -135,6 +112,74 @@ impl BucketHeaders {
             || headers.output_tokens.is_some())
         .then_some(headers)
     }
+}
+
+/// `anthropic-fast-{input,output}-tokens-{limit,remaining,reset}` of a fast request's answer. A family is dropped
+/// as a `BucketHeaders` family is, when its `limit` or `remaining` does not parse, and a reset that does not parse
+/// reads as absent. The reset reads epoch seconds or RFC 3339, whichever the header carries, since no capture of a
+/// live fast answer settles the format yet.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct FastHeaders {
+    pub input: Option<Bucket>,
+    pub output: Option<Bucket>,
+}
+
+impl FastHeaders {
+    pub fn parse(head: &ResponseHead) -> Option<FastHeaders> {
+        let bucket = |family: &str| {
+            bucket_family(head, &format!("{FAST_PREFIX}{family}"), |v| {
+                epoch_millis(v).or_else(|| rfc3339_millis(v))
+            })
+        };
+        let headers = FastHeaders {
+            input: bucket("input-tokens"),
+            output: bucket("output-tokens"),
+        };
+        (headers.input.is_some() || headers.output.is_some()).then_some(headers)
+    }
+}
+
+/// One family of three headers, `<name>-limit`, `<name>-remaining` and `<name>-reset`: `None` when the limit does
+/// not parse to a nonzero value or the remaining does not parse, since a malformed header must not move a pin; a
+/// reset `reset_of` cannot read is absent rather than refusing the family.
+fn bucket_family(
+    head: &ResponseHead,
+    name: &str,
+    reset_of: fn(&str) -> Option<i64>,
+) -> Option<Bucket> {
+    let limit = head
+        .get(&format!("{name}-limit"))?
+        .trim()
+        .parse::<u64>()
+        .ok()
+        .filter(|&limit| limit != 0)?;
+    let remaining = head
+        .get(&format!("{name}-remaining"))?
+        .trim()
+        .parse::<u64>()
+        .ok()?;
+    let reset = head.get(&format!("{name}-reset")).and_then(reset_of);
+    Some(Bucket {
+        limit,
+        remaining,
+        reset,
+    })
+}
+
+/// A reset in epoch seconds, as the unified family writes it, in milliseconds.
+fn epoch_millis(value: &str) -> Option<i64> {
+    value
+        .trim()
+        .parse::<i64>()
+        .ok()
+        .map(|s| s.saturating_mul(1_000))
+}
+
+/// A reset in RFC 3339, as the per-bucket family writes it, in milliseconds.
+fn rfc3339_millis(value: &str) -> Option<i64> {
+    jiff::Timestamp::from_str(value.trim())
+        .ok()
+        .map(|t| t.as_millisecond())
 }
 
 /// The selection sample a head implies: the unified windows for an OAuth account, the buckets under `rpm:`,
@@ -478,6 +523,75 @@ mod tests {
             ],
         );
         assert_eq!(BucketHeaders::parse(&zero_limit).unwrap().requests, None);
+    }
+
+    #[test]
+    fn the_six_fast_headers_read_into_two_buckets_and_a_reset_reads_epoch_seconds_or_rfc_3339() {
+        let h = head(
+            429,
+            &[
+                ("anthropic-fast-input-tokens-limit", "400000"),
+                ("anthropic-fast-input-tokens-remaining", "0"),
+                ("anthropic-fast-input-tokens-reset", "1700000060"),
+                ("anthropic-fast-output-tokens-limit", "80000"),
+                ("anthropic-fast-output-tokens-remaining", "12000"),
+                ("anthropic-fast-output-tokens-reset", "2023-11-14T22:14:50Z"),
+            ],
+        );
+        let fast = FastHeaders::parse(&h).unwrap();
+        assert_eq!(
+            fast.input,
+            Some(Bucket {
+                limit: 400_000,
+                remaining: 0,
+                reset: Some(1_700_000_060_000)
+            }),
+            "epoch seconds"
+        );
+        assert_eq!(
+            fast.output,
+            Some(Bucket {
+                limit: 80_000,
+                remaining: 12_000,
+                reset: Some(1_700_000_090_000)
+            }),
+            "RFC 3339"
+        );
+        assert!(FastHeaders::parse(&head(429, &[("retry-after", "3")])).is_none());
+    }
+
+    #[test]
+    fn a_fast_family_with_one_malformed_value_is_dropped_and_the_other_kept() {
+        let output = [
+            ("anthropic-fast-output-tokens-limit", "80000"),
+            ("anthropic-fast-output-tokens-remaining", "12000"),
+            ("anthropic-fast-output-tokens-reset", "1700000090"),
+        ];
+        let h = head(
+            429,
+            &[
+                ("anthropic-fast-input-tokens-limit", "400000"),
+                ("anthropic-fast-input-tokens-remaining", "none"),
+                ("anthropic-fast-input-tokens-reset", "1700000060"),
+                output[0],
+                output[1],
+                output[2],
+            ],
+        );
+        let fast = FastHeaders::parse(&h).unwrap();
+        assert_eq!(fast.input, None, "a remaining that does not parse");
+        assert_eq!(
+            fast.output.map(|b| (b.limit, b.remaining, b.reset)),
+            Some((80_000, 12_000, Some(1_700_000_090_000)))
+        );
+        let no_family_left = head(
+            429,
+            &[
+                ("anthropic-fast-input-tokens-limit", "x"),
+                ("anthropic-fast-input-tokens-remaining", "0"),
+            ],
+        );
+        assert!(FastHeaders::parse(&no_family_left).is_none());
     }
 
     #[test]

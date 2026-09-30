@@ -327,8 +327,8 @@ impl AffinityMap {
 
     /// An existing entry with the same account, key and generation is refreshed in place and its key marked
     /// dirty; any other case (new, or held by another key) replaces it and yields a row. `confirmed` decides
-    /// the warmth: when false a refreshed entry keeps its warm deadline, its `ttl_ms` shrinking to the lifetime
-    /// it has left, and a new one carries no warmth.
+    /// the warmth: when false a refreshed entry on the report's lane keeps its warm deadline, its `ttl_ms`
+    /// shrinking to the lifetime it has left, and one refreshed from another lane or a new one carries no warmth.
     #[allow(clippy::too_many_arguments)]
     fn upsert(
         &mut self,
@@ -353,6 +353,9 @@ impl AffinityMap {
                 entry.written_at = report.now;
                 entry.ttl_ms = ttl_ms;
                 entry.prefix_tokens = prefix_tokens;
+            } else if entry.lane != report.lane {
+                entry.ttl_ms = 0;
+                entry.written_at = report.now;
             } else {
                 // Keeps the old warm deadline (written_at + ttl_ms) fixed: a link-only refresh must not revive
                 // a lapsed boundary by moving written_at forward while leaving the old full ttl_ms in place.

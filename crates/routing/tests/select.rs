@@ -1,10 +1,10 @@
 use phoebis_routing::{
     effective_warm, lane_key, release_reasons, resolve, select, warm, warmth_of, AffinityChain,
-    AffinityMap, AffinityRow, BurnRates, ClientClass, CohortHold, EvidenceSource, Exhaustion,
-    HoldFacts, MemberSpend, MigrateReason, OverageEvidence, PinRef,
-    Placement, RateTable, Rates, RegistrySnapshot, RoutingState, SelectRequest, SelectResult,
-    StateWrite, UtilizationSample, Warmth, WindowReading, FIVE_HOUR, MODEL_REJECTED_REASON,
-    SEVEN_DAY, SEVEN_DAY_FABLE,
+    AffinityMap, AffinityRow, BurnRates, ClientClass, CohortHold, CreditsState, EvidenceSource,
+    Exhaustion, HoldFacts, MemberSpend, MigrateReason, OverageEvidence,
+    PinRef, Placement, RateTable, Rates, RegistrySnapshot, RoutingState, SelectRequest,
+    SelectResult, StateWrite, UtilizationSample, Warmth, WindowReading, FAST_CREDITS_REASON,
+    FAST_RATE_LIMIT_REASON, FIVE_HOUR, MODEL_REJECTED_REASON, SEVEN_DAY, SEVEN_DAY_FABLE,
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, Affinity, AffinityMode, AffinitySource, ApiKeyRow,
@@ -334,6 +334,7 @@ fn request(
         parent_agent_id: None,
         holds: Vec::new(),
         lane: lane_key(model, "standard", "none", "-"),
+        fast: false,
     }
 }
 
@@ -1311,6 +1312,500 @@ fn exhaustion_is_timed_from_the_earliest_cooldown_and_untimed_when_only_an_opera
         ),
         "a mixed pool answers from the cooled account's deadline"
     );
+}
+
+/// `req` sent with `speed: "fast"`, on its model's fast lane.
+fn fast(req: SelectRequest) -> SelectRequest {
+    SelectRequest {
+        fast: true,
+        lane: lane_key(&req.canonical_model, "fast", "none", "-"),
+        ..req
+    }
+}
+
+/// The poll's extra-usage state, its utilization a fraction.
+fn credits(
+    enabled: bool,
+    reason: Option<&str>,
+    utilization: Option<f64>,
+    observed_at: i64,
+) -> CreditsState {
+    CreditsState {
+        enabled,
+        disabled_reason: reason.map(String::from),
+        utilization,
+        observed_at,
+        incarnation: 1,
+    }
+}
+
+fn skipped_as(result: &SelectResult) -> Vec<(&str, &str)> {
+    match result {
+        SelectResult::Selected(s) => s
+            .trace
+            .skipped
+            .iter()
+            .map(|k| (k.account_id.as_str(), k.obstacle))
+            .collect(),
+        other => panic!("expected a selection, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_fast_request_passes_a_plan_window_cooldown_and_is_blocked_by_a_fast_a_model_or_a_retry_after_row(
+) {
+    let s = snapshot(Pool::default());
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.record_cooldown(cooled("a", "account", HOUR, "five_hour", "rate_limit"));
+    st.record_cooldown(cooled("b", "fast", HOUR, "fast", FAST_RATE_LIMIT_REASON));
+    st.record_cooldown(cooled(
+        "c",
+        "model:claude-opus-5",
+        HOUR,
+        "retry_after",
+        "rate_limit",
+    ));
+    let at = |now: i64| fast(request(&s, None, "claude-opus-5", true, &[], now));
+    let (result, _) = select(&mut st, &s, &at(1_000), &mut rng());
+    assert_eq!(
+        picked(&result),
+        "a",
+        "a fast request draws no plan window, so the five-hour row is no obstacle"
+    );
+    assert_eq!(skipped_as(&result), [("b", "cooldown"), ("c", "cooldown")]);
+    for plan in ["seven_day", "seven_day_opus"] {
+        let mut st = RoutingState::from_load(RoutingLoad::default());
+        st.record_cooldown(cooled("a", "account", HOUR, plan, "rate_limit"));
+        st.record_cooldown(cooled("b", "account", HOUR, plan, "rate_limit"));
+        st.record_cooldown(cooled("c", "account", HOUR, plan, "rate_limit"));
+        assert!(
+            matches!(
+                select(&mut st, &s, &at(1_000), &mut rng()).0,
+                SelectResult::Selected(_)
+            ),
+            "{plan}"
+        );
+    }
+    st.record_cooldown(cooled(
+        "a",
+        "account",
+        2 * HOUR,
+        "retry_after",
+        "rate_limit",
+    ));
+    assert!(
+        matches!(
+            select(&mut st, &s, &at(1_000), &mut rng()).0,
+            SelectResult::Exhausted(_)
+        ),
+        "an account row no plan window names holds either speed"
+    );
+}
+
+#[test]
+fn a_standard_request_passes_no_fast_row_and_is_blocked_by_every_row_it_was_before() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1), ("c", 2)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let at = |now: i64| request(&s, None, "claude-opus-5", true, &[], now);
+    st.record_cooldown(cooled("a", "fast", HOUR, "fast", FAST_RATE_LIMIT_REASON));
+    st.record_cooldown(cooled(
+        "b",
+        "fast",
+        HOUR,
+        "out_of_credits",
+        FAST_CREDITS_REASON,
+    ));
+    st.record_credits("a", credits(false, Some("out_of_credits"), None, 500));
+    assert_eq!(
+        picked(&select(&mut st, &s, &at(1_000), &mut rng()).0),
+        "a",
+        "neither a fast row nor the credits state holds a standard request"
+    );
+    st.record_cooldown(cooled("a", "account", HOUR, "five_hour", "rate_limit"));
+    assert_eq!(picked(&select(&mut st, &s, &at(1_000), &mut rng()).0), "b");
+    st.record_cooldown(cooled(
+        "b",
+        "model:claude-opus-5",
+        2 * HOUR,
+        "retry_after",
+        "rate_limit",
+    ));
+    assert_eq!(picked(&select(&mut st, &s, &at(1_000), &mut rng()).0), "c");
+    st.record_cooldown(cooled(
+        "c",
+        "account",
+        3 * HOUR,
+        "retry_after",
+        "rate_limit",
+    ));
+    assert!(matches!(
+        select(&mut st, &s, &at(1_000), &mut rng()).0,
+        SelectResult::Exhausted(Exhaustion::Timed { deadline: HOUR, ref window }) if window == "five_hour"
+    ));
+}
+
+#[test]
+fn a_fast_request_skips_a_credits_blocked_account_and_an_api_key_account_is_fast_eligible_whenever_eligible(
+) {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1), ("c", 2)],
+        kinds: vec![("c", AccountKind::ApiKey)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let at = |now: i64| fast(request(&s, None, "claude-opus-5", true, &[], now));
+    st.record_credits("a", credits(true, None, Some(0.4), 500));
+    st.record_credits("b", credits(true, None, Some(0.9), 500));
+    assert_eq!(
+        picked(&select(&mut st, &s, &at(1_000), &mut rng()).0),
+        "a",
+        "credits with room"
+    );
+    for (blocked, why) in [
+        (credits(false, None, None, 600), "disabled"),
+        (
+            credits(true, Some("org_level_disabled"), Some(0.1), 600),
+            "naming a reason",
+        ),
+        (credits(true, None, Some(1.0), 600), "at the limit"),
+    ] {
+        let mut st = RoutingState::from_load(RoutingLoad::default());
+        st.record_credits("a", blocked);
+        assert_eq!(
+            picked(&select(&mut st, &s, &at(1_000), &mut rng()).0),
+            "b",
+            "{why}"
+        );
+    }
+    st.record_credits("a", credits(false, None, None, 600));
+    st.record_credits("b", credits(true, None, Some(1.2), 600));
+    assert_eq!(
+        picked(&select(&mut st, &s, &at(1_000), &mut rng()).0),
+        "c",
+        "an API-key upstream serves a fast request whenever it serves at all"
+    );
+    assert_eq!(
+        picked(
+            &select(
+                &mut st,
+                &s,
+                &request(&s, None, "claude-opus-5", true, &[], 1_000),
+                &mut rng()
+            )
+            .0
+        ),
+        "a",
+        "a standard request draws no credits"
+    );
+}
+
+#[test]
+fn a_fast_request_neither_releases_nor_moves_its_pin_for_a_spent_window_or_plan_overage() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let at = |now: i64| fast(request(&s, Some("s1"), "claude-sonnet-5", true, &[], now));
+    assert_eq!(picked(&select(&mut st, &s, &at(1_000), &mut rng()).0), "a");
+    st.record_sample("a", refreshing(1.0, 9 * HOUR, 9 * HOUR, 1_500));
+    st.record_sample("b", refreshing(0.4, 9 * HOUR, 9 * HOUR, 1_500));
+    st.record_overage("a", overage(true, 1_500, Some(9 * HOUR)));
+    let pin = pinned(&st, "s1");
+    assert_eq!(
+        release_reasons(&st, &s, &pin, &at(2_000)),
+        vec!["released"],
+        "neither the spent window nor the overage stands against a fast request"
+    );
+    let SelectResult::Selected(sel) = select(&mut st, &s, &at(2_000), &mut rng()).0 else {
+        panic!()
+    };
+    assert_eq!(
+        (sel.account.id.as_str(), sel.migrated, sel.trace.renewed),
+        ("a", None, true)
+    );
+    let standard = request(&s, Some("s1"), "claude-sonnet-5", true, &[], 3_000);
+    assert_eq!(
+        release_reasons(&st, &s, &pin, &standard),
+        vec!["overage", "spent"],
+        "the same facts stand against a standard request"
+    );
+    let SelectResult::Selected(sel) = select(&mut st, &s, &standard, &mut rng()).0 else {
+        panic!()
+    };
+    assert_eq!(
+        (sel.account.id.as_str(), sel.migrated),
+        ("b", Some(MigrateReason::Spent))
+    );
+
+    let never = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        policy: OveragePolicy::Never,
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.record_overage("a", overage(true, 500, Some(9 * HOUR)));
+    assert_eq!(
+        picked(
+            &select(
+                &mut st,
+                &never,
+                &fast(request(&never, None, "claude-sonnet-5", true, &[], 1_000)),
+                &mut rng()
+            )
+            .0
+        ),
+        "a",
+        "under never, plan overage is no obstacle to a fast request"
+    );
+    assert_eq!(
+        picked(
+            &select(
+                &mut st,
+                &never,
+                &request(&never, None, "claude-sonnet-5", true, &[], 1_000),
+                &mut rng()
+            )
+            .0
+        ),
+        "b"
+    );
+}
+
+#[test]
+fn the_local_answer_is_fast_lane_exhausted_with_the_earliest_reset_while_one_account_is_only_rate_limited(
+) {
+    let s = snapshot(Pool::default());
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.record_cooldown(cooled("a", "fast", 5_000, "fast", FAST_RATE_LIMIT_REASON));
+    st.record_cooldown(cooled(
+        "b",
+        "fast",
+        3_000,
+        "out_of_credits",
+        FAST_CREDITS_REASON,
+    ));
+    st.record_cooldown(cooled(
+        "c",
+        "model:claude-opus-5",
+        2_000,
+        "retry_after",
+        "rate_limit",
+    ));
+    let at = |now: i64| fast(request(&s, None, "claude-opus-5", true, &[], now));
+    assert_eq!(
+        select(&mut st, &s, &at(1_000), &mut rng()).0,
+        SelectResult::Exhausted(Exhaustion::FastLane { deadline: 5_000 }),
+        "the fast rate limit's own reset, however early the other rows lift"
+    );
+    st.record_cooldown(cooled(
+        "b",
+        "fast",
+        4_000,
+        "retry_after",
+        FAST_RATE_LIMIT_REASON,
+    ));
+    assert_eq!(
+        select(&mut st, &s, &at(1_000), &mut rng()).0,
+        SelectResult::Exhausted(Exhaustion::FastLane { deadline: 4_000 }),
+        "the earliest of the fast rate limits"
+    );
+
+    // A request bound to its account answers that account's own fast row.
+    let mut bound = RoutingState::from_load(RoutingLoad::default());
+    let pinned_at = |now: i64| fast(request(&s, Some("s1"), "claude-opus-5", false, &[], now));
+    let first = picked(&select(&mut bound, &s, &pinned_at(1_000), &mut rng()).0).to_string();
+    bound.record_cooldown(cooled(
+        &first,
+        "fast",
+        7_000,
+        "fast",
+        FAST_RATE_LIMIT_REASON,
+    ));
+    assert_eq!(
+        select(&mut bound, &s, &pinned_at(2_000), &mut rng()).0,
+        SelectResult::Exhausted(Exhaustion::FastLane { deadline: 7_000 })
+    );
+}
+
+#[test]
+fn the_local_answer_is_fast_credits_unavailable_with_the_pinned_accounts_reason_when_every_account_is_credits_blocked(
+) {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let at = |now: i64, session: Option<&str>, attempted: &[&str]| {
+        fast(request(&s, session, "claude-opus-5", true, attempted, now))
+    };
+    assert_eq!(
+        picked(&select(&mut st, &s, &at(1_000, Some("s1"), &["a"]), &mut rng()).0),
+        "b"
+    );
+    st.record_cooldown(cooled(
+        "a",
+        "fast",
+        HOUR,
+        "out_of_credits",
+        FAST_CREDITS_REASON,
+    ));
+    st.record_credits("b", credits(false, Some("org_level_disabled"), None, 1_500));
+    assert_eq!(
+        select(&mut st, &s, &at(2_000, Some("s1"), &[]), &mut rng()).0,
+        SelectResult::Exhausted(Exhaustion::FastCredits {
+            reason: "org_level_disabled".into()
+        }),
+        "the pinned account's reason first"
+    );
+    assert_eq!(
+        select(&mut st, &s, &at(2_000, None, &[]), &mut rng()).0,
+        SelectResult::Exhausted(Exhaustion::FastCredits {
+            reason: "out_of_credits".into()
+        }),
+        "without a pin, the first account's in order"
+    );
+    let paused = snapshot_with(
+        Pool {
+            members: vec![("a", 0), ("b", 1), ("c", 2)],
+            ..Pool::default()
+        },
+        &[("c", false, AccountState::Ready)],
+    );
+    assert_eq!(
+        select(
+            &mut st,
+            &paused,
+            &fast(request(&paused, None, "claude-opus-5", true, &[], 2_000)),
+            &mut rng()
+        )
+        .0,
+        SelectResult::Exhausted(Exhaustion::FastCredits {
+            reason: "out_of_credits".into()
+        }),
+        "an account only an operator can clear leaves every account the pool could use credits-blocked"
+    );
+}
+
+#[test]
+fn a_mixed_fast_credits_and_model_cooldown_set_answers_the_timed_exhaustion_as_before() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.record_cooldown(cooled(
+        "a",
+        "fast",
+        5 * HOUR,
+        "out_of_credits",
+        FAST_CREDITS_REASON,
+    ));
+    st.record_cooldown(cooled(
+        "b",
+        "model:claude-opus-5",
+        2_000,
+        "retry_after",
+        "rate_limit",
+    ));
+    assert_eq!(
+        select(
+            &mut st,
+            &s,
+            &fast(request(&s, None, "claude-opus-5", true, &[], 1_000)),
+            &mut rng()
+        )
+        .0,
+        SelectResult::Exhausted(Exhaustion::Timed {
+            deadline: 2_000,
+            window: "retry_after".into()
+        })
+    );
+}
+
+#[test]
+fn a_fast_pin_released_by_its_fast_lane_names_the_fast_reason_and_a_standard_one_names_cooldown() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let fast_at = |now: i64| fast(request(&s, Some("s1"), "claude-sonnet-5", true, &[], now));
+    let standard_at = |now: i64| request(&s, Some("s1"), "claude-sonnet-5", true, &[], now);
+    assert_eq!(
+        picked(&select(&mut st, &s, &fast_at(1_000), &mut rng()).0),
+        "a"
+    );
+    let pin = pinned(&st, "s1");
+    st.record_cooldown(cooled("a", "fast", HOUR, "fast", FAST_RATE_LIMIT_REASON));
+    assert_eq!(
+        release_reasons(&st, &s, &pin, &fast_at(2_000)),
+        vec![FAST_RATE_LIMIT_REASON]
+    );
+    assert_eq!(
+        release_reasons(&st, &s, &pin, &standard_at(2_000)),
+        vec!["released"],
+        "the fast lane's row is nothing to a standard request"
+    );
+    st.record_cooldown(cooled("a", "account", 2 * HOUR, "five_hour", "rate_limit"));
+    assert_eq!(
+        release_reasons(&st, &s, &pin, &fast_at(2_000)),
+        vec![FAST_RATE_LIMIT_REASON],
+        "the plan window's row holds no fast request"
+    );
+    assert_eq!(
+        release_reasons(&st, &s, &pin, &standard_at(2_000)),
+        vec!["cooldown"]
+    );
+    st.clear_cooldown("a", "account");
+    st.clear_cooldown("a", "fast");
+    st.record_credits("a", credits(false, None, None, 1_500));
+    assert_eq!(
+        release_reasons(&st, &s, &pin, &fast_at(2_000)),
+        vec![FAST_CREDITS_REASON],
+        "the poll's credits state alone"
+    );
+    st.record_cooldown(cooled(
+        "a",
+        "fast",
+        HOUR,
+        "out_of_credits",
+        FAST_CREDITS_REASON,
+    ));
+    assert_eq!(
+        release_reasons(&st, &s, &pin, &fast_at(2_000)),
+        vec![FAST_CREDITS_REASON],
+        "named once when the row and the state both stand"
+    );
+    let SelectResult::Selected(sel) = select(&mut st, &s, &fast_at(2_000), &mut rng()).0 else {
+        panic!()
+    };
+    assert_eq!(
+        (sel.account.id.as_str(), sel.trace.renewed),
+        ("b", false),
+        "the session is placed afresh on the sibling"
+    );
+}
+
+#[test]
+fn a_credits_blocked_candidate_is_skipped_under_the_credits_obstacle_in_the_trace() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.record_credits("a", credits(false, Some("out_of_credits"), None, 500));
+    let (result, _) = select(
+        &mut st,
+        &s,
+        &fast(request(&s, None, "claude-opus-5", true, &[], 1_000)),
+        &mut rng(),
+    );
+    assert_eq!(picked(&result), "b");
+    assert_eq!(skipped_as(&result), [("a", "credits")]);
 }
 
 #[test]
@@ -3029,6 +3524,7 @@ fn two_pools_sharing_an_account_share_its_entries() {
         parent_agent_id: None,
         holds: Vec::new(),
         lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
+        fast: false,
     };
     let SelectResult::Selected(sel1) =
         select(&mut st, &s, &req_for("k1", "s1", 1_500), &mut rng()).0
@@ -6440,6 +6936,66 @@ fn a_request_on_another_lane_is_cold_whatever_its_boundaries_and_its_continuatio
         ),
         (0, standard.as_str(), Some("m5")),
         "a main turn on another lane reads cold too"
+    );
+}
+
+#[test]
+fn a_request_that_continues_nothing_on_another_lane_leaves_a_shared_identitys_pin_untouched() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let standard = lane_key("claude-sonnet-5", "standard", "none", "-");
+    let fast_lane = lane_key("claude-sonnet-5", "fast", "none", "-");
+    let at = |now: i64, lane: &str, static_hash: Option<&str>, boundaries: &[&str]| SelectRequest {
+        lane: lane.to_string(),
+        ..with_facts(
+            request(&s, Some("s1"), "claude-sonnet-5", true, &[], now),
+            None,
+            false,
+            static_hash,
+            boundaries,
+        )
+    };
+    select(
+        &mut st,
+        &s,
+        &at(T + 1_000, &standard, Some("s0"), &["m1", "m2"]),
+        &mut rng(),
+    );
+    let before = pinned(&st, "s1");
+    select(
+        &mut st,
+        &s,
+        &at(T + 2_000, &fast_lane, Some("s9"), &["x1", "x2"]),
+        &mut rng(),
+    );
+    let after = pinned(&st, "s1");
+    assert_eq!(
+        (
+            after.lane.as_str(),
+            after.last_refresh_at,
+            after.tail_hash.as_deref()
+        ),
+        (standard.as_str(), before.last_refresh_at, Some("m2")),
+        "another conversation beside the pin's, whatever its lane, changes nothing"
+    );
+    let map = st.affinity();
+    let map = map.read().unwrap();
+    assert_eq!(
+        warmth_of(&after, &at(T + 3_000, &fast_lane, None, &[]), &map),
+        Warmth::Cold,
+        "a chainless body on another lane still reads cold"
+    );
+    assert_eq!(
+        warmth_of(
+            &after,
+            &at(T + 3_000, &fast_lane, Some("s0"), &["m1", "m2", "m3"]),
+            &map
+        ),
+        Warmth::Cold,
+        "and so does a continuation"
     );
 }
 

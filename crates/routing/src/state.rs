@@ -73,9 +73,56 @@ impl OverageEvidence {
     }
 }
 
+/// The poll's newest extra-usage state of an account, for the fast eligibility; memory only, the ledger keeps the
+/// samples.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CreditsState {
+    pub enabled: bool,
+    pub disabled_reason: Option<String>,
+    /// A fraction of the monthly limit, as the plan windows read.
+    pub utilization: Option<f64>,
+    pub observed_at: i64,
+    pub incarnation: u64,
+}
+
+impl CreditsState {
+    /// The reason fast mode cannot draw credits here: the poll's own reason, `extra_usage_disabled` for a disabled
+    /// state without one, `org_spend_cap_reached` at a utilization of one or more; `None` while credits have room.
+    pub fn blocked(&self) -> Option<&str> {
+        if let Some(reason) = self.disabled_reason.as_deref().filter(|r| !r.is_empty()) {
+            return Some(reason);
+        }
+        if !self.enabled {
+            return Some("extra_usage_disabled");
+        }
+        self.utilization
+            .is_some_and(|u| u >= 1.0)
+            .then_some("org_spend_cap_reached")
+    }
+}
+
 pub const FIVE_HOUR: &str = "five_hour";
 pub const SEVEN_DAY: &str = "seven_day";
 pub const SEVEN_DAY_FABLE: &str = "seven_day_fable";
+
+/// `five_hour`, `seven_day`, or a `seven_day_` claim: the plan windows the classifier names on a cooldown row.
+pub fn is_plan_window(window: &str) -> bool {
+    window == FIVE_HOUR || window == SEVEN_DAY || window.starts_with("seven_day_")
+}
+
+/// The one fast-eligibility rule over a live cooldown row, which the selector's walk (through `blocking_cooldown`)
+/// and the keepalive's gate both call: whether the row keeps a request of this speed for `canonical_model` off its
+/// account. An `account` row holds either speed unless the request is fast and the row's window is a plan window,
+/// since a fast request draws usage credits and no plan window; the model's `model:` row holds either speed; the
+/// `fast` row holds a fast request alone. For the same reason no overage hold applies to a fast request, a rule
+/// both callers apply beside this one.
+pub fn cooldown_holds(scope: &str, window: &str, canonical_model: &str, fast: bool) -> bool {
+    match scope {
+        "account" => !(fast && is_plan_window(window)),
+        "fast" => fast,
+        _ => scope.strip_prefix("model:") == Some(canonical_model),
+    }
+}
 
 /// One window's reading: utilization as a fraction, the reset that refunds it when the source named one, and
 /// when it was read; a reading is replaced only by a newer one for the same window.
@@ -590,6 +637,9 @@ pub struct RoutingState {
     /// restart loads the newest readings and predicts from them alone until the next request completes.
     charges: HashMap<String, Charges>,
     cooldowns: HashMap<(String, String), CooldownRow>,
+    /// The poll's newest extra-usage state per account; memory only, so a restart judges fast eligibility on the
+    /// cooldown rows alone until the next poll lands.
+    credits: HashMap<String, CreditsState>,
     in_flight: InFlight,
     /// The ledger's last-answered spend per pool member, by `(pool_id, account_id)`; memory only.
     member_spend: HashMap<(String, String), MemberSpend>,
@@ -641,6 +691,7 @@ impl RoutingState {
                 .into_iter()
                 .map(|c| ((c.account_id.clone(), c.scope.clone()), c))
                 .collect(),
+            credits: HashMap::new(),
             in_flight: InFlight::default(),
             member_spend: HashMap::new(),
             next_epoch,
@@ -879,19 +930,50 @@ impl RoutingState {
         canonical_model: &str,
         now: i64,
     ) -> Option<&CooldownRow> {
+        self.blocking_cooldown(account_id, canonical_model, now, false)
+    }
+
+    /// The later of the account's live rows `cooldown_holds` answers true for, the model canonicalized as
+    /// `cooldown` does; for a standard request it answers what `cooldown` answers, an account row winning a tie.
+    pub fn blocking_cooldown(
+        &self,
+        account_id: &str,
+        canonical_model: &str,
+        now: i64,
+        fast: bool,
+    ) -> Option<&CooldownRow> {
         let canonical_model = self.canonical(canonical_model);
-        let account = self
-            .cooldowns
-            .get(&(account_id.to_string(), "account".to_string()))
-            .filter(|c| c.until > now);
-        let model = self
-            .cooldowns
-            .get(&(account_id.to_string(), format!("model:{canonical_model}")))
-            .filter(|c| c.until > now);
-        match (account, model) {
-            (Some(a), Some(m)) => Some(if a.until >= m.until { a } else { m }),
-            (a, m) => a.or(m),
+        let model_scope = format!("model:{canonical_model}");
+        ["account", "fast", model_scope.as_str()]
+            .into_iter()
+            .filter_map(|scope| {
+                self.cooldowns
+                    .get(&(account_id.to_string(), scope.to_string()))
+            })
+            .filter(|row| {
+                row.until > now && cooldown_holds(&row.scope, &row.window, canonical_model, fast)
+            })
+            .fold(None, |held: Option<&CooldownRow>, row| match held {
+                Some(held) if held.until >= row.until => Some(held),
+                _ => Some(row),
+            })
+    }
+
+    /// Only a newer reading replaces the held one, so a slow poll cannot roll the state back.
+    pub fn record_credits(&mut self, account_id: &str, state: CreditsState) -> bool {
+        if self
+            .credits
+            .get(account_id)
+            .is_some_and(|held| held.observed_at >= state.observed_at)
+        {
+            return false;
         }
+        self.credits.insert(account_id.to_string(), state);
+        true
+    }
+
+    pub fn credits(&self, account_id: &str) -> Option<&CreditsState> {
+        self.credits.get(account_id)
     }
 
     /// Every live cooldown row of one account, whatever its scope, in no particular order. `cooldown` answers
@@ -1460,12 +1542,14 @@ impl RoutingState {
         }
         // None of these needs a deletion written: the overage rows cascade with the account and the next holder's
         // first reading replaces one left under another incarnation, the window rows cascade too and the
-        // purge tick drops one of another incarnation, and charges, round-robin cursors and shedding rounds are
-        // held in memory only. Samples, charges and cursors are keyed by id alone, so the reload drops those of a
-        // holder the id has moved past.
+        // purge tick drops one of another incarnation, and charges, credits states, round-robin cursors and
+        // shedding rounds are held in memory only. Samples, charges and cursors are keyed by id alone, so the
+        // reload drops those of a holder the id has moved past.
         let absent = |account_id: &str| snapshot.account(account_id).is_none();
         self.overage
             .retain(|account_id, evidence| !gone(account_id, evidence.incarnation));
+        self.credits
+            .retain(|account_id, state| !gone(account_id, state.incarnation));
         self.samples.retain(|account_id, _| !absent(account_id));
         self.charges.retain(|account_id, _| !absent(account_id));
         self.round_robin.retain(|(pool_id, _, cohort), _| {
@@ -1992,5 +2076,69 @@ mod tests {
         );
         read(&mut state, FIVE_HOUR, 0.2, None, 2_000);
         assert!((utilization(&state, FIVE_HOUR, 1_000 + 3 * WEEK_MS) - 0.2).abs() < CLOSE);
+    }
+
+    #[test]
+    fn the_fast_lane_rule_passes_a_plan_window_row_for_a_fast_request_alone() {
+        const MODEL: &str = "claude-opus-5-5";
+        let own_model = format!("model:{MODEL}");
+        for fast in [false, true] {
+            for plan in [FIVE_HOUR, SEVEN_DAY, "seven_day_opus"] {
+                assert_eq!(
+                    cooldown_holds("account", plan, MODEL, fast),
+                    !fast,
+                    "an account row at {plan}, fast {fast}"
+                );
+            }
+            assert!(
+                cooldown_holds("account", "retry_after", MODEL, fast),
+                "an account row no plan window names, fast {fast}"
+            );
+            assert_eq!(
+                cooldown_holds("fast", "fast", MODEL, fast),
+                fast,
+                "the fast lane's own row"
+            );
+            assert!(
+                cooldown_holds(&own_model, "retry_after", MODEL, fast),
+                "the model's own row, fast {fast}"
+            );
+            assert!(
+                !cooldown_holds("model:claude-sonnet-5", "retry_after", MODEL, fast),
+                "another model's row, fast {fast}"
+            );
+        }
+        assert!(!is_plan_window("retry_after") && !is_plan_window("overage"));
+
+        let mut state = RoutingState::from_load(RoutingLoad::default());
+        let row = |scope: &str, until: i64, window: &str| CooldownRow {
+            account_id: "a".into(),
+            scope: scope.into(),
+            until,
+            set_at: 0,
+            reason: "rate_limit".into(),
+            window: window.into(),
+            source_request_id: None,
+            incarnation: 1,
+        };
+        state.record_cooldown(row("account", 5_000, FIVE_HOUR));
+        state.record_cooldown(row("fast", 3_000, "fast"));
+        state.record_cooldown(row(&own_model, 4_000, "retry_after"));
+        let until = |fast: bool| {
+            state
+                .blocking_cooldown("a", MODEL, 1_000, fast)
+                .map(|r| r.until)
+        };
+        assert_eq!(
+            until(false),
+            state.cooldown("a", MODEL, 1_000).map(|r| r.until),
+            "a standard request reads what the model's cooldown reads"
+        );
+        assert_eq!(until(false), Some(5_000));
+        assert_eq!(
+            until(true),
+            Some(4_000),
+            "a fast request passes the plan window and reads the later of the fast and the model row"
+        );
     }
 }

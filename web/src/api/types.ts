@@ -608,7 +608,7 @@ export interface CapturedBodies {
 }
 
 /** Why the router moved a session's pin: the reason string of a `pin_migrated` event. */
-export type PinMigrationReason = 'cooldown' | 'drain' | 'mark' | 'overage' | 'return_to_plan' | 'shed' | 'spent';
+export type PinMigrationReason = 'cooldown' | 'drain' | 'fast_lane' | 'mark' | 'overage' | 'return_to_plan' | 'shed' | 'spent';
 
 /** Why the router released a session's pin without a move: the `reasons` of a `pin_expired` event, in the
  * order the selection found them. */
@@ -620,6 +620,8 @@ export type PinReleaseReason =
   | 'deleted'
   | 'disconnected'
   | 'expired'
+  | 'fast_credits'
+  | 'fast_rate_limit'
   | 'funding_required'
   | 'overage'
   | 'paused'

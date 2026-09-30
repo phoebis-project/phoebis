@@ -86,6 +86,15 @@ test('the account list folds state, enabled, and cooldowns onto one status', () 
   assert.equal(d.decodeAccount({ ...fixture('account'), cooldowns: [{ scope: 'account', until: 1, reason: 'rate_limit', window: '5h', set_at: 0 }] }).status, 'cooldown');
 });
 
+test('an account cooling on its fast lane alone reads ready, and one with an account row beside it reads cooldown', () => {
+  const fast = { scope: 'fast', until: 1, reason: 'fast_rate_limit', window: 'fast', set_at: 0 };
+  const account = { scope: 'account', until: 1, reason: 'rate_limit', window: '5h', set_at: 0 };
+  const alone = d.decodeAccount({ ...fixture('account'), cooldowns: [fast] });
+  assert.equal(alone.status, 'ready', 'its standard lane still serves');
+  assert.deepEqual(alone.cooldowns.map((c) => c.scope), ['fast'], 'the row itself is still decoded');
+  assert.equal(d.decodeAccount({ ...fixture('account'), cooldowns: [fast, account] }).status, 'cooldown');
+});
+
 test('a window both samplers wrote folds to one entry carrying the newer reading', () => {
   const base = fixture('account');
   const older = { id: '5h', observed_at: 1_000_000, resets_at: 4_600_000, utilization: 0.11 };

@@ -551,6 +551,17 @@ mod tests {
             ClientHints::read(&betas).per_turn_effort,
             "the per-turn beta on a line of its own"
         );
+        let mut spaced = HeaderMap::new();
+        spaced.insert(
+            "anthropic-beta",
+            "effort-2025-11-24, per-turn-control-2026-07-01"
+                .parse()
+                .unwrap(),
+        );
+        assert!(
+            ClientHints::read(&spaced).per_turn_effort,
+            "the per-turn beta after a comma and a space"
+        );
     }
 
     #[test]

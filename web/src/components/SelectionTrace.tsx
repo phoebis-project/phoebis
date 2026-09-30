@@ -14,6 +14,7 @@ const OBSTACLE_HINT: Record<Obstacle, string> = {
   attempted: 'already tried by this request',
   budget: 'at its spend budget for the period',
   cooldown: 'in a cooldown',
+  credits: 'its usage credits unavailable for fast mode',
   floor: 'at the Pace floor',
   operator: 'held by an operator',
   overage: 'in overage',

@@ -8,8 +8,8 @@ use rand::{Rng, RngExt};
 
 use crate::affinity::{AffinityEntry, AffinityMap};
 use crate::state::{
-    budget_deadline, shed_marks, warm, BurnUnit, PinRef, RoutingState, StateWrite, Tier, FIVE_HOUR,
-    SEVEN_DAY, SEVEN_DAY_FABLE,
+    budget_deadline, shed_marks, warm, BurnUnit, CreditsState, PinRef, RoutingState, StateWrite,
+    Tier, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
 };
 use crate::windows::window_for;
 use crate::{term, Candidate, KeyRefusal, RegistrySnapshot, ResolveError};
@@ -74,6 +74,8 @@ pub struct SelectRequest {
     pub holds: Vec<HoldFacts>,
     /// The cache lane the request writes to, as the relay composed it; a pin or an entry of another lane is cold.
     pub lane: String,
+    /// The body carried `speed: "fast"`: fast eligibility applies.
+    pub fast: bool,
 }
 
 /// The cache lane key, `<model>|<speed>|<thinking>|<effort>`: the one spelling the relay composes and every pin,
@@ -152,16 +154,16 @@ pub enum Warmth {
 }
 
 /// The verdict of `request` on the pin it arrives for. The compacted flag is cold whatever else the request says; a
-/// request on another cache lane than the pin's last is cold whatever its messages continue, unless its class
-/// leaves the pin alone; the class decides when present; without it, a request whose boundaries contain the pin's
-/// tail or name an entry the pin's key and generation wrote on the pin's account and incarnation continues the
-/// conversation (so where one session holds several conversations, a continuation of any of them refreshes the
-/// pin), one that matches the static prefix without such a boundary restarted it,
-/// and one matching neither is foreign. A body without a chain
-/// refreshes, the fallback for a request that carries no fact. A keepalive probe replays the recipe's headers and
-/// body verbatim, the re-arming request's rather than its own, so it is judged by none of this: its renewal report
-/// stamps the refresh instead. A token count is judged by none of it either, since it creates no cache entry to be
-/// warm about.
+/// request on another cache lane than the pin's last is cold whatever its messages continue, unless it leaves the
+/// pin alone (a class that does not refresh, or a foreign request); the class decides when present; without it, a
+/// request whose boundaries contain the pin's tail or name an entry the pin's key and generation wrote on the pin's
+/// account and incarnation continues the conversation (so where one session holds several conversations, a
+/// continuation of any of them refreshes the pin), one that matches the static prefix without such a boundary
+/// restarted it, and one matching
+/// neither is foreign. A body without a chain refreshes, the fallback for a request that carries no fact. A
+/// keepalive probe replays the recipe's headers and body verbatim, the re-arming request's rather than its own, so
+/// it is judged by none of this: its renewal report stamps the refresh instead. A token count is judged by none of
+/// it either, since it creates no cache entry to be warm about.
 pub fn warmth_of(current: &PinRow, request: &SelectRequest, affinity: &AffinityMap) -> Warmth {
     if request.probe || request.count {
         return Warmth::Untouched;
@@ -169,23 +171,23 @@ pub fn warmth_of(current: &PinRow, request: &SelectRequest, affinity: &AffinityM
     if request.context_compacted {
         return Warmth::Cold;
     }
-    // Another lane is another cache: a refreshing turn on it reads the pin cold, whatever its boundaries. A class
-    // that leaves the pin alone still does, since such a request never touched the conversation's prefix.
+    // Another lane is another cache: a refreshing turn on it reads the pin cold, whatever its boundaries. A request
+    // that leaves the pin alone still does, since it never touched the conversation's prefix.
     let lane_changed = request.lane != current.lane;
+    let refreshed = if lane_changed {
+        Warmth::Cold
+    } else {
+        Warmth::Refresh
+    };
     if let Some(class) = request.request_class.as_deref() {
-        return if !REFRESHING_CLASSES.contains(&class) {
-            Warmth::Untouched
-        } else if lane_changed {
-            Warmth::Cold
+        return if REFRESHING_CLASSES.contains(&class) {
+            refreshed
         } else {
-            Warmth::Refresh
+            Warmth::Untouched
         };
     }
-    if lane_changed {
-        return Warmth::Cold;
-    }
     if request.static_hash.is_none() && request.boundaries.is_empty() {
-        return Warmth::Refresh;
+        return refreshed;
     }
     // The pin's tail stays an anchor beside the map: the affinity report lands when the previous answer ends,
     // and a quick continuation can select before it does.
@@ -201,7 +203,7 @@ pub fn warmth_of(current: &PinRow, request: &SelectRequest, affinity: &AffinityM
                 .entry(&request.canonical_model, b)
                 .is_some_and(on_pin)
     }) {
-        return Warmth::Refresh;
+        return refreshed;
     }
     if request.static_hash.is_some() && request.static_hash == current.static_hash {
         return Warmth::Cold;
@@ -255,9 +257,9 @@ pub struct SelectionTrace {
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct Skipped {
     pub account_id: String,
-    /// A step-2 obstacle (`attempted`, `budget`, `cooldown`, `operator`, `overage`, `subscription_ended`), or
-    /// a partition's name: `above_ceiling`, `at_cap`, `floor`, `spent`, `winding_down`, or `ranked` for an
-    /// eligible sibling the strategy did not pick.
+    /// A step-2 obstacle (`attempted`, `budget`, `cooldown`, `credits`, `operator`, `overage`,
+    /// `subscription_ended`), or a partition's name: `above_ceiling`, `at_cap`, `floor`, `spent`, `winding_down`,
+    /// or `ranked` for an eligible sibling the strategy did not pick.
     pub obstacle: &'static str,
 }
 
@@ -278,6 +280,14 @@ pub struct Selection {
 /// The reason a rejection cooldown row carries; the verdict writes it and the report below reads it.
 pub const MODEL_REJECTED_REASON: &str = "model_rejected";
 
+/// The reason a fast request's 429 that names an overage-disabled reason cools the fast lane under; the row's
+/// `window` is that reason, which the local answer hands back to the client.
+pub const FAST_CREDITS_REASON: &str = "fast_credits";
+
+/// The reason a fast request's 429 without that reason cools the fast lane under; the row's `window` is `fast`, or
+/// `retry_after` when only `Retry-After` timed it, so the in-place retry treats it as any timed throttle.
+pub const FAST_RATE_LIMIT_REASON: &str = "fast_rate_limit";
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Exhaustion {
     /// No candidate is eligible, and every cooldown in the way is a rejection of the request's model.
@@ -287,6 +297,15 @@ pub enum Exhaustion {
         window: String,
     },
     Untimed,
+    /// Every fast-eligible candidate is out and at least one holds only a `fast_rate_limit` row: the earliest
+    /// deadline.
+    FastLane {
+        deadline: i64,
+    },
+    /// Every candidate the pool could use is credits-blocked: the pinned account's reason, else the first in order.
+    FastCredits {
+        reason: String,
+    },
 }
 
 /// Why the current registry refuses a request admitted under an older one.
@@ -325,19 +344,24 @@ enum Obstacle {
         until: i64,
         window: String,
     },
+    /// The poll reads the account's usage credits as unavailable for fast mode.
+    Credits {
+        reason: String,
+    },
     /// Cancelled and past the saved end.
     Ended,
     Operator,
 }
 
 /// The step-2 name `release_reasons` and the trace report for an obstacle: `attempted`, `budget`, `cooldown`,
-/// `operator`, `overage`, or `subscription_ended`.
+/// `credits`, `operator`, `overage`, or `subscription_ended`.
 fn obstacle_name(obstacle: &Obstacle) -> &'static str {
     match obstacle {
         Obstacle::Attempted => "attempted",
         Obstacle::Budget { .. } => "budget",
         Obstacle::Cooldown { reason, .. } if reason == "overage" => "overage",
         Obstacle::Cooldown { .. } => "cooldown",
+        Obstacle::Credits { .. } => "credits",
         Obstacle::Ended => "subscription_ended",
         Obstacle::Operator => "operator",
     }
@@ -403,10 +427,12 @@ fn state_name(state: AccountState) -> Option<&'static str> {
 /// key or the pool is gone), `deleted` (the account left the registry), `paused` (`enabled` is off), the
 /// account's state when it cannot serve (`disconnected`, `funding_required`, `reauth_required`, `unpaired`),
 /// `subscription_ended` (cancelled and past its saved end), `cooldown` (a live row blocks the model on the
-/// account), `budget` (the member's spend is at or above its configured budget), `overage` (in overage under a
-/// policy other than `allow`), `attempted` (this request already tried it), and `spent` (no allowance left in
-/// the request's window). Never empty: a pin released by a move whose destination then answered nothing carries
-/// `released`, the one fact the list above does not evaluate.
+/// account), `fast_rate_limit` or `fast_credits` for a fast request (the fast lane's own row, or the poll's
+/// credits state, blocks it), `budget` (the member's spend is at or above its configured budget), `overage` (in
+/// overage under a policy other than `allow`), `attempted` (this request already tried it), and `spent` (no
+/// allowance left in the request's window); a fast request draws no plan window, so neither `overage` nor
+/// `spent` stands against it. Never empty: a pin released by a move whose destination then answered nothing
+/// carries `released`, the one fact the list above does not evaluate.
 pub fn release_reasons(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
@@ -444,18 +470,35 @@ pub fn release_reasons(
     {
         reasons.push("subscription_ended");
     }
-    if state
-        .cooldown(&pin.account_id, &request.canonical_model, request.now)
-        .is_some()
+    if let Some(row) = state.blocking_cooldown(
+        &pin.account_id,
+        &request.canonical_model,
+        request.now,
+        request.fast,
+    ) {
+        // A fast-lane row names its own reason, so the drawer never reads it as a cooled account.
+        reasons.push(match (row.scope.as_str(), row.reason.as_str()) {
+            ("fast", FAST_CREDITS_REASON) => FAST_CREDITS_REASON,
+            ("fast", _) => FAST_RATE_LIMIT_REASON,
+            _ => "cooldown",
+        });
+    }
+    if request.fast
+        && state
+            .credits(&pin.account_id)
+            .and_then(CreditsState::blocked)
+            .is_some()
+        && !reasons.contains(&FAST_CREDITS_REASON)
     {
-        reasons.push("cooldown");
+        reasons.push(FAST_CREDITS_REASON);
     }
     if pool.is_some_and(|p| {
         budget_exhausted(state, snapshot, &p.id, &pin.account_id, request.now).is_some()
     }) {
         reasons.push("budget");
     }
-    if pool.is_some_and(|p| p.overage_policy != OveragePolicy::Allow)
+    if !request.fast
+        && pool.is_some_and(|p| p.overage_policy != OveragePolicy::Allow)
         && state.in_overage(&pin.account_id, request.now, request.fallback_ms)
     {
         reasons.push("overage");
@@ -463,12 +506,14 @@ pub fn release_reasons(
     if request.attempted.contains(&pin.account_id) {
         reasons.push("attempted");
     }
-    if !holds_allowance(
-        state,
-        &pin.account_id,
-        window_for(&request.canonical_model),
-        request.now,
-    ) {
+    if !request.fast
+        && !holds_allowance(
+            state,
+            &pin.account_id,
+            window_for(&request.canonical_model),
+            request.now,
+        )
+    {
         reasons.push("spent");
     }
     if reasons.is_empty() {
@@ -524,6 +569,9 @@ pub fn select(
         }
     }
 
+    // The fast answer names the pinned account's credits reason first, whatever becomes of the pin below.
+    let pinned_account = pin.as_ref().map(|p| p.account_id.clone());
+
     // What the request says about the pin's cache, judged once where the pin is: every rule below that reads
     // warmth reads this, so a compacted or restarted request is cold on the request that carries the fact.
     let verdict = pin.as_ref().map_or(Warmth::Untouched, |current| {
@@ -548,6 +596,7 @@ pub fn select(
             &request.attempted,
             request.now,
             request.fallback_ms,
+            request.fast,
         ) {
             None => eligible.push(candidate),
             Some(o) => obstacles.push((candidate.account_id.clone(), o)),
@@ -770,11 +819,11 @@ pub fn select(
             !held,
             rng,
         ) else {
-            let obstacles = obstacles
+            let (pinned, others): (Vec<_>, Vec<_>) = obstacles
                 .into_iter()
                 .chain(spent_deadlines)
-                .map(|(_, o)| o)
-                .collect();
+                .partition(|(id, _)| Some(id) == pinned_account.as_ref());
+            let obstacles = pinned.into_iter().chain(others).map(|(_, o)| o).collect();
             return (SelectResult::Exhausted(exhaustion_of(obstacles)), writes);
         };
         if held {
@@ -957,21 +1006,9 @@ fn fenced(
         &[],
         request.now,
         request.fallback_ms,
+        request.fast,
     );
-    match own {
-        Some(Obstacle::Cooldown { reason, .. }) if reason == MODEL_REJECTED_REASON => {
-            Exhaustion::ModelRejected
-        }
-        Some(Obstacle::Cooldown { until, window, .. }) => Exhaustion::Timed {
-            deadline: until,
-            window,
-        },
-        Some(Obstacle::Budget { until }) => Exhaustion::Timed {
-            deadline: until,
-            window: "overage".into(),
-        },
-        _ => Exhaustion::Untimed,
-    }
+    exhaustion_of(own.into_iter().collect())
 }
 
 fn seconds_ms(seconds: u64) -> i64 {
@@ -1115,7 +1152,11 @@ fn move_of<'a>(
     // decides instead.
     // Under `prefer_plan` a sibling in overage is no destination: the overage rule would hand the session back
     // on the next request, the two rules trading it on no new evidence.
-    if pool.shedding.migrate_when_spent && !holds_allowance(state, &current.account_id, window, now)
+    // A fast request draws usage credits and no plan window, so neither a spent window nor plan overage is a
+    // reason to move its session.
+    if !request.fast
+        && pool.shedding.migrate_when_spent
+        && !holds_allowance(state, &current.account_id, window, now)
     {
         let set = destinations(state, &|c| {
             holds_allowance(state, &c.account_id, window, now)
@@ -1131,7 +1172,8 @@ fn move_of<'a>(
     // subscription sibling: one out of overage with allowance left, since a spent one would move the pin again
     // on its next request. While the evidence's reset falls within the grace the session keeps its cache: its
     // account is about to get its plan back, and moving now would move it twice.
-    if prefer_plan
+    if !request.fast
+        && prefer_plan
         && kind(&current.account_id) == Some(AccountKind::Oauth)
         && state.in_overage(&current.account_id, now, fallback_ms)
     {
@@ -1197,7 +1239,12 @@ fn move_of<'a>(
     // the release names the cooldown and the mark leaves with the pin, where a shed would name a move the
     // cooldown forced. The round above still runs, since a cooldown can hold one model alone.
     if state
-        .cooldown(&current.account_id, &request.canonical_model, now)
+        .blocking_cooldown(
+            &current.account_id,
+            &request.canonical_model,
+            now,
+            request.fast,
+        )
         .is_some()
     {
         return None;
@@ -1280,6 +1327,7 @@ fn obstacle(
     attempted: &[String],
     now: i64,
     fallback_ms: i64,
+    fast: bool,
 ) -> Option<Obstacle> {
     let tried = attempted.iter().any(|a| a == &candidate.account_id);
     // A candidate the registry no longer holds was deleted after admission; it is nobody's to select, and a
@@ -1296,17 +1344,28 @@ fn obstacle(
     {
         return Some(Obstacle::Ended);
     }
-    if let Some(cooldown) = state.cooldown(&candidate.account_id, model, now) {
+    if let Some(cooldown) = state.blocking_cooldown(&candidate.account_id, model, now, fast) {
         return Some(Obstacle::Cooldown {
             reason: cooldown.reason.clone(),
             until: cooldown.until,
             window: cooldown.window.clone(),
         });
     }
+    if fast {
+        if let Some(reason) = state
+            .credits(&candidate.account_id)
+            .and_then(CreditsState::blocked)
+        {
+            return Some(Obstacle::Credits {
+                reason: reason.into(),
+            });
+        }
+    }
     if let Some(until) = budget_exhausted(state, snapshot, &pool.id, &candidate.account_id, now) {
         return Some(Obstacle::Budget { until });
     }
-    if pool.overage_policy == OveragePolicy::Never {
+    // Plan overage is a plan window's state, which a fast request does not draw.
+    if !fast && pool.overage_policy == OveragePolicy::Never {
         if let Some(deadline) = state
             .overage_deadline(&candidate.account_id, fallback_ms)
             .filter(|d| *d > now)
@@ -1730,7 +1789,41 @@ fn choose<'a>(
     chosen.map(|c| (c, first))
 }
 
+/// The answer for a request nothing can serve, the pinned account's obstacle first when it has one. A fast rate
+/// limit anywhere answers the earliest fast reset, since the client waits for the fast lane rather than for a
+/// window it does not draw; a set whose every timed obstacle is a credits block answers the first one's reason,
+/// which no wait clears before the poll reads credits again.
 fn exhaustion_of(obstacles: Vec<Obstacle>) -> Exhaustion {
+    let fast_reset = obstacles
+        .iter()
+        .filter_map(|o| match o {
+            Obstacle::Cooldown { reason, until, .. } if reason == FAST_RATE_LIMIT_REASON => {
+                Some(*until)
+            }
+            _ => None,
+        })
+        .min();
+    if let Some(deadline) = fast_reset {
+        return Exhaustion::FastLane { deadline };
+    }
+    let credits: Vec<Option<&str>> = obstacles
+        .iter()
+        .filter_map(|o| match o {
+            Obstacle::Cooldown { reason, window, .. } => {
+                Some((reason == FAST_CREDITS_REASON).then_some(window.as_str()))
+            }
+            Obstacle::Credits { reason } => Some(Some(reason.as_str())),
+            Obstacle::Budget { .. } => Some(None),
+            _ => None,
+        })
+        .collect();
+    if let Some(Some(reason)) = credits.first() {
+        if credits.iter().all(Option::is_some) {
+            return Exhaustion::FastCredits {
+                reason: reason.to_string(),
+            };
+        }
+    }
     let cooldowns: Vec<(i64, String, String)> = obstacles
         .into_iter()
         .filter_map(|o| match o {

@@ -15,8 +15,11 @@ pub const PER_TURN_BETA: &str = "per-turn-control-2026-07-01";
 /// per-turn form, so a lane change reads as a cold cache. The four parts go through `phoebis_routing::lane_key`.
 pub fn lane_of(canonical_model: &str, facts: &BodyFacts, per_turn_effort: bool) -> String {
     let shape = &facts.shape;
-    let speed = shape.speed.as_deref().unwrap_or("standard");
-    let thinking = match (shape.thinking_type.as_deref(), shape.thinking_budget) {
+    let speed = shape.speed.as_deref().map_or("standard", token);
+    let thinking = match (
+        shape.thinking_type.as_deref().map(token),
+        shape.thinking_budget,
+    ) {
         (None, _) => "none".to_string(),
         (Some(kind), None) => kind.to_string(),
         (Some(kind), Some(budget)) => format!("{kind}:{budget}"),
@@ -24,9 +27,23 @@ pub fn lane_of(canonical_model: &str, facts: &BodyFacts, per_turn_effort: bool) 
     let effort = if per_turn_effort {
         "*"
     } else {
-        facts.top_level_effort.as_deref().unwrap_or("-")
+        facts.top_level_effort.as_deref().map_or("-", token)
     };
     phoebis_routing::lane_key(canonical_model, speed, &thinking, effort)
+}
+
+/// A part the client wrote, as sent when it is a short token and `other` otherwise: the lane lands on every pin and
+/// entry the registry keeps, and a `|` would shift the parts after it.
+fn token(part: &str) -> &str {
+    let short = (1..=32).contains(&part.len())
+        && part
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.'));
+    if short {
+        part
+    } else {
+        "other"
+    }
 }
 
 #[cfg(test)]
@@ -62,6 +79,36 @@ mod tests {
         assert_eq!(
             lane_of("claude-opus-5-5", &bare, false),
             "claude-opus-5-5|standard|none|-"
+        );
+    }
+
+    #[test]
+    fn a_lane_part_that_is_no_short_token_collapses_to_other() {
+        let body = |speed: &str, thinking: &str, effort: &str| {
+            BodyFacts::read(
+                serde_json::json!({
+                    "speed": speed,
+                    "thinking": {"type": thinking, "budget_tokens": 1024},
+                    "output_config": {"effort": effort},
+                    "messages": [{"role": "user", "content": "hi"}],
+                })
+                .to_string()
+                .as_bytes(),
+            )
+        };
+        let longest = "a".repeat(32);
+        assert_eq!(
+            lane_of("m", &body(&longest, "enabled", "x-high.2_B"), false),
+            format!("m|{longest}|enabled:1024|x-high.2_B"),
+            "32 bytes of letters, digits, `_`, `-` and `.` stand as sent"
+        );
+        assert_eq!(
+            lane_of("m", &body(&"a".repeat(33), "en abled", "hi|gh"), false),
+            "m|other|other:1024|other"
+        );
+        assert_eq!(
+            lane_of("m", &body("", "é", "high"), false),
+            "m|other|other:1024|high"
         );
     }
 

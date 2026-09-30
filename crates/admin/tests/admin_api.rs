@@ -1735,3 +1735,70 @@ async fn a_request_row_answers_its_fork_fields() {
         "the detail route answers the same fields"
     );
 }
+
+#[tokio::test]
+async fn deleting_the_fast_cooldown_clears_the_fast_lane_and_leaves_the_account_row() {
+    use common::{delete, get, json, login, NOW};
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let cooled = |scope: &str, reason: &str, window: &str| phoebis_routing::Report::Cooldown {
+        account_id: "business".into(),
+        row: phoebis_store::CooldownRow {
+            account_id: "business".into(),
+            scope: scope.into(),
+            until: NOW + 600_000,
+            set_at: 0,
+            reason: reason.into(),
+            window: window.into(),
+            source_request_id: None,
+            incarnation: 1,
+        },
+        pin: None,
+        lifecycle_generation: 1,
+        credential_generation: 1,
+        incarnation: 1,
+    };
+    parts
+        .router
+        .report(cooled("fast", phoebis_routing::FAST_RATE_LIMIT_REASON, "fast"));
+    parts
+        .router
+        .report(cooled("account", "rate_limit", "five_hour"));
+    // A query queues behind both reports, so the rows it answers are the ones the route will read.
+    assert_eq!(parts.router.cooldowns().await.unwrap().len(), 2);
+    let shown = json(get(&parts.app, "/admin/accounts/business", Some(&cookie)).await).await;
+    let mut scopes: Vec<&str> = shown["cooldowns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["scope"].as_str().unwrap())
+        .collect();
+    scopes.sort_unstable();
+    assert_eq!(scopes, ["account", "fast"]);
+    let path = "/admin/accounts/business/cooldowns/fast";
+    assert_eq!(delete(&parts.app, path, Some(&cookie)).await.status(), 204);
+    assert_eq!(
+        parts
+            .router
+            .cooldowns()
+            .await
+            .unwrap()
+            .iter()
+            .map(|c| c.scope.as_str())
+            .collect::<Vec<_>>(),
+        ["account"],
+        "the account's own row stands"
+    );
+    assert_eq!(delete(&parts.app, path, Some(&cookie)).await.status(), 404);
+    let refused = delete(
+        &parts.app,
+        "/admin/accounts/business/cooldowns/turbo",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(refused.status(), 400);
+    assert_eq!(
+        json(refused).await["error"],
+        "scope is account, fast or model:<canonical>"
+    );
+}

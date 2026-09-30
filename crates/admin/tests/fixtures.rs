@@ -261,6 +261,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             parent_agent_id: None,
             holds: Vec::new(),
             lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
+            fast: false,
         })
         .await
         .unwrap();
@@ -333,6 +334,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 cohort: Some("direct".into()),
             }],
             lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
+            fast: false,
         })
         .await
         .unwrap();

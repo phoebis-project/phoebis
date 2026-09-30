@@ -170,6 +170,38 @@ fn a_report_stamps_its_lane_and_a_refresh_from_another_lane_rewrites_it() {
 }
 
 #[test]
+fn a_link_only_refresh_from_another_lane_carries_no_warmth_over() {
+    let fast = lane_key("claude-sonnet-5", "fast", "none", "-");
+    let mut map = AffinityMap::default();
+    map.record(&AffinityReport {
+        cache_touched: true,
+        message_ttl_ms: Some(3_600_000),
+        ..report("k", "a", &["b1", "b2"], 1_000)
+    });
+    let deadline = |map: &AffinityMap| {
+        map.entry("claude-sonnet-5", "b2")
+            .map(|e| e.written_at + e.ttl_ms)
+    };
+    assert_eq!(deadline(&map), Some(1_000 + 3_600_000));
+    map.record(&report("k", "a", &["b1", "b2"], 2_000));
+    assert_eq!(
+        deadline(&map),
+        Some(1_000 + 3_600_000),
+        "a link-only refresh on the same lane keeps the warm deadline"
+    );
+    map.record(&AffinityReport {
+        lane: fast.clone(),
+        ..report("k", "a", &["b1", "b2"], 3_000)
+    });
+    let entry = map.entry("claude-sonnet-5", "b2").unwrap();
+    assert_eq!(entry.lane, fast);
+    assert!(
+        !entry.live(3_000),
+        "the standard lane's warmth is no warmth on the fast lane"
+    );
+}
+
+#[test]
 fn the_conversation_lookup_finds_a_root_across_lanes() {
     let mut map = AffinityMap::default();
     map.record(&AffinityReport {

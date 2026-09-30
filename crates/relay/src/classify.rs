@@ -1,17 +1,19 @@
 //! The cooldown classification table, partitioned by account kind, applied to every upstream head before any
 //! byte reaches the caller.
 
-use phoebis_routing::MODEL_REJECTED_REASON;
+use phoebis_routing::{FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, MODEL_REJECTED_REASON};
 use phoebis_store::{AccountKind, AccountState};
 use phoebis_transport::response::ResponseHead;
 use serde_json::Value;
 
 use crate::memory::Injected;
-use crate::ratelimit::{retry_after, UnifiedHeaders};
+use crate::ratelimit::{retry_after, FastHeaders, UnifiedHeaders};
 
 /// Deadlines carry a second of margin so a request sent at the reset is not refused by a clock a hair behind.
 pub(crate) const MARGIN_MS: i64 = 1_000;
 const PERMISSION_MS: i64 = 3_600_000;
+const FAST_RATE_LIMIT_FALLBACK_MS: i64 = 600_000;
+const FAST_CREDITS_FALLBACK_MS: i64 = 3_600_000;
 
 /// The window name a rejection row carries; the console shows it beside the deadline.
 pub const MODEL_REJECTION_WINDOW: &str = "model_rejection";
@@ -38,6 +40,7 @@ pub fn next_month_start(now: i64) -> i64 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Scope {
     Account,
+    Fast,
     Model,
 }
 
@@ -82,6 +85,8 @@ pub struct HeadContext<'a> {
     pub wire_model: &'a str,
     /// `routing.model_rejection_seconds` in milliseconds.
     pub model_rejection_ms: i64,
+    /// The request carried `speed: "fast"`.
+    pub fast: bool,
 }
 
 pub fn classify(head: &ResponseHead, ctx: &HeadContext<'_>) -> Verdict {
@@ -123,6 +128,16 @@ pub fn classify(head: &ResponseHead, ctx: &HeadContext<'_>) -> Verdict {
                 reason: MODEL_REJECTED_REASON,
                 window: MODEL_REJECTION_WINDOW.into(),
             }),
+            mark: None,
+        };
+    }
+    // A fast request's throttle is the fast lane's, whatever the account kind, unless the head says a shared plan
+    // window rejected or an api_key spend cap did: those are the account's and keep their own rows.
+    let plan_rejected = unified.as_ref().is_some_and(shared_window_rejected)
+        || (ctx.kind == AccountKind::ApiKey && ctx.body_prefix.is_some_and(names_spend_limit));
+    if ctx.fast && rate_limited && !plan_rejected {
+        return Verdict::FailOver {
+            cooldown: Some(fast_cooldown(head, unified.as_ref(), ctx)),
             mark: None,
         };
     }
@@ -206,10 +221,7 @@ fn oauth_cooldown(
 ) -> Cooldown {
     let rejected = |s: &Option<String>| s.as_deref() == Some("rejected");
     if let Some(u) = unified {
-        let shared = rejected(&u.five_hour_status)
-            || rejected(&u.seven_day_status)
-            || (rejected(&u.status) && !fable_only(u));
-        if shared {
+        if shared_window_rejected(u) {
             let reset = [
                 u.five_hour_reset.filter(|_| rejected(&u.five_hour_status)),
                 u.seven_day_reset.filter(|_| rejected(&u.seven_day_status)),
@@ -251,6 +263,62 @@ fn oauth_cooldown(
         until: until.saturating_add(MARGIN_MS),
         reason: "rate_limit",
         window: exhaustion_window(unified, AccountKind::Oauth),
+    }
+}
+
+/// A shared plan window rejected: the 5-hour or the 7-day status, or the top-level status unless the model-scoped
+/// window is the only one that rejected.
+fn shared_window_rejected(u: &UnifiedHeaders) -> bool {
+    let rejected = |s: &Option<String>| s.as_deref() == Some("rejected");
+    rejected(&u.five_hour_status)
+        || rejected(&u.seven_day_status)
+        || (rejected(&u.status) && !fable_only(u))
+}
+
+fn fast_cooldown(
+    head: &ResponseHead,
+    unified: Option<&UnifiedHeaders>,
+    ctx: &HeadContext<'_>,
+) -> Cooldown {
+    if let Some(reason) = unified.and_then(|u| u.overage_disabled_reason.as_deref()) {
+        // The spend cap lifts with the month; any other refusal holds until the reset the head names, else an
+        // hour, and the poll's next enabled reading lifts it earlier.
+        let until = if reason == "org_spend_cap_reached" {
+            next_month_start(ctx.now)
+        } else {
+            unified
+                .and_then(|u| u.overage_reset)
+                .unwrap_or(ctx.now.saturating_add(FAST_CREDITS_FALLBACK_MS))
+        };
+        return Cooldown {
+            scope: Scope::Fast,
+            until: until.saturating_add(MARGIN_MS),
+            reason: FAST_CREDITS_REASON,
+            window: reason.to_string(),
+        };
+    }
+    // The per-minute bucket's reset decides the normal case; a 429 with neither reset is more likely an
+    // organization without fast access, and ten minutes bounds the dials wasted on it.
+    let fast_reset = FastHeaders::parse(head)
+        .into_iter()
+        .flat_map(|f| {
+            [
+                f.input.and_then(|b| b.reset),
+                f.output.and_then(|b| b.reset),
+            ]
+        })
+        .flatten()
+        .max();
+    let (until, window) = match (fast_reset, retry_after(head, ctx.now)) {
+        (Some(reset), _) => (reset, "fast"),
+        (None, Some(delay)) => (ctx.now.saturating_add(delay), "retry_after"),
+        (None, None) => (ctx.now.saturating_add(FAST_RATE_LIMIT_FALLBACK_MS), "fast"),
+    };
+    Cooldown {
+        scope: Scope::Fast,
+        until: until.saturating_add(MARGIN_MS),
+        reason: FAST_RATE_LIMIT_REASON,
+        window: window.into(),
     }
 }
 
@@ -450,6 +518,14 @@ mod tests {
             can_strip: false,
             wire_model: "claude-opus-5",
             model_rejection_ms: 3_600_000,
+            fast: false,
+        }
+    }
+
+    fn fast_ctx<'a>(kind: AccountKind) -> HeadContext<'a> {
+        HeadContext {
+            fast: true,
+            ..context(kind)
         }
     }
 
@@ -846,6 +922,222 @@ mod tests {
         );
         let c = cooldown_of(classify(&h, &ctx));
         assert_eq!((c.scope, c.until), (Scope::Model, NOW + 9_000 + 1_000));
+    }
+
+    /// The six `anthropic-fast-*` headers of a fast answer, each family's reset at the epoch second given.
+    fn fast_headers(
+        input_reset: &'static str,
+        output_reset: &'static str,
+    ) -> Vec<(&'static str, &'static str)> {
+        vec![
+            ("anthropic-fast-input-tokens-limit", "400000"),
+            ("anthropic-fast-input-tokens-remaining", "0"),
+            ("anthropic-fast-input-tokens-reset", input_reset),
+            ("anthropic-fast-output-tokens-limit", "80000"),
+            ("anthropic-fast-output-tokens-remaining", "0"),
+            ("anthropic-fast-output-tokens-reset", output_reset),
+        ]
+    }
+
+    #[test]
+    fn a_fast_429_with_the_overage_disabled_reason_cools_the_fast_lane_until_the_month_start_the_reset_or_an_hour(
+    ) {
+        let mut ctx = fast_ctx(AccountKind::Oauth);
+        ctx.now = ms(2026, 9, 25, 12, 34);
+        let reason = "anthropic-ratelimit-unified-overage-disabled-reason";
+        let c = cooldown_of(classify(
+            &head(429, &[(reason, "org_spend_cap_reached")]),
+            &ctx,
+        ));
+        assert_eq!(
+            (c.scope, c.reason, c.window.as_str(), c.until),
+            (
+                Scope::Fast,
+                FAST_CREDITS_REASON,
+                "org_spend_cap_reached",
+                ms(2026, 10, 1, 0, 0) + MARGIN_MS
+            ),
+            "the spend cap lifts with the month"
+        );
+        let c = cooldown_of(classify(
+            &head(
+                429,
+                &[
+                    (reason, "out_of_credits"),
+                    ("anthropic-ratelimit-unified-overage-reset", "1790000000"),
+                    ("retry-after", "30"),
+                ],
+            ),
+            &ctx,
+        ));
+        assert_eq!(
+            (c.scope, c.reason, c.window.as_str(), c.until),
+            (
+                Scope::Fast,
+                FAST_CREDITS_REASON,
+                "out_of_credits",
+                1_790_000_000_000 + MARGIN_MS
+            ),
+            "another reason holds until the overage reset the head names"
+        );
+        let c = cooldown_of(classify(&head(429, &[(reason, "out_of_credits")]), &ctx));
+        assert_eq!(
+            (c.scope, c.reason, c.window.as_str(), c.until),
+            (
+                Scope::Fast,
+                FAST_CREDITS_REASON,
+                "out_of_credits",
+                ctx.now + 3_600_000 + MARGIN_MS
+            ),
+            "without a reset, an hour"
+        );
+    }
+
+    #[test]
+    fn a_fast_429_without_the_reason_cools_the_fast_lane_by_the_later_fast_reset_then_retry_after_then_ten_minutes(
+    ) {
+        let ctx = fast_ctx(AccountKind::Oauth);
+        // 1700000090 is 2023-11-14T22:14:50Z: the later of the two resets, read from RFC 3339.
+        let mut both = fast_headers("1700000030", "2023-11-14T22:14:50Z");
+        both.push(("retry-after", "5"));
+        let c = cooldown_of(classify(&head(429, &both), &ctx));
+        assert_eq!(
+            (c.scope, c.reason, c.window.as_str(), c.until),
+            (
+                Scope::Fast,
+                FAST_RATE_LIMIT_REASON,
+                "fast",
+                NOW + 90_000 + MARGIN_MS
+            )
+        );
+        let c = cooldown_of(classify(&head(429, &[("retry-after", "20")]), &ctx));
+        assert_eq!(
+            (c.scope, c.reason, c.window.as_str(), c.until),
+            (
+                Scope::Fast,
+                FAST_RATE_LIMIT_REASON,
+                "retry_after",
+                NOW + 20_000 + MARGIN_MS
+            )
+        );
+        let c = cooldown_of(classify(&head(429, &[]), &ctx));
+        assert_eq!(
+            (c.scope, c.reason, c.window.as_str(), c.until),
+            (
+                Scope::Fast,
+                FAST_RATE_LIMIT_REASON,
+                "fast",
+                NOW + 600_000 + MARGIN_MS
+            )
+        );
+    }
+
+    #[test]
+    fn a_fast_429_that_rejects_a_shared_window_cools_the_account_as_a_standard_one_does() {
+        for shared in [
+            ("anthropic-ratelimit-unified-5h-status", "rejected"),
+            ("anthropic-ratelimit-unified-7d-status", "rejected"),
+        ] {
+            let h = head(
+                429,
+                &[
+                    shared,
+                    ("anthropic-ratelimit-unified-reset", "1700003600"),
+                    (
+                        "anthropic-ratelimit-unified-overage-disabled-reason",
+                        "out_of_credits",
+                    ),
+                    ("retry-after", "5"),
+                ],
+            );
+            let fast = cooldown_of(classify(&h, &fast_ctx(AccountKind::Oauth)));
+            let standard = cooldown_of(classify(&h, &context(AccountKind::Oauth)));
+            assert_eq!(fast, standard, "{shared:?}");
+            assert_eq!(
+                (fast.scope, fast.reason, fast.until),
+                (Scope::Account, "rate_limit", 1_700_003_600_000 + MARGIN_MS),
+                "{shared:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_fast_429_on_an_api_key_account_cools_the_fast_lane_and_its_spend_cap_still_cools_the_account(
+    ) {
+        let mut ctx = fast_ctx(AccountKind::ApiKey);
+        let c = cooldown_of(classify(&head(429, &[("retry-after", "12")]), &ctx));
+        assert_eq!(
+            (c.scope, c.reason, c.window.as_str(), c.until),
+            (
+                Scope::Fast,
+                FAST_RATE_LIMIT_REASON,
+                "retry_after",
+                NOW + 12_000 + MARGIN_MS
+            )
+        );
+        let body = spend_cap_body();
+        ctx.body_prefix = Some(&body);
+        ctx.now = ms(2026, 9, 25, 12, 34);
+        let c = cooldown_of(classify(&head(429, &[]), &ctx));
+        assert_eq!(
+            (c.scope, c.reason, c.window.as_str(), c.until),
+            (
+                Scope::Account,
+                SPEND_CAP_REASON,
+                "overage",
+                ms(2026, 10, 1, 0, 0) + MARGIN_MS
+            )
+        );
+    }
+
+    #[test]
+    fn a_standard_429_reads_as_before_whatever_the_fast_headers_say() {
+        let mut headers = fast_headers("1700000030", "1700000090");
+        headers.push((
+            "anthropic-ratelimit-unified-overage-disabled-reason",
+            "out_of_credits",
+        ));
+        headers.push(("retry-after", "30"));
+        let h = head(429, &headers);
+        let c = cooldown_of(classify(&h, &context(AccountKind::Oauth)));
+        assert_eq!(
+            (c.scope, c.reason, c.window.as_str(), c.until),
+            (
+                Scope::Account,
+                "rate_limit",
+                "retry_after",
+                NOW + 30_000 + MARGIN_MS
+            )
+        );
+        let c = cooldown_of(classify(&h, &context(AccountKind::ApiKey)));
+        assert_eq!(
+            (c.scope, c.reason, c.until),
+            (Scope::Model, "rate_limit", NOW + 30_000 + MARGIN_MS)
+        );
+    }
+
+    #[test]
+    fn a_fast_requests_first_sse_rate_limit_error_cools_the_fast_lane() {
+        let mut ctx = fast_ctx(AccountKind::Oauth);
+        ctx.first_event =
+            Some(br#"{"type":"error","error":{"type":"rate_limit_error","message":"slow"}}"#);
+        let h = head(
+            200,
+            &[("content-type", "text/event-stream"), ("retry-after", "9")],
+        );
+        let c = cooldown_of(classify(&h, &ctx));
+        assert_eq!(
+            (c.scope, c.reason, c.window.as_str(), c.until),
+            (
+                Scope::Fast,
+                FAST_RATE_LIMIT_REASON,
+                "retry_after",
+                NOW + 9_000 + MARGIN_MS
+            )
+        );
+        ctx.first_event =
+            Some(br#"{"type":"error","error":{"type":"overloaded_error","message":"x"}}"#);
+        assert!(matches!(classify(&h, &ctx), Verdict::Commit));
     }
 
     #[test]

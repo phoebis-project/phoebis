@@ -16,11 +16,14 @@ use tokio_util::sync::CancellationToken;
 use crate::affinity::{
     AffinityMap, AffinityReport, ConversationLookup, ConversationMatch, ConversationQuery,
 };
-use crate::select::{release_reasons, select, MigrateReason, Refusal, SelectRequest, SelectResult};
+use crate::select::{
+    release_reasons, select, MigrateReason, Refusal, SelectRequest, SelectResult,
+    FAST_CREDITS_REASON,
+};
 use crate::state::{
-    burn_folded, AccountTicket, EvidenceSource, InFlight, MemberSpend, OverageEvidence, PinRef,
-    PinUsage, RateTable, RoutingState, SharePricer, StateWrite, UtilizationSample, WindowReading,
-    FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
+    burn_folded, AccountTicket, CreditsState, EvidenceSource, InFlight, MemberSpend,
+    OverageEvidence, PinRef, PinUsage, RateTable, RoutingState, SharePricer, StateWrite,
+    UtilizationSample, WindowReading, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
 };
 use crate::{resolve, window_for, KeyRefusal, Presented, RegistrySnapshot};
 
@@ -225,6 +228,12 @@ pub enum Report {
         incarnation: u64,
         lifecycle_generation: u64,
         credential_generation: u64,
+    },
+    /// The poll's newest extra-usage state of an account, which decides fast eligibility.
+    Credits {
+        account_id: String,
+        state: CreditsState,
+        incarnation: u64,
     },
     /// The ledger's latest read of a pool member's spend, replacing every row it names.
     MemberSpend(Vec<MemberSpend>),
@@ -1157,6 +1166,13 @@ impl Task {
                 row.set_at = (self.clock)();
                 row.incarnation = incarnation;
                 row.scope = self.state.canonical_scope(&row.scope);
+                // A fast-lane row moves the session for fast mode alone; the name tells the drawer it was no
+                // rate limit on the account's standard traffic.
+                let moved = if row.scope == "fast" {
+                    "fast_lane"
+                } else {
+                    "cooldown"
+                };
                 let mut writes = Vec::new();
                 if self.state.record_cooldown(row.clone()) {
                     self.emit(RouterEvent::CooldownSet {
@@ -1179,14 +1195,38 @@ impl Task {
                             agent_id: pin.agent_id,
                             model: pin.model,
                         };
-                        self.invalidated.insert(
-                            key.clone(),
-                            (account_id.clone(), "cooldown", (self.clock)()),
-                        );
+                        self.invalidated
+                            .insert(key.clone(), (account_id.clone(), moved, (self.clock)()));
                         writes.push(StateWrite::DeletePin(key));
                     }
                 }
                 self.write(writes);
+            }
+            Report::Credits {
+                account_id,
+                mut state,
+                incarnation,
+            } => {
+                if self.moved_past(&account_id, incarnation) {
+                    return;
+                }
+                state.incarnation = incarnation;
+                let observed_at = state.observed_at;
+                let room = state.blocked().is_none();
+                if !self.state.record_credits(&account_id, state) || !room {
+                    return;
+                }
+                // Credits with room lift a refusal only when read after it: an earlier reading says nothing about
+                // the state that refused the request.
+                let now = (self.clock)();
+                let refused = self.state.cooldowns_of(&account_id, now).any(|row| {
+                    row.scope == "fast"
+                        && row.reason == FAST_CREDITS_REASON
+                        && observed_at > row.set_at
+                });
+                if refused {
+                    self.release_cooldown(account_id, "fast".to_string(), "recovered");
+                }
             }
             Report::Overage {
                 account_id,
@@ -1747,6 +1787,18 @@ fn holder<'a>(
         tracing::debug!(account = %account_id, "a report named a holder the id has moved past");
     }
     account
+}
+
+/// The poll's extra-usage state, its utilization a fraction as the windows read; `None` when the snapshot carries
+/// none. `incarnation` is the holder of the account id the snapshot was fetched for.
+pub fn credits_from_usage(snapshot: &UsageSnapshot, incarnation: u64) -> Option<CreditsState> {
+    snapshot.extra_usage.as_ref().map(|e| CreditsState {
+        enabled: e.is_enabled,
+        disabled_reason: e.disabled_reason.clone(),
+        utilization: e.utilization.map(|u| u / 100.0),
+        observed_at: snapshot.fetched_at,
+        incarnation,
+    })
 }
 
 /// `incarnation` is the holder of the account id the snapshot was fetched for, which the evidence names.

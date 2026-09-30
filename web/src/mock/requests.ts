@@ -408,6 +408,7 @@ export const requestById = new Map(REQUESTS.map((r) => [r.id, r]));
 /** A move reason the fixture draws for a single-attempt row, weighted toward the shedding round and a spent window. */
 const MIGRATION_REASONS: { value: PinMigrationReason; weight: number }[] = [
   { value: 'drain', weight: 1 },
+  { value: 'fast_lane', weight: 1 },
   { value: 'overage', weight: 2 },
   { value: 'return_to_plan', weight: 1 },
   { value: 'shed', weight: 3 },

@@ -59,7 +59,8 @@ function accountStatus(a: Rec, cooldowns: unknown[]): Account['status'] {
   if (state === 'reauth_required' || state === 'funding_required') return state;
   if (state === 'unpaired' || state === 'disconnected') return 'unpaired';
   if (!bool(a.enabled, true)) return 'paused';
-  if (cooldowns.length > 0) return 'cooldown';
+  // A fast-lane row holds fast-mode requests alone: the upstream still serves its standard traffic.
+  if (cooldowns.some((c) => str(rec(c).scope) !== 'fast')) return 'cooldown';
   return 'ready';
 }
 
@@ -355,17 +356,17 @@ const shapeOf = (v: unknown): RequestShape => { const s = rec(v); return { conte
 const responseOf = (v: unknown): AttemptResponse => { const r = rec(v); return { clearedInputTokens: numOrNull(r.cleared_input_tokens), inferenceGeo: strOrNull(r.inference_geo), refusalCategory: strOrNull(r.refusal_category), refusalRecommendedModel: strOrNull(r.refusal_recommended_model), servedModel: strOrNull(r.served_model), speed: strOrNull(r.speed), stopReason: strOrNull(r.stop_reason), stopSequence: strOrNull(r.stop_sequence) }; };
 
 /** The move reasons a `pin_migrated` event and a trace's `moved` carry. */
-export const PIN_MIGRATION_REASON_VALUES = ['cooldown', 'drain', 'mark', 'overage', 'return_to_plan', 'shed', 'spent'] as const satisfies readonly PinMigrationReason[];
+export const PIN_MIGRATION_REASON_VALUES = ['cooldown', 'drain', 'fast_lane', 'mark', 'overage', 'return_to_plan', 'shed', 'spent'] as const satisfies readonly PinMigrationReason[];
 /** The reasons a `pin_expired` event carries; the drawer words any other name as sent. */
 export const PIN_RELEASE_REASON_VALUES = [
-  'attempted', 'budget', 'client_error', 'cooldown', 'deleted', 'disconnected', 'expired', 'funding_required', 'overage', 'paused', 'reauth_required', 'released', 'spent', 'subscription_ended', 'unpaired', 'unserved',
+  'attempted', 'budget', 'client_error', 'cooldown', 'deleted', 'disconnected', 'expired', 'fast_credits', 'fast_rate_limit', 'funding_required', 'overage', 'paused', 'reauth_required', 'released', 'spent', 'subscription_ended', 'unpaired', 'unserved',
 ] as const satisfies readonly PinReleaseReason[];
 /**
  * The obstacles the router names for a candidate it passed over: the eligibility checks (`attempted`, `budget`,
- * `cooldown`, `operator`, `overage`, `subscription_ended`) and the partitions (`above_ceiling`, `at_cap`, `floor`,
- * `ranked`, `spent`, `winding_down`). The trace keeps any other name as sent.
+ * `cooldown`, `credits`, `operator`, `overage`, `subscription_ended`) and the partitions (`above_ceiling`, `at_cap`,
+ * `floor`, `ranked`, `spent`, `winding_down`). The trace keeps any other name as sent.
  */
-export const SKIP_OBSTACLE_VALUES = ['above_ceiling', 'at_cap', 'attempted', 'budget', 'cooldown', 'floor', 'operator', 'overage', 'ranked', 'spent', 'subscription_ended', 'winding_down'] as const;
+export const SKIP_OBSTACLE_VALUES = ['above_ceiling', 'at_cap', 'attempted', 'budget', 'cooldown', 'credits', 'floor', 'operator', 'overage', 'ranked', 'spent', 'subscription_ended', 'winding_down'] as const;
 export const PLACEMENT_RUNG_VALUES = ['content', 'static', 'with_main'] as const satisfies readonly Placement['rung'][];
 const tierOf = (v: unknown): SelectionTrace['tier'] => {
   const t = list(v);

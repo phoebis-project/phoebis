@@ -290,7 +290,10 @@ is never held while that account can still serve. A token count is never placed 
 its pin or the strategy decides it.
 
 The eligible set starts from every account that can serve the canonical model: enabled, paired or keyed, not
-`reauth_required` or `funding_required`, off cooldown, and not already tried by this request.
+`reauth_required` or `funding_required`, off cooldown, and not already tried by this request. A request sent fast is
+judged for the fast lane instead: it passes an account cooldown whose window is a plan window, and an account whose fast
+lane is cooling or whose usage credits the poll reads as unavailable cannot serve it; an API-key upstream serves it
+whenever it can serve at all.
 
 A pin is held per agent of a conversation, where a conversation is the session id
 or the conversation's own messages. It lasts `affinity_ttl_seconds` from its last
@@ -349,7 +352,8 @@ OAuth account and how it answered, and while an account backs off, since when an
 A live pin on a portable request moves only when its session sends a request, and only by one of five rules,
 checked in this order: spent, overage, return to plan, drain, and shed. The first rule that finds a destination
 moves the pin and names the move after itself. A pin on an account past its subscription end reaches none of
-them: the `subscription_ended` exclusion releases it, as a cooldown releases a cooled account's pin.
+them: the `subscription_ended` exclusion releases it, as a cooldown releases a cooled account's pin. A request sent
+fast takes neither the spent nor the overage rule, since it draws usage credits and no plan window.
 
 With `migrate_above_utilization` set, every rule prefers a cool destination, so a moved session does not land where the
 next round would shed it again. A cool sibling reads below the threshold minus 0.05 (`MIGRATE_BAND`) on every reading it
@@ -428,10 +432,12 @@ account in overage, so leaving overage switches the reading without a reset and 
 the right share on both. A keepalive probe's usage never counts. A figure priced through a cell or a factor the
 measurement campaign has not filled is marked as the cost reference marks the cell.
 
-Any move records a `pin_migrated` event with reason `cooldown`, `drain`, `mark`, `overage`, `return_to_plan`, `shed`, or
-`spent`: `cooldown` and `mark` when a failover or a credential mark moved the session, the others after the rule above
-that moved it. A pin released without a move records `pin_expired` with `reasons`, every fact the selection found
-against the account: `attempted`, `cooldown`, `deleted`, `expired`, `overage`, `paused`, `spent`, `subscription_ended`,
+Any move records a `pin_migrated` event with reason `cooldown`, `drain`, `fast_lane`, `mark`, `overage`,
+`return_to_plan`, `shed`, or `spent`: `cooldown` and `mark` when a failover or a credential mark moved the session,
+`fast_lane` when a fast-mode rejection moved the session, the others after the rule above that moved it. A pin released
+without a move records `pin_expired` with `reasons`, every fact the selection found against the account: `attempted`,
+`cooldown`, `deleted`, `expired`, `fast_credits` and `fast_rate_limit` (a fast request's pinned upstream whose usage
+credits the poll reads as unavailable, or whose fast lane cools), `overage`, `paused`, `spent`, `subscription_ended`,
 `unserved`, the account's state when it cannot serve (`disconnected`, `funding_required`, `reauth_required`,
 `unpaired`), or `released` when the selection found nothing else against the account, as with a move whose destination
 emptied. A pin whose creating request was answered 400, 401, 403, or 404, with no cooldown or mark on the account and no
@@ -467,6 +473,20 @@ evidence that the window is fine, and the rejection cools the whole account.
 | 429 without a valid Retry-After | Account-wide for the fallback duration | Yes |
 | 400 `invalid_request_error`, credit balance | Marked `funding_required` until cleared | Yes |
 | 200 SSE, first event `error`/`rate_limit_error` | As the 429 rows, using the response's Retry-After | Yes |
+
+**fast mode** (either kind, read ahead of the two tables above)
+
+| Upstream result to a fast request | Cooldown | Failover |
+| --- | --- | --- |
+| 429 or SSE `rate_limit_error`, overage-disabled reason on the head | Fast lane, reason `fast_credits` | Yes |
+| 429 or SSE `rate_limit_error`, no such reason, no shared window rejected | Fast lane, reason `fast_rate_limit` | Yes |
+| 429 with a shared window rejected, or an api_key spend cap | The rows above | Yes |
+
+A `fast_credits` row holds until the month starts for `org_spend_cap_reached`, else until the overage reset the head
+names, else for one hour, and the poll's next enabled reading lifts it earlier. A `fast_rate_limit` row holds until the
+later fast window reset the head names, else until `Retry-After`, else for ten minutes. A fast-lane cooldown holds fast
+requests alone; standard requests on the account are unaffected, and `DELETE /admin/accounts/{id}/cooldowns/fast`
+clears it.
 
 **shared** (either kind)
 
@@ -590,6 +610,16 @@ reached its spend budget answers `429` with the `overage` claim, the same one an
 [Pools](#pools)), and a probe pinned to a member at its budget is answered with the budget period's end as its
 reset, whatever its siblings hold.
 
+A request sent fast that no upstream's fast lane can take is answered locally, before any dial, with `429` and the error
+type `rate_limit_error`. While any upstream holds only a fast rate limit, the error code is `fast_lane_exhausted`, the
+message `every account in this pool is at its fast limit`, and `retry-after` the earliest fast rate-limit reset, in
+whole seconds rounded up and at least one. When every upstream the pool could use is refused usage credits, the error
+code is `fast_credits_unavailable`, the message `no account in this pool can draw usage credits for fast mode`, and
+`anthropic-ratelimit-unified-overage-disabled-reason` carries the session's pinned upstream's reason, else the first
+upstream's. The router never waits for a fast reset in place: a fast `429` timed by `Retry-After` alone retries in
+place under the pool's bound as any throttle does ([retry in place](#retry-in-place)), and any other moves the request
+to a sibling or ends in one of these answers.
+
 A model every account in the pool has rejected within the rejection window answers `404` with error code
 `model_rejected` and the message `every account in this pool rejected the model`; the
 [cooldowns table](#cooldowns-and-failover) says how a rejection is recorded. A pool with no member answers
@@ -630,6 +660,10 @@ Whether the flag still counts is one rule every reader applies alike, the select
 included: an account counts as in overage while the reset its evidence names is ahead of now; evidence that names
 none stands for the cooldown fallback (`routing.cooldown_fallback_seconds`) past its observation, and is then
 re-read against the same rule.
+
+The poll's `extra_usage` state also decides fast eligibility: an upstream whose credits read disabled, name a reason,
+or stand at their limit serves no fast request until a later reading shows room. A request sent fast draws usage
+credits and no plan window, so neither `prefer_plan` nor `never` holds it off an upstream in overage.
 
 ## Subscription end
 

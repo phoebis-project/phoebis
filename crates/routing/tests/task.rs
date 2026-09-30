@@ -4,11 +4,12 @@ use std::time::Duration;
 
 use phoebis_oauth::{Clock, ExtraUsage, UsageSnapshot, UsageWindow};
 use phoebis_routing::{
-    lane_key, resolve, sample_from_usage, spawn, AffinityReport, BandWeight, BurnRates,
-    ClientClass, Exhaustion, KeyRefusal, MemberSpend, PinRef, PinUsage, Presented,
-    RateTable, Rates, Refusal, ReloadError, Report, ResolveError, RouterConfig, RouterHandle,
-    RoutingState, SelectRequest, SelectResult, SharePricer, UtilizationSample, WindowReading,
-    FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
+    credits_from_usage, lane_key, resolve, sample_from_usage, spawn, AffinityReport, BandWeight,
+    BurnRates, ClientClass, CreditsState, Exhaustion, KeyRefusal, MemberSpend, PinRef,
+    PinUsage, Presented, RateTable, Rates, Refusal, ReloadError, Report, ResolveError,
+    RouterConfig, RouterHandle, RoutingState, SelectRequest, SelectResult, SharePricer,
+    UtilizationSample, WindowReading, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR,
+    SEVEN_DAY, SEVEN_DAY_FABLE,
 };
 use phoebis_store::{
     key_prefix, AccountKind, AccountRow, AccountState, Affinity, AffinitySource, ApiKeyRow,
@@ -156,6 +157,7 @@ fn request(handle: &phoebis_routing::RouterHandle, session: Option<&str>, now: i
         parent_agent_id: None,
         holds: Vec::new(),
         lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
+        fast: false,
     }
 }
 
@@ -606,6 +608,7 @@ async fn a_persisted_resolution_keys_the_dated_pin_after_a_restart_before_any_re
             parent_agent_id: None,
             holds: Vec::new(),
             lane: lane_key("claude-sonnet-4-5", "standard", "none", "-"),
+            fast: false,
         }
     };
     let epoch;
@@ -732,6 +735,7 @@ async fn resolve_answers_once_the_state_holds_the_spellings_pins_and_cooldowns_u
             parent_agent_id: None,
             holds: Vec::new(),
             lane: lane_key("claude-sonnet-4-5", "standard", "none", "-"),
+            fast: false,
         })
         .await
         .unwrap();
@@ -2943,6 +2947,231 @@ async fn a_fail_over_after_a_cooldown_names_cooldown_in_the_trace() {
         next_event(&mut events).await,
         RouterEvent::PinMigrated { reason, .. } if reason == "cooldown"
     ));
+}
+
+#[tokio::test]
+async fn a_fast_row_with_a_pin_invalidates_it_under_fast_lane() {
+    use phoebis_routing::RouterEvent;
+    let store = seeded(&["a", "b"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    let first = handle
+        .select(request(&handle, Some("s1"), 1_000))
+        .await
+        .unwrap();
+    let SelectResult::Selected(selection) = &first.result else {
+        panic!("{:?}", first.result)
+    };
+    // Both members sit at one priority, so the strategy may start the session on either.
+    let from = selection.account.id.clone();
+    let to = if from == "a" { "b" } else { "a" };
+    let pin = selection.pin.clone().unwrap();
+    assert!(matches!(
+        next_event(&mut events).await,
+        RouterEvent::PinCreated { .. }
+    ));
+    handle.report(Report::Cooldown {
+        account_id: from.clone(),
+        row: CooldownRow {
+            account_id: from.clone(),
+            scope: "fast".into(),
+            until: 1_000 + 600_000,
+            set_at: 0,
+            reason: FAST_RATE_LIMIT_REASON.into(),
+            window: "fast".into(),
+            source_request_id: None,
+            incarnation: 1,
+        },
+        pin: Some(pin),
+        lifecycle_generation: 1,
+        credential_generation: 1,
+        incarnation: 1,
+    });
+    assert!(matches!(
+        next_event(&mut events).await,
+        RouterEvent::CooldownSet { scope, .. } if scope == "fast"
+    ));
+    // The relay's next selection of the same request, with the account it just tried.
+    let second = handle
+        .select(SelectRequest {
+            attempted: vec![from.clone()],
+            ..request(&handle, Some("s1"), 1_100)
+        })
+        .await
+        .unwrap();
+    let SelectResult::Selected(sel) = &second.result else {
+        panic!("{:?}", second.result)
+    };
+    assert_eq!(
+        (sel.account.id.as_str(), sel.trace.moved),
+        (to, Some("fast_lane"))
+    );
+    assert!(matches!(
+        next_event(&mut events).await,
+        RouterEvent::PinMigrated { from_account, to_account, reason, .. }
+            if from_account == from && to_account == to && reason == "fast_lane"
+    ));
+}
+
+/// The poll's extra-usage state of account `a`, read at `fetched_at` and converted as the poll converts it.
+fn credits_at(
+    enabled: bool,
+    reason: Option<&str>,
+    utilization: Option<f64>,
+    fetched_at: i64,
+) -> Report {
+    let snapshot = UsageSnapshot {
+        account_id: "a".into(),
+        identity_generation: 1,
+        fetched_at,
+        windows: vec![],
+        fable_window: None,
+        extra_usage: Some(ExtraUsage {
+            is_enabled: enabled,
+            monthly_limit: None,
+            used_credits: None,
+            utilization,
+            currency: None,
+            disabled_reason: reason.map(String::from),
+        }),
+        raw_keys: vec![],
+        error: None,
+    };
+    Report::Credits {
+        account_id: "a".into(),
+        state: credits_from_usage(&snapshot, 1).expect("the snapshot carries extra usage"),
+        incarnation: 1,
+    }
+}
+
+async fn fast_rows(handle: &RouterHandle) -> Vec<String> {
+    handle
+        .cooldowns()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|row| row.scope == "fast")
+        .map(|row| row.reason)
+        .collect()
+}
+
+#[tokio::test]
+async fn an_enabled_credits_state_with_room_lifts_a_fast_credits_row_and_a_plan_sample_lifts_no_fast_row(
+) {
+    use phoebis_routing::RouterEvent;
+    let store = seeded_oauth(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    handle.report(cooled(
+        "a",
+        "fast",
+        1_000 + 5 * HOUR,
+        FAST_CREDITS_REASON,
+        "out_of_credits",
+    ));
+    assert!(matches!(
+        next_event(&mut events).await,
+        RouterEvent::CooldownSet { scope, .. } if scope == "fast"
+    ));
+    now.store(2_000, Ordering::SeqCst);
+    handle.report(observed(
+        "a",
+        sample_with(2_000, FIVE_HOUR, 0.4, None).with(
+            SEVEN_DAY,
+            WindowReading {
+                utilization: 0.4,
+                reset: None,
+                observed_at: 2_000,
+            },
+        ),
+    ));
+    handle.report(credits_at(true, None, Some(20.0), 900));
+    handle.report(credits_at(false, Some("out_of_credits"), None, 2_500));
+    handle.report(credits_at(true, None, Some(100.0), 2_600));
+    assert_eq!(
+        fast_rows(&handle).await,
+        [FAST_CREDITS_REASON],
+        "a plan sample, a reading from before the rejection, a refusal and credits at their limit lift nothing"
+    );
+    handle.report(credits_at(true, None, Some(20.0), 3_000));
+    loop {
+        match next_event(&mut events).await {
+            RouterEvent::CooldownCleared {
+                account_id,
+                scope,
+                cause,
+                ..
+            } => {
+                assert_eq!(
+                    (account_id.as_str(), scope.as_str(), cause),
+                    ("a", "fast", "recovered")
+                );
+                break;
+            }
+            RouterEvent::CooldownSet { .. } => panic!("no row was set"),
+            _ => {}
+        }
+    }
+    assert!(fast_rows(&handle).await.is_empty());
+    handle.report(cooled(
+        "a",
+        "fast",
+        1_000 + 5 * HOUR,
+        FAST_RATE_LIMIT_REASON,
+        "fast",
+    ));
+    handle.report(credits_at(true, None, Some(20.0), 4_000));
+    assert_eq!(
+        fast_rows(&handle).await,
+        [FAST_RATE_LIMIT_REASON],
+        "a credits reading says nothing about the fast lane's own rate limit"
+    );
+}
+
+#[tokio::test]
+async fn a_credits_state_older_than_the_held_one_is_dropped() {
+    let mut state = RoutingState::from_load(RoutingLoad::default());
+    let reading = |enabled: bool, observed_at: i64| CreditsState {
+        enabled,
+        disabled_reason: None,
+        utilization: None,
+        observed_at,
+        incarnation: 1,
+    };
+    assert!(state.record_credits("a", reading(false, 2_000)));
+    assert!(
+        !state.record_credits("a", reading(true, 1_500)),
+        "an older reading"
+    );
+    assert!(
+        !state.record_credits("a", reading(true, 2_000)),
+        "a reading no newer than the held one"
+    );
+    assert_eq!(
+        state.credits("a").map(|c| (c.enabled, c.observed_at)),
+        Some((false, 2_000))
+    );
+    assert!(state.record_credits("a", reading(true, 2_500)));
+    assert_eq!(state.credits("a").and_then(CreditsState::blocked), None);
+
+    // Through the task: the dropped reading lifts nothing, the newer one does.
+    let store = seeded_oauth(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
+    handle.report(cooled(
+        "a",
+        "fast",
+        1_000 + 5 * HOUR,
+        FAST_CREDITS_REASON,
+        "out_of_credits",
+    ));
+    handle.report(credits_at(false, Some("out_of_credits"), None, 3_000));
+    handle.report(credits_at(true, None, Some(10.0), 2_500));
+    assert_eq!(fast_rows(&handle).await, [FAST_CREDITS_REASON]);
+    handle.report(credits_at(true, None, Some(10.0), 3_500));
+    assert!(fast_rows(&handle).await.is_empty());
 }
 
 #[tokio::test]

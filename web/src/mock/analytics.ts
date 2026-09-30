@@ -382,7 +382,7 @@ export function burnOf(rows: HourlyRollup[], range: Range, groupBy: BurnGroup): 
 }
 
 /** The reason each hour's moves are filed under, in turn, weighted toward the failover and the shedding round. */
-const MOVE_TURNS: PinMigrationReason[] = ['cooldown', 'shed', 'cooldown', 'spent', 'shed', 'overage', 'cooldown', 'return_to_plan', 'drain', 'mark'];
+const MOVE_TURNS: PinMigrationReason[] = ['cooldown', 'shed', 'cooldown', 'spent', 'shed', 'overage', 'cooldown', 'return_to_plan', 'drain', 'mark', 'fast_lane'];
 
 /** The account rollups' moves into each account, with the cache the first request after each one wrote again. */
 export function rewritesOf(rollups: AccountRollup[], range: Range): { moves: Record<string, number>; points: RewritePoint[] } {

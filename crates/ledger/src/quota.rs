@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use phoebis_oauth::{UsageService, UsageSnapshot};
 use phoebis_relay::UnifiedHeaders;
-use phoebis_routing::{sample_from_usage, Report, RouterHandle};
+use phoebis_routing::{credits_from_usage, sample_from_usage, Report, RouterHandle};
 use phoebis_store::{AccountKind, AccountRow, AccountState, Store};
 use phoebis_transport::response::ResponseHead;
 use tokio::task::JoinSet;
@@ -367,9 +367,9 @@ impl QuotaPoll {
     }
 
     /// One account's snapshot: recorded to the ledger when it is clean and, when `router` is given, reported
-    /// to it as `Report::Sample` and, when the snapshot carries the evidence, `Report::Overage`, before this
-    /// returns; the clean snapshot is answered. The scheduler and the startup step both call it with the
-    /// router. The profile is `refresh_profile`'s.
+    /// to it as `Report::Sample` and, when the snapshot carries the evidence, `Report::Overage` and
+    /// `Report::Credits`, before this returns; the clean snapshot is answered. The scheduler and the startup step
+    /// both call it with the router. The profile is `refresh_profile`'s.
     pub async fn poll_account(
         usage: &UsageService,
         ledger: &Ledger,
@@ -396,6 +396,13 @@ impl QuotaPoll {
                         router.report(Report::Overage {
                             account_id: account.id.clone(),
                             evidence,
+                            incarnation: account.incarnation,
+                        });
+                    }
+                    if let Some(state) = credits_from_usage(&snapshot, account.incarnation) {
+                        router.report(Report::Credits {
+                            account_id: account.id.clone(),
+                            state,
                             incarnation: account.incarnation,
                         });
                     }

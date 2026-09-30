@@ -58,6 +58,8 @@ const PIN_RELEASE_LABEL: Record<PinReleaseReason, string> = {
   deleted: 'upstream deleted',
   disconnected: 'upstream disconnected',
   expired: 'pin idle past the affinity window',
+  fast_credits: 'usage credits unavailable for fast mode',
+  fast_rate_limit: 'fast lane rate limited',
   funding_required: 'funding required',
   overage: 'in overage',
   paused: 'upstream paused',

@@ -22,18 +22,19 @@ pub use resolve::{resolve, Candidate, ResolveError};
 pub use select::{
     effective_warm, lane_key, release_reasons, select, warmth_of, ClientClass, CohortHold,
     Exhaustion, HoldFacts, MigrateReason, Placement, Refusal,
-    SelectRequest, SelectResult, Selection, SelectionTrace, Skipped, Warmth, MIGRATE_BAND,
-    MODEL_REJECTED_REASON, REFRESHING_CLASSES,
+    SelectRequest, SelectResult, Selection, SelectionTrace, Skipped, Warmth, FAST_CREDITS_REASON,
+    FAST_RATE_LIMIT_REASON, MIGRATE_BAND, MODEL_REJECTED_REASON, REFRESHING_CLASSES,
 };
 pub use snapshot::{KeyRefusal, Presented, RegistrySnapshot};
 pub use state::{
-    budget_deadline, burn_decayed, shed_marks, warm, AccountTicket, BurnUnit, EvidenceSource,
-    InFlight, KeyPermit, MemberSpend, OverageEvidence, PinRef, PinUsage, Purged, RateTable, Rates,
-    RoutingState, SharePricer, StateWrite, UtilizationSample, WindowReading, BUCKET_LIFE_MS,
-    FIVE_HOUR, IN_FLIGHT_RECLAIM_MS, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
+    budget_deadline, burn_decayed, cooldown_holds, is_plan_window, shed_marks, warm, AccountTicket,
+    BurnUnit, CreditsState, EvidenceSource, InFlight, KeyPermit, MemberSpend, OverageEvidence,
+    PinRef, PinUsage, Purged, RateTable, Rates, RoutingState, SharePricer, StateWrite,
+    UtilizationSample, WindowReading, BUCKET_LIFE_MS, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS, SEVEN_DAY,
+    SEVEN_DAY_FABLE, WEEK_MS,
 };
 pub use task::{
-    sample_from_usage, spawn, BandWeight, BurnRates, ReloadError, Report, RouterConfig,
-    RouterEvent, RouterGone, RouterHandle, SelectAnswer,
+    credits_from_usage, sample_from_usage, spawn, BandWeight, BurnRates, ReloadError, Report,
+    RouterConfig, RouterEvent, RouterGone, RouterHandle, SelectAnswer,
 };
 pub use windows::window_for;

@@ -991,6 +991,63 @@ pub fn json_429_unified(reset_secs: i64, claim: &str) -> Respond {
     }
 }
 
+/// A fast request's 429 for the fast lane's own limit: `retry-after` when given, and the six `anthropic-fast-*`
+/// headers when the resets are given, the input family's reset first.
+pub fn json_429_fast_rate_limit(
+    retry_after: Option<u64>,
+    fast_resets: Option<(&str, &str)>,
+) -> Respond {
+    let mut headers: Vec<(String, String)> = Vec::new();
+    if let Some(seconds) = retry_after {
+        headers.push(("retry-after".into(), seconds.to_string()));
+    }
+    if let Some((input, output)) = fast_resets {
+        for (family, limit, reset) in [("input", "400000", input), ("output", "80000", output)] {
+            let name = |part: &str| format!("anthropic-fast-{family}-tokens-{part}");
+            headers.push((name("limit"), limit.into()));
+            headers.push((name("remaining"), "0".into()));
+            headers.push((name("reset"), reset.into()));
+        }
+    }
+    Respond::Json {
+        status: 429,
+        headers,
+        body: br#"{"type":"error","error":{"type":"rate_limit_error","message":"fast limit"}}"#
+            .to_vec(),
+    }
+}
+
+/// A fast request's 429 for usage credits it cannot draw: the overage-disabled reason, the overage reset when
+/// given, and both shared windows `allowed`, so no plan window reads as the one that rejected.
+pub fn json_429_fast_credits(reason: &str, overage_reset: Option<i64>) -> Respond {
+    let mut headers: Vec<(String, String)> = vec![
+        (
+            "anthropic-ratelimit-unified-5h-status".into(),
+            "allowed".into(),
+        ),
+        (
+            "anthropic-ratelimit-unified-7d-status".into(),
+            "allowed".into(),
+        ),
+        (
+            "anthropic-ratelimit-unified-overage-disabled-reason".into(),
+            reason.into(),
+        ),
+    ];
+    if let Some(reset) = overage_reset {
+        headers.push((
+            "anthropic-ratelimit-unified-overage-reset".into(),
+            reset.to_string(),
+        ));
+    }
+    Respond::Json {
+        status: 429,
+        headers,
+        body: br#"{"type":"error","error":{"type":"rate_limit_error","message":"no credits"}}"#
+            .to_vec(),
+    }
+}
+
 pub fn json_200() -> Respond {
     Respond::Json {
         status: 200,

@@ -65,7 +65,8 @@ async fn next_trace(h: &Harness, session: &str) -> SelectionTrace {
     let key = snapshot.key("desktop").expect("the harness key");
     let canonical = h.catalog.canonical_for(MODEL).await;
     let candidates = resolve(&snapshot, key, &canonical, MODEL).unwrap();
-    let lane = lane_key(&canonical, "standard", "none", "-");
+    // The profile body's own lane, so the selection reads the session's pin on the lane it was written under.
+    let lane = lane_key(&canonical, "standard", "enabled:31999", "-");
     let answer = h
         .router
         .select(SelectRequest {
@@ -92,6 +93,7 @@ async fn next_trace(h: &Harness, session: &str) -> SelectionTrace {
             parent_agent_id: None,
             holds: Vec::new(),
             lane,
+            fast: false,
         })
         .await
         .unwrap();

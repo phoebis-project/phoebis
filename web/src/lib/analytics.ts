@@ -5,6 +5,7 @@ import { fmtCompact, fmtInt, fmtPct } from '@/lib/format';
 export const PIN_MIGRATION_LABEL: Record<PinMigrationReason, string> = {
   cooldown: 'rate limited',
   drain: 'winding down',
+  fast_lane: 'fast lane cooling',
   mark: 'upstream marked',
   overage: 'overage',
   return_to_plan: 'returned to plan',
