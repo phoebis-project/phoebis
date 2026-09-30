@@ -14,7 +14,7 @@ use phoebis_profile::fixtures::{body, inference_head, BodyFixture, FixtureKind};
 use phoebis_routing::{CreditsState, Report};
 use phoebis_store::CooldownRow;
 use common::*;
-use fake_upstream::{FakeUpstream, Rule};
+use fake_upstream::{FakeUpstream, Respond, Rule};
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 
@@ -210,7 +210,7 @@ async fn with_every_account_credits_blocked_the_router_answers_fast_credits_unav
         rows(&h.router.cooldowns().await.unwrap()),
         [(
             "a",
-            "fast",
+            "fast_credits",
             "fast_credits",
             "out_of_credits",
             NOW + HOUR + 1_000
@@ -266,6 +266,103 @@ async fn with_every_account_credits_blocked_the_router_answers_fast_credits_unav
     );
     assert_eq!(up.requests().len(), dialed, "no upstream was dialled");
     up.shutdown().await;
+}
+
+/// Two fast requests in flight on one upstream at once, one refused its usage credits and one rate limited: the
+/// first is held at the upstream while the second is answered, so the second's refusal lands first.
+#[tokio::test]
+async fn concurrent_credits_and_rate_limit_refusals_keep_a_row_each_and_a_credits_lift_leaves_the_rate_limit(
+) {
+    let rate_limit = || json_429_fast_rate_limit(None, Some(("1060", "1090")));
+    let credits = || json_429_fast_credits("out_of_credits", None);
+    for (held, answered, order) in [
+        (
+            credits(),
+            rate_limit(),
+            "a rate limit, then a credits refusal",
+        ),
+        (
+            rate_limit(),
+            credits(),
+            "a credits refusal, then a rate limit",
+        ),
+    ] {
+        let up = messages_up().await;
+        up.add_credential_rule(A, "/v1/messages", json_200());
+        up.push_credential_rule(A, "/v1/messages", Respond::Gated(Box::new(held)));
+        up.push_credential_rule(A, "/v1/messages", answered);
+        let h = harness(&up, &[oauth("a", A, 0)], PoolSpec::default()).await;
+        let app = h.app.clone();
+        let first = tokio::spawn(async move { app.oneshot(fast_request("s1")).await.unwrap() });
+        wait_for(Duration::from_secs(2), || {
+            (credentials_seen(&up).len() == 1).then_some(())
+        })
+        .await;
+        let second = h.app.clone().oneshot(fast_request("s2")).await.unwrap();
+        assert_eq!(second.status(), 429, "{order}");
+        body_json(second).await;
+        up.release();
+        let first = first.await.unwrap();
+        assert_eq!(first.status(), 429, "{order}");
+        body_json(first).await;
+        assert_eq!(
+            rows(&h.router.cooldowns().await.unwrap()),
+            [
+                ("a", "fast", "fast_rate_limit", "fast", 1_090_000 + 1_000),
+                (
+                    "a",
+                    "fast_credits",
+                    "fast_credits",
+                    "out_of_credits",
+                    NOW + HOUR + 1_000
+                ),
+            ],
+            "{order}: each refusal keeps its own row and deadline"
+        );
+        let code = |resp: &axum::http::Response<Body>| {
+            resp.headers()["x-phoebis-error-code"]
+                .to_str()
+                .unwrap()
+                .to_string()
+        };
+        let resp = h.app.clone().oneshot(fast_request("s3")).await.unwrap();
+        assert_eq!(
+            code(&resp),
+            "fast_credits_unavailable",
+            "{order}: the credits row answers ahead of the rate limit beside it"
+        );
+        body_json(resp).await;
+        // The poll reads a's credits back with room, after both refusals.
+        h.router.report(Report::Credits {
+            account_id: "a".into(),
+            state: CreditsState {
+                enabled: true,
+                disabled_reason: None,
+                utilization: Some(0.2),
+                observed_at: NOW + 1,
+                incarnation: 1,
+            },
+            incarnation: 1,
+        });
+        assert_eq!(
+            rows(&h.router.cooldowns().await.unwrap()),
+            [("a", "fast", "fast_rate_limit", "fast", 1_090_000 + 1_000)],
+            "{order}: the credits reading lifts its own row alone"
+        );
+        let resp = h.app.clone().oneshot(fast_request("s4")).await.unwrap();
+        assert_eq!(
+            code(&resp),
+            "fast_lane_exhausted",
+            "{order}: the rate limit still refuses until its own reset"
+        );
+        body_json(resp).await;
+        assert_eq!(
+            credentials_seen(&up),
+            [A, A],
+            "{order}: nothing is dialled after the two refusals"
+        );
+        up.shutdown().await;
+    }
 }
 
 #[tokio::test]

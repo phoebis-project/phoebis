@@ -30,6 +30,9 @@ pub struct PinRef {
     pub agent_id: String,
     pub model: String,
     pub epoch: u64,
+    /// The lane the pin held once the selection that handed this out placed or renewed it. A renewal keeps the
+    /// epoch across a lane change, so a report whose effect is bound to a lane checks this as well.
+    pub lane: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -114,12 +117,12 @@ pub fn is_plan_window(window: &str) -> bool {
 /// and the keepalive's gate both call: whether the row keeps a request of this speed for `canonical_model` off its
 /// account. An `account` row holds either speed unless the request is fast and the row's window is a plan window,
 /// since a fast request draws usage credits and no plan window; the model's `model:` row holds either speed; the
-/// `fast` row holds a fast request alone. For the same reason no overage hold applies to a fast request, a rule
-/// both callers apply beside this one.
+/// fast lane's two rows, `fast` (its rate limit) and `fast_credits` (its usage-credits refusal), hold a fast request
+/// alone. For the same reason no overage hold applies to a fast request, a rule both callers apply beside this one.
 pub fn cooldown_holds(scope: &str, window: &str, canonical_model: &str, fast: bool) -> bool {
     match scope {
         "account" => !(fast && is_plan_window(window)),
-        "fast" => fast,
+        "fast" | "fast_credits" => fast,
         _ => scope.strip_prefix("model:") == Some(canonical_model),
     }
 }
@@ -768,6 +771,15 @@ impl RoutingState {
         }
     }
 
+    /// `canonical` applied to a lane's model part, the one ahead of its last three: a lane composed under a
+    /// spelling before its resolution landed then names the model its pin and entries were relaned to.
+    pub fn canonical_lane(&self, lane: &str) -> String {
+        match lane.rmatch_indices('|').nth(2) {
+            Some((at, _)) => format!("{}{}", self.canonical(&lane[..at]), &lane[at..]),
+            None => lane.to_string(),
+        }
+    }
+
     pub fn pin(&self, key: &PinKey) -> Option<&PinRow> {
         let canonical = PinKey {
             model: self.canonical(&key.model).to_string(),
@@ -960,7 +972,7 @@ impl RoutingState {
     ) -> Option<&CooldownRow> {
         let canonical_model = self.canonical(canonical_model);
         let model_scope = format!("model:{canonical_model}");
-        ["account", "fast", model_scope.as_str()]
+        ["account", "fast", "fast_credits", model_scope.as_str()]
             .into_iter()
             .filter_map(|scope| {
                 self.cooldowns
@@ -2165,6 +2177,11 @@ mod tests {
                 fast,
                 "the fast lane's own row"
             );
+            assert_eq!(
+                cooldown_holds("fast_credits", "out_of_credits", MODEL, fast),
+                fast,
+                "the fast lane's credits row"
+            );
             assert!(
                 cooldown_holds(&own_model, "retry_after", MODEL, fast),
                 "the model's own row, fast {fast}"
@@ -2205,6 +2222,17 @@ mod tests {
             until(true),
             Some(4_000),
             "a fast request passes the plan window and reads the later of the fast and the model row"
+        );
+        state.record_cooldown(row("fast_credits", 4_500, "out_of_credits"));
+        let until = |fast: bool| {
+            state
+                .blocking_cooldown("a", MODEL, 1_000, fast)
+                .map(|r| r.until)
+        };
+        assert_eq!(
+            (until(false), until(true)),
+            (Some(5_000), Some(4_500)),
+            "the credits row holds a fast request alone, beside the fast lane's rate limit"
         );
     }
 }

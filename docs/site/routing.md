@@ -428,8 +428,10 @@ A request that carries `x-claude-code-context-compacted` reads cold whatever els
 session goes first in the round's order on the request that carries the fact. A body the router cannot read refreshes
 the pin on every request on the pin's lane; the first one after a request on another lane reads it cold, as any lane
 change does. A keepalive probe replays another request's headers and body, so the router judges none of them: a probe
-never colds a session, and its renewal counts as a refresh. A `count_tokens` request creates no cache entry, so it
-neither refreshes nor colds the pin and leaves its cache TTL as it was.
+never colds a session, and its renewal counts as a refresh while the pin still holds the lane the probe was sent on; a
+renewal that lands after the session moved to another lane refreshed another cache and leaves the pin as it was. A
+`count_tokens` request creates no cache entry, so it neither refreshes nor colds the pin and leaves its cache TTL as it
+was.
 
 **Burn** Each pin keeps its usage over `burn_window_seconds` as typed tokens per hour (input, cache read, 5-minute and
 1-hour cache writes, output) for the pin's one model, in two copies: one plain and one weighed by the peak band at each
@@ -443,14 +445,14 @@ Any move records a `pin_migrated` event with reason `cooldown`, `drain`, `fast_l
 `return_to_plan`, `shed`, or `spent`: `cooldown` and `mark` when a failover or a credential mark moved the session,
 `fast_lane` when a fast-mode rejection moved the session, the others after the rule above that moved it. A pin released
 without a move records `pin_expired` with `reasons`, every fact the selection found against the account: `attempted`,
-`cooldown`, `deleted`, `expired`, `fast_credits` and `fast_rate_limit` (a fast request's pinned upstream whose usage
-credits the poll reads as unavailable, or whose fast lane cools), `overage`, `paused`, `spent`, `subscription_ended`,
-`unserved`, the account's state when it cannot serve (`disconnected`, `funding_required`, `reauth_required`,
-`unpaired`), or `released` when the selection found nothing else against the account, as with a move whose destination
-emptied. A pin whose creating request was answered 400, 401, 403, or 404, with no cooldown or mark on the account and no
-other turn of the session renewing it meanwhile, records the single reason `client_error`: it never served, so the
-session's next request is placed afresh rather than moved. Releasing a session by hand, from the Sessions view or
-`POST /admin/sessions/{key}/{session}/release`, expires its pin the same way.
+`cooldown`, `deleted`, `expired`, `fast_credits` and `fast_rate_limit` (a fast request's pinned upstream whose
+`fast_credits` row stands or whose usage credits the poll reads as unavailable, or whose `fast` row stands), `overage`,
+`paused`, `spent`, `subscription_ended`, `unserved`, the account's state when it cannot serve (`disconnected`,
+`funding_required`, `reauth_required`, `unpaired`), or `released` when the selection found nothing else against the
+account, as with a move whose destination emptied. A pin whose creating request was answered 400, 401, 403, or 404, with
+no cooldown or mark on the account and no other turn of the session renewing it meanwhile, records the single reason
+`client_error`: it never served, so the session's next request is placed afresh rather than moved. Releasing a session
+by hand, from the Sessions view or `POST /admin/sessions/{key}/{session}/release`, expires its pin the same way.
 
 ## Cooldowns and failover
 
@@ -485,17 +487,20 @@ evidence that the window is fine, and the rejection cools the whole account.
 
 | 429 or SSE `rate_limit_error` to a fast request | Cooldown | Failover |
 | --- | --- | --- |
-| Overage-disabled reason on the head | Fast lane, reason `fast_credits` | Yes |
-| No such reason, 5h and 7d not rejected, no api_key spend cap | Fast lane, reason `fast_rate_limit` | Yes |
+| Overage-disabled reason on the head | Scope `fast_credits`, reason `fast_credits` | Yes |
+| No such reason, 5h and 7d not rejected, no api_key spend cap | Scope `fast`, reason `fast_rate_limit` | Yes |
 | No such reason, the 5h or 7d window rejected, or an api_key spend cap | The rows above | Yes |
 
 The overage-disabled reason decides first, whatever the shared windows read, since a fast request draws usage credits
 and no plan window; a rejected top-level `status` that names neither shared window leaves the rate limit on the fast
-lane. A `fast_credits` row holds until the month starts for `org_spend_cap_reached`, else until the overage reset the
-head names, else for one hour, and the poll's next enabled reading lifts it earlier. A `fast_rate_limit` row holds until
-the later fast window reset the head names, else until `Retry-After`, else for ten minutes. A fast-lane cooldown holds
-fast requests alone; standard requests on the account are unaffected, and `DELETE /admin/accounts/{id}/cooldowns/fast`
-clears it.
+lane. The two refusals keep a row each, so each lifts on its own evidence. A `fast_credits` row holds until the month
+starts for `org_spend_cap_reached`, else until the overage reset the head names, else for one hour, and the poll's next
+enabled reading lifts it earlier, leaving a `fast` row beside it standing. A `fast` row holds until the later fast
+window reset the head names, else until `Retry-After`, else for ten minutes. Both rows hold fast requests alone;
+standard requests on the account are unaffected. A fast refusal moves the session's pin only while the pin still holds
+the lane the refused request was sent on, since a session that has moved on to another lane no longer asks for the fast
+lane. `DELETE /admin/accounts/{id}/cooldowns/fast` and `DELETE /admin/accounts/{id}/cooldowns/fast_credits` clear
+them.
 
 **shared** (either kind)
 

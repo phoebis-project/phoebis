@@ -1401,6 +1401,7 @@ async fn a_pinned_sessions_burn_reads_its_share_rate_on_the_account_it_sits_on()
             agent_id: "main".into(),
             model: "claude-opus-5".into(),
             epoch: 1,
+            lane: phoebis_routing::lane_key("claude-opus-5", "standard", "none", "-"),
         },
         now,
         usage: Some(phoebis_routing::PinUsage {
@@ -1737,7 +1738,7 @@ async fn a_request_row_answers_its_fork_fields() {
 }
 
 #[tokio::test]
-async fn deleting_the_fast_cooldown_clears_the_fast_lane_and_leaves_the_account_row() {
+async fn deleting_either_fast_cooldown_clears_its_own_row_and_leaves_the_others() {
     use common::{delete, get, json, login, NOW};
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
@@ -1761,11 +1762,16 @@ async fn deleting_the_fast_cooldown_clears_the_fast_lane_and_leaves_the_account_
     parts
         .router
         .report(cooled("fast", phoebis_routing::FAST_RATE_LIMIT_REASON, "fast"));
+    parts.router.report(cooled(
+        "fast_credits",
+        phoebis_routing::FAST_CREDITS_REASON,
+        "out_of_credits",
+    ));
     parts
         .router
         .report(cooled("account", "rate_limit", "five_hour"));
-    // A query queues behind both reports, so the rows it answers are the ones the route will read.
-    assert_eq!(parts.router.cooldowns().await.unwrap().len(), 2);
+    // A query queues behind the reports, so the rows it answers are the ones the route will read.
+    assert_eq!(parts.router.cooldowns().await.unwrap().len(), 3);
     let shown = json(get(&parts.app, "/admin/accounts/business", Some(&cookie)).await).await;
     let mut scopes: Vec<&str> = shown["cooldowns"]
         .as_array()
@@ -1774,22 +1780,32 @@ async fn deleting_the_fast_cooldown_clears_the_fast_lane_and_leaves_the_account_
         .map(|c| c["scope"].as_str().unwrap())
         .collect();
     scopes.sort_unstable();
-    assert_eq!(scopes, ["account", "fast"]);
-    let path = "/admin/accounts/business/cooldowns/fast";
-    assert_eq!(delete(&parts.app, path, Some(&cookie)).await.status(), 204);
-    assert_eq!(
+    assert_eq!(scopes, ["account", "fast", "fast_credits"]);
+    let standing = || async {
         parts
             .router
             .cooldowns()
             .await
             .unwrap()
-            .iter()
-            .map(|c| c.scope.as_str())
-            .collect::<Vec<_>>(),
+            .into_iter()
+            .map(|c| c.scope)
+            .collect::<Vec<_>>()
+    };
+    let path = "/admin/accounts/business/cooldowns/fast";
+    assert_eq!(delete(&parts.app, path, Some(&cookie)).await.status(), 204);
+    assert_eq!(
+        standing().await,
+        ["account", "fast_credits"],
+        "the rate limit's row alone leaves"
+    );
+    assert_eq!(delete(&parts.app, path, Some(&cookie)).await.status(), 404);
+    let path = "/admin/accounts/business/cooldowns/fast_credits";
+    assert_eq!(delete(&parts.app, path, Some(&cookie)).await.status(), 204);
+    assert_eq!(
+        standing().await,
         ["account"],
         "the account's own row stands"
     );
-    assert_eq!(delete(&parts.app, path, Some(&cookie)).await.status(), 404);
     let refused = delete(
         &parts.app,
         "/admin/accounts/business/cooldowns/turbo",
@@ -1799,6 +1815,6 @@ async fn deleting_the_fast_cooldown_clears_the_fast_lane_and_leaves_the_account_
     assert_eq!(refused.status(), 400);
     assert_eq!(
         json(refused).await["error"],
-        "scope is account, fast or model:<canonical>"
+        "scope is account, fast, fast_credits or model:<canonical>"
     );
 }

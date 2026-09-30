@@ -8,10 +8,12 @@ export type CoolingRow = { accountId: string; reason: string; scope: string; unt
 
 const MODEL_SCOPE_PREFIX = 'model:';
 
-/** `Whole upstream` for the account scope, `Fast mode` for the fast lane's, the model id for `model:<id>`. */
+/** `Whole upstream` for the account scope, `Fast mode` and `Fast mode credits` for the fast lane's rate limit and
+ *  usage-credits refusal, the model id for `model:<id>`. */
 export function scopeLabel(scope: string): string {
   if (scope === 'account') return 'Whole upstream';
   if (scope === 'fast') return 'Fast mode';
+  if (scope === 'fast_credits') return 'Fast mode credits';
   return scope.startsWith(MODEL_SCOPE_PREFIX) ? scope.slice(MODEL_SCOPE_PREFIX.length) : scope;
 }
 

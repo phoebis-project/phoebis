@@ -10,7 +10,7 @@ import { Badge, Card, EmptyState, ErrorState, Skeleton } from '@/components/ui/p
 import { WindowTriple } from '@/components/ui/QuotaBars';
 import { fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortId, tokensTotal } from '@/lib/format';
 import { useAsync, useNow } from '@/lib/hooks';
-import { STATUS_LABEL, STATUS_TONE, isSubscription, remainingOf, windowOf } from '@/lib/quota';
+import { STATUS_LABEL, STATUS_TONE, isFastScope, isSubscription, remainingOf, windowOf } from '@/lib/quota';
 
 export function DashboardPage() {
   const overview = useAsync(() => api.getOverview(), []);
@@ -130,7 +130,7 @@ function RemainingCard({ title, subtitle, windowId, accounts }: { accounts: Acco
 
 function AccountMini({ account, now }: { account: Account; now: number }) {
   // A fast-lane row holds fast-mode requests alone, so the line reads a row that cools the upstream.
-  const cooldown = account.cooldowns.find((c) => c.scope !== 'fast');
+  const cooldown = account.cooldowns.find((c) => !isFastScope(c.scope));
   return (
     <Link to={`/upstreams/${account.id}`} className="card card--padded account-mini">
       <div className="account-mini__head">

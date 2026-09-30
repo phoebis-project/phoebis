@@ -15,7 +15,7 @@ import { WindowTriple } from '@/components/ui/QuotaBars';
 import { fmtAbsolute, fmtCredits, fmtDate, fmtDayShort, fmtDuration, fmtEndsIn, fmtInt, fmtRelative } from '@/lib/format';
 import { accountPatchOf, subscriptionEndFormOf, subscriptionEndRefusal, tickCancelled, type SubscriptionEndForm } from '@/lib/forms';
 import { useAsync, useNow } from '@/lib/hooks';
-import { STATUS_LABEL, STATUS_TONE } from '@/lib/quota';
+import { STATUS_LABEL, STATUS_TONE, isFastScope } from '@/lib/quota';
 
 type SortKey = 'name' | 'reset' | 'status' | 'usage';
 const END_HINT = "Prefilled from the plan's start and its monthly renewal; correct it from the date the plan's billing settings show. An annual plan is marked cancelled in its final month only.";
@@ -186,7 +186,7 @@ function AccountDetail({ account, now, onToast, onPair, onChanged }: { account: 
   // A flagged upstream reports its flag as the status, so routing is the only honest read of whether it takes requests.
   const paused = !account.routingEnabled;
   // A fast-lane row holds fast-mode requests alone, so the header counts the rows that cool the upstream.
-  const cooldown = account.cooldowns.find((c) => c.scope !== 'fast') ?? null;
+  const cooldown = account.cooldowns.find((c) => !isFastScope(c.scope)) ?? null;
   const extra = account.extraUsage;
   const overage = account.overage;
   const run = async <T,>(action: () => Promise<T>, done: string | ((result: T) => string)) => {

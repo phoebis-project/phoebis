@@ -1216,6 +1216,7 @@ async fn pin_of(handle: &phoebis_routing::RouterHandle) -> phoebis_routing::PinR
         agent_id: row.agent_id,
         model: row.model,
         epoch: row.epoch,
+        lane: row.lane,
     }
 }
 
@@ -3045,13 +3046,14 @@ fn credits_at(
     }
 }
 
+/// The reasons of the fast lane's live rows, the rate limit's before the credits refusal's.
 async fn fast_rows(handle: &RouterHandle) -> Vec<String> {
     handle
         .cooldowns()
         .await
         .unwrap()
         .into_iter()
-        .filter(|row| row.scope == "fast")
+        .filter(|row| row.scope == "fast" || row.scope == "fast_credits")
         .map(|row| row.reason)
         .collect()
 }
@@ -3066,14 +3068,14 @@ async fn an_enabled_credits_state_with_room_lifts_a_fast_credits_row_and_a_plan_
     let mut events = handle.subscribe_events();
     handle.report(cooled(
         "a",
-        "fast",
+        "fast_credits",
         1_000 + 5 * HOUR,
         FAST_CREDITS_REASON,
         "out_of_credits",
     ));
     assert!(matches!(
         next_event(&mut events).await,
-        RouterEvent::CooldownSet { scope, .. } if scope == "fast"
+        RouterEvent::CooldownSet { scope, .. } if scope == "fast_credits"
     ));
     now.store(2_000, Ordering::SeqCst);
     handle.report(observed(
@@ -3106,7 +3108,7 @@ async fn an_enabled_credits_state_with_room_lifts_a_fast_credits_row_and_a_plan_
             } => {
                 assert_eq!(
                     (account_id.as_str(), scope.as_str(), cause),
-                    ("a", "fast", "recovered")
+                    ("a", "fast_credits", "recovered")
                 );
                 break;
             }
@@ -3118,15 +3120,27 @@ async fn an_enabled_credits_state_with_room_lifts_a_fast_credits_row_and_a_plan_
     handle.report(cooled(
         "a",
         "fast",
-        1_000 + 5 * HOUR,
+        2_000 + 600_000,
         FAST_RATE_LIMIT_REASON,
         "fast",
     ));
+    handle.report(cooled(
+        "a",
+        "fast_credits",
+        2_000 + HOUR,
+        FAST_CREDITS_REASON,
+        "out_of_credits",
+    ));
+    assert_eq!(
+        fast_rows(&handle).await,
+        [FAST_RATE_LIMIT_REASON, FAST_CREDITS_REASON],
+        "the two refusals keep a row each"
+    );
     handle.report(credits_at(true, None, Some(20.0), 4_000));
     assert_eq!(
         fast_rows(&handle).await,
         [FAST_RATE_LIMIT_REASON],
-        "a credits reading says nothing about the fast lane's own rate limit"
+        "a credits reading lifts the credits row alone and says nothing about the fast lane's own rate limit"
     );
 }
 
@@ -3155,6 +3169,207 @@ async fn a_restart_judges_fast_eligibility_on_the_credits_state_the_last_poll_re
             reason: "out_of_credits".into()
         }),
         "before any poll, the restored state keeps a fast request off the account"
+    );
+}
+
+#[tokio::test]
+async fn a_restart_restores_both_fast_rows_and_a_fast_request_waits_on_whichever_still_stands() {
+    let store = seeded_oauth(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    handle.report(cooled(
+        "a",
+        "fast_credits",
+        1_000 + HOUR,
+        FAST_CREDITS_REASON,
+        "out_of_credits",
+    ));
+    handle.report(cooled(
+        "a",
+        "fast",
+        1_000 + 600_000,
+        FAST_RATE_LIMIT_REASON,
+        "fast",
+    ));
+    wait_for(WRITTEN, || {
+        (store.load_routing().unwrap().cooldowns.len() == 2).then_some(())
+    })
+    .await;
+    handle.shutdown().await.unwrap();
+    now.store(2_000, Ordering::SeqCst);
+    let again = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    assert_eq!(
+        again
+            .cooldowns()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|row| (row.scope, row.reason, row.until))
+            .collect::<Vec<_>>(),
+        [
+            (
+                "fast".to_string(),
+                FAST_RATE_LIMIT_REASON.to_string(),
+                1_000 + 600_000
+            ),
+            (
+                "fast_credits".to_string(),
+                FAST_CREDITS_REASON.to_string(),
+                1_000 + HOUR
+            ),
+        ],
+        "each row comes back with its own deadline"
+    );
+    let fast = || SelectRequest {
+        fast: true,
+        lane: lane_key("claude-sonnet-5", "fast", "none", "-"),
+        ..request(&again, None, 2_000)
+    };
+    assert_eq!(
+        again.select(fast()).await.unwrap().result,
+        SelectResult::Exhausted(Exhaustion::FastCredits {
+            reason: "out_of_credits".into()
+        }),
+        "the credits row answers ahead of the rate limit beside it"
+    );
+    assert!(again.clear_cooldown("a", "fast_credits").await.unwrap());
+    assert_eq!(
+        again.select(fast()).await.unwrap().result,
+        SelectResult::Exhausted(Exhaustion::FastLane {
+            deadline: 1_000 + 600_000
+        }),
+        "the rate limit alone still refuses until its own reset"
+    );
+}
+
+/// A request of session "s1" under the spelling `claude-sonnet-4-5`, its lane composed from that spelling as the
+/// relay composes it at admission, on the main thread so its warmth reads the lane alone.
+fn spelled(handle: &RouterHandle, now: i64) -> SelectRequest {
+    let s = handle.snapshot();
+    SelectRequest {
+        canonical_model: "claude-sonnet-4-5".into(),
+        candidates: resolve(
+            &s,
+            s.key("k").unwrap(),
+            "claude-sonnet-4-5",
+            "claude-sonnet-4-5",
+        )
+        .unwrap(),
+        request_class: Some("main".into()),
+        lane: lane_key("claude-sonnet-4-5", "standard", "none", "-"),
+        ..request(handle, Some("s1"), now)
+    }
+}
+
+#[tokio::test]
+async fn a_resolution_between_admission_and_selection_keeps_the_pin_warm_on_its_relaned_lane() {
+    const DATED: &str = "claude-sonnet-4-5-20250929";
+    let store = seeded(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
+    let first = handle.select(spelled(&handle, 1_000)).await.unwrap();
+    assert!(matches!(first.result, SelectResult::Selected(_)));
+    // The continuation is admitted under the spelling, and the catalog resolves it before the router selects.
+    let admitted = spelled(&handle, 2_000);
+    handle
+        .resolve("claude-sonnet-4-5", DATED, 1_500)
+        .await
+        .unwrap();
+    let answer = handle.select(admitted).await.unwrap();
+    assert!(matches!(answer.result, SelectResult::Selected(_)));
+    let dated_lane = lane_key(DATED, "standard", "none", "-");
+    assert_eq!(
+        handle
+            .pins()
+            .await
+            .unwrap()
+            .iter()
+            .map(|p| (p.model.as_str(), p.lane.as_str(), p.last_refresh_at))
+            .collect::<Vec<_>>(),
+        [(DATED, dated_lane.as_str(), 2_000)],
+        "the turn refreshes its pin and keeps the lane the resolution gave it"
+    );
+}
+
+#[tokio::test]
+async fn a_resolution_between_selection_and_completion_files_the_affinity_entry_under_the_dated_id_and_lane(
+) {
+    const DATED: &str = "claude-sonnet-4-5-20250929";
+    let store = seeded(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
+    let selected = handle.select(spelled(&handle, 1_000)).await.unwrap();
+    assert!(matches!(selected.result, SelectResult::Selected(_)));
+    handle
+        .resolve("claude-sonnet-4-5", DATED, 1_500)
+        .await
+        .unwrap();
+    // The answer completes after the resolution landed, and its report still names what admission read.
+    handle.report(Report::Affinity(AffinityReport {
+        canonical_model: "claude-sonnet-4-5".into(),
+        lane: lane_key("claude-sonnet-4-5", "standard", "none", "-"),
+        ..affinity_report(&handle, "a", 2_000)
+    }));
+    // A query queues behind the report, so the map it reads afterwards holds the report's entries.
+    handle.pins().await.unwrap();
+    let entry = handle
+        .affinity()
+        .read()
+        .unwrap()
+        .entry(DATED, "b1")
+        .cloned()
+        .expect("the entry is filed under the dated id");
+    assert_eq!(
+        entry.lane,
+        lane_key(DATED, "standard", "none", "-"),
+        "the entry's lane names the model its key does, so the next request on the dated id reads it warm"
+    );
+}
+
+#[tokio::test]
+async fn a_fork_after_a_resolution_places_on_the_warm_entry_a_late_report_filed_and_not_by_the_strategy(
+) {
+    const DATED: &str = "claude-sonnet-4-5-20250929";
+    let store = seeded(&["a", "b"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
+    let selected = handle.select(spelled(&handle, 1_000)).await.unwrap();
+    let SelectResult::Selected(selection) = &selected.result else {
+        panic!("{:?}", selected.result)
+    };
+    let source = selection.account.id.clone();
+    handle
+        .resolve("claude-sonnet-4-5", DATED, 1_500)
+        .await
+        .unwrap();
+    // The source's answer completes after the resolution, its message boundary confirmed warm.
+    handle.report(Report::Affinity(AffinityReport {
+        canonical_model: "claude-sonnet-4-5".into(),
+        lane: lane_key("claude-sonnet-4-5", "standard", "none", "-"),
+        cache_touched: true,
+        message_ttl_ms: Some(300_000),
+        prefix_tokens: 40_000,
+        ..affinity_report(&handle, &source, 2_000)
+    }));
+    // A fork under a session of its own, admitted on the dated id, continues the source's messages.
+    let fork = SelectRequest {
+        session_id: Some("s2".into()),
+        canonical_model: DATED.into(),
+        lane: lane_key(DATED, "standard", "none", "-"),
+        boundaries: vec!["b1".into(), "fork-1".into()],
+        ..spelled(&handle, 3_000)
+    };
+    let answer = handle.select(fork).await.unwrap();
+    let SelectResult::Selected(placed) = &answer.result else {
+        panic!("{:?}", answer.result)
+    };
+    assert_eq!(
+        (
+            placed.account.id.as_str(),
+            placed.trace.placement.as_ref().map(|p| p.rung)
+        ),
+        (source.as_str(), Some("content")),
+        "the fork lands on the source's warm prefix"
     );
 }
 
@@ -3190,7 +3405,7 @@ async fn a_credits_state_older_than_the_held_one_is_dropped() {
     let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
     handle.report(cooled(
         "a",
-        "fast",
+        "fast_credits",
         1_000 + 5 * HOUR,
         FAST_CREDITS_REASON,
         "out_of_credits",
@@ -3368,6 +3583,91 @@ fn selected_pin(answer: phoebis_routing::SelectAnswer) -> PinRef {
         SelectResult::Selected(s) => s.pin.expect("a session request holds a pin"),
         other => panic!("{other:?}"),
     }
+}
+
+/// Session "s1"'s main turn at `now`, standard or fast, its lane naming the speed.
+fn turn(handle: &RouterHandle, fast: bool, now: i64) -> SelectRequest {
+    let speed = if fast { "fast" } else { "standard" };
+    SelectRequest {
+        request_class: Some("main".into()),
+        fast,
+        lane: lane_key("claude-sonnet-5", speed, "none", "-"),
+        ..request(handle, Some("s1"), now)
+    }
+}
+
+#[tokio::test]
+async fn a_probe_renewal_from_the_lane_the_session_left_leaves_the_switched_pins_warmth_alone() {
+    let store = seeded(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
+    selected_pin(handle.select(turn(&handle, false, 1_000)).await.unwrap());
+    let probe = selected_pin(
+        handle
+            .select(SelectRequest {
+                probe: true,
+                ..turn(&handle, false, 2_000)
+            })
+            .await
+            .unwrap(),
+    );
+    // The session switches to fast mode while the probe is in flight: the pin reads cold on its new lane.
+    selected_pin(handle.select(turn(&handle, true, 3_000)).await.unwrap());
+    handle.report(renewal(
+        probe,
+        4_000,
+        PinUsage::default(),
+        "keepalive",
+        300_000,
+    ));
+    let pins = handle.pins().await.unwrap();
+    assert_eq!(
+        pins.iter()
+            .map(|p| (p.lane.as_str(), p.last_refresh_at))
+            .collect::<Vec<_>>(),
+        [(lane_key("claude-sonnet-5", "fast", "none", "-").as_str(), 0)],
+        "the probe refreshed the standard lane's cache, which is not the one the pin now holds"
+    );
+}
+
+#[tokio::test]
+async fn a_late_fast_429_from_the_lane_the_session_left_never_deletes_its_standard_pin() {
+    let store = seeded(&["a", "b"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
+    let fast = selected_pin(handle.select(turn(&handle, true, 1_000)).await.unwrap());
+    let account = handle.pins().await.unwrap()[0].account_id.clone();
+    // The session's next turn is standard, and the fast turn's refusal lands after it.
+    selected_pin(handle.select(turn(&handle, false, 2_000)).await.unwrap());
+    handle.report(Report::Cooldown {
+        account_id: account.clone(),
+        row: CooldownRow {
+            account_id: account.clone(),
+            scope: "fast".into(),
+            until: 1_000 + 600_000,
+            set_at: 0,
+            reason: FAST_RATE_LIMIT_REASON.into(),
+            window: "fast".into(),
+            source_request_id: None,
+            incarnation: 1,
+        },
+        pin: Some(fast),
+        lifecycle_generation: 1,
+        credential_generation: 1,
+        incarnation: 1,
+    });
+    assert_eq!(fast_rows(&handle).await, [FAST_RATE_LIMIT_REASON]);
+    let pins = handle.pins().await.unwrap();
+    assert_eq!(
+        pins.iter()
+            .map(|p| (p.account_id.as_str(), p.lane.as_str()))
+            .collect::<Vec<_>>(),
+        [(
+            account.as_str(),
+            lane_key("claude-sonnet-5", "standard", "none", "-").as_str()
+        )],
+        "the fast row holds no standard request, so the standard pin stays"
+    );
 }
 
 #[tokio::test]

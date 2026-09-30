@@ -9,6 +9,7 @@ import { urlHost } from '@/lib/format';
 import { modelRulesRefusal, type NumericKeepaliveKey } from '@/lib/forms';
 import { matchesPattern } from '@/lib/pattern';
 import { matchesPattern as matchesModelPattern, processRules } from '@/lib/patterns';
+import { isFastScope } from '@/lib/quota';
 import { ACCOUNTS, QUOTA_HISTORY, QUOTA_SNAPSHOTS } from './accounts';
 import { RECONCILIATIONS, breakdownOf, burnOf, placementsOf, rewritesOf, seriesOf } from './analytics';
 import { CATALOG } from './catalog';
@@ -238,7 +239,7 @@ function questionFor(e: AlertEvent, viewer: boolean): AlertEvent {
 /** A flag outranks the enabled bit and the cooldowns in the status the account view folds, so pausing never hides one. */
 const FLAGGED: Account['status'][] = ['funding_required', 'reauth_required', 'unpaired'];
 /** A fast-lane row holds fast-mode requests alone, so the upstream cools only under another scope's row. */
-const cooling = (cooldowns: Account['cooldowns']) => cooldowns.some((c) => c.scope !== 'fast');
+const cooling = (cooldowns: Account['cooldowns']) => cooldowns.some((c) => !isFastScope(c.scope));
 const statusOf = (a: Account, enabled: boolean): Account['status'] => {
   if (FLAGGED.includes(a.status)) return a.status;
   if (!enabled) return 'paused';

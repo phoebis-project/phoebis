@@ -334,9 +334,11 @@ window and an api-key account's in dollars, side by side and each split into cac
 upstream, key, session, or request class, beside a Meter reconciliation table (see [Plan meter](#plan-meter)); the
 5-hour share carries the peak band's weight, the 7-day share none. The shares read under the upstream grouping alone,
 since shares of different upstreams' windows do not add, and the Spend per minute chart draws dollars alone, a
-subscription upstream's among them only for its fast-mode answers. The key, request class and upstream groupings read
-the hourly rollups, which fold a request under the hour it arrived in and weigh it by that hour's band rather than at
-its completion, where the meter charges it. Grouped by upstream, it adds a Plan per hour chart: the share of each
+subscription upstream's among them only for its fast-mode answers; past the seven lines a chart draws, the subscription
+upstreams folded into the rest draw their fast-mode dollars as Other (fast mode), or Other (fast mode, tier unknown) for
+those whose tier the tier factor table does not size. The key, request class and upstream groupings read the hourly
+rollups, which fold a request under the hour it arrived in and weigh it by that hour's band rather than at its
+completion, where the meter charges it. Grouped by upstream, it adds a Plan per hour chart: the share of each
 subscription upstream's 5-hour window, solid, and of its 7-day window, dashed, that its traffic used per hour, a share
 priced through a cell no measurement has filled marked with an asterisk in the legend and the tooltip, and an upstream
 whose tier the tier factor table does not size listed as tier unknown. Latency reports percentiles read from the merged

@@ -15,6 +15,10 @@ export const windowOf = (account: Account, id: WindowId) => account.windows.find
 
 export const isSubscription = (account: Account) => account.kind === 'oauth';
 
+/** The fast lane's two cooldown scopes, its rate limit's and its usage-credits refusal's: each holds fast-mode
+ *  requests alone, so neither cools the upstream's standard traffic. */
+export const isFastScope = (scope: string) => scope === 'fast' || scope === 'fast_credits';
+
 export function soonestReset(account: Account, now: number): WindowId | null {
   let best: RateLimitWindow | null = null;
   let bestAt = Number.POSITIVE_INFINITY;

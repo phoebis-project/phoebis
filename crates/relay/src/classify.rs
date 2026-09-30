@@ -40,7 +40,10 @@ pub fn next_month_start(now: i64) -> i64 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Scope {
     Account,
+    /// The fast lane's rate limit.
     Fast,
+    /// The fast lane's usage-credits refusal, a row apart from the rate limit's: each lifts on its own evidence.
+    FastCredits,
     Model,
 }
 
@@ -301,7 +304,7 @@ fn fast_cooldown(
                 .unwrap_or(ctx.now.saturating_add(FAST_CREDITS_FALLBACK_MS))
         };
         return Cooldown {
-            scope: Scope::Fast,
+            scope: Scope::FastCredits,
             until: until.saturating_add(MARGIN_MS),
             reason: FAST_CREDITS_REASON,
             window: reason.to_string(),
@@ -962,7 +965,7 @@ mod tests {
         assert_eq!(
             (c.scope, c.reason, c.window.as_str(), c.until),
             (
-                Scope::Fast,
+                Scope::FastCredits,
                 FAST_CREDITS_REASON,
                 "org_spend_cap_reached",
                 ms(2026, 10, 1, 0, 0) + MARGIN_MS
@@ -983,7 +986,7 @@ mod tests {
         assert_eq!(
             (c.scope, c.reason, c.window.as_str(), c.until),
             (
-                Scope::Fast,
+                Scope::FastCredits,
                 FAST_CREDITS_REASON,
                 "out_of_credits",
                 1_790_000_000_000 + MARGIN_MS
@@ -994,7 +997,7 @@ mod tests {
         assert_eq!(
             (c.scope, c.reason, c.window.as_str(), c.until),
             (
-                Scope::Fast,
+                Scope::FastCredits,
                 FAST_CREDITS_REASON,
                 "out_of_credits",
                 ctx.now + 3_600_000 + MARGIN_MS
@@ -1014,7 +1017,7 @@ mod tests {
             let c = cooldown_of(classify(&head(429, &headers), &ctx));
             assert_eq!(
                 (c.scope, c.reason, c.window.as_str()),
-                (Scope::Fast, FAST_CREDITS_REASON, "out_of_credits"),
+                (Scope::FastCredits, FAST_CREDITS_REASON, "out_of_credits"),
                 "the reason decides whatever the plan statuses read: {rejected:?}"
             );
         }

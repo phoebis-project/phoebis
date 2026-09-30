@@ -16,10 +16,7 @@ use tokio_util::sync::CancellationToken;
 use crate::affinity::{
     AffinityMap, AffinityReport, ConversationLookup, ConversationMatch, ConversationQuery,
 };
-use crate::select::{
-    release_reasons, select, MigrateReason, Refusal, SelectRequest, SelectResult,
-    FAST_CREDITS_REASON,
-};
+use crate::select::{release_reasons, select, MigrateReason, Refusal, SelectRequest, SelectResult};
 use crate::state::{
     burn_folded, AccountTicket, CreditsState, EvidenceSource, InFlight, MemberSpend,
     OverageEvidence, PinRef, PinUsage, RateTable, RoutingState, SharePricer, StateWrite,
@@ -804,6 +801,9 @@ impl Task {
                 // fresh cooldown never start a second life under the spelling the resolution just retired.
                 request.canonical_model =
                     self.state.canonical(&request.canonical_model).to_string();
+                // The lane's model part with it: admitted before the resolution, the lane still names the spelling
+                // the pin was relaned from, and would read that pin as another cache.
+                request.lane = self.state.canonical_lane(&request.lane);
                 if request.revision < snapshot.revision {
                     // The registry moved after admission: the key, its policy, the pool, and the candidates are
                     // re-derived from what is current, and a request the current registry would refuse is refused.
@@ -1124,10 +1124,13 @@ impl Task {
 
     fn report(&mut self, report: Report) {
         match report {
-            Report::Affinity(report) => {
+            Report::Affinity(mut report) => {
                 if self.moved_past(&report.account_id, report.incarnation) {
                     return;
                 }
+                // The map files the entry under the resolved model, so its lane names that model too: an answer
+                // selected before the resolution landed still reports the spelling admission read.
+                report.lane = self.state.canonical_lane(&report.lane);
                 let rows = self
                     .state
                     .affinity()
@@ -1171,7 +1174,7 @@ impl Task {
                 row.scope = self.state.canonical_scope(&row.scope);
                 // A fast-lane row moves the session for fast mode alone; the name tells the drawer it was no
                 // rate limit on the account's standard traffic.
-                let moved = if row.scope == "fast" {
+                let moved = if row.scope == "fast" || row.scope == "fast_credits" {
                     "fast_lane"
                 } else {
                     "cooldown"
@@ -1191,13 +1194,29 @@ impl Task {
                 }
                 if let Some(mut pin) = pin {
                     pin.model = self.state.canonical(&pin.model).to_string();
-                    if self.state.invalidate_pin(&pin, &account_id) {
-                        let key = PinKey {
-                            key_id: pin.key_id,
-                            session_id: pin.session_id,
-                            agent_id: pin.agent_id,
-                            model: pin.model,
-                        };
+                    let key = PinKey {
+                        key_id: pin.key_id.clone(),
+                        session_id: pin.session_id.clone(),
+                        agent_id: pin.agent_id.clone(),
+                        model: pin.model.clone(),
+                    };
+                    // A fast-lane row refuses the fast lane alone: once a later turn moved the pin to another
+                    // lane, the session no longer asks for what the row refuses, so a late refusal leaves it.
+                    let left_lane = moved == "fast_lane"
+                        && self.state.pin(&key).is_some_and(|current| {
+                            current.lane != self.state.canonical_lane(&pin.lane)
+                        });
+                    if left_lane {
+                        tracing::debug!(
+                            key_id = %key.key_id,
+                            session_id = %key.session_id,
+                            agent_id = %key.agent_id,
+                            model = %key.model,
+                            report_lane = %pin.lane,
+                            pin_lane = %self.state.pin(&key).map_or("", |p| p.lane.as_str()),
+                            "a fast refusal from a lane the pin has left leaves the pin"
+                        );
+                    } else if self.state.invalidate_pin(&pin, &account_id) {
                         self.invalidated
                             .insert(key.clone(), (account_id.clone(), moved, (self.clock)()));
                         writes.push(StateWrite::DeletePin(key));
@@ -1225,15 +1244,15 @@ impl Task {
                     return;
                 }
                 // Credits with room lift a refusal only when read after it: an earlier reading says nothing about
-                // the state that refused the request.
+                // the state that refused the request. They lift the credits row alone, since the fast lane's rate
+                // limit beside it is a bucket the reading does not measure.
                 let now = (self.clock)();
-                let refused = self.state.cooldowns_of(&account_id, now).any(|row| {
-                    row.scope == "fast"
-                        && row.reason == FAST_CREDITS_REASON
-                        && observed_at > row.set_at
-                });
+                let refused = self
+                    .state
+                    .cooldowns_of(&account_id, now)
+                    .any(|row| row.scope == "fast_credits" && observed_at > row.set_at);
                 if refused {
-                    self.release_cooldown(account_id, "fast".to_string(), "recovered");
+                    self.release_cooldown(account_id, "fast_credits".to_string(), "recovered");
                 }
             }
             Report::Overage {
@@ -1375,7 +1394,23 @@ impl Task {
                     model: pin.model.clone(),
                 };
                 if let Some(current) = self.state.pin(&key).cloned() {
-                    if current.epoch == pin.epoch {
+                    // A probe's renewal is the refresh of the cache it read, which is another cache once the session
+                    // changed lanes while it was in flight. A client's renewal folds its own burn whatever lane
+                    // the pin moved to since, so it is not held to the lane.
+                    let left_lane = origin == "keepalive"
+                        && current.lane != self.state.canonical_lane(&pin.lane);
+                    if left_lane {
+                        tracing::debug!(
+                            key_id = %key.key_id,
+                            session_id = %key.session_id,
+                            agent_id = %key.agent_id,
+                            model = %key.model,
+                            report_lane = %pin.lane,
+                            pin_lane = %current.lane,
+                            "a probe renewal from a lane the pin has left leaves the pin"
+                        );
+                    }
+                    if current.epoch == pin.epoch && !left_lane {
                         let mut renewed = PinRow {
                             last_used_at: now,
                             ..current

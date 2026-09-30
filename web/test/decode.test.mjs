@@ -95,6 +95,15 @@ test('an account cooling on its fast lane alone reads ready, and one with an acc
   assert.equal(d.decodeAccount({ ...fixture('account'), cooldowns: [fast, account] }).status, 'cooldown');
 });
 
+test("an account cooling on its fast lane's credits row, alone or beside its rate limit, reads ready", () => {
+  const fast = { scope: 'fast', until: 1, reason: 'fast_rate_limit', window: 'fast', set_at: 0 };
+  const credits = { scope: 'fast_credits', until: 2, reason: 'fast_credits', window: 'out_of_credits', set_at: 0 };
+  assert.equal(d.decodeAccount({ ...fixture('account'), cooldowns: [credits] }).status, 'ready');
+  const both = d.decodeAccount({ ...fixture('account'), cooldowns: [fast, credits] });
+  assert.equal(both.status, 'ready', 'neither fast row cools its standard lane');
+  assert.deepEqual(both.cooldowns.map((c) => c.scope), ['fast', 'fast_credits'], 'each row is decoded');
+});
+
 test("an account decodes its fast lane's two readings, a missing one as null, and no pair as null", () => {
   const body = fixture('account');
   const lane = d.decodeAccount(body).fastLane;

@@ -1,6 +1,7 @@
 import type { Account, FastLaneReading } from '@/api/types';
 import { own } from '@/lib/analytics';
 import { fmtAbsolute, fmtPct, fmtRelative } from '@/lib/format';
+import { isFastScope } from '@/lib/quota';
 
 /** A fast cooldown's reason as its chip words it; a reason added later reads as the router sent it. */
 const FAST_REASON_LABEL: Record<string, string> = { fast_credits: 'credits unavailable', fast_rate_limit: 'rate limited' };
@@ -18,7 +19,7 @@ const refilled = (r: FastLaneReading, now: number) => r.resetsAt !== null && Dat
  *  nothing when it has neither. */
 export function FastLane({ account, now }: { account: Account; now: number }): JSX.Element | null {
   const lane = account.fastLane;
-  const cooling = account.cooldowns.filter((c) => c.scope === 'fast');
+  const cooling = account.cooldowns.filter((c) => isFastScope(c.scope));
   if (lane === null && cooling.length === 0) return null;
   // The router keeps the last answer's pair in memory until the next fast answer, while the buckets reset within
   // minutes, so a reading past its reset reads as the refilled bucket the router itself routes on.
@@ -37,7 +38,7 @@ export function FastLane({ account, now }: { account: Account; now: number }): J
         </span>
       )}
       {cooling.map((c) => (
-        <span key={c.reason} className="chip chip--serious fast-lane__cooldown" title={fmtAbsolute(c.until)}>
+        <span key={c.scope} className="chip chip--serious fast-lane__cooldown" title={fmtAbsolute(c.until)}>
           <span className="chip__label">Fast mode</span>
           {reasonLabel(c.reason)}, lifts {fmtRelative(c.until, now)}
         </span>

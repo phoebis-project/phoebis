@@ -1413,7 +1413,7 @@ fn a_standard_request_passes_no_fast_row_and_is_blocked_by_every_row_it_was_befo
     st.record_cooldown(cooled("a", "fast", HOUR, "fast", FAST_RATE_LIMIT_REASON));
     st.record_cooldown(cooled(
         "b",
-        "fast",
+        "fast_credits",
         HOUR,
         "out_of_credits",
         FAST_CREDITS_REASON,
@@ -1583,7 +1583,7 @@ fn the_local_answer_is_fast_lane_exhausted_with_the_earliest_reset_while_one_acc
     st.record_cooldown(cooled("a", "fast", 5_000, "fast", FAST_RATE_LIMIT_REASON));
     st.record_cooldown(cooled(
         "b",
-        "fast",
+        "fast_credits",
         3_000,
         "out_of_credits",
         FAST_CREDITS_REASON,
@@ -1608,6 +1608,12 @@ fn the_local_answer_is_fast_lane_exhausted_with_the_earliest_reset_while_one_acc
         "retry_after",
         FAST_RATE_LIMIT_REASON,
     ));
+    assert_eq!(
+        select(&mut st, &s, &at(1_000), &mut rng()).0,
+        SelectResult::Exhausted(Exhaustion::FastLane { deadline: 5_000 }),
+        "b's credits row answers ahead of the rate limit beside it, so b holds no rate limit alone"
+    );
+    st.clear_cooldown("b", "fast_credits");
     assert_eq!(
         select(&mut st, &s, &at(1_000), &mut rng()).0,
         SelectResult::Exhausted(Exhaustion::FastLane { deadline: 4_000 }),
@@ -1648,7 +1654,7 @@ fn the_local_answer_is_fast_credits_unavailable_with_the_pinned_accounts_reason_
     );
     st.record_cooldown(cooled(
         "a",
-        "fast",
+        "fast_credits",
         HOUR,
         "out_of_credits",
         FAST_CREDITS_REASON,
@@ -1802,7 +1808,7 @@ fn a_mixed_fast_credits_and_model_cooldown_set_answers_the_timed_exhaustion_as_b
     let mut st = RoutingState::from_load(RoutingLoad::default());
     st.record_cooldown(cooled(
         "a",
-        "fast",
+        "fast_credits",
         5 * HOUR,
         "out_of_credits",
         FAST_CREDITS_REASON,
@@ -1894,7 +1900,7 @@ fn a_fast_pin_released_by_its_fast_lane_names_the_fast_reason_and_a_standard_one
     );
     st.record_cooldown(cooled(
         "a",
-        "fast",
+        "fast_credits",
         HOUR,
         "out_of_credits",
         FAST_CREDITS_REASON,
@@ -1903,6 +1909,12 @@ fn a_fast_pin_released_by_its_fast_lane_names_the_fast_reason_and_a_standard_one
         release_reasons(&st, &s, &pin, &fast_at(2_000)),
         vec![FAST_CREDITS_REASON],
         "named once when the row and the state both stand"
+    );
+    st.record_cooldown(cooled("a", "fast", HOUR, "fast", FAST_RATE_LIMIT_REASON));
+    assert_eq!(
+        release_reasons(&st, &s, &pin, &fast_at(2_000)),
+        vec![FAST_RATE_LIMIT_REASON, FAST_CREDITS_REASON],
+        "each of the fast lane's two rows is named"
     );
     let SelectResult::Selected(sel) = select(&mut st, &s, &fast_at(2_000), &mut rng()).0 else {
         panic!()
@@ -9184,7 +9196,7 @@ fn a_pin_that_fails_over_off_its_account_spends_its_mark_there() {
     assert!(marked(&st, "s1", T));
     // What the task does with a cooldown report that names the pin: the row, then the invalidation.
     let fail_over = |st: &mut RoutingState, account: &str, until: i64| {
-        let epoch = pinned(st, "s1").epoch;
+        let current = pinned(st, "s1");
         st.record_cooldown(cooled(account, "account", until, "five_hour", "rate_limit"));
         assert!(st.invalidate_pin(
             &PinRef {
@@ -9192,7 +9204,8 @@ fn a_pin_that_fails_over_off_its_account_spends_its_mark_there() {
                 session_id: "s1".into(),
                 agent_id: "main".into(),
                 model: "claude-sonnet-5".into(),
-                epoch,
+                epoch: current.epoch,
+                lane: current.lane,
             },
             account,
         ));

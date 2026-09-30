@@ -878,6 +878,7 @@ async fn a_pin_the_router_moved_on_the_agents_own_request_moves_the_next_probe()
             agent_id: pin.agent_id.clone(),
             model: pin.model.clone(),
             epoch: pin.epoch,
+            lane: pin.lane.clone(),
         }),
         lifecycle_generation: 1,
         credential_generation: 1,

@@ -291,12 +291,13 @@ pub struct Selection {
 /// The reason a rejection cooldown row carries; the verdict writes it and the report below reads it.
 pub const MODEL_REJECTED_REASON: &str = "model_rejected";
 
-/// The reason a fast request's 429 that names an overage-disabled reason cools the fast lane under; the row's
-/// `window` is that reason, which the local answer hands back to the client.
+/// The reason a fast request's 429 that names an overage-disabled reason cools the fast lane under, on the
+/// `fast_credits` row; the row's `window` is that reason, which the local answer hands back to the client.
 pub const FAST_CREDITS_REASON: &str = "fast_credits";
 
-/// The reason a fast request's 429 without that reason cools the fast lane under; the row's `window` is `fast`, or
-/// `retry_after` when only `Retry-After` timed it, so the in-place retry treats it as any timed throttle.
+/// The reason a fast request's 429 without that reason cools the fast lane under, on the `fast` row, apart from the
+/// credits row so each lifts on its own evidence; the row's `window` is `fast`, or `retry_after` when only
+/// `Retry-After` timed it, so the in-place retry treats it as any timed throttle.
 pub const FAST_RATE_LIMIT_REASON: &str = "fast_rate_limit";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -438,12 +439,12 @@ fn state_name(state: AccountState) -> Option<&'static str> {
 /// key or the pool is gone), `deleted` (the account left the registry), `paused` (`enabled` is off), the
 /// account's state when it cannot serve (`disconnected`, `funding_required`, `reauth_required`, `unpaired`),
 /// `subscription_ended` (cancelled and past its saved end), `cooldown` (a live row blocks the model on the
-/// account), `fast_rate_limit` or `fast_credits` for a fast request (the fast lane's own row, or the poll's
-/// credits state, blocks it), `budget` (the member's spend is at or above its configured budget), `overage` (in
-/// overage under a policy other than `allow`), `attempted` (this request already tried it), and `spent` (no
-/// allowance left in the request's window); a fast request draws no plan window, so neither `overage` nor
-/// `spent` stands against it. Never empty: a pin released by a move whose destination then answered nothing
-/// carries `released`, the one fact the list above does not evaluate.
+/// account), `fast_rate_limit` or `fast_credits` for a fast request (one of the fast lane's two rows, or the
+/// poll's credits state, blocks it), `budget` (the member's spend is at or above its configured budget),
+/// `overage` (in overage under a policy other than `allow`), `attempted` (this request already tried it), and
+/// `spent` (no allowance left in the request's window); a fast request draws no plan window, so neither
+/// `overage` nor `spent` stands against it. Never empty: a pin released by a move whose destination then
+/// answered nothing carries `released`, the one fact the list above does not evaluate.
 pub fn release_reasons(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
@@ -488,19 +489,26 @@ pub fn release_reasons(
         request.fast,
     ) {
         // A fast-lane row names its own reason, so the drawer never reads it as a cooled account.
-        reasons.push(match (row.scope.as_str(), row.reason.as_str()) {
-            ("fast", FAST_CREDITS_REASON) => FAST_CREDITS_REASON,
-            ("fast", _) => FAST_RATE_LIMIT_REASON,
+        reasons.push(match row.scope.as_str() {
+            "fast" => FAST_RATE_LIMIT_REASON,
+            "fast_credits" => FAST_CREDITS_REASON,
             _ => "cooldown",
         });
     }
-    if request.fast
-        && snapshot
+    // The credits row blocks beside a later row too, and so does the poll's state, which no row records.
+    let credits_row = || {
+        state
+            .cooldowns_of(&pin.account_id, request.now)
+            .any(|row| row.scope == "fast_credits")
+    };
+    let credits_state = || {
+        snapshot
             .account(&pin.account_id)
             .and_then(|account| state.credits_of(&pin.account_id, account.incarnation))
             .and_then(CreditsState::blocked)
             .is_some()
-        && !reasons.contains(&FAST_CREDITS_REASON)
+    };
+    if request.fast && !reasons.contains(&FAST_CREDITS_REASON) && (credits_row() || credits_state())
     {
         reasons.push(FAST_CREDITS_REASON);
     }
@@ -915,6 +923,7 @@ pub fn select(
     let pin_ref = session.map(|session| {
         let epoch = state.fresh_epoch();
         let row = fresh_pin(request, session, epoch, chosen, shed_from.clone());
+        let lane = row.lane.clone();
         state.put_pin(row.clone());
         writes.push(StateWrite::UpsertPin(row));
         PinRef {
@@ -923,6 +932,7 @@ pub fn select(
             agent_id: request.agent_id.clone(),
             model: request.canonical_model.clone(),
             epoch,
+            lane,
         }
     });
     let mut trace_skipped: Vec<Skipped> = obstacles
@@ -1400,14 +1410,20 @@ fn obstacle(
         window: row.window.clone(),
     };
     let blocking = state.blocking_cooldown(&candidate.account_id, model, now, fast);
-    // A fast rate limit dates the fast lane alone: where the account's credits or its budget block the request
-    // too, that blocker answers, since the fast reset would pass with the request still refused.
-    let fast_limited =
-        blocking.filter(|row| row.scope == "fast" && row.reason == FAST_RATE_LIMIT_REASON);
+    // A fast rate limit dates the fast lane alone: where the account's credits (their row or the poll's state) or
+    // its budget block the request too, that blocker answers, since the fast reset would pass with the request
+    // still refused.
+    let fast_limited = blocking.filter(|row| row.scope == "fast");
     if let Some(row) = blocking.filter(|_| fast_limited.is_none()) {
         return Some(cooldown(row));
     }
     if fast {
+        if let Some(row) = state
+            .cooldowns_of(&candidate.account_id, now)
+            .find(|row| row.scope == "fast_credits")
+        {
+            return Some(cooldown(row));
+        }
         if let Some(reason) = state
             .credits_of(&candidate.account_id, account.incarnation)
             .and_then(CreditsState::blocked)
@@ -1475,6 +1491,7 @@ fn renew(
             stamp_hashes(&mut renewed, request);
         }
     }
+    let lane = renewed.lane.clone();
     state.put_pin(renewed.clone());
     state.mark_renewed(&current.key());
     writes.push(StateWrite::UpsertPin(renewed));
@@ -1493,6 +1510,7 @@ fn renew(
             agent_id: current.agent_id.clone(),
             model: current.model.clone(),
             epoch: current.epoch,
+            lane,
         }),
         migrated: None,
         in_overage: state.in_overage(&current.account_id, now, fallback_ms),

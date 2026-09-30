@@ -638,6 +638,7 @@ fn cooldown_set(cooldown: Option<&Cooldown>, canonical_model: &str) -> Option<Co
         scope: match c.scope {
             Scope::Account => "account".into(),
             Scope::Fast => "fast".into(),
+            Scope::FastCredits => "fast_credits".into(),
             Scope::Model => format!("model:{canonical_model}"),
         },
         until: c.until,
@@ -3257,6 +3258,7 @@ pub(crate) fn report_failover(
         let scope = match cooldown.scope {
             Scope::Account => "account".to_string(),
             Scope::Fast => "fast".to_string(),
+            Scope::FastCredits => "fast_credits".to_string(),
             Scope::Model => format!("model:{canonical_model}"),
         };
         let row = CooldownRow {

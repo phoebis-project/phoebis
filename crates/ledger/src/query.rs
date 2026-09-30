@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use phoebis_routing::{MemberSpend, PinUsage, SEVEN_DAY};
+use phoebis_routing::{MemberSpend, PinUsage, FIVE_HOUR, SEVEN_DAY};
 use phoebis_store::{AccountKind, BudgetPeriod};
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension, ToSql};
 use serde::{Deserialize, Serialize};
@@ -1609,10 +1609,19 @@ pub(crate) fn price_usage(
     row: &UsageRow,
 ) {
     match kind {
-        Some(AccountKind::Oauth) => {
-            if row.fast {
-                point.usd += row.estimated_usd;
+        Some(AccountKind::Oauth) if row.fast => {
+            point.usd += row.estimated_usd;
+            // Ahead of the model's cells, which a fast-only model lacks: the zero rests on the tier alone.
+            if let Some(tier) = tier {
+                if tables.tier_factor(tier, FIVE_HOUR).is_some() {
+                    point.five_hour_share.get_or_insert(0.0);
+                }
+                if tables.tier_factor(tier, SEVEN_DAY).is_some() {
+                    point.seven_day_share.get_or_insert(0.0);
+                }
             }
+        }
+        Some(AccountKind::Oauth) => {
             let usage = PinUsage {
                 input: row.input_tokens,
                 cache_read: row.cache_read_tokens,
@@ -1624,18 +1633,12 @@ pub(crate) fn price_usage(
                 if let Some(share) =
                     tables.five_hour_share_at(tier, row.canonical_model, usage, row.at)
                 {
-                    let total = point.five_hour_share.get_or_insert(0.0);
-                    if !row.fast {
-                        *total += share.share;
-                        point.five_hour_unmeasured |= share.unmeasured;
-                    }
+                    *point.five_hour_share.get_or_insert(0.0) += share.share;
+                    point.five_hour_unmeasured |= share.unmeasured;
                 }
                 if let Some(share) = tables.share(SEVEN_DAY, tier, row.canonical_model, usage) {
-                    let total = point.seven_day_share.get_or_insert(0.0);
-                    if !row.fast {
-                        *total += share.share;
-                        point.seven_day_unmeasured |= share.unmeasured;
-                    }
+                    *point.seven_day_share.get_or_insert(0.0) += share.share;
+                    point.seven_day_unmeasured |= share.unmeasured;
                 }
             }
         }

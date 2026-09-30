@@ -537,6 +537,31 @@ await emailLines('/upstreams/business the head reads the email under the name', 
   api.putAccount(story);
 }
 {
+  // The fast lane's credits refusal is a row of its own beside the rate limit: a chip and a cooling-down row each,
+  // and with the model row cleared the mock's rule reads neither fast row as cooling the upstream.
+  const story = (await api.listAccounts()).find((a) => a.id === 'business');
+  const credits = { reason: 'fast_credits', scope: 'fast_credits', setAt: story.cooldowns[0].setAt, until: new Date(Date.now() + 40 * 60_000).toISOString(), windowId: null };
+  api.putAccount({ ...story, cooldowns: [...story.cooldowns, credits] });
+  for (const c of story.cooldowns.filter((c) => c.scope.startsWith('model:'))) await api.clearCooldown('business', c.scope);
+  const both = await mount('/upstreams/business');
+  const chips = [...both.container.querySelectorAll('.fast-lane__cooldown')].map((c) => c.textContent?.trim() ?? '');
+  const cardOf = (title) => [...both.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === title);
+  const scopes = [...(cardOf('Cooling down')?.querySelectorAll('tbody tr') ?? [])].map((tr) => `${tr.children[0]?.textContent?.trim()} | ${tr.children[1]?.textContent?.trim()}`);
+  const badges = [...both.container.querySelectorAll('.detail__badges .badge')].map((b) => b.textContent?.trim() ?? '');
+  results.push({
+    name: '/upstreams an upstream whose fast lane cools on its rate limit and its credits shows a chip and a row for each and reads ready',
+    ok:
+      chips.length === 2 &&
+      /^Fast moderate limited, lifts in 1[12]m$/.test(chips[0]) &&
+      /^Fast modecredits unavailable, lifts in (39|40)m$/.test(chips[1]) &&
+      JSON.stringify(scopes) === JSON.stringify(['Fast mode | fast_rate_limit', 'Fast mode credits | fast_credits']) &&
+      badges[0] === 'Ready',
+    missing: [...chips, ...scopes, ...badges],
+  });
+  both.unmount();
+  api.putAccount(story);
+}
+{
   const head = m.container.querySelector('.detail__head');
   const headButtons = [...(head?.querySelectorAll('button') ?? [])].map((b) => b.textContent?.trim());
   results.push({ name: '/upstreams header holds every action', ok: ['Re-pair', 'Pause', 'Disconnect', 'Delete upstream'].every((l) => headButtons.includes(l)), missing: headButtons });
@@ -3304,20 +3329,23 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
   results.push({ name: '/analytics the key grouping charts each key in dollars and draws no plan share', ok: keys.includes('desktop') && keys.includes('laptop') && card('Plan per hour') === undefined, missing: keys });
   await burnGroup('Upstream');
   {
-    // Past the seven lines a chart draws, subscription upstreams fold into one plan line; its fast-mode dollars
-    // are no one upstream's, and a line labelled plan has no place on a dollars chart.
+    // Past the seven lines a chart draws, subscription upstreams fold into one plan line. Seven standard-only
+    // upstreams keep their lines, and the eighth, the smallest, spent dollars on fast mode alone: the folded rest
+    // carries them, under a label that names the dollars rather than the plan unit.
     const at = new Date(Date.now() - 3_600_000).toISOString();
-    api.getAnalyticsBurn = async () => ({ bucketSeconds: 3_600, points: Array.from({ length: 9 }, (_, i) => ({ at, cachedTokens: 0, fiveHourShare: 0.01, fiveHourUnmeasured: false, group: `plan-${i}`, sevenDayShare: 0.001, sevenDayUnmeasured: false, uncachedTokens: 1_000 * (9 - i), unit: 'window_share', usd: 0.5 })) });
+    api.getAnalyticsBurn = async () => ({ bucketSeconds: 3_600, points: Array.from({ length: 8 }, (_, i) => ({ at, cachedTokens: 0, fiveHourShare: i < 7 ? 0.01 : 0, fiveHourUnmeasured: false, group: `plan-${i}`, sevenDayShare: i < 7 ? 0.001 : 0, sevenDayUnmeasured: false, uncachedTokens: 1_000 * (8 - i), unit: 'window_share', usd: i < 7 ? 0 : 0.6 })) });
     await burnGroup('Key');
     await burnGroup('Upstream');
     const folded = legendOf('Spend per minute');
+    const values = [...(card('Spend per minute')?.querySelectorAll('.legend li .legend__value') ?? [])].map((v) => v.textContent?.trim() ?? '');
+    const said = card('Spend per minute')?.textContent ?? '';
     delete api.getAnalyticsBurn;
     await burnGroup('Key');
     await burnGroup('Upstream');
     results.push({
-      name: '/analytics spend per minute under the upstream grouping draws the upstreams that spent dollars and no folded plan line',
-      ok: folded.length === 7 && folded.every((t) => t.startsWith('plan-')),
-      missing: folded,
+      name: "/analytics spend per minute under the upstream grouping draws a folded rest's fast-mode dollars under a dollar label",
+      ok: JSON.stringify(folded) === JSON.stringify(['Other (fast mode)']) && JSON.stringify(values) === JSON.stringify(['$0.01']) && !said.includes('No upstream spent dollars in this range.'),
+      missing: [...folded, ...values, said.slice(0, 120)],
     });
   }
 

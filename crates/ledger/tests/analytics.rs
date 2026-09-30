@@ -10,7 +10,7 @@ use phoebis_ledger::{
     LedgerDb, LiveKeys, ModelPrice, ModelRow, PlanTables, PriceTable, RequestFilter, RequestRecord,
     RollupFilter, RollupRow, SeriesFilter, Tiers, NO_CLASS, UNATTRIBUTED,
 };
-use phoebis_routing::{RegistrySnapshot, RoutingState, FIVE_HOUR, SEVEN_DAY};
+use phoebis_routing::{PinUsage, RegistrySnapshot, RoutingState, FIVE_HOUR, SEVEN_DAY};
 use phoebis_store::{AccountKind, BudgetPeriod, PoolMember, RegistryLoad, RoutingLoad};
 use rand::{RngExt, SeedableRng};
 
@@ -1032,6 +1032,54 @@ fn a_fast_row_adds_dollars_and_no_share_to_a_subscription_burn_point() {
         ),
         (0.25, None, None),
         "without a tier the tables size, a fast row reads its dollars and no share"
+    );
+}
+
+#[test]
+fn fast_traffic_alone_on_a_model_without_plan_cells_reads_a_zero_share_on_a_sized_tier() {
+    let tables = PlanTables::shipped();
+    let kinds = HashMap::from([("a".to_string(), AccountKind::Oauth)]);
+    let tiers: Tiers = HashMap::from([("a".to_string(), Some(MAX_5X.to_string()))]);
+    let filter = SeriesFilter {
+        from: 0,
+        to: 7_200_000,
+        bucket_seconds: 3_600,
+        ..SeriesFilter::default()
+    };
+    let row = RollupRow {
+        input_tokens: 1_000,
+        output_tokens: 100,
+        estimated_usd: 0.25,
+        ..RollupRow::key(
+            3_600,
+            "k",
+            0,
+            "p",
+            "a",
+            "claude-opus-5-5",
+            "inference",
+            UNATTRIBUTED,
+            UNATTRIBUTED,
+            "none",
+            NO_CLASS,
+            "fast",
+        )
+    };
+    assert!(
+        tables
+            .share(FIVE_HOUR, MAX_5X, "claude-opus-5-5", PinUsage::default())
+            .is_none(),
+        "the model has no plan cells"
+    );
+    let point = burn_series_over(&[row], &tables, &kinds, &tiers, &filter)
+        .unwrap()
+        .into_iter()
+        .find(|p| p.at == 3_600_000)
+        .unwrap();
+    assert_eq!(
+        (point.usd, point.five_hour_share, point.seven_day_share),
+        (0.25, Some(0.0), Some(0.0)),
+        "the tier alone sizes the account, so its fast dollars sit beside a zero share of either window"
     );
 }
 

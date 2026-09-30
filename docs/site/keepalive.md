@@ -27,11 +27,12 @@ against that cost, per pool and per hour, and `GET /admin/keepalive/overview` re
 can go negative when probes outspend what they save.
 
 A probe of a request sent fast runs fast too, since the replay keeps the body as sent: it draws usage credits at the
-fast rates, settles in dollars whatever the upstream's funding, counts toward the dollar cap and no share cap, and its
-saving reads the fast input cell less the fast cache-read cell; a probe the upstream served at standard speed is priced
-at the standard cells. The upstream shares no cached prefix across speeds, so a probe keeps a request of its own speed
-warm alone: a session that switches between fast mode and standard requests earns no credit from the other speed's
-probe.
+fast rates, settles in dollars whatever the upstream's funding, and counts toward the dollar cap and no share cap; a
+probe the upstream served at standard speed is priced at the standard cells. A request it kept warm saves the input cell
+less the cache-read cell of the speed its own answer was served at, the fast cells when it was served fast and the
+standard cells when the upstream answered it at standard speed. The upstream shares no cached prefix across speeds, so a
+probe keeps a request of its own speed warm alone: a session that switches between fast mode and standard requests earns
+no credit from the other speed's probe.
 
 A pool's cache TTL policy applies to a probe the way it applies to the request it replays, because the probe goes
 through the same edit path: a marker-less recipe body takes the top-level member only where the policy's

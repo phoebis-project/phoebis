@@ -9,6 +9,7 @@ import { CACHE_TTL_DEFAULTS, METERED_TTL_DEFAULTS, PLAN_TTL_DEFAULTS, POOL_AFFIN
 import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons } from '@/lib/cache';
 import { emptyCounts } from '@/lib/counts';
 import { BUCKET_COUNT, emptyHistogram } from '@/lib/histogram';
+import { isFastScope } from '@/lib/quota';
 import { WINDOW_HOURS, WINDOW_LABEL, WINDOW_ORDER } from '@/lib/windows';
 
 type Rec = Record<string, unknown>;
@@ -60,7 +61,7 @@ function accountStatus(a: Rec, cooldowns: unknown[]): Account['status'] {
   if (state === 'unpaired' || state === 'disconnected') return 'unpaired';
   if (!bool(a.enabled, true)) return 'paused';
   // A fast-lane row holds fast-mode requests alone: the upstream still serves its standard traffic.
-  if (cooldowns.some((c) => str(rec(c).scope) !== 'fast')) return 'cooldown';
+  if (cooldowns.some((c) => !isFastScope(str(rec(c).scope)))) return 'cooldown';
   return 'ready';
 }
 

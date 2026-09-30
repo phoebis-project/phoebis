@@ -11,7 +11,7 @@ import { ChartTooltip, Legend, type TooltipRow } from '@/components/charts/Toolt
 import { MultiSelect, type Option } from '@/components/ui/MultiSelect';
 import { IconX } from '@/components/ui/icons';
 import { Badge, Button, Card, ErrorState, Input, Meter, Segmented, Select, Skeleton, Toggle } from '@/components/ui/primitives';
-import { CONVERSATION_CLASSES, MIN_RISE, RATIO_HIGH, RATIO_LOW, RECONCILED_WINDOW_LABEL, RETENTION_FOR_A_WEEK, foldBurn, moveLabel, own, placementCells, placementRungLabel, ratioOff, type BurnLine, type BurnRow } from '@/lib/analytics';
+import { CONVERSATION_CLASSES, MIN_RISE, RATIO_HIGH, RATIO_LOW, RECONCILED_WINDOW_LABEL, RETENTION_FOR_A_WEEK, foldBurn, moveLabel, own, placementCells, placementRungLabel, ratioOff, type BurnLine, type BurnLineUnit, type BurnRow } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missCount, missLabel, missReasonOrder } from '@/lib/cache';
 import { fmtAbsolute, fmtCompact, fmtDayShort, fmtDuration, fmtHourTick, fmtInt, fmtMs, fmtPct, fmtPeriodEnd, fmtShare, fmtUsd, shortId, toLocalInput, upperFirst } from '@/lib/format';
@@ -1271,6 +1271,9 @@ const OVERHEAD_HINT = 'every other class, and requests that named none';
 const CLASS_NOTE = `conversation is ${CONVERSATION_HINT}; overhead is ${OVERHEAD_HINT}`;
 
 const SPEND_NOTE = "Dollars per minute: API-key traffic, and a subscription upstream's fast-mode answers; its plan quota spends window share, charted under Plan per hour";
+/** A folded rest of subscription upstreams as the dollars chart names it: its dollars are its members' fast-mode
+ *  answers, and its own label names the plan unit, which the dollars axis does not chart. */
+const SPEND_REST_LABEL: Record<Exclude<BurnLineUnit, 'usd'>, string> = { unknown: 'Other (fast mode, tier unknown)', window_share: 'Other (fast mode)' };
 const PLAN_NOTE =
   "The share of each subscription upstream's own 5-hour window (solid) and 7-day window (dashed) its traffic used per hour, the 5-hour share weighed by the peak band";
 const UNMEASURED_NOTE = 'priced through an unmeasured cell';
@@ -1304,10 +1307,10 @@ function BurnCharts({ answer, error, groupBy, loading }: { answer: { bucketSecon
   const empty = !loading && error === null && rows.length === 0 ? 'No traffic in this range.' : undefined;
   const byUpstream = groupBy === 'account';
   // Every other grouping mixes both kinds of upstream, so its lines chart the dollars their API-key traffic and
-  // fast-mode answers spent; under the upstream grouping a subscription upstream draws a dollar line only for the
-  // usage credits its fast-mode answers spent, and a folded rest of subscription upstreams draws none, since its
-  // label names a plan unit the dollars axis does not chart.
-  const spent = lines.map((l, i) => ({ i, l })).filter(({ l }) => !byUpstream || l.unit === 'usd' || (!l.other && l.usdPerMinute > 0));
+  // fast-mode answers spent; under the upstream grouping a subscription upstream, or a folded rest of them, draws a
+  // dollar line only for the usage credits its fast-mode answers spent.
+  const spent = lines.map((l, i) => ({ i, l })).filter(({ l }) => !byUpstream || l.unit === 'usd' || l.usdPerMinute > 0);
+  const spendNameOf = (l: BurnLine) => (l.other && l.unit !== 'usd' ? SPEND_REST_LABEL[l.unit] : nameOf(l));
   // One precision for every tick, from the largest figure drawn, so the axis never mixes $0.0070 with $0.01.
   const usdMax = Math.max(0, ...rows.flatMap((r) => spent.map(({ i }) => r.usd[i])));
   const usdDigits = usdMax >= 10 ? 0 : usdMax >= 0.1 ? 2 : usdMax >= 0.01 ? 3 : 4;
@@ -1350,13 +1353,13 @@ function BurnCharts({ answer, error, groupBy, loading }: { answer: { bucketSecon
         error={error}
         loading={loading}
         empty={empty ?? (spent.length === 0 ? 'No upstream spent dollars in this range.' : undefined)}
-        legend={spent.map(({ l }) => ({ color: colorOf(l), label: nameOf(l), shape: 'line' as const, title: titleOf(l), value: fmtUsd(l.usdPerMinute) }))}
+        legend={spent.map(({ l }) => ({ color: colorOf(l), label: spendNameOf(l), shape: 'line' as const, title: titleOf(l), value: fmtUsd(l.usdPerMinute) }))}
       >
         <LineChart data={rows} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
           <CartesianGrid vertical={false} stroke={ink.grid} />
           <XAxis dataKey="at" tickFormatter={tick} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
           <YAxis tickFormatter={(v: number) => `$${v.toFixed(usdDigits)}`} tickLine={false} axisLine={false} width={56} />
-          <Tooltip cursor={{ stroke: ink.axis }} content={timeTip<BurnRow>((r) => spent.map(({ i, l }) => ({ color: colorOf(l), label: nameOf(l), title: titleOf(l), value: fmtUsd(r.usd[i]) })))} />
+          <Tooltip cursor={{ stroke: ink.axis }} content={timeTip<BurnRow>((r) => spent.map(({ i, l }) => ({ color: colorOf(l), label: spendNameOf(l), title: titleOf(l), value: fmtUsd(r.usd[i]) })))} />
           {spent.map(({ i, l }) => (
             <Line key={i} type="monotone" dataKey={(r: BurnRow) => r.usd[i]} stroke={colorOf(l)} strokeWidth={2} dot={false} isAnimationActive={false} />
           ))}

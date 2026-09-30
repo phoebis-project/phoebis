@@ -1441,8 +1441,9 @@ impl Engine {
                     .and_then(|s| s.tier),
                 _ => None,
             };
-            // The request that read the prefix would have paid it as input at its own speed's cells.
-            let speed = if fast { Speed::Fast } else { Speed::Standard };
+            // The request that read the prefix would have paid it as input at the cells of the speed it was
+            // served at, which the answer reports and which can fall short of the speed the recipe asked for.
+            let speed = Speed::of(complete.response.speed.as_deref());
             let saving_net = gross_saving(
                 unit,
                 &table,

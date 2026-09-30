@@ -343,10 +343,12 @@ pub(crate) async fn clear_cooldown(
     if let Err(refusal) = account(&state, &id) {
         return refusal;
     }
-    if scope != "account" && scope != "fast" && !scope.starts_with("model:") {
+    if !matches!(scope.as_str(), "account" | "fast" | "fast_credits")
+        && !scope.starts_with("model:")
+    {
         return failure(
             StatusCode::BAD_REQUEST,
-            "scope is account, fast or model:<canonical>",
+            "scope is account, fast, fast_credits or model:<canonical>",
         );
     }
     match state.router.clear_cooldown(&id, &scope).await {

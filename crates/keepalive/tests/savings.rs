@@ -869,6 +869,29 @@ async fn a_fast_probe_keeps_a_fast_request_warm_at_the_fast_cells_and_a_switch_o
     assert!(!row(&r, &switched).await.kept_warm);
 }
 
+/// The upstream may serve a request asked fast at standard speed: its saving is what the served speed's cells
+/// would have charged for the prefix, never the fast cells the recipe asked for.
+#[tokio::test]
+async fn a_request_asked_fast_and_served_standard_credits_the_standard_cells() {
+    let mut r = rig(RigSpec::default()).await;
+    let fast = opus_body().replacen('{', r#"{"speed":"fast","#, 1);
+    r.up.push_credential_rule(A, "/v1/messages", cold_answer());
+    r.observe_with("main", &fast).await;
+    r.up.push_credential_rule(A, "/v1/messages", fast_read_back());
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").probes, 1);
+    r.advance(60_000);
+    r.up.push_credential_rule(A, "/v1/messages", warm_answer());
+    let kept = r.observe_with("main", &fast).await;
+    let rows = rollups(&r, |rows| inference_rows(rows).kept_warm_requests == 1).await;
+    // Opus 5's standard cells: input 5 and cache read 0.50 per million.
+    let saving = 2_000.0 * (5.0 - 0.5) / 1_000_000.0;
+    let credited = inference_rows(&rows).saved_usd_gross;
+    assert!((credited - saving).abs() < 1e-12, "{credited}");
+    assert!(row(&r, &kept).await.kept_warm);
+}
+
 /// A restart restores the plan-side figure beside the dollar one: an oauth account's probe counts toward it
 /// mid-day, not only while the engine has run continuously.
 #[tokio::test]

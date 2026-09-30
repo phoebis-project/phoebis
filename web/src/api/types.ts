@@ -28,7 +28,7 @@ export interface ExtraUsage {
 
 export interface Cooldown {
   reason: string;
-  /** What the cooldown covers, as the router spells it: `account`, `fast` (the fast lane), or `model:<id>`. Clearing one names this. */
+  /** What the cooldown covers, as the router spells it: `account`, `fast` (the fast lane's rate limit), `fast_credits` (its usage-credits refusal), or `model:<id>`. Clearing one names this. */
   scope: string;
   setAt: string;
   until: string;
