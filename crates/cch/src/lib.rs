@@ -1,5 +1,7 @@
 //! The Claude Code billing-header hash (`cch=xxxxx;`) that must be recomputed after any body edit.
 
+use std::borrow::Cow;
+
 use xxhash_rust::xxh64::xxh64;
 
 pub const SEED: u64 = 0x4D65_9218_E32A_3268;
@@ -346,6 +348,39 @@ fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
 /// `content` array (a `tool_result`'s blocks), in body order. One pass; a member of that name anywhere else (a
 /// tool schema, a tool input, a block nested deeper than that) is skipped with the value that holds it.
 pub fn cache_control_spans(body: &[u8]) -> Result<Vec<(usize, usize)>, CchError> {
+    cache_control_walk(body, Keys::Raw)
+}
+
+/// How many `cache_control` members sit where `cache_control_spans` looks once every key on the way is decoded.
+/// The two differ exactly where a key the Messages API reads (the marker's own, or a container's above it) is
+/// spelled with an escape: a decoder reaches that marker and the raw walk, whose spans a body edit splices, does
+/// not. Walked by the same scanner rather than a parse of the whole body, so a body a strict decoder refuses (a
+/// lone surrogate escape in a string value) is counted like any other.
+pub fn decoded_cache_control_count(body: &[u8]) -> Result<usize, CchError> {
+    cache_control_walk(body, Keys::Decoded).map(|spans| spans.len())
+}
+
+/// How a walk reads a member's key.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Keys {
+    /// The bytes between the quotes, as the client spelled them.
+    Raw,
+    /// What a decoder reads through the key's escapes.
+    Decoded,
+}
+
+/// A member key as `keys` reads it. A key that does not decode names none of the members a walk looks for, all
+/// plain ASCII, so it reads as no name at all.
+fn key_name(body: &[u8], ks: usize, ke: usize, keys: Keys) -> Cow<'_, [u8]> {
+    let raw = &body[ks + 1..ke - 1];
+    if keys == Keys::Raw || !raw.contains(&b'\\') {
+        return Cow::Borrowed(raw);
+    }
+    serde_json::from_slice::<String>(&body[ks..ke])
+        .map_or(Cow::Borrowed(&[][..]), |key| Cow::Owned(key.into_bytes()))
+}
+
+fn cache_control_walk(body: &[u8], keys: Keys) -> Result<Vec<(usize, usize)>, CchError> {
     let mut s = Scanner {
         body,
         pos: 0,
@@ -369,14 +404,14 @@ pub fn cache_control_spans(body: &[u8]) -> Result<Vec<(usize, usize)>, CchError>
             return Err(CchError::Json(s.pos));
         }
         s.ws();
-        match &s.body[ks + 1..ke - 1] {
+        match key_name(body, ks, ke, keys).as_ref() {
             b"cache_control" => {
                 let start = s.pos;
                 s.value(false)?;
                 spans.push((start, s.pos));
             }
-            b"system" | b"tools" => block_array(&mut s, &mut spans, false)?,
-            b"messages" => message_array(&mut s, &mut spans)?,
+            b"system" | b"tools" => block_array(&mut s, &mut spans, false, keys)?,
+            b"messages" => message_array(&mut s, &mut spans, keys)?,
             _ => s.value(false)?,
         }
         s.ws();
@@ -399,6 +434,7 @@ fn block_array(
     s: &mut Scanner<'_>,
     spans: &mut Vec<(usize, usize)>,
     inner: bool,
+    keys: Keys,
 ) -> Result<(), CchError> {
     s.ws();
     if s.body.get(s.pos) != Some(&b'[') {
@@ -412,7 +448,7 @@ fn block_array(
     loop {
         s.ws();
         if s.body.get(s.pos) == Some(&b'{') {
-            block_object(s, spans, inner)?;
+            block_object(s, spans, inner, keys)?;
         } else {
             s.value(false)?;
         }
@@ -435,6 +471,7 @@ fn block_object(
     s: &mut Scanner<'_>,
     spans: &mut Vec<(usize, usize)>,
     inner: bool,
+    keys: Keys,
 ) -> Result<(), CchError> {
     s.pos += 1;
     s.ws();
@@ -449,7 +486,8 @@ fn block_object(
             return Err(CchError::Json(s.pos));
         }
         s.ws();
-        match &s.body[ks + 1..ke - 1] {
+        let body = s.body;
+        match key_name(body, ks, ke, keys).as_ref() {
             b"cache_control" => {
                 let start = s.pos;
                 s.value(false)?;
@@ -457,7 +495,7 @@ fn block_object(
             }
             // A `tool_result` is the one block the API gives a `content` array of blocks, and its `type` may
             // follow `content` in body order, so the member is read on its name alone and one level only.
-            b"content" if !inner => block_array(s, spans, true)?,
+            b"content" if !inner => block_array(s, spans, true, keys)?,
             _ => s.value(false)?,
         }
         s.ws();
@@ -474,7 +512,11 @@ fn block_object(
 
 /// `messages[]`: each object element's `content` is walked as `block_array` walks `system` and `tools`, when it
 /// is an array; every other member, and a non-array `content`, is skipped whole.
-fn message_array(s: &mut Scanner<'_>, spans: &mut Vec<(usize, usize)>) -> Result<(), CchError> {
+fn message_array(
+    s: &mut Scanner<'_>,
+    spans: &mut Vec<(usize, usize)>,
+    keys: Keys,
+) -> Result<(), CchError> {
     s.ws();
     if s.body.get(s.pos) != Some(&b'[') {
         return s.value(false);
@@ -487,7 +529,7 @@ fn message_array(s: &mut Scanner<'_>, spans: &mut Vec<(usize, usize)>) -> Result
     loop {
         s.ws();
         if s.body.get(s.pos) == Some(&b'{') {
-            message_object(s, spans)?;
+            message_object(s, spans, keys)?;
         } else {
             s.value(false)?;
         }
@@ -503,7 +545,11 @@ fn message_array(s: &mut Scanner<'_>, spans: &mut Vec<(usize, usize)>) -> Result
     Ok(())
 }
 
-fn message_object(s: &mut Scanner<'_>, spans: &mut Vec<(usize, usize)>) -> Result<(), CchError> {
+fn message_object(
+    s: &mut Scanner<'_>,
+    spans: &mut Vec<(usize, usize)>,
+    keys: Keys,
+) -> Result<(), CchError> {
     s.pos += 1;
     s.ws();
     if s.eat(b'}') {
@@ -517,8 +563,8 @@ fn message_object(s: &mut Scanner<'_>, spans: &mut Vec<(usize, usize)>) -> Resul
             return Err(CchError::Json(s.pos));
         }
         s.ws();
-        if &s.body[ks + 1..ke - 1] == b"content" {
-            block_array(s, spans, false)?;
+        if key_name(s.body, ks, ke, keys).as_ref() == b"content" {
+            block_array(s, spans, false, keys)?;
         } else {
             s.value(false)?;
         }
@@ -1051,6 +1097,27 @@ mod tests {
             ],
             "the tool's own marker is found, the one inside its input_schema is skipped with the schema"
         );
+    }
+
+    #[test]
+    fn the_decoded_marker_count_reaches_an_escaped_key_the_raw_walk_misses() {
+        let escaped_marker =
+            br#"{"system":[{"type":"text","text":"s","cache_contr\u006fl":{"type":"ephemeral"}}]}"#;
+        assert_eq!(decoded_cache_control_count(escaped_marker).unwrap(), 1);
+        assert!(cache_control_spans(escaped_marker).unwrap().is_empty());
+
+        let escaped_container =
+            br#"{"sy\u0073tem":[{"type":"text","text":"s","cache_control":{"type":"ephemeral"}}]}"#;
+        assert_eq!(decoded_cache_control_count(escaped_container).unwrap(), 1);
+        assert!(cache_control_spans(escaped_container).unwrap().is_empty());
+
+        let schema = br#"{"tools":[{"name":"t","input_schema":{"properties":{"cache_contr\u006fl":{}}}}],"messages":[{"role":"user","content":[{"type":"text","text":"\udc00","cache_control":{"type":"ephemeral"}}]}]}"#;
+        assert_eq!(
+            decoded_cache_control_count(schema).unwrap(),
+            1,
+            "a tool schema's property is the client's data, and a lone surrogate in a value is walked past"
+        );
+        assert_eq!(cache_control_spans(schema).unwrap().len(), 1);
     }
 
     #[test]

@@ -151,10 +151,9 @@ id, between admission and routing.
 
 A request body whose top-level object carries `model`, `metadata` or `stream` more than once, raw or escaped, whose
 `safeguards` member cannot be cut while its key's server-side auto mode is off (carried twice, or spelled with an
-escape), or whose `cache_control` marker the pool's cache TTL policy cannot reach (the key spelled with an escape, or
-repeated in one object), is refused before anything reaches the upstream: `400` with the error code `body_shape` and a
-message naming the member. A body whose top-level object nests deeper than the relay reads is refused `400` with the
-error code `invalid_body`.
+escape), or whose `cache_control` marker the pool's cache TTL policy cannot reach (the key spelled with an escape), is
+refused before anything reaches the upstream: `400` with the error code `body_shape` and a message naming the member. A
+body whose top-level object nests deeper than the relay reads is refused `400` with the error code `invalid_body`.
 
 A request body that does not finish arriving within the compiled-in wait after authentication is refused `408`
 with the error code `request_timeout` and the message `the request body did not arrive in time`.

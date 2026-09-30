@@ -233,27 +233,27 @@ pub fn edit_body(body: &mut Vec<u8>, edit: &NativeEdit<'_>) -> Result<BodyEdits,
 /// decoder reads it through its escapes, so a body spelling the key any other way carries a marker the rewrite
 /// never reaches: its hour would outlive a five-minute policy, unenforced and unreported. Where the two
 /// readings disagree the request is refused. Answers whether any byte moved.
+///
+/// The decoder's count comes from a key-decoding walk over the same scanner, never a parse of the whole body: a
+/// strict parser refuses a body for a lone surrogate escape (a client emits one for a string cut mid-pair) that
+/// says nothing about its markers.
 pub fn set_cache_ttl(
     body: &mut Vec<u8>,
     ttl: CacheTtl,
     markerless: Markerless,
 ) -> Result<bool, RelayError> {
     let changed = rewrite_cache_ttl(body, ttl, markerless)?;
-    let enforced = match (schema_markers(body), phoebis_cch::cache_control_spans(body)) {
-        (Some(decoded), Ok(walked)) => decoded == walked.len(),
+    let enforced = match (
+        phoebis_cch::decoded_cache_control_count(body),
+        phoebis_cch::cache_control_spans(body),
+    ) {
+        (Ok(decoded), Ok(walked)) => decoded == walked.len(),
         _ => false,
     };
     if !enforced {
         return Err(RelayError::BodyShape(BodyMember::CacheControl));
     }
     Ok(changed)
-}
-
-/// How many `cache_control` members a decoder reads at the positions the Messages API takes them from. `None`
-/// where the body does not parse.
-fn schema_markers(body: &[u8]) -> Option<usize> {
-    let root = serde_json::from_slice::<serde_json::Value>(body).ok()?;
-    Some(schema_cache_controls(root.as_object()?).len())
 }
 
 /// Every `cache_control` member at the five positions the Messages API takes one from: the top level,
@@ -280,8 +280,8 @@ pub(crate) fn schema_cache_controls(
     for message in messages {
         let content = message.get("content");
         found.extend(blocks(content));
-        // The walk reads a `tool_result`'s own blocks one level down, so this reading has to as well, or the
-        // two would disagree on every such body and the edit would be refused.
+        // The walk reads a `tool_result`'s own blocks one level down, so this reading does too, or the facts
+        // would miss a marker the rewrite edits.
         let nested = content
             .and_then(serde_json::Value::as_array)
             .into_iter()
@@ -848,8 +848,8 @@ mod tests {
             "the escape is in the raw bytes"
         );
         assert_eq!(
-            schema_markers(escaped),
-            Some(1),
+            phoebis_cch::decoded_cache_control_count(escaped).unwrap(),
+            1,
             "the decoder reads the marker"
         );
         assert!(
@@ -862,12 +862,43 @@ mod tests {
             Err(RelayError::BodyShape(BodyMember::CacheControl))
         ));
 
-        let repeated = br#"{"system":[{"type":"text","text":"s","cache_control":{"type":"ephemeral"},"cache_control":{"type":"ephemeral","ttl":"1h"}}],"messages":[]}"#;
+        let repeated = br#"{"system":[{"type":"text","text":"s","cache_control":{"type":"ephemeral"},"cache_contr\u006fl":{"type":"ephemeral","ttl":"1h"}}],"messages":[]}"#;
         let mut body = repeated.to_vec();
         assert!(matches!(
             set_cache_ttl(&mut body, CacheTtl::FiveMinutes, Markerless::TakesTheMember),
             Err(RelayError::BodyShape(BodyMember::CacheControl))
         ));
+    }
+
+    #[test]
+    fn set_cache_ttl_places_every_marker_of_a_body_a_strict_decoder_refuses() {
+        let surrogate = br#"{"system":[{"type":"text","text":"\udc00","cache_control":{"type":"ephemeral","ttl":"1h"}}],"messages":[{"role":"user","content":[{"type":"text","text":"x","cache_control":{"type":"ephemeral","ttl":"1h"}}]}]}"#;
+        assert!(
+            serde_json::from_slice::<serde_json::Value>(surrogate).is_err(),
+            "a lone surrogate escape is one the decoder refuses"
+        );
+        let mut body = surrogate.to_vec();
+        assert!(
+            set_cache_ttl(&mut body, CacheTtl::FiveMinutes, Markerless::TakesTheMember).unwrap()
+        );
+        let spans = phoebis_cch::cache_control_spans(&body).unwrap();
+        assert_eq!(spans.len(), 2, "no marker added or refused");
+        for (start, end) in spans {
+            assert_eq!(&body[start..end], br#"{"type":"ephemeral"}"#);
+        }
+    }
+
+    #[test]
+    fn set_cache_ttl_places_both_plain_spellings_of_a_repeated_marker() {
+        let mut body = br#"{"system":[{"type":"text","text":"s","cache_control":{"type":"ephemeral","ttl":"1h"},"cache_control":{"type":"ephemeral","ttl":"1h"}}],"messages":[]}"#.to_vec();
+        assert!(
+            set_cache_ttl(&mut body, CacheTtl::FiveMinutes, Markerless::TakesTheMember).unwrap()
+        );
+        assert_eq!(
+            body,
+            br#"{"system":[{"type":"text","text":"s","cache_control":{"type":"ephemeral"},"cache_control":{"type":"ephemeral"}}],"messages":[]}"#,
+            "whichever spelling a parser keeps carries the policy's TTL"
+        );
     }
 
     #[test]
