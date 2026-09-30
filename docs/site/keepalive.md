@@ -29,7 +29,9 @@ can go negative when probes outspend what they save.
 A probe of a request sent fast runs fast too, since the replay keeps the body as sent: it draws usage credits at the
 fast rates, settles in dollars whatever the upstream's funding, counts toward the dollar cap and no share cap, and its
 saving reads the fast input cell less the fast cache-read cell; a probe the upstream served at standard speed is priced
-at the standard cells.
+at the standard cells. The upstream shares no cached prefix across speeds, so a probe keeps a request of its own speed
+warm alone: a session that switches between fast mode and standard requests earns no credit from the other speed's
+probe.
 
 A pool's cache TTL policy applies to a probe the way it applies to the request it replays, because the probe goes
 through the same edit path: a marker-less recipe body takes the top-level member only where the policy's
@@ -134,8 +136,8 @@ Both daily caps count per UTC day and are kept in `router.sqlite` as each probe 
 where they stood. A probe settled in dollars, on an api_key account, a subscription account in overage, or a model
 the plan table lacks, counts toward its pool's `probe_cost_cap_usd_per_day`; a plan-funded probe counts toward its
 account's `probe_cap_window_share_per_day`, and a migrated probe toward neither. A fast-mode session's probes settle
-in dollars and count toward `probe_cost_cap_usd_per_day`; `probe_cap_window_share_per_day` bounds plan-funded probes
-alone, and a fast-mode session's probes never count toward it.
+in dollars and count toward `probe_cost_cap_usd_per_day`, never toward `probe_cap_window_share_per_day`, which bounds
+plan-funded probes alone.
 
 ## The cost reference
 

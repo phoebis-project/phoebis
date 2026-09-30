@@ -804,6 +804,71 @@ async fn the_share_cap_ignores_a_fast_probe_and_the_dollar_cap_counts_it() {
     );
 }
 
+/// A fast session's cache lives on the fast lane, so a fast probe keeps a fast request warm at the fast cells and
+/// nothing on the standard lane.
+#[tokio::test]
+async fn a_fast_probe_keeps_a_fast_request_warm_at_the_fast_cells_and_a_switch_of_speed_earns_nothing(
+) {
+    let mut r = rig(RigSpec::default()).await;
+    let fast = opus_body().replacen('{', r#"{"speed":"fast","#, 1);
+    r.up.push_credential_rule(A, "/v1/messages", cold_answer());
+    r.observe_with("main", &fast).await;
+    r.up.push_credential_rule(A, "/v1/messages", fast_read_back());
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").probes, 1);
+    r.advance(60_000);
+    r.up.push_credential_rule(A, "/v1/messages", fast_read_back());
+    let kept = r.observe_with("main", &fast).await;
+    let rows = rollups(&r, |rows| inference_rows(rows).kept_warm_requests == 1).await;
+    let mut on_fast = RollupRow::key(0, "", 0, "", "", "", "inference", "", "", "", "", "");
+    for row in rows
+        .iter()
+        .filter(|row| row.kind == "inference" && row.speed == "fast")
+    {
+        on_fast.add(row);
+    }
+    // Opus 5's fast cells: input 10 and cache read 1.00 per million.
+    let saving = 2_000.0 * (10.0 - 1.0) / 1_000_000.0;
+    assert_eq!(
+        (on_fast.kept_warm_requests, on_fast.kept_warm_tokens),
+        (1, 2_000),
+        "the credit files under speed fast"
+    );
+    assert!(
+        (on_fast.saved_usd_gross - saving).abs() < 1e-12,
+        "{}",
+        on_fast.saved_usd_gross
+    );
+    let probe_speeds: Vec<&str> = rows
+        .iter()
+        .filter(|row| row.kind == "probe")
+        .map(|row| row.speed.as_str())
+        .collect();
+    assert!(
+        !probe_speeds.is_empty() && probe_speeds.iter().all(|speed| *speed == "fast"),
+        "and the probe that kept it under speed fast too: {probe_speeds:?}"
+    );
+    assert!(row(&r, &kept).await.kept_warm);
+
+    r.up.push_credential_rule(A, "/v1/messages", fast_read_back());
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").probes, 2);
+    r.advance(60_000);
+    let switched = r.observe_with("main", &opus_body()).await;
+    // The next probe's delta reaches the ledger behind any credit the switched request earned.
+    r.advance(270_000);
+    r.step().await;
+    let rows = rollups(&r, |rows| probe_rows(rows).requests >= 3).await;
+    assert_eq!(
+        inference_rows(&rows).kept_warm_requests,
+        1,
+        "a standard request reads no cache the fast probe kept, whatever it reads back"
+    );
+    assert!(!row(&r, &switched).await.kept_warm);
+}
+
 /// A restart restores the plan-side figure beside the dollar one: an oauth account's probe counts toward it
 /// mid-day, not only while the engine has run continuously.
 #[tokio::test]

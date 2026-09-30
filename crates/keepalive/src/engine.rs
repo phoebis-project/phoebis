@@ -379,6 +379,9 @@ pub(crate) struct Agent {
     /// The unit the covering probe's own cost settled in, so the credit it earns later settles in the same one;
     /// a model the plan table lacks falls the unit back to dollars along with the cost, so the two never split.
     pub covered_unit: Option<SavingsUnit>,
+    /// The covering probe's recipe was sent fast: it kept the fast lane's cache, which a standard request never
+    /// reads, and the reverse.
+    pub covered_fast: bool,
     pub last_real_at: Option<i64>,
     /// The label of the last discard that had one, so a probe result arriving after the recipe stopped settles
     /// under the stop that orphaned it.
@@ -422,6 +425,7 @@ impl Agent {
             covered_since_real: false,
             covered_account: None,
             covered_unit: None,
+            covered_fast: false,
             last_real_at: None,
             last_stop: None,
         }
@@ -462,6 +466,8 @@ pub(crate) struct PriorCoverage {
     /// account either).
     pub unit: Option<SavingsUnit>,
     pub model: String,
+    /// The covering recipe's speed, which the credited request's has to match.
+    pub fast: bool,
     pub real_at: i64,
     pub ttl_ms: i64,
 }
@@ -1134,6 +1140,7 @@ impl Engine {
                 covered: agent.covered_since_real,
                 unit: agent.covered_unit,
                 model: agent.canonical_model.clone(),
+                fast: agent.covered_fast,
                 real_at,
                 ttl_ms: agent.ttl_ms,
             })
@@ -1146,6 +1153,7 @@ impl Engine {
         agent.covered_since_real = false;
         agent.covered_account = None;
         agent.covered_unit = None;
+        agent.covered_fast = false;
         if agent.state == AgentState::Unknown {
             inner.set_reason(&key, &agent_id, Reason::AgentUnknown);
             return;
@@ -1384,6 +1392,10 @@ impl Engine {
                     let ttl = prior.ttl_ms.max(crate::config::FIVE_MINUTES_MS);
                     let gap_exceeded = agent.last_real_at.unwrap_or(now) - prior.real_at > ttl;
                     let same_model = prior.model == agent.canonical_model;
+                    let fast = agent.current.as_ref().is_some_and(|o| o.recipe.fast);
+                    // The upstream shares no cached prefix across speeds, so a probe on the other lane kept
+                    // nothing this request read.
+                    let same_speed = prior.fast == fast;
                     // The account that served this request, after any failover, has to be the one the
                     // covering probe warmed; a prefix cached elsewhere by ordinary traffic is nobody's
                     // saving to claim.
@@ -1395,6 +1407,7 @@ impl Engine {
                     (prior.covered
                         && gap_exceeded
                         && same_model
+                        && same_speed
                         && same_account
                         && read > 0
                         && unit.is_some())
@@ -1406,7 +1419,7 @@ impl Engine {
                             agent.account.clone(),
                             agent.canonical_model.clone(),
                             unit.unwrap(),
-                            agent.current.as_ref().is_some_and(|o| o.recipe.fast),
+                            fast,
                         )
                     })
                 })

@@ -2777,8 +2777,8 @@ impl Relay {
         }
     }
 
-    /// A head that answers none of the three header families (the unified windows, the api_key buckets, the fast
-    /// lane's buckets) carries no sample and changes nothing.
+    /// A head that answers none of the three header families (the api_key buckets, the fast lane's buckets, the
+    /// unified windows) carries no sample and changes nothing.
     fn report_head_sample(
         &self,
         account: &AccountRow,

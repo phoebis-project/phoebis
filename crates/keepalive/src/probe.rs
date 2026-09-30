@@ -678,6 +678,7 @@ impl Inner {
             agent.covered_since_real = true;
             agent.covered_account = Some(record.account.clone());
             agent.covered_unit = covered_unit;
+            agent.covered_fast = job.recipe.fast;
         }
         self.set_reason(key, agent_id, Reason::Scheduled);
         // A probe that consumed its whole refresh interval must not start a tight loop.
