@@ -1519,7 +1519,6 @@ async fn a_rollup_row_from_before_the_class_dimension_reads_under_the_reserved_c
                  ALTER TABLE account_rollups_hourly DROP COLUMN migrations_json; \
                  ALTER TABLE attempts DROP COLUMN selection; \
                  ALTER TABLE quota_samples DROP COLUMN observed_at; \
-                 DROP TABLE window_reconciliations; \
                  ALTER TABLE requests DROP COLUMN auto_mode;",
             )?;
             Ok(())
@@ -1545,7 +1544,7 @@ async fn a_rollup_row_from_before_the_class_dimension_reads_under_the_reserved_c
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 22);
+    assert_eq!(db.schema_version().await.unwrap(), 23);
     let rows = db
         .read_blocking(|c| phoebis_ledger::read_rollups(c, 0, i64::MAX))
         .unwrap();
@@ -1633,7 +1632,6 @@ async fn migration_nineteen_adds_the_identity_columns_to_a_version_eighteen_file
                  ALTER TABLE requests DROP COLUMN forked_from; \
                  ALTER TABLE requests DROP COLUMN fork_depth; \
                  ALTER TABLE quota_samples DROP COLUMN observed_at; \
-                 DROP TABLE window_reconciliations; \
                  ALTER TABLE requests DROP COLUMN auto_mode; \
                  UPDATE meta SET value = '18' WHERE key = 'schema_version';",
             )?;
@@ -1642,7 +1640,7 @@ async fn migration_nineteen_adds_the_identity_columns_to_a_version_eighteen_file
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 22);
+    assert_eq!(db.schema_version().await.unwrap(), 23);
     let (row, _) = db.request("r0").await.unwrap().unwrap();
     assert_eq!(
         (
@@ -1674,6 +1672,9 @@ async fn migration_nineteen_adds_the_identity_columns_to_a_version_eighteen_file
     );
 }
 
+/// The table migration 23 drops, recreated so a forward replay from version 20 or 21 can drop it again.
+const RECREATE_DROPPED_TABLE: &str = "CREATE TABLE window_reconciliations (account_id TEXT NOT NULL, window TEXT NOT NULL, window_end INTEGER NOT NULL, computed_at INTEGER NOT NULL, PRIMARY KEY (account_id, window, window_end)); -- rollback";
+
 #[tokio::test]
 async fn a_ledger_from_before_the_auto_mode_column_gains_it() {
     let dir = tempfile::tempdir().unwrap();
@@ -1681,16 +1682,16 @@ async fn a_ledger_from_before_the_auto_mode_column_gains_it() {
     {
         let db = phoebis_ledger::LedgerDb::open(&path).unwrap();
         db.write(|c| {
-            c.execute_batch(
-                "ALTER TABLE requests DROP COLUMN auto_mode; \
-                 UPDATE meta SET value = '20' WHERE key = 'schema_version';",
-            )?;
+            c.execute_batch(&format!(
+                "ALTER TABLE requests DROP COLUMN auto_mode; {RECREATE_DROPPED_TABLE}\n\
+                 UPDATE meta SET value = '20' WHERE key = 'schema_version';"
+            ))?;
             Ok(())
         })
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 22);
+    assert_eq!(db.schema_version().await.unwrap(), 23);
     let columns = db
         .read_blocking(|c| {
             let mut stmt = c.prepare("SELECT name FROM pragma_table_info('requests')")?;
@@ -1701,6 +1702,19 @@ async fn a_ledger_from_before_the_auto_mode_column_gains_it() {
         })
         .unwrap();
     assert!(columns.contains(&"auto_mode".to_string()));
+    let reconciliation_tables: i64 = db
+        .read_blocking(|c| {
+            Ok(c.query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'window_reconciliations'",
+                [],
+                |r| r.get(0),
+            )?)
+        })
+        .unwrap();
+    assert_eq!(
+        reconciliation_tables, 0,
+        "migration 23 dropped the reconciliation table"
+    );
 }
 
 #[tokio::test]
@@ -1745,7 +1759,7 @@ async fn migration_twenty_two_files_every_rollup_row_under_standard_speed_and_ke
             c.execute_batch(&format!(
                 "CREATE TABLE rollups_hourly_prev AS SELECT {columns} FROM rollups_hourly; \
                  DROP TABLE rollups_hourly; \
-                 ALTER TABLE rollups_hourly_prev RENAME TO rollups_hourly; \
+                 ALTER TABLE rollups_hourly_prev RENAME TO rollups_hourly; {RECREATE_DROPPED_TABLE}\n\
                  UPDATE meta SET value = '21' WHERE key = 'schema_version';"
             ))?;
             Ok(())
@@ -1753,7 +1767,7 @@ async fn migration_twenty_two_files_every_rollup_row_under_standard_speed_and_ke
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 22);
+    assert_eq!(db.schema_version().await.unwrap(), 23);
     let speeds = |ledger: &phoebis_ledger::LedgerDb| {
         ledger
             .read_blocking(|c| {

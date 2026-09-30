@@ -12,7 +12,6 @@ import type {
   AnalyticsGroup,
   AnalyticsPoint,
   AnalyticsQuery,
-  AnalyticsReconciliations,
   ApiKey,
   BudgetPeriod,
   BurnGroup,
@@ -181,8 +180,6 @@ export interface Api {
   getAnalyticsBreakdown(query: AnalyticsQuery): Promise<AnalyticsGroup[]>;
   /** The route reads the range and the grouping alone; no other filter of the query narrows it. */
   getAnalyticsBurn(range: Pick<AnalyticsQuery, 'from' | 'to'>, groupBy: BurnGroup): Promise<{ bucketSeconds: number; points: BurnPoint[] }>;
-  /** The completed windows of the last 30 days, which hold no range. */
-  getAnalyticsReconciliations(): Promise<AnalyticsReconciliations>;
   getAnalyticsRewrites(range: Pick<AnalyticsQuery, 'from' | 'to'>): Promise<{ moves: Record<string, number>; points: RewritePoint[] }>;
   getAnalyticsSeries(query: AnalyticsQuery): Promise<AnalyticsPoint[]>;
   getCapturedBodies(requestId: string): Promise<CapturedBodies | null>;

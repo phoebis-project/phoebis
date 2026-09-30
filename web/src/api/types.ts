@@ -836,38 +836,6 @@ export interface RewritePoint {
   rewriteTokens: number;
 }
 
-/** One completed 5-hour or 7-day window of a subscription upstream, as `GET /admin/analytics/reconciliations`
- *  answers it: the rise its readings showed against the share the router predicted for its own requests in it. */
-export interface WindowReconciliation {
-  accountId: string;
-  computedAt: string;
-  /** The instants of the run's first and last readings; the router's requests completed between them. */
-  firstReadingAt: string;
-  lastReadingAt: string;
-  /** The last reading's utilization over the first's, as a fraction of the window. */
-  observedRise: number;
-  /** The share of the window the router priced its own requests at. */
-  predictedShare: number;
-  /** `observedRise` over `predictedShare`: 1.1 means the meter charged 1.1 times the table. */
-  ratio: number;
-  requests: number;
-  /** Whether any request was priced through a cell or factor no measurement has filled, or an attempt on a model
-   *  the cost table lacks was left out of the prediction. */
-  unmeasured: boolean;
-  /** `five_hour` or `seven_day`. */
-  window: string;
-  /** The reset the window's readings named. */
-  windowEnd: string;
-}
-
-/** The reconciliations of the last 30 days, newest first, and the request retention that bounds them. */
-export interface AnalyticsReconciliations {
-  reconciliations: WindowReconciliation[];
-  /** `stats.retention_days` as configured, zero meaning forever: a window older than the kept requests is not
-   *  reconciled. */
-  requestRetentionDays: number;
-}
-
 export type KeepaliveState = 'busy' | 'idle' | 'parked';
 
 /** Whether a cache-keepalive companion is registered for the session and still reporting. */
@@ -999,7 +967,6 @@ export type AlertKind =
   | 'client_drift'
   | 'funding_required'
   | 'keepalive_cost_cap'
-  | 'meter_drift'
   | 'poll_backoff'
   | 'pool_exhausted'
   | 'reauth_required'
@@ -1036,18 +1003,6 @@ export interface ClientDriftDetail {
   key: string | null;
   /** Free text: the relay names the check that caught the drift, and a later build may name another one. */
   trigger: string;
-}
-
-/** What a meter_drift event carried: the completed window whose ratio left the band. */
-export interface MeterDriftDetail {
-  account: string;
-  observed_rise: number;
-  predicted_share: number;
-  ratio: number;
-  requests: number;
-  /** `five_hour` or `seven_day`. */
-  window: string;
-  window_end: number;
 }
 
 /** What a poll_backoff event carried: since when the upstream's usage poll has been answered 429. */

@@ -110,8 +110,8 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
             system["ledger"]["dropped"].as_u64(),
             system["ledger"]["channel_depth"].as_u64()
         ),
-        (Some(22), Some(0), Some(4_096)),
-        "the ledger schema is at the migration that keys the rollups by speed"
+        (Some(23), Some(0), Some(4_096)),
+        "the ledger schema is at the migration that drops the reconciliation table"
     );
     assert_eq!(system["gaps"][0]["detail"]["dropped"].as_u64(), Some(7));
     assert!(
@@ -1319,81 +1319,6 @@ async fn the_rewrites_route_answers_the_series_and_the_moves_by_reason() {
         .sum();
     assert_eq!(total, 500, "the moved attempt's cache write is the rewrite");
     assert_eq!(rewrites["moves"]["shed"].as_u64(), Some(1));
-}
-
-#[tokio::test]
-async fn the_reconciliations_route_answers_the_rows_newest_first_and_the_request_retention() {
-    let parts = common::admin_parts_full().await;
-    let cookie = login(&parts.app, "admin-secret").await;
-    let row = |window: &str, window_end: i64, ratio: f64| phoebis_ledger::ReconciliationRow {
-        account_id: "business".into(),
-        computed_at: window_end + 900_000,
-        first_reading_at: window_end - 4 * HOUR,
-        last_reading_at: window_end - HOUR,
-        observed_rise: 0.2,
-        predicted_share: 0.2 / ratio,
-        ratio,
-        requests: 4,
-        unmeasured: window == phoebis_routing::SEVEN_DAY,
-        window: window.into(),
-        window_end,
-    };
-    parts
-        .db
-        .insert_reconciliations(vec![
-            row(phoebis_routing::FIVE_HOUR, common::NOW - 2 * HOUR, 1.1),
-            row(phoebis_routing::SEVEN_DAY, common::NOW - HOUR, 1.4),
-            row(phoebis_routing::FIVE_HOUR, common::NOW - 40 * 24 * HOUR, 1.0),
-        ])
-        .await
-        .unwrap();
-    let body = json(
-        get(
-            &parts.app,
-            "/admin/analytics/reconciliations",
-            Some(&cookie),
-        )
-        .await,
-    )
-    .await;
-    assert_eq!(body["request_retention_days"].as_u64(), Some(90));
-    let rows = body["reconciliations"].as_array().unwrap();
-    assert_eq!(
-        rows.iter()
-            .map(|r| (
-                r["window"].as_str().unwrap(),
-                r["window_end"].as_i64().unwrap()
-            ))
-            .collect::<Vec<_>>(),
-        [
-            (phoebis_routing::SEVEN_DAY, common::NOW - HOUR),
-            (phoebis_routing::FIVE_HOUR, common::NOW - 2 * HOUR)
-        ],
-        "newest first, and a window older than 30 days is not answered"
-    );
-    assert_eq!(
-        (
-            rows[0]["account_id"].as_str(),
-            rows[0]["ratio"].as_f64(),
-            rows[0]["observed_rise"].as_f64(),
-            rows[0]["requests"].as_u64(),
-            rows[0]["unmeasured"].as_bool(),
-            rows[0]["first_reading_at"].as_i64(),
-            rows[0]["last_reading_at"].as_i64(),
-            rows[0]["computed_at"].as_i64(),
-        ),
-        (
-            Some("business"),
-            Some(1.4),
-            Some(0.2),
-            Some(4),
-            Some(true),
-            Some(common::NOW - 5 * HOUR),
-            Some(common::NOW - 2 * HOUR),
-            Some(common::NOW - HOUR + 900_000),
-        )
-    );
-    assert!(rows[0]["predicted_share"].as_f64().is_some());
 }
 
 #[tokio::test]

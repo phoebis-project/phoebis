@@ -1,6 +1,6 @@
 //! The ledger schema: `requests`, `attempts`, `bodies`, `quota_samples`, `extra_usage_samples`,
-//! `rollups_hourly`, `account_rollups_hourly`, `cooldown_spans`, `cooldown_segments`, `kept_warm_marks`,
-//! `events`, and `window_reconciliations`, plus `meta` for the schema marker.
+//! `rollups_hourly`, `account_rollups_hourly`, `cooldown_spans`, `cooldown_segments`, `kept_warm_marks`, and
+//! `events`, plus `meta` for the schema marker.
 
 pub const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -267,6 +267,8 @@ CREATE INDEX IF NOT EXISTS events_at ON events (at);
 /// Version 22: the speed the answer reported is a dimension of the hourly rollup, so it joins the primary key after
 /// the class and the table is rebuilt as version 18 rebuilt it, every existing row filed under `standard`; the two
 /// indexes are recreated on the new table.
+///
+/// Version 23: the per-window reconciliation's table leaves; the readings keep `observed_at`.
 pub const MIGRATIONS: &[(u32, &str)] = &[
     (
         2,
@@ -728,4 +730,5 @@ ALTER TABLE rollups_hourly_next RENAME TO rollups_hourly;
 CREATE INDEX IF NOT EXISTS rollups_hourly_key ON rollups_hourly (key_id, key_generation, hour);
 CREATE INDEX IF NOT EXISTS rollups_hourly_member ON rollups_hourly (pool_id, account_id, hour);",
     ),
+    (23, "DROP TABLE window_reconciliations;"),
 ];

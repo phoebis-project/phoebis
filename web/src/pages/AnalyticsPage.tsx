@@ -3,7 +3,7 @@ import { Area, AreaChart, Bar, BarChart, CartesianGrid, ComposedChart, Line, Lin
 import { Link, useSearchParams } from 'react-router-dom';
 import { api } from '@/api';
 import { foldGroups, foldRequests, loadSessionRequests, sumGroups } from '@/api/fold';
-import type { AccountRollup, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, AnalyticsReconciliations, BurnGroup, BurnPoint, CacheMissReason, CostSplit, LatencyHistograms, MemberBudget, PlacementRow, RequestLog, RewritePoint } from '@/api/types';
+import type { AccountRollup, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, CacheMissReason, CostSplit, LatencyHistograms, MemberBudget, PlacementRow, RequestLog, RewritePoint } from '@/api/types';
 import { Donut } from '@/components/charts/Donut';
 import { OUTCOME_SERIES, PERCENTILES, PROBE_SERIES, TOKEN_SERIES, accountColor } from '@/components/charts/theme';
 import { useChartInk } from '@/components/charts/useChartInk';
@@ -11,7 +11,7 @@ import { ChartTooltip, Legend, type TooltipRow } from '@/components/charts/Toolt
 import { MultiSelect, type Option } from '@/components/ui/MultiSelect';
 import { IconX } from '@/components/ui/icons';
 import { Badge, Button, Card, ErrorState, Input, Meter, Segmented, Select, Skeleton, Toggle } from '@/components/ui/primitives';
-import { CONVERSATION_CLASSES, MIN_RISE, RATIO_HIGH, RATIO_LOW, RECONCILED_WINDOW_LABEL, RETENTION_FOR_A_WEEK, foldBurn, moveLabel, own, placementCells, placementRungLabel, ratioOff, type BurnLine, type BurnLineUnit, type BurnRow } from '@/lib/analytics';
+import { CONVERSATION_CLASSES, foldBurn, moveLabel, placementCells, placementRungLabel, type BurnLine, type BurnLineUnit, type BurnRow } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missCount, missLabel, missReasonOrder } from '@/lib/cache';
 import { fmtAbsolute, fmtCompact, fmtDayShort, fmtDuration, fmtHourTick, fmtInt, fmtMs, fmtPct, fmtPeriodEnd, fmtShare, fmtUsd, shortId, toLocalInput, upperFirst } from '@/lib/format';
@@ -201,7 +201,6 @@ export function AnalyticsPage() {
   // Side groupings on the page's own query, as byModel and byPool are; a session view folds them from the log.
   const bySpeed = useAsync(() => (sessionId === null ? api.getAnalyticsSeries({ ...query, groupBy: 'speed' }) : Promise.resolve<AnalyticsPoint[]>([])), [query, sessionId]);
   const byEffort = useAsync(() => (sessionId === null ? api.getAnalyticsBreakdown({ ...query, groupBy: 'effort' }) : Promise.resolve<AnalyticsGroup[]>([])), [query, sessionId]);
-  const reconciliations = useAsync(() => api.getAnalyticsReconciliations(), []);
   const placements = useAsync(
     () => (sessionId === null ? api.analyticsPlacements({ from: fromIso, keyIds: filters.keyId, poolIds: filters.poolId, to: toIso }) : Promise.resolve<PlacementRow[]>([])),
     [fromIso, toIso, filters.keyId, filters.poolId, sessionId],
@@ -224,7 +223,7 @@ export function AnalyticsPage() {
   // An outage of the ledger fails the section and filter-choice reads with these three, and this is the one
   // control that reads again, so it reads everything the view draws from.
   const retry = () => {
-    for (const read of [accountKeys, accountRollups, breakdown, budgets, burn, byEffort, byModel, byPool, bySpeed, keyKeys, log, modelKeys, placements, poolKeys, reconciliations, rewrites, series]) read.reload();
+    for (const read of [accountKeys, accountRollups, breakdown, budgets, burn, byEffort, byModel, byPool, bySpeed, keyKeys, log, modelKeys, placements, poolKeys, rewrites, series]) read.reload();
   };
   const rows = useMemo(() => (log.stale ? [] : (log.data?.requests ?? [])), [log.stale, log.data]);
   const points = useMemo(() => (stale ? [] : sessionId === null ? (series.data ?? []) : foldRequests(rows, rangeBucketMs, fromIso, toIso, groupBy, foldOptions)), [stale, sessionId, series.data, rows, rangeBucketMs, fromIso, toIso, groupBy, foldOptions]);
@@ -453,7 +452,6 @@ export function AnalyticsPage() {
           <Segmented<BurnGroup> ariaLabel="Burn group by" value={burnGroup} onChange={setBurnGroup} options={BURN_GROUPS.map((g) => ({ label: BURN_GROUP_LABEL[g], value: g }))} />
         </div>
         <BurnCharts answer={burn.stale ? null : burn.data} error={burn.error} groupBy={burnGroup} loading={burn.data === null || burn.stale} />
-        <ReconciliationTable answer={reconciliations.stale ? null : reconciliations.data} error={reconciliations.error} />
         <BudgetTable budgets={budgets.data} error={budgets.error} now={now} />
       </Section>
 
@@ -1442,77 +1440,6 @@ function BurnCharts({ answer, error, groupBy, loading }: { answer: { bucketSecon
         </ChartCard>
       )}
     </div>
-  );
-}
-
-const RECONCILIATION_HINT =
-  "For each completed 5-hour and 7-day window, the rise the upstream's readings showed against the share the router predicted for its own requests in it: 1.1 means the meter charged 1.1 times the table. A ratio under 0.8 or over 1.25 after a rise of at least 5% is marked; a window priced through a cell no measurement has filled, or where an attempt on a model the cost table lacks was left out of the prediction, is marked as such.";
-// The burn prices no share for a model the cost table lacks, so only the reconciliation's mark names that case.
-const RECONCILED_UNMEASURED_HINT = `${UNMEASURED_HINT}, or an attempt on a model the cost table lacks was left out of the prediction`;
-
-function ReconciliationTable({ answer, error }: { answer: AnalyticsReconciliations | null; error: string | null }) {
-  const rows = answer?.reconciliations ?? [];
-  const retention = answer?.requestRetentionDays ?? 0;
-  return (
-    <Card title="Meter reconciliation" subtitle={RECONCILIATION_HINT} padded={false} className="card--table">
-      <div className="table-wrap">
-        <table className="table">
-          <thead>
-            <tr>
-              <th>Upstream</th>
-              <th>Window</th>
-              <th>Ended</th>
-              <th className="right">Rise</th>
-              <th className="right">Predicted</th>
-              <th className="right">Ratio</th>
-              <th className="right">Requests</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r) => (
-              <tr key={`${r.accountId}-${r.window}-${r.windowEnd}`}>
-                <td className="mono">{r.accountId}</td>
-                <td>{own(RECONCILED_WINDOW_LABEL, r.window) ? RECONCILED_WINDOW_LABEL[r.window] : r.window}</td>
-                <td title={`reconciled ${fmtAbsolute(r.computedAt)}`}>{fmtAbsolute(r.windowEnd)}</td>
-                <td className="right num">{fmtShare(r.observedRise)}</td>
-                <td className="right num">
-                  {fmtShare(r.predictedShare)}
-                  {r.unmeasured && (
-                    <span className="muted" title={RECONCILED_UNMEASURED_HINT}>
-                      *
-                    </span>
-                  )}
-                </td>
-                <td className="right num">
-                  {ratioOff(r) ? (
-                    <Badge tone="serious" title={`Outside ${RATIO_LOW} to ${RATIO_HIGH} after a rise of ${fmtPct(MIN_RISE)} or more`}>
-                      {r.ratio.toFixed(2)}
-                    </Badge>
-                  ) : (
-                    r.ratio.toFixed(2)
-                  )}
-                </td>
-                <td className="right num">{fmtInt(r.requests)}</td>
-              </tr>
-            ))}
-            {rows.length === 0 && (
-              <tr>
-                <td colSpan={7} className={error ? '' : 'muted'}>
-                  {error ? <ErrorState title="Could not load the reconciliation" body={error} /> : answer === null ? <Skeleton height={22} /> : 'no completed window yet'}
-                </td>
-              </tr>
-            )}
-            {retention !== 0 && retention < RETENTION_FOR_A_WEEK && (
-              <tr>
-                <td colSpan={7} className="muted">
-                  Requests are kept {retention} day{retention === 1 ? '' : 's'}; a window whose oldest requests are gone is not reconciled, so a 7-day window needs {RETENTION_FOR_A_WEEK} or more.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-    </Card>
   );
 }
 

@@ -135,27 +135,14 @@ Max 5x's, so a share of a Max 5x window over the tier's factor is that share of 
 The Fable-scoped week is half the 7-day window on every tier, so a Fable request's share of it is twice its 7-day share.
 An account whose tier the table does not list is priced at no share.
 
-**Reconciliation** For each completed 5-hour and 7-day window of a subscription account the ledger compares the rise
-the account's readings showed with the share the router predicted for its own requests completed between those readings
-(a run is the readings that name one reset, a head's whole seconds and the endpoint's fraction being one, so a reset
-never falls inside one; a window in which the router sent nothing, the first window after the ledger starts, and one
-whose oldest requests the request retention has already purged yield no ratio, and the table says so when the retention
-is seven days or fewer). The analytics show one ratio per account and window, computed every quarter hour: 1.1 means the
-meter charged 1.1 times the table. No correction is applied to the prediction; a ratio under 0.8 or over 1.25 after a
-rise of at least five percent of the window raises the `meter_drift` alert for that account and window, and the
-account's next completed window of the same kind inside the band resolves it. The ratios are kept as long as the hourly
-rollups (`stats.rollup_retention_days`, zero forever).
-
 **Peak band** On weekdays from 5 to 11 AM Pacific time, 12:00 to 18:00 UTC while daylight time holds and 13:00 to 19:00
 UTC from 2026-11-01, the 5-hour meter charges a request about 1.45 times as much. Output read 1.44 on 2026-09-24 and
 input 1.33 on 2026-09-25, so the factor lies between 1.3 and 1.45 until one window reads both; the edges are steps, and
 a weekend probe read the off-peak rate on 2026-09-26, so the band is weekdays only; the row stays provisional for its
 factor until one in-band window reads both input and output. The meter charges a request when it completes, so the
-reconciliation weighs a request's 5-hour share by the band in force at its completion, and a session's burn keeps a copy
+prediction weighs a request's 5-hour share by the band in force at its completion, and a session's burn keeps a copy
 weighed by the band at each renewal, which the shedding round prices on plan quota so the order reads what the meter
 charges. A band row with a later date takes over from that date and never re-weights an earlier request.
-
-The analytics show each account's reconciliation beside the tables.
 
 ## Body capture
 
@@ -177,7 +164,6 @@ included, whether or not the router dropped it on the way upstream.
 | Quota and extra-usage samples | `quota.sample_retention_days` (30 days by default) |
 | Captured bodies | The hours the capture named |
 | Hourly rollups | `stats.rollup_retention_days` (400 days; 0 forever, otherwise at least `stats.retention_days`) |
-| Window reconciliations | As long as the hourly rollups |
 
 The purge that enforces these runs once an hour. Every five-minute poll's reading is kept for
 `quota.sample_retention_days`, so an idle upstream adds 288 quota rows per window per day.
@@ -331,22 +317,21 @@ beside it: the cache-write tokens the first request after a move paid to warm it
 counted, by reason; then a Requests by speed chart, standard and fast per bucket, and an Effort levels card with a bar
 per level the requests asked for. Burn reports a subscription account's spend as the share of its own 5-hour and 7-day
 window and an api-key account's in dollars, side by side and each split into cached and uncached tokens, grouped by
-upstream, key, session, or request class, beside a Meter reconciliation table (see [Plan meter](#plan-meter)); the
-5-hour share carries the peak band's weight, the 7-day share none. The shares read under the upstream grouping alone,
-since shares of different upstreams' windows do not add, and the Spend per minute chart draws dollars alone, a
-subscription upstream's among them only for its fast-mode answers; past the seven lines a chart draws, the subscription
-upstreams folded into the rest draw their fast-mode dollars as Other (fast mode), or Other (fast mode, tier unknown) for
-those whose tier the tier factor table does not size. The key, request class and upstream groupings read the hourly
-rollups, which fold a request under the hour it arrived in and weigh it by that hour's band rather than at its
-completion, where the meter charges it. Grouped by upstream, it adds a Plan per hour chart: the share of each
-subscription upstream's 5-hour window, solid, and of its 7-day window, dashed, that its traffic used per hour, a share
-priced through a cell no measurement has filled marked with an asterisk in the legend and the tooltip, and an upstream
-whose tier the tier factor table does not size listed as tier unknown. Latency reports percentiles read from the merged
-per-hour histograms; Cache reports the hit ratio, tokens that expired between turns, the share of input served from
-cache, and the output split into thinking and plain output; Cost reports the estimated spend for the range and a Fast
-mode spend tile, the dollars fast-mode answers drew from usage credits; Cache warming reports what probes cost against
-what they saved, where a fast-mode session's probes and credits read as dollars and file under speed `fast`; and
-Upstreams reports peak utilization, ineligible time, and pin churn per upstream.
+upstream, key, session, or request class; the 5-hour share carries the peak band's weight, the 7-day share none. The
+shares read under the upstream grouping alone, since shares of different upstreams' windows do not add, and the Spend
+per minute chart draws dollars alone, a subscription upstream's among them only for its fast-mode answers; past the
+seven lines a chart draws, the subscription upstreams folded into the rest draw their fast-mode dollars as Other (fast
+mode), or Other (fast mode, tier unknown) for those whose tier the tier factor table does not size. The key, request
+class and upstream groupings read the hourly rollups, which fold a request under the hour it arrived in and weigh it by
+that hour's band rather than at its completion, where the meter charges it. Grouped by upstream, it adds a Plan per hour
+chart: the share of each subscription upstream's 5-hour window, solid, and of its 7-day window, dashed, that its traffic
+used per hour, a share priced through a cell no measurement has filled marked with an asterisk in the legend and the
+tooltip, and an upstream whose tier the tier factor table does not size listed as tier unknown. Latency reports
+percentiles read from the merged per-hour histograms; Cache reports the hit ratio, tokens that expired between turns,
+the share of input served from cache, and the output split into thinking and plain output; Cost reports the estimated
+spend for the range and a Fast mode spend tile, the dollars fast-mode answers drew from usage credits; Cache warming
+reports what probes cost against what they saved, where a fast-mode session's probes and credits read as dollars and
+file under speed `fast`; and Upstreams reports peak utilization, ineligible time, and pin churn per upstream.
 
 The Cache section closes with Placements by rung: the attempts in the range the router placed by a warm prefix or beside
 the main conversation rather than by its strategy, counted by rung (by the conversation's own messages, by its static
@@ -390,7 +375,6 @@ one.
 | `client_drift` | Client drift | `all` |
 | `funding_required` | Funding required | `account`, `any_account` |
 | `keepalive_cost_cap` | Probe cost cap reached | `all`, `pool` |
-| `meter_drift` | Meter drift | `account`, `any_account` |
 | `poll_backoff` | Usage poll backing off | `account`, `any_account` |
 | `pool_exhausted` | Pool exhausted | `all`, `pool` |
 | `reauth_required` | Re-auth required | `account`, `any_account` |
@@ -432,12 +416,6 @@ paired or verified again.
 lost counting as a failure, and resolves on the next refresh that succeeds. The detail names the account, the
 length of the run, the last error, and `outcome`: `failed` for a refresh the token endpoint refused, `uncertain`
 for one whose answer never arrived, so the token may or may not have rotated upstream.
-
-**Meter drift** fires when a completed 5-hour or 7-day window's readings rose by at least 5% of the window and the rise
-was under 0.8 or over 1.25 times the share the router predicted for its own requests, and resolves when the upstream's
-next completed window of that kind reads inside. The event's subject is the upstream and the window, `<upstream>:5h` or
-`<upstream>:7d`, so each window keeps one event of its own; the detail names the window, its end, the rise, the
-predicted share, the ratio and the requests counted.
 
 The four session kinds are events rather than conditions: a rule of one of them receives one delivery per event
 as it happens, opens nothing, and has nothing to resolve. `session_active` receives `session_started` and

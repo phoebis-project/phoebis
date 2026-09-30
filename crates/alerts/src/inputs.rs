@@ -1,4 +1,4 @@
-//! Where the conditions and the session events come from: five conditions off the observation bus, eight off a
+//! Where the conditions and the session events come from: five conditions off the observation bus, seven off a
 //! one-second poll of state other parts of the process already keep, and the session's events off the bus, the
 //! lifecycle channel the keepalive engine feeds from the companion's reports, and the poll's idle and expiry
 //! clocks.
@@ -12,7 +12,7 @@ use phoebis_bus::{
     spawn_subscriber, Bus, Event, Kind as RequestKind, LifecycleReceiver, Origin, Outcome,
     RequestObserved, SessionLifecycle,
 };
-use phoebis_ledger::{polled, read_reconciliations, ReconciliationRow, RATIO_HIGH, RATIO_LOW};
+use phoebis_ledger::polled;
 use phoebis_oauth::{PollOutcome, UsageService};
 use phoebis_routing::{RouterHandle, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE};
 use phoebis_store::{AccountState, AlertEventRow};
@@ -299,7 +299,7 @@ struct InFlight {
     stream: Option<SseCutter>,
 }
 
-/// The bus half of the inputs: five of the fourteen conditions are facts about a request going by. Public so a
+/// The bus half of the inputs: five of the thirteen conditions are facts about a request going by. Public so a
 /// test drives it event by event without a bus.
 pub struct BusArm {
     alerts: Arc<Alerts>,
@@ -903,13 +903,11 @@ impl LifecycleArm {
     }
 }
 
-/// The polled half of the inputs: eight of the fourteen conditions are state another part of the process already
+/// The polled half of the inputs: seven of the thirteen conditions are state another part of the process already
 /// keeps. Public so a test drives one evaluation without waiting for the ticker.
 pub struct Poller {
     alerts: Arc<Alerts>,
     failures: BTreeMap<String, u32>,
-    /// The newest `computed_at` of the ledger's reconciliations seen.
-    last_reconciled: i64,
     last_resolved: (i64, u64),
     question_retention_ms: i64,
     router: RouterHandle,
@@ -952,11 +950,9 @@ impl Poller {
             .ok()
             .flatten()
             .unwrap_or((0, 0));
-        let last_reconciled = resolve_drift_at_start(&alerts);
         Poller {
             alerts: alerts.clone(),
             failures: BTreeMap::new(),
-            last_reconciled,
             last_resolved,
             question_retention_ms: inputs.body_capture_max_hours as i64 * 3_600_000,
             router: inputs.router.clone(),
@@ -1030,30 +1026,6 @@ impl Poller {
                             }),
                         });
                     }
-                }
-            }
-        }
-        if let Ok(rows) = parts
-            .ledger
-            .db()
-            .reconciliations_computed_after(self.last_reconciled)
-            .await
-        {
-            // Oldest first, so the newest row of a window decides; one this tick opened is not in `open` yet.
-            let mut opened = BTreeSet::new();
-            for row in rows {
-                self.last_reconciled = self.last_reconciled.max(row.computed_at);
-                let subject = drift_subject(&row.account_id, &row.window);
-                if row.off() {
-                    self.alerts.signal(&drift_signal(&row, subject.clone()));
-                    opened.insert(subject);
-                } else if inside(row.ratio)
-                    && (opened.remove(&subject)
-                        || open
-                            .iter()
-                            .any(|e| e.kind == Kind::MeterDrift.as_str() && e.subject == subject))
-                {
-                    self.alerts.clear(Kind::MeterDrift, &subject);
                 }
             }
         }
@@ -1284,87 +1256,6 @@ impl Poller {
             );
         }
     }
-}
-
-/// A drift event's subject: the account and the window, `5h` or `7d`, since `Alerts::clear` resolves every open
-/// event of a kind and subject and a healthy 7-day window must not resolve a 5-hour drift.
-fn drift_subject(account_id: &str, window: &str) -> String {
-    let short = match window {
-        FIVE_HOUR => "5h",
-        SEVEN_DAY => "7d",
-        other => other,
-    };
-    format!("{account_id}:{short}")
-}
-
-/// The window a drift subject names, spelled as the ledger's rows spell it.
-fn drift_window(short: &str) -> Option<&'static str> {
-    match short {
-        "5h" => Some(FIVE_HOUR),
-        "7d" => Some(SEVEN_DAY),
-        _ => None,
-    }
-}
-
-fn inside(ratio: f64) -> bool {
-    (RATIO_LOW..=RATIO_HIGH).contains(&ratio)
-}
-
-fn drift_signal(row: &ReconciliationRow, subject: String) -> Signal {
-    Signal {
-        kind: Kind::MeterDrift,
-        account_id: Some(row.account_id.clone()),
-        key_id: None,
-        pool_id: None,
-        subject,
-        detail: json!({
-            "account": row.account_id,
-            "observed_rise": row.observed_rise,
-            "predicted_share": row.predicted_share,
-            "ratio": row.ratio,
-            "requests": row.requests,
-            "window": row.window,
-            "window_end": row.window_end,
-        }),
-    }
-}
-
-/// Resolves every open drift event whose account's newest row of that window reads inside, since a window that
-/// completed while no poller ran is otherwise never read, and answers the newest `computed_at`, the watermark.
-fn resolve_drift_at_start(alerts: &Arc<Alerts>) -> i64 {
-    let parts = alerts.parts();
-    let rows = match parts
-        .ledger
-        .db()
-        .read_blocking(|conn| read_reconciliations(conn, i64::MIN))
-    {
-        Ok(rows) => rows,
-        Err(error) => {
-            tracing::warn!(%error, "the reconciliations could not be read; drift alerts start from now");
-            return (parts.clock)();
-        }
-    };
-    let open = parts.store.open_alert_events().unwrap_or_default();
-    for event in open
-        .into_iter()
-        .filter(|e| e.kind == Kind::MeterDrift.as_str())
-    {
-        let Some((account_id, window)) = event
-            .subject
-            .rsplit_once(':')
-            .and_then(|(account_id, short)| Some((account_id, drift_window(short)?)))
-        else {
-            continue;
-        };
-        // Newest first, so the first row of the account and window is its newest.
-        let newest = rows
-            .iter()
-            .find(|r| r.account_id == account_id && r.window == window);
-        if newest.is_some_and(|r| inside(r.ratio)) {
-            alerts.clear(Kind::MeterDrift, &event.subject);
-        }
-    }
-    rows.iter().map(|r| r.computed_at).max().unwrap_or(i64::MIN)
 }
 
 /// The three input tasks, so the binary's teardown can stop the observers before the keepalive close, drain

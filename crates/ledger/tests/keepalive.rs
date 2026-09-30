@@ -483,7 +483,6 @@ async fn migration_five_adds_the_skipped_column_and_the_marks_table_to_a_version
             sql.push_str(&format!("ALTER TABLE requests DROP COLUMN {column}; "));
         }
         sql.push_str("ALTER TABLE quota_samples DROP COLUMN observed_at; ");
-        sql.push_str("DROP TABLE window_reconciliations; ");
         sql.push_str("UPDATE meta SET value = '4' WHERE key = 'schema_version';");
         db.write(|c| {
             c.execute_batch(&sql)?;
@@ -492,7 +491,7 @@ async fn migration_five_adds_the_skipped_column_and_the_marks_table_to_a_version
         .unwrap();
     }
     let db = std::sync::Arc::new(LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 22);
+    assert_eq!(db.schema_version().await.unwrap(), 23);
     let (_, attempts) = db.request("r0").await.unwrap().unwrap();
     assert_eq!(
         attempts.len(),

@@ -31,21 +31,6 @@
         "updated_at": 1000000,
         "webhook_url": "http://127.0.0.1:1/hook",
         "window": "7d_oi"
-      },
-      {
-        "created_at": 1000000,
-        "enabled": true,
-        "has_secret": false,
-        "id": "rule_b0b0641ad08e59fd",
-        "kind": "meter_drift",
-        "scope": {
-          "id": "business",
-          "type": "account"
-        },
-        "threshold": null,
-        "updated_at": 1000000,
-        "webhook_url": "http://127.0.0.1:1/meter",
-        "window": null
       }
     ]
   }

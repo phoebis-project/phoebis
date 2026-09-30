@@ -7,10 +7,6 @@ use std::sync::{Arc, Mutex, PoisonError};
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension, Transaction};
 
 use crate::query::request_by_id;
-use crate::reconcile::{
-    insert_reconciliations_in, read_reconciliations, read_reconciliations_computed_after,
-    ReconciliationRow,
-};
 use crate::record::{
     AttemptRecord, BodyRecord, EventRecord, ExtraUsageSampleRecord, QuotaSampleRecord,
     RequestRecord,
@@ -209,34 +205,6 @@ impl LedgerDb {
             })?;
             Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
         }).await
-    }
-
-    pub async fn insert_reconciliations(
-        self: &Arc<Self>,
-        rows: Vec<ReconciliationRow>,
-    ) -> Result<(), LedgerError> {
-        let db = Arc::clone(self);
-        tokio::task::spawn_blocking(move || db.write(|conn| insert_reconciliations_in(conn, &rows)))
-            .await
-            .map_err(|e| LedgerError::Io(std::io::Error::other(e)))?
-    }
-
-    /// Newest first per account and window, `window_end` at or after `since`.
-    pub async fn reconciliations(
-        self: &Arc<Self>,
-        since: i64,
-    ) -> Result<Vec<ReconciliationRow>, LedgerError> {
-        self.read(move |conn| read_reconciliations(conn, since))
-            .await
-    }
-
-    /// Every row computed after `computed_at`, oldest first: the alert engine's watermark read.
-    pub async fn reconciliations_computed_after(
-        self: &Arc<Self>,
-        computed_at: i64,
-    ) -> Result<Vec<ReconciliationRow>, LedgerError> {
-        self.read(move |conn| read_reconciliations_computed_after(conn, computed_at))
-            .await
     }
 
     pub async fn extra_usage_samples(
@@ -652,7 +620,7 @@ mod tests {
     async fn the_schema_opens_in_wal_mode_with_a_version_and_rows_round_trip() {
         let dir = tempfile::tempdir().unwrap();
         let db = Arc::new(LedgerDb::open(&dir.path().join("data").join("ledger.sqlite")).unwrap());
-        assert_eq!(db.read_blocking(read_version).unwrap(), 22);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 23);
         let mode: String = db
             .read_blocking(|c| Ok(c.query_row("PRAGMA journal_mode", [], |r| r.get(0))?))
             .unwrap();
@@ -738,7 +706,7 @@ mod tests {
             .await
             .unwrap();
         assert_ne!(worker, caller, "the closure ran on a blocking worker");
-        assert_eq!(version, 22, "and answered what the connection holds");
+        assert_eq!(version, 23, "and answered what the connection holds");
     }
 
     #[tokio::test]
@@ -753,7 +721,7 @@ mod tests {
         assert!(matches!(panicked, Err(LedgerError::ReadCancelled)));
         assert_eq!(
             db.read_blocking(read_version).unwrap(),
-            22,
+            23,
             "the poisoned guard recovered rather than turning every later read into ReadCancelled too"
         );
     }

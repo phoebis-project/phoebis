@@ -3237,7 +3237,7 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
     [...m.container.querySelectorAll('#burn .segmented button')].find((b) => b.textContent?.trim() === label)?.click();
     await m.settle(700);
   };
-  expect('/analytics burn section', m.text(), ['Burn', 'Tokens per minute', 'Spend per minute', 'Plan per hour', 'Migration rewrites', 'Meter reconciliation', 'Moves']);
+  expect('/analytics burn section', m.text(), ['Burn', 'Tokens per minute', 'Spend per minute', 'Plan per hour', 'Migration rewrites', 'Moves']);
   {
     expect('/analytics speed and effort', m.text(), ['Requests by speed', 'Standard and fast per bucket, stacked', 'Effort levels', 'Requests per effort level in range', 'Fast mode spend', 'usage credits, at the fast cells']);
     // The two cards close the Traffic section's grid, after the rewrites card.
@@ -3297,27 +3297,6 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
       windows.every((w) => planned.includes(w)) &&
       marked.length > 0,
     missing: [...spend, ...spendDashed, `fast spenders ${fastSpenders.join(',')}`],
-  });
-
-  const reconciled = [...(card('Meter reconciliation')?.querySelectorAll('tbody tr') ?? [])].map((tr) => [...tr.children].map((td) => ({ badge: td.querySelector('.badge--serious') !== null, text: td.textContent?.trim() })));
-  const windowOf = (id, window) => reconciled.find((r) => r[0]?.text === id && r[1]?.text === window) ?? [];
-  results.push({
-    name: '/analytics the reconciliation table marks a ratio outside 0.8 to 1.25 and a window priced through an unmeasured cell',
-    ok:
-      JSON.stringify([...(card('Meter reconciliation')?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim())) === JSON.stringify(['Upstream', 'Window', 'Ended', 'Rise', 'Predicted', 'Ratio', 'Requests']) &&
-      windowOf('personal', '7-day')[5]?.text === '1.41' &&
-      windowOf('personal', '7-day')[5]?.badge === true &&
-      windowOf('personal', '7-day')[4]?.text?.endsWith('*') === true &&
-      windowOf('personal', '5-hour')[5]?.text === '1.41' &&
-      windowOf('personal', '5-hour')[5]?.badge === true &&
-      windowOf('personal', '5-hour')[3]?.text === '31%' &&
-      windowOf('personal', '5-hour')[4]?.text?.endsWith('*') === false &&
-      windowOf('business', '5-hour')[5]?.text === '1.06' &&
-      windowOf('business', '5-hour')[5]?.badge === false &&
-      windowOf('business', '5-hour')[4]?.text?.endsWith('*') === false &&
-      windowOf('business', '5-hour')[3]?.text === '24%' &&
-      !card('Meter reconciliation')?.textContent?.includes('Requests are kept'),
-    missing: reconciled.map((r) => r.map((c) => `${c.text}${c.badge ? '!' : ''}`).join(' | ')),
   });
 
   await burnGroup('Request class');
@@ -3838,21 +3817,6 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
   }
 }
 m.unmount();
-
-{
-  // A ledger with no completed window yet, whose requests are kept for less than a 7-day window needs.
-  const { getAnalyticsReconciliations } = api;
-  for (const [days, kept] of [[3, '3 days'], [1, '1 day']]) {
-    api.getAnalyticsReconciliations = async () => ({ reconciliations: [], requestRetentionDays: days });
-    const empty = await mount('/analytics');
-    api.getAnalyticsReconciliations = getAnalyticsReconciliations;
-    expect(`/analytics the reconciliation table says when no window has completed and when the retention is ${kept}`, empty.text(), [
-      'no completed window yet',
-      `Requests are kept ${kept}; a window whose oldest requests are gone is not reconciled, so a 7-day window needs 8 or more.`,
-    ]);
-    empty.unmount();
-  }
-}
 
 {
   // The session view answers from the request log, so the class pattern has to reach its read and its fold
@@ -4477,7 +4441,7 @@ m.unmount();
 api.lifecyclePageSize = 500;
 m = await mount('/alerts');
 expect('/alerts an expired question says so to an admin', m.text(), ['question expired with its captured body']);
-expect('/alerts', m.text(), ['Rules', 'Create rule', 'Re-auth required', 'Utilization above threshold', 'Pool exhausted', 'Waiting for user input', 'Client drift', 'Funding required', 'Probe cost cap reached', 'Credential refresh failed', 'Meter drift', 'personal:5h', 'Usage poll backing off', 'backing off since', '5-hour window, ratio 1.41 after a rise of 31%', 'hooks.example.com/phoebis/active', 'hooks.example.com/phoebis/subagent', 'All traffic', 'Signed', 'Unsigned', 'Events', 'Any condition', 'Any state', 'open', 'resolved', 'refused', 'asked: The ledger migration can rewrite rows in place', 'client 2.1.274, caught by the billing-hash check', 'agent main', 'Resolve', '2 in a row, the last refused: invalid_grant', 'Lifecycle', 'Any session condition', 'Session started', 'Subagent ended', 'idle for 30 min', 'parent main']);
+expect('/alerts', m.text(), ['Rules', 'Create rule', 'Re-auth required', 'Utilization above threshold', 'Pool exhausted', 'Waiting for user input', 'Client drift', 'Funding required', 'Probe cost cap reached', 'Credential refresh failed', 'Usage poll backing off', 'backing off since', 'hooks.example.com/phoebis/active', 'hooks.example.com/phoebis/subagent', 'All traffic', 'Signed', 'Unsigned', 'Events', 'Any condition', 'Any state', 'open', 'resolved', 'refused', 'asked: The ledger migration can rewrite rows in place', 'client 2.1.274, caught by the billing-hash check', 'agent main', 'Resolve', '2 in a row, the last refused: invalid_grant', 'Lifecycle', 'Any session condition', 'Session started', 'Subagent ended', 'idle for 30 min', 'parent main']);
 {
   // An opened run and a resolve run both start at attempt 1, so a row has to say which run it belongs to.
   const row = [...[...m.container.querySelectorAll('table')][1].querySelectorAll('tbody tr')].find((r) => r.textContent.includes('Credential refresh failed'));
@@ -4721,8 +4685,6 @@ expect('/alerts', m.text(), ['Rules', 'Create rule', 'Re-auth required', 'Utiliz
   results.push({ name: '/alerts reauth_required scopes by any upstream or one upstream', ok: reauth[0] === 'Any upstream' && reauth.some((o) => o.startsWith('Upstream ')) && !reauth.includes('All traffic'), missing: reauth });
   const cap = await scopesFor('keepalive_cost_cap');
   results.push({ name: '/alerts keepalive_cost_cap scopes by pool or all', ok: cap.includes('All traffic') && cap.some((o) => o.startsWith('Pool ')) && !cap.some((o) => o.startsWith('Key ')), missing: cap });
-  const meter = await scopesFor('meter_drift');
-  results.push({ name: '/alerts meter_drift scopes by any upstream or one upstream', ok: meter[0] === 'Any upstream' && meter.some((o) => o.startsWith('Upstream ')) && !meter.includes('All traffic') && !meter.some((o) => o.startsWith('Pool ')), missing: meter });
   const backoff = await scopesFor('poll_backoff');
   results.push({ name: '/alerts poll_backoff scopes by any upstream or one upstream', ok: backoff[0] === 'Any upstream' && backoff.some((o) => o.startsWith('Upstream ')) && !backoff.includes('All traffic') && !backoff.some((o) => o.startsWith('Pool ')), missing: backoff });
   await scopesFor('utilization_above');

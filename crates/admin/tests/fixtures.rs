@@ -507,40 +507,6 @@ async fn every_route_is_captured_and_holds_its_shape() {
         .with(phoebis_relay::FAST_OUTPUT, fast_reading(0.08)),
         incarnation: 1,
     });
-    // Two completed windows: a 5-hour one inside the band, and a 7-day one outside it, priced through cells no
-    // measurement has filled.
-    parts
-        .db
-        .insert_reconciliations(vec![
-            phoebis_ledger::ReconciliationRow {
-                account_id: "business".into(),
-                computed_at: now - 600_000,
-                first_reading_at: now - 5 * 3_600_000,
-                last_reading_at: now - 3_600_000,
-                observed_rise: 0.21,
-                predicted_share: 0.2,
-                ratio: 1.05,
-                requests: 14,
-                unmeasured: false,
-                window: "five_hour".into(),
-                window_end: now - 1_800_000,
-            },
-            phoebis_ledger::ReconciliationRow {
-                account_id: "business".into(),
-                computed_at: now - 600_000,
-                first_reading_at: now - 7 * 86_400_000,
-                last_reading_at: now - 3_600_000,
-                observed_rise: 0.33,
-                predicted_share: 0.25,
-                ratio: 1.32,
-                requests: 212,
-                unmeasured: true,
-                window: "seven_day".into(),
-                window_end: now - 1_800_000,
-            },
-        ])
-        .await
-        .unwrap();
     parts.ledger.record(Record::Event(EventRecord {
         at: hour_ago + 300,
         kind: "model_rejected".into(),
@@ -713,10 +679,9 @@ async fn every_route_is_captured_and_holds_its_shape() {
     })
     .await;
     hold(&planted, "requests", "GET /admin/requests", ready);
-    // One rule per shape the page draws: an enabled one with a secret and a threshold, a disabled one, and one on
-    // an account. The drift rule is turned off only after its event opened, since a disabled rule matches no signal.
+    // One rule per shape the page draws: an enabled one with a secret and a threshold, and a disabled one. The drift
+    // rule is turned off only after its event opened, since a disabled rule matches no signal.
     post(app, "/admin/alerts/rules", &format!(r#"{{"kind":"utilization_above","scope":{{"type":"pool","id":"main"}},"threshold":0.9,"window":"7d_oi","webhook_url":"http://127.0.0.1:1/hook","secret":"{rule_secret}"}}"#), Some(&cookie)).await;
-    post(app, "/admin/alerts/rules", r#"{"kind":"meter_drift","scope":{"type":"account","id":"business"},"webhook_url":"http://127.0.0.1:1/meter"}"#, Some(&cookie)).await;
     let drift = json(post(app, "/admin/alerts/rules", r#"{"kind":"client_drift","scope":{"type":"all"},"webhook_url":"http://127.0.0.1:1/drift"}"#, Some(&cookie)).await).await;
     // A refusal, then a 500, then the 200 that ends it: the event carries all three attempts.
     parts.webhook.answer(Err("refused".into()));
@@ -739,7 +704,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
     )
     .await;
     // A lifecycle rule is written, fired, and taken away again: the deliveries route needs a row of its own to
-    // capture, while the rules answer above stays the three rows the page is drawn from. The delivery outlives its
+    // capture, while the rules answer above stays the two rows the page is drawn from. The delivery outlives its
     // rule, since a lifecycle row hangs off no event and holds the rule id as plain text.
     let lifecycle = json(post(app, "/admin/alerts/rules", r#"{"kind":"session_active","scope":{"type":"all"},"webhook_url":"http://127.0.0.1:1/life"}"#, Some(&cookie)).await).await;
     parts.alerts.deliver_event(
@@ -792,10 +757,6 @@ async fn every_route_is_captured_and_holds_its_shape() {
         (
             "analytics_placements",
             "/admin/analytics/placements?range=24h",
-        ),
-        (
-            "analytics_reconciliations",
-            "/admin/analytics/reconciliations",
         ),
         ("analytics_rewrites", "/admin/analytics/rewrites?range=24h"),
         (

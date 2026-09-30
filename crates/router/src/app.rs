@@ -164,8 +164,8 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             )
         })?,
     );
-    // One copy of the shipped plan tables for every reader: the router's burn rates, band and share pricer,
-    // the ledger's reconciliation, the keepalive's settlements and the admin's session burn and settings echo.
+    // One copy of the shipped plan tables for every reader: the router's burn rates, band and share pricer, the
+    // keepalive's settlements and the admin's session burn and settings echo.
     let tables = Arc::new(phoebis_ledger::PlanTables::shipped());
     let router_task = phoebis_routing::spawn(
         store.clone(),
@@ -221,7 +221,6 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             purge_interval: Duration::from_secs(3_600),
             event_poll: Duration::from_secs(5),
             expire_interval: Duration::from_secs(60),
-            tables: tables.clone(),
         },
     );
     let live = LiveFeed::spawn(&bus, pricing.clone(), clock.clone(), LiveConfig::default());

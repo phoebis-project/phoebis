@@ -461,16 +461,10 @@ fn scopes_admit_what_the_spec_table_allows() {
         allowed_scopes(Kind::ReauthRequired).contains(&ScopeType::AnyAccount)
             && !allowed_scopes(Kind::ReauthRequired).contains(&ScopeType::Key)
     );
-    assert_eq!(Kind::ALL.len(), 14);
+    assert_eq!(Kind::ALL.len(), 13);
     assert_eq!(
         Kind::parse("keepalive_cost_cap"),
         Some(Kind::KeepaliveCostCap)
-    );
-    assert_eq!(Kind::parse("meter_drift"), Some(Kind::MeterDrift));
-    assert_eq!(
-        allowed_scopes(Kind::MeterDrift),
-        &[ScopeType::Account, ScopeType::AnyAccount],
-        "a drift is an account's, so a pool or key scope has nothing to match"
     );
     assert_eq!(Kind::parse("poll_backoff"), Some(Kind::PollBackoff));
     assert_eq!(

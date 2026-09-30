@@ -97,10 +97,6 @@ pub fn router(state: Arc<AdminState>) -> Router {
         .route("/admin/analytics/budgets", get(analytics::budgets))
         .route("/admin/analytics/burn", get(analytics::burn))
         .route("/admin/analytics/placements", get(analytics::placements))
-        .route(
-            "/admin/analytics/reconciliations",
-            get(analytics::reconciliations),
-        )
         .route("/admin/analytics/rewrites", get(analytics::rewrites))
         .route("/admin/analytics/series", get(analytics::series))
         .route("/admin/dashboard", get(dashboard::show))

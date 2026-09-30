@@ -531,7 +531,7 @@ ALTER TABLE keepalive_budgets ADD COLUMN five_hour_share REAL NOT NULL DEFAULT 0
 ALTER TABLE keepalive_budgets ADD COLUMN five_hour_share_unmeasured INTEGER NOT NULL DEFAULT 0;
 "#;
 
-// The ledger's per-window reconciliation replaced the one reader these rows had.
+// Nothing read these rows once the meter's unit became the window share.
 const V34: &str = "DROP TABLE IF EXISTS plan_fits;";
 
 // The pool column carries the default so every existing pool reopens on; the key column is nullable because

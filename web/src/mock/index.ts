@@ -11,7 +11,7 @@ import { matchesPattern } from '@/lib/pattern';
 import { matchesPattern as matchesModelPattern, processRules } from '@/lib/patterns';
 import { isFastScope } from '@/lib/quota';
 import { ACCOUNTS, QUOTA_HISTORY, QUOTA_SNAPSHOTS } from './accounts';
-import { RECONCILIATIONS, breakdownOf, burnOf, placementsOf, rewritesOf, seriesOf } from './analytics';
+import { breakdownOf, burnOf, placementsOf, rewritesOf, seriesOf } from './analytics';
 import { CATALOG } from './catalog';
 import { liveFeed } from './live';
 import { ALERT_EVENTS, ALERT_RULES, KEEPALIVE_OVERVIEW, LIFECYCLE_DELIVERIES, RECIPES, SESSIONS, SETTINGS } from './operations';
@@ -578,10 +578,6 @@ export class MockApi implements Api {
 
   getAnalyticsBurn(range: Pick<AnalyticsQuery, 'from' | 'to'>, groupBy: BurnGroup) {
     return latency(burnOf(ALL_ROLLUPS, range, groupBy));
-  }
-
-  getAnalyticsReconciliations() {
-    return latency({ ...RECONCILIATIONS, reconciliations: RECONCILIATIONS.reconciliations.map((r) => ({ ...r })) });
   }
 
   getAnalyticsRewrites(range: Pick<AnalyticsQuery, 'from' | 'to'>) {

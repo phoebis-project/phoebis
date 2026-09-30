@@ -167,22 +167,6 @@ export function foldBurn(points: BurnPoint[], groupBy: BurnGroup, bucketSeconds:
   return { lines, rows };
 }
 
-/** How the reconciliation route names a window, as its table labels it. */
-export const RECONCILED_WINDOW_LABEL: Record<string, string> = { five_hour: '5-hour', seven_day: '7-day' };
-
-/** The band a completed window's ratio must lie in, and the least rise that makes a ratio outside it count, as the
- *  ledger and the `meter_drift` alert read them. */
-export const RATIO_LOW = 0.8;
-export const RATIO_HIGH = 1.25;
-export const MIN_RISE = 0.05;
-
-/** A ratio the reconciliation table marks: outside the band after a rise of at least `MIN_RISE`. */
-export const ratioOff = (r: { observedRise: number; ratio: number }) => r.observedRise >= MIN_RISE && (r.ratio < RATIO_LOW || r.ratio > RATIO_HIGH);
-
-/** The request retention, in the setting's whole days, that keeps a 7-day window's oldest requests until the ledger
- *  reconciles it: the window's first reading can precede its close by the window and a reconciliation interval. */
-export const RETENTION_FOR_A_WEEK = 8;
-
 /** A placement rung as the request drawer words its placed phrase. */
 export const PLACEMENT_RUNG_LABEL: Record<Placement['rung'], string> = { content: 'by its messages', static: 'by its static prefix', with_main: 'with the main conversation' };
 /** A rung the console has no label for reads as the router sent it. */

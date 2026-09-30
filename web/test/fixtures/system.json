@@ -6,7 +6,7 @@
     "uptime_seconds": 0,
     "storage_ok": true,
     "ledger": {
-      "schema_version": 22,
+      "schema_version": 23,
       "written": 15,
       "dropped": 0,
       "write_failures": 0,
@@ -43,7 +43,7 @@
       "deliveries_failed": 0,
       "deliveries_ok": 2,
       "open": 1,
-      "rules": 3
+      "rules": 2
     }
   }
 }

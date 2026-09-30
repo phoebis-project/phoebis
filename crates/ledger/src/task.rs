@@ -1,7 +1,6 @@
 //! The ledger task: one bounded channel from the assembler and every other producer, one writer that lands
 //! batches through `spawn_blocking`, and the gap event that says what was lost.
 
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -9,7 +8,7 @@ use std::time::Duration;
 use phoebis_bus::{spawn_subscriber, Bus, Subscriber};
 use phoebis_oauth::Clock;
 use phoebis_routing::{RegistrySnapshot, Report, RouterHandle};
-use phoebis_store::{AccountKind, BudgetPeriod, Store};
+use phoebis_store::{BudgetPeriod, Store};
 use tokio::sync::{mpsc, oneshot, watch, Mutex};
 
 use crate::assemble::{Assembler, Record};
@@ -17,10 +16,8 @@ use crate::bodies::run_retention;
 use crate::db::{insert_event_in, insert_request_in, insert_samples_in};
 use crate::events::spawn_event_mirror;
 use crate::metrics::Metrics;
-use crate::plan::PlanTables;
 use crate::pricing::{price_attempts, PriceTable, Pricing};
-use crate::query::{member_spends, Tiers};
-use crate::reconcile::{reconcile, RECONCILE_INTERVAL};
+use crate::query::member_spends;
 use crate::record::{AttemptRecord, EventRecord, QuotaSampleRecord, RequestRecord};
 use crate::{LedgerDb, LedgerError};
 
@@ -43,8 +40,6 @@ pub struct LedgerConfig {
     pub event_poll: Duration,
     /// How often the assembler ages out entries whose completion never arrived.
     pub expire_interval: Duration,
-    /// The router's own copy, so a window is reconciled against the share the router predicted for it.
-    pub tables: Arc<PlanTables>,
 }
 
 impl Default for LedgerConfig {
@@ -56,7 +51,6 @@ impl Default for LedgerConfig {
             purge_interval: Duration::from_secs(3_600),
             event_poll: Duration::from_secs(5),
             expire_interval: EXPIRE_INTERVAL,
-            tables: Arc::new(PlanTables::shipped()),
         }
     }
 }
@@ -180,7 +174,7 @@ pub fn spawn(
     let mirror = spawn_event_mirror(
         db.clone(),
         ledger.clone(),
-        store.clone(),
+        store,
         router.clone(),
         clock.clone(),
         config.event_poll,
@@ -203,7 +197,6 @@ pub fn spawn(
     tokio::spawn(writer(
         db.clone(),
         pricing,
-        store,
         router,
         rx,
         stopped,
@@ -281,7 +274,6 @@ async fn land_all(ledger: &Ledger, records: Vec<Record>) {
 async fn writer(
     db: Arc<LedgerDb>,
     pricing: Arc<Pricing>,
-    store: Arc<Store>,
     router: RouterHandle,
     mut rx: mpsc::Receiver<Record>,
     mut stopped: watch::Receiver<bool>,
@@ -307,11 +299,6 @@ async fn writer(
     let mut revision_poll = tokio::time::interval(config.event_poll);
     revision_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     revision_poll.tick().await;
-    // The first pass waits a whole interval, so the alert poller's watermark, taken at its start, lies before
-    // every row this process computes.
-    let mut reconciling = tokio::time::interval(RECONCILE_INTERVAL);
-    reconciling.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    reconciling.tick().await;
     // Drops the writer has not yet reported: the channel's, read from the counter each round, and its own.
     let mut reported: u64 = 0;
     let mut member_revision = router.snapshot().revision;
@@ -353,10 +340,6 @@ async fn writer(
             }
             // Nothing but the top-of-loop check runs here; see the arm's own comment above.
             _ = revision_poll.tick() => continue,
-            _ = reconciling.tick() => {
-                run_reconcile(&db, &store, &config.tables, clock()).await;
-                continue;
-            }
             // Re-armed after every run: the boundary a budgeted member's period ends on, so a pool whose
             // traffic never touches this writer still turns over its spend at the period's edge.
             _ = sleep_until(spend_due, &clock) => {
@@ -599,66 +582,6 @@ async fn land(
     }
 }
 
-/// One pass: the kinds and tiers read off the store as the analytics read them, the completed windows priced
-/// on a ledger read, and what it answers written in one transaction.
-async fn run_reconcile(db: &Arc<LedgerDb>, store: &Arc<Store>, tables: &Arc<PlanTables>, now: i64) {
-    let store = store.clone();
-    let accounts = tokio::task::spawn_blocking(move || {
-        let accounts = store.accounts()?;
-        let kinds: HashMap<String, AccountKind> =
-            accounts.iter().map(|a| (a.id.clone(), a.kind)).collect();
-        let mut tiers = Tiers::new();
-        let mut unread = Vec::new();
-        for account in accounts.iter().filter(|a| a.kind == AccountKind::Oauth) {
-            match store.subscription(&account.id) {
-                Ok(row) => {
-                    tiers.insert(account.id.clone(), row.and_then(|s| s.tier));
-                }
-                Err(error) => unread.push((account.id.clone(), error)),
-            }
-        }
-        Ok::<_, phoebis_store::StoreError>((kinds, tiers, unread))
-    })
-    .await;
-    let (kinds, tiers, unread) = match accounts {
-        Ok(Ok(read)) => read,
-        Ok(Err(error)) => {
-            tracing::warn!(%error, "the accounts could not be read; no window was reconciled");
-            return;
-        }
-        Err(error) => {
-            tracing::error!(%error, "reading the accounts for the reconciliation panicked");
-            return;
-        }
-    };
-    // An account without a tier reconciles nothing, so one whose row cannot be read waits for the next pass
-    // while the rest go ahead.
-    for (account, error) in unread {
-        tracing::warn!(
-            %error,
-            %account,
-            "an account's subscription could not be read; its windows wait for the next pass"
-        );
-    }
-    let tables = tables.clone();
-    let rows = match db
-        .read(move |conn| reconcile(conn, &tables, &tiers, &kinds, now))
-        .await
-    {
-        Ok(rows) => rows,
-        Err(error) => {
-            tracing::warn!(%error, "the completed windows could not be reconciled");
-            return;
-        }
-    };
-    if rows.is_empty() {
-        return;
-    }
-    if let Err(error) = db.insert_reconciliations(rows).await {
-        tracing::warn!(%error, "the window reconciliations could not be written");
-    }
-}
-
 async fn run_purge(db: &Arc<LedgerDb>, config: &LedgerConfig, router: &RouterHandle, now: i64) {
     let (db, config) = (db.clone(), config.clone());
     let budgeted = budgeted_members(&router.snapshot());
@@ -672,6 +595,7 @@ async fn run_purge(db: &Arc<LedgerDb>, config: &LedgerConfig, router: &RouterHan
 #[cfg(test)]
 mod tests {
     use super::*;
+    use phoebis_store::AccountKind;
 
     /// A ledger whose channel holds one record and has no writer draining it.
     fn stalled() -> (Ledger, mpsc::Receiver<Record>) {

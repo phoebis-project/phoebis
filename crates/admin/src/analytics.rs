@@ -446,21 +446,3 @@ pub(crate) async fn rewrites(
     }))
     .into_response()
 }
-
-/// How far back the reconciliation table reads: a month of 5-hour windows and four 7-day ones.
-const RECONCILIATIONS_MS: i64 = 30 * 86_400_000;
-
-/// The windows reconciled over the last 30 days, newest first, beside the request retention as configured, so the
-/// page can say which windows the retention leaves unreconciled.
-pub(crate) async fn reconciliations(State(state): State<Arc<AdminState>>) -> Response {
-    let since = (state.clock)() - RECONCILIATIONS_MS;
-    let rows = match state.ledger.db().reconciliations(since).await {
-        Ok(rows) => rows,
-        Err(e) => return ledger_failure(e),
-    };
-    Json(json!({
-        "reconciliations": rows,
-        "request_retention_days": state.settings.retention_days,
-    }))
-    .into_response()
-}

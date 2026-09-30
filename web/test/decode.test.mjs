@@ -639,28 +639,6 @@ test('the rewrite series decodes with the moves by reason over the range', () =>
   assert.deepEqual(d.decodeRewrites({ moves: { later_reason: 2, shed: 3 }, points: [] }).moves, { later_reason: 2, shed: 3 });
 });
 
-test('a window reconciliation decodes its instants, its rise against the prediction, and the request retention', () => {
-  const body = fixture('analytics_reconciliations');
-  const answer = d.decodeReconciliations(body);
-  assert.equal(answer.requestRetentionDays, 90);
-  const [inside, outside] = answer.reconciliations;
-  assert.deepEqual(inside, {
-    accountId: 'business',
-    computedAt: new Date(body.reconciliations[0].computed_at).toISOString(),
-    firstReadingAt: new Date(body.reconciliations[0].first_reading_at).toISOString(),
-    lastReadingAt: new Date(body.reconciliations[0].last_reading_at).toISOString(),
-    observedRise: 0.21,
-    predictedShare: 0.2,
-    ratio: 1.05,
-    requests: 14,
-    unmeasured: false,
-    window: 'five_hour',
-    windowEnd: new Date(body.reconciliations[0].window_end).toISOString(),
-  });
-  assert.deepEqual([outside.window, outside.ratio, outside.unmeasured], ['seven_day', 1.32, true], 'the window outside the band priced through unmeasured cells');
-  assert.deepEqual(d.decodeReconciliations({}), { reconciliations: [], requestRetentionDays: 0 }, 'a missing field reads as none');
-});
-
 test('an attempt carries the selection trace with its skipped members as named objects', () => {
   const detail = d.decodeRequest(fixture('request').request);
   const [bare] = d.decodeRequest({ attempts: [{ index: 1, selection: null }] }).attempts;
@@ -1177,7 +1155,6 @@ test('alert rules, events, and deliveries decode with the secret reduced to has_
   assert.deepEqual(util.scope, { id: 'main', type: 'pool' });
   assert.ok(isIso(util.createdAt) && !('secret' in util));
   assert.equal(rules.find((r) => r.kind === 'client_drift').enabled, false);
-  assert.deepEqual(rules.find((r) => r.kind === 'meter_drift').scope, { id: 'business', type: 'account' }, 'the drift kind is its own, not read as the fallback');
   assert.equal(d.decodeAlertRule({ ...fixture('alert_rules').rules[0], kind: 'poll_backoff' }).kind, 'poll_backoff', 'the backoff kind is its own, not read as the fallback');
   assert.equal(d.decodeAlertEvent({ ...fixture('alert_events').events[0], kind: 'poll_backoff' }).kind, 'poll_backoff');
   const [event] = fixture('alert_events').events.map(d.decodeAlertEvent);

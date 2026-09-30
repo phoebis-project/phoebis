@@ -100,12 +100,6 @@ test('under the upstream grouping the rest folds into one other per unit, so no 
   assert.deepEqual(oneUnit.lines.slice(7).map((l) => l.label), ['Other (dollars)'], 'a rest of one unit folds into that unit alone');
 });
 
-test('a reconciled ratio is marked outside 0.8 to 1.25 once the window rose by 5% or more', () => {
-  const at = (ratio, observedRise = 0.06) => d.ratioOff({ observedRise, ratio });
-  assert.deepEqual([at(0.8), at(1.25), at(1), at(0.79), at(1.26)], [false, false, false, true, true]);
-  assert.deepEqual([at(1.3, 0.04), at(0.5, 0.049), at(1.3, 0.05)], [false, false, true], 'a smaller rise is a few quanta of the meter');
-});
-
 test("the placements table's hit share formats", () => {
   const row = { cacheReadTokens: 184_000, hitShare: 2 / 3, hits: 2, placements: 3, promisedTokens: 190_500, rung: 'content' };
   assert.deepEqual(d.placementCells(row), ['3', '2', '67%', '184K', '190.5K'], 'placements, hits, hit share, tokens read, tokens promised');

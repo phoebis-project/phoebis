@@ -13,7 +13,6 @@ mod plan;
 mod pricing;
 mod query;
 mod quota;
-mod reconcile;
 mod record;
 mod rollup;
 mod schema;
@@ -51,10 +50,6 @@ pub use query::{
 pub use quota::{
     polled, samples_from_head, samples_from_poll, QuotaPoll, Sampled, POLL_INTERVAL,
     PROFILE_EVERY_POLLS,
-};
-pub use reconcile::{
-    read_reconciliations, reconcile, ReconciliationRow, MIN_RISE, RATIO_HIGH, RATIO_LOW,
-    RECONCILE_INTERVAL, RESET_TOLERANCE_MS,
 };
 pub use record::{
     AttemptRecord, BodyRecord, EventRecord, ExtraUsageSampleRecord, KeepaliveDelta,
