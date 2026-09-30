@@ -7160,6 +7160,154 @@ fn a_fresh_request_finds_no_warm_entry_of_another_lane_and_lands_by_the_strategy
     );
 }
 
+#[test]
+fn a_pin_and_an_entry_written_before_the_lane_existed_adopt_the_requests_lane_and_stay_warm() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let standard = lane_key("claude-sonnet-5", "standard", "none", "-");
+    let fast = lane_key("claude-sonnet-5", "fast", "none", "-");
+    let turn = |session: &str, now: i64, lane: &str, boundaries: &[&str]| SelectRequest {
+        lane: lane.to_string(),
+        ..with_facts(
+            request(&s, Some(session), "claude-sonnet-5", true, &[], now),
+            Some("main"),
+            false,
+            None,
+            boundaries,
+        )
+    };
+    // A warm pin the upgrade left without a lane, on b behind a by priority, so only the pin keeps it there.
+    let mut st = loaded(vec![PinRow {
+        tail_hash: Some("m1".into()),
+        lane: String::new(),
+        ..seeded_pin("s1", "b", T)
+    }]);
+    assert_eq!(
+        landed(
+            select(
+                &mut st,
+                &s,
+                &turn("s1", T, &standard, &["m1", "m2"]),
+                &mut rng()
+            )
+            .0
+        ),
+        ("b".into(), None)
+    );
+    let pin = pinned(&st, "s1");
+    assert_eq!(
+        (pin.last_refresh_at, pin.lane.as_str()),
+        (T, standard.as_str()),
+        "its first request after the upgrade refreshes it and stamps the request's lane"
+    );
+    select(
+        &mut st,
+        &s,
+        &turn("s1", T + 1_000, &fast, &["m1", "m2", "m3"]),
+        &mut rng(),
+    );
+    assert_eq!(
+        pinned(&st, "s1").last_refresh_at,
+        0,
+        "from then on it holds that lane, so another one reads cold"
+    );
+
+    // An entry the upgrade left without a lane places a fresh request on either lane until a report stamps it.
+    let entry_on_b = || {
+        let st = RoutingState::from_load(RoutingLoad::default());
+        seed_affinity(
+            &st,
+            vec![AffinityRow {
+                lane: String::new(),
+                ..affinity_row(
+                    &s,
+                    "claude-sonnet-5",
+                    "m1",
+                    AffinityChain::Message,
+                    "b",
+                    T - 1_000,
+                    300_000,
+                    12_345,
+                    "root",
+                )
+            }],
+        );
+        st
+    };
+    for lane in [&standard, &fast] {
+        let SelectResult::Selected(sel) = select(
+            &mut entry_on_b(),
+            &s,
+            &turn("s2", T, lane, &["m1", "m2"]),
+            &mut rng(),
+        )
+        .0
+        else {
+            panic!("b lands the request")
+        };
+        assert_eq!(
+            (sel.account.id.as_str(), sel.trace.placement.map(|p| p.rung)),
+            ("b", Some("content")),
+            "{lane}: the lane-less entry is the request's own"
+        );
+    }
+}
+
+#[test]
+fn a_resolution_between_two_turns_keeps_the_pin_warm_on_the_dated_id() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let turn = |model: &str, now: i64, boundaries: &[&str]| {
+        with_facts(
+            request(&s, Some("s1"), model, true, &[], now),
+            Some("main"),
+            false,
+            None,
+            boundaries,
+        )
+    };
+    select(
+        &mut st,
+        &s,
+        &turn("claude-sonnet-4-5", T, &["m1"]),
+        &mut rng(),
+    );
+    let rekey = st.apply_resolution("claude-sonnet-4-5", "claude-sonnet-4-5-20250929", T + 500);
+    let dated_lane = lane_key("claude-sonnet-4-5-20250929", "standard", "none", "-");
+    assert_eq!(
+        rekey
+            .upsert_pins
+            .iter()
+            .map(|p| p.lane.as_str())
+            .collect::<Vec<_>>(),
+        [dated_lane.as_str()],
+        "the moved pin's lane names the model the next request composes it from"
+    );
+    select(
+        &mut st,
+        &s,
+        &turn("claude-sonnet-4-5-20250929", T + 1_000, &["m1", "m2"]),
+        &mut rng(),
+    );
+    let pin = st
+        .pin(&PinKey {
+            model: "claude-sonnet-4-5-20250929".into(),
+            ..pin_key("s1")
+        })
+        .cloned()
+        .expect("the pin moved to the dated id");
+    assert_eq!(
+        pin.last_refresh_at,
+        T + 1_000,
+        "the continuation after the resolution refreshes its pin"
+    );
+}
+
 /// A state whose session "s1" already holds a pin on "a", made by a real selection with static prefix "s0" and
 /// tail "old-tail": the fixture the warmth tests below build on.
 fn pinned_state(s: &RegistrySnapshot, now: i64) -> RoutingState {

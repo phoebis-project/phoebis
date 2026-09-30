@@ -84,6 +84,12 @@ pub fn lane_key(model: &str, speed: &str, thinking: &str, effort: &str) -> Strin
     format!("{model}|{speed}|{thinking}|{effort}")
 }
 
+/// Whether a pin or an entry stored on `stored` holds the cache a request on `lane` writes to. A row written
+/// before rows carried a lane stores none and adopts the request's, since it never recorded another cache.
+pub(crate) fn same_lane(stored: &str, lane: &str) -> bool {
+    stored.is_empty() || stored == lane
+}
+
 /// Where a fresh placement's account came from, for the trace and the console's hit-or-miss reading.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct Placement {
@@ -173,7 +179,7 @@ pub fn warmth_of(current: &PinRow, request: &SelectRequest, affinity: &AffinityM
     }
     // Another lane is another cache: a refreshing turn on it reads the pin cold, whatever its boundaries. A request
     // that leaves the pin alone still does, since it never touched the conversation's prefix.
-    let lane_changed = request.lane != current.lane;
+    let lane_changed = !same_lane(&current.lane, &request.lane);
     let refreshed = if lane_changed {
         Warmth::Cold
     } else {
@@ -1556,7 +1562,8 @@ fn placement_of<'a>(
 
     if let Some((depth, entry)) =
         affinity.deepest(&request.canonical_model, &request.boundaries, |e| {
-            e.lane == request.lane && account_ok(state, snapshot, allowed, window, now, e)
+            same_lane(&e.lane, &request.lane)
+                && account_ok(state, snapshot, allowed, window, now, e)
         })
     {
         if let Some(candidate) = candidate_of(&entry.account_id) {
@@ -1616,7 +1623,7 @@ fn placement_of<'a>(
     };
     let (depth, entry) =
         affinity.deepest(&request.canonical_model, &request.static_boundaries, |e| {
-            e.lane == request.lane
+            same_lane(&e.lane, &request.lane)
                 && account_ok(state, snapshot, allowed, window, now, e)
                 && size_gate(e)
                 && !blocked(state, snapshot, pool, window, now, &e.account_id)
@@ -1675,7 +1682,7 @@ fn subagent_cohort<'a>(
     }
     let (_, entry) =
         affinity.deepest(&request.canonical_model, &request.static_boundaries, |e| {
-            e.lane == request.lane
+            same_lane(&e.lane, &request.lane)
                 && e.prefix_tokens > 0
                 && account_ok(state, snapshot, allowed, window, request.now, e)
         })?;

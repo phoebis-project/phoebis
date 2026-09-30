@@ -540,7 +540,8 @@ ALTER TABLE pools ADD COLUMN auto_mode_server INTEGER NOT NULL DEFAULT 1;
 ALTER TABLE api_keys ADD COLUMN auto_mode_server INTEGER;
 "#;
 
-// The cache lane a pin's last request and an entry's writer wrote to: a filter beside the `(model, hash)` key, so
-// neither table is rebuilt. A row from before reads `''`, which no request's lane matches: its pin reads cold once.
+// The cache lane a pin's last request and an entry's writer wrote to: a filter beside each table's key (a pin's
+// `(key_id, session_id, agent_id, model)`, an entry's `(model, hash)`), so neither table is rebuilt. A row from
+// before reads `''`, which adopts the lane of the next request that reads it.
 const V36: &str = "ALTER TABLE pins ADD COLUMN lane TEXT NOT NULL DEFAULT ''; \
 ALTER TABLE affinity ADD COLUMN lane TEXT NOT NULL DEFAULT '';";

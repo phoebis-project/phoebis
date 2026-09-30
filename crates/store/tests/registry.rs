@@ -831,7 +831,7 @@ fn a_store_left_at_32_is_carried_to_33_with_the_typed_burn_restarted_and_the_sha
     );
     assert_eq!(
         pin.lane, "",
-        "a pin from before the lane column names none, so its next request reads it cold once"
+        "a pin from before the lane column names none, so its next request stamps its own"
     );
     let budgets = migrated.keepalive_budgets("2026-09-29").unwrap();
     assert_eq!(

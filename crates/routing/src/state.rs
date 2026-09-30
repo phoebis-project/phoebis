@@ -1406,6 +1406,7 @@ impl RoutingState {
             if !keep_existing {
                 let moved = PinRow {
                     model: dated_id.to_string(),
+                    lane: relaned(&pin.lane, spelling, dated_id),
                     ..pin
                 };
                 if let Some(replaced) = self.pins.insert(dated_key.clone(), moved.clone()) {
@@ -1590,6 +1591,18 @@ impl RoutingState {
             cooldowns,
             pins,
         }
+    }
+}
+
+/// A moved pin's lane under the dated id: the relay composes the next request's lane from the model it admits,
+/// which is the dated id from now on, so a lane still spelling the old model would read as another cache.
+fn relaned(lane: &str, spelling: &str, dated_id: &str) -> String {
+    match lane
+        .strip_prefix(spelling)
+        .filter(|rest| rest.starts_with('|'))
+    {
+        Some(rest) => format!("{dated_id}{rest}"),
+        None => lane.to_string(),
     }
 }
 

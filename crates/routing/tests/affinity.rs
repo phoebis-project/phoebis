@@ -4,8 +4,8 @@
 //! fork facts the relay reads from a match are the relay's own.
 
 use phoebis_routing::{
-    lane_key, AffinityMap, AffinityReport, ConversationLookup, ConversationMatch,
-    ConversationQuery,
+    lane_key, AffinityChain, AffinityMap, AffinityReport, AffinityRow, ConversationLookup,
+    ConversationMatch, ConversationQuery,
 };
 
 fn boundaries(hashes: &[&str]) -> Vec<String> {
@@ -198,6 +198,36 @@ fn a_link_only_refresh_from_another_lane_carries_no_warmth_over() {
     assert!(
         !entry.live(3_000),
         "the standard lane's warmth is no warmth on the fast lane"
+    );
+}
+
+#[test]
+fn a_link_only_refresh_of_an_entry_written_before_the_lane_existed_adopts_its_lane_and_keeps_the_warmth(
+) {
+    let fast = lane_key("claude-sonnet-5", "fast", "none", "-");
+    let mut map = AffinityMap::from_rows(vec![AffinityRow {
+        model: "claude-sonnet-5".into(),
+        hash: "b1".into(),
+        chain: AffinityChain::Message,
+        account_id: "a".into(),
+        incarnation: 1,
+        written_at: 1_000,
+        ttl_ms: 3_600_000,
+        prefix_tokens: 2_000,
+        key_id: "k".into(),
+        key_generation: 0,
+        root: "b1".into(),
+        lane: String::new(),
+    }]);
+    map.record(&AffinityReport {
+        lane: fast.clone(),
+        ..report("k", "a", &["b1"], 2_000)
+    });
+    let entry = map.entry("claude-sonnet-5", "b1").unwrap();
+    assert_eq!(
+        (entry.lane.as_str(), entry.written_at + entry.ttl_ms),
+        (fast.as_str(), 1_000 + 3_600_000),
+        "the entry takes the report's lane and keeps its warm deadline"
     );
 }
 

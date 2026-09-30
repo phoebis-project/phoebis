@@ -57,7 +57,8 @@ pub struct PinRow {
     pub shed_at: Option<i64>,
     pub static_hash: Option<String>,
     pub tail_hash: Option<String>,
-    /// The lane of the last request that refreshed or colded the pin, `""` before any did.
+    /// The lane of the request that created the pin, stamped again by each request that refreshed or colded it;
+    /// `""` on a pin written before pins carried a lane, which adopts the next request's lane.
     pub lane: String,
 }
 

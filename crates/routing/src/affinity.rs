@@ -353,7 +353,7 @@ impl AffinityMap {
                 entry.written_at = report.now;
                 entry.ttl_ms = ttl_ms;
                 entry.prefix_tokens = prefix_tokens;
-            } else if entry.lane != report.lane {
+            } else if !crate::select::same_lane(&entry.lane, &report.lane) {
                 entry.ttl_ms = 0;
                 entry.written_at = report.now;
             } else {
