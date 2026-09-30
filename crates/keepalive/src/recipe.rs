@@ -20,6 +20,8 @@ pub struct Recipe {
     /// it never sees the request facts they come from.
     pub static_hash: Option<String>,
     pub tail_hash: Option<String>,
+    /// The body carries `speed: "fast"`: the replay runs fast and settles in dollars.
+    pub fast: bool,
 }
 
 pub fn valid_id(s: &str) -> bool {
@@ -133,6 +135,7 @@ pub fn make_recipe(
     if !matches!(thinking, "" | "adaptive" | "disabled") {
         return Err("fixed_thinking");
     }
+    let fast = root.get("speed").and_then(Value::as_str) == Some("fast");
     let choice = root
         .pointer("/tool_choice/type")
         .and_then(Value::as_str)
@@ -212,6 +215,7 @@ pub fn make_recipe(
         size,
         static_hash: None,
         tail_hash: None,
+        fast,
     })
 }
 

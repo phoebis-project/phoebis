@@ -134,7 +134,8 @@ pub struct WindowReading {
 }
 
 /// An account's latest readings by window name: `five_hour`, `seven_day`, `seven_day_fable` for a subscription
-/// account; `rpm:<model>`, `itpm:<model>`, `otpm:<model>` per canonical model for an api_key account.
+/// account; `rpm:<model>`, `itpm:<model>`, `otpm:<model>` per canonical model for an api_key account; and for
+/// either kind `fast_input` and `fast_output`, the fast lane's two buckets.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct UtilizationSample {
     pub windows: BTreeMap<String, WindowReading>,

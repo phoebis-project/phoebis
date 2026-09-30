@@ -217,4 +217,7 @@ pub struct KeepaliveDelta {
     pub wasted_probes: u64,
     pub wasted_probe_usd: f64,
     pub wasted_probe_reasons: std::collections::BTreeMap<String, u64>,
+    /// The recipe's speed, which keys the credit row: `fast` for `Some(Speed::Fast)`, `standard` otherwise, so
+    /// the derived `Default`'s `None` files standard.
+    pub speed: Option<crate::pricing::Speed>,
 }

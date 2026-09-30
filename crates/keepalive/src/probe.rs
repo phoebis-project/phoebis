@@ -103,6 +103,8 @@ pub struct ProbeRecord {
     pub agent_id: String,
     pub canonical_model: String,
     pub cost_usd: f64,
+    /// The recipe carried `speed: "fast"`, so its ledger rows file under speed `fast`.
+    pub fast: bool,
     pub key: SessionKey,
     pub key_generation: i64,
     /// The serving account's kind, looked up by `account` after the response; `None` when the account left the
@@ -286,7 +288,13 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
         // request either, so its probe settles in dollars like today and the credit path never matches it.
         let in_overage = matches!(&exchange, Exchange::Answered(result) if result.in_overage);
         let funding = record.kind.map(|kind| Funding::of(kind, in_overage));
-        let default_unit = funding.map(Funding::unit).unwrap_or(SavingsUnit::Usd);
+        // A fast replay draws usage credits whatever the account's funding, so it settles in dollars: the pool's
+        // dollar figure below carries it and the account's share figure never does.
+        let default_unit = if job.recipe.fast {
+            SavingsUnit::Usd
+        } else {
+            funding.map(Funding::unit).unwrap_or(SavingsUnit::Usd)
+        };
         // The tier the store names now: a share is of the window the account has at this settlement.
         let tier = (default_unit == SavingsUnit::WindowShare)
             .then(|| {
@@ -384,6 +392,7 @@ impl Inner {
             agent_id: job.agent_id.clone(),
             canonical_model: job.canonical_model.clone(),
             cost_usd: 0.0,
+            fast: job.recipe.fast,
             key: job.key.clone(),
             key_generation: job.key_generation,
             kind: None,
@@ -412,9 +421,9 @@ impl Inner {
         if let Some(usage) = result.body.as_deref().and_then(ProbeUsage::parse) {
             record.usage = usage;
             // The ledger's probe-cost column is dollars whatever funded the account, so this always prices
-            // through the price table; the funding-unit cost the agent's own net deducts is a second figure
-            // computed once the serving account's kind is known, back in `run_job`.
-            // Dollars read neither a tier nor the settlement instant.
+            // through the price table, at the cells the answer's own `usage.speed` selects; the funding-unit
+            // cost the agent's own net deducts is a second figure computed once the serving account's kind is
+            // known, back in `run_job`. Dollars read neither a tier nor the settlement instant.
             record.cost_usd = probe_cost(
                 SavingsUnit::Usd,
                 table,
@@ -509,6 +518,7 @@ impl Inner {
                 account: Some(record.account.clone()),
                 label,
                 costs: vec![record.cost_usd],
+                fast: job.recipe.fast,
             });
             return Applied::Orphaned;
         }

@@ -494,7 +494,8 @@ fn malformed_usage_is_refused_and_the_bus_shape_is_read() {
             output: 10,
             five_minutes: 2_000,
             one_hour: 0,
-            input: 0
+            input: 0,
+            speed: None
         }
     );
     let split = ProbeUsage::parse(br#"{"usage":{"cache_read_input_tokens":5,"cache_creation":{"ephemeral_1h_input_tokens":7}}}"#).unwrap();
@@ -524,7 +525,8 @@ fn malformed_usage_is_refused_and_the_bus_shape_is_read() {
             output: 7,
             five_minutes: 3,
             one_hour: 0,
-            input: 4
+            input: 4,
+            speed: None
         }
     );
 }

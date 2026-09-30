@@ -1072,3 +1072,110 @@ async fn a_probe_refused_by_a_full_pool_retries_after_the_header_rather_than_pau
     drop(other);
     r.up.release();
 }
+
+const OAUTH_SECRET: &str = "sk-ant-oat01-OOOO";
+/// A model whose price row carries fast cells.
+const FAST_PRICED: &str = "claude-opus-5";
+
+/// A subscription account on plan quota, so a standard probe of its sessions would settle in a window share.
+fn plan_funded_spec() -> RigSpec {
+    RigSpec {
+        accounts: vec![oauth("o", OAUTH_SECRET, 0)],
+        limits: KeepaliveLimits {
+            oauth_prewarm_verified: true,
+            ..KeepaliveLimits::default()
+        },
+        pool: PoolSpec {
+            overage_policy: phoebis_store::OveragePolicy::Allow,
+            ..PoolSpec::default()
+        },
+        tier: Some("default_claude_max_5x"),
+        ..RigSpec::default()
+    }
+}
+
+/// The rig's body on `FAST_PRICED`, sent in fast mode.
+fn fast_body() -> String {
+    BODY.replace("claude-sonnet-4-5", FAST_PRICED)
+        .replacen('{', r#"{"speed":"fast","#, 1)
+}
+
+/// A probe's answer reading the 2,000-token prefix back, served at `speed`.
+fn read_back_at(speed: &str) -> Respond {
+    json(
+        200,
+        &format!(
+            r#"{{"id":"msg_p","type":"message","content":[],"usage":{{"input_tokens":0,"cache_read_input_tokens":2000,"cache_creation_input_tokens":0,"output_tokens":0,"speed":"{speed}"}}}}"#
+        ),
+    )
+}
+
+/// One fast-mode request on the plan-funded account and the probe after it, answered at `served`, and what
+/// the price table says 2,000 cache reads cost at that speed.
+async fn fast_probe_served(served: &str, speed: phoebis_ledger::Speed) -> (Rig, f64) {
+    let mut r = rig(plan_funded_spec()).await;
+    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", real_answer());
+    r.observe_with("main", &fast_body()).await;
+    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", read_back_at(served));
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").probes, 1);
+    let (cost, _) = phoebis_ledger::PriceTable::shipped()
+        .estimate(FAST_PRICED, speed, 0, 2_000, 0, 0, 0)
+        .expect("a priced model");
+    (r, cost)
+}
+
+/// A fast-mode request draws usage credits and no plan window, and its probe replays the body as sent, so the
+/// probe does too: it settles in dollars at the fast cells on an account whose standard traffic spends plan
+/// quota, and the account's window share is untouched.
+#[tokio::test]
+async fn a_fast_recipes_probe_settles_in_dollars_at_the_fast_cells_on_a_plan_funded_account() {
+    let (r, fast) = fast_probe_served("fast", phoebis_ledger::Speed::Fast).await;
+    let (standard, _) = phoebis_ledger::PriceTable::shipped()
+        .estimate(FAST_PRICED, phoebis_ledger::Speed::Standard, 0, 2_000, 0, 0, 0)
+        .unwrap();
+    assert!(
+        fast > standard,
+        "the fast cells are dearer: {fast} against {standard}"
+    );
+    let status = r.status("main");
+    assert!(
+        (status.net_usd + fast).abs() < 1e-12,
+        "the probe settled in dollars at the fast cells: {status:?}"
+    );
+    assert_eq!(
+        (
+            status.net_five_hour_share,
+            status.net_five_hour_share_unmeasured
+        ),
+        (0.0, false),
+        "the account's share balance is unchanged"
+    );
+    assert_eq!(
+        r.engine
+            .share_spent_today()
+            .get("o")
+            .copied()
+            .unwrap_or(0.0),
+        0.0,
+        "no window share was spent"
+    );
+    assert!(
+        (r.engine.spent_today().get("main").copied().unwrap_or(0.0) - fast).abs() < 1e-12,
+        "the day's dollar figure carries it: {:?}",
+        r.engine.spent_today()
+    );
+}
+
+/// The answer's own `usage.speed` picks the cells, as it does for a request: a fast recipe the upstream served
+/// at standard speed still settles in dollars, at the standard cells.
+#[tokio::test]
+async fn a_fast_recipe_served_standard_prices_at_the_standard_cells() {
+    let (r, standard) = fast_probe_served("standard", phoebis_ledger::Speed::Standard).await;
+    let status = r.status("main");
+    assert!(
+        (status.net_usd + standard).abs() < 1e-12 && status.net_five_hour_share == 0.0,
+        "dollars at the standard cells: {status:?}"
+    );
+}

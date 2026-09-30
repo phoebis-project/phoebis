@@ -1,6 +1,7 @@
 //! The cache evidence a response carries, in the shape the Go engine read it: the read and write token counts
 //! by TTL, and the TTL those counts prove.
 
+use phoebis_ledger::Speed;
 use serde_json::Value;
 
 use crate::config::{FIVE_MINUTES_MS, ONE_HOUR_MS};
@@ -20,6 +21,9 @@ pub struct ProbeUsage {
     pub one_hour: u64,
     /// Uncached input, which the Go engine never read: the probe cost estimate needs it.
     pub input: u64,
+    /// The answer's `usage.speed`, which selects the cells the probe is priced at; `None` when the answer named
+    /// none.
+    pub speed: Option<Speed>,
 }
 
 impl ProbeUsage {
@@ -76,6 +80,10 @@ impl ProbeUsage {
         if usage.write == 0 {
             usage.write = usage.five_minutes + usage.one_hour;
         }
+        usage.speed = node
+            .get("speed")
+            .and_then(Value::as_str)
+            .map(|s| Speed::of(Some(s)));
         Some(usage)
     }
 
@@ -89,6 +97,9 @@ impl ProbeUsage {
             five_minutes,
             one_hour,
             input: usage.input_tokens.unwrap_or(0),
+            // The bus's usage carries no speed; the kept-warm observation this reads never prices a probe, whose
+            // own answer goes through `parse`.
+            speed: None,
         }
     }
 

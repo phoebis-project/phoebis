@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use phoebis_ledger::{
     fold_keepalive, hour_of, read_rollups, AttemptRecord, KeepaliveDelta, LedgerConfig, LedgerDb,
-    LiveKeys, Record, RequestRecord,
+    LiveKeys, Record, RequestRecord, Speed,
 };
 use common::*;
 use fake_upstream::FakeUpstream;
@@ -540,4 +540,44 @@ async fn the_writer_lands_a_keepalive_record_in_its_batch() {
     .await;
     assert_eq!(rows[0].probe_cost_usd, 0.5);
     up.shutdown().await;
+}
+
+/// A fast-mode session's probes and credits are dollars at the fast cells, so they file beside the fast
+/// requests they keep warm; a delta that names no speed, as every standard one does, files standard.
+#[test]
+fn a_fast_recipes_credit_files_under_speed_fast() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let at = 1_700_000_000_000;
+    db.write(|c| {
+        let tx = c.transaction()?;
+        fold_keepalive(
+            &tx,
+            &KeepaliveDelta {
+                kept_warm_requests: 1,
+                saved_usd_gross: 0.018,
+                speed: Some(Speed::Fast),
+                ..delta(at, "inference")
+            },
+        )?;
+        fold_keepalive(
+            &tx,
+            &KeepaliveDelta {
+                kept_warm_requests: 1,
+                saved_usd_gross: 0.0036,
+                ..delta(at, "inference")
+            },
+        )?;
+        tx.commit()?;
+        Ok(())
+    })
+    .unwrap();
+    let rows = db
+        .read_blocking(|c| read_rollups(c, hour_of(at), hour_of(at) + 3_600))
+        .unwrap();
+    let mut by_speed: Vec<(&str, f64)> = rows
+        .iter()
+        .map(|r| (r.speed.as_str(), r.saved_usd_gross))
+        .collect();
+    by_speed.sort_by(|a, b| a.0.cmp(b.0));
+    assert_eq!(by_speed, [("fast", 0.018), ("standard", 0.0036)]);
 }

@@ -11,7 +11,7 @@ use phoebis_bus::{
     spawn_subscriber, AccountSelected, Bus, Event as BusEvent, LifecycleSender, Outcome, Phase,
     RequestComplete, RequestObserved, ResponseChunk, ResponseHead, SessionLifecycle,
 };
-use phoebis_ledger::{Ledger, Metrics, PlanTables, Pricing};
+use phoebis_ledger::{Ledger, Metrics, PlanTables, Pricing, Speed};
 use phoebis_oauth::Clock;
 use phoebis_relay::Relay;
 use phoebis_routing::{budget_deadline, RegistrySnapshot, RouterHandle, FIVE_HOUR};
@@ -494,6 +494,8 @@ pub(crate) struct Settlement {
     pub account: Option<String>,
     pub label: Wasted,
     pub costs: Vec<f64>,
+    /// The stopped recipe carried `speed: "fast"`, so the settlement files under speed `fast`.
+    pub fast: bool,
 }
 
 pub(crate) struct Inner {
@@ -698,9 +700,11 @@ impl Inner {
         else {
             return;
         };
+        let mut fast = false;
         if let Some(observation) = agent.current.take() {
             self.pending.remove(&observation.id);
             self.retained -= observation.recipe.size;
+            fast = observation.recipe.fast;
         }
         agent.expires = None;
         agent.retry_at = None;
@@ -717,6 +721,7 @@ impl Inner {
                 account: agent.account.clone(),
                 label,
                 costs,
+                fast,
             };
             self.settlements.push(settlement);
         }
@@ -1401,11 +1406,12 @@ impl Engine {
                             agent.account.clone(),
                             agent.canonical_model.clone(),
                             unit.unwrap(),
+                            agent.current.as_ref().is_some_and(|o| o.recipe.fast),
                         )
                     })
                 })
         };
-        if let Some((read, key_generation, pool_id, account, model, unit)) = credit {
+        if let Some((read, key_generation, pool_id, account, model, unit, fast)) = credit {
             // The mark says a probe kept this request warm, which is true whatever the price table knows;
             // the saving is what the table can put a number on, zero for a model it does not price. The
             // agent's own net settles in the covering probe's unit, a share of the tier the store names now,
@@ -1422,12 +1428,32 @@ impl Engine {
                     .and_then(|s| s.tier),
                 _ => None,
             };
-            let saving_net = gross_saving(unit, &table, tables, tier.as_deref(), &model, read, now);
+            // The request that read the prefix would have paid it as input at its own speed's cells.
+            let speed = if fast { Speed::Fast } else { Speed::Standard };
+            let saving_net = gross_saving(
+                unit,
+                &table,
+                tables,
+                tier.as_deref(),
+                &model,
+                read,
+                now,
+                speed,
+            );
             let saving_ledger = if unit == SavingsUnit::Usd {
                 saving_net.map_or(0.0, |s| s.share)
             } else {
-                gross_saving(SavingsUnit::Usd, &table, tables, None, &model, read, now)
-                    .map_or(0.0, |s| s.share)
+                gross_saving(
+                    SavingsUnit::Usd,
+                    &table,
+                    tables,
+                    None,
+                    &model,
+                    read,
+                    now,
+                    speed,
+                )
+                .map_or(0.0, |s| s.share)
             };
             inner
                 .sessions
@@ -1442,7 +1468,15 @@ impl Engine {
                     saving_net.map_or(0.0, |s| s.share),
                     saving_net.is_some_and(|s| s.unmeasured),
                 );
-            credited = Some((read, key_generation, pool_id, account, model, saving_ledger));
+            credited = Some((
+                read,
+                key_generation,
+                pool_id,
+                account,
+                model,
+                saving_ledger,
+                fast,
+            ));
         }
         let (ready, armed) = inner.sessions[&key]
             .agents
@@ -1492,7 +1526,7 @@ impl Engine {
             }
         }
         drop(inner);
-        if let Some((read, key_generation, pool_id, account, model, saving)) = credited {
+        if let Some((read, key_generation, pool_id, account, model, saving, fast)) = credited {
             self.record_kept_warm(
                 now,
                 &key,
@@ -1503,6 +1537,7 @@ impl Engine {
                 &complete.request_id,
                 read,
                 saving,
+                fast,
             );
             self.parts.metrics.observe_saving(&pool_id, saving);
         }
@@ -1777,7 +1812,8 @@ pub(crate) struct RouterView {
     pub budgets: BTreeSet<(String, String)>,
     /// A retained model name to the one the router keys its rows on, for the names that differ.
     pub canonical: HashMap<String, String>,
-    pub cooled: BTreeSet<(String, String)>,
+    /// `(account, scope)` of every live cooldown row to its window, so the gate can tell a plan-window row apart.
+    pub cooled: BTreeMap<(String, String), String>,
     pub overage: BTreeSet<String>,
     /// `(key, session, agent, canonical model)` to the pinned account: the account a probe would actually run
     /// on, so a sibling's pin never overwrites an agent's own.
@@ -1832,7 +1868,7 @@ impl Engine {
             .unwrap_or_default()
             .into_iter()
             .filter(|c| c.until > now)
-            .map(|c| (c.account_id, c.scope))
+            .map(|c| ((c.account_id, c.scope), c.window))
             .collect();
         let fallback_ms = self.parts.cooldown_fallback.as_millis() as i64;
         let overage = self
@@ -1974,15 +2010,22 @@ pub(crate) fn gate(
     ) {
         return Some(Gate::Hold(Reason::Reauth));
     }
-    let model_scope = format!("model:{}", agent.canonical_model);
-    if view
-        .cooled
-        .contains(&(account.id.clone(), "account".into()))
-        || view.cooled.contains(&(account.id.clone(), model_scope))
-    {
+    let fast = agent
+        .current
+        .as_ref()
+        .map(|o| &o.recipe)
+        .is_some_and(|r| r.fast);
+    // The router's own rule decides which live row holds the probe: a fast recipe passes a plan-window row on the
+    // account and holds on its own lane's, as a fast request does.
+    let cooled = view.cooled.iter().any(|((id, scope), window)| {
+        id == &account.id
+            && phoebis_routing::cooldown_holds(scope, window, &agent.canonical_model, fast)
+    });
+    if cooled {
         return Some(Gate::Hold(Reason::Cooled));
     }
-    if view.overage.contains(&account.id) && pool.overage_policy != OveragePolicy::Allow {
+    // A fast recipe draws usage credits, not a plan window, so plan overage does not hold it.
+    if !fast && view.overage.contains(&account.id) && pool.overage_policy != OveragePolicy::Allow {
         return Some(Gate::Hold(Reason::Overage));
     }
     // Read live on every poll like the two holds above: the period's end or a raised budget clears it on the
@@ -2005,8 +2048,8 @@ pub(crate) fn gate(
     // The day's plan-funded probes already settled as shares of the account's own 5-hour window, the band
     // inside each price, so the sum caps against the configured share directly. An API-key account has no
     // window to share and spends dollars, which the dollar cap above bounds; a zero share cap would read its
-    // empty entry as spent.
-    if let Some(share) = policy.probe_cap_window_share_per_day {
+    // empty entry as spent. A fast recipe's probes settle in dollars too, so the share cap never reads them.
+    if let Some(share) = policy.probe_cap_window_share_per_day.filter(|_| !fast) {
         if account.kind == AccountKind::Oauth {
             let share_spent = share_spent_today.get(&account.id).copied().unwrap_or(0.0);
             if share_spent >= share {
@@ -2014,7 +2057,11 @@ pub(crate) fn gate(
             }
         }
     }
-    let default_unit = Funding::of(account.kind, in_overage).unit();
+    let default_unit = if fast {
+        SavingsUnit::Usd
+    } else {
+        Funding::of(account.kind, in_overage).unit()
+    };
     // A model the cost table lacks, or an account whose tier the factor table cannot size, settles every probe
     // in dollars whatever the funding, the same fall-back `settled_cost` takes; the stop has to read the balance
     // in that unit too, or a zero share balance masks a negative dollar one, which the share cap never catches
@@ -2112,6 +2159,11 @@ mod tests {
     /// One pool holding one key and two members, subscription account `o` on Max 5x and api_key account `a`,
     /// with the stop on and no grace, so a negative balance in the unit the next probe settles in holds at once.
     fn stop_view(o_in_overage: bool) -> RouterView {
+        stop_view_under(o_in_overage, OveragePolicy::Allow)
+    }
+
+    /// `stop_view` with the pool's overage policy named, for a case the overage hold has to reach.
+    fn stop_view_under(o_in_overage: bool, overage_policy: OveragePolicy) -> RouterView {
         let policy = KeepalivePolicy {
             enabled: true,
             stop_when_net_negative: true,
@@ -2171,7 +2223,7 @@ mod tests {
                 enabled: true,
                 strategy: phoebis_store::Strategy::default(),
                 affinity_ttl_seconds: 3_600,
-                overage_policy: OveragePolicy::Allow,
+                overage_policy,
                 migrate_above_utilization: None,
                 select_below_utilization: None,
                 model_rules: Vec::new(),
@@ -2193,7 +2245,7 @@ mod tests {
         RouterView {
             budgets: BTreeSet::new(),
             canonical: HashMap::new(),
-            cooled: BTreeSet::new(),
+            cooled: BTreeMap::new(),
             overage: if o_in_overage {
                 BTreeSet::from(["o".to_string()])
             } else {
@@ -2271,6 +2323,145 @@ mod tests {
             (None, Some(Gate::Hold(Reason::NetNegative))),
             "on plan without a tier a probe settles in dollars, so the dollar balance decides"
         );
+    }
+
+    /// An observation whose recipe `make_recipe` built from a body sent in fast mode, or at standard speed.
+    fn observation(fast: bool) -> Observation {
+        let speed = if fast { r#""speed":"fast","# } else { "" };
+        let body = format!(
+            r#"{{"model":"claude-opus-5",{speed}"max_tokens":1024,"messages":[{{"role":"user","content":"hi"}}]}}"#
+        );
+        let recipe = make_recipe(&[], body.as_bytes(), "claude-opus-5", 1 << 20).unwrap();
+        assert_eq!(recipe.fast, fast, "{body}");
+        Observation {
+            id: "r".into(),
+            attempt: 1,
+            started: 0,
+            recipe,
+            ready: true,
+            expected: 2_000,
+            ttl_ms: 0,
+            prior: None,
+            poisoned: false,
+            dispatched_ms: None,
+        }
+    }
+
+    /// The gate's answer for `main` pinned on `account` with `net` and no grace, holding a recipe of that speed.
+    fn gated_at(view: &RouterView, account: &str, fast: bool, net: Net) -> Option<Gate> {
+        let mut agent = Agent::new("main", "k", 1, 0);
+        agent.account = Some(account.into());
+        agent.canonical_model = "claude-opus-5".into();
+        agent.net = net;
+        agent.grace_left = 0;
+        agent.current = Some(observation(fast));
+        gate(
+            view,
+            &mut agent,
+            "s",
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &PlanTables::shipped(),
+        )
+    }
+
+    #[test]
+    fn the_net_negative_stop_reads_the_dollar_balance_for_a_fast_recipe() {
+        let share_short = Net {
+            five_hour_share: -0.01,
+            usd: 0.50,
+            ..Net::default()
+        };
+        let dollars_short = Net {
+            five_hour_share: 0.01,
+            usd: -0.50,
+            ..Net::default()
+        };
+        let view = stop_view(false);
+        assert_eq!(
+            (
+                gated_at(&view, "o", true, share_short),
+                gated_at(&view, "o", true, dollars_short)
+            ),
+            (None, Some(Gate::Hold(Reason::NetNegative))),
+            "a fast recipe's probes settle in dollars on plan too, so the dollar balance decides"
+        );
+        assert_eq!(
+            (
+                gated_at(&view, "o", false, share_short),
+                gated_at(&view, "o", false, dollars_short)
+            ),
+            (Some(Gate::Hold(Reason::NetNegative)), None),
+            "a standard recipe on the same account still reads the share"
+        );
+    }
+
+    #[test]
+    fn a_fast_recipe_passes_a_plan_window_hold_takes_no_overage_hold_and_holds_on_a_fast_row() {
+        let cooled = |scope: &str, window: &str| RouterView {
+            cooled: BTreeMap::from([(("o".to_string(), scope.to_string()), window.to_string())]),
+            ..stop_view(false)
+        };
+        let plan_window = cooled("account", "five_hour");
+        assert_eq!(
+            (
+                gated_at(&plan_window, "o", true, Net::default()),
+                gated_at(&plan_window, "o", false, Net::default())
+            ),
+            (None, Some(Gate::Hold(Reason::Cooled))),
+            "an account row on a plan window holds the standard recipe alone"
+        );
+        let fast_row = cooled("fast", "fast");
+        assert_eq!(
+            (
+                gated_at(&fast_row, "o", true, Net::default()),
+                gated_at(&fast_row, "o", false, Net::default())
+            ),
+            (Some(Gate::Hold(Reason::Cooled)), None),
+            "the fast lane's row holds the fast recipe alone"
+        );
+        let overage = stop_view_under(true, OveragePolicy::Never);
+        assert_eq!(
+            (
+                gated_at(&overage, "o", true, Net::default()),
+                gated_at(&overage, "o", false, Net::default())
+            ),
+            (None, Some(Gate::Hold(Reason::Overage))),
+            "plan overage holds the standard recipe alone"
+        );
+    }
+
+    #[test]
+    fn the_gate_holds_on_a_cooldown_row_exactly_when_the_routers_rule_does() {
+        let rows = [
+            ("account", "five_hour"),
+            ("account", "seven_day"),
+            ("account", "seven_day_fable"),
+            ("account", "retry_after"),
+            ("fast", "fast"),
+            ("model:claude-opus-5", "retry_after"),
+            ("model:claude-sonnet-5", "retry_after"),
+        ];
+        let mut answers = BTreeSet::new();
+        for (scope, window) in rows {
+            for fast in [false, true] {
+                let view = RouterView {
+                    cooled: BTreeMap::from([(
+                        ("o".to_string(), scope.to_string()),
+                        window.to_string(),
+                    )]),
+                    ..stop_view(false)
+                };
+                let holds = phoebis_routing::cooldown_holds(scope, window, "claude-opus-5", fast);
+                assert_eq!(
+                    gated_at(&view, "o", fast, Net::default()) == Some(Gate::Hold(Reason::Cooled)),
+                    holds,
+                    "{scope} at {window}, fast {fast}"
+                );
+                answers.insert(holds);
+            }
+        }
+        assert_eq!(answers.len(), 2, "the table reaches both answers");
     }
 
     #[test]

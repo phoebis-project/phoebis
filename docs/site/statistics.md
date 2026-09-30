@@ -343,7 +343,8 @@ whose tier the tier factor table does not size listed as tier unknown. Latency r
 per-hour histograms; Cache reports the hit ratio, tokens that expired between turns, the share of input served from
 cache, and the output split into thinking and plain output; Cost reports the estimated spend for the range and a Fast
 mode spend tile, the dollars fast-mode answers drew from usage credits; Cache warming reports what probes cost against
-what they saved; and Upstreams reports peak utilization, ineligible time, and pin churn per upstream.
+what they saved, where a fast-mode session's probes and credits read as dollars and file under speed `fast`; and
+Upstreams reports peak utilization, ineligible time, and pin churn per upstream.
 
 The Cache section closes with Placements by rung: the attempts in the range the router placed by a warm prefix or beside
 the main conversation rather than by its strategy, counted by rung (by the conversation's own messages, by its static

@@ -42,7 +42,7 @@ const MIGRATED_PROBE_HINT =
   "The probe was served by another account than the recipe's; it paid the write the next request would have paid there, so it counts for neither the cold streak nor the net.";
 const NO_TRAFFIC_HINT = 'This session has no ledgered requests, so there is nothing to show in analytics or observe.';
 const NET_HINT =
-  "What the agent's probes saved minus what they cost, in the unit each probe settled in: a share of the upstream's 5-hour window on plan quota, dollars on an API key or in overage. An agent whose upstream changed funding carries both.";
+  "What the agent's probes saved minus what they cost, in the unit each probe settled in: a share of the upstream's 5-hour window on plan quota, dollars on an API key or in overage. An agent whose upstream changed funding carries both. A fast-mode session's probes settle in dollars whatever the upstream's funding, since they draw usage credits.";
 const UNMEASURED_HINT = 'Priced in part through a cell or a tier factor the measurement campaign has not filled';
 
 /**

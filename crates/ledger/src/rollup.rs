@@ -8,6 +8,7 @@ use rusqlite::{params, Connection, OptionalExtension, Transaction};
 #[cfg(test)]
 use crate::histogram::bucket_index;
 use crate::histogram::Histogram;
+use crate::pricing::Speed;
 use crate::record::{AttemptRecord, EventRecord, KeepaliveDelta, RequestRecord};
 use crate::LedgerError;
 
@@ -625,7 +626,11 @@ pub fn fold_keepalive(tx: &Transaction<'_>, delta: &KeepaliveDelta) -> Result<()
         UNATTRIBUTED,
         NO_EFFORT,
         NO_CLASS,
-        STANDARD_SPEED,
+        if delta.speed == Some(Speed::Fast) {
+            "fast"
+        } else {
+            STANDARD_SPEED
+        },
     );
     let mut row = read_rollup(tx, &key)?.unwrap_or(key);
     row.kept_warm_requests += delta.kept_warm_requests;

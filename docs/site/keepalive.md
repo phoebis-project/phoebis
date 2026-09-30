@@ -26,6 +26,11 @@ A probe costs a cache read at list price. The ledger credits the gross saving a 
 against that cost, per pool and per hour, and `GET /admin/keepalive/overview` reports the net of the two, which
 can go negative when probes outspend what they save.
 
+A probe of a request sent fast runs fast too, since the replay keeps the body as sent: it draws usage credits at the
+fast rates, settles in dollars whatever the upstream's funding, counts toward the dollar cap and no share cap, and its
+saving reads the fast input cell less the fast cache-read cell; a probe the upstream served at standard speed is priced
+at the standard cells.
+
 A pool's cache TTL policy applies to a probe the way it applies to the request it replays, because the probe goes
 through the same edit path: a marker-less recipe body takes the top-level member only where the policy's
 `inject_when_absent` is on. The engine learns the TTL an entry was written with from the response's usage and
@@ -128,7 +133,9 @@ even written. `GET /admin/pools` answers the full policy with every default fill
 Both daily caps count per UTC day and are kept in `router.sqlite` as each probe settles, so a restart resumes them
 where they stood. A probe settled in dollars, on an api_key account, a subscription account in overage, or a model
 the plan table lacks, counts toward its pool's `probe_cost_cap_usd_per_day`; a plan-funded probe counts toward its
-account's `probe_cap_window_share_per_day`, and a migrated probe toward neither.
+account's `probe_cap_window_share_per_day`, and a migrated probe toward neither. A fast-mode session's probes settle
+in dollars and count toward `probe_cost_cap_usd_per_day`; `probe_cap_window_share_per_day` bounds plan-funded probes
+alone, and a fast-mode session's probes never count toward it.
 
 ## The cost reference
 
@@ -178,7 +185,8 @@ The prices carry one caveat: "API list prices. A subscription upstream on plan q
 instead of money." A recipe's own net follows the same split: the share of the account's 5-hour window, the band inside
 each probe's price, on a subscription account outside overage, and dollars on an api_key account or one in overage; a
 plan-funded probe on a model the cost table lacks, or on an account whose tier the factor table lacks, settles in
-dollars too. Each agent line of the Sessions view shows its net, as "N% of the 5-hour window", in dollars, or both for
+dollars too. Whatever the upstream's funding, a fast-mode session's net is a dollar net, since its probes draw usage
+credits. Each agent line of the Sessions view shows its net, as "N% of the 5-hour window", in dollars, or both for
 an agent whose upstream changed funding while it was warmed. A balance with a share priced through a stand-in cell or
 factor in it keeps the asterisk.
 

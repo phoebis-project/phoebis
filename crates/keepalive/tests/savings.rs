@@ -749,6 +749,61 @@ async fn a_plan_funded_probe_leaves_the_dollar_cap_unchanged() {
     );
 }
 
+/// A probe's answer reading the 2,000-token prefix back, served fast.
+fn fast_read_back() -> Respond {
+    Respond::Json { status: 200, headers: vec![], body: br#"{"id":"msg_p","type":"message","content":[],"usage":{"input_tokens":0,"cache_read_input_tokens":2000,"cache_creation_input_tokens":0,"output_tokens":0,"speed":"fast"}}"#.to_vec() }
+}
+
+/// A fast-mode request draws usage credits and no plan window, so its probe settles in dollars whatever the
+/// upstream's funding: the share cap never sees it, and the dollar figure the pool's cap reads carries it.
+#[tokio::test]
+async fn the_share_cap_ignores_a_fast_probe_and_the_dollar_cap_counts_it() {
+    let mut r = rig(RigSpec {
+        policy: KeepalivePolicy {
+            probe_cap_window_share_per_day: Some(0.0),
+            ..RigSpec::default().policy
+        },
+        ..subscription_spec()
+    })
+    .await;
+    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
+    r.observe_with("main", &opus_body()).await;
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(
+        (r.status("main").probes, r.status("main").reason),
+        (0, Reason::CapReached),
+        "a zero share cap holds the standard recipe"
+    );
+    let fast = opus_body().replacen('{', r#"{"speed":"fast","#, 1);
+    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
+    r.observe_with("main", &fast).await;
+    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", fast_read_back());
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(
+        r.status("main").probes,
+        1,
+        "the fast recipe probes past the share cap"
+    );
+    // Opus 5's fast cache read is 1.00 per million.
+    let cost = 2_000.0 * 1.0 / 1_000_000.0;
+    assert!(
+        (r.engine.spent_today().get("main").copied().unwrap_or(0.0) - cost).abs() < 1e-12,
+        "the day's dollar figure: {:?}",
+        r.engine.spent_today()
+    );
+    assert_eq!(
+        r.engine
+            .share_spent_today()
+            .get("o")
+            .copied()
+            .unwrap_or(0.0),
+        0.0,
+        "and the day's share figure is untouched"
+    );
+}
+
 /// A restart restores the plan-side figure beside the dollar one: an oauth account's probe counts toward it
 /// mid-day, not only while the engine has run continuously.
 #[tokio::test]

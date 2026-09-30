@@ -203,7 +203,7 @@ async fn select_main(r: &Rig) -> SelectResult {
     let snapshot = r.h.router.snapshot();
     let key = snapshot.key("desktop").unwrap();
     let candidates = resolve(&snapshot, key, &model, &model).unwrap();
-    let lane = lane_key(&model, "standard", "none", "-");
+    let lane = lane_key(&model, "standard", "adaptive", "-");
     r.h.router
         .select(SelectRequest {
             key_id: "desktop".into(),

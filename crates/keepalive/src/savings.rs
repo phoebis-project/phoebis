@@ -14,9 +14,10 @@ use crate::probe::{Applied, ProbeOutcome, ProbeRecord};
 use crate::usage::ProbeUsage;
 
 /// The gross saving of a request that read `cache_read_tokens` it would otherwise have paid as input, in the
-/// unit the covering probe was funded under: dollars at list prices, or the share of the `tier`'s 5-hour window
-/// at `at` (the band inside the price). `None` for a model the table lacks, or on the share side a missing or
-/// unlisted tier; a dollar figure is never flagged.
+/// unit the covering probe was funded under: dollars at the list prices of the cells `speed` selects, or the
+/// share of the `tier`'s 5-hour window at `at` (the band inside the price). `None` for a model the table lacks,
+/// or on the share side a missing or unlisted tier; a dollar figure is never flagged.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn gross_saving(
     unit: SavingsUnit,
     table: &PriceTable,
@@ -25,10 +26,11 @@ pub(crate) fn gross_saving(
     canonical_model: &str,
     cache_read_tokens: u64,
     at: i64,
+    speed: Speed,
 ) -> Option<Share> {
     match unit {
         SavingsUnit::Usd => {
-            let price = table.price(canonical_model)?;
+            let price = table.price_at(canonical_model, speed)?;
             Some(Share {
                 share: cache_read_tokens as f64 * (price.input - price.cache_read) / 1_000_000.0,
                 unmeasured: false,
@@ -53,10 +55,10 @@ pub(crate) fn gross_saving(
     }
 }
 
-/// A probe's estimated cost, in the unit the account serving it is funded under: dollars at list prices for an
-/// api_key account or a subscription account in overage, the share of the `tier`'s 5-hour window at `at` on
-/// plan (the band inside the price). `None` for a model the table lacks, or on the share side a missing or
-/// unlisted tier; a dollar figure is never flagged.
+/// A probe's estimated cost, in the unit the account serving it is funded under: dollars at the list prices of
+/// the cells the answer's `usage.speed` selects for an api_key account, a subscription account in overage, or a
+/// fast recipe, the share of the `tier`'s 5-hour window at `at` on plan (the band inside the price). `None` for a
+/// model the table lacks, or on the share side a missing or unlisted tier; a dollar figure is never flagged.
 pub(crate) fn probe_cost(
     unit: SavingsUnit,
     table: &PriceTable,
@@ -77,7 +79,7 @@ pub(crate) fn probe_cost(
         SavingsUnit::Usd => table
             .estimate(
                 canonical_model,
-                Speed::Standard,
+                usage.speed.unwrap_or(Speed::Standard),
                 usage.input,
                 usage.read,
                 five_minutes,
@@ -104,7 +106,9 @@ pub(crate) fn probe_cost(
 }
 
 /// One delta of a recipe's key. An account the recipe never reached takes the ledger's reserved id, which is
-/// what every reader groups an unattributed row under; an empty string would read as an account of its own.
+/// what every reader groups an unattributed row under; an empty string would read as an account of its own. A
+/// fast recipe's delta files under speed `fast`, beside the fast requests it keeps warm.
+#[allow(clippy::too_many_arguments)]
 fn delta(
     at: i64,
     key: &SessionKey,
@@ -113,6 +117,7 @@ fn delta(
     account: Option<&str>,
     canonical_model: &str,
     kind: &str,
+    fast: bool,
 ) -> KeepaliveDelta {
     KeepaliveDelta {
         at,
@@ -125,6 +130,7 @@ fn delta(
             .to_string(),
         canonical_model: canonical_model.to_string(),
         kind: kind.to_string(),
+        speed: fast.then_some(Speed::Fast),
         ..Default::default()
     }
 }
@@ -141,6 +147,7 @@ impl Engine {
             Some(&record.account),
             &record.canonical_model,
             "probe",
+            record.fast,
         );
         match record.outcome {
             ProbeOutcome::Migrated => d.probe_migrated = 1,
@@ -163,6 +170,7 @@ impl Engine {
         request_id: &str,
         tokens: u64,
         saving: f64,
+        fast: bool,
     ) {
         let mut d = delta(
             at,
@@ -172,6 +180,7 @@ impl Engine {
             account,
             canonical_model,
             "inference",
+            fast,
         );
         d.kept_warm_request_id = Some(request_id.to_string());
         d.kept_warm_requests = 1;
@@ -189,6 +198,7 @@ impl Engine {
             settlement.account.as_deref(),
             &settlement.canonical_model,
             "probe",
+            settlement.fast,
         );
         d.wasted_probes = settlement.costs.len() as u64;
         d.wasted_probe_usd = settlement.costs.iter().sum();
@@ -197,6 +207,7 @@ impl Engine {
         self.parts.ledger.record(Record::Keepalive(d));
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn record_skipped(
         &self,
         at: i64,
@@ -205,6 +216,7 @@ impl Engine {
         pool_id: &str,
         account: Option<&str>,
         canonical_model: &str,
+        fast: bool,
     ) {
         let mut d = delta(
             at,
@@ -214,6 +226,7 @@ impl Engine {
             account,
             canonical_model,
             "probe",
+            fast,
         );
         d.probes_skipped = 1;
         self.parts.ledger.record(Record::Keepalive(d));
@@ -226,7 +239,7 @@ impl Engine {
         let (settlements, skipped) = {
             let mut inner = self.lock();
             let queued = std::mem::take(&mut inner.skipped);
-            let mut skipped: Vec<(SessionKey, String, i64, String, Option<String>, String)> =
+            let mut skipped: Vec<(SessionKey, i64, String, Option<String>, String, bool)> =
                 Vec::new();
             for (key, agent_id) in queued {
                 let Some(agent) = inner
@@ -238,11 +251,11 @@ impl Engine {
                 };
                 skipped.push((
                     key,
-                    agent_id,
                     agent.key_generation,
                     agent.pool_id.clone(),
                     agent.account.clone(),
                     agent.canonical_model.clone(),
+                    agent.current.as_ref().is_some_and(|o| o.recipe.fast),
                 ));
             }
             (std::mem::take(&mut inner.settlements), skipped)
@@ -250,7 +263,7 @@ impl Engine {
         for settlement in settlements {
             self.record_settlement(now, settlement);
         }
-        for (key, _, key_generation, pool_id, account, model) in skipped {
+        for (key, key_generation, pool_id, account, model, fast) in skipped {
             self.record_skipped(
                 now,
                 &key,
@@ -258,6 +271,7 @@ impl Engine {
                 &pool_id,
                 account.as_deref(),
                 &model,
+                fast,
             );
         }
     }
@@ -381,6 +395,7 @@ mod tests {
             "claude-opus-5",
             1_000_000,
             SATURDAY_AFTERNOON,
+            Speed::Standard,
         )
         .expect("a priced model on a known tier");
         // The shipped table's Opus 5-hour cells, per million tokens: input 0.0841, cache read 0.00219.
@@ -392,10 +407,50 @@ mod tests {
     }
 
     #[test]
+    fn a_fast_recipes_saving_reads_the_fast_input_less_the_fast_cache_read() {
+        let saved = |speed| {
+            gross_saving(
+                SavingsUnit::Usd,
+                &PriceTable::shipped(),
+                &PlanTables::shipped(),
+                None,
+                "claude-opus-5",
+                1_000_000,
+                0,
+                speed,
+            )
+            .expect("a priced model")
+        };
+        // The shipped Opus 5 row, per million tokens: input 10 and cache read 1 at the fast cells, 5 and 0.5
+        // at the standard ones.
+        assert!(
+            (saved(Speed::Fast).share - (10.0 - 1.0)).abs() < 1e-12,
+            "{:?}",
+            saved(Speed::Fast)
+        );
+        assert!(
+            (saved(Speed::Standard).share - (5.0 - 0.5)).abs() < 1e-12,
+            "{:?}",
+            saved(Speed::Standard)
+        );
+    }
+
+    #[test]
     fn a_delta_without_an_account_takes_the_ledgers_reserved_id() {
         let key = ("desktop".to_string(), "session".to_string());
-        let of =
-            |account| delta(0, &key, 0, "main", account, "claude-sonnet-5", "probe").account_id;
+        let of = |account| {
+            delta(
+                0,
+                &key,
+                0,
+                "main",
+                account,
+                "claude-sonnet-5",
+                "probe",
+                false,
+            )
+            .account_id
+        };
         assert_eq!(of(None), UNATTRIBUTED, "a recipe with no account");
         assert_eq!(of(Some("")), UNATTRIBUTED, "a probe record that named none");
         assert_eq!(of(Some("a")), "a");
