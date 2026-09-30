@@ -153,6 +153,9 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
             error_type: "invalid_request_error",
             code: phoebis_bus::BODY_SHAPE_ERROR_CODE,
             message: match member {
+                BodyMember::BillingStamp => {
+                    "the request body carries a billing stamp the relay cannot restamp, so the edits the request needs cannot travel with a hash that matches them"
+                }
                 BodyMember::CacheControl => {
                     "the request body carries a cache_control marker the relay cannot place, so the pool's cache TTL policy cannot be applied to it"
                 }
@@ -345,6 +348,7 @@ mod tests {
     #[test]
     fn every_body_shape_refusal_carries_the_code_the_ledger_reads_as_a_standing() {
         for member in [
+            BodyMember::BillingStamp,
             BodyMember::CacheControl,
             BodyMember::MetadataUserId,
             BodyMember::Model,

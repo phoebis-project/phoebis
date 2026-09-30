@@ -150,9 +150,9 @@ for classifier requests in Claude Code. However, this session isn't eligible bec
 requests are billed as before. To fix it and access the new version of auto mode, ask your gateway to implement:
 `<url>`".
 
-The router never adds the member or the beta to a request that did not carry them, and never answers a verdict
-itself; a body it cannot cut under an off setting is refused as [What the proxy accepts](#what-the-proxy-accepts)
-says.
+The router never adds the member or the beta to a request that did not carry them, and never answers a verdict itself; a
+body it cannot cut under an off setting, or whose billing stamp it cannot restamp after the cut, is refused as [What the
+proxy accepts](#what-the-proxy-accepts) says.
 
 ## What the proxy accepts
 
@@ -206,7 +206,8 @@ id, between admission and routing.
 
 A request body whose top-level object carries `model`, `metadata` or `stream` more than once, raw or escaped, whose
 `safeguards` member cannot be cut while its key's server-side auto mode is off (carried twice, or spelled with an
-escape), or whose `cache_control` marker the pool's cache TTL policy cannot reach (a key on the marker's path spelled
+escape), whose `cache_control` marker the pool's cache TTL policy cannot reach (a key on the marker's path spelled with
+an escape), or whose billing stamp the router cannot restamp after an edit (the stamp, or a key on its path, spelled
 with an escape), is refused before anything reaches the upstream: `400` with the error code `body_shape` and a message
 naming the member. A body whose top-level object nests deeper than the relay reads is refused `400` with the error code
 `invalid_body`.

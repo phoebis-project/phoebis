@@ -284,6 +284,49 @@ async fn a_marker_the_rewrite_cannot_reach_is_refused_rather_than_sent_unenforce
 }
 
 #[tokio::test]
+async fn a_marker_the_rewrite_cannot_read_is_refused_rather_than_left_at_its_own_ttl() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let h = harness(
+        &up,
+        &[api_key("acct", A, 0)],
+        policy(r#"{"enabled":true,"metered":{"main":"5m"}}"#),
+    )
+    .await;
+    let unreadable = String::from_utf8(body(BodyFixture::Oauth).to_vec())
+        .unwrap()
+        .replacen(
+            r#"{"type":"ephemeral","ttl":"1h"}"#,
+            r#"{"type":1e400,"type":"ephemeral","ttl":"1h"}"#,
+            1,
+        )
+        .into_bytes();
+    assert_eq!(
+        markers(&unreadable).len(),
+        3,
+        "the walk reaches every marker, the unreadable one first"
+    );
+
+    let req = request_from_fixture(inference_head(FixtureKind::ApiKey), &unreadable, KEY);
+    let resp = h.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), 400);
+    assert_eq!(
+        resp.headers()
+            .get("x-phoebis-error-code")
+            .and_then(|v| v.to_str().ok()),
+        Some("body_shape")
+    );
+    assert!(
+        up.requests().is_empty(),
+        "no body with one marker left at its own hour reached the upstream"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
 async fn with_the_toggle_on_a_marker_less_body_takes_the_member() {
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),

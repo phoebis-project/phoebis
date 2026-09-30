@@ -75,7 +75,11 @@ pub const DANGEROUS_TOOL_USE_BETA: &str = "dangerous-tool-use-2026-09-03";
 /// resolved.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BodyMember {
-    /// A `cache_control` marker the decoder reads and the raw walk cannot reach.
+    /// A billing stamp in `system[0].text` the decoder reads and the raw walk cannot reach, so the restamp
+    /// after an edit would leave the client's hash on bytes it was not computed over.
+    BillingStamp,
+    /// A `cache_control` marker the decoder reads and the raw walk cannot reach, or one it reaches and cannot
+    /// read.
     CacheControl,
     MetadataUserId,
     Model,
@@ -89,6 +93,7 @@ pub enum BodyMember {
 impl BodyMember {
     pub fn path(self) -> &'static str {
         match self {
+            BodyMember::BillingStamp => "system[0].text",
             BodyMember::CacheControl => "cache_control",
             BodyMember::MetadataUserId => "metadata.user_id",
             BodyMember::Model => "model",
@@ -97,11 +102,14 @@ impl BodyMember {
         }
     }
 
-    /// `RelayError::BodyShape`'s `Display` text: a `cache_control` marker the rewrite cannot place, a repeated
-    /// member, or a `safeguards` member the cut cannot place, was found rather than absent, so none reads like the
-    /// other two variants' "has no ... member to edit".
+    /// `RelayError::BodyShape`'s `Display` text: a billing stamp the restamp cannot reach, a `cache_control`
+    /// marker the rewrite cannot place, a repeated member, or a `safeguards` member the cut cannot place, was found
+    /// rather than absent, so none reads like the other two variants' "has no ... member to edit".
     pub(crate) fn shape_message(self) -> String {
         match self {
+            BodyMember::BillingStamp => {
+                "request body carries a billing stamp the router cannot restamp".into()
+            }
             BodyMember::CacheControl => {
                 "request body carries a cache_control marker the router cannot place".into()
             }
@@ -155,6 +163,13 @@ pub fn edit_body(body: &mut Vec<u8>, edit: &NativeEdit<'_>) -> Result<BodyEdits,
             }
         }
     }
+    // A stamp the raw walk cannot reach (a key on its path or the line spelled with an escape, or a second
+    // spelling after the one the walk reads) is one the restamp below never rewrites, so an edited body would
+    // carry the client's hash over bytes it was not computed for. Kept to compare after the edits: a body no edit
+    // touched still carries the client's own stamp and travels.
+    let unreachable_stamp = (phoebis_cch::decoded_stamp_count(body)
+        > usize::from(carries_a_stamp(body)))
+    .then(|| body.clone());
     if edit.safeguards == SafeguardsEdit::Drop {
         // A second spelling would reach the upstream after the first is cut and a last-wins parser would act
         // on it; an escaped spelling is one the raw walk never finds. Both refuse rather than send a body
@@ -212,6 +227,9 @@ pub fn edit_body(body: &mut Vec<u8>, edit: &NativeEdit<'_>) -> Result<BodyEdits,
         Some(ttl) => set_cache_ttl(body, ttl, edit.markerless)?,
         None => false,
     };
+    if unreachable_stamp.is_some_and(|sent| *body != sent) {
+        return Err(RelayError::BodyShape(BodyMember::BillingStamp));
+    }
     let cch_restamped = phoebis_cch::restamp_if_present(body)?;
     Ok(BodyEdits {
         account_uuid_replaced,
@@ -291,6 +309,10 @@ pub(crate) fn schema_cache_controls(
 /// removes the `ttl` member, and every other member of the marker keeps its place. A marker whose `type` is not
 /// `ephemeral` is left as sent. A body with no marker anywhere gets the top-level `cache_control` member with
 /// the TTL, before `stream`, where `markerless` allows it. Returns whether any byte changed.
+///
+/// Every marker is read before any is written: one the parser cannot read (a number out of range, a value that
+/// is no object) would keep its own TTL beside rewritten ones, and the dispatch would report the policy's TTL for
+/// the whole body, so the request is refused as a marker the rewrite cannot place.
 fn rewrite_cache_ttl(
     body: &mut Vec<u8>,
     ttl: CacheTtl,
@@ -304,14 +326,17 @@ fn rewrite_cache_ttl(
         add_top_level_cache_control(body, ttl);
         return Ok(true);
     }
+    let markers = spans
+        .into_iter()
+        .map(|(start, end)| {
+            serde_json::from_slice::<serde_json::Map<String, serde_json::Value>>(&body[start..end])
+                .map(|marker| (start, end, marker))
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| RelayError::BodyShape(BodyMember::CacheControl))?;
     let mut changed = false;
     // Last to first so an earlier span's offsets still hold after a later one is spliced.
-    for (start, end) in spans.into_iter().rev() {
-        let Ok(marker) =
-            serde_json::from_slice::<serde_json::Map<String, serde_json::Value>>(&body[start..end])
-        else {
-            continue;
-        };
+    for (start, end, marker) in markers.into_iter().rev() {
         if marker.get("type").and_then(serde_json::Value::as_str) != Some("ephemeral") {
             continue;
         }
@@ -883,6 +908,45 @@ mod tests {
     }
 
     #[test]
+    fn set_cache_ttl_refuses_a_marker_its_parser_cannot_read_beside_a_readable_one() {
+        let unreadable = br#"{"system":[{"type":"text","text":"s","cache_control":{"type":1e400,"type":"ephemeral","ttl":"1h"}}],"messages":[{"role":"user","content":[{"type":"text","text":"x","cache_control":{"type":"ephemeral","ttl":"1h"}}]}]}"#;
+        let spans = phoebis_cch::cache_control_spans(unreadable).unwrap();
+        assert_eq!(
+            (
+                phoebis_cch::decoded_cache_control_count(unreadable).unwrap(),
+                spans.len()
+            ),
+            (2, 2),
+            "the walks agree, so the count guard alone passes the body"
+        );
+        let (start, end) = spans[0];
+        assert!(
+            serde_json::from_slice::<serde_json::Map<String, serde_json::Value>>(
+                &unreadable[start..end]
+            )
+            .is_err(),
+            "a number out of range is one the marker parser refuses"
+        );
+        for ttl in [CacheTtl::FiveMinutes, CacheTtl::OneHour] {
+            let mut body = unreadable.to_vec();
+            assert!(
+                matches!(
+                    set_cache_ttl(&mut body, ttl, Markerless::TakesTheMember),
+                    Err(RelayError::BodyShape(BodyMember::CacheControl))
+                ),
+                "{ttl:?}"
+            );
+        }
+
+        let not_an_object = br#"{"system":[{"type":"text","text":"s","cache_control":"ephemeral"}],"messages":[{"role":"user","content":[{"type":"text","text":"x","cache_control":{"type":"ephemeral","ttl":"1h"}}]}]}"#;
+        let mut body = not_an_object.to_vec();
+        assert!(matches!(
+            set_cache_ttl(&mut body, CacheTtl::FiveMinutes, Markerless::TakesTheMember),
+            Err(RelayError::BodyShape(BodyMember::CacheControl))
+        ));
+    }
+
+    #[test]
     fn set_cache_ttl_places_both_plain_spellings_of_a_repeated_marker() {
         let mut body = br#"{"system":[{"type":"text","text":"s","cache_control":{"type":"ephemeral","ttl":"1h"},"cache_control":{"type":"ephemeral","ttl":"1h"}}],"messages":[]}"#.to_vec();
         assert!(
@@ -1033,6 +1097,100 @@ mod tests {
             edit_body(&mut body, &drop_edit(SafeguardsEdit::Drop)),
             Err(RelayError::BodyShape(BodyMember::Safeguards))
         ));
+    }
+
+    /// The digits a client writes after `cch=` over `body` as it serialized it, hashed from the bytes alone so a
+    /// stamp `find_cch` cannot reach is hashed too.
+    fn client_stamp(body: &[u8]) -> String {
+        let at = find(body, b"cch=").expect("a stamped body") + 4;
+        let mut zeroed = body.to_vec();
+        zeroed[at..at + CCH_DIGITS].copy_from_slice(b"00000");
+        let view = phoebis_cch::normalize(&zeroed).expect("the body parses");
+        format!(
+            "{:05x}",
+            xxhash_rust::xxh64::xxh64(&view, phoebis_cch::SEED) & 0xF_FFFF
+        )
+    }
+
+    fn carried_stamp(body: &[u8]) -> String {
+        let at = find(body, b"cch=").expect("a stamped body") + 4;
+        String::from_utf8(body[at..at + CCH_DIGITS].to_vec()).unwrap()
+    }
+
+    /// The recorded first-party body with the member, its billing line under a `text` key spelled with an
+    /// escape, stamped as a client serializing that spelling stamps it.
+    fn escaped_stamp_with_safeguards() -> Vec<u8> {
+        let mut body =
+            String::from_utf8(with_safeguards(fixture_body(BodyFixture::FirstParty9b244)))
+                .unwrap()
+                .replacen(
+                    r#""text":"x-anthropic-billing-header"#,
+                    r#""te\u0078t":"x-anthropic-billing-header"#,
+                    1,
+                )
+                .into_bytes();
+        let at = find(&body, b"cch=").unwrap() + 4;
+        let stamp = client_stamp(&body);
+        body[at..at + CCH_DIGITS].copy_from_slice(stamp.as_bytes());
+        body
+    }
+
+    #[test]
+    fn a_stamp_the_restamp_cannot_reach_refuses_an_edit_and_travels_as_sent_without_one() {
+        let sent = escaped_stamp_with_safeguards();
+        assert!(
+            phoebis_cch::find_cch(&sent).is_none() && !carries_a_stamp(&sent),
+            "the raw walk misses the stamp"
+        );
+        let root: serde_json::Value = serde_json::from_slice(&sent).unwrap();
+        assert!(
+            root["system"][0]["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("cch=")),
+            "a decoder reads the billing line under the escaped key"
+        );
+        // Hashed without the relay: the client's digits hold for the bytes it sent, and the bytes the cut leaves
+        // need others, which no restamp writes since none reaches the stamp.
+        let mut cut = sent.clone();
+        phoebis_cch::remove_top_level_member(&mut cut, "safeguards").expect("the member is there");
+        assert_eq!(
+            (
+                carried_stamp(&sent),
+                client_stamp(&sent),
+                client_stamp(&cut)
+            ),
+            ("4e6eb".into(), "4e6eb".into(), "6d872".into())
+        );
+
+        let mut body = sent.clone();
+        assert!(matches!(
+            edit_body(&mut body, &drop_edit(SafeguardsEdit::Drop)),
+            Err(RelayError::BodyShape(BodyMember::BillingStamp))
+        ));
+
+        let mut body = sent.clone();
+        let edits = edit_body(&mut body, &drop_edit(SafeguardsEdit::Keep))
+            .expect("nothing to edit, so nothing to restamp");
+        assert!(!edits.cch_restamped);
+        assert!(
+            body == sent,
+            "no byte moved, so the client's own stamp holds"
+        );
+
+        let mut body = sent.clone();
+        assert!(
+            matches!(
+                edit_body(
+                    &mut body,
+                    &NativeEdit {
+                        upstream_model: "claude-opus-4-1",
+                        ..drop_edit(SafeguardsEdit::Keep)
+                    }
+                ),
+                Err(RelayError::BodyShape(BodyMember::BillingStamp))
+            ),
+            "any edit needs the restamp, the member kept or not"
+        );
     }
 
     #[test]

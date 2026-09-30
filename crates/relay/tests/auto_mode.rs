@@ -440,3 +440,65 @@ async fn off_refuses_a_body_whose_member_the_walk_cannot_place() {
     assert_eq!(r.status, 200);
     assert_eq!(count(&r.sent[0].body, br#""safeguards":["#), 2);
 }
+
+/// The recorded first-party body with the member and the account's uuid, its billing line under a `text` key
+/// spelled with an escape and stamped as a client serializing that spelling stamps it: the relay's restamp
+/// cannot reach it.
+fn first_party_with_an_escaped_stamp() -> Vec<u8> {
+    let mut sent = String::from_utf8(with_uuid(&with_safeguards(body(
+        BodyFixture::FirstParty9b244,
+    ))))
+    .unwrap()
+    .replacen(
+        r#""text":"x-anthropic-billing-header"#,
+        r#""te\u0078t":"x-anthropic-billing-header"#,
+        1,
+    )
+    .into_bytes();
+    let at = sent
+        .windows(4)
+        .position(|w| w == b"cch=")
+        .expect("a stamped body")
+        + 4;
+    let mut zeroed = sent.clone();
+    zeroed[at..at + 5].copy_from_slice(b"00000");
+    let hash =
+        xxhash_rust::xxh64::xxh64(&phoebis_cch::normalize(&zeroed).unwrap(), phoebis_cch::SEED) & 0xF_FFFF;
+    sent[at..at + 5].copy_from_slice(format!("{hash:05x}").as_bytes());
+    sent
+}
+
+#[tokio::test]
+async fn off_refuses_a_stamp_the_restamp_cannot_reach_and_the_default_relays_it_as_sent() {
+    let head = head_with_beta(FixtureKind::OauthFirstParty);
+    let sent_body = first_party_with_an_escaped_stamp();
+    assert!(
+        phoebis_cch::find_cch(&sent_body).is_none(),
+        "the raw walk misses the stamp"
+    );
+
+    let r = relay(&[account()], key_off(), json_200(), &head, &sent_body).await;
+    assert_eq!(r.status, 400);
+    assert_eq!(r.code, "body_shape");
+    assert!(
+        String::from_utf8_lossy(&r.answer).contains("billing stamp"),
+        "the message names the stamp: {}",
+        String::from_utf8_lossy(&r.answer)
+    );
+    assert!(
+        r.sent.is_empty(),
+        "no cut body under the client's stale hash reached the upstream"
+    );
+
+    // Nothing edits the body under the default, so the client's own stamp travels with the bytes it covers.
+    let r = relay(
+        &[account()],
+        PoolSpec::default(),
+        json_200(),
+        &head,
+        &sent_body,
+    )
+    .await;
+    assert_eq!(r.status, 200);
+    assert!(r.sent[0].body == sent_body, "no byte moved");
+}

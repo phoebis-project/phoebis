@@ -580,6 +580,114 @@ fn message_object(
     Ok(())
 }
 
+/// How many billing stamps sit where `find_cch` looks, `system[0].text` of the top-level object, once every key
+/// on the way and the line itself are decoded, each spelling of a repeated key counted. It exceeds what the raw
+/// walk reaches exactly where one of those keys or the line is spelled with an escape, or where a second spelling
+/// follows the one the raw walk reads: a stamp `restamp_if_present` never rewrites. The scanner reads as far as
+/// the body is well formed and counts what it passed, as `string_member_span` finds a member ahead of a syntax
+/// error.
+pub fn decoded_stamp_count(body: &[u8]) -> usize {
+    let mut s = Scanner {
+        body,
+        pos: 0,
+        depth: 0,
+        edits: Vec::new(),
+    };
+    let mut count = 0;
+    s.ws();
+    let _ = each_decoded_member(&mut s, |s, key| {
+        if key == b"system" {
+            first_block_stamps(s, &mut count)
+        } else {
+            s.value(false)
+        }
+    });
+    count
+}
+
+/// Walks the object at `s` (its `{` not yet eaten), handing `member` each member's decoded key with `s` at the
+/// value, which `member` reads.
+fn each_decoded_member<'a>(
+    s: &mut Scanner<'a>,
+    mut member: impl FnMut(&mut Scanner<'a>, &[u8]) -> Result<(), CchError>,
+) -> Result<(), CchError> {
+    if !s.eat(b'{') {
+        return Err(CchError::Json(s.pos));
+    }
+    s.ws();
+    if s.eat(b'}') {
+        return Ok(());
+    }
+    loop {
+        s.ws();
+        let (ks, ke) = s.string()?;
+        s.ws();
+        if !s.eat(b':') {
+            return Err(CchError::Json(s.pos));
+        }
+        s.ws();
+        let body = s.body;
+        member(s, key_name(body, ks, ke, Keys::Decoded).as_ref())?;
+        s.ws();
+        if s.eat(b',') {
+            continue;
+        }
+        if !s.eat(b'}') {
+            return Err(CchError::Json(s.pos));
+        }
+        return Ok(());
+    }
+}
+
+/// A `system` value: when it is an array whose first element is an object, each of that object's `text` members
+/// that reads as a stamp is counted; every other element and member, and a `system` of another shape, is skipped
+/// whole.
+fn first_block_stamps(s: &mut Scanner<'_>, count: &mut usize) -> Result<(), CchError> {
+    s.ws();
+    if s.body.get(s.pos) != Some(&b'[') {
+        return s.value(false);
+    }
+    s.pos += 1;
+    s.ws();
+    if s.eat(b']') {
+        return Ok(());
+    }
+    if s.body.get(s.pos) == Some(&b'{') {
+        each_decoded_member(s, |s, key| {
+            if key == b"text" && s.body.get(s.pos) == Some(&b'"') {
+                let (start, end) = s.string()?;
+                *count += usize::from(reads_as_a_stamp(&s.body[start..end]));
+                Ok(())
+            } else {
+                s.value(false)
+            }
+        })?;
+    } else {
+        s.value(false)?;
+    }
+    loop {
+        s.ws();
+        if s.eat(b']') {
+            return Ok(());
+        }
+        if !s.eat(b',') {
+            return Err(CchError::Json(s.pos));
+        }
+        s.value(false)?;
+    }
+}
+
+/// Whether a string token, quotes included, is a billing line claiming a hash once decoded. A token a strict
+/// decoder refuses (a lone surrogate escape) is read by its bytes, as `find_cch` reads every line, so this count
+/// never falls below the raw walk's.
+fn reads_as_a_stamp(token: &[u8]) -> bool {
+    const PREFIX: &str = "x-anthropic-billing-header:";
+    match serde_json::from_slice::<String>(token) {
+        Ok(line) => line.starts_with(PREFIX) && line.contains("cch="),
+        Err(_) => token[1..].starts_with(PREFIX.as_bytes()) && find(token, b"cch=").is_some(),
+    }
+}
+
 pub fn sign(body: &[u8]) -> Result<Vec<u8>, CchError> {
     let Some(loc) = find_cch(body) else {
         return Ok(body.to_vec());
@@ -1118,6 +1226,63 @@ mod tests {
             "a tool schema's property is the client's data, and a lone surrogate in a value is walked past"
         );
         assert_eq!(cache_control_spans(schema).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn the_decoded_stamp_count_reaches_a_stamp_the_raw_walk_misses() {
+        const LINE: &str =
+            "x-anthropic-billing-header: cc_version=2.1.220.test; cc_entrypoint=sdk-cli; cch=00000;";
+        let body = |template: &str| template.replace("LINE", LINE).into_bytes();
+
+        let plain = body(r#"{"system":[{"type":"text","text":"LINE"}],"model":"m"}"#);
+        assert_eq!(decoded_stamp_count(&plain), 1);
+        assert!(find_cch(&plain).is_some());
+
+        for missed in [
+            r#"{"sy\u0073tem":[{"type":"text","text":"LINE"}],"model":"m"}"#,
+            r#"{"system":[{"type":"text","te\u0078t":"LINE"}],"model":"m"}"#,
+            r#"{"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.220.test; cc_entrypoint=sdk-cli; cch\u003d00000;"}],"model":"m"}"#,
+            r#"{"system":[{"type":"text","text":"s","te\u0078t":"LINE"}],"model":"m"}"#,
+            r#"{"system":[{"type":"text","text":"s"}],"model":"m","system":[{"type":"text","text":"LINE"}]}"#,
+        ] {
+            let missed = body(missed);
+            let shown = String::from_utf8_lossy(&missed).into_owned();
+            assert!(find_cch(&missed).is_none(), "{shown}");
+            assert_eq!(decoded_stamp_count(&missed), 1, "{shown}");
+        }
+
+        let both =
+            body(r#"{"system":[{"type":"text","text":"LINE","te\u0078t":"LINE"}],"model":"m"}"#);
+        assert!(find_cch(&both).is_some());
+        assert_eq!(
+            decoded_stamp_count(&both),
+            2,
+            "a second spelling after the one the raw walk reads"
+        );
+
+        for elsewhere in [
+            r#"{"system":[{"type":"text","text":"s"},{"type":"text","text":"LINE"}],"model":"m"}"#,
+            r#"{"tools":[{"name":"t","input_schema":{"system":[{"text":"LINE"}]}}],"model":"m"}"#,
+            r#"{"system":"LINE","model":"m"}"#,
+            r#"{"system":[{"type":"text","text":"x-anthropic-billing-header: cc_entrypoint=sdk-cli;"}]}"#,
+        ] {
+            let elsewhere = body(elsewhere);
+            assert_eq!(
+                decoded_stamp_count(&elsewhere),
+                0,
+                "{}",
+                String::from_utf8_lossy(&elsewhere)
+            );
+        }
+
+        let surrogate = body(r#"{"system":[{"type":"text","text":"LINE \udc00"}],"model":"m"}"#);
+        assert!(serde_json::from_slice::<serde_json::Value>(&surrogate).is_err());
+        assert!(find_cch(&surrogate).is_some());
+        assert_eq!(
+            decoded_stamp_count(&surrogate),
+            1,
+            "a line a strict decoder refuses is read by its bytes, as the raw walk reads it"
+        );
     }
 
     #[test]
