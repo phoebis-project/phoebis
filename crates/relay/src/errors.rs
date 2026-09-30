@@ -151,7 +151,7 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
         RelayError::BodyShape(member) => Failure {
             status: StatusCode::BAD_REQUEST,
             error_type: "invalid_request_error",
-            code: "body_shape",
+            code: phoebis_bus::BODY_SHAPE_ERROR_CODE,
             message: match member {
                 BodyMember::CacheControl => {
                     "the request body carries a cache_control marker the relay cannot place, so the pool's cache TTL policy cannot be applied to it"
@@ -340,5 +340,32 @@ mod tests {
             suffix.message
         );
         assert_ne!(hash.message, suffix.message);
+    }
+
+    #[test]
+    fn every_body_shape_refusal_carries_the_code_the_ledger_reads_as_a_standing() {
+        for member in [
+            BodyMember::CacheControl,
+            BodyMember::MetadataUserId,
+            BodyMember::Model,
+            BodyMember::Repeated("metadata"),
+            BodyMember::Repeated("model"),
+            BodyMember::Repeated("safeguards"),
+            BodyMember::Repeated("stream"),
+            BodyMember::Safeguards,
+        ] {
+            let failure = relay_failure(&RelayError::BodyShape(member));
+            assert_eq!(
+                failure.code,
+                phoebis_bus::BODY_SHAPE_ERROR_CODE,
+                "{}",
+                member.path()
+            );
+        }
+        assert_eq!(
+            phoebis_bus::BODY_SHAPE_ERROR_CODE,
+            "body_shape",
+            "the wire spelling"
+        );
     }
 }

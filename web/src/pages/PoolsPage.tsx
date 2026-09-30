@@ -1269,7 +1269,7 @@ export function PoolDialog({
           beside
           hint={
             <>
-              Claude Code asks the upstream to review each tool use on the model&apos;s own turn. Off, the router drops that request from every message of this pool&apos;s keys, and the client reviews with classifier requests of its own, billed to the upstream&apos;s windows and shown on the <PageLink to="/analytics">Analytics page</PageLink>; a key can override this. The Client page of the documentation explains what the client does in each state.
+              Claude Code asks the upstream to review each tool use on the model&apos;s own turn. Off, the router drops that request from every message of this pool&apos;s keys, and the client reviews with classifier requests of its own, billed to the upstream&apos;s windows; a key can override this. The Client page of the documentation explains what the client does in each state.
             </>
           }
         >

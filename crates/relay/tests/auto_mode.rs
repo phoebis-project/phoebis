@@ -292,6 +292,52 @@ async fn off_drops_the_beta_alone_from_a_request_without_the_member() {
     assert_eq!(beta_list(&off.sent[0]), expected_betas);
 }
 
+/// A probe replays a recipe whose retained head keeps the beta the client sent, so the drop has to happen on the
+/// probe's own pass through the relay, as it does for a request the client sends.
+#[tokio::test]
+async fn a_probe_under_an_off_key_loses_the_beta_as_an_inference_does() {
+    let head = head_with_beta(FixtureKind::OauthNonFirstParty);
+    let native = body(BodyFixture::Oauth);
+    let mut sent = Vec::new();
+    for pool in [PoolSpec::default(), key_off()] {
+        let up = FakeUpstream::start(vec![messages_rule(json_200())]).await;
+        let h = harness(&up, &[account()], pool).await;
+        // The engine replays the recipe's head with no credential and no recorded head.
+        let mut req = request_from_fixture(&head, native, KEY);
+        remove_header(&mut req, "authorization");
+        req.extensions_mut().remove::<phoebis_relay::OriginalHead>();
+        let resp = h
+            .relay
+            .probe(
+                phoebis_relay::Probe {
+                    key_id: "desktop".into(),
+                    key_generation: h.store.api_key("desktop").unwrap().unwrap().created_at,
+                    allow_oauth: true,
+                },
+                req,
+            )
+            .await;
+        assert_eq!(resp.status(), 200);
+        let requests = up.requests();
+        assert_eq!(requests.len(), 1);
+        sent.extend(requests);
+        up.shutdown().await;
+    }
+    let (on, off) = (&sent[0], &sent[1]);
+    assert!(
+        off.body == on.body,
+        "a body without the member is the one the default sends"
+    );
+    let mut expected_betas = caller_betas(&head);
+    assert_eq!(beta_list(on), expected_betas, "the default keeps the beta");
+    expected_betas.retain(|b| b != DANGEROUS_TOOL_USE_BETA);
+    assert_eq!(
+        beta_list(off),
+        expected_betas,
+        "the off key drops the beta alone"
+    );
+}
+
 #[tokio::test]
 async fn a_count_under_off_loses_the_beta_as_an_inference_does() {
     let head = head_with_beta(FixtureKind::CountApiKey);

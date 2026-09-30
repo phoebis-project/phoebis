@@ -29,8 +29,9 @@ call; the status and outcome; the error code; the time to first byte and to firs
 sent and received; whether the response was served kept warm; whether its body was captured; and the client's
 user agent and class (`claude-code/<entrypoint>` or `other`), the gateway hints it sent (the agent
 type, the compaction and context-compacted markers, and the summed tool durations of the turn before), the turn origin
-off its attribution line, its auto-mode standing (a server-side check the router passed through or dropped under the
-key's setting, or a refusal for the body's shape before any upstream saw it), and the request's shape: the effort, the
+off its attribution line, its auto-mode standing (as admission read it, a server-side check asked for under an on
+setting or the `safeguards` member carried under an off setting, which the dispatch drops; or a refusal for the body's
+shape before any upstream saw it), and the request's shape: the effort, the
 thinking mode and budget, the output limit, the tool, system-block, and message counts, the context edits, the
 temperature, and the requested speed and service tier.
 A session that branched from
@@ -272,8 +273,9 @@ characters, `?` for one, a backslash quoting either, and a value with no wildcar
 takes a pattern over the class (`claude-code/*`), and the agent type and turn origin filters pick from the values the
 client's hint headers and attribution line carry. Selecting a row opens a drawer with the request's detail, which shows
 the user agent, the model as the client spelled it and, when it
-differs, the canonical id the router recorded, its auto-mode standing (a server-side check requested, one dropped by the
-key's setting, a request refused for its body shape, or not requested), and the client hints: the agent type, the
+differs, the canonical id the router recorded, its auto-mode standing (asked for a server-side check under an on
+setting; carried the safeguards member under an off setting, which the dispatch drops; refused for its body shape; or
+not requested), and the client hints: the agent type, the
 compaction and context-compacted markers, the turn origin, and the tool time before the turn; the trail names an
 upstream that rejected the model and the one that served it. The table holds the requests up to the moment you opened
 it, so paging does not shift as new ones arrive; Refresh brings it up to now. When the session moved during the request,

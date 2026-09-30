@@ -108,9 +108,10 @@ Claude Code in auto mode reviews each tool use before it runs. Behind the router
 the model's own turn: every session post carries a `safeguards` member near the end of its body (the machine's
 permission rules with their literal text, the working and home directories, the trusted directories, the git state
 and the user identity) and the `dangerous-tool-use-2026-09-03` beta, and the answer's `message_delta` carries one
-verdict per tool use. A Max account answered a verdict for every reviewed tool use through the router; an API-key
-account has not been measured. A session post that asks takes two to four seconds against one to two for one that
-does not, and the client's own classifier request about 1.3 seconds.
+verdict per tool use. A Max account answered a verdict for every reviewed tool use through a gateway that relays the
+member unchanged, as the router does with the setting on; an API-key account has not been measured. A session post that
+asks takes two to four seconds against one to two for one that does not, and the client's own classifier request about
+1.3 seconds.
 
 What the router does with that request is the pool's **Support server-side auto mode** setting, on by default,
 which a key can override ([routing](routing.md#pools)):
@@ -133,11 +134,12 @@ first asking round; `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1` does the same in 
 The client's own classifier runs in two stages: a stage-1 request that stops at `</block>` and answers `<block>no` or
 `<block>yes`, and, after a `yes` or an unreadable answer, a stage-2 request with no stop sequence that reasons in
 `<thinking>` before its `<block>` answer, with an optional `<reason>` and `<category>`. A stage-1 block followed by a
-refused stage 2 stands as a block; the one stage 2 measured through the router was refused by the upstream with the
-category `reasoning_extraction`. These requests carry no beta of their own behind a plain base URL; in first-party mode
-they add `auto-mode-classifier-2026-07-16` and the `auxiliary` request class. Their bodies carry no `stream` and no
-`tools`, a security-monitor system block, and `stop_sequences` at stage 1. They carry the session's own id and pin like
-any request, on the Sonnet default, so a session on another model takes a second pin beside its own.
+refused stage 2 stands as a block; both stage 2 requests measured through that gateway were refused with the category
+`reasoning_extraction`, by it or by the upstream; a direct run settles which. These requests carry no beta of their own
+behind a plain base URL; in first-party mode they add `auto-mode-classifier-2026-07-16` and the `auxiliary` request
+class. Their bodies carry no `stream` and no `tools`, a security-monitor system block, and `stop_sequences` at stage 1.
+They carry the session's own id and pin like any request, on the Sonnet default, so a session on another model takes a
+second pin beside its own.
 
 **The notice.** The client can show a one-line notice that its classifier requests are billed because the gateway
 does not support the server-side check. A Pro, Max or Team login never sees it; a key or token login sees it once per

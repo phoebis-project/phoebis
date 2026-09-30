@@ -146,9 +146,10 @@ async fn a_server_check_is_observed_as_server_and_its_stream_passes_through_unch
 
 #[tokio::test]
 async fn a_server_check_under_an_off_key_is_observed_stripped() {
+    let events = tool_call_stream(DELTA_WITHOUT_MEMBER);
     let r = observe(
         key_off(),
-        sse(tool_call_stream(DELTA_WITHOUT_MEMBER)),
+        sse(events.clone()),
         &server_check_head(),
         &server_check_body(),
     )
@@ -158,6 +159,11 @@ async fn a_server_check_under_an_off_key_is_observed_stripped() {
     assert!(
         !received.contains("safeguards"),
         "the member the row calls dropped did not reach the upstream"
+    );
+    assert_eq!(
+        r.answer,
+        wire(&events),
+        "the off setting edits the request alone: the caller receives the upstream's events byte for byte"
     );
 }
 

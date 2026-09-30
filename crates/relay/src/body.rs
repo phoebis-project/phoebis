@@ -14,7 +14,6 @@ pub struct BodyEdits {
     pub cch_restamped: bool,
     pub restored: Vec<Injected>,
     pub cache_ttl_edited: bool,
-    pub safeguards_dropped: bool,
 }
 
 /// What a body carrying no `cache_control` marker of its own does under a cache TTL policy.
@@ -156,25 +155,21 @@ pub fn edit_body(body: &mut Vec<u8>, edit: &NativeEdit<'_>) -> Result<BodyEdits,
             }
         }
     }
-    let safeguards_dropped = match edit.safeguards {
-        SafeguardsEdit::Keep => false,
-        SafeguardsEdit::Drop => {
-            // A second spelling would reach the upstream after the first is cut and a last-wins parser would act
-            // on it; an escaped spelling is one the raw walk never finds. Both refuse rather than send a body
-            // the operator asked to have stripped. Presence is counted over decoded keys, not read from a parse of
-            // the whole body: a body a strict decoder refuses (a lone surrogate escape in a string value) is one
-            // the cut below still walks.
-            let spellings = phoebis_cch::top_level_member_count(body, "safeguards")?;
-            if spellings > 1 {
-                return Err(RelayError::BodyShape(BodyMember::Repeated("safeguards")));
-            }
-            let cut = phoebis_cch::remove_top_level_member(body, "safeguards").is_some();
-            if spellings == 1 && !cut {
-                return Err(RelayError::BodyShape(BodyMember::Safeguards));
-            }
-            cut
+    if edit.safeguards == SafeguardsEdit::Drop {
+        // A second spelling would reach the upstream after the first is cut and a last-wins parser would act
+        // on it; an escaped spelling is one the raw walk never finds. Both refuse rather than send a body
+        // the operator asked to have stripped. Presence is counted over decoded keys, not read from a parse of
+        // the whole body: a body a strict decoder refuses (a lone surrogate escape in a string value) is one
+        // the cut below still walks.
+        let spellings = phoebis_cch::top_level_member_count(body, "safeguards")?;
+        if spellings > 1 {
+            return Err(RelayError::BodyShape(BodyMember::Repeated("safeguards")));
         }
-    };
+        let cut = phoebis_cch::remove_top_level_member(body, "safeguards").is_some();
+        if spellings == 1 && !cut {
+            return Err(RelayError::BodyShape(BodyMember::Safeguards));
+        }
+    }
     // An API-key account has no identity to splice: the measured client never carried one for it.
     let account_uuid_replaced = match edit.account_uuid {
         None => false,
@@ -225,7 +220,6 @@ pub fn edit_body(body: &mut Vec<u8>, edit: &NativeEdit<'_>) -> Result<BodyEdits,
         cch_restamped,
         restored,
         cache_ttl_edited,
-        safeguards_dropped,
     })
 }
 
@@ -958,7 +952,6 @@ mod tests {
         let mut body = stamped_with_safeguards();
         let edits =
             edit_body(&mut body, &drop_edit(SafeguardsEdit::Drop)).expect("the member is cut");
-        assert!(edits.safeguards_dropped);
         assert!(edits.cch_restamped);
         let root: serde_json::Value = serde_json::from_slice(&body).expect("the cut body parses");
         assert!(root.get("safeguards").is_none());
@@ -973,8 +966,7 @@ mod tests {
     fn edit_body_keeps_the_member_under_keep() {
         let stamped = stamped_with_safeguards();
         let mut body = stamped.clone();
-        let edits = edit_body(&mut body, &drop_edit(SafeguardsEdit::Keep)).expect("editable");
-        assert!(!edits.safeguards_dropped);
+        edit_body(&mut body, &drop_edit(SafeguardsEdit::Keep)).expect("editable");
         assert!(body == stamped, "no byte moved");
     }
 
@@ -1010,8 +1002,7 @@ mod tests {
 
         let without = fixture_body(BodyFixture::Oauth);
         let mut body = without.to_vec();
-        let edits = edit_body(&mut body, &drop_edit(SafeguardsEdit::Drop)).expect("nothing to cut");
-        assert!(!edits.safeguards_dropped);
+        edit_body(&mut body, &drop_edit(SafeguardsEdit::Drop)).expect("nothing to cut");
         assert!(body == without);
     }
 
@@ -1027,9 +1018,7 @@ mod tests {
         let spliced = with_safeguards(surrogate.as_bytes());
 
         let mut body = spliced.clone();
-        let edits =
-            edit_body(&mut body, &drop_edit(SafeguardsEdit::Drop)).expect("the member is cut");
-        assert!(edits.safeguards_dropped);
+        edit_body(&mut body, &drop_edit(SafeguardsEdit::Drop)).expect("the member is cut");
         assert!(
             body == surrogate.as_bytes(),
             "the member left with one comma"

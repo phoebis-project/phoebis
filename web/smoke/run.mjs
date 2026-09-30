@@ -2709,8 +2709,8 @@ if (failoverRow) {
   results.push({ name: 'fixture: a server-side check and a dropped check', ok: server !== undefined && dropped !== undefined, missing: [server?.id ?? 'no server row', dropped?.id ?? 'no dropped row'] });
   results.push({ name: 'fixture: the dropped check sits under notebook, the key whose setting is off', ok: dropped?.keyId === 'notebook' && dropped?.poolId === 'studio', missing: [`${dropped?.keyId} under ${dropped?.poolId}`] });
   for (const [r, name, words] of [
-    [server, '/requests drawer reads a server-side check requested', 'server-side check requested'],
-    [dropped, '/requests drawer reads a dropped check', "server-side check dropped by this key's setting"],
+    [server, '/requests drawer reads a check asked for under an on setting', 'asked for a server-side check under an on setting'],
+    [dropped, '/requests drawer reads a member carried under an off setting', 'carried the safeguards member under an off setting, which the dispatch drops'],
   ]) {
     if (!r) continue;
     await m.navigate(`/requests/${r.id}`);

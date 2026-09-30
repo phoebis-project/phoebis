@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use bytes::Bytes;
 use phoebis_bus::{
     user_agent_of, AccountSelected, AutoMode, Event, Outcome, RequestComplete, RequestObserved,
-    ResponseChunk, ResponseHead,
+    ResponseChunk, ResponseHead, BODY_SHAPE_ERROR_CODE,
 };
 use phoebis_oauth::Clock;
 use phoebis_relay::UnifiedHeaders;
@@ -619,7 +619,7 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
         // its member; the standing says so beside the outcome's code. A failover leg refused for its shape comes
         // after a leg that did reach one, so that row keeps what admission read.
         auto_mode: if complete.outcome == Outcome::Rejected
-            && complete.error_code.as_deref() == Some("body_shape")
+            && complete.error_code.as_deref() == Some(BODY_SHAPE_ERROR_CODE)
         {
             Some(AutoMode::BodyShape.as_str().to_string())
         } else {

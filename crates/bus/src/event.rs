@@ -55,6 +55,10 @@ impl AutoMode {
     }
 }
 
+/// The relay's error code for a body refused for its shape. The ledger matches a completion's code against it to
+/// record the `BodyShape` standing, so both crates read the one spelling rather than each writing its own.
+pub const BODY_SHAPE_ERROR_CODE: &str = "body_shape";
+
 /// Token counts as the upstream reported them. A field the upstream did not send stays `None`, never zero,
 /// so a missing usage block is told apart from an empty one.
 #[derive(Clone, Debug, Default, PartialEq)]

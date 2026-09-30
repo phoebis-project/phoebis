@@ -8,7 +8,7 @@ use std::time::Duration;
 use phoebis_bus::{
     AccountSelected, AttemptOutcome, AutoMode, Event as BusEvent, Kind, Origin,
     Outcome as BusOutcome, RequestComplete, RequestObserved, RequestShape, ResponseChunk,
-    ResponseFacts, Usage,
+    ResponseFacts, Usage, BODY_SHAPE_ERROR_CODE,
 };
 use phoebis_ledger::{
     list_requests, Assembler, AttemptRecord, EventRecord, LedgerConfig, LiveKeys, Record,
@@ -1069,7 +1069,7 @@ async fn the_auto_mode_standing_round_trips_and_a_body_shape_refusal_reads_body_
         h.bus.publish(BusEvent::RequestComplete(RequestComplete {
             outcome: BusOutcome::Rejected,
             status: 400,
-            error_code: Some("body_shape".into()),
+            error_code: Some(BODY_SHAPE_ERROR_CODE.into()),
             ..refused
         }));
     }
@@ -1104,7 +1104,7 @@ async fn the_auto_mode_standing_round_trips_and_a_body_shape_refusal_reads_body_
         attempt: 1,
         outcome: BusOutcome::Failed,
         status: 400,
-        error_code: Some("body_shape".into()),
+        error_code: Some(BODY_SHAPE_ERROR_CODE.into()),
         ..refused
     }));
     let harness = &h;

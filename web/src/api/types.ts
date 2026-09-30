@@ -420,8 +420,9 @@ export interface CreatedApiKey {
 }
 
 /**
- * A request's auto-mode standing: a server-side check it asked for (`server`) or one the key's setting dropped
- * (`stripped`), or a refusal for its body shape before any upstream saw it (`body_shape`).
+ * A request's auto-mode standing. Admission reads `server` (a server-side check asked for under an on setting) or
+ * `stripped` (the `safeguards` member carried under an off setting, which the dispatch drops) whether or not the
+ * request reaches an upstream; `body_shape` is a refusal for its body shape before any upstream saw it.
  */
 export type AutoMode = 'body_shape' | 'server' | 'stripped';
 export const AUTO_MODE_VALUES = ['body_shape', 'server', 'stripped'] as const satisfies readonly AutoMode[];

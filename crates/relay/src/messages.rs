@@ -1218,11 +1218,6 @@ impl Relay {
             request_id: &trace.request_id,
             restore,
             retry_in_place: Duration::from_secs(failover.retry_in_place_seconds),
-            safeguards: if auto_mode_server {
-                SafeguardsEdit::Keep
-            } else {
-                SafeguardsEdit::Drop
-            },
             target: &target,
             trace: &trace,
         };
@@ -1592,7 +1587,11 @@ impl Relay {
                         client_version: &r.cli_version,
                         prompt_units: r.prompt_units,
                     }),
-                    safeguards: admitted.safeguards,
+                    safeguards: if admitted.auto_mode_server {
+                        SafeguardsEdit::Keep
+                    } else {
+                        SafeguardsEdit::Drop
+                    },
                 },
             )?;
             if !claims_its_ttl(&edits) {
@@ -3191,7 +3190,6 @@ struct Admitted<'a> {
     /// The pool's `retry_in_place_seconds`: the longest throttle waited out on the same account, and the
     /// longest a held selection waits for a slot.
     retry_in_place: Duration,
-    safeguards: SafeguardsEdit,
     target: &'a str,
     trace: &'a Trace,
 }
