@@ -1,6 +1,6 @@
 //! The recipe builder's shape checks, the TTL evidence rules, and usage parsing; the Go recipe and usage suites.
 use phoebis_keepalive::{
-    make_recipe, request_ttl_ms, ProbeUsage, FIVE_MINUTES_MS, MAX_USAGE_BYTES, ONE_HOUR_MS,
+    make_recipe, request_ttl_ms, ProbeUsage, Recipe, FIVE_MINUTES_MS, MAX_USAGE_BYTES, ONE_HOUR_MS,
 };
 use serde_json::{json, Value};
 
@@ -12,6 +12,32 @@ fn headers() -> Vec<(String, String)> {
         ("x-claude-code-agent-id".into(), "main".into()),
         ("x-claude-code-session-id".into(), "session".into()),
     ]
+}
+
+fn headers_with_beta() -> Vec<(String, String)> {
+    vec![
+        (
+            "anthropic-beta".into(),
+            "test-beta,dangerous-tool-use-2026-09-03".into(),
+        ),
+        ("x-claude-code-agent-id".into(), "main".into()),
+        ("x-claude-code-session-id".into(), "session".into()),
+    ]
+}
+
+fn header_bytes(headers: &[(String, String)]) -> usize {
+    headers.iter().map(|(n, v)| n.len() + v.len()).sum()
+}
+
+/// The first-party fixture with its fixed thinking budget swapped for adaptive thinking, the shape a recipe
+/// retains; it keeps the client's stamp over the unedited body.
+fn stamped_adaptive() -> String {
+    let stamped = phoebis_profile::fixtures::body(phoebis_profile::fixtures::BodyFixture::FirstParty9b244);
+    String::from_utf8(stamped.to_vec()).unwrap().replacen(
+        r#""thinking":{"budget_tokens":31999,"type":"enabled","display":"omitted"}"#,
+        r#""thinking":{"type":"adaptive"}"#,
+        1,
+    )
 }
 
 fn with(path: &str, value: Value) -> Vec<u8> {
@@ -98,6 +124,111 @@ fn a_body_without_a_stream_flag_gains_one_and_a_stamped_body_is_resigned() {
             .map(|l| recipe.body[l.digits_start..l.digits_start + 5].to_vec()),
         Some(b"9b244".to_vec()),
         "and differs from the client's stamp over the unedited body"
+    );
+}
+
+#[test]
+fn a_retained_body_loses_its_safeguards_member_and_a_stamped_one_is_resigned() {
+    let plain = stamped_adaptive();
+    let spliced = phoebis_cch::sign(&phoebis_profile::fixtures::with_safeguards(plain.as_bytes())).unwrap();
+    assert!(
+        serde_json::from_slice::<Value>(&spliced).unwrap()["safeguards"].is_array(),
+        "the client's body carries the member"
+    );
+    let model = "claude-sonnet-4-5";
+    let recipe = make_recipe(&headers_with_beta(), &spliced, model, 8 << 20).unwrap();
+    let result: Value = serde_json::from_slice(&recipe.body).unwrap();
+    assert!(result.get("safeguards").is_none(), "the member is cut");
+    assert!(phoebis_cch::find_cch(&recipe.body).is_some());
+    assert_eq!(
+        recipe.body,
+        phoebis_cch::sign(&recipe.body).unwrap(),
+        "the stamp matches the cut body"
+    );
+    assert_eq!(
+        recipe.body,
+        make_recipe(&headers(), plain.as_bytes(), model, 8 << 20)
+            .unwrap()
+            .body,
+        "the cut takes the member and one comma and nothing else"
+    );
+    assert_eq!(
+        recipe.size,
+        recipe.body.len() + model.len() + header_bytes(&headers_with_beta()),
+        "the retained size reads the cut body"
+    );
+    assert_eq!(
+        recipe.headers,
+        headers_with_beta(),
+        "the beta travels as kept, with no member behind it"
+    );
+}
+
+#[test]
+fn a_body_without_the_member_yields_the_recipe_it_did() {
+    let body = BODY
+        .replacen(r#""max_tokens":1024"#, r#""max_tokens":0"#, 1)
+        .replacen(r#""stream":true"#, r#""stream":false"#, 1)
+        .into_bytes();
+    assert_eq!(
+        make_recipe(&headers(), BODY.as_bytes(), "routing-alias", 1 << 20).unwrap(),
+        Recipe {
+            size: body.len() + "routing-alias".len() + header_bytes(&headers()),
+            body,
+            headers: headers(),
+            model: "routing-alias".into(),
+            ttl_ms: FIVE_MINUTES_MS,
+            static_hash: None,
+            tail_hash: None,
+        }
+    );
+    let plain = stamped_adaptive();
+    let edited = plain
+        .replacen(r#""max_tokens":32000"#, r#""max_tokens":0"#, 1)
+        .replacen(r#""stream":true"#, r#""stream":false"#, 1);
+    assert_eq!(
+        make_recipe(&headers(), plain.as_bytes(), "claude-sonnet-4-5", 8 << 20)
+            .unwrap()
+            .body,
+        phoebis_cch::sign(edited.as_bytes()).unwrap(),
+        "a stamped body changes only in its output controls and its stamp"
+    );
+}
+
+#[test]
+fn an_escaped_safeguards_spelling_is_not_retained() {
+    let spliced =
+        String::from_utf8(phoebis_profile::fixtures::with_safeguards(BODY.as_bytes())).unwrap();
+    let escaped = spliced.replacen(r#""safeguards""#, r#""safeg\u0075ards""#, 1);
+    assert!(
+        escaped.contains(r#""safeg\u0075ards":["#) && !escaped.contains(r#""safeguards""#),
+        "the escape is in the raw bytes, where the cut matches keys"
+    );
+    assert!(
+        serde_json::from_str::<Value>(&escaped).unwrap()["safeguards"].is_array(),
+        "and a decoder reads the member through it"
+    );
+    assert_eq!(
+        make_recipe(
+            &headers_with_beta(),
+            escaped.as_bytes(),
+            "routing-alias",
+            1 << 20
+        )
+        .unwrap_err(),
+        "invalid_request"
+    );
+    let twice = spliced.replacen(r#""stream":"#, r#""safeg\u0075ards":[],"stream":"#, 1);
+    assert_eq!(
+        make_recipe(
+            &headers_with_beta(),
+            twice.as_bytes(),
+            "routing-alias",
+            1 << 20
+        )
+        .unwrap_err(),
+        "invalid_request",
+        "a second spelling beside the one the cut finds"
     );
 }
 

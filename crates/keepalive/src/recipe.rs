@@ -176,6 +176,16 @@ pub fn make_recipe(
             edited.splice(at..at, b"\"stream\":false,".iter().copied());
         }
     }
+    // A retained body carries the turn's own pending tool use in its `safeguards` member: a probe replaying it
+    // would ask for a verdict on an action already decided, whatever the pool's setting says. The decoded key
+    // count tells an absent member from one the raw walk cannot reach (an escaped spelling) or would leave behind
+    // (a second one), and neither is retained.
+    let spellings =
+        phoebis_cch::top_level_member_count(&edited, "safeguards").map_err(|_| "invalid_request")?;
+    let cut = phoebis_cch::remove_top_level_member(&mut edited, "safeguards").is_some();
+    if spellings > 1 || (spellings == 1 && !cut) {
+        return Err("invalid_request");
+    }
     // `stream` is inside the billing hash view and `max_tokens` outside it: the client's stamp no longer
     // matches the edited body, and the relay would refuse it as drift. A body without a stamp is left alone.
     phoebis_cch::restamp_if_present(&mut edited).map_err(|_| "invalid_request")?;

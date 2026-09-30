@@ -13,9 +13,12 @@ structured nor bound to a strict tool. A request that fails one of those checks 
 view shows it as `unsupported shape`, or as `storage limit` when the body or a header block ran over its size
 limit.
 
-Shortly before the retained request's prompt cache would expire, the router sends a probe built from it: the same
-body with `max_tokens` set to `0` and `stream` set to `false`, through the same failover loop a real request
-takes. The probe follows the session's pin, renews it, and migrates to another account on a 429. A probe whose pinned
+Shortly before the retained request's prompt cache would expire, the router sends a probe built from it through the same
+failover loop a real request takes: the same body with `max_tokens` set to `0`, `stream` set to `false` and the client's
+`safeguards` member removed (the request for a server-side auto mode check on the turn's tool use, which a replayed turn
+has no use for, whatever the pool's `auto_mode_server` says); the request's `anthropic-beta` line travels as kept, and a
+pool or key set off drops the `dangerous-tool-use-2026-09-03` beta from a probe as from any request. The probe follows
+the session's pin, renews it, and migrates to another account on a 429. A probe whose pinned
 member is at its spend budget is not sent, and one that reaches the selector anyway is answered with the budget's
 deadline rather than placed on a sibling, so a probe never moves a session's pin on that account.
 
