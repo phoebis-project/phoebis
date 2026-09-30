@@ -4,9 +4,24 @@
     "rules": [
       {
         "created_at": 1000000,
+        "enabled": true,
+        "has_secret": false,
+        "id": "rule_48997a99fff8661f",
+        "kind": "poll_backoff",
+        "scope": {
+          "id": "business",
+          "type": "account"
+        },
+        "threshold": null,
+        "updated_at": 1000000,
+        "webhook_url": "http://127.0.0.1:1/backoff",
+        "window": null
+      },
+      {
+        "created_at": 1000000,
         "enabled": false,
         "has_secret": false,
-        "id": "rule_1d458392d93169e6",
+        "id": "rule_155484da872a66f4",
         "kind": "client_drift",
         "scope": {
           "id": null,
@@ -21,7 +36,7 @@
         "created_at": 1000000,
         "enabled": true,
         "has_secret": true,
-        "id": "rule_4410d204a711e862",
+        "id": "rule_f616554d6601a2a6",
         "kind": "utilization_above",
         "scope": {
           "id": "main",

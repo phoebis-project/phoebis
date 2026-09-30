@@ -679,9 +679,10 @@ async fn every_route_is_captured_and_holds_its_shape() {
     })
     .await;
     hold(&planted, "requests", "GET /admin/requests", ready);
-    // One rule per shape the page draws: an enabled one with a secret and a threshold, and a disabled one. The drift
-    // rule is turned off only after its event opened, since a disabled rule matches no signal.
+    // One rule per shape the page draws: an enabled one with a secret and a threshold, a disabled one, and one on
+    // an account. The drift rule is turned off only after its event opened, since a disabled rule matches no signal.
     post(app, "/admin/alerts/rules", &format!(r#"{{"kind":"utilization_above","scope":{{"type":"pool","id":"main"}},"threshold":0.9,"window":"7d_oi","webhook_url":"http://127.0.0.1:1/hook","secret":"{rule_secret}"}}"#), Some(&cookie)).await;
+    post(app, "/admin/alerts/rules", r#"{"kind":"poll_backoff","scope":{"type":"account","id":"business"},"webhook_url":"http://127.0.0.1:1/backoff"}"#, Some(&cookie)).await;
     let drift = json(post(app, "/admin/alerts/rules", r#"{"kind":"client_drift","scope":{"type":"all"},"webhook_url":"http://127.0.0.1:1/drift"}"#, Some(&cookie)).await).await;
     // A refusal, then a 500, then the 200 that ends it: the event carries all three attempts.
     parts.webhook.answer(Err("refused".into()));
@@ -704,7 +705,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
     )
     .await;
     // A lifecycle rule is written, fired, and taken away again: the deliveries route needs a row of its own to
-    // capture, while the rules answer above stays the two rows the page is drawn from. The delivery outlives its
+    // capture, while the rules answer above stays the three rows the page is drawn from. The delivery outlives its
     // rule, since a lifecycle row hangs off no event and holds the rule id as plain text.
     let lifecycle = json(post(app, "/admin/alerts/rules", r#"{"kind":"session_active","scope":{"type":"all"},"webhook_url":"http://127.0.0.1:1/life"}"#, Some(&cookie)).await).await;
     parts.alerts.deliver_event(

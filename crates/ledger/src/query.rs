@@ -1580,20 +1580,20 @@ pub type Tiers = HashMap<String, Option<String>>;
 
 /// The columns `burn_series` and `session_burn_series` price into a `BurnPoint`: a rollup row and a session
 /// attempt carry the same five token counts and a dollar estimate under different names.
-pub(crate) struct UsageRow<'a> {
-    pub(crate) canonical_model: &'a str,
-    pub(crate) input_tokens: u64,
-    pub(crate) cache_read_tokens: u64,
-    pub(crate) cache_write_5m_tokens: u64,
-    pub(crate) cache_write_1h_tokens: u64,
-    pub(crate) output_tokens: u64,
-    pub(crate) estimated_usd: f64,
+struct UsageRow<'a> {
+    canonical_model: &'a str,
+    input_tokens: u64,
+    cache_read_tokens: u64,
+    cache_write_5m_tokens: u64,
+    cache_write_1h_tokens: u64,
+    output_tokens: u64,
+    estimated_usd: f64,
     /// Milliseconds, the instant the band is read at: the row's own hour for a rollup row, which folds by the
     /// request's hour and keeps no completion, and the completion for an attempt, where the meter charges it. Per
     /// row, since a bucket spanning a band edge cannot say which side a charge fell on.
-    pub(crate) at: i64,
+    at: i64,
     /// The row's rollup speed, or the attempt's, read `fast`.
-    pub(crate) fast: bool,
+    fast: bool,
 }
 
 /// The shares of an oauth account's two windows (the 5-hour one banded at the row's own instant) when `tier`
@@ -1601,7 +1601,7 @@ pub(crate) struct UsageRow<'a> {
 /// carries no price the caller could attribute, so it adds nothing at all. A fast row on an oauth account adds
 /// its `estimated_usd` and a zero share where the tables size its tier: fast mode spends usage credits and draws no
 /// plan window, and the zero still tells a reader the account is priced in its window unit.
-pub(crate) fn price_usage(
+fn price_usage(
     point: &mut BurnPoint,
     kind: Option<AccountKind>,
     tier: Option<&str>,

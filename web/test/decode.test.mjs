@@ -1155,6 +1155,7 @@ test('alert rules, events, and deliveries decode with the secret reduced to has_
   assert.deepEqual(util.scope, { id: 'main', type: 'pool' });
   assert.ok(isIso(util.createdAt) && !('secret' in util));
   assert.equal(rules.find((r) => r.kind === 'client_drift').enabled, false);
+  assert.deepEqual(rules.find((r) => r.kind === 'poll_backoff').scope, { id: 'business', type: 'account' }, 'an account scope reads as its own type, not as the fallback');
   assert.equal(d.decodeAlertRule({ ...fixture('alert_rules').rules[0], kind: 'poll_backoff' }).kind, 'poll_backoff', 'the backoff kind is its own, not read as the fallback');
   assert.equal(d.decodeAlertEvent({ ...fixture('alert_events').events[0], kind: 'poll_backoff' }).kind, 'poll_backoff');
   const [event] = fixture('alert_events').events.map(d.decodeAlertEvent);

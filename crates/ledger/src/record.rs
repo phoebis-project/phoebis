@@ -175,8 +175,8 @@ pub struct QuotaSampleRecord {
     pub utilization: Option<f64>,
     pub reset_at: Option<i64>,
     pub source: String,
-    /// Milliseconds: the poll's `fetched_at` or the head's clock. The bucket alone cannot say which side of a
-    /// request completed in the same five minutes a reading fell on.
+    /// Milliseconds: the poll's `fetched_at` or the head's clock, stamping the reading itself where the bucket
+    /// only names its five minutes.
     pub observed_at: Option<i64>,
 }
 

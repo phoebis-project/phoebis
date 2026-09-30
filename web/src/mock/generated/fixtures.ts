@@ -438,11 +438,11 @@ export const FIXTURES: Record<string, Fixture> = {
             "key": "desktop",
             "trigger": "hash"
           },
-          "id": "evt_00e89da6894acf01",
+          "id": "evt_3bf2c3c3f5de940c",
           "kind": "client_drift",
           "opened_at": 1000000,
           "resolved_at": null,
-          "rule_id": "rule_1d458392d93169e6",
+          "rule_id": "rule_155484da872a66f4",
           "state": "open",
           "subject": "client 2.1.274"
         }
@@ -467,7 +467,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "event": "session_started",
           "id": 4,
           "kind": "session_active",
-          "rule_id": "rule_67f2ad1b2e838676",
+          "rule_id": "rule_e0d7513cbbeeabb7",
           "state": "event",
           "status": 200,
           "subject": "desktop, session e2e-ui"
@@ -482,9 +482,24 @@ export const FIXTURES: Record<string, Fixture> = {
       "rules": [
         {
           "created_at": 1000000,
+          "enabled": true,
+          "has_secret": false,
+          "id": "rule_48997a99fff8661f",
+          "kind": "poll_backoff",
+          "scope": {
+            "id": "business",
+            "type": "account"
+          },
+          "threshold": null,
+          "updated_at": 1000000,
+          "webhook_url": "http://127.0.0.1:1/backoff",
+          "window": null
+        },
+        {
+          "created_at": 1000000,
           "enabled": false,
           "has_secret": false,
-          "id": "rule_1d458392d93169e6",
+          "id": "rule_155484da872a66f4",
           "kind": "client_drift",
           "scope": {
             "id": null,
@@ -499,7 +514,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "created_at": 1000000,
           "enabled": true,
           "has_secret": true,
-          "id": "rule_4410d204a711e862",
+          "id": "rule_f616554d6601a2a6",
           "kind": "utilization_above",
           "scope": {
             "id": "main",
@@ -7900,7 +7915,7 @@ export const FIXTURES: Record<string, Fixture> = {
         "deliveries_failed": 0,
         "deliveries_ok": 2,
         "open": 1,
-        "rules": 2
+        "rules": 3
       }
     }
   }
