@@ -53,6 +53,7 @@ const POOL_ROWS: PoolSeed[] = [
     sessionPlacement: 'by_warm_prefix',
     subagentPlacement: 'by_cohort',
     keepalive: { ...KEEPALIVE_TUNING_DEFAULTS, enabled: true, costCapUsdPerDay: 4, warmSubagents: true },
+    autoModeServer: true,
     cacheDiagnostics: true,
     cacheTtl: {
       enabled: true,
@@ -107,6 +108,7 @@ const POOL_ROWS: PoolSeed[] = [
     movesPerHour: {},
     affinityTtlSeconds: 0,
     keepalive: { ...KEEPALIVE_TUNING_DEFAULTS, enabled: false, costCapUsdPerDay: null },
+    autoModeServer: true,
     cacheDiagnostics: null,
     cacheTtl: { ...CACHE_TTL_DEFAULTS },
     bodyCaptureHours: 0,
@@ -133,6 +135,8 @@ const POOL_ROWS: PoolSeed[] = [
     affinityTtlSeconds: 3_600,
     movesPerHour: {},
     keepalive: { ...KEEPALIVE_TUNING_DEFAULTS, enabled: false, costCapUsdPerDay: null },
+    // Off, so the pool card's badge and the key dialog's Inherit label each read both states in the story.
+    autoModeServer: false,
     cacheDiagnostics: null,
     cacheTtl: { ...CACHE_TTL_DEFAULTS },
     bodyCaptureHours: 0,
@@ -154,6 +158,7 @@ export const KEYS: ApiKey[] = [
     ...KEY_SAMPLE,
     id: 'desktop',
     affinitySource: 'auto',
+    autoModeServer: null,
     name: 'desktop',
     prefix: 'phoebis-8f2a',
     poolId: 'all',
@@ -181,6 +186,7 @@ export const KEYS: ApiKey[] = [
     // A Claude Code install on a shared machine: the
     // session id alone keeps its conversations apart.
     affinitySource: 'session',
+    autoModeServer: null,
     name: 'laptop',
     prefix: 'phoebis-c41d',
     poolId: 'all',
@@ -210,6 +216,7 @@ export const KEYS: ApiKey[] = [
     ...KEY_SAMPLE,
     id: 'batch',
     affinitySource: 'auto',
+    autoModeServer: null,
     name: 'batch',
     prefix: 'phoebis-5b70',
     poolId: 'codex',
@@ -233,6 +240,7 @@ export const KEYS: ApiKey[] = [
     ...KEY_SAMPLE,
     id: 'ci',
     affinitySource: 'auto',
+    autoModeServer: null,
     name: 'ci',
     prefix: 'phoebis-19e7',
     poolId: 'codex',
@@ -260,6 +268,8 @@ export const KEYS: ApiKey[] = [
     ...KEY_SAMPLE,
     id: 'notebook',
     affinitySource: 'auto',
+    // On under a pool that is off, so the key dialog reads an override against the pool's setting.
+    autoModeServer: true,
     name: 'notebook',
     prefix: 'phoebis-a07c',
     poolId: 'studio',

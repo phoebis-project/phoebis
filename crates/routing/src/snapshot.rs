@@ -210,4 +210,13 @@ impl RegistrySnapshot {
                 .unwrap_or(0)
         })
     }
+    /// The key's override where set, else the pool's; a key whose pool the snapshot lacks reads on, the wire
+    /// unchanged.
+    pub fn auto_mode_server(&self, key: &ApiKeyRow) -> bool {
+        key.auto_mode_server.unwrap_or_else(|| {
+            self.pools
+                .get(&key.pool_id)
+                .is_none_or(|p| p.auto_mode_server)
+        })
+    }
 }

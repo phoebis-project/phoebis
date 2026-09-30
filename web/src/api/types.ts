@@ -323,6 +323,8 @@ export interface Pool {
   affinityMode: AffinityMode;
   /** Idle seconds before a session's pin to an account expires; 0 disables affinity. */
   affinityTtlSeconds: number;
+  /** Whether the client's server-side auto mode checks travel; off drops them. */
+  autoModeServer: boolean;
   /** Hours of captured request and response bodies for keys with no override; 0 is off. */
   bodyCaptureHours: number;
   /** The time constant of each pin's burn average, which a shedding round sizes its target from. */
@@ -380,6 +382,8 @@ export type KeyStatus = 'active' | 'disabled' | 'expired' | 'revoked';
 
 export interface ApiKey {
   affinitySource: AffinitySource;
+  /** Null inherits the pool's `autoModeServer`; true or false overrides it for this key. */
+  autoModeServer: boolean | null;
   /** Hours of captured bodies for this key; null inherits the pool, 0 turns capture off here. */
   bodyCaptureHours: number | null;
   createdAt: string;

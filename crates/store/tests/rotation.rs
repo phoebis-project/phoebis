@@ -22,6 +22,7 @@ fn pool(id: &str) -> PoolRow {
         failover: Failover::default(),
         cache_ttl_json: "{}".into(),
         cache_diagnostics: None,
+        auto_mode_server: true,
         affinity: Affinity::default(),
         quota_headers: QuotaHeaders::Pass,
         created_at: 1,
@@ -51,6 +52,7 @@ fn key(store: &Store, id: &str, pool_id: &str, secret: &str) -> ApiKeyRow {
         retired_secret_last_used_at: None,
         in_flight_cap: None,
         affinity_source: AffinitySource::Auto,
+        auto_mode_server: None,
     }
 }
 

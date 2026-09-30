@@ -64,6 +64,7 @@ export interface AccountPatch {
 
 export interface KeyInput {
   affinitySource: AffinitySource;
+  autoModeServer: boolean | null;
   bodyCaptureHours: number | null;
   enabled: boolean;
   /** An ISO instant, or null for no expiry; undefined leaves the stored expiry alone. */
@@ -133,6 +134,7 @@ export const POOL_AFFINITY_DEFAULTS: PoolAffinityFields = {
 
 export interface PoolInput extends PoolEngineFields, PoolAffinityFields {
   affinityTtlSeconds: number;
+  autoModeServer: boolean;
   bodyCaptureHours: number;
   cacheDiagnostics: boolean | null;
   cacheTtl: PoolCacheTtl;

@@ -2,6 +2,7 @@ import type { PoolGroup } from './forms';
 
 /** Each pool dialog group's rail label and the parent it sits under; `POOL_GROUPS` holds their order. */
 export const POOL_RAIL: Record<PoolGroup, { label: string; parent: string }> = {
+  autoMode: { label: 'Auto mode', parent: 'Pool' },
   bodyCapture: { label: 'Body capture', parent: 'Visibility' },
   cacheDiagnostics: { label: 'Cache diagnostics', parent: 'Visibility' },
   cacheTtl: { label: 'Cache TTL', parent: 'Caching' },

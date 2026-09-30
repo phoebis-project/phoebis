@@ -444,6 +444,7 @@ async fn a_second_key_sees_its_own_usage_and_not_the_firsts() {
                 retired_secret_last_used_at: None,
                 in_flight_cap: None,
                 affinity_source: AffinitySource::Auto,
+                auto_mode_server: None,
             },
             "test",
         )
@@ -498,6 +499,7 @@ fn desktop_row(store: &Store) -> ApiKeyRow {
         retired_secret_last_used_at: None,
         in_flight_cap: None,
         affinity_source: AffinitySource::Auto,
+        auto_mode_server: None,
     }
 }
 
@@ -610,6 +612,7 @@ async fn a_deleted_keys_usage_stays_with_it() {
                 retired_secret_last_used_at: None,
                 in_flight_cap: None,
                 affinity_source: AffinitySource::Auto,
+                auto_mode_server: None,
             },
             "test",
         )

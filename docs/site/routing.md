@@ -75,6 +75,7 @@ Every field, in the order the request body takes them:
 | `keepalive` | disabled | a policy object; its defaults are on the [Keepalive page](keepalive.md) |
 | `cache_ttl` | off | a policy object, `inject_when_absent` off by default; see below |
 | `cache_diagnostics` | unset (inherits) | `true`, `false`, or `null` |
+| `auto_mode_server` | `true` | `true` or `false`: `auto_mode_server must be true or false` |
 | `quota_headers` | `pass` | `hide` or `pass`; see below |
 | `body_capture_hours` | `0` (off) | `body_capture_hours exceeds stats.body_capture_max_hours` |
 | `wind_down_minutes` | `30` | 0 to 10,080 (a week) |
@@ -83,6 +84,11 @@ Every field, in the order the request body takes them:
 `cache_diagnostics` forces the cache-diagnosis beta and the `previous_message_id` member toward
 `api.anthropic.com` for this pool's requests, whatever the [bootstrap option](installation.md#compatibility)
 says; `null` inherits it.
+
+`auto_mode_server` is whether the client's server-side auto mode checks travel to the upstream. On, the default,
+the router passes the request for a check and its verdict through unchanged; off, it drops the request so the
+client reviews each tool use with a classifier request of its own. The [client page](client.md) says what the
+client does in each case, and a key can override the pool (below).
 
 On `hide` every answer but a 429 loses the `anthropic-ratelimit-unified-*` family, so an organization-wide quota
 never reaches a key holder as its own; a 429 keeps the family so the client's continue-when-reset arms;
@@ -177,6 +183,10 @@ creation and to rotation and nowhere else; the console shows it once, in a modal
 | `keepalive_opt_out` | `false` by default |
 | `body_capture_hours` | unset inherits the pool's; `0` turns it off; capped by `stats.body_capture_max_hours` |
 | `affinity_source` | `auto`, `session`, `user_id`, `content`, or `whole_key`, default `auto`; see [Clients](#clients) |
+| `auto_mode_server` | `true`, `false`, or unset (inherits the pool's); see below |
+
+A key's `auto_mode_server` refuses a value of another type with `auto_mode_server must be true, false, or null`;
+`null` sets it back to inheriting the pool's.
 
 Rotate issues a new secret under the same id; a revoked key cannot be rotated. Revoke is permanent; a revoked
 key cannot be re-enabled (`409`). Delete removes the key outright. The console's warning when body capture is on
@@ -184,6 +194,7 @@ for a key: "Bodies contain the prompts, file contents, and tool results of every
 the admin secret can read them."
 
 The key form sets
+`auto_mode_server` as **Server-side auto mode** (Inherit, naming the pool's value, On, or Off) in its Access group, and
 `affinity_source` as **Affinity source** (Automatic, Session id, User id, Conversation content, or Whole key) in its
 Sessions group.
 

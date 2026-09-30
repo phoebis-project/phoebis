@@ -43,6 +43,7 @@ fn pool(id: &str, enabled: bool, rules: Vec<ModelRule>, body_capture_hours: u32)
         failover: Failover::default(),
         cache_ttl_json: "{}".into(),
         cache_diagnostics: None,
+        auto_mode_server: true,
         affinity: Affinity::default(),
         quota_headers: QuotaHeaders::Pass,
         created_at: 0,
@@ -72,6 +73,7 @@ fn key(id: &str, pool_id: &str, secret: &str, rules: Vec<ModelRule>, mode: Rules
         retired_secret_last_used_at: None,
         in_flight_cap: None,
         affinity_source: AffinitySource::Auto,
+        auto_mode_server: None,
     }
 }
 
@@ -114,6 +116,7 @@ fn snapshot() -> RegistrySnapshot {
             },
             ApiKeyRow {
                 body_capture_hours: Some(0),
+                auto_mode_server: Some(false),
                 ..key(
                     "quiet",
                     "main",
@@ -157,6 +160,16 @@ fn snapshot() -> RegistrySnapshot {
                 Vec::new(),
                 RulesMode::Extend,
             ),
+            ApiKeyRow {
+                auto_mode_server: Some(true),
+                ..key(
+                    "reviewed",
+                    "empty",
+                    "phoebis-reviewedsecret000",
+                    Vec::new(),
+                    RulesMode::Extend,
+                )
+            },
             key(
                 "mixed_client",
                 "mixed",
@@ -220,7 +233,10 @@ fn snapshot() -> RegistrySnapshot {
                 24,
             ),
             pool("off", false, Vec::new(), 0),
-            pool("empty", true, Vec::new(), 0),
+            PoolRow {
+                auto_mode_server: false,
+                ..pool("empty", true, Vec::new(), 0)
+            },
             pool("mixed", true, Vec::new(), 0),
         ],
         retired_secrets: Vec::new(),
@@ -281,6 +297,27 @@ fn body_capture_hours_is_the_key_override_else_the_pool_value() {
         s.body_capture_hours(s.key("dark").unwrap()),
         0,
         "a pool with the default captures nothing"
+    );
+}
+
+#[test]
+fn auto_mode_server_is_the_key_override_else_the_pool_value() {
+    let s = snapshot();
+    assert!(
+        s.auto_mode_server(s.key("desktop").unwrap()),
+        "null under a pool on inherits on"
+    );
+    assert!(
+        !s.auto_mode_server(s.key("solo").unwrap()),
+        "null under a pool off inherits off"
+    );
+    assert!(
+        !s.auto_mode_server(s.key("quiet").unwrap()),
+        "off overrides a pool on"
+    );
+    assert!(
+        s.auto_mode_server(s.key("reviewed").unwrap()),
+        "on overrides a pool off"
     );
 }
 

@@ -931,16 +931,25 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
   results.push({ name: '/pools keys section is not a multi-select', ok: keysMulti.length === 0, missing: keysMulti });
 
   // Grouped dialog: a two-level rail beside one group at a time, one heading per group.
-  const groupLabels = ['Identity', 'Members', 'Keys', 'Models', 'Selection', 'Placement', 'Pinning', 'Utilization thresholds', 'Load shedding', 'Failover', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Probe tuning', 'Response headers', 'Body capture', 'Cache diagnostics'];
+  const groupLabels = ['Identity', 'Members', 'Keys', 'Models', 'Auto mode', 'Selection', 'Placement', 'Pinning', 'Utilization thresholds', 'Load shedding', 'Failover', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Probe tuning', 'Response headers', 'Body capture', 'Cache diagnostics'];
   const railParents = [...(dlg?.querySelectorAll('.dialog-rail__parent .dialog-rail__label') ?? [])].map((s) => s.textContent?.trim());
   const railGroups = [...(dlg?.querySelectorAll('.dialog-rail__group .dialog-rail__label') ?? [])].map((s) => s.textContent?.trim());
   results.push({
-    name: '/pools dialog rail lists the five parents and the seventeen groups in order',
+    name: '/pools dialog rail lists the five parents and the eighteen groups in order',
     ok: JSON.stringify(railParents) === JSON.stringify(['Pool', 'Routing', 'Load', 'Caching', 'Visibility']) && JSON.stringify(railGroups) === JSON.stringify(groupLabels),
     missing: [...railParents, ...railGroups],
   });
   const headings = [...(dlg?.querySelectorAll('.dialog-group__title') ?? [])].map((h) => h.textContent?.trim());
   results.push({ name: '/pools dialog body repeats the groups in order', ok: JSON.stringify(headings) === JSON.stringify(groupLabels), missing: headings });
+  {
+    const autoMode = group(dlg, 'Auto mode');
+    const toggle = autoMode?.querySelector('[role="switch"][aria-label="Support server-side auto mode"]');
+    results.push({
+      name: '/pools Auto mode group holds the switch on by default with its hint',
+      ok: toggle !== null && toggle !== undefined && toggle.getAttribute('aria-checked') === 'true' && (autoMode?.textContent ?? '').includes('classifier requests of its own'),
+      missing: [toggle ? String(toggle.getAttribute('aria-checked')) : 'no switch', (autoMode?.textContent ?? 'no group').slice(0, 120)],
+    });
+  }
   results.push({ name: '/pools dialog body is the only scroller', ok: (dlg?.querySelectorAll('.dialog__rail-split > .dialog__body').length ?? 0) === 1, missing: [] });
   results.push({ name: '/pools dialog marks one rail entry current', ok: (dlg?.querySelectorAll('.dialog-rail [aria-current="true"]').length ?? 0) === 1, missing: [] });
   const footButtons = [...(dlg?.querySelectorAll('.dialog__foot .dialog__actions button') ?? [])].map((b) => b.textContent?.trim());
@@ -957,7 +966,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
     const members = group(dlg, 'Members');
     results.push({
       name: '/pools choosing a group hides every other group and marks its rail entry',
-      ok: (dlg?.querySelectorAll('section.dialog-group[hidden]').length ?? 0) === 16 && members?.hidden === false && rail(dlg, 'members')?.getAttribute('aria-current') === 'true',
+      ok: (dlg?.querySelectorAll('section.dialog-group[hidden]').length ?? 0) === 17 && members?.hidden === false && rail(dlg, 'members')?.getAttribute('aria-current') === 'true',
       missing: shown(),
     });
     results.push({ name: "/pools focus lands on the group's heading", ok: !!members && document.activeElement === members.querySelector('h3'), missing: [document.activeElement?.outerHTML.slice(0, 80) ?? 'nothing focused'] });
@@ -2062,7 +2071,7 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
     // Access holds who may use the key and how much at once: on create, Expiry, then the cap.
     const access = group(dlg, 'Access');
     const labels = [...(access?.querySelectorAll('.field__label') ?? [])].map((l) => l.textContent?.trim());
-    results.push({ name: '/keys Requests in flight follows Expiry in Access', ok: JSON.stringify(labels) === JSON.stringify(['Expiry', 'Requests in flight']), missing: labels });
+    results.push({ name: '/keys Requests in flight follows Expiry in Access', ok: JSON.stringify(labels) === JSON.stringify(['Expiry', 'Server-side auto mode', 'Requests in flight']), missing: labels });
     // What names a conversation sits in Sessions; it keeps its options and defaults.
     const sessions = group(dlg, 'Sessions');
     const selectIn = (section, label) => section?.querySelector(`select[aria-label="${label}"]`);
@@ -2198,7 +2207,7 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
     const labels = [...(group(editDlg, 'Access')?.querySelectorAll('.field__label') ?? [])].map((l) => l.textContent?.trim());
     results.push({
       name: '/keys edit dialog draws the Enabled switch and an expiry that keeps the current one by default',
-      ok: toggle !== null && toggle?.disabled === false && group(editDlg, 'Access')?.contains(toggle) && JSON.stringify(labels) === JSON.stringify(['Enabled', 'Expiry', 'Requests in flight']) && expiry?.value === 'keep' && JSON.stringify(options) === JSON.stringify(['keep', '7', '30', '60', '90', '365', 'never']),
+      ok: toggle !== null && toggle?.disabled === false && group(editDlg, 'Access')?.contains(toggle) && JSON.stringify(labels) === JSON.stringify(['Enabled', 'Expiry', 'Server-side auto mode', 'Requests in flight']) && expiry?.value === 'keep' && JSON.stringify(options) === JSON.stringify(['keep', '7', '30', '60', '90', '365', 'never']),
       missing: [toggle ? String(toggle.getAttribute('aria-checked')) : 'no switch', JSON.stringify(labels), expiry?.value ?? 'no expiry select', options.join(',')],
     });
   }
@@ -2262,6 +2271,24 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
   });
   foot(ci, 'Cancel')?.click();
   await m.settle(200);
+  // A new key opens on its first pool, which is on; notebook overrides its pool, which is off.
+  const autoModeOf = (dlg) => group(dlg, 'Access')?.querySelector('select[aria-label="Server-side auto mode"]');
+  [...m.container.querySelectorAll('button')].find((b) => b.textContent?.includes('Create API key'))?.click();
+  await m.settle(200);
+  const fresh = [...m.container.querySelectorAll('dialog[open]')].pop();
+  const freshOptions = [...(autoModeOf(fresh)?.options ?? [])].map((o) => `${o.value}:${o.textContent?.trim()}`);
+  const freshValue = autoModeOf(fresh)?.value;
+  foot(fresh, 'Cancel')?.click();
+  await m.settle(200);
+  const notebook = await editOf('notebook');
+  const notebookValue = autoModeOf(notebook)?.value;
+  foot(notebook, 'Cancel')?.click();
+  await m.settle(200);
+  results.push({
+    name: "/keys Server-side auto mode offers Inherit, On and Off and starts on Inherit naming the pool's value",
+    ok: JSON.stringify(freshOptions) === JSON.stringify(["inherit:Inherit (on, the pool's setting)", 'on:On', 'off:Off']) && freshValue === 'inherit' && notebookValue === 'on',
+    missing: [JSON.stringify(freshOptions), String(freshValue), String(notebookValue)],
+  });
 }
 {
   // The pool checks moved laptop to codex. Its own dialog moves it back, drawing the grey rows of the pool the

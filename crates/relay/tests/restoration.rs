@@ -796,6 +796,7 @@ async fn a_key_created_again_under_a_used_id_reads_none_of_the_previous_holders_
                 retired_secret_last_used_at: None,
                 in_flight_cap: None,
                 affinity_source: AffinitySource::Auto,
+                auto_mode_server: None,
             },
             "test",
         )

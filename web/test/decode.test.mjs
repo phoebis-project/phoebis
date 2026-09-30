@@ -207,11 +207,24 @@ test("a key decodes its affinity source, or the store's default, and a write sen
   const odd = d.decodeKey({ ...row, affinity_source: 'hash' });
   assert.deepEqual([odd.affinitySource], ['auto'], 'a spelling the console does not know reads the default rather than a value no control offers');
   assert.deepEqual([...d.AFFINITY_SOURCE_VALUES], ['auto', 'content', 'session', 'user_id', 'whole_key']);
-  const input = { affinitySource: 'content', bodyCaptureHours: null, enabled: true, keepaliveOptOut: false, longContextTwins: true, modelRules: [], modelRulesMode: 'extend', name: 'strict', notes: null, poolId: 'main' };
+  const input = { affinitySource: 'content', autoModeServer: false, bodyCaptureHours: null, enabled: true, keepaliveOptOut: false, longContextTwins: true, modelRules: [], modelRulesMode: 'extend', name: 'strict', notes: null, poolId: 'main' };
   const body = d.encodeKey(input);
-  assert.deepEqual([body.affinity_source], ['content']);
+  assert.deepEqual([body.affinity_source, body.auto_mode_server], ['content', false]);
   const back = d.decodeKey({ ...row, ...body });
-  assert.deepEqual([back.affinitySource], ['content'], 'the route answers the body back as it was sent');
+  assert.deepEqual([back.affinitySource, back.autoModeServer], ['content', false], 'the route answers the body back as it was sent');
+});
+
+test("a key decodes its server-side auto mode override as on, off, or inheriting, and a write sends it as set", () => {
+  const row = fixture('keys').keys[0];
+  assert.equal(d.decodeKey(row).autoModeServer, null, 'the captured key inherits its pool');
+  assert.equal(d.decodeKey({ ...row, auto_mode_server: true }).autoModeServer, true);
+  assert.equal(d.decodeKey({ ...row, auto_mode_server: false }).autoModeServer, false);
+  const bare = { ...row };
+  delete bare.auto_mode_server;
+  assert.equal(d.decodeKey(bare).autoModeServer, null, 'a row without the field inherits');
+  const input = { affinitySource: 'auto', autoModeServer: null, bodyCaptureHours: null, enabled: true, keepaliveOptOut: false, longContextTwins: true, modelRules: [], modelRulesMode: 'extend', name: 'desktop', notes: null, poolId: 'main' };
+  assert.equal(d.encodeKey(input).auto_mode_server, null, 'inherit is sent as null so a patch clears an override');
+  assert.equal(d.encodeKey({ ...input, autoModeServer: true }).auto_mode_server, true);
 });
 
 test('a key\'s processed rule list decodes with the level, the rule, and the cooldowns each entry covers', () => {
@@ -308,6 +321,18 @@ test("a pool's cache TTL decodes the two rule sets and encodes them back", () =>
   assert.equal(back.cache_diagnostics, true);
   assert.equal(back.keepalive.warm_subagents, false);
   assert.equal(d.decodePool({ ...row, cache_diagnostics: false }).cacheDiagnostics, false);
+});
+
+test('a pool decodes its server-side auto mode switch, on when the row carries none, and encodes it back', () => {
+  const row = fixture('pools').pools[0];
+  const p = d.decodePool(row);
+  assert.equal(p.autoModeServer, true, 'the captured pool is on');
+  assert.equal(d.decodePool({ ...row, auto_mode_server: false }).autoModeServer, false);
+  const bare = { ...row };
+  delete bare.auto_mode_server;
+  assert.equal(d.decodePool(bare).autoModeServer, true, 'a row without the field reads the store default');
+  assert.equal(d.encodePool({ ...p, name: p.name, status: 'active' }).auto_mode_server, true);
+  assert.equal(d.encodePool({ ...p, autoModeServer: false, name: p.name, status: 'active' }).auto_mode_server, false);
 });
 
 test('a pool decodes the engine fields and encodes them back', () => {

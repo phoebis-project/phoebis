@@ -122,6 +122,7 @@ fn load_of(pool: Pool, unavailable: &[(&str, bool, AccountState)]) -> RegistryLo
             retired_secret_last_used_at: None,
             in_flight_cap: None,
             affinity_source: AffinitySource::Auto,
+            auto_mode_server: None,
         }],
         members: pool
             .members
@@ -151,6 +152,7 @@ fn load_of(pool: Pool, unavailable: &[(&str, bool, AccountState)]) -> RegistryLo
             failover: pool.failover,
             cache_ttl_json: "{}".into(),
             cache_diagnostics: None,
+            auto_mode_server: true,
             affinity: Affinity {
                 mode: pool.mode,
                 subagent_placement: pool.subagent_placement,
@@ -2928,6 +2930,7 @@ fn two_pools_sharing_an_account_share_its_entries() {
         retired_secret_last_used_at: None,
         in_flight_cap: None,
         affinity_source: AffinitySource::Auto,
+        auto_mode_server: None,
     };
     let pool = |id: &str| PoolRow {
         id: id.into(),
@@ -2946,6 +2949,7 @@ fn two_pools_sharing_an_account_share_its_entries() {
         failover: Failover::default(),
         cache_ttl_json: "{}".into(),
         cache_diagnostics: None,
+        auto_mode_server: true,
         affinity: Affinity::default(),
         quota_headers: QuotaHeaders::Pass,
         created_at: 0,

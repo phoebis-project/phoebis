@@ -127,6 +127,7 @@ async fn the_listing_answers_the_callers_key_with_each_list_level_applied() {
                 retired_secret_last_used_at: None,
                 in_flight_cap: None,
                 affinity_source: AffinitySource::Auto,
+                auto_mode_server: None,
             },
             "test",
         )

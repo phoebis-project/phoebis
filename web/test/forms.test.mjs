@@ -362,7 +362,7 @@ test("refusals come in rail order, a new pool's first two the name and the membe
     refusals.slice(0, 2).map((r) => r.text),
     ['the pool needs a name.', 'the pool needs a member.'],
   );
-  assert.deepEqual(d.POOL_GROUPS, ['identity', 'members', 'keys', 'models', 'selection', 'placement', 'pinning', 'utilization', 'shedding', 'failover', 'overage', 'cacheTtl', 'keepalive', 'probeTuning', 'responseHeaders', 'bodyCapture', 'cacheDiagnostics']);
+  assert.deepEqual(d.POOL_GROUPS, ['identity', 'members', 'keys', 'models', 'autoMode', 'selection', 'placement', 'pinning', 'utilization', 'shedding', 'failover', 'overage', 'cacheTtl', 'keepalive', 'probeTuning', 'responseHeaders', 'bodyCapture', 'cacheDiagnostics']);
 });
 
 test('every bounded engine field is refused once it leaves its bound', () => {
@@ -384,4 +384,14 @@ test('the key dialog carries the rules, the mode, and the twins switch from the 
   assert.deepEqual([back.modelRules, back.modelRulesMode, back.longContextTwins], [own, 'replace', false], 'the route answers the body back as it was sent');
   const fresh = d.keyInputOf(d.keyFormOf(null, 'all'), NOW);
   assert.deepEqual([fresh.modelRules, fresh.modelRulesMode, fresh.longContextTwins], [[], 'extend', true], 'a new key starts where the route defaults one');
+});
+
+test("the key dialog maps the server-side auto mode override to inherit, on, or off and back", () => {
+  const row = fixture('keys').keys[0];
+  const read = (wire) => d.keyFormOf(d.decodeKey({ ...row, auto_mode_server: wire }), 'unused').autoModeServer;
+  assert.deepEqual([read(null), read(true), read(false)], ['inherit', 'on', 'off']);
+  assert.equal(d.keyFormOf(null, 'all').autoModeServer, 'inherit', 'a new key inherits its pool');
+  const form = d.keyFormOf(d.decodeKey(row), 'unused');
+  const sent = (choice) => d.keyInputOf({ ...form, autoModeServer: choice }, NOW).autoModeServer;
+  assert.deepEqual([sent('inherit'), sent('on'), sent('off')], [null, true, false]);
 });

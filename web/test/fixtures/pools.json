@@ -70,6 +70,7 @@
           }
         },
         "cache_diagnostics": null,
+        "auto_mode_server": true,
         "body_capture_hours": 24,
         "created_at": 1790575957922,
         "updated_at": 1790575957922,

@@ -184,6 +184,7 @@ pub async fn harness_on(
                     failover: Failover::default(),
                     cache_ttl_json: "{}".into(),
                     cache_diagnostics: None,
+                    auto_mode_server: true,
                     affinity: Affinity::default(),
                     quota_headers: QuotaHeaders::Pass,
                     created_at: NOW,
@@ -230,6 +231,7 @@ pub async fn harness_on(
                     retired_secret_last_used_at: None,
                     in_flight_cap: None,
                     affinity_source: AffinitySource::Auto,
+                    auto_mode_server: None,
                 },
                 "test",
             )

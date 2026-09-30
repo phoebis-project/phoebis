@@ -105,6 +105,7 @@ async fn events_need_the_key_and_a_key_cannot_read_or_alter_anothers_sessions() 
                 retired_secret_last_used_at: None,
                 in_flight_cap: None,
                 affinity_source: AffinitySource::Auto,
+                auto_mode_server: None,
             },
             "test",
         )
@@ -201,6 +202,7 @@ async fn a_key_created_again_under_a_used_id_inherits_none_of_its_sessions() {
                 retired_secret_last_used_at: None,
                 in_flight_cap: None,
                 affinity_source: AffinitySource::Auto,
+                auto_mode_server: None,
             },
             "test",
         )

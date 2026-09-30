@@ -475,6 +475,7 @@ export class MockApi implements Api {
       poolId: input.poolId,
       // The route's defaults for a body that leaves these fields out, which a caller outside the console may.
       affinitySource: input.affinitySource ?? 'auto',
+      autoModeServer: input.autoModeServer ?? null,
       longContextTwins: input.longContextTwins ?? true,
       modelRules: input.modelRules ?? [],
       modelRulesMode: input.modelRulesMode ?? 'extend',

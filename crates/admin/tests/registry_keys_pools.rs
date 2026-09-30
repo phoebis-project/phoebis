@@ -275,6 +275,103 @@ async fn pools_are_created_edited_and_deleted_with_their_members_and_validation(
 }
 
 #[tokio::test]
+async fn the_auto_mode_setting_round_trips_on_the_pool_and_the_key_and_a_wrong_type_is_refused() {
+    let (app, _up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    let pool = json(
+        post(
+            &app,
+            "/admin/pools",
+            r#"{"id":"main","label":"Main","strategy":"priority"}"#,
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(pool["auto_mode_server"], true, "a new pool is on");
+    let pool = json(
+        patch(
+            &app,
+            "/admin/pools/main",
+            r#"{"auto_mode_server":false}"#,
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(pool["auto_mode_server"], false);
+    let key = json(
+        post(
+            &app,
+            "/admin/keys",
+            r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        (&key["auto_mode_server"], &key["effective_auto_mode_server"]),
+        (&serde_json::Value::Null, &serde_json::json!(false)),
+        "a new key inherits the pool's"
+    );
+    let key = json(
+        patch(
+            &app,
+            "/admin/keys/desktop",
+            r#"{"auto_mode_server":true}"#,
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        (&key["auto_mode_server"], &key["effective_auto_mode_server"]),
+        (&serde_json::json!(true), &serde_json::json!(true)),
+        "on overrides a pool off"
+    );
+    let key = json(
+        patch(
+            &app,
+            "/admin/keys/desktop",
+            r#"{"auto_mode_server":null}"#,
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        (&key["auto_mode_server"], &key["effective_auto_mode_server"]),
+        (&serde_json::Value::Null, &serde_json::json!(false)),
+        "null inherits the pool's again"
+    );
+    let refused = patch(
+        &app,
+        "/admin/keys/desktop",
+        r#"{"auto_mode_server":"yes"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(refused.status(), 400);
+    assert_eq!(
+        json(refused).await["error"].as_str(),
+        Some("auto_mode_server must be true, false, or null")
+    );
+    let refused = patch(
+        &app,
+        "/admin/pools/main",
+        r#"{"auto_mode_server":null}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(refused.status(), 400);
+    assert_eq!(
+        json(refused).await["error"].as_str(),
+        Some("auto_mode_server must be true or false")
+    );
+}
+
+#[tokio::test]
 async fn keys_are_issued_once_rotated_revoked_and_never_shown_again() {
     let (app, _up, _store, router) = common::admin_parts().await;
     let cookie = login(&app, "admin-secret").await;
@@ -853,6 +950,7 @@ async fn sessions_list_live_pins_and_a_release_expires_them() {
                 failover: phoebis_store::Failover::default(),
                 cache_ttl_json: "{}".into(),
                 cache_diagnostics: None,
+                auto_mode_server: true,
                 affinity: Affinity::default(),
                 quota_headers: QuotaHeaders::Pass,
                 created_at: common::NOW,
@@ -884,6 +982,7 @@ async fn sessions_list_live_pins_and_a_release_expires_them() {
                 retired_secret_last_used_at: None,
                 in_flight_cap: None,
                 affinity_source: AffinitySource::Auto,
+                auto_mode_server: None,
             },
             "test",
         )

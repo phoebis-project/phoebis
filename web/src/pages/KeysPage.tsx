@@ -7,7 +7,7 @@ import { PatternEditor, useCatalogSuggestions } from '@/components/PatternEditor
 import { IconInfo, IconPlus, IconWarning } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, ErrorState, Field, GroupedDialog, Input, Menu, PageLink, SearchInput, Segmented, Select, Skeleton, Toast, Toggle, type DialogGroup } from '@/components/ui/primitives';
 import { fmtAbsolute, fmtCompact, fmtDate, fmtInt, fmtRelative, fmtUsd } from '@/lib/format';
-import { KEY_GROUPS, keyFormOf, keyInputOf, keyRefusals, type CaptureMode, type KeyGroup } from '@/lib/forms';
+import { KEY_GROUPS, keyFormOf, keyInputOf, keyRefusals, type AutoModeOverride, type CaptureMode, type KeyGroup } from '@/lib/forms';
 import { useAsync, useNow, type Loaded } from '@/lib/hooks';
 
 const STATUS_TONE: Record<KeyStatus, 'critical' | 'good' | 'neutral' | 'warning'> = { active: 'good', disabled: 'warning', expired: 'neutral', revoked: 'critical' };
@@ -317,8 +317,8 @@ function Tile({ label, value }: { label: string; value: string | null }) {
   );
 }
 
-/** What the key dialog reads of a pool: its capture default, the rules a key inherits, and whose catalogs to suggest from. */
-export type KeyDialogPool = Pick<Pool, 'bodyCaptureHours' | 'id' | 'modelRules' | 'name'> & { members: Pick<Pool['members'][number], 'accountId'>[] };
+/** What the key dialog reads of a pool: its auto mode and capture defaults, the rules a key inherits, and whose catalogs to suggest from. */
+export type KeyDialogPool = Pick<Pool, 'autoModeServer' | 'bodyCaptureHours' | 'id' | 'modelRules' | 'name'> & { members: Pick<Pool['members'][number], 'accountId'>[] };
 
 const KEY_GROUP_LABEL: Record<KeyGroup, string> = { access: 'Access', capture: 'Capture', key: 'Key', models: 'Models', sessions: 'Sessions' };
 
@@ -337,6 +337,7 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing
   const [expiry, setExpiry] = useState('never');
   const [inFlightCap, setInFlightCap] = useState('');
   const [affinitySource, setAffinitySource] = useState<AffinitySource>('auto');
+  const [autoModeServer, setAutoModeServer] = useState<AutoModeOverride>('inherit');
   const [notes, setNotes] = useState('');
   const [captureMode, setCaptureMode] = useState<CaptureMode>('inherit');
   const [captureHours, setCaptureHours] = useState(6);
@@ -374,6 +375,7 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing
     setExpiry(form.expiry);
     setInFlightCap(form.inFlightCap);
     setAffinitySource(form.affinitySource);
+    setAutoModeServer(form.autoModeServer);
     setNotes(form.notes);
     setCaptureMode(form.captureMode);
     setCaptureHours(form.captureHours);
@@ -384,14 +386,14 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing
   }, [open, existing, initialPoolId, pools]);
 
   // The server's words leave with the next edit to any field; a failed save changes none, so they stand until then.
-  useEffect(() => setError(null), [affinitySource, captureHours, captureMode, enabled, expiry, inFlightCap, longContextTwins, modelRules, modelRulesMode, name, notes, optOut, poolId]);
+  useEffect(() => setError(null), [affinitySource, autoModeServer, captureHours, captureMode, enabled, expiry, inFlightCap, longContextTwins, modelRules, modelRulesMode, name, notes, optOut, poolId]);
 
   const moving = existing !== null && poolId !== existing.poolId;
 
   const submit = async () => {
     setBusy(true);
     setError(null);
-    const form = { affinitySource, captureHours, captureMode, enabled, expiry, inFlightCap, longContextTwins, modelRules, modelRulesMode, name, notes, optOut, poolId };
+    const form = { affinitySource, autoModeServer, captureHours, captureMode, enabled, expiry, inFlightCap, longContextTwins, modelRules, modelRulesMode, name, notes, optOut, poolId };
     const input = keyInputOf(form, Date.now());
     try {
       if (existing) {
@@ -478,6 +480,13 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing
             <option value="90">90 days</option>
             <option value="365">1 year</option>
             {existing && <option value="never">No expiration</option>}
+          </Select>
+        </Field>
+        <Field label="Server-side auto mode" hint="Inherit follows the pool. Off drops the client's server-side tool-use checks on this key, so the client reviews with classifier requests of its own; On keeps them whatever the pool says.">
+          <Select value={autoModeServer} onChange={(e) => setAutoModeServer(e.target.value as AutoModeOverride)} aria-label="Server-side auto mode">
+            <option value="inherit">Inherit ({pool?.autoModeServer === false ? 'off' : 'on'}, the pool&apos;s setting)</option>
+            <option value="on">On</option>
+            <option value="off">Off</option>
           </Select>
         </Field>
         <Field

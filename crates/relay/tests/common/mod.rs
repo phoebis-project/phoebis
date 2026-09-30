@@ -657,6 +657,7 @@ async fn build(
                     failover: pool.failover,
                     cache_ttl_json: pool.cache_ttl.into(),
                     cache_diagnostics: pool.cache_diagnostics,
+                    auto_mode_server: true,
                     affinity: Affinity::default(),
                     quota_headers: pool.quota_headers,
                     created_at: NOW,
@@ -703,6 +704,7 @@ async fn build(
                     retired_secret_last_used_at: None,
                     in_flight_cap: pool.key_in_flight_cap,
                     affinity_source: AffinitySource::Auto,
+                    auto_mode_server: None,
                 },
                 "test",
             )

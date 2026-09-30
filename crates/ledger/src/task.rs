@@ -750,6 +750,7 @@ mod tests {
                     failover: phoebis_store::Failover::default(),
                     cache_ttl_json: "{}".into(),
                     cache_diagnostics: None,
+                    auto_mode_server: true,
                     affinity: phoebis_store::Affinity::default(),
                     quota_headers: phoebis_store::QuotaHeaders::Pass,
                     created_at: 0,

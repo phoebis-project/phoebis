@@ -2162,6 +2162,7 @@ mod tests {
                 retired_secret_last_used_at: None,
                 in_flight_cap: None,
                 affinity_source: phoebis_store::AffinitySource::default(),
+                auto_mode_server: None,
             }],
             members: vec![member("a"), member("o")],
             pools: vec![phoebis_store::PoolRow {
@@ -2181,6 +2182,7 @@ mod tests {
                 failover: phoebis_store::Failover::default(),
                 cache_ttl_json: "{}".into(),
                 cache_diagnostics: None,
+                auto_mode_server: true,
                 affinity: phoebis_store::Affinity::default(),
                 quota_headers: phoebis_store::QuotaHeaders::default(),
                 created_at: 0,

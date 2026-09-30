@@ -188,8 +188,8 @@ async function atRest() {
 }
 
 /**
- * The grouped dialog on a mock-only fixture that carries the pool dialog's seventeen groups under five parents: the
- * frame keeps its fixed size, no rail row wraps and the rail holds all 22 entries without scrolling at the pass's
+ * The grouped dialog on a mock-only fixture that carries the pool dialog's eighteen groups under five parents: the
+ * frame keeps its fixed size, no rail row wraps and the rail holds all 23 entries without scrolling at the pass's
  * viewport. The two longest labels are read chosen, refused, and both, since the chosen weight and the refusal dot
  * widen an entry. The numbers go to the measurements whatever the outcome, since the rail's fit rests on text widths
  * the browser's font decides.
@@ -234,7 +234,7 @@ async function groupedDialogFixture(theme) {
     measurements.push(`${theme} /fixtures/grouped-dialog ${state} ${JSON.stringify(read)}`);
     const sayIn = (what) => say(`${state}: ${what}`);
     if (read.frame.width !== 1040 || read.frame.height !== 752) sayIn(`the frame measures ${read.frame.width} by ${read.frame.height}, not 1040 by 752`);
-    if (read.groups !== 17 || read.parents !== 5) sayIn(`the rail draws ${read.groups} groups under ${read.parents} parents, not 17 under 5`);
+    if (read.groups !== 18 || read.parents !== 5) sayIn(`the rail draws ${read.groups} groups under ${read.parents} parents, not 18 under 5`);
     if (read.wrapped.length) sayIn(`${read.wrapped.join(', ')} wraps onto a second line`);
     if (read.rail.scrollHeight > read.rail.clientHeight) sayIn(`the rail scrolls: ${read.rail.scrollHeight} px of entries in ${read.rail.clientHeight} px`);
   };
@@ -518,7 +518,7 @@ async function poolRoutingCards(theme) {
 }
 
 /** The pool dialog's groups in rail order. */
-const POOL_GROUP_LABELS = ['Identity', 'Members', 'Keys', 'Models', 'Selection', 'Placement', 'Pinning', 'Utilization thresholds', 'Load shedding', 'Failover', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Probe tuning', 'Response headers', 'Body capture', 'Cache diagnostics'];
+const POOL_GROUP_LABELS = ['Identity', 'Members', 'Keys', 'Models', 'Auto mode', 'Selection', 'Placement', 'Pinning', 'Utilization thresholds', 'Load shedding', 'Failover', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Probe tuning', 'Response headers', 'Body capture', 'Cache diagnostics'];
 /** Per group, the switches whose dependents the geometry pass turns off, and the controls that must go disabled. */
 const POOL_DEPENDENTS = {
   'Body capture': [{ switch: 'Capture request and response bodies', controls: ['input[aria-label="Capture retention in hours"]'] }],
@@ -1591,7 +1591,8 @@ const measureSelect = (label) =>
  * The key dialog's Requests in flight field under Access against the Name field under Key: the same input box and the
  * same hint type as the Pool field's. A cap of 0 raises the refusal in Access and holds the Create button. The
  * Affinity source select under Sessions is the Expiry select's box, on a full row,
- * and its hint the Pool hint's type.
+ * and its hint the Pool hint's type. The Server-side auto mode select under Access is the Expiry select's box, and
+ * its hint the Pool hint's type.
  */
 async function keyCapField(theme) {
   const say = (what) => failures.push(`${theme} /keys: ${what}`);
@@ -1616,7 +1617,8 @@ async function keyCapField(theme) {
   await show('Access');
   const cap = await measureInput('Requests in flight');
   const expiry = await measureSelect('Expiry');
-  const hints = { cap: await hintOf('Requests in flight') };
+  const autoMode = await measureSelect('Server-side auto mode');
+  const hints = { autoMode: await hintOf('Server-side auto mode'), cap: await hintOf('Requests in flight') };
   await show('Key');
   const name = await measureInput('Name');
   hints.pool = await hintOf('Pool');
@@ -1633,6 +1635,9 @@ async function keyCapField(theme) {
   for (const [label, read] of [['Affinity source', hints.source]]) {
     if (!read || read !== hints.pool) say(`the ${label} hint reads ${read} against the Pool hint's ${hints.pool}`);
   }
+  measurements.push(`${theme} /keys Server-side auto mode select ${JSON.stringify({ expiry, hints, select: autoMode })}`);
+  for (const finding of compare(autoMode, expiry, ['background', 'border', 'font', 'height', 'padding', 'width'], 'the Server-side auto mode select against the Expiry select')) say(finding);
+  if (!hints.autoMode || hints.autoMode !== hints.pool) say(`the Server-side auto mode hint reads ${hints.autoMode} against the Pool hint's ${hints.pool}`);
   await show('Access');
   const access = dialog.locator('section.dialog-group[aria-label="Access"]');
   await access.locator('input[aria-label="Requests in flight"]').fill('0');

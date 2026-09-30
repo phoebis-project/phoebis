@@ -64,11 +64,12 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
     (32, V32),
     (33, V33),
     (34, V34),
+    (35, V35),
 ];
 
 /// The newest schema version this build knows how to read. `prepare` refuses a registry stamped past it
 /// rather than skip migrations it does not carry and misread the tables that follow.
-pub const SCHEMA_VERSION: u32 = 34;
+pub const SCHEMA_VERSION: u32 = 35;
 
 const V2: &str = r#"
 CREATE TABLE IF NOT EXISTS account_models (
@@ -530,3 +531,10 @@ ALTER TABLE keepalive_budgets ADD COLUMN five_hour_share_unmeasured INTEGER NOT 
 
 // The ledger's per-window reconciliation replaced the one reader these rows had.
 const V34: &str = "DROP TABLE IF EXISTS plan_fits;";
+
+// The pool column carries the default so every existing pool reopens on; the key column is nullable because
+// null is the value that inherits the pool's.
+const V35: &str = r#"
+ALTER TABLE pools ADD COLUMN auto_mode_server INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE api_keys ADD COLUMN auto_mode_server INTEGER;
+"#;

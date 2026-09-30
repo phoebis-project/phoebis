@@ -114,6 +114,8 @@ struct PoolInput {
     cache_ttl: Option<Value>,
     #[serde(default, deserialize_with = "double_option")]
     cache_diagnostics: Option<Option<bool>>,
+    #[serde(default, deserialize_with = "double_option")]
+    auto_mode_server: Option<Option<Value>>,
     #[serde(default)]
     body_capture_hours: Option<u32>,
     #[serde(default)]
@@ -312,6 +314,17 @@ fn apply(state: &AdminState, row: &mut PoolRow, input: &PoolInput) -> Result<(),
     }
     if let Some(diagnostics) = input.cache_diagnostics {
         row.cache_diagnostics = diagnostics;
+    }
+    if let Some(value) = &input.auto_mode_server {
+        row.auto_mode_server = match value {
+            Some(Value::Bool(on)) => *on,
+            _ => {
+                return Err(failure(
+                    StatusCode::BAD_REQUEST,
+                    "auto_mode_server must be true or false",
+                ))
+            }
+        };
     }
     if let Some(hours) = input.body_capture_hours {
         if hours > state.body_capture_max_hours {
@@ -515,6 +528,7 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
         failover: Failover::default(),
         cache_ttl_json: "{}".into(),
         cache_diagnostics: None,
+        auto_mode_server: true,
         affinity: Affinity::default(),
         quota_headers: QuotaHeaders::Pass,
         created_at: now,
@@ -831,6 +845,7 @@ pub(crate) async fn pool_json(state: &AdminState, row: &PoolRow) -> Result<Value
         "moves_per_hour": moves.iter().map(|(reason, count)| (reason.clone(), *count as f64)).collect::<std::collections::BTreeMap<_, _>>(),
         "keepalive": KeepalivePolicy::from_json(&row.keepalive_json),
         "cache_ttl": CacheTtlPolicy::from_json(&row.cache_ttl_json), "cache_diagnostics": row.cache_diagnostics,
+        "auto_mode_server": row.auto_mode_server,
         "body_capture_hours": row.body_capture_hours, "created_at": row.created_at, "updated_at": row.updated_at,
         "members": members.iter().map(|m| member_json(m, &accounts, &spends, ineligible(m).unwrap_or("eligible"))).collect::<Vec<_>>(),
         "keys": keys,

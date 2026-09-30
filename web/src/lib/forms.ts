@@ -80,7 +80,7 @@ export function prefixThresholdRefusal(value: string): string | null {
 }
 
 /** The pool dialog's groups in rail order; a refusal names the one its control sits in. */
-export const POOL_GROUPS = ['identity', 'members', 'keys', 'models', 'selection', 'placement', 'pinning', 'utilization', 'shedding', 'failover', 'overage', 'cacheTtl', 'keepalive', 'probeTuning', 'responseHeaders', 'bodyCapture', 'cacheDiagnostics'] as const;
+export const POOL_GROUPS = ['identity', 'members', 'keys', 'models', 'autoMode', 'selection', 'placement', 'pinning', 'utilization', 'shedding', 'failover', 'overage', 'cacheTtl', 'keepalive', 'probeTuning', 'responseHeaders', 'bodyCapture', 'cacheDiagnostics'] as const;
 export type PoolGroup = (typeof POOL_GROUPS)[number];
 
 export interface PoolRefusal {
@@ -192,11 +192,14 @@ export function validatePoolInput(input: PoolInput, accountIds: ReadonlySet<stri
   return poolRefusals(input, accountIds).length === 0;
 }
 
+export type AutoModeOverride = 'inherit' | 'off' | 'on';
+
 export type CaptureMode = 'inherit' | 'off' | 'override';
 
 /** The key dialog's fields as the operator leaves them. */
 export interface KeyForm {
   affinitySource: AffinitySource;
+  autoModeServer: AutoModeOverride;
   captureHours: number;
   captureMode: CaptureMode;
   enabled: boolean;
@@ -217,6 +220,7 @@ export interface KeyForm {
 export function keyFormOf(existing: ApiKey | null, poolId: string): KeyForm {
   return {
     affinitySource: existing?.affinitySource ?? 'auto',
+    autoModeServer: existing?.autoModeServer == null ? 'inherit' : existing.autoModeServer ? 'on' : 'off',
     captureHours: existing?.bodyCaptureHours || 6,
     captureMode: existing ? (existing.bodyCaptureHours === null ? 'inherit' : existing.bodyCaptureHours === 0 ? 'off' : 'override') : 'inherit',
     // The stored switch rather than `status`: every edit sends it, and an expired or revoked key's status would
@@ -237,6 +241,7 @@ export function keyFormOf(existing: ApiKey | null, poolId: string): KeyForm {
 export function keyInputOf(form: KeyForm, now: number): KeyInput {
   return {
     affinitySource: form.affinitySource,
+    autoModeServer: form.autoModeServer === 'inherit' ? null : form.autoModeServer === 'on',
     bodyCaptureHours: form.captureMode === 'inherit' ? null : form.captureMode === 'off' ? 0 : form.captureHours,
     enabled: form.enabled,
     expiresAt: form.expiry === 'keep' ? undefined : form.expiry === 'never' ? null : new Date(now + Number(form.expiry) * 86_400_000).toISOString(),

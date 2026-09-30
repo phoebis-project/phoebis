@@ -487,6 +487,9 @@ pub struct PoolRow {
     pub cache_ttl_json: String,
     /// `None` inherits `compatibility.cache_diagnostics`; `Some` overrides it for this pool.
     pub cache_diagnostics: Option<bool>,
+    /// Whether the client's server-side auto mode checks travel; off, the relay drops them so the client
+    /// falls back to its own classifier requests.
+    pub auto_mode_server: bool,
     pub affinity: Affinity,
     /// Whether a member's own identity and quota headers reach the client on this pool's responses.
     pub quota_headers: QuotaHeaders,
@@ -547,6 +550,8 @@ pub struct ApiKeyRow {
     /// Requests in flight this key may hold at once; `None` is no cap.
     pub in_flight_cap: Option<u32>,
     pub affinity_source: AffinitySource,
+    /// `None` inherits the pool's `auto_mode_server`; `Some` overrides it for this key.
+    pub auto_mode_server: Option<bool>,
 }
 
 #[derive(Clone, Debug)]
@@ -769,8 +774,8 @@ impl Store {
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let now = now_ms();
         tx.execute(
-            "INSERT INTO pools (id, label, enabled, strategy, affinity_ttl_seconds, overage_policy, migrate_above_utilization, select_below_utilization, model_rules_json, keepalive_json, body_capture_hours, prefer_subscription, shed_share, burn_window_seconds, source_dwell_seconds, migrate_when_spent, warm_sessions, retry_in_place_seconds, in_flight_cap, pace_floor, overage_move_grace_minutes, wind_down_minutes, cache_ttl_json, cache_diagnostics, affinity_mode, subagent_placement, session_placement, min_shared_prefix_tokens, quota_headers, created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?30)",
+            "INSERT INTO pools (id, label, enabled, strategy, affinity_ttl_seconds, overage_policy, migrate_above_utilization, select_below_utilization, model_rules_json, keepalive_json, body_capture_hours, prefer_subscription, shed_share, burn_window_seconds, source_dwell_seconds, migrate_when_spent, warm_sessions, retry_in_place_seconds, in_flight_cap, pace_floor, overage_move_grace_minutes, wind_down_minutes, cache_ttl_json, cache_diagnostics, affinity_mode, subagent_placement, session_placement, min_shared_prefix_tokens, quota_headers, auto_mode_server, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?31)",
             params![
                 row.id,
                 row.label,
@@ -801,6 +806,7 @@ impl Store {
                 row.affinity.session_placement,
                 row.affinity.min_shared_prefix_tokens as i64,
                 row.quota_headers,
+                row.auto_mode_server,
                 now
             ],
         )?;
@@ -814,7 +820,7 @@ impl Store {
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let now = now_ms();
         let updated = tx.execute(
-            "UPDATE pools SET label = ?2, enabled = ?3, strategy = ?4, affinity_ttl_seconds = ?5, overage_policy = ?6, migrate_above_utilization = ?7, select_below_utilization = ?8, model_rules_json = ?9, keepalive_json = ?10, body_capture_hours = ?11, prefer_subscription = ?12, shed_share = ?13, burn_window_seconds = ?14, source_dwell_seconds = ?15, migrate_when_spent = ?16, warm_sessions = ?17, retry_in_place_seconds = ?18, in_flight_cap = ?19, pace_floor = ?20, overage_move_grace_minutes = ?21, wind_down_minutes = ?22, cache_ttl_json = ?23, cache_diagnostics = ?24, affinity_mode = ?25, subagent_placement = ?26, session_placement = ?27, min_shared_prefix_tokens = ?28, quota_headers = ?29, updated_at = ?30 WHERE id = ?1",
+            "UPDATE pools SET label = ?2, enabled = ?3, strategy = ?4, affinity_ttl_seconds = ?5, overage_policy = ?6, migrate_above_utilization = ?7, select_below_utilization = ?8, model_rules_json = ?9, keepalive_json = ?10, body_capture_hours = ?11, prefer_subscription = ?12, shed_share = ?13, burn_window_seconds = ?14, source_dwell_seconds = ?15, migrate_when_spent = ?16, warm_sessions = ?17, retry_in_place_seconds = ?18, in_flight_cap = ?19, pace_floor = ?20, overage_move_grace_minutes = ?21, wind_down_minutes = ?22, cache_ttl_json = ?23, cache_diagnostics = ?24, affinity_mode = ?25, subagent_placement = ?26, session_placement = ?27, min_shared_prefix_tokens = ?28, quota_headers = ?29, auto_mode_server = ?30, updated_at = ?31 WHERE id = ?1",
             params![
                 row.id,
                 row.label,
@@ -845,6 +851,7 @@ impl Store {
                 row.affinity.session_placement,
                 row.affinity.min_shared_prefix_tokens as i64,
                 row.quota_headers,
+                row.auto_mode_server,
                 now
             ],
         )?;
@@ -979,8 +986,8 @@ impl Store {
         )?;
         let now = previous.map_or(now_ms(), |p| now_ms().max(p + 1));
         tx.execute(
-            "INSERT INTO api_keys (id, label, notes, pool_id, enabled, revoked_at, expires_at, model_rules_json, model_rules_mode, long_context_twins, keepalive_opt_out, body_capture_hours, secret_digest, prefix, in_flight_cap, affinity_source, created_at, rotated_at, last_used_at, retired_secret_last_used_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, NULL, NULL, NULL)",
+            "INSERT INTO api_keys (id, label, notes, pool_id, enabled, revoked_at, expires_at, model_rules_json, model_rules_mode, long_context_twins, keepalive_opt_out, body_capture_hours, secret_digest, prefix, in_flight_cap, affinity_source, auto_mode_server, created_at, rotated_at, last_used_at, retired_secret_last_used_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, NULL, NULL, NULL)",
             params![
                 row.id,
                 row.label,
@@ -998,6 +1005,7 @@ impl Store {
                 row.prefix,
                 row.in_flight_cap.map(|c| c as i64),
                 row.affinity_source,
+                row.auto_mode_server,
                 now
             ],
         )?;
@@ -1018,7 +1026,7 @@ impl Store {
             return Err(StoreError::PoolNotFound(row.pool_id.clone()));
         }
         let updated = tx.execute(
-            "UPDATE api_keys SET label = ?2, notes = ?3, pool_id = ?4, enabled = ?5, expires_at = ?6, model_rules_json = ?7, model_rules_mode = ?8, long_context_twins = ?9, keepalive_opt_out = ?10, body_capture_hours = ?11, in_flight_cap = ?12, affinity_source = ?13 WHERE id = ?1",
+            "UPDATE api_keys SET label = ?2, notes = ?3, pool_id = ?4, enabled = ?5, expires_at = ?6, model_rules_json = ?7, model_rules_mode = ?8, long_context_twins = ?9, keepalive_opt_out = ?10, body_capture_hours = ?11, in_flight_cap = ?12, affinity_source = ?13, auto_mode_server = ?14 WHERE id = ?1",
             params![
                 row.id,
                 row.label,
@@ -1032,7 +1040,8 @@ impl Store {
                 row.keepalive_opt_out,
                 row.body_capture_hours.map(|h| h as i64),
                 row.in_flight_cap.map(|c| c as i64),
-                row.affinity_source
+                row.affinity_source,
+                row.auto_mode_server
             ],
         )?;
         if updated == 0 {
@@ -1277,8 +1286,8 @@ impl Store {
     }
 }
 
-const POOL_SELECT: &str = "SELECT id, label, enabled, strategy, affinity_ttl_seconds, overage_policy, migrate_above_utilization, select_below_utilization, model_rules_json, keepalive_json, body_capture_hours, created_at, updated_at, prefer_subscription, shed_share, burn_window_seconds, source_dwell_seconds, migrate_when_spent, warm_sessions, retry_in_place_seconds, in_flight_cap, pace_floor, overage_move_grace_minutes, wind_down_minutes, cache_ttl_json, cache_diagnostics, affinity_mode, subagent_placement, session_placement, min_shared_prefix_tokens, quota_headers FROM pools";
-const KEY_SELECT: &str = "SELECT id, label, notes, pool_id, enabled, revoked_at, expires_at, keepalive_opt_out, body_capture_hours, secret_digest, prefix, created_at, rotated_at, last_used_at, retired_secret_last_used_at, model_rules_json, model_rules_mode, long_context_twins, in_flight_cap, affinity_source FROM api_keys";
+const POOL_SELECT: &str = "SELECT id, label, enabled, strategy, affinity_ttl_seconds, overage_policy, migrate_above_utilization, select_below_utilization, model_rules_json, keepalive_json, body_capture_hours, created_at, updated_at, prefer_subscription, shed_share, burn_window_seconds, source_dwell_seconds, migrate_when_spent, warm_sessions, retry_in_place_seconds, in_flight_cap, pace_floor, overage_move_grace_minutes, wind_down_minutes, cache_ttl_json, cache_diagnostics, affinity_mode, subagent_placement, session_placement, min_shared_prefix_tokens, quota_headers, auto_mode_server FROM pools";
+const KEY_SELECT: &str = "SELECT id, label, notes, pool_id, enabled, revoked_at, expires_at, keepalive_opt_out, body_capture_hours, secret_digest, prefix, created_at, rotated_at, last_used_at, retired_secret_last_used_at, model_rules_json, model_rules_mode, long_context_twins, in_flight_cap, affinity_source, auto_mode_server FROM api_keys";
 
 fn all_pools(conn: &rusqlite::Connection) -> Result<Vec<PoolRow>, StoreError> {
     let mut stmt = conn.prepare(&format!("{POOL_SELECT} ORDER BY label, id"))?;
@@ -1336,6 +1345,7 @@ fn row_to_pool(r: &rusqlite::Row<'_>) -> rusqlite::Result<PoolRow> {
             min_shared_prefix_tokens: r.get::<_, i64>(29)? as u64,
         },
         quota_headers: r.get(30)?,
+        auto_mode_server: r.get(31)?,
     })
 }
 
@@ -1364,6 +1374,7 @@ fn row_to_key(r: &rusqlite::Row<'_>) -> rusqlite::Result<ApiKeyRow> {
         retired_secret_last_used_at: r.get(14)?,
         in_flight_cap: r.get::<_, Option<i64>>(18)?.map(|c| c as u32),
         affinity_source: r.get(19)?,
+        auto_mode_server: r.get::<_, Option<bool>>(20)?,
     })
 }
 
@@ -1396,6 +1407,7 @@ fn pool_diff(row: &PoolRow) -> String {
         "session_placement": row.affinity.session_placement.as_str(),
         "min_shared_prefix_tokens": row.affinity.min_shared_prefix_tokens,
         "quota_headers": row.quota_headers.as_str(),
+        "auto_mode_server": row.auto_mode_server,
     })
     .to_string()
 }
@@ -1415,6 +1427,7 @@ fn key_diff(row: &ApiKeyRow) -> String {
         "in_flight_cap": row.in_flight_cap,
         "prefix": row.prefix,
         "affinity_source": row.affinity_source.as_str(),
+        "auto_mode_server": row.auto_mode_server,
     })
     .to_string()
 }

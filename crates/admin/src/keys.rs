@@ -50,6 +50,8 @@ struct KeyInput {
     in_flight_cap: Option<Option<u32>>,
     #[serde(default)]
     affinity_source: Option<String>,
+    #[serde(default, deserialize_with = "double_option")]
+    auto_mode_server: Option<Option<Value>>,
 }
 
 fn new_secret() -> String {
@@ -124,6 +126,18 @@ fn apply(state: &AdminState, row: &mut ApiKeyRow, input: &KeyInput) -> Result<()
                 return Err(failure(
                     StatusCode::BAD_REQUEST,
                     "affinity_source must be auto, session, user_id, content, or whole_key",
+                ))
+            }
+        };
+    }
+    if let Some(value) = &input.auto_mode_server {
+        row.auto_mode_server = match value {
+            None => None,
+            Some(Value::Bool(on)) => Some(*on),
+            Some(_) => {
+                return Err(failure(
+                    StatusCode::BAD_REQUEST,
+                    "auto_mode_server must be true, false, or null",
                 ))
             }
         };
@@ -278,6 +292,7 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
         retired_secret_last_used_at: None,
         in_flight_cap: None,
         affinity_source: phoebis_store::AffinitySource::Auto,
+        auto_mode_server: None,
     };
     if let Err(refusal) = apply(&state, &mut row, &input) {
         return refusal;
@@ -417,13 +432,13 @@ fn key_json(
     lifetime: &BTreeMap<String, phoebis_ledger::Totals>,
     sessions_on_retired_secret: usize,
 ) -> Result<Value, StoreError> {
-    let effective = row.body_capture_hours.unwrap_or(
-        state
-            .store
-            .pool(&row.pool_id)?
-            .map(|p| p.body_capture_hours)
-            .unwrap_or(0),
-    );
+    let pool = state.store.pool(&row.pool_id)?;
+    let effective = row
+        .body_capture_hours
+        .unwrap_or(pool.as_ref().map(|p| p.body_capture_hours).unwrap_or(0));
+    let effective_auto_mode = row
+        .auto_mode_server
+        .unwrap_or_else(|| pool.as_ref().is_none_or(|p| p.auto_mode_server));
     Ok(json!({
         "id": row.id, "label": row.label, "notes": row.notes, "pool_id": row.pool_id, "enabled": row.enabled,
         "revoked_at": row.revoked_at, "expires_at": row.expires_at, "model_rules": row.model_rules,
@@ -431,6 +446,7 @@ fn key_json(
         "keepalive_opt_out": row.keepalive_opt_out, "body_capture_hours": row.body_capture_hours, "effective_body_capture_hours": effective,
         "in_flight_cap": row.in_flight_cap,
         "affinity_source": row.affinity_source.as_str(),
+        "auto_mode_server": row.auto_mode_server, "effective_auto_mode_server": effective_auto_mode,
         "prefix": row.prefix, "created_at": row.created_at, "rotated_at": row.rotated_at, "last_used_at": row.last_used_at,
         "retired_secret_last_used_at": row.retired_secret_last_used_at, "sessions_on_retired_secret": sessions_on_retired_secret,
         "usage_7d": { "cost_usd": week.get(&row.id).map_or(0.0, |t| t.cost_usd), "requests": week.get(&row.id).map_or(0, |t| t.requests), "tokens": week.get(&row.id).map_or(0, |t| t.tokens) },

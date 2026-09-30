@@ -253,16 +253,16 @@ test('the request detail reads the row and its events from one GET, and a purged
   assert.equal(await api.getRequest('gone'), null);
 });
 
-test('a key create and a key edit send the affinity source in snake_case', async () => {
+test('a key create and a key edit send the affinity source and the auto mode override in snake_case', async () => {
   const row = JSON.parse(readFileSync(new URL('./fixtures/keys.json', import.meta.url), 'utf8')).body.keys[0];
-  const input = { affinitySource: 'user_id', bodyCaptureHours: null, enabled: true, keepaliveOptOut: false, longContextTwins: true, modelRules: [], modelRulesMode: 'extend', name: 'Desktop', notes: null, poolId: 'main' };
+  const input = { affinitySource: 'user_id', autoModeServer: null, bodyCaptureHours: null, enabled: true, keepaliveOptOut: false, longContextTwins: true, modelRules: [], modelRulesMode: 'extend', name: 'Desktop', notes: null, poolId: 'main' };
   const calls = stub((url, init) => answer(200, { ...row, ...JSON.parse(init.body), ...(init.method === 'POST' ? { secret: 'phoebis-fixture' } : {}) }));
   const api = new HttpApi();
   const created = await api.createKey({ ...input, expiresInDays: null });
-  const edited = await api.updateKey('desktop', { ...input, affinitySource: 'content' });
-  const sent = calls.map((c) => [c.init.method, c.url, JSON.parse(c.init.body).affinity_source]);
-  assert.deepEqual(sent, [['POST', '/admin/keys', 'user_id'], ['PATCH', '/admin/keys/desktop', 'content']]);
-  assert.deepEqual([created.key.affinitySource, edited.affinitySource], ['user_id', 'content']);
+  const edited = await api.updateKey('desktop', { ...input, affinitySource: 'content', autoModeServer: false });
+  const sent = calls.map((c) => [c.init.method, c.url, JSON.parse(c.init.body).affinity_source, JSON.parse(c.init.body).auto_mode_server]);
+  assert.deepEqual(sent, [['POST', '/admin/keys', 'user_id', null], ['PATCH', '/admin/keys/desktop', 'content', false]]);
+  assert.deepEqual([created.key.affinitySource, created.key.autoModeServer, edited.affinitySource, edited.autoModeServer], ['user_id', null, 'content', false]);
 });
 
 test('a pool save is one PATCH that carries the members with the settings', async () => {

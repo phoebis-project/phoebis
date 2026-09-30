@@ -12,7 +12,7 @@ const as = async (role) => {
 /** The pool as the dialog would send it back unchanged, so a case edits only the fields it is about. */
 const poolInputOf = (p) => ({ ...p, members: p.members.map((m) => ({ accountId: m.accountId, budgetPeriod: m.budgetPeriod, budgetUsd: m.budgetUsd, priority: m.priority })) });
 const storyPool = async (api) => poolInputOf((await api.listPools()).find((p) => p.id === 'all'));
-const keyInput = { affinitySource: 'auto', bodyCaptureHours: null, enabled: true, expiresInDays: null, keepaliveOptOut: false, longContextTwins: true, modelRules: [], modelRulesMode: 'extend', name: 'fresh', notes: null, poolId: 'all' };
+const keyInput = { affinitySource: 'auto', autoModeServer: null, bodyCaptureHours: null, enabled: true, expiresInDays: null, keepaliveOptOut: false, longContextTwins: true, modelRules: [], modelRulesMode: 'extend', name: 'fresh', notes: null, poolId: 'all' };
 const ruleInputOf = (r) => ({ enabled: r.enabled, kind: r.kind, scope: r.scope, threshold: r.threshold, webhookUrl: r.webhookUrl, windowId: r.windowId });
 const newRule = { enabled: true, kind: 'utilization_above', scope: { id: 'all', type: 'pool' }, threshold: 0.8, webhookUrl: 'https://hooks.example.com/phoebis/new', windowId: '5h' };
 
@@ -230,6 +230,25 @@ test("a key write stores the affinity source", async () => {
   delete plain.affinitySource;
   const { key: bare } = await api.createKey(plain);
   assert.deepEqual([bare.affinitySource], ['auto'], "a body without the field takes the route's default");
+});
+
+test("a key write stores the server-side auto mode override and a pool write stores the switch", async () => {
+  const api = await as('admin');
+  const { key: inheriting } = await api.createKey({ ...keyInput, name: 'inheriting' });
+  assert.equal(inheriting.autoModeServer, null, 'the mock answers the inherit it was sent');
+  const { key: pinned } = await api.createKey({ ...keyInput, autoModeServer: false, name: 'pinned' });
+  assert.equal(pinned.autoModeServer, false);
+  const edited = await api.updateKey('pinned', { ...keyInput, autoModeServer: true, expiresAt: undefined, name: 'pinned' });
+  assert.equal(edited.autoModeServer, true);
+  const plain = { ...keyInput, name: 'plain' };
+  delete plain.autoModeServer;
+  assert.equal((await api.createKey(plain)).key.autoModeServer, null, "a body without the field takes the route's default");
+  const pool = await storyPool(api);
+  await api.updatePool('all', { ...pool, autoModeServer: false });
+  assert.equal((await api.listPools()).find((p) => p.id === 'all').autoModeServer, false);
+  const { autoModeServer: _dropped, ...unset } = pool;
+  const created = await api.createPool({ ...unset, name: 'fresh' });
+  assert.equal(created.autoModeServer, true, "a new pool without the field takes the route's default");
 });
 
 test("a key write with an unknown affinity source is refused with the route's text", async () => {

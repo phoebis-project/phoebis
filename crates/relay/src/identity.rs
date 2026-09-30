@@ -316,6 +316,7 @@ mod tests {
             retired_secret_last_used_at: None,
             in_flight_cap: None,
             affinity_source: source,
+            auto_mode_server: None,
         }
     }
 

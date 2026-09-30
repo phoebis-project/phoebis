@@ -23,6 +23,8 @@
         "effective_body_capture_hours": 24,
         "in_flight_cap": null,
         "affinity_source": "auto",
+        "auto_mode_server": null,
+        "effective_auto_mode_server": true,
         "prefix": "N3XKuDEy",
         "created_at": 1790575957924,
         "rotated_at": null,

@@ -539,6 +539,7 @@ function PoolCard({
                 )}
                 {/* Outside the branch above: a pool that rewrites no breakpoint can still force diagnostics. */}
                 {pool.cacheDiagnostics !== null && <Badge tone="neutral">diagnostics {pool.cacheDiagnostics ? 'on' : 'off'}</Badge>}
+                {!pool.autoModeServer && <Badge tone="neutral">server-side auto mode off</Badge>}
               </span>
             </dd>
           </div>
@@ -703,6 +704,7 @@ type NumericTuningKey = { [K in keyof ProbeTuning]-?: ProbeTuning[K] extends num
 interface PoolForm {
   affinity: number;
   affinityMode: AffinityMode;
+  autoModeServer: boolean;
   /** Each member's budget field as typed, empty for none, beside its period; kept for an unticked member too. */
   budgets: Record<string, { period: BudgetPeriod; usd: string }>;
   cacheDiagnostics: boolean | null;
@@ -742,6 +744,7 @@ const isPreset = (seconds: number) => AFFINITY_PICKS.some((p) => p.seconds === s
 const blankForm = (): PoolForm => ({
   affinity: 3_600,
   affinityMode: POOL_AFFINITY_DEFAULTS.affinityMode,
+  autoModeServer: true,
   budgets: {},
   cacheDiagnostics: null,
   cacheTtl: { ...CACHE_TTL_DEFAULTS },
@@ -776,6 +779,7 @@ const blankForm = (): PoolForm => ({
 const formFrom = (pool: Pool): PoolForm => ({
   affinity: pool.affinityTtlSeconds,
   affinityMode: pool.affinityMode,
+  autoModeServer: pool.autoModeServer,
   budgets: Object.fromEntries(pool.members.map((m) => [m.accountId, { period: m.budgetPeriod, usd: m.budgetUsd === null ? '' : String(m.budgetUsd) }])),
   cacheDiagnostics: pool.cacheDiagnostics,
   cacheTtl: {
@@ -913,8 +917,8 @@ export function PoolDialog({
     () =>
       pool || pools.some((p) => p.id === draftPoolId)
         ? pools
-        : [...pools, { bodyCaptureHours: draftCaptureHours, id: draftPoolId, members: Object.keys(form.members).map((accountId) => ({ accountId })), modelRules: form.modelRules, name: draftName }],
-    [pool, pools, draftCaptureHours, draftPoolId, draftName, form.members, form.modelRules],
+        : [...pools, { autoModeServer: form.autoModeServer, bodyCaptureHours: draftCaptureHours, id: draftPoolId, members: Object.keys(form.members).map((accountId) => ({ accountId })), modelRules: form.modelRules, name: draftName }],
+    [pool, pools, draftCaptureHours, draftPoolId, draftName, form.autoModeServer, form.members, form.modelRules],
   );
   const suggestions = useCatalogSuggestions(Object.keys(form.members), open);
   // Below five minutes a pin expires before the probe it scheduled can help.
@@ -929,6 +933,7 @@ export function PoolDialog({
     ...form.engine,
     affinityMode: form.affinityMode,
     affinityTtlSeconds: form.affinity,
+    autoModeServer: form.autoModeServer,
     bodyCaptureHours: form.capture ? form.captureHours : 0,
     cacheDiagnostics: form.cacheDiagnostics,
     cacheTtl: form.cacheTtl,
@@ -1005,6 +1010,7 @@ export function PoolDialog({
     if (!moving || !moveTo) return;
     await api.updateKey(moving.id, {
       affinitySource: moving.affinitySource,
+      autoModeServer: moving.autoModeServer,
       bodyCaptureHours: moving.bodyCaptureHours,
       enabled: moving.enabled,
       keepaliveOptOut: moving.keepaliveOptOut,
@@ -1254,6 +1260,21 @@ export function PoolDialog({
           <PatternEditor label="Model rules" value={form.modelRules} onChange={(rules) => set('modelRules', rules)} suggestions={suggestions} />
         </Field>
         {rulesRefusal && refusalCallout(rulesRefusal)}
+      </div>
+    ),
+    autoMode: (
+      <div className="cells">
+        <Field
+          label="Support server-side auto mode"
+          beside
+          hint={
+            <>
+              Claude Code asks the upstream to review each tool use on the model&apos;s own turn. Off, the router drops that request from every message of this pool&apos;s keys, and the client reviews with classifier requests of its own, billed to the upstream&apos;s windows and shown on the <PageLink to="/analytics">Analytics page</PageLink>; a key can override this. The Client page of the documentation explains what the client does in each state.
+            </>
+          }
+        >
+          <Toggle checked={form.autoModeServer} onChange={(v) => set('autoModeServer', v)} label="Support server-side auto mode" />
+        </Field>
       </div>
     ),
     selection: (

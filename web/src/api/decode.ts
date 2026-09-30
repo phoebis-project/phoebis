@@ -224,6 +224,7 @@ export function decodeKey(v: unknown): ApiKey {
   const enabled = bool(k.enabled, true);
   return {
     affinitySource: AFFINITY_SOURCE_VALUES.find((s) => s === str(k.affinity_source)) ?? 'auto',
+    autoModeServer: k.auto_mode_server === true ? true : k.auto_mode_server === false ? false : null,
     bodyCaptureHours: numOrNull(k.body_capture_hours),
     createdAt: isoOr(k.created_at, epoch),
     enabled,
@@ -290,6 +291,7 @@ export function decodePool(v: unknown): Pool {
     activePins: num(p.active_pins),
     affinityMode: AFFINITY_MODE_VALUES.find((x) => x === str(p.affinity_mode)) ?? POOL_AFFINITY_DEFAULTS.affinityMode,
     affinityTtlSeconds: num(p.affinity_ttl_seconds),
+    autoModeServer: bool(p.auto_mode_server, true),
     bodyCaptureHours: num(p.body_capture_hours),
     burnWindowSeconds: num(p.burn_window_seconds, POOL_ENGINE_DEFAULTS.burnWindowSeconds),
     cacheDiagnostics: p.cache_diagnostics === true ? true : p.cache_diagnostics === false ? false : null,
@@ -641,14 +643,14 @@ const encodeTtlRules = (r: TtlRules) => ({ keepalive: r.keepalive, main: r.main,
 
 export const encodeAccountPatch = (p: AccountPatch) => ({ cancelled: p.cancelled, subscription_ends_at: p.subscriptionEndsAt === null ? null : Date.parse(p.subscriptionEndsAt) });
 export const encodeKey = (i: KeyInput) => ({
-  affinity_source: i.affinitySource, body_capture_hours: i.bodyCaptureHours, enabled: i.enabled,
+  affinity_source: i.affinitySource, auto_mode_server: i.autoModeServer, body_capture_hours: i.bodyCaptureHours, enabled: i.enabled,
   ...(i.expiresAt === undefined ? {} : { expires_at: i.expiresAt === null ? null : Date.parse(i.expiresAt) }),
   ...(i.inFlightCap === undefined ? {} : { in_flight_cap: i.inFlightCap }),
   keepalive_opt_out: i.keepaliveOptOut, label: i.name, long_context_twins: i.longContextTwins,
   model_rules: encodeModelRules(i.modelRules), model_rules_mode: i.modelRulesMode, notes: i.notes, pool_id: i.poolId,
 });
 export const encodePool = (i: PoolInput) => ({
-  affinity_mode: i.affinityMode, affinity_ttl_seconds: i.affinityTtlSeconds, body_capture_hours: i.bodyCaptureHours, cache_diagnostics: i.cacheDiagnostics,
+  affinity_mode: i.affinityMode, affinity_ttl_seconds: i.affinityTtlSeconds, auto_mode_server: i.autoModeServer, body_capture_hours: i.bodyCaptureHours, cache_diagnostics: i.cacheDiagnostics,
   cache_ttl: { enabled: i.cacheTtl.enabled, inject_when_absent: i.cacheTtl.injectWhenAbsent, metered: encodeTtlRules(i.cacheTtl.metered), plan: encodeTtlRules(i.cacheTtl.plan) },
   enabled: i.status === 'active', model_rules: encodeModelRules(i.modelRules),
   keepalive: { cold_probe_limit: i.keepalive.coldProbeLimit, enabled: i.keepalive.enabled, jitter_seconds_1h: i.keepalive.jitterSeconds1h, jitter_seconds_5m: i.keepalive.jitterSeconds5m, lead_seconds_1h: i.keepalive.leadSeconds1h, lead_seconds_5m: i.keepalive.leadSeconds5m, max_idle_seconds: i.keepalive.maxIdleSeconds, max_idle_ticks: i.keepalive.maxIdleTicks, net_negative_grace_probes: i.keepalive.netNegativeGraceProbes, probe_cap_window_share_per_day: i.keepalive.capWindowSharePerDay, probe_cost_cap_usd_per_day: i.keepalive.costCapUsdPerDay, retry_max_seconds: i.keepalive.retryMaxSeconds, retry_seconds: i.keepalive.retrySeconds, stop_when_net_negative: i.keepalive.stopWhenNetNegative, warm_subagents: i.keepalive.warmSubagents },
