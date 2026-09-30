@@ -1545,7 +1545,7 @@ async fn a_rollup_row_from_before_the_class_dimension_reads_under_the_reserved_c
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 23);
+    assert_eq!(db.schema_version().await.unwrap(), 22);
     let rows = db
         .read_blocking(|c| phoebis_ledger::read_rollups(c, 0, i64::MAX))
         .unwrap();
@@ -1642,7 +1642,7 @@ async fn migration_nineteen_adds_the_identity_columns_to_a_version_eighteen_file
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 23);
+    assert_eq!(db.schema_version().await.unwrap(), 22);
     let (row, _) = db.request("r0").await.unwrap().unwrap();
     assert_eq!(
         (
@@ -1690,7 +1690,7 @@ async fn a_ledger_from_before_the_auto_mode_column_gains_it() {
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 23);
+    assert_eq!(db.schema_version().await.unwrap(), 22);
     let columns = db
         .read_blocking(|c| {
             let mut stmt = c.prepare("SELECT name FROM pragma_table_info('requests')")?;
@@ -1704,7 +1704,7 @@ async fn a_ledger_from_before_the_auto_mode_column_gains_it() {
 }
 
 #[tokio::test]
-async fn migration_twenty_three_files_every_rollup_row_under_standard_speed_and_keys_by_it() {
+async fn migration_twenty_two_files_every_rollup_row_under_standard_speed_and_keys_by_it() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("ledger.sqlite");
     let request = |id: &str| RequestRecord {
@@ -1753,7 +1753,7 @@ async fn migration_twenty_three_files_every_rollup_row_under_standard_speed_and_
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 23);
+    assert_eq!(db.schema_version().await.unwrap(), 22);
     let speeds = |ledger: &phoebis_ledger::LedgerDb| {
         ledger
             .read_blocking(|c| {

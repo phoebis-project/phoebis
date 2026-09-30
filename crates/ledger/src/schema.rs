@@ -264,7 +264,7 @@ CREATE INDEX IF NOT EXISTS events_at ON events (at);
 /// Version 21: the request row records its auto-mode standing (a server-side check passed through or stripped
 /// under the key's setting, or a refusal for the body's shape before any dispatch); a row from before reads NULL.
 ///
-/// Version 23: the speed the answer reported is a dimension of the hourly rollup, so it joins the primary key after
+/// Version 22: the speed the answer reported is a dimension of the hourly rollup, so it joins the primary key after
 /// the class and the table is rebuilt as version 18 rebuilt it, every existing row filed under `standard`; the two
 /// indexes are recreated on the new table.
 pub const MIGRATIONS: &[(u32, &str)] = &[
@@ -667,7 +667,7 @@ CREATE INDEX window_reconciliations_computed ON window_reconciliations (computed
         "ALTER TABLE requests ADD COLUMN auto_mode TEXT;",
     ),
     (
-        23,
+        22,
         "CREATE TABLE rollups_hourly_next (
   hour INTEGER NOT NULL,
   key_id TEXT NOT NULL,
