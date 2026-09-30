@@ -23,8 +23,11 @@ export function FastLane({ account, now }: { account: Account; now: number }): J
   // The router keeps the last answer's pair in memory until the next fast answer, while the buckets reset within
   // minutes, so a reading past its reset reads as the refilled bucket the router itself routes on.
   const used = lane ? ([['input', lane.input], ['output', lane.output]] as const).flatMap(([name, r]) => (r ? [`${name} ${fmtPct(refilled(r, now) ? 0 : r.utilization)} used`] : [])) : [];
+  const readings = lane ? [lane.input, lane.output].filter((r): r is FastLaneReading => r !== null) : [];
   const reset = lane ? laterReset([lane.input, lane.output]) : null;
-  const when = reset === null ? [] : [Date.parse(reset) <= now ? `refilled ${fmtRelative(reset, now)}` : `resets ${fmtRelative(reset, now)}`];
+  // A reading with no reset may still be spent, so the lane reads refilled only when every reading has refilled; a
+  // later reset already past beside such a reading says nothing of when.
+  const when = reset === null ? [] : Date.parse(reset) > now ? [`resets ${fmtRelative(reset, now)}`] : readings.every((r) => refilled(r, now)) ? [`refilled ${fmtRelative(reset, now)}`] : [];
   return (
     <div className="chips fast-lane">
       {used.length > 0 && (

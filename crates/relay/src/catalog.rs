@@ -955,17 +955,26 @@ fn parse_models(body: &[u8]) -> Result<Discovered, DiscoveryError> {
 /// The API's own effort order, which a row's levels are shown in; a name outside it follows, as listed.
 const EFFORT_ORDER: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
 
-/// The effort levels a listing row says its model supports. The inner shape of `capabilities` is unrecorded, so
-/// an object of levels (each kept unless its `supported` is other than true) and an array of names both read, and
-/// any other shape reads as none rather than failing the row.
+/// The effort levels a listing row says its model supports. The Models API reference shows `capabilities.effort` as
+/// an object of levels, each an object with its own `supported`, beside the effort object's own `supported` flag;
+/// no captured listing confirms it, so an array of names reads too, and any other shape reads as none rather than
+/// failing the row.
 fn effort_levels(entry: &serde_json::Value) -> Vec<String> {
     let listed: Vec<&str> = match entry.get("capabilities").and_then(|c| c.get("effort")) {
+        Some(serde_json::Value::Object(levels))
+            if levels.get("supported").and_then(|s| s.as_bool()) == Some(false) =>
+        {
+            Vec::new()
+        }
+        // The effort object's own flag is a bare boolean, which no level is, so only object entries count.
         Some(serde_json::Value::Object(levels)) => levels
             .iter()
             .filter(|(_, level)| {
-                level
-                    .get("supported")
-                    .is_none_or(|supported| supported.as_bool() == Some(true))
+                level.as_object().is_some_and(|level| {
+                    level
+                        .get("supported")
+                        .is_none_or(|supported| supported.as_bool() == Some(true))
+                })
             })
             .map(|(name, _)| name.as_str())
             .collect(),
@@ -1020,9 +1029,23 @@ mod tests {
                 "eco": { "supported": true },
                 "low": { "supported": true },
             } } },
+            // The Models API reference's shape: the levels beside the object's own `supported` flag, keys sorted.
+            { "id": "documented", "capabilities": { "effort": {
+                "high": { "supported": true },
+                "low": { "supported": true },
+                "max": { "supported": true },
+                "medium": { "supported": true },
+                "supported": true,
+                "xhigh": { "supported": true },
+            } } },
+            { "id": "unsupported", "capabilities": { "effort": { "supported": false } } },
+            { "id": "unsupported_listed", "capabilities": { "effort": {
+                "low": { "supported": true },
+                "supported": false,
+            } } },
         ] });
         let models = parse_models(body.to_string().as_bytes()).unwrap().models;
-        assert_eq!(models.len(), 5, "no shape of capabilities drops its row");
+        assert_eq!(models.len(), 8, "no shape of capabilities drops its row");
         let levels = |id: &str| {
             models
                 .iter()
@@ -1038,6 +1061,16 @@ mod tests {
             levels("others"),
             vec!["low", "max", "turbo", "eco"],
             "the API's levels first, an absent supported keeps its level, other names as listed"
+        );
+        assert_eq!(
+            levels("documented"),
+            vec!["low", "medium", "high", "xhigh", "max"],
+            "the object's own supported flag is no level"
+        );
+        assert!(levels("unsupported").is_empty());
+        assert!(
+            levels("unsupported_listed").is_empty(),
+            "an effort object marked unsupported lists no level"
         );
     }
 

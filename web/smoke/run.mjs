@@ -435,14 +435,23 @@ m.unmount();
   const soon = new Date(Date.now() + 5 * 60_000).toISOString();
   api.listAccounts = async () =>
     (await listAccounts.call(api)).map((a) =>
-      a.id === 'business' ? { ...a, fastLane: { input: { ...a.fastLane.input, resetsAt: past }, output: { ...a.fastLane.output, resetsAt: past } } } : a.id === 'console' ? { ...a, fastLane: { input: { ...a.fastLane.input, resetsAt: past }, output: { ...a.fastLane.output, resetsAt: soon } } } : a,
+      a.id === 'business'
+        ? { ...a, fastLane: { input: { ...a.fastLane.input, resetsAt: past }, output: { ...a.fastLane.output, resetsAt: past } } }
+        : a.id === 'console'
+          ? { ...a, fastLane: { input: { ...a.fastLane.input, resetsAt: past }, output: { ...a.fastLane.output, resetsAt: soon } } }
+          : a.id === 'mail'
+            ? { ...a, fastLane: { input: { observedAt: past, resetsAt: null, utilization: 0.5 }, output: { observedAt: past, resetsAt: past, utilization: 0.3 } } }
+            : a,
     );
   const stale = await mount('/quota');
   const lineOf = (label) => [...stale.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === label)?.querySelector('.fast-lane__line')?.textContent?.trim() ?? '';
   results.push({
-    name: '/quota a fast lane reading past its reset reads refilled, and a lane past both says when it refilled',
-    ok: /^Fast modeinput 0% used, output 0% used, refilled 2h 0m ago$/.test(lineOf('business')) && /^Fast modeinput 0% used, output 5% used, resets in [45]m$/.test(lineOf('Console workspace')),
-    missing: [lineOf('business') || 'no line on business', lineOf('Console workspace') || 'no line on the Console workspace'],
+    name: '/quota a fast lane reading past its reset reads refilled, a lane past both says when it refilled, and one beside a reading with no reset says nothing of when',
+    ok:
+      /^Fast modeinput 0% used, output 0% used, refilled 2h 0m ago$/.test(lineOf('business')) &&
+      /^Fast modeinput 0% used, output 5% used, resets in [45]m$/.test(lineOf('Console workspace')) &&
+      lineOf('mail') === 'Fast modeinput 50% used, output 0% used',
+    missing: [lineOf('business') || 'no line on business', lineOf('Console workspace') || 'no line on the Console workspace', lineOf('mail') || 'no line on mail'],
   });
   api.listAccounts = listAccounts;
   stale.unmount();
