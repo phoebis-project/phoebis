@@ -21,6 +21,7 @@ use tokio_util::task::TaskTracker;
 
 use crate::catalog::CatalogService;
 use crate::hold::Inspect;
+use crate::identity::PendingReports;
 use crate::messages::{Guards, RelayOutcome, Trace};
 use crate::observe::{answer_from_json, is_tool_use_delta, message_id_from_json};
 use crate::sse::{SseEvent, SseParser};
@@ -155,6 +156,10 @@ impl Renewal {
 /// answer's usage to the router's window prediction. A token count builds none: it writes no cache.
 pub(crate) struct AffinityFacts {
     pub router: RouterHandle,
+    /// Where the report's sequence is filed for the conversation's next turn to wait on.
+    pub pending: Arc<PendingReports>,
+    /// The request's own session id, which its next turn waits on.
+    pub session_id: Option<String>,
     pub account_id: String,
     pub incarnation: u64,
     pub key_id: String,
@@ -172,13 +177,15 @@ pub(crate) struct AffinityFacts {
     /// `tier_ttls` of the body as this pass sent it upstream.
     pub static_ttl_ms: Option<i64>,
     pub message_ttl_ms: Option<i64>,
+    /// `uniform_ttl` of the same body.
+    pub uniform_ttl_ms: Option<i64>,
 }
 
 impl AffinityFacts {
     /// Sends `Report::Usage` for an answer whose usage is not empty, then converts into `AffinityReport`
     /// (`cache_touched` and `prefix_tokens` from the usage's three cache fields, false and 0 without them) and
-    /// sends `Report::Affinity` through `router.report`; a committed answer only (`status == 200`), since a
-    /// rejection continues no conversation and consumes no window.
+    /// sends `Report::Affinity` through `router.report`, filing the sequence it took in `pending`; a committed
+    /// answer only (`status == 200`), since a rejection continues no conversation and consumes no window.
     pub(crate) fn send(
         self,
         now: i64,
@@ -205,6 +212,13 @@ impl AffinityFacts {
         let prefix_tokens = cached(|u| u.cache_read_tokens)
             + cached(|u| u.cache_write_5m_tokens)
             + cached(|u| u.cache_write_1h_tokens);
+        // The identifier the next turn's wait reads this conversation by.
+        let ids: Vec<String> = self
+            .session_id
+            .iter()
+            .map(|id| format!("session:{id}"))
+            .collect();
+        let key_id = self.key_id.clone();
         let report = AffinityReport {
             account_id: self.account_id,
             incarnation: self.incarnation,
@@ -223,8 +237,19 @@ impl AffinityFacts {
             cache_touched: prefix_tokens > 0,
             prefix_tokens,
             now,
+            cache_write_5m_tokens: usage.and_then(|u| u.cache_write_5m_tokens),
+            cache_write_1h_tokens: usage.and_then(|u| u.cache_write_1h_tokens),
+            uniform_ttl_ms: self.uniform_ttl_ms,
         };
-        self.router.report(Report::Affinity(report));
+        if let Some(seq) = self.router.report(Report::Affinity(report)) {
+            self.pending.record(
+                &key_id,
+                self.key_generation,
+                &ids,
+                seq,
+                self.router.applied_report(),
+            );
+        }
     }
 }
 

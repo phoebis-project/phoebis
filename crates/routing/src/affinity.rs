@@ -64,6 +64,13 @@ pub struct AffinityReport {
     /// of a message or parent entry.
     pub prefix_tokens: u64,
     pub now: i64,
+    /// The response's cache-creation writes as its usage reported them: the split object fills both (the 1-hour
+    /// member present, if zero), the older total-only shape the 5-minute one alone; `None` without usage.
+    pub cache_write_5m_tokens: Option<u64>,
+    pub cache_write_1h_tokens: Option<u64>,
+    /// The TTL every `cache_control` marker of the dispatched body carries, when they all carry one; `None` for a
+    /// body without a marker or with markers at both TTLs.
+    pub uniform_ttl_ms: Option<i64>,
 }
 
 pub struct ConversationQuery<'a> {
@@ -205,8 +212,21 @@ impl AffinityMap {
                 .cloned()
                 .unwrap_or_default()
         });
-        let message_confirmed = report.cache_touched && report.message_ttl_ms.is_some();
-        let message_ttl = report.message_ttl_ms.unwrap_or(0);
+        // The upstream's own TTL beats the marker's when every marker of the request carried one TTL and the split
+        // says the cache wrote at the other: the markers are what the request asked, the split is what the cache
+        // holds. A request with markers at both TTLs keeps each tier's marker, since the split names no tier.
+        let written = match (report.cache_write_5m_tokens, report.cache_write_1h_tokens) {
+            // The split object always carries the 1-hour member, so its absence is the older total-only shape,
+            // which names no TTL.
+            (Some(five), Some(0)) if five > 0 => Some(300_000),
+            (Some(0) | None, Some(hour)) if hour > 0 => Some(3_600_000),
+            _ => None,
+        };
+        let written = written.filter(|w| report.uniform_ttl_ms.is_some_and(|t| t != *w));
+        let message_ttl_ms = report.message_ttl_ms.map(|t| written.unwrap_or(t));
+        let static_ttl_ms = report.static_ttl_ms.map(|t| written.unwrap_or(t));
+        let message_confirmed = report.cache_touched && message_ttl_ms.is_some();
+        let message_ttl = message_ttl_ms.unwrap_or(0);
         let mut rows = Vec::new();
 
         for boundary in &report.message_boundaries {
@@ -260,8 +280,8 @@ impl AffinityMap {
             }
         }
         if report.cache_touched {
-            let static_confirmed = report.static_ttl_ms.is_some();
-            let static_ttl = report.static_ttl_ms.unwrap_or(0);
+            let static_confirmed = static_ttl_ms.is_some();
+            let static_ttl = static_ttl_ms.unwrap_or(0);
             for (index, boundary) in report.static_boundaries.iter().enumerate() {
                 let size = report.static_sizes.get(index).copied().unwrap_or(0);
                 if let Some(row) = self.upsert(
@@ -446,6 +466,9 @@ mod tests {
             cache_touched: false,
             prefix_tokens: 0,
             now,
+            cache_write_5m_tokens: None,
+            cache_write_1h_tokens: None,
+            uniform_ttl_ms: None,
         }
     }
 
@@ -797,5 +820,55 @@ mod tests {
             "a confirmed refresh resets the deadline from its own written_at: live to nine minutes"
         );
         assert!(!confirmed.entry("m", "b2").unwrap().live(540_001));
+    }
+
+    #[test]
+    fn a_uniform_request_takes_the_written_ttl_and_a_mixed_one_keeps_its_markers() {
+        // (static tier, message tier) as recorded for a request whose tiers carry the given deepest markers.
+        let recorded = |uniform: Option<i64>,
+                        tiers: (Option<i64>, Option<i64>),
+                        writes: (Option<u64>, Option<u64>)| {
+            let mut map = AffinityMap::default();
+            map.record(&AffinityReport {
+                static_boundaries: vec!["s1".into()],
+                static_sizes: vec![10],
+                static_ttl_ms: tiers.0,
+                message_ttl_ms: tiers.1,
+                cache_touched: true,
+                prefix_tokens: 200,
+                cache_write_5m_tokens: writes.0,
+                cache_write_1h_tokens: writes.1,
+                uniform_ttl_ms: uniform,
+                ..report("k", "a", 0)
+            });
+            (
+                map.entry("m", "s1").unwrap().ttl_ms,
+                map.entry("m", "b2").unwrap().ttl_ms,
+            )
+        };
+        let hour = Some(3_600_000);
+        let five = Some(300_000);
+        assert_eq!(
+            recorded(hour, (hour, hour), (Some(200), Some(0))),
+            (300_000, 300_000),
+            "the upstream wrote at five minutes, so every tier the request marked lives five minutes"
+        );
+        assert_eq!(
+            recorded(hour, (None, hour), (Some(200), Some(0))),
+            (0, 300_000),
+            "a tier without a marker gets no warmth whatever the split says"
+        );
+        assert_eq!(
+            recorded(None, (five, five), (Some(0), Some(200))),
+            (300_000, 300_000),
+            "a request marked at both TTLs keeps each tier's marker, even where the deepest ones agree"
+        );
+        for writes in [(Some(200), Some(200)), (Some(200), None), (None, None)] {
+            assert_eq!(
+                recorded(hour, (hour, hour), writes),
+                (3_600_000, 3_600_000),
+                "writes {writes:?} name no single TTL, so the markers stand"
+            );
+        }
     }
 }

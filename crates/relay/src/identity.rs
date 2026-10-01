@@ -1,5 +1,9 @@
 //! Who and what a request is: the session, the agent, the owner, and the model it asks for.
 
+use std::collections::HashMap;
+use std::sync::Mutex;
+use std::time::Duration;
+
 use axum::http::HeaderMap;
 use phoebis_bus::OTHER_CLIENT;
 use phoebis_routing::{ClientClass, ConversationLookup, ConversationQuery};
@@ -17,6 +21,15 @@ const LONG_CONTEXT_SUFFIX: &str = "[1m]";
 
 /// Bound on an identifier or model name the relay repeats into logs and ledger keys.
 pub(crate) const MAX_ID_LEN: usize = 256;
+
+/// The longest the climb waits for the previous answer's affinity report to reach the map: a client that
+/// sends its next turn within milliseconds of the last chunk would otherwise be read against a map that lacks
+/// its previous answer. Five milliseconds covers a queue the task is draining and costs a backlogged router
+/// nothing more.
+pub(crate) const PENDING_REPORT_WAIT: Duration = Duration::from_millis(5);
+
+/// The entries `PendingReports` holds before an insert sweeps out the ones the watermark has passed.
+const PENDING_REPORTS_SWEEP: usize = 4_096;
 
 #[derive(Debug)]
 pub struct RequestIdentity {
@@ -125,6 +138,82 @@ pub fn climb(
             }
         }
     }
+}
+
+/// Per conversation identifier, the sequence of the newest affinity report not yet seen applied, under the key id
+/// and generation. The identifiers are `session:<id>`.
+#[derive(Default)]
+pub(crate) struct PendingReports {
+    entries: Mutex<HashMap<(String, i64, String), u64>>,
+}
+
+impl PendingReports {
+    /// Files `seq` under every identifier in `ids`, never lowering a stored sequence; past 4 096 entries an insert
+    /// first drops every entry `applied` has passed.
+    pub(crate) fn record(
+        &self,
+        key_id: &str,
+        key_generation: i64,
+        ids: &[String],
+        seq: u64,
+        applied: u64,
+    ) {
+        let mut entries = self.entries.lock().expect("pending reports lock poisoned");
+        if entries.len() >= PENDING_REPORTS_SWEEP {
+            entries.retain(|_, pending| *pending > applied);
+        }
+        for id in ids {
+            // The sequence is taken at enqueue and filed here under another lock, so a later report's record can
+            // land first; the stored maximum keeps the wait on the newest report.
+            let stored = entries
+                .entry((key_id.to_string(), key_generation, id.clone()))
+                .or_insert(seq);
+            *stored = (*stored).max(seq);
+        }
+    }
+
+    /// The identifier and sequence the request waits on: the highest entry among `ids` above `applied`, an entry
+    /// `applied` has passed removed on the way; `ids` is what `waits_on` answers for the request.
+    pub(crate) fn pending(
+        &self,
+        key_id: &str,
+        key_generation: i64,
+        ids: &[String],
+        applied: u64,
+    ) -> Option<(String, u64)> {
+        let mut entries = self.entries.lock().expect("pending reports lock poisoned");
+        let mut highest: Option<(String, u64)> = None;
+        for id in ids {
+            let entry = (key_id.to_string(), key_generation, id.clone());
+            let Some(&seq) = entries.get(&entry) else {
+                continue;
+            };
+            if seq <= applied {
+                entries.remove(&entry);
+            } else if highest.as_ref().is_none_or(|(_, top)| seq > *top) {
+                highest = Some((id.clone(), seq));
+            }
+        }
+        highest
+    }
+
+    /// Removes the entry only while it still holds `seq`.
+    pub(crate) fn remove_if(&self, key_id: &str, key_generation: i64, id: &str, seq: u64) {
+        let mut entries = self.entries.lock().expect("pending reports lock poisoned");
+        let entry = (key_id.to_string(), key_generation, id.to_string());
+        if entries.get(&entry) == Some(&seq) {
+            entries.remove(&entry);
+        }
+    }
+}
+
+/// The identifier a request's wait consults: `session:<id>` for its own session id, nothing without one.
+pub(crate) fn waits_on(identity: &RequestIdentity, message_boundaries: &[String]) -> Vec<String> {
+    identity
+        .session_id
+        .iter()
+        .map(|session_id| format!("session:{session_id}"))
+        .collect()
 }
 
 /// `claude-code/<entrypoint>` for a `claude-cli/` user agent (the token `entrypoint_of` reads, `cli` when it
@@ -414,5 +503,61 @@ mod tests {
         );
         assert_eq!(identity.forked_from, None);
         assert_eq!(identity.fork_depth, None);
+    }
+
+    #[test]
+    fn a_record_never_lowers_a_sequence_and_a_completed_wait_keeps_a_newer_report() {
+        let pending = PendingReports::default();
+        let ids = vec!["session:s1".to_string()];
+        pending.record("k", 0, &ids, 10, 0);
+        assert_eq!(
+            pending.pending("k", 0, &ids, 0),
+            Some(("session:s1".to_string(), 10))
+        );
+        // A second response of the conversation lands while the next turn waits on the first one's report.
+        pending.record("k", 0, &ids, 11, 0);
+        pending.remove_if("k", 0, "session:s1", 10);
+        assert_eq!(
+            pending.pending("k", 0, &ids, 10),
+            Some(("session:s1".to_string(), 11)),
+            "the wait on 10 completed and left the newer report for the turn after"
+        );
+        pending.record("k", 0, &ids, 9, 0);
+        assert_eq!(
+            pending.pending("k", 0, &ids, 10),
+            Some(("session:s1".to_string(), 11)),
+            "a record that lands late never lowers the stored sequence"
+        );
+        assert_eq!(pending.pending("k", 0, &ids, 11), None);
+        assert_eq!(
+            pending.pending("k", 0, &ids, 0),
+            None,
+            "the lookup removed the entry the watermark had passed"
+        );
+    }
+
+    #[test]
+    fn a_request_waits_on_its_strongest_identifier_alone() {
+        let boundaries = vec!["x".to_string(), "y".to_string()];
+        assert_eq!(
+            waits_on(&identity_of(Some("a")), &boundaries),
+            vec!["session:a".to_string()]
+        );
+        assert!(waits_on(&identity_of(None), &[]).is_empty());
+
+        let pending = PendingReports::default();
+        pending.record(
+            "k",
+            0,
+            &["session:a".to_string()],
+            5,
+            0,
+        );
+        let other_session = waits_on(&identity_of(Some("b")), &boundaries);
+        assert_eq!(
+            pending.pending("k", 0, &other_session, 0),
+            None,
+            "another session never waits on this session's report"
+        );
     }
 }

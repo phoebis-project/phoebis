@@ -5,6 +5,11 @@ license.workspace = true
 rust-version.workspace = true
 version.workspace = true
 
+[features]
+# The task's report hold, see `RouterHandle::hold_reports`. A dependent's dev-dependency, and this crate's own
+# below, turn it on for a test build, so a release build carries no way to stall reports.
+debug-hooks = []
+
 [dependencies]
 phoebis-oauth = { path = "../oauth" }
 phoebis-store = { path = "../store" }
@@ -20,6 +25,8 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 phoebis-profile = { path = "../profile" }
+# An integration test builds the library without `cfg(test)`, so the hold it reaches needs the feature on.
+phoebis-routing = { path = ".", features = ["debug-hooks"] }
 phoebis-store = { path = "../store", features = ["debug-hooks"] }
 phoebis-transport = { path = "../transport" }
 fake-upstream = { path = "../../tests/fake_upstream" }

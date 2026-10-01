@@ -3,14 +3,16 @@
 //! through a single writer so the store sees every change in the order the loop made it.
 
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
 use phoebis_oauth::{Clock, UsageSnapshot};
 use phoebis_store::{
     AccountState, CooldownRow, PinBurn, PinKey, PinRow, RekeyWrite, Store, StoreError,
 };
-use tokio::sync::{broadcast, mpsc, oneshot};
+use tokio::sync::{broadcast, mpsc, oneshot, Notify};
+use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use crate::affinity::{
@@ -328,7 +330,16 @@ enum Command {
     Reload {
         reply: oneshot::Sender<Result<(), String>>,
     },
-    Report(Report),
+    /// The sequence number an affinity report took at enqueue, `None` for every other report.
+    Report(Report, Option<u64>),
+    #[cfg(any(test, feature = "debug-hooks"))]
+    HoldReports {
+        reply: oneshot::Sender<()>,
+    },
+    #[cfg(any(test, feature = "debug-hooks"))]
+    ReleaseReports {
+        reply: oneshot::Sender<()>,
+    },
     Resolve {
         spelling: String,
         dated_id: String,
@@ -352,11 +363,32 @@ enum Command {
     },
 }
 
+/// The sequence of affinity reports: assigned at enqueue under one lock with the send, so the order of the
+/// numbers is the order of the queue; `applied` is the last one the task applied or passed over, published
+/// for the relay's bounded wait.
+#[derive(Default)]
+struct ReportSequence {
+    next: Mutex<u64>,
+    applied: AtomicU64,
+    applied_notify: Notify,
+    /// Notified when a wait registers on a sequence `applied` has not reached; read by `ReportHold::waiter`.
+    #[cfg(any(test, feature = "debug-hooks"))]
+    waiter_registered: Notify,
+}
+
+impl ReportSequence {
+    fn publish(&self, seq: u64) {
+        self.applied.store(seq, Ordering::Release);
+        self.applied_notify.notify_waiters();
+    }
+}
+
 #[derive(Clone)]
 pub struct RouterHandle {
     affinity: Arc<RwLock<AffinityMap>>,
     events: broadcast::Sender<RouterEvent>,
     in_flight: InFlight,
+    reports: Arc<ReportSequence>,
     snapshot: Arc<RwLock<Arc<RegistrySnapshot>>>,
     tx: mpsc::Sender<Command>,
 }
@@ -393,15 +425,62 @@ impl RouterHandle {
 
     /// Never waits: a report is a fact about the past, and a relay holding a client stream must not block on
     /// the task's queue. A full queue is logged and the report dropped, which delays a state change by one
-    /// request rather than stalling one.
-    pub fn report(&self, report: Report) {
-        match self.tx.try_send(Command::Report(report)) {
-            Ok(()) => {}
+    /// request rather than stalling one. For `Report::Affinity` the sequence number the report took at enqueue,
+    /// `None` for every other report and for a report the full or closed queue dropped.
+    pub fn report(&self, report: Report) -> Option<u64> {
+        if !matches!(report, Report::Affinity(_)) {
+            Self::sent(self.tx.try_send(Command::Report(report, None)));
+            return None;
+        }
+        // Held across the send, so a later number never enters the queue ahead of an earlier one and the
+        // watermark the task publishes in queue order covers every number below it.
+        let mut next = self
+            .reports
+            .next
+            .lock()
+            .expect("report sequence lock poisoned");
+        let seq = *next + 1;
+        Self::sent(self.tx.try_send(Command::Report(report, Some(seq)))).then(|| {
+            *next = seq;
+            seq
+        })
+    }
+
+    fn sent(result: Result<(), mpsc::error::TrySendError<Command>>) -> bool {
+        match result {
+            Ok(()) => true,
             Err(mpsc::error::TrySendError::Full(_)) => {
-                tracing::warn!("the router task's queue is full, a report was dropped")
+                tracing::warn!("the router task's queue is full, a report was dropped");
+                false
             }
             Err(mpsc::error::TrySendError::Closed(_)) => {
-                tracing::warn!("the router task has stopped, a report was dropped")
+                tracing::warn!("the router task has stopped, a report was dropped");
+                false
+            }
+        }
+    }
+
+    /// The sequence of the last affinity report the task applied.
+    pub fn applied_report(&self) -> u64 {
+        self.reports.applied.load(Ordering::Acquire)
+    }
+
+    /// Resolves true once the task has applied the report numbered `seq`, false at `deadline`; registered
+    /// before the sequence is read, as `InFlight::wait_for_slot` registers its waiter.
+    pub async fn wait_for_report(&self, seq: u64, deadline: Instant) -> bool {
+        loop {
+            // Registered before the watermark is read, so a report applied between the read and the wait
+            // still wakes this waiter.
+            let applied = self.reports.applied_notify.notified();
+            tokio::pin!(applied);
+            applied.as_mut().enable();
+            if self.applied_report() >= seq {
+                return true;
+            }
+            #[cfg(any(test, feature = "debug-hooks"))]
+            self.reports.waiter_registered.notify_one();
+            if tokio::time::timeout_at(deadline, applied).await.is_err() {
+                return self.applied_report() >= seq;
             }
         }
     }
@@ -507,6 +586,44 @@ impl RouterHandle {
     }
 }
 
+/// Compiled only under the `debug-hooks` feature, which a dependent's dev-dependency turns on, so a release build
+/// carries no way to stall the task's reports.
+#[cfg(any(test, feature = "debug-hooks"))]
+impl RouterHandle {
+    /// Answers once the task parks every affinity report it receives, unapplied and with the watermark behind
+    /// it, until the hold is released; every other command is served as usual.
+    pub async fn hold_reports(&self) -> ReportHold {
+        self.ask(|reply| Command::HoldReports { reply })
+            .await
+            .expect("the router task is running");
+        ReportHold {
+            handle: self.clone(),
+        }
+    }
+}
+
+/// The task's affinity reports parked from `RouterHandle::hold_reports` until `release`.
+#[cfg(any(test, feature = "debug-hooks"))]
+pub struct ReportHold {
+    handle: RouterHandle,
+}
+
+#[cfg(any(test, feature = "debug-hooks"))]
+impl ReportHold {
+    /// Resolves once a `wait_for_report` has registered on a sequence the watermark has not reached.
+    pub async fn waiter(&self) {
+        self.handle.reports.waiter_registered.notified().await;
+    }
+
+    /// Applies the parked reports in their order, publishes the watermark, and answers once that is done.
+    pub async fn release(self) {
+        self.handle
+            .ask(|reply| Command::ReleaseReports { reply })
+            .await
+            .expect("the router task is running");
+    }
+}
+
 impl ConversationLookup for RouterHandle {
     /// The snapshot's own incarnation reading, so a stale conversation never outlives the account it named.
     fn conversation(&self, query: &ConversationQuery<'_>) -> Option<ConversationMatch> {
@@ -535,6 +652,10 @@ struct Task {
     /// The account a pin was invalidated from, why, and when. The next select for that same key
     /// within `MIGRATION_WINDOW_MS` reports a migration rather than a fresh pin; older entries go on purge.
     invalidated: HashMap<PinKey, (String, &'static str, i64)>,
+    /// The affinity reports a test's hold keeps unapplied, in queue order; `None` while no hold is on.
+    #[cfg(any(test, feature = "debug-hooks"))]
+    parked: Option<Vec<(Report, u64)>>,
+    reports: Arc<ReportSequence>,
     revision: u64,
     snapshot: Arc<RwLock<Arc<RegistrySnapshot>>>,
     state: RoutingState,
@@ -576,10 +697,12 @@ pub fn spawn(
     let (writer, mut writes) = mpsc::unbounded_channel::<Vec<StateWrite>>();
     let (done_tx, done_rx) = oneshot::channel();
     let (events, _) = broadcast::channel(EVENTS);
+    let reports = Arc::new(ReportSequence::default());
     let handle = RouterHandle {
         affinity,
         events: events.clone(),
         in_flight,
+        reports: reports.clone(),
         snapshot: snapshot.clone(),
         tx: tx.clone(),
     };
@@ -631,6 +754,9 @@ pub fn spawn(
         config,
         events,
         invalidated: HashMap::new(),
+        #[cfg(any(test, feature = "debug-hooks"))]
+        parked: None,
+        reports,
         revision: 1,
         snapshot,
         state,
@@ -649,9 +775,12 @@ pub fn spawn(
                     Some(Command::Shutdown { reply }) => {
                         // Nothing queued behind the shutdown is served: the handles that sent it are done.
                         rx.close();
+                        // A held report lands with the drain like any other, ahead of the ones queued after it.
+                        #[cfg(any(test, feature = "debug-hooks"))]
+                        task.release_reports();
                         while let Some(command) = rx.recv().await {
                             match command {
-                                Command::Report(report) => task.report(report),
+                                Command::Report(report, seq) => task.numbered_report(report, seq),
                                 // A resolution is a report with an answer: it lands with the drain rather than
                                 // leaving the catalog cache to publish the spelling again after a restart.
                                 Command::Resolve { spelling, dated_id, at, reply } => {
@@ -985,7 +1114,17 @@ impl Task {
                     ticket,
                 });
             }
-            Command::Report(report) => self.report(report),
+            Command::Report(report, seq) => self.numbered_report(report, seq),
+            #[cfg(any(test, feature = "debug-hooks"))]
+            Command::HoldReports { reply } => {
+                self.parked.get_or_insert_with(Vec::new);
+                let _ = reply.send(());
+            }
+            #[cfg(any(test, feature = "debug-hooks"))]
+            Command::ReleaseReports { reply } => {
+                self.release_reports();
+                let _ = reply.send(());
+            }
             Command::Resolve {
                 spelling,
                 dated_id,
@@ -1118,6 +1257,28 @@ impl Task {
                     });
                 }
             }
+        }
+    }
+
+    /// Applies the report, then for an affinity report publishes its number: a report `moved_past` passes over
+    /// is drained the same, so a waiter on it never waits out its bound.
+    fn numbered_report(&mut self, report: Report, seq: Option<u64>) {
+        #[cfg(any(test, feature = "debug-hooks"))]
+        if let (Some(parked), Some(seq)) = (self.parked.as_mut(), seq) {
+            parked.push((report, seq));
+            return;
+        }
+        self.report(report);
+        if let Some(seq) = seq {
+            self.reports.publish(seq);
+        }
+    }
+
+    #[cfg(any(test, feature = "debug-hooks"))]
+    fn release_reports(&mut self) {
+        for (report, seq) in self.parked.take().unwrap_or_default() {
+            self.report(report);
+            self.reports.publish(seq);
         }
     }
 

@@ -223,10 +223,12 @@ whose `safeguards` member the router cannot cut under an off setting (spelled wi
 refused `400` with the error code `body_shape` before anything reaches the upstream.
 
 A conversation is identified by its session header: the session id the client sends names it.
-A key's `affinity_source` fixes one of these rungs instead of walking the whole
-ladder, and a request that does not fit a fixed rung has no identity and no pin. A new session id whose messages
-continue another conversation of the same key keeps its own identity, and is recorded as a fork of that
-conversation at the depth where the two part.
+A turn that follows its own conversation's previous answer within milliseconds waits on its session id,
+at most five milliseconds, for that answer's report to reach the map.
+A key's `affinity_source` fixes one of these rungs instead of walking the whole ladder, and a
+request that does not fit a fixed rung has no identity and no pin. A new session id whose messages continue another
+conversation of the same key keeps its own identity, and is recorded as a fork of that conversation at the depth where
+the two part.
 
 ## Model rules
 
@@ -277,20 +279,22 @@ different accounts. The identity a pin is held under is the session header [Clie
 A fresh request with no live pin lands where its prefix is already warm. The deepest message boundary any account still
 holds wins first, for a main conversation and a subagent alike. Both rungs read entries of the request's own cache lane
 alone: the model, the speed, the thinking configuration and, on a model without the per-turn effort form, the effort;
-the upstream shares no cached prefix across those, so an entry of another lane is no warm prefix. Failing that, the
-deepest static boundary places a subagent under `by_cohort` or a main conversation under `by_warm_prefix`, when the
-shared prefix, sized by the relay's estimate from the request's bytes, is at least `min_shared_prefix_tokens`, the
-request carries or receives a cache marker, and the account is not at its cap, at or above the ceiling
-(`select_below_utilization`), at or above the migrate threshold less its 0.05 band (`migrate_above_utilization`), under
-the Pace floor, or winding down. A cooling account never reaches either rung, since the eligible set excludes it; a
-spent account is in the eligible set, and both rungs refuse it through the allowance check. A subagent under `with_main`
-lands its first request on its parent agent's pin in place of the static walk, and one under `by_strategy` skips the
-static walk; every case that finds no live match lands by the strategy. A held request of a subagent cohort waits where
-its cohort already is rather than on the strategy's own pick; a session already on an account, under any of its agents,
-is never held while that account can still serve. A token count is never placed and never held: it is bound to no cap
-and occupies no slot, so its pin or the strategy decides it. It creates no pin, since it touches no cache: a count with
-a pin follows it past the cap and the move rules, and one without lands by the strategy and leaves the agent's next
-message to be placed under the cap.
+the upstream shares no cached prefix across those, so an entry of another lane is no warm prefix. An entry's warmth
+lasts the marker's TTL on its tier; when every marker of the request carried one TTL and the response reports its cache
+writes at the other alone, the reported TTL is the lifetime of every tier the request marked, and a request with markers
+at both TTLs keeps each marker's. Failing that, the deepest static boundary places a subagent under `by_cohort` or a
+main conversation under `by_warm_prefix`, when the shared prefix, sized by the relay's estimate from the request's
+bytes, is at least `min_shared_prefix_tokens`, the request carries or receives a cache marker, and the account is not at
+its cap, at or above the ceiling (`select_below_utilization`), at or above the migrate threshold less its 0.05 band
+(`migrate_above_utilization`), under the Pace floor, or winding down. A cooling account never reaches either rung, since
+the eligible set excludes it; a spent account is in the eligible set, and both rungs refuse it through the allowance
+check. A subagent under `with_main` lands its first request on its parent agent's pin in place of the static walk, and
+one under `by_strategy` skips the static walk; every case that finds no live match lands by the strategy. A held request
+of a subagent cohort waits where its cohort already is rather than on the strategy's own pick; a session already on an
+account, under any of its agents, is never held while that account can still serve. A token count is never placed and
+never held: it is bound to no cap and occupies no slot, so its pin or the strategy decides it. It creates no pin, since
+it touches no cache: a count with a pin follows it past the cap and the move rules, and one without lands by the
+strategy and leaves the agent's next message to be placed under the cap.
 
 The eligible set starts from every account that can serve the canonical model: enabled, paired or keyed, not
 `reauth_required` or `funding_required`, off cooldown, and not already tried by this request. A request sent fast is

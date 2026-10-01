@@ -200,6 +200,9 @@ fn affinity_report(
         cache_touched: false,
         prefix_tokens: 0,
         now,
+        cache_write_5m_tokens: None,
+        cache_write_1h_tokens: None,
+        uniform_ttl_ms: None,
     }
 }
 
@@ -4037,6 +4040,57 @@ async fn a_shutdown_persists_a_refreshed_entrys_time() {
     assert_eq!(
         row.written_at, 2_000,
         "the shutdown drained the refreshed row"
+    );
+}
+
+#[tokio::test]
+async fn an_affinity_report_takes_a_sequence_at_enqueue_and_the_wait_sees_it_applied() {
+    let store = seeded(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
+    assert_eq!(
+        handle.report(Report::Affinity(affinity_report(&handle, "a", 1_000))),
+        Some(1)
+    );
+    assert_eq!(
+        handle.report(Report::Affinity(affinity_report(&handle, "a", 1_000))),
+        Some(2)
+    );
+    assert_eq!(
+        handle.report(a_million_input("a", 1_000)),
+        None,
+        "only an affinity report takes a number"
+    );
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
+    assert!(handle.wait_for_report(2, deadline).await);
+    assert_eq!(handle.applied_report(), 2);
+
+    let hold = handle.hold_reports().await;
+    assert_eq!(
+        handle.report(Report::Affinity(affinity_report(&handle, "a", 2_000))),
+        Some(3)
+    );
+    // A query queues behind the report, so its answer proves the task reached the report and parked it.
+    handle.pins().await.unwrap();
+    assert_eq!(
+        handle.applied_report(),
+        2,
+        "the held report stays unapplied while the task serves the commands behind it"
+    );
+    hold.release().await;
+    assert_eq!(handle.applied_report(), 3);
+
+    let started = tokio::time::Instant::now();
+    assert!(
+        !handle
+            .wait_for_report(9, started + Duration::from_millis(5))
+            .await,
+        "a report never enqueued is never applied"
+    );
+    let waited = started.elapsed();
+    assert!(
+        (Duration::from_millis(5)..Duration::from_millis(50)).contains(&waited),
+        "the wait ends at its bound: {waited:?}"
     );
 }
 

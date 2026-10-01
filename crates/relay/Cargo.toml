@@ -37,6 +37,8 @@ url = { workspace = true }
 boring = { workspace = true }
 phoebis-bus = { path = "../bus" }
 phoebis-ledger = { path = "../ledger" }
+# The router task's report hold, which the conversation climb's wait tests park a report behind.
+phoebis-routing = { path = "../routing", features = ["debug-hooks"] }
 phoebis-store = { path = "../store", features = ["debug-hooks"] }
 fake-upstream = { path = "../../tests/fake_upstream" }
 flate2 = { workspace = true }

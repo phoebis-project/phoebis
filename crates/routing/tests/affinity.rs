@@ -31,6 +31,9 @@ fn report(key_id: &str, account_id: &str, message_boundaries: &[&str], now: i64)
         cache_touched: false,
         prefix_tokens: 0,
         now,
+        cache_write_5m_tokens: None,
+        cache_write_1h_tokens: None,
+        uniform_ttl_ms: None,
     }
 }
 

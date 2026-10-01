@@ -1783,6 +1783,9 @@ mod tests {
             cache_touched: false,
             prefix_tokens: 0,
             now: 1_000,
+            cache_write_5m_tokens: None,
+            cache_write_1h_tokens: None,
+            uniform_ttl_ms: None,
         }
     }
 

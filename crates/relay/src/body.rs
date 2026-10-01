@@ -433,14 +433,27 @@ pub fn tier_ttls(body: &[u8]) -> (Option<i64>, Option<i64>) {
         }
     }
     let static_marker = static_marker.map(|(_, span)| span);
-    let ttl_ms = |span: Option<(usize, usize)>| {
-        span.map(|(start, end)| {
-            serde_json::from_slice::<serde_json::Value>(&body[start..end])
-                .ok()
-                .map_or(300_000, |marker| crate::facts::marker_ttl_ms(&marker))
-        })
-    };
-    (ttl_ms(static_marker), ttl_ms(message_marker))
+    (
+        static_marker.map(|span| span_ttl_ms(body, span)),
+        message_marker.map(|span| span_ttl_ms(body, span)),
+    )
+}
+
+/// The TTL every `cache_control` marker of an edited body carries, read off every marker `cache_control_spans`
+/// lists; `None` for a body without a marker or with markers at both TTLs.
+pub fn uniform_ttl(body: &[u8]) -> Option<i64> {
+    // Every marker rather than the deepest per tier: two tiers whose deepest markers agree can still hold a
+    // marker at the other TTL further up, and the cache writes that prefix at that TTL.
+    let spans = phoebis_cch::cache_control_spans(body).ok()?;
+    let mut ttls = spans.into_iter().map(|span| span_ttl_ms(body, span));
+    let first = ttls.next()?;
+    ttls.all(|ttl| ttl == first).then_some(first)
+}
+
+fn span_ttl_ms(body: &[u8], (start, end): (usize, usize)) -> i64 {
+    serde_json::from_slice::<serde_json::Value>(&body[start..end])
+        .ok()
+        .map_or(300_000, |marker| crate::facts::marker_ttl_ms(&marker))
 }
 
 /// Before `stream` when the body has one, so the member lands where the measured client puts it; a body
@@ -977,6 +990,20 @@ mod tests {
         assert_eq!(tier_ttls(top_level), (Some(300_000), Some(300_000)));
         assert_eq!(tier_ttls(br#"{"messages":[]}"#), (None, None));
         assert_eq!(tier_ttls(b"not json"), (None, None));
+    }
+
+    #[test]
+    fn uniform_ttl_reads_every_marker_not_the_deepest_per_tier() {
+        let mixed = br#"{"tools":[{"name":"t","cache_control":{"type":"ephemeral","ttl":"1h"}}],"system":[{"type":"text","text":"a","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":[{"type":"text","text":"x","cache_control":{"type":"ephemeral"}}]}]}"#;
+        assert_eq!(tier_ttls(mixed), (Some(300_000), Some(300_000)));
+        assert_eq!(
+            uniform_ttl(mixed),
+            None,
+            "the hour marker in the tools is above the deepest static marker and still makes the request mixed"
+        );
+        let hour = br#"{"tools":[{"name":"t","cache_control":{"type":"ephemeral","ttl":"1h"}}],"system":[{"type":"text","text":"a","cache_control":{"type":"ephemeral","ttl":"1h"}}],"messages":[{"role":"user","content":[{"type":"text","text":"x","cache_control":{"type":"ephemeral","ttl":"1h"}}]}]}"#;
+        assert_eq!(uniform_ttl(hour), Some(3_600_000));
+        assert_eq!(uniform_ttl(br#"{"messages":[]}"#), None);
     }
 
     #[test]

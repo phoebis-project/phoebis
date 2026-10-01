@@ -297,6 +297,9 @@ async fn every_route_is_captured_and_holds_its_shape() {
             cache_touched: true,
             prefix_tokens: 500,
             now,
+            cache_write_5m_tokens: None,
+            cache_write_1h_tokens: None,
+            uniform_ttl_ms: None,
         }));
     let placed = parts
         .router

@@ -41,7 +41,7 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
 use crate::billing::{restorable_version, Restore};
-use crate::body::tier_ttls;
+use crate::body::{tier_ttls, uniform_ttl};
 use crate::casing::OriginalHead;
 use crate::catalog::CatalogService;
 use crate::chains::Chains;
@@ -58,7 +58,9 @@ use crate::exhaustion::exhaustion_response;
 use crate::facts::{BodyFacts, ClientHints};
 use crate::headers::{outbound_headers, CredentialKind};
 use crate::hold::{hold, Commit, Held, Inspect, INSPECT_BUFFER};
-use crate::identity::{client_class, climb, identify, RequestIdentity};
+use crate::identity::{
+    client_class, climb, identify, waits_on, PendingReports, RequestIdentity, PENDING_REPORT_WAIT,
+};
 use crate::memory::{
     uuid_v4, Injected, MemoryKey, Previous, SessionMemory, MEMORY_CAP, MEMORY_IDLE_MS,
 };
@@ -192,6 +194,9 @@ pub struct Relay {
     pub(crate) limits: Limits,
     manager: Arc<CredentialManager>,
     memory: Arc<SessionMemory>,
+    /// The sequence of the affinity report each conversation's last answer enqueued, which the next turn's
+    /// climb waits on.
+    pending_reports: Arc<PendingReports>,
     pub(crate) pool: Arc<Pool>,
     resolver: Resolver,
     router: RouterHandle,
@@ -220,6 +225,7 @@ impl Relay {
             limits,
             manager,
             memory: Arc::new(SessionMemory::new(MEMORY_CAP, MEMORY_IDLE_MS)),
+            pending_reports: Arc::new(PendingReports::default()),
             pool,
             resolver,
             router,
@@ -1049,15 +1055,26 @@ impl Relay {
         // The resolved name is substituted before anything downstream reads it, so the observed event, the
         // routing decision, and the ledger agree.
         identity.canonical_model = self.catalog.canonical_for(&identity.folded_model).await;
-        climb(
-            &mut identity,
-            &key,
-            facts
-                .chains
-                .as_ref()
-                .map_or(&[][..], |c| c.message_boundaries.as_slice()),
-            &self.router,
-        );
+        // The previous answer's report may still sit in the router task's queue when the client's next turn
+        // arrives within milliseconds; the climb reads the map directly, so it waits, bounded, for that report
+        // to land.
+        let boundaries = facts
+            .chains
+            .as_ref()
+            .map_or(&[][..], |c| c.message_boundaries.as_slice());
+        let ids = waits_on(&identity, boundaries);
+        let applied = self.router.applied_report();
+        if let Some((id, seq)) =
+            self.pending_reports
+                .pending(&key.id, key.created_at, &ids, applied)
+        {
+            let deadline = tokio::time::Instant::now() + PENDING_REPORT_WAIT;
+            if self.router.wait_for_report(seq, deadline).await {
+                self.pending_reports
+                    .remove_if(&key.id, key.created_at, &id, seq);
+            }
+        }
+        climb(&mut identity, &key, boundaries, &self.router);
         trace
             .observed(
                 Some(&key),
@@ -1810,6 +1827,7 @@ impl Relay {
                 ticket,
                 tier_ttls: tier_ttls(&edited),
                 trace: admitted.trace,
+                uniform_ttl_ms: uniform_ttl(&edited),
             };
             let request = RawRequest {
                 method: "POST",
@@ -2541,6 +2559,8 @@ impl Relay {
         let root = ctx.identity.session_id.clone();
         Some(AffinityFacts {
             router: self.router.clone(),
+            pending: self.pending_reports.clone(),
+            session_id: ctx.identity.session_id.clone(),
             account_id: ctx.account.id.clone(),
             incarnation: ctx.account.incarnation,
             key_id: ctx.key.id.clone(),
@@ -2563,6 +2583,7 @@ impl Relay {
             request_id: head.get("request-id").map(str::to_string),
             static_ttl_ms: ctx.tier_ttls.0,
             message_ttl_ms: ctx.tier_ttls.1,
+            uniform_ttl_ms: ctx.uniform_ttl_ms,
         })
     }
 
@@ -3150,6 +3171,8 @@ struct Responding<'a> {
     /// `tier_ttls` of the body as this pass sends it upstream, after the TTL rewrite.
     tier_ttls: (Option<i64>, Option<i64>),
     trace: &'a Trace,
+    /// `uniform_ttl` of the same body.
+    uniform_ttl_ms: Option<i64>,
 }
 
 impl Responding<'_> {

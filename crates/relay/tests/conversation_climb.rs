@@ -52,6 +52,26 @@ fn ok(id: &str, request_id: Option<&str>, cache: bool) -> Respond {
     }
 }
 
+/// A 200 answer naming `id` whose usage reports its cache writes in the split shape alone, five minutes and one
+/// hour as given.
+fn ok_split(id: &str, five_minute: u64, one_hour: u64) -> Respond {
+    let usage = json!({
+        "input_tokens": 10,
+        "output_tokens": 5,
+        "cache_creation": {
+            "ephemeral_5m_input_tokens": five_minute,
+            "ephemeral_1h_input_tokens": one_hour,
+        },
+    });
+    Respond::Json {
+        status: 200,
+        headers: vec![],
+        body: json!({"id": id, "type": "message", "content": [], "usage": usage})
+            .to_string()
+            .into_bytes(),
+    }
+}
+
 /// A generic 400 that names no injected field: it classifies as a straight commit, forwarded as it came.
 fn a_400() -> Respond {
     Respond::Json {
@@ -147,6 +167,68 @@ async fn a_one_hour_static_tier_and_a_five_minute_tail_record_both_lifetimes() {
             "the last message's marker with no ttl member is the five-minute default"
         );
     }
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_one_hour_marker_answered_with_a_five_minute_write_records_five_minutes() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: ok_split("msg_1", 200, 0),
+    }])
+    .await;
+    let (h, mut sub) = setup(&up, &one()).await;
+    let mut value = body(vec![user("hi"), assistant("hello")]);
+    value["messages"][1]["content"] = json!([{"type": "text", "text": "hello", "cache_control": {"type": "ephemeral", "ttl": "1h"}}]);
+    let tail_hash = phoebis_relay::Chains::read(&value)
+        .unwrap()
+        .tail_hash()
+        .unwrap()
+        .to_string();
+    send(&h, req(&value)).await;
+    identified(&mut sub).await;
+    settle(&h).await;
+    let map = h.router.affinity();
+    assert_eq!(
+        map.read().unwrap().entry(MODEL, &tail_hash).unwrap().ttl_ms,
+        300_000,
+        "the upstream wrote at five minutes, whatever the marker asked"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_mixed_marker_request_with_equal_deepest_ttls_keeps_its_markers_lifetimes() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: ok_split("msg_1", 0, 200),
+    }])
+    .await;
+    let (h, mut sub) = setup(&up, &one()).await;
+    let mut value = body(vec![user("hi"), assistant("hello")]);
+    value["tools"] = json!([{
+        "name": "t",
+        "input_schema": {"type": "object"},
+        "cache_control": {"type": "ephemeral", "ttl": "1h"},
+    }]);
+    value["system"] =
+        json!([{"type": "text", "text": "be helpful", "cache_control": {"type": "ephemeral"}}]);
+    value["messages"][1]["content"] =
+        json!([{"type": "text", "text": "hello", "cache_control": {"type": "ephemeral"}}]);
+    let tail_hash = phoebis_relay::Chains::read(&value)
+        .unwrap()
+        .tail_hash()
+        .unwrap()
+        .to_string();
+    send(&h, req(&value)).await;
+    identified(&mut sub).await;
+    settle(&h).await;
+    let map = h.router.affinity();
+    assert_eq!(
+        map.read().unwrap().entry(MODEL, &tail_hash).unwrap().ttl_ms,
+        300_000,
+        "a request marked at both TTLs keeps each tier's marker"
+    );
     up.shutdown().await;
 }
 
