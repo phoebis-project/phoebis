@@ -2,6 +2,7 @@ import type {
   AccountRollup, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, CacheMissReason, CostSplit, LatencyHistograms, PinMigrationReason, PlacementRow, PlanModelCells, RequestKind, RequestLog, RewritePoint,
   WastedProbeReason,
 } from '@/api/types';
+import { bucketShare, tierFactors } from '@/lib/analytics';
 import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons, missCount } from '@/lib/cache';
 import { emptyCounts } from '@/lib/counts';
 import { earlierHolderLabel, placementHit } from '@/lib/format';
@@ -256,11 +257,10 @@ function cellsOf(window: Window, model: string): PlanModelCells | undefined {
   return id === undefined ? undefined : rows[id];
 }
 
-/** The mock's tier spellings as the cost table keys its tiers; the mock's `pro_5x` is the table's Pro row. Null for a
- *  tier the table lacks or a factor it leaves unmeasured. */
+/** A tier's factor on `window`, matched as the console matches it; null for a tier the table lacks or a factor it
+ *  leaves unmeasured. */
 function tierFactorOf(tier: string | undefined, window: Window): number | null {
-  if (tier === undefined) return null;
-  const row = TABLES.cost.tiers[`default_claude_${tier === 'pro_5x' ? 'pro' : tier}`];
+  const row = tier === undefined ? undefined : tierFactors(TABLES.cost.tiers, tier);
   if (row === undefined) return null;
   return window === 'five_hour' ? row.fiveHour : row.sevenDay;
 }
@@ -305,15 +305,16 @@ function sharesOf(r: HourlyRollup, tier: string | undefined): Record<Window, num
   return { five_hour: one('five_hour'), seven_day: one('seven_day') };
 }
 
+/** A bucket's sums, each window's shares kept per row so one unpriced row nulls the window, as the route reads it. */
 interface BurnSum {
   cached: number;
-  fiveHour: number | null;
-  sevenDay: number | null;
+  fiveHour: (number | null)[];
+  sevenDay: (number | null)[];
   tokens: number;
   uncached: number;
   usd: number;
 }
-const emptyBurn = (): BurnSum => ({ cached: 0, fiveHour: null, sevenDay: null, tokens: 0, uncached: 0, usd: 0 });
+const emptyBurn = (): BurnSum => ({ cached: 0, fiveHour: [], sevenDay: [], tokens: 0, uncached: 0, usd: 0 });
 
 /** How many sessions the session grouping keeps, the route's cut. */
 const BURN_SESSIONS = 20;
@@ -344,9 +345,15 @@ export function burnOf(rows: HourlyRollup[], range: Range, groupBy: BurnGroup): 
     s.uncached += r.tokens.uncachedInput;
     s.usd += oauth && !fast ? 0 : r.costUsd;
     if (!oauth) continue;
+    if (fast) {
+      // The zero rests on the tier alone, as the route reads a fast row, and never nulls a bucket.
+      if (tierFactorOf(tiers.get(r.accountId), 'five_hour') !== null) s.fiveHour.push(0);
+      if (tierFactorOf(tiers.get(r.accountId), 'seven_day') !== null) s.sevenDay.push(0);
+      continue;
+    }
     const shares = sharesOf(r, tiers.get(r.accountId));
-    if (shares.five_hour !== null) s.fiveHour = (s.fiveHour ?? 0) + (fast ? 0 : shares.five_hour);
-    if (shares.seven_day !== null) s.sevenDay = (s.sevenDay ?? 0) + (fast ? 0 : shares.seven_day);
+    s.fiveHour.push(shares.five_hour);
+    s.sevenDay.push(shares.seven_day);
   }
   const tokensOf = (group: string) => [...(sums.get(group)?.values() ?? [])].reduce((n, s) => n + s.cached + s.uncached, 0);
   let groups = [...sums.keys()].sort();
@@ -360,9 +367,9 @@ export function burnOf(rows: HourlyRollup[], range: Range, groupBy: BurnGroup): 
       return {
         at: iso(at),
         cachedTokens: Math.round(s.cached),
-        fiveHourShare: byUpstream ? s.fiveHour : null,
+        fiveHourShare: byUpstream ? bucketShare(s.fiveHour) : null,
         group,
-        sevenDayShare: byUpstream ? s.sevenDay : null,
+        sevenDayShare: byUpstream ? bucketShare(s.sevenDay) : null,
         tokens: Math.round(s.tokens),
         uncachedTokens: Math.round(s.uncached),
         unit: kind === undefined ? null : kind === 'oauth' ? 'window_share' : 'usd',

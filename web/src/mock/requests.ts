@@ -51,7 +51,6 @@ export const LANES: Lane[] = [
     models: [
       { value: 'claude-fable-5-1', weight: 8 },
       { value: 'claude-sonnet-5-5', weight: 5 },
-      { value: 'claude-sonnet-5', weight: 1 },
       { value: 'claude-opus-5-5', weight: 1.5 },
       { value: 'claude-haiku-4-5-20251001', weight: 2 },
     ],
@@ -62,7 +61,6 @@ export const LANES: Lane[] = [
     accountIds: ['business', 'personal', 'mail'],
     models: [
       { value: 'claude-sonnet-5-5', weight: 6 },
-      { value: 'claude-sonnet-5', weight: 1 },
       { value: 'claude-haiku-4-5-20251001', weight: 3 },
     ],
   },
@@ -76,6 +74,13 @@ export const LANES: Lane[] = [
     ],
   },
 ];
+
+/**
+ * The model an upstream serves a drawn request on. `mail` carries the story's unmeasured traffic alone: it serves
+ * Sonnet 5, whose cells the cost table leaves `null`, whatever the lane drew, so its buckets read no share while the
+ * other subscription upstreams' buckets stay priced.
+ */
+const modelOn = (accountId: string, drawn: string) => (accountId === 'mail' ? 'claude-sonnet-5' : drawn);
 
 /** Probes exist only where the pool keeps caches warm and the key has not opted out, and so does anything kept warm by one. */
 export function warmsCaches(keyId: string, poolId: string): boolean {
@@ -257,11 +262,12 @@ function buildRequests(): RequestLog[] {
     const hourOfDay = new Date(atMs).getHours();
     if (hourOfDay >= 1 && hourOfDay <= 6 && rng.chance(0.65)) continue;
     const kind = rng.weighted<RequestKind>(warmsCaches(lane.keyId, lane.poolId) ? WARMED_KINDS : TRAFFIC_KINDS);
-    const model = rng.weighted(lane.models);
+    const drawn = rng.weighted(lane.models);
     const finalStatus = kind === 'probe' ? (rng.chance(0.97) ? 200 : 502) : rng.weighted([{ value: 200, weight: 88 }, { value: 429, weight: 5 }, { value: 529, weight: 3 }, { value: 502, weight: 2 }]);
     const attemptsWanted = finalStatus === 200 ? (lane.poolId === 'all' && rng.chance(0.14) ? rng.int(2, 3) : 1) : rng.int(1, 3);
     const tried = buildAttempts(lane, atMs, finalStatus, attemptsWanted);
     const head = tried[tried.length - 1];
+    const model = modelOn(head.accountId, drawn);
     const usage = finalStatus === 200 ? usageFor(model, kind) : { input: 0, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0, output: 0, ...NO_ANSWER_FACTS };
     const diagnosis = diagnosed(tried, kind);
     const refused = refusalOwed && lane.keyId === 'laptop' && kind === 'inference' && finalStatus === 200;
@@ -837,8 +843,9 @@ function historicalRollups(): HourlyRollup[] {
       // would round the morning to nothing and lose the pair of key groups.
       const n = Math.max(earlierHolder && daylight === 1 ? 1 : 0, Math.round(volume * laneWeight * h.float(3, 9)));
       if (n === 0) continue;
-      const model = h.weighted(lane.models);
+      const drawn = h.weighted(lane.models);
       const accountId = h.pick(lane.accountIds);
+      const model = modelOn(accountId, drawn);
       const sessionId = h.pick(SESSION_IDS);
       const ok = Math.max(0, n - (h.chance(0.2) ? h.int(1, 2) : 0));
       const err = n - ok;

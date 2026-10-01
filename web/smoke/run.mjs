@@ -501,7 +501,7 @@ results.push({
   missing: [m.text().includes('Add upstream') ? 'has Add upstream' : 'no Add upstream', m.container.querySelector('.search input')?.getAttribute('placeholder') ?? 'no search input'],
 });
 results.push({ name: 'nav calls the page Upstreams', ok: [...m.container.querySelectorAll('.nav__link')].some((a) => a.textContent?.trim() === 'Upstreams') && !m.text().includes('Accounts'), missing: [...m.container.querySelectorAll('.nav__link')].map((a) => a.textContent?.trim() ?? '') });
-expect('/upstreams (redirect to first)', m.text(), ['business@example.com', 'Identity', 'OAuth login', 'Max since', 'max_20x', 'Billing type', 'Organization', 'Renewal date is not reported by the provider', 'Usage', 'Fable', '7-day trend', 'Pools', 'priority 0', 'Credential', 'Requests', 'Re-pair', 'Pause', 'Disconnect', 'Delete upstream', 'Extra usage this month', 'Add upstream']);
+expect('/upstreams (redirect to first)', m.text(), ['business@example.com', 'Identity', 'OAuth login', 'Max since', 'default_claude_max_20x', 'Billing type', 'Organization', 'Renewal date is not reported by the provider', 'Usage', 'Fable', '7-day trend', 'Pools', 'priority 0', 'Credential', 'Requests', 'Re-pair', 'Pause', 'Disconnect', 'Delete upstream', 'Extra usage this month', 'Add upstream']);
 await emailLines('/upstreams each row reads its email under the name, and draws no line without one', [...m.container.querySelectorAll('a.account-row')].map((r) => [idOf(r), r.querySelector('.account-row__sub')?.textContent ?? null]));
 await emailLines('/upstreams/business the head reads the email under the name', [['business', m.container.querySelector('.detail__ident > .detail__sub.mono')?.textContent ?? null]]);
 {
@@ -1057,7 +1057,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
   await m.settle(300);
   const dlg = m.container.querySelector('dialog[open]');
   const t = dlg?.textContent ?? '';
-  expect('/pools edit dialog prefilled', t, ['Edit pool all', 'Name', 'Status', 'Strategy', 'Session affinity', 'How long a session stays on its upstream after its last request; off keeps no pins, and a custom value is at least 60 seconds.', 'off', '5m', '10m', '1h', '4h', 'custom', 'Migrate above utilization', 'Prefer plan quota:', 'move sessions to a sibling with plan quota when this upstream starts billing extra usage', 'Allow:', 'ignore extra usage', 'Never:', 'treat an upstream in extra usage as unavailable until its window resets', 'Keep prompt caches warm', 'Daily probe cost cap ($)', 'Per UTC day, for probes paid in dollars: on API-key upstreams, on subscription upstreams in overage, and on models the plan table lacks. Plan-funded probes do not count here.', 'Cost reference', 'Probe tuning', 'Members', 'Priority', 'Keys', 'Create key', 'desktop', 'laptop', 'phoebis-8f2a', 'active', "A key reaches only this pool's members. Create key, Move to and Revoke apply at once, without Save pool; rotation and expiry are on the API keys page", 'Save pool', 'Model rules', 'Allow', 'Deny', 'Add rule', 'written with a trailing *']);
+  expect('/pools edit dialog prefilled', t, ['Edit pool all', 'Name', 'Status', 'Strategy', 'Session affinity', 'How long a session stays on its upstream after its last request; off keeps no pins, and a custom value is at least 60 seconds.', 'off', '5m', '10m', '1h', '4h', 'custom', 'Migrate above utilization', 'Prefer plan quota:', 'move sessions to a sibling with plan quota when this upstream starts billing extra usage', 'Allow:', 'ignore extra usage', 'Never:', 'treat an upstream in extra usage as unavailable until its window resets', 'Keep prompt caches warm', 'Daily probe cost cap ($)', 'Per UTC day, for probes paid in dollars: on API-key upstreams, on subscription upstreams in overage, and on models whose 5-hour share the cost table cannot price. Plan-funded probes do not count here.', 'Cost reference', 'Probe tuning', 'Members', 'Priority', 'Keys', 'Create key', 'desktop', 'laptop', 'phoebis-8f2a', 'active', "A key reaches only this pool's members. Create key, Move to and Revoke apply at once, without Save pool; rotation and expiry are on the API keys page", 'Save pool', 'Model rules', 'Allow', 'Deny', 'Add rule', 'written with a trailing *']);
   const nameInput = group(dlg, 'Identity')?.querySelector('input[placeholder="research"]');
   results.push({ name: '/pools edit dialog name prefilled', ok: nameInput?.value === 'all', missing: [nameInput?.value] });
   const keysMulti = [...(dlg?.querySelectorAll('.mselect__trigger') ?? [])].map((b) => b.textContent?.trim()).filter((x) => x?.startsWith('Keys'));
@@ -1362,7 +1362,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
       ok: JSON.stringify(before) === '["90","90"]' && JSON.stringify(after) === '["89","89"]' && ticks.length === 6 && ticks.includes('business: 5-hour 62%') && util?.querySelector('.ubar__band') !== null,
       missing: [JSON.stringify(before), JSON.stringify(after), ...ticks],
     });
-    expect("/pools the shedding preview replays a round over the hot members' pins", card('Load shedding')?.querySelector('.shed-preview')?.textContent ?? '', ['Would move', 'warm', '% of the burn in window share', 'across 2 upstreams']);
+    expect("/pools the shedding preview replays a round over the hot members' pins", card('Load shedding')?.querySelector('.shed-preview')?.textContent ?? '', ['Would move', 'warm', '% of the burn in window share', 'across 2 upstreams', '2 pins the table cannot price stay.']);
 
     // Select-below inside the band under the migrate threshold holds the save and says why.
     const save = () => [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Save pool');
@@ -2633,7 +2633,7 @@ m = await mount('/models');
 m.unmount();
 
 m = await mount('/requests');
-expect('/requests', m.text(), ['Columns (13)', 'Rows', 'SSE', 'Details', 'Client', 'claude-code/cli', 'other', 'Agent type', 'Turn origin', 'claude-fable-5-1', 'desktop', 'laptop', 'shown']);
+expect('/requests', m.text(), ['Columns (13)', 'Rows', 'SSE', 'Details', 'Client', 'claude-code/cli', 'Agent type', 'Turn origin', 'claude-fable-5-1', 'desktop', 'laptop', 'shown']);
 {
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
   const type = async (check, label, value) => {
@@ -2762,7 +2762,7 @@ expect('/requests', m.text(), ['Columns (13)', 'Rows', 'SSE', 'Details', 'Client
   const trailText = multi.map((t) => [...t.querySelectorAll('.trail__step')].map((b) => b.textContent?.trim()).join(' '));
   results.push({ name: '/requests trail badges name account and status', ok: trailText.every((x) => /\w+ \d{3}/.test(x)), missing: trailText.slice(0, 3) });
   const tip = multi[0]?.getAttribute('title') ?? '';
-  results.push({ name: '/requests trail tooltip lists outcome and cooldown per attempt', ok: /1\..*(failed over|rate limited|succeeded)/.test(tip) && /cooldown/.test(tip), missing: [tip.slice(0, 120)] });
+  results.push({ name: '/requests trail tooltip lists outcome and cooldown per attempt', ok: /1\..*(failed over|rate limited|succeeded|upstream error)/.test(tip) && /cooldown/.test(tip), missing: [tip.slice(0, 120)] });
 }
 {
   const rowsSelect = [...m.container.querySelectorAll('.pager select')].pop();
@@ -3266,15 +3266,31 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
   const windows = ['business', 'mail', 'personal'].flatMap((id) => [`${id} (5-hour)`, `${id} (7-day)`]);
   const planItems = [...(card('Plan per hour')?.querySelectorAll('.legend li') ?? [])];
   const dashedOf = (items) => items.filter((li) => li.querySelector('.legend__swatch')?.getAttribute('style')?.includes('repeating-linear-gradient')).map((li) => li.textContent ?? '');
-  results.push({
-    name: "/analytics plan per hour draws each subscription upstream's 5-hour and 7-day share",
-    ok:
-      windows.every((w) => planned.includes(w)) &&
-      !planned.some((t) => t.startsWith('console')) &&
-      dashedOf(planItems).every((t) => t.includes('(7-day)')) &&
-      dashedOf(planItems).length === 3,
-    missing: planned,
-  });
+  {
+    // `mail` serves the story's Sonnet 5 traffic alone, whose cells the cost table leaves null, and every 7-day cell
+    // is null, so its 5-hour window and every upstream's 7-day window price nothing in the range.
+    const valueOf = (li) => li.querySelector('.legend__value')?.textContent?.trim() ?? '';
+    const labelOf = (li) => [...li.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent?.trim()).join('');
+    const fiveHour = planItems.filter((li) => labelOf(li).endsWith('(5-hour)'));
+    const sevenDay = planItems.filter((li) => labelOf(li).endsWith('(7-day)'));
+    const unlisted = planItems.filter((li) => labelOf(li) === 'model unlisted');
+    results.push({
+      name: "/analytics plan per hour draws each priced upstream's 5-hour share, a dash for the unmeasured 7-day window, and one model unlisted entry",
+      ok:
+        windows.every((w) => planned.includes(w)) &&
+        !planned.some((t) => t.startsWith('console')) &&
+        dashedOf(planItems).every((t) => t.includes('(7-day)')) &&
+        dashedOf(planItems).length === 3 &&
+        fiveHour.length === 3 &&
+        fiveHour.every((li) => (labelOf(li).startsWith('mail ') ? valueOf(li) === '-' : valueOf(li).endsWith('%'))) &&
+        sevenDay.length === 3 &&
+        sevenDay.every((li) => valueOf(li) === '-') &&
+        unlisted.length === 1 &&
+        valueOf(unlisted[0]) === '5-hour, 7-day' &&
+        unlisted[0].getAttribute('title') === 'A bucket whose traffic ran on a model the cost table has no row for, or on a cell it leaves unmeasured, prices no share on that window and draws no point',
+      missing: planItems.map((li) => `${labelOf(li)}=${valueOf(li)}`),
+    });
+  }
   const spend = legendOf('Spend per minute');
   const spendDashed = dashedOf([...(card('Spend per minute')?.querySelectorAll('.legend li') ?? [])]);
   // A subscription upstream spends dollars only on its fast-mode answers, which the story's desktop key sends on Opus.
@@ -3304,9 +3320,10 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
   {
     // Past the seven lines a chart draws, subscription upstreams fold into one plan line. Seven standard-only
     // upstreams keep their lines, and the eighth, the smallest, spent dollars on fast mode alone: the folded rest
-    // carries them, under a label that names the dollars rather than the plan unit.
+    // carries them, under a label that names the dollars rather than the plan unit. The eighth is the story's
+    // business upstream, since a line's unit comes from the tier on file and its Max 20x tier is one the table sizes.
     const at = new Date(Date.now() - 3_600_000).toISOString();
-    api.getAnalyticsBurn = async () => ({ bucketSeconds: 3_600, points: Array.from({ length: 8 }, (_, i) => ({ at, cachedTokens: 0, fiveHourShare: i < 7 ? 0.01 : 0, fiveHourUnmeasured: false, group: `plan-${i}`, sevenDayShare: i < 7 ? 0.001 : 0, sevenDayUnmeasured: false, uncachedTokens: 1_000 * (8 - i), unit: 'window_share', usd: i < 7 ? 0 : 0.6 })) });
+    api.getAnalyticsBurn = async () => ({ bucketSeconds: 3_600, points: Array.from({ length: 8 }, (_, i) => ({ at, cachedTokens: 0, fiveHourShare: i < 7 ? 0.01 : 0, group: i < 7 ? `plan-${i}` : 'business', sevenDayShare: i < 7 ? 0.001 : 0, tokens: 1_000 * (8 - i), uncachedTokens: 1_000 * (8 - i), unit: 'window_share', usd: i < 7 ? 0 : 0.6 })) });
     await burnGroup('Key');
     await burnGroup('Upstream');
     const folded = legendOf('Spend per minute');
@@ -4182,6 +4199,18 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
       name: "/sessions an agent's net reads in the unit it settled in, and one that crossed a funding change carries both",
       ok: nets.includes('-0.003% of the 5-hour window') && nets.includes('0.009% of the 5-hour window | -$0.01') && nets.includes('0') && nets.every((n) => n === '0' || /of the 5-hour window|\$/.test(n)),
       missing: [...new Set(nets)],
+    });
+    // The story's Opus 5 and Sonnet 5 cells are null, so a probe on either settles in dollars on a subscription too.
+    const agentRows = [...m.container.querySelectorAll('.agents__row:not(.agents__row--head)')].map((row) => ({
+      model: row.children[1]?.textContent?.trim(),
+      net: [...(row.querySelector('.agents__net')?.children ?? [])].map((part) => part.textContent?.trim()).join(' | '),
+      upstream: row.children[2]?.textContent?.trim(),
+    }));
+    const unlisted = agentRows.filter((r) => ['business', 'personal'].includes(r.upstream) && ['claude-opus-5', 'claude-sonnet-5'].includes(r.model));
+    results.push({
+      name: '/sessions an agent on a subscription upstream whose model the cost table cannot price settles its probes in dollars',
+      ok: unlisted.length > 0 && unlisted.every((r) => !r.net.includes('of the 5-hour window')) && unlisted.some((r) => r.net.startsWith('-$')),
+      missing: unlisted.map((r) => `${r.upstream} ${r.model}: ${r.net}`),
     });
   }
   const collapseAll = [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Collapse all');

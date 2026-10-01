@@ -1559,7 +1559,8 @@ fn bucket_range(filter: &SeriesFilter) -> Result<(i64, i64), LedgerError> {
 
 /// One point of the burn series: a subscription row's tokens as the share of its account's own two windows
 /// (the 5-hour share weighed by the band at the row's instant, the 7-day share unbanded), an api_key row's in
-/// dollars; `None` on both shares while no subscription row of the bucket could be priced.
+/// dollars; `None` on a window while no subscription row of the bucket could be priced on it, or while any row of
+/// the bucket a known tier holds could not be.
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
 pub struct BurnPoint {
     /// Milliseconds, like every other series' `at`.
@@ -1567,6 +1568,12 @@ pub struct BurnPoint {
     pub cached_tokens: u64,
     pub five_hour_share: Option<f64>,
     pub seven_day_share: Option<f64>,
+    /// A row of the bucket a known tier could not price on the window, so its share reads `None` whatever the other
+    /// rows priced: a partial sum would read as the bucket's share. Never on the wire.
+    #[serde(skip)]
+    pub five_hour_unpriced: bool,
+    #[serde(skip)]
+    pub seven_day_unpriced: bool,
     /// Every token of the bucket's rows, all five types, so a reader tells a bucket with no traffic from one whose
     /// traffic no table priced.
     pub tokens: u64,
@@ -1599,7 +1606,8 @@ struct UsageRow<'a> {
 /// names one the tables size, `estimated_usd` for an api_key account; a row whose account is not in `kinds`
 /// carries no price the caller could attribute, so it adds nothing at all. A fast row on an oauth account adds
 /// its `estimated_usd` and a zero share where the tables size its tier: fast mode spends usage credits and draws no
-/// plan window, and the zero still tells a reader the account is priced in its window unit.
+/// plan window, and the zero still tells a reader the account is priced in its window unit. A bucket holding a row
+/// the table cannot price answers `None` on that window, whichever row came first.
 fn price_usage(
     point: &mut BurnPoint,
     kind: Option<AccountKind>,
@@ -1612,10 +1620,10 @@ fn price_usage(
             point.usd += row.estimated_usd;
             // Ahead of the model's cells, which a fast-only model lacks: the zero rests on the tier alone.
             if let Some(tier) = tier {
-                if tables.tier_factor(tier, FIVE_HOUR).is_some() {
+                if tables.tier_factor(tier, FIVE_HOUR).is_some() && !point.five_hour_unpriced {
                     point.five_hour_share.get_or_insert(0.0);
                 }
-                if tables.tier_factor(tier, SEVEN_DAY).is_some() {
+                if tables.tier_factor(tier, SEVEN_DAY).is_some() && !point.seven_day_unpriced {
                     point.seven_day_share.get_or_insert(0.0);
                 }
             }
@@ -1629,13 +1637,25 @@ fn price_usage(
                 output: row.output_tokens,
             };
             if let Some(tier) = tier {
-                if let Some(share) =
-                    tables.five_hour_share_at(tier, row.canonical_model, usage, row.at)
-                {
-                    *point.five_hour_share.get_or_insert(0.0) += share;
+                match tables.five_hour_share_at(tier, row.canonical_model, usage, row.at) {
+                    Some(share) if !point.five_hour_unpriced => {
+                        *point.five_hour_share.get_or_insert(0.0) += share;
+                    }
+                    Some(_) => {}
+                    None => {
+                        point.five_hour_unpriced = true;
+                        point.five_hour_share = None;
+                    }
                 }
-                if let Some(share) = tables.share(SEVEN_DAY, tier, row.canonical_model, usage) {
-                    *point.seven_day_share.get_or_insert(0.0) += share;
+                match tables.share(SEVEN_DAY, tier, row.canonical_model, usage) {
+                    Some(share) if !point.seven_day_unpriced => {
+                        *point.seven_day_share.get_or_insert(0.0) += share;
+                    }
+                    Some(_) => {}
+                    None => {
+                        point.seven_day_unpriced = true;
+                        point.seven_day_share = None;
+                    }
                 }
             }
         }

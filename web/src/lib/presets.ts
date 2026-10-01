@@ -49,14 +49,18 @@ export function failoverPresetOf(p: Pick<Pool, 'inFlightCap' | 'paceFloor' | 're
 }
 
 /** The round's marking rule, the mirror of the router's: pins in the round's order with their decayed burns,
- *  marked until the marked burn reaches `target`, never the last unmarked pin, none for a zero target. */
-export function shedMarks(ordered: { id: string; burn: number }[], target: number): string[] {
+ *  marked until the marked burn reaches `target`, never the last unmarked pin, never an unpriced pin, none for a
+ *  zero target. */
+export function shedMarks(ordered: { id: string; burn: number | null }[], target: number): string[] {
   const marks: string[] = [];
   if (Number.isNaN(target) || target <= 0) return marks;
   let marked = 0;
   for (const pin of ordered) {
     // An indivisible pin may carry the marked burn past the target, and the round stops there.
     if (marked >= target || marks.length + 1 >= ordered.length) break;
+    // An unpriced burn moves the marked sum nowhere, so marking the pin would shed a session on a guess: it stays,
+    // and it still counts as one of the account's pins for the last-pin rule.
+    if (pin.burn === null) continue;
     marks.push(pin.id);
     marked += pin.burn;
   }
@@ -86,6 +90,8 @@ export interface ShedPreview {
   sessions: number;
   /** The unit every replayed member's burn is in; null when none has a pin or two members differ. */
   unit: BurnUnit | null;
+  /** Pins whose burn the table cannot price, left in the order unmarked. */
+  unpriced: number;
   warm: number;
 }
 
@@ -104,7 +110,7 @@ export function shedPreview(
   now: number,
 ): ShedPreview {
   const threshold = pool.migrateAboveUtilization;
-  if (threshold === null) return { averaged: false, burnShare: 0, cool: false, members: 0, sessions: 0, unit: null, warm: 0 };
+  if (threshold === null) return { averaged: false, burnShare: 0, cool: false, members: 0, sessions: 0, unit: null, unpriced: 0, warm: 0 };
   const byId = new Map(accounts.map((a) => [a.id, a]));
   const band = threshold - MIGRATE_BAND;
   // The router's destination readings: a subscription account's two shared windows, an API-key account's worst
@@ -123,27 +129,40 @@ export function shedPreview(
   const windowMs = pool.burnWindowSeconds * 1_000;
   const rounds = hot.map((account) => {
     const pins = sessions
-      .filter((s) => s.pinned && s.accountId === account.id && s.burn !== null)
+      .filter((s) => s.pinned && s.accountId === account.id)
       // The router walks an account's pins in key, session and model order, which settles ties in the sorts below.
       .sort((a, b) => cmp(a.keyId, b.keyId) || cmp(a.sessionId, b.sessionId) || cmp(a.model ?? '', b.model ?? ''))
       .map((s) => ({
-        burn: burnDecayed(s.burn ?? 0, s.burnAt, now, windowMs),
+        burn: s.burn === null ? null : burnDecayed(s.burn, s.burnAt, now, windowMs),
         id: `${s.keyId}/${s.sessionId}/${s.model ?? ''}`,
         // A pin with no prompt size reported yet ranks as the cheapest rewrite.
         rewrite: Math.max(s.lastInputTokens ?? 0, 1),
         unit: s.burnUnit,
         warm: s.lastRefreshAt !== null && s.cacheTtlMs !== null && now - Date.parse(s.lastRefreshAt) < s.cacheTtlMs,
       }));
-    const perRewrite = (p: (typeof pins)[number]) => p.burn / p.rewrite;
-    const cold = pins.filter((p) => !p.warm).sort((a, b) => b.burn - a.burn);
-    const warm = pins.filter((p) => p.warm).sort((a, b) => perRewrite(b) - perRewrite(a));
-    const ordered = pool.warmSessions === 'always' ? [...cold, ...warm].sort((a, b) => perRewrite(b) - perRewrite(a)) : [...cold, ...warm];
-    const total = pins.reduce((s, p) => s + p.burn, 0);
+    type Pin = (typeof pins)[number];
+    // A pin whose burn cannot be priced ranks after every priced pin of its group, as the router's round ranks it.
+    const pricedFirst = (a: number | null, b: number | null) => (a === null ? (b === null ? 0 : 1) : b === null ? -1 : b - a);
+    const perRewrite = (p: Pin) => (p.burn === null ? null : p.burn / p.rewrite);
+    const byRewrite = (a: Pin, b: Pin) => pricedFirst(perRewrite(a), perRewrite(b));
+    const cold = pins.filter((p) => !p.warm).sort((a, b) => pricedFirst(a.burn, b.burn));
+    const warm = pins.filter((p) => p.warm).sort(byRewrite);
+    const ordered = pool.warmSessions === 'always' ? [...cold, ...warm].sort(byRewrite) : [...cold, ...warm];
+    const total = pins.reduce((s, p) => s + (p.burn ?? 0), 0);
     let marks = shedMarks(ordered, pool.shedShare * total);
-    // The warm pins stay in the order under `never`, so the last-pin rule still counts them among the member's pins.
-    if (pool.warmSessions === 'never') marks = marks.slice(0, cold.length);
+    // The warm pins stay in the order under `never`, so the last-pin rule still counts them among the member's pins;
+    // the marks are priced pins alone, so the cold group's marks are its priced count at most, as the router's
+    // `cold_priced` truncation reads them.
+    if (pool.warmSessions === 'never') marks = marks.slice(0, cold.filter((p) => p.burn !== null).length);
     const marked = pins.filter((p) => marks.includes(p.id));
-    return { burn: marked.reduce((s, p) => s + p.burn, 0), sessions: marked.length, total, unit: pins[0]?.unit ?? null, warm: marked.filter((p) => p.warm).length };
+    return {
+      burn: marked.reduce((s, p) => s + (p.burn ?? 0), 0),
+      sessions: marked.length,
+      total,
+      unit: pins[0]?.unit ?? null,
+      unpriced: pins.filter((p) => p.burn === null).length,
+      warm: marked.filter((p) => p.warm).length,
+    };
   });
   const units = new Set(rounds.flatMap((r) => (r.unit === null ? [] : [r.unit])));
   const burning = rounds.filter((r) => r.total > 0);
@@ -157,6 +176,7 @@ export function shedPreview(
     members: hot.length,
     sessions: rounds.reduce((s, r) => s + r.sessions, 0),
     unit: units.size === 1 ? [...units][0] : null,
+    unpriced: rounds.reduce((s, r) => s + r.unpriced, 0),
     warm: rounds.reduce((s, r) => s + r.warm, 0),
   };
 }
@@ -174,5 +194,7 @@ export function shedPreviewLine(preview: ShedPreview, migrateOn: boolean): strin
         : 'of the burn';
   const across = preview.members > 1 ? `, across ${preview.members} upstreams` : '';
   const what = `${preview.sessions} ${preview.sessions === 1 ? 'session' : 'sessions'}, ${preview.warm} warm, ${fmtPct(preview.burnShare)} ${of}${across}`;
-  return preview.cool ? `Would move ${what}.` : `Would mark ${what}, but no member reads under the band to take them.`;
+  const n = preview.unpriced;
+  const unpriced = n > 0 ? ` ${n} pin${n === 1 ? '' : 's'} the table cannot price stay${n === 1 ? 's' : ''}.` : '';
+  return `${preview.cool ? `Would move ${what}.` : `Would mark ${what}, but no member reads under the band to take them.`}${unpriced}`;
 }

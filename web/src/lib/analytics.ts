@@ -1,4 +1,4 @@
-import type { BurnGroup, BurnPoint, BurnUnit, PinMigrationReason, Placement, PlacementRow } from '@/api/types';
+import type { Account, BurnGroup, BurnPoint, BurnUnit, CostTable, PinMigrationReason, Placement, PlacementRow } from '@/api/types';
 import { fmtCompact, fmtInt, fmtPct } from '@/lib/format';
 
 /** Why a session's pin moved, as the request drawer, its selection trace and the rewrites legend word it. */
@@ -33,9 +33,8 @@ export const MAX_BURN_LINES = 7;
 /** The key the folded rest carries, suffixed by its unit under the upstream grouping; no group is looked up by it. */
 export const OTHER_KEY = 'other';
 /**
- * The unit a burn line charts in. `unknown` is a subscription upstream the route priced no share for, its tier
- * missing or one the cost table does not size: it has no share to draw, and dollars only for what its
- * fast-mode answers spent.
+ * The unit a burn line charts in. `unknown` is a subscription upstream the cost table does not size, its tier missing
+ * or one the table has no factors for: it has no share to draw, and dollars only for what its fast-mode answers spent.
  */
 export type BurnLineUnit = BurnUnit | 'unknown';
 const OTHER_LABEL: Record<BurnLineUnit, string> = { unknown: 'Other (tier unknown)', usd: 'Other (dollars)', window_share: 'Other (plan)' };
@@ -43,7 +42,7 @@ const OTHER_LABEL: Record<BurnLineUnit, string> = { unknown: 'Other (tier unknow
 export interface BurnLine {
   /** The highest 5-hour share per hour the range reached; null for a line with no share in any bucket. */
   fiveHourPeak: number | null;
-  /** The range's 5-hour share per hour, a bucket without a share counting as none; null with no share at all. */
+  /** The range's 5-hour share per hour over the buckets that read one; null on a window the line never priced. */
   fiveHourPerHour: number | null;
   key: string;
   label: string;
@@ -56,6 +55,11 @@ export interface BurnLine {
    * API-key one dollars; every other grouping mixes both, so it charts dollars.
    */
   unit: BurnLineUnit;
+  /**
+   * Per window, whether a bucket with tokens has no share on it: a model the table has no row for, or a cell it
+   * leaves unmeasured. False on a line that does not chart window share.
+   */
+  unpriced: { fiveHour: boolean; sevenDay: boolean };
   usdPerMinute: number;
 }
 
@@ -63,9 +67,14 @@ export interface BurnLine {
 export interface BurnRow {
   at: number;
   cached: number[];
-  /** Null where no priced row landed in the slot, so a missing figure never reads as a zero share. */
+  /**
+   * Null where the slot's traffic could not be priced, or on a window the line never priced; an idle slot reads zero
+   * on a window the line priced.
+   */
   fiveHour: (number | null)[];
   sevenDay: (number | null)[];
+  /** Every token of the slot, all five types, as the route counts them: zero only for a slot with no traffic. */
+  tokens: number[];
   uncached: number[];
   usd: number[];
 }
@@ -74,9 +83,39 @@ interface Sum {
   cached: number;
   fiveHour: number | null;
   sevenDay: number | null;
+  tokens: number;
   uncached: number;
   usd: number;
 }
+
+/**
+ * A bucket's share of one window over its rows: null when any row is unpriced, whatever the order, or when there are
+ * no rows; the sum otherwise.
+ */
+export function bucketShare(shares: (number | null)[]): number | null {
+  if (shares.length === 0 || shares.some((s) => s === null)) return null;
+  return (shares as number[]).reduce((n, s) => n + s, 0);
+}
+
+/**
+ * The cost table's factors for a stored tier, matched as the ledger matches it: as stored, then with the `default_`
+ * prefix taken off or put on, since only one spelling has been seen on the wire. Undefined for a tier it does not size.
+ */
+export function tierFactors(tiers: CostTable['tiers'], tier: string): CostTable['tiers'][string] | undefined {
+  const bare = tier.startsWith('default_') ? tier.slice('default_'.length) : null;
+  const key = [tier, bare, `default_${tier}`].find((k): k is string => k !== null && own(tiers, k));
+  return key === undefined ? undefined : tiers[key];
+}
+
+/**
+ * The upstreams whose stored tier the cost table sizes, matched as the ledger matches it: as stored, then with the
+ * `default_` prefix taken off or put on.
+ */
+export function sizedUpstreams(accounts: Account[], tiers: CostTable['tiers']): Set<string> {
+  return new Set(accounts.filter((a) => a.subscription !== null && tierFactors(tiers, a.subscription.rateLimitTier) !== undefined).map((a) => a.id));
+}
+
+const meanOf = (values: number[]) => values.reduce((n, v) => n + v, 0) / values.length;
 
 const LEGEND_ORDER: ClassLegend[] = ['conversation', 'overhead'];
 
@@ -84,18 +123,18 @@ const LEGEND_ORDER: ClassLegend[] = ['conversation', 'overhead'];
  * The burn route's points as chart lines and rows. The request-class grouping folds into its two legend entries;
  * every other grouping keeps the groups with the most tokens and sums the rest as other, whose shares stay empty
  * since shares of different windows do not add up. Under the upstream grouping the rest folds once per unit, since
- * a subscription upstream's window share and an API-key upstream's dollars chart on different axes.
+ * a subscription upstream's window share and an API-key upstream's dollars chart on different axes. `sized` names
+ * the upstreams whose tier the cost table sizes, which chart in window share whatever their buckets priced.
  */
-export function foldBurn(points: BurnPoint[], groupBy: BurnGroup, bucketSeconds: number, max = MAX_BURN_LINES): { lines: BurnLine[]; rows: BurnRow[] } {
+export function foldBurn(points: BurnPoint[], groupBy: BurnGroup, bucketSeconds: number, sized: ReadonlySet<string>, max = MAX_BURN_LINES): { lines: BurnLine[]; rows: BurnRow[] } {
   const lineOf = (group: string) => (groupBy === 'request_class' ? classLegendOf(group) : group);
   const tokens = new Map<string, number>();
   for (const p of points) tokens.set(lineOf(p.group), (tokens.get(lineOf(p.group)) ?? 0) + p.cachedTokens + p.uncachedTokens);
-  // A share marks a subscription upstream the tables price; the route answers the unit for one they cannot, whose
-  // points carry no share, and dollars only for its fast-mode answers.
+  // The category comes from the tier on file rather than from whether a bucket priced, so an upstream whose range
+  // ran on unmeasured models alone still charts as a plan line and its unpriced windows show.
   const byUpstream = groupBy === 'account';
-  const priced = new Set(byUpstream ? points.filter((p) => p.fiveHourShare !== null).map((p) => p.group) : []);
   const subscribed = new Set(byUpstream ? points.filter((p) => p.unit === 'window_share').map((p) => p.group) : []);
-  const unitOf = (group: string): BurnLineUnit => (priced.has(group) ? 'window_share' : subscribed.has(group) ? 'unknown' : 'usd');
+  const unitOf = (group: string): BurnLineUnit => (subscribed.has(group) ? (sized.has(group) ? 'window_share' : 'unknown') : 'usd');
   const ranked = [...tokens.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([k]) => k);
   const kept: string[] = groupBy === 'request_class' ? LEGEND_ORDER : ranked.slice(0, max);
   const folded = groupBy === 'request_class' ? [] : ranked.slice(max);
@@ -107,11 +146,12 @@ export function foldBurn(points: BurnPoint[], groupBy: BurnGroup, bucketSeconds:
   const byAt = new Map<number, Sum[]>();
   for (const p of points) {
     const at = Date.parse(p.at);
-    const sums = byAt.get(at) ?? Array.from({ length: slots }, (): Sum => ({ cached: 0, fiveHour: null, sevenDay: null, uncached: 0, usd: 0 }));
+    const sums = byAt.get(at) ?? Array.from({ length: slots }, (): Sum => ({ cached: 0, fiveHour: null, sevenDay: null, tokens: 0, uncached: 0, usd: 0 }));
     byAt.set(at, sums);
     const slot = slotOf(p.group);
     const s = sums[slot];
     s.cached += p.cachedTokens;
+    s.tokens += p.tokens;
     s.uncached += p.uncachedTokens;
     s.usd += p.usd;
     if (slot >= kept.length) continue;
@@ -127,20 +167,34 @@ export function foldBurn(points: BurnPoint[], groupBy: BurnGroup, bucketSeconds:
       cached: sums.map((s) => s.cached / minutes),
       fiveHour: sums.map((s) => (s.fiveHour === null ? null : s.fiveHour / hours)),
       sevenDay: sums.map((s) => (s.sevenDay === null ? null : s.sevenDay / hours)),
+      tokens: sums.map((s) => s.tokens),
       uncached: sums.map((s) => s.uncached / minutes),
       usd: sums.map((s) => s.usd / minutes),
     }));
 
   const mean = (read: (r: BurnRow) => number) => (rows.length ? rows.reduce((n, r) => n + read(r), 0) / rows.length : 0);
-  const perHour = (read: (r: BurnRow) => number | null) => (rows.some((r) => read(r) !== null) ? mean((r) => read(r) ?? 0) : null);
   const lines = Array.from({ length: slots }, (_, i): BurnLine => {
     const rest = i >= kept.length ? rests[i - kept.length] : null;
+    // A window the line never priced traffic on stays null in every slot, idle ones included, so its legend reads a
+    // dash; one it priced counts an idle slot (no token of any type) as zero, and a slot with tokens and no share
+    // stays null. An idle slot's own share never makes the window priced: a failed request's row carries no token
+    // and a listed model prices it at zero.
+    const foldWindow = (read: (r: BurnRow) => (number | null)[]) => {
+      const priced = rows.some((r) => r.tokens[i] > 0 && read(r)[i] !== null);
+      for (const r of rows) if (r.tokens[i] === 0) read(r)[i] = priced ? 0 : null;
+      return { perHour: priced ? meanOf(rows.map((r) => read(r)[i]).filter((v): v is number => v !== null)) : null, unpriced: rows.some((r) => read(r)[i] === null && r.tokens[i] > 0) };
+    };
+    const fiveHour = foldWindow((r) => r.fiveHour);
+    const sevenDay = foldWindow((r) => r.sevenDay);
     const shares = rows.map((r) => r.fiveHour[i]).filter((v): v is number => v !== null);
+    // Only a window-share line lacks a share for want of a row; every other line's slots read null by construction.
+    const plan = rest === null && unitOf(kept[i]) === 'window_share';
     const figures = {
       fiveHourPeak: shares.length ? Math.max(...shares) : null,
-      fiveHourPerHour: perHour((r) => r.fiveHour[i]),
-      sevenDayPerHour: perHour((r) => r.sevenDay[i]),
+      fiveHourPerHour: fiveHour.perHour,
+      sevenDayPerHour: sevenDay.perHour,
       tokensPerMinute: mean((r) => r.cached[i] + r.uncached[i]),
+      unpriced: { fiveHour: plan && fiveHour.unpriced, sevenDay: plan && sevenDay.unpriced },
       usdPerMinute: mean((r) => r.usd[i]),
     };
     if (rest === null) return { ...figures, key: kept[i], label: kept[i] === '-' ? 'unattributed' : kept[i], other: false, unit: unitOf(kept[i]) };

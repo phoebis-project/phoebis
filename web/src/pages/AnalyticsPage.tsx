@@ -11,7 +11,7 @@ import { ChartTooltip, Legend, type TooltipRow } from '@/components/charts/Toolt
 import { MultiSelect, type Option } from '@/components/ui/MultiSelect';
 import { IconX } from '@/components/ui/icons';
 import { Badge, Button, Card, ErrorState, Input, Meter, Segmented, Select, Skeleton, Toggle } from '@/components/ui/primitives';
-import { CONVERSATION_CLASSES, foldBurn, moveLabel, placementCells, placementRungLabel, type BurnLine, type BurnLineUnit, type BurnRow } from '@/lib/analytics';
+import { CONVERSATION_CLASSES, foldBurn, moveLabel, placementCells, placementRungLabel, sizedUpstreams, type BurnLine, type BurnLineUnit, type BurnRow } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missCount, missLabel, missReasonOrder } from '@/lib/cache';
 import { fmtAbsolute, fmtCompact, fmtDayShort, fmtDuration, fmtHourTick, fmtInt, fmtMs, fmtPct, fmtPeriodEnd, fmtShare, fmtUsd, shortId, toLocalInput, upperFirst } from '@/lib/format';
@@ -197,6 +197,10 @@ export function AnalyticsPage() {
   );
   const accountRollups = useAsync(() => api.listAccountRollups(fromIso, toIso), [fromIso, toIso]);
   const burn = useAsync(() => api.getAnalyticsBurn({ from: fromIso, to: toIso }, burnGroup), [fromIso, toIso, burnGroup]);
+  // The plan chart's line category reads each upstream's stored tier against the cost table's tiers.
+  const burnAccounts = useAsync(() => api.listAccounts(), []);
+  const burnSettings = useAsync(() => api.getSettings(), []);
+  const sized = useMemo(() => (burnAccounts.data && burnSettings.data ? sizedUpstreams(burnAccounts.data, burnSettings.data.planTables.cost.tiers) : null), [burnAccounts.data, burnSettings.data]);
   const rewrites = useAsync(() => api.getAnalyticsRewrites({ from: fromIso, to: toIso }), [fromIso, toIso]);
   // Side groupings on the page's own query, as byModel and byPool are; a session view folds them from the log.
   const bySpeed = useAsync(() => (sessionId === null ? api.getAnalyticsSeries({ ...query, groupBy: 'speed' }) : Promise.resolve<AnalyticsPoint[]>([])), [query, sessionId]);
@@ -223,7 +227,7 @@ export function AnalyticsPage() {
   // An outage of the ledger fails the section and filter-choice reads with these three, and this is the one
   // control that reads again, so it reads everything the view draws from.
   const retry = () => {
-    for (const read of [accountKeys, accountRollups, breakdown, budgets, burn, byEffort, byModel, byPool, bySpeed, keyKeys, log, modelKeys, placements, poolKeys, rewrites, series]) read.reload();
+    for (const read of [accountKeys, accountRollups, breakdown, budgets, burn, burnAccounts, burnSettings, byEffort, byModel, byPool, bySpeed, keyKeys, log, modelKeys, placements, poolKeys, rewrites, series]) read.reload();
   };
   const rows = useMemo(() => (log.stale ? [] : (log.data?.requests ?? [])), [log.stale, log.data]);
   const points = useMemo(() => (stale ? [] : sessionId === null ? (series.data ?? []) : foldRequests(rows, rangeBucketMs, fromIso, toIso, groupBy, foldOptions)), [stale, sessionId, series.data, rows, rangeBucketMs, fromIso, toIso, groupBy, foldOptions]);
@@ -451,7 +455,7 @@ export function AnalyticsPage() {
           <span className="muted">Group by</span>
           <Segmented<BurnGroup> ariaLabel="Burn group by" value={burnGroup} onChange={setBurnGroup} options={BURN_GROUPS.map((g) => ({ label: BURN_GROUP_LABEL[g], value: g }))} />
         </div>
-        <BurnCharts answer={burn.stale ? null : burn.data} error={burn.error} groupBy={burnGroup} loading={burn.data === null || burn.stale} />
+        <BurnCharts answer={burn.stale ? null : burn.data} error={burn.error ?? burnAccounts.error ?? burnSettings.error} groupBy={burnGroup} loading={burn.data === null || burn.stale || sized === null} sized={sized} />
         <BudgetTable budgets={budgets.data} error={budgets.error} now={now} />
       </Section>
 
@@ -1275,15 +1279,17 @@ const SPEND_REST_LABEL: Record<Exclude<BurnLineUnit, 'usd'>, string> = { unknown
 const PLAN_NOTE =
   "The share of each subscription upstream's own 5-hour window (solid) and 7-day window (dashed) its traffic used per hour, the 5-hour share weighed by the peak band";
 const TIER_UNKNOWN_HINT = 'No tier on file, or one the cost table does not size, so no share of its windows is priced';
+const MODEL_UNLISTED_HINT = 'A bucket whose traffic ran on a model the cost table has no row for, or on a cell it leaves unmeasured, prices no share on that window and draws no point';
+const NO_UPSTREAM: ReadonlySet<string> = new Set();
 
 /**
  * The burn route's three views of one grouping. A line's colour follows its group within the answer rather than
  * its rank, so a range that reorders the groups does not repaint them; the upstream grouping keeps each upstream's
  * page-wide colour.
  */
-function BurnCharts({ answer, error, groupBy, loading }: { answer: { bucketSeconds: number; points: BurnPoint[] } | null; error: string | null; groupBy: BurnGroup; loading: boolean }) {
+function BurnCharts({ answer, error, groupBy, loading, sized }: { answer: { bucketSeconds: number; points: BurnPoint[] } | null; error: string | null; groupBy: BurnGroup; loading: boolean; sized: ReadonlySet<string> | null }) {
   const ink = useChartInk();
-  const { lines, rows } = useMemo(() => (answer === null ? { lines: [] as BurnLine[], rows: [] as BurnRow[] } : foldBurn(answer.points, groupBy, answer.bucketSeconds)), [answer, groupBy]);
+  const { lines, rows } = useMemo(() => (answer === null ? { lines: [] as BurnLine[], rows: [] as BurnRow[] } : foldBurn(answer.points, groupBy, answer.bucketSeconds, sized ?? NO_UPSTREAM)), [answer, groupBy, sized]);
   const named = useMemo(() => lines.filter((l) => !l.other).map((l) => l.key).sort(), [lines]);
   const colorOf = (l: BurnLine) => (l.other ? ink.muted : groupBy === 'account' ? accountColor(ink, l.key) : ink.series[Math.min(7, named.indexOf(l.key))]);
   // A session id runs past any legend, so it shows cut the way the session filter's chip cuts it, whole on hover.
@@ -1304,8 +1310,7 @@ function BurnCharts({ answer, error, groupBy, loading }: { answer: { bucketSecon
   const usdDigits = usdMax >= 10 ? 0 : usdMax >= 0.1 ? 2 : usdMax >= 0.01 ? 3 : 4;
   const planned = lines.map((l, i) => ({ i, l })).filter(({ l }) => byUpstream && !l.other && l.unit === 'window_share');
   const unpriced = lines.filter((l) => byUpstream && !l.other && l.unit === 'unknown');
-  // A priced upstream's bucket with no share had no priced traffic, which is a share of zero rather than a gap.
-  const shareAt = (shares: (number | null)[], i: number) => shares[i] ?? 0;
+  const shareOf = (share: number | null) => (share === null ? '-' : fmtShare(share));
   return (
     <div className="grid-2">
       <ChartCard
@@ -1374,16 +1379,29 @@ function BurnCharts({ answer, error, groupBy, loading }: { answer: { bucketSecon
                 label: `${nameOf(l)} (5-hour)`,
                 shape: 'line' as const,
                 title: l.fiveHourPeak === null ? undefined : `Highest hour ${fmtShare(l.fiveHourPeak)}`,
-                value: fmtShare(l.fiveHourPerHour ?? 0),
+                value: shareOf(l.fiveHourPerHour),
               },
               {
                 color: colorOf(l),
                 dashed: true,
                 label: `${nameOf(l)} (7-day)`,
                 shape: 'line' as const,
-                value: fmtShare(l.sevenDayPerHour ?? 0),
+                value: shareOf(l.sevenDayPerHour),
               },
             ]),
+            // One entry for every share the table cannot price, whichever upstream and window it fell on; muted, since
+            // it draws no line of its own.
+            ...(planned.some(({ l }) => l.unpriced.fiveHour || l.unpriced.sevenDay)
+              ? [
+                  {
+                    color: ink.muted,
+                    label: 'model unlisted',
+                    shape: 'line' as const,
+                    title: MODEL_UNLISTED_HINT,
+                    value: [planned.some(({ l }) => l.unpriced.fiveHour) ? '5-hour' : null, planned.some(({ l }) => l.unpriced.sevenDay) ? '7-day' : null].filter((w) => w !== null).join(', '),
+                  },
+                ]
+              : []),
             // Muted, since no line of its own is drawn.
             ...unpriced.map((l) => ({ color: ink.muted, label: nameOf(l), shape: 'line' as const, title: TIER_UNKNOWN_HINT, value: 'tier unknown' })),
           ]}
@@ -1396,14 +1414,15 @@ function BurnCharts({ answer, error, groupBy, loading }: { answer: { bucketSecon
               cursor={{ stroke: ink.axis }}
               content={timeTip<BurnRow>((r) => [
                 ...planned.flatMap(({ i, l }) => [
-                  { color: colorOf(l), label: `${nameOf(l)} (5-hour)`, value: fmtShare(shareAt(r.fiveHour, i)) },
-                  { color: colorOf(l), label: `${nameOf(l)} (7-day)`, value: fmtShare(shareAt(r.sevenDay, i)) },
+                  { color: colorOf(l), label: `${nameOf(l)} (5-hour)`, title: r.fiveHour[i] === null ? MODEL_UNLISTED_HINT : undefined, value: shareOf(r.fiveHour[i]) },
+                  { color: colorOf(l), label: `${nameOf(l)} (7-day)`, title: r.sevenDay[i] === null ? MODEL_UNLISTED_HINT : undefined, value: shareOf(r.sevenDay[i]) },
                 ]),
               ])}
             />
             {planned.flatMap(({ i, l }) => [
-              <Line key={`${i}-5h`} type="monotone" dataKey={(r: BurnRow) => shareAt(r.fiveHour, i)} stroke={colorOf(l)} strokeWidth={2} dot={false} isAnimationActive={false} />,
-              <Line key={`${i}-7d`} type="monotone" dataKey={(r: BurnRow) => shareAt(r.sevenDay, i)} stroke={colorOf(l)} strokeWidth={2} strokeDasharray="5 3" dot={false} isAnimationActive={false} />,
+              // A null slot draws no point, and the gap stays since the lines do not connect across it.
+              <Line key={`${i}-5h`} type="monotone" dataKey={(r: BurnRow) => r.fiveHour[i]} stroke={colorOf(l)} strokeWidth={2} dot={false} isAnimationActive={false} />,
+              <Line key={`${i}-7d`} type="monotone" dataKey={(r: BurnRow) => r.sevenDay[i]} stroke={colorOf(l)} strokeWidth={2} strokeDasharray="5 3" dot={false} isAnimationActive={false} />,
             ])}
           </LineChart>
         </ChartCard>

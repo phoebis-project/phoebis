@@ -1743,7 +1743,7 @@ export function PoolDialog({
               input={{ min: 0, step: 0.5, value: form.capUsd, onChange: (e) => set('capUsd', Number(e.target.value)), 'aria-label': 'Daily probe cost cap in dollars', 'aria-invalid': invalid('Daily probe cost cap in dollars') }}
               hint={
                 <>
-                  Per UTC day, for probes paid in dollars: on API-key upstreams, on subscription upstreams in overage, and on models the plan table lacks. Plan-funded probes do not count here. The <CostReferenceLink /> prices a probe.
+                  Per UTC day, for probes paid in dollars: on API-key upstreams, on subscription upstreams in overage, and on models whose 5-hour share the cost table cannot price. Plan-funded probes do not count here. The <CostReferenceLink /> prices a probe.
                 </>
               }
             />

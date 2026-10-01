@@ -1,4 +1,5 @@
-import type { AlertEvent, AlertRule, BurnUnit, CompanionState, KeepaliveOverview, KeepaliveRecipe, LifecycleDelivery, RecipeReason, Session, Settings } from '@/api/types';
+import type { AlertEvent, AlertRule, BurnUnit, CompanionState, KeepaliveOverview, KeepaliveRecipe, LifecycleDelivery, PlanModelCells, RecipeReason, Session, Settings } from '@/api/types';
+import { own } from '@/lib/analytics';
 import { accountById } from './accounts';
 import { PRICES } from './catalog';
 import { keyById } from './pools';
@@ -61,6 +62,18 @@ for (const r of REQUESTS) {
 /** A 20k-token prefix read back at Fable 5.1's cache-read cell, 0.001675 of the Max 20x window per million, rounded. */
 const PROBE_SHARE = 0.00003;
 
+/**
+ * Whether the cost table's 5-hour row for `model` (a dated id reads its undated name) prices every type in `types`:
+ * a model with no row, or with a `null` cell among them, has no share for that usage.
+ */
+function sharePrices(model: string, types: (keyof PlanModelCells)[]): boolean {
+  const rows = SETTINGS_SAMPLE.planTables.cost.windows.five_hour ?? {};
+  const undated = model.replace(/-\d{8}$/, '');
+  const row = own(rows, model) ? rows[model] : own(rows, undated) ? rows[undated] : undefined;
+  return row !== undefined && types.every((t) => row[t] !== null);
+}
+const PIN_TYPES: (keyof PlanModelCells)[] = ['cacheRead', 'cacheWrite1h', 'cacheWrite5m', 'input', 'output'];
+
 export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
   // The last entry deliberately falls outside the ledgered ids.
   const sessionId = i < SESSION_IDS.length ? SESSION_IDS[i] : rng.uuid();
@@ -86,6 +99,8 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
   const burnAtRoll = ago(rng.int(2, 40) * MINUTE);
   const lastInputRoll = rng.int(500, 20_000);
   const lastRefreshRoll = ago(rng.int(2, 40) * MINUTE);
+  // A pin on a model whose row prices none of its types has no burn to rank by, as the route answers it.
+  const burn = !pinned ? null : unit === 'usd' ? burnUsdRoll : PIN_TYPES.some((t) => sharePrices(spec.model, [t])) ? burnRoll : null;
   // The ledger names a session's fork from its requests, so a session it never saw records none.
   const fork = REQUESTS.find((r) => r.sessionId === sessionId && r.forkedFrom !== null);
   return {
@@ -104,8 +119,8 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
     lastRequestAt: seen ? seen.last : null,
     pinned,
     requests: seen ? seen.requests : 0,
-    burn: pinned ? (unit === 'usd' ? burnUsdRoll : burnRoll) : null,
-    burnAt: pinned ? burnAtRoll : null,
+    burn,
+    burnAt: burn === null ? null : burnAtRoll,
     burnUnit: unit,
     cacheTtlMs: pinned ? 5 * MINUTE : null,
     lastInputTokens: pinned ? lastInputRoll : null,
@@ -194,12 +209,16 @@ export const RECIPES: KeepaliveRecipe[] = SESSIONS.flatMap((pin, i) => {
     // A subagent spawned in the last turn may not have sent a request yet.
     const lastRequestAt = j === 0 ? pin.lastRequestAt : rng.int(0, 4) === 0 ? null : ago(rng.int(1, 40) * MINUTE);
     const accountId = j === 0 ? pin.accountId : sub?.accountId ?? pin.accountId;
-    // The unit a probe settles in follows the serving account's own funding: a share of the 5-hour window on a
-    // subscription upstream, dollars on an api_key one, the same split the engine's own net carries. A probe
+    const ttlSeconds = model.includes('haiku') ? 300 : 3_600;
+    // The unit a probe settles in follows the serving account's own funding and the probe's typed usage: a share of
+    // the 5-hour window on a subscription upstream whose row for the model prices every type the probe spends,
+    // dollars on an api_key one or on a model the table cannot price, the same decision the engine makes. A probe
     // replays a prefix of about 20k tokens at the cache-read rate: about 0.016% of the window, or $0.004.
     const probes = state === 'armed' && reason === null ? j + 1 : 0;
-    const onPlan = accountById.get(accountId ?? '')?.kind === 'oauth';
-    // Held for overage after probing on plan quota, so it settled in both units and carries a balance in each.
+    const probeTypes: (keyof PlanModelCells)[] = ['cacheRead', 'cacheWrite5m', 'input', 'output', ...(ttlSeconds === 3_600 ? (['cacheWrite1h'] as const) : [])];
+    const inShare = accountById.get(accountId ?? '')?.kind === 'oauth' && sharePrices(model, probeTypes);
+    // Held for overage after probing, so an agent on plan quota settled in both units and carries a balance in each;
+    // one whose probes the share could not price carries its dollar balance alone.
     const crossed = reason === 'overage';
     return {
       ...RECIPE_SAMPLE,
@@ -213,14 +232,14 @@ export const RECIPES: KeepaliveRecipe[] = SESSIONS.flatMap((pin, i) => {
       model,
       // A freshly-armed agent has paid one probe's cost and earned no credit back yet; a held one has paid
       // nothing further since its last hold began.
-      netFiveHourShare: crossed ? 3 * PROBE_SHARE : onPlan ? -PROBE_SHARE * probes : 0,
-      netUsd: crossed ? -0.012 : onPlan ? 0 : -0.004 * probes,
+      netFiveHourShare: inShare ? (crossed ? 3 * PROBE_SHARE : -PROBE_SHARE * probes) : 0,
+      netUsd: crossed ? -0.012 : inShare ? 0 : -0.004 * probes,
       nextProbeAt: state === 'armed' && reason === null ? ahead(rng.int(20, 280) * 1000) : null,
       poolId: keyById.get(pin.keyId)?.poolId ?? 'all',
       reason,
       sessionId: pin.sessionId,
       state,
-      ttlSeconds: model.includes('haiku') ? 300 : 3_600,
+      ttlSeconds,
     };
   });
 });

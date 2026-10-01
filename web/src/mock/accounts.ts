@@ -48,7 +48,7 @@ export const ACCOUNTS: Account[] = ([
       quarantined: false,
       refreshTokenExpiresAt: ahead(58 * DAY),
     },
-    subscription: { billingType: 'annual', organizationType: 'claude_max', plan: 'max', rateLimitTier: 'max_20x', since: ago(200 * DAY), trialEndsAt: null, endsAt: null, derivedEndsAt: ahead(160 * DAY) },
+    subscription: { billingType: 'annual', organizationType: 'claude_max', plan: 'max', rateLimitTier: 'default_claude_max_20x', since: ago(200 * DAY), trialEndsAt: null, endsAt: null, derivedEndsAt: ahead(160 * DAY) },
     requests: { last24h: 1187, last7d: 7420, lifetime: 184_211 },
     // A live model-scoped cooldown, which the pool eligibility check leaves alone (that reads the account-wide
     // scope alone) but which the Models view and this account's own status fold in like any other cooldown. The
@@ -94,7 +94,7 @@ export const ACCOUNTS: Account[] = ([
       quarantined: false,
       refreshTokenExpiresAt: ahead(31 * DAY),
     },
-    subscription: { billingType: 'monthly', organizationType: 'claude_pro', plan: 'pro', rateLimitTier: 'pro_5x', since: ago(20 * DAY), trialEndsAt: ahead(8 * DAY), endsAt: ahead(5 * DAY), derivedEndsAt: ahead(35 * DAY) },
+    subscription: { billingType: 'monthly', organizationType: 'claude_pro', plan: 'pro', rateLimitTier: 'default_claude_pro', since: ago(20 * DAY), trialEndsAt: ahead(8 * DAY), endsAt: ahead(5 * DAY), derivedEndsAt: ahead(35 * DAY) },
     requests: { last24h: 364, last7d: 2290, lifetime: 51_902 },
     cooldowns: [
       {
@@ -135,7 +135,7 @@ export const ACCOUNTS: Account[] = ([
       quarantined: true,
       refreshTokenExpiresAt: ahead(72 * DAY),
     },
-    subscription: { billingType: 'monthly', organizationType: 'claude_max', plan: 'max', rateLimitTier: 'max_5x', since: ago(400 * DAY), trialEndsAt: null, endsAt: null, derivedEndsAt: ahead(20 * DAY) },
+    subscription: { billingType: 'monthly', organizationType: 'claude_max', plan: 'max', rateLimitTier: 'default_claude_max_5x', since: ago(400 * DAY), trialEndsAt: null, endsAt: null, derivedEndsAt: ahead(20 * DAY) },
     requests: { last24h: 812, last7d: 4103, lifetime: 22_870 },
     cooldowns: [],
   },

@@ -405,7 +405,8 @@ stays in the round. A session that returns to standard requests brings its pin b
 The console's Pools form offers `shed_share`, `burn_window_seconds`, and `source_dwell_seconds` together as three
 presets beside custom: balanced (0.5, 600 s, 900 s, the default), fast (0.5, 300 s, 600 s), and conservative (0.3,
 900 s, 1800 s). The form's preview of what a shedding round would move leaves out the pins of a subscription upstream
-whose tier is not known, which the round still sheds.
+whose tier is not known, which the round still sheds, and keeps a pin whose burn the table cannot price in the order
+unmarked, as the round does.
 
 A marked session moves at its next request, onto a cool sibling (see above) that did not shed this pin within
 `source_dwell_seconds`. A mark from a round on plan quota moves a standard request alone: a fast-mode request of the

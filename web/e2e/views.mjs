@@ -1343,6 +1343,43 @@ async function burnCards(theme) {
 }
 
 /**
+ * The Plan per hour legend's model unlisted entry against its neighbours: the entry before it, a planned upstream's
+ * 7-day entry, on type and swatch size, and, where an upstream whose tier the cost table does not size draws a tier
+ * unknown entry beside it, that muted entry on type, swatch size and colour too. In the mock's story the entry draws
+ * for `mail`, whose Sonnet 5 traffic the table cannot price; the router's seed bills no subscription traffic, so
+ * there the pass records that the entry is not drawn.
+ */
+async function planLegend(theme) {
+  const read = await page.evaluate(() => {
+    const card = [...document.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Plan per hour');
+    if (!card) return null;
+    const items = [...card.querySelectorAll('.legend li')];
+    const label = (li) => [...li.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent?.trim()).join('');
+    const value = (li) => li.querySelector('.legend__value')?.textContent?.trim() ?? null;
+    const box = (li) => {
+      if (!li) return null;
+      const s = getComputedStyle(li);
+      const swatch = li.querySelector('.legend__swatch');
+      const r = swatch?.getBoundingClientRect();
+      return { color: swatch ? getComputedStyle(swatch).backgroundColor : null, label: label(li), swatch: r ? `${Math.round(r.width)}x${Math.round(r.height)}` : null, type: `${s.fontFamily}/${s.fontSize}/${s.fontWeight}`, value: value(li) };
+    };
+    const at = items.findIndex((li) => label(li) === 'model unlisted');
+    return { neighbour: at > 0 ? box(items[at - 1]) : null, tierUnknown: box(items.find((li) => value(li) === 'tier unknown')), unlisted: at < 0 ? null : box(items[at]) };
+  });
+  measurements.push(`${theme} /analytics plan legend ${JSON.stringify(read)}`);
+  if (read === null) {
+    failures.push(`${theme} /analytics: no Plan per hour card to read the legend of`);
+    return;
+  }
+  if (read.unlisted === null) {
+    if (mock) failures.push(`${theme} /analytics: the story's mail upstream runs on a model the table cannot price, yet no model unlisted entry draws`);
+    return;
+  }
+  failures.push(...compare(read.unlisted, read.neighbour, ['type', 'swatch'], `${theme} /analytics: the model unlisted entry against the entry before it`));
+  if (read.tierUnknown) failures.push(...compare(read.unlisted, read.tierUnknown, ['type', 'swatch', 'color'], `${theme} /analytics: the model unlisted entry against the tier unknown entry`));
+}
+
+/**
  * The two analytics tables: Placements by rung against Cache by model, the table card before it in the Cache
  * section, on the title and head types and the card width, and where both cards draw figures, their type too, and a
  * placements row is as tall as a cache row; Member budgets against Placements by rung on the title and head types
@@ -2144,6 +2181,7 @@ try {
       if (view.path === '/analytics') {
         await wastedProbeRows(theme);
         await burnCards(theme);
+        await planLegend(theme);
         await analyticsTables(theme);
         await trafficCards(theme);
       }

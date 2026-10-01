@@ -328,12 +328,15 @@ mode), or Other (fast mode, tier unknown) for those whose tier the cost table do
 upstream groupings read the hourly rollups, which fold a request under the hour it arrived in and weigh it by that
 hour's band rather than at its completion, where the meter charges it. Grouped by upstream, it adds a Plan per hour
 chart: the share of each subscription upstream's 5-hour window, solid, and of its 7-day window, dashed, that its traffic
-used per hour, and an upstream whose tier the cost table does not size listed as tier unknown. Latency reports
-percentiles read from the merged per-hour histograms; Cache reports the hit ratio, tokens that expired between turns,
-the share of input served from cache, and the output split into thinking and plain output; Cost reports the estimated
-spend for the range and a Fast mode spend tile, the dollars fast-mode answers drew from usage credits; Cache warming
-reports what probes cost against what they saved, where a fast-mode session's probes and credits read as dollars and
-file under speed `fast`; and Upstreams reports peak utilization, ineligible time, and pin churn per upstream.
+used per hour, a bucket the table cannot price (a model it has no row for, or a cell it leaves unmeasured) listed under
+one model unlisted legend entry and drawn as a gap, an hour with no traffic counted as zero on a window the upstream
+priced in the range, a window with no priced bucket shown as a dash, and an upstream whose tier the table does not size
+listed as tier unknown. Latency reports percentiles read from the merged per-hour histograms; Cache reports the hit
+ratio, tokens that expired between turns, the share of input served from cache, and the output split into thinking and
+plain output; Cost reports the estimated spend for the range and a Fast mode spend tile, the dollars fast-mode answers
+drew from usage credits; Cache warming reports what probes cost against what they saved, where a fast-mode session's
+probes and credits read as dollars and file under speed `fast`; and Upstreams reports peak utilization, ineligible time,
+and pin churn per upstream.
 
 The Cache section closes with Placements by rung: the attempts in the range the router placed by a warm prefix or beside
 the main conversation rather than by its strategy, counted by rung (by the conversation's own messages, by its static

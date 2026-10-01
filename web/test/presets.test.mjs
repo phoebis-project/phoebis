@@ -103,6 +103,33 @@ test('the preview orders cold pins first, stops at the share, and never marks th
   assert.deepEqual([decayed.sessions, decayed.burnShare.toFixed(3)], [1, (5 / (10 / Math.E + 5 + 1)).toFixed(3)], 'the order and the share read each burn decayed to now');
 });
 
+test('a pin the table cannot price stays in the order unmarked and counts for the last-pin rule', () => {
+  const unlisted = four.map((p) => (p.sessionId === 'warm-1' ? { ...p, burn: null } : p));
+  const round = replay([hot, cool], unlisted);
+  assert.deepEqual([round.sessions, round.warm, round.unpriced], [2, 1, 1], 'cold 3 then warm 4, as with every pin priced');
+  assert.ok(d.shedPreviewLine(round, true).endsWith(' 1 pin the table cannot price stays.'), d.shedPreviewLine(round, true));
+  const pair = replay([hot, cool], [pin('priced', 1, false), pin('unlisted', null, false)]);
+  assert.deepEqual([pair.sessions, pair.unpriced], [1, 1], 'without the unpriced pin the priced one would be the last unmarked');
+  assert.deepEqual(
+    d.shedMarks(
+      [
+        { burn: 1, id: 'priced' },
+        { burn: null, id: 'unlisted' },
+        { burn: 2, id: 'last' },
+      ],
+      3,
+    ),
+    ['priced', 'last'],
+    'the unpriced pin is passed over and is the one unmarked pin the rule keeps',
+  );
+});
+
+test('under never an unpriced cold pin keeps no warm mark', () => {
+  const pins = [pin('cold-priced', 1, false), pin('cold-unlisted', null, false), pin('warm', 5, true)];
+  const round = replay([hot, cool], pins, { shedShare: 0.9, warmSessions: 'never' });
+  assert.deepEqual([round.sessions, round.warm], [1, 0], 'the marks are cut at the one priced cold pin, not at both cold pins');
+});
+
 test('a round under always ranks a warm pin ahead of a cold one by burn over the prompt it would rewrite', () => {
   // Burn over rewrite: warm-b's 3/100 leads cold-a's 4/1000 and cold-c's 3/1000, though both cold pins burn as much.
   const pins = [pin('cold-a', 4, false), pin('warm-b', 3, true, { lastInputTokens: 100 }), pin('cold-c', 3, false)];

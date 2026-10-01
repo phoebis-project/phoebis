@@ -960,6 +960,52 @@ fn the_burn_series_prices_a_subscription_row_in_window_share_and_an_api_key_row_
 }
 
 #[test]
+fn a_fast_row_never_lifts_a_window_an_unpriced_row_of_its_bucket_nulled() {
+    let tables = PlanTables::shipped();
+    let kinds = HashMap::from([("a".to_string(), AccountKind::Oauth)]);
+    let tiers: Tiers = HashMap::from([("a".to_string(), Some(MAX_20X.to_string()))]);
+    let filter = SeriesFilter {
+        from: 0,
+        to: 7_200_000,
+        bucket_seconds: 3_600,
+        ..SeriesFilter::default()
+    };
+    // Every Opus 5 cell is null, so its standard row leaves the bucket unpriced on both windows.
+    let row = |model: &str, speed: &str, estimated_usd: f64| RollupRow {
+        input_tokens: 1_000,
+        estimated_usd,
+        ..RollupRow::key(
+            3_600,
+            "k",
+            0,
+            "p",
+            "a",
+            model,
+            "inference",
+            UNATTRIBUTED,
+            UNATTRIBUTED,
+            "none",
+            NO_CLASS,
+            speed,
+        )
+    };
+    let unpriced = row("claude-opus-5", "standard", 0.0);
+    let fast = row("claude-opus-5-5", "fast", 0.25);
+    for rows in [[unpriced.clone(), fast.clone()], [fast, unpriced]] {
+        let point = burn_series_over(&rows, &tables, &kinds, &tiers, &filter)
+            .unwrap()
+            .into_iter()
+            .find(|p| p.at == 3_600_000)
+            .unwrap();
+        assert_eq!(
+            (point.usd, point.five_hour_share, point.seven_day_share),
+            (0.25, None, None),
+            "the fast row's zero never stands for a bucket holding a row the table cannot price, whichever came first"
+        );
+    }
+}
+
+#[test]
 fn a_fast_row_adds_dollars_and_no_share_to_a_subscription_burn_point() {
     let tables = PlanTables::shipped();
     let kinds = HashMap::from([("a".to_string(), AccountKind::Oauth)]);
@@ -1334,6 +1380,67 @@ fn a_row_of_an_account_without_a_tier_prices_no_share_and_an_api_key_row_keeps_i
 }
 
 #[test]
+fn a_bucket_mixing_a_priced_and_an_unpriced_row_prices_no_share_on_that_window_and_counts_every_token(
+) {
+    let db = LedgerDb::open_in_memory().unwrap();
+    // The same hour on Max 20x: a million Opus 5.5 input tokens the table prices and a million Opus 5 tokens it
+    // leaves unmeasured; a partial sum would read as the hour's share.
+    for (id, model) in [("priced", "claude-opus-5-5"), ("unpriced", "claude-opus-5")] {
+        db.insert_request(
+            &RequestRecord {
+                id: id.into(),
+                received_at: WEEKDAY_OFF_PEAK,
+                key_id: Some("k".into()),
+                pool_id: Some("p".into()),
+                canonical_model: model.into(),
+                model: model.into(),
+                kind: "inference".into(),
+                origin: "client".into(),
+                outcome: "succeeded".into(),
+                attempts: 1,
+                ..Default::default()
+            },
+            &[AttemptRecord {
+                request_id: id.into(),
+                attempt: 1,
+                account_id: "a".into(),
+                account_kind: "oauth".into(),
+                outcome: "succeeded".into(),
+                input_tokens: Some(1_000_000),
+                ..Default::default()
+            }],
+            None,
+        )
+        .unwrap();
+    }
+    let tables = PlanTables::shipped();
+    let kinds = HashMap::from([("a".to_string(), AccountKind::Oauth)]);
+    let tiers: Tiers = HashMap::from([("a".to_string(), Some(MAX_20X.to_string()))]);
+    let hour = phoebis_ledger::hour_of(WEEKDAY_OFF_PEAK) * 1_000;
+    let filter = SeriesFilter {
+        from: hour,
+        to: hour + 3_600_000,
+        bucket_seconds: 3_600,
+        ..SeriesFilter::default()
+    };
+    let point = db
+        .read_blocking(|c| burn_series(c, &tables, &kinds, &tiers, &filter))
+        .unwrap()
+        .into_iter()
+        .find(|p| p.at == hour)
+        .unwrap();
+    assert_eq!(
+        (
+            point.five_hour_share,
+            point.seven_day_share,
+            point.uncached_tokens,
+            point.usd
+        ),
+        (None, None, 2_000_000, 0.0)
+    );
+}
+
+#[test]
 fn a_row_on_a_model_with_an_unmeasured_cell_prices_no_share_and_its_tokens_still_count() {
     let db = LedgerDb::open_in_memory().unwrap();
     // Every Opus 5 cell is null, so a million of its input tokens meet an unmeasured cell on both windows.
@@ -1542,11 +1649,20 @@ fn a_sessions_fast_attempt_reads_its_dollars_at_a_zero_share() {
 #[test]
 fn the_burn_series_over_one_read_matches_a_read_per_scope() {
     let db = LedgerDb::open_in_memory().unwrap();
-    for (mut request, attempts) in synthetic_day(5) {
+    for (mut request, mut attempts) in synthetic_day(5) {
         // The day's Claude models are all unmeasured in the cost table; its Opus rows move to Opus 5.5, whose
-        // 5-hour cells are measured, so a scope's buckets mix priced shares with unpriced rows.
+        // 5-hour cells are measured. Account a's other rows move to what the table prices (Sonnet 5.5, and the API
+        // key for its GPT rows), so its scope reads priced shares, while c keeps its unmeasured Sonnet 5 rows beside
+        // Opus 5.5 and its buckets mix priced shares with unpriced rows.
         if request.canonical_model == "claude-opus-5" {
             request.canonical_model = "claude-opus-5-5".into();
+        }
+        if let Some(last) = attempts.last_mut().filter(|a| a.account_id == "a") {
+            match request.canonical_model.as_str() {
+                "claude-sonnet-5" => request.canonical_model = "claude-sonnet-5-5".into(),
+                "gpt-5" => last.account_id = "b".into(),
+                _ => {}
+            }
         }
         db.insert_request(&request, &attempts, None).unwrap();
     }
