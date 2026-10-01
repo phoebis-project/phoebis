@@ -8,6 +8,7 @@ export * from '@/lib/buckets';
 export * from '@/lib/cache';
 export * from '@/lib/format';
 export * from '@/lib/forms';
+export * from '@/lib/menu';
 export * from '@/lib/pattern';
 export * as modelPatterns from '@/lib/patterns';
 export * from '@/lib/presets';

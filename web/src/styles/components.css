@@ -1071,15 +1071,6 @@ textarea.input {
   overflow: visible;
 }
 
-/* The Keys page's table needs 645 px for the seeded keys, which its card holds from a 1248 px window on, beside the
-   lifetime cost card; there the wrap stops clipping, so a row menu can drop past the table's last row. Narrower, the
-   wrap keeps its sideways scroll and the menu takes whichever side has the room. */
-@media (min-width: 1248px) {
-  .card--table > .table-wrap:has(> .keys-page-table) {
-    overflow: visible;
-  }
-}
-
 /* The cell grid: two equal columns with the gutter; a child spans both unless it is one of a pair. */
 .cells {
   display: grid;

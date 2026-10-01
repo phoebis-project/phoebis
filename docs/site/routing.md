@@ -460,11 +460,10 @@ fast request's pinned upstream whose `fast_credits` row stands or whose usage cr
 `fast_rate_limit` (one whose `fast` row is the blocking row that stands latest), `overage`, `paused`, `spent`,
 `subscription_ended`, `unserved`, the account's state when it cannot serve (`disconnected`, `funding_required`,
 `reauth_required`, `unpaired`), or `released` when the selection found nothing else against the account, as with a move
-whose destination emptied. A pin whose creating request was answered 400, 401, 403,
-or 404, with no cooldown or mark on the account and no other turn of the session renewing it meanwhile, records the
-single reason `client_error`: it never served, so the session's next request is placed afresh rather than moved.
-Releasing a session by hand, from the Sessions view or `POST /admin/sessions/{key}/{session}/release`, expires its pin
-the same way.
+whose destination emptied. A pin whose creating request was answered 400, 401, 403, or 404, with no cooldown or mark on
+the account and no other turn of the session renewing it meanwhile, records the single reason `client_error`: it never
+served, so the session's next request is placed afresh rather than moved. Releasing a session by hand, from the Sessions
+view or `POST /admin/sessions/{key}/{session}/release`, expires its pin the same way.
 
 ## Cooldowns and failover
 

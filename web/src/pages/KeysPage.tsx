@@ -131,7 +131,7 @@ export function KeysPage() {
             )}
           </div>
           <div className="table-wrap">
-            <table className="table keys-page-table">
+            <table className="table">
               <thead>
                 <tr>
                   <th>Name</th>

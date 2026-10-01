@@ -1,6 +1,7 @@
 import { createContext, Fragment, useContext, useEffect, useId, useLayoutEffect, useRef, useState, type ButtonHTMLAttributes, type CSSProperties, type HTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes } from 'react';
 import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
+import { menuPlacement, type MenuPlacement } from '@/lib/menu';
 import type { BadgeTone } from '@/lib/quota';
 import { IconCheck, IconChevron, IconCopy, IconSearch, IconWarning, IconX } from './icons';
 
@@ -514,7 +515,6 @@ export function ConfirmDialog({ open, onClose, onConfirm, title, body, confirmLa
   );
 }
 
-type MenuPlacement = { kind: 'down' } | { kind: 'up' } | { kind: 'float'; left: number; top: number };
 const IN_FLOW: MenuPlacement = { kind: 'down' };
 const CLIPPING = new Set(['auto', 'clip', 'hidden', 'scroll']);
 
@@ -536,8 +536,8 @@ export function Menu({ items, label = 'Actions' }: { items: { danger?: boolean; 
   }, [open]);
   // Measured once per opening, after the list has drawn below its trigger and before the browser paints it. A table
   // wrap that scrolls sideways clips on both axes, so its edges bound the list as much as the viewport's do. A row
-  // too short for the list on either side inside its wrap (a table filtered to one row on a narrow window) moves the
-  // list out of the wrap, into a fixed layer at the trigger.
+  // too short for the list on either side inside its wrap (a table filtered to one row) moves the list out of the
+  // wrap, into a fixed layer at the trigger.
   useLayoutEffect(() => {
     if (!open) {
       setPlacement(IN_FLOW);
@@ -546,20 +546,12 @@ export function Menu({ items, label = 'Actions' }: { items: { danger?: boolean; 
     if (!ref.current) return;
     const trigger = ref.current.getBoundingClientRect();
     anchor.current = trigger;
-    // A wrap bounds the list only while it clips: the Keys page's rule sets it `overflow: visible` where it fits. The
+    // A wrap bounds the list only while it clips: the pool dialog's key table sets its wrap `overflow: visible`. The
     // clipping values are named because a page without styles, as in the smoke run, reads the property empty.
     const wrap = ref.current.closest<HTMLElement>('.table-wrap');
-    const clip = wrap && CLIPPING.has(getComputedStyle(wrap).overflowY) ? wrap.getBoundingClientRect() : undefined;
-    const floor = clip ? Math.min(clip.bottom, window.innerHeight) : window.innerHeight;
-    const ceiling = clip ? Math.max(clip.top, 0) : 0;
-    const need = (listRef.current?.offsetHeight ?? 0) + 4;
-    const width = listRef.current?.offsetWidth ?? 0;
-    if (floor - trigger.bottom >= need) setPlacement(IN_FLOW);
-    else if (trigger.top - ceiling >= need) setPlacement({ kind: 'up' });
-    else {
-      const below = window.innerHeight - trigger.bottom >= need;
-      setPlacement({ kind: 'float', left: trigger.right - width, top: below ? trigger.bottom + 4 : trigger.top - need });
-    }
+    const clip = wrap && CLIPPING.has(getComputedStyle(wrap).overflowY) ? wrap : null;
+    const next = menuPlacement(trigger, clip, { height: listRef.current?.offsetHeight ?? 0, width: listRef.current?.offsetWidth ?? 0 }, window.innerHeight);
+    setPlacement(next.kind === 'down' ? IN_FLOW : next);
   }, [open]);
   // A fixed layer stays where it was drawn while the page moves under it, so it closes rather than float beside
   // another row. A scroll is read by whether it moved the trigger: the scroll that brought the row into view can

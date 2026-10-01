@@ -78,8 +78,10 @@ const releaseLabel = (reasons: unknown): string =>
     })
     .join(', ');
 
+/** Where a hold waited: its cohort's upstream, else the last one it waited on. */
+const heldOn = (h: CohortHold) => h.cohort ?? h.waitedOn[h.waitedOn.length - 1] ?? 'an upstream';
 /** The badge rounds the wait, so its hover carries it whole with where it was placed, as the drawer names it. */
-const heldTitle = (h: CohortHold) => `waited ${fmtInt(h.heldMs)} ms on ${h.cohort ?? h.waitedOn[h.waitedOn.length - 1] ?? 'an upstream'}`;
+const heldTitle = (h: CohortHold) => `waited ${fmtInt(h.heldMs)} ms on ${heldOn(h)}`;
 
 // A fixed three-slot readout: a plan that serves no Fable reports two windows in
 // its headers, and the empty third slot is the point rather than a gap to hide.
@@ -558,7 +560,7 @@ function RequestDrawer({ request, requestId, now, onClose }: { now: number; onCl
             {/* A hold that ended with nothing dispatched has no attempt whose trace could name it. */}
             {r.attempts.length === 0 && r.held && (
               <p className="attempt__hold">
-                held {fmtMs(r.held.heldMs)} on {r.held.cohort ?? r.held.waitedOn[r.held.waitedOn.length - 1] ?? 'an upstream'}
+                held {fmtMs(r.held.heldMs)} on {heldOn(r.held)}
               </p>
             )}
             {trail.map((e) => {

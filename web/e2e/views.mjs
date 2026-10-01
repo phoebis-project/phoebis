@@ -938,21 +938,30 @@ async function poolKeyMenus(theme) {
 }
 
 /**
- * The Keys page's last Actions menu at the pass's viewport and at the 760 px strip, on the full table and on the table
- * filtered to its last key's name through the search field, with the page scrolled as far down as it goes so the row
- * sits as low as it can: whichever side the list takes, each item takes a pointer at its centre and the list lies
- * inside the viewport. One short row at the strip leaves the list less room than it needs on both sides inside the
- * table's clipping wrapper, so there the list must leave the table for a layer of its own.
+ * The Keys page's Actions menus at the pass's viewport and at the 760 px strip. On the full table, the first row's
+ * menu with the table's top scrolled under the top bar opens downward in flow whenever the room under it inside the
+ * table's wrap holds the list, and the last row's menu with the page scrolled as far down as it goes takes whichever
+ * side has the room. On the table filtered to its last key's name through the search field, the one short row leaves
+ * the list less room than it needs on both sides inside the clipping wrap, so the list leaves the table for a layer
+ * of its own, which a scroll that moves its trigger and a resize each close. Whatever the side, each item takes a
+ * pointer at its centre and the list lies inside the viewport.
  */
 async function keysPageMenus(theme) {
   const say = (what) => failures.push(`${theme} /keys menu: ${what}`);
   const rows = page.locator('.card--table tbody tr');
   const search = page.getByPlaceholder('Search keys', { exact: true });
   const scrolled = await page.evaluate(() => window.scrollY);
-  const read = async (state) => {
-    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+  // The last row sits as low as the page lets it at the page's end; the first row as high as the top bar lets it.
+  const scrollFor = (row) =>
+    page.evaluate((first) => {
+      const wrap = document.querySelector('.card--table > .table-wrap');
+      window.scrollTo(0, first && wrap ? window.scrollY + wrap.getBoundingClientRect().top - 60 : document.documentElement.scrollHeight);
+    }, row === 'first');
+  const triggerOf = (row) => (row === 'first' ? rows.first() : rows.last()).locator('.menu__trigger');
+  const read = async (state, row) => {
+    await scrollFor(row);
     await settle();
-    const trigger = rows.last().locator('.menu__trigger');
+    const trigger = triggerOf(row);
     await trigger.click();
     await settle();
     const found = await page.evaluate(() => {
@@ -961,11 +970,12 @@ async function keysPageMenus(theme) {
       if (lists.length !== 1) return { lists: lists.length };
       const box = list.getBoundingClientRect();
       const node = document.querySelector('.card--table > .table-wrap');
-      const wrap = node?.getBoundingClientRect();
+      const top = node ? node.getBoundingClientRect().top + node.clientTop : 0;
+      const at = document.querySelector('.menu__trigger[aria-expanded="true"]')?.closest('.menu')?.getBoundingClientRect();
       const items = [...list.querySelectorAll('[role="menuitem"]')].map((item) => {
-        const at = item.getBoundingClientRect();
-        const x = Math.round(at.left + at.width / 2);
-        const y = Math.round(at.top + at.height / 2);
+        const b = item.getBoundingClientRect();
+        const x = Math.round(b.left + b.width / 2);
+        const y = Math.round(b.top + b.height / 2);
         const hit = document.elementFromPoint(x, y);
         return { at: hit ? `${hit.tagName.toLowerCase()}.${hit.className}` : 'nothing', hit: hit !== null && item.contains(hit), label: item.textContent?.trim(), x, y };
       });
@@ -975,8 +985,9 @@ async function keysPageMenus(theme) {
         items,
         lists: 1,
         placement: list.classList.contains('menu__list--float') ? 'float' : list.classList.contains('menu__list--up') ? 'up' : 'down',
+        // The room under the trigger inside the wrap's client box and the viewport, against the list and its gap.
+        room: at && node ? { below: Math.min(top + node.clientHeight, window.innerHeight) - at.bottom, need: list.offsetHeight + 4 } : null,
         viewport: { height: window.innerHeight, width: window.innerWidth },
-        wrap: wrap ? { bottom: wrap.bottom, clientWidth: node.clientWidth, overflow: getComputedStyle(node).overflowX, scrollWidth: node.scrollWidth, top: wrap.top } : null,
       };
     });
     await trigger.click();
@@ -988,23 +999,64 @@ async function keysPageMenus(theme) {
     if (found.items.length === 0) sayIn('the list draws no item');
     for (const item of found.items.filter((it) => !it.hit)) sayIn(`item ${item.label} takes no pointer at its centre (${item.x}, ${item.y}): ${item.at} lies there`);
     if (!found.inside) sayIn(`the list's edges ${JSON.stringify(found.edges)} leave the ${found.viewport.width} by ${found.viewport.height} viewport`);
-    // The wrap stops clipping only where the table fits it, so a table wider than its card still scrolls sideways.
-    if (found.wrap?.overflow === 'visible' && found.wrap.scrollWidth > found.wrap.clientWidth) sayIn(`the wrap clips nothing while its table runs ${found.wrap.scrollWidth} px in ${found.wrap.clientWidth} px`);
+    if (found.room && found.room.below >= found.room.need && found.placement !== 'down') sayIn(`the list takes ${found.placement} though ${found.room.below} px below hold its ${found.room.need}`);
     return found;
+  };
+  // A fixed layer stays where it was drawn, so a scroll that moves its trigger closes it, and so does a resize. A
+  // 450 px window is shorter than the filtered page, so the page has somewhere to scroll.
+  const closes = async (width) => {
+    const sayIn = (what) => say(`at ${width} by 450 px, the filtered table's layer: ${what}`);
+    await page.setViewportSize({ height: 450, width });
+    await settle();
+    const open = async () => {
+      await scrollFor('last');
+      await settle();
+      await triggerOf('last').click();
+      await settle();
+      return page.locator('.menu__list--float').count();
+    };
+    if ((await open()) !== 1) return sayIn('did not open to read its close');
+    const moved = await page.evaluate(() => {
+      const trigger = document.querySelector('.menu__trigger[aria-expanded="true"]');
+      const before = trigger?.getBoundingClientRect().top ?? 0;
+      window.scrollBy(0, window.scrollY >= 50 ? -50 : 50);
+      return (trigger?.getBoundingClientRect().top ?? 0) - before;
+    });
+    await settle();
+    const afterScroll = await page.locator('.menu__list').count();
+    measurements.push(`${theme} /keys menu at ${width} by 450 px, the layer after a scroll that moved its trigger ${moved} px: ${afterScroll} lists open`);
+    if (moved === 0) sayIn('the page did not scroll, so its close on a scroll went unread');
+    else if (afterScroll !== 0) sayIn(`stayed open after a scroll moved its trigger ${moved} px`);
+    if (afterScroll !== 0) await triggerOf('last').click();
+    if ((await open()) !== 1) return sayIn('did not open again to read its close on a resize');
+    await page.setViewportSize({ height: 440, width });
+    await settle();
+    const afterResize = await page.locator('.menu__list').count();
+    measurements.push(`${theme} /keys menu at ${width} by 450 px, the layer after a resize: ${afterResize} lists open`);
+    if (afterResize !== 0) {
+      sayIn('stayed open after a resize');
+      await triggerOf('last').click();
+    }
+    await page.setViewportSize({ height: 800, width });
+    await settle();
   };
   for (const width of [1280, 760]) {
     try {
       await page.setViewportSize({ height: 800, width });
       await settle();
       const full = await rows.count();
-      await read(`the full table of ${full} rows`);
+      const first = await read(`the first row of ${full}`, 'first');
+      // The story holds several keys, so its first row has the room below that a downward list needs.
+      if (mock && first?.room && first.room.below < first.room.need) say(`at ${width} px the first row's room below, ${first.room.below} px, holds no list`);
+      await read(`the last row of ${full}`, 'last');
       const name = ((await rows.last().locator('td').first().locator('b').textContent()) ?? '').trim();
       await search.fill(name);
       await settle();
       const filtered = await rows.count();
       if (filtered !== 1) say(`at ${width} px the search for ${JSON.stringify(name)} leaves ${filtered} rows, not one`);
-      const one = await read(`the table filtered to ${JSON.stringify(name)}`);
-      if (width === 760 && one?.placement !== 'float') say(`at 760 px the filtered table's menu takes ${one?.placement}, not a layer of its own`);
+      const one = await read(`the table filtered to ${JSON.stringify(name)}`, 'last');
+      if (one?.placement !== 'float') say(`at ${width} px the filtered table's menu takes ${one?.placement}, not a layer of its own`);
+      else await closes(width);
     } catch (error) {
       say(`at ${width} px: ${error instanceof Error ? error.message : String(error)}`);
     }
