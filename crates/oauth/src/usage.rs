@@ -28,8 +28,9 @@ const FETCH_TIMEOUT: Duration = Duration::from_secs(5);
 pub const BACKOFF_CAP_MS: i64 = 15 * 60 * 1_000;
 
 /// The wait a 429 without `Retry-After` earns, by how many 429s the account has answered in a row; past the
-/// ladder every further 429 waits `BACKOFF_CAP_MS`.
-const BACKOFF_LADDER_MS: [i64; 4] = [60_000, 120_000, 240_000, 480_000];
+/// ladder every further 429 waits `BACKOFF_CAP_MS`. The ladder starts at two minutes: the endpoint's own limit
+/// is per account and per minute, so a one-minute retry met the same answer.
+const BACKOFF_LADDER_MS: [i64; 3] = [120_000, 240_000, 480_000];
 
 /// The endpoint names a 429's warning and the held answer carry.
 const PROFILE_ENDPOINT: &str = "profile";
@@ -396,13 +397,17 @@ impl UsageService {
         Some(Duration::from_millis((not_before - now) as u64))
     }
 
-    /// The last snapshot held for the account, clean or carrying its last attempt's error, with no fetch.
+    /// The last snapshot held for the account, clean or carrying its last attempt's error, with no fetch;
+    /// `None` for an entry another holder of the id left behind (a re-pairing or a delete and a new account
+    /// under the id that no route invalidated), so no caller shows the old holder's windows as the new one's.
     pub fn latest(&self, account_id: &str) -> Option<UsageSnapshot> {
+        let identity = self.inner.identity(account_id);
         self.inner
             .cache
             .lock()
             .expect(LOCK_POISONED)
             .get(account_id)
+            .filter(|entry| identity == Some(entry.identity))
             .map(|entry| entry.snapshot.clone())
     }
 
@@ -659,9 +664,13 @@ impl Inner {
     ) -> FetchOutcome {
         let mut cache = self.cache.lock().expect(LOCK_POISONED);
         if identity_changed {
-            // A hold armed while this fetch was out still marks the answer, as on every other path.
+            // A hold armed while this fetch was out still marks the answer, as on every other path; an entry an
+            // earlier holder of the id left behind is nobody's answer.
             let now = (self.clock)();
             return match cache.get(account_id) {
+                Some(entry) if Some(entry.identity) != ended => {
+                    Err("account identity changed while fetching usage".to_string())
+                }
                 Some(entry) if now < entry.not_before => Ok(entry.held_answer()),
                 Some(entry) => Ok(entry.snapshot.clone()),
                 None => Err("account identity changed while fetching usage".to_string()),

@@ -78,11 +78,11 @@ last run, predicted forward, and its backoff starts at once, and one whose first
 another error serves from them too and keeps the cadence. The poll counts that read as its own: it next reads each
 account five minutes after the startup step, on the account's phase, and its profile an hour after.
 
-An account the endpoint answers 429 backs off alone. Its hold grows through one, two, four and eight minutes to
-fifteen, a `Retry-After` honoured up to the same fifteen, and a retry never comes sooner than the account's next
-five-minute slot, so a hold shorter than that waits for the slot. Each 429 is logged as a warning naming the account
-and the endpoint that answered it, and the next clean answer returns the account to the five minutes. A transport
-failure or another error keeps the cadence. The other accounts keep theirs throughout.
+An account the endpoint answers 429 backs off alone. Its hold grows through two, four and eight minutes to fifteen, a
+`Retry-After` honoured up to the same fifteen, and the retry comes when the hold ends, sooner than the account's next
+five-minute slot when the hold is shorter. Each 429 is logged as a warning naming the account and the endpoint that
+answered it, and the next clean answer returns the account to the five minutes. A transport failure or another error
+keeps the cadence. The other accounts keep theirs throughout.
 
 ## Pricing
 

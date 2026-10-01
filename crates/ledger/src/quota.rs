@@ -201,7 +201,7 @@ fn next_slot(at: Instant, dispatched: Instant) -> Instant {
 
 /// Draws the schedule again when the polled accounts differ from the ones it was drawn for: a pairing, a
 /// re-pairing or a delete re-spreads the phases, an attempt in flight keeps its slot, an account is not read
-/// again sooner than an interval after its last read, and a backoff that ends later keeps the service's time.
+/// again sooner than an interval after its last read, and a held account's slot is the hold's end.
 /// The first pass follows the startup step, which has just read every account it lists, so those slots start
 /// an interval on with that read counted as their first poll.
 fn spread(
@@ -245,8 +245,10 @@ fn spread(
             if let Some(read) = slot.last_read {
                 at = at.max(read + POLL_INTERVAL);
             }
+            // A hold ends when the service says it ends: a 429's wait is the endpoint's own limit per account, and
+            // the cadence floor would make a two-minute hold a five-minute one.
             if let Some(held) = usage.held_for(&account.id) {
-                at = at.max(now + held);
+                at = now + held;
             }
             slot.at = at;
         }
@@ -269,9 +271,9 @@ impl QuotaPoll {
     /// delays no other and no finished attempt is kept; a completion moves its slot only while the slot still
     /// belongs to the incarnation the attempt was drawn for. The next slot is the first on the account's phase an
     /// interval after the read (`next_slot`), so a late wake reads once and keeps the phase, or, after a 429, the
-    /// usage service's next-attempt time when that is later, so a backoff never brings an attempt sooner than the
-    /// cadence; with no slot to wait for, the scheduler wakes after one interval and re-reads the registry. Every
-    /// clean snapshot is recorded to the ledger and reported to the router as `poll_account` does with a router.
+    /// usage service's next-attempt time, which may come sooner than the cadence; with no slot to wait for, the
+    /// scheduler wakes after one interval and re-reads the registry. Every clean snapshot is recorded to the ledger
+    /// and reported to the router as `poll_account` does with a router.
     ///
     /// Spawned once the startup step is done: that step has just read every account, so an account the first
     /// pass finds is next read an interval after the start, on its phase, and its profile an hour on.
@@ -347,7 +349,7 @@ impl QuotaPoll {
                                 if slot.in_flight == Some(id) && slot.incarnation == done.incarnation {
                                     slot.in_flight = None;
                                     let next = next_slot(slot.at, slot.last_read.unwrap_or(slot.at));
-                                    slot.at = done.held.map_or(next, |wait| (Instant::now() + wait).max(next));
+                                    slot.at = done.held.map_or(next, |wait| Instant::now() + wait);
                                 }
                             }
                         }

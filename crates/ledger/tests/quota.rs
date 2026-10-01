@@ -495,26 +495,26 @@ async fn a_rate_limited_account_backs_off_alone_while_its_sibling_keeps_the_inte
     let (lines, _sink) = capture_tracing();
     let paused = start_polling(&h, &up).await;
 
-    // The hold grows through 1, 2, 4 and 8 minutes to 15, and the next attempt waits for the hold or the next
-    // slot, whichever is later: `a` at 300, 600, 900 and 1 200 s, then 480 s and 900 s on (1 681 and 2 582 s,
-    // a second or so late each); `c` every 300 s from 450 s throughout.
+    // The hold grows through 2, 4 and 8 minutes to 15, and the next attempt comes when the hold ends: `a` at
+    // 300 s, then 120, 240, 480, 900 and 900 s on (about 421, 662, 1 143, 2 044 and 2 945 s, a second or so late
+    // each); `c` every 300 s from 450 s throughout.
     step_to(&h, &up, &paused, secs(599)).await;
     assert_eq!(
         usage_asked(&up, A),
-        1,
-        "the one-minute hold waits for the next slot"
+        2,
+        "the two-minute hold ends before the next slot"
     );
     step_to(&h, &up, &paused, secs(1_205)).await;
     assert_eq!(
         usage_asked(&up, A),
         4,
-        "the holds below the interval read as the interval"
+        "the holds shorter than the interval end on their own"
     );
     step_to(&h, &up, &paused, secs(1_675)).await;
     assert_eq!(
         usage_asked(&up, A),
         4,
-        "the eight-minute hold outlasts the next slot"
+        "the fifteen-minute hold outlasts the next slot"
     );
     step_to(&h, &up, &paused, secs(3_000)).await;
     assert_eq!((usage_asked(&up, A), usage_asked(&up, OAUTH_C)), (6, 9));
@@ -537,7 +537,7 @@ async fn a_rate_limited_account_backs_off_alone_while_its_sibling_keeps_the_inte
 
     // The next answer is clean: the run ends, and the request after it is one interval later.
     up.set_credential_rule_after(A, 0, "/api/oauth/usage", usage_rule().respond);
-    step_to(&h, &up, &paused, secs(3_700)).await;
+    step_to(&h, &up, &paused, secs(3_850)).await;
     assert_eq!(usage_asked(&up, A), 7);
     let status = h.usage.as_ref().unwrap().poll_status("a").unwrap();
     assert_eq!(
@@ -572,23 +572,23 @@ async fn a_retry_after_is_honoured_and_capped_by_the_poll() {
 
     step_to(&h, &up, &paused, secs(302)).await;
     assert_eq!(usage_asked(&up, A), 1, "the first slot");
-    step_to(&h, &up, &paused, secs(598)).await;
+    step_to(&h, &up, &paused, secs(418)).await;
     assert_eq!(
         usage_asked(&up, A),
         1,
-        "the 120 s asked for end before the next slot, which the retry waits for"
+        "the two minutes asked for are not stretched to the next slot"
     );
-    step_to(&h, &up, &paused, secs(602)).await;
-    assert_eq!(usage_asked(&up, A), 2, "asked again at the next slot");
+    step_to(&h, &up, &paused, secs(424)).await;
+    assert_eq!(usage_asked(&up, A), 2, "asked again when the 120 s end");
     let status = h.usage.as_ref().unwrap().poll_status("a").unwrap();
     assert_eq!(
         status.next_attempt_at,
         Some(status.last_attempt_at + 900_000),
         "the hour asked for is held to fifteen minutes"
     );
-    step_to(&h, &up, &paused, secs(1_498)).await;
+    step_to(&h, &up, &paused, secs(1_318)).await;
     assert_eq!(usage_asked(&up, A), 2, "held inside the fifteen minutes");
-    step_to(&h, &up, &paused, secs(1_504)).await;
+    step_to(&h, &up, &paused, secs(1_326)).await;
     assert_eq!(usage_asked(&up, A), 3, "asked again at the cap");
     up.shutdown().await;
 }

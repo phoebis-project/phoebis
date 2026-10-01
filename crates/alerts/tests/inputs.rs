@@ -1612,7 +1612,7 @@ async fn a_poll_backoff_alert_fires_after_thirty_minutes_of_backoff_and_resolves
     );
     usage.poll("business").await.unwrap();
     let at = |ms: i64| rig.clock.store(NOW + ms, Ordering::SeqCst);
-    // A second 429 once the first step's minute has passed: the run keeps its start and climbs the ladder.
+    // A second 429 once the first step's two minutes have passed: the run keeps its start and climbs the ladder.
     at(29 * 60_000);
     usage.poll("business").await.unwrap();
     let status = usage.poll_status("business").unwrap();
@@ -1646,7 +1646,7 @@ async fn a_poll_backoff_alert_fires_after_thirty_minutes_of_backoff_and_resolves
         serde_json::json!({
             "account": "business",
             "backoff_since": NOW,
-            "next_attempt_at": NOW + 29 * 60_000 + 120_000,
+            "next_attempt_at": NOW + 29 * 60_000 + 240_000,
             "rate_limited_in_a_row": 2,
         })
     );
@@ -1660,7 +1660,7 @@ async fn a_poll_backoff_alert_fires_after_thirty_minutes_of_backoff_and_resolves
 
     // A threshold of 0 applies the switch at the rule's next request, whatever it has counted so far.
     up.set_rule_after(0, "/api/oauth/usage", usage_answer(200));
-    at(29 * 60_000 + 120_000);
+    at(29 * 60_000 + 240_000);
     usage.poll("business").await.unwrap();
     assert_eq!(
         usage.poll_status("business").unwrap().last_outcome,

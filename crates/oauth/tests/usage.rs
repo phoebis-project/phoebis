@@ -591,7 +591,7 @@ mod service {
     }
 
     #[tokio::test]
-    async fn a_429_without_retry_after_backs_off_at_one_two_four_eight_and_then_fifteen_minutes() {
+    async fn a_429_without_retry_after_backs_off_at_two_four_eight_and_then_fifteen_minutes() {
         // The fake answers 429 with no header; the clock is the service's, so each step is one fetch past the
         // cache TTL of one second and one more inside the wait.
         let now = Arc::new(AtomicI64::new(1_000_000));
@@ -604,7 +604,7 @@ mod service {
         );
         let (lines, _sink) = crate::common::capture_tracing();
         let mut at = 1_000_000;
-        for (step, wait_ms) in [60_000, 120_000, 240_000, 480_000, 900_000, 900_000]
+        for (step, wait_ms) in [120_000, 240_000, 480_000, 900_000, 900_000, 900_000]
             .into_iter()
             .enumerate()
         {
@@ -629,7 +629,7 @@ mod service {
             if step == 0 {
                 assert_eq!(
                     service.snapshot("a").await.unwrap().error.as_deref(),
-                    Some("the usage endpoint rate-limited the account; next attempt at 1970-01-01 00:17:40 UTC"),
+                    Some("the usage endpoint rate-limited the account; next attempt at 1970-01-01 00:18:40 UTC"),
                     "the held answer names the endpoint and when it may be asked again"
                 );
             }
@@ -680,14 +680,14 @@ mod service {
         );
 
         service.snapshot("a").await.unwrap();
-        now.store(1_060_000, Ordering::SeqCst);
+        now.store(1_120_000, Ordering::SeqCst);
         service.snapshot("a").await.unwrap();
         assert_eq!(
             service.poll_status("a").unwrap().rate_limited_in_a_row,
             2,
             "two 429s in a row"
         );
-        now.store(1_180_000, Ordering::SeqCst);
+        now.store(1_360_000, Ordering::SeqCst);
         assert!(service.snapshot("a").await.unwrap().error.is_none());
         let status = service.poll_status("a").unwrap();
         assert_eq!(
@@ -698,7 +698,7 @@ mod service {
                 status.backoff_since,
                 status.last_clean_at
             ),
-            (PollOutcome::Clean, 0, None, None, Some(1_180_000)),
+            (PollOutcome::Clean, 0, None, None, Some(1_360_000)),
             "the clean answer ends the run"
         );
         assert_eq!(service.held_for("a"), None);
@@ -712,7 +712,7 @@ mod service {
                 body: b"{}".to_vec(),
             },
         );
-        now.store(1_181_000, Ordering::SeqCst);
+        now.store(1_361_000, Ordering::SeqCst);
         assert!(service.snapshot("a").await.unwrap().error.is_some());
         let status = service.poll_status("a").unwrap();
         assert_eq!(
@@ -722,13 +722,13 @@ mod service {
                 status.next_attempt_at,
                 status.last_clean_at
             ),
-            (PollOutcome::Failed, 0, None, Some(1_180_000)),
+            (PollOutcome::Failed, 0, None, Some(1_360_000)),
             "a 5xx is a failed attempt, not a backoff"
         );
         assert_eq!(service.held_for("a"), None);
 
         up.set_rule_after(4, "/api/oauth/usage", Respond::CloseAfterRequest);
-        now.store(1_182_000, Ordering::SeqCst);
+        now.store(1_362_000, Ordering::SeqCst);
         assert!(service.snapshot("a").await.unwrap().error.is_some());
         let status = service.poll_status("a").unwrap();
         assert_eq!(
@@ -738,7 +738,7 @@ mod service {
                 status.next_attempt_at,
                 status.last_attempt_at
             ),
-            (PollOutcome::Failed, 0, None, 1_182_000),
+            (PollOutcome::Failed, 0, None, 1_362_000),
             "a transport failure is a failed attempt, not a backoff"
         );
         assert_eq!(service.held_for("a"), None);
@@ -922,8 +922,9 @@ mod service {
         up.shutdown().await;
     }
 
-    /// A fetch whose account is disconnected while it is out is discarded, and the caller gets the cached
-    /// entry instead; when a hold was armed meanwhile, that answer is the held one, never the clean windows.
+    /// A fetch whose account is disconnected and paired again while it is out is discarded, and the caller gets
+    /// the new pairing's cached entry instead; when a hold was armed meanwhile, that answer is the held one,
+    /// never the clean windows.
     #[tokio::test]
     async fn a_lifecycle_change_during_a_fetch_under_a_new_hold_answers_the_held_snapshot() {
         let now = Arc::new(AtomicI64::new(1_000_000));
@@ -972,8 +973,27 @@ mod service {
             (usage_requests(&up) == 2).then_some(())
         })
         .await;
+        let generation = store.bump_lifecycle("a").unwrap();
+        service.invalidate("a");
+        store
+            .commit_credentials(
+                "a",
+                1,
+                generation,
+                None,
+                None,
+                &NewBundle {
+                    access_token: Secret::new("sk-ant-oat01-PLACEHOLDER"),
+                    refresh_token: Some(Secret::new("rt")),
+                    issued_at: 1_000_000,
+                    expires_at: 1_000_000 + 86_400_000,
+                    refresh_expires_at: None,
+                    scopes: "user:profile user:inference".into(),
+                },
+            )
+            .unwrap();
+        store.set_state("a", AccountState::Ready).unwrap();
         assert!(service.profile("a").await.is_err(), "the hold is armed");
-        store.bump_lifecycle("a").unwrap();
         up.release();
         let answer = fetching.await.unwrap().unwrap();
         assert_eq!(
@@ -1051,6 +1071,71 @@ mod service {
             "the cache holds no snapshot of the old holder"
         );
         assert_eq!(usage_requests(&up), 1);
+        up.shutdown().await;
+    }
+
+    /// A delete and a new holder under the id that no route invalidated leaves the old holder's entry in the
+    /// cache: neither the latest reading nor a fetch that ended under the new identity may answer it.
+    #[tokio::test]
+    async fn an_entry_of_an_earlier_holder_of_the_id_reads_as_absent() {
+        let now = Arc::new(AtomicI64::new(1_000_000));
+        let usage = || Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: control_response(ControlFixture::Usage).to_vec(),
+        };
+        let up = FakeUpstream::start(vec![Rule {
+            path_prefix: "/api/oauth/usage".into(),
+            respond: usage(),
+        }])
+        .await;
+        let store = store_with_bundle_until(1_000_000 + 86_400_000);
+        let service = Arc::new(service_for(
+            &up,
+            store.clone(),
+            Duration::from_secs(60),
+            &now,
+        ));
+        service.poll("a").await.unwrap();
+        assert!(
+            service.latest("a").is_some(),
+            "the holder's own reading is cached"
+        );
+
+        // The next fetch is held out while the row changes hands; no route invalidates the entry.
+        up.set_rule_after(1, "/api/oauth/usage", Respond::Gated(Box::new(usage())));
+        let old = {
+            let service = service.clone();
+            tokio::spawn(async move { service.poll("a").await })
+        };
+        wait_for(Duration::from_secs(5), || {
+            (usage_requests(&up) == 2).then_some(())
+        })
+        .await;
+        store.delete_account("a", "test").unwrap();
+        store
+            .insert_account(&AccountRow {
+                id: "a".into(),
+                kind: AccountKind::Oauth,
+                label: "a".into(),
+                enabled: true,
+                identity: None,
+                lifecycle_generation: 1,
+                incarnation: 1,
+                revision: 1,
+                state: AccountState::Ready,
+            })
+            .unwrap();
+        assert!(
+            service.latest("a").is_none(),
+            "the cached reading belongs to the earlier holder and reads as absent"
+        );
+        up.release();
+        assert!(
+            old.await.unwrap().is_err(),
+            "a fetch that ended under another identity answers no reading, cached or fetched"
+        );
+        assert!(service.latest("a").is_none());
         up.shutdown().await;
     }
 

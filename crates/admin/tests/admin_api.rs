@@ -507,10 +507,10 @@ async fn the_usage_get_answers_the_polls_latest_snapshot_and_standing_without_a_
             "last_attempt_at": NOW + 10_000,
             "last_clean_at": NOW,
             "last_outcome": "rate_limited",
-            "next_attempt_at": NOW + 10_000 + 60_000,
+            "next_attempt_at": NOW + 10_000 + 120_000,
             "rate_limited_in_a_row": 1,
         }),
-        "the first 429 holds the account for the ladder's first step, one minute"
+        "the first 429 holds the account for the ladder's first step, two minutes"
     );
     let held = json(get(&h.app, path, Some(&cookie)).await).await;
     assert!(
@@ -544,7 +544,7 @@ async fn the_usage_get_answers_the_polls_latest_snapshot_and_standing_without_a_
             .to_vec(),
         },
     );
-    h.clock_cell.store(NOW + 70_000, Ordering::SeqCst);
+    h.clock_cell.store(NOW + 130_000, Ordering::SeqCst);
     let restored = json(post(&h.app, refresh, "", Some(&cookie)).await).await;
     assert_eq!(asked(), 3, "past the hold the refresh reads the endpoint");
     assert!(restored["error"].is_null(), "{restored}");
@@ -552,8 +552,8 @@ async fn the_usage_get_answers_the_polls_latest_snapshot_and_standing_without_a_
         restored["poll"],
         serde_json::json!({
             "backoff_since": null,
-            "last_attempt_at": NOW + 70_000,
-            "last_clean_at": NOW + 70_000,
+            "last_attempt_at": NOW + 130_000,
+            "last_clean_at": NOW + 130_000,
             "last_outcome": "clean",
             "next_attempt_at": null,
             "rate_limited_in_a_row": 0,
