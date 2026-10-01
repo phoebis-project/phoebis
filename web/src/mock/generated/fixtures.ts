@@ -5861,13 +5861,11 @@ export const FIXTURES: Record<string, Fixture> = {
             "enabled": false,
             "inject_when_absent": false,
             "metered": {
-              "keepalive": "5m",
               "main": "5m",
               "models": [],
               "subagent": "5m"
             },
             "plan": {
-              "keepalive": "1h",
               "main": "1h",
               "models": [],
               "subagent": "1h"

@@ -68,11 +68,12 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
     (36, V36),
     (37, V37),
     (38, V38),
+    (39, V39),
 ];
 
 /// The newest schema version this build knows how to read. `prepare` refuses a registry stamped past it
 /// rather than skip migrations it does not carry and misread the tables that follow.
-pub const SCHEMA_VERSION: u32 = 38;
+pub const SCHEMA_VERSION: u32 = 39;
 
 const V2: &str = r#"
 CREATE TABLE IF NOT EXISTS account_models (
@@ -568,4 +569,11 @@ DELETE FROM alert_deliveries WHERE kind = 'meter_drift'
   OR event_id IN (SELECT id FROM alert_events WHERE kind = 'meter_drift');
 DELETE FROM alert_events WHERE kind = 'meter_drift';
 DELETE FROM alert_rules WHERE kind = 'meter_drift';
+"#;
+
+// The rule sets' `keepalive` TTL left with the probe reading its agent's branch; a stored key would make the reader
+// refuse the whole policy as unknown and read it as off, so the key goes from every stored policy.
+const V39: &str = r#"
+UPDATE pools SET cache_ttl_json = json_remove(cache_ttl_json, '$.plan.keepalive', '$.metered.keepalive')
+WHERE json_valid(cache_ttl_json) AND json_type(cache_ttl_json) = 'object';
 "#;

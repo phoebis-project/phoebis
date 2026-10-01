@@ -1562,11 +1562,9 @@ impl Relay {
             let writes_cost_money = selection.in_overage || account.kind == AccountKind::ApiKey;
             // Priced per attempt: a migrated attempt reads its destination's overage, and a same-account
             // retry reuses this body rather than pricing again.
-            // A probe replays another turn's markers under its own keepalive TTL; otherwise the branch follows
-            // the agent, so a subagent's rewrite never reads the main turn's per-model override.
-            let branch = if admitted.trace.kind == Kind::Probe {
-                TtlBranch::Keepalive
-            } else if admitted.identity.agent_id == "main" {
+            // A probe replays another turn's markers under that turn's agent, so the branch follows the agent for
+            // a probe as for the turn, and a subagent's rewrite never reads the main turn's per-model override.
+            let branch = if admitted.identity.agent_id == "main" {
                 TtlBranch::Main
             } else {
                 TtlBranch::Subagent

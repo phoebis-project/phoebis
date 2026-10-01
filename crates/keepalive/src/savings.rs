@@ -11,7 +11,7 @@ use phoebis_routing::{PinUsage, FIVE_HOUR};
 use phoebis_store::{BudgetRow, BudgetScope};
 
 use crate::config::{FIVE_MINUTES_MS, ONE_HOUR_MS};
-use crate::engine::{Engine, SavingsUnit, SessionKey, Settlement};
+use crate::engine::{Engine, SavingsUnit, SessionKey, Settlement, MAIN_AGENT};
 use crate::probe::{Applied, ProbeOutcome, ProbeRecord};
 use crate::usage::ProbeUsage;
 
@@ -138,17 +138,24 @@ pub(crate) fn probe_types(ttl_ms: i64, longest_ttl_ms: i64) -> PinUsage {
 }
 
 /// `probe_types` for the body the relay dispatches. While the pool's cache TTL `policy` is on, `Relay::dispatch_to`
-/// rewrites every marker of a probe to the keepalive TTL of the set the account's funding selects (`metered` for an
-/// api_key account or one in overage), and adds one at that TTL to a body without any where the policy says so;
-/// that TTL then replaces both the one in force and the recipe's own. A body left without a marker writes nothing.
+/// rewrites every marker of a probe to the TTL its agent's branch takes in the set the account's funding selects
+/// (`metered` for an api_key account or one in overage), and adds one at that TTL to a body without any where the
+/// policy says so; that TTL then replaces both the one in force and the recipe's own. A body left without a marker
+/// writes nothing.
 pub(crate) fn dispatched_types(
     policy: &CacheTtlPolicy,
     canonical_model: &str,
     metered: bool,
+    agent_id: &str,
     ttl_ms: i64,
     longest_ttl_ms: i64,
 ) -> PinUsage {
-    let Some(ttl) = policy.ttl_for(canonical_model, TtlBranch::Keepalive, metered) else {
+    let branch = if agent_id == MAIN_AGENT {
+        TtlBranch::Main
+    } else {
+        TtlBranch::Subagent
+    };
+    let Some(ttl) = policy.ttl_for(canonical_model, branch, metered) else {
         return probe_types(ttl_ms, longest_ttl_ms);
     };
     let marked = longest_ttl_ms > 0 || policy.inject_when_absent;

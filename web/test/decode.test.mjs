@@ -331,8 +331,8 @@ test("a pool's cache TTL decodes the two rule sets and encodes them back", () =>
     cache_ttl: {
       enabled: true,
       inject_when_absent: true,
-      plan: { keepalive: '1h', main: '5m', subagent: '1h', models: [{ model: 'claude-haiku-4-5-20251001', main: '5m', subagent: '5m' }] },
-      metered: { keepalive: '5m', main: '5m', subagent: '5m', models: [] },
+      plan: { main: '5m', subagent: '1h', models: [{ model: 'claude-haiku-4-5-20251001', main: '5m', subagent: '5m' }] },
+      metered: { main: '5m', subagent: '5m', models: [] },
     },
     cache_diagnostics: true,
     keepalive: { ...row.keepalive, warm_subagents: false },
@@ -405,8 +405,8 @@ test('a pool the route answers without a cache TTL policy decodes to the default
   assert.deepEqual(d.decodePool(wire).cacheTtl, {
     enabled: false,
     injectWhenAbsent: false,
-    metered: { keepalive: '5m', main: '5m', models: [], subagent: '5m' },
-    plan: { keepalive: '1h', main: '1h', models: [], subagent: '1h' },
+    metered: { main: '5m', models: [], subagent: '5m' },
+    plan: { main: '1h', models: [], subagent: '1h' },
   });
   const partial = d.decodePool({ ...wire, cache_ttl: { enabled: true, plan: { main: '5m' } } });
   assert.deepEqual(

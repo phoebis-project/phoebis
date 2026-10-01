@@ -278,7 +278,6 @@ function CacheTtlGrid({ disabled, hint, metered, onChange, plan }: { disabled: b
   const rows = [
     { key: 'main', label: 'Main conversation', name: 'main conversation' },
     { key: 'subagent', label: 'Subagents', name: 'subagent' },
-    { key: 'keepalive', label: 'Keepalive', name: 'keepalive' },
   ] as const;
   const sets = [
     { label: 'Plan writes', name: 'plan', rules: plan },
@@ -1660,7 +1659,7 @@ export function PoolDialog({
           onChange={(name, rules) => setCacheTtl(name, rules)}
           hint={
             <>
-              The TTL a <GroupLink id="keepalive">keepalive probe</GroupLink> writes with. The first probe after a turn follows that turn&apos;s TTL, and each later probe follows this one.
+              The TTL each turn writes with, by agent. A <GroupLink id="keepalive">keepalive probe</GroupLink> replays the turn under its agent&apos;s TTL, so the first probe after a turn and every later one follow the same rule.
             </>
           }
         />

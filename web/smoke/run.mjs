@@ -1612,27 +1612,27 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
 
   {
     const ttl = group(dlg, 'Cache TTL');
-    const gridNames = ['Plan writes', 'Metered writes'].flatMap((set) => ['main conversation', 'subagent', 'keepalive'].map((row) => `${set} ${row} TTL`));
+    const gridNames = ['Plan writes', 'Metered writes'].flatMap((set) => ['main conversation', 'subagent'].map((row) => `${set} ${row} TTL`));
     const gridSelects = gridNames.map((name) => ttl?.querySelectorAll(`.ttl-grid select[aria-label="${name}"]`).length ?? 0);
     const ruleSets = [...(dlg?.querySelectorAll('[data-rule-set]') ?? [])];
     const names = ruleSets.map((el) => el.getAttribute('data-rule-set')).sort();
     const labels = ruleSets.map((el) => `${el.getAttribute('data-rule-set')}=${el.querySelector('.field__label')?.textContent?.trim()}`).sort();
     results.push({
-      name: '/pools the cache TTL group draws the six TTL selects in one grid and one override root per rule set, plan and metered, each with its own picker',
-      ok: JSON.stringify(gridSelects) === '[1,1,1,1,1,1]' && names.join(',') === 'metered,plan' && labels.join(',') === 'metered=Metered writes,plan=Plan writes' && ruleSets.every((el) => el.querySelectorAll('select[aria-label^="Model to add"]').length === 1),
+      name: '/pools the cache TTL group draws the four TTL selects in one grid and one override root per rule set, plan and metered, each with its own picker',
+      ok: JSON.stringify(gridSelects) === '[1,1,1,1]' && names.join(',') === 'metered,plan' && labels.join(',') === 'metered=Metered writes,plan=Plan writes' && ruleSets.every((el) => el.querySelectorAll('select[aria-label^="Model to add"]').length === 1),
       missing: [JSON.stringify(gridSelects), ...names, ...labels],
     });
     const writeCost = [...(ttl?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === 'Write cost');
     const gridHint = ttl?.querySelector('.ttl-grid')?.closest('.field')?.querySelector(':scope > .field__hint')?.textContent ?? '';
-    const meteredKeepalive = ttl?.querySelector('select[aria-label="Metered writes keepalive TTL"]');
+    const meteredMain = ttl?.querySelector('select[aria-label="Metered writes main conversation TTL"]');
     results.push({
-      name: '/pools the write cost line says when each rule set applies, and the grid says which write a keepalive probe follows',
+      name: '/pools the write cost line says when each rule set applies, and the grid says which TTL a keepalive probe follows',
       ok:
         (writeCost?.querySelector(':scope > .field__hint')?.textContent ?? '') ===
           'Plan writes apply while an upstream spends plan quota, where a 1-hour write costs the same as a 5-minute one. Metered writes apply while a write costs money, on an API-key upstream or a subscription upstream in overage: 2x input for an hour against 1.25x for five minutes. Reads cost the same either way.' &&
-        gridHint === "The TTL a keepalive probe writes with. The first probe after a turn follows that turn's TTL, and each later probe follows this one." &&
-        meteredKeepalive?.value === '5m',
-      missing: [writeCost?.querySelector(':scope > .field__hint')?.textContent ?? 'no write cost hint', gridHint || 'no grid hint', meteredKeepalive?.value ?? 'no metered keepalive select'],
+        gridHint === "The TTL each turn writes with, by agent. A keepalive probe replays the turn under its agent's TTL, so the first probe after a turn and every later one follow the same rule." &&
+        meteredMain?.value === '5m',
+      missing: [writeCost?.querySelector(':scope > .field__hint')?.textContent ?? 'no write cost hint', gridHint || 'no grid hint', meteredMain?.value ?? 'no metered main select'],
     });
     // The marker toggle sits under the policy toggle, bound to the pool's injection flag.
     const marker = () => dlg?.querySelector('button[role="switch"][aria-label="Add a cache marker to a request without one"]');

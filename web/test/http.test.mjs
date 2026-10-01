@@ -275,7 +275,7 @@ test('a pool save is one PATCH that carries the members with the settings', asyn
     affinityTtlSeconds: 600,
     bodyCaptureHours: 0,
     cacheDiagnostics: null,
-    cacheTtl: { enabled: false, injectWhenAbsent: false, metered: { keepalive: '5m', main: '5m', models: [], subagent: '5m' }, plan: { keepalive: '1h', main: '1h', models: [], subagent: '5m' } },
+    cacheTtl: { enabled: false, injectWhenAbsent: false, metered: { main: '5m', models: [], subagent: '5m' }, plan: { main: '1h', models: [], subagent: '5m' } },
     keepalive: { coldProbeLimit: 2, costCapUsdPerDay: null, enabled: false, jitterSeconds1h: 30, jitterSeconds5m: 5, leadSeconds1h: 360, leadSeconds5m: 60, maxIdleSeconds: 3_600, maxIdleTicks: 0, netNegativeGraceProbes: 2, retryMaxSeconds: 300, retrySeconds: 30, stopWhenNetNegative: true, warmSubagents: true },
     affinityMode: 'when_cached',
     members: [{ accountId: 'business', budgetPeriod: 'month', budgetUsd: null, priority: 0 }, { accountId: 'direct', budgetPeriod: 'day', budgetUsd: 12.5, priority: 1 }],

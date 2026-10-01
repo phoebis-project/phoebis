@@ -264,7 +264,6 @@ export type CacheTtl = '5m' | '1h';
 
 /** One rule set's shape: the TTL by branch, with per-model overrides on `main` and `subagent`. */
 export interface TtlRules {
-  keepalive: CacheTtl;
   main: CacheTtl;
   /** Per-model overrides; a model absent here takes `main` and `subagent`. */
   models: { main: CacheTtl; model: string; subagent: CacheTtl }[];

@@ -41,7 +41,8 @@ A pool's cache TTL policy applies to a probe the way it applies to the request i
 through the same edit path: a marker-less recipe body takes the top-level member only where the policy's
 `inject_when_absent` is on. The engine learns the TTL an entry was written with from the response's usage and
 from what the router sent, never from the marker the client wrote. The first probe after a turn follows that
-turn's cache TTL; the probe itself writes with the rule set's keepalive TTL, which the next probe then follows.
+turn's cache TTL; the probe itself writes with the TTL its agent's branch holds in the rule set, which the next probe
+then follows.
 
 Cache diagnostics apply to a probe the same way: with the option on for the pool, a probe carries the
 cache-diagnosis beta and a `diagnostics.previous_message_id` naming the session's last real answer on that
@@ -175,7 +176,7 @@ the same table, so a Max 5x account spends four times as much of its own window 
 multiples a group header's tooltip gives. A dash is a cell the plan meter has not measured, through which no share is
 priced. A 1-hour write spends the same share as a 5-minute one, so on plan-funded traffic the long TTL is free and the
 pool's plan rule set keeps `1h` for the main conversation and subagents alike; while a write costs money a 1-hour write
-is 2x against 1.25x, so the metered rule set's `keepalive` TTL defaults to `5m`.</dd>
+is 2x against 1.25x, so the metered rule set defaults to `5m` throughout.</dd>
 </dl>
 
 Below the prices, a second table reads the cost table the ledger ships (`crates/ledger/cost_table.yaml`) in two column
@@ -192,10 +193,10 @@ plan-funded probe whose token types the cost table cannot price on the account's
 under a type the probe carries: input, cache reads, output, the 5-minute write, and the 1-hour write when the probe goes
 out for an hour), or on an account whose tier the table does not size, settles in dollars too, counts toward the dollar
 cap and never toward the window-share cap; so does a probe whose answer carries a type the table cannot price, which
-never books a share. A probe goes out for an hour when the pool's cache TTL policy is on and the `keepalive` TTL of the
-rule set the account's funding selects is `1h`, since the relay rewrites every marker of the probe to that TTL (and adds
-one where `inject_when_absent` is on); with the policy off, when the recipe keeps an hour's cache or marks any part of
-its prefix for an hour. A probe settled in dollars on a model the price table does not list prices at the table's
+never books a share. A probe goes out for an hour when the pool's cache TTL policy is on and the rule set the account's
+funding selects holds `1h` for the probe's agent, since the relay rewrites every marker of the probe to that TTL (and
+adds one where `inject_when_absent` is on); with the policy off, when the recipe keeps an hour's cache or marks any part
+of its prefix for an hour. A probe settled in dollars on a model the price table does not list prices at the table's
 dearest cell of each type, never at zero, so the dollar cap and the net still bound it; a request such a probe kept warm
 saves at the same cells, so its net stays positive while the cache saves more than the probes cost. Whatever the
 upstream's funding, a fast-mode session's net is a dollar net, since its probes draw usage credits. Each agent line of

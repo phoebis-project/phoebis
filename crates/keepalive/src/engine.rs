@@ -2062,12 +2062,14 @@ pub(crate) fn gate(
         .current
         .as_ref()
         .map_or(0, |o| o.recipe.longest_ttl_ms);
-    // The relay rewrites the probe's markers to the pool's keepalive TTL, from the set whoever pays for the write
-    // selects as `Relay::dispatch_to` selects it, so the types are the dispatched body's, not the recipe's own.
+    // The relay rewrites the probe's markers to the TTL of its agent's branch in the pool's policy, from the set
+    // whoever pays for the write selects as `Relay::dispatch_to` selects it, so the types are the dispatched
+    // body's, not the recipe's own.
     let types = dispatched_types(
         &CacheTtlPolicy::from_json(&pool.cache_ttl_json),
         &agent.canonical_model,
         in_overage || account.kind == AccountKind::ApiKey,
+        &agent.id,
         agent.ttl_ms,
         longest_ttl_ms,
     );
@@ -2640,7 +2642,7 @@ mod tests {
     }
 
     #[test]
-    fn a_probe_gates_on_the_ttl_the_pools_keepalive_rule_dispatches_it_with() {
+    fn a_probe_gates_on_the_ttl_its_agents_branch_dispatches_it_with() {
         let mut hourless = PlanTables::shipped();
         hourless
             .cost
@@ -2672,11 +2674,11 @@ mod tests {
             )
             .err()
         };
-        let probes_for_an_hour = r#"{"enabled":true,"plan":{"main":"5m","keepalive":"1h"}}"#;
+        let probes_for_an_hour = r#"{"enabled":true,"plan":{"main":"1h"}}"#;
         assert_eq!(
             gated(probes_for_an_hour, &hourless, FIVE_MINUTES_MS),
             None,
-            "the relay rewrites the five-minute markers to the hour, which the row cannot price, so the probe settles in dollars"
+            "the relay rewrites the five-minute markers to the hour the main branch holds, which the row cannot price, so the probe settles in dollars"
         );
         assert_eq!(
             gated(probes_for_an_hour, &PlanTables::shipped(), FIVE_MINUTES_MS),
@@ -2690,7 +2692,7 @@ mod tests {
         );
         assert_eq!(
             gated(
-                r#"{"enabled":true,"plan":{"main":"1h","keepalive":"5m"}}"#,
+                r#"{"enabled":true,"plan":{"main":"5m"}}"#,
                 &hourless,
                 ONE_HOUR_MS
             ),
@@ -2699,12 +2701,12 @@ mod tests {
         );
         assert_eq!(
             gated(
-                r#"{"enabled":true,"metered":{"keepalive":"1h"},"plan":{"keepalive":"5m"}}"#,
+                r#"{"enabled":true,"metered":{"main":"1h"},"plan":{"main":"5m"}}"#,
                 &hourless,
                 FIVE_MINUTES_MS
             ),
             Some(Gate::Hold(Reason::CapReached)),
-            "a plan-funded probe reads the plan set's keepalive TTL, never the metered set's"
+            "a plan-funded probe reads the plan set, never the metered set"
         );
         assert_eq!(
             gated(probes_for_an_hour, &hourless, 0),
@@ -2713,7 +2715,7 @@ mod tests {
         );
         assert_eq!(
             gated(
-                r#"{"enabled":true,"inject_when_absent":true,"plan":{"keepalive":"1h"}}"#,
+                r#"{"enabled":true,"inject_when_absent":true,"plan":{"main":"1h"}}"#,
                 &hourless,
                 0
             ),

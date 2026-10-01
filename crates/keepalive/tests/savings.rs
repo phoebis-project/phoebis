@@ -1393,16 +1393,16 @@ async fn a_plan_funded_probe_on_a_model_neither_table_prices_books_the_dearest_c
     );
 }
 
-/// A pool whose plan set keeps main turns at five minutes and probes for an hour rewrites a five-minute recipe's
-/// probe to the hour. On a row whose hour cell is null that probe settles in dollars, so the gate decides dollars
-/// before it dispatches and a zero share cap never holds it; with the hour cell priced the probe settles in the
-/// share, and the zero share cap holds it.
+/// A pool whose plan set writes main turns for an hour rewrites a five-minute recipe's probe to the hour. On a row
+/// whose hour cell is null that probe settles in dollars, so the gate decides dollars before it dispatches and a
+/// zero share cap never holds it; with the hour cell priced the probe settles in the share, and the zero share cap
+/// holds it.
 #[tokio::test]
 async fn a_probe_the_pool_dispatches_for_an_hour_settles_in_dollars_on_a_row_whose_hour_cell_is_null(
 ) {
     let spec = |tables| RigSpec {
         pool: PoolSpec {
-            cache_ttl: r#"{"enabled":true,"plan":{"main":"5m","keepalive":"1h"}}"#,
+            cache_ttl: r#"{"enabled":true,"plan":{"main":"1h"}}"#,
             overage_policy: phoebis_store::OveragePolicy::Allow,
             ..PoolSpec::default()
         },
@@ -1428,7 +1428,7 @@ async fn a_probe_the_pool_dispatches_for_an_hour_settles_in_dollars_on_a_row_who
     assert_eq!(
         r.status("main").cache_ttl_ms,
         300_000,
-        "the main turn went for five minutes"
+        "the upstream wrote the main turn for five minutes"
     );
     r.advance(270_000);
     r.step().await;

@@ -101,8 +101,8 @@ export const KEEPALIVE_TUNING_DEFAULTS: Omit<PoolKeepalive, 'costCapUsdPerDay' |
 };
 
 /** Cache TTL policy a new pool starts with: off, so a pool's breakpoints pass through untouched until set. */
-export const PLAN_TTL_DEFAULTS: TtlRules = { keepalive: '1h', main: '1h', models: [], subagent: '1h' };
-export const METERED_TTL_DEFAULTS: TtlRules = { keepalive: '5m', main: '5m', models: [], subagent: '5m' };
+export const PLAN_TTL_DEFAULTS: TtlRules = { main: '1h', models: [], subagent: '1h' };
+export const METERED_TTL_DEFAULTS: TtlRules = { main: '5m', models: [], subagent: '5m' };
 export const CACHE_TTL_DEFAULTS: PoolCacheTtl = { enabled: false, injectWhenAbsent: false, metered: METERED_TTL_DEFAULTS, plan: PLAN_TTL_DEFAULTS };
 
 export type PoolEngineFields = Pick<

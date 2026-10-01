@@ -277,7 +277,6 @@ const ttl = (v: unknown, fallback: CacheTtl): CacheTtl => (v === '1h' || v === '
 function decodeTtlRules(v: unknown, fallback: TtlRules): TtlRules {
   const c = rec(v);
   return {
-    keepalive: ttl(c.keepalive, fallback.keepalive),
     main: ttl(c.main, fallback.main),
     models: list(c.models).map(rec).map((m) => ({ main: ttl(m.main, fallback.main), model: str(m.model), subagent: ttl(m.subagent, fallback.subagent) })),
     subagent: ttl(c.subagent, fallback.subagent),
@@ -632,7 +631,7 @@ export function decodeLiveDelta(v: unknown): LiveDelta | null {
 }
 
 const encodeModelRules = (rules: ModelRule[]) => rules.map((r) => ({ not: r.not, pattern: r.pattern }));
-const encodeTtlRules = (r: TtlRules) => ({ keepalive: r.keepalive, main: r.main, models: r.models.map((m) => ({ main: m.main, model: m.model, subagent: m.subagent })), subagent: r.subagent });
+const encodeTtlRules = (r: TtlRules) => ({ main: r.main, models: r.models.map((m) => ({ main: m.main, model: m.model, subagent: m.subagent })), subagent: r.subagent });
 
 export const encodeAccountPatch = (p: AccountPatch) => ({ cancelled: p.cancelled, subscription_ends_at: p.subscriptionEndsAt === null ? null : Date.parse(p.subscriptionEndsAt) });
 export const encodeKey = (i: KeyInput) => ({

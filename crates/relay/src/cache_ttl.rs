@@ -1,5 +1,6 @@
-//! The per-pool cache TTL policy: two rule sets, `plan` and `metered`, each carrying the TTL a keepalive probe,
-//! a main turn and a subagent turn take, and the per-model overrides on the two turn kinds.
+//! The per-pool cache TTL policy: two rule sets, `plan` and `metered`, each carrying the TTL a main turn and a
+//! subagent turn take, and the per-model overrides on the two; a keepalive probe replays its turn under the
+//! branch of the agent it warms.
 
 /// The two TTLs the API accepts. Serialized as the wire spells them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
@@ -28,12 +29,11 @@ pub struct ModelTtl {
     pub subagent: CacheTtl,
 }
 
-/// One rule set: the TTL by branch, with per-model overrides on `main` and `subagent`. Serialized whole; read
-/// through `complete`, never through a derived `Deserialize` with one shared default, so a metered probe can
-/// never inherit an hour meant for the plan set.
+/// One rule set: the TTL by branch, with per-model overrides. Serialized whole; read through `complete`, never
+/// through a derived `Deserialize` with one shared default, so a metered set can never inherit an hour meant
+/// for the plan set.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct TtlRules {
-    pub keepalive: CacheTtl,
     pub main: CacheTtl,
     /// Per-model overrides on the canonical model id; a model absent here takes `main` and `subagent`.
     pub models: Vec<ModelTtl>,
@@ -43,7 +43,6 @@ pub struct TtlRules {
 impl TtlRules {
     pub fn plan_default() -> TtlRules {
         TtlRules {
-            keepalive: CacheTtl::OneHour,
             main: CacheTtl::OneHour,
             models: Vec::new(),
             subagent: CacheTtl::OneHour,
@@ -52,7 +51,6 @@ impl TtlRules {
 
     pub fn metered_default() -> TtlRules {
         TtlRules {
-            keepalive: CacheTtl::FiveMinutes,
             main: CacheTtl::FiveMinutes,
             models: Vec::new(),
             subagent: CacheTtl::FiveMinutes,
@@ -62,19 +60,15 @@ impl TtlRules {
     /// A partial set (every field optional, unknown fields refused) completed against `base`.
     pub fn complete(partial: PartialTtlRules, base: &TtlRules) -> TtlRules {
         TtlRules {
-            keepalive: partial.keepalive.unwrap_or(base.keepalive),
             main: partial.main.unwrap_or(base.main),
             models: partial.models.unwrap_or_else(|| base.models.clone()),
             subagent: partial.subagent.unwrap_or(base.subagent),
         }
     }
 
-    /// The TTL for `branch`: the per-model override first for `Main` and `Subagent`, an override written under
-    /// an undated spelling still found once the canonical id is dated.
+    /// The TTL for `branch`: the per-model override first, an override written under an undated spelling still
+    /// found once the canonical id is dated.
     fn ttl(&self, canonical_model: &str, branch: TtlBranch) -> CacheTtl {
-        if branch == TtlBranch::Keepalive {
-            return self.keepalive;
-        }
         let over = self
             .models
             .iter()
@@ -96,16 +90,14 @@ impl TtlRules {
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct PartialTtlRules {
-    pub keepalive: Option<CacheTtl>,
     pub main: Option<CacheTtl>,
     pub models: Option<Vec<ModelTtl>>,
     pub subagent: Option<CacheTtl>,
 }
 
-/// Which TTL of a rule set a request takes.
+/// Which TTL of a rule set a request takes: the agent's branch, for a probe as for the turn it replays.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TtlBranch {
-    Keepalive,
     Main,
     Subagent,
 }
@@ -121,7 +113,7 @@ struct RawPolicy {
 
 /// A pool's cache TTL policy, stored as JSON in `pools.cache_ttl_json`. Deserialized by hand through `RawPolicy`
 /// so each set is completed against its own baseline rather than a shared default that could hand a metered
-/// probe an hour.
+/// write an hour.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct CacheTtlPolicy {
     pub enabled: bool,
@@ -209,7 +201,7 @@ impl CacheTtlPolicy {
     }
 
     /// `None` while the policy is off; else the branch's TTL from the set `metered` selects, the per-model
-    /// override first for `Main` and `Subagent`.
+    /// override first.
     pub fn ttl_for(
         &self,
         canonical_model: &str,
@@ -280,7 +272,6 @@ mod tests {
             assert_eq!(
                 metered_only.metered,
                 TtlRules {
-                    keepalive: CacheTtl::FiveMinutes,
                     main: CacheTtl::FiveMinutes,
                     models: Vec::new(),
                     subagent: CacheTtl::FiveMinutes,
@@ -297,7 +288,6 @@ mod tests {
             assert_eq!(
                 plan_only.plan,
                 TtlRules {
-                    keepalive: CacheTtl::OneHour,
                     main: CacheTtl::OneHour,
                     models: Vec::new(),
                     subagent: CacheTtl::OneHour,
@@ -339,14 +329,9 @@ mod tests {
             "a per-model override on plan does not reach metered"
         );
         assert_eq!(
-            policy.ttl_for("claude-opus-5", TtlBranch::Keepalive, false),
+            policy.ttl_for("claude-opus-5", TtlBranch::Subagent, true),
             Some(CacheTtl::OneHour),
-            "a probe reads the plan set's own keepalive TTL"
-        );
-        assert_eq!(
-            policy.ttl_for("claude-opus-5", TtlBranch::Keepalive, true),
-            Some(CacheTtl::FiveMinutes),
-            "a probe reads the metered set's own keepalive TTL"
+            "a subagent's money write reads the metered set's subagent"
         );
         assert_eq!(
             CacheTtlPolicy::default().ttl_for("claude-opus-5", TtlBranch::Main, true),

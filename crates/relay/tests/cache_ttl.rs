@@ -537,7 +537,7 @@ async fn a_metered_write_takes_the_metered_set_and_a_plan_write_the_plan_set() {
 }
 
 #[tokio::test]
-async fn a_probe_writes_with_the_sets_keepalive_ttl() {
+async fn a_probe_writes_with_its_agents_branch_ttl() {
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
         respond: json_200(),
@@ -546,26 +546,33 @@ async fn a_probe_writes_with_the_sets_keepalive_ttl() {
     let h = harness(
         &up,
         &[oauth("a", OA, 0)],
-        policy(r#"{"enabled":true,"plan":{"keepalive":"5m","main":"1h"}}"#),
+        policy(r#"{"enabled":true,"plan":{"main":"5m","subagent":"1h"}}"#),
     )
     .await;
-    let req = request_for(KEY, "claude-sonnet-4-5", "s1");
+    let probe = || phoebis_relay::Probe {
+        key_id: "desktop".into(),
+        key_generation: h.store.api_key("desktop").unwrap().unwrap().created_at,
+        allow_oauth: true,
+    };
     let resp = h
         .relay
-        .probe(
-            phoebis_relay::Probe {
-                key_id: "desktop".into(),
-                key_generation: h.store.api_key("desktop").unwrap().unwrap().created_at,
-                allow_oauth: true,
-            },
-            req,
-        )
+        .probe(probe(), request_for(KEY, "claude-sonnet-4-5", "s1"))
         .await;
     assert_eq!(resp.status(), 200);
     assert_eq!(
         markers(&up.requests()[0].body),
         vec![r#"{"type":"ephemeral"}"#.to_string(); 3],
-        "the probe's replay reads the set's keepalive TTL, not main's hour"
+        "the probe's replay reads its agent's branch, main's five minutes, not the hour the subagent branch holds"
+    );
+
+    let mut sub = request_for(KEY, "claude-sonnet-4-5", "s1");
+    set_header(&mut sub, "x-claude-code-agent-id", "sub-1");
+    let resp = h.relay.probe(probe(), sub).await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        markers(&up.requests()[1].body),
+        vec![r#"{"type":"ephemeral","ttl":"1h"}"#.to_string(); 3],
+        "a subagent's probe reads the subagent branch's hour"
     );
     up.shutdown().await;
 }
