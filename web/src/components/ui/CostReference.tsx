@@ -35,7 +35,7 @@ const NOTES: { body: ReactNode; term: string }[] = [
         another tier spends that share over its tier's factor from the same table, so a Max 5x account spends four times as much of its own window and a Pro account twenty times, by the
         multiples a group header's tooltip gives. A dash is a cell the plan meter has not measured, through which no share is priced. A 1-hour write spends the same share as a 5-minute
         one, so on plan-funded traffic the long TTL is free and the pool's plan rule set keeps <code>1h</code> for the main conversation and subagents alike; while a write costs money a
-        1-hour write is 2x against 1.25x, so the metered rule set's <code>keepalive</code> TTL defaults to <code>5m</code>.
+        1-hour write is 2x against 1.25x, so the metered rule set defaults to <code>5m</code> throughout.
       </>
     ),
   },

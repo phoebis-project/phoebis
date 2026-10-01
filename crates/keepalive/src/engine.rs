@@ -2653,26 +2653,30 @@ mod tests {
             .unwrap()
             .cache_write_1h = None;
         // A zero share cap holds exactly the probes that settle in the share, so whether it holds names the unit.
+        let gated_as =
+            |agent_id: &str, cache_ttl_json: &str, tables: &PlanTables, marker_ms: i64| {
+                let view =
+                    stop_view_dispatching(false, OveragePolicy::Allow, Some(0.0), cache_ttl_json);
+                let mut agent = Agent::new(agent_id, "k", 1, 0);
+                agent.account = Some("o".into());
+                agent.canonical_model = "claude-opus-5-5".into();
+                agent.ttl_ms = marker_ms;
+                let mut current = observation(false);
+                current.recipe.ttl_ms = marker_ms;
+                current.recipe.longest_ttl_ms = marker_ms;
+                agent.current = Some(current);
+                gate(
+                    &view,
+                    &mut agent,
+                    "s",
+                    &BTreeMap::new(),
+                    &BTreeMap::new(),
+                    tables,
+                )
+                .err()
+            };
         let gated = |cache_ttl_json: &str, tables: &PlanTables, marker_ms: i64| {
-            let view =
-                stop_view_dispatching(false, OveragePolicy::Allow, Some(0.0), cache_ttl_json);
-            let mut agent = Agent::new("main", "k", 1, 0);
-            agent.account = Some("o".into());
-            agent.canonical_model = "claude-opus-5-5".into();
-            agent.ttl_ms = marker_ms;
-            let mut current = observation(false);
-            current.recipe.ttl_ms = marker_ms;
-            current.recipe.longest_ttl_ms = marker_ms;
-            agent.current = Some(current);
-            gate(
-                &view,
-                &mut agent,
-                "s",
-                &BTreeMap::new(),
-                &BTreeMap::new(),
-                tables,
-            )
-            .err()
+            gated_as("main", cache_ttl_json, tables, marker_ms)
         };
         let probes_for_an_hour = r#"{"enabled":true,"plan":{"main":"1h"}}"#;
         assert_eq!(
@@ -2721,6 +2725,17 @@ mod tests {
             ),
             None,
             "unless the policy adds the marker, at the hour"
+        );
+        let by_agent = r#"{"enabled":true,"plan":{"main":"5m","subagent":"1h"}}"#;
+        assert_eq!(
+            gated(by_agent, &hourless, FIVE_MINUTES_MS),
+            Some(Gate::Hold(Reason::CapReached)),
+            "a main agent's probe reads the main branch's five minutes"
+        );
+        assert_eq!(
+            gated_as("sub-1", by_agent, &hourless, FIVE_MINUTES_MS),
+            None,
+            "a subagent's probe reads the subagent branch's hour, which the row cannot price, so the probe settles in dollars"
         );
     }
 
