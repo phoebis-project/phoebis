@@ -19,11 +19,12 @@ failover loop a real request takes: the same body with `max_tokens` set to `0`, 
 has no use for, whatever the pool's `auto_mode_server` says); the request's `anthropic-beta` line travels as kept, and a
 pool or key set off drops the `dangerous-tool-use-2026-09-03` beta from a probe as from any request. The probe follows
 the session's pin and renews it. A probe whose pinned member is at its spend budget, on an account the operator
-disabled, past its subscription's end, or already tried by this probe is answered rather than placed on a sibling, so a
-probe never moves the pin for those standings, and the agent reads `budget`, `paused` (a disabled account or an ended
-subscription) or `retrying` until the next real request lands; a 429 on the pinned account, a credits block, overage
-under `never`, an account that is disconnected, unpaired or deleted, and the pool's move rules move it as they move a
-real request.
+disabled, past its subscription's end, or already tried by this probe while a sibling could take it is answered rather
+than placed on a sibling, so a probe never moves the pin for those standings, and the agent reads `budget`, `paused` (a
+disabled account or an ended subscription) or `retrying` until the next real request lands. A probe whose pinned account
+was deleted is held as `paused` before it is sent, as one on a disabled account is. A 429 on the pinned account, a
+credits block, overage under `never`, an account that is disconnected or unpaired, and the pool's move rules move it as
+they move a real request.
 
 A probe costs a cache read at list price. The ledger credits the gross saving a later kept-warm request earns
 against that cost, per pool and per hour, and `GET /admin/keepalive/overview` reports the net of the two, which

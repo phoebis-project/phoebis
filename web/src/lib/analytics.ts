@@ -64,7 +64,10 @@ export interface BurnLine {
   usdPerMinute: number;
 }
 
-/** One bucket, the token and dollar figures per minute of the bucket and the shares per hour, indexed like the lines. */
+/**
+ * One bucket, indexed like the lines: the cached and uncached tokens and the dollars per minute of the bucket, its raw
+ * token count, and the shares per hour.
+ */
 export interface BurnRow {
   at: number;
   cached: number[];

@@ -157,15 +157,6 @@ pub struct CostTable {
     pub windows: BTreeMap<String, BTreeMap<String, ModelCells>>,
 }
 
-#[derive(serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-struct CostFile {
-    bands: Vec<Band>,
-    effective: String,
-    tiers: BTreeMap<String, Factors>,
-    windows: BTreeMap<String, BTreeMap<String, ModelCells>>,
-}
-
 impl CostTable {
     pub fn shipped() -> CostTable {
         CostTable::from_yaml(SHIPPED_COST_TABLE).expect("the shipped cost table parses")
@@ -174,15 +165,15 @@ impl CostTable {
     /// Refuses a file with a window other than the two, a v1 field or a key left out (serde names it), a cell below
     /// zero, a factor at or below zero, or a band `resolve_bands` refuses.
     pub fn from_yaml(text: &str) -> Result<CostTable, LedgerError> {
-        let mut file: CostFile =
+        let mut table: CostTable =
             serde_norway::from_str(text).map_err(|e| LedgerError::Plan(e.to_string()))?;
-        let windows: Vec<&str> = file.windows.keys().map(String::as_str).collect();
+        let windows: Vec<&str> = table.windows.keys().map(String::as_str).collect();
         if windows != [FIVE_HOUR, SEVEN_DAY] {
             return Err(LedgerError::Plan(format!(
                 "cost table windows {windows:?}: exactly `{FIVE_HOUR}` and `{SEVEN_DAY}` are priced"
             )));
         }
-        for (window, models) in &file.windows {
+        for (window, models) in &table.windows {
             for (model, cells) in models {
                 for (name, cell) in cells.named() {
                     if cell.is_some_and(|c| !c.is_finite() || c < 0.0) {
@@ -193,7 +184,7 @@ impl CostTable {
                 }
             }
         }
-        for (tier, factors) in &file.tiers {
+        for (tier, factors) in &table.tiers {
             for (window, factor) in [
                 (FIVE_HOUR, factors.five_hour),
                 (SEVEN_DAY, factors.seven_day),
@@ -205,13 +196,8 @@ impl CostTable {
                 }
             }
         }
-        resolve_bands(&mut file.bands)?;
-        Ok(CostTable {
-            bands: file.bands,
-            effective: file.effective,
-            tiers: file.tiers,
-            windows: file.windows,
-        })
+        resolve_bands(&mut table.bands)?;
+        Ok(table)
     }
 
     /// The model's cells on `window`, the exact id then its undated base (`listing::row_for`); `None` for a

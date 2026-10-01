@@ -100,7 +100,7 @@ export function KeysPage() {
                         {k.name} <span className="muted mono">{k.prefix}…</span>
                       </span>
                       <span className="num">
-                        {fmtUsd(k.lifetime.cost)} <span className="muted">{fmtCompact(k.lifetime.requests)} requests</span>
+                        {fmtUsd(k.lifetime.cost)} <span className="muted">{fmtCompact(k.lifetime.requests)} {k.lifetime.requests === 1 ? 'request' : 'requests'}</span>
                       </span>
                     </div>
                     <div className="hbars__track">

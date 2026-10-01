@@ -1649,7 +1649,8 @@ fn price_usage(
     match kind {
         Some(AccountKind::Oauth) if row.fast => {
             point.usd += row.estimated_usd;
-            // Ahead of the model's cells, which a fast-only model lacks: the zero rests on the tier alone.
+            // Ahead of the model's cells: a fast row prices in dollars whatever standard cells the model carries, so
+            // the zero rests on the tier alone.
             if let Some(tier) = tier.filter(|_| tokens > 0) {
                 if tables.tier_factor(tier, FIVE_HOUR).is_some() && !point.five_hour_unpriced {
                     point.five_hour_share.get_or_insert(0.0);

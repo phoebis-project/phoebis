@@ -284,8 +284,9 @@ pub(crate) async fn accounts(
 /// and an api_key account's in dollars. The shares and `unit` are answered under the `account` grouping alone and
 /// read null under every other one, since a key, a class or a session spans accounts and shares of different
 /// accounts' windows do not add; a bucket holding a row the table cannot price reads null on that window, so a
-/// partial sum never reads as its share. Each point's `tokens` counts every token type, so a reader tells a bucket
-/// with no traffic from one whose traffic no table priced.
+/// partial sum never reads as its share. Each point's `tokens` counts every token type, zero for a bucket with no
+/// traffic the ledger can attribute (a deregistered account's traffic adds none), so for a registered account a
+/// reader tells an empty bucket from one whose traffic no table priced.
 pub(crate) async fn burn(
     State(state): State<Arc<AdminState>>,
     Query(q): Query<HashMap<String, String>>,

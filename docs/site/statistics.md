@@ -31,11 +31,12 @@ user agent and class (`claude-code/<entrypoint>` or `other`), the gateway hints 
 type, the compaction and context-compacted markers, and the summed tool durations of the turn before), the turn origin
 off its attribution line, its auto-mode standing (as admission read it, a server-side check asked for under an on
 setting or the `safeguards` member carried under an off setting, which the dispatch drops; or a refusal for the body's
-shape before any upstream saw it), and the request's shape: the effort, the
-thinking mode and budget, the output limit, the tool, system-block, and message counts, the context edits, the
-temperature, and the requested speed and service tier.
-A session that branched from
-another conversation carries that conversation's root and the matched depth as well.
+shape before any upstream saw it), and the request's shape: the effort, the thinking mode and budget, the output limit,
+the tool, system-block, and message counts, the context edits, the temperature, and the requested speed and service
+tier.
+A session that branched from another conversation carries that conversation's root and
+the matched depth as well. The session it names is the client's own,
+and the Sessions view groups a row by it.
 The attempt row names the account and its kind; the upstream status and request id; the outcome; the
 cooldown the attempt set; the stop reason, the model the answer names when it differs from the one the router
 resolved, the speed, the region inference ran in, the tokens a context edit cleared, and a refusal's category and

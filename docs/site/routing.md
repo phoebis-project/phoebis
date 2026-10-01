@@ -226,10 +226,9 @@ refused `400` with the error code `body_shape` before anything reaches the upstr
 A conversation is identified by its session header: the session id the client sends names it.
 A turn that follows its own conversation's previous answer within milliseconds waits on its session id,
 at most five milliseconds, for that answer's report to reach the map.
-A key's `affinity_source` fixes one of these rungs instead of walking the whole ladder, and a
-request that does not fit a fixed rung has no identity and no pin. A new session id whose messages continue another
-conversation of the same key keeps its own identity, and is recorded as a fork of that conversation at the depth where
-the two part.
+A key's `affinity_source` fixes one of these rungs instead of walking the whole ladder, and a request that
+does not fit a fixed rung has no identity and no pin. A new session id whose messages continue another conversation of
+the same key keeps its own identity, and is recorded as a fork of that conversation at the depth where the two part.
 
 ## Model rules
 
@@ -456,14 +455,15 @@ Any move records a `pin_migrated` event with reason `cooldown`, `drain`, `fast_l
 `return_to_plan`, `shed`, or `spent`: `cooldown` and `mark` when a failover or a credential mark moved the session,
 `fast_lane` when a fast-mode rejection moved the session, the others after the rule above that moved it. A pin released
 without a move records `pin_expired` with `reasons`, every fact the selection found against the account: `attempted`,
-`cooldown`, `deleted`, `expired`, `fast_credits` and `fast_rate_limit` (a fast request's pinned upstream whose
-`fast_credits` row stands or whose usage credits the poll reads as unavailable, or whose `fast` row stands), `overage`,
-`paused`, `spent`, `subscription_ended`, `unserved`, the account's state when it cannot serve (`disconnected`,
-`funding_required`, `reauth_required`, `unpaired`), or `released` when the selection found nothing else against the
-account, as with a move whose destination emptied. A pin whose creating request was answered 400, 401, 403, or 404, with
-no cooldown or mark on the account and no other turn of the session renewing it meanwhile, records the single reason
-`client_error`: it never served, so the session's next request is placed afresh rather than moved. Releasing a session
-by hand, from the Sessions view or `POST /admin/sessions/{key}/{session}/release`, expires its pin the same way.
+`cooldown`, `deleted`, `expired`, `fast_credits` (a fast request's pinned upstream whose `fast_credits` row stands or
+whose usage credits the poll reads as unavailable) and `fast_rate_limit` (one whose `fast` row is the blocking row that
+stands latest), `overage`, `paused`, `spent`, `subscription_ended`, `unserved`, the account's state when it cannot serve
+(`disconnected`, `funding_required`, `reauth_required`, `unpaired`), or `released` when the selection found nothing else
+against the account, as with a move whose destination emptied. A pin whose creating request was answered 400, 401, 403,
+or 404, with no cooldown or mark on the account and no other turn of the session renewing it meanwhile, records the
+single reason `client_error`: it never served, so the session's next request is placed afresh rather than moved.
+Releasing a session by hand, from the Sessions view or `POST /admin/sessions/{key}/{session}/release`, expires its pin
+the same way.
 
 ## Cooldowns and failover
 
@@ -508,10 +508,11 @@ lane. The two refusals keep a row each, so each lifts on its own evidence. A `fa
 starts for `org_spend_cap_reached`, else until the overage reset the head names, else for one hour, and the poll's next
 enabled reading lifts it earlier, leaving a `fast` row beside it standing. A `fast` row holds until the later fast
 window reset the head names, else until `Retry-After`, else for ten minutes. Both rows hold fast requests alone;
-standard requests on the account are unaffected. A fast refusal moves the session's pin only while the pin still holds
-the lane the refused request was sent on, since a session that has moved on to another lane no longer asks for the fast
-lane. `DELETE /admin/accounts/{id}/cooldowns/fast` and `DELETE /admin/accounts/{id}/cooldowns/fast_credits` clear
-them.
+standard requests on the account are unaffected. A fast refusal moves the session's pin unless the pin has changed lanes
+after the refused request was selected: a session that has moved on to another lane no longer asks for the fast lane.
+The lane compared is the one the selection left on the pin, so a fast request that left a standard pin's lane alone (an
+auxiliary class, or a request foreign to the conversation) moves that pin too.
+`DELETE /admin/accounts/{id}/cooldowns/fast` and `DELETE /admin/accounts/{id}/cooldowns/fast_credits` clear them.
 
 **shared** (either kind)
 
@@ -634,9 +635,11 @@ under its id, before it was routed is refused with the `401` admission answers a
 [What the proxy accepts](client.md#what-the-proxy-accepts)). A pool whose every member has reached its spend budget
 answers `429` with the `overage` claim, the same one an account in overage carries (see [Pools](#pools)), and a probe
 pinned to a member at its budget is answered with the end of the latest period whose budget is reached as its reset,
-whatever its siblings hold. A probe whose pinned account is disabled, past its subscription's end, or already tried by
-the probe while a sibling could take it is answered `503` `accounts_unavailable` whatever its siblings hold, so it never
-moves the pin; its request row reads rejected rather than exhausted, so the pool exhaustion alert does not count it.
+whatever its siblings hold. A probe whose pinned account is disabled or past its subscription's end is answered `503`
+`accounts_unavailable` whatever its siblings hold, and so is one that already tried its pinned account while a sibling
+could take it, where moving would otherwise land the pin on that sibling; such a probe never moves the pin, and its
+request row reads rejected rather than exhausted, so the pool exhaustion alert does not count it. A probe that already
+tried its pinned account with no sibling to take it gets the pool's own answer above.
 
 A request sent fast that no upstream's fast lane can take is answered locally, before any dial, with `429` and the error
 type `rate_limit_error`. While any upstream holds only a fast rate limit, the error code is `fast_lane_exhausted`, the

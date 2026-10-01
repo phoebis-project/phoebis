@@ -261,8 +261,9 @@ CREATE INDEX IF NOT EXISTS events_at ON events (at);
 /// its own requests in it, resets excluded by construction (a run names one reset). A reading from before this
 /// version reads NULL and bounds no run.
 ///
-/// Version 21: the request row records its auto-mode standing (a server-side check passed through or stripped
-/// under the key's setting, or a refusal for the body's shape before any dispatch); a row from before reads NULL.
+/// Version 21: the request row records its auto-mode standing (as admission read it: a server-side check asked for
+/// under an on setting, the `safeguards` member carried under an off setting, or a refusal for the body's shape
+/// before any dispatch); a row from before reads NULL.
 ///
 /// Version 22: the speed the answer reported is a dimension of the hourly rollup, so it joins the primary key after
 /// the class and the table is rebuilt as version 18 rebuilt it, every existing row filed under `standard`; the two
