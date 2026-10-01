@@ -22,6 +22,12 @@ export function menuPlacement(trigger: { bottom: number; right: number; top: num
   const need = list.height + 4;
   if (floor - trigger.bottom >= need) return { kind: 'down' };
   if (trigger.top - ceiling >= need) return { kind: 'up' };
+  return floatAt(trigger, list, viewportHeight);
+}
+
+/** The fixed layer at a trigger: below it when the viewport has the room and above it otherwise, right-aligned to it. */
+export function floatAt(trigger: { bottom: number; right: number; top: number }, list: { height: number; width: number }, viewportHeight: number): Extract<MenuPlacement, { kind: 'float' }> {
+  const need = list.height + 4;
   const below = viewportHeight - trigger.bottom >= need;
   return { kind: 'float', left: trigger.right - list.width, top: below ? trigger.bottom + 4 : trigger.top - need };
 }

@@ -1,7 +1,7 @@
 import { createContext, Fragment, useContext, useEffect, useId, useLayoutEffect, useRef, useState, type ButtonHTMLAttributes, type CSSProperties, type HTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes } from 'react';
 import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
-import { menuPlacement, type MenuPlacement } from '@/lib/menu';
+import { floatAt, menuPlacement, type MenuPlacement } from '@/lib/menu';
 import type { BadgeTone } from '@/lib/quota';
 import { IconCheck, IconChevron, IconCopy, IconSearch, IconWarning, IconX } from './icons';
 
@@ -524,7 +524,7 @@ export function Menu({ items, label = 'Actions' }: { items: { danger?: boolean; 
   const ref = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
-  // Where the trigger stood when the list was placed, so a fixed layer can tell whether the page has moved under it.
+  // Where the trigger rested once the list floated, so a fixed layer can tell whether the page has moved under it.
   const anchor = useRef<DOMRect | null>(null);
   useEffect(() => {
     if (!open) return;
@@ -546,7 +546,6 @@ export function Menu({ items, label = 'Actions' }: { items: { danger?: boolean; 
     }
     if (!ref.current) return;
     const trigger = ref.current.getBoundingClientRect();
-    anchor.current = trigger;
     // A wrap bounds the list only while it clips: the pool dialog's key table sets its wrap `overflow: visible`. The
     // clipping values are named because a page without styles, as in the smoke run, reads the property empty.
     const wrap = ref.current.closest<HTMLElement>('.table-wrap');
@@ -554,10 +553,20 @@ export function Menu({ items, label = 'Actions' }: { items: { danger?: boolean; 
     const next = menuPlacement(trigger, clip, { height: listRef.current?.offsetHeight ?? 0, width: listRef.current?.offsetWidth ?? 0 }, window.innerHeight);
     setPlacement(next.kind === 'down' ? IN_FLOW : next);
   }, [open]);
+  const floating = open && placement.kind === 'float';
+  // The list in flow can overflow a clipping wrap and give it a scrollbar that pushes the trigger aside; leaving for the
+  // portal takes the scrollbar away. So the layer is placed again from the trigger at rest, measured once it floats,
+  // and that measurement is where the close-on-move checks below start.
+  useLayoutEffect(() => {
+    if (!floating || !ref.current) return;
+    const trigger = ref.current.getBoundingClientRect();
+    anchor.current = trigger;
+    const at = floatAt(trigger, { height: listRef.current?.offsetHeight ?? 0, width: listRef.current?.offsetWidth ?? 0 }, window.innerHeight);
+    setPlacement((p) => (p.kind === 'float' && p.left === at.left && p.top === at.top ? p : at));
+  }, [floating]);
   // A fixed layer stays where it was drawn while the page moves under it, so it closes rather than float beside
   // another row. A scroll is read by whether it moved the trigger: the scroll that brought the row into view can
   // report after the click that opened the list, and a scroll inside the list or in another pane moves nothing.
-  const floating = open && placement.kind === 'float';
   const moved = () => {
     const at = ref.current?.getBoundingClientRect();
     return !at || !anchor.current || at.top !== anchor.current.top || at.left !== anchor.current.left;

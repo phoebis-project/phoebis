@@ -663,10 +663,9 @@ function seedDrawerBranches() {
 /**
  * The hold a request waited through is its own fact, as the router writes it at completion: the one its serving
  * attempt followed, and on the newest exhausted desktop turn a hold that ran its pool's bound out with every
- * upstream still at its cap, answered without a dispatch, so the log shows a hold no attempt names. The oldest
- * exhausted single-attempt turn on a lane with a second upstream failed over from its attempt and then waited on
- * that upstream until the bound ran out, so its one attempt predates the hold and names none of it. Nothing is
- * drawn, so every seeded stream keeps its values.
+ * upstream still at its cap, answered without a dispatch, so the log shows a hold no attempt names. One more failed
+ * turn failed over from its attempts and then waited on an upstream of its lane it had not tried until the bound ran
+ * out, so no attempt's trace names the whole wait. Nothing is drawn, so every seeded stream keeps its values.
  */
 function seedHolds() {
   for (const r of REQUESTS) r.held = [...r.attempts].reverse().find((a) => a.selection?.cohortHold)?.selection?.cohortHold ?? null;
@@ -677,13 +676,26 @@ function seedHolds() {
     const heldMs = boundOf(atCap);
     Object.assign(atCap, { accountId: null, attempts: [], costUsd: 0, durationMs: heldMs, errorCode: 'accounts_at_cap', held: { cohort: null, heldMs, waitedOn } });
   }
-  const laneOf = (r: RequestLog) => LANES.find((l) => l.keyId === r.keyId && l.poolId === r.poolId);
-  const afterAttempt = [...REQUESTS].reverse().find((r) => r !== atCap && r.kind === 'inference' && r.status === 429 && r.attempts.length === 1 && (laneOf(r)?.accountIds.length ?? 0) > 1 && !REQUEST_EVENTS.has(r.id));
-  if (!afterAttempt) return;
-  const failed = afterAttempt.attempts[0];
-  const waitedOn = laneOf(afterAttempt)?.accountIds.filter((id) => id !== failed.accountId).slice(0, 1) ?? [];
-  const heldMs = boundOf(afterAttempt);
-  Object.assign(afterAttempt, { accountId: null, durationMs: (afterAttempt.durationMs ?? 0) + heldMs, errorCode: 'accounts_at_cap', held: { cohort: null, heldMs, waitedOn } });
+  const untried = (r: RequestLog) => LANES.find((l) => l.keyId === r.keyId && l.poolId === r.poolId)?.accountIds.find((id) => !r.attempts.some((a) => a.accountId === id));
+  const failedTurn = (r: RequestLog) => r !== atCap && r.kind === 'inference' && r.status !== 200 && r.attempts.length > 0 && untried(r) !== undefined;
+  // The draw skips by the local hour, so at some clocks no turn was exhausted after one attempt; the oldest failed
+  // turn then takes the story, which keeps it at every clock.
+  const oldest = [...REQUESTS].reverse();
+  const afterAttempt = oldest.find((r) => failedTurn(r) && r.status === 429 && r.attempts.length === 1) ?? oldest.find(failedTurn);
+  const next = afterAttempt && untried(afterAttempt);
+  if (!afterAttempt || !next) return;
+  // The router's one builder sums every hold into the row, so the row keeps the hold its last attempt's trace
+  // already named, whichever turn the clock drew, and adds the bound's wait.
+  const before = afterAttempt.held;
+  const bound = boundOf(afterAttempt);
+  Object.assign(afterAttempt, {
+    accountId: null,
+    durationMs: (afterAttempt.durationMs ?? 0) + bound,
+    errorCode: 'accounts_at_cap',
+    held: { cohort: null, heldMs: (before?.heldMs ?? 0) + bound, waitedOn: [...(before?.waitedOn ?? []), next] },
+    outcome: 'exhausted',
+    status: 429,
+  });
 }
 
 addStoryEvents();

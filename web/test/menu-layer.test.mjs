@@ -14,12 +14,17 @@ const { act, createElement: h, createRoot, Menu } = await import('./dist/ui.js')
 
 // jsdom lays nothing out, so the boxes the placement reads are stood in: a clipping wrap whose 80 px client box is too
 // short for the 141 px list on either side of any row, and each row's menu 40 px below the one before it, read from
-// the row's place among its siblings the way a layout would, so a re-sorted row reads a moved trigger.
-const box = (top, height) => ({ bottom: top + height, height, left: 800, right: 900, top, width: 100, x: 800, y: top });
+// the row's place among its siblings the way a layout would, so a re-sorted row reads a moved trigger. Where a browser
+// draws scrollbars, a list in flow overflowing the wrap gives it one, which narrows the table and moves a
+// right-aligned trigger left by the gutter; `gutter` stands that in while a list sits inside the wrap.
+let gutter = 0;
+const box = (top, height, left = 800) => ({ bottom: top + height, height, left, right: left + 100, top, width: 100, x: left, y: top });
 window.HTMLElement.prototype.getBoundingClientRect = function () {
   if (this.classList.contains('table-wrap')) return box(100, 82);
   const row = this.classList.contains('menu') ? this.closest('.row') : null;
-  return row ? box(110 + 40 * [...row.parentElement.children].indexOf(row), 22) : box(0, 0);
+  if (!row) return box(0, 0);
+  const shifted = row.closest('.table-wrap')?.querySelector('.menu__list') ? gutter : 0;
+  return box(110 + 40 * [...row.parentElement.children].indexOf(row), 22, 800 - shifted);
 };
 const sized = (name, value) => Object.defineProperty(window.HTMLElement.prototype, name, { configurable: true, get() { return value(this); } });
 sized('clientHeight', (el) => (el.classList.contains('table-wrap') ? 80 : 0));
@@ -36,6 +41,7 @@ const roots = [];
 afterEach(() => {
   for (const root of roots.splice(0)) act(() => root.unmount());
   document.body.replaceChildren();
+  gutter = 0;
 });
 const mounted = (element) => {
   const container = document.createElement('div');
@@ -74,4 +80,14 @@ test('a floating menu takes focus on its first enabled item and gives it back to
   act(() => edit.click());
   assert.equal(document.querySelectorAll('.menu__list').length, 0, 'choosing an item closes the menu');
   assert.ok(document.activeElement === opener, 'focus returns to the trigger the menu was opened from');
+});
+
+test('a floating menu whose list in flow gave the wrap a scrollbar stays open and stands at its trigger at rest', () => {
+  gutter = 15;
+  const m = mounted(table(['a']));
+  act(() => trigger(m.container, 'a').click());
+  const list = floatingList();
+  assert.equal(list?.textContent, 'Open a', 'leaving the wrap takes its scrollbar away and moves the trigger back, which is no move');
+  // The trigger rests at 800 to 900 once the list floats, so the 160 px list ends at its right edge.
+  assert.equal(list.style.left, '740px', 'the layer is placed from the trigger at rest, not from where the scrollbar pushed it');
 });

@@ -113,41 +113,48 @@ const failures = [];
 const measurements = [];
 // A tile repainted in part can anti-alias a rounded corner a shade apart from one painted whole, and which
 // happens depends on when the paints land, so every raster is a whole one.
-const browser = await chromium.launch({ args: ['--disable-partial-raster'] });
-const context = await browser.newContext({
-  reducedMotion: 'reduce',
-  timezoneId: 'UTC',
-  viewport: { height: 800, width: 1280 },
-});
-// Animations are cut so a screenshot never lands mid-transition.
-await context.addInitScript(() => {
-  document.addEventListener('DOMContentLoaded', () => {
-    const style = document.createElement('style');
-    style.textContent = [
-      '*, *::before, *::after {',
-      '  animation-duration: 0s !important; animation-delay: 0s !important;',
-      '  transition-duration: 0s !important; transition-delay: 0s !important;',
-      '}',
-    ].join('\n');
-    document.head.append(style);
+const RASTER = ['--disable-partial-raster'];
+const browser = await chromium.launch({ args: RASTER });
+
+/** A page of `on` at the pass's viewport and zone, with motion cut and every console or page error a failure. */
+async function openPage(on) {
+  const context = await on.newContext({
+    reducedMotion: 'reduce',
+    timezoneId: 'UTC',
+    viewport: { height: 800, width: 1280 },
   });
-});
-const page = await context.newPage();
-// The first load asks /admin/session without a cookie and gets the 401 that shows the login screen; Chromium
-// logs that answer as a failed resource, and it is the one console error the pass expects. Chromium puts the
-// path in the message or in the location depending on how it reports the failure, so both are searched. Only
-// the first such line is excused: a session lost mid-pass would log the same one, and that is a failure.
-let anonymous = 0;
-const expectedAnonymous = (message) => {
-  const reported = `${message.text()} ${message.location()?.url ?? ''}`;
-  if (!/\/admin\/session\b/.test(reported) || !/\b401\b/.test(reported)) return false;
-  anonymous += 1;
-  return anonymous === 1;
-};
-page.on('console', (m) => {
-  if (m.type() === 'error' && !expectedAnonymous(m)) failures.push(`console error on ${page.url()}: ${m.text()}`);
-});
-page.on('pageerror', (e) => failures.push(`page error on ${page.url()}: ${e.message}`));
+  // Animations are cut so a screenshot never lands mid-transition.
+  await context.addInitScript(() => {
+    document.addEventListener('DOMContentLoaded', () => {
+      const style = document.createElement('style');
+      style.textContent = [
+        '*, *::before, *::after {',
+        '  animation-duration: 0s !important; animation-delay: 0s !important;',
+        '  transition-duration: 0s !important; transition-delay: 0s !important;',
+        '}',
+      ].join('\n');
+      document.head.append(style);
+    });
+  });
+  const opened = await context.newPage();
+  // The first load asks /admin/session without a cookie and gets the 401 that shows the login screen; Chromium
+  // logs that answer as a failed resource, and it is the one console error a page expects. Chromium puts the
+  // path in the message or in the location depending on how it reports the failure, so both are searched. Only
+  // the first such line is excused: a session lost mid-pass would log the same one, and that is a failure.
+  let anonymous = 0;
+  const expectedAnonymous = (message) => {
+    const reported = `${message.text()} ${message.location()?.url ?? ''}`;
+    if (!/\/admin\/session\b/.test(reported) || !/\b401\b/.test(reported)) return false;
+    anonymous += 1;
+    return anonymous === 1;
+  };
+  opened.on('console', (m) => {
+    if (m.type() === 'error' && !expectedAnonymous(m)) failures.push(`console error on ${opened.url()}: ${m.text()}`);
+  });
+  opened.on('pageerror', (e) => failures.push(`page error on ${opened.url()}: ${e.message}`));
+  return opened;
+}
+let page = await openPage(browser);
 
 /**
  * Resolves once the console's entry module has run to its end, its top-level await on the mock included, so the
@@ -2313,11 +2320,12 @@ async function forkLink(theme) {
   else if (read.current !== 'true' || read.marked !== 1 || !read.inView) say(`following the fork link leaves its base ${JSON.stringify(read)}`);
 }
 
-// Where a throw below came from, so the failure it becomes names a view rather than a stack.
-let at = 'the login';
-try {
-  // The same pin the jsdom smoke run applies, over the timers as well as the date: `install` alone keeps the
-  // clock running at the wall's pace, so it is paused at the origin and moves only when `advance` moves it.
+/**
+ * Signs `page` in with the pass's secret. The same pin the jsdom smoke run applies, over the timers as well as the
+ * date: `install` alone keeps the clock running at the wall's pace, so it is paused at the origin and moves only when
+ * `advance` moves it.
+ */
+async function logIn() {
   await page.clock.install({ time: clockOrigin });
   await page.clock.pauseAt(clockOrigin);
   await page.goto(`${base}/`);
@@ -2327,6 +2335,12 @@ try {
   await page.getByRole('button', { name: 'Log in' }).click();
   await advance(LOAD_MS);
   await page.waitForSelector('.stat-grid');
+}
+
+// Where a throw below came from, so the failure it becomes names a view rather than a stack.
+let at = 'the login';
+try {
+  await logIn();
 
   for (const theme of ['light', 'dark']) {
     mkdirSync(join(shots, theme), { recursive: true });
@@ -2419,6 +2433,24 @@ try {
     at = `${theme} /pools cost reference`;
     await page.evaluate((t) => localStorage.setItem('phoebis.theme', t), theme);
     await poolCostReference(theme);
+  }
+  // Headless Chromium hides scrollbars, and with them the gutter a list in flow gives a clipping wrap, which pushes a
+  // right-aligned trigger aside wherever a browser draws scrollbars (Windows and Linux by default). The Keys page's
+  // menus run once more in a browser that shows them, on a page of its own after every shot, since the scrollbars
+  // would change the shots.
+  at = 'the /keys menus with scrollbars shown';
+  const shown = await chromium.launch({ args: RASTER, ignoreDefaultArgs: ['--hide-scrollbars'] });
+  try {
+    page = await openPage(shown);
+    await logIn();
+    await page.evaluate(() => localStorage.setItem('phoebis.theme', 'light'));
+    await page.goto(`${base}/keys`);
+    await booted();
+    await advance(LOAD_MS);
+    await page.waitForSelector('.card--table tbody tr', { timeout: 15_000 });
+    await keysPageMenus('light (scrollbars shown)');
+  } finally {
+    await shown.close().catch((error) => failures.push(`closing the browser that shows scrollbars: ${error.message}`));
   }
 } catch (error) {
   // Reported, never re-raised: the console errors collected so far are the point of the run, and a rethrow
