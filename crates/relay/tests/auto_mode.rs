@@ -4,13 +4,13 @@
 mod common;
 use common::*;
 
+use fake_upstream::{FakeUpstream, RecordedRequest, Respond, Rule};
+use http_body_util::BodyExt;
 use phoebis_profile::fixtures::{
     body, inference_head, with_dangerous_tool_use_beta, with_safeguards, BodyFixture, FixtureKind,
     SAFEGUARDS_MEMBER,
 };
 use phoebis_relay::DANGEROUS_TOOL_USE_BETA;
-use fake_upstream::{FakeUpstream, RecordedRequest, Respond, Rule};
-use http_body_util::BodyExt;
 use tower::ServiceExt;
 
 const A: &str = "sk-ant-api03-AAAA0001";
@@ -463,7 +463,8 @@ fn first_party_with_an_escaped_stamp() -> Vec<u8> {
     let mut zeroed = sent.clone();
     zeroed[at..at + 5].copy_from_slice(b"00000");
     let hash =
-        xxhash_rust::xxh64::xxh64(&phoebis_cch::normalize(&zeroed).unwrap(), phoebis_cch::SEED) & 0xF_FFFF;
+        xxhash_rust::xxh64::xxh64(&phoebis_cch::normalize(&zeroed).unwrap(), phoebis_cch::SEED)
+            & 0xF_FFFF;
     sent[at..at + 5].copy_from_slice(format!("{hash:05x}").as_bytes());
     sent
 }

@@ -673,10 +673,12 @@ fn router_config(
             five_hour: tables.rate_table(phoebis_routing::FIVE_HOUR),
             fast: prices.fast_rate_table(),
         },
-        share: phoebis_routing::SharePricer::new(move |window, tier, model, usage, at| match window {
-            phoebis_routing::FIVE_HOUR => tables.five_hour_share_at(tier, model, usage, at),
-            window => tables.share(window, tier, model, usage),
-        }),
+        share: phoebis_routing::SharePricer::new(
+            move |window, tier, model, usage, at| match window {
+                phoebis_routing::FIVE_HOUR => tables.five_hour_share_at(tier, model, usage, at),
+                window => tables.share(window, tier, model, usage),
+            },
+        ),
         ..phoebis_routing::RouterConfig::default()
     }
 }
@@ -774,7 +776,10 @@ mod tests {
     #[test]
     fn the_router_config_prices_a_windows_share_through_the_shipped_plan_tables() {
         let tables = phoebis_ledger::PlanTables::shipped();
-        let config = router_config(&phoebis_ledger::PriceTable::shipped(), Arc::new(tables.clone()));
+        let config = router_config(
+            &phoebis_ledger::PriceTable::shipped(),
+            Arc::new(tables.clone()),
+        );
         let usage = phoebis_routing::PinUsage {
             input: 1_000,
             cache_read: 10_000,
@@ -786,9 +791,13 @@ mod tests {
         // Monday 2026-09-21 at 14:00 UTC, inside the peak band.
         let at = 1_789_999_200_000;
         assert_eq!(
-            config
-                .share
-                .price(phoebis_routing::FIVE_HOUR, tier, "claude-opus-5-5", usage, at),
+            config.share.price(
+                phoebis_routing::FIVE_HOUR,
+                tier,
+                "claude-opus-5-5",
+                usage,
+                at
+            ),
             tables.five_hour_share_at(tier, "claude-opus-5-5", usage, at),
             "the 5-hour share is weighed by the band at the completion"
         );
@@ -803,7 +812,13 @@ mod tests {
         }
         assert!(config
             .share
-            .price(phoebis_routing::FIVE_HOUR, tier, "claude-opus-5-5", usage, at)
+            .price(
+                phoebis_routing::FIVE_HOUR,
+                tier,
+                "claude-opus-5-5",
+                usage,
+                at
+            )
             .is_some_and(|share| share > 0.0));
         assert_eq!(
             config.share.price(
@@ -921,11 +936,15 @@ mod tests {
         );
         // Monday 2026-09-21 at 14:00 and at 20:00 UTC.
         assert_eq!(
-            config.band.at(phoebis_routing::FIVE_HOUR, 1_789_999_200_000),
+            config
+                .band
+                .at(phoebis_routing::FIVE_HOUR, 1_789_999_200_000),
             1.435
         );
         assert_eq!(
-            config.band.at(phoebis_routing::FIVE_HOUR, 1_790_020_800_000),
+            config
+                .band
+                .at(phoebis_routing::FIVE_HOUR, 1_790_020_800_000),
             1.0
         );
     }

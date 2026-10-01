@@ -5,9 +5,9 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use fake_upstream::{FakeUpstream, RecordedRequest, Respond, Rule};
 use phoebis_relay::Relay;
 use phoebis_store::{AccountKind, AffinitySource, ApiKeyRow, RulesMode};
-use fake_upstream::{FakeUpstream, RecordedRequest, Respond, Rule};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tower::ServiceExt;

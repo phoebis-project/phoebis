@@ -1,5 +1,6 @@
 mod common;
 
+use fake_upstream::{FakeUpstream, Respond, Rule};
 use phoebis_oauth::{
     control_request, exchange_body, parse_token_response, refresh_body, AcquireError, ControlKind,
     CredentialManager,
@@ -15,7 +16,6 @@ use phoebis_transport::{
     request::serialize_head,
     Plane,
 };
-use fake_upstream::{FakeUpstream, Respond, Rule};
 use std::sync::{
     atomic::{AtomicI64, Ordering},
     Arc,

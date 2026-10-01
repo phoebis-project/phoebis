@@ -1,6 +1,6 @@
 mod common;
-use phoebis_alerts::{Kind, LifecycleEvent, ScopeType, Signal};
 use common::*;
+use phoebis_alerts::{Kind, LifecycleEvent, ScopeType, Signal};
 
 #[tokio::test]
 async fn a_signal_opens_one_event_per_matching_rule_and_subject_and_a_clear_resolves_it() {
@@ -606,7 +606,9 @@ async fn a_retry_that_crosses_the_expiry_posts_no_question_text_either() {
         })
     };
     let rig = rig_with_hook(
-        Arc::new(phoebis_store::Store::open_in_memory(&phoebis_store::StorageKey::generate()).unwrap()),
+        Arc::new(
+            phoebis_store::Store::open_in_memory(&phoebis_store::StorageKey::generate()).unwrap(),
+        ),
         hook,
     )
     .await;

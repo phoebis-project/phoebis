@@ -2,11 +2,11 @@
 mod common;
 use std::time::Duration;
 
-use phoebis_ledger::{event_of, recent_events_of_kind, EventRecord, LedgerConfig, LedgerDb};
-use phoebis_routing::RouterEvent;
 use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule};
 use http_body_util::BodyExt;
+use phoebis_ledger::{event_of, recent_events_of_kind, EventRecord, LedgerConfig, LedgerDb};
+use phoebis_routing::RouterEvent;
 use tower::ServiceExt;
 
 #[tokio::test]

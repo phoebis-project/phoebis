@@ -2,10 +2,10 @@
 mod common;
 use std::time::Duration;
 
-use phoebis_bus::{Event, Kind, Origin, Phase, RequestObserved, RequestShape, ResponseChunk};
-use phoebis_ledger::{AttemptRecord, EventRecord, Record, RequestRecord};
 use common::{delete, get, json, login, post, wait_json};
 use futures::StreamExt;
+use phoebis_bus::{Event, Kind, Origin, Phase, RequestObserved, RequestShape, ResponseChunk};
+use phoebis_ledger::{AttemptRecord, EventRecord, Record, RequestRecord};
 
 const HOUR: i64 = 3_600_000;
 

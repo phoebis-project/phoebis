@@ -651,7 +651,8 @@ mod tests {
     /// A store carrying one pool, one account, and one budgeted member, and the router spawned over it: enough
     /// for `refresh_member_spends` to find a member to read.
     fn budgeted_router() -> RouterHandle {
-        let store = Arc::new(Store::open_in_memory(&phoebis_store::StorageKey::generate()).unwrap());
+        let store =
+            Arc::new(Store::open_in_memory(&phoebis_store::StorageKey::generate()).unwrap());
         store
             .insert_account(&phoebis_store::AccountRow {
                 id: "a".into(),

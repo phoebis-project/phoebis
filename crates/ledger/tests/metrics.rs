@@ -6,13 +6,13 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
+use common::*;
+use fake_upstream::{FakeUpstream, Rule};
 use phoebis_bus::SubscriberStats;
 use phoebis_ledger::{
     AttemptRecord, LedgerConfig, Metrics, PriceTable, QuotaSampleRecord, RequestRecord,
     RoutingGauges,
 };
-use common::*;
-use fake_upstream::{FakeUpstream, Rule};
 use tower::ServiceExt;
 
 fn series_of(text: &str) -> BTreeSet<String> {

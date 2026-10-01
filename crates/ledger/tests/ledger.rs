@@ -5,6 +5,9 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
+use common::*;
+use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
+use http_body_util::BodyExt;
 use phoebis_bus::{
     AccountSelected, AttemptOutcome, AutoMode, Event as BusEvent, Kind, Origin,
     Outcome as BusOutcome, RequestComplete, RequestObserved, RequestShape, ResponseChunk,
@@ -16,9 +19,6 @@ use phoebis_ledger::{
 };
 use phoebis_profile::fixtures::BodyFixture;
 use phoebis_store::{BudgetPeriod, MemberWrite};
-use common::*;
-use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
-use http_body_util::BodyExt;
 use tower::ServiceExt;
 
 fn request_id(resp: &axum::http::Response<axum::body::Body>) -> String {
@@ -271,7 +271,13 @@ async fn the_row_carries_the_callers_user_agent_and_the_log_filters_on_it() {
             ..Default::default()
         };
         h.db.read_blocking(|c| {
-            phoebis_ledger::list_requests(c, &filter, &phoebis_ledger::LiveKeys::default(), None, 10)
+            phoebis_ledger::list_requests(
+                c,
+                &filter,
+                &phoebis_ledger::LiveKeys::default(),
+                None,
+                10,
+            )
         })
         .unwrap()
         .0
@@ -311,10 +317,11 @@ async fn the_row_carries_the_client_class_the_hints_and_the_turn_origin_and_the_
     let native =
         String::from_utf8(phoebis_profile::fixtures::body(BodyFixture::FirstParty9b244).to_vec())
             .unwrap();
-    let (line, headers) = phoebis_transport::request::parse_head(
-        phoebis_profile::fixtures::inference_head(phoebis_profile::fixtures::FixtureKind::OauthFirstParty),
-    )
-    .unwrap();
+    let (line, headers) =
+        phoebis_transport::request::parse_head(phoebis_profile::fixtures::inference_head(
+            phoebis_profile::fixtures::FixtureKind::OauthFirstParty,
+        ))
+        .unwrap();
     let target = line.split(' ').nth(1).unwrap();
     // `agent` swaps the fixture's own `claude-cli/` user agent and drops the fixture's `X-Stainless-Lang` with it,
     // sending the language header `agent` names in its place.
@@ -386,7 +393,13 @@ async fn the_row_carries_the_client_class_the_hints_and_the_turn_origin_and_the_
             ..Default::default()
         };
         h.db.read_blocking(|c| {
-            phoebis_ledger::list_requests(c, &filter, &phoebis_ledger::LiveKeys::default(), None, 10)
+            phoebis_ledger::list_requests(
+                c,
+                &filter,
+                &phoebis_ledger::LiveKeys::default(),
+                None,
+                10,
+            )
         })
         .unwrap()
         .0
@@ -408,7 +421,13 @@ async fn the_row_carries_the_client_class_the_hints_and_the_turn_origin_and_the_
             ..Default::default()
         };
         h.db.read_blocking(|c| {
-            phoebis_ledger::list_requests(c, &filter, &phoebis_ledger::LiveKeys::default(), None, 10)
+            phoebis_ledger::list_requests(
+                c,
+                &filter,
+                &phoebis_ledger::LiveKeys::default(),
+                None,
+                10,
+            )
         })
         .unwrap()
         .0
@@ -430,7 +449,13 @@ async fn the_row_carries_the_client_class_the_hints_and_the_turn_origin_and_the_
             ..Default::default()
         };
         h.db.read_blocking(|c| {
-            phoebis_ledger::list_requests(c, &filter, &phoebis_ledger::LiveKeys::default(), None, 10)
+            phoebis_ledger::list_requests(
+                c,
+                &filter,
+                &phoebis_ledger::LiveKeys::default(),
+                None,
+                10,
+            )
         })
         .unwrap()
         .0
@@ -538,7 +563,13 @@ async fn a_request_with_no_user_agent_is_found_by_the_wildcard_and_the_exact_das
             ..Default::default()
         };
         h.db.read_blocking(|c| {
-            phoebis_ledger::list_requests(c, &filter, &phoebis_ledger::LiveKeys::default(), None, 10)
+            phoebis_ledger::list_requests(
+                c,
+                &filter,
+                &phoebis_ledger::LiveKeys::default(),
+                None,
+                10,
+            )
         })
         .unwrap()
         .0
@@ -627,10 +658,11 @@ fn request_with_native_body(
     key: &str,
     session: &str,
 ) -> axum::http::Request<axum::body::Body> {
-    let (line, headers) = phoebis_transport::request::parse_head(
-        phoebis_profile::fixtures::inference_head(phoebis_profile::fixtures::FixtureKind::OauthFirstParty),
-    )
-    .unwrap();
+    let (line, headers) =
+        phoebis_transport::request::parse_head(phoebis_profile::fixtures::inference_head(
+            phoebis_profile::fixtures::FixtureKind::OauthFirstParty,
+        ))
+        .unwrap();
     let target = line.split(' ').nth(1).unwrap();
     let mut req = axum::http::Request::builder().method("POST").uri(target);
     for (n, v) in headers {

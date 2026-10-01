@@ -4,12 +4,12 @@ mod common;
 
 use std::time::Duration;
 
+use common::*;
+use fake_upstream::{wait_for_async, FakeUpstream, Respond, Rule};
 use phoebis_profile::fixtures::{body, inference_head, BodyFixture, FixtureKind};
 use phoebis_relay::{FAST_INPUT, FAST_OUTPUT};
 use phoebis_routing::{RouterConfig, SharePricer, FIVE_HOUR, SEVEN_DAY};
 use phoebis_store::{AffinitySource, SubscriptionRow};
-use common::*;
-use fake_upstream::{wait_for_async, FakeUpstream, Respond, Rule};
 use tower::ServiceExt;
 
 const CLOSE: f64 = 1e-9;

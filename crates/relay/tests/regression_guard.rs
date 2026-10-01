@@ -1,7 +1,7 @@
 use axum::http::StatusCode;
+use fake_upstream::{FakeUpstream, Respond, Rule};
 use phoebis_profile::fixtures::{body, inference_head, BodyFixture, FixtureKind};
 use phoebis_store::AccountKind;
-use fake_upstream::{FakeUpstream, Respond, Rule};
 use tower::ServiceExt;
 
 mod common;

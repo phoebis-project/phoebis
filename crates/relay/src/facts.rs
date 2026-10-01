@@ -52,7 +52,8 @@ impl BodyFacts {
         // Counted over decoded keys on the walk the cut runs on, not read from the parse below: a body a strict
         // decoder refuses (a lone surrogate escape in a string value) still has its member cut under an off
         // setting, and the request row has to say so.
-        let safeguards = phoebis_cch::top_level_member_count(body, "safeguards").is_ok_and(|n| n >= 1);
+        let safeguards =
+            phoebis_cch::top_level_member_count(body, "safeguards").is_ok_and(|n| n >= 1);
         let Ok(root) = serde_json::from_slice::<Value>(body) else {
             return BodyFacts {
                 fresh_user_turn: false,

@@ -11,6 +11,7 @@ use std::time::Duration;
 use bytes::Bytes;
 use phoebis_alerts::{AlertInputs, AlertParts, Alerts, Kind, ScopeType, Signal, Webhook};
 // The bus has a `Kind` of its own, and this file already speaks the alert one.
+use fake_upstream::FakeUpstream;
 use phoebis_bus::{
     Bus, Event, Kind as RequestKind, Origin, Outcome, RequestComplete, RequestObserved,
     RequestShape, ResponseFacts,
@@ -28,7 +29,6 @@ use phoebis_store::{
 };
 use phoebis_transport::control::{ControlClient, ResolveFuture, Resolver};
 use phoebis_transport::{connector_builder, trust_extra_ca, Plane};
-use fake_upstream::FakeUpstream;
 
 pub const NOW: i64 = 1_700_000_000_000;
 

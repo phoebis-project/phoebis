@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use futures::future::{BoxFuture, FutureExt, Shared};
 use phoebis_profile::Profile;
 use phoebis_store::{
     AccountRow, AccountState, AttemptOutcome, CredentialBundle, NewBundle, Secret, Store,
@@ -14,7 +15,6 @@ use phoebis_store::{
 use phoebis_transport::control::ControlClient;
 use phoebis_transport::response::ResponseHead;
 use phoebis_transport::TransportError;
-use futures::future::{BoxFuture, FutureExt, Shared};
 use serde_json::Value;
 use tracing::Instrument;
 
@@ -786,11 +786,11 @@ pub(crate) fn retry_after_ms(head: &ResponseHead, now: i64, max_ms: i64) -> Opti
 mod tests {
     use super::*;
 
+    use fake_upstream::{FakeUpstream, Respond, Rule};
     use phoebis_profile::fixtures::{control_response, ControlFixture};
     use phoebis_store::{AccountKind, Identity, StorageKey};
     use phoebis_transport::control::{ResolveFuture, Resolver};
     use phoebis_transport::{connector_builder, Plane};
-    use fake_upstream::{FakeUpstream, Respond, Rule};
 
     /// A manager for account `a` over an in-memory store, a fixed clock, and a fake token endpoint that
     /// answers every refresh with the measured fixture.

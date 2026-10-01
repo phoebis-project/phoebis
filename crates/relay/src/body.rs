@@ -885,7 +885,9 @@ mod tests {
             "the decoder reads the marker"
         );
         assert!(
-            phoebis_cch::cache_control_spans(escaped).unwrap().is_empty(),
+            phoebis_cch::cache_control_spans(escaped)
+                .unwrap()
+                .is_empty(),
             "the walk does not reach it"
         );
         let mut body = escaped.to_vec();
@@ -1046,7 +1048,11 @@ mod tests {
         assert!(edits.cch_restamped);
         let root: serde_json::Value = serde_json::from_slice(&body).expect("the cut body parses");
         assert!(root.get("safeguards").is_none());
-        assert_eq!(phoebis_cch::sign(&body).unwrap(), body, "the stamp is current");
+        assert_eq!(
+            phoebis_cch::sign(&body).unwrap(),
+            body,
+            "the stamp is current"
+        );
         assert!(
             body == fixture_body(BodyFixture::FirstParty9b244),
             "one comma went with the member, so the body is the recording again"

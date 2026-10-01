@@ -45,18 +45,20 @@ fn the_fable_window_comes_from_limits_regardless_of_the_named_key() {
 }
 
 mod service {
+    use fake_upstream::{wait_for, FakeUpstream, Respond, Rule};
     use phoebis_oauth::{Clock, CredentialManager, PollOutcome, UsageService};
     use phoebis_profile::{
         claude_code_2_1_269_linux_x64,
         fixtures::{control_response, ControlFixture},
     };
-    use phoebis_store::{AccountKind, AccountRow, AccountState, NewBundle, Secret, StorageKey, Store};
+    use phoebis_store::{
+        AccountKind, AccountRow, AccountState, NewBundle, Secret, StorageKey, Store,
+    };
     use phoebis_transport::{
         connector_builder,
         control::{ControlClient, ResolveFuture, Resolver},
         Plane,
     };
-    use fake_upstream::{wait_for, FakeUpstream, Respond, Rule};
     use std::sync::{
         atomic::{AtomicI64, Ordering},
         Arc,

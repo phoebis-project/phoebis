@@ -2,10 +2,10 @@ mod common;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use phoebis_profile::fixtures::{body, inference_head, BodyFixture, FixtureKind};
 use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule};
 use http_body_util::BodyExt;
+use phoebis_profile::fixtures::{body, inference_head, BodyFixture, FixtureKind};
 use tower::ServiceExt;
 
 fn ok() -> Rule {

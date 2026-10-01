@@ -352,10 +352,11 @@ async fn a_confirmed_pairing_stores_the_plan_and_the_start_at_once() {
     use common::{get, json, login, post};
     let (app, up) = common::admin_app().await;
     let cookie = login(&app, "admin-secret").await;
-    let mut profile: serde_json::Value = serde_json::from_slice(
-        phoebis_profile::fixtures::control_response(phoebis_profile::fixtures::ControlFixture::Profile),
-    )
-    .unwrap();
+    let mut profile: serde_json::Value =
+        serde_json::from_slice(phoebis_profile::fixtures::control_response(
+            phoebis_profile::fixtures::ControlFixture::Profile,
+        ))
+        .unwrap();
     profile["account"]["has_claude_max"] = serde_json::json!(true);
     profile["organization"]["subscription_created_at"] = serde_json::json!("2026-03-14T10:00:00Z");
     profile["organization"]["claude_code_trial_ends_at"] =
@@ -608,8 +609,8 @@ async fn the_usage_get_says_no_credential_is_stored_for_a_disconnected_or_unpair
 
 #[tokio::test]
 async fn an_account_whose_snapshot_holds_no_windows_answers_the_windows_the_router_holds() {
-    use phoebis_routing::{Report, UtilizationSample, WindowReading, FIVE_HOUR, SEVEN_DAY};
     use common::{get, json, login, wait_json, NOW};
+    use phoebis_routing::{Report, UtilizationSample, WindowReading, FIVE_HOUR, SEVEN_DAY};
     let h = common::admin_parts_polled(std::time::Duration::from_secs(60)).await;
     let cookie = login(&h.app, "admin-secret").await;
     let path = "/admin/accounts/business/usage";
@@ -674,10 +675,10 @@ async fn an_account_whose_snapshot_holds_no_windows_answers_the_windows_the_rout
 /// run and read more than a day ago, are the windows the account view lists, as the usage `GET` answers them.
 #[tokio::test]
 async fn an_account_the_ledger_holds_no_sample_of_today_lists_the_windows_the_router_holds() {
+    use common::{get, json, login, wait_json, NOW};
     use phoebis_routing::{
         Report, UtilizationSample, WindowReading, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
     };
-    use common::{get, json, login, wait_json, NOW};
     const HOUR: i64 = 3_600_000;
     let h = common::admin_parts_polled(std::time::Duration::from_secs(60)).await;
     let cookie = login(&h.app, "admin-secret").await;
@@ -1503,8 +1504,8 @@ async fn a_pin_on_a_model_with_an_unmeasured_cell_reads_no_burn() {
 
 #[tokio::test]
 async fn every_session_row_answers_its_fork_members_and_a_forked_session_names_its_base() {
-    use phoebis_ledger::{Record, RequestRecord};
     use common::{generation, login, post, wait_json};
+    use phoebis_ledger::{Record, RequestRecord};
     use std::sync::atomic::Ordering;
 
     let seed = common::admin_parts_full().await;
@@ -1683,8 +1684,8 @@ async fn every_session_row_answers_its_fork_members_and_a_forked_session_names_i
 
 #[tokio::test]
 async fn a_request_row_answers_its_fork_fields() {
-    use phoebis_ledger::{Record, RequestRecord};
     use common::{generation, get, json, login, post, wait_json};
+    use phoebis_ledger::{Record, RequestRecord};
 
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
@@ -1765,9 +1766,11 @@ async fn deleting_either_fast_cooldown_clears_its_own_row_and_leaves_the_others(
         credential_generation: 1,
         incarnation: 1,
     };
-    parts
-        .router
-        .report(cooled("fast", phoebis_routing::FAST_RATE_LIMIT_REASON, "fast"));
+    parts.router.report(cooled(
+        "fast",
+        phoebis_routing::FAST_RATE_LIMIT_REASON,
+        "fast",
+    ));
     parts.router.report(cooled(
         "fast_credits",
         phoebis_routing::FAST_CREDITS_REASON,

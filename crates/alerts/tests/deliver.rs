@@ -3,12 +3,12 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use common::*;
 use phoebis_alerts::{
     admitted, body, signature, Kind, ReqwestWebhook, ScopeType, Webhook, BACKOFF, LINK_LOCAL,
     LOOPBACK, UNSPECIFIED,
 };
 use phoebis_store::{Secret, StorageKey, Store};
-use common::*;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[tokio::test]

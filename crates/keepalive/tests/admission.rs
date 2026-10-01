@@ -3,11 +3,11 @@
 mod common;
 use std::time::Duration;
 
+use common::*;
 use phoebis_bus::{Event as BusEvent, Kind, Outcome, Phase, ResponseChunk, Usage};
 use phoebis_keepalive::{
     AgentState, Event, Guard, KeepaliveLimits, KeepalivePolicy, Reason, RecipeState,
 };
-use common::*;
 
 /// The ledger row for a request, once the writer has landed it.
 async fn landed(r: &Rig, id: &str) {
@@ -353,8 +353,8 @@ async fn a_later_selection_supersedes_an_earlier_attempts_evidence() {
     let r = rig(RigSpec::default()).await;
     r.engine.observe(r.observed("req", "main", BODY));
     r.engine.observe(r.selected("req", "a"));
-    r.engine
-        .observe(phoebis_bus::Event::AccountSelected(phoebis_bus::AccountSelected {
+    r.engine.observe(phoebis_bus::Event::AccountSelected(
+        phoebis_bus::AccountSelected {
             request_id: "req".into(),
             attempt: 2,
             account_id: "b".into(),
@@ -363,7 +363,8 @@ async fn a_later_selection_supersedes_an_earlier_attempts_evidence() {
             started_at: r.now(),
             cache_ttl_ms: None,
             selection: None,
-        }));
+        },
+    ));
     // Evidence stamped with the first attempt arrives after the second selection and is ignored.
     r.engine
         .observe(phoebis_bus::Event::ResponseChunk(ResponseChunk {

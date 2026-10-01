@@ -6,11 +6,11 @@ use common::*;
 
 use std::sync::atomic::Ordering;
 
+use fake_upstream::{FakeUpstream, Respond, Rule};
+use http_body_util::BodyExt;
 use phoebis_profile::fixtures::{body, inference_head, BodyFixture, FixtureKind};
 use phoebis_relay::{CACHE_DIAGNOSIS_BETA, EXTENDED_TTL_BETA};
 use phoebis_routing::warm;
-use fake_upstream::{FakeUpstream, Respond, Rule};
-use http_body_util::BodyExt;
 use tower::ServiceExt;
 
 const A: &str = "sk-ant-api03-AAAA0001";

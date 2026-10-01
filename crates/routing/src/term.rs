@@ -1,9 +1,9 @@
 //! The account's paid term: the operator's cancelled flag and saved end, the trial end the profile carries, and
 //! the derivation the account form prefills from.
 
-use phoebis_store::SubscriptionTerm;
 use jiff::tz::TimeZone;
 use jiff::{Span, Timestamp};
+use phoebis_store::SubscriptionTerm;
 
 /// The end an engine rule reads: the stored end while the account is cancelled, else a trial end still ahead.
 pub fn end_of(term: &SubscriptionTerm, now: i64) -> Option<i64> {

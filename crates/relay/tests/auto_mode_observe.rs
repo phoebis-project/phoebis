@@ -5,12 +5,12 @@ use common::*;
 
 use std::time::Duration;
 
+use fake_upstream::{FakeUpstream, RecordedRequest, Respond, Rule, SseEvent};
+use http_body_util::BodyExt;
 use phoebis_bus::{AutoMode, Bus, Event, RequestObserved};
 use phoebis_profile::fixtures::{
     body, inference_head, with_dangerous_tool_use_beta, with_safeguards, BodyFixture, FixtureKind,
 };
-use fake_upstream::{FakeUpstream, RecordedRequest, Respond, Rule, SseEvent};
-use http_body_util::BodyExt;
 use serde_json::Value;
 use tower::ServiceExt;
 

@@ -5,13 +5,13 @@ use std::sync::Arc;
 
 use axum::body::Body;
 use axum::http::Request;
+use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
+use http_body_util::BodyExt;
 use phoebis_profile::fixtures::{body, inference_head, BodyFixture, FixtureKind};
 use phoebis_relay::MemoryKey;
 use phoebis_store::{
     AccountKind, AffinitySource, ApiKeyRow, RulesMode, StorageKey, Store,
 };
-use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
-use http_body_util::BodyExt;
 use tower::ServiceExt;
 
 const UUID_RE_LEN: usize = 36;

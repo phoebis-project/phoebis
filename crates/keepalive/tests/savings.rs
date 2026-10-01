@@ -4,10 +4,10 @@ mod common;
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use phoebis_keepalive::{Event, KeepaliveLimits, KeepalivePolicy, Reason};
-use phoebis_ledger::{hour_of, read_rollups, RollupRow};
 use common::*;
 use fake_upstream::Respond;
+use phoebis_keepalive::{Event, KeepaliveLimits, KeepalivePolicy, Reason};
+use phoebis_ledger::{hour_of, read_rollups, RollupRow};
 
 /// Every rollup row the rig wrote, once the writer has landed what the test waits for. The whole table
 /// rather than the rig's own hour: a test that moves the clock to the next UTC day writes past it.

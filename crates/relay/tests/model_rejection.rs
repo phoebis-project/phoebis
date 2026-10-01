@@ -3,11 +3,11 @@
 mod common;
 use std::time::Duration;
 
-use phoebis_bus::{Bus, Event};
-use phoebis_relay::Limits;
 use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule};
 use http_body_util::BodyExt;
+use phoebis_bus::{Bus, Event};
+use phoebis_relay::Limits;
 use tower::ServiceExt;
 
 const A: &str = "sk-ant-oat01-AAAA";

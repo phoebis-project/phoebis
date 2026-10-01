@@ -2,6 +2,7 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use fake_upstream::{stays_for, wait_for, wait_for_async};
 use phoebis_oauth::{Clock, ExtraUsage, UsageSnapshot, UsageWindow};
 use phoebis_routing::{
     credits_from_usage, lane_key, resolve, sample_from_usage, spawn, AffinityReport, BandWeight,
@@ -17,7 +18,6 @@ use phoebis_store::{
     QuotaHeaders, RoutingLoad, RulesMode, Shedding, StorageKey, Store, Strategy, SubscriptionRow,
     WindowRow,
 };
-use fake_upstream::{stays_for, wait_for, wait_for_async};
 
 const HOUR: i64 = 3_600_000;
 
@@ -125,7 +125,11 @@ fn clock(now: &Arc<AtomicI64>) -> Clock {
     Arc::new(move || now.load(Ordering::SeqCst))
 }
 
-fn request(handle: &phoebis_routing::RouterHandle, session: Option<&str>, now: i64) -> SelectRequest {
+fn request(
+    handle: &phoebis_routing::RouterHandle,
+    session: Option<&str>,
+    now: i64,
+) -> SelectRequest {
     let s = handle.snapshot();
     SelectRequest {
         key_id: "k".into(),

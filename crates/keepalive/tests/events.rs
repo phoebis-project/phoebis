@@ -4,11 +4,11 @@ mod common;
 use std::str::FromStr;
 use std::time::Duration;
 
+use common::*;
 use phoebis_bus::{Phase, ResponseChunk, Usage};
 use phoebis_keepalive::{
     decode_query_event, AgentState, Event, EventError, KeepaliveLimits, RecipeState,
 };
-use common::*;
 
 #[tokio::test]
 async fn the_session_bound_counts_live_sessions_only() {
@@ -671,7 +671,9 @@ async fn a_lapsed_lease_marks_the_session_unattended_and_a_same_instance_start_r
     );
     let counts = r.engine.reasons();
     assert_eq!(
-        counts.get(&phoebis_keepalive::Reason::LeaseExpired).copied(),
+        counts
+            .get(&phoebis_keepalive::Reason::LeaseExpired)
+            .copied(),
         Some(1)
     );
 }

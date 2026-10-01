@@ -3,15 +3,17 @@ use std::collections::BTreeMap;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
+use common::*;
 use phoebis_alerts::{
     question_subject, spawn_inputs, AlertInputs, BusArm, Kind, Poller, ScopeType, Tracked,
     BACKOFF_ALERT_AFTER_MS,
 };
-use phoebis_bus::{Bus, Event, Kind as RequestKind, Origin, Outcome, RequestObserved, ResponseChunk};
+use phoebis_bus::{
+    Bus, Event, Kind as RequestKind, Origin, Outcome, RequestObserved, ResponseChunk,
+};
 use phoebis_oauth::PollOutcome;
 use phoebis_routing::{Report, UtilizationSample, WindowReading, FIVE_HOUR, SEVEN_DAY};
 use phoebis_store::{AccountState, AlertEventRow};
-use common::*;
 
 /// A `RequestObserved` of another origin or kind on the session, which must not count as the user's answer.
 fn observed_as(id: &str, session: &str, origin: Origin, kind: RequestKind) -> Event {
@@ -1541,10 +1543,10 @@ async fn a_question_signalled_long_after_admission_is_tracked_from_the_signal() 
 
 fn usage_answer(status: u16) -> fake_upstream::Respond {
     let body = match status {
-        200 => {
-            phoebis_profile::fixtures::control_response(phoebis_profile::fixtures::ControlFixture::Usage)
-                .to_vec()
-        }
+        200 => phoebis_profile::fixtures::control_response(
+            phoebis_profile::fixtures::ControlFixture::Usage,
+        )
+        .to_vec(),
         _ => b"{}".to_vec(),
     };
     fake_upstream::Respond::Json {

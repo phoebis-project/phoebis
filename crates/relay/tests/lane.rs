@@ -8,11 +8,11 @@ use std::time::Duration;
 
 use axum::body::Body;
 use axum::http::Request;
+use common::*;
+use fake_upstream::{FakeUpstream, Respond, Rule};
 use phoebis_profile::fixtures::{body, inference_head, BodyFixture, FixtureKind};
 use phoebis_routing::lane_key;
 use phoebis_store::{PinRow, StorageKey, Store};
-use common::*;
-use fake_upstream::{FakeUpstream, Respond, Rule};
 use tower::ServiceExt;
 
 const A: &str = "sk-ant-oat01-AAAA";

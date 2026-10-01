@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use axum::body::Body;
 use bytes::{Bytes, BytesMut};
+use futures::future::BoxFuture;
 use phoebis_bus::{Outcome, Phase, ResponseChunk, ResponseFacts, Usage};
 use phoebis_oauth::Clock;
 use phoebis_routing::{AffinityReport, PinRef, PinUsage, Report, RouterHandle};
@@ -13,7 +14,6 @@ use phoebis_transport::decode::Decoder;
 use phoebis_transport::pool::{Conn, Pool, PoolKey};
 use phoebis_transport::response::BodyReader;
 use phoebis_transport::TransportError;
-use futures::future::BoxFuture;
 use tokio::io::AsyncRead;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;

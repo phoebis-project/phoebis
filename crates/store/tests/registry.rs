@@ -587,7 +587,10 @@ fn a_pin_a_pool_a_member_and_a_key_from_before_the_affinity_columns_read_the_def
     );
 
     let partial_override = policy("partial-override");
-    assert_eq!(partial_override.plan, phoebis_relay::TtlRules::plan_default());
+    assert_eq!(
+        partial_override.plan,
+        phoebis_relay::TtlRules::plan_default()
+    );
     assert_eq!(
         partial_override.metered,
         phoebis_relay::TtlRules {
@@ -644,8 +647,9 @@ fn a_stored_policy_with_the_retired_keepalive_key_reads_as_set_after_the_migrati
     drop(conn);
     let store = Store::open(&path, &key).unwrap();
     assert_eq!(store.schema_version().unwrap(), 42);
-    let policy =
-        phoebis_relay::CacheTtlPolicy::from_json(&store.pool("warm").unwrap().unwrap().cache_ttl_json);
+    let policy = phoebis_relay::CacheTtlPolicy::from_json(
+        &store.pool("warm").unwrap().unwrap().cache_ttl_json,
+    );
     assert!(policy.enabled, "the policy survives the key's removal");
     assert_eq!(
         policy.plan,

@@ -3,10 +3,10 @@
 mod common;
 use axum::body::Body;
 use axum::http::Request;
-use phoebis_keepalive::{companion_router, EVENTS_PATH, SNAPSHOT_PATH};
-use phoebis_store::{AffinitySource, ApiKeyRow, RulesMode};
 use common::*;
 use http_body_util::BodyExt;
+use phoebis_keepalive::{companion_router, EVENTS_PATH, SNAPSHOT_PATH};
+use phoebis_store::{AffinitySource, ApiKeyRow, RulesMode};
 use tower::ServiceExt;
 
 const OTHER_KEY: &str = "phoebis-otherkey";

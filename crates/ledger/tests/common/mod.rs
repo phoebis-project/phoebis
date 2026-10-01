@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use axum::body::Body;
 use axum::http::Request;
+use fake_upstream::FakeUpstream;
 use phoebis_bus::Bus;
 use phoebis_ledger::{spawn, Ledger, LedgerConfig, LedgerDb, Metrics, PriceTable, Pricing};
 use phoebis_oauth::Clock;
@@ -22,7 +23,6 @@ use phoebis_store::{
     Secret, Shedding, StorageKey, Store, Strategy,
 };
 use phoebis_transport::request::parse_head;
-use fake_upstream::FakeUpstream;
 // The polls live with the fake so every integration suite has them; only some of them are used here.
 #[allow(unused_imports)]
 pub use fake_upstream::{capture_tracing, stays_for, stays_for_async, wait_for, wait_for_async};
@@ -242,7 +242,8 @@ pub async fn harness_on(
         let c = clock_cell.clone();
         Arc::new(move || c.load(Ordering::SeqCst))
     };
-    let mut b = phoebis_transport::connector_builder(p, phoebis_transport::Plane::Inference).unwrap();
+    let mut b =
+        phoebis_transport::connector_builder(p, phoebis_transport::Plane::Inference).unwrap();
     if !up.ca_pem().is_empty() {
         phoebis_transport::trust_extra_ca(&mut b, up.ca_pem()).unwrap();
     }
@@ -255,7 +256,8 @@ pub async fn harness_on(
             .or(Some(addr));
         Box::pin(async move { resolved }) as phoebis_transport::control::ResolveFuture
     });
-    let mut cb = phoebis_transport::connector_builder(p, phoebis_transport::Plane::Control).unwrap();
+    let mut cb =
+        phoebis_transport::connector_builder(p, phoebis_transport::Plane::Control).unwrap();
     if !up.ca_pem().is_empty() {
         phoebis_transport::trust_extra_ca(&mut cb, up.ca_pem()).unwrap();
     }
@@ -408,7 +410,10 @@ pub fn request_for_fixture(
 pub async fn ledgered(
     h: &Harness,
     id: &str,
-) -> (phoebis_ledger::RequestRecord, Vec<phoebis_ledger::AttemptRecord>) {
+) -> (
+    phoebis_ledger::RequestRecord,
+    Vec<phoebis_ledger::AttemptRecord>,
+) {
     wait_for_async(Duration::from_secs(5), || async {
         h.db.request(id).await.unwrap()
     })

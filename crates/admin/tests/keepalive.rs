@@ -281,9 +281,8 @@ async fn the_sessions_view_carries_the_companion_and_the_recipes_and_release_dis
     // A retained recipe shows the main agent's companion state and the next probe.
     let now = common::NOW;
     parts.keepalive.observe(phoebis_bus::Event::RequestObserved(phoebis_bus::RequestObserved { request_id: "r1".into(), origin: phoebis_bus::Origin::Client, kind: phoebis_bus::Kind::Inference, key_id: Some("desktop".into()), key_generation: common::generation(&parts.store, "desktop"), pool_id: Some("main".into()), session_id: Some("s1".into()), agent_id: Some("main".into()), parent_agent_id: None, owner_id: None, model: "claude-sonnet-5".into(), canonical_model: "claude-sonnet-5".into(), wire_model: "claude-sonnet-5".into(), stream: false, headers: vec![], body: bytes::Bytes::from(r#"{"model":"claude-sonnet-5","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}"#), body_capture_hours: 0, shape: phoebis_bus::RequestShape::default(), static_hash: None, boundaries: Vec::new(), client: phoebis_bus::ClientFacts::default(), auto_mode: None, fork: phoebis_bus::Fork::default(), presented_retired: false, rotation_at: None, received_at: now }));
-    parts
-        .keepalive
-        .observe(phoebis_bus::Event::AccountSelected(phoebis_bus::AccountSelected {
+    parts.keepalive.observe(phoebis_bus::Event::AccountSelected(
+        phoebis_bus::AccountSelected {
             request_id: "r1".into(),
             attempt: 1,
             account_id: "direct".into(),
@@ -292,10 +291,10 @@ async fn the_sessions_view_carries_the_companion_and_the_recipes_and_release_dis
             started_at: now,
             cache_ttl_ms: None,
             selection: None,
-        }));
-    parts
-        .keepalive
-        .observe(phoebis_bus::Event::RequestComplete(phoebis_bus::RequestComplete {
+        },
+    ));
+    parts.keepalive.observe(phoebis_bus::Event::RequestComplete(
+        phoebis_bus::RequestComplete {
             request_id: "r1".into(),
             attempt: 1,
             account_id: Some("direct".into()),
@@ -315,7 +314,8 @@ async fn the_sessions_view_carries_the_companion_and_the_recipes_and_release_dis
             response_chunks: None,
             held: None,
             finished_at: now,
-        }));
+        },
+    ));
     let listed = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
     let row = listed["sessions"]
         .as_array()
@@ -597,9 +597,8 @@ async fn a_session_row_groups_by_key_generation_and_a_historical_row_is_read_onl
         )
         .unwrap();
     parts.keepalive.observe(phoebis_bus::Event::RequestObserved(phoebis_bus::RequestObserved { request_id: "r3".into(), origin: phoebis_bus::Origin::Client, kind: phoebis_bus::Kind::Inference, key_id: Some("desktop".into()), key_generation: g, pool_id: Some("main".into()), session_id: Some("s1".into()), agent_id: Some("main".into()), parent_agent_id: None, owner_id: None, model: "claude-sonnet-5".into(), canonical_model: "claude-sonnet-5".into(), wire_model: "claude-sonnet-5".into(), stream: false, headers: vec![], body: bytes::Bytes::from(r#"{"model":"claude-sonnet-5","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}"#), body_capture_hours: 0, shape: phoebis_bus::RequestShape::default(), static_hash: None, boundaries: Vec::new(), client: phoebis_bus::ClientFacts::default(), auto_mode: None, fork: phoebis_bus::Fork::default(), presented_retired: false, rotation_at: None, received_at: now }));
-    parts
-        .keepalive
-        .observe(phoebis_bus::Event::AccountSelected(phoebis_bus::AccountSelected {
+    parts.keepalive.observe(phoebis_bus::Event::AccountSelected(
+        phoebis_bus::AccountSelected {
             request_id: "r3".into(),
             attempt: 1,
             account_id: "direct".into(),
@@ -608,10 +607,10 @@ async fn a_session_row_groups_by_key_generation_and_a_historical_row_is_read_onl
             started_at: now,
             cache_ttl_ms: None,
             selection: None,
-        }));
-    parts
-        .keepalive
-        .observe(phoebis_bus::Event::RequestComplete(phoebis_bus::RequestComplete {
+        },
+    ));
+    parts.keepalive.observe(phoebis_bus::Event::RequestComplete(
+        phoebis_bus::RequestComplete {
             request_id: "r3".into(),
             attempt: 1,
             account_id: Some("direct".into()),
@@ -631,7 +630,8 @@ async fn a_session_row_groups_by_key_generation_and_a_historical_row_is_read_onl
             response_chunks: None,
             held: None,
             finished_at: now,
-        }));
+        },
+    ));
     let listed = common::wait_json(&parts.app, "/admin/sessions", &cookie, |v| {
         v["sessions"]
             .as_array()

@@ -1,7 +1,7 @@
 //! The analytics, request-log, and dashboard routes over rows written straight into the ledger.
 mod common;
-use phoebis_ledger::{AttemptRecord, BodyRecord, Record, RequestRecord};
 use common::{get, json, login, post, wait_json};
+use phoebis_ledger::{AttemptRecord, BodyRecord, Record, RequestRecord};
 
 const HOUR: i64 = 3_600_000;
 
@@ -792,11 +792,13 @@ async fn a_request_answers_its_hold_with_its_wait_and_held_filters_the_list() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
     let now = common::NOW;
-    let held = serde_json::to_string(&phoebis_routing::cohort_hold(&[phoebis_routing::HoldFacts {
-        account_id: "business".into(),
-        cohort: None,
-        held_ms: 1_250,
-    }]))
+    let held = serde_json::to_string(&phoebis_routing::cohort_hold(&[
+        phoebis_routing::HoldFacts {
+            account_id: "business".into(),
+            cohort: None,
+            held_ms: 1_250,
+        },
+    ]))
     .unwrap();
     parts.ledger.record(Record::Request {
         request: RequestRecord {

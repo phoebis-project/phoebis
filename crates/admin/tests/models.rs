@@ -1,13 +1,13 @@
 //! The processed rule list per key and the cooldown state grouped by model, both read-only routes.
 mod common;
 
+use common::{get, json, login, NOW};
 use phoebis_ledger::EventRecord;
 use phoebis_routing::{Report, MODEL_REJECTED_REASON};
 use phoebis_store::{
     Affinity, AffinitySource, ApiKeyRow, CooldownRow, Failover, MemberWrite,
     ModelRule, OveragePolicy, PoolRow, QuotaHeaders, RulesMode, Shedding, Strategy,
 };
-use common::{get, json, login, NOW};
 use serde_json::json as j;
 
 const MODEL: &str = "claude-haiku-4-5-20251001";

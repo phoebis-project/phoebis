@@ -1,7 +1,7 @@
+use fake_upstream::FakeUpstream;
 use phoebis_profile::claude_code_2_1_269_linux_x64;
 use phoebis_transport::pool::{Pool, PoolKey};
 use phoebis_transport::{connector_builder, trust_extra_ca, Plane};
-use fake_upstream::FakeUpstream;
 use std::time::Duration;
 
 const HOST: &str = "api.anthropic.com";

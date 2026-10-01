@@ -1,6 +1,6 @@
 mod common;
-use phoebis_store::{Affinity, AffinitySource, QuotaHeaders};
 use common::{delete, get, json, login, patch, post, put};
+use phoebis_store::{Affinity, AffinitySource, QuotaHeaders};
 
 #[tokio::test]
 async fn pools_are_created_edited_and_deleted_with_their_members_and_validation() {
@@ -2018,8 +2018,8 @@ async fn a_pool_accepts_the_shedding_and_failover_fields_and_refuses_each_out_of
 
 #[tokio::test]
 async fn a_pool_accepts_its_affinity_and_quota_fields_and_a_members_budget() {
-    use phoebis_ledger::{AttemptRecord, Record, RequestRecord};
     use common::{generation, wait_json};
+    use phoebis_ledger::{AttemptRecord, Record, RequestRecord};
 
     let parts = common::admin_parts_full().await;
     let app = &parts.app;
@@ -2415,8 +2415,8 @@ async fn a_budget_on_a_subscription_member_is_kept_and_a_null_budget_is_accepted
 
 #[tokio::test]
 async fn a_member_at_its_budget_reads_ineligible_and_its_lone_pool_reads_exhausted() {
-    use phoebis_ledger::{AttemptRecord, Record, RequestRecord};
     use common::{generation, wait_json};
+    use phoebis_ledger::{AttemptRecord, Record, RequestRecord};
 
     let parts = common::admin_parts_full().await;
     let app = &parts.app;

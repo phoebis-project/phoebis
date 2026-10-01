@@ -6,8 +6,8 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
-use phoebis_store::{AlertDeliveryRow, AlertEventRow, Secret};
 use hmac::{Hmac, Mac};
+use phoebis_store::{AlertDeliveryRow, AlertEventRow, Secret};
 use sha2::Sha256;
 
 use crate::destination::{refusal_of, GuardedResolver};

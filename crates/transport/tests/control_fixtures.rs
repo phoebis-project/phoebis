@@ -1,4 +1,5 @@
 use bytes::Bytes;
+use fake_upstream::{FakeUpstream, Respond, Rule};
 use phoebis_profile::{
     claude_code_2_1_269_linux_x64,
     fixtures::{control_head, control_response, ControlFixture},
@@ -9,7 +10,6 @@ use phoebis_transport::{
     control::{ControlClient, ResolveFuture, Resolver},
     Plane, TransportError,
 };
-use fake_upstream::{FakeUpstream, Respond, Rule};
 use std::{sync::Arc, time::Duration};
 
 #[tokio::test]

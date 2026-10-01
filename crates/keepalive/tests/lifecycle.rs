@@ -2,9 +2,9 @@
 mod common;
 use std::time::Duration;
 
+use common::*;
 use phoebis_bus::{lifecycle_channel, LifecycleReceiver, SessionLifecycle};
 use phoebis_keepalive::Event;
-use common::*;
 
 const SESSION: &str = "session";
 const KEY: &str = "desktop";

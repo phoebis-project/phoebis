@@ -12,6 +12,7 @@ use std::time::Duration;
 use axum::body::Body;
 use axum::http::Request;
 use bytes::Bytes;
+use fake_upstream::{FakeUpstream, Respond, Rule};
 use phoebis_bus::{
     AccountSelected, Bus, Event as BusEvent, Kind, LifecycleSender, Origin, Outcome,
     RequestComplete, RequestObserved, RequestShape, ResponseChunk, ResponseFacts, Subscriber,
@@ -24,7 +25,6 @@ use phoebis_ledger::{
     spawn as spawn_ledger, Ledger, LedgerConfig, LedgerDb, Metrics, PlanTables, PriceTable, Pricing,
 };
 use phoebis_oauth::Clock;
-use fake_upstream::{FakeUpstream, Respond, Rule};
 // Re-exported for every test binary that shares this rig; only some of them, this one included, reach for all
 // of `oauth`, `wait_for`, and `NOW` themselves.
 #[allow(unused_imports)]
@@ -381,7 +381,9 @@ impl Rig {
     /// The fixture head over `body`, for a test that sends another model or another cache marker.
     pub fn request_with(&self, agent: &str, body: &str) -> Request<Body> {
         let mut req = relay_common::request_from_fixture(
-            phoebis_profile::fixtures::inference_head(phoebis_profile::fixtures::FixtureKind::ApiKey),
+            phoebis_profile::fixtures::inference_head(
+                phoebis_profile::fixtures::FixtureKind::ApiKey,
+            ),
             body.as_bytes(),
             KEY,
         );

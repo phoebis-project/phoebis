@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use axum::body::Body;
 use axum::http::Request;
+use fake_upstream::{FakeUpstream, Respond, Rule};
 use phoebis_bus::Bus;
 use phoebis_oauth::Clock;
 use phoebis_profile::{
@@ -24,7 +25,6 @@ use phoebis_store::{
     RulesMode, Secret, Shedding, StorageKey, Store, Strategy,
 };
 use phoebis_transport::request::parse_head;
-use fake_upstream::{FakeUpstream, Respond, Rule};
 // The polls live with the fake so every integration suite has them; the call sites here name them as before.
 #[allow(unused_imports)]
 pub use fake_upstream::{stays_for, wait_for, wait_for_async};
@@ -754,7 +754,8 @@ async fn build(
         let c = clock_cell.clone();
         Arc::new(move || c.load(Ordering::SeqCst))
     };
-    let mut b = phoebis_transport::connector_builder(p, phoebis_transport::Plane::Inference).unwrap();
+    let mut b =
+        phoebis_transport::connector_builder(p, phoebis_transport::Plane::Inference).unwrap();
     trust_fake_ca(&mut b, up);
     let addr = up.addr();
     // An authority with an explicit port names another loopback fake on that port; everything else is `up`.
@@ -766,7 +767,8 @@ async fn build(
             .or(Some(addr));
         Box::pin(async move { resolved }) as phoebis_transport::control::ResolveFuture
     });
-    let mut cb = phoebis_transport::connector_builder(p, phoebis_transport::Plane::Control).unwrap();
+    let mut cb =
+        phoebis_transport::connector_builder(p, phoebis_transport::Plane::Control).unwrap();
     trust_fake_ca(&mut cb, up);
     let control = Arc::new(phoebis_transport::control::ControlClient::new(
         p,

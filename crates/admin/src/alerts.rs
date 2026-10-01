@@ -10,7 +10,9 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
 use phoebis_alerts::{allowed_scopes, ipv4_refusal, ipv6_refusal, Kind, ScopeType, IDLE_MINUTES};
-use phoebis_store::{webhook_host, AlertDeliveryRow, AlertEventRow, AlertRuleRow, Secret, StoreError};
+use phoebis_store::{
+    webhook_host, AlertDeliveryRow, AlertEventRow, AlertRuleRow, Secret, StoreError,
+};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use url::{Host, Url};
@@ -144,7 +146,8 @@ fn destination_refusal(url: &Url) -> Option<&'static str> {
         // trailing dot spells the same name, so trim it before comparing.
         Host::Domain(name) => {
             let name = name.strip_suffix('.').unwrap_or(name);
-            (name == "localhost" || name.ends_with(".localhost")).then_some(phoebis_alerts::LOOPBACK)
+            (name == "localhost" || name.ends_with(".localhost"))
+                .then_some(phoebis_alerts::LOOPBACK)
         }
         Host::Ipv4(ip) => ipv4_refusal(ip),
         Host::Ipv6(ip) => ipv6_refusal(ip),

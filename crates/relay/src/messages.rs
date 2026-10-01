@@ -13,6 +13,7 @@ use axum::response::Response;
 use axum::routing::{get, head, post};
 use axum::Router;
 use bytes::Bytes;
+use futures::future::BoxFuture;
 use phoebis_bus::{
     AccountSelected, AttemptOutcome, AutoMode, Bus, ClientFacts, CooldownSet, Event, Fork,
     Kind, Origin, Outcome, RequestComplete, RequestObserved, RequestShape, ResponseChunk,
@@ -35,7 +36,6 @@ use phoebis_transport::pool::{Pool, PoolKey};
 use phoebis_transport::request::RawRequest;
 use phoebis_transport::response::{framing, keep_alive, BodyReader, ResponseHead};
 use phoebis_transport::TransportError;
-use futures::future::BoxFuture;
 use tokio::io::AsyncRead;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
@@ -955,7 +955,8 @@ impl Relay {
         // the wire untouched and a last-wins parser upstream would act on it instead. Refused whole rather
         // than repaired: the caller's body is not edited on its way through. A scan that could not finish
         // proves nothing about the members past where it stopped, so it refuses as well.
-        let repeated = phoebis_cch::repeated_top_level_member(&raw, &["model", "metadata", "stream"]);
+        let repeated =
+            phoebis_cch::repeated_top_level_member(&raw, &["model", "metadata", "stream"]);
         let refusal = match repeated {
             Ok(None) => None,
             Ok(Some(name)) => Some(RelayError::BodyShape(BodyMember::Repeated(name))),

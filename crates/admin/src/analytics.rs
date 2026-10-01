@@ -192,7 +192,8 @@ pub(crate) async fn budgets(State(state): State<Arc<AdminState>>) -> Response {
                 .collect::<Vec<_>>()
         })
         .collect();
-    let month = |period: &phoebis_store::BudgetPeriod| *period == phoebis_store::BudgetPeriod::Month;
+    let month =
+        |period: &phoebis_store::BudgetPeriod| *period == phoebis_store::BudgetPeriod::Month;
     members.sort_by(|a, b| (&a.0, &a.1, month(&a.2)).cmp(&(&b.0, &b.1, month(&b.2))));
     let members: Vec<Value> = members.into_iter().map(|(.., row)| row).collect();
     Json(json!({ "members": members })).into_response()

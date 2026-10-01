@@ -309,354 +309,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "phoebis-admin"
-version = "0.1.0"
-dependencies = [
- "axum",
- "base64",
- "bytes",
- "phoebis-alerts",
- "phoebis-bus",
- "phoebis-keepalive",
- "phoebis-ledger",
- "phoebis-live",
- "phoebis-oauth",
- "phoebis-profile",
- "phoebis-relay",
- "phoebis-routing",
- "phoebis-store",
- "phoebis-transport",
- "fake-upstream",
- "futures",
- "http-body-util",
- "rand 0.10.2",
- "rusqlite",
- "serde",
- "serde_json",
- "subtle",
- "tempfile",
- "thiserror",
- "tokio",
- "tokio-tungstenite",
- "tower",
- "tracing",
- "url",
-]
-
-[[package]]
-name = "phoebis-alerts"
-version = "0.1.0"
-dependencies = [
- "bytes",
- "phoebis-bus",
- "phoebis-ledger",
- "phoebis-oauth",
- "phoebis-profile",
- "phoebis-routing",
- "phoebis-store",
- "phoebis-transport",
- "fake-upstream",
- "hmac",
- "rand 0.10.2",
- "reqwest",
- "rusqlite",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "tempfile",
- "tokio",
- "tokio-util",
- "tracing",
-]
-
-[[package]]
-name = "phoebis-bus"
-version = "0.1.0"
-dependencies = [
- "bytes",
- "futures",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "phoebis-cch"
-version = "0.1.0"
-dependencies = [
- "phoebis-profile",
- "serde",
- "serde_json",
- "thiserror",
- "xxhash-rust",
-]
-
-[[package]]
-name = "phoebis-keepalive"
-version = "0.1.0"
-dependencies = [
- "axum",
- "boring",
- "bytes",
- "phoebis-bus",
- "phoebis-cch",
- "phoebis-keepalive",
- "phoebis-ledger",
- "phoebis-oauth",
- "phoebis-profile",
- "phoebis-relay",
- "phoebis-routing",
- "phoebis-store",
- "phoebis-transport",
- "fake-upstream",
- "http-body-util",
- "jiff",
- "rand 0.10.2",
- "serde",
- "serde_json",
- "thiserror",
- "tokio",
- "tokio-util",
- "tower",
- "tracing",
- "url",
-]
-
-[[package]]
-name = "phoebis-ledger"
-version = "0.1.0"
-dependencies = [
- "axum",
- "bytes",
- "phoebis-bus",
- "phoebis-cch",
- "phoebis-oauth",
- "phoebis-profile",
- "phoebis-relay",
- "phoebis-routing",
- "phoebis-store",
- "phoebis-transport",
- "fake-upstream",
- "http-body-util",
- "jiff",
- "rand 0.10.2",
- "rusqlite",
- "serde",
- "serde_json",
- "serde_norway",
- "tempfile",
- "thiserror",
- "tokio",
- "tower",
- "tracing",
-]
-
-[[package]]
-name = "phoebis-live"
-version = "0.1.0"
-dependencies = [
- "axum",
- "bytes",
- "phoebis-bus",
- "phoebis-ledger",
- "phoebis-oauth",
- "phoebis-profile",
- "phoebis-relay",
- "phoebis-routing",
- "phoebis-store",
- "phoebis-transport",
- "fake-upstream",
- "futures",
- "http-body-util",
- "serde",
- "serde_json",
- "tokio",
- "tokio-tungstenite",
- "tokio-util",
- "tower",
- "tracing",
-]
-
-[[package]]
-name = "phoebis-oauth"
-version = "0.1.0"
-dependencies = [
- "base64",
- "bytes",
- "phoebis-oauth",
- "phoebis-profile",
- "phoebis-store",
- "phoebis-transport",
- "fake-upstream",
- "futures",
- "jiff",
- "rand 0.10.2",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "thiserror",
- "tokio",
- "tracing",
- "url",
-]
-
-[[package]]
-name = "phoebis-profile"
-version = "0.1.0"
-
-[[package]]
-name = "phoebis-relay"
-version = "0.1.0"
-dependencies = [
- "axum",
- "boring",
- "bytes",
- "phoebis-bus",
- "phoebis-cch",
- "phoebis-ledger",
- "phoebis-oauth",
- "phoebis-profile",
- "phoebis-routing",
- "phoebis-store",
- "phoebis-transport",
- "fake-upstream",
- "flate2",
- "futures",
- "hmac",
- "http-body-util",
- "httparse",
- "hyper",
- "hyper-util",
- "jiff",
- "rand 0.10.2",
- "reqwest",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "subtle",
- "tempfile",
- "thiserror",
- "tokio",
- "tokio-boring",
- "tokio-stream",
- "tokio-util",
- "tower",
- "tracing",
- "url",
- "xxhash-rust",
-]
-
-[[package]]
-name = "phoebis-router"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "axum",
- "phoebis-admin",
- "phoebis-alerts",
- "phoebis-bus",
- "phoebis-cch",
- "phoebis-keepalive",
- "phoebis-ledger",
- "phoebis-live",
- "phoebis-oauth",
- "phoebis-profile",
- "phoebis-relay",
- "phoebis-routing",
- "phoebis-store",
- "phoebis-transport",
- "phoebis-ui",
- "clap",
- "fake-upstream",
- "hyper",
- "hyper-util",
- "jiff",
- "reqwest",
- "serde",
- "serde_json",
- "serde_norway",
- "tempfile",
- "thiserror",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "phoebis-routing"
-version = "0.1.0"
-dependencies = [
- "phoebis-oauth",
- "phoebis-profile",
- "phoebis-routing",
- "phoebis-store",
- "phoebis-transport",
- "fake-upstream",
- "jiff",
- "rand 0.10.2",
- "serde",
- "serde_json",
- "subtle",
- "thiserror",
- "tokio",
- "tokio-util",
- "tracing",
-]
-
-[[package]]
-name = "phoebis-store"
-version = "0.1.0"
-dependencies = [
- "aes-gcm",
- "phoebis-relay",
- "phoebis-routing",
- "phoebis-store",
- "fd-lock",
- "hmac",
- "jiff",
- "libc",
- "rand 0.10.2",
- "rusqlite",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "tempfile",
- "thiserror",
- "tracing",
- "url",
- "zeroize",
-]
-
-[[package]]
-name = "phoebis-transport"
-version = "0.1.0"
-dependencies = [
- "boring",
- "brotli",
- "bytes",
- "phoebis-profile",
- "fake-upstream",
- "flate2",
- "httparse",
- "thiserror",
- "tokio",
- "tokio-boring",
- "tracing",
- "zstd",
-]
-
-[[package]]
-name = "phoebis-ui"
-version = "0.1.0"
-dependencies = [
- "axum",
- "http-body-util",
- "mime_guess",
- "rust-embed",
- "tokio",
- "tower",
-]
-
-[[package]]
 name = "cexpr"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1885,6 +1537,354 @@ name = "percent-encoding"
 version = "2.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
+
+[[package]]
+name = "phoebis-admin"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64",
+ "bytes",
+ "fake-upstream",
+ "futures",
+ "http-body-util",
+ "phoebis-alerts",
+ "phoebis-bus",
+ "phoebis-keepalive",
+ "phoebis-ledger",
+ "phoebis-live",
+ "phoebis-oauth",
+ "phoebis-profile",
+ "phoebis-relay",
+ "phoebis-routing",
+ "phoebis-store",
+ "phoebis-transport",
+ "rand 0.10.2",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "subtle",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tokio-tungstenite",
+ "tower",
+ "tracing",
+ "url",
+]
+
+[[package]]
+name = "phoebis-alerts"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "fake-upstream",
+ "hmac",
+ "phoebis-bus",
+ "phoebis-ledger",
+ "phoebis-oauth",
+ "phoebis-profile",
+ "phoebis-routing",
+ "phoebis-store",
+ "phoebis-transport",
+ "rand 0.10.2",
+ "reqwest",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
+name = "phoebis-bus"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "futures",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "phoebis-cch"
+version = "0.1.0"
+dependencies = [
+ "phoebis-profile",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "xxhash-rust",
+]
+
+[[package]]
+name = "phoebis-keepalive"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "boring",
+ "bytes",
+ "fake-upstream",
+ "http-body-util",
+ "jiff",
+ "phoebis-bus",
+ "phoebis-cch",
+ "phoebis-keepalive",
+ "phoebis-ledger",
+ "phoebis-oauth",
+ "phoebis-profile",
+ "phoebis-relay",
+ "phoebis-routing",
+ "phoebis-store",
+ "phoebis-transport",
+ "rand 0.10.2",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+ "tower",
+ "tracing",
+ "url",
+]
+
+[[package]]
+name = "phoebis-ledger"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "bytes",
+ "fake-upstream",
+ "http-body-util",
+ "jiff",
+ "phoebis-bus",
+ "phoebis-cch",
+ "phoebis-oauth",
+ "phoebis-profile",
+ "phoebis-relay",
+ "phoebis-routing",
+ "phoebis-store",
+ "phoebis-transport",
+ "rand 0.10.2",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "serde_norway",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tower",
+ "tracing",
+]
+
+[[package]]
+name = "phoebis-live"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "bytes",
+ "fake-upstream",
+ "futures",
+ "http-body-util",
+ "phoebis-bus",
+ "phoebis-ledger",
+ "phoebis-oauth",
+ "phoebis-profile",
+ "phoebis-relay",
+ "phoebis-routing",
+ "phoebis-store",
+ "phoebis-transport",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-tungstenite",
+ "tokio-util",
+ "tower",
+ "tracing",
+]
+
+[[package]]
+name = "phoebis-oauth"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "bytes",
+ "fake-upstream",
+ "futures",
+ "jiff",
+ "phoebis-oauth",
+ "phoebis-profile",
+ "phoebis-store",
+ "phoebis-transport",
+ "rand 0.10.2",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "url",
+]
+
+[[package]]
+name = "phoebis-profile"
+version = "0.1.0"
+
+[[package]]
+name = "phoebis-relay"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "boring",
+ "bytes",
+ "fake-upstream",
+ "flate2",
+ "futures",
+ "hmac",
+ "http-body-util",
+ "httparse",
+ "hyper",
+ "hyper-util",
+ "jiff",
+ "phoebis-bus",
+ "phoebis-cch",
+ "phoebis-ledger",
+ "phoebis-oauth",
+ "phoebis-profile",
+ "phoebis-routing",
+ "phoebis-store",
+ "phoebis-transport",
+ "rand 0.10.2",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "subtle",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tokio-boring",
+ "tokio-stream",
+ "tokio-util",
+ "tower",
+ "tracing",
+ "url",
+ "xxhash-rust",
+]
+
+[[package]]
+name = "phoebis-router"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "clap",
+ "fake-upstream",
+ "hyper",
+ "hyper-util",
+ "jiff",
+ "phoebis-admin",
+ "phoebis-alerts",
+ "phoebis-bus",
+ "phoebis-cch",
+ "phoebis-keepalive",
+ "phoebis-ledger",
+ "phoebis-live",
+ "phoebis-oauth",
+ "phoebis-profile",
+ "phoebis-relay",
+ "phoebis-routing",
+ "phoebis-store",
+ "phoebis-transport",
+ "phoebis-ui",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "serde_norway",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "phoebis-routing"
+version = "0.1.0"
+dependencies = [
+ "fake-upstream",
+ "jiff",
+ "phoebis-oauth",
+ "phoebis-profile",
+ "phoebis-routing",
+ "phoebis-store",
+ "phoebis-transport",
+ "rand 0.10.2",
+ "serde",
+ "serde_json",
+ "subtle",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
+name = "phoebis-store"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm",
+ "fd-lock",
+ "hmac",
+ "jiff",
+ "libc",
+ "phoebis-relay",
+ "phoebis-routing",
+ "phoebis-store",
+ "rand 0.10.2",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror",
+ "tracing",
+ "url",
+ "zeroize",
+]
+
+[[package]]
+name = "phoebis-transport"
+version = "0.1.0"
+dependencies = [
+ "boring",
+ "brotli",
+ "bytes",
+ "fake-upstream",
+ "flate2",
+ "httparse",
+ "phoebis-profile",
+ "thiserror",
+ "tokio",
+ "tokio-boring",
+ "tracing",
+ "zstd",
+]
+
+[[package]]
+name = "phoebis-ui"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "http-body-util",
+ "mime_guess",
+ "rust-embed",
+ "tokio",
+ "tower",
+]
 
 [[package]]
 name = "pin-project-lite"

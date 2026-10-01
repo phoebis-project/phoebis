@@ -4,10 +4,10 @@ mod common;
 use std::sync::Arc;
 use std::time::Duration;
 
-use phoebis_alerts::{signature, spawn_inputs, Kind, ReqwestWebhook, ScopeType};
-use phoebis_store::{AccountState, Secret};
 use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule};
+use phoebis_alerts::{signature, spawn_inputs, Kind, ReqwestWebhook, ScopeType};
+use phoebis_store::{AccountState, Secret};
 
 #[tokio::test]
 async fn a_forced_reauth_posts_one_signed_webhook_and_a_resolve_and_a_dead_endpoint_gets_three_attempts(

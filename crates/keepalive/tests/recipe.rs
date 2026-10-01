@@ -32,7 +32,8 @@ fn header_bytes(headers: &[(String, String)]) -> usize {
 /// The first-party fixture with its fixed thinking budget swapped for adaptive thinking, the shape a recipe
 /// retains; it keeps the client's stamp over the unedited body.
 fn stamped_adaptive() -> String {
-    let stamped = phoebis_profile::fixtures::body(phoebis_profile::fixtures::BodyFixture::FirstParty9b244);
+    let stamped =
+        phoebis_profile::fixtures::body(phoebis_profile::fixtures::BodyFixture::FirstParty9b244);
     String::from_utf8(stamped.to_vec()).unwrap().replacen(
         r#""thinking":{"budget_tokens":31999,"type":"enabled","display":"omitted"}"#,
         r#""thinking":{"type":"adaptive"}"#,
@@ -101,7 +102,8 @@ fn a_body_without_a_stream_flag_gains_one_and_a_stamped_body_is_resigned() {
     assert_eq!(result["stream"].as_bool(), Some(false));
     // The first-party fixture carries a billing hash over a view that includes `stream`, so the edited body
     // must be re-signed or the relay refuses it as drift.
-    let stamped = phoebis_profile::fixtures::body(phoebis_profile::fixtures::BodyFixture::FirstParty9b244);
+    let stamped =
+        phoebis_profile::fixtures::body(phoebis_profile::fixtures::BodyFixture::FirstParty9b244);
     let adaptive = String::from_utf8(stamped.to_vec()).unwrap().replacen(
         r#""thinking":{"budget_tokens":31999,"type":"enabled","display":"omitted"}"#,
         r#""thinking":{"type":"adaptive"}"#,
@@ -130,7 +132,10 @@ fn a_body_without_a_stream_flag_gains_one_and_a_stamped_body_is_resigned() {
 #[test]
 fn a_retained_body_loses_its_safeguards_member_and_a_stamped_one_is_resigned() {
     let plain = stamped_adaptive();
-    let spliced = phoebis_cch::sign(&phoebis_profile::fixtures::with_safeguards(plain.as_bytes())).unwrap();
+    let spliced = phoebis_cch::sign(&phoebis_profile::fixtures::with_safeguards(
+        plain.as_bytes(),
+    ))
+    .unwrap();
     assert!(
         serde_json::from_slice::<Value>(&spliced).unwrap()["safeguards"].is_array(),
         "the client's body carries the member"

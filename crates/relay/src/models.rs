@@ -8,10 +8,10 @@ use axum::body::Body;
 use axum::extract::{Path, Request, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode, Uri};
 use axum::response::Response;
+use futures::future::join_all;
 use phoebis_routing::listing::{find, listing, page, CatalogRow};
 use phoebis_routing::rules::{process, ProcessedRule};
 use phoebis_store::{AccountRow, AccountState, ModelRule};
-use futures::future::join_all;
 use serde_json::json;
 
 use crate::{

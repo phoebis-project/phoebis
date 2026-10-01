@@ -3,14 +3,14 @@ mod common;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
+use common::*;
+use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
+use http_body_util::BodyExt;
 use phoebis_bus::{
     AttemptOutcome, Bus, ClientFacts, Event, Fork, Outcome, Phase, ResponseChunk,
     Subscriber,
 };
 use phoebis_relay::Limits;
-use common::*;
-use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
-use http_body_util::BodyExt;
 use tower::ServiceExt;
 
 const A: &str = "sk-ant-oat01-AAAA";
@@ -648,7 +648,9 @@ async fn refused_and_exhausted_requests_publish_an_observed_event_and_their_comp
 /// carries them; none of it gates the request, so the fact reaches the bus whether or not the client sent it.
 #[tokio::test]
 async fn the_observed_event_carries_the_client_class_the_hint_headers_and_the_turn_origin() {
-    use phoebis_profile::fixtures::{body as fixture_body, inference_head, BodyFixture, FixtureKind};
+    use phoebis_profile::fixtures::{
+        body as fixture_body, inference_head, BodyFixture, FixtureKind,
+    };
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
         respond: json_200(),
@@ -747,7 +749,9 @@ async fn the_observed_event_carries_no_fork_for_a_sessions_own_turn() {
 /// publishes neither hash.
 #[tokio::test]
 async fn the_observation_carries_the_class_and_the_chains_and_a_refusal_carries_neither() {
-    use phoebis_profile::fixtures::{body as fixture_body, inference_head, BodyFixture, FixtureKind};
+    use phoebis_profile::fixtures::{
+        body as fixture_body, inference_head, BodyFixture, FixtureKind,
+    };
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
         respond: json_200(),

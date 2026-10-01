@@ -12,6 +12,7 @@ use axum::extract::{Query, State};
 use axum::http::Request;
 use axum::routing::get;
 use axum::Router;
+use fake_upstream::FakeUpstream;
 use phoebis_bus::Bus;
 use phoebis_ledger::{PriceTable, Pricing};
 use phoebis_live::{LiveConfig, LiveEvent, LiveFeed, SessionCheck};
@@ -28,7 +29,6 @@ use phoebis_store::{
     Secret, Shedding, StorageKey, Store, Strategy,
 };
 use phoebis_transport::request::parse_head;
-use fake_upstream::FakeUpstream;
 // The polls live with the fake so every integration suite has them; only some of them are used here.
 #[allow(unused_imports)]
 pub use fake_upstream::{stays_for, wait_for};
@@ -168,13 +168,15 @@ pub async fn harness(up: &FakeUpstream, capture_hours: u32) -> Harness {
         let c = clock_cell.clone();
         Arc::new(move || c.load(Ordering::SeqCst))
     };
-    let mut b = phoebis_transport::connector_builder(p, phoebis_transport::Plane::Inference).unwrap();
+    let mut b =
+        phoebis_transport::connector_builder(p, phoebis_transport::Plane::Inference).unwrap();
     phoebis_transport::trust_extra_ca(&mut b, up.ca_pem()).unwrap();
     let addr = up.addr();
     let resolver: phoebis_transport::control::Resolver = Arc::new(move |_: &str| {
         Box::pin(async move { Some(addr) }) as phoebis_transport::control::ResolveFuture
     });
-    let mut cb = phoebis_transport::connector_builder(p, phoebis_transport::Plane::Control).unwrap();
+    let mut cb =
+        phoebis_transport::connector_builder(p, phoebis_transport::Plane::Control).unwrap();
     phoebis_transport::trust_extra_ca(&mut cb, up.ca_pem()).unwrap();
     let control = Arc::new(phoebis_transport::control::ControlClient::new(
         p,

@@ -4,12 +4,12 @@ mod common;
 use std::collections::BTreeMap;
 use std::time::Duration;
 
+use common::*;
+use fake_upstream::FakeUpstream;
 use phoebis_ledger::{
     fold_keepalive, hour_of, read_rollups, AttemptRecord, KeepaliveDelta, LedgerConfig, LedgerDb,
     LiveKeys, Record, RequestRecord, Speed,
 };
-use common::*;
-use fake_upstream::FakeUpstream;
 
 fn delta(at: i64, kind: &str) -> KeepaliveDelta {
     KeepaliveDelta {

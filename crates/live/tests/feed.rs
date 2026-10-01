@@ -537,7 +537,8 @@ async fn a_request_whose_completion_the_bus_dropped_is_lost_after_the_ttl_and_a_
             .iter()
             .map(|r| r.id.clone())
             .collect();
-        (ids.len() == phoebis_live::IN_FLIGHT_LIMIT && ids.iter().any(|id| id == "g5")).then_some(ids)
+        (ids.len() == phoebis_live::IN_FLIGHT_LIMIT && ids.iter().any(|id| id == "g5"))
+            .then_some(ids)
     })
     .await;
     assert!(

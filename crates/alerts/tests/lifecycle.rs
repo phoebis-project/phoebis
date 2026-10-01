@@ -6,6 +6,7 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use common::*;
 use phoebis_alerts::{
     agent_subject, question_subject, spawn_inputs, AlertInputs, BusArm, Kind, LifecycleArm, Poller,
     ScopeType,
@@ -15,7 +16,6 @@ use phoebis_bus::{
     SessionLifecycle,
 };
 use phoebis_store::{AlertEventRow, AlertRuleRow};
-use common::*;
 
 const KEY: &str = "desktop";
 

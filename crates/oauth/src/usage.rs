@@ -4,10 +4,10 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use futures::future::{BoxFuture, FutureExt, Shared};
 use phoebis_profile::Profile;
 use phoebis_store::Store;
 use phoebis_transport::control::ControlClient;
-use futures::future::{BoxFuture, FutureExt, Shared};
 use serde_json::Value;
 use tokio::sync::Semaphore;
 

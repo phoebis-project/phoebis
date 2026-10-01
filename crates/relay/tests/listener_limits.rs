@@ -4,9 +4,9 @@ mod common;
 
 use std::time::Duration;
 
-use phoebis_bus::{Bus, Event};
 use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
+use phoebis_bus::{Bus, Event};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 /// The stop sender comes back with the address: `stopped()` reads a dropped sender as a stop, so a test holds

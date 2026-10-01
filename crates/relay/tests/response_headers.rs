@@ -3,9 +3,9 @@
 mod common;
 use common::*;
 
+use fake_upstream::{FakeUpstream, Rule};
 use phoebis_routing::FIVE_HOUR;
 use phoebis_store::QuotaHeaders;
-use fake_upstream::{FakeUpstream, Rule};
 use tower::ServiceExt;
 
 const OA: &str = "sk-ant-oat01-AAAA0001";

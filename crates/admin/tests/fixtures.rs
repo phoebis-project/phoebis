@@ -3,6 +3,7 @@
 mod common;
 use std::path::PathBuf;
 
+use common::{delete, deltas_until, get, json, login, next_text, patch, post, serve, wait_json};
 use phoebis_bus::{
     AccountSelected, AttemptOutcome, Event, Kind, Origin, Phase, RequestComplete, RequestObserved,
     RequestShape, ResponseChunk, ResponseFacts, ResponseHead, Usage,
@@ -13,7 +14,6 @@ use phoebis_ledger::{
 };
 use phoebis_routing::{lane_key, ClientClass};
 use phoebis_store::{AccountState, Identity, NewBundle, Secret, SubscriptionRow};
-use common::{delete, deltas_until, get, json, login, next_text, patch, post, serve, wait_json};
 use serde_json::{json as j, Value};
 
 fn dir() -> PathBuf {
@@ -232,9 +232,13 @@ async fn every_route_is_captured_and_holds_its_shape() {
         .key("desktop")
         .expect("the desktop key is in the snapshot")
         .clone();
-    let candidates =
-        phoebis_routing::resolve(&snapshot, &key_row, "claude-sonnet-5", "claude-sonnet-5")
-            .expect("the pool's model rules allow claude-sonnet-5");
+    let candidates = phoebis_routing::resolve(
+        &snapshot,
+        &key_row,
+        "claude-sonnet-5",
+        "claude-sonnet-5",
+    )
+    .expect("the pool's model rules allow claude-sonnet-5");
     let selected = parts
         .router
         .select(phoebis_routing::SelectRequest {
@@ -274,9 +278,8 @@ async fn every_route_is_captured_and_holds_its_shape() {
     // cohort's account, so `request.json` captures a placement and a hold as `select` serializes them on the
     // attempt the shape check reads. The boundaries stand for the conversation `s1` forked from.
     let boundaries: Vec<String> = vec!["b-fixture-1".into(), "b-fixture-2".into()];
-    parts
-        .router
-        .report(phoebis_routing::Report::Affinity(phoebis_routing::AffinityReport {
+    parts.router.report(phoebis_routing::Report::Affinity(
+        phoebis_routing::AffinityReport {
             account_id: "direct".into(),
             incarnation: snapshot
                 .account("direct")
@@ -300,7 +303,8 @@ async fn every_route_is_captured_and_holds_its_shape() {
             cache_write_5m_tokens: None,
             cache_write_1h_tokens: None,
             uniform_ttl_ms: None,
-        }));
+        },
+    ));
     let placed = parts
         .router
         .select(phoebis_routing::SelectRequest {

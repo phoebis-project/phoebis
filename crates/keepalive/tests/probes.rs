@@ -3,10 +3,10 @@
 mod common;
 use std::str::FromStr;
 
-use phoebis_keepalive::{Event, KeepaliveLimits, KeepalivePolicy, Reason};
-use phoebis_store::AccountState;
 use common::*;
 use fake_upstream::{Respond, SseEvent};
+use phoebis_keepalive::{Event, KeepaliveLimits, KeepalivePolicy, Reason};
+use phoebis_store::AccountState;
 
 fn json(status: u16, body: &str) -> Respond {
     Respond::Json {
@@ -532,7 +532,8 @@ async fn an_oversized_or_stalled_probe_body_releases_the_worker_and_shutdown_fin
     .await;
     assert_eq!(r.engine.stats().running_probes, 1);
     tokio::time::pause();
-    tokio::time::advance(phoebis_keepalive::PROBE_DEADLINE + std::time::Duration::from_secs(1)).await;
+    tokio::time::advance(phoebis_keepalive::PROBE_DEADLINE + std::time::Duration::from_secs(1))
+        .await;
     tokio::time::resume();
     r.engine.wait_idle().await;
     r.pump(None).await;
@@ -1164,7 +1165,15 @@ async fn fast_probe_served(served: &str, speed: phoebis_ledger::Speed) -> (Rig, 
 async fn a_fast_recipes_probe_settles_in_dollars_at_the_fast_cells_on_a_plan_funded_account() {
     let (r, fast) = fast_probe_served("fast", phoebis_ledger::Speed::Fast).await;
     let (standard, _) = phoebis_ledger::PriceTable::shipped()
-        .estimate(FAST_PRICED, phoebis_ledger::Speed::Standard, 0, 2_000, 0, 0, 0)
+        .estimate(
+            FAST_PRICED,
+            phoebis_ledger::Speed::Standard,
+            0,
+            2_000,
+            0,
+            0,
+            0,
+        )
         .unwrap();
     assert!(
         fast > standard,

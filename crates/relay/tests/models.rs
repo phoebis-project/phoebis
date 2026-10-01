@@ -2,10 +2,10 @@
 mod common;
 use std::sync::atomic::Ordering;
 
-use phoebis_store::{AffinitySource, ApiKeyRow, CooldownRow, RulesMode};
 use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule};
 use http_body_util::BodyExt;
+use phoebis_store::{AffinitySource, ApiKeyRow, CooldownRow, RulesMode};
 use tower::ServiceExt;
 
 const A: &str = "sk-ant-oat01-AAAAAAAAAAAAAAAA";

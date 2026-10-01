@@ -37,7 +37,8 @@ pub(crate) async fn upgrade(
     let sessions = state.sessions.clone();
     let clock = state.clock.clone();
     let session_id = caller.session_id;
-    let alive: phoebis_live::SessionCheck = Box::new(move || sessions.is_live(&session_id, (clock)()));
+    let alive: phoebis_live::SessionCheck =
+        Box::new(move || sessions.is_live(&session_id, (clock)()));
     upgrade.on_upgrade(move |socket| async move { live.attach(socket, preview, alive, slot).await })
 }
 

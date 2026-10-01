@@ -4,10 +4,10 @@ mod common;
 
 use axum::body::Body;
 use axum::http::Request;
-use phoebis_bus::{Bus, Event, Fork};
 use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
 use http_body_util::BodyExt;
+use phoebis_bus::{Bus, Event, Fork};
 use serde_json::{json, Value};
 use tower::ServiceExt;
 
@@ -313,7 +313,10 @@ async fn a_completed_response_lands_its_boundaries_and_ids_in_the_affinity_map()
         let response_entry = guard
             .parent("msg_1")
             .expect("the answer's own id lands as a response link");
-        assert_eq!(response_entry.chain, phoebis_routing::AffinityChain::Response);
+        assert_eq!(
+            response_entry.chain,
+            phoebis_routing::AffinityChain::Response
+        );
         let request_entry = guard
             .parent("req_up_0001")
             .expect("the upstream's request-id lands as a request link");
@@ -361,7 +364,10 @@ async fn a_streamed_answer_lands_its_message_id_in_the_affinity_map() {
         let response_entry = guard
             .parent("msg_stream_1")
             .expect("the streamed answer's own message id lands as a response link, off the message_start event");
-        assert_eq!(response_entry.chain, phoebis_routing::AffinityChain::Response);
+        assert_eq!(
+            response_entry.chain,
+            phoebis_routing::AffinityChain::Response
+        );
     }
     up.shutdown().await;
 }

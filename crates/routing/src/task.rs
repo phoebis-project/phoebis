@@ -1858,9 +1858,10 @@ impl Task {
         let seconds = snapshot
             .key(key_id)
             .and_then(|k| snapshot.pool(&k.pool_id))
-            .map_or(phoebis_store::Shedding::default().burn_window_seconds, |pool| {
-                pool.shedding.burn_window_seconds
-            });
+            .map_or(
+                phoebis_store::Shedding::default().burn_window_seconds,
+                |pool| pool.shedding.burn_window_seconds,
+            );
         i64::try_from(seconds)
             .ok()
             .and_then(|s| s.checked_mul(1_000))

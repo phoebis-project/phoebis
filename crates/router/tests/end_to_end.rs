@@ -1,11 +1,11 @@
 //! The binary from the outside: one fixture request relayed through a configured API-key account, and the
 //! bootstrap rules that refuse a configuration nobody should be able to start.
 
+use fake_upstream::{FakeUpstream, Respond, Rule};
 use phoebis_profile::fixtures::{
     body, control_response, inference_head, with_dangerous_tool_use_beta, with_safeguards,
     BodyFixture, ControlFixture, FixtureKind, SAFEGUARDS_MEMBER,
 };
-use fake_upstream::{FakeUpstream, Respond, Rule};
 use std::net::TcpListener;
 use std::sync::Mutex;
 
@@ -2987,7 +2987,10 @@ async fn a_startup_poll_the_endpoint_refuses_routes_the_first_request_from_the_p
             .iter()
             .map(|w| (w.account_id.as_str(), w.window.as_str()))
             .collect::<Vec<_>>(),
-        vec![("b", phoebis_routing::FIVE_HOUR), ("b", phoebis_routing::SEVEN_DAY)],
+        vec![
+            ("b", phoebis_routing::FIVE_HOUR),
+            ("b", phoebis_routing::SEVEN_DAY)
+        ],
         "b's rows are still there and the replacement a holds none"
     );
     up.shutdown().await;

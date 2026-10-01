@@ -5,12 +5,12 @@ mod common;
 
 use std::time::{Duration, Instant};
 
-use phoebis_bus::{Bus, Event};
-use phoebis_profile::fixtures::{body, inference_head, BodyFixture, FixtureKind};
-use phoebis_store::Failover;
 use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
 use http_body_util::BodyExt;
+use phoebis_bus::{Bus, Event};
+use phoebis_profile::fixtures::{body, inference_head, BodyFixture, FixtureKind};
+use phoebis_store::Failover;
 use tower::ServiceExt;
 
 const A: &str = "sk-ant-oat01-AAAA";
@@ -417,7 +417,11 @@ async fn a_hold_that_would_leave_no_attempt_for_a_dial_answers_the_exhaustion_at
             complete.status,
             complete.error_code.as_deref()
         ),
-        (phoebis_bus::Outcome::Exhausted, 429, Some("accounts_at_cap")),
+        (
+            phoebis_bus::Outcome::Exhausted,
+            429,
+            Some("accounts_at_cap")
+        ),
         "a pool at its cap is an exhausted pool to the ledger and the alerts"
     );
     assert!(waited < HELD_FOR, "answered without waiting: {waited:?}");
@@ -888,7 +892,9 @@ async fn a_probe_and_a_count_on_a_key_at_its_cap_are_served_without_a_permit() {
     up.push_credential_rule(A, "/v1/messages", json_200());
     let mut probe = request_for(KEY, MODEL, "s2");
     probe.headers_mut().remove("authorization");
-    probe.extensions_mut().remove::<phoebis_relay::OriginalHead>();
+    probe
+        .extensions_mut()
+        .remove::<phoebis_relay::OriginalHead>();
     let probed = h
         .relay
         .probe(

@@ -4,10 +4,10 @@
 mod common;
 use std::time::Duration;
 
-use phoebis_ledger::{run_retention, LedgerConfig, Purged, MAX_CAPTURED_BODY};
 use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
 use http_body_util::BodyExt;
+use phoebis_ledger::{run_retention, LedgerConfig, Purged, MAX_CAPTURED_BODY};
 use tower::ServiceExt;
 
 fn request_id(resp: &axum::http::Response<axum::body::Body>) -> String {
