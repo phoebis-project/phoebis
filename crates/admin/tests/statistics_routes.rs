@@ -71,7 +71,7 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
         ),
         (Some(30), Some(1), Some(86_400), Some("127.0.0.1:9464"))
     );
-    assert_eq!(settings["pricing"]["version"], "2026-09-30");
+    assert_eq!(settings["pricing"]["version"], "2026-10-01");
     assert_eq!(settings["pricing"]["source"], "shipped");
     let tables = &settings["plan_tables"];
     let cost = &tables["cost"];

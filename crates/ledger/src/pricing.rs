@@ -282,7 +282,7 @@ mod tests {
                 table.effective.as_str(),
                 table.source.as_str()
             ),
-            ("2026-09-30", "2026-09-30", "shipped")
+            ("2026-10-01", "2026-10-01", "shipped")
         );
         assert_eq!(table.models.len(), 6);
         let cells = |p: &ModelPrice| {
@@ -546,7 +546,7 @@ mod tests {
             "no usage, no estimate"
         );
         assert!((attempts[1].estimated_usd.unwrap() - 0.0015).abs() < 1e-12);
-        assert_eq!(attempts[1].pricing_version.as_deref(), Some("2026-09-30"));
+        assert_eq!(attempts[1].pricing_version.as_deref(), Some("2026-10-01"));
         assert!((split.total() - 0.0015).abs() < 1e-12);
         let split = price_attempts(&table, "gpt-5", &mut attempts, &unknown);
         assert_eq!(
