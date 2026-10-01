@@ -3290,6 +3290,14 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
         unlisted[0].getAttribute('title') === 'A bucket whose traffic ran on a model the cost table has no row for, or on a cell it leaves unmeasured, prices no share on that window and draws no point',
       missing: planItems.map((li) => `${labelOf(li)}=${valueOf(li)}`),
     });
+    // The legend's per-hour mean still ends in `%` over a single gap, so the buckets themselves are read: the
+    // unmeasured model belongs to `mail` alone, and no story row carries it onto a priced upstream.
+    const gaps = [];
+    for (const days of [1, 7]) {
+      const burn = await api.getAnalyticsBurn({ from: new Date(Date.now() - days * 86_400_000).toISOString(), to: new Date().toISOString() }, 'account');
+      gaps.push(...burn.points.filter((p) => ['business', 'personal'].includes(p.group) && p.tokens > 0 && p.fiveHourShare === null).map((p) => `${days}d ${p.group} ${p.at}`));
+    }
+    results.push({ name: '/analytics every bucket with tokens of a priced upstream carries its 5-hour share', ok: gaps.length === 0, missing: gaps });
   }
   const spend = legendOf('Spend per minute');
   const spendDashed = dashedOf([...(card('Spend per minute')?.querySelectorAll('.legend li') ?? [])]);

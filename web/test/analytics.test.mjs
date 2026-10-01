@@ -152,6 +152,21 @@ test("a bucket's share is null when any row is unpriced, in either order", () =>
   assert.equal(d.bucketShare([]), null, 'a bucket with no row has no share');
 });
 
+test("the mock's burn fold prices only rows with tokens and nulls a window on any unpriced row, in either order", () => {
+  // Wednesday 2026-09-16 at 10:00 UTC, before the peak band opens in Los Angeles; business is the story's Max 20x.
+  const hour = Date.parse('2026-09-16T10:00:00Z');
+  const row = (model, uncachedInput) => ({ accountId: 'business', costUsd: 0, hour: new Date(hour).toISOString(), keyId: 'desktop', model, requestClass: 'main', sessionId: 's', tokens: { cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, output: 0, uncachedInput } });
+  const range = { from: new Date(hour).toISOString(), to: new Date(hour + HOUR).toISOString() };
+  const shareOf = (rows) => d.burnOf(rows, range, 'account').points.find((p) => p.group === 'business' && Date.parse(p.at) === hour).fiveHourShare;
+  const priced = row('claude-opus-5-5', 1_000_000);
+  // A failed request on Sonnet 4.5, which the table has no row for, carries no token.
+  const failed = row('claude-sonnet-4-5', 0);
+  for (const rows of [[priced, failed], [failed, priced]]) assert.ok(Math.abs(shareOf(rows) - 0.01461) < 1e-12, 'a row with no token leaves the priced share');
+  assert.equal(shareOf([failed, row('claude-opus-5-5', 0)]), null, 'rows with no token alone are an idle bucket, not a share of zero');
+  const unpriced = row('claude-sonnet-5', 1_000);
+  for (const rows of [[priced, unpriced], [unpriced, priced]]) assert.equal(shareOf(rows), null, 'a row the table cannot price nulls the window');
+});
+
 test('an upstream is sized when the cost table holds its stored tier', () => {
   const account = (id, rateLimitTier) => ({ id, kind: rateLimitTier === null ? 'api_key' : 'oauth', subscription: rateLimitTier === null ? null : { rateLimitTier } });
   const accounts = [account('stored', 'default_claude_max_20x'), account('bare', 'claude_max_20x'), account('team', 'claude_team'), account('key', null)];

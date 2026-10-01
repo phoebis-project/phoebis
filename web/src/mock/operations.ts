@@ -120,7 +120,7 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
     pinned,
     requests: seen ? seen.requests : 0,
     burn,
-    burnAt: burn === null ? null : burnAtRoll,
+    burnAt: pinned ? burnAtRoll : null,
     burnUnit: unit,
     cacheTtlMs: pinned ? 5 * MINUTE : null,
     lastInputTokens: pinned ? lastInputRoll : null,

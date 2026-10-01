@@ -1607,7 +1607,8 @@ struct UsageRow<'a> {
 /// carries no price the caller could attribute, so it adds nothing at all. A fast row on an oauth account adds
 /// its `estimated_usd` and a zero share where the tables size its tier: fast mode spends usage credits and draws no
 /// plan window, and the zero still tells a reader the account is priced in its window unit. A bucket holding a row
-/// the table cannot price answers `None` on that window, whichever row came first.
+/// the table cannot price answers `None` on that window, whichever row came first; a row with no token has nothing
+/// to price and leaves both windows as the other rows set them.
 fn price_usage(
     point: &mut BurnPoint,
     kind: Option<AccountKind>,
@@ -1615,11 +1616,16 @@ fn price_usage(
     tables: &PlanTables,
     row: &UsageRow,
 ) {
+    let tokens = row.input_tokens
+        + row.cache_read_tokens
+        + row.cache_write_5m_tokens
+        + row.cache_write_1h_tokens
+        + row.output_tokens;
     match kind {
         Some(AccountKind::Oauth) if row.fast => {
             point.usd += row.estimated_usd;
             // Ahead of the model's cells, which a fast-only model lacks: the zero rests on the tier alone.
-            if let Some(tier) = tier {
+            if let Some(tier) = tier.filter(|_| tokens > 0) {
                 if tables.tier_factor(tier, FIVE_HOUR).is_some() && !point.five_hour_unpriced {
                     point.five_hour_share.get_or_insert(0.0);
                 }
@@ -1636,7 +1642,9 @@ fn price_usage(
                 write_1h: row.cache_write_1h_tokens,
                 output: row.output_tokens,
             };
-            if let Some(tier) = tier {
+            // A failed request books a row with no token, and the table refuses a model it has no row for before it
+            // reads the usage: such a row would null a priced hour for a charge of nothing.
+            if let Some(tier) = tier.filter(|_| tokens > 0) {
                 match tables.five_hour_share_at(tier, row.canonical_model, usage, row.at) {
                     Some(share) if !point.five_hour_unpriced => {
                         *point.five_hour_share.get_or_insert(0.0) += share;
@@ -1663,11 +1671,7 @@ fn price_usage(
         None => return,
     }
     point.cached_tokens += row.cache_read_tokens;
-    point.tokens += row.input_tokens
-        + row.cache_read_tokens
-        + row.cache_write_5m_tokens
-        + row.cache_write_1h_tokens
-        + row.output_tokens;
+    point.tokens += tokens;
     point.uncached_tokens += row.input_tokens;
 }
 

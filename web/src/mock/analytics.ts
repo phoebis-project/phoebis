@@ -340,11 +340,14 @@ export function burnOf(rows: HourlyRollup[], range: Range, groupBy: BurnGroup): 
     sums.set(group, byAt);
     const s = byAt.get(at) ?? emptyBurn();
     byAt.set(at, s);
+    const tokens = r.tokens.uncachedInput + r.tokens.cacheRead + r.tokens.cacheWrite5m + r.tokens.cacheWrite1h + r.tokens.output;
     s.cached += r.tokens.cacheRead;
-    s.tokens += r.tokens.uncachedInput + r.tokens.cacheRead + r.tokens.cacheWrite5m + r.tokens.cacheWrite1h + r.tokens.output;
+    s.tokens += tokens;
     s.uncached += r.tokens.uncachedInput;
     s.usd += oauth && !fast ? 0 : r.costUsd;
-    if (!oauth) continue;
+    // A row with no token has nothing to price, as the route reads it: a failed request on a model the table has no
+    // row for never nulls a priced bucket.
+    if (!oauth || tokens === 0) continue;
     if (fast) {
       // The zero rests on the tier alone, as the route reads a fast row, and never nulls a bucket.
       if (tierFactorOf(tiers.get(r.accountId), 'five_hour') !== null) s.fiveHour.push(0);

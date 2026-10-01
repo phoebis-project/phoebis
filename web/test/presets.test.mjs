@@ -55,11 +55,13 @@ const pool = (over = {}) => ({
   warmSessions: 'when_needed',
   ...over,
 });
-const preview = (sessions, over) => d.shedPreview(pool(over), [hot, cool], sessions, NOW);
+/** Every account the cost table sizes, so each subscription member's pins enter the round. */
+const SIZED = new Set(['cool', 'hot', 'near', 'second']);
+const preview = (sessions, over) => d.shedPreview(pool(over), [hot, cool], sessions, NOW, SIZED);
 const four = [pin('warm-4', 4, true), pin('cold-3', 3, false), pin('warm-2', 2, true), pin('warm-1', 1, true)];
 const member = (accountId, eligible = 'eligible') => ({ accountId, eligible, priority: 0 });
 /** A round over `accounts`, every one of them a member, with the pool's balanced shedding settings. */
-const replay = (accounts, sessions, over = {}) => d.shedPreview(pool({ members: accounts.map((a) => member(a.id)), ...over }), accounts, sessions, NOW);
+const replay = (accounts, sessions, over = {}) => d.shedPreview(pool({ members: accounts.map((a) => member(a.id)), ...over }), accounts, sessions, NOW, SIZED);
 
 test('the preview orders cold pins first, stops at the share, and never marks the last pin', () => {
   assert.deepEqual(
@@ -124,6 +126,18 @@ test('a pin the table cannot price stays in the order unmarked and counts for th
   );
 });
 
+test("the pins of an upstream whose tier the table does not size stay out of the preview, unlike a pin it cannot price", () => {
+  // The route reads no burn for any pin of such an upstream, while the round prices them on the reference tier and
+  // sheds them; the preview cannot replay that order, so it leaves them out rather than call them unpriced.
+  const team = account('team', 0.95);
+  const pins = [pin('team-a', null, false, { accountId: 'team' }), pin('team-b', null, false, { accountId: 'team' })];
+  const round = d.shedPreview(pool({ members: [member('team'), member('cool')] }), [team, cool], pins, NOW, new Set(['cool']));
+  assert.deepEqual([round.members, round.sessions, round.unpriced], [1, 0, 0]);
+  assert.equal(d.shedPreviewLine(round, true).includes('cannot price'), false, d.shedPreviewLine(round, true));
+  const overage = d.shedPreview(pool({ members: [member('team'), member('cool')] }), [team, cool], pins.map((p, i) => ({ ...p, burn: i + 1, burnUnit: 'usd' })), NOW, new Set(['cool']));
+  assert.equal(overage.sessions, 1, 'in dollars the round reads no tier, so the pins enter it');
+});
+
 test('under never an unpriced cold pin keeps no warm mark', () => {
   const pins = [pin('cold-priced', 1, false), pin('cold-unlisted', null, false), pin('warm', 5, true)];
   const round = replay([hot, cool], pins, { shedShare: 0.9, warmSessions: 'never' });
@@ -158,7 +172,7 @@ test('with no member under the band the preview marks sessions it cannot move', 
   const stuck = replay([hot, near], four);
   assert.deepEqual([stuck.sessions, stuck.cool], [2, false]);
   assert.equal(d.shedPreviewLine(stuck, true), 'Would mark 2 sessions, 1 warm, 70% of the burn in window share, but no member reads under the band to take them.');
-  const cooling = d.shedPreview(pool({ members: [member('hot'), member('cool', 'cooldown')] }), [hot, cool], four, NOW);
+  const cooling = d.shedPreview(pool({ members: [member('hot'), member('cool', 'cooldown')] }), [hot, cool], four, NOW, SIZED);
   assert.equal(cooling.cool, false, 'a member the router skips is no destination');
   const open = replay([hot, near, cool], four);
   assert.deepEqual([open.cool, d.shedPreviewLine(open, true)], [true, 'Would move 2 sessions, 1 warm, 70% of the burn in window share.']);

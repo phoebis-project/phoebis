@@ -1379,64 +1379,130 @@ fn a_row_of_an_account_without_a_tier_prices_no_share_and_an_api_key_row_keeps_i
     );
 }
 
-#[test]
-fn a_bucket_mixing_a_priced_and_an_unpriced_row_prices_no_share_on_that_window_and_counts_every_token(
+/// One request in the off-band weekday hour on `account`, its one attempt carrying `input` uncached tokens; `None`
+/// books a failed request, whose rollup row carries no token.
+fn plant_in_the_off_band_hour(
+    db: &LedgerDb,
+    id: &str,
+    account: &str,
+    model: &str,
+    input: Option<u64>,
 ) {
-    let db = LedgerDb::open_in_memory().unwrap();
-    // The same hour on Max 20x: a million Opus 5.5 input tokens the table prices and a million Opus 5 tokens it
-    // leaves unmeasured; a partial sum would read as the hour's share.
-    for (id, model) in [("priced", "claude-opus-5-5"), ("unpriced", "claude-opus-5")] {
-        db.insert_request(
-            &RequestRecord {
-                id: id.into(),
-                received_at: WEEKDAY_OFF_PEAK,
-                key_id: Some("k".into()),
-                pool_id: Some("p".into()),
-                canonical_model: model.into(),
-                model: model.into(),
-                kind: "inference".into(),
-                origin: "client".into(),
-                outcome: "succeeded".into(),
-                attempts: 1,
-                ..Default::default()
-            },
-            &[AttemptRecord {
-                request_id: id.into(),
-                attempt: 1,
-                account_id: "a".into(),
-                account_kind: "oauth".into(),
-                outcome: "succeeded".into(),
-                input_tokens: Some(1_000_000),
-                ..Default::default()
-            }],
-            None,
-        )
-        .unwrap();
-    }
+    db.insert_request(
+        &RequestRecord {
+            id: id.into(),
+            received_at: WEEKDAY_OFF_PEAK,
+            key_id: Some("k".into()),
+            pool_id: Some("p".into()),
+            canonical_model: model.into(),
+            model: model.into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            outcome: if input.is_some() {
+                "succeeded"
+            } else {
+                "failed"
+            }
+            .into(),
+            attempts: 1,
+            ..Default::default()
+        },
+        &[AttemptRecord {
+            request_id: id.into(),
+            attempt: 1,
+            account_id: account.into(),
+            account_kind: "oauth".into(),
+            outcome: if input.is_some() {
+                "succeeded"
+            } else {
+                "upstream_error"
+            }
+            .into(),
+            input_tokens: input,
+            ..Default::default()
+        }],
+        None,
+    )
+    .unwrap();
+}
+
+/// The off-band hour's burn point of `account`, a Max 20x subscription.
+fn off_band_point_on_max_20x(db: &LedgerDb, account: &str) -> phoebis_ledger::BurnPoint {
     let tables = PlanTables::shipped();
-    let kinds = HashMap::from([("a".to_string(), AccountKind::Oauth)]);
-    let tiers: Tiers = HashMap::from([("a".to_string(), Some(MAX_20X.to_string()))]);
+    let kinds = HashMap::from([(account.to_string(), AccountKind::Oauth)]);
+    let tiers: Tiers = HashMap::from([(account.to_string(), Some(MAX_20X.to_string()))]);
     let hour = phoebis_ledger::hour_of(WEEKDAY_OFF_PEAK) * 1_000;
     let filter = SeriesFilter {
         from: hour,
         to: hour + 3_600_000,
         bucket_seconds: 3_600,
+        accounts: vec![account.into()],
         ..SeriesFilter::default()
     };
-    let point = db
-        .read_blocking(|c| burn_series(c, &tables, &kinds, &tiers, &filter))
+    db.read_blocking(|c| burn_series(c, &tables, &kinds, &tiers, &filter))
         .unwrap()
         .into_iter()
         .find(|p| p.at == hour)
-        .unwrap();
+        .expect("the planted hour")
+}
+
+#[test]
+fn a_bucket_mixing_a_priced_and_an_unpriced_row_prices_no_share_on_that_window_and_counts_every_token(
+) {
+    let db = LedgerDb::open_in_memory().unwrap();
+    // The same hour on Max 20x: a million input tokens of a model the table prices and a million Opus 5 tokens it
+    // leaves unmeasured; a partial sum would read as the hour's share. The rollups read in model order, so Opus 5
+    // comes before Opus 5.5 and after Fable 5.1, and each order is taken once.
+    for (account, priced) in [("a", "claude-opus-5-5"), ("b", "claude-fable-5-1")] {
+        plant_in_the_off_band_hour(
+            &db,
+            &format!("{account}-priced"),
+            account,
+            priced,
+            Some(1_000_000),
+        );
+        plant_in_the_off_band_hour(
+            &db,
+            &format!("{account}-unpriced"),
+            account,
+            "claude-opus-5",
+            Some(1_000_000),
+        );
+        let point = off_band_point_on_max_20x(&db, account);
+        assert_eq!(
+            (
+                point.five_hour_share,
+                point.seven_day_share,
+                point.tokens,
+                point.usd
+            ),
+            (None, None, 2_000_000, 0.0),
+            "{priced} beside Opus 5"
+        );
+    }
+}
+
+#[test]
+fn a_row_with_no_token_never_unprices_a_bucket_and_a_bucket_of_them_alone_reads_no_share() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    // A failed request on Sonnet 4.5, a model the table has no row for, books a row with no token beside a priced
+    // hour of Opus 5.5: it has nothing to price, so the hour keeps its share.
+    plant_in_the_off_band_hour(&db, "priced", "a", "claude-opus-5-5", Some(1_000_000));
+    plant_in_the_off_band_hour(&db, "failed", "a", "claude-sonnet-4-5", None);
+    // A failed request alone on a model the table lists, which would price at zero: an idle hour, not a share of zero.
+    plant_in_the_off_band_hour(&db, "listed", "b", "claude-opus-5-5", None);
+    let point = off_band_point_on_max_20x(&db, "a");
+    assert!(
+        point
+            .five_hour_share
+            .is_some_and(|share| (share - 0.01461).abs() < 1e-9),
+        "the Opus 5.5 share stands: {point:?}"
+    );
+    assert_eq!(point.tokens, 1_000_000);
+    let idle = off_band_point_on_max_20x(&db, "b");
     assert_eq!(
-        (
-            point.five_hour_share,
-            point.seven_day_share,
-            point.uncached_tokens,
-            point.usd
-        ),
-        (None, None, 2_000_000, 0.0)
+        (idle.five_hour_share, idle.seven_day_share, idle.tokens),
+        (None, None, 0)
     );
 }
 

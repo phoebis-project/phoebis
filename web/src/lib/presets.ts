@@ -101,13 +101,14 @@ export interface ShedPreview {
  * as the router's `burn_decayed` does: cold pins first by burn, then warm ones by burn over their last input size,
  * bounded by the warm-sessions mode. A member's pins share one unit, so its round needs no conversion; members in
  * different units cannot be summed, so their shares are averaged instead. A member without `eligible` counts as
- * eligible, as a member of a pool not saved yet does.
+ * eligible, as a member of a pool not saved yet does. `sized` names the upstreams whose tier the cost table sizes.
  */
 export function shedPreview(
   pool: Pick<Pool, 'burnWindowSeconds' | 'migrateAboveUtilization' | 'shedShare' | 'warmSessions'> & { members: { accountId: string; eligible?: MemberEligibility }[] },
   accounts: Account[],
   sessions: Session[],
   now: number,
+  sized: ReadonlySet<string>,
 ): ShedPreview {
   const threshold = pool.migrateAboveUtilization;
   if (threshold === null) return { averaged: false, burnShare: 0, cool: false, members: 0, sessions: 0, unit: null, unpriced: 0, warm: 0 };
@@ -129,7 +130,10 @@ export function shedPreview(
   const windowMs = pool.burnWindowSeconds * 1_000;
   const rounds = hot.map((account) => {
     const pins = sessions
-      .filter((s) => s.pinned && s.accountId === account.id)
+      // The route reads no burn for a window-share pin of an upstream whose tier the table does not size, while the
+      // round prices it on the reference tier and sheds it; the preview cannot replay that order, so it leaves those
+      // pins out rather than count them as pins the table cannot price.
+      .filter((s) => s.pinned && s.accountId === account.id && (s.burnUnit !== 'window_share' || sized.has(account.id)))
       // The router walks an account's pins in key, session and model order, which settles ties in the sorts below.
       .sort((a, b) => cmp(a.keyId, b.keyId) || cmp(a.sessionId, b.sessionId) || cmp(a.model ?? '', b.model ?? ''))
       .map((s) => ({

@@ -16,6 +16,7 @@ import { SelectionOrder } from '@/components/ui/SelectionOrder';
 import { UtilizationBar } from '@/components/UtilizationBar';
 import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, ErrorState, Field, GroupedDialog, GroupLink, Input, Menu, PageLink, Select, Skeleton, SwitchedNumber, Toast, Toggle, type DialogGroup } from '@/components/ui/primitives';
+import { sizedUpstreams } from '@/lib/analytics';
 import { fmtAbsolute, fmtCompact, fmtHourTick, fmtInt, fmtPct, fmtPeriodEnd, fmtRelative, fmtUsd } from '@/lib/format';
 import { ENGINE_BOUNDS, ENGINE_FIELD_LABELS, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_LABELS, POOL_GROUPS, PROBE_TUNING_ROWS, bandRefusal, poolRefusals, type PoolGroup } from '@/lib/forms';
 import { useAsync, useNow } from '@/lib/hooks';
@@ -997,7 +998,8 @@ export function PoolDialog({
   const readings = memberAccounts.map((a) => ({ fiveHour: windowOf(a, '5h')?.utilization ?? null, id: a.id, label: a.label, sevenDay: windowOf(a, '7d')?.utilization ?? null }));
   // The route's verdict per stored member, so a member in cooldown is no destination for a shed session.
   const verdict = new Map((pool?.members ?? []).map((m) => [m.accountId, m.eligible]));
-  const preview = shedPreview({ ...input, members: input.members.map((m) => ({ ...m, eligible: verdict.get(m.accountId) })) }, accounts, sessions, now);
+  const sized = useMemo(() => sizedUpstreams(accounts, settings.data?.planTables.cost.tiers ?? {}), [accounts, settings.data]);
+  const preview = shedPreview({ ...input, members: input.members.map((m) => ({ ...m, eligible: verdict.get(m.accountId) })) }, accounts, sessions, now, sized);
   const setNetNegative = (value: boolean) => setForm((f) => ({ ...f, tuning: { ...f.tuning, stopWhenNetNegative: value } }));
   const setCacheTtl = <K extends keyof PoolCacheTtl>(key: K, value: PoolCacheTtl[K]) => setForm((f) => ({ ...f, cacheTtl: { ...f.cacheTtl, [key]: value } }));
 

@@ -851,7 +851,8 @@ export interface Session {
    *  no pin at all, with one whose account left the registry, on a subscription upstream whose tier is unknown, or
    *  on a model with a cell the table leaves unmeasured. */
   burn: number | null;
-  /** When `burn` was last folded, the instant the shedding preview decays it forward from; null with `burn`. */
+  /** When `burn` was last folded, the instant the shedding preview decays it forward from; null with no pin, or for a
+   *  pin never folded. */
   burnAt: string | null;
   /** Null for a session with no pin, or one whose account left the registry: no kind is left to pick a unit from. */
   burnUnit: BurnUnit | null;

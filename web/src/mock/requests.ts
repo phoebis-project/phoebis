@@ -76,11 +76,12 @@ export const LANES: Lane[] = [
 ];
 
 /**
- * The model an upstream serves a drawn request on. `mail` carries the story's unmeasured traffic alone: it serves
- * Sonnet 5, whose cells the cost table leaves `null`, whatever the lane drew, so its buckets read no share while the
- * other subscription upstreams' buckets stay priced.
+ * The upstream that carries the story's unmeasured traffic alone: it serves Sonnet 5, whose cells the cost table
+ * leaves `null`, whatever the lane drew, so its buckets read no share while the other subscription upstreams'
+ * buckets stay priced.
  */
-const modelOn = (accountId: string, drawn: string) => (accountId === 'mail' ? 'claude-sonnet-5' : drawn);
+const UNPRICED_UPSTREAM = 'mail';
+const modelOn = (accountId: string, drawn: string) => (accountId === UNPRICED_UPSTREAM ? 'claude-sonnet-5' : drawn);
 
 /** Probes exist only where the pool keeps caches warm and the key has not opted out, and so does anything kept warm by one. */
 export function warmsCaches(keyId: string, poolId: string): boolean {
@@ -337,17 +338,21 @@ function buildRequests(): RequestLog[] {
     });
     // A dropped check belongs under notebook, the one key under a pool that turned the check off, and that pool's
     // one member served it; notebook captures no bodies. The row keeps every other value it drew on the laptop
-    // lane, so this loop's later draws stay where they were. The passes after the loop draw per row by its key and
-    // pool (a lane in `LANES`, which has none for notebook, and the pool's cache warming), so they draw less for
-    // this row and their later draws move.
+    // lane, so this loop's later draws stay where they were, and the model the lane drew rather than the one `mail`
+    // serves, which stays on `mail`. The passes after the loop draw per row by its key and pool (a lane in `LANES`,
+    // which has none for notebook, and the pool's cache warming), so they draw less for this row and their later
+    // draws move.
     if (autoMode === 'stripped') {
       const moved = rows[rows.length - 1];
       Object.assign(moved, {
         accountId: 'business',
         attempts: moved.attempts.map((a) => ({ ...a, accountId: 'business' })),
+        canonicalModel: drawn,
         capturedBodies: false,
+        costUsd: Math.round(costOf(drawn, moved.usage) * 10_000) / 10_000,
         keyGeneration: Date.parse(keyById.get('notebook')!.createdAt),
         keyId: 'notebook',
+        model: drawn,
         poolId: 'studio',
         responseTruncated: false,
       });
@@ -381,10 +386,19 @@ function buildRequests(): RequestLog[] {
     unsampled.attempts = unsampled.attempts.map((a) => ({ ...a, windows: a.windows.map((w) => (w.id === '7d' ? { ...w, utilization: null } : w)) }));
   }
   // The drawer and the Models view need one request an upstream refused the model of. The newest desktop turn that
-  // failed over past a 429 takes it: the client spelled the model without the date the router resolved it to, and
-  // a pool member the request had not tried answered 404 for that model first. Nothing here draws from a stream,
-  // so every row after it keeps its values.
-  const story = rows.find((r) => r.keyId === 'desktop' && r.kind === 'inference' && r.outcome === 'succeeded' && r.sessionId !== null && r.attempts.some((a) => a.outcome === 'rate_limited' && a.cooldownSet));
+  // failed over past a 429 to an API-key upstream or to the unmeasured one takes it: the client spelled the model
+  // without the date the router resolved it to, and a pool member the request had not tried answered 404 for that
+  // model first. The cost table has no row for that model, so its tokens never land in a priced subscription's
+  // share. Nothing here draws from a stream, so every row after it keeps its values.
+  const story = rows.find(
+    (r) =>
+      r.keyId === 'desktop' &&
+      r.kind === 'inference' &&
+      r.outcome === 'succeeded' &&
+      r.sessionId !== null &&
+      (r.accountId === UNPRICED_UPSTREAM || ACCOUNTS.find((a) => a.id === r.accountId)?.kind === 'api_key') &&
+      r.attempts.some((a) => a.outcome === 'rate_limited' && a.cooldownSet),
+  );
   const rejecter = story && LANES.find((l) => l.keyId === story.keyId)?.accountIds.find((id) => !story.attempts.some((a) => a.accountId === id));
   if (story && rejecter) {
     const at = Date.parse(story.at);
