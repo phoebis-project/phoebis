@@ -818,7 +818,7 @@ export interface BurnPoint {
   group: string;
   /** The same spend as a fraction of the upstream's 7-day window, unbanded. */
   sevenDayShare: number | null;
-  /** Every token of the bucket, all five types: zero only for a bucket with no traffic. */
+  /** Every token of the bucket, all five types: zero for a bucket with no traffic the ledger can attribute. */
   tokens: number;
   /** Uncached input tokens. */
   uncachedTokens: number;

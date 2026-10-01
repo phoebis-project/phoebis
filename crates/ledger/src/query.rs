@@ -1574,8 +1574,8 @@ pub struct BurnPoint {
     pub five_hour_unpriced: bool,
     #[serde(skip)]
     pub seven_day_unpriced: bool,
-    /// Every token of the bucket's rows, all five types, so a reader tells a bucket with no traffic from one whose
-    /// traffic no table priced.
+    /// Every token of the bucket's rows, all five types: zero for a bucket with no traffic the ledger can attribute,
+    /// since `price_usage` adds nothing for a row whose account is no longer registered.
     pub tokens: u64,
     pub uncached_tokens: u64,
     pub usd: f64,

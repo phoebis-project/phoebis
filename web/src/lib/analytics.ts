@@ -73,7 +73,10 @@ export interface BurnRow {
    */
   fiveHour: (number | null)[];
   sevenDay: (number | null)[];
-  /** Every token of the slot, all five types, as the route counts them: zero only for a slot with no traffic. */
+  /**
+   * Every token of the slot, all five types, as the route counts them: zero for a slot with no traffic the ledger can
+   * attribute.
+   */
   tokens: number[];
   uncached: number[];
   usd: number[];
@@ -96,6 +99,12 @@ export function bucketShare(shares: (number | null)[]): number | null {
   if (shares.length === 0 || shares.some((s) => s === null)) return null;
   return (shares as number[]).reduce((n, s) => n + s, 0);
 }
+
+/**
+ * Whether a window-share slot holds traffic the table could not price: a null share with tokens behind it. An idle
+ * slot on a window the line never priced reads null too, with no traffic to list as model unlisted.
+ */
+export const slotUnpriced = (share: number | null, tokens: number): boolean => share === null && tokens > 0;
 
 /**
  * The cost table's factors for a stored tier, matched as the ledger matches it: as stored, then with the `default_`
@@ -182,7 +191,7 @@ export function foldBurn(points: BurnPoint[], groupBy: BurnGroup, bucketSeconds:
     const foldWindow = (read: (r: BurnRow) => (number | null)[]) => {
       const priced = rows.some((r) => r.tokens[i] > 0 && read(r)[i] !== null);
       for (const r of rows) if (r.tokens[i] === 0) read(r)[i] = priced ? 0 : null;
-      return { perHour: priced ? meanOf(rows.map((r) => read(r)[i]).filter((v): v is number => v !== null)) : null, unpriced: rows.some((r) => read(r)[i] === null && r.tokens[i] > 0) };
+      return { perHour: priced ? meanOf(rows.map((r) => read(r)[i]).filter((v): v is number => v !== null)) : null, unpriced: rows.some((r) => slotUnpriced(read(r)[i], r.tokens[i])) };
     };
     const fiveHour = foldWindow((r) => r.fiveHour);
     const sevenDay = foldWindow((r) => r.sevenDay);

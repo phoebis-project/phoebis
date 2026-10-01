@@ -9430,6 +9430,52 @@ fn warm_sessions_never_stops_after_the_cold_pins_and_always_ignores_warmth() {
     }
 }
 
+/// An unpriced cold pin takes no mark, so the round's order reaches a warm pin while the cold group's marks still
+/// fall short of its length; `never` keeps that warm pin unmarked all the same.
+#[test]
+fn warm_sessions_never_marks_no_warm_pin_when_an_unpriced_cold_pin_leaves_the_cold_marks_short() {
+    let s = snapshot(shedding_pool(Shedding {
+        warm_sessions: WarmSessions::Never,
+        ..Shedding::default()
+    }));
+    let mut st = loaded(vec![
+        burning("cold-1", "a", 1.0, false, T),
+        PinRow {
+            model: "claude-guess".into(),
+            ..burning("cold-guess", "a", 9.0, false, T)
+        },
+        burning("warm-4", "a", 4.0, true, T),
+        burning("warm-1", "a", 1.0, true, T),
+    ]);
+    st.set_rates(BurnRates {
+        five_hour: input_prices(&[("claude-sonnet-5", Some(1.0)), ("claude-guess", None)]),
+        ..BurnRates::default()
+    });
+    hot_a_cool_b(&mut st, T - 500);
+    assert_eq!(
+        landed(select(&mut st, &s, &main_turn(&s, "warm-1", T), &mut rng()).0),
+        ("a".into(), None)
+    );
+    let marks: Vec<&str> = ["cold-1", "warm-4", "warm-1"]
+        .into_iter()
+        .filter(|session| marked(&st, session, T))
+        .collect();
+    assert_eq!(
+        marks,
+        ["cold-1"],
+        "the priced burn is 6 and the target 3: cold-1 is marked, the order passes the unpriced cold pin and reaches \
+         warm-4, which `never` keeps"
+    );
+    let guess = PinKey {
+        model: "claude-guess".into(),
+        ..pin_key("cold-guess")
+    };
+    assert!(
+        !st.shed_marked(&guess, T, 900_000),
+        "the unpriced cold pin is never marked"
+    );
+}
+
 #[test]
 fn a_shed_pin_never_returns_to_the_account_that_shed_it_within_the_dwell_even_when_that_account_cooled(
 ) {

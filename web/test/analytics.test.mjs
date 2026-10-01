@@ -145,6 +145,18 @@ test('a known tier with only a priced 7-day share keeps its 7-day series', () =>
   assert.deepEqual(line.unpriced, { fiveHour: true, sevenDay: false });
 });
 
+test('a null slot is unpriced only with tokens behind it, so an idle slot on a never-priced window is not', () => {
+  // The upstream prices its 5-hour window and never its 7-day one, so both of its 7-day slots read null.
+  const plan = (at, over) => point(at * HOUR, 'business', { unit: 'window_share', ...over });
+  const { lines, rows } = d.foldBurn([plan(0, { fiveHourShare: 0.02, uncachedTokens: 10 }), plan(1, {})], 'account', 3_600, new Set(['business']));
+  const [busy, idle] = rows;
+  assert.deepEqual([busy.sevenDay[0], idle.sevenDay[0], idle.fiveHour[0]], [null, null, 0]);
+  assert.equal(d.slotUnpriced(busy.sevenDay[0], busy.tokens[0]), true, 'traffic the table could not price');
+  assert.equal(d.slotUnpriced(idle.sevenDay[0], idle.tokens[0]), false, 'an idle slot has no traffic to list as model unlisted');
+  assert.equal(d.slotUnpriced(idle.fiveHour[0], idle.tokens[0]), false);
+  assert.deepEqual(lines[0].unpriced, { fiveHour: false, sevenDay: true }, 'the legend reads the slots the same way');
+});
+
 test("a bucket's share is null when any row is unpriced, in either order", () => {
   assert.equal(d.bucketShare([0.1, null]), null);
   assert.equal(d.bucketShare([null, 0.1]), null);

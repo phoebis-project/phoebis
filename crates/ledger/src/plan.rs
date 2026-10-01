@@ -146,6 +146,7 @@ pub struct Factors {
 /// that window per million tokens of each type; `tiers` sizes every other tier against it; `bands` is the peak band,
 /// one measured factor applied at a request's completion on the windows its row names.
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct CostTable {
     pub bands: Vec<Band>,
     pub effective: String,

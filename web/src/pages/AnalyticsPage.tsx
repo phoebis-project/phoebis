@@ -11,7 +11,7 @@ import { ChartTooltip, Legend, type TooltipRow } from '@/components/charts/Toolt
 import { MultiSelect, type Option } from '@/components/ui/MultiSelect';
 import { IconX } from '@/components/ui/icons';
 import { Badge, Button, Card, ErrorState, Input, Meter, Segmented, Select, Skeleton, Toggle } from '@/components/ui/primitives';
-import { CONVERSATION_CLASSES, foldBurn, moveLabel, placementCells, placementRungLabel, sizedUpstreams, type BurnLine, type BurnLineUnit, type BurnRow } from '@/lib/analytics';
+import { CONVERSATION_CLASSES, foldBurn, moveLabel, placementCells, placementRungLabel, sizedUpstreams, slotUnpriced, type BurnLine, type BurnLineUnit, type BurnRow } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missCount, missLabel, missReasonOrder } from '@/lib/cache';
 import { fmtAbsolute, fmtCompact, fmtDayShort, fmtDuration, fmtHourTick, fmtInt, fmtMs, fmtPct, fmtPeriodEnd, fmtShare, fmtUsd, shortId, toLocalInput, upperFirst } from '@/lib/format';
@@ -1414,8 +1414,8 @@ function BurnCharts({ answer, error, groupBy, loading, sized }: { answer: { buck
               cursor={{ stroke: ink.axis }}
               content={timeTip<BurnRow>((r) => [
                 ...planned.flatMap(({ i, l }) => [
-                  { color: colorOf(l), label: `${nameOf(l)} (5-hour)`, title: r.fiveHour[i] === null ? MODEL_UNLISTED_HINT : undefined, value: shareOf(r.fiveHour[i]) },
-                  { color: colorOf(l), label: `${nameOf(l)} (7-day)`, title: r.sevenDay[i] === null ? MODEL_UNLISTED_HINT : undefined, value: shareOf(r.sevenDay[i]) },
+                  { color: colorOf(l), label: `${nameOf(l)} (5-hour)`, title: slotUnpriced(r.fiveHour[i], r.tokens[i]) ? MODEL_UNLISTED_HINT : undefined, value: shareOf(r.fiveHour[i]) },
+                  { color: colorOf(l), label: `${nameOf(l)} (7-day)`, title: slotUnpriced(r.sevenDay[i], r.tokens[i]) ? MODEL_UNLISTED_HINT : undefined, value: shareOf(r.sevenDay[i]) },
                 ]),
               ])}
             />

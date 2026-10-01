@@ -294,6 +294,28 @@ fn a_file_with_a_v1_field_is_refused_naming_it() {
     }
 }
 
+/// A caller that deserializes the table itself skips `from_yaml`, so the table's own shape refuses a v1 key too.
+#[test]
+fn a_cost_table_read_without_from_yaml_refuses_a_top_level_unknown_key_by_name() {
+    let file = cost_file(&[FIVE_HOUR, SEVEN_DAY], CELLS, ZONE);
+    serde_norway::from_str::<CostTable>(&file).expect("the v2 file deserializes");
+    for name in ["tier", "version"] {
+        let text = file.replacen(
+            "effective: 2026-10-01\n",
+            &format!("effective: 2026-10-01\n{name}: default_claude_max_5x\n"),
+            1,
+        );
+        assert_ne!(text, file, "the edit for {name} lands");
+        let refused = serde_norway::from_str::<CostTable>(&text)
+            .map(|_| "read".to_string())
+            .unwrap_or_else(|e| e.to_string());
+        assert!(
+            refused.contains(&format!("unknown field `{name}`")),
+            "the refusal names `{name}`: {refused}"
+        );
+    }
+}
+
 #[test]
 fn a_row_or_a_tier_missing_a_key_is_refused_rather_than_read_as_unmeasured() {
     let without_output = CELLS.replace("\n      output: 0.07279", "");
