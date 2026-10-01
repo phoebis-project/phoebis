@@ -812,7 +812,8 @@ export interface BurnPoint {
   /** Cache-read tokens. */
   cachedTokens: number;
   /** A subscription upstream's spend in the bucket as a fraction of its own 5-hour window, the band weighed in; null
-   *  for an API-key upstream or one whose tier is unknown, and under every other grouping. */
+   *  for an API-key upstream, one whose tier is unknown, a bucket with no row the table prices (an idle hour among
+   *  them) or one holding a row the table cannot price, and under every other grouping. */
   fiveHourShare: number | null;
   group: string;
   /** The same spend as a fraction of the upstream's 7-day window, unbanded. */

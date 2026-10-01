@@ -370,7 +370,7 @@ pub(crate) struct Agent {
     /// a prefix ordinary traffic cached on the other account, which no probe of this recipe paid for.
     pub covered_account: Option<String>,
     /// The unit the covering probe's own cost settled in, so the credit it earns later settles in the same one;
-    /// a model the plan table lacks falls the unit back to dollars along with the cost, so the two never split.
+    /// a probe the cost table cannot price falls the unit back to dollars along with the cost, so the two never split.
     pub covered_unit: Option<SavingsUnit>,
     /// The covering probe's recipe was sent fast: it kept the fast lane's cache, which a standard request never
     /// reads, and the reverse.

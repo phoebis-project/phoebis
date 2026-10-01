@@ -134,11 +134,10 @@ even written. `GET /admin/pools` answers the full policy with every default fill
 `{}` shows every value above.
 
 Both daily caps count per UTC day and are kept in `router.sqlite` as each probe settles, so a restart resumes them
-where they stood. A probe settled in dollars, on an api_key account, a subscription account in overage, or a model
-the plan table lacks, counts toward its pool's `probe_cost_cap_usd_per_day`; a plan-funded probe counts toward its
-account's `probe_cap_window_share_per_day`, and a migrated probe toward neither. A fast-mode session's probes settle
-in dollars and count toward `probe_cost_cap_usd_per_day`, never toward `probe_cap_window_share_per_day`, which bounds
-plan-funded probes alone.
+where they stood. A probe settled in dollars counts toward its pool's `probe_cost_cap_usd_per_day`: one on an api_key
+account or a subscription account in overage, a plan-funded one the cost table cannot price (see [The cost
+reference](#the-cost-reference)), and a fast-mode session's whatever the upstream's funding. A probe settled in the
+window share counts toward its account's `probe_cap_window_share_per_day`, and a migrated probe toward neither.
 
 ## The cost reference
 
