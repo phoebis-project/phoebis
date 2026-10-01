@@ -1187,7 +1187,8 @@ async fn the_canonical_model_prices_a_probe_whatever_the_caller_spelled() {
 }
 
 #[tokio::test]
-async fn a_kept_warm_request_on_an_unpriced_model_is_marked_and_counted_with_zero_saving() {
+async fn a_kept_warm_request_on_an_unpriced_model_saves_at_the_dearest_cells_and_its_recipe_keeps_probing(
+) {
     // claude-sonnet-4-5 is BODY's own model and stays out of the shipped price table for this test, unlike
     // the priced tests above.
     let mut r = rig(RigSpec::default()).await;
@@ -1197,6 +1198,7 @@ async fn a_kept_warm_request_on_an_unpriced_model_is_marked_and_counted_with_zer
     r.step().await;
     assert_eq!(r.status("main").probes, 1);
     let before = r.status("main").net_usd;
+    assert!((before + DEAREST_READ_2000).abs() < 1e-12, "{before}");
     r.advance(60_000);
     let second = r.observe_with("main", BODY).await;
     let rows = rollups(&r, |rows| inference_rows(rows).kept_warm_requests == 1).await;
@@ -1206,13 +1208,31 @@ async fn a_kept_warm_request_on_an_unpriced_model_is_marked_and_counted_with_zer
         (1, 2_000),
         "the mark and the tokens count on a model the price table does not know"
     );
-    assert_eq!(credit.saved_usd_gross, 0.0);
-    assert_eq!(
-        r.status("main").net_usd,
-        before,
-        "no saving to add for an unpriced model"
+    // The dearest input the shipped price table lists, Fable 5.1's 10 per million, less its dearest cache read,
+    // Opus 5's 0.5: the cells the probe's own cost reads.
+    let saved = 2_000.0 * (10.0 - 0.5) / 1_000_000.0;
+    assert!(
+        (credit.saved_usd_gross - saved).abs() < 1e-12,
+        "{}",
+        credit.saved_usd_gross
+    );
+    assert!(
+        (r.status("main").net_usd - (before + saved)).abs() < 1e-12,
+        "the saving lands on the net the probe's cost left: {:?}",
+        r.status("main")
     );
     assert!(row(&r, &second).await.kept_warm);
+    // Four more probes cost less than the one read saved, so the net stays positive and the stop never holds.
+    for _ in 0..4 {
+        r.advance(270_000);
+        r.step().await;
+    }
+    let status = r.status("main");
+    assert_eq!(status.probes, 5, "{status:?}");
+    assert!(
+        status.net_usd > 0.0 && status.reason != Reason::NetNegative,
+        "{status:?}"
+    );
 }
 
 /// The standing answer's 2,000 cached tokens read back at the dearest cache read the shipped price table lists,

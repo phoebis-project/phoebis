@@ -193,10 +193,11 @@ never books a share. A probe goes out for an hour when the pool's cache TTL poli
 rule set the account's funding selects is `1h`, since the relay rewrites every marker of the probe to that TTL (and adds
 one where `inject_when_absent` is on); with the policy off, when the recipe keeps an hour's cache or marks any part of
 its prefix for an hour. A probe settled in dollars on a model the price table does not list prices at the table's
-dearest cell of each type, never at zero, so the dollar cap and the net still bound it. Whatever the upstream's funding,
-a fast-mode session's net is a dollar net, since its probes draw usage credits. Each agent line of the Sessions view
-shows its net, as "N% of the 5-hour window", in dollars, or both for an agent whose upstream changed funding while it
-was warmed.
+dearest cell of each type, never at zero, so the dollar cap and the net still bound it; a request such a probe kept warm
+saves at the same cells, so its net stays positive while the cache saves more than the probes cost. Whatever the
+upstream's funding, a fast-mode session's net is a dollar net, since its probes draw usage credits. Each agent line of
+the Sessions view shows its net, as "N% of the 5-hour window", in dollars, or both for an agent whose upstream changed
+funding while it was warmed.
 
 The four shipped rows, all prices in USD per million tokens:
 
@@ -266,12 +267,12 @@ how these sessions are used."
 
 Per pool and per hour, the ledger's rollup carries the keepalive fields the console reads: `kept_warm_requests` and
 `kept_warm_tokens`, the requests and tokens a probe kept off a cache miss on any model the request named;
-`saved_usd_gross`, what those kept-warm tokens saved against paying them as uncached input every turn, zero for a model
-the price table does not know; `probe_cost_usd`, what sending the probes cost, at the dearest listed cells for such a
-model; `probe_migrated`, a probe that landed on a different account than the recipe's; `wasted_probes` and
-`wasted_probe_usd`, probes still unanswered when the recipe was discarded, and what they cost; `wasted_probe_reasons`,
-those wasted probes counted by the reason above; and `probes_skipped`, a due probe a gate withheld rather than sending,
-for example because the cost cap or a cooldown already held the recipe.
+`saved_usd_gross`, what those kept-warm tokens saved against paying them as uncached input every turn; `probe_cost_usd`,
+what sending the probes cost; both at the dearest listed cells for a model the price table does not know;
+`probe_migrated`, a probe that landed on a different account than the recipe's; `wasted_probes` and `wasted_probe_usd`,
+probes still unanswered when the recipe was discarded, and what they cost; `wasted_probe_reasons`, those wasted probes
+counted by the reason above; and `probes_skipped`, a due probe a gate withheld rather than sending, for example because
+the cost cap or a cooldown already held the recipe.
 
 `GET /admin/keepalive/overview` sums a week of these into `net_saved_7d_usd` (gross saved minus probe cost),
 `probes_24h` (`ok`, `failed`, `migrated`, `skipped`), and `cost_today` per pool against its daily cap.

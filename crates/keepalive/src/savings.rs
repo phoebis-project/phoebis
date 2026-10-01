@@ -17,8 +17,8 @@ use crate::usage::ProbeUsage;
 
 /// The gross saving of a request that read `cache_read_tokens` it would otherwise have paid as input, in the
 /// unit the covering probe settled in: dollars at the list prices of the cells `speed` selects, or the share of
-/// the `tier`'s 5-hour window at `at` (the band inside the price). `None` for a model the table lacks or a cell it
-/// leaves `null`, or on the share side a tier the table does not size.
+/// the `tier`'s 5-hour window at `at` (the band inside the price). `None` on the share side alone, for a model the
+/// cost table lacks, a cell it leaves `null`, or a tier it does not size.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn gross_saving(
     unit: SavingsUnit,
@@ -32,8 +32,16 @@ pub(crate) fn gross_saving(
 ) -> Option<f64> {
     match unit {
         SavingsUnit::Usd => {
-            let price = table.price_at(canonical_model, speed)?;
-            Some(cache_read_tokens as f64 * (price.input - price.cache_read) / 1_000_000.0)
+            let per_token = match table.price_at(canonical_model, speed) {
+                Some(price) => (price.input - price.cache_read) / 1_000_000.0,
+                // The dearest cells `probe_dollars` prices this model's probes at: both sides of the net read one
+                // rate table, so a cache that saves more than its probes cost keeps the recipe net positive.
+                None => {
+                    let dearest = table.rate_table().fallback;
+                    dearest.input.unwrap_or(0.0) - dearest.cache_read.unwrap_or(0.0)
+                }
+            };
+            Some(cache_read_tokens as f64 * per_token)
         }
         SavingsUnit::WindowShare => {
             let tier = tier?;

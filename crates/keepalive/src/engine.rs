@@ -1416,10 +1416,11 @@ impl Engine {
                 })
         };
         if let Some((read, key_generation, pool_id, account, model, unit, fast)) = credit {
-            // The mark says a probe kept this request warm, which is true whatever the price table knows;
-            // the saving is what the table can put a number on, zero for a model it does not price. The
-            // agent's own net settles in the covering probe's unit, a share of the tier the store names now,
-            // priced at this settlement; the ledger's kept-warm column stays dollars whatever that unit was.
+            // The mark says a probe kept this request warm, which is true whatever the tables know; a model the
+            // price table does not list saves dollars at its dearest cells, as its probes cost, and the share is
+            // what the cost table can put a number on, zero where it cannot. The agent's own net settles in the
+            // covering probe's unit, a share of the tier the store names now, priced at this settlement; the
+            // ledger's kept-warm column stays dollars whatever that unit was.
             let tables = &self.parts.tables;
             let table = self.parts.pricing.current();
             let tier = match (unit, account.as_deref()) {
