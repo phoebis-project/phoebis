@@ -489,7 +489,8 @@ export function decodePlacementRow(v: unknown): PlacementRow {
 export function decodeMemberBudget(v: unknown): MemberBudget {
   const m = rec(v);
   return {
-    accountId: str(m.account_id), budgetPeriod: BUDGET_PERIOD_VALUES.find((x) => x === str(m.budget_period)) ?? 'month', budgetUsd: num(m.budget_usd), periodEnd: isoOrNull(m.period_end), poolId: str(m.pool_id),
+    accountId: str(m.account_id), budgetPeriod: BUDGET_PERIOD_VALUES.find((x) => x === str(m.budget_period)) ?? 'month', budgetUsd: num(m.budget_usd),
+    kind: ACCOUNT_KIND_VALUES.find((x) => x === str(m.kind)) ?? 'oauth', periodEnd: isoOrNull(m.period_end), poolId: str(m.pool_id),
     spentUsd: numOrNull(m.spent_usd),
   };
 }

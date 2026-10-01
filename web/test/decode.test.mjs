@@ -435,7 +435,12 @@ test('a pool decodes the pin, placement and quota fields and its members\' budge
     'the budgeted API-key member reads its budgets and the spend the ledger reported against each',
   );
   const business = p.members.find((m) => m.accountId === 'business');
-  assert.deepEqual([business.kind, business.budgetDailyUsd, business.budgetMonthlyUsd, business.spends], ['oauth', null, null, []], 'a member without a budget reads no spend');
+  const [metered] = row.members[0].spends;
+  assert.deepEqual(
+    [business.kind, business.budgetDailyUsd, business.budgetMonthlyUsd, business.spends],
+    ['oauth', null, 30, [{ period: 'month', periodEnd: new Date(metered.period_end).toISOString(), spentUsd: metered.spent_usd }]],
+    'the budgeted subscription member reads its budget and the metered spend the ledger reported against it',
+  );
   assert.deepEqual(p.keys, [{ enabled: true, id: 'desktop', label: 'Desktop', prefix: row.keys[0].prefix }]);
 
   const wire = {
@@ -993,6 +998,12 @@ test('a placement row and a member budget keep the figures the routes leave null
   const unreported = d.decodeMemberBudget({ ...member, period_end: null, spent_usd: null });
   assert.deepEqual([unreported.spentUsd, unreported.periodEnd], [null, null], 'a member the ledger has not reported on has no spend yet');
   assert.equal(d.decodeMemberBudget({ ...member, budget_period: 'week' }).budgetPeriod, 'month', 'a period outside the two reads as the store default');
+  assert.deepEqual(
+    fixture('analytics_budgets').members.map((m) => d.decodeMemberBudget(m).kind),
+    ['oauth', 'api_key'],
+    "each row names its member's account kind, so the card can say a subscription member's spend is metered",
+  );
+  assert.equal(d.decodeMemberBudget({ ...member, kind: 'robot' }).kind, 'oauth', "a kind outside the two reads as the pool member's decoder reads it");
 });
 
 test('a settings answer with no compatibility block reads the defaults the router ships with', () => {

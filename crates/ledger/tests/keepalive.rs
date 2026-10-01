@@ -579,4 +579,11 @@ fn a_fast_recipes_credit_files_under_speed_fast() {
         .collect();
     by_speed.sort_by(|a, b| a.0.cmp(b.0));
     assert_eq!(by_speed, [("fast", 0.018), ("standard", 0.0036)]);
+    assert_eq!(
+        rows.iter()
+            .find(|r| r.speed == "fast")
+            .map(|r| r.funding.as_str()),
+        Some("fast"),
+        "a fast credit draws usage credits, so a subscription member's budget reads it as metered"
+    );
 }

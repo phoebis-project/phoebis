@@ -2232,10 +2232,13 @@ async fn a_pool_accepts_its_affinity_and_quota_fields_and_a_members_budget() {
 
 #[tokio::test]
 async fn a_member_carries_a_daily_and_a_monthly_budget_side_by_side() {
-    let (app, _up) = common::admin_app().await;
-    let cookie = login(&app, "admin-secret").await;
+    use common::wait_json;
+
+    let parts = common::admin_parts_full().await;
+    let app = &parts.app;
+    let cookie = login(app, "admin-secret").await;
     let created = post(
-        &app,
+        app,
         "/admin/pools",
         r#"{"id":"main","label":"Main","strategy":"priority",
             "members":[{"account_id":"direct","priority":0,"budget_daily_usd":5.0,"budget_monthly_usd":50.0}]}"#,
@@ -2243,7 +2246,14 @@ async fn a_member_carries_a_daily_and_a_monthly_budget_side_by_side() {
     )
     .await;
     assert_eq!(created.status(), 201);
-    let read = json(get(&app, "/admin/pools", Some(&cookie)).await).await;
+    // Waits for the ledger's refresh to report both periods, so a member row that dropped one never settles and
+    // one that doubled one fails the read below.
+    let read = wait_json(app, "/admin/pools", &cookie, |v| {
+        v["pools"][0]["members"][0]["spends"]
+            .as_array()
+            .is_some_and(|s| s.len() >= 2)
+    })
+    .await;
     let member = &read["pools"][0]["members"][0];
     assert_eq!(
         (
@@ -2257,15 +2267,17 @@ async fn a_member_carries_a_daily_and_a_monthly_budget_side_by_side() {
         member["budget_until"].is_null(),
         "no budget is reached, so nothing holds the member: {member}"
     );
-    // The ledger's refresh may or may not have reported yet; either way a report names a budgeted period at no
-    // spend.
-    for report in member["spends"].as_array().unwrap() {
-        assert!(
-            matches!(report["period"].as_str(), Some("day" | "month"))
-                && report["spent_usd"].as_f64() == Some(0.0),
-            "{member}"
-        );
-    }
+    let reports: Vec<(Option<&str>, Option<f64>)> = member["spends"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| (r["period"].as_str(), r["spent_usd"].as_f64()))
+        .collect();
+    assert_eq!(
+        reports,
+        [(Some("day"), Some(0.0)), (Some("month"), Some(0.0))],
+        "one report per budgeted period, the day's before the month's, at no spend: {member}"
+    );
 }
 
 #[tokio::test]
@@ -2288,11 +2300,36 @@ async fn a_daily_budget_of_zero_is_refused() {
 }
 
 #[tokio::test]
-async fn a_budget_on_a_member_that_is_not_an_api_key_account_is_refused_and_a_null_budget_is_accepted(
-) {
-    let (app, _up) = common::admin_app().await;
+async fn a_budget_on_a_subscription_member_is_kept_and_a_null_budget_is_accepted() {
+    let (app, _up) = common::admin_app_paired().await;
     let cookie = login(&app, "admin-secret").await;
-    let refused = post(
+    let business = |pools: &serde_json::Value| {
+        pools["pools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["id"] == "main")
+            .and_then(|p| {
+                p["members"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|m| m["account_id"] == "business")
+                    .cloned()
+            })
+            .unwrap()
+    };
+    // At no spend the budget holds nothing back, so the verdict stays eligible and no report names a spend.
+    let unspent = |member: &serde_json::Value| {
+        member["eligible"].as_str() == Some("eligible")
+            && member["budget_until"].is_null()
+            && member["spends"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|r| r["spent_usd"].as_f64() == Some(0.0))
+    };
+    let created = post(
         &app,
         "/admin/pools",
         r#"{"id":"main","label":"Main","strategy":"priority",
@@ -2300,67 +2337,66 @@ async fn a_budget_on_a_member_that_is_not_an_api_key_account_is_refused_and_a_nu
         Some(&cookie),
     )
     .await;
-    assert_eq!(refused.status(), 400);
     assert_eq!(
-        json(refused).await["error"].as_str(),
-        Some("budget applies to an API-key member")
+        created.status(),
+        201,
+        "a subscription member's budget bounds its metered spend, so the create keeps it"
     );
+    let member = business(&json(get(&app, "/admin/pools", Some(&cookie)).await).await);
     assert_eq!(
-        json(get(&app, "/admin/pools", Some(&cookie)).await).await["pools"]
-            .as_array()
-            .map(Vec::len),
-        Some(0),
-        "the refused create wrote no pool"
+        (
+            member["budget_daily_usd"].as_f64(),
+            member["budget_monthly_usd"].as_f64(),
+        ),
+        (None, Some(50.0)),
+        "{member}"
     );
-    let created = post(
+    assert!(unspent(&member), "{member}");
+    let accepted = post(
         &app,
         "/admin/pools",
-        r#"{"id":"main","label":"Main","strategy":"priority",
+        r#"{"id":"aux","label":"Aux","strategy":"priority",
             "members":[{"account_id":"business","priority":0,"budget_monthly_usd":null},
                        {"account_id":"direct","priority":1,"budget_monthly_usd":5.0}]}"#,
         Some(&cookie),
     )
     .await;
     assert_eq!(
-        created.status(),
+        accepted.status(),
         201,
         "a null budget on the OAuth member and a budget on the API-key member are accepted"
     );
-    for (method, path, body) in [
+    for (method, path, body, budgets) in [
         (
             "PATCH",
             "/admin/pools/main",
             r#"{"members":[{"account_id":"business","priority":0,"budget_monthly_usd":10.0}]}"#,
+            (None, Some(10.0)),
         ),
         (
             "PUT",
             "/admin/pools/main/members",
             r#"{"members":[{"account_id":"business","priority":0,"budget_daily_usd":10.0}]}"#,
+            (Some(10.0), None),
         ),
     ] {
-        let refused = if method == "PATCH" {
+        let kept = if method == "PATCH" {
             patch(&app, path, body, Some(&cookie)).await
         } else {
             put(&app, path, body, Some(&cookie)).await
         };
-        assert_eq!(refused.status(), 400, "{method} {path}");
+        assert_eq!(kept.status(), 200, "{method} {path}");
+        let member = business(&json(get(&app, "/admin/pools", Some(&cookie)).await).await);
         assert_eq!(
-            json(refused).await["error"].as_str(),
-            Some("budget applies to an API-key member"),
-            "{method} {path}"
+            (
+                member["budget_daily_usd"].as_f64(),
+                member["budget_monthly_usd"].as_f64(),
+            ),
+            budgets,
+            "{method} {path} keeps the subscription member's budget: {member}"
         );
+        assert!(unspent(&member), "{method} {path}: {member}");
     }
-    let kept = json(get(&app, "/admin/pools", Some(&cookie)).await).await;
-    let members = &kept["pools"][0]["members"];
-    assert_eq!(
-        (
-            members[0]["account_id"].as_str(),
-            members[0]["budget_monthly_usd"].as_f64(),
-            members[1]["budget_monthly_usd"].as_f64(),
-        ),
-        (Some("business"), None, Some(5.0)),
-        "a refused member write leaves the stored membership as it was"
-    );
 }
 
 #[tokio::test]

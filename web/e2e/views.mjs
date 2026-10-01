@@ -1385,7 +1385,8 @@ async function planLegend(theme) {
  * placements row is as tall as a cache row; Member budgets against Placements by rung on the title and head types
  * alone, since the two cards sit in different sections' grids, and Member budgets in the Burn section. Every budget
  * row draws its bar, one row per budgeted period; in the mock's story the member past its budget carries the
- * at-budget badge. The router's seed places nothing and budgets no member, so there the tables draw their empty rows.
+ * at-budget badge, and the subscription member's spend leads with the muted word metered in the figure's own type.
+ * The router's seed places nothing and budgets no member, so there the tables draw their empty rows.
  */
 async function analyticsTables(theme) {
   const say = (what) => failures.push(`${theme} /analytics: ${what}`);
@@ -1423,6 +1424,8 @@ async function analyticsTables(theme) {
     };
     const budgetRows = [...(card('Member budgets')?.querySelectorAll('tbody tr') ?? [])].filter((tr) => tr.children.length === 5);
     const atBudget = (tr) => [...tr.querySelectorAll('.badge')].find((b) => b.textContent?.trim() === 'at budget');
+    const spent = (tr) => tr.children[2].querySelector('.num');
+    const word = (el) => (el ? `${getComputedStyle(el).fontFamily}/${getComputedStyle(el).fontSize}` : null);
     return {
       atBudget: budgetRows.filter(atBudget).map((tr) => ({ badge: badge(atBudget(tr)), upstream: tr.children[1].textContent?.trim() })),
       bars: budgetRows.map((tr) => {
@@ -1431,6 +1434,9 @@ async function analyticsTables(theme) {
       }),
       budgets: box('Member budgets'),
       cache: box('Cache by model'),
+      metered: budgetRows
+        .filter((tr) => spent(tr)?.querySelector('.muted'))
+        .map((tr) => ({ figure: word(spent(tr)), text: spent(tr)?.textContent, upstream: tr.children[1].textContent?.trim(), word: word(spent(tr)?.querySelector('.muted')) })),
       placements: box('Placements by rung'),
     };
   });
@@ -1443,8 +1449,10 @@ async function analyticsTables(theme) {
   for (const bar of read.bars.filter((b) => b === null || !/^[0-9]{3,}x4$/.test(b))) say(`a member budget row draws its bar as ${bar}`);
   if (mock) {
     if (!read.placements?.rows) say('the story places requests by rung, yet the placements card draws no figure');
-    if (read.bars.length !== 3) say(`the story budgets three periods across two members, yet the card lists ${read.bars.length}`);
+    if (read.bars.length !== 4) say(`the story budgets four periods across three members, yet the card lists ${read.bars.length}`);
     if (JSON.stringify(read.atBudget.map((r) => r.upstream)) !== JSON.stringify(['evals'])) say(`the at-budget mark sits on ${JSON.stringify(read.atBudget.map((r) => r.upstream))}, not on evals alone`);
+    if (JSON.stringify(read.metered.map((r) => [r.upstream, r.text])) !== JSON.stringify([['business', 'metered $12.50']])) say(`the metered word sits on ${JSON.stringify(read.metered.map((r) => [r.upstream, r.text]))}, not on business alone`);
+    for (const r of read.metered.filter((r) => r.word !== r.figure)) say(`the metered word on ${r.upstream} reads ${r.word}, not the figure's ${r.figure}`);
   }
 }
 

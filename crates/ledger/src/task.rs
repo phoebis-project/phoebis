@@ -8,7 +8,7 @@ use std::time::Duration;
 use phoebis_bus::{spawn_subscriber, Bus, Subscriber};
 use phoebis_oauth::Clock;
 use phoebis_routing::{RegistrySnapshot, Report, RouterHandle};
-use phoebis_store::Store;
+use phoebis_store::{AccountKind, Store};
 use tokio::sync::{mpsc, oneshot, watch, Mutex};
 
 use crate::assemble::{Assembler, Record};
@@ -390,17 +390,19 @@ async fn writer(
     let _ = done.send(());
 }
 
-/// Every budgeted period of every pool member with a spend budget, from the snapshot: one entry per budget the
-/// member carries.
+/// Every budgeted period of every pool member, from the snapshot; a subscription member's sum reads its metered
+/// rows alone (overage and fast), since its plan-funded traffic is no spend.
 fn budgeted_members(snapshot: &RegistrySnapshot) -> Vec<BudgetedMember> {
     snapshot
         .budgeted_members()
         .flat_map(|m| {
-            m.budgets().map(|(period, _)| BudgetedMember {
+            let metered_only =
+                snapshot.account(&m.account_id).map(|a| a.kind) == Some(AccountKind::Oauth);
+            m.budgets().map(move |(period, _)| BudgetedMember {
                 pool_id: m.pool_id.clone(),
                 account_id: m.account_id.clone(),
                 period,
-                metered_only: false,
+                metered_only,
             })
         })
         .collect()

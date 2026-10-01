@@ -1816,8 +1816,8 @@ async fn migration_twenty_four_files_a_rollup_row_under_fast_funding_by_its_spee
     {
         let db = phoebis_ledger::LedgerDb::open(&path).unwrap();
         // No version-23 row kept an overage reading, so this one files under plan once migrated.
-        plant_funded(&db, "overage", None, Some(true));
-        plant_funded(&db, "fast", Some("fast"), None);
+        plant_funded(&db, ("a", "oauth"), "overage", None, Some(true));
+        plant_funded(&db, ("a", "oauth"), "fast", Some("fast"), None);
         // SQLite cannot drop a primary-key column, so the version-23 table is rebuilt from the live one with
         // the funding left out; the indexes go with the table it replaces, and the migration has to add them back.
         db.write(|c| {
@@ -2271,18 +2271,20 @@ fn a_member_with_two_budgets_gets_a_spend_row_per_period() {
     );
 }
 
-/// A succeeded request of a million uncached Opus 5 input tokens on `main`'s member `a`, its last attempt served
-/// at `speed` with the head's overage reading `overage_in_use`.
+/// A succeeded request of a million uncached Opus 5 input tokens on `main`'s member `account` of `kind`, its last
+/// attempt served at `speed` with the head's overage reading `overage_in_use`.
 fn plant_funded(
     db: &phoebis_ledger::LedgerDb,
+    (account, kind): (&str, &str),
     id: &str,
     speed: Option<&str>,
     overage_in_use: Option<bool>,
 ) {
     let at = ms(2026, 1, 15, 1, 0);
+    let id = format!("{account}-{id}");
     db.insert_request(
         &RequestRecord {
-            id: id.into(),
+            id: id.clone(),
             received_at: at,
             finished_at: Some(at + 500),
             key_id: Some("desktop".into()),
@@ -2296,10 +2298,10 @@ fn plant_funded(
             ..Default::default()
         },
         &[AttemptRecord {
-            request_id: id.into(),
+            request_id: id,
             attempt: 1,
-            account_id: "a".into(),
-            account_kind: "oauth".into(),
+            account_id: account.into(),
+            account_kind: kind.into(),
             outcome: "succeeded".into(),
             input_tokens: Some(1_000_000),
             speed: speed.map(String::from),
@@ -2311,19 +2313,20 @@ fn plant_funded(
     .unwrap();
 }
 
-/// The four funding cases on one account in one hour: overage in use, the plan, and two fast answers, one with no
-/// overage reading and one whose head said overage was not in use.
-fn plant_every_funding(db: &phoebis_ledger::LedgerDb) {
-    plant_funded(db, "overage", None, Some(true));
-    plant_funded(db, "plan", None, Some(false));
-    plant_funded(db, "fast", Some("fast"), None);
-    plant_funded(db, "fast-on-plan", Some("fast"), Some(false));
+/// The five funding cases on one member in one hour: overage in use, the plan, and three fast answers, one with no
+/// overage reading, one whose head said overage was not in use and one whose head said it was.
+fn plant_every_funding(db: &phoebis_ledger::LedgerDb, member: (&str, &str)) {
+    plant_funded(db, member, "overage", None, Some(true));
+    plant_funded(db, member, "plan", None, Some(false));
+    plant_funded(db, member, "fast", Some("fast"), None);
+    plant_funded(db, member, "fast-on-plan", Some("fast"), Some(false));
+    plant_funded(db, member, "fast-in-overage", Some("fast"), Some(true));
 }
 
 #[test]
 fn an_attempt_folds_under_fast_overage_or_plan_funding() {
     let db = phoebis_ledger::LedgerDb::open_in_memory().unwrap();
-    plant_every_funding(&db);
+    plant_every_funding(&db, ("a", "oauth"));
     let mut rows = db
         .read_blocking(|c| phoebis_ledger::read_rollups(c, 0, i64::MAX))
         .unwrap()
@@ -2334,18 +2337,18 @@ fn an_attempt_folds_under_fast_overage_or_plan_funding() {
     assert_eq!(
         rows,
         vec![
-            ("fast".to_string(), "fast".to_string(), 2),
+            ("fast".to_string(), "fast".to_string(), 3),
             ("overage".to_string(), "standard".to_string(), 1),
             ("plan".to_string(), "standard".to_string(), 1),
         ],
-        "a fast answer draws usage credits whatever the overage flag, so both file under fast"
+        "a fast answer draws usage credits whatever the overage flag, so all three file under fast"
     );
 }
 
 #[test]
 fn member_spends_sums_the_metered_rows_alone_when_asked() {
     let db = phoebis_ledger::LedgerDb::open_in_memory().unwrap();
-    plant_every_funding(&db);
+    plant_every_funding(&db, ("a", "oauth"));
     let spent = |metered_only| {
         db.read_blocking(|c| {
             member_spends(
@@ -2365,14 +2368,57 @@ fn member_spends_sums_the_metered_rows_alone_when_asked() {
     };
     assert_eq!(
         spent(false),
-        5.0 + 5.0 + 10.0 + 10.0,
-        "every row: two million standard input tokens at $5 and two million fast at $10"
+        5.0 + 5.0 + 10.0 + 10.0 + 10.0,
+        "every row: two million standard input tokens at $5 and three million fast at $10"
     );
     assert_eq!(
         spent(true),
-        5.0 + 10.0 + 10.0,
-        "the overage row and the two fast answers; the plan's own traffic is no spend"
+        5.0 + 10.0 + 10.0 + 10.0,
+        "the overage row and the three fast answers; the plan's own traffic is no spend"
     );
+}
+
+#[tokio::test]
+async fn a_subscription_members_spend_reads_its_metered_rows_alone() {
+    let up = FakeUpstream::start(vec![]).await;
+    let h = harness(
+        &up,
+        &[oauth("a", A, 0), api_key("b", C, 1)],
+        (0, None),
+        LedgerConfig::default(),
+    )
+    .await;
+    h.clock.store(ms(2026, 1, 15, 12, 0), Ordering::SeqCst);
+    // Planted before the budgets land, so whichever refresh reports both members has read every row.
+    plant_every_funding(&h.db, ("a", "oauth"));
+    plant_every_funding(&h.db, ("b", "api_key"));
+    let budgeted = |account_id: &str| MemberWrite {
+        account_id: account_id.into(),
+        priority: 0,
+        budget_daily_usd: None,
+        budget_monthly_usd: Some(1_000.0),
+    };
+    h.store
+        .set_pool_members("main", &[budgeted("a"), budgeted("b")], "test")
+        .unwrap();
+    h.router.reload().await.unwrap();
+    let spent = wait_for_async(Duration::from_secs(5), || async {
+        let rows = h.router.member_spends().await.unwrap();
+        let of = |account: &str| {
+            rows.iter()
+                .find(|r| r.pool_id == "main" && r.account_id == account)
+                .map(|r| r.spent_usd)
+        };
+        Some((of("a")?, of("b")?))
+    })
+    .await;
+    assert_eq!(
+        spent,
+        (5.0 + 10.0 + 10.0 + 10.0, 5.0 + 5.0 + 10.0 + 10.0 + 10.0),
+        "the subscription member's month reads its overage row and its fast answers and never its plan row; the \
+         API-key member's reads every row"
+    );
+    up.shutdown().await;
 }
 
 #[tokio::test]
@@ -2382,7 +2428,15 @@ async fn the_ledger_reports_every_budgeted_members_spend_after_a_flush() {
         respond: json_200(),
     }])
     .await;
-    let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    // An API-key member, whose whole spend counts: the fake's answer reports no overage, so a subscription
+    // member's budget would read the relayed request as plan traffic and never move.
+    let h = harness(
+        &up,
+        &[api_key("a", C, 0)],
+        (0, None),
+        LedgerConfig::default(),
+    )
+    .await;
     h.store
         .set_pool_members(
             "main",
@@ -2454,7 +2508,8 @@ async fn an_exhausted_monthly_member_changed_to_daily_is_admitted_while_no_membe
     )
     .await;
     // Planted directly rather than relayed: an earlier day of the same month, so the monthly sum is exhausted
-    // while the day it falls in has already passed.
+    // while the day it falls in has already passed. In overage, since a subscription member's budget counts its
+    // metered spend alone.
     h.db.insert_request(
         &RequestRecord {
             id: "seed".into(),
@@ -2477,6 +2532,7 @@ async fn an_exhausted_monthly_member_changed_to_daily_is_admitted_while_no_membe
             account_kind: "oauth".into(),
             outcome: "succeeded".into(),
             input_tokens: Some(1_000_000),
+            overage_in_use: Some(true),
             ..Default::default()
         }],
         None,
@@ -2583,7 +2639,8 @@ async fn the_period_boundary_tick_refreshes_the_spend_without_traffic() {
     )
     .await;
     h.clock.store(ms(2026, 1, 15, 12, 0), Ordering::SeqCst);
-    // Planted directly rather than relayed: priced usage past the budget, inside the day the tick will close.
+    // Planted directly rather than relayed: priced usage past the budget, inside the day the tick will close, in
+    // overage, since a subscription member's budget counts its metered spend alone.
     h.db.insert_request(
         &RequestRecord {
             id: "seed".into(),
@@ -2606,6 +2663,7 @@ async fn the_period_boundary_tick_refreshes_the_spend_without_traffic() {
             account_kind: "oauth".into(),
             outcome: "succeeded".into(),
             input_tokens: Some(51_000_000),
+            overage_in_use: Some(true),
             ..Default::default()
         }],
         None,

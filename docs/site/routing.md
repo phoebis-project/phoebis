@@ -104,14 +104,15 @@ either way.
 A member's `priority` is a number; lower sorts first. Naming an unknown account in `members` answers `404
 account {id} not found`, and the pool is not created.
 
-An API-key member carries a daily and a monthly spend budget, `budget_daily_usd` and `budget_monthly_usd`, each unset by
-default (no cap) and measured over the UTC calendar day or month; a budget on any other member answers `400 budget
-applies to an API-key member`, since a subscription member's usage is metered against its plan windows and its overage
-is not a per-member budget. A member whose spend reaches either budget is skipped for requests until that period ends,
-the month's end whenever the monthly budget is reached, and a keepalive probe pinned to it waits rather than moving the
-pin. A pool whose every member is at its budget answers `429` with the `overage` claim, the same one an account in
-overage carries. The spend sums the member's hourly rollups, and the rows of an active budget period outlive
-`stats.rollup_retention_days` until that period ends.
+Every member carries a daily and a monthly spend budget, `budget_daily_usd` and `budget_monthly_usd`, each unset by
+default (no cap) and measured over the UTC calendar day or month. An API-key member's whole spend counts; a subscription
+member's metered spend alone does, its overage traffic and its fast answers (a fast answer draws usage credits whatever
+the overage state), priced at API list rates from the rollups filed under `overage` and `fast`, so a budget on one
+bounds its extra spend in dollars from the router's side while its plan-funded traffic is never counted. A member whose
+spend reaches either budget is skipped for requests until that period ends, the month's end whenever the monthly budget
+is reached, and a keepalive probe pinned to it waits rather than moving the pin. A pool whose every member is at its
+budget answers `429` with the `overage` claim, the same one an account in overage carries. The spend sums the member's
+hourly rollups, and the rows of an active budget period outlive `stats.rollup_retention_days` until that period ends.
 
 `prefer_subscription` orders the set by kind (subscription accounts with plan quota, then those in overage, then
 API keys) before priority; it is the operator's answer alone, on by default, and no strategy overrides it. A pool

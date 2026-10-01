@@ -175,11 +175,15 @@ pub(crate) async fn budgets(State(state): State<Arc<AdminState>>) -> Response {
         .budgeted_members()
         .flat_map(|m| {
             let rows = crate::routes::spend_rows(&spends, &m.pool_id, &m.account_id);
+            let kind = snapshot.account(&m.account_id).map(|a| match a.kind {
+                phoebis_store::AccountKind::ApiKey => "api_key",
+                phoebis_store::AccountKind::Oauth => "oauth",
+            });
             m.budgets()
                 .map(|(period, budget)| {
                     let spend = rows.iter().find(|s| s.period == period);
                     let row = json!({
-                        "pool_id": m.pool_id, "account_id": m.account_id,
+                        "pool_id": m.pool_id, "account_id": m.account_id, "kind": kind,
                         "budget_usd": budget, "budget_period": period.as_str(),
                         "spent_usd": spend.map(|s| s.spent_usd), "period_end": spend.map(|s| s.period_end),
                     });

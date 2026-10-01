@@ -171,7 +171,14 @@ test('the placements read sends the range and the key and pool lists, the budget
   const camel = (name) => name.replace(/_(\w)/g, (_, c) => c.toUpperCase());
   const decoded = (row) => Object.fromEntries(Object.entries(row).map(([k, v]) => [camel(k), k === 'period_end' ? new Date(v).toISOString() : v]));
   assert.deepEqual(budgets, bodies['/admin/analytics/budgets'].members.map(decoded));
-  assert.deepEqual([budgets[0].accountId, budgets[0].spentUsd, budgets[0].periodEnd], ['direct', 0.0036, new Date(2_678_400_000).toISOString()]);
+  const end = new Date(2_678_400_000).toISOString();
+  assert.deepEqual(
+    budgets.map((b) => [b.accountId, b.kind, b.spentUsd, b.periodEnd]),
+    [
+      ['business', 'oauth', 0, end],
+      ['direct', 'api_key', 0.0036, end],
+    ],
+  );
 });
 
 test('getSession answers null on 401 without running the hook', async () => {

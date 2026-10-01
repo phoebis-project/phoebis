@@ -68,7 +68,14 @@ const POOL_ROWS: PoolSeed[] = [
     bodyCaptureHours: 24,
     modelRules: [{ not: true, pattern: 'claude-3*' }],
     members: [
-      unbudgeted('business', 0),
+      // A subscription member capped on its metered spend, so the card and the budgets card draw a metered line.
+      {
+        accountId: 'business',
+        budgetDailyUsd: null,
+        budgetMonthlyUsd: 30,
+        priority: 0,
+        spends: [{ period: 'month', periodEnd: periodEndAfter('month', NOW), spentUsd: 12.5 }],
+      },
       unbudgeted('mail', 0),
       unbudgeted('personal', 0),
       // Under both its budgets, half the month's spent, so the card has two spend lines that hold nothing back.

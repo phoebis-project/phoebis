@@ -104,7 +104,7 @@ const CLOSED = {
   accounts: { '[].kind': d.ACCOUNT_KIND_VALUES },
   alert_lifecycle: { '.deliveries[].event': d.LIFECYCLE_EVENT_VALUES },
   alert_rules: { '[].kind': d.ALERT_KIND_VALUES, '[].scope.type': d.SCOPE_TYPE_VALUES, '[].windowId': [...d.WINDOW_ID_VALUES, null] },
-  analytics_budgets: { '[].budgetPeriod': d.BUDGET_PERIOD_VALUES },
+  analytics_budgets: { '[].budgetPeriod': d.BUDGET_PERIOD_VALUES, '[].kind': d.ACCOUNT_KIND_VALUES },
   analytics_placements: { '[].rung': d.PLACEMENT_RUNG_VALUES },
   keepalive_recipes: { '[].reason': [...d.RECIPE_REASON_VALUES, null], '[].state': d.RECIPE_STATE_VALUES },
   live_messages: { '.recent[].attempts[].outcome': d.ATTEMPT_OUTCOME_VALUES, '.recent[].kind': d.REQUEST_KIND_VALUES },

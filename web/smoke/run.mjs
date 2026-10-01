@@ -937,6 +937,28 @@ await m.navigate('/upstreams/spare');
 }
 m.unmount();
 
+{
+  // Read while the story stands: the pool checks below write both budgeted pools, and a write answers no spend until
+  // the ledger reports again, which would leave no figure for the word to qualify.
+  const early = await mount('/analytics');
+  const card = [...early.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Member budgets');
+  const spentOf = (account) => [...(card?.querySelectorAll('tbody tr') ?? [])].find((tr) => tr.children[1]?.textContent?.trim() === account)?.children[2];
+  const metered = spentOf('business');
+  const whole = spentOf('console');
+  results.push({
+    name: "/analytics a subscription member's spent cell reads its metered spend, an API-key member's its whole spend",
+    ok:
+      card?.querySelector('.card__subtitle')?.textContent ===
+        "Each budgeted member's spend in its current period, an API-key member's whole spend and a subscription member's metered spend; the range and the filters above do not apply here" &&
+      metered?.querySelector('.num')?.textContent === 'metered $12.50' &&
+      metered?.querySelector('.num .muted')?.textContent === 'metered ' &&
+      (whole?.querySelector('.num')?.textContent ?? '').startsWith('$') &&
+      whole?.querySelector('.num .muted') === null,
+    missing: [metered?.textContent ?? 'no business row', whole?.textContent ?? 'no console row'],
+  });
+  early.unmount();
+}
+
 m = await mount('/pools');
 expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace', 'Round robin', 'subscription first', 'Within the first priority tier that has an eligible upstream, the one with the most weekly allowance left per hour until its window resets or its subscription ends; an unsampled upstream counts as untouched, and ties are random.', 'Within the first priority tier that has an eligible upstream, each in turn; a restart starts the round again.', 'Prefer plan quota', 'Allow overage', 'Migrate off', 'Select-below off', 'Affinity 10m', 'Affinity off', 'Keep prompt caches warm', 'cold limit 2', 'idle 1h', 'net-negative stop 2', '$4.00/day cap', 'Traffic, 24h', 'Requests per hour', '3-hour average', 'Members', 'eligible', 'cooldown ends', 'overage', 'P1', 'Console workspace', 'codex', 'Evals workspace', 'desktop', 'laptop', 'ci', 'Active pins', 'Edit']);
 {
@@ -996,8 +1018,9 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
     ok: (ttl?.textContent ?? '').startsWith('plan 1h / 5m, metered 5m / 5m') && ttlBadges.includes('adds markers') && !(dd('codex', 'Cache TTL')?.textContent ?? '').includes('adds markers'),
     missing: [ttl?.textContent ?? 'no Cache TTL row', ...ttlBadges],
   });
-  // Each member reads its spend against each budget it carries, the day's before the month's; the route's budget
-  // verdict is the label beside the spend, and the selection order names it as the reason the member is skipped.
+  // Each member reads its spend against each budget it carries, the day's before the month's, a subscription
+  // member's as metered spend; the route's budget verdict is the label beside the spend, and the selection order
+  // names it as the reason the member is skipped.
   const member = (pool, label) => {
     const li = [...(cards.get(pool)?.querySelectorAll('.pool__members ul li') ?? [])].find((x) => x.children[1]?.textContent?.trim() === label);
     const cell = li?.querySelector('.pool__eligibility');
@@ -1010,12 +1033,18 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
   const origin = new Date(CLOCK_ORIGIN);
   const dayEnd = new Date(Date.UTC(origin.getUTCFullYear(), origin.getUTCMonth(), origin.getUTCDate() + 1)).toLocaleString('en-US', { day: '2-digit', hour: '2-digit', hourCycle: 'h23', minute: '2-digit', month: 'short' });
   const half = member('all', 'Console workspace');
-  const none = member('all', 'business');
+  const metered = member('all', 'business');
+  const none = member('all', 'mail');
   const spent = member('codex', 'Evals workspace');
   results.push({
-    name: '/pools an API-key member reads its spend against each budget, the day before the month, and a subscription member reads no budget line',
-    ok: JSON.stringify(half.lines) === '["$1.10 of $5.00 today","$25.00 of $50.00 this month"]' && JSON.stringify(half.badges) === '["eligible|badge badge--good"]' && none.text === 'eligible',
-    missing: [...half.lines, ...half.badges, none.text],
+    name: '/pools an API-key member reads its spend against each budget, the day before the month',
+    ok: JSON.stringify(half.lines) === '["$1.10 of $5.00 today","$25.00 of $50.00 this month"]' && JSON.stringify(half.badges) === '["eligible|badge badge--good"]',
+    missing: [...half.lines, ...half.badges],
+  });
+  results.push({
+    name: '/pools a subscription member reads its metered spend against its budget, and a member without one says so',
+    ok: metered.lines.length === 1 && (metered.lines[0] ?? '').startsWith('metered $12.50 of $30.00 this month') && JSON.stringify(metered.badges) === '["eligible|badge badge--good"]' && none.text.startsWith('no budget'),
+    missing: [...metered.lines, ...metered.badges, none.text],
   });
   results.push({
     name: "/pools a member at its budget reads the route's verdict beside its spend, until the day ends",
@@ -1061,7 +1090,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
   await m.settle(300);
   const dlg = m.container.querySelector('dialog[open]');
   const t = dlg?.textContent ?? '';
-  expect('/pools edit dialog prefilled', t, ['Edit pool all', 'Name', 'Status', 'Strategy', 'Session affinity', 'How long a session stays on its upstream after its last request; off keeps no pins, and a custom value is at least 60 seconds.', 'off', '5m', '10m', '1h', '4h', 'custom', 'Migrate above utilization', 'Prefer plan quota:', 'move sessions to a sibling with plan quota when this upstream starts billing extra usage', 'Allow:', 'ignore extra usage', 'Never:', 'treat an upstream in extra usage as unavailable until its window resets', 'Keep prompt caches warm', 'Daily probe cost cap ($)', 'Per UTC day, for probes paid in dollars: on API-key upstreams, on subscription upstreams in overage, and on models whose 5-hour share the cost table cannot price. Plan-funded probes do not count here.', 'Cost reference', 'Probe tuning', 'Members', 'Priority', 'Keys', 'Create key', 'desktop', 'laptop', 'phoebis-8f2a', 'active', "A key reaches only this pool's members. Create key, Move to and Revoke apply at once, without Save pool; rotation and expiry are on the API keys page", 'Save pool', 'Model rules', 'Allow', 'Deny', 'Add rule', 'written with a trailing *']);
+  expect('/pools edit dialog prefilled', t, ['Edit pool all', 'Name', 'Status', 'Strategy', 'Session affinity', 'How long a session stays on its upstream after its last request; off keeps no pins, and a custom value is at least 60 seconds.', 'off', '5m', '10m', '1h', '4h', 'custom', 'Migrate above utilization', 'Prefer plan quota:', 'move sessions to a sibling with plan quota when this upstream starts billing extra usage', "caps a member's spend in dollars: an API-key member's whole spend, a subscription member's overage and fast answers.", 'Allow:', 'ignore extra usage', 'Never:', 'treat an upstream in extra usage as unavailable until its window resets', 'Keep prompt caches warm', 'Daily probe cost cap ($)', 'Per UTC day, for probes paid in dollars: on API-key upstreams, on subscription upstreams in overage, and on models whose 5-hour share the cost table cannot price. Plan-funded probes do not count here.', 'Cost reference', 'Probe tuning', 'Members', 'Priority', 'Keys', 'Create key', 'desktop', 'laptop', 'phoebis-8f2a', 'active', "A key reaches only this pool's members. Create key, Move to and Revoke apply at once, without Save pool; rotation and expiry are on the API keys page", 'Save pool', 'Model rules', 'Allow', 'Deny', 'Add rule', 'written with a trailing *']);
   const nameInput = group(dlg, 'Identity')?.querySelector('input[placeholder="research"]');
   results.push({ name: '/pools edit dialog name prefilled', ok: nameInput?.value === 'all', missing: [nameInput?.value] });
   const keysMulti = [...(dlg?.querySelectorAll('.mselect__trigger') ?? [])].map((b) => b.textContent?.trim()).filter((x) => x?.startsWith('Keys'));
@@ -1722,24 +1751,27 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
         ),
       missing: [JSON.stringify(options(quota)), String(quota?.value)],
     });
-    // An API-key member row carries a daily and a monthly budget; a budget the member write refuses holds the save.
+    // Every member row carries a daily and a monthly budget, a subscription member's as an API-key member's; a budget
+    // the member write refuses holds the save.
     const daily = (label) => dlg?.querySelector(`input[aria-label="Daily budget for ${label}, USD"]`);
     const monthly = (label) => dlg?.querySelector(`input[aria-label="Monthly budget for ${label}, USD"]`);
-    const rows = [daily('Console workspace'), monthly('Console workspace')].flatMap((f) => [f?.value, f?.getAttribute('placeholder'), f?.getAttribute('min'), f?.getAttribute('step')]);
-    const hint = 'API-key members only. A member whose spend reaches its daily or its monthly budget is skipped until that UTC day or month ends, priced at API list rates; set one, both, or neither.';
+    const field = (f) => [f?.value, f?.getAttribute('placeholder'), f?.getAttribute('min'), f?.getAttribute('step')];
+    const rows = [daily('Console workspace'), monthly('Console workspace')].flatMap(field);
+    const subscription = [daily('business'), monthly('business')].flatMap(field);
+    const hint =
+      "A member whose spend reaches its daily or its monthly budget is skipped until that UTC day or month ends, priced at API list rates: an API-key member's whole spend counts, a subscription member's metered spend alone (overage and fast answers); set one, both, or neither.";
     const heads = [...(group(dlg, 'Members')?.querySelectorAll('.members-table thead th') ?? [])].map((th) => th.textContent?.trim());
     results.push({
-      name: '/pools an API-key member row carries a daily and a monthly budget field, and a subscription member row carries neither',
+      name: "/pools every member row carries a daily and a monthly budget field, a subscription member's as an API-key member's",
       ok:
         JSON.stringify(rows) === '["5","none","0.01","any","50","none","0.01","any"]' &&
+        JSON.stringify(subscription) === '["","none","0.01","any","30","none","0.01","any"]' &&
         JSON.stringify(heads) === '["Upstream","Priority","Daily budget, USD","Monthly budget, USD"]' &&
-        daily('business') === null &&
-        monthly('business') === null &&
-        daily('team') === null &&
-        monthly('team') === null &&
+        daily('team')?.disabled === true &&
+        monthly('team')?.disabled === true &&
         (group(dlg, 'Members')?.querySelector('select') ?? null) === null &&
         (group(dlg, 'Members')?.textContent ?? '').includes(hint),
-      missing: [...rows.map(String), ...heads, `business fields ${daily('business') === null && monthly('business') === null ? 'absent' : 'drawn'}`],
+      missing: [...rows.map(String), ...subscription.map(String), ...heads, `team fields ${daily('team')?.disabled === true && monthly('team')?.disabled === true ? 'disabled' : 'absent or enabled'}`],
     });
     await type(daily('Console workspace'), '0');
     const members = group(dlg, 'Members');
@@ -2022,26 +2054,34 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
   await api.updatePool('all', { ...before, members: before.members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })) });
 }
 {
-  // A budget belongs to an API-key member: one stored on a subscription member through the API draws no field and no
-  // spend line, and the dialog's save sends it back as none.
+  // A budget on a subscription member bounds its metered spend: one stored through the API draws its two fields and
+  // its metered lines, and the dialog's save keeps it.
   const studio = (await api.listPools()).find((p) => p.id === 'studio');
   await api.updatePool('studio', { ...studio, members: [{ accountId: 'business', budgetDailyUsd: 30, budgetMonthlyUsd: 300, priority: 0 }] });
   m.unmount();
   m = await mount('/pools');
   const card = [...m.container.querySelectorAll('.pool')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'studio');
-  const cell = card?.querySelector('.pool__members ul li .pool__eligibility')?.textContent?.replace(/\s+/g, ' ').trim() ?? 'absent';
+  const cell = card?.querySelector('.pool__members ul li .pool__eligibility');
+  const lines = [...(cell?.children ?? [])].map((c) => c.textContent?.replace(/\s+/g, ' ').trim());
   [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool studio')?.click();
   await m.settle(300);
   const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
-  const fields = ['Daily', 'Monthly'].map((period) => dlg?.querySelector(`input[aria-label="${period} budget for business, USD"]`) ?? null);
+  const fields = ['Daily', 'Monthly'].map((period) => dlg?.querySelector(`input[aria-label="${period} budget for business, USD"]`)?.value ?? null);
   [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Save pool')?.click();
   await m.settle(700);
   const stored = (await api.listPools()).find((p) => p.id === 'studio')?.members.find((x) => x.accountId === 'business');
   results.push({
-    name: '/pools a budget stored on a subscription member draws no field or spend line, and a save sends it back as none',
-    ok: cell === 'eligible' && fields.every((f) => f === null) && stored?.budgetDailyUsd === null && stored?.budgetMonthlyUsd === null && !m.container.querySelector('dialog[open]'),
-    missing: [cell, ...fields.map((f) => (f === null ? 'no field' : `field ${f.value}`)), JSON.stringify(stored ?? null)],
+    name: '/pools a budget on a subscription member draws its two fields and a save keeps it',
+    ok:
+      JSON.stringify(lines) === '["metered - of $30.00 today","metered - of $300.00 this month","eligible"]' &&
+      JSON.stringify(fields) === '["30","300"]' &&
+      stored?.budgetDailyUsd === 30 &&
+      stored?.budgetMonthlyUsd === 300 &&
+      !m.container.querySelector('dialog[open]'),
+    missing: [...lines, ...fields.map((f) => (f === null ? 'no field' : `field ${f}`)), JSON.stringify(stored ?? null)],
   });
+  // The story's membership back, so the budgets card below reads the rows the fixture holds.
+  await api.updatePool('studio', studio);
 }
 m.unmount();
 
@@ -3430,7 +3470,8 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
     ok:
       card('Member budgets')?.closest('.analytics-section')?.id === 'burn' &&
       JSON.stringify(budgeted.heads) === JSON.stringify(['Pool', 'Upstream', 'Spent', 'Budget', 'Period ends']) &&
-      budgets.length === 3 &&
+      budgets.length === 4 &&
+      JSON.stringify(budgets.filter((b) => b.kind === 'oauth').map((b) => [b.poolId, b.accountId, b.budgetPeriod])) === '[["all","business","month"]]' &&
       JSON.stringify(budgeted.rows.map((r) => [r[0], r[1]])) === JSON.stringify(budgets.map((b) => [b.poolId, b.accountId])) &&
       budgeted.rows.every((r, i) => r[3] === `$${budgets[i].budgetUsd.toFixed(2)} per ${budgets[i].budgetPeriod}`) &&
       budgetRows.every((tr) => tr.querySelectorAll('.meter').length === 1),

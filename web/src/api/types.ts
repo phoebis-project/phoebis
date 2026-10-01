@@ -726,6 +726,8 @@ export interface MemberBudget {
   accountId: string;
   budgetPeriod: BudgetPeriod;
   budgetUsd: number;
+  /** The member's account kind: a subscription member's spend is its metered spend alone. */
+  kind: AccountKind;
   /** The next UTC day or month boundary; null, with `spentUsd`, until the ledger reports. */
   periodEnd: string | null;
   poolId: string;

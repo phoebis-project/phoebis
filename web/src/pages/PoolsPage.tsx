@@ -658,11 +658,12 @@ function PoolCard({
 }
 
 /**
- * An API-key member's spend against each budget it carries, the day's before the month's, or that it has none; a
- * subscription member has no budget.
+ * A member's spend against each budget it carries, an API-key member's whole spend and a subscription member's
+ * metered spend (overage and fast answers), or that it has none.
  */
 function MemberBudget({ member }: { member: PoolMember }) {
-  if (member.kind !== 'api_key') return null;
+  // The word leads, so the operator reads at once that the plan's own traffic is not in the figure.
+  const metered = member.kind === 'oauth' ? 'metered ' : '';
   const budgets = (
     [
       ['day', member.budgetDailyUsd],
@@ -676,6 +677,7 @@ function MemberBudget({ member }: { member: PoolMember }) {
         const spent = member.spends.find((s) => s.period === period)?.spentUsd;
         return (
           <span key={period} className="num">
+            {metered}
             {spent === undefined ? '-' : fmtUsd(spent)} of {fmtUsd(budget)} {period === 'day' ? 'today' : 'this month'}
           </span>
         );
@@ -937,7 +939,6 @@ export function PoolDialog({
   // Sessions by warm prefix and subagents by cohort both place by the shared prefix, so either one reads the threshold.
   const prefixEnabled = form.sessionPlacement === 'by_warm_prefix' || form.subagentPlacement === 'by_cohort';
   const budgetOf = (accountId: string) => form.budgets[accountId] ?? { daily: '', monthly: '' };
-  const apiKeyIds = new Set(accounts.filter((a) => a.kind === 'api_key').map((a) => a.id));
   const input: PoolInput = {
     ...form.engine,
     affinityMode: form.affinityMode,
@@ -952,9 +953,6 @@ export function PoolDialog({
       ? { ...form.tuning, costCapUsdPerDay: form.capEnabled ? form.capUsd : null, enabled: true, warmSubagents: form.warmSubagents }
       : { ...(pool?.keepalive ?? { ...KEEPALIVE_TUNING_DEFAULTS, costCapUsdPerDay: null }), enabled: false },
     members: Object.entries(form.members).map(([accountId, priority]) => {
-      // A budget belongs to an API-key member, so one left from an earlier tick or stored through the API on any other
-      // member goes back as none, which clears it.
-      if (!apiKeyIds.has(accountId)) return { accountId, budgetDailyUsd: null, budgetMonthlyUsd: null, priority };
       const budget = budgetOf(accountId);
       // A field that reads no number goes on as NaN, which the refusals below hold the save for.
       const usd = (typed: string) => (typed.trim() === '' ? null : Number(typed));
@@ -1109,7 +1107,7 @@ export function PoolDialog({
           <PageLink to="/upstreams">Upstreams page</PageLink>.
         </p>
         <p className="field__hint">
-          API-key members only. A member whose spend reaches its daily or its monthly budget is skipped until that UTC day or month ends, priced at API list rates; set one, both, or neither.
+          A member whose spend reaches its daily or its monthly budget is skipped until that UTC day or month ends, priced at API list rates: an API-key member&apos;s whole spend counts, a subscription member&apos;s metered spend alone (overage and fast answers); set one, both, or neither.
         </p>
         <div className="table-wrap">
           <table className="table members-table">
@@ -1159,41 +1157,32 @@ export function PoolDialog({
                         aria-invalid={invalid(`priority:${a.id}`)}
                       />
                     </td>
-                    {a.kind === 'api_key' ? (
-                      <>
-                        <td className="right">
-                          <Input
-                            type="number"
-                            min={0.01}
-                            step="any"
-                            value={budgetOf(a.id).daily}
-                            disabled={!on}
-                            placeholder="none"
-                            onChange={(e) => setBudget(a.id, { daily: e.target.value })}
-                            aria-label={`Daily budget for ${a.label}, USD`}
-                            aria-invalid={invalid(`budget_daily:${a.id}`)}
-                          />
-                        </td>
-                        <td className="right">
-                          <Input
-                            type="number"
-                            min={0.01}
-                            step="any"
-                            value={budgetOf(a.id).monthly}
-                            disabled={!on}
-                            placeholder="none"
-                            onChange={(e) => setBudget(a.id, { monthly: e.target.value })}
-                            aria-label={`Monthly budget for ${a.label}, USD`}
-                            aria-invalid={invalid(`budget_monthly:${a.id}`)}
-                          />
-                        </td>
-                      </>
-                    ) : (
-                      <>
-                        <td />
-                        <td />
-                      </>
-                    )}
+                    <td className="right">
+                      <Input
+                        type="number"
+                        min={0.01}
+                        step="any"
+                        value={budgetOf(a.id).daily}
+                        disabled={!on}
+                        placeholder="none"
+                        onChange={(e) => setBudget(a.id, { daily: e.target.value })}
+                        aria-label={`Daily budget for ${a.label}, USD`}
+                        aria-invalid={invalid(`budget_daily:${a.id}`)}
+                      />
+                    </td>
+                    <td className="right">
+                      <Input
+                        type="number"
+                        min={0.01}
+                        step="any"
+                        value={budgetOf(a.id).monthly}
+                        disabled={!on}
+                        placeholder="none"
+                        onChange={(e) => setBudget(a.id, { monthly: e.target.value })}
+                        aria-label={`Monthly budget for ${a.label}, USD`}
+                        aria-invalid={invalid(`budget_monthly:${a.id}`)}
+                      />
+                    </td>
                   </tr>
                 );
               })}
@@ -1603,7 +1592,7 @@ export function PoolDialog({
           plain
           hint={
             <>
-              For subscription upstreams billing extra usage; API-key members stop at their budget in <GroupLink id="members">Members</GroupLink> instead. The <PageLink to="/upstreams">Upstreams page</PageLink> shows which upstream is in overage.
+              For subscription upstreams billing extra usage. A daily or monthly budget in <GroupLink id="members">Members</GroupLink> caps a member&apos;s spend in dollars: an API-key member&apos;s whole spend, a subscription member&apos;s overage and fast answers. The <PageLink to="/upstreams">Upstreams page</PageLink> shows which upstream is in overage.
             </>
           }
         >

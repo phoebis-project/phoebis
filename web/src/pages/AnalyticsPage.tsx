@@ -1486,7 +1486,7 @@ function PlacementTable({ error, rows, unfiltered }: { error: string | null; row
   );
 }
 
-const BUDGET_HINT = "Each budgeted API-key member's spend in its current period; the range and the filters above do not apply here";
+const BUDGET_HINT = "Each budgeted member's spend in its current period, an API-key member's whole spend and a subscription member's metered spend; the range and the filters above do not apply here";
 
 /** Spend against each member's budget; a member at its budget is skipped until its period ends. */
 function BudgetTable({ budgets, error, now }: { budgets: MemberBudget[] | null; error: string | null; now: number }) {
@@ -1521,7 +1521,10 @@ function BudgetTable({ budgets, error, now }: { budgets: MemberBudget[] | null; 
                           not reported
                         </span>
                       ) : (
-                        <span className="num">{fmtUsd(b.spentUsd)}</span>
+                        <span className="num">
+                          {b.kind === 'oauth' && <span className="muted">metered </span>}
+                          {fmtUsd(b.spentUsd)}
+                        </span>
                       )}
                       {reached && (
                         <Badge tone="warning" title="Routing skips this member until its period ends">

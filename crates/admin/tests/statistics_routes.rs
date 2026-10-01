@@ -1490,8 +1490,8 @@ async fn a_request_answers_its_class_and_each_attempts_trace_with_skipped_as_nam
 async fn budgets_route_answers_a_members_spend_against_its_budget() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
-    // A budget applies to an API-key member alone, so "direct" carries one in both pools (proving a second row
-    // sorts by pool ahead of "main") while "business" rides "main" unbudgeted (proving the route excludes it).
+    // "direct" carries a budget in both pools (proving a second row sorts by pool ahead of "main") while
+    // "business" rides "main" unbudgeted (proving the route excludes it).
     post(
         &parts.app,
         "/admin/pools",
@@ -1537,8 +1537,15 @@ async fn budgets_route_answers_a_members_spend_against_its_budget() {
             members[0]["account_id"].as_str(),
             members[0]["budget_usd"].as_f64(),
             members[0]["budget_period"].as_str(),
+            members[0]["kind"].as_str(),
         ),
-        (Some("aux"), Some("direct"), Some(5.0), Some("day")),
+        (
+            Some("aux"),
+            Some("direct"),
+            Some(5.0),
+            Some("day"),
+            Some("api_key")
+        ),
         "sorted by pool id ahead of main"
     );
     assert_eq!(
@@ -1547,8 +1554,15 @@ async fn budgets_route_answers_a_members_spend_against_its_budget() {
             members[1]["account_id"].as_str(),
             members[1]["budget_usd"].as_f64(),
             members[1]["budget_period"].as_str(),
+            members[1]["kind"].as_str(),
         ),
-        (Some("main"), Some("direct"), Some(20.0), Some("day")),
+        (
+            Some("main"),
+            Some("direct"),
+            Some(20.0),
+            Some("day"),
+            Some("api_key")
+        ),
         "a member with both budgets answers its day ahead of its month"
     );
     let member = &members[2];
@@ -1558,8 +1572,15 @@ async fn budgets_route_answers_a_members_spend_against_its_budget() {
             member["account_id"].as_str(),
             member["budget_usd"].as_f64(),
             member["budget_period"].as_str(),
+            member["kind"].as_str(),
         ),
-        (Some("main"), Some("direct"), Some(50.0), Some("month")),
+        (
+            Some("main"),
+            Some("direct"),
+            Some(50.0),
+            Some("month"),
+            Some("api_key")
+        ),
         "a budgeted period names its pool, account, and budget"
     );
     assert_eq!(

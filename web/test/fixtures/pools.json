@@ -79,9 +79,15 @@
             "eligible": "eligible",
             "kind": "oauth",
             "budget_daily_usd": null,
-            "budget_monthly_usd": null,
+            "budget_monthly_usd": 30.0,
             "budget_until": null,
-            "spends": []
+            "spends": [
+              {
+                "period": "month",
+                "spent_usd": 0.0,
+                "period_end": 2678400000
+              }
+            ]
           },
           {
             "account_id": "direct",

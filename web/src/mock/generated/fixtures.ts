@@ -2029,7 +2029,17 @@ export const FIXTURES: Record<string, Fixture> = {
       "members": [
         {
           "pool_id": "main",
+          "account_id": "business",
+          "kind": "oauth",
+          "budget_usd": 30,
+          "budget_period": "month",
+          "spent_usd": 0,
+          "period_end": 2678400000
+        },
+        {
+          "pool_id": "main",
           "account_id": "direct",
+          "kind": "api_key",
           "budget_usd": 50,
           "budget_period": "month",
           "spent_usd": 0.0036,
@@ -5883,9 +5893,15 @@ export const FIXTURES: Record<string, Fixture> = {
               "eligible": "eligible",
               "kind": "oauth",
               "budget_daily_usd": null,
-              "budget_monthly_usd": null,
+              "budget_monthly_usd": 30,
               "budget_until": null,
-              "spends": []
+              "spends": [
+                {
+                  "period": "month",
+                  "spent_usd": 0,
+                  "period_end": 2678400000
+                }
+              ]
             },
             {
               "account_id": "direct",

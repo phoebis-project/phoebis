@@ -407,7 +407,7 @@ export class MockApi implements Api {
         ).flatMap(([budgetPeriod, budgetUsd]) => {
           if (budgetUsd === null) return [];
           const spend = m.spends.find((s) => s.period === budgetPeriod);
-          return [{ accountId: m.accountId, budgetPeriod, budgetUsd, periodEnd: spend?.periodEnd ?? null, poolId: p.id, spentUsd: spend?.spentUsd ?? null }];
+          return [{ accountId: m.accountId, budgetPeriod, budgetUsd, kind: m.kind, periodEnd: spend?.periodEnd ?? null, poolId: p.id, spentUsd: spend?.spentUsd ?? null }];
         }),
       ),
     );
