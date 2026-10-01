@@ -200,5 +200,5 @@ the repository that runs the workflow, so a renamed repository publishes under i
 
 ## License
 
-The workspace manifest declares an MIT license, but the repository carries no license file, so its terms are not
-published anywhere a reader can find them.
+`phoebis` is published under the MIT license. The terms are in the `LICENSE` file at the root of the repository, which the
+workspace manifest declares and the container image carries at `/usr/share/doc/phoebis/LICENSE`.

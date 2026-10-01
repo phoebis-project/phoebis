@@ -32,6 +32,7 @@ RUN PHOEBIS_SKIP_UI_BUILD=1 cargo build --release --locked --package phoebis-rou
 # gcr.io/distroless/cc-debian13:nonroot, resolved 2026-09-22
 FROM gcr.io/distroless/cc-debian13@sha256:54df941ed0d06a1bd95ef5e0ce391fd8d9f94b64782dc9a60062727849ee3f97
 COPY --from=builder /src/target/release/phoebis /usr/local/bin/phoebis
+COPY --from=builder /src/LICENSE /usr/share/doc/phoebis/LICENSE
 COPY --from=builder --chown=65532:65532 /var/lib/phoebis /var/lib/phoebis
 WORKDIR /var/lib/phoebis
 ENV PHOEBIS_CONFIG=/etc/phoebis/config.yaml
