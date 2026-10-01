@@ -22,8 +22,9 @@ pub use resolve::{resolve, Candidate, ResolveError};
 pub use select::{
     cohort_hold, effective_warm, lane_key, release_reasons, select, warmth_of, ClientClass,
     CohortHold, Exhaustion, HoldFacts, MigrateReason, Placement, Refusal,
-    SelectRequest, SelectResult, Selection, SelectionTrace, Skipped, Warmth, FAST_CREDITS_REASON,
-    FAST_RATE_LIMIT_REASON, MIGRATE_BAND, MODEL_REJECTED_REASON, REFRESHING_CLASSES,
+    SelectRequest, SelectResult, Selection, SelectionTrace, Skipped, Warmth, BUDGET_WINDOW,
+    FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, MIGRATE_BAND, MODEL_REJECTED_REASON,
+    REFRESHING_CLASSES,
 };
 pub use snapshot::{KeyRefusal, Presented, RegistrySnapshot};
 pub use state::{

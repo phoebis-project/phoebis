@@ -4,7 +4,7 @@
 
 use axum::http::StatusCode;
 use axum::response::Response;
-use phoebis_routing::Exhaustion;
+use phoebis_routing::{Exhaustion, BUDGET_WINDOW};
 
 use crate::anthropic_error;
 use crate::errors::MODEL_REJECTED;
@@ -34,7 +34,7 @@ pub fn exhaustion_response(exhaustion: &Exhaustion, now: i64, request_id: &str) 
             // the caller sees the same overage claim a request at a budget-refused pool gets.
             let claim = if window == "retry_after" {
                 "five_hour"
-            } else if window == "budget" {
+            } else if window == BUDGET_WINDOW {
                 "overage"
             } else {
                 window.as_str()

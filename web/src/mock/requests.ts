@@ -391,15 +391,15 @@ function buildRequests(): RequestLog[] {
   // without the date the router resolved it to, and a pool member the request had not tried answered 404 for that
   // model first. The cost table has no row for that model, so its tokens never land in a priced subscription's
   // share. Nothing here draws from a stream, so every row after it keeps its values.
-  const story = rows.find(
-    (r) =>
-      r.keyId === 'desktop' &&
-      r.kind === 'inference' &&
-      r.outcome === 'succeeded' &&
-      r.sessionId !== null &&
-      (r.accountId === UNPRICED_UPSTREAM || ACCOUNTS.find((a) => a.id === r.accountId)?.kind === 'api_key') &&
-      r.attempts.some((a) => a.outcome === 'rate_limited' && a.cooldownSet),
-  );
+  const storyTurn = (r: RequestLog) =>
+    r.keyId === 'desktop' &&
+    r.kind === 'inference' &&
+    r.outcome === 'succeeded' &&
+    r.sessionId !== null &&
+    (r.accountId === UNPRICED_UPSTREAM || ACCOUNTS.find((a) => a.id === r.accountId)?.kind === 'api_key');
+  // The draw skips by the local hour, so at some clocks no such turn failed over past a 429; the newest turn those
+  // upstreams served then takes the story, which keeps it at every clock.
+  const story = rows.find((r) => storyTurn(r) && r.attempts.some((a) => a.outcome === 'rate_limited' && a.cooldownSet)) ?? rows.find(storyTurn);
   const rejecter = story && LANES.find((l) => l.keyId === story.keyId)?.accountIds.find((id) => !story.attempts.some((a) => a.accountId === id));
   if (story && rejecter) {
     const at = Date.parse(story.at);

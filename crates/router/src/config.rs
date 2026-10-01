@@ -819,7 +819,7 @@ mod tests {
                     "retired-gate",
                     "  profile: claude-code-2.1.269-linux-x64\n  retired_gate: false\n"
                 )),
-                Err(ConfigError::Syntax(_))
+                Err(ConfigError::Syntax(message)) if message.to_string().contains("retired_gate")
             ),
             "retired_gate is a key no build has ever carried, so it is refused like any other unknown key"
         );

@@ -528,7 +528,7 @@ async fn a_fresh_pin_renewed_in_the_same_millisecond_survives_the_first_requests
     up.shutdown().await;
 }
 
-/// A gated credential rule holds the account's first attempt while the registry moves under the request: the
+/// A gated credential rule holds account A's first attempt while the registry moves under the request: the
 /// store write and the reload bump the revision the router task compares against, so releasing the gate sends
 /// the reselect down the stale path, which answers the same 401 admission gives a key the registry does not hold.
 async fn a_stale_keys_refusal_answers_admissions_401(recreated: bool) {
@@ -641,7 +641,7 @@ async fn a_request_whose_key_was_deleted_before_selection_answers_admissions_401
     a_stale_keys_refusal_answers_admissions_401(false).await;
 }
 
-/// A gated credential rule holds the account's first attempt while the pool's model rules tighten under the
+/// A gated credential rule holds account A's first attempt while the pool's model rules tighten under the
 /// request: the reselect after the attempt reads the current rules and refuses on them, as conclusive a
 /// refusal as a key gone from the registry, so it reads rejected whatever the attempt count.
 #[tokio::test]

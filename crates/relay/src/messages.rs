@@ -23,7 +23,7 @@ use phoebis_routing::{
     cohort_hold, resolve, AccountTicket, ClientClass, CohortHold, EvidenceSource, Exhaustion,
     HoldFacts, KeyPermit, KeyRefusal, OverageEvidence, PinRef, Presented,
     Refusal, Report, ResolveError, RouterHandle, SelectRequest, SelectResult, Selection,
-    SelectionTrace, MODEL_REJECTED_REASON,
+    SelectionTrace, BUDGET_WINDOW, MODEL_REJECTED_REASON,
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, MemoryStore,
@@ -1511,8 +1511,8 @@ impl Relay {
             None,
         );
         if let Exhaustion::Timed { window, .. } = exhaustion {
-            if window == "budget" {
-                outcome.obstacle = Some("budget");
+            if window == BUDGET_WINDOW {
+                outcome.obstacle = Some(BUDGET_WINDOW);
             }
         }
         if let Exhaustion::Pinned { obstacle } = exhaustion {

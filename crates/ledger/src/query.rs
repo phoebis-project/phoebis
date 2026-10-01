@@ -748,7 +748,7 @@ pub fn group_of(
 
 /// Minute precision in UTC; the `<id>@<generation>` selector, never the label, tells two holders created in
 /// the same minute apart. `None` for generation 0, which is no creation time, and for a generation that is no
-/// millisecond instant, so the console's label of the same group reads the same.
+/// millisecond instant, so the console and the ledger agree on every generation a key can carry.
 fn created_stamp(generation: &str) -> Option<String> {
     generation
         .parse::<i64>()

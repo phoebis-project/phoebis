@@ -11,7 +11,7 @@ use axum::http::{header, Request};
 use bytes::{Bytes, BytesMut};
 use phoebis_ledger::{PlanTables, PriceTable};
 use phoebis_relay::{RelayOutcome, ServedUnder};
-use phoebis_routing::PinUsage;
+use phoebis_routing::{PinUsage, BUDGET_WINDOW};
 use phoebis_store::{AccountKind, BudgetRow, BudgetScope};
 use http_body_util::BodyExt;
 use serde_json::Value;
@@ -729,7 +729,7 @@ impl Inner {
             self.retry(key, agent_id, Reason::RetryableProbeError, now, delay_ms);
             return;
         }
-        if status == 429 && obstacle == Some("budget") {
+        if status == 429 && obstacle == Some(BUDGET_WINDOW) {
             // The pinned member reached its spend budget between the gate's read and the selection. A pause
             // would outlive the budget (nothing but a real request undoes one); the reason alone leaves the
             // schedule armed, so the gate re-reads the spend on the next poll and releases the probe itself

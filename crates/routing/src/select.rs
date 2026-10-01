@@ -318,6 +318,10 @@ pub const FAST_CREDITS_REASON: &str = "fast_credits";
 /// `Retry-After` timed it, so the in-place retry treats it as any timed throttle.
 pub const FAST_RATE_LIMIT_REASON: &str = "fast_rate_limit";
 
+/// The exhaustion window and the outcome stamp of a probe answered on its pinned member's spend budget: the
+/// selector names it, the relay stamps and claims it, the keepalive reads it.
+pub const BUDGET_WINDOW: &str = "budget";
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Exhaustion {
     /// No candidate is eligible, and every cooldown in the way is a rejection of the request's model.
@@ -664,7 +668,7 @@ pub fn select(
                     return (
                         SelectResult::Exhausted(Exhaustion::Timed {
                             deadline: *until,
-                            window: "budget".into(),
+                            window: BUDGET_WINDOW.into(),
                         }),
                         writes,
                     );

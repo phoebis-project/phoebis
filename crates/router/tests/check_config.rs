@@ -1,4 +1,5 @@
-//! `phoebis check-config` warns about a wide key file mode and refuses a file that sets an unknown key.
+//! `phoebis check-config` warns about a wide key file mode, refuses a file that sets an unknown key, names the routing
+//! keys in its summary, and passes every shipped deploy config.
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};

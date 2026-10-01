@@ -7664,7 +7664,7 @@ export const FIXTURES: Record<string, Fixture> = {
       "uptime_seconds": 0,
       "storage_ok": true,
       "ledger": {
-        "schema_version": 23,
+        "schema_version": 25,
         "written": 15,
         "dropped": 0,
         "write_failures": 0,

@@ -181,8 +181,8 @@ proxy accepts](#what-the-proxy-accepts) says.
 | any other method on a known path | | none | `405` |
 | any unmatched path | | none | `404` |
 
-The query string of a request to either Messages route travels as the client sent it, `?beta=true` included; the
-router routes on the path alone.
+The query string of a request to either Messages route travels as the client sent it, `?beta=true` included; the router
+routes on the path alone.
 
 The client probes `/api/hello` before it sends anything, and ignores the answer. The two `/v1/models` routes
 answer the [models listing](#the-models-listing) below. Every refusal above, including the wrong-method and

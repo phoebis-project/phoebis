@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use crate::record::AttemptRecord;
 use crate::rollup::CostSplit;
@@ -181,14 +181,14 @@ impl PriceTable {
 }
 
 pub struct Pricing {
-    table: RwLock<Arc<PriceTable>>,
+    table: Arc<PriceTable>,
     unknown: AtomicU64,
 }
 
 impl Pricing {
     pub fn new(table: PriceTable) -> Pricing {
         Pricing {
-            table: RwLock::new(Arc::new(table)),
+            table: Arc::new(table),
             unknown: AtomicU64::new(0),
         }
     }
@@ -205,10 +205,7 @@ impl Pricing {
     }
 
     pub fn current(&self) -> Arc<PriceTable> {
-        self.table
-            .read()
-            .expect("price table lock poisoned")
-            .clone()
+        self.table.clone()
     }
 
     pub fn unknown_models(&self) -> u64 {
