@@ -955,12 +955,7 @@ mod tests {
     }
 
     fn key(session: &str) -> MemoryKey {
-        MemoryKey {
-            key_id: "k".into(),
-            key_generation: 1,
-            session_id: session.into(),
-            agent_id: "main".into(),
-        }
+        MemoryKey::for_session("k", 1, session, "main")
     }
 
     fn row(incarnation: u64, revision: u64) -> AccountRow {

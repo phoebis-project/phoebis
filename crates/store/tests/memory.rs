@@ -3,12 +3,7 @@
 use phoebis_store::{MemoryKey, MemoryRecord, MemoryStore, StorageKey, Store};
 
 fn key(agent: &str) -> MemoryKey {
-    MemoryKey {
-        key_id: "desktop".into(),
-        key_generation: 1_000,
-        session_id: "s1".into(),
-        agent_id: agent.into(),
-    }
+    MemoryKey::for_session("desktop", 1_000, "s1", agent)
 }
 
 fn record(version: u32, payload: &str, last_seen: i64) -> MemoryRecord {
@@ -66,5 +61,43 @@ fn rows_outlive_a_reopen_of_the_on_disk_store() {
         store.load(&key("main")).unwrap(),
         Some(record(1, "{}", 1_000))
     );
-    assert_eq!(store.schema_version().unwrap(), 39);
+    assert_eq!(store.schema_version().unwrap(), 40);
+}
+
+#[test]
+fn rows_keyed_s1_and_session_s1_both_survive_the_kind_prefix() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("router.sqlite");
+    let storage = StorageKey::generate();
+    drop(Store::open(&path, &storage).unwrap());
+    // Two version-39 rows under one key, generation and agent: a session `s1` and a session whose own id is
+    // `session:s1`, both valid ids, each with its own payload.
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch(
+        "INSERT INTO session_memory (key_id, key_generation, session_id, agent_id, record_version, payload, last_seen) \
+         VALUES ('desktop', 1000, 's1', 'main', 1, '{\"prompt_id\":\"p1\"}', 1000); \
+         INSERT INTO session_memory (key_id, key_generation, session_id, agent_id, record_version, payload, last_seen) \
+         VALUES ('desktop', 1000, 'session:s1', 'main', 1, '{\"prompt_id\":\"p2\"}', 1000); \
+         UPDATE meta SET value = '39' WHERE key = 'schema_version';",
+    )
+    .unwrap();
+    drop(conn);
+    let store = Store::open(&path, &storage).expect("the migration completes and the store opens");
+    assert_eq!(store.schema_version().unwrap(), 40);
+    let payload = |session: &str| {
+        store
+            .load(&MemoryKey::for_session("desktop", 1_000, session, "main"))
+            .unwrap()
+            .map(|r| r.payload)
+    };
+    assert_eq!(
+        payload("s1"),
+        Some(r#"{"prompt_id":"p1"}"#.into()),
+        "the bare id reads back under its prefix"
+    );
+    assert_eq!(
+        payload("session:s1"),
+        Some(r#"{"prompt_id":"p2"}"#.into()),
+        "and its neighbour keeps its own row"
+    );
 }

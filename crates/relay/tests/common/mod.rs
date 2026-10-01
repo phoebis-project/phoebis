@@ -35,6 +35,14 @@ pub const CLAUDE_CLI_USER_AGENT: &str = "claude-cli/2.1.269 (external, sdk-cli)"
 pub const KEY: &str = "phoebis-testkey";
 /// A raw Messages caller, not Claude Code.
 pub const SDK_USER_AGENT: &str = "anthropic-sdk-python/0.40.0";
+
+pub fn user(text: &str) -> serde_json::Value {
+    serde_json::json!({"role": "user", "content": text})
+}
+
+pub fn assistant(text: &str) -> serde_json::Value {
+    serde_json::json!({"role": "assistant", "content": text})
+}
 pub const NOW: i64 = 1_000_000;
 /// The catalog cache's window in every harness but `harness_with_catalog_window`'s: the bootstrap default.
 pub const CATALOG_WINDOW: Duration = Duration::from_secs(60);

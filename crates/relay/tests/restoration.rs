@@ -622,12 +622,12 @@ async fn a_streamed_commits_request_id_and_a_json_commits_request_id_both_reach_
     )
     .await;
     let app = h.app.clone();
-    let key = MemoryKey {
-        key_id: "desktop".into(),
-        key_generation: h.store.api_key("desktop").unwrap().unwrap().created_at,
-        session_id: "s-1".into(),
-        agent_id: "main".into(),
-    };
+    let key = MemoryKey::for_session(
+        "desktop",
+        h.store.api_key("desktop").unwrap().unwrap().created_at,
+        "s-1",
+        "main",
+    );
     let resp = app
         .clone()
         .oneshot(cli_request("s-1", None, None))
@@ -711,12 +711,12 @@ async fn the_previous_request_id_and_the_prompt_id_survive_a_restart_through_the
     let prompt = field(&billing_line(&up.requests()[0].body), "cc_prompt_id")
         .unwrap()
         .to_string();
-    let key = MemoryKey {
-        key_id: "desktop".into(),
-        key_generation: h.store.api_key("desktop").unwrap().unwrap().created_at,
-        session_id: "s-1".into(),
-        agent_id: "main".into(),
-    };
+    let key = MemoryKey::for_session(
+        "desktop",
+        h.store.api_key("desktop").unwrap().unwrap().created_at,
+        "s-1",
+        "main",
+    );
     assert_eq!(
         h.relay
             .previous(&key, "acct", "claude-sonnet-4-5")

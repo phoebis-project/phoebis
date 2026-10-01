@@ -248,12 +248,7 @@ async fn a_flush_after_the_answer_completes_carries_its_id_to_the_store() {
     // The key's own generation is the store's insertion stamp, not the harness clock: `insert_api_key` stamps
     // it from the wall clock.
     let generation = h.store.api_key("desktop").unwrap().unwrap().created_at;
-    let key = MemoryKey {
-        key_id: "desktop".into(),
-        key_generation: generation,
-        session_id: "s1".into(),
-        agent_id: "main".into(),
-    };
+    let key = MemoryKey::for_session("desktop", generation, "s1", "main");
     // A spawned write can land after the flush unless the hand-off is awaited ahead of it; the drain above is
     // what makes the flush see it.
     let record = h
@@ -838,12 +833,12 @@ async fn a_probe_names_the_sessions_previous_message_id_and_its_own_answer_is_ne
         .await;
     assert_eq!(resp.status(), 200);
     assert_diagnosed_turn(&up.requests()[2], Some("msg_turn"));
-    let key = phoebis_relay::MemoryKey {
-        key_id: "desktop".into(),
-        key_generation: h.store.api_key("desktop").unwrap().unwrap().created_at,
-        session_id: "s1".into(),
-        agent_id: "main".into(),
-    };
+    let key = phoebis_relay::MemoryKey::for_session(
+        "desktop",
+        h.store.api_key("desktop").unwrap().unwrap().created_at,
+        "s1",
+        "main",
+    );
     assert_eq!(
         h.relay
             .previous(&key, "acct", "claude-sonnet-4-5")

@@ -69,11 +69,12 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
     (37, V37),
     (38, V38),
     (39, V39),
+    (40, V40),
 ];
 
 /// The newest schema version this build knows how to read. `prepare` refuses a registry stamped past it
 /// rather than skip migrations it does not carry and misread the tables that follow.
-pub const SCHEMA_VERSION: u32 = 39;
+pub const SCHEMA_VERSION: u32 = 40;
 
 const V2: &str = r#"
 CREATE TABLE IF NOT EXISTS account_models (
@@ -576,4 +577,21 @@ DELETE FROM alert_rules WHERE kind = 'meter_drift';
 const V39: &str = r#"
 UPDATE pools SET cache_ttl_json = json_remove(cache_ttl_json, '$.plan.keepalive', '$.metered.keepalive')
 WHERE json_valid(cache_ttl_json) AND json_type(cache_ttl_json) = 'object';
+"#;
+
+// Every row written before this version was keyed on the client's own session id.
+// Rebuilt rather than updated in place: `session_id` is in the primary key, and a
+// bare `s1` prefixed beside a stored `session:s1` would collide mid-update.
+const V40: &str = r#"
+CREATE TABLE session_memory_next (
+  key_id TEXT NOT NULL, key_generation INTEGER NOT NULL, session_id TEXT NOT NULL, agent_id TEXT NOT NULL,
+  record_version INTEGER NOT NULL, payload TEXT NOT NULL, last_seen INTEGER NOT NULL,
+  PRIMARY KEY (key_id, key_generation, session_id, agent_id)
+);
+INSERT INTO session_memory_next (key_id, key_generation, session_id, agent_id, record_version, payload, last_seen)
+  SELECT key_id, key_generation, 'session:' || session_id, agent_id, record_version, payload, last_seen
+  FROM session_memory;
+DROP TABLE session_memory;
+ALTER TABLE session_memory_next RENAME TO session_memory;
+CREATE INDEX session_memory_seen ON session_memory (last_seen);
 "#;

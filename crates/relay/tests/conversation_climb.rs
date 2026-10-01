@@ -13,14 +13,6 @@ use tower::ServiceExt;
 
 const MODEL: &str = "claude-sonnet-4-5";
 
-fn user(text: &str) -> Value {
-    json!({"role": "user", "content": text})
-}
-
-fn assistant(text: &str) -> Value {
-    json!({"role": "assistant", "content": text})
-}
-
 fn body(messages: Vec<Value>) -> Value {
     json!({"model": MODEL, "messages": messages})
 }

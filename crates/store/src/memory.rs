@@ -12,11 +12,27 @@ pub struct MemoryKey {
     /// The holder's `created_at`. An id is reusable, so entries of the key that held it before are another
     /// holder's and must never be read as the current one's.
     pub key_generation: i64,
+    /// The conversation under the prefix `session:<id>`, the client's own session id.
     pub session_id: String,
     pub agent_id: String,
 }
 
 impl MemoryKey {
+    /// The key of a conversation the client named by its own session id.
+    pub fn for_session(
+        key_id: &str,
+        key_generation: i64,
+        session_id: &str,
+        agent_id: &str,
+    ) -> MemoryKey {
+        MemoryKey {
+            key_id: key_id.to_string(),
+            key_generation,
+            session_id: format!("session:{session_id}"),
+            agent_id: agent_id.to_string(),
+        }
+    }
+
     /// The same key under another agent: the parent a subagent inherits from shares the key, the session,
     /// and the generation.
     pub fn with_agent(&self, agent: &str) -> MemoryKey {
