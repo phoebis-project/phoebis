@@ -455,11 +455,12 @@ Any move records a `pin_migrated` event with reason `cooldown`, `drain`, `fast_l
 `return_to_plan`, `shed`, or `spent`: `cooldown` and `mark` when a failover or a credential mark moved the session,
 `fast_lane` when a fast-mode rejection moved the session, the others after the rule above that moved it. A pin released
 without a move records `pin_expired` with `reasons`, every fact the selection found against the account: `attempted`,
-`cooldown`, `deleted`, `expired`, `fast_credits` (a fast request's pinned upstream whose `fast_credits` row stands or
-whose usage credits the poll reads as unavailable) and `fast_rate_limit` (one whose `fast` row is the blocking row that
-stands latest), `overage`, `paused`, `spent`, `subscription_ended`, `unserved`, the account's state when it cannot serve
-(`disconnected`, `funding_required`, `reauth_required`, `unpaired`), or `released` when the selection found nothing else
-against the account, as with a move whose destination emptied. A pin whose creating request was answered 400, 401, 403,
+`budget` (the pinned member has reached one of its spend budgets), `cooldown`, `deleted`, `expired`, `fast_credits` (a
+fast request's pinned upstream whose `fast_credits` row stands or whose usage credits the poll reads as unavailable) and
+`fast_rate_limit` (one whose `fast` row is the blocking row that stands latest), `overage`, `paused`, `spent`,
+`subscription_ended`, `unserved`, the account's state when it cannot serve (`disconnected`, `funding_required`,
+`reauth_required`, `unpaired`), or `released` when the selection found nothing else against the account, as with a move
+whose destination emptied. A pin whose creating request was answered 400, 401, 403,
 or 404, with no cooldown or mark on the account and no other turn of the session renewing it meanwhile, records the
 single reason `client_error`: it never served, so the session's next request is placed afresh rather than moved.
 Releasing a session by hand, from the Sessions view or `POST /admin/sessions/{key}/{session}/release`, expires its pin

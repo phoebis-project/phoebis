@@ -711,10 +711,23 @@ textarea.input {
   background: var(--surface-3);
 }
 
+/* Every menu sits in a table, and the size is pinned to the table's so a list drawn outside it reads the same. */
 .menu__list {
   right: 0;
   left: auto;
   min-width: 160px;
+  font-size: 13px;
+}
+
+.menu__list--up {
+  top: auto;
+  bottom: calc(100% + 4px);
+}
+
+.menu__list--float {
+  position: fixed;
+  right: auto;
+  bottom: auto;
 }
 
 .menu__list .is-danger {
@@ -912,7 +925,9 @@ textarea.input {
 }
 
 /* Sized so the pool dialog's 23 entries fit the rail's 623 px at 1280 by 800 with room: 18 group rows of 24.25 px,
-   5 parent rows of 19.75 px, 2 px inside a run, 8 px between runs and 8 px of padding sum to 619.25 px. */
+   5 parent rows of 19.75 px, 2 px inside a run, 8 px between runs and 8 px of padding sum to 619.25 px. Past that, or
+   on a shorter viewport, the rail scrolls and each run's parent heading holds the top until the next run's heading
+   pushes it off. */
 .dialog-rail {
   display: flex;
   flex-direction: column;
@@ -929,7 +944,12 @@ textarea.input {
   gap: 2px;
 }
 
+/* A sticky edge sits inside the scroller's padding, so the heading takes back the rail's 8 px to hold flush at its top,
+   where no group shows above it. */
 .dialog-rail__parent {
+  position: sticky;
+  top: -8px;
+  z-index: 1;
   padding: 3px 10px;
   font-size: 11px;
   font-weight: 600;
@@ -938,7 +958,7 @@ textarea.input {
   text-align: left;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  background: none;
+  background: var(--surface-2);
   border: 0;
 }
 
@@ -1049,6 +1069,15 @@ textarea.input {
    combinators leave a dialog opened from a group, such as the cost reference, scrolling its own table. */
 .dialog-group > .cells > .table-wrap:has(> .keys-table) {
   overflow: visible;
+}
+
+/* The Keys page's table needs 645 px for the seeded keys, which its card holds from a 1248 px window on, beside the
+   lifetime cost card; there the wrap stops clipping, so a row menu can drop past the table's last row. Narrower, the
+   wrap keeps its sideways scroll and the menu takes whichever side has the room. */
+@media (min-width: 1248px) {
+  .card--table > .table-wrap:has(> .keys-page-table) {
+    overflow: visible;
+  }
 }
 
 /* The cell grid: two equal columns with the gutter; a child spans both unless it is one of a pair. */

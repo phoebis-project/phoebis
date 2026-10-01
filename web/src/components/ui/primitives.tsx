@@ -1,4 +1,5 @@
-import { createContext, Fragment, useContext, useEffect, useId, useRef, useState, type ButtonHTMLAttributes, type CSSProperties, type HTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes } from 'react';
+import { createContext, Fragment, useContext, useEffect, useId, useLayoutEffect, useRef, useState, type ButtonHTMLAttributes, type CSSProperties, type HTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes } from 'react';
+import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
 import type { BadgeTone } from '@/lib/quota';
 import { IconCheck, IconChevron, IconCopy, IconSearch, IconWarning, IconX } from './icons';
@@ -513,42 +514,103 @@ export function ConfirmDialog({ open, onClose, onConfirm, title, body, confirmLa
   );
 }
 
+type MenuPlacement = { kind: 'down' } | { kind: 'up' } | { kind: 'float'; left: number; top: number };
+const IN_FLOW: MenuPlacement = { kind: 'down' };
+const CLIPPING = new Set(['auto', 'clip', 'hidden', 'scroll']);
+
 export function Menu({ items, label = 'Actions' }: { items: { danger?: boolean; disabled?: boolean; label: string; onClick: () => void; title?: string }[]; label?: string }) {
   const [open, setOpen] = useState(false);
+  const [placement, setPlacement] = useState<MenuPlacement>(IN_FLOW);
   const ref = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  // Where the trigger stood when the list was placed, so a fixed layer can tell whether the page has moved under it.
+  const anchor = useRef<DOMRect | null>(null);
   useEffect(() => {
     if (!open) return;
     const onDoc = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+      const target = e.target as Node;
+      if (!ref.current?.contains(target) && !listRef.current?.contains(target)) setOpen(false);
     };
     document.addEventListener('mousedown', onDoc);
     return () => document.removeEventListener('mousedown', onDoc);
   }, [open]);
+  // Measured once per opening, after the list has drawn below its trigger and before the browser paints it. A table
+  // wrap that scrolls sideways clips on both axes, so its edges bound the list as much as the viewport's do. A row
+  // too short for the list on either side inside its wrap (a table filtered to one row on a narrow window) moves the
+  // list out of the wrap, into a fixed layer at the trigger.
+  useLayoutEffect(() => {
+    if (!open) {
+      setPlacement(IN_FLOW);
+      return;
+    }
+    if (!ref.current) return;
+    const trigger = ref.current.getBoundingClientRect();
+    anchor.current = trigger;
+    // A wrap bounds the list only while it clips: the Keys page's rule sets it `overflow: visible` where it fits. The
+    // clipping values are named because a page without styles, as in the smoke run, reads the property empty.
+    const wrap = ref.current.closest<HTMLElement>('.table-wrap');
+    const clip = wrap && CLIPPING.has(getComputedStyle(wrap).overflowY) ? wrap.getBoundingClientRect() : undefined;
+    const floor = clip ? Math.min(clip.bottom, window.innerHeight) : window.innerHeight;
+    const ceiling = clip ? Math.max(clip.top, 0) : 0;
+    const need = (listRef.current?.offsetHeight ?? 0) + 4;
+    const width = listRef.current?.offsetWidth ?? 0;
+    if (floor - trigger.bottom >= need) setPlacement(IN_FLOW);
+    else if (trigger.top - ceiling >= need) setPlacement({ kind: 'up' });
+    else {
+      const below = window.innerHeight - trigger.bottom >= need;
+      setPlacement({ kind: 'float', left: trigger.right - width, top: below ? trigger.bottom + 4 : trigger.top - need });
+    }
+  }, [open]);
+  // A fixed layer stays where it was drawn while the page moves under it, so it closes rather than float beside
+  // another row. A scroll is read by whether it moved the trigger: the scroll that brought the row into view can
+  // report after the click that opened the list, and a scroll inside the list or in another pane moves nothing.
+  const floating = open && placement.kind === 'float';
+  useEffect(() => {
+    if (!floating) return;
+    const onScroll = () => {
+      const at = ref.current?.getBoundingClientRect();
+      if (!at || !anchor.current || at.top !== anchor.current.top || at.left !== anchor.current.left) setOpen(false);
+    };
+    const onResize = () => setOpen(false);
+    window.addEventListener('scroll', onScroll, true);
+    window.addEventListener('resize', onResize);
+    return () => {
+      window.removeEventListener('scroll', onScroll, true);
+      window.removeEventListener('resize', onResize);
+    };
+  }, [floating]);
+  const list = open && (
+    <div
+      ref={listRef}
+      className={placement.kind === 'down' ? 'menu__list' : `menu__list menu__list--${placement.kind}`}
+      role="menu"
+      style={placement.kind === 'float' ? { left: placement.left, top: placement.top } : undefined}
+    >
+      {items.map((item) => (
+        <button
+          key={item.label}
+          type="button"
+          role="menuitem"
+          className={item.danger ? 'is-danger' : ''}
+          disabled={item.disabled}
+          title={item.title}
+          onClick={() => {
+            setOpen(false);
+            item.onClick();
+          }}
+        >
+          {item.label}
+        </button>
+      ))}
+    </div>
+  );
   return (
     <div className="menu" ref={ref}>
       <button type="button" className="menu__trigger" aria-haspopup="menu" aria-expanded={open} aria-label={label} onClick={() => setOpen((v) => !v)}>
         <span aria-hidden>···</span>
       </button>
-      {open && (
-        <div className="menu__list" role="menu">
-          {items.map((item) => (
-            <button
-              key={item.label}
-              type="button"
-              role="menuitem"
-              className={item.danger ? 'is-danger' : ''}
-              disabled={item.disabled}
-              title={item.title}
-              onClick={() => {
-                setOpen(false);
-                item.onClick();
-              }}
-            >
-              {item.label}
-            </button>
-          ))}
-        </div>
-      )}
+      {/* A modal dialog sits in the top layer, so a layer portalled to the body would draw under it. */}
+      {floating && ref.current ? createPortal(list, ref.current.closest('dialog[open]') ?? document.body) : list}
     </div>
   );
 }

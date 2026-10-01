@@ -966,6 +966,15 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
     .filter((card) => [...card.querySelectorAll('.badge')].some((b) => b.textContent?.trim() === 'server-side auto mode off'))
     .map((card) => card.querySelector('.card__title')?.textContent?.trim());
   results.push({ name: '/pools the card of a pool with server-side auto mode off carries the badge, and no other card does', ok: JSON.stringify(badged) === '["studio"]', missing: badged });
+  const rowOf = (card, label) => [...card.querySelectorAll('.pool__policy > div')].find((row) => row.querySelector('dt')?.textContent?.trim() === label);
+  const studio = [...m.container.querySelectorAll('.pool')].find((card) => card.querySelector('.card__title')?.textContent?.trim() === 'studio');
+  const autoRows = [...m.container.querySelectorAll('.pool')].map((card) => rowOf(card, 'Auto mode')).filter(Boolean);
+  const ttlChips = [...m.container.querySelectorAll('.pool')].flatMap((card) => [...(rowOf(card, 'Cache TTL')?.querySelectorAll('.badge') ?? [])].map((b) => b.textContent?.trim()));
+  results.push({
+    name: '/pools the auto-mode badge sits on an Auto mode row of its own, drawn only on the card whose check is off',
+    ok: autoRows.length === 1 && studio !== undefined && autoRows[0] === rowOf(studio, 'Auto mode') && autoRows[0]?.querySelector('dd .badge')?.textContent?.trim() === 'server-side auto mode off' && !ttlChips.includes('server-side auto mode off'),
+    missing: [`${autoRows.length} Auto mode rows`, autoRows[0]?.textContent ?? 'no row', ...ttlChips],
+  });
 }
 {
   const cardMembers = [...(m.container.querySelector('.pool__members ul')?.querySelectorAll('li') ?? [])].map((li) => `${li.children[0]?.textContent?.trim()} ${li.children[1]?.textContent?.trim()}`);
@@ -2088,6 +2097,21 @@ m.unmount();
 m = await mount('/keys');
 expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost', 'Lifetime cost by key', 'phoebis-8f2a', 'phoebis-c41d', 'phoebis-19e7', 'Pool rules', 'revoked', 'Create API key', 'Never', 'still on the previous secret']);
 {
+  // jsdom draws no styles and lays nothing out, so the menu reads the viewport's room below and keeps the list in flow.
+  const last = [...m.container.querySelectorAll('.card--table tbody tr')].pop();
+  last?.querySelector('.menu__trigger')?.click();
+  await m.settle(100);
+  const list = last?.querySelector('.menu > .menu__list');
+  const items = [...(list?.querySelectorAll('[role="menuitem"]') ?? [])].map((b) => b.textContent?.trim());
+  results.push({
+    name: "/keys the last row's Actions menu opens its list in flow with the row's four actions",
+    ok: list?.getAttribute('role') === 'menu' && !list.classList.contains('menu__list--up') && !list.classList.contains('menu__list--float') && JSON.stringify(items) === JSON.stringify(['Edit', 'Rotate', 'Revoke', 'Delete']),
+    missing: [list ? list.className : 'no list in the row', ...items],
+  });
+  last?.querySelector('.menu__trigger')?.click();
+  await m.settle(100);
+}
+{
   const retired = [...m.container.querySelectorAll('.card--table tbody tr .sub')].find((s) => (s.textContent ?? '').includes('still on the previous secret'));
   results.push({
     name: '/keys a rotated key counts the sessions still on the previous secret',
@@ -3168,6 +3192,21 @@ if (failoverRow) {
     const drawn = traceOf(m.container.querySelector('.drawer .selection-trace'));
     const waited = strategyHold.attempts[0].selection.cohortHold.waitedOn;
     results.push({ name: '/requests drawer names the last account a hold with no cohort waited on and the wait', ok: drawn.head.includes('fresh placement') && drawn.head.includes(`held 1.3 s on ${waited[waited.length - 1]} before placing`), missing: [strategyHold.id, drawn.head] });
+  }
+  // With nothing dispatched, no attempt's trace can name the hold, so the drawer reads the row's own.
+  const unplaced = requests.find((r) => r.held !== null && r.attempts.length === 0);
+  results.push({ name: 'fixture: a request held with nothing dispatched', ok: unplaced !== undefined, missing: [] });
+  if (unplaced) {
+    await m.navigate(`/requests/${unplaced.id}`);
+    await m.settle(300);
+    const line = m.container.querySelector('.drawer .attempt__hold')?.textContent?.trim() ?? 'no hold line';
+    const on = unplaced.held.cohort ?? unplaced.held.waitedOn.at(-1);
+    const wait = unplaced.held.heldMs >= 1000 ? `${(unplaced.held.heldMs / 1000).toFixed(unplaced.held.heldMs >= 10_000 ? 0 : 1)} s` : `${Math.round(unplaced.held.heldMs)} ms`;
+    results.push({
+      name: '/requests drawer of a request held with nothing dispatched names the hold and its wait under Attempts',
+      ok: line === `held ${wait} on ${on}` && m.container.querySelectorAll('.drawer .attempt').length === 0 && m.container.querySelectorAll('.drawer .selection-trace').length === 0,
+      missing: [unplaced.id, line],
+    });
   }
 }
 {

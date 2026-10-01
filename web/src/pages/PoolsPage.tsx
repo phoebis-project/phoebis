@@ -489,6 +489,16 @@ function PoolCard({
               <dd title={QUOTA_HEADERS_HINT}>hidden</dd>
             </div>
           )}
+          {/* The badge is wider than any column's value, so on a column of its own it would push the grid past a
+              narrow card. */}
+          {!pool.autoModeServer && (
+            <div className="pool__policy-wide">
+              <dt>Auto mode</dt>
+              <dd>
+                <Badge tone="neutral">server-side auto mode off</Badge>
+              </dd>
+            </div>
+          )}
           <div className="pool__policy-wide">
             <dt>Placement</dt>
             <dd>
@@ -539,7 +549,6 @@ function PoolCard({
                 )}
                 {/* Outside the branch above: a pool that rewrites no breakpoint can still force diagnostics. */}
                 {pool.cacheDiagnostics !== null && <Badge tone="neutral">diagnostics {pool.cacheDiagnostics ? 'on' : 'off'}</Badge>}
-                {!pool.autoModeServer && <Badge tone="neutral">server-side auto mode off</Badge>}
               </span>
             </dd>
           </div>

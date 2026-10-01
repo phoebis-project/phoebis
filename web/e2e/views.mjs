@@ -192,7 +192,9 @@ async function atRest() {
  * frame keeps its fixed size, no rail row wraps and the rail holds all 23 entries without scrolling at the pass's
  * viewport. The two longest labels are read chosen, refused, and both, since the chosen weight and the refusal dot
  * widen an entry. The numbers go to the measurements whatever the outcome, since the rail's fit rests on text widths
- * the browser's font decides.
+ * the browser's font decides. Then the rail outgrows its height twice, on a 700 px viewport and with six more entries
+ * at 800 px: it scrolls, and once scrolled to its end the parent heading of the run passing its top holds there in
+ * the rail's own colour, over the groups that pass under it.
  */
 async function groupedDialogFixture(theme) {
   const say = (what) => failures.push(`${theme} /fixtures/grouped-dialog: ${what}`);
@@ -238,6 +240,44 @@ async function groupedDialogFixture(theme) {
     if (read.wrapped.length) sayIn(`${read.wrapped.join(', ')} wraps onto a second line`);
     if (read.rail.scrollHeight > read.rail.clientHeight) sayIn(`the rail scrolls: ${read.rail.scrollHeight} px of entries in ${read.rail.clientHeight} px`);
   };
+  const scrolls = async (state, frame) => {
+    await page.evaluate(() => {
+      const rail = document.querySelector('dialog[open] .dialog-rail');
+      rail.scrollTop = rail.scrollHeight;
+    });
+    await settle();
+    const read = await page.evaluate(() => {
+      const dialog = document.querySelector('dialog[open]');
+      const rail = dialog.querySelector('.dialog-rail');
+      const top = rail.getBoundingClientRect().top;
+      // The run passing the rail's top, by more than its heading's height, so its own end has not begun to push it off.
+      const run = [...rail.querySelectorAll('.dialog-rail__run')].find((r) => {
+        const box = r.getBoundingClientRect();
+        const heading = r.querySelector('.dialog-rail__parent')?.getBoundingClientRect().height ?? 0;
+        return box.top < top && box.bottom > top + heading;
+      });
+      const heading = run?.querySelector('.dialog-rail__parent');
+      const at = heading?.getBoundingClientRect();
+      const hit = at ? document.elementFromPoint(at.left + at.width / 2, at.top + at.height / 2) : null;
+      const box = dialog.getBoundingClientRect();
+      return {
+        frame: { height: box.height, width: box.width },
+        heading: heading
+          ? { background: getComputedStyle(heading).backgroundColor, covers: hit !== null && heading.contains(hit), label: heading.dataset.parent, offset: at.top - top, radius: getComputedStyle(heading).borderRadius }
+          : null,
+        rail: { background: getComputedStyle(rail).backgroundColor, clientHeight: rail.clientHeight, scrollHeight: rail.scrollHeight, scrollTop: rail.scrollTop },
+      };
+    });
+    measurements.push(`${theme} /fixtures/grouped-dialog ${state} ${JSON.stringify(read)}`);
+    const sayIn = (what) => say(`${state}: ${what}`);
+    if (read.frame.width !== frame.width || read.frame.height !== frame.height) sayIn(`the frame measures ${read.frame.width} by ${read.frame.height}, not ${frame.width} by ${frame.height}`);
+    if (read.rail.scrollHeight <= read.rail.clientHeight) sayIn(`the rail does not scroll: ${read.rail.scrollHeight} px of entries in ${read.rail.clientHeight} px`);
+    if (!read.heading) return sayIn('no run passes the rail\'s top once it is scrolled to its end');
+    if (Math.abs(read.heading.offset) > 0.5) sayIn(`the ${read.heading.label} heading sits ${read.heading.offset} px from the rail's top, not at it`);
+    if (!read.heading.covers) sayIn(`the ${read.heading.label} heading is covered at its centre`);
+    if (read.heading.background !== read.rail.background) sayIn(`the ${read.heading.label} heading is drawn in ${read.heading.background}, not the rail's ${read.rail.background}`);
+    if (read.heading.radius !== '0px') sayIn(`the ${read.heading.label} heading rounds its corners by ${read.heading.radius}, so the groups show past them`);
+  };
   try {
     await load('');
     await check('Identity chosen');
@@ -251,9 +291,17 @@ async function groupedDialogFixture(theme) {
     await check('Overage and plan end chosen, both refused');
     await choose('utilization');
     await check('Utilization thresholds chosen, both refused');
+    // min(800px, 100vh - 48px) at 700 px is 652 px.
+    await page.setViewportSize({ height: 700, width: 1280 });
+    await load('');
+    await scrolls('at 700 px', { height: 652, width: 1040 });
+    await page.setViewportSize({ height: 800, width: 1280 });
+    await load('?extra=6');
+    await scrolls('with six more entries', { height: 752, width: 1040 });
   } catch (error) {
     say(error instanceof Error ? error.message : String(error));
   }
+  await page.setViewportSize({ height: 800, width: 1280 });
 }
 
 async function poolChips(theme) {
@@ -885,6 +933,86 @@ async function poolKeyMenus(theme) {
     await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => say(`${pool}'s dialog stayed open after Escape`));
   }
   if (mock && !(counts.some((n) => n > 1) && counts.includes(1))) say(`the story's pools hold ${JSON.stringify(counts)} keys, not one pool with several and one with a single key`);
+  await page.evaluate((y) => window.scrollTo(0, y), scrolled);
+  await atRest();
+}
+
+/**
+ * The Keys page's last Actions menu at the pass's viewport and at the 760 px strip, on the full table and on the table
+ * filtered to its last key's name through the search field, with the page scrolled as far down as it goes so the row
+ * sits as low as it can: whichever side the list takes, each item takes a pointer at its centre and the list lies
+ * inside the viewport. One short row at the strip leaves the list less room than it needs on both sides inside the
+ * table's clipping wrapper, so there the list must leave the table for a layer of its own.
+ */
+async function keysPageMenus(theme) {
+  const say = (what) => failures.push(`${theme} /keys menu: ${what}`);
+  const rows = page.locator('.card--table tbody tr');
+  const search = page.getByPlaceholder('Search keys', { exact: true });
+  const scrolled = await page.evaluate(() => window.scrollY);
+  const read = async (state) => {
+    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+    await settle();
+    const trigger = rows.last().locator('.menu__trigger');
+    await trigger.click();
+    await settle();
+    const found = await page.evaluate(() => {
+      const lists = document.querySelectorAll('.menu__list');
+      const list = lists[0];
+      if (lists.length !== 1) return { lists: lists.length };
+      const box = list.getBoundingClientRect();
+      const node = document.querySelector('.card--table > .table-wrap');
+      const wrap = node?.getBoundingClientRect();
+      const items = [...list.querySelectorAll('[role="menuitem"]')].map((item) => {
+        const at = item.getBoundingClientRect();
+        const x = Math.round(at.left + at.width / 2);
+        const y = Math.round(at.top + at.height / 2);
+        const hit = document.elementFromPoint(x, y);
+        return { at: hit ? `${hit.tagName.toLowerCase()}.${hit.className}` : 'nothing', hit: hit !== null && item.contains(hit), label: item.textContent?.trim(), x, y };
+      });
+      return {
+        edges: { bottom: box.bottom, left: box.left, right: box.right, top: box.top },
+        inside: box.top >= 0 && box.left >= 0 && box.bottom <= window.innerHeight && box.right <= window.innerWidth,
+        items,
+        lists: 1,
+        placement: list.classList.contains('menu__list--float') ? 'float' : list.classList.contains('menu__list--up') ? 'up' : 'down',
+        viewport: { height: window.innerHeight, width: window.innerWidth },
+        wrap: wrap ? { bottom: wrap.bottom, clientWidth: node.clientWidth, overflow: getComputedStyle(node).overflowX, scrollWidth: node.scrollWidth, top: wrap.top } : null,
+      };
+    });
+    await trigger.click();
+    await settle();
+    const width = page.viewportSize()?.width;
+    measurements.push(`${theme} /keys menu at ${width} px, ${state} ${JSON.stringify(found)}`);
+    const sayIn = (what) => say(`at ${width} px, ${state}: ${what}`);
+    if (found.lists !== 1) return sayIn(`${found.lists} lists are open, not one`);
+    if (found.items.length === 0) sayIn('the list draws no item');
+    for (const item of found.items.filter((it) => !it.hit)) sayIn(`item ${item.label} takes no pointer at its centre (${item.x}, ${item.y}): ${item.at} lies there`);
+    if (!found.inside) sayIn(`the list's edges ${JSON.stringify(found.edges)} leave the ${found.viewport.width} by ${found.viewport.height} viewport`);
+    // The wrap stops clipping only where the table fits it, so a table wider than its card still scrolls sideways.
+    if (found.wrap?.overflow === 'visible' && found.wrap.scrollWidth > found.wrap.clientWidth) sayIn(`the wrap clips nothing while its table runs ${found.wrap.scrollWidth} px in ${found.wrap.clientWidth} px`);
+    return found;
+  };
+  for (const width of [1280, 760]) {
+    try {
+      await page.setViewportSize({ height: 800, width });
+      await settle();
+      const full = await rows.count();
+      await read(`the full table of ${full} rows`);
+      const name = ((await rows.last().locator('td').first().locator('b').textContent()) ?? '').trim();
+      await search.fill(name);
+      await settle();
+      const filtered = await rows.count();
+      if (filtered !== 1) say(`at ${width} px the search for ${JSON.stringify(name)} leaves ${filtered} rows, not one`);
+      const one = await read(`the table filtered to ${JSON.stringify(name)}`);
+      if (width === 760 && one?.placement !== 'float') say(`at 760 px the filtered table's menu takes ${one?.placement}, not a layer of its own`);
+    } catch (error) {
+      say(`at ${width} px: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    await search.fill('').catch(() => {});
+    await settle();
+  }
+  await page.setViewportSize({ height: 800, width: 1280 });
+  await settle();
   await page.evaluate((y) => window.scrollTo(0, y), scrolled);
   await atRest();
 }
@@ -2207,6 +2335,7 @@ try {
       if (view.path === '/keys') {
         await keyCapField(theme);
         await keyDialogGeometry(theme);
+        await keysPageMenus(theme);
       }
       if (view.path === '/requests') {
         await speedFilter(theme);

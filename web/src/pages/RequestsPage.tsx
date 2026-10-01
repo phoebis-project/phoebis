@@ -555,6 +555,12 @@ function RequestDrawer({ request, requestId, now, onClose }: { now: number; onCl
                 </li>
               ))}
             </ol>
+            {/* A hold that ended with nothing dispatched has no attempt whose trace could name it. */}
+            {r.attempts.length === 0 && r.held && (
+              <p className="attempt__hold">
+                held {fmtMs(r.held.heldMs)} on {r.held.cohort ?? r.held.waitedOn[r.held.waitedOn.length - 1] ?? 'an upstream'}
+              </p>
+            )}
             {trail.map((e) => {
               if (e.kind === 'pin_expired') {
                 return (
