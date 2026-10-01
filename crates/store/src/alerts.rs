@@ -112,19 +112,10 @@ fn row_to_delivery(r: &rusqlite::Row<'_>) -> rusqlite::Result<AlertDeliveryRow> 
 }
 
 /// The statement `Store::lifecycle_deliveries` runs. A term appears only when its value is given, since a
-/// nullable `? IS NULL OR` guard keeps the planner off the partial indexes. The index is named because the
-/// planner, lacking statistics, costs `event_id IS NULL` on `alert_deliveries_event` at a few rows when that
-/// entry holds every lifecycle row, then seeks there and sorts them all. The parameters bind in order: the kind
-/// when asked, the cursor's `at` and `id` when given, then the limit.
+/// nullable `? IS NULL OR` guard keeps the planner off the partial indexes. The parameters bind in order: the
+/// kind when asked, the cursor's `at` and `id` when given, then the limit.
 pub fn lifecycle_deliveries_sql(kind: bool, cursor: bool) -> String {
-    let index = if kind {
-        "alert_deliveries_lifecycle_kind"
-    } else {
-        "alert_deliveries_lifecycle_at"
-    };
-    let mut sql = format!(
-        "SELECT {DELIVERY_COLUMNS} FROM alert_deliveries INDEXED BY {index} WHERE event_id IS NULL"
-    );
+    let mut sql = format!("SELECT {DELIVERY_COLUMNS} FROM alert_deliveries WHERE event_id IS NULL");
     if kind {
         sql.push_str(" AND kind = ?");
     }
@@ -133,6 +124,20 @@ pub fn lifecycle_deliveries_sql(kind: bool, cursor: bool) -> String {
     }
     sql.push_str(" ORDER BY at DESC, id DESC LIMIT ?");
     sql
+}
+
+/// The statement `Store::alert_deliveries` runs: one event's deliveries in order, bound by the event id.
+pub fn event_deliveries_sql() -> String {
+    format!("SELECT {DELIVERY_COLUMNS} FROM alert_deliveries WHERE event_id = ?1 ORDER BY id")
+}
+
+/// The statement `Store::alert_deliveries_for` runs for `events` event ids, bound in order.
+pub fn events_deliveries_sql(events: usize) -> String {
+    let marks: Vec<String> = (1..=events).map(|i| format!("?{i}")).collect();
+    format!(
+        "SELECT {DELIVERY_COLUMNS} FROM alert_deliveries WHERE event_id IN ({}) ORDER BY event_id, id",
+        marks.join(", ")
+    )
 }
 
 /// Where a rule posts, with the port when it names one. A webhook URL may carry a credential in its userinfo,
@@ -385,9 +390,7 @@ impl Store {
 
     pub fn alert_deliveries(&self, event_id: &str) -> Result<Vec<AlertDeliveryRow>, StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
-        let mut stmt = conn.prepare(&format!(
-            "SELECT {DELIVERY_COLUMNS} FROM alert_deliveries WHERE event_id = ?1 ORDER BY id"
-        ))?;
+        let mut stmt = conn.prepare(&event_deliveries_sql())?;
         let rows = stmt.query_map(params![event_id], row_to_delivery)?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
             .map_err(StoreError::from)
@@ -405,11 +408,7 @@ impl Store {
             return Ok(grouped);
         }
         let conn = self.conn.lock().expect(LOCK_POISONED);
-        let marks: Vec<String> = (1..=event_ids.len()).map(|i| format!("?{i}")).collect();
-        let mut stmt = conn.prepare(&format!(
-            "SELECT {DELIVERY_COLUMNS} FROM alert_deliveries WHERE event_id IN ({}) ORDER BY event_id, id",
-            marks.join(", ")
-        ))?;
+        let mut stmt = conn.prepare(&events_deliveries_sql(event_ids.len()))?;
         let rows = stmt.query_map(
             rusqlite::params_from_iter(event_ids.iter().copied()),
             row_to_delivery,

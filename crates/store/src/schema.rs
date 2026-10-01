@@ -71,11 +71,12 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
     (39, V39),
     (40, V40),
     (41, V41),
+    (42, V42),
 ];
 
 /// The newest schema version this build knows how to read. `prepare` refuses a registry stamped past it
 /// rather than skip migrations it does not carry and misread the tables that follow.
-pub const SCHEMA_VERSION: u32 = 41;
+pub const SCHEMA_VERSION: u32 = 42;
 
 const V2: &str = r#"
 CREATE TABLE IF NOT EXISTS account_models (
@@ -606,4 +607,12 @@ UPDATE pool_members SET budget_daily_usd = budget_usd WHERE budget_usd IS NOT NU
 UPDATE pool_members SET budget_monthly_usd = budget_usd WHERE budget_usd IS NOT NULL AND budget_period = 'month';
 ALTER TABLE pool_members DROP COLUMN budget_usd;
 ALTER TABLE pool_members DROP COLUMN budget_period;
+"#;
+
+// The event index held every lifecycle row under a null event id, and the planner, without statistics, costed
+// `event_id IS NULL` there at a few rows and sorted them all; partial, it holds the rows an event lookup and the
+// cascade read and nothing a lifecycle page asks for.
+const V42: &str = r#"
+DROP INDEX IF EXISTS alert_deliveries_event;
+CREATE INDEX alert_deliveries_event ON alert_deliveries (event_id, id) WHERE event_id IS NOT NULL;
 "#;

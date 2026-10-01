@@ -28,7 +28,8 @@ pub use accounts::{
     AccountKind, AccountRow, AccountState, Identity, SubscriptionRow, INFERENCE_HOST,
 };
 pub use alerts::{
-    lifecycle_deliveries_sql, webhook_host, AlertDeliveryRow, AlertEventRow, AlertRuleRow,
+    event_deliveries_sql, events_deliveries_sql, lifecycle_deliveries_sql, webhook_host,
+    AlertDeliveryRow, AlertEventRow, AlertRuleRow,
 };
 pub use budgets::{BudgetRow, BudgetScope};
 pub use credentials::{

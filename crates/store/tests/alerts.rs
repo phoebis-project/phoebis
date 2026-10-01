@@ -2,8 +2,8 @@
 //! while it stays open.
 
 use phoebis_store::{
-    lifecycle_deliveries_sql, AlertDeliveryRow, AlertEventRow, AlertRuleRow, Secret, StorageKey,
-    Store, StoreError,
+    event_deliveries_sql, events_deliveries_sql, lifecycle_deliveries_sql, AlertDeliveryRow,
+    AlertEventRow, AlertRuleRow, Secret, StorageKey, Store, StoreError,
 };
 
 fn rule(id: &str) -> AlertRuleRow {
@@ -25,7 +25,7 @@ fn rule(id: &str) -> AlertRuleRow {
 #[test]
 fn rules_are_stored_with_a_sealed_secret_that_only_has_secret_reveals() {
     let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 41);
+    assert_eq!(store.schema_version().unwrap(), 42);
     store
         .upsert_alert_rule(&rule("r1"), Some(Some(&Secret::new("hunter2"))), "admin")
         .unwrap();
@@ -497,24 +497,44 @@ fn a_lifecycle_delivery_lands_without_an_event_lists_newest_first_and_is_purged_
 }
 
 #[test]
-fn every_lifecycle_deliveries_page_seeks_a_partial_index_and_sorts_nothing() {
+fn every_deliveries_query_seeks_its_partial_index_and_sorts_nothing() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("router.sqlite");
     drop(Store::open(&path, &StorageKey::generate()).unwrap());
     let conn = rusqlite::Connection::open(&path).unwrap();
-    let mut wrong = Vec::new();
+    // The store's own connection enforces foreign keys, and only then does a delete plan the cascade's child scan.
+    conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+    let mut shapes = Vec::new();
     for (kind, cursor, index) in [
         (false, false, "alert_deliveries_lifecycle_at"),
         (false, true, "alert_deliveries_lifecycle_at"),
         (true, false, "alert_deliveries_lifecycle_kind"),
         (true, true, "alert_deliveries_lifecycle_kind"),
     ] {
-        let mut stmt = conn
-            .prepare(&format!(
-                "EXPLAIN QUERY PLAN {}",
-                lifecycle_deliveries_sql(kind, cursor)
-            ))
-            .unwrap();
+        shapes.push((
+            format!("lifecycle page, kind {kind}, cursor {cursor}"),
+            lifecycle_deliveries_sql(kind, cursor),
+            index,
+        ));
+    }
+    shapes.push((
+        "one event's deliveries".into(),
+        event_deliveries_sql(),
+        "alert_deliveries_event",
+    ));
+    shapes.push((
+        "two events' deliveries".into(),
+        events_deliveries_sql(2),
+        "alert_deliveries_event",
+    ));
+    shapes.push((
+        "an event's delete and its cascade".into(),
+        "DELETE FROM alert_events WHERE id = ?".into(),
+        "alert_deliveries_event",
+    ));
+    let mut wrong = Vec::new();
+    for (shape, sql, index) in shapes {
+        let mut stmt = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
         // The plan does not depend on the bound values, so the parameters stay unbound.
         let mut rows = stmt.raw_query();
         let mut plan = Vec::new();
@@ -523,7 +543,7 @@ fn every_lifecycle_deliveries_page_seeks_a_partial_index_and_sorts_nothing() {
         }
         let plan = plan.join("; ");
         if !plan.contains(index) || plan.contains("TEMP B-TREE") {
-            wrong.push(format!("kind {kind}, cursor {cursor}: {plan}"));
+            wrong.push(format!("{shape}: {plan}"));
         }
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));

@@ -61,7 +61,7 @@ fn rows_outlive_a_reopen_of_the_on_disk_store() {
         store.load(&key("main")).unwrap(),
         Some(record(1, "{}", 1_000))
     );
-    assert_eq!(store.schema_version().unwrap(), 41);
+    assert_eq!(store.schema_version().unwrap(), 42);
 }
 
 // The reverse of the registry's member budgets migration, so a store stamped back below it can run it again. One
@@ -88,7 +88,7 @@ fn rows_keyed_s1_and_session_s1_both_survive_the_kind_prefix() {
     .unwrap();
     drop(conn);
     let store = Store::open(&path, &storage).expect("the migration completes and the store opens");
-    assert_eq!(store.schema_version().unwrap(), 41);
+    assert_eq!(store.schema_version().unwrap(), 42);
     let payload = |session: &str| {
         store
             .load(&MemoryKey::for_session("desktop", 1_000, session, "main"))

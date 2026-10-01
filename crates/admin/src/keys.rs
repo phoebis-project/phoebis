@@ -11,6 +11,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
+use phoebis_routing::RegistrySnapshot;
 use phoebis_store::{AffinitySource, ApiKeyRow, StoreError, ROTATION_GRACE_MS};
 use rand::Rng;
 use serde_json::{json, Value};
@@ -236,13 +237,11 @@ pub(crate) async fn list(State(state): State<Arc<AdminState>>) -> Response {
             } else {
                 Vec::new()
             };
+            let snapshot = state.router.snapshot();
             let mut out = Vec::new();
             for row in rows {
                 let count = sessions_on_retired_secret(&row, &activity, now);
-                match key_json(&state, &row, &week, &lifetime, count) {
-                    Ok(v) => out.push(v),
-                    Err(e) => return store_failure(e),
-                }
+                out.push(key_json(&snapshot, &row, &week, &lifetime, count));
             }
             Json(json!({ "keys": out })).into_response()
         }
@@ -311,13 +310,9 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
     }
     let (week, lifetime) = totals(&state).await;
     // A key this route just created has never rotated, so no session can present a retired secret of it.
-    match key_json(&state, &row, &week, &lifetime, 0) {
-        Ok(mut v) => {
-            v["secret"] = json!(secret);
-            (StatusCode::CREATED, Json(v)).into_response()
-        }
-        Err(e) => store_failure(e),
-    }
+    let mut v = key_json(&state.router.snapshot(), &row, &week, &lifetime, 0);
+    v["secret"] = json!(secret);
+    (StatusCode::CREATED, Json(v)).into_response()
 }
 
 pub(crate) async fn patch(
@@ -346,10 +341,8 @@ pub(crate) async fn patch(
     let now = (state.clock)();
     let activity = recent_activity(&state, now).await;
     let count = sessions_on_retired_secret(&row, &activity, now);
-    match key_json(&state, &row, &week, &lifetime, count) {
-        Ok(v) => Json(v).into_response(),
-        Err(e) => store_failure(e),
-    }
+    let v = key_json(&state.router.snapshot(), &row, &week, &lifetime, count);
+    Json(v).into_response()
 }
 
 pub(crate) async fn rotate(
@@ -383,13 +376,9 @@ pub(crate) async fn rotate(
             let (week, lifetime) = totals(&state).await;
             let activity = recent_activity(&state, now).await;
             let count = sessions_on_retired_secret(&row, &activity, now);
-            match key_json(&state, &row, &week, &lifetime, count) {
-                Ok(mut v) => {
-                    v["secret"] = json!(secret);
-                    Json(v).into_response()
-                }
-                Err(e) => store_failure(e),
-            }
+            let mut v = key_json(&state.router.snapshot(), &row, &week, &lifetime, count);
+            v["secret"] = json!(secret);
+            Json(v).into_response()
         }
         Ok(None) => failure(StatusCode::NOT_FOUND, "key not found"),
         Err(e) => store_failure(e),
@@ -426,30 +415,23 @@ pub(crate) async fn remove(
 
 /// Never the digest and never the secret.
 fn key_json(
-    state: &AdminState,
+    snapshot: &RegistrySnapshot,
     row: &ApiKeyRow,
     week: &BTreeMap<String, phoebis_ledger::Totals>,
     lifetime: &BTreeMap<String, phoebis_ledger::Totals>,
     sessions_on_retired_secret: usize,
-) -> Result<Value, StoreError> {
-    let pool = state.store.pool(&row.pool_id)?;
-    let effective = row
-        .body_capture_hours
-        .unwrap_or(pool.as_ref().map(|p| p.body_capture_hours).unwrap_or(0));
-    let effective_auto_mode = row
-        .auto_mode_server
-        .unwrap_or_else(|| pool.as_ref().is_none_or(|p| p.auto_mode_server));
-    Ok(json!({
+) -> Value {
+    json!({
         "id": row.id, "label": row.label, "notes": row.notes, "pool_id": row.pool_id, "enabled": row.enabled,
         "revoked_at": row.revoked_at, "expires_at": row.expires_at, "model_rules": row.model_rules,
         "model_rules_mode": row.model_rules_mode.as_str(), "long_context_twins": row.long_context_twins,
-        "keepalive_opt_out": row.keepalive_opt_out, "body_capture_hours": row.body_capture_hours, "effective_body_capture_hours": effective,
+        "keepalive_opt_out": row.keepalive_opt_out, "body_capture_hours": row.body_capture_hours, "effective_body_capture_hours": snapshot.body_capture_hours(row),
         "in_flight_cap": row.in_flight_cap,
         "affinity_source": row.affinity_source.as_str(),
-        "auto_mode_server": row.auto_mode_server, "effective_auto_mode_server": effective_auto_mode,
+        "auto_mode_server": row.auto_mode_server, "effective_auto_mode_server": snapshot.auto_mode_server(row),
         "prefix": row.prefix, "created_at": row.created_at, "rotated_at": row.rotated_at, "last_used_at": row.last_used_at,
         "retired_secret_last_used_at": row.retired_secret_last_used_at, "sessions_on_retired_secret": sessions_on_retired_secret,
         "usage_7d": { "cost_usd": week.get(&row.id).map_or(0.0, |t| t.cost_usd), "requests": week.get(&row.id).map_or(0, |t| t.requests), "tokens": week.get(&row.id).map_or(0, |t| t.tokens) },
         "lifetime": { "cost_usd": lifetime.get(&row.id).map_or(0.0, |t| t.cost_usd), "requests": lifetime.get(&row.id).map_or(0, |t| t.requests) },
-    }))
+    })
 }
