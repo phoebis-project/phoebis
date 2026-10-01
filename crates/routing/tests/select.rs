@@ -5143,7 +5143,7 @@ fn a_token_count_is_never_placed_and_lands_by_the_strategy() {
 #[test]
 fn a_token_count_at_the_account_cap_is_selected_and_never_held() {
     let (s, mut st) = capped_cohort_on_b(SubagentPlacement::ByCohort);
-    // The session's main agent pins on b, the first override's landing for any other agent of the session.
+    // The session's main agent pins on b; the worker's count holds no pin of its own.
     select(
         &mut st,
         &s,
@@ -5169,6 +5169,107 @@ fn a_token_count_at_the_account_cap_is_selected_and_never_held() {
     assert_eq!(
         sel.account.id, "a",
         "with every account at its cap the count lands where the strategy says"
+    );
+}
+
+/// A count as the main agent of `s1` sends it at `now`.
+fn count_of(s: &RegistrySnapshot, portable: bool, now: i64) -> SelectRequest {
+    SelectRequest {
+        count: true,
+        ..request(s, Some("s1"), "claude-sonnet-5", portable, &[], now)
+    }
+}
+
+#[test]
+fn a_pinless_token_count_writes_no_pin_and_the_agents_next_message_is_placed_under_the_cap() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        failover: Failover {
+            in_flight_cap: 1,
+            ..Failover::default()
+        },
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let _a = st.in_flight().dispatched("a", 1_000);
+    let (result, writes) = select(&mut st, &s, &count_of(&s, true, 1_000), &mut rng());
+    let SelectResult::Selected(sel) = result else {
+        panic!("a count is bound to no cap, so it is placed: {result:?}")
+    };
+    assert_eq!(
+        sel.pin, None,
+        "a count touches no cache, so it creates no pin"
+    );
+    assert!(
+        !writes.iter().any(|w| matches!(w, StateWrite::UpsertPin(_))),
+        "{writes:?}"
+    );
+    assert!(st.pin(&pin_key("s1")).is_none());
+    assert_eq!(
+        picked(
+            &select(
+                &mut st,
+                &s,
+                &request(&s, Some("s1"), "claude-sonnet-5", true, &[], 2_000),
+                &mut rng(),
+            )
+            .0
+        ),
+        "b",
+        "the agent's next message meets the cap with no pin of the count's to renew, so it lands under it"
+    );
+}
+
+#[test]
+fn a_pinned_token_count_follows_its_pin_where_a_real_request_would_move() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        failover: Failover {
+            in_flight_cap: 1,
+            ..Failover::default()
+        },
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    assert_eq!(
+        picked(
+            &select(
+                &mut st,
+                &s,
+                &request(&s, Some("s1"), "claude-sonnet-5", true, &[], 1_000),
+                &mut rng(),
+            )
+            .0
+        ),
+        "a"
+    );
+    let _a = st.in_flight().dispatched("a", 1_000);
+    // Past the overage grace, so a real request would move off `a`.
+    st.record_overage("a", overage(true, 1_500, Some(9 * HOUR)));
+    let (result, _) = select(&mut st, &s, &count_of(&s, true, 2_000), &mut rng());
+    let SelectResult::Selected(sel) = result else {
+        panic!("the count lands: {result:?}")
+    };
+    assert_eq!(
+        (sel.account.id.as_str(), sel.migrated, sel.trace.renewed),
+        ("a", None, true),
+        "a count follows its pin at the cap and past a move rule"
+    );
+    assert_eq!(pinned(&st, "s1").account_id, "a");
+    let SelectResult::Selected(sel) = select(
+        &mut st,
+        &s,
+        &request(&s, Some("s1"), "claude-sonnet-5", true, &[], 3_000),
+        &mut rng(),
+    )
+    .0
+    else {
+        panic!("the message lands")
+    };
+    assert_eq!(
+        (sel.account.id.as_str(), sel.migrated),
+        ("b", Some(MigrateReason::Overage)),
+        "the move rule still moves the agent's next message"
     );
 }
 

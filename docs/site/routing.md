@@ -288,7 +288,9 @@ lands its first request on its parent agent's pin in place of the static walk, a
 static walk; every case that finds no live match lands by the strategy. A held request of a subagent cohort waits where
 its cohort already is rather than on the strategy's own pick; a session already on an account, under any of its agents,
 is never held while that account can still serve. A token count is never placed and never held: it is bound to no cap
-and occupies no slot, so its pin or the strategy decides it.
+and occupies no slot, so its pin or the strategy decides it. It creates no pin, since it touches no cache: a count with
+a pin follows it past the cap and the move rules, and one without lands by the strategy and leaves the agent's next
+message to be placed under the cap.
 
 The eligible set starts from every account that can serve the canonical model: enabled, paired or keyed, not
 `reauth_required` or `funding_required`, off cooldown, and not already tried by this request. A request sent fast is
@@ -618,15 +620,17 @@ With every account in the pool rate limited, `phoebis` answers `429` with `retry
 `anthropic-ratelimit-unified-representative-claim` naming the window; a cooldown that came from a bare `Retry-After` is
 rendered as `five_hour`, because the client treats an unknown claim as no claim. The error code is `accounts_exhausted`
 and the message is `every account in this pool is rate limited`. With every account at its in-flight cap past the hold,
-`phoebis` answers `429` with error code `accounts_at_cap` and a `Retry-After` of at most 19 seconds
-([in-flight caps](#in-flight-caps)), since the pool frees on its own. For anything only an operator can clear, such as a
-pool whose accounts are all paused, `phoebis` answers `503` with error code `accounts_unavailable`, message
-`no account in this pool can serve requests`, and no `retry-after`. A request admitted under a key that was deleted, or
-deleted and created again under its id, before it was routed is refused with the `401` admission answers a key the
-registry does not hold (see [What the proxy accepts](client.md#what-the-proxy-accepts)). A pool whose every member has
-reached its spend budget answers `429` with the `overage` claim, the same one an account in overage carries (see
-[Pools](#pools)), and a probe pinned to a member at its budget is answered with the budget period's end as its
-reset, whatever its siblings hold.
+`phoebis` answers `429` with error code `accounts_at_cap` and a `Retry-After` of at most 19 seconds ([in-flight
+caps](#in-flight-caps)), since the pool frees on its own. For anything only an operator can clear, such as a pool whose
+accounts are all paused, `phoebis` answers `503` with error code `accounts_unavailable`, message `no account in this pool
+can serve requests`, and no `retry-after`. A request admitted under a key that was deleted, or deleted and created again
+under its id, before it was routed is refused with the `401` admission answers a key the registry does not hold (see
+[What the proxy accepts](client.md#what-the-proxy-accepts)). A pool whose every member has reached its spend budget
+answers `429` with the `overage` claim, the same one an account in overage carries (see [Pools](#pools)), and a probe
+pinned to a member at its budget is answered with the budget period's end as its reset, whatever its siblings hold. A
+probe whose pinned account is disabled, past its subscription's end, or already tried by the probe while a sibling could
+take it is answered `503` `accounts_unavailable` whatever its siblings hold, so it never moves the pin; its request row
+reads rejected rather than exhausted, so the pool exhaustion alert does not count it.
 
 A request sent fast that no upstream's fast lane can take is answered locally, before any dial, with `429` and the error
 type `rate_limit_error`. While any upstream holds only a fast rate limit, the error code is `fast_lane_exhausted`, the

@@ -832,6 +832,37 @@ async fn an_exhaustion_503_pauses_under_its_own_reason() {
     );
 }
 
+/// The gate reads no subscription term, so a probe due after the pinned account's subscription ended reaches
+/// the selection, which answers the obstacle rather than placing the probe on `b`: the relay hands the name over,
+/// the agent pauses under the ended subscription, and the pin still names `a`.
+#[tokio::test]
+async fn a_probe_on_a_pin_whose_subscription_ended_holds_the_agent_and_keeps_the_pin() {
+    let mut r = rig(RigSpec::default()).await;
+    r.observe("main").await;
+    assert_eq!(r.status("main").account_id.as_deref(), Some("a"));
+    let sent = r.up.requests().len();
+    r.h.store
+        .set_cancelled("a", true, Some(r.now() + 1_000))
+        .unwrap();
+    r.h.router.reload().await.unwrap();
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(
+        (r.status("main").reason, r.status("main").next_probe_at),
+        (Reason::IneligibleCredential, None)
+    );
+    assert_eq!(r.up.requests().len(), sent, "the probe reached no upstream");
+    assert!(
+        r.h.router
+            .pins()
+            .await
+            .unwrap()
+            .iter()
+            .any(|p| p.session_id == "session" && p.account_id == "a"),
+        "the pin still names a"
+    );
+}
+
 /// The day the cap charges against is read under the same lock that charges it, so a charge stamped with a
 /// day before the one already summed must not roll the sum back to it.
 #[tokio::test]

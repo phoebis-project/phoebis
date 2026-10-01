@@ -546,6 +546,10 @@ fn client_facts(
 fn outcome_of(outcome: &RelayOutcome) -> Outcome {
     match outcome.error_code.as_deref() {
         Some("account_cancelled") => Outcome::Canceled,
+        // A probe answered on its pinned member's standing (`Exhaustion::Pinned`, the one untimed answer that
+        // names an obstacle) is refused for the probe alone, whatever its siblings hold: conclusive, and no
+        // exhaustion of the pool for the alert or the rollups to count.
+        Some("accounts_unavailable") if outcome.obstacle.is_some() => Outcome::Rejected,
         // A pool whose every account is at its in-flight cap had nothing to place the request on either, and the
         // pool alert and the rollups count it with the other exhaustions.
         Some("accounts_exhausted") | Some("accounts_unavailable") | Some(ACCOUNTS_AT_CAP) => {

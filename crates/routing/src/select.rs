@@ -704,14 +704,16 @@ pub fn select(
     let window = window_for(&request.canonical_model);
 
     // Step 4: the moves, for a portable request with a live pin. A pin on an account past its saved end never
-    // reaches them: step 5 releases it as it releases a cooled account's.
+    // reaches them: step 5 releases it as it releases a cooled account's. A token count follows its pin: it
+    // creates no pin (step 7), so a move it made would leave the session with none.
     let mut migrated = None;
     let mut shed_from = None;
     let mut selection_set: Vec<&Candidate> = eligible.clone();
     if let Some(current) = pin.as_ref().filter(|current| {
-        !snapshot
-            .term(&current.account_id)
-            .is_some_and(|term| term::ended(term, request.now))
+        !request.count
+            && !snapshot
+                .term(&current.account_id)
+                .is_some_and(|term| term::ended(term, request.now))
     }) {
         let cold = !warm_on(current, verdict, request.now);
         // The lane the pin carries once this request renews it: a request that leaves the pin alone stamps none.
@@ -888,11 +890,8 @@ pub fn select(
         if held {
             // The cohort-aware hold is a cap exemption and nothing more: a session already on an account under
             // any agent lands there rather than waiting, and a still-held subagent waits where its own cohort
-            // is rather than on the strategy's unrelated choice. A token count takes neither: it is never
-            // placed, so its session's pins and cohort have no say in where it lands or waits.
-            let session_pin = (!request.count)
-                .then(|| any_agent_pin(state, request, &allowed, window, ttl_ms))
-                .flatten();
+            // is rather than on the strategy's unrelated choice. A token count never gets here: it is never held.
+            let session_pin = any_agent_pin(state, request, &allowed, window, ttl_ms);
             if let Some(candidate) = session_pin {
                 (
                     candidate,
@@ -904,19 +903,15 @@ pub fn select(
                     }),
                 )
             } else {
-                let cohort = (!request.count)
-                    .then(|| {
-                        subagent_cohort(
-                            state,
-                            snapshot,
-                            pool,
-                            request,
-                            &affinity_guard,
-                            &allowed,
-                            window,
-                        )
-                    })
-                    .flatten();
+                let cohort = subagent_cohort(
+                    state,
+                    snapshot,
+                    pool,
+                    request,
+                    &affinity_guard,
+                    &allowed,
+                    window,
+                );
                 let hold = match cohort {
                     Some(c) => HoldFacts {
                         account_id: c.account_id.clone(),
@@ -952,8 +947,9 @@ pub fn select(
         cohort: request.holds.last().and_then(|h| h.cohort.clone()),
     });
 
-    // Step 7: a fresh pin with a fresh epoch.
-    let pin_ref = session.map(|session| {
+    // Step 7: a fresh pin with a fresh epoch. A token count touches no cache, so it creates none: a pin it left
+    // on an account at its cap would carry the agent's next message past the cap, since a renewal never reads it.
+    let pin_ref = session.filter(|_| !request.count).map(|session| {
         let epoch = state.fresh_epoch();
         let row = fresh_pin(request, session, epoch, chosen, shed_from.clone());
         let lane = row.lane.clone();

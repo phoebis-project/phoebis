@@ -22,7 +22,8 @@ the session's pin and renews it. A probe whose pinned member is at its spend bud
 disabled, past its subscription's end, or already tried by this probe is answered rather than placed on a sibling, so a
 probe never moves the pin for those standings, and the agent reads `budget`, `paused` (a disabled account or an ended
 subscription) or `retrying` until the next real request lands; a 429 on the pinned account, a credits block, overage
-under `never`, a disconnected account and the pool's move rules move it as they move a real request.
+under `never`, an account that is disconnected, unpaired or deleted, and the pool's move rules move it as they move a
+real request.
 
 A probe costs a cache read at list price. The ledger credits the gross saving a later kept-warm request earns
 against that cost, per pool and per hour, and `GET /admin/keepalive/overview` reports the net of the two, which

@@ -1442,6 +1442,79 @@ async fn a_probe_fails_over_only_to_an_eligible_sibling() {
     up.shutdown().await;
 }
 
+/// A probe held on its pinned member's pause answers the probe alone while a sibling could serve: the relay hands
+/// the keepalive the obstacle, and the completion reads rejected rather than exhausted, so the pool exhaustion
+/// alert, which reads only an exhausted completion, is not raised for a pool that can still serve.
+#[tokio::test]
+async fn a_probe_held_on_its_pinned_members_pause_completes_rejected_beside_a_sibling_that_can_serve(
+) {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test");
+    let h = harness_with_bus(
+        &up,
+        &[
+            api_key("a", "sk-ant-api03-AAAA", 0),
+            api_key("b", "sk-ant-api03-BBBB", 1),
+        ],
+        PoolSpec::default(),
+        bus,
+    )
+    .await;
+    let real = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(outcome(&real).account_id, "a", "the session pins on a");
+    real.into_body().collect().await.unwrap();
+    drain_until_complete(&mut sub).await;
+    h.store.set_enabled("a", false).unwrap();
+    h.router.reload().await.unwrap();
+
+    let resp = h
+        .relay
+        .probe(
+            phoebis_relay::Probe {
+                key_id: "desktop".into(),
+                key_generation: h.store.api_key("desktop").unwrap().unwrap().created_at,
+                allow_oauth: false,
+            },
+            request_for(KEY, "claude-sonnet-4-5", "s1"),
+        )
+        .await;
+    assert_eq!(
+        (
+            resp.status().as_u16(),
+            resp.headers()["x-phoebis-error-code"].to_str().unwrap(),
+            outcome(&resp).obstacle,
+        ),
+        (503, "accounts_unavailable", Some("operator")),
+        "the probe is answered on its pin's pause, with the obstacle for the keepalive"
+    );
+    resp.into_body().collect().await.unwrap();
+    let (events, _) = drain_until_complete(&mut sub).await;
+    let Some(Event::RequestComplete(complete)) = events.last() else {
+        panic!("last event: {:?}", events.last())
+    };
+    assert_eq!(
+        complete.outcome,
+        Outcome::Rejected,
+        "a held pin is no exhaustion of a pool whose sibling can serve"
+    );
+    assert_eq!(
+        credentials_seen(&up),
+        vec!["sk-ant-api03-AAAA".to_string()],
+        "the probe never reached b"
+    );
+    up.shutdown().await;
+}
+
 /// A registry write landing while the eligible account's attempt is gated bumps the revision the router task
 /// compares against; the reselect that follows recomputes candidates from the current registry, past the
 /// pre-loop filter. The sibling it re-admits is still the one `allow_oauth: false` disallows, so the reselect
