@@ -12,7 +12,7 @@ use crate::errors::MODEL_REJECTED;
 pub fn exhaustion_response(exhaustion: &Exhaustion, now: i64, request_id: &str) -> Response {
     match exhaustion {
         Exhaustion::ModelRejected => MODEL_REJECTED.response(request_id),
-        Exhaustion::Untimed => anthropic_error(
+        Exhaustion::Untimed | Exhaustion::Pinned { .. } => anthropic_error(
             StatusCode::SERVICE_UNAVAILABLE,
             "api_error",
             "accounts_unavailable",

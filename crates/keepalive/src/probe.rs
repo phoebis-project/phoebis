@@ -61,7 +61,7 @@ pub(crate) struct ProbeResult {
     /// The `Retry-After` header's seconds, on a pool-at-its-cap 429; `None` otherwise.
     pub retry_after_secs: Option<u64>,
     /// The relay's `RelayOutcome::obstacle`: `budget` for a probe the selector refused on the pinned member's
-    /// spend.
+    /// spend, `operator`, `subscription_ended` or `attempted` for one it answered on the pinned member's standing.
     pub obstacle: Option<&'static str>,
 }
 
@@ -684,10 +684,12 @@ impl Inner {
     /// 429 the relay answers when every account is cooled, is the quota pause; a pool at its in-flight cap
     /// (`accounts_at_cap`) retries after the header's wait instead, since a slot there may free up before the
     /// next real request would; a probe the selector refused on the pinned member's spend budget holds under
-    /// `budget` without a pause, since only a raised budget or the period's end clears it, never a wait; the
-    /// untimed exhaustion 503, when every account of the pool was unusable at selection, pauses under its own
-    /// reason; a 5xx forwarded from upstream retries; any other 4xx is a shape the upstream refuses; a
-    /// cancelled, timed-out, or lost exchange (status 0) is a transport error.
+    /// `budget` without a pause, since only a raised budget or the period's end clears it, never a wait; a probe
+    /// the selector answered on its pinned member's standing holds under that standing: `Paused` for the
+    /// operator's pause, `IneligibleCredential` for an ended subscription (both read `paused` in the console), a
+    /// retry for a member this probe already tried; the untimed exhaustion 503, when every account of the pool was
+    /// unusable at selection, pauses under its own reason; a 5xx forwarded from upstream retries; any other 4xx is
+    /// a shape the upstream refuses; a cancelled, timed-out, or lost exchange (status 0) is a transport error.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn probe_error(
         &mut self,
@@ -700,6 +702,22 @@ impl Inner {
         exhausted: bool,
         now: i64,
     ) {
+        match (exhausted, obstacle) {
+            (true, Some("operator")) => {
+                self.set_reason(key, agent_id, Reason::Paused);
+                self.pause(key, agent_id);
+                return;
+            }
+            (true, Some("subscription_ended")) => {
+                self.set_reason(key, agent_id, Reason::IneligibleCredential);
+                self.pause(key, agent_id);
+                return;
+            }
+            (true, Some("attempted")) => {
+                return self.retry(key, agent_id, Reason::RetryableProbeError, now, None)
+            }
+            _ => {}
+        }
         if status == 429 && error_code == Some("accounts_at_cap") {
             // Retrying, not pausing: the pool is momentarily full, not out of quota, and a slot frees up in
             // seconds, so `RetryableProbeError` ("retrying") is the honest label rather than the quota one.
@@ -835,6 +853,33 @@ mod tests {
             },
         );
         (inner, key)
+    }
+
+    #[test]
+    fn a_pinned_answer_holds_the_agent_under_its_obstacle() {
+        for (obstacle, reason, paused) in [
+            ("operator", Reason::Paused, true),
+            ("subscription_ended", Reason::IneligibleCredential, true),
+            ("attempted", Reason::RetryableProbeError, false),
+        ] {
+            let (mut inner, key) = one_agent_inner();
+            inner.probe_error(
+                &key,
+                "main",
+                503,
+                Some("accounts_unavailable"),
+                Some(obstacle),
+                None,
+                true,
+                1_000,
+            );
+            let agent = &inner.sessions[&key].agents["main"];
+            assert_eq!(
+                (agent.reason, agent.paused),
+                (reason, paused),
+                "the {obstacle} answer holds the agent under its own standing, not the exhausted pool"
+            );
+        }
     }
 
     #[test]

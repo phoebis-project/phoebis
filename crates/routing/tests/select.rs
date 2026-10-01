@@ -3172,6 +3172,169 @@ fn a_probe_on_a_pin_whose_member_is_at_its_budget_answers_the_periods_end_and_mo
     );
 }
 
+/// A pin on `a` written by a request under `before`, then a probe of that session under `at_probe` at a later
+/// instant, `attempted` naming the accounts the probe already tried: the probe's answer, its writes, and the
+/// account the session's pin names afterwards.
+fn probe_after_a_pin_on_a(
+    before: &RegistrySnapshot,
+    at_probe: &RegistrySnapshot,
+    attempted: &[&str],
+) -> (SelectResult, Vec<StateWrite>, Option<String>) {
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    assert_eq!(
+        picked(
+            &select(
+                &mut st,
+                before,
+                &request(before, Some("s1"), "claude-sonnet-5", true, &[], 1_000),
+                &mut rng(),
+            )
+            .0
+        ),
+        "a",
+        "a serves the session's first request"
+    );
+    let probe = SelectRequest {
+        probe: true,
+        ..request(
+            at_probe,
+            Some("s1"),
+            "claude-sonnet-5",
+            true,
+            attempted,
+            2_000,
+        )
+    };
+    let (result, writes) = select(&mut st, at_probe, &probe, &mut rng());
+    let pinned = st.pin(&pin_key("s1")).map(|p| p.account_id.clone());
+    (result, writes, pinned)
+}
+
+fn a_before_b() -> Pool {
+    Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    }
+}
+
+#[test]
+fn a_probe_on_a_pin_whose_account_the_operator_paused_answers_the_obstacle_and_moves_nothing() {
+    let paused = snapshot_with(a_before_b(), &[("a", false, AccountState::Ready)]);
+    let (result, writes, pinned) = probe_after_a_pin_on_a(&snapshot(a_before_b()), &paused, &[]);
+    assert_eq!(
+        result,
+        SelectResult::Exhausted(Exhaustion::Pinned {
+            obstacle: "operator"
+        }),
+        "the probe answers the pause rather than moving to a sibling"
+    );
+    assert_eq!(
+        pinned.as_deref(),
+        Some("a"),
+        "the pin still names a after the probe"
+    );
+    assert!(
+        writes.is_empty(),
+        "the probe moves no pin and releases nothing: {writes:?}"
+    );
+}
+
+#[test]
+fn a_probe_on_a_pin_whose_subscription_ended_answers_the_obstacle_and_moves_nothing() {
+    let ended = snapshot_with_terms(
+        a_before_b(),
+        vec![SubscriptionTerm {
+            account_id: "a".into(),
+            since: Some(0),
+            trial_ends_at: None,
+            cancelled: true,
+            ends_at: Some(1_500),
+            tier: None,
+        }],
+    );
+    let (result, writes, pinned) = probe_after_a_pin_on_a(&snapshot(a_before_b()), &ended, &[]);
+    assert_eq!(
+        result,
+        SelectResult::Exhausted(Exhaustion::Pinned {
+            obstacle: "subscription_ended"
+        }),
+        "the probe answers the ended subscription rather than moving to a sibling"
+    );
+    assert_eq!(
+        pinned.as_deref(),
+        Some("a"),
+        "the pin still names a after the probe"
+    );
+    assert!(
+        writes.is_empty(),
+        "the probe moves no pin and releases nothing: {writes:?}"
+    );
+}
+
+#[test]
+fn a_probe_that_already_tried_its_pinned_account_answers_attempted_and_moves_nothing() {
+    let s = snapshot(a_before_b());
+    let (result, writes, pinned) = probe_after_a_pin_on_a(&s, &s, &["a"]);
+    assert_eq!(
+        result,
+        SelectResult::Exhausted(Exhaustion::Pinned {
+            obstacle: "attempted"
+        }),
+        "the probe answers its own attempt rather than moving to a sibling"
+    );
+    assert_eq!(
+        pinned.as_deref(),
+        Some("a"),
+        "the pin still names a after the probe"
+    );
+    assert!(
+        writes.is_empty(),
+        "the probe moves no pin and releases nothing: {writes:?}"
+    );
+}
+
+#[test]
+fn a_probe_that_tried_its_pinned_account_with_no_sibling_left_answers_the_pools_exhaustion() {
+    let s = snapshot(a_before_b());
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    assert_eq!(
+        picked(
+            &select(
+                &mut st,
+                &s,
+                &request(&s, Some("s1"), "claude-sonnet-5", true, &[], 1_000),
+                &mut rng(),
+            )
+            .0
+        ),
+        "a",
+        "a serves the session's first request"
+    );
+    st.record_cooldown(cooled("b", "account", 10_000, "five_hour", "rate_limit"));
+    let probe = SelectRequest {
+        probe: true,
+        ..request(&s, Some("s1"), "claude-sonnet-5", true, &["a"], 2_000)
+    };
+    let (result, writes) = select(&mut st, &s, &probe, &mut rng());
+    assert_eq!(
+        result,
+        SelectResult::Exhausted(Exhaustion::Timed {
+            deadline: 10_000,
+            window: "five_hour".into(),
+        }),
+        "with no sibling to move to, the attempt hides nothing and the pool's own exhaustion answers"
+    );
+    assert_eq!(
+        st.pin(&pin_key("s1")).map(|p| p.account_id.as_str()),
+        Some("a"),
+        "the pin still names a after the probe"
+    );
+    assert!(
+        writes.is_empty(),
+        "the probe moves no pin and releases nothing: {writes:?}"
+    );
+}
+
 #[test]
 fn a_non_portable_request_bound_to_a_member_at_its_budget_answers_the_timed_exhaustion_with_the_overage_claim(
 ) {
@@ -4978,7 +5141,7 @@ fn a_token_count_is_never_placed_and_lands_by_the_strategy() {
 }
 
 #[test]
-fn a_held_token_count_takes_neither_of_the_holds_overrides() {
+fn a_token_count_at_the_account_cap_is_selected_and_never_held() {
     let (s, mut st) = capped_cohort_on_b(SubagentPlacement::ByCohort);
     // The session's main agent pins on b, the first override's landing for any other agent of the session.
     select(
@@ -5000,13 +5163,12 @@ fn a_held_token_count_takes_neither_of_the_holds_overrides() {
         "worker",
     );
     count.count = true;
-    let SelectResult::Held { account_id, hold } = select(&mut st, &s, &count, &mut rng()).0 else {
-        panic!("a count at the cap is held")
+    let SelectResult::Selected(sel) = select(&mut st, &s, &count, &mut rng()).0 else {
+        panic!("a count is bound to no cap, so it is never held")
     };
     assert_eq!(
-        (account_id.as_str(), hold.cohort),
-        ("a", None),
-        "neither the session's pin on b nor the cohort's entry there lifts a count past the cap"
+        sel.account.id, "a",
+        "with every account at its cap the count lands where the strategy says"
     );
 }
 

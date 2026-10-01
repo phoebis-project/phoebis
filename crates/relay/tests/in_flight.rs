@@ -765,6 +765,65 @@ async fn a_probe_and_a_count_on_a_key_at_its_cap_are_served_without_a_permit() {
 }
 
 #[tokio::test]
+async fn a_token_count_at_the_key_and_account_caps_is_served_and_takes_no_slot() {
+    let up = FakeUpstream::start(vec![]).await;
+    up.add_credential_rule(A, "/v1/messages", held_stream());
+    let h = harness(
+        &up,
+        &[oauth("a", A, 0)],
+        PoolSpec {
+            failover: account_cap(1, 1),
+            key_in_flight_cap: Some(1),
+            ..PoolSpec::default()
+        },
+    )
+    .await;
+    let held = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, MODEL, "s1"))
+        .await
+        .unwrap();
+    assert_eq!(held.status().as_u16(), 200);
+    assert_eq!(
+        in_flight(&h, "a"),
+        (1, 1),
+        "the stream holds the account's one slot and the key's"
+    );
+
+    up.push_credential_rule(A, "/v1/messages", json_200());
+    let counted = h
+        .app
+        .clone()
+        .oneshot(request_from_fixture(
+            inference_head(FixtureKind::CountOauthNonFirstParty),
+            body(BodyFixture::CountOauth),
+            KEY,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        counted.status().as_u16(),
+        200,
+        "a count is neither held nor refused at either cap"
+    );
+    assert_eq!(
+        in_flight(&h, "a"),
+        (1, 1),
+        "the count's open response holds no slot of either cap"
+    );
+    drain(counted).await;
+    assert_eq!(
+        in_flight(&h, "a"),
+        (1, 1),
+        "the count took no slot of either cap"
+    );
+    drop(held);
+    up.release();
+    up.shutdown().await;
+}
+
+#[tokio::test]
 async fn a_pool_with_nothing_to_hold_for_still_answers_accounts_unavailable() {
     let up = FakeUpstream::start(messages(held_stream())).await;
     let h = harness(

@@ -287,8 +287,8 @@ spent account is in the eligible set, and both rungs refuse it through the allow
 lands its first request on its parent agent's pin in place of the static walk, and one under `by_strategy` skips the
 static walk; every case that finds no live match lands by the strategy. A held request of a subagent cohort waits where
 its cohort already is rather than on the strategy's own pick; a session already on an account, under any of its agents,
-is never held while that account can still serve. A token count is never placed and takes neither exemption from a hold:
-its pin or the strategy decides it.
+is never held while that account can still serve. A token count is never placed and never held: it is bound to no cap
+and occupies no slot, so its pin or the strategy decides it.
 
 The eligible set starts from every account that can serve the canonical model: enabled, paired or keyed, not
 `reauth_required` or `funding_required`, off cooldown, and not already tried by this request. A request sent fast is
@@ -589,18 +589,19 @@ a throttle that names no `Retry-After`, and a request bound to its account all t
 answer when it is returned, a stream for its whole length, whether it finishes, fails, or the client hangs up. The first
 attempt on an account is charged by the selection that chose it, so two selections answered together never read the same
 free slot; a retry on the same account is charged at its dispatch. The count is kept by the router itself; no report is
-involved. An account at the pool's `in_flight_cap` (default 16) is passed over while a sibling is under it, even a
-sibling above `select_below_utilization`: the cap is a bound, the ceiling a preference. Only when every account that
-could serve is at its cap is the request held: it waits up to `retry_in_place_seconds` for a slot on the account it
-would have chosen and lands there when one frees; past the bound it is selected again with that account passed over, and
-with every account passed over it is answered `429` with the error type `rate_limit_error`, the error code
-`accounts_at_cap`, the message `every account in this pool is at its in-flight cap`, and a `Retry-After` of the pool's
-`retry_in_place_seconds` held between 1 and 19 seconds: the client waits out a `Retry-After` under 20 seconds and treats
-a longer one as a block it does not retry. A hold costs one attempt of `routing.max_attempts`, and a hold that would
-leave none for the dial is answered the same `429` at once. A request that dialled an account before its holds ran out,
-and a pool with no account to hold for, keep the `503 accounts_unavailable` below. A request whose session already
-holds a pin under any agent is never held, and a move whose every destination is at its cap is not made: the pin
-renews in place and the next request judges the move again; a held subagent waits where its cohort is.
+involved. A token count is not counted: it occupies no slot, is never passed over at the cap and is never held for one.
+An account at the pool's `in_flight_cap` (default 16) is passed over while a sibling is under it, even a sibling above
+`select_below_utilization`: the cap is a bound, the ceiling a preference. Only when every account that could serve is at
+its cap is the request held: it waits up to `retry_in_place_seconds` for a slot on the account it would have chosen and
+lands there when one frees; past the bound it is selected again with that account passed over, and with every account
+passed over it is answered `429` with the error type `rate_limit_error`, the error code `accounts_at_cap`, the message
+`every account in this pool is at its in-flight cap`, and a `Retry-After` of the pool's `retry_in_place_seconds` held
+between 1 and 19 seconds: the client waits out a `Retry-After` under 20 seconds and treats a longer one as a block it
+does not retry. A hold costs one attempt of `routing.max_attempts`, and a hold that would leave none for the dial is
+answered the same `429` at once. A request that dialled an account before its holds ran out, and a pool with no account
+to hold for, keep the `503 accounts_unavailable` below. A request whose session already holds a pin under any agent is
+never held, and a move whose every destination is at its cap is not made: the pin renews in place and the next request
+judges the move again; a held subagent waits where its cohort is.
 
 **Per key.** A key's own `in_flight_cap`, unset by default, counts each Messages request once, from its admission,
 before anything is selected, until its response ends. A keepalive probe and a `count_tokens` request take no slot and

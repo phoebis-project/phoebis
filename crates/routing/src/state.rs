@@ -500,9 +500,9 @@ impl InFlightShared {
 
 /// Requests in flight per key and per account, counted from the relay's synchronous calls; shared by the
 /// handle and the task. A key permit is one per request, reserved before selection and held across every
-/// attempt; an account ticket is one per wire attempt, a leg's first taken by the selection that chose the
-/// account and each later one at its dial. Each is released exactly once, by its guard's drop, when the
-/// response it counts ends.
+/// attempt; an account ticket is one per wire attempt, a token count's excepted (it is bound to no cap), a leg's
+/// first taken by the selection that chose the account and each later one at its dial. Each is released exactly
+/// once, by its guard's drop, when the response it counts ends.
 #[derive(Clone, Default)]
 pub struct InFlight(Arc<InFlightShared>);
 

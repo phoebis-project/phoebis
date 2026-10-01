@@ -149,8 +149,10 @@ pub struct RelayOutcome {
     pub upstream_request_id: Option<String>,
     /// The TTL the relay rewrote the body to on this attempt, in milliseconds; `None` when the body went as sent.
     pub cache_ttl_ms: Option<i64>,
-    /// `budget` when the selector answered a probe pinned to a member at its spend budget, the one exhaustion the
-    /// keepalive holds on rather than pauses; `None` otherwise.
+    /// `budget` when the selector answered a probe pinned to a member at its spend budget, `operator`,
+    /// `subscription_ended` or `attempted` when it answered one on its pinned member's standing
+    /// (`Exhaustion::Pinned`): the obstacles the keepalive holds on rather than pauses as an exhausted pool; `None`
+    /// otherwise.
     pub obstacle: Option<&'static str>,
 }
 
@@ -1434,7 +1436,7 @@ impl Relay {
                 "accounts_exhausted",
                 exhaustion_response(exhaustion, now, admitted.request_id),
             ),
-            Exhaustion::Untimed => (
+            Exhaustion::Untimed | Exhaustion::Pinned { .. } => (
                 "accounts_unavailable",
                 exhaustion_response(exhaustion, now, admitted.request_id),
             ),
@@ -1466,6 +1468,9 @@ impl Relay {
             if window == "budget" {
                 outcome.obstacle = Some("budget");
             }
+        }
+        if let Exhaustion::Pinned { obstacle } = exhaustion {
+            outcome.obstacle = Some(*obstacle);
         }
         self.answer(
             admitted.trace,
@@ -1705,11 +1710,15 @@ impl Relay {
             stripping = false;
             // One per wire attempt. The first pass's was charged by its selection, so the count the selector read
             // is the one it charged; a later pass takes its own before the dial. A pass that ends without
-            // committing a stream drops it with its response half, before the next pass or leg takes one.
-            let ticket = selected.take().unwrap_or_else(|| {
-                self.router
-                    .in_flight()
-                    .dispatched(&account.id, (self.clock)())
+            // committing a stream drops it with its response half, before the next pass or leg takes one. A
+            // token count takes none on any pass: it is bound to no cap.
+            let count = admitted.trace.kind == Kind::CountTokens;
+            let ticket = selected.take().or_else(|| {
+                (!count).then(|| {
+                    self.router
+                        .in_flight()
+                        .dispatched(&account.id, (self.clock)())
+                })
             });
             admitted
                 .trace
@@ -1794,7 +1803,7 @@ impl Relay {
                 request_id: admitted.request_id,
                 retry_in_place: admitted.retry_in_place,
                 spent: *spent,
-                ticket: Some(ticket),
+                ticket,
                 tier_ttls: tier_ttls(&edited),
                 trace: admitted.trace,
             };

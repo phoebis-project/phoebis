@@ -18,9 +18,11 @@ failover loop a real request takes: the same body with `max_tokens` set to `0`, 
 `safeguards` member removed (the request for a server-side auto mode check on the turn's tool use, which a replayed turn
 has no use for, whatever the pool's `auto_mode_server` says); the request's `anthropic-beta` line travels as kept, and a
 pool or key set off drops the `dangerous-tool-use-2026-09-03` beta from a probe as from any request. The probe follows
-the session's pin, renews it, and migrates to another account on a 429. A probe whose pinned member is at its spend
-budget is not sent, and one that reaches the selector anyway is answered with the budget's deadline rather than placed
-on a sibling, so a probe never moves a session's pin on that account.
+the session's pin and renews it. A probe whose pinned member is at its spend budget, on an account the operator
+disabled, past its subscription's end, or already tried by this probe is answered rather than placed on a sibling, so a
+probe never moves the pin for those standings, and the agent reads `budget`, `paused` (a disabled account or an ended
+subscription) or `retrying` until the next real request lands; a 429 on the pinned account, a credits block, overage
+under `never`, a disconnected account and the pool's move rules move it as they move a real request.
 
 A probe costs a cache read at list price. The ledger credits the gross saving a later kept-warm request earns
 against that cost, per pool and per hour, and `GET /admin/keepalive/overview` reports the net of the two, which
@@ -237,7 +239,7 @@ probe that made its net negative, not a contradiction.
 | `net_negative` | net negative | Probes have cost more than they saved; held until a request lands warm. |
 | `oauth_unverified` | subscription probes off | Off until the account's expiry-crossing experiment passes. |
 | `overage` | overage | The account is on extra usage and the pool policy skips probes there. |
-| `paused` | paused | The account is paused, the pool is disabled, or the key opted out. |
+| `paused` | paused | The account is paused or its subscription has ended, the pool is disabled, or the key opted out. |
 | `pool_exhausted` | pool exhausted | Every account of the pool was exhausted or cooled when the probe was selected. |
 | `probe_error` | probe error | The last probe failed on the transport or was refused. |
 | `quota_exhausted` | quota exhausted | The account's usage window is spent; probes resume when it resets. |

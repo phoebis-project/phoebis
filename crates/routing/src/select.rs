@@ -320,6 +320,13 @@ pub enum Exhaustion {
     FastCredits {
         reason: String,
     },
+    /// A probe whose pinned member cannot serve it for an obstacle no wait clears (`attempted` while a sibling
+    /// could take the probe, `operator` for an account the operator disabled, `subscription_ended`): answered as
+    /// the untimed exhaustion and placed nowhere, so a probe never moves the session's pin; the name reaches the
+    /// keepalive, which holds the agent under it.
+    Pinned {
+        obstacle: &'static str,
+    },
 }
 
 /// Why the current registry refuses a request admitted under an older one.
@@ -626,23 +633,43 @@ pub fn select(
     }
     let in_set = |set: &[&Candidate], id: &str| set.iter().any(|c| c.account_id == id);
 
-    // A probe warms the pin it was sent for. With that member at its spend budget there is nothing to warm, and a
-    // placement on a sibling would move the session's pin onto a member no request asked for, so the probe
-    // answers the budget's deadline and moves nothing. The window names the obstacle for the relay, which
-    // renders it on the wire as the overage claim and hands the keepalive the name.
+    // A probe warms the pin it was sent for. With that member at its spend budget, disabled by the operator, past
+    // its subscription's end, or already tried by this probe there is nothing to warm, and a placement on a
+    // sibling would move the session's pin onto a member no request asked for, so the probe answers the obstacle
+    // and moves nothing; the keepalive reads the obstacle's name off the answer.
     if request.probe {
         if let Some(current) = pin.as_ref() {
-            if let Some((_, Obstacle::Budget { until })) = obstacles
-                .iter()
-                .find(|(id, o)| id == &current.account_id && matches!(o, Obstacle::Budget { .. }))
-            {
-                return (
-                    SelectResult::Exhausted(Exhaustion::Timed {
-                        deadline: *until,
-                        window: "budget".into(),
-                    }),
-                    writes,
-                );
+            let pinned = obstacles.iter().find(|(id, _)| id == &current.account_id);
+            match pinned.map(|(_, o)| o) {
+                // The window names the obstacle for the relay, which renders it on the wire as the overage claim.
+                Some(Obstacle::Budget { until }) => {
+                    return (
+                        SelectResult::Exhausted(Exhaustion::Timed {
+                            deadline: *until,
+                            window: "budget".into(),
+                        }),
+                        writes,
+                    );
+                }
+                // An attempt of the probe's own hides nothing when no sibling could take it: no pin can move,
+                // and the pool's exhaustion (a cooldown's deadline among it) is the truer answer.
+                Some(Obstacle::Attempted) if eligible.is_empty() => {}
+                // `Operator` also covers a deleted account and a state other than ready; those keep the answer
+                // they get under their own reason, and only the operator's pause holds the pin.
+                Some(Obstacle::Operator)
+                    if snapshot
+                        .account(&current.account_id)
+                        .is_none_or(|a| a.enabled) => {}
+                // No wait clears these, so they answer untimed; the next real request moves the pin if it must.
+                Some(o @ (Obstacle::Attempted | Obstacle::Ended | Obstacle::Operator)) => {
+                    return (
+                        SelectResult::Exhausted(Exhaustion::Pinned {
+                            obstacle: obstacle_name(o),
+                        }),
+                        writes,
+                    );
+                }
+                _ => {}
             }
         }
     }
@@ -774,10 +801,14 @@ pub fn select(
     // preferences below and a free account the ceiling would pass over still takes the request. With every
     // account that could serve at its cap the request is held for a slot; the set is left whole so the answer
     // names the account the strategy would have chosen. A pinned request never gets here: step 5 renewed it.
+    // A token count is bound to no cap: it occupies no slot (the task charges none for it), so the cap it would
+    // be held for is one it never fills. It keeps the whole set and lands where its pin or the strategy says.
     let under_cap: Vec<&Candidate> = selection_set
         .iter()
         .copied()
-        .filter(|c| state.in_flight().account(&c.account_id) < pool.failover.in_flight_cap)
+        .filter(|c| {
+            request.count || state.in_flight().account(&c.account_id) < pool.failover.in_flight_cap
+        })
         .collect();
     let held = under_cap.is_empty();
     narrow(&mut selection_set, &mut skipped, under_cap, "at_cap");

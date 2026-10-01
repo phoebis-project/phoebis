@@ -965,14 +965,15 @@ impl Task {
                 let (cancel, ticket) = match &result {
                     // Charged here, in the one place selections are serialized, so the count the next selection
                     // reads already holds this one: a ticket taken at the dial, awaits later, would let every
-                    // selection answered in between read the same count and land over the cap.
+                    // selection answered in between read the same count and land over the cap. A token count
+                    // takes none: it is bound to no cap.
                     SelectResult::Selected(selection) => (
                         self.token(&selection.account.id).child_token(),
-                        Some(
+                        (!request.count).then(|| {
                             self.state
                                 .in_flight()
-                                .dispatched(&selection.account.id, request.now),
-                        ),
+                                .dispatched(&selection.account.id, request.now)
+                        }),
                     ),
                     SelectResult::Exhausted(_)
                     | SelectResult::Held { .. }
