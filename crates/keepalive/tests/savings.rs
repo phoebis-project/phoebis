@@ -22,7 +22,7 @@ async fn rollups(r: &Rig, want: impl Fn(&[RollupRow]) -> bool) -> Vec<RollupRow>
 }
 
 fn probe_rows(rows: &[RollupRow]) -> RollupRow {
-    let mut sum = RollupRow::key(0, "", 0, "", "", "", "probe", "", "", "", "", "");
+    let mut sum = RollupRow::key(0, "", 0, "", "", "", "probe", "", "", "", "", "", "");
     for row in rows.iter().filter(|r| r.kind == "probe") {
         sum.add(row);
     }
@@ -30,7 +30,7 @@ fn probe_rows(rows: &[RollupRow]) -> RollupRow {
 }
 
 fn inference_rows(rows: &[RollupRow]) -> RollupRow {
-    let mut sum = RollupRow::key(0, "", 0, "", "", "", "inference", "", "", "", "", "");
+    let mut sum = RollupRow::key(0, "", 0, "", "", "", "inference", "", "", "", "", "", "");
     for row in rows.iter().filter(|r| r.kind == "inference") {
         sum.add(row);
     }
@@ -821,7 +821,7 @@ async fn a_fast_probe_keeps_a_fast_request_warm_at_the_fast_cells_and_a_switch_o
     r.up.push_credential_rule(A, "/v1/messages", fast_read_back());
     let kept = r.observe_with("main", &fast).await;
     let rows = rollups(&r, |rows| inference_rows(rows).kept_warm_requests == 1).await;
-    let mut on_fast = RollupRow::key(0, "", 0, "", "", "", "inference", "", "", "", "", "");
+    let mut on_fast = RollupRow::key(0, "", 0, "", "", "", "inference", "", "", "", "", "", "");
     for row in rows
         .iter()
         .filter(|row| row.kind == "inference" && row.speed == "fast")

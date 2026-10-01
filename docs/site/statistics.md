@@ -51,7 +51,8 @@ any request's landing on another agent's pin of its session, is a hit when it re
 A budgeted pool member's spend sums the priced hourly rollups over each period it carries a budget for, the current UTC
 day and the current month; a keepalive probe's cost counts toward it the same as any other request's, since a probe on
 an API-key member still draws real money. The table in force is fixed at startup, so a member held at its budget waits
-for the period to end or its budget to be raised, rather than for a price correction.
+for the period to end or its budget to be raised, rather than for a price correction. The rollups file each hour's
+traffic under who paid for it: the plan, overage, or a fast answer's usage credits, as the response reported it.
 
 A model an upstream rejected leaves two events in the log: `model_rejected` names the refusing account and the
 spelling the request carried, `model_permitted` the account that served the same request afterwards; the request

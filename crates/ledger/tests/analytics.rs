@@ -8,7 +8,8 @@ use phoebis_ledger::{
     moves_by_reason, placements, read_account_rollups, read_rollups, rewrite_series, run_retention,
     session_identities, AttemptRecord, BudgetedMember, EventRecord, Histogram, KeepaliveDelta,
     LedgerConfig, LedgerDb, LiveKeys, ModelPrice, ModelRow, PlanTables, PriceTable, RequestFilter,
-    RequestRecord, RollupFilter, RollupRow, SeriesFilter, Tiers, NO_CLASS, UNATTRIBUTED,
+    RequestRecord, RollupFilter, RollupRow, SeriesFilter, Tiers, FAST_FUNDING, NO_CLASS,
+    PLAN_FUNDING, UNATTRIBUTED,
 };
 use phoebis_routing::{PinUsage, RegistrySnapshot, RoutingState, FIVE_HOUR};
 use phoebis_store::{AccountKind, BudgetPeriod, PoolMember, RegistryLoad, RoutingLoad};
@@ -987,6 +988,11 @@ fn a_fast_row_never_lifts_a_window_an_unpriced_row_of_its_bucket_nulled() {
             "none",
             NO_CLASS,
             speed,
+            if speed == "fast" {
+                FAST_FUNDING
+            } else {
+                PLAN_FUNDING
+            },
         )
     };
     let unpriced = row("claude-opus-5", "standard", 0.0);
@@ -1034,6 +1040,11 @@ fn a_fast_row_adds_dollars_and_no_share_to_a_subscription_burn_point() {
                 "none",
                 NO_CLASS,
                 speed,
+                if speed == "fast" {
+                    FAST_FUNDING
+                } else {
+                    PLAN_FUNDING
+                },
             )
         };
         burn_series_over(&[row], &tables, &kinds, tiers, &filter)
@@ -1099,6 +1110,7 @@ fn fast_traffic_alone_on_a_model_without_plan_cells_reads_a_zero_share_on_a_size
             "none",
             NO_CLASS,
             "fast",
+            FAST_FUNDING,
         )
     };
     assert!(

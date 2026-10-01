@@ -880,8 +880,8 @@ fn sum_groups(
         let key = group_of(row, group_by, live, agent_groups);
         let entry = sums.entry(key.clone()).or_insert_with(|| {
             (
-                RollupRow::key(0, &key, 0, "", "", "", "", "", "", "", "", ""),
-                RollupRow::key(0, &key, 0, "", "", "", "", "", "", "", "", ""),
+                RollupRow::key(0, &key, 0, "", "", "", "", "", "", "", "", "", ""),
+                RollupRow::key(0, &key, 0, "", "", "", "", "", "", "", "", "", ""),
                 false,
             )
         });
@@ -1328,9 +1328,10 @@ pub struct BudgetedMember {
 
 /// One budgeted period's spend of one member in its current period, summed from the hourly rollups and priced at
 /// read time, a keepalive probe's cost included since it draws real money from an API-key member's budget the
-/// same as any other request's; the row names the period kind and its UTC bounds in ms (`period_end` is the next
-/// day or month boundary). The rollup's own stored price is not read, since a budget must move with the table in
-/// force, not the price an attempt happened to be booked at.
+/// same as any other request's; with `metered_only`, a subscription member's metered rows alone, those filed under
+/// `overage` or `fast`. The row names the period kind and its UTC bounds in ms (`period_end` is the next day or
+/// month boundary). The rollup's own stored price is not read, since a budget must move with the table in force,
+/// not the price an attempt happened to be booked at.
 pub fn member_spends(
     conn: &Connection,
     members: &[BudgetedMember],
@@ -1344,13 +1345,14 @@ pub fn member_spends(
         "SELECT canonical_model, speed, SUM(input_tokens), SUM(cache_read_tokens), SUM(cache_write_5m_tokens), \
          SUM(cache_write_1h_tokens), SUM(output_tokens) FROM rollups_hourly \
          WHERE pool_id = ?1 AND account_id = ?2 AND hour >= ?3 AND hour < ?4 \
+         AND (?5 = 0 OR funding IN ('overage', 'fast')) \
          GROUP BY canonical_model, speed",
     )?;
     for BudgetedMember {
         pool_id,
         account_id,
         period,
-        ..
+        metered_only,
     } in members
     {
         let (period_start, period_end) = period_bounds(*period, now);
@@ -1359,7 +1361,8 @@ pub fn member_spends(
                 pool_id,
                 account_id,
                 period_start / 1_000,
-                period_end / 1_000
+                period_end / 1_000,
+                metered_only
             ],
             |r| {
                 Ok((

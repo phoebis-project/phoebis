@@ -55,8 +55,8 @@ pub use record::{
 };
 pub use rollup::{
     bucket_of, delta_of, fold_account, fold_event, fold_keepalive, fold_request, hour_of,
-    read_account_rollups, read_rollups, AccountRollupRow, CostSplit, RollupRow,
-    KEY_RANGE_PREDICATE, NO_CLASS, UNATTRIBUTED,
+    read_account_rollups, read_rollups, AccountRollupRow, CostSplit, RollupRow, FAST_FUNDING,
+    KEY_RANGE_PREDICATE, NO_CLASS, OVERAGE_FUNDING, PLAN_FUNDING, UNATTRIBUTED,
 };
 pub use task::{spawn, Ledger, LedgerConfig, LedgerGone, LedgerStats, CHANNEL_DEPTH};
 pub use usage::{key_usage_windows, usage_router, KeyUsageWindow, ModelUsage, UsageTokens};

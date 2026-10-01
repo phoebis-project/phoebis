@@ -1544,7 +1544,7 @@ async fn a_rollup_row_from_before_the_class_dimension_reads_under_the_reserved_c
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 23);
+    assert_eq!(db.schema_version().await.unwrap(), 24);
     let rows = db
         .read_blocking(|c| phoebis_ledger::read_rollups(c, 0, i64::MAX))
         .unwrap();
@@ -1640,7 +1640,7 @@ async fn migration_nineteen_adds_the_identity_columns_to_a_version_eighteen_file
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 23);
+    assert_eq!(db.schema_version().await.unwrap(), 24);
     let (row, _) = db.request("r0").await.unwrap().unwrap();
     assert_eq!(
         (
@@ -1691,7 +1691,7 @@ async fn a_ledger_from_before_the_auto_mode_column_gains_it() {
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 23);
+    assert_eq!(db.schema_version().await.unwrap(), 24);
     let columns = db
         .read_blocking(|c| {
             let mut stmt = c.prepare("SELECT name FROM pragma_table_info('requests')")?;
@@ -1767,7 +1767,7 @@ async fn migration_twenty_two_files_every_rollup_row_under_standard_speed_and_ke
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 23);
+    assert_eq!(db.schema_version().await.unwrap(), 24);
     let speeds = |ledger: &phoebis_ledger::LedgerDb| {
         ledger
             .read_blocking(|c| {
@@ -1791,6 +1791,67 @@ async fn migration_twenty_two_files_every_rollup_row_under_standard_speed_and_ke
         speeds(&db),
         vec![("fast".to_string(), 1), ("standard".to_string(), 1)],
         "the key admits a second row that differs from the first in its speed alone"
+    );
+    for index in ["rollups_hourly_key", "rollups_hourly_member"] {
+        let present = db
+            .read_blocking(|c| {
+                Ok(c
+                    .query_row(
+                        "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?1 AND tbl_name = 'rollups_hourly'",
+                        [index],
+                        |_| Ok(()),
+                    )
+                    .is_ok())
+            })
+            .unwrap();
+        assert!(present, "{index} stands on the rebuilt table");
+    }
+}
+
+#[tokio::test]
+async fn migration_twenty_four_files_a_rollup_row_under_fast_funding_by_its_speed_and_plan_otherwise(
+) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ledger.sqlite");
+    {
+        let db = phoebis_ledger::LedgerDb::open(&path).unwrap();
+        // No version-23 row kept an overage reading, so this one files under plan once migrated.
+        plant_funded(&db, "overage", None, Some(true));
+        plant_funded(&db, "fast", Some("fast"), None);
+        // SQLite cannot drop a primary-key column, so the version-23 table is rebuilt from the live one with
+        // the funding left out; the indexes go with the table it replaces, and the migration has to add them back.
+        db.write(|c| {
+            let columns: String = c.query_row(
+                "SELECT group_concat(name, ', ') FROM pragma_table_info('rollups_hourly') WHERE name != 'funding'",
+                [],
+                |r| r.get(0),
+            )?;
+            c.execute_batch(&format!(
+                "CREATE TABLE rollups_hourly_prev AS SELECT {columns} FROM rollups_hourly; \
+                 DROP TABLE rollups_hourly; \
+                 ALTER TABLE rollups_hourly_prev RENAME TO rollups_hourly; \
+                 UPDATE meta SET value = '23' WHERE key = 'schema_version';"
+            ))?;
+            Ok(())
+        })
+        .unwrap();
+    }
+    let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
+    assert_eq!(db.schema_version().await.unwrap(), 24);
+    let mut rows = db
+        .read_blocking(|c| phoebis_ledger::read_rollups(c, 0, i64::MAX))
+        .unwrap()
+        .into_iter()
+        .map(|r| (r.speed, r.funding, r.requests))
+        .collect::<Vec<_>>();
+    rows.sort();
+    assert_eq!(
+        rows,
+        vec![
+            ("fast".to_string(), "fast".to_string(), 1),
+            ("standard".to_string(), "plan".to_string(), 1),
+        ],
+        "a fast row files under fast funding, any other under plan, each keeping its count"
     );
     for index in ["rollups_hourly_key", "rollups_hourly_member"] {
         let present = db
@@ -2207,6 +2268,110 @@ fn a_member_with_two_budgets_gets_a_spend_row_per_period() {
         month.spent_usd,
         3.0 * day.spent_usd,
         "the month sums today's and the earlier day's, never last month's"
+    );
+}
+
+/// A succeeded request of a million uncached Opus 5 input tokens on `main`'s member `a`, its last attempt served
+/// at `speed` with the head's overage reading `overage_in_use`.
+fn plant_funded(
+    db: &phoebis_ledger::LedgerDb,
+    id: &str,
+    speed: Option<&str>,
+    overage_in_use: Option<bool>,
+) {
+    let at = ms(2026, 1, 15, 1, 0);
+    db.insert_request(
+        &RequestRecord {
+            id: id.into(),
+            received_at: at,
+            finished_at: Some(at + 500),
+            key_id: Some("desktop".into()),
+            pool_id: Some("main".into()),
+            canonical_model: "claude-opus-5".into(),
+            model: "claude-opus-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            outcome: "succeeded".into(),
+            attempts: 1,
+            ..Default::default()
+        },
+        &[AttemptRecord {
+            request_id: id.into(),
+            attempt: 1,
+            account_id: "a".into(),
+            account_kind: "oauth".into(),
+            outcome: "succeeded".into(),
+            input_tokens: Some(1_000_000),
+            speed: speed.map(String::from),
+            overage_in_use,
+            ..Default::default()
+        }],
+        None,
+    )
+    .unwrap();
+}
+
+/// The four funding cases on one account in one hour: overage in use, the plan, and two fast answers, one with no
+/// overage reading and one whose head said overage was not in use.
+fn plant_every_funding(db: &phoebis_ledger::LedgerDb) {
+    plant_funded(db, "overage", None, Some(true));
+    plant_funded(db, "plan", None, Some(false));
+    plant_funded(db, "fast", Some("fast"), None);
+    plant_funded(db, "fast-on-plan", Some("fast"), Some(false));
+}
+
+#[test]
+fn an_attempt_folds_under_fast_overage_or_plan_funding() {
+    let db = phoebis_ledger::LedgerDb::open_in_memory().unwrap();
+    plant_every_funding(&db);
+    let mut rows = db
+        .read_blocking(|c| phoebis_ledger::read_rollups(c, 0, i64::MAX))
+        .unwrap()
+        .into_iter()
+        .map(|r| (r.funding, r.speed, r.requests))
+        .collect::<Vec<_>>();
+    rows.sort();
+    assert_eq!(
+        rows,
+        vec![
+            ("fast".to_string(), "fast".to_string(), 2),
+            ("overage".to_string(), "standard".to_string(), 1),
+            ("plan".to_string(), "standard".to_string(), 1),
+        ],
+        "a fast answer draws usage credits whatever the overage flag, so both file under fast"
+    );
+}
+
+#[test]
+fn member_spends_sums_the_metered_rows_alone_when_asked() {
+    let db = phoebis_ledger::LedgerDb::open_in_memory().unwrap();
+    plant_every_funding(&db);
+    let spent = |metered_only| {
+        db.read_blocking(|c| {
+            member_spends(
+                c,
+                &[BudgetedMember {
+                    pool_id: "main".into(),
+                    account_id: "a".into(),
+                    period: BudgetPeriod::Day,
+                    metered_only,
+                }],
+                ms(2026, 1, 15, 12, 0),
+                &PriceTable::shipped(),
+            )
+        })
+        .unwrap()[0]
+            .spent_usd
+    };
+    assert_eq!(
+        spent(false),
+        5.0 + 5.0 + 10.0 + 10.0,
+        "every row: two million standard input tokens at $5 and two million fast at $10"
+    );
+    assert_eq!(
+        spent(true),
+        5.0 + 10.0 + 10.0,
+        "the overage row and the two fast answers; the plan's own traffic is no spend"
     );
 }
 
