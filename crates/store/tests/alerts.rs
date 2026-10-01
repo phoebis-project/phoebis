@@ -517,23 +517,25 @@ fn every_deliveries_query_seeks_its_partial_index_and_sorts_nothing() {
             index,
         ));
     }
+    // An event shape names the seek, since a full scan of the event index would name the index as well.
+    let event_seek = "alert_deliveries_event (event_id=?)";
     shapes.push((
         "one event's deliveries".into(),
         event_deliveries_sql(),
-        "alert_deliveries_event",
+        event_seek,
     ));
     shapes.push((
         "two events' deliveries".into(),
         events_deliveries_sql(2),
-        "alert_deliveries_event",
+        event_seek,
     ));
     shapes.push((
         "an event's delete and its cascade".into(),
         "DELETE FROM alert_events WHERE id = ?".into(),
-        "alert_deliveries_event",
+        event_seek,
     ));
     let mut wrong = Vec::new();
-    for (shape, sql, index) in shapes {
+    for (shape, sql, expected) in shapes {
         let mut stmt = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
         // The plan does not depend on the bound values, so the parameters stay unbound.
         let mut rows = stmt.raw_query();
@@ -542,7 +544,7 @@ fn every_deliveries_query_seeks_its_partial_index_and_sorts_nothing() {
             plan.push(row.get::<_, String>(3).unwrap());
         }
         let plan = plan.join("; ");
-        if !plan.contains(index) || plan.contains("TEMP B-TREE") {
+        if !plan.contains(expected) || plan.contains("TEMP B-TREE") {
             wrong.push(format!("{shape}: {plan}"));
         }
     }

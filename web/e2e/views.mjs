@@ -939,7 +939,7 @@ async function poolKeyMenus(theme) {
 
 /**
  * The Keys page's Actions menus at the pass's viewport and at the 760 px strip. On the full table, the first row's
- * menu with the table's top scrolled under the top bar opens downward in flow whenever the room under it inside the
+ * menu with the table's top scrolled to just below the bar opens downward in flow whenever the room under it inside the
  * table's wrap holds the list, and the last row's menu with the page scrolled as far down as it goes takes whichever
  * side has the room. On the table filtered to its last key's name through the search field, the one short row leaves
  * the list less room than it needs on both sides inside the clipping wrap, so the list leaves the table for a layer

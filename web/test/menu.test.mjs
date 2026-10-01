@@ -6,7 +6,7 @@ import * as d from './dist/api.js';
 const list = { height: 141, width: 160 };
 const trigger = (top) => ({ bottom: top + 22, right: 900, top });
 // A wrap 300 px tall inside a 1 px border, so its client box runs from 101 to 401; a horizontal scrollbar under it
-// takes the 15 px between that and the border box's 417.
+// and the bottom border take the 16 px between that and the border box's 417.
 const wrap = { clientHeight: 300, clientTop: 1, getBoundingClientRect: () => ({ bottom: 417, top: 100 }) };
 
 test('a menu without a clipping wrap opens downward while the viewport holds the list below its trigger', () => {

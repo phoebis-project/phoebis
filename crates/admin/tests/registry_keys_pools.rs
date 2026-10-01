@@ -2303,22 +2303,23 @@ async fn a_daily_budget_of_zero_is_refused() {
 async fn a_budget_on_a_subscription_member_is_kept_and_a_null_budget_is_accepted() {
     let (app, _up) = common::admin_app_paired().await;
     let cookie = login(&app, "admin-secret").await;
-    let business = |pools: &serde_json::Value| {
+    let member_of = |pools: &serde_json::Value, pool: &str, account: &str| {
         pools["pools"]
             .as_array()
             .unwrap()
             .iter()
-            .find(|p| p["id"] == "main")
+            .find(|p| p["id"] == pool)
             .and_then(|p| {
                 p["members"]
                     .as_array()
                     .unwrap()
                     .iter()
-                    .find(|m| m["account_id"] == "business")
+                    .find(|m| m["account_id"] == account)
                     .cloned()
             })
             .unwrap()
     };
+    let business = |pools: &serde_json::Value| member_of(pools, "main", "business");
     // At no spend the budget holds nothing back, so the verdict stays eligible and no report names a spend.
     let unspent = |member: &serde_json::Value| {
         member["eligible"].as_str() == Some("eligible")
@@ -2365,6 +2366,19 @@ async fn a_budget_on_a_subscription_member_is_kept_and_a_null_budget_is_accepted
         accepted.status(),
         201,
         "a null budget on the OAuth member and a budget on the API-key member are accepted"
+    );
+    let pools = json(get(&app, "/admin/pools", Some(&cookie)).await).await;
+    let budgets = |account: &str| {
+        let member = member_of(&pools, "aux", account);
+        (
+            member["budget_daily_usd"].as_f64(),
+            member["budget_monthly_usd"].as_f64(),
+        )
+    };
+    assert_eq!(
+        (budgets("business"), budgets("direct")),
+        ((None, None), (None, Some(5.0))),
+        "the aux pool stores no budget on the subscription member and 5.0 on the API-key member: {pools}"
     );
     for (method, path, body, budgets) in [
         (

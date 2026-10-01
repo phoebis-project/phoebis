@@ -36,6 +36,12 @@ pub const KEY: &str = "phoebis-testkey";
 /// A raw Messages caller, not Claude Code.
 pub const SDK_USER_AGENT: &str = "anthropic-sdk-python/0.40.0";
 
+pub const NOW: i64 = 1_000_000;
+/// The catalog cache's window in every harness but `harness_with_catalog_window`'s: the bootstrap default.
+pub const CATALOG_WINDOW: Duration = Duration::from_secs(60);
+/// The startup bound every harness passes to `CatalogService::new`, short enough for a test to wait past it.
+pub const STARTUP_BOUND: Duration = Duration::from_millis(500);
+
 pub fn user(text: &str) -> serde_json::Value {
     serde_json::json!({"role": "user", "content": text})
 }
@@ -43,11 +49,6 @@ pub fn user(text: &str) -> serde_json::Value {
 pub fn assistant(text: &str) -> serde_json::Value {
     serde_json::json!({"role": "assistant", "content": text})
 }
-pub const NOW: i64 = 1_000_000;
-/// The catalog cache's window in every harness but `harness_with_catalog_window`'s: the bootstrap default.
-pub const CATALOG_WINDOW: Duration = Duration::from_secs(60);
-/// The startup bound every harness passes to `CatalogService::new`, short enough for a test to wait past it.
-pub const STARTUP_BOUND: Duration = Duration::from_millis(500);
 
 #[derive(Clone)]
 pub struct TestAccount {
@@ -382,6 +383,30 @@ pub async fn harness_on(
         pool,
         limits,
         None,
+        false,
+        None,
+        None,
+        CATALOG_WINDOW,
+        RouterConfig::default(),
+    )
+    .await
+}
+
+/// `harness_on` with a bus attached, for a reopened store whose requests a test reads off the bus.
+pub async fn harness_on_with_bus(
+    store: Arc<Store>,
+    up: &FakeUpstream,
+    accounts: &[TestAccount],
+    pool: PoolSpec,
+    bus: Bus,
+) -> Harness {
+    build(
+        store,
+        up,
+        accounts,
+        pool,
+        default_limits(),
+        Some(bus),
         false,
         None,
         None,

@@ -421,7 +421,8 @@ fn budget_exhausted(
     let member = snapshot
         .members(pool_id)
         .iter()
-        .find(|m| m.account_id == account_id)?;
+        .find(|m| m.account_id == account_id)
+        .filter(|m| m.budgeted())?;
     let spends = state
         .member_spends_of(pool_id, account_id)
         .collect::<Vec<_>>();

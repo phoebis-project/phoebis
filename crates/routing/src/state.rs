@@ -1301,7 +1301,7 @@ impl RoutingState {
         self.affinity.clone()
     }
 
-    /// The member's spend rows, one per period the ledger reported, in no fixed order.
+    /// The member's spend rows, one per period the ledger reported, the day's before the month's.
     pub fn member_spends_of(
         &self,
         pool_id: &str,

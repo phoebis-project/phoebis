@@ -626,7 +626,7 @@ fn a_pin_a_pool_a_member_and_a_key_from_before_the_affinity_columns_read_the_def
 /// A version-38 pool's `cache_ttl_json` as the app wrote it then, the `keepalive` key in both sets: a seed that
 /// restores the dropped shape plays the roll-back constant's role, so the sweep's marker covers it the same way.
 const SEED_PRE_V39: &str = r#"
-INSERT INTO pools (id, label, enabled, strategy, overage_policy, keepalive_json, cache_ttl_json, created_at, updated_at) VALUES ('warm', 'warm', 1, 'priority', 'prefer_plan', '{}', '{"enabled":true,"inject_when_absent":false,"metered":{"keepalive":"1h","main":"1h","models":[],"subagent":"5m"},"plan":{"keepalive":"5m","main":"5m","models":[],"subagent":"1h"}}', 1, 1); -- rollback
+INSERT INTO pools (id, label, enabled, strategy, overage_policy, keepalive_json, cache_ttl_json, created_at, updated_at) VALUES ('warm', 'warm', 1, 'priority', 'prefer_plan', '{}', '{"enabled":true,"inject_when_absent":false,"metered":{"keepalive":"1h","main":"1h","models":[],"subagent":"1h"},"plan":{"keepalive":"5m","main":"5m","models":[],"subagent":"5m"}}', 1, 1); -- rollback
 "#;
 
 #[test]
@@ -652,7 +652,7 @@ fn a_stored_policy_with_the_retired_keepalive_key_reads_as_set_after_the_migrati
         phoebis_relay::TtlRules {
             main: phoebis_relay::CacheTtl::FiveMinutes,
             models: Vec::new(),
-            subagent: phoebis_relay::CacheTtl::OneHour,
+            subagent: phoebis_relay::CacheTtl::FiveMinutes,
         },
         "the plan set keeps its stored branches, not the defaults"
     );
@@ -661,7 +661,7 @@ fn a_stored_policy_with_the_retired_keepalive_key_reads_as_set_after_the_migrati
         phoebis_relay::TtlRules {
             main: phoebis_relay::CacheTtl::OneHour,
             models: Vec::new(),
-            subagent: phoebis_relay::CacheTtl::FiveMinutes,
+            subagent: phoebis_relay::CacheTtl::OneHour,
         },
         "the metered set keeps its stored branches, not the defaults"
     );
