@@ -625,6 +625,7 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
         } else {
             observed.auto_mode.map(|m| m.as_str().to_string())
         },
+        held: complete.held.clone(),
     };
     records.push(Record::Request {
         request,
@@ -822,6 +823,7 @@ mod tests {
             client_version: Some("2.1.300".into()),
             response_bytes: Some(20),
             response_chunks: None,
+            held: None,
             finished_at: 1_500,
         })
     }
@@ -848,6 +850,7 @@ mod tests {
             client_version: None,
             response_bytes,
             response_chunks,
+            held: None,
             finished_at: 1_500,
         }
     }

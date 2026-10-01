@@ -75,6 +75,8 @@ pub struct RequestRecord {
     pub fork_depth: Option<u32>,
     /// `server`, `stripped`, `body_shape`; null for every other request.
     pub auto_mode: Option<String>,
+    /// The `CohortHold` JSON of the holds the request waited through; `None` for a request never held.
+    pub held: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

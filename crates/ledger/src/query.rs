@@ -109,6 +109,8 @@ pub struct RequestFilter {
     pub turn_origins: Vec<String>,
     /// `fast`, `standard`: the serving attempt's `speed`, NULL read as `standard`.
     pub speeds: Vec<String>,
+    /// Keep the requests that waited for a slot (`held` on the request row).
+    pub held: bool,
     pub from: Option<i64>,
     pub to: Option<i64>,
     pub include_probes: bool,
@@ -284,6 +286,9 @@ pub fn list_requests(
             "COALESCE((SELECT a.speed FROM attempts a WHERE a.request_id = requests.id ORDER BY a.attempt DESC LIMIT 1), 'standard') IN ({})",
             marks.join(", ")
         ));
+    }
+    if filter.held {
+        clauses.push("requests.held IS NOT NULL".into());
     }
     // The rollups and the console's fold already read an absent agent or client as `-`; `pattern_any`'s
     // coalesce keeps a nullable column from excluding such a row from both the wildcard and the exact marker.

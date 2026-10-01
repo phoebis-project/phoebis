@@ -2,7 +2,7 @@
 //! across accounts, and the response the caller gets.
 
 use std::collections::BTreeSet;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use axum::body::Body;
@@ -20,10 +20,10 @@ use phoebis_bus::{
 };
 use phoebis_oauth::{AccessToken, AcquireError, Clock, CredentialManager};
 use phoebis_routing::{
-    resolve, AccountTicket, ClientClass, EvidenceSource, Exhaustion, HoldFacts,
-    KeyPermit, KeyRefusal, OverageEvidence, PinRef, Presented, Refusal, Report,
-    ResolveError, RouterHandle, SelectRequest, SelectResult, Selection, SelectionTrace,
-    MODEL_REJECTED_REASON,
+    cohort_hold, resolve, AccountTicket, ClientClass, CohortHold, EvidenceSource, Exhaustion,
+    HoldFacts, KeyPermit, KeyRefusal, OverageEvidence, PinRef, Presented,
+    Refusal, Report, ResolveError, RouterHandle, SelectRequest, SelectResult, Selection,
+    SelectionTrace, MODEL_REJECTED_REASON,
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, MemoryStore,
@@ -156,6 +156,8 @@ pub struct RelayOutcome {
     /// (`Exhaustion::Pinned`): the obstacles the keepalive holds on rather than pauses as an exhausted pool; `None`
     /// otherwise.
     pub obstacle: Option<&'static str>,
+    /// The holds this request waited through, the summary `phoebis_routing::cohort_hold` gives; `None` for none.
+    pub held: Option<CohortHold>,
 }
 
 /// Which side funded the account a request served under, on the response's extensions beside `RelayOutcome`.
@@ -346,11 +348,23 @@ pub(crate) struct Trace {
     origin: Origin,
     kind: Kind,
     probe_generation: Option<i64>,
+    /// The holds waited through so far. Kept here rather than threaded to each outcome, because every answer
+    /// after a hold carries it: a served attempt, a local answer on the leg, and an exhaustion that dispatched
+    /// nothing, which no attempt row could record.
+    held: Arc<Mutex<Option<CohortHold>>>,
 }
 
 impl Trace {
     pub(crate) fn bus_attached(&self) -> bool {
         self.bus.is_some()
+    }
+
+    fn waited(&self, holds: &[HoldFacts]) {
+        *self.held.lock().expect("hold lock poisoned") = cohort_hold(holds);
+    }
+
+    fn held(&self) -> Option<CohortHold> {
+        self.held.lock().expect("hold lock poisoned").clone()
     }
 
     fn publish(&self, event: Event) {
@@ -522,6 +536,10 @@ impl Trace {
             client_version: outcome.client_version.clone(),
             response_bytes,
             response_chunks,
+            held: outcome
+                .held
+                .as_ref()
+                .and_then(|h| serde_json::to_string(h).ok()),
             finished_at,
         }))
         .await;
@@ -745,6 +763,7 @@ impl Relay {
                 Kind::Inference
             },
             probe_generation: probe.as_ref().map(|p| p.key_generation),
+            held: Arc::new(Mutex::new(None)),
         };
         let (parts, body) = request.into_parts();
         let original = parts.extensions.get::<OriginalHead>();
@@ -1374,7 +1393,10 @@ impl Relay {
                 }
                 // A hold spends a slot of the budget like an attempt. A slot freed within the bound lets the next
                 // selection place there; past it the account is attempted and the next selection looks elsewhere.
-                SelectResult::Held { account_id, hold } => {
+                SelectResult::Held {
+                    account_id,
+                    mut hold,
+                } => {
                     // With no slot left for a dial after this one, the wait could only end in the budget's refusal,
                     // so the pool answers as the exhausted one it is, at once: at its cap, unless a leg dialled.
                     if spent + 1 >= self.limits.max_attempts {
@@ -1383,14 +1405,19 @@ impl Relay {
                             .await;
                     }
                     spent += 1;
-                    holds.push(hold);
-                    let deadline = tokio::time::Instant::now() + admitted.retry_in_place;
-                    if !self
+                    let started = tokio::time::Instant::now();
+                    let deadline = started + admitted.retry_in_place;
+                    let freed = self
                         .router
                         .in_flight()
                         .wait_for_slot(&account_id, failover.in_flight_cap, deadline)
-                        .await
-                    {
+                        .await;
+                    // Measured here, the one place that knows: the trace of the attempt that follows names the
+                    // wait, and so does the completion when no attempt follows.
+                    hold.held_ms = started.elapsed().as_millis() as u64;
+                    holds.push(hold);
+                    trace.waited(&holds);
+                    if !freed {
                         held_out = true;
                         attempted.push(account_id);
                     }
@@ -2805,6 +2832,7 @@ impl Relay {
             upstream_request_id: None,
             cache_ttl_ms,
             obstacle: None,
+            held: trace.held(),
         }
     }
 

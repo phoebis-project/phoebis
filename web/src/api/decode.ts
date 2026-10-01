@@ -387,7 +387,7 @@ const placementOf = (v: unknown): Placement | null => {
   const rung = PLACEMENT_RUNG_VALUES.find((r) => r === str(p.rung));
   return rung === undefined ? null : { depth: num(p.depth), prefixTokens: num(p.prefix_tokens), rung };
 };
-const cohortHoldOf = (v: unknown): CohortHold | null => (v === null || typeof v !== 'object' ? null : { cohort: strOrNull(rec(v).cohort), waitedOn: strings(rec(v).waited_on) });
+const cohortHoldOf = (v: unknown): CohortHold | null => (v === null || typeof v !== 'object' ? null : { cohort: strOrNull(rec(v).cohort), heldMs: num(rec(v).held_ms), waitedOn: strings(rec(v).waited_on) });
 export function decodeSelection(v: unknown): SelectionTrace | null {
   if (v === null || typeof v !== 'object') return null;
   const s = rec(v);
@@ -404,7 +404,7 @@ export function decodeRequest(v: unknown): RequestLog {
     attempts: list(r.attempts).map(rec).map((a) => ({ accountId: str(a.account_id), cacheMissReason: missReason(a.cache_miss_reason), cooldownSet: a.cooldown_set ? { reason: str(rec(a.cooldown_set).reason), until: isoOr(rec(a.cooldown_set).until, epoch) } : null, durationMs: numOrNull(a.duration_ms), index: num(a.index) - 1, outcome: outcomeOf(a.outcome), response: responseOf(a.response), selection: decodeSelection(a.selection), startedAt: isoOr(a.started_at, epoch), upstreamStatus: numOrNull(a.upstream_status), windows: attemptWindows(a.windows) })),
     autoMode: AUTO_MODE_VALUES.find((m) => m === str(r.auto_mode)) ?? null,
     canonicalModel: str(r.canonical_model), capturedBodies: bool(r.captured_bodies), client: strOrNull(r.client), clientDrift: strOrNull(r.client_drift), compaction: strOrNull(r.compaction), contextCompacted: strOrNull(r.context_compacted), costUsd: num(r.cost_usd), durationMs: numOrNull(r.duration_ms), errorCode: strOrNull(r.error_code),
-    forkDepth: numOrNull(r.fork_depth), forkedFrom: strOrNull(r.forked_from), id: str(r.id),
+    forkDepth: numOrNull(r.fork_depth), forkedFrom: strOrNull(r.forked_from), held: cohortHoldOf(r.held), id: str(r.id),
     keyGeneration: num(r.key_generation), keyId: strOrNull(r.key_id),
     kind: REQUEST_KIND_VALUES.find((k) => k === str(r.kind)) ?? 'inference', model: str(r.model),
     outcome: REQUEST_OUTCOME_VALUES.find((o) => o === str(r.outcome)) ?? 'failed',

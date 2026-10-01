@@ -4182,7 +4182,8 @@ export const FIXTURES: Record<string, Fixture> = {
                 "stop_sequence": null
               }
             }
-          ]
+          ],
+          "held": null
         },
         {
           "id": "r-captured",
@@ -4288,7 +4289,8 @@ export const FIXTURES: Record<string, Fixture> = {
                 "stop_sequence": null
               }
             }
-          ]
+          ],
+          "held": null
         },
         {
           "id": "r-failed",
@@ -4394,7 +4396,8 @@ export const FIXTURES: Record<string, Fixture> = {
                 "stop_sequence": null
               }
             }
-          ]
+          ],
+          "held": null
         },
         {
           "id": "r-earlier-holder",
@@ -4500,7 +4503,8 @@ export const FIXTURES: Record<string, Fixture> = {
                 "stop_sequence": null
               }
             }
-          ]
+          ],
+          "held": null
         },
         {
           "id": "r-failover",
@@ -4612,7 +4616,8 @@ export const FIXTURES: Record<string, Fixture> = {
                   "waited_on": [
                     "direct"
                   ],
-                  "cohort": "direct"
+                  "cohort": "direct",
+                  "held_ms": 1250
                 }
               },
               "response": {
@@ -4680,7 +4685,14 @@ export const FIXTURES: Record<string, Fixture> = {
                 "stop_sequence": null
               }
             }
-          ]
+          ],
+          "held": {
+            "waited_on": [
+              "direct"
+            ],
+            "cohort": "direct",
+            "held_ms": 1250
+          }
         }
       ],
       "accounts": [
@@ -6301,7 +6313,8 @@ export const FIXTURES: Record<string, Fixture> = {
                 "waited_on": [
                   "direct"
                 ],
-                "cohort": "direct"
+                "cohort": "direct",
+                "held_ms": 1250
               }
             },
             "response": {
@@ -6369,7 +6382,14 @@ export const FIXTURES: Record<string, Fixture> = {
               "stop_sequence": null
             }
           }
-        ]
+        ],
+        "held": {
+          "waited_on": [
+            "direct"
+          ],
+          "cohort": "direct",
+          "held_ms": 1250
+        }
       },
       "events": [
         {
@@ -6574,7 +6594,8 @@ export const FIXTURES: Record<string, Fixture> = {
                 "stop_sequence": null
               }
             }
-          ]
+          ],
+          "held": null
         },
         {
           "id": "r-captured",
@@ -6680,7 +6701,8 @@ export const FIXTURES: Record<string, Fixture> = {
                 "stop_sequence": null
               }
             }
-          ]
+          ],
+          "held": null
         },
         {
           "id": "r-failed",
@@ -6786,7 +6808,8 @@ export const FIXTURES: Record<string, Fixture> = {
                 "stop_sequence": null
               }
             }
-          ]
+          ],
+          "held": null
         },
         {
           "id": "r-earlier-holder",
@@ -6892,7 +6915,8 @@ export const FIXTURES: Record<string, Fixture> = {
                 "stop_sequence": null
               }
             }
-          ]
+          ],
+          "held": null
         },
         {
           "id": "r-failover",
@@ -7004,7 +7028,8 @@ export const FIXTURES: Record<string, Fixture> = {
                   "waited_on": [
                     "direct"
                   ],
-                  "cohort": "direct"
+                  "cohort": "direct",
+                  "held_ms": 1250
                 }
               },
               "response": {
@@ -7072,7 +7097,14 @@ export const FIXTURES: Record<string, Fixture> = {
                 "stop_sequence": null
               }
             }
-          ]
+          ],
+          "held": {
+            "waited_on": [
+              "direct"
+            ],
+            "cohort": "direct",
+            "held_ms": 1250
+          }
         }
       ],
       "next_cursor": null

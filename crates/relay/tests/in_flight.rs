@@ -191,6 +191,18 @@ async fn a_hold_followed_by_a_dispatch_names_the_hold_in_the_attempts_trace() {
         serde_json::json!(["a"]),
         "the attempt that follows the hold names the account it waited on: {selection}"
     );
+    let held_ms = selection["cohort_hold"]["held_ms"]
+        .as_u64()
+        .unwrap_or_else(|| panic!("the trace names the wait: {selection}"));
+    assert!(
+        held_ms > 0 && held_ms <= 10_000,
+        "the wait lasted until the release, within the bound: {held_ms}"
+    );
+    assert_eq!(
+        serde_json::to_value(outcome(&held).held).unwrap(),
+        selection["cohort_hold"],
+        "the request's own summary is the attempt's entry"
+    );
     drop(first);
     up.release();
     up.shutdown().await;
@@ -411,6 +423,171 @@ async fn a_hold_that_would_leave_no_attempt_for_a_dial_answers_the_exhaustion_at
     assert!(waited < HELD_FOR, "answered without waiting: {waited:?}");
     assert_eq!(posts(&up), 1, "nothing was dialled for the held request");
     drain(first).await;
+    up.shutdown().await;
+}
+
+/// The completion the bus carried for `request_id`, read off `sub` as it arrives.
+async fn completion_of(
+    sub: &mut phoebis_bus::Subscriber,
+    request_id: &str,
+) -> phoebis_bus::RequestComplete {
+    let mut events = Vec::new();
+    wait_for(Duration::from_secs(5), || {
+        while let Ok(e) = sub.events.try_recv() {
+            events.push(e);
+        }
+        events.iter().find_map(|e| match e {
+            Event::RequestComplete(c) if c.request_id == request_id => Some(c.clone()),
+            _ => None,
+        })
+    })
+    .await
+}
+
+#[tokio::test]
+async fn a_hold_that_times_out_with_no_dispatch_names_its_wait_on_the_completion() {
+    let up = FakeUpstream::start(messages(held_stream())).await;
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test");
+    let h = harness_with_bus(
+        &up,
+        &[oauth("a", A, 0)],
+        PoolSpec {
+            failover: account_cap(1, 1),
+            ..PoolSpec::default()
+        },
+        bus,
+    )
+    .await;
+    let first = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, MODEL, "s1"))
+        .await
+        .unwrap();
+    assert_eq!(h.router.in_flight().account("a"), 1, "a is at its cap");
+    // The paused clock runs the one-second bound out as soon as nothing else is left to run, so the wait is
+    // measured on the runtime's clock rather than slept through.
+    tokio::time::pause();
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, MODEL, "s2"))
+        .await
+        .unwrap();
+    tokio::time::resume();
+    assert_eq!(
+        (
+            resp.status().as_u16(),
+            resp.headers()["x-phoebis-error-code"].to_str().unwrap()
+        ),
+        (429, "accounts_at_cap"),
+        "past the bound the one account is attempted and the pool is at its cap"
+    );
+    assert_eq!(posts(&up), 1, "nothing was dialled for the held request");
+    let held = outcome(&resp)
+        .held
+        .expect("the outcome names the hold it waited through");
+    assert_eq!(held.waited_on, ["a"]);
+    assert!(
+        (900..=2_000).contains(&held.held_ms),
+        "the wait ran the one-second bound out: {}",
+        held.held_ms
+    );
+    let complete = completion_of(&mut sub, &outcome(&resp).request_id).await;
+    assert_eq!(
+        complete
+            .held
+            .as_deref()
+            .map(|h| serde_json::from_str::<serde_json::Value>(h).unwrap()),
+        Some(serde_json::to_value(&held).unwrap()),
+        "the completion carries the hold although no attempt followed it"
+    );
+    drop(first);
+    up.release();
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_hold_whose_next_selection_finds_no_attempt_left_names_its_wait_on_the_completion() {
+    let up = FakeUpstream::start(messages(held_stream())).await;
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test");
+    let h = harness_with_bus_limits(
+        &up,
+        &[oauth("a", A, 0), oauth("b", B, 1)],
+        PoolSpec {
+            failover: account_cap(1, 1),
+            ..PoolSpec::default()
+        },
+        bus,
+        phoebis_relay::Limits {
+            max_attempts: 2,
+            ..default_limits()
+        },
+    )
+    .await;
+    let on_a = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, MODEL, "s1"))
+        .await
+        .unwrap();
+    let on_b = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, MODEL, "s2"))
+        .await
+        .unwrap();
+    assert_eq!(
+        (
+            outcome(&on_a).account_id.as_str(),
+            outcome(&on_b).account_id.as_str()
+        ),
+        ("a", "b"),
+        "each account holds one stream at its cap"
+    );
+    tokio::time::pause();
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, MODEL, "s3"))
+        .await
+        .unwrap();
+    tokio::time::resume();
+    assert_eq!(
+        (
+            resp.status().as_u16(),
+            resp.headers()["x-phoebis-error-code"].to_str().unwrap()
+        ),
+        (429, "accounts_at_cap"),
+        "the hold on b would leave no slot of the budget for a dial"
+    );
+    assert_eq!(posts(&up), 2, "nothing was dialled for the held request");
+    let held = outcome(&resp)
+        .held
+        .expect("the outcome names the hold it waited through");
+    assert_eq!(
+        held.waited_on,
+        ["a"],
+        "the hold on b answered at once and was never waited through"
+    );
+    assert!(
+        (900..=2_000).contains(&held.held_ms),
+        "the first wait ran the one-second bound out: {}",
+        held.held_ms
+    );
+    let complete = completion_of(&mut sub, &outcome(&resp).request_id).await;
+    assert_eq!(
+        complete
+            .held
+            .as_deref()
+            .map(|h| serde_json::from_str::<serde_json::Value>(h).unwrap()),
+        Some(serde_json::to_value(&held).unwrap()),
+        "the completion carries the first wait"
+    );
+    drop((on_a, on_b));
+    up.release();
     up.shutdown().await;
 }
 

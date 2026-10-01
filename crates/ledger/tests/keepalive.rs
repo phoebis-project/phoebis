@@ -460,6 +460,7 @@ async fn migration_five_adds_the_skipped_column_and_the_marks_table_to_a_version
             "effort",
             "fork_depth",
             "forked_from",
+            "held",
             "identified_by",
             "identity_depth",
             "identity_root",
@@ -491,7 +492,7 @@ async fn migration_five_adds_the_skipped_column_and_the_marks_table_to_a_version
         .unwrap();
     }
     let db = std::sync::Arc::new(LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 24);
+    assert_eq!(db.schema_version().await.unwrap(), 25);
     let (_, attempts) = db.request("r0").await.unwrap().unwrap();
     assert_eq!(
         attempts.len(),

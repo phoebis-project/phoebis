@@ -20,8 +20,8 @@ pub use affinity::{
 pub use phoebis_store::canonical_id as canonical_model;
 pub use resolve::{resolve, Candidate, ResolveError};
 pub use select::{
-    effective_warm, lane_key, release_reasons, select, warmth_of, ClientClass, CohortHold,
-    Exhaustion, HoldFacts, MigrateReason, Placement, Refusal,
+    cohort_hold, effective_warm, lane_key, release_reasons, select, warmth_of, ClientClass,
+    CohortHold, Exhaustion, HoldFacts, MigrateReason, Placement, Refusal,
     SelectRequest, SelectResult, Selection, SelectionTrace, Skipped, Warmth, FAST_CREDITS_REASON,
     FAST_RATE_LIMIT_REASON, MIGRATE_BAND, MODEL_REJECTED_REASON, REFRESHING_CLASSES,
 };

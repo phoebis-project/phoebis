@@ -313,6 +313,7 @@ async fn the_sessions_view_carries_the_companion_and_the_recipes_and_release_dis
             client_version: None,
             response_bytes: None,
             response_chunks: None,
+            held: None,
             finished_at: now,
         }));
     let listed = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
@@ -628,6 +629,7 @@ async fn a_session_row_groups_by_key_generation_and_a_historical_row_is_read_onl
             client_version: None,
             response_bytes: None,
             response_chunks: None,
+            held: None,
             finished_at: now,
         }));
     let listed = common::wait_json(&parts.app, "/admin/sessions", &cookie, |v| {

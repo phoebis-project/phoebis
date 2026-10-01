@@ -40,6 +40,8 @@ pub(crate) fn request_summary(r: &RequestRecord, attempts: &[AttemptRecord]) -> 
         // priced attempt would put a signed zero on the wire and the UI would read "-$0.00".
         "cost_usd": attempts.iter().filter_map(|a| a.estimated_usd).fold(0.0, |a, b| a + b),
         "attempts": attempts.iter().map(attempt_json).collect::<Vec<_>>(),
+        // The request row's own facts rather than an attempt's: a hold that ended in an exhaustion has no attempt.
+        "held": r.held.as_deref().and_then(|h| serde_json::from_str::<Value>(h).ok()),
     })
 }
 
@@ -149,6 +151,7 @@ pub(crate) async fn list(
         agent_types: list_param(&q, "agent_types"),
         turn_origins: list_param(&q, "turn_origins"),
         speeds: list_param(&q, "speeds"),
+        held: q.get("held").is_some_and(|v| v == "true" || v == "1"),
         from,
         to,
         include_probes: q

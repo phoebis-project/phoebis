@@ -681,16 +681,25 @@ test('a selection trace decodes its placement', () => {
   const placed = d.decodeRequest(fixture('request').request).attempts[0].selection;
   assert.ok(wire?.placement && wire?.cohort_hold, 'the captured trace carries a placement and a hold');
   assert.deepEqual(placed.placement, { depth: wire.placement.depth, prefixTokens: wire.placement.prefix_tokens, rung: wire.placement.rung });
-  assert.deepEqual(placed.cohortHold, { cohort: wire.cohort_hold.cohort, waitedOn: wire.cohort_hold.waited_on });
+  assert.deepEqual(placed.cohortHold, { cohort: wire.cohort_hold.cohort, heldMs: wire.cohort_hold.held_ms, waitedOn: wire.cohort_hold.waited_on });
+  assert.equal(placed.cohortHold.heldMs, 1250, 'the captured hold names its wait');
   assert.deepEqual([placed.placement.rung, placed.placement.depth, placed.placement.prefixTokens > 0], ['content', 2, true]);
   const trace = (placement, cohort_hold) => d.decodeSelection({ cohort_hold, placement, renewed: false, skipped: [], strategy: 'pace', tier: null });
   for (const rung of ['content', 'static', 'with_main']) assert.equal(trace({ depth: 1, prefix_tokens: 10, rung }, null).placement.rung, rung);
   assert.deepEqual([...d.PLACEMENT_RUNG_VALUES], ['content', 'static', 'with_main']);
   assert.equal(trace({ depth: 1, prefix_tokens: 10, rung: 'guess' }, null).placement, null, 'a rung the console cannot word reads as no placement');
   assert.equal(trace(null, null).placement, null);
-  assert.deepEqual(trace(null, { cohort: null, waited_on: ['business', 'direct'] }).cohortHold, { cohort: null, waitedOn: ['business', 'direct'] }, "a hold on the strategy's choice names no cohort");
+  assert.deepEqual(trace(null, { cohort: null, held_ms: 400, waited_on: ['business', 'direct'] }).cohortHold, { cohort: null, heldMs: 400, waitedOn: ['business', 'direct'] }, "a hold on the strategy's choice names no cohort");
   const older = d.decodeSelection({ renewed: true, skipped: [], strategy: 'pace', tier: null });
   assert.deepEqual([older.placement, older.cohortHold], [null, null], 'a trace without either member reads as neither');
+});
+
+test('a request decodes the holds it waited through, whether or not an attempt followed', () => {
+  const wire = fixture('request').request;
+  assert.deepEqual(d.decodeRequest(wire).held, { cohort: wire.held.cohort, heldMs: 1250, waitedOn: wire.held.waited_on }, 'the row carries its own summary');
+  assert.deepEqual(d.decodeRequest(wire).held, d.decodeRequest(wire).attempts[0].selection.cohortHold, 'and it is the trace the attempt after the hold names');
+  assert.deepEqual(d.decodeRequest({ ...wire, attempts: [], held: { cohort: null, held_ms: 10_000, waited_on: ['business'] } }).held, { cohort: null, heldMs: 10_000, waitedOn: ['business'] }, 'a hold no attempt followed');
+  assert.equal(d.decodeRequest({ ...wire, held: null }).held, null, 'a request never held');
 });
 
 test('a request decodes its fork', () => {

@@ -2,7 +2,7 @@ import type { SKIP_OBSTACLE_VALUES } from '@/api/decode';
 import type { Placement, PoolStrategy, SelectionTrace as Trace, Usage } from '@/api/types';
 import { Badge } from '@/components/ui/primitives';
 import { moveLabel, own } from '@/lib/analytics';
-import { fmtCompact, placementHit } from '@/lib/format';
+import { fmtCompact, fmtMs, placementHit } from '@/lib/format';
 import { STRATEGY_LABEL } from '@/lib/selection';
 
 type Obstacle = (typeof SKIP_OBSTACLE_VALUES)[number];
@@ -70,7 +70,11 @@ export function SelectionTrace({ trace, usage }: { trace: Trace; usage: Usage })
         )}
         <span>{placement}</span>
         {placed !== null && moved !== null && <span>{placed}</span>}
-        {hold !== null && <span title={HOLD_HINT}>held on {hold} before placing</span>}
+        {hold !== null && trace.cohortHold && (
+          <span title={HOLD_HINT}>
+            held {fmtMs(trace.cohortHold.heldMs)} on {hold} before placing
+          </span>
+        )}
         {promised !== null && hit !== null && trace.cacheRead !== null ? (
           <span className="num" title={PROMISE_HINT[promised.rung]}>
             {hit ? 'hit' : 'miss'}, {fmtCompact(trace.cacheRead)} of {fmtCompact(promised.prefixTokens)} promised tokens

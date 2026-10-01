@@ -288,7 +288,8 @@
               "stop_sequence": null
             }
           }
-        ]
+        ],
+        "held": null
       },
       {
         "id": "r-captured",
@@ -394,7 +395,8 @@
               "stop_sequence": null
             }
           }
-        ]
+        ],
+        "held": null
       },
       {
         "id": "r-failed",
@@ -500,7 +502,8 @@
               "stop_sequence": null
             }
           }
-        ]
+        ],
+        "held": null
       },
       {
         "id": "r-earlier-holder",
@@ -606,7 +609,8 @@
               "stop_sequence": null
             }
           }
-        ]
+        ],
+        "held": null
       },
       {
         "id": "r-failover",
@@ -718,7 +722,8 @@
                 "waited_on": [
                   "direct"
                 ],
-                "cohort": "direct"
+                "cohort": "direct",
+                "held_ms": 1250
               }
             },
             "response": {
@@ -786,7 +791,14 @@
               "stop_sequence": null
             }
           }
-        ]
+        ],
+        "held": {
+          "waited_on": [
+            "direct"
+          ],
+          "cohort": "direct",
+          "held_ms": 1250
+        }
       }
     ],
     "accounts": [

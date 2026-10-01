@@ -303,6 +303,7 @@ function buildRequests(): RequestLog[] {
       transport,
       status: finalStatus,
       attempts,
+      held: null,
       ttfbMs,
       ttftMs,
       durationMs,
@@ -539,9 +540,12 @@ function placementOf(p: Rng, r: RequestLog): Placement | null {
   return { depth: rung === 'content' ? p.int(2, 9) : p.int(1, 3), prefixTokens: Math.round(read * p.float(0.85, 1.12)), rung };
 }
 
-/** Half the subagents placed afresh first waited on their cohort's account, every upstream at its cap. */
-const cohortHoldOf = (p: Rng, r: RequestLog, placement: Placement | null, accountId: string): CohortHold | null =>
-  placement !== null && r.agentId !== 'main' && p.chance(0.5) ? { cohort: placement.rung === 'with_main' ? null : accountId, waitedOn: [accountId] } : null;
+/**
+ * Half the subagents placed afresh first waited on their cohort's account, every upstream at its cap. The wait
+ * draws from a stream of its own, so every placement drawn after a hold keeps its values.
+ */
+const cohortHoldOf = (p: Rng, w: Rng, r: RequestLog, placement: Placement | null, accountId: string): CohortHold | null =>
+  placement !== null && r.agentId !== 'main' && p.chance(0.5) ? { cohort: placement.rung === 'with_main' ? null : accountId, heldMs: w.int(180, 4_000), waitedOn: [accountId] } : null;
 
 /**
  * The drawer's shed move and the two newer release reasons, each on a pin no other event touches, so the checks
@@ -576,6 +580,7 @@ function traceRequests() {
   const h = createRng(2_909);
   // The placements draw from a stream of their own, so every trace drawn before them keeps its values.
   const p = createRng(4_111);
+  const w = createRng(3_119);
   const accountOf = new Map(ACCOUNTS.map((a) => [a.id, a]));
   for (const r of REQUESTS) {
     const pool = poolById.get(r.poolId ?? '');
@@ -598,7 +603,7 @@ function traceRequests() {
       const tried = new Set(all.slice(0, i).map((x) => x.accountId));
       const skipped = members.filter((id) => id !== a.accountId).map((accountId) => ({ accountId, obstacle: tried.has(accountId) ? 'attempted' : h.weighted(OBSTACLE_DRAWS) }));
       const placement = moved === undefined ? placementOf(p, r) : null;
-      const cohortHold = cohortHoldOf(p, r, placement, a.accountId);
+      const cohortHold = cohortHoldOf(p, w, r, placement, a.accountId);
       if (placement !== null) {
         // A placement runs no ranking, so it names no tier and passes nobody over as ranked.
         const passed = skipped.filter((s) => s.obstacle !== 'ranked');
@@ -651,13 +656,29 @@ function seedDrawerBranches() {
   );
   seed(
     (s, r) => s.moved === null && s.placement === null && !s.renewed && s.cohortHold === null && s.skipped.length > 0 && !REQUEST_EVENTS.has(r.id),
-    (s, r) => ({ ...s, cohortHold: { cohort: null, waitedOn: [r.attempts[0].accountId] } }),
+    (s, r) => ({ ...s, cohortHold: { cohort: null, heldMs: 1250, waitedOn: [r.attempts[0].accountId] } }),
   );
+}
+
+/**
+ * The hold a request waited through is its own fact, as the router writes it at completion: the one its serving
+ * attempt followed, and on the newest exhausted desktop turn a hold that ran its pool's bound out with every
+ * upstream still at its cap, answered without a dispatch, so the log shows a hold no attempt names. Nothing is
+ * drawn, so every seeded stream keeps its values.
+ */
+function seedHolds() {
+  for (const r of REQUESTS) r.held = [...r.attempts].reverse().find((a) => a.selection?.cohortHold)?.selection?.cohortHold ?? null;
+  const atCap = REQUESTS.find((r) => r.keyId === 'desktop' && r.kind === 'inference' && r.status === 429 && !REQUEST_EVENTS.has(r.id));
+  if (!atCap) return;
+  const waitedOn = LANES.find((l) => l.keyId === atCap.keyId)?.accountIds.slice(0, 1) ?? [];
+  const heldMs = (poolById.get(atCap.poolId ?? '')?.retryInPlaceSeconds ?? 10) * 1_000;
+  Object.assign(atCap, { accountId: null, attempts: [], costUsd: 0, durationMs: heldMs, errorCode: 'accounts_at_cap', held: { cohort: null, heldMs, waitedOn } });
 }
 
 addStoryEvents();
 traceRequests();
 seedDrawerBranches();
+seedHolds();
 identifyRequests();
 
 const outputTps = (r: RequestLog): number | null => {

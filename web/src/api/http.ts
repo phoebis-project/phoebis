@@ -183,7 +183,7 @@ export class HttpApi implements Api {
   };
   listRequests = async (q: RequestQuery = {}) =>
     d.decodeRequestPage(
-      await call('GET', `/admin/requests${qs({ accounts: q.accountIds, agent_types: q.agentTypes, client: q.client, cursor: q.cursor, from: q.from ? Date.parse(q.from) : undefined, include_probes: q.includeProbes, keys: q.keyIds, kinds: q.kind ? [q.kind] : undefined, limit: q.limit, models: q.models, pools: q.poolIds, speeds: q.speeds, statuses: q.statuses?.map(String), text: q.search, to: q.to ? Date.parse(q.to) : undefined, turn_origins: q.turnOrigins, user_agent: q.userAgent })}`),
+      await call('GET', `/admin/requests${qs({ accounts: q.accountIds, agent_types: q.agentTypes, client: q.client, cursor: q.cursor, from: q.from ? Date.parse(q.from) : undefined, held: q.held, include_probes: q.includeProbes, keys: q.keyIds, kinds: q.kind ? [q.kind] : undefined, limit: q.limit, models: q.models, pools: q.poolIds, speeds: q.speeds, statuses: q.statuses?.map(String), text: q.search, to: q.to ? Date.parse(q.to) : undefined, turn_origins: q.turnOrigins, user_agent: q.userAgent })}`),
     );
   listSessions = async () => (await call<{ sessions: unknown[] }>('GET', '/admin/sessions')).sessions.map(d.decodeSession);
   login = async (secret: string): Promise<SessionInfo> => {

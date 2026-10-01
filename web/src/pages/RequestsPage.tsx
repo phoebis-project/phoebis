@@ -1,14 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api } from '@/api';
-import type { Attempt, CapturedBodies, PinReleaseReason, RequestKind, RequestLog, RequestQuery, Usage, WindowId } from '@/api/types';
+import type { Attempt, CapturedBodies, CohortHold, PinReleaseReason, RequestKind, RequestLog, RequestQuery, Usage, WindowId } from '@/api/types';
 import { PIN_RELEASE_REASON_VALUES } from '@/api/decode';
 import { useAppSettings } from '@/app/settings';
 import { SelectionTrace } from '@/components/SelectionTrace';
 import { AttemptTrail } from '@/components/ui/AttemptTrail';
 import { MultiSelect } from '@/components/ui/MultiSelect';
 import { IconChevronLeft, IconChevronRight, IconChevronsLeft, IconColumns, IconRefresh, IconX } from '@/components/ui/icons';
-import { Badge, Button, Card, CopyButton, EmptyState, ErrorState, Input, KeyValue, SearchInput, Select, Skeleton } from '@/components/ui/primitives';
+import { Badge, Button, Card, CopyButton, EmptyState, ErrorState, Input, KeyValue, SearchInput, Select, Skeleton, Toggle } from '@/components/ui/primitives';
 import { moveLabel } from '@/lib/analytics';
 import { autoModeLabel } from '@/lib/autoMode';
 import { isDivergence, missLabel } from '@/lib/cache';
@@ -78,6 +78,9 @@ const releaseLabel = (reasons: unknown): string =>
     })
     .join(', ');
 
+/** The badge rounds the wait, so its hover carries it whole with where it was placed, as the drawer names it. */
+const heldTitle = (h: CohortHold) => `waited ${fmtInt(h.heldMs)} ms on ${h.cohort ?? h.waitedOn[h.waitedOn.length - 1] ?? 'an upstream'}`;
+
 // A fixed three-slot readout: a plan that serves no Fable reports two windows in
 // its headers, and the empty third slot is the point rather than a gap to hide.
 const ATTEMPT_WINDOWS: { id: WindowId; label: string }[] = [
@@ -101,6 +104,7 @@ export function RequestsPage() {
   const [agentTypes, setAgentTypes] = useState<string[]>([]);
   const [turnOrigins, setTurnOrigins] = useState<string[]>([]);
   const [speeds, setSpeeds] = useState<string[]>([]);
+  const [held, setHeld] = useState(false);
   const [keyIds, setKeyIds] = useState<string[]>([]);
   const [poolIds, setPoolIds] = useState<string[]>([]);
   const [accountIds, setAccountIds] = useState<string[]>([]);
@@ -120,8 +124,8 @@ export function RequestsPage() {
   const query = useMemo<RequestQuery>(() => {
     const r = RANGES.find((x) => x.value === range) ?? RANGES[2];
     // Probes are off the log unless they are what the filter asks for.
-    return { accountIds, agentTypes, client: clientPattern, cursor, from: new Date(loadedAt - r.ms).toISOString(), includeProbes: kind === 'probe', keyIds, kind: kind || null, limit: pageSize, models, poolIds, search, speeds, statuses: statuses.map(Number), to: new Date(loadedAt).toISOString(), turnOrigins, userAgent };
-  }, [search, userAgent, clientPattern, agentTypes, turnOrigins, speeds, keyIds, poolIds, accountIds, models, statuses, kind, range, pageSize, cursor, loadedAt]);
+    return { accountIds, agentTypes, client: clientPattern, cursor, from: new Date(loadedAt - r.ms).toISOString(), held, includeProbes: kind === 'probe', keyIds, kind: kind || null, limit: pageSize, models, poolIds, search, speeds, statuses: statuses.map(Number), to: new Date(loadedAt).toISOString(), turnOrigins, userAgent };
+  }, [search, userAgent, clientPattern, agentTypes, turnOrigins, speeds, held, keyIds, poolIds, accountIds, models, statuses, kind, range, pageSize, cursor, loadedAt]);
   const requests = useAsync(() => api.listRequests(query), [query]);
 
   const resetPaging = () => {
@@ -132,7 +136,7 @@ export function RequestsPage() {
     resetPaging();
     setLoadedAt(Date.now());
   };
-  useEffect(resetPaging, [search, userAgent, clientPattern, agentTypes, turnOrigins, speeds, keyIds, poolIds, accountIds, models, statuses, kind, range, pageSize]);
+  useEffect(resetPaging, [search, userAgent, clientPattern, agentTypes, turnOrigins, speeds, held, keyIds, poolIds, accountIds, models, statuses, kind, range, pageSize]);
 
   const rows = requests.data?.requests ?? [];
   // Sized to the longest class the loaded rows actually carry, floored at the header label so the column never
@@ -151,7 +155,7 @@ export function RequestsPage() {
     setStack(copy);
     setCursor(previous);
   };
-  const active = search || userAgent || clientPattern || agentTypes.length || turnOrigins.length || speeds.length || keyIds.length || poolIds.length || accountIds.length || models.length || statuses.length || kind || range !== '24h';
+  const active = search || userAgent || clientPattern || agentTypes.length || turnOrigins.length || speeds.length || held || keyIds.length || poolIds.length || accountIds.length || models.length || statuses.length || kind || range !== '24h';
   const reset = () => {
     setSearch('');
     setUserAgent('');
@@ -159,6 +163,7 @@ export function RequestsPage() {
     setAgentTypes([]);
     setTurnOrigins([]);
     setSpeeds([]);
+    setHeld(false);
     setKeyIds([]);
     setPoolIds([]);
     setAccountIds([]);
@@ -217,6 +222,10 @@ export function RequestsPage() {
             onChange={setSpeeds}
             mono
           />
+          <label className="row">
+            <Toggle checked={held} onChange={setHeld} label="Held only" />
+            <span className="secondary">Held only</span>
+          </label>
           {active ? (
             <button type="button" className="link-btn" onClick={reset}>
               Reset
@@ -312,7 +321,14 @@ export function RequestsPage() {
                         )}
                         {visible.has('attempts') && (
                           <td>
-                            <AttemptTrail attempts={r.attempts} />
+                            <span className="requests__attempts">
+                              <AttemptTrail attempts={r.attempts} />
+                              {r.held && (
+                                <Badge tone="neutral" title={heldTitle(r.held)}>
+                                  held {fmtMs(r.held.heldMs)}
+                                </Badge>
+                              )}
+                            </span>
                           </td>
                         )}
                         {visible.has('ttfb') && <td className="right num">{fmtMs(r.ttfbMs)}</td>}

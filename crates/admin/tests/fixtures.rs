@@ -335,20 +335,25 @@ async fn every_route_is_captured_and_holds_its_shape() {
             holds: vec![phoebis_routing::HoldFacts {
                 account_id: "direct".into(),
                 cohort: Some("direct".into()),
+                held_ms: 1_250,
             }],
             lane: lane_key("claude-sonnet-5-5", "standard", "none", "-"),
             fast: false,
         })
         .await
         .unwrap();
-    let placed_json = match &placed.result {
+    // The request row carries the same summary as the attempt's trace, as the relay writes it on completion.
+    let (placed_json, placed_held) = match &placed.result {
         phoebis_routing::SelectResult::Selected(selection) => {
             assert!(
                 selection.trace.placement.is_some() && selection.trace.cohort_hold.is_some(),
                 "the warm prefix places the request and the hold is on its trace, not {:?}",
                 selection.trace
             );
-            serde_json::to_string(&selection.trace).unwrap()
+            (
+                serde_json::to_string(&selection.trace).unwrap(),
+                serde_json::to_string(&selection.trace.cohort_hold).unwrap(),
+            )
         }
         other => panic!("the warm prefix's account answers a selection, not {other:?}"),
     };
@@ -416,6 +421,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             forked_from: Some("s0".into()),
             fork_depth: Some(2),
             auto_mode: Some("server".into()),
+            held: Some(placed_held),
             ..request(
                 key_generation,
                 "r-failover",
@@ -678,6 +684,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             client_version: None,
             response_bytes: None,
             response_chunks: None,
+            held: None,
             finished_at: now,
         }));
     let ready = wait_json(app, "/admin/requests", &cookie, |v| {
@@ -930,6 +937,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
         client_version: Some("2.1.269".into()),
         response_bytes: Some(5),
         response_chunks: None,
+        held: None,
         finished_at: now + 900,
     }));
     let deltas = deltas_until(&mut ws, "finished").await;

@@ -787,6 +787,119 @@ async fn the_analytics_group_by_client_and_narrow_to_client_patterns() {
 }
 
 #[tokio::test]
+async fn a_request_answers_its_hold_with_its_wait_and_held_filters_the_list() {
+    use phoebis_bus::{Event, Outcome, RequestComplete, ResponseFacts};
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let now = common::NOW;
+    let held = serde_json::to_string(&phoebis_routing::cohort_hold(&[phoebis_routing::HoldFacts {
+        account_id: "business".into(),
+        cohort: None,
+        held_ms: 1_250,
+    }]))
+    .unwrap();
+    parts.ledger.record(Record::Request {
+        request: RequestRecord {
+            held: Some(held.clone()),
+            ..request(
+                "r-held",
+                now - 60_000,
+                Some("desktop"),
+                "claude-sonnet-5",
+                "succeeded",
+                200,
+                "inference",
+            )
+        },
+        attempts: vec![attempt("r-held", "business", 200)],
+        bodies: None,
+    });
+    parts.ledger.record(Record::Request {
+        request: request(
+            "r-plain",
+            now - 120_000,
+            Some("desktop"),
+            "claude-sonnet-5",
+            "succeeded",
+            200,
+            "inference",
+        ),
+        attempts: vec![attempt("r-plain", "business", 200)],
+        bodies: None,
+    });
+    // The bound ran out with every upstream still at its cap, so the relay answered without a dispatch and the
+    // completion is the only place the wait is written.
+    parts.bus.publish(observed("r-at-cap"));
+    parts.bus.publish(Event::RequestComplete(RequestComplete {
+        request_id: "r-at-cap".into(),
+        attempt: 0,
+        account_id: None,
+        outcome: Outcome::Exhausted,
+        status: 429,
+        usage: None,
+        response: ResponseFacts::default(),
+        ttfb_ms: None,
+        ttfc_ms: None,
+        error_code: Some("accounts_at_cap".into()),
+        client_drift: None,
+        client_version: None,
+        response_bytes: None,
+        response_chunks: None,
+        held: Some(held),
+        finished_at: now + 1_300,
+    }));
+    let all = wait_json(&parts.app, "/admin/requests?limit=500", &cookie, |v| {
+        v["requests"].as_array().unwrap().len() == 3
+    })
+    .await;
+    let row = |page: &serde_json::Value, id: &str| {
+        page["requests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"] == id)
+            .cloned()
+            .unwrap_or_else(|| panic!("{id} is listed: {page}"))
+    };
+    assert_eq!(
+        row(&all, "r-held")["held"],
+        serde_json::json!({ "waited_on": ["business"], "cohort": null, "held_ms": 1_250 }),
+        "the row answers the holds it waited through with the wait"
+    );
+    assert_eq!(row(&all, "r-plain")["held"], serde_json::Value::Null);
+    let at_cap = row(&all, "r-at-cap");
+    assert_eq!(
+        (
+            at_cap["held"]["held_ms"].as_u64(),
+            at_cap["attempts"].as_array().unwrap().len()
+        ),
+        (Some(1_250), 0),
+        "a hold with no attempt after it still reads as held"
+    );
+    let held_only = json(
+        get(
+            &parts.app,
+            "/admin/requests?held=1&limit=500",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    let mut ids: Vec<&str> = held_only["requests"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["id"].as_str().unwrap())
+        .collect();
+    ids.sort_unstable();
+    assert_eq!(
+        ids,
+        ["r-at-cap", "r-held"],
+        "held keeps the requests that waited for a slot"
+    );
+}
+
+#[tokio::test]
 async fn the_request_log_filters_paginates_and_shows_one_row_per_request_with_its_trail() {
     let parts = common::admin_parts_full().await;
     let now = common::NOW;
@@ -1134,12 +1247,10 @@ async fn a_bodies_route_answers_the_bytes_each_side_stored_and_saw() {
 
 /// A capturing request straight onto the bus: `delivered` of its response chunks reach the ledger while its
 /// completion says `published` went out, so the rest were dropped at the bus.
-fn publish_capture(bus: &phoebis_bus::Bus, id: &str, delivered: u32, published: u32) {
-    use phoebis_bus::{
-        Event, Kind, Origin, Outcome, RequestComplete, RequestObserved, RequestShape,
-        ResponseChunk, ResponseFacts,
-    };
-    bus.publish(Event::RequestObserved(RequestObserved {
+/// The observation of an inference request under `desktop`, for a test that drives the writer through the bus.
+fn observed(id: &str) -> phoebis_bus::Event {
+    use phoebis_bus::{Event, Kind, Origin, RequestObserved, RequestShape};
+    Event::RequestObserved(RequestObserved {
         request_id: id.into(),
         origin: Origin::Client,
         kind: Kind::Inference,
@@ -1166,7 +1277,12 @@ fn publish_capture(bus: &phoebis_bus::Bus, id: &str, delivered: u32, published: 
         presented_retired: false,
         rotation_at: None,
         received_at: common::NOW,
-    }));
+    })
+}
+
+fn publish_capture(bus: &phoebis_bus::Bus, id: &str, delivered: u32, published: u32) {
+    use phoebis_bus::{Event, Outcome, RequestComplete, ResponseChunk, ResponseFacts};
+    bus.publish(observed(id));
     for index in 0..delivered {
         bus.publish(Event::ResponseChunk(ResponseChunk {
             request_id: id.into(),
@@ -1191,6 +1307,7 @@ fn publish_capture(bus: &phoebis_bus::Bus, id: &str, delivered: u32, published: 
         client_version: None,
         response_bytes: None,
         response_chunks: Some(published),
+        held: None,
         finished_at: common::NOW + 900,
     }));
 }

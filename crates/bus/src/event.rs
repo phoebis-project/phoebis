@@ -409,6 +409,10 @@ pub struct RequestComplete {
     /// How many `ResponseChunk` events the relay published for this request; `None` for a local answer with
     /// no relayed body.
     pub response_chunks: Option<u32>,
+    /// The holds the request waited through before its answer, as the `CohortHold` JSON the selection trace
+    /// carries; `None` for a request never held. Set on a request held and then served, and on one whose hold
+    /// ended in an exhaustion with no attempt dispatched.
+    pub held: Option<String>,
     pub finished_at: i64,
 }
 

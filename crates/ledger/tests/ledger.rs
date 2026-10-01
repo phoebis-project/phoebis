@@ -920,6 +920,7 @@ fn complete_event(id: &str) -> BusEvent {
         client_version: None,
         response_bytes: None,
         response_chunks: None,
+        held: None,
         finished_at: 1,
     })
 }
@@ -1152,6 +1153,67 @@ async fn the_auto_mode_standing_round_trips_and_a_body_shape_refusal_reads_body_
             .collect::<Vec<_>>(),
         vec![Some(429)],
         "the leg that reached an upstream"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn the_held_filter_keeps_the_requests_that_waited_for_a_slot() {
+    let up = FakeUpstream::start(vec![]).await;
+    let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let waited = r#"{"waited_on":["a"],"cohort":null,"held_ms":1250}"#;
+    h.bus.publish(observed_event("held-served"));
+    h.bus.publish(selected_event("held-served", 1, "a", 10));
+    h.bus.publish(head_event("held-served", 200, 20));
+    let BusEvent::RequestComplete(served) =
+        answered_event("held-served", 200, ResponseFacts::default())
+    else {
+        unreachable!()
+    };
+    h.bus.publish(BusEvent::RequestComplete(RequestComplete {
+        held: Some(waited.into()),
+        ..served
+    }));
+    // The bound ran out with the pool still at its cap: the answer dispatched nothing, so only the request row
+    // can say it waited.
+    h.bus.publish(observed_event("held-at-cap"));
+    let BusEvent::RequestComplete(at_cap) = complete_event("held-at-cap") else {
+        unreachable!()
+    };
+    h.bus.publish(BusEvent::RequestComplete(RequestComplete {
+        outcome: BusOutcome::Exhausted,
+        status: 429,
+        error_code: Some("accounts_at_cap".into()),
+        held: Some(waited.into()),
+        ..at_cap
+    }));
+    h.bus.publish(observed_event("never-held"));
+    h.bus.publish(selected_event("never-held", 1, "a", 10));
+    h.bus.publish(head_event("never-held", 200, 20));
+    h.bus
+        .publish(answered_event("never-held", 200, ResponseFacts::default()));
+    let (never, _) = ledgered(&h, "never-held").await;
+    assert_eq!(never.held, None);
+    let (at_cap, attempts) = ledgered(&h, "held-at-cap").await;
+    assert!(attempts.is_empty(), "nothing was dispatched for it");
+    assert_eq!(at_cap.held.as_deref(), Some(waited));
+    ledgered(&h, "held-served").await;
+    let mut held =
+        h.db.read(|c| {
+            let filter = RequestFilter {
+                held: true,
+                ..RequestFilter::default()
+            };
+            let (rows, _) = list_requests(c, &filter, &LiveKeys::default(), None, 50)?;
+            Ok(rows.into_iter().map(|(r, _)| r.id).collect::<Vec<_>>())
+        })
+        .await
+        .unwrap();
+    held.sort();
+    assert_eq!(
+        held,
+        ["held-at-cap", "held-served"],
+        "a request held and served and one held with no dispatch both waited for a slot"
     );
     up.shutdown().await;
 }
@@ -1503,7 +1565,7 @@ async fn a_rollup_row_from_before_the_class_dimension_reads_under_the_reserved_c
     {
         let db = phoebis_ledger::LedgerDb::open(&path).unwrap();
         // The four columns migration 18 adds, the five migration 19 adds, migration 20's column and table and
-        // migration 21's column, each dropped back out so the replay below has to add them again;
+        // the columns migrations 21 and 25 add, each dropped back out so the replay below has to add them again;
         // `rollups_hourly` keeps the shape the class dimension joins, since a primary-key column cannot be
         // dropped in place and the rebuild names its own columns regardless of what the source table still
         // carries.
@@ -1519,7 +1581,8 @@ async fn a_rollup_row_from_before_the_class_dimension_reads_under_the_reserved_c
                  ALTER TABLE account_rollups_hourly DROP COLUMN migrations_json; \
                  ALTER TABLE attempts DROP COLUMN selection; \
                  ALTER TABLE quota_samples DROP COLUMN observed_at; \
-                 ALTER TABLE requests DROP COLUMN auto_mode;",
+                 ALTER TABLE requests DROP COLUMN auto_mode; \
+                 ALTER TABLE requests DROP COLUMN held;",
             )?;
             Ok(())
         })
@@ -1544,7 +1607,7 @@ async fn a_rollup_row_from_before_the_class_dimension_reads_under_the_reserved_c
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 24);
+    assert_eq!(db.schema_version().await.unwrap(), 25);
     let rows = db
         .read_blocking(|c| phoebis_ledger::read_rollups(c, 0, i64::MAX))
         .unwrap();
@@ -1633,6 +1696,7 @@ async fn migration_nineteen_adds_the_identity_columns_to_a_version_eighteen_file
                  ALTER TABLE requests DROP COLUMN fork_depth; \
                  ALTER TABLE quota_samples DROP COLUMN observed_at; \
                  ALTER TABLE requests DROP COLUMN auto_mode; \
+                 ALTER TABLE requests DROP COLUMN held; \
                  UPDATE meta SET value = '18' WHERE key = 'schema_version';",
             )?;
             Ok(())
@@ -1640,7 +1704,7 @@ async fn migration_nineteen_adds_the_identity_columns_to_a_version_eighteen_file
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 24);
+    assert_eq!(db.schema_version().await.unwrap(), 25);
     let (row, _) = db.request("r0").await.unwrap().unwrap();
     assert_eq!(
         (
@@ -1683,7 +1747,8 @@ async fn a_ledger_from_before_the_auto_mode_column_gains_it() {
         let db = phoebis_ledger::LedgerDb::open(&path).unwrap();
         db.write(|c| {
             c.execute_batch(&format!(
-                "ALTER TABLE requests DROP COLUMN auto_mode; {RECREATE_DROPPED_TABLE}\n\
+                "ALTER TABLE requests DROP COLUMN auto_mode; ALTER TABLE requests DROP COLUMN held; \
+                 {RECREATE_DROPPED_TABLE}\n\
                  UPDATE meta SET value = '20' WHERE key = 'schema_version';"
             ))?;
             Ok(())
@@ -1691,7 +1756,7 @@ async fn a_ledger_from_before_the_auto_mode_column_gains_it() {
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 24);
+    assert_eq!(db.schema_version().await.unwrap(), 25);
     let columns = db
         .read_blocking(|c| {
             let mut stmt = c.prepare("SELECT name FROM pragma_table_info('requests')")?;
@@ -1759,7 +1824,8 @@ async fn migration_twenty_two_files_every_rollup_row_under_standard_speed_and_ke
             c.execute_batch(&format!(
                 "CREATE TABLE rollups_hourly_prev AS SELECT {columns} FROM rollups_hourly; \
                  DROP TABLE rollups_hourly; \
-                 ALTER TABLE rollups_hourly_prev RENAME TO rollups_hourly; {RECREATE_DROPPED_TABLE}\n\
+                 ALTER TABLE rollups_hourly_prev RENAME TO rollups_hourly; \
+                 ALTER TABLE requests DROP COLUMN held; {RECREATE_DROPPED_TABLE}\n\
                  UPDATE meta SET value = '21' WHERE key = 'schema_version';"
             ))?;
             Ok(())
@@ -1767,7 +1833,7 @@ async fn migration_twenty_two_files_every_rollup_row_under_standard_speed_and_ke
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 24);
+    assert_eq!(db.schema_version().await.unwrap(), 25);
     let speeds = |ledger: &phoebis_ledger::LedgerDb| {
         ledger
             .read_blocking(|c| {
@@ -1830,6 +1896,7 @@ async fn migration_twenty_four_files_a_rollup_row_under_fast_funding_by_its_spee
                 "CREATE TABLE rollups_hourly_prev AS SELECT {columns} FROM rollups_hourly; \
                  DROP TABLE rollups_hourly; \
                  ALTER TABLE rollups_hourly_prev RENAME TO rollups_hourly; \
+                 ALTER TABLE requests DROP COLUMN held; \
                  UPDATE meta SET value = '23' WHERE key = 'schema_version';"
             ))?;
             Ok(())
@@ -1837,7 +1904,7 @@ async fn migration_twenty_four_files_a_rollup_row_under_fast_funding_by_its_spee
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 24);
+    assert_eq!(db.schema_version().await.unwrap(), 25);
     let mut rows = db
         .read_blocking(|c| phoebis_ledger::read_rollups(c, 0, i64::MAX))
         .unwrap()
@@ -1867,6 +1934,44 @@ async fn migration_twenty_four_files_a_rollup_row_under_fast_funding_by_its_spee
             .unwrap();
         assert!(present, "{index} stands on the rebuilt table");
     }
+}
+
+#[tokio::test]
+async fn migration_twenty_five_gives_a_request_row_from_before_no_hold() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ledger.sqlite");
+    {
+        let db = phoebis_ledger::LedgerDb::open(&path).unwrap();
+        db.insert_request(
+            &RequestRecord {
+                id: "r0".into(),
+                canonical_model: "claude-sonnet-5".into(),
+                model: "claude-sonnet-5".into(),
+                kind: "inference".into(),
+                origin: "client".into(),
+                outcome: "succeeded".into(),
+                ..Default::default()
+            },
+            &[],
+            None,
+        )
+        .unwrap();
+        db.write(|c| {
+            c.execute_batch(
+                "ALTER TABLE requests DROP COLUMN held; \
+                 UPDATE meta SET value = '24' WHERE key = 'schema_version';",
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    }
+    let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
+    assert_eq!(db.schema_version().await.unwrap(), 25);
+    let (row, _) = db.request("r0").await.unwrap().unwrap();
+    assert_eq!(
+        row.held, None,
+        "a request from before the column waited on nothing it recorded"
+    );
 }
 
 #[test]

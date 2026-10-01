@@ -96,6 +96,14 @@ test('listRequests passes the client pattern, the agent types, and the turn orig
   for (const part of ['client=claude-code%2F*', 'agent_types=Explore%2CPlan', 'turn_origins=human']) assert.ok(url.includes(part), `${part} in ${url}`);
 });
 
+test('listRequests asks for the held requests alone when the query says so', async () => {
+  const calls = stub(() => answer(200, { next_cursor: null, requests: [] }));
+  await new HttpApi().listRequests({ held: true });
+  assert.equal(new URL(calls[0].url, 'http://x').searchParams.get('held'), 'true');
+  await new HttpApi().listRequests({});
+  assert.ok(!String(calls[1].url).includes('held'), 'no held filter, no parameter');
+});
+
 test('listRequests passes the speeds as one comma list', async () => {
   const calls = stub(() => answer(200, { next_cursor: null, requests: [] }));
   await new HttpApi().listRequests({ speeds: ['fast', 'standard'] });

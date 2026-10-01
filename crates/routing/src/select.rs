@@ -118,6 +118,8 @@ pub struct HoldFacts {
     /// The cohort's account the hold was placed by (a subagent's deepest live static entry); `None` for a hold
     /// on the strategy's choice.
     pub cohort: Option<String>,
+    /// How long the relay waited on this hold, whether a slot freed or the bound ran out.
+    pub held_ms: u64,
 }
 
 /// The holds before this attempt, as the trace records them.
@@ -125,6 +127,20 @@ pub struct HoldFacts {
 pub struct CohortHold {
     pub waited_on: Vec<String>,
     pub cohort: Option<String>,
+    /// The holds' waits summed: the time the request spent waiting for a slot.
+    pub held_ms: u64,
+}
+
+/// The summary of the holds a request waited through, `None` for none: the accounts waited on in order, the last
+/// hold's cohort and the waits summed. The selector's trace and the relay's completion both read it, so the
+/// attempt's entry and the request row never disagree.
+pub fn cohort_hold(holds: &[HoldFacts]) -> Option<CohortHold> {
+    let last = holds.last()?;
+    Some(CohortHold {
+        waited_on: holds.iter().map(|h| h.account_id.clone()).collect(),
+        cohort: last.cohort.clone(),
+        held_ms: holds.iter().map(|h| h.held_ms).sum(),
+    })
 }
 
 /// Why a pin moved, in the order the rules run: the first rule with a destination moves it.
@@ -914,14 +930,17 @@ pub fn select(
                     &allowed,
                     window,
                 );
+                // The wait is the relay's to measure, once it has waited.
                 let hold = match cohort {
                     Some(c) => HoldFacts {
                         account_id: c.account_id.clone(),
                         cohort: Some(c.account_id.clone()),
+                        held_ms: 0,
                     },
                     None => HoldFacts {
                         account_id: strategy_choice.account_id.clone(),
                         cohort: None,
+                        held_ms: 0,
                     },
                 };
                 return (
@@ -944,10 +963,7 @@ pub fn select(
             (strategy_choice, Some(tier), None)
         }
     };
-    let cohort_hold = (!request.holds.is_empty()).then(|| CohortHold {
-        waited_on: request.holds.iter().map(|h| h.account_id.clone()).collect(),
-        cohort: request.holds.last().and_then(|h| h.cohort.clone()),
-    });
+    let cohort_hold = cohort_hold(&request.holds);
 
     // Step 7: a fresh pin with a fresh epoch. A token count touches no cache, so it creates none: a pin it left
     // on an account at its cap would carry the agent's next message past the cap, since a renewal never reads it.

@@ -1,11 +1,11 @@
 use phoebis_routing::{
-    effective_warm, lane_key, release_reasons, resolve, select, warm, warmth_of, AffinityChain,
-    AffinityMap, AffinityRow, BurnRates, BurnUnit, ClientClass, CohortHold, CreditsState,
-    EvidenceSource, Exhaustion, HoldFacts, MemberSpend, MigrateReason,
-    OverageEvidence, PinRef, Placement, RateTable, Rates, RegistrySnapshot, RoutingState,
-    SelectRequest, SelectResult, StateWrite, UtilizationSample, Warmth, WindowReading,
-    FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR, MODEL_REJECTED_REASON, SEVEN_DAY,
-    SEVEN_DAY_FABLE,
+    cohort_hold, effective_warm, lane_key, release_reasons, resolve, select, warm, warmth_of,
+    AffinityChain, AffinityMap, AffinityRow, BurnRates, BurnUnit, ClientClass, CohortHold,
+    CreditsState, EvidenceSource, Exhaustion, HoldFacts, MemberSpend,
+    MigrateReason, OverageEvidence, PinRef, Placement, RateTable, Rates, RegistrySnapshot,
+    RoutingState, SelectRequest, SelectResult, StateWrite, UtilizationSample, Warmth,
+    WindowReading, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR, MODEL_REJECTED_REASON,
+    SEVEN_DAY, SEVEN_DAY_FABLE,
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, Affinity, AffinityMode, AffinitySource, ApiKeyRow,
@@ -5105,6 +5105,7 @@ fn a_held_subagent_is_held_on_its_cohorts_account() {
         HoldFacts {
             account_id: "b".into(),
             cohort: Some("b".into()),
+            held_ms: 0,
         },
     );
 }
@@ -5439,6 +5440,7 @@ fn a_cohort_hold_that_times_out_lands_the_next_member_elsewhere() {
             holds: vec![HoldFacts {
                 account_id: "a".into(),
                 cohort: Some("a".into()),
+                held_ms: 1_000,
             }],
             ..subagent(
                 request(&s, Some("session"), "claude-sonnet-5", true, &["a"], 1_500),
@@ -5462,6 +5464,7 @@ fn a_cohort_hold_that_times_out_lands_the_next_member_elsewhere() {
         HoldFacts {
             account_id: "b".into(),
             cohort: None,
+            held_ms: 0,
         },
     );
 
@@ -5479,7 +5482,31 @@ fn a_cohort_hold_that_times_out_lands_the_next_member_elsewhere() {
         Some(CohortHold {
             waited_on: vec!["a".into()],
             cohort: Some("a".into()),
+            held_ms: 1_000,
         }),
+    );
+}
+
+#[test]
+fn a_cohort_hold_names_every_account_waited_on_the_last_cohort_and_the_waits_summed() {
+    let hold = |account: &str, cohort: Option<&str>, held_ms: u64| HoldFacts {
+        account_id: account.into(),
+        cohort: cohort.map(String::from),
+        held_ms,
+    };
+    assert_eq!(
+        cohort_hold(&[]),
+        None,
+        "a request that never held names no hold"
+    );
+    assert_eq!(
+        cohort_hold(&[hold("a", Some("a"), 1_000), hold("b", None, 250)]),
+        Some(CohortHold {
+            waited_on: vec!["a".into(), "b".into()],
+            cohort: None,
+            held_ms: 1_250,
+        }),
+        "the last hold's cohort, a strategy's choice here, and both waits"
     );
 }
 
@@ -6878,6 +6905,7 @@ fn every_candidate_at_its_cap_answers_held_with_the_best_of_them() {
             hold: HoldFacts {
                 account_id: "b".into(),
                 cohort: None,
+                held_ms: 0,
             },
         },
         "b is the one priority would have chosen"
@@ -6922,6 +6950,7 @@ fn a_held_round_robin_selection_leaves_the_turn_with_the_account_it_named() {
             hold: HoldFacts {
                 account_id: "a".into(),
                 cohort: None,
+                held_ms: 0,
             },
         },
         "the round starts at a"
@@ -6978,6 +7007,7 @@ fn the_cap_binds_before_the_ceiling_so_a_free_account_above_it_takes_the_placeme
             hold: HoldFacts {
                 account_id: "a".into(),
                 cohort: None,
+                held_ms: 0,
             },
         },
         "with both at their cap the request is held on the one the ceiling prefers"

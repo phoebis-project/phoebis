@@ -275,6 +275,9 @@ CREATE INDEX IF NOT EXISTS events_at ON events (at);
 /// metered ones would count the plan's traffic against it. `funding` joins the primary key after the speed and the
 /// table is rebuilt as version 22 rebuilt it; a row from before files under `fast` when its speed says fast and
 /// under `plan` otherwise, since the overage reading was never kept on a rollup row.
+///
+/// Version 25: the holds a request waited through, kept on the request itself: a hold that ends in an exhaustion
+/// dispatches nothing, so no attempt row could carry it. A row from before reads NULL.
 pub const MIGRATIONS: &[(u32, &str)] = &[
     (
         2,
@@ -800,4 +803,5 @@ ALTER TABLE rollups_hourly_next RENAME TO rollups_hourly;
 CREATE INDEX IF NOT EXISTS rollups_hourly_key ON rollups_hourly (key_id, key_generation, hour);
 CREATE INDEX IF NOT EXISTS rollups_hourly_member ON rollups_hourly (pool_id, account_id, hour);",
     ),
+    (25, "ALTER TABLE requests ADD COLUMN held TEXT;"),
 ];

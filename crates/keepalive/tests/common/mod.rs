@@ -590,6 +590,7 @@ impl Rig {
             client_version: None,
             response_bytes: None,
             response_chunks: None,
+            held: None,
             finished_at: self.now(),
         })
     }

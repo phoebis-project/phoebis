@@ -431,6 +431,7 @@ pub fn complete(
         client_version: version.map(String::from),
         response_bytes: None,
         response_chunks: None,
+        held: None,
         finished_at: NOW,
     })
 }

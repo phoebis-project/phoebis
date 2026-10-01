@@ -487,6 +487,8 @@ export interface Placement {
 export interface CohortHold {
   /** The cohort's account the last hold was placed by; null for a hold on the strategy's choice. */
   cohort: string | null;
+  /** The holds' waits summed, in milliseconds, whether a slot freed or the bound ran out. */
+  heldMs: number;
   waitedOn: string[];
 }
 
@@ -574,6 +576,8 @@ export interface RequestLog {
   /** A request whose session branched from another: the depth where the two part, and the session it branched from. */
   forkDepth: number | null;
   forkedFrom: string | null;
+  /** The holds the request waited through, with the wait; null for a request never held. */
+  held: CohortHold | null;
   id: string;
   /** The `created_at` of the key the request was read under, 0 for none; a key id created again is another holder. */
   keyGeneration: number;
@@ -667,6 +671,8 @@ export interface RequestQuery {
   client?: string;
   cursor?: string;
   from?: string;
+  /** Keep the requests that waited for a slot. */
+  held?: boolean;
   includeProbes?: boolean;
   keyIds?: string[];
   kind?: RequestKind | null;

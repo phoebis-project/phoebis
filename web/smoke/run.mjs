@@ -2768,6 +2768,56 @@ expect('/requests', m.text(), ['Columns (13)', 'Rows', 'SSE', 'Details', 'Client
   await m.settle(700);
   await m.navigate('/requests');
   await m.settle(300);
+
+  // The marker follows the trail on a row held and served and on a row held with nothing dispatched, and the
+  // switch keeps the held rows alone; the wait reads as the TTFB column reads a duration.
+  const waitText = (ms) => (ms >= 1000 ? `${(ms / 1000).toFixed(ms >= 10_000 ? 0 : 1)} s` : `${Math.round(ms)} ms`);
+  const servedHeld = requests.find((r) => r.held?.heldMs === 1250 && r.attempts.length === 1);
+  const heldAtCap = requests.find((r) => r.held !== null && r.attempts.length === 0 && r.errorCode === 'accounts_at_cap');
+  results.push({ name: 'fixture: a request served after a hold and one held with nothing dispatched', ok: servedHeld !== undefined && heldAtCap !== undefined, missing: [String(servedHeld?.id), String(heldAtCap?.id)] });
+  const heldSearch = m.container.querySelector('input.filters__search');
+  const attemptsCellOf = async (id) => {
+    setter.call(heldSearch, id);
+    heldSearch?.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await m.settle(700);
+    const cells = [...m.container.querySelectorAll('.requests__table tbody .requests__attempts')];
+    const marker = cells.length === 1 ? cells[0].querySelector(':scope > .badge') : null;
+    return { trail: cells[0]?.querySelector('.trail, .muted')?.textContent?.trim() ?? `${cells.length} rows`, marker: marker?.textContent?.trim() ?? 'no marker', title: marker?.getAttribute('title') ?? null };
+  };
+  if (servedHeld && heldAtCap) {
+    const served = await attemptsCellOf(servedHeld.id);
+    const waitedOn = servedHeld.held.cohort ?? servedHeld.held.waitedOn.at(-1);
+    results.push({
+      name: '/requests a request served after a hold draws the held marker with its wait after its attempts',
+      ok: served.marker === 'held 1.3 s' && served.title === `waited 1,250 ms on ${waitedOn}` && served.trail.startsWith(servedHeld.attempts[0].accountId),
+      missing: [served.trail, served.marker, String(served.title)],
+    });
+    const atCap = await attemptsCellOf(heldAtCap.id);
+    results.push({
+      name: '/requests a request held with nothing dispatched draws no attempt and the held marker',
+      ok: atCap.trail === 'none' && atCap.marker === `held ${waitText(heldAtCap.held.heldMs)}`,
+      missing: [atCap.trail, atCap.marker],
+    });
+    setter.call(heldSearch, '');
+    heldSearch?.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await m.settle(700);
+  }
+  const heldCheck = '/requests the Held only switch keeps the requests that waited for a slot';
+  const heldOnly = m.container.querySelector('.filters button[role="switch"][aria-label="Held only"]');
+  if (!heldOnly) controlMissing(heldCheck, 'Held only');
+  const caption = heldOnly?.closest('label')?.querySelector('.secondary')?.textContent?.trim();
+  const besideSpeed = heldOnly?.closest('label')?.previousElementSibling?.querySelector('.mselect__trigger')?.textContent?.trim().startsWith('Speed');
+  heldOnly?.click();
+  await m.settle(700);
+  const heldRows = [...m.container.querySelectorAll('.requests__table tbody tr')].map((tr) => tr.querySelector('.requests__attempts > .badge')?.textContent?.trim() ?? 'no marker');
+  const heldDay = (await api.listRequests({ from: new Date(Date.now() - 24 * 3_600_000).toISOString(), held: true, limit: 25, to: new Date().toISOString() })).requests.length;
+  results.push({
+    name: heldCheck,
+    ok: heldOnly?.getAttribute('aria-checked') === 'true' && caption === 'Held only' && besideSpeed === true && heldRows.length > 0 && heldRows.length === heldDay && heldRows.every((t) => t.startsWith('held ')),
+    missing: [`${heldRows.length} rows against ${heldDay}`, String(caption), String(besideSpeed), ...new Set(heldRows)],
+  });
+  heldOnly?.click();
+  await m.settle(700);
 }
 {
   const hinted = requests.find((r) => r.turnOrigin !== null && r.userAgent !== null);
@@ -3085,7 +3135,9 @@ if (failoverRow) {
     await m.navigate(`/requests/${held.id}`);
     await m.settle(300);
     const drawn = traceOf(m.container.querySelector('.drawer .selection-trace'));
-    results.push({ name: '/requests drawer names the account a hold waited on', ok: drawn.head.includes(`held on ${held.attempts[0].selection.cohortHold.cohort} before placing`), missing: [drawn.head] });
+    const { cohort, heldMs } = held.attempts[0].selection.cohortHold;
+    const wait = heldMs >= 1000 ? `${(heldMs / 1000).toFixed(heldMs >= 10_000 ? 0 : 1)} s` : `${Math.round(heldMs)} ms`;
+    results.push({ name: '/requests drawer names the account a hold waited on and how long it waited', ok: drawn.head.includes(`held ${wait} on ${cohort} before placing`), missing: [wait, drawn.head] });
   }
   // The lines a trace draws more rarely: a placement beside a move, a placement with the main conversation, which
   // promises no size and so keeps the plain cache line, and a hold on the strategy's choice, which names no cohort.
@@ -3106,7 +3158,7 @@ if (failoverRow) {
     const drawn = traceOf(m.container.querySelector('.drawer .selection-trace'));
     results.push({
       name: '/requests drawer reads a placement with the main conversation against the input, since it promised no size',
-      ok: drawn.head.includes('placed with the main conversation') && drawn.head.includes('input tokens read from cache') && !drawn.head.includes('promised tokens') && !drawn.head.includes('held on'),
+      ok: drawn.head.includes('placed with the main conversation') && drawn.head.includes('input tokens read from cache') && !drawn.head.includes('promised tokens') && !drawn.head.includes('before placing'),
       missing: [withMain.id, drawn.head],
     });
   }
@@ -3115,7 +3167,7 @@ if (failoverRow) {
     await m.settle(300);
     const drawn = traceOf(m.container.querySelector('.drawer .selection-trace'));
     const waited = strategyHold.attempts[0].selection.cohortHold.waitedOn;
-    results.push({ name: '/requests drawer names the last account a hold with no cohort waited on', ok: drawn.head.includes('fresh placement') && drawn.head.includes(`held on ${waited[waited.length - 1]} before placing`), missing: [strategyHold.id, drawn.head] });
+    results.push({ name: '/requests drawer names the last account a hold with no cohort waited on and the wait', ok: drawn.head.includes('fresh placement') && drawn.head.includes(`held 1.3 s on ${waited[waited.length - 1]} before placing`), missing: [strategyHold.id, drawn.head] });
   }
 }
 {
