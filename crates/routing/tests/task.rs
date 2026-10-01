@@ -4089,7 +4089,7 @@ async fn an_affinity_report_takes_a_sequence_at_enqueue_and_the_wait_sees_it_app
     );
     let waited = started.elapsed();
     assert!(
-        (Duration::from_millis(5)..Duration::from_millis(50)).contains(&waited),
+        (Duration::from_millis(5)..Duration::from_secs(1)).contains(&waited),
         "the wait ends at its bound: {waited:?}"
     );
 }

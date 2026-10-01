@@ -212,10 +212,12 @@ impl AffinityMap {
                 .cloned()
                 .unwrap_or_default()
         });
-        // The upstream's own TTL beats the marker's when every marker of the request carried one TTL and the split
-        // says the cache wrote at the other: the markers are what the request asked, the split is what the cache
-        // holds. A request with markers at both TTLs keeps each tier's marker, since the split names no tier.
-        let written = match (report.cache_write_5m_tokens, report.cache_write_1h_tokens) {
+        // The upstream's own TTL beats the marker's for the boundaries the response wrote, when every marker of the
+        // request carried one TTL and the split says the cache wrote at the other: the markers are what the request
+        // asked, the split is what the cache holds. A request with markers at both TTLs keeps each tier's marker,
+        // since the split names no tier.
+        let (five, hour) = (report.cache_write_5m_tokens, report.cache_write_1h_tokens);
+        let written = match (five, hour) {
             // The split object always carries the 1-hour member, so its absence is the older total-only shape,
             // which names no TTL.
             (Some(five), Some(0)) if five > 0 => Some(300_000),
@@ -223,8 +225,16 @@ impl AffinityMap {
             _ => None,
         };
         let written = written.filter(|w| report.uniform_ttl_ms.is_some_and(|t| t != *w));
+        // The usage names no tier, so the static prefix counts as written only when the cache read stops short of
+        // the size the relay estimated for it: a turn that read its static prefix and wrote its tail leaves the
+        // static boundaries at their marker's lifetime.
+        let read = report
+            .prefix_tokens
+            .saturating_sub(five.unwrap_or(0) + hour.unwrap_or(0));
+        let static_written = written
+            .filter(|_| read == 0 || report.static_sizes.last().is_some_and(|size| read < *size));
         let message_ttl_ms = report.message_ttl_ms.map(|t| written.unwrap_or(t));
-        let static_ttl_ms = report.static_ttl_ms.map(|t| written.unwrap_or(t));
+        let static_ttl_ms = report.static_ttl_ms.map(|t| static_written.unwrap_or(t));
         let message_confirmed = report.cache_touched && message_ttl_ms.is_some();
         let message_ttl = message_ttl_ms.unwrap_or(0);
         let mut rows = Vec::new();
@@ -822,53 +832,84 @@ mod tests {
         assert!(!confirmed.entry("m", "b2").unwrap().live(540_001));
     }
 
+    /// (static tier, message tier) as recorded for a request whose tiers carry the given deepest markers and whose
+    /// response read `read` tokens beside its writes; the static prefix is sized at 500 tokens.
+    fn recorded_ttls(
+        uniform: Option<i64>,
+        tiers: (Option<i64>, Option<i64>),
+        writes: (Option<u64>, Option<u64>),
+        read: u64,
+    ) -> (i64, i64) {
+        let mut map = AffinityMap::default();
+        map.record(&AffinityReport {
+            static_boundaries: vec!["s1".into()],
+            static_sizes: vec![500],
+            static_ttl_ms: tiers.0,
+            message_ttl_ms: tiers.1,
+            cache_touched: true,
+            prefix_tokens: read + writes.0.unwrap_or(0) + writes.1.unwrap_or(0),
+            cache_write_5m_tokens: writes.0,
+            cache_write_1h_tokens: writes.1,
+            uniform_ttl_ms: uniform,
+            ..report("k", "a", 0)
+        });
+        (
+            map.entry("m", "s1").unwrap().ttl_ms,
+            map.entry("m", "b2").unwrap().ttl_ms,
+        )
+    }
+
     #[test]
     fn a_uniform_request_takes_the_written_ttl_and_a_mixed_one_keeps_its_markers() {
-        // (static tier, message tier) as recorded for a request whose tiers carry the given deepest markers.
-        let recorded = |uniform: Option<i64>,
-                        tiers: (Option<i64>, Option<i64>),
-                        writes: (Option<u64>, Option<u64>)| {
-            let mut map = AffinityMap::default();
-            map.record(&AffinityReport {
-                static_boundaries: vec!["s1".into()],
-                static_sizes: vec![10],
-                static_ttl_ms: tiers.0,
-                message_ttl_ms: tiers.1,
-                cache_touched: true,
-                prefix_tokens: 200,
-                cache_write_5m_tokens: writes.0,
-                cache_write_1h_tokens: writes.1,
-                uniform_ttl_ms: uniform,
-                ..report("k", "a", 0)
-            });
-            (
-                map.entry("m", "s1").unwrap().ttl_ms,
-                map.entry("m", "b2").unwrap().ttl_ms,
-            )
-        };
         let hour = Some(3_600_000);
         let five = Some(300_000);
         assert_eq!(
-            recorded(hour, (hour, hour), (Some(200), Some(0))),
+            recorded_ttls(hour, (hour, hour), (Some(200), Some(0)), 0),
             (300_000, 300_000),
-            "the upstream wrote at five minutes, so every tier the request marked lives five minutes"
+            "the upstream read nothing and wrote at five minutes, so every tier the request marked lives five minutes"
         );
         assert_eq!(
-            recorded(hour, (None, hour), (Some(200), Some(0))),
+            recorded_ttls(hour, (None, hour), (Some(200), Some(0)), 0),
             (0, 300_000),
             "a tier without a marker gets no warmth whatever the split says"
         );
         assert_eq!(
-            recorded(None, (five, five), (Some(0), Some(200))),
+            recorded_ttls(None, (five, five), (Some(0), Some(200)), 0),
             (300_000, 300_000),
             "a request marked at both TTLs keeps each tier's marker, even where the deepest ones agree"
         );
         for writes in [(Some(200), Some(200)), (Some(200), None), (None, None)] {
             assert_eq!(
-                recorded(hour, (hour, hour), writes),
+                recorded_ttls(hour, (hour, hour), writes, 0),
                 (3_600_000, 3_600_000),
                 "writes {writes:?} name no single TTL, so the markers stand"
             );
         }
+    }
+
+    #[test]
+    fn a_tier_the_response_only_read_keeps_its_markers_lifetime() {
+        let hour = Some(3_600_000);
+        let five = Some(300_000);
+        assert_eq!(
+            recorded_ttls(five, (five, five), (Some(0), Some(200)), 0),
+            (3_600_000, 3_600_000),
+            "the upstream read nothing and wrote at an hour, so every tier the request marked lives an hour"
+        );
+        assert_eq!(
+            recorded_ttls(hour, (hour, hour), (Some(200), Some(0)), 600),
+            (3_600_000, 300_000),
+            "the static prefix was read and keeps the hour; the tail was written for five minutes"
+        );
+        assert_eq!(
+            recorded_ttls(five, (five, five), (Some(0), Some(200)), 600),
+            (300_000, 3_600_000),
+            "the static prefix was read and keeps five minutes; the tail was written for an hour"
+        );
+        assert_eq!(
+            recorded_ttls(hour, (hour, hour), (Some(200), Some(0)), 100),
+            (300_000, 300_000),
+            "a read short of the static prefix leaves part of it written, so the static tier takes the split's TTL"
+        );
     }
 }
