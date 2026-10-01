@@ -186,6 +186,34 @@ test('an upstream is sized when the cost table holds its stored tier', () => {
   assert.deepEqual([...d.sizedUpstreams(accounts, tiers)].sort(), ['bare', 'stored']);
 });
 
+test('a priced bucket between unpriced ones, or at an end beside one, is an isolated slot the plan chart marks', () => {
+  const plan = (at, over) => point(at * HOUR, 'business', { tokens: 100, uncachedTokens: 100, unit: 'window_share', ...over });
+  const { rows } = d.foldBurn([plan(0), plan(1, { fiveHourShare: 0.05 }), plan(2)], 'account', 3_600, new Set(['business']));
+  const fiveHour = rows.map((r) => r.fiveHour[0]);
+  assert.deepEqual(fiveHour, [null, 0.05, null], 'a priced hour between two whose traffic went unpriced');
+  assert.deepEqual(d.isolatedSlots(fiveHour), [false, true, false], 'the line draws no segment through it, so it takes a dot');
+  assert.deepEqual(d.isolatedSlots(rows.map((r) => r.sevenDay[0])), [false, false, false], 'a window that priced nothing has no slot to mark');
+  assert.deepEqual(d.isolatedSlots([0.02, null, 0.03, 0]), [true, false, false, false], "an end beside a null is isolated; a slot with a priced neighbour is part of a segment");
+  assert.deepEqual(d.isolatedSlots([0]), [true], 'a lone bucket draws no segment either');
+});
+
+test('every burn read reads the upstreams again, so a tier a profile refresh supplied sizes the upstream on the next range', async () => {
+  const tiers = { default_claude_max_20x: { fiveHour: 1, sevenDay: 1 } };
+  const reads = [null, 'default_claude_max_20x'];
+  const source = {
+    getAnalyticsBurn: async () => ({ bucketSeconds: 3_600, points: [] }),
+    listAccounts: async () => {
+      const rateLimitTier = reads.shift();
+      return [{ id: 'business', kind: 'oauth', subscription: rateLimitTier === null ? null : { rateLimitTier } }];
+    },
+  };
+  const range = { from: new Date(0).toISOString(), to: new Date(HOUR).toISOString() };
+  const before = await d.readBurn(source, range, 'account');
+  const after = await d.readBurn(source, range, 'account');
+  assert.deepEqual([d.sizedUpstreams(before.accounts, tiers).has('business'), d.sizedUpstreams(after.accounts, tiers).has('business')], [false, true]);
+  assert.deepEqual(after.answer, { bucketSeconds: 3_600, points: [] });
+});
+
 test("the placements table's hit share formats", () => {
   const row = { cacheReadTokens: 184_000, hitShare: 2 / 3, hits: 2, placements: 3, promisedTokens: 190_500, rung: 'content' };
   assert.deepEqual(d.placementCells(row), ['3', '2', '67%', '184K', '190.5K'], 'placements, hits, hit share, tokens read, tokens promised');

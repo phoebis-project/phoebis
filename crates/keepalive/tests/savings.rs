@@ -1215,26 +1215,28 @@ async fn a_kept_warm_request_on_an_unpriced_model_is_marked_and_counted_with_zer
     assert!(row(&r, &second).await.kept_warm);
 }
 
+/// The standing answer's 2,000 cached tokens read back at the dearest cache read the shipped price table lists,
+/// Opus 5's 0.5 per million: what a probe on a model the table does not list costs.
+const DEAREST_READ_2000: f64 = 2_000.0 * 0.5 / 1_000_000.0;
+
 #[tokio::test]
-async fn an_unpriced_model_costs_nothing_and_still_lands_a_probe_row() {
+async fn an_unpriced_model_costs_the_dearest_cells_and_still_lands_a_probe_row() {
     let mut r = rig(RigSpec::default()).await;
     r.observe("main").await;
     r.advance(270_000);
     r.step().await;
-    assert_eq!(
-        r.status("main").net_usd,
-        0.0,
-        "claude-sonnet-4-5 is not in the shipped table, so nothing is estimated"
+    assert!(
+        (r.status("main").net_usd + DEAREST_READ_2000).abs() < 1e-12,
+        "claude-sonnet-4-5 is not in the shipped table, so its probe prices at the dearest cells: {:?}",
+        r.status("main")
     );
     let rows = rollups(&r, |rows| probe_rows(rows).requests == 1).await;
-    assert_eq!(
-        (
-            probe_rows(&rows).probe_cost_usd,
-            r.status("main").unanswered
-        ),
-        (0.0, 1),
-        "a probe at no cost is still a probe nobody answered yet"
+    assert!(
+        (probe_rows(&rows).probe_cost_usd - DEAREST_READ_2000).abs() < 1e-12,
+        "the ledger's probe cost reads the same figure: {}",
+        probe_rows(&rows).probe_cost_usd
     );
+    assert_eq!(r.status("main").unanswered, 1);
 }
 
 /// A cost table lacking every model, so "claude-haiku-4-5-20251001" (which the shipped dollar table prices) is
@@ -1324,6 +1326,126 @@ async fn a_plan_funded_probe_on_a_model_with_an_unmeasured_cell_settles_in_dolla
     assert!(
         !r.engine.share_spent_today().contains_key("o")
             && r.engine.spent_today().get("main").copied().unwrap_or(0.0) > 0.0
+    );
+}
+
+/// A model neither table prices (Fable 5: every cost cell null, no dollar row) settles a plan-funded probe in
+/// dollars at the price table's dearest cells, never at zero, so the dollar cap and the net both bound it while the
+/// share cap cannot.
+#[tokio::test]
+async fn a_plan_funded_probe_on_a_model_neither_table_prices_books_the_dearest_cells_against_the_dollar_cap(
+) {
+    let mut r = rig(RigSpec {
+        policy: KeepalivePolicy {
+            probe_cap_window_share_per_day: Some(0.0),
+            probe_cost_cap_usd_per_day: Some(0.0005),
+            ..RigSpec::default().policy
+        },
+        ..subscription_spec()
+    })
+    .await;
+    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
+    r.observe_with("main", &body_on("claude-fable-5")).await;
+    r.advance(270_000);
+    r.step().await;
+    let status = r.status("main");
+    assert_eq!(
+        status.probes, 1,
+        "a zero share cap holds nothing on a probe that settles in dollars: {status:?}"
+    );
+    assert!(
+        (status.net_usd + DEAREST_READ_2000).abs() < 1e-12 && status.net_five_hour_share == 0.0,
+        "{status:?}"
+    );
+    assert!(
+        (r.engine.spent_today().get("main").copied().unwrap_or(0.0) - DEAREST_READ_2000).abs()
+            < 1e-12
+            && !r.engine.share_spent_today().contains_key("o"),
+        "{:?}",
+        r.engine.spent_today()
+    );
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(
+        (r.status("main").probes, r.status("main").reason),
+        (1, Reason::CapReached),
+        "the dollar cap holds the next probe"
+    );
+}
+
+/// A pool whose plan set keeps main turns at five minutes and probes for an hour rewrites a five-minute recipe's
+/// probe to the hour. On a row whose hour cell is null that probe settles in dollars, so the gate decides dollars
+/// before it dispatches and a zero share cap never holds it; with the hour cell priced the probe settles in the
+/// share, and the zero share cap holds it.
+#[tokio::test]
+async fn a_probe_the_pool_dispatches_for_an_hour_settles_in_dollars_on_a_row_whose_hour_cell_is_null(
+) {
+    let spec = |tables| RigSpec {
+        pool: PoolSpec {
+            cache_ttl: r#"{"enabled":true,"plan":{"main":"5m","keepalive":"1h"}}"#,
+            overage_policy: phoebis_store::OveragePolicy::Allow,
+            ..PoolSpec::default()
+        },
+        policy: KeepalivePolicy {
+            probe_cap_window_share_per_day: Some(0.0),
+            ..RigSpec::default().policy
+        },
+        tables,
+        ..subscription_spec()
+    };
+    let mut hourless = plan_pricing_sonnet();
+    hourless
+        .cost
+        .windows
+        .get_mut("five_hour")
+        .unwrap()
+        .get_mut(PRICED)
+        .unwrap()
+        .cache_write_1h = None;
+    let mut r = rig(spec(hourless)).await;
+    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
+    r.observe_with("main", &priced_body()).await;
+    assert_eq!(
+        r.status("main").cache_ttl_ms,
+        300_000,
+        "the main turn went for five minutes"
+    );
+    r.advance(270_000);
+    r.step().await;
+    let status = r.status("main");
+    assert_eq!(
+        status.probes, 1,
+        "the probe goes for an hour, which the row cannot price, so the zero share cap never holds it: {status:?}"
+    );
+    let probe = r.up.requests().into_iter().last().unwrap();
+    assert!(
+        std::str::from_utf8(&probe.body)
+            .unwrap()
+            .contains(r#""ttl":"1h""#),
+        "the relay dispatched the probe for an hour"
+    );
+    // 2,000 cached tokens read back at Sonnet 5's 0.2 per million.
+    let dollars = 2_000.0 * 0.2 / 1_000_000.0;
+    assert!(
+        (r.engine.spent_today().get("main").copied().unwrap_or(0.0) - dollars).abs() < 1e-12
+            && !r.engine.share_spent_today().contains_key("o"),
+        "the settlement books dollars: {:?}",
+        r.engine.spent_today()
+    );
+    assert!(
+        (status.net_usd + dollars).abs() < 1e-12 && status.net_five_hour_share == 0.0,
+        "{status:?}"
+    );
+
+    let mut r = rig(spec(plan_pricing_sonnet())).await;
+    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
+    r.observe_with("main", &priced_body()).await;
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(
+        (r.status("main").probes, r.status("main").reason),
+        (0, Reason::CapReached),
+        "with the hour cell priced the probe settles in the share, which the zero share cap holds"
     );
 }
 

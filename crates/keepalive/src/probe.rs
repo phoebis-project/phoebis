@@ -18,7 +18,7 @@ use serde_json::Value;
 
 use crate::engine::{Engine, Funding, Inner, Reason, SavingsUnit, SessionKey, Wasted};
 use crate::recipe::Recipe;
-use crate::savings::{probe_cost, probe_types, settlement_unit, unpriced_type};
+use crate::savings::{probe_cost, probe_dollars, settlement_unit, unpriced_type};
 use crate::usage::{ProbeUsage, MAX_USAGE_BYTES};
 
 /// The engine's own bound on one exchange. A probe with `max_tokens = 0` answers in seconds; the relay's idle
@@ -40,8 +40,9 @@ pub(crate) struct ProbeJob {
     pub canonical_model: String,
     pub recipe: Recipe,
     pub expected: u64,
-    /// The TTL the recipe kept warm when the job was cut, which fixes the probe's typed usage for its settlement.
-    pub ttl_ms: i64,
+    /// The typed usage the gate decided the probe's unit on, from the TTL the relay dispatches it with: the
+    /// settlement decides on the same set, so the gate, the caps and the savings read one unit.
+    pub types: PinUsage,
 }
 
 pub(crate) struct ProbeResult {
@@ -139,40 +140,30 @@ fn settled_cost(
     usage: ProbeUsage,
     types: PinUsage,
     outcome: ProbeOutcome,
-    cost_usd: f64,
     at: i64,
 ) -> (SavingsUnit, f64) {
     if outcome == ProbeOutcome::Migrated {
         return (default_unit, 0.0);
     }
     let unit = settlement_unit(default_unit, tables, tier, canonical_model, types);
-    let dollars = || {
-        probe_cost(
-            SavingsUnit::Usd,
-            table,
-            tables,
-            tier,
-            canonical_model,
-            usage,
-            at,
-        )
-        .unwrap_or(cost_usd)
-    };
-    match probe_cost(unit, table, tables, tier, canonical_model, usage, at) {
-        Some(cost) => (unit, cost),
-        // The answer carried a type the typed usage did not foresee, such as a write at a TTL a pool rule
-        // dispatched; a null cell never books a share, so the probe settles in dollars and its savings follow.
-        None if unit == SavingsUnit::WindowShare => {
-            tracing::debug!(
-                account,
-                model = canonical_model,
-                unpriced = unpriced_type(tables, canonical_model, usage),
-                "a probe the cost table cannot price on the window share settles in dollars"
-            );
-            (SavingsUnit::Usd, dollars())
+    if unit == SavingsUnit::WindowShare {
+        if let Some(share) = probe_cost(unit, table, tables, tier, canonical_model, usage, at) {
+            return (unit, share);
         }
-        None => (unit, dollars()),
+        // The answer carried a type the typed usage did not foresee, such as an hour write after the pool's TTL
+        // rule changed between the gate and the dispatch; a null cell never books a share, so the probe settles
+        // in dollars and its savings follow.
+        tracing::debug!(
+            account,
+            model = canonical_model,
+            unpriced = unpriced_type(tables, canonical_model, usage),
+            "a probe the cost table cannot price on the window share settles in dollars"
+        );
     }
+    (
+        SavingsUnit::Usd,
+        probe_dollars(table, canonical_model, usage),
+    )
 }
 
 /// A pool-at-its-cap 429's `Retry-After` seconds, `None` for anything else or a header that does not parse.
@@ -280,7 +271,7 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
     let snapshot = engine.parts.router.snapshot();
     let (record, applied, rolled, charge) = {
         let mut inner = engine.lock();
-        let mut record = inner.probe_record(&job, &exchange, &table, &tables);
+        let mut record = inner.probe_record(&job, &exchange, &table);
         record.kind = snapshot.account(&record.account).map(|a| a.kind);
         let rolled = inner.roll_day(now);
         // A dangling account (gone from the registry between dispatch and landing) cannot serve the next
@@ -314,9 +305,8 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
             &record.account,
             &record.canonical_model,
             record.usage,
-            probe_types(job.ttl_ms, job.recipe.longest_ttl_ms),
+            job.types,
             record.outcome,
-            record.cost_usd,
             now,
         );
         let mut charge = None;
@@ -384,7 +374,6 @@ impl Inner {
         job: &ProbeJob,
         exchange: &Exchange,
         table: &PriceTable,
-        tables: &PlanTables,
     ) -> ProbeRecord {
         let mut record = ProbeRecord {
             account: job.account.clone().unwrap_or_else(|| "-".to_string()),
@@ -423,16 +412,7 @@ impl Inner {
             // through the price table, at the cells the answer's own `usage.speed` selects; the funding-unit
             // cost the agent's own net deducts is a second figure computed once the serving account's kind is
             // known, back in `run_job`. Dollars read neither a tier nor the settlement instant.
-            record.cost_usd = probe_cost(
-                SavingsUnit::Usd,
-                table,
-                tables,
-                None,
-                &job.canonical_model,
-                usage,
-                0,
-            )
-            .unwrap_or(0.0);
+            record.cost_usd = probe_dollars(table, &job.canonical_model, usage);
         }
         if result
             .account
@@ -825,6 +805,7 @@ mod tests {
 
     use crate::config::{FIVE_MINUTES_MS, ONE_HOUR_MS};
     use crate::engine::{Agent, Session};
+    use crate::savings::probe_types;
 
     use super::*;
 
@@ -980,7 +961,6 @@ mod tests {
             usage,
             probe_types(FIVE_MINUTES_MS, FIVE_MINUTES_MS),
             ProbeOutcome::Ok,
-            0.0,
             OFF_BAND,
         );
         assert_eq!(
@@ -1017,7 +997,6 @@ mod tests {
                 million_input(),
                 probe_types(FIVE_MINUTES_MS, FIVE_MINUTES_MS),
                 ProbeOutcome::Ok,
-                0.0,
                 at,
             )
         };
@@ -1048,7 +1027,6 @@ mod tests {
             million_input(),
             probe_types(FIVE_MINUTES_MS, FIVE_MINUTES_MS),
             ProbeOutcome::Ok,
-            0.0,
             OFF_BAND,
         );
         let dollars = probe_cost(
@@ -1083,7 +1061,6 @@ mod tests {
             million_input(),
             probe_types(FIVE_MINUTES_MS, FIVE_MINUTES_MS),
             ProbeOutcome::Ok,
-            0.0,
             OFF_BAND,
         );
         let dollars = probe_cost(
@@ -1127,7 +1104,6 @@ mod tests {
                 million_input(),
                 probe_types(ttl_ms, ttl_ms),
                 ProbeOutcome::Ok,
-                0.0,
                 OFF_BAND,
             )
         };
@@ -1187,7 +1163,6 @@ mod tests {
             usage,
             types,
             ProbeOutcome::Ok,
-            0.0,
             OFF_BAND,
         );
         let dollars = probe_cost(
@@ -1222,7 +1197,6 @@ mod tests {
             ProbeUsage::default(),
             probe_types(FIVE_MINUTES_MS, FIVE_MINUTES_MS),
             ProbeOutcome::Migrated,
-            0.0,
             OFF_BAND,
         );
         assert_eq!((unit, cost), (SavingsUnit::WindowShare, 0.0));

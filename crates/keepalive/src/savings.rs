@@ -6,10 +6,11 @@
 use std::collections::BTreeMap;
 
 use phoebis_ledger::{KeepaliveDelta, PlanTables, PriceTable, Record, Speed, UNATTRIBUTED};
+use phoebis_relay::{CacheTtl, CacheTtlPolicy, TtlBranch};
 use phoebis_routing::{PinUsage, FIVE_HOUR};
 use phoebis_store::{BudgetRow, BudgetScope};
 
-use crate::config::FIVE_MINUTES_MS;
+use crate::config::{FIVE_MINUTES_MS, ONE_HOUR_MS};
 use crate::engine::{Engine, SavingsUnit, SessionKey, Settlement};
 use crate::probe::{Applied, ProbeOutcome, ProbeRecord};
 use crate::usage::ProbeUsage;
@@ -50,9 +51,9 @@ pub(crate) fn gross_saving(
     }
 }
 
-/// A probe's estimated cost in `unit`: dollars at the list prices of the cells the answer's `usage.speed` selects,
-/// or the share of the `tier`'s 5-hour window at `at` (the band inside the price). `None` for a model the table
-/// lacks or a cell it leaves `null`, or on the share side a tier the table does not size.
+/// A probe's estimated cost in `unit`: `probe_dollars`, or the share of the `tier`'s 5-hour window at `at` (the band
+/// inside the price). `None` on the share side alone, for a model the cost table lacks, a cell it leaves `null`, or
+/// a tier it does not size.
 pub(crate) fn probe_cost(
     unit: SavingsUnit,
     table: &PriceTable,
@@ -62,21 +63,38 @@ pub(crate) fn probe_cost(
     usage: ProbeUsage,
     at: i64,
 ) -> Option<f64> {
-    let typed = typed(usage);
     match unit {
-        SavingsUnit::Usd => table
-            .estimate(
-                canonical_model,
-                usage.speed.unwrap_or(Speed::Standard),
-                typed.input,
-                typed.cache_read,
-                typed.write_5m,
-                typed.write_1h,
-                typed.output,
-            )
-            .map(|(total, _)| total),
-        SavingsUnit::WindowShare => tables.five_hour_share_at(tier?, canonical_model, typed, at),
+        SavingsUnit::Usd => Some(probe_dollars(table, canonical_model, usage)),
+        SavingsUnit::WindowShare => {
+            tables.five_hour_share_at(tier?, canonical_model, typed(usage), at)
+        }
     }
+}
+
+/// A probe's dollars at the list prices of the cells the answer's `usage.speed` selects. A model the price table
+/// does not list prices at the dearest listed cell of each type, the fallback `PriceTable::rate_table` gives the
+/// dollar burn: the daily cap and the net read this figure, and a zero would let a probe that consumed quota pass
+/// both.
+pub(crate) fn probe_dollars(table: &PriceTable, canonical_model: &str, usage: ProbeUsage) -> f64 {
+    let typed = typed(usage);
+    if let Some((total, _)) = table.estimate(
+        canonical_model,
+        usage.speed.unwrap_or(Speed::Standard),
+        typed.input,
+        typed.cache_read,
+        typed.write_5m,
+        typed.write_1h,
+        typed.output,
+    ) {
+        return total;
+    }
+    let dearest = table.rate_table().fallback;
+    let at = |tokens: u64, rate: Option<f64>| tokens as f64 * rate.unwrap_or(0.0);
+    at(typed.input, dearest.input)
+        + at(typed.cache_read, dearest.cache_read)
+        + at(typed.write_5m, dearest.write_5m)
+        + at(typed.write_1h, dearest.write_1h)
+        + at(typed.output, dearest.output)
 }
 
 /// A probe answer's tokens by type. An answer that reports the aggregate `cache_creation_input_tokens` and no TTL
@@ -109,6 +127,29 @@ pub(crate) fn probe_types(ttl_ms: i64, longest_ttl_ms: i64) -> PinUsage {
         write_1h: u64::from(ttl_ms.max(longest_ttl_ms) > FIVE_MINUTES_MS),
         output: 1,
     }
+}
+
+/// `probe_types` for the body the relay dispatches. While the pool's cache TTL `policy` is on, `Relay::dispatch_to`
+/// rewrites every marker of a probe to the keepalive TTL of the set the account's funding selects (`metered` for an
+/// api_key account or one in overage), and adds one at that TTL to a body without any where the policy says so;
+/// that TTL then replaces both the one in force and the recipe's own. A body left without a marker writes nothing.
+pub(crate) fn dispatched_types(
+    policy: &CacheTtlPolicy,
+    canonical_model: &str,
+    metered: bool,
+    ttl_ms: i64,
+    longest_ttl_ms: i64,
+) -> PinUsage {
+    let Some(ttl) = policy.ttl_for(canonical_model, TtlBranch::Keepalive, metered) else {
+        return probe_types(ttl_ms, longest_ttl_ms);
+    };
+    let marked = longest_ttl_ms > 0 || policy.inject_when_absent;
+    let dispatched_ms = if marked && ttl == CacheTtl::OneHour {
+        ONE_HOUR_MS
+    } else {
+        FIVE_MINUTES_MS
+    };
+    probe_types(dispatched_ms, dispatched_ms)
 }
 
 /// The first token type `usage` carries that the model's 5-hour row leaves unmeasured, for a log line: `row` when

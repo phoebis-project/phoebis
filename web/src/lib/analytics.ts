@@ -1,4 +1,5 @@
-import type { Account, BurnGroup, BurnPoint, BurnUnit, CostTable, PinMigrationReason, Placement, PlacementRow } from '@/api/types';
+import type { Api } from '@/api/client';
+import type { Account, AnalyticsQuery, BurnGroup, BurnPoint, BurnUnit, CostTable, PinMigrationReason, Placement, PlacementRow } from '@/api/types';
 import { fmtCompact, fmtInt, fmtPct } from '@/lib/format';
 
 /** Why a session's pin moved, as the request drawer, its selection trace and the rewrites legend word it. */
@@ -105,6 +106,27 @@ export function bucketShare(shares: (number | null)[]): number | null {
  * slot on a window the line never priced reads null too, with no traffic to list as model unlisted.
  */
 export const slotUnpriced = (share: number | null, tokens: number): boolean => share === null && tokens > 0;
+
+/**
+ * Which slots hold a share with no share beside them on either side, the series' ends counting as null: a line that
+ * leaves its null slots unconnected draws such a slot as a zero-length path, so the chart marks it with a dot.
+ */
+export function isolatedSlots(values: (number | null)[]): boolean[] {
+  return values.map((v, i) => v !== null && (values[i - 1] ?? null) === null && (values[i + 1] ?? null) === null);
+}
+
+/**
+ * The burn route's answer with the upstreams beside it, read together: a profile refresh can supply a tier the last
+ * read lacked, and the plan chart sizes each upstream from the tiers of the read that answered its buckets.
+ */
+export async function readBurn(
+  source: Pick<Api, 'getAnalyticsBurn' | 'listAccounts'>,
+  range: Pick<AnalyticsQuery, 'from' | 'to'>,
+  groupBy: BurnGroup,
+): Promise<{ accounts: Account[]; answer: { bucketSeconds: number; points: BurnPoint[] } }> {
+  const [answer, accounts] = await Promise.all([source.getAnalyticsBurn(range, groupBy), source.listAccounts()]);
+  return { accounts, answer };
+}
 
 /**
  * The cost table's factors for a stored tier, matched as the ledger matches it: as stored, then with the `default_`

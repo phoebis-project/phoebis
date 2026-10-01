@@ -13,8 +13,8 @@ use phoebis_bus::{
 };
 use phoebis_ledger::{Ledger, Metrics, PlanTables, Pricing, Speed};
 use phoebis_oauth::Clock;
-use phoebis_relay::Relay;
-use phoebis_routing::{budget_deadline, RegistrySnapshot, RouterHandle};
+use phoebis_relay::{CacheTtlPolicy, Relay};
+use phoebis_routing::{budget_deadline, PinUsage, RegistrySnapshot, RouterHandle};
 use phoebis_store::{AccountKind, AccountState, OveragePolicy, Store};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
@@ -23,7 +23,7 @@ use tokio_util::task::TaskTracker;
 use crate::config::{KeepaliveLimits, KeepalivePolicy, MIN_AFFINITY_SECONDS};
 use crate::probe::{run_job, wasted_label, ProbeJob};
 use crate::recipe::{make_recipe, Recipe};
-use crate::savings::{gross_saving, probe_types, settlement_unit};
+use crate::savings::{dispatched_types, gross_saving, settlement_unit};
 use crate::usage::ProbeUsage;
 
 const LOCK_POISONED: &str = "keepalive engine poisoned by a prior panic";
@@ -1635,7 +1635,7 @@ impl Engine {
                 return;
             }
             inner.follow_resolutions(&view.canonical);
-            let mut due: Vec<(i64, SessionKey, String)> = Vec::new();
+            let mut due: Vec<(i64, SessionKey, String, PinUsage)> = Vec::new();
             let candidates: Vec<(SessionKey, String)> = inner
                 .sessions
                 .iter()
@@ -1680,12 +1680,12 @@ impl Engine {
                         .unwrap();
                     gate(&view, agent, &key.1, spent, share_spent, &self.parts.tables)
                 };
-                match held {
-                    Some(Gate::Drop(reason, label)) => {
+                let types = match held {
+                    Err(Gate::Drop(reason, label)) => {
                         inner.discard(&key, &agent_id, reason, Some(label));
                         continue;
                     }
-                    Some(Gate::Hold(reason)) => {
+                    Err(Gate::Hold(reason)) => {
                         // One hold withholds one probe, whatever number of ticks it spans: the production
                         // ticker runs each second, so a five-hour cooldown would otherwise ledger 18,000
                         // withheld probes for the one it actually withheld. A hold that begins before the
@@ -1712,8 +1712,8 @@ impl Engine {
                         }
                         continue;
                     }
-                    None => {}
-                }
+                    Ok(types) => types,
+                };
                 if !ready || inner.sessions[&key].agents[&agent_id].in_flight {
                     continue;
                 }
@@ -1723,12 +1723,12 @@ impl Engine {
                     continue;
                 };
                 if at <= now {
-                    due.push((at, key, agent_id));
+                    due.push((at, key, agent_id, types));
                 }
             }
-            due.sort();
+            due.sort_by(|a, b| (a.0, &a.1, &a.2).cmp(&(b.0, &b.1, &b.2)));
             let mut jobs = Vec::new();
-            for (_, key, agent_id) in due {
+            for (_, key, agent_id, types) in due {
                 if inner.running >= max_workers {
                     break;
                 }
@@ -1757,7 +1757,7 @@ impl Engine {
                     canonical_model: agent.canonical_model.clone(),
                     recipe: observation.recipe.clone(),
                     expected: observation.expected,
-                    ttl_ms: agent.ttl_ms,
+                    types,
                 };
                 agent.in_flight = true;
                 agent.hold_counted = false;
@@ -1949,8 +1949,9 @@ impl Engine {
     }
 }
 
-/// The spec's "Scheduling against router state" row, in its order. `Some` names why the due probe waits, or
-/// why the recipe goes.
+/// The spec's "Scheduling against router state" row, in its order. `Err` names why the due probe waits, or why
+/// the recipe goes; `Ok` carries the typed usage the gate decided the probe's unit on, which the job takes to its
+/// settlement.
 pub(crate) fn gate(
     view: &RouterView,
     agent: &mut Agent,
@@ -1958,18 +1959,18 @@ pub(crate) fn gate(
     spent_today: &BTreeMap<String, f64>,
     share_spent_today: &BTreeMap<String, f64>,
     tables: &PlanTables,
-) -> Option<Gate> {
+) -> Result<PinUsage, Gate> {
     let key_id = agent.key_id.clone();
     // The operator's opt-out reaches an idle session here, not only at its next request: the recipe is dropped
     // rather than held, because nothing on that key may be probed again until the flag is cleared.
     let Some(key) = view.snapshot.key(&key_id).filter(|k| !k.keepalive_opt_out) else {
-        return Some(Gate::Drop(Reason::KeyOptedOut, Wasted::Released));
+        return Err(Gate::Drop(Reason::KeyOptedOut, Wasted::Released));
     };
     let Some(pool) = view.snapshot.pool(&key.pool_id).filter(|p| p.enabled) else {
-        return Some(Gate::Hold(Reason::PoolDisabled));
+        return Err(Gate::Hold(Reason::PoolDisabled));
     };
     if pool.affinity_ttl_seconds < MIN_AFFINITY_SECONDS {
-        return Some(Gate::Hold(Reason::AffinityTooShort));
+        return Err(Gate::Hold(Reason::AffinityTooShort));
     }
     let policy = KeepalivePolicy::from_json(&pool.keepalive_json);
     // The pool's tuning may have changed since admission, and an admin may have moved the key to another
@@ -1978,12 +1979,12 @@ pub(crate) fn gate(
     agent.policy = policy.clone();
     agent.pool_id = key.pool_id.clone();
     if !policy.enabled {
-        return Some(Gate::Hold(Reason::KeepaliveOff));
+        return Err(Gate::Hold(Reason::KeepaliveOff));
     }
     // The operator's switch reaches a recipe armed before it was flipped, the way the key opt-out does: dropped
     // rather than held, since nothing about a subagent may be probed again until the option comes back.
     if agent.id != MAIN_AGENT && !policy.warm_subagents {
-        return Some(Gate::Drop(Reason::SubagentsOff, Wasted::Released));
+        return Err(Gate::Drop(Reason::SubagentsOff, Wasted::Released));
     }
     // The pin is what the probe will follow, so the pin's account is the one to gate: the router may have moved
     // the agent's own pin between this recipe's last observation and the probe.
@@ -2001,16 +2002,16 @@ pub(crate) fn gate(
         .as_deref()
         .and_then(|id| view.snapshot.account(id))
     else {
-        return Some(Gate::Hold(Reason::Paused));
+        return Err(Gate::Hold(Reason::Paused));
     };
     if !account.enabled {
-        return Some(Gate::Hold(Reason::Paused));
+        return Err(Gate::Hold(Reason::Paused));
     }
     if matches!(
         account.state,
         AccountState::ReauthRequired | AccountState::FundingRequired
     ) {
-        return Some(Gate::Hold(Reason::Reauth));
+        return Err(Gate::Hold(Reason::Reauth));
     }
     let fast = agent
         .current
@@ -2024,11 +2025,11 @@ pub(crate) fn gate(
             && phoebis_routing::cooldown_holds(scope, window, &agent.canonical_model, fast)
     });
     if cooled {
-        return Some(Gate::Hold(Reason::Cooled));
+        return Err(Gate::Hold(Reason::Cooled));
     }
     // A fast recipe draws usage credits, not a plan window, so plan overage does not hold it.
     if !fast && view.overage.contains(&account.id) && pool.overage_policy != OveragePolicy::Allow {
-        return Some(Gate::Hold(Reason::Overage));
+        return Err(Gate::Hold(Reason::Overage));
     }
     // Read live on every poll like the two holds above: the period's end or a raised budget clears it on the
     // next tick, and a real request that moves the pin clears it through the pin.
@@ -2036,7 +2037,7 @@ pub(crate) fn gate(
         .budgets
         .contains(&(pool.id.clone(), account.id.clone()))
     {
-        return Some(Gate::Hold(Reason::Budget));
+        return Err(Gate::Hold(Reason::Budget));
     }
     // The cap bounds the pool the probe runs under, which the refresh above may have just moved.
     let spent = spent_today.get(&agent.pool_id).copied().unwrap_or(0.0);
@@ -2044,7 +2045,7 @@ pub(crate) fn gate(
         .probe_cost_cap_usd_per_day
         .is_some_and(|cap| spent >= cap)
     {
-        return Some(Gate::Hold(Reason::CapReached));
+        return Err(Gate::Hold(Reason::CapReached));
     }
     let in_overage = view.overage.contains(&account.id);
     // A fast recipe draws usage credits, so its probes settle in dollars whatever the funding.
@@ -2060,27 +2061,30 @@ pub(crate) fn gate(
         .current
         .as_ref()
         .map_or(0, |o| o.recipe.longest_ttl_ms);
-    let unit = settlement_unit(
-        default_unit,
-        tables,
-        tier,
+    // The relay rewrites the probe's markers to the pool's keepalive TTL, from the set whoever pays for the write
+    // selects as `Relay::dispatch_to` selects it, so the types are the dispatched body's, not the recipe's own.
+    let types = dispatched_types(
+        &CacheTtlPolicy::from_json(&pool.cache_ttl_json),
         &agent.canonical_model,
-        probe_types(agent.ttl_ms, longest_ttl_ms),
+        in_overage || account.kind == AccountKind::ApiKey,
+        agent.ttl_ms,
+        longest_ttl_ms,
     );
+    let unit = settlement_unit(default_unit, tables, tier, &agent.canonical_model, types);
     // A share-settled probe's day already sums shares of the account's own 5-hour window, the band inside each
     // price, so the sum caps against the configured share directly.
     if let Some(share) = policy.probe_cap_window_share_per_day {
         if unit == SavingsUnit::WindowShare {
             let share_spent = share_spent_today.get(&account.id).copied().unwrap_or(0.0);
             if share_spent >= share {
-                return Some(Gate::Hold(Reason::CapReached));
+                return Err(Gate::Hold(Reason::CapReached));
             }
         }
     }
     if policy.stop_when_net_negative && agent.net.in_unit(unit) < 0.0 && agent.grace_left == 0 {
-        return Some(Gate::Hold(Reason::NetNegative));
+        return Err(Gate::Hold(Reason::NetNegative));
     }
-    None
+    Ok(types)
 }
 
 #[cfg(test)]
@@ -2178,6 +2182,16 @@ mod tests {
         overage_policy: OveragePolicy,
         share_cap: Option<f64>,
     ) -> RouterView {
+        stop_view_dispatching(o_in_overage, overage_policy, share_cap, "{}")
+    }
+
+    /// `stop_view_with` with the pool's cache TTL policy stored as `cache_ttl_json`.
+    fn stop_view_dispatching(
+        o_in_overage: bool,
+        overage_policy: OveragePolicy,
+        share_cap: Option<f64>,
+        cache_ttl_json: &str,
+    ) -> RouterView {
         let policy = KeepalivePolicy {
             enabled: true,
             stop_when_net_negative: true,
@@ -2247,7 +2261,7 @@ mod tests {
                 prefer_subscription: false,
                 shedding: phoebis_store::Shedding::default(),
                 failover: phoebis_store::Failover::default(),
-                cache_ttl_json: "{}".into(),
+                cache_ttl_json: cache_ttl_json.into(),
                 cache_diagnostics: None,
                 auto_mode_server: true,
                 affinity: phoebis_store::Affinity::default(),
@@ -2290,6 +2304,7 @@ mod tests {
                 &BTreeMap::new(),
                 &tables,
             )
+            .err()
         };
         let gated_in = |view: &RouterView, account: &str, net: Net| {
             gated_on(view, account, "claude-opus-5-5", net)
@@ -2389,6 +2404,7 @@ mod tests {
                 &BTreeMap::new(),
                 &tables,
             )
+            .err()
         };
         assert_eq!(
             gated(&stop_view(false), FIVE_MINUTES_MS),
@@ -2451,6 +2467,7 @@ mod tests {
             &BTreeMap::new(),
             &PlanTables::shipped(),
         )
+        .err()
     }
 
     #[test]
@@ -2602,6 +2619,7 @@ mod tests {
                 &BTreeMap::new(),
                 &tables,
             )
+            .err()
         };
         assert_eq!(
             gated(&stop_view(false), ONE_HOUR_MS),
@@ -2617,6 +2635,89 @@ mod tests {
             gated(&stop_view(false), FIVE_MINUTES_MS),
             Some(Gate::Hold(Reason::NetNegative)),
             "with five-minute markers alone the probe settles in the share"
+        );
+    }
+
+    #[test]
+    fn a_probe_gates_on_the_ttl_the_pools_keepalive_rule_dispatches_it_with() {
+        let mut hourless = PlanTables::shipped();
+        hourless
+            .cost
+            .windows
+            .get_mut(FIVE_HOUR)
+            .unwrap()
+            .get_mut("claude-opus-5-5")
+            .unwrap()
+            .cache_write_1h = None;
+        // A zero share cap holds exactly the probes that settle in the share, so whether it holds names the unit.
+        let gated = |cache_ttl_json: &str, tables: &PlanTables, marker_ms: i64| {
+            let view =
+                stop_view_dispatching(false, OveragePolicy::Allow, Some(0.0), cache_ttl_json);
+            let mut agent = Agent::new("main", "k", 1, 0);
+            agent.account = Some("o".into());
+            agent.canonical_model = "claude-opus-5-5".into();
+            agent.ttl_ms = marker_ms;
+            let mut current = observation(false);
+            current.recipe.ttl_ms = marker_ms;
+            current.recipe.longest_ttl_ms = marker_ms;
+            agent.current = Some(current);
+            gate(
+                &view,
+                &mut agent,
+                "s",
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+                tables,
+            )
+            .err()
+        };
+        let probes_for_an_hour = r#"{"enabled":true,"plan":{"main":"5m","keepalive":"1h"}}"#;
+        assert_eq!(
+            gated(probes_for_an_hour, &hourless, FIVE_MINUTES_MS),
+            None,
+            "the relay rewrites the five-minute markers to the hour, which the row cannot price, so the probe settles in dollars"
+        );
+        assert_eq!(
+            gated(probes_for_an_hour, &PlanTables::shipped(), FIVE_MINUTES_MS),
+            Some(Gate::Hold(Reason::CapReached)),
+            "with the hour cell priced the same probe settles in the share"
+        );
+        assert_eq!(
+            gated("{}", &hourless, FIVE_MINUTES_MS),
+            Some(Gate::Hold(Reason::CapReached)),
+            "with the policy off the five-minute markers go as sent"
+        );
+        assert_eq!(
+            gated(
+                r#"{"enabled":true,"plan":{"main":"1h","keepalive":"5m"}}"#,
+                &hourless,
+                ONE_HOUR_MS
+            ),
+            Some(Gate::Hold(Reason::CapReached)),
+            "an hour recipe whose probe the pool dispatches for five minutes never writes for an hour"
+        );
+        assert_eq!(
+            gated(
+                r#"{"enabled":true,"metered":{"keepalive":"1h"},"plan":{"keepalive":"5m"}}"#,
+                &hourless,
+                FIVE_MINUTES_MS
+            ),
+            Some(Gate::Hold(Reason::CapReached)),
+            "a plan-funded probe reads the plan set's keepalive TTL, never the metered set's"
+        );
+        assert_eq!(
+            gated(probes_for_an_hour, &hourless, 0),
+            Some(Gate::Hold(Reason::CapReached)),
+            "a body without a marker goes without one, so it writes nothing for an hour"
+        );
+        assert_eq!(
+            gated(
+                r#"{"enabled":true,"inject_when_absent":true,"plan":{"keepalive":"1h"}}"#,
+                &hourless,
+                0
+            ),
+            None,
+            "unless the policy adds the marker, at the hour"
         );
     }
 

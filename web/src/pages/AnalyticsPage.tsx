@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
-import { Area, AreaChart, Bar, BarChart, CartesianGrid, ComposedChart, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { Area, AreaChart, Bar, BarChart, CartesianGrid, ComposedChart, Dot, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { Link, useSearchParams } from 'react-router-dom';
 import { api } from '@/api';
 import { foldGroups, foldRequests, loadSessionRequests, sumGroups } from '@/api/fold';
@@ -11,7 +11,7 @@ import { ChartTooltip, Legend, type TooltipRow } from '@/components/charts/Toolt
 import { MultiSelect, type Option } from '@/components/ui/MultiSelect';
 import { IconX } from '@/components/ui/icons';
 import { Badge, Button, Card, ErrorState, Input, Meter, Segmented, Select, Skeleton, Toggle } from '@/components/ui/primitives';
-import { CONVERSATION_CLASSES, foldBurn, moveLabel, placementCells, placementRungLabel, sizedUpstreams, slotUnpriced, type BurnLine, type BurnLineUnit, type BurnRow } from '@/lib/analytics';
+import { CONVERSATION_CLASSES, foldBurn, isolatedSlots, moveLabel, placementCells, placementRungLabel, readBurn, sizedUpstreams, slotUnpriced, type BurnLine, type BurnLineUnit, type BurnRow } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missCount, missLabel, missReasonOrder } from '@/lib/cache';
 import { fmtAbsolute, fmtCompact, fmtDayShort, fmtDuration, fmtHourTick, fmtInt, fmtMs, fmtPct, fmtPeriodEnd, fmtShare, fmtUsd, shortId, toLocalInput, upperFirst } from '@/lib/format';
@@ -196,11 +196,10 @@ export function AnalyticsPage() {
     [classPattern, userAgentPattern, filters, fromIso, includeProbes, sessionId, sessionKey, toIso],
   );
   const accountRollups = useAsync(() => api.listAccountRollups(fromIso, toIso), [fromIso, toIso]);
-  const burn = useAsync(() => api.getAnalyticsBurn({ from: fromIso, to: toIso }, burnGroup), [fromIso, toIso, burnGroup]);
+  const burn = useAsync(() => readBurn(api, { from: fromIso, to: toIso }, burnGroup), [fromIso, toIso, burnGroup]);
   // The plan chart's line category reads each upstream's stored tier against the cost table's tiers.
-  const burnAccounts = useAsync(() => api.listAccounts(), []);
   const burnSettings = useAsync(() => api.getSettings(), []);
-  const sized = useMemo(() => (burnAccounts.data && burnSettings.data ? sizedUpstreams(burnAccounts.data, burnSettings.data.planTables.cost.tiers) : null), [burnAccounts.data, burnSettings.data]);
+  const sized = useMemo(() => (burn.data && burnSettings.data ? sizedUpstreams(burn.data.accounts, burnSettings.data.planTables.cost.tiers) : null), [burn.data, burnSettings.data]);
   const rewrites = useAsync(() => api.getAnalyticsRewrites({ from: fromIso, to: toIso }), [fromIso, toIso]);
   // Side groupings on the page's own query, as byModel and byPool are; a session view folds them from the log.
   const bySpeed = useAsync(() => (sessionId === null ? api.getAnalyticsSeries({ ...query, groupBy: 'speed' }) : Promise.resolve<AnalyticsPoint[]>([])), [query, sessionId]);
@@ -227,7 +226,7 @@ export function AnalyticsPage() {
   // An outage of the ledger fails the section and filter-choice reads with these three, and this is the one
   // control that reads again, so it reads everything the view draws from.
   const retry = () => {
-    for (const read of [accountKeys, accountRollups, breakdown, budgets, burn, burnAccounts, burnSettings, byEffort, byModel, byPool, bySpeed, keyKeys, log, modelKeys, placements, poolKeys, rewrites, series]) read.reload();
+    for (const read of [accountKeys, accountRollups, breakdown, budgets, burn, burnSettings, byEffort, byModel, byPool, bySpeed, keyKeys, log, modelKeys, placements, poolKeys, rewrites, series]) read.reload();
   };
   const rows = useMemo(() => (log.stale ? [] : (log.data?.requests ?? [])), [log.stale, log.data]);
   const points = useMemo(() => (stale ? [] : sessionId === null ? (series.data ?? []) : foldRequests(rows, rangeBucketMs, fromIso, toIso, groupBy, foldOptions)), [stale, sessionId, series.data, rows, rangeBucketMs, fromIso, toIso, groupBy, foldOptions]);
@@ -455,7 +454,7 @@ export function AnalyticsPage() {
           <span className="muted">Group by</span>
           <Segmented<BurnGroup> ariaLabel="Burn group by" value={burnGroup} onChange={setBurnGroup} options={BURN_GROUPS.map((g) => ({ label: BURN_GROUP_LABEL[g], value: g }))} />
         </div>
-        <BurnCharts answer={burn.stale ? null : burn.data} error={burn.error ?? burnAccounts.error ?? burnSettings.error} groupBy={burnGroup} loading={burn.data === null || burn.stale || sized === null} sized={sized} />
+        <BurnCharts answer={burn.stale ? null : (burn.data?.answer ?? null)} error={burn.error ?? burnSettings.error} groupBy={burnGroup} loading={burn.data === null || burn.stale || sized === null} sized={sized} />
         <BudgetTable budgets={budgets.data} error={budgets.error} now={now} />
       </Section>
 
@@ -1283,6 +1282,16 @@ const MODEL_UNLISTED_HINT = 'A bucket whose traffic ran on a model the cost tabl
 const NO_UPSTREAM: ReadonlySet<string> = new Set();
 
 /**
+ * A plan line's dot, drawn on the slots `isolatedSlots` names alone: the line leaves its null slots unconnected, so a
+ * share with a null or the series' end on both sides draws no segment of its own.
+ */
+const isolatedDot = (values: (number | null)[], color: string) => {
+  const isolated = isolatedSlots(values);
+  return ({ cx, cy, index, key }: { cx?: number; cy?: number; index: number; key?: string }) =>
+    isolated[index] ? <Dot key={key} className="recharts-line-dot" cx={cx} cy={cy} r={3} fill={color} stroke={color} /> : <g key={key} />;
+};
+
+/**
  * The burn route's three views of one grouping. A line's colour follows its group within the answer rather than
  * its rank, so a range that reorders the groups does not repaint them; the upstream grouping keeps each upstream's
  * page-wide colour.
@@ -1410,8 +1419,10 @@ function BurnCharts({ answer, error, groupBy, loading, sized }: { answer: { buck
             <CartesianGrid vertical={false} stroke={ink.grid} />
             <XAxis dataKey="at" tickFormatter={tick} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
             <YAxis tickFormatter={(v: number) => fmtShare(v)} tickLine={false} axisLine={false} width={52} />
+            {/* Recharts drops null entries by default, and a bucket whose every share is null would lose its date, its dashes and the unpriced hint. */}
             <Tooltip
               cursor={{ stroke: ink.axis }}
+              filterNull={false}
               content={timeTip<BurnRow>((r) => [
                 ...planned.flatMap(({ i, l }) => [
                   { color: colorOf(l), label: `${nameOf(l)} (5-hour)`, title: slotUnpriced(r.fiveHour[i], r.tokens[i]) ? MODEL_UNLISTED_HINT : undefined, value: shareOf(r.fiveHour[i]) },
@@ -1421,8 +1432,8 @@ function BurnCharts({ answer, error, groupBy, loading, sized }: { answer: { buck
             />
             {planned.flatMap(({ i, l }) => [
               // A null slot draws no point, and the gap stays since the lines do not connect across it.
-              <Line key={`${i}-5h`} type="monotone" dataKey={(r: BurnRow) => r.fiveHour[i]} stroke={colorOf(l)} strokeWidth={2} dot={false} isAnimationActive={false} />,
-              <Line key={`${i}-7d`} type="monotone" dataKey={(r: BurnRow) => r.sevenDay[i]} stroke={colorOf(l)} strokeWidth={2} strokeDasharray="5 3" dot={false} isAnimationActive={false} />,
+              <Line key={`${i}-5h`} type="monotone" dataKey={(r: BurnRow) => r.fiveHour[i]} stroke={colorOf(l)} strokeWidth={2} dot={isolatedDot(rows.map((r) => r.fiveHour[i]), colorOf(l))} isAnimationActive={false} />,
+              <Line key={`${i}-7d`} type="monotone" dataKey={(r: BurnRow) => r.sevenDay[i]} stroke={colorOf(l)} strokeWidth={2} strokeDasharray="5 3" dot={isolatedDot(rows.map((r) => r.sevenDay[i]), colorOf(l))} isAnimationActive={false} />,
             ])}
           </LineChart>
         </ChartCard>

@@ -3347,6 +3347,51 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
     });
   }
 
+  {
+    // jsdom lays nothing out, so the plan chart's container reads a browser's size here and the chart draws its
+    // lines, dots and tooltip. `business` is a Max 20x upstream the cost table sizes: its middle hour priced, and the
+    // hours either side carried traffic on a cell the table leaves unmeasured, so the 5-hour series reads
+    // [null, 0.05, null] and the 7-day one is null throughout.
+    const hours = [11, 12, 13].map((h) => Date.UTC(2026, 8, 16, h));
+    api.getAnalyticsBurn = async () => ({ bucketSeconds: 3_600, points: hours.map((at, h) => ({ at: new Date(at).toISOString(), cachedTokens: 0, fiveHourShare: h === 1 ? 0.05 : null, group: 'business', sevenDayShare: null, tokens: 1_000, uncachedTokens: 1_000, unit: 'window_share', usd: 0 })) });
+    const measure = window.HTMLElement.prototype.getBoundingClientRect;
+    window.HTMLElement.prototype.getBoundingClientRect = function () {
+      return this.classList.contains('recharts-responsive-container') ? { bottom: 220, height: 220, left: 0, right: 600, top: 0, width: 600, x: 0, y: 0 } : measure.call(this);
+    };
+    await burnGroup('Key');
+    await burnGroup('Upstream');
+    const plan = card('Plan per hour');
+    const dots = [...(plan?.querySelectorAll('.recharts-line-dots .recharts-line-dot') ?? [])];
+    const curves = [...(plan?.querySelectorAll('.recharts-line-curve') ?? [])].map((c) => c.getAttribute('d')).filter((d) => d !== null);
+    results.push({
+      name: '/analytics plan per hour marks a priced hour between two unpriced ones with a dot and leaves the gaps unconnected',
+      ok: dots.length === 1 && curves.length > 0 && curves.every((d) => !/[CLHV]/i.test(d.slice(1))),
+      missing: [`${dots.length} dots`, ...curves],
+    });
+    // The first hour's every share is null: the tooltip still names it, with a dash and the unpriced hint per window.
+    plan?.querySelector('.recharts-wrapper')?.dispatchEvent(new window.MouseEvent('mousemove', { bubbles: true, clientX: 60, clientY: 60 }));
+    await m.settle(300);
+    const tip = plan?.querySelector('.chart-tip');
+    const tipRows = [...(tip?.querySelectorAll('.chart-tip__row') ?? [])].map((row) => ({
+      hint: row.querySelector('.chart-tip__label')?.getAttribute('title'),
+      label: row.querySelector('.chart-tip__label')?.textContent?.trim(),
+      value: row.querySelector('.chart-tip__value')?.textContent?.trim(),
+    }));
+    const when = new Date(hours[0]).toLocaleString('en-US', { day: '2-digit', hour: '2-digit', hourCycle: 'h23', minute: '2-digit', month: 'short', second: '2-digit', year: 'numeric' });
+    results.push({
+      name: '/analytics plan per hour keeps the tooltip of an hour whose every share is null, its date, dashes and unpriced hint',
+      ok:
+        tip?.querySelector('.chart-tip__title')?.textContent === when &&
+        JSON.stringify(tipRows.map((r) => [r.label, r.value])) === JSON.stringify([['business (5-hour)', '-'], ['business (7-day)', '-']]) &&
+        tipRows.every((r) => r.hint === 'A bucket whose traffic ran on a model the cost table has no row for, or on a cell it leaves unmeasured, prices no share on that window and draws no point'),
+      missing: [tip?.querySelector('.chart-tip__title')?.textContent ?? 'no tooltip', when, JSON.stringify(tipRows)],
+    });
+    window.HTMLElement.prototype.getBoundingClientRect = measure;
+    delete api.getAnalyticsBurn;
+    await burnGroup('Key');
+    await burnGroup('Upstream');
+  }
+
   // Placements by rung sit in the Cache section, each budgeted member's spend in the Burn section.
   const tableOf = (t) => ({
     heads: [...(card(t)?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim()),
