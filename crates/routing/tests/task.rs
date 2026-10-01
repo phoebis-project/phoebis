@@ -82,8 +82,8 @@ fn seeded_kind(kind: AccountKind, ids: &[&str]) -> Arc<Store> {
                 .map(|id| MemberWrite {
                     account_id: id.to_string(),
                     priority: 0,
-                    budget_usd: None,
-                    budget_period: phoebis_store::BudgetPeriod::Month,
+                    budget_daily_usd: None,
+                    budget_monthly_usd: None,
                 })
                 .collect::<Vec<_>>(),
             "test",
@@ -240,8 +240,8 @@ async fn a_selection_is_written_through_and_a_registry_write_shows_up_after_relo
             &[MemberWrite {
                 account_id: "b".into(),
                 priority: 0,
-                budget_usd: None,
-                budget_period: phoebis_store::BudgetPeriod::Month,
+                budget_daily_usd: None,
+                budget_monthly_usd: None,
             }],
             "test",
         )
@@ -1273,8 +1273,8 @@ async fn an_account_recreated_under_a_used_id_inherits_none_of_its_routing_state
             &[MemberWrite {
                 account_id: "a".to_string(),
                 priority: 0,
-                budget_usd: None,
-                budget_period: phoebis_store::BudgetPeriod::Month,
+                budget_daily_usd: None,
+                budget_monthly_usd: None,
             }],
             "test",
         )
@@ -1314,8 +1314,8 @@ fn insert_account_a(store: &Store) {
             &[MemberWrite {
                 account_id: "a".to_string(),
                 priority: 0,
-                budget_usd: None,
-                budget_period: phoebis_store::BudgetPeriod::Month,
+                budget_daily_usd: None,
+                budget_monthly_usd: None,
             }],
             "test",
         )
@@ -4207,8 +4207,8 @@ async fn an_account_recreated_under_its_id_drops_its_affinity_entries_and_a_late
             &[MemberWrite {
                 account_id: "a".into(),
                 priority: 0,
-                budget_usd: None,
-                budget_period: phoebis_store::BudgetPeriod::Month,
+                budget_daily_usd: None,
+                budget_monthly_usd: None,
             }],
             "test",
         )
@@ -4247,8 +4247,8 @@ async fn a_spend_report_under_another_period_than_the_members_is_discarded() {
             &[MemberWrite {
                 account_id: "a".into(),
                 priority: 0,
-                budget_usd: Some(10.0),
-                budget_period: phoebis_store::BudgetPeriod::Day,
+                budget_daily_usd: Some(10.0),
+                budget_monthly_usd: None,
             }],
             "test",
         )
@@ -4270,7 +4270,7 @@ async fn a_spend_report_under_another_period_than_the_members_is_discarded() {
     };
     state.record_member_spend(&snapshot, vec![month_row]);
     assert!(
-        state.member_spend("p", "a").is_none(),
+        state.member_spends_of("p", "a").next().is_none(),
         "a Month row is no obstacle for a member configured on Day"
     );
     let day_row = MemberSpend {
@@ -4283,7 +4283,10 @@ async fn a_spend_report_under_another_period_than_the_members_is_discarded() {
         observed_at: 1_000,
     };
     state.record_member_spend(&snapshot, vec![day_row.clone()]);
-    assert_eq!(state.member_spend("p", "a"), Some(&day_row));
+    assert_eq!(
+        state.member_spends_of("p", "a").collect::<Vec<_>>(),
+        vec![&day_row]
+    );
 }
 
 #[tokio::test]
@@ -4295,8 +4298,8 @@ async fn a_members_spend_read_after_a_period_edit_answers_none_until_the_next_re
             &[MemberWrite {
                 account_id: "a".into(),
                 priority: 0,
-                budget_usd: Some(10.0),
-                budget_period: phoebis_store::BudgetPeriod::Month,
+                budget_daily_usd: None,
+                budget_monthly_usd: Some(10.0),
             }],
             "test",
         )
@@ -4316,8 +4319,8 @@ async fn a_members_spend_read_after_a_period_edit_answers_none_until_the_next_re
     };
     state.record_member_spend(&month_snapshot, vec![month_row.clone()]);
     assert_eq!(
-        state.member_spend_live(&month_snapshot, "p", "a"),
-        Some(&month_row),
+        state.member_spends_live(&month_snapshot, "p", "a"),
+        vec![&month_row],
         "the row matches the member's period at write time"
     );
 
@@ -4329,8 +4332,8 @@ async fn a_members_spend_read_after_a_period_edit_answers_none_until_the_next_re
             &[MemberWrite {
                 account_id: "a".into(),
                 priority: 0,
-                budget_usd: Some(10.0),
-                budget_period: phoebis_store::BudgetPeriod::Day,
+                budget_daily_usd: Some(10.0),
+                budget_monthly_usd: None,
             }],
             "test",
         )
@@ -4338,12 +4341,12 @@ async fn a_members_spend_read_after_a_period_edit_answers_none_until_the_next_re
     handle.reload().await.unwrap();
     let day_snapshot = handle.snapshot();
     assert_eq!(
-        state.member_spend("p", "a"),
-        Some(&month_row),
+        state.member_spends_of("p", "a").collect::<Vec<_>>(),
+        vec![&month_row],
         "nothing has cleared the stale row yet"
     );
     assert!(
-        state.member_spend_live(&day_snapshot, "p", "a").is_none(),
+        state.member_spends_live(&day_snapshot, "p", "a").is_empty(),
         "the read applies the current period, not the one the stored row was summed under"
     );
 }
@@ -4357,8 +4360,8 @@ async fn the_handle_answers_no_row_for_a_member_whose_period_the_report_predates
             &[MemberWrite {
                 account_id: "a".into(),
                 priority: 0,
-                budget_usd: Some(10.0),
-                budget_period: phoebis_store::BudgetPeriod::Month,
+                budget_daily_usd: None,
+                budget_monthly_usd: Some(10.0),
             }],
             "test",
         )
@@ -4392,8 +4395,8 @@ async fn the_handle_answers_no_row_for_a_member_whose_period_the_report_predates
             &[MemberWrite {
                 account_id: "a".into(),
                 priority: 0,
-                budget_usd: Some(10.0),
-                budget_period: phoebis_store::BudgetPeriod::Day,
+                budget_daily_usd: Some(10.0),
+                budget_monthly_usd: None,
             }],
             "test",
         )

@@ -48,10 +48,10 @@ placement by the conversation's own messages is a hit when the response read the
 by the static prefix, by a subagent's fallback to its parent agent's pin, or, with every account at its cap, by
 any request's landing on another agent's pin of its session, is a hit when it read at all.
 
-A budgeted pool member's spend for its current period sums the priced hourly rollups; a keepalive probe's cost
-counts toward it the same as any other request's, since a probe on an API-key member still draws real money. The
-table in force is fixed at startup, so a member held at its budget waits for the period to end or its budget to be
-raised, rather than for a price correction.
+A budgeted pool member's spend sums the priced hourly rollups over each period it carries a budget for, the current UTC
+day and the current month; a keepalive probe's cost counts toward it the same as any other request's, since a probe on
+an API-key member still draws real money. The table in force is fixed at startup, so a member held at its budget waits
+for the period to end or its budget to be raised, rather than for a price correction.
 
 A model an upstream rejected leaves two events in the log: `model_rejected` names the refusing account and the
 spelling the request carried, `model_permitted` the account that served the same request afterwards; the request
@@ -344,10 +344,10 @@ prefix, or with the main conversation), each with its hits, hit share, the token
 prefix sizes the placements promised. A placement by the conversation's own messages is a hit when the response read the
 whole prefix it was promised; one by the static prefix or beside the main conversation is a hit when the response read
 from cache at all, since the latter promises no size. The table reads the range and the key and pool filters, and a
-session view leaves it out. The Burn section closes with Member budgets: each API-key pool member with a budget, its
-spend in the current day or month against that budget with a bar, and when the period ends. A member at its budget is
-marked, since routing skips it until the period ends; one the ledger has not reported on yet reads "not reported". The
-range and the filters do not apply to it.
+session view leaves it out. The Burn section closes with Member budgets: one row per budget an API-key pool member
+carries, its spend in that day or month against the budget with a bar, and when the period ends. A member at its budget
+is marked, since routing skips it until the period ends; one the ledger has not reported on yet reads "not reported".
+The range and the filters do not apply to it.
 
 Cooldown time books to the hour it elapses in as the interval runs, and a cooldown cleared early gives back only the
 hours it never held. A cooldown is booked up to seven days ahead of the announcement that set it, and a later

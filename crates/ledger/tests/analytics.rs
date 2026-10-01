@@ -6,9 +6,9 @@ use phoebis_ledger::{
     apply_filter, breakdown, bucket_index, burn_rows, burn_series, burn_series_over, delta_of,
     fold_account, fold_event, fold_keepalive, key_request_totals, list_requests, member_spends,
     moves_by_reason, placements, read_account_rollups, read_rollups, rewrite_series, run_retention,
-    session_identities, AttemptRecord, EventRecord, Histogram, KeepaliveDelta, LedgerConfig,
-    LedgerDb, LiveKeys, ModelPrice, ModelRow, PlanTables, PriceTable, RequestFilter, RequestRecord,
-    RollupFilter, RollupRow, SeriesFilter, Tiers, NO_CLASS, UNATTRIBUTED,
+    session_identities, AttemptRecord, BudgetedMember, EventRecord, Histogram, KeepaliveDelta,
+    LedgerConfig, LedgerDb, LiveKeys, ModelPrice, ModelRow, PlanTables, PriceTable, RequestFilter,
+    RequestRecord, RollupFilter, RollupRow, SeriesFilter, Tiers, NO_CLASS, UNATTRIBUTED,
 };
 use phoebis_routing::{PinUsage, RegistrySnapshot, RoutingState, FIVE_HOUR};
 use phoebis_store::{AccountKind, BudgetPeriod, PoolMember, RegistryLoad, RoutingLoad};
@@ -1998,6 +1998,16 @@ fn plant_spend_every_kind(
     db.insert_request(&request, &[attempt], None).unwrap();
 }
 
+/// One budgeted period of `account` on `pool`, summed over every row whatever its funding.
+fn budgeted(pool: &str, account: &str, period: BudgetPeriod) -> BudgetedMember {
+    BudgetedMember {
+        pool_id: pool.into(),
+        account_id: account.into(),
+        period,
+        metered_only: false,
+    }
+}
+
 #[test]
 fn a_members_spend_prices_every_token_kind_at_its_own_rate() {
     let db = LedgerDb::open_in_memory().unwrap();
@@ -2017,14 +2027,7 @@ fn a_members_spend_prices_every_token_kind_at_its_own_rate() {
         50,
     );
     let rows = db
-        .read_blocking(|c| {
-            member_spends(
-                c,
-                &[("p".into(), "a".into(), BudgetPeriod::Day)],
-                now,
-                &table,
-            )
-        })
+        .read_blocking(|c| member_spends(c, &[budgeted("p", "a", BudgetPeriod::Day)], now, &table))
         .unwrap();
     assert_eq!(
         rows[0].spent_usd,
@@ -2067,7 +2070,7 @@ fn a_members_spend_prices_a_fast_row_at_the_fast_cells() {
         .read_blocking(|c| {
             member_spends(
                 c,
-                &[("p".into(), "a".into(), BudgetPeriod::Day)],
+                &[budgeted("p", "a", BudgetPeriod::Day)],
                 now,
                 &PriceTable::shipped(),
             )
@@ -2160,12 +2163,7 @@ fn a_members_spend_is_the_priced_rollups_of_its_utc_period_alone() {
     let day_now = ms(2026, 1, 15, 10, 0);
     let day = db
         .read_blocking(|c| {
-            member_spends(
-                c,
-                &[("p".into(), "a".into(), BudgetPeriod::Day)],
-                day_now,
-                &table,
-            )
+            member_spends(c, &[budgeted("p", "a", BudgetPeriod::Day)], day_now, &table)
         })
         .unwrap();
     assert_eq!(
@@ -2181,7 +2179,7 @@ fn a_members_spend_is_the_priced_rollups_of_its_utc_period_alone() {
         .read_blocking(|c| {
             member_spends(
                 c,
-                &[("p".into(), "a".into(), BudgetPeriod::Month)],
+                &[budgeted("p", "a", BudgetPeriod::Month)],
                 month_now,
                 &table,
             )
@@ -2224,7 +2222,7 @@ fn a_members_spend_is_the_priced_rollups_of_its_utc_period_alone() {
         .read_blocking(|c| {
             member_spends(
                 c,
-                &[("p".into(), "b".into(), BudgetPeriod::Month)],
+                &[budgeted("p", "b", BudgetPeriod::Month)],
                 turnover_now,
                 &table,
             )
@@ -2267,14 +2265,7 @@ fn an_unpriced_model_contributes_nothing_to_a_members_spend() {
         1_000,
     );
     let rows = db
-        .read_blocking(|c| {
-            member_spends(
-                c,
-                &[("p".into(), "a".into(), BudgetPeriod::Day)],
-                now,
-                &table,
-            )
-        })
+        .read_blocking(|c| member_spends(c, &[budgeted("p", "a", BudgetPeriod::Day)], now, &table))
         .unwrap();
     assert_eq!(
         rows[0].spent_usd, 40.0,
@@ -2299,12 +2290,7 @@ fn a_purge_of_the_periods_raw_requests_leaves_the_members_spend_in_force() {
     );
     let before = db
         .read_blocking(|c| {
-            member_spends(
-                c,
-                &[("p".into(), "a".into(), BudgetPeriod::Month)],
-                now,
-                &table,
-            )
+            member_spends(c, &[budgeted("p", "a", BudgetPeriod::Month)], now, &table)
         })
         .unwrap();
     assert_eq!(before[0].spent_usd, 50.0);
@@ -2324,12 +2310,7 @@ fn a_purge_of_the_periods_raw_requests_leaves_the_members_spend_in_force() {
     assert_eq!((purged.requests, purged.attempts), (1, 1));
     let after = db
         .read_blocking(|c| {
-            member_spends(
-                c,
-                &[("p".into(), "a".into(), BudgetPeriod::Month)],
-                now,
-                &table,
-            )
+            member_spends(c, &[budgeted("p", "a", BudgetPeriod::Month)], now, &table)
         })
         .unwrap();
     assert_eq!(
@@ -2346,8 +2327,8 @@ fn a_purge_of_the_periods_raw_requests_leaves_the_members_spend_in_force() {
                 pool_id: "p".into(),
                 account_id: "a".into(),
                 priority: 0,
-                budget_usd: Some(10.0),
-                budget_period: BudgetPeriod::Month,
+                budget_daily_usd: None,
+                budget_monthly_usd: Some(10.0),
             }],
             ..Default::default()
         },
@@ -2357,7 +2338,8 @@ fn a_purge_of_the_periods_raw_requests_leaves_the_members_spend_in_force() {
     );
     state.record_member_spend(&snapshot, after);
     let spend = state
-        .member_spend("p", "a")
+        .member_spends_of("p", "a")
+        .next()
         .expect("the row still matches the member's configured period");
     assert!(
         spend.spent_usd >= 10.0,
@@ -2384,9 +2366,9 @@ fn the_rollup_retention_keeps_the_rows_of_a_budgeted_members_active_period() {
             50,
         );
     }
-    let budgeted = vec![
-        ("p".to_string(), "a".to_string(), BudgetPeriod::Month),
-        ("p".to_string(), "c".to_string(), BudgetPeriod::Day),
+    let budgets = vec![
+        budgeted("p", "a", BudgetPeriod::Month),
+        budgeted("p", "c", BudgetPeriod::Day),
     ];
     run_retention(
         &db,
@@ -2396,19 +2378,12 @@ fn the_rollup_retention_keeps_the_rows_of_a_budgeted_members_active_period() {
             ..LedgerConfig::default()
         },
         now,
-        &budgeted,
+        &budgets,
     )
     .unwrap();
     let spent = |account: &str, period: BudgetPeriod| {
-        db.read_blocking(|c| {
-            member_spends(
-                c,
-                &[("p".to_string(), account.to_string(), period)],
-                now,
-                &table,
-            )
-        })
-        .unwrap()[0]
+        db.read_blocking(|c| member_spends(c, &[budgeted("p", account, period)], now, &table))
+            .unwrap()[0]
             .spent_usd
     };
     assert_eq!(

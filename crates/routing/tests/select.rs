@@ -133,8 +133,8 @@ fn load_of(pool: Pool, unavailable: &[(&str, bool, AccountState)]) -> RegistryLo
                 pool_id: "p".into(),
                 account_id: (*a).into(),
                 priority: *p,
-                budget_usd: None,
-                budget_period: BudgetPeriod::Month,
+                budget_daily_usd: None,
+                budget_monthly_usd: None,
             })
             .collect(),
         pools: vec![PoolRow {
@@ -191,13 +191,13 @@ fn without_account(s: &RegistrySnapshot, id: &str) -> RegistrySnapshot {
     RegistrySnapshot::from_load(load, [0; 32], 0, 1)
 }
 
-/// `s` rebuilt with `account_id`'s pool membership carrying `budget_usd` and `budget_period`, the way the admin
+/// `s` rebuilt with `account_id`'s pool membership carrying the daily and monthly budgets, the way the admin
 /// route's `set_pool_members` would leave it.
 fn with_member_budget(
     s: &RegistrySnapshot,
     account_id: &str,
-    budget_usd: Option<f64>,
-    budget_period: BudgetPeriod,
+    daily: Option<f64>,
+    monthly: Option<f64>,
 ) -> RegistrySnapshot {
     let load = RegistryLoad {
         accounts: s.accounts().cloned().collect(),
@@ -208,8 +208,8 @@ fn with_member_budget(
             .flat_map(|p| s.members(&p.id).to_vec())
             .map(|mut m| {
                 if m.account_id == account_id {
-                    m.budget_usd = budget_usd;
-                    m.budget_period = budget_period;
+                    m.budget_daily_usd = daily;
+                    m.budget_monthly_usd = monthly;
                 }
                 m
             })
@@ -1721,7 +1721,7 @@ fn a_fast_rate_limit_answers_its_reset_only_where_it_is_the_candidates_one_block
         "no wait for the fast reset clears the credits block beside it"
     );
 
-    let budgeted = with_member_budget(&s, "a", Some(5.0), BudgetPeriod::Month);
+    let budgeted = with_member_budget(&s, "a", None, Some(5.0));
     let mut st = RoutingState::from_load(RoutingLoad::default());
     st.record_cooldown(cooled("a", "fast", 5_000, "fast", FAST_RATE_LIMIT_REASON));
     st.record_member_spend(
@@ -2916,8 +2916,8 @@ fn a_member_at_its_budget_is_skipped_until_the_periods_end_and_serves_again_afte
             ..Pool::default()
         }),
         "a",
+        None,
         Some(5.0),
-        BudgetPeriod::Month,
     );
     let mut st = RoutingState::from_load(RoutingLoad::default());
     st.record_member_spend(
@@ -2993,6 +2993,140 @@ fn a_member_at_its_budget_is_skipped_until_the_periods_end_and_serves_again_afte
     );
 }
 
+/// A spend row of `a` summed over `period` from 0 to `period_end`, as the ledger would report it at 1,000.
+fn spend_of_a(period: BudgetPeriod, period_end: i64, spent_usd: f64) -> MemberSpend {
+    MemberSpend {
+        pool_id: "p".into(),
+        account_id: "a".into(),
+        period,
+        period_start: 0,
+        period_end,
+        spent_usd,
+        observed_at: 1_000,
+    }
+}
+
+#[test]
+fn a_member_with_both_budgets_is_skipped_when_either_is_reached() {
+    let s = with_member_budget(
+        &snapshot(Pool {
+            members: vec![("a", 0), ("b", 1)],
+            ..Pool::default()
+        }),
+        "a",
+        Some(5.0),
+        Some(50.0),
+    );
+    let pick = |st: &mut RoutingState, session: &str| {
+        let SelectResult::Selected(sel) = select(
+            st,
+            &s,
+            &request(&s, Some(session), "claude-sonnet-5", true, &[], 1_000),
+            &mut rng(),
+        )
+        .0
+        else {
+            panic!("a member serves the request")
+        };
+        let skipped = sel
+            .trace
+            .skipped
+            .iter()
+            .any(|sk| sk.account_id == "a" && sk.obstacle == "budget");
+        (sel.account.id.to_string(), skipped)
+    };
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.record_member_spend(
+        &s,
+        vec![
+            spend_of_a(BudgetPeriod::Day, 10_000, 1.0),
+            spend_of_a(BudgetPeriod::Month, 100_000, 25.0),
+        ],
+    );
+    assert_eq!(
+        pick(&mut st, "s1"),
+        ("a".to_string(), false),
+        "under both budgets, a serves"
+    );
+    st.record_member_spend(
+        &s,
+        vec![
+            spend_of_a(BudgetPeriod::Day, 10_000, 5.0),
+            spend_of_a(BudgetPeriod::Month, 100_000, 25.0),
+        ],
+    );
+    assert_eq!(
+        pick(&mut st, "s2"),
+        ("b".to_string(), true),
+        "the day's budget is reached, so a is skipped though the month's has room"
+    );
+    st.record_member_spend(
+        &s,
+        vec![
+            spend_of_a(BudgetPeriod::Day, 10_000, 1.0),
+            spend_of_a(BudgetPeriod::Month, 100_000, 50.0),
+        ],
+    );
+    assert_eq!(
+        pick(&mut st, "s3"),
+        ("b".to_string(), true),
+        "the month's budget is reached, so a is skipped though the day's has room"
+    );
+}
+
+#[test]
+fn a_member_whose_monthly_budget_is_reached_answers_the_months_end_not_the_days() {
+    let s = with_member_budget(
+        &snapshot(Pool {
+            members: vec![("a", 0)],
+            ..Pool::default()
+        }),
+        "a",
+        Some(5.0),
+        Some(50.0),
+    );
+    let answer = |st: &mut RoutingState| {
+        select(
+            st,
+            &s,
+            &request(&s, Some("s1"), "claude-sonnet-5", true, &[], 1_000),
+            &mut rng(),
+        )
+        .0
+    };
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.record_member_spend(
+        &s,
+        vec![
+            spend_of_a(BudgetPeriod::Day, 10_000, 5.0),
+            spend_of_a(BudgetPeriod::Month, 100_000, 50.0),
+        ],
+    );
+    assert_eq!(
+        answer(&mut st),
+        SelectResult::Exhausted(Exhaustion::Timed {
+            deadline: 100_000,
+            window: "overage".into(),
+        }),
+        "the day's end clears nothing while the month's budget stands, so the month's end is the wait"
+    );
+    st.record_member_spend(
+        &s,
+        vec![
+            spend_of_a(BudgetPeriod::Day, 10_000, 5.0),
+            spend_of_a(BudgetPeriod::Month, 100_000, 25.0),
+        ],
+    );
+    assert_eq!(
+        answer(&mut st),
+        SelectResult::Exhausted(Exhaustion::Timed {
+            deadline: 10_000,
+            window: "overage".into(),
+        }),
+        "only the day's budget is reached, so the day's end is the wait"
+    );
+}
+
 #[test]
 fn every_member_at_its_budget_answers_a_timed_exhaustion_under_the_overage_window() {
     let s = with_member_budget(
@@ -3002,12 +3136,12 @@ fn every_member_at_its_budget_answers_a_timed_exhaustion_under_the_overage_windo
                 ..Pool::default()
             }),
             "a",
+            None,
             Some(5.0),
-            BudgetPeriod::Month,
         ),
         "b",
+        None,
         Some(5.0),
-        BudgetPeriod::Month,
     );
     let mut st = RoutingState::from_load(RoutingLoad::default());
     st.record_member_spend(
@@ -3057,8 +3191,8 @@ fn a_pin_on_a_member_at_its_budget_is_released_with_reason_budget() {
             ..Pool::default()
         }),
         "a",
+        None,
         Some(5.0),
-        BudgetPeriod::Month,
     );
     let mut st = RoutingState::from_load(RoutingLoad::default());
     assert_eq!(
@@ -3105,8 +3239,8 @@ fn a_probe_on_a_pin_whose_member_is_at_its_budget_answers_the_periods_end_and_mo
             ..Pool::default()
         }),
         "a",
+        None,
         Some(5.0),
-        BudgetPeriod::Month,
     );
     let mut st = RoutingState::from_load(RoutingLoad::default());
     assert_eq!(
@@ -3344,8 +3478,8 @@ fn a_non_portable_request_bound_to_a_member_at_its_budget_answers_the_timed_exha
             ..Pool::default()
         }),
         "a",
+        None,
         Some(5.0),
-        BudgetPeriod::Month,
     );
     let mut st = RoutingState::from_load(RoutingLoad::default());
     select(
@@ -3385,8 +3519,8 @@ fn a_spend_row_of_another_period_than_the_members_is_no_obstacle() {
     };
     // Recorded under the Month-configured snapshot, so `record_member_spend` keeps the row; the Day-configured
     // snapshot below is what the selector's own period check reads it against.
-    let s_month = with_member_budget(&snapshot(pool()), "a", Some(5.0), BudgetPeriod::Month);
-    let s_day = with_member_budget(&snapshot(pool()), "a", Some(5.0), BudgetPeriod::Day);
+    let s_month = with_member_budget(&snapshot(pool()), "a", None, Some(5.0));
+    let s_day = with_member_budget(&snapshot(pool()), "a", Some(5.0), None);
     let mut st = RoutingState::from_load(RoutingLoad::default());
     st.record_member_spend(
         &s_month,
@@ -3757,8 +3891,8 @@ fn two_pools_sharing_an_account_share_its_entries() {
         pool_id: pool_id.into(),
         account_id: account_id.into(),
         priority,
-        budget_usd: None,
-        budget_period: BudgetPeriod::Month,
+        budget_daily_usd: None,
+        budget_monthly_usd: None,
     };
     let load = RegistryLoad {
         accounts: vec![account("a"), account("b"), account("c")],
@@ -4880,8 +5014,8 @@ fn a_budget_blocked_parents_pin_never_lands_a_capped_sibling() {
             ..Pool::default()
         }),
         "a",
+        None,
         Some(5.0),
-        BudgetPeriod::Month,
     );
     let mut st = RoutingState::from_load(RoutingLoad::default());
     select(

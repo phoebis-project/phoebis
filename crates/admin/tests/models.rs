@@ -83,14 +83,14 @@ async fn the_key_models_route_answers_the_processed_list_with_the_matching_coold
                 MemberWrite {
                     account_id: "business".into(),
                     priority: 0,
-                    budget_usd: None,
-                    budget_period: phoebis_store::BudgetPeriod::Month,
+                    budget_daily_usd: None,
+                    budget_monthly_usd: None,
                 },
                 MemberWrite {
                     account_id: "direct".into(),
                     priority: 1,
-                    budget_usd: None,
-                    budget_period: phoebis_store::BudgetPeriod::Month,
+                    budget_daily_usd: None,
+                    budget_monthly_usd: None,
                 },
             ],
             "test",

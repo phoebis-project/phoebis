@@ -5,11 +5,11 @@ import { KEY_SAMPLE, POOL_SAMPLE } from './samples';
 import { DAY, HOUR, MINUTE, NOW, ago, ahead, daysAgo, iso, startOfHour } from './time';
 
 /** A member as the story seeds it; the mock reads its kind and its eligibility off the account, as the route does. */
-type MemberSeed = Omit<PoolMember, 'eligible' | 'kind'>;
+type MemberSeed = Omit<PoolMember, 'budgetUntil' | 'eligible' | 'kind'>;
 /** The route lists a pool's keys from the key registry, so the story seeds none on the pool itself. */
 export type PoolSeed = Omit<Pool, 'keys' | 'members'> & { members: MemberSeed[] };
 
-const unbudgeted = (accountId: string, priority: number): MemberSeed => ({ accountId, budgetPeriod: 'month', budgetUsd: null, periodEnd: null, priority, spentUsd: null });
+const unbudgeted = (accountId: string, priority: number): MemberSeed => ({ accountId, budgetDailyUsd: null, budgetMonthlyUsd: null, priority, spends: [] });
 
 /** The next UTC calendar boundary after `now`, which is where the ledger's spend period ends. */
 function periodEndAfter(period: BudgetPeriod, now: number): string {
@@ -71,8 +71,17 @@ const POOL_ROWS: PoolSeed[] = [
       unbudgeted('business', 0),
       unbudgeted('mail', 0),
       unbudgeted('personal', 0),
-      // Half its monthly budget spent, so the card has a spend line that holds nothing back.
-      { accountId: 'console', budgetPeriod: 'month', budgetUsd: 50, periodEnd: periodEndAfter('month', NOW), priority: 1, spentUsd: 25 },
+      // Under both its budgets, half the month's spent, so the card has two spend lines that hold nothing back.
+      {
+        accountId: 'console',
+        budgetDailyUsd: 5,
+        budgetMonthlyUsd: 50,
+        priority: 1,
+        spends: [
+          { period: 'day', periodEnd: periodEndAfter('day', NOW), spentUsd: 1.1 },
+          { period: 'month', periodEnd: periodEndAfter('month', NOW), spentUsd: 25 },
+        ],
+      },
     ],
     traffic24h: ALL_TRAFFIC,
     requests24h: ALL_TRAFFIC.reduce((s, b) => s + b.requests, 0),
@@ -115,7 +124,7 @@ const POOL_ROWS: PoolSeed[] = [
       { not: false, pattern: 'claude-haiku-4-5*' },
       { not: true, pattern: '*' },
     ],
-    members: [{ accountId: 'evals', budgetPeriod: 'day', budgetUsd: 20, periodEnd: periodEndAfter('day', NOW), priority: 0, spentUsd: 20.4 }],
+    members: [{ accountId: 'evals', budgetDailyUsd: 20, budgetMonthlyUsd: null, priority: 0, spends: [{ period: 'day', periodEnd: periodEndAfter('day', NOW), spentUsd: 20.4 }] }],
     traffic24h: CODEX_TRAFFIC,
     requests24h: CODEX_TRAFFIC.reduce((s, b) => s + b.requests, 0),
     cost24h: 2.14,

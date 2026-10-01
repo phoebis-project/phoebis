@@ -1732,7 +1732,7 @@ async fn a_member_with_an_unknown_field_is_refused_rather_than_silently_dropped(
     let refused = patch(
         &app,
         "/admin/pools/main",
-        r#"{"members":[{"account_id":"business","priority":0,"budgetUsd":50.0}]}"#,
+        r#"{"members":[{"account_id":"business","priority":0,"budgetMonthlyUsd":50.0}]}"#,
         Some(&cookie),
     )
     .await;
@@ -2029,7 +2029,7 @@ async fn a_pool_accepts_its_affinity_and_quota_fields_and_a_members_budget() {
             app,
             "/admin/pools",
             r#"{"id":"main","label":"Main","strategy":"priority",
-                "members":[{"account_id":"direct","priority":0,"budget_usd":50.0,"budget_period":"month"}]}"#,
+                "members":[{"account_id":"direct","priority":0,"budget_monthly_usd":50.0}]}"#,
             Some(&cookie),
         )
         .await,
@@ -2056,12 +2056,12 @@ async fn a_pool_accepts_its_affinity_and_quota_fields_and_a_members_budget() {
     );
     assert_eq!(
         (
-            created["members"][0]["budget_usd"].as_f64(),
-            created["members"][0]["budget_period"].as_str(),
+            created["members"][0]["budget_daily_usd"].as_f64(),
+            created["members"][0]["budget_monthly_usd"].as_f64(),
             created["members"][0]["kind"].as_str(),
         ),
-        (Some(50.0), Some("month"), Some("api_key")),
-        "a member's budget and its account's kind are answered"
+        (None, Some(50.0), Some("api_key")),
+        "a member's budgets and its account's kind are answered"
     );
     post(
         app,
@@ -2102,15 +2102,20 @@ async fn a_pool_accepts_its_affinity_and_quota_fields_and_a_members_budget() {
         bodies: None,
     });
     let spent = wait_json(app, "/admin/pools", &cookie, |v| {
-        v["pools"][0]["members"][0]["spent_usd"]
+        v["pools"][0]["members"][0]["spends"][0]["spent_usd"]
             .as_f64()
             .is_some_and(|s| s > 0.0)
     })
     .await;
+    let spends = &spent["pools"][0]["members"][0]["spends"];
     assert_eq!(
-        spent["pools"][0]["members"][0]["period_end"].as_i64(),
-        Some(2_678_400_000),
-        "the period end is the calendar month's own boundary at the fixture's clock"
+        (
+            spends.as_array().map(Vec::len),
+            spends[0]["period"].as_str(),
+            spends[0]["period_end"].as_i64(),
+        ),
+        (Some(1), Some("month"), Some(2_678_400_000)),
+        "one report for the one budget, its end the calendar month's own boundary at the fixture's clock"
     );
     let patched = json(
         patch(
@@ -2118,7 +2123,7 @@ async fn a_pool_accepts_its_affinity_and_quota_fields_and_a_members_budget() {
             "/admin/pools/main",
             r#"{"affinity_mode":"when_cached","subagent_placement":"with_main","session_placement":"by_warm_prefix",
                 "min_shared_prefix_tokens":5000,"quota_headers":"hide",
-                "members":[{"account_id":"direct","priority":0,"budget_usd":10.0,"budget_period":"day"}]}"#,
+                "members":[{"account_id":"direct","priority":0,"budget_daily_usd":10.0}]}"#,
             Some(&cookie),
         )
         .await,
@@ -2131,8 +2136,8 @@ async fn a_pool_accepts_its_affinity_and_quota_fields_and_a_members_budget() {
             patched["session_placement"].as_str(),
             patched["min_shared_prefix_tokens"].as_u64(),
             patched["quota_headers"].as_str(),
-            patched["members"][0]["budget_usd"].as_f64(),
-            patched["members"][0]["budget_period"].as_str(),
+            patched["members"][0]["budget_daily_usd"].as_f64(),
+            patched["members"][0]["budget_monthly_usd"].as_f64(),
         ),
         (
             Some("when_cached"),
@@ -2141,7 +2146,7 @@ async fn a_pool_accepts_its_affinity_and_quota_fields_and_a_members_budget() {
             Some(5_000),
             Some("hide"),
             Some(10.0),
-            Some("day")
+            None
         ),
         "a patch round-trips the five fields and a member's budget"
     );
@@ -2163,16 +2168,12 @@ async fn a_pool_accepts_its_affinity_and_quota_fields_and_a_members_budget() {
             "quota_headers must be hide or pass",
         ),
         (
-            r#"{"members":[{"account_id":"direct","priority":0,"budget_usd":0}]}"#,
-            "budget_usd is above 0",
+            r#"{"members":[{"account_id":"direct","priority":0,"budget_daily_usd":0}]}"#,
+            "budget_daily_usd is above 0",
         ),
         (
-            r#"{"members":[{"account_id":"direct","priority":0,"budget_usd":-5}]}"#,
-            "budget_usd is above 0",
-        ),
-        (
-            r#"{"members":[{"account_id":"direct","priority":0,"budget_period":"week"}]}"#,
-            "budget_period must be day or month",
+            r#"{"members":[{"account_id":"direct","priority":0,"budget_monthly_usd":-5}]}"#,
+            "budget_monthly_usd is above 0",
         ),
     ] {
         let refused = patch(app, "/admin/pools/main", body, Some(&cookie)).await;
@@ -2183,7 +2184,7 @@ async fn a_pool_accepts_its_affinity_and_quota_fields_and_a_members_budget() {
         put(
             app,
             "/admin/pools/main/members",
-            r#"{"members":[{"account_id":"direct","priority":0,"budget_usd":20.0,"budget_period":"month"}]}"#,
+            r#"{"members":[{"account_id":"direct","priority":0,"budget_monthly_usd":20.0}]}"#,
             Some(&cookie),
         )
         .await,
@@ -2191,23 +2192,23 @@ async fn a_pool_accepts_its_affinity_and_quota_fields_and_a_members_budget() {
     .await;
     assert_eq!(
         (
-            via_members["members"][0]["budget_usd"].as_f64(),
-            via_members["members"][0]["budget_period"].as_str(),
+            via_members["members"][0]["budget_daily_usd"].as_f64(),
+            via_members["members"][0]["budget_monthly_usd"].as_f64(),
         ),
-        (Some(20.0), Some("month")),
+        (None, Some(20.0)),
         "PUT .../members carries a budget the same way a PATCH does"
     );
     let bad_budget = put(
         app,
         "/admin/pools/main/members",
-        r#"{"members":[{"account_id":"direct","priority":0,"budget_usd":-1}]}"#,
+        r#"{"members":[{"account_id":"direct","priority":0,"budget_daily_usd":-1}]}"#,
         Some(&cookie),
     )
     .await;
     assert_eq!(bad_budget.status(), 400);
     assert_eq!(
         json(bad_budget).await["error"].as_str(),
-        Some("budget_usd is above 0")
+        Some("budget_daily_usd is above 0")
     );
     let cleared = json(
         put(
@@ -2221,11 +2222,68 @@ async fn a_pool_accepts_its_affinity_and_quota_fields_and_a_members_budget() {
     .await;
     assert_eq!(
         (
-            cleared["members"][0]["budget_usd"].as_f64(),
-            cleared["members"][0]["budget_period"].as_str(),
+            cleared["members"][0]["budget_daily_usd"].as_f64(),
+            cleared["members"][0]["budget_monthly_usd"].as_f64(),
         ),
-        (None, Some("month")),
+        (None, None),
         "a member list is a replacement, so an absent budget clears the stored one"
+    );
+}
+
+#[tokio::test]
+async fn a_member_carries_a_daily_and_a_monthly_budget_side_by_side() {
+    let (app, _up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    let created = post(
+        &app,
+        "/admin/pools",
+        r#"{"id":"main","label":"Main","strategy":"priority",
+            "members":[{"account_id":"direct","priority":0,"budget_daily_usd":5.0,"budget_monthly_usd":50.0}]}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(created.status(), 201);
+    let read = json(get(&app, "/admin/pools", Some(&cookie)).await).await;
+    let member = &read["pools"][0]["members"][0];
+    assert_eq!(
+        (
+            member["budget_daily_usd"].as_f64(),
+            member["budget_monthly_usd"].as_f64(),
+        ),
+        (Some(5.0), Some(50.0)),
+        "both budgets are stored and answered side by side"
+    );
+    assert!(
+        member["budget_until"].is_null(),
+        "no budget is reached, so nothing holds the member: {member}"
+    );
+    // The ledger's refresh may or may not have reported yet; either way a report names a budgeted period at no
+    // spend.
+    for report in member["spends"].as_array().unwrap() {
+        assert!(
+            matches!(report["period"].as_str(), Some("day" | "month"))
+                && report["spent_usd"].as_f64() == Some(0.0),
+            "{member}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_daily_budget_of_zero_is_refused() {
+    let (app, _up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    let refused = post(
+        &app,
+        "/admin/pools",
+        r#"{"id":"main","label":"Main","strategy":"priority",
+            "members":[{"account_id":"direct","priority":0,"budget_daily_usd":0}]}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(refused.status(), 400);
+    assert_eq!(
+        json(refused).await["error"].as_str(),
+        Some("budget_daily_usd is above 0")
     );
 }
 
@@ -2238,14 +2296,14 @@ async fn a_budget_on_a_member_that_is_not_an_api_key_account_is_refused_and_a_nu
         &app,
         "/admin/pools",
         r#"{"id":"main","label":"Main","strategy":"priority",
-            "members":[{"account_id":"business","priority":0,"budget_usd":50.0}]}"#,
+            "members":[{"account_id":"business","priority":0,"budget_monthly_usd":50.0}]}"#,
         Some(&cookie),
     )
     .await;
     assert_eq!(refused.status(), 400);
     assert_eq!(
         json(refused).await["error"].as_str(),
-        Some("budget_usd applies to an API-key member")
+        Some("budget applies to an API-key member")
     );
     assert_eq!(
         json(get(&app, "/admin/pools", Some(&cookie)).await).await["pools"]
@@ -2258,8 +2316,8 @@ async fn a_budget_on_a_member_that_is_not_an_api_key_account_is_refused_and_a_nu
         &app,
         "/admin/pools",
         r#"{"id":"main","label":"Main","strategy":"priority",
-            "members":[{"account_id":"business","priority":0,"budget_usd":null},
-                       {"account_id":"direct","priority":1,"budget_usd":5.0}]}"#,
+            "members":[{"account_id":"business","priority":0,"budget_monthly_usd":null},
+                       {"account_id":"direct","priority":1,"budget_monthly_usd":5.0}]}"#,
         Some(&cookie),
     )
     .await;
@@ -2272,12 +2330,12 @@ async fn a_budget_on_a_member_that_is_not_an_api_key_account_is_refused_and_a_nu
         (
             "PATCH",
             "/admin/pools/main",
-            r#"{"members":[{"account_id":"business","priority":0,"budget_usd":10.0}]}"#,
+            r#"{"members":[{"account_id":"business","priority":0,"budget_monthly_usd":10.0}]}"#,
         ),
         (
             "PUT",
             "/admin/pools/main/members",
-            r#"{"members":[{"account_id":"business","priority":0,"budget_usd":10.0}]}"#,
+            r#"{"members":[{"account_id":"business","priority":0,"budget_daily_usd":10.0}]}"#,
         ),
     ] {
         let refused = if method == "PATCH" {
@@ -2288,7 +2346,7 @@ async fn a_budget_on_a_member_that_is_not_an_api_key_account_is_refused_and_a_nu
         assert_eq!(refused.status(), 400, "{method} {path}");
         assert_eq!(
             json(refused).await["error"].as_str(),
-            Some("budget_usd applies to an API-key member"),
+            Some("budget applies to an API-key member"),
             "{method} {path}"
         );
     }
@@ -2297,8 +2355,8 @@ async fn a_budget_on_a_member_that_is_not_an_api_key_account_is_refused_and_a_nu
     assert_eq!(
         (
             members[0]["account_id"].as_str(),
-            members[0]["budget_usd"].as_f64(),
-            members[1]["budget_usd"].as_f64(),
+            members[0]["budget_monthly_usd"].as_f64(),
+            members[1]["budget_monthly_usd"].as_f64(),
         ),
         (Some("business"), None, Some(5.0)),
         "a refused member write leaves the stored membership as it was"
@@ -2317,7 +2375,7 @@ async fn a_member_at_its_budget_reads_ineligible_and_its_lone_pool_reads_exhaust
         app,
         "/admin/pools",
         r#"{"id":"main","label":"Main","strategy":"priority",
-            "members":[{"account_id":"direct","priority":0,"budget_usd":0.0001,"budget_period":"month"}]}"#,
+            "members":[{"account_id":"direct","priority":0,"budget_monthly_usd":0.0001}]}"#,
         Some(&cookie),
     )
     .await;
@@ -2369,6 +2427,11 @@ async fn a_member_at_its_budget_reads_ineligible_and_its_lone_pool_reads_exhaust
         ),
         (Some("budget"), Some("exhausted")),
         "a member whose spend reached its budget is ineligible, and its only pool reads exhausted"
+    );
+    assert_eq!(
+        spent["pools"][0]["members"][0]["budget_until"].as_i64(),
+        Some(2_678_400_000),
+        "the member is held to the end of the month whose budget it reached"
     );
     // Also in overage, under a policy that would otherwise read it as the obstacle: the selector checks
     // budget first, and this route must answer the same obstacle it would.

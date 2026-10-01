@@ -104,13 +104,14 @@ either way.
 A member's `priority` is a number; lower sorts first. Naming an unknown account in `members` answers `404
 account {id} not found`, and the pool is not created.
 
-An API-key member carries a spend `budget_usd`, unset by default (no cap), and a `budget_period` of `day` or `month`
-(default `month`, the UTC calendar day or month); a budget on any other member answers `400 budget_usd applies to an
-API-key member`, since a subscription member's usage is metered against its plan windows and its overage is not a
-per-member budget. A member whose spend for the current period reaches its budget is skipped for requests until the
-period ends, and a keepalive probe pinned to it waits rather than moving the pin. A pool whose every member is at its
-budget answers `429` with the `overage` claim, the same one an account in overage carries. The spend sums the member's
-hourly rollups, and the rows of an active budget period outlive `stats.rollup_retention_days` until that period ends.
+An API-key member carries a daily and a monthly spend budget, `budget_daily_usd` and `budget_monthly_usd`, each unset by
+default (no cap) and measured over the UTC calendar day or month; a budget on any other member answers `400 budget
+applies to an API-key member`, since a subscription member's usage is metered against its plan windows and its overage
+is not a per-member budget. A member whose spend reaches either budget is skipped for requests until that period ends,
+the month's end whenever the monthly budget is reached, and a keepalive probe pinned to it waits rather than moving the
+pin. A pool whose every member is at its budget answers `429` with the `overage` claim, the same one an account in
+overage carries. The spend sums the member's hourly rollups, and the rows of an active budget period outlive
+`stats.rollup_retention_days` until that period ends.
 
 `prefer_subscription` orders the set by kind (subscription accounts with plan quota, then those in overage, then
 API keys) before priority; it is the operator's answer alone, on by default, and no strategy overrides it. A pool
@@ -631,10 +632,10 @@ can serve requests`, and no `retry-after`. A request admitted under a key that w
 under its id, before it was routed is refused with the `401` admission answers a key the registry does not hold (see
 [What the proxy accepts](client.md#what-the-proxy-accepts)). A pool whose every member has reached its spend budget
 answers `429` with the `overage` claim, the same one an account in overage carries (see [Pools](#pools)), and a probe
-pinned to a member at its budget is answered with the budget period's end as its reset, whatever its siblings hold. A
-probe whose pinned account is disabled, past its subscription's end, or already tried by the probe while a sibling could
-take it is answered `503` `accounts_unavailable` whatever its siblings hold, so it never moves the pin; its request row
-reads rejected rather than exhausted, so the pool exhaustion alert does not count it.
+pinned to a member at its budget is answered with the end of the latest period whose budget is reached as its reset,
+whatever its siblings hold. A probe whose pinned account is disabled, past its subscription's end, or already tried by
+the probe while a sibling could take it is answered `503` `accounts_unavailable` whatever its siblings hold, so it never
+moves the pin; its request row reads rejected rather than exhausted, so the pool exhaustion alert does not count it.
 
 A request sent fast that no upstream's fast lane can take is answered locally, before any dial, with `429` and the error
 type `rate_limit_error`. While any upstream holds only a fast rate limit, the error code is `fast_lane_exhausted`, the

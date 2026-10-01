@@ -1315,14 +1315,25 @@ pub(crate) fn period_bounds(period: BudgetPeriod, now: i64) -> (i64, i64) {
     }
 }
 
-/// One budgeted member's spend in its current period, summed from the hourly rollups and priced at read time,
-/// a keepalive probe's cost included since it draws real money from an API-key member's budget the same as any
-/// other request's; the row names the period kind and its UTC bounds in ms (`period_end` is the next day or
-/// month boundary). The rollup's own stored price is not read, since a budget must move with the table in
+/// One budgeted period of one member, as the spend report and the retention take it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BudgetedMember {
+    pub pool_id: String,
+    pub account_id: String,
+    pub period: BudgetPeriod,
+    /// Sum the metered rows alone, those filed under `overage` or `fast`: a subscription member's plan-funded traffic
+    /// is no spend.
+    pub metered_only: bool,
+}
+
+/// One budgeted period's spend of one member in its current period, summed from the hourly rollups and priced at
+/// read time, a keepalive probe's cost included since it draws real money from an API-key member's budget the
+/// same as any other request's; the row names the period kind and its UTC bounds in ms (`period_end` is the next
+/// day or month boundary). The rollup's own stored price is not read, since a budget must move with the table in
 /// force, not the price an attempt happened to be booked at.
 pub fn member_spends(
     conn: &Connection,
-    members: &[(String, String, BudgetPeriod)],
+    members: &[BudgetedMember],
     now: i64,
     table: &PriceTable,
 ) -> Result<Vec<MemberSpend>, LedgerError> {
@@ -1335,7 +1346,13 @@ pub fn member_spends(
          WHERE pool_id = ?1 AND account_id = ?2 AND hour >= ?3 AND hour < ?4 \
          GROUP BY canonical_model, speed",
     )?;
-    for (pool_id, account_id, period) in members {
+    for BudgetedMember {
+        pool_id,
+        account_id,
+        period,
+        ..
+    } in members
+    {
         let (period_start, period_end) = period_bounds(*period, now);
         let rows = stmt.query_map(
             params![

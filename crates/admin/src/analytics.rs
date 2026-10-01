@@ -170,27 +170,27 @@ pub(crate) async fn budgets(State(state): State<Arc<AdminState>>) -> Response {
             "the router is not available",
         );
     };
-    let mut members: Vec<Value> = snapshot
+    // One row per budgeted period, so a member with both budgets reads twice, its day before its month.
+    let mut members: Vec<(String, String, phoebis_store::BudgetPeriod, Value)> = snapshot
         .budgeted_members()
-        .map(|m| {
-            let spend = crate::routes::member_spend_of(
-                &spends,
-                &m.pool_id,
-                &m.account_id,
-                m.budget_usd,
-                m.budget_period,
-            );
-            json!({
-                "pool_id": m.pool_id, "account_id": m.account_id,
-                "budget_usd": m.budget_usd, "budget_period": m.budget_period.as_str(),
-                "spent_usd": spend.map(|s| s.spent_usd), "period_end": spend.map(|s| s.period_end),
-            })
+        .flat_map(|m| {
+            let rows = crate::routes::spend_rows(&spends, &m.pool_id, &m.account_id);
+            m.budgets()
+                .map(|(period, budget)| {
+                    let spend = rows.iter().find(|s| s.period == period);
+                    let row = json!({
+                        "pool_id": m.pool_id, "account_id": m.account_id,
+                        "budget_usd": budget, "budget_period": period.as_str(),
+                        "spent_usd": spend.map(|s| s.spent_usd), "period_end": spend.map(|s| s.period_end),
+                    });
+                    (m.pool_id.clone(), m.account_id.clone(), period, row)
+                })
+                .collect::<Vec<_>>()
         })
         .collect();
-    members.sort_by(|a, b| {
-        (a["pool_id"].as_str(), a["account_id"].as_str())
-            .cmp(&(b["pool_id"].as_str(), b["account_id"].as_str()))
-    });
+    let month = |period: &phoebis_store::BudgetPeriod| *period == phoebis_store::BudgetPeriod::Month;
+    members.sort_by(|a, b| (&a.0, &a.1, month(&a.2)).cmp(&(&b.0, &b.1, month(&b.2))));
+    let members: Vec<Value> = members.into_iter().map(|(.., row)| row).collect();
     Json(json!({ "members": members })).into_response()
 }
 

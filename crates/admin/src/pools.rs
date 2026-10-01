@@ -11,8 +11,8 @@ use axum::Json;
 use phoebis_keepalive::KeepalivePolicy;
 use phoebis_relay::CacheTtlPolicy;
 use phoebis_store::{
-    Affinity, AffinityMode, BudgetPeriod, Failover, MemberWrite, OveragePolicy, PoolMember,
-    PoolRow, QuotaHeaders, SessionPlacement, Shedding, StoreError, Strategy, SubagentPlacement,
+    Affinity, AffinityMode, Failover, MemberWrite, OveragePolicy, PoolMember, PoolRow,
+    QuotaHeaders, SessionPlacement, Shedding, StoreError, Strategy, SubagentPlacement,
     WarmSessions,
 };
 use serde_json::{json, Value};
@@ -30,16 +30,16 @@ struct MemberInput {
     #[serde(default)]
     priority: u32,
     #[serde(default)]
-    budget_usd: Option<f64>,
+    budget_daily_usd: Option<f64>,
     #[serde(default)]
-    budget_period: Option<String>,
+    budget_monthly_usd: Option<f64>,
 }
 
-/// Turns the wire members into store writes, refusing a non-positive budget, a budget on a member that is not
-/// an API-key account, or an unknown period before any write lands; a member list replaces the pool's whole
-/// membership, so an absent budget clears it. A subscription member's usage is metered against its plan windows
-/// and its overage is not a per-member budget, so a budget there has nothing of its own to cap. An account the
-/// store does not hold is left to the member write itself, which answers its 404.
+/// Turns the wire members into store writes, refusing a non-positive budget or a budget on a member that is not
+/// an API-key account before any write lands; a member list replaces the pool's whole membership, so an absent
+/// budget clears it. A subscription member's usage is metered against its plan windows and its overage is not a
+/// per-member budget, so a budget there has nothing of its own to cap. An account the store does not hold is left
+/// to the member write itself, which answers its 404.
 // The error is a rendered HTTP response, returned once per request and dropped; boxing it would buy a
 // pointer chase and nothing else.
 #[allow(clippy::result_large_err)]
@@ -50,38 +50,35 @@ fn member_writes(
     members
         .iter()
         .map(|m| {
-            if m.budget_usd.is_some_and(|b| b <= 0.0) {
-                return Err(failure(StatusCode::BAD_REQUEST, "budget_usd is above 0"));
+            if m.budget_daily_usd.is_some_and(|b| b <= 0.0) {
+                return Err(failure(
+                    StatusCode::BAD_REQUEST,
+                    "budget_daily_usd is above 0",
+                ));
             }
-            if m.budget_usd.is_some() {
+            if m.budget_monthly_usd.is_some_and(|b| b <= 0.0) {
+                return Err(failure(
+                    StatusCode::BAD_REQUEST,
+                    "budget_monthly_usd is above 0",
+                ));
+            }
+            if m.budget_daily_usd.is_some() || m.budget_monthly_usd.is_some() {
                 match state.store.account(&m.account_id) {
                     Ok(Some(account)) if account.kind != phoebis_store::AccountKind::ApiKey => {
                         return Err(failure(
                             StatusCode::BAD_REQUEST,
-                            "budget_usd applies to an API-key member",
+                            "budget applies to an API-key member",
                         ))
                     }
                     Ok(_) => {}
                     Err(error) => return Err(store_failure(error)),
                 }
             }
-            let budget_period = match &m.budget_period {
-                Some(period) => match BudgetPeriod::parse(period) {
-                    Some(period) => period,
-                    None => {
-                        return Err(failure(
-                            StatusCode::BAD_REQUEST,
-                            "budget_period must be day or month",
-                        ))
-                    }
-                },
-                None => BudgetPeriod::Month,
-            };
             Ok(MemberWrite {
                 account_id: m.account_id.clone(),
                 priority: m.priority,
-                budget_usd: m.budget_usd,
-                budget_period,
+                budget_daily_usd: m.budget_daily_usd,
+                budget_monthly_usd: m.budget_monthly_usd,
             })
         })
         .collect()
@@ -700,6 +697,7 @@ fn member_json(
     accounts: &[phoebis_store::AccountRow],
     spends: &[phoebis_routing::MemberSpend],
     eligible: &str,
+    now: i64,
 ) -> Value {
     let kind = accounts
         .iter()
@@ -708,17 +706,16 @@ fn member_json(
             phoebis_store::AccountKind::ApiKey => "api_key",
             phoebis_store::AccountKind::Oauth => "oauth",
         });
-    let spend = crate::routes::member_spend_of(
-        spends,
-        &m.pool_id,
-        &m.account_id,
-        m.budget_usd,
-        m.budget_period,
-    );
+    let rows = crate::routes::spend_rows(spends, &m.pool_id, &m.account_id);
+    let reports: Vec<Value> = rows
+        .iter()
+        .filter(|s| m.budget(s.period).is_some())
+        .map(|s| json!({ "period": s.period.as_str(), "spent_usd": s.spent_usd, "period_end": s.period_end }))
+        .collect();
     json!({
-        "account_id": m.account_id, "priority": m.priority, "eligible": eligible,
-        "kind": kind, "budget_usd": m.budget_usd, "budget_period": m.budget_period.as_str(),
-        "spent_usd": spend.map(|s| s.spent_usd), "period_end": spend.map(|s| s.period_end),
+        "account_id": m.account_id, "priority": m.priority, "eligible": eligible, "kind": kind,
+        "budget_daily_usd": m.budget_daily_usd, "budget_monthly_usd": m.budget_monthly_usd,
+        "budget_until": phoebis_routing::budget_deadline(m, &rows, now), "spends": reports,
     })
 }
 
@@ -793,19 +790,9 @@ pub(crate) async fn pool_json(state: &AdminState, row: &PoolRow) -> Result<Value
         {
             return Some("cooldown");
         }
-        if let (Some(budget), Some(spend)) = (
-            m.budget_usd,
-            crate::routes::member_spend_of(
-                &spends,
-                &row.id,
-                &m.account_id,
-                m.budget_usd,
-                m.budget_period,
-            ),
-        ) {
-            if crate::routes::budget_exceeded(spend, budget, now) {
-                return Some("budget");
-            }
+        let rows = crate::routes::spend_rows(&spends, &row.id, &m.account_id);
+        if phoebis_routing::budget_deadline(m, &rows, now).is_some() {
+            return Some("budget");
         }
         if row.overage_policy == OveragePolicy::Never
             && overages
@@ -847,7 +834,7 @@ pub(crate) async fn pool_json(state: &AdminState, row: &PoolRow) -> Result<Value
         "cache_ttl": CacheTtlPolicy::from_json(&row.cache_ttl_json), "cache_diagnostics": row.cache_diagnostics,
         "auto_mode_server": row.auto_mode_server,
         "body_capture_hours": row.body_capture_hours, "created_at": row.created_at, "updated_at": row.updated_at,
-        "members": members.iter().map(|m| member_json(m, &accounts, &spends, ineligible(m).unwrap_or("eligible"))).collect::<Vec<_>>(),
+        "members": members.iter().map(|m| member_json(m, &accounts, &spends, ineligible(m).unwrap_or("eligible"), now)).collect::<Vec<_>>(),
         "keys": keys,
         "status": status,
         "requests_24h": day.get(&row.id).map_or(0, |t| t.requests),

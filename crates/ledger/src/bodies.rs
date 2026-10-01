@@ -1,10 +1,9 @@
 //! Captured bodies, kept only for keys whose effective capture window is above zero, and the hourly purge
 //! that enforces every retention window the ledger has.
 
-use phoebis_store::BudgetPeriod;
 use rusqlite::{params, params_from_iter, ToSql};
 
-use crate::query::period_bounds;
+use crate::query::{period_bounds, BudgetedMember};
 use crate::task::LedgerConfig;
 use crate::{LedgerDb, LedgerError};
 
@@ -26,12 +25,12 @@ pub struct Purged {
     pub rollups: usize,
 }
 
-/// `budgeted` is every pool member with a spend budget, as `member_spends` takes them.
+/// `budgeted` is every budgeted period of every pool member with a spend budget, as `member_spends` takes them.
 pub fn run_retention(
     db: &LedgerDb,
     config: &LedgerConfig,
     now: i64,
-    budgeted: &[(String, String, BudgetPeriod)],
+    budgeted: &[BudgetedMember],
 ) -> Result<Purged, LedgerError> {
     db.write(|conn| {
         let tx = conn.transaction()?;
@@ -69,11 +68,12 @@ pub fn run_retention(
 
 /// A budget sums its member's hourly rows over the whole active period, so a retention shorter than the period
 /// would reopen an exhausted member before the period ends: a budgeted member's rows from its period's start on
-/// stay, and the first purge past the period's end takes them.
+/// stay, and the first purge past the period's end takes them; a member with both budgets keeps its rows from the
+/// earlier start.
 fn purge_hourly_rollups(
     tx: &rusqlite::Transaction<'_>,
     cutoff: Option<i64>,
-    budgeted: &[(String, String, BudgetPeriod)],
+    budgeted: &[BudgetedMember],
     now: i64,
 ) -> Result<usize, LedgerError> {
     let Some(cutoff) = cutoff else {
@@ -88,10 +88,10 @@ fn purge_hourly_rollups(
     let mut args: Vec<Box<dyn ToSql>> = vec![Box::new(cutoff)];
     let values: Vec<String> = budgeted
         .iter()
-        .map(|(pool_id, account_id, period)| {
-            args.push(Box::new(pool_id.clone()));
-            args.push(Box::new(account_id.clone()));
-            args.push(Box::new(period_bounds(*period, now).0 / 1_000));
+        .map(|m| {
+            args.push(Box::new(m.pool_id.clone()));
+            args.push(Box::new(m.account_id.clone()));
+            args.push(Box::new(period_bounds(m.period, now).0 / 1_000));
             let n = args.len();
             format!("(?{}, ?{}, ?{n})", n - 2, n - 1)
         })

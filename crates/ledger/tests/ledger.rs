@@ -11,8 +11,8 @@ use phoebis_bus::{
     ResponseFacts, Usage, BODY_SHAPE_ERROR_CODE,
 };
 use phoebis_ledger::{
-    list_requests, Assembler, AttemptRecord, EventRecord, LedgerConfig, LiveKeys, Record,
-    RequestFilter, RequestRecord,
+    list_requests, member_spends, Assembler, AttemptRecord, BudgetedMember, EventRecord,
+    LedgerConfig, LiveKeys, PriceTable, Record, RequestFilter, RequestRecord,
 };
 use phoebis_profile::fixtures::BodyFixture;
 use phoebis_store::{BudgetPeriod, MemberWrite};
@@ -2137,6 +2137,79 @@ fn ms(y: i16, m: i8, d: i8, h: i8, mi: i8) -> i64 {
         .as_millisecond()
 }
 
+/// A succeeded request of `input_tokens` uncached Sonnet 5 input on `main`'s member `a`, received at `at`.
+fn plant_spend(db: &phoebis_ledger::LedgerDb, id: &str, at: i64, input_tokens: u64) {
+    db.insert_request(
+        &RequestRecord {
+            id: id.into(),
+            received_at: at,
+            finished_at: Some(at + 500),
+            key_id: Some("desktop".into()),
+            pool_id: Some("main".into()),
+            canonical_model: "claude-sonnet-5".into(),
+            model: "claude-sonnet-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            outcome: "succeeded".into(),
+            attempts: 1,
+            ..Default::default()
+        },
+        &[AttemptRecord {
+            request_id: id.into(),
+            attempt: 1,
+            account_id: "a".into(),
+            account_kind: "api_key".into(),
+            outcome: "succeeded".into(),
+            input_tokens: Some(input_tokens),
+            ..Default::default()
+        }],
+        None,
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_member_with_two_budgets_gets_a_spend_row_per_period() {
+    let db = phoebis_ledger::LedgerDb::open_in_memory().unwrap();
+    let now = ms(2026, 1, 15, 12, 0);
+    plant_spend(&db, "today", ms(2026, 1, 15, 1, 0), 1_000_000);
+    plant_spend(&db, "earlier", ms(2026, 1, 5, 1, 0), 2_000_000);
+    plant_spend(&db, "last-month", ms(2025, 12, 31, 1, 0), 4_000_000);
+    let budgeted = |period| BudgetedMember {
+        pool_id: "main".into(),
+        account_id: "a".into(),
+        period,
+        metered_only: false,
+    };
+    let rows = db
+        .read_blocking(|c| {
+            member_spends(
+                c,
+                &[budgeted(BudgetPeriod::Day), budgeted(BudgetPeriod::Month)],
+                now,
+                &PriceTable::shipped(),
+            )
+        })
+        .unwrap();
+    let row = |period| rows.iter().find(|r| r.period == period).unwrap();
+    let (day, month) = (row(BudgetPeriod::Day), row(BudgetPeriod::Month));
+    assert_eq!(rows.len(), 2, "one row per budgeted period: {rows:?}");
+    assert_eq!(
+        (day.period_start, day.period_end),
+        (ms(2026, 1, 15, 0, 0), ms(2026, 1, 16, 0, 0))
+    );
+    assert_eq!(
+        (month.period_start, month.period_end),
+        (ms(2026, 1, 1, 0, 0), ms(2026, 2, 1, 0, 0))
+    );
+    assert!(day.spent_usd > 0.0, "today's request is priced");
+    assert_eq!(
+        month.spent_usd,
+        3.0 * day.spent_usd,
+        "the month sums today's and the earlier day's, never last month's"
+    );
+}
+
 #[tokio::test]
 async fn the_ledger_reports_every_budgeted_members_spend_after_a_flush() {
     let up = FakeUpstream::start(vec![Rule {
@@ -2151,8 +2224,8 @@ async fn the_ledger_reports_every_budgeted_members_spend_after_a_flush() {
             &[MemberWrite {
                 account_id: "a".into(),
                 priority: 0,
-                budget_usd: Some(100.0),
-                budget_period: BudgetPeriod::Month,
+                budget_daily_usd: None,
+                budget_monthly_usd: Some(100.0),
             }],
             "test",
         )
@@ -2251,8 +2324,8 @@ async fn an_exhausted_monthly_member_changed_to_daily_is_admitted_while_no_membe
             &[MemberWrite {
                 account_id: "a".into(),
                 priority: 0,
-                budget_usd: Some(0.01),
-                budget_period: BudgetPeriod::Month,
+                budget_daily_usd: None,
+                budget_monthly_usd: Some(0.01),
             }],
             "test",
         )
@@ -2293,8 +2366,8 @@ async fn an_exhausted_monthly_member_changed_to_daily_is_admitted_while_no_membe
             &[MemberWrite {
                 account_id: "a".into(),
                 priority: 0,
-                budget_usd: Some(0.01),
-                budget_period: BudgetPeriod::Day,
+                budget_daily_usd: Some(0.01),
+                budget_monthly_usd: None,
             }],
             "test",
         )
@@ -2379,8 +2452,8 @@ async fn the_period_boundary_tick_refreshes_the_spend_without_traffic() {
             &[MemberWrite {
                 account_id: "a".into(),
                 priority: 0,
-                budget_usd: Some(100.0),
-                budget_period: BudgetPeriod::Day,
+                budget_daily_usd: Some(100.0),
+                budget_monthly_usd: None,
             }],
             "test",
         )
@@ -2470,8 +2543,8 @@ async fn a_registry_change_recorded_ahead_of_the_reload_still_reaches_the_writer
             &[MemberWrite {
                 account_id: "a".into(),
                 priority: 0,
-                budget_usd: Some(100.0),
-                budget_period: BudgetPeriod::Month,
+                budget_daily_usd: None,
+                budget_monthly_usd: Some(100.0),
             }],
             "test",
         )

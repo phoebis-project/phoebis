@@ -129,8 +129,8 @@ pub async fn harness(up: &FakeUpstream, capture_hours: u32) -> Harness {
             &[MemberWrite {
                 account_id: "a".into(),
                 priority: 0,
-                budget_usd: None,
-                budget_period: phoebis_store::BudgetPeriod::Month,
+                budget_daily_usd: None,
+                budget_monthly_usd: None,
             }],
             "test",
         )

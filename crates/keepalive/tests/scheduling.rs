@@ -4,7 +4,8 @@
 mod common;
 use phoebis_keepalive::{Event, KeepaliveLimits, KeepalivePolicy, Reason};
 use phoebis_ledger::{
-    hour_of, member_spends, read_rollups, AttemptRecord, PriceTable, Record, RequestRecord,
+    hour_of, member_spends, read_rollups, AttemptRecord, BudgetedMember, PriceTable, Record,
+    RequestRecord,
 };
 use phoebis_routing::{
     lane_key, resolve, ClientClass, EvidenceSource, OverageEvidence, PinRef, Report, SelectRequest,
@@ -394,7 +395,12 @@ fn plant_and_report_spend(r: &Rig, id: &str, usd: f64) {
         r.db.read_blocking(|conn| {
             member_spends(
                 conn,
-                &[("main".into(), "a".into(), BudgetPeriod::Month)],
+                &[BudgetedMember {
+                    pool_id: "main".into(),
+                    account_id: "a".into(),
+                    period: BudgetPeriod::Month,
+                    metered_only: false,
+                }],
                 r.now(),
                 &PriceTable::shipped(),
             )
@@ -412,14 +418,14 @@ async fn with_budget_member(r: &Rig) {
                 MemberWrite {
                     account_id: "a".into(),
                     priority: 0,
-                    budget_usd: Some(5.0),
-                    budget_period: BudgetPeriod::Month,
+                    budget_daily_usd: None,
+                    budget_monthly_usd: Some(5.0),
                 },
                 MemberWrite {
                     account_id: "b".into(),
                     priority: 1,
-                    budget_usd: None,
-                    budget_period: BudgetPeriod::Month,
+                    budget_daily_usd: None,
+                    budget_monthly_usd: None,
                 },
             ],
             "test",
@@ -438,14 +444,14 @@ async fn raise_budget(r: &Rig) {
                 MemberWrite {
                     account_id: "a".into(),
                     priority: 0,
-                    budget_usd: Some(1_000.0),
-                    budget_period: BudgetPeriod::Month,
+                    budget_daily_usd: None,
+                    budget_monthly_usd: Some(1_000.0),
                 },
                 MemberWrite {
                     account_id: "b".into(),
                     priority: 1,
-                    budget_usd: None,
-                    budget_period: BudgetPeriod::Month,
+                    budget_daily_usd: None,
+                    budget_monthly_usd: None,
                 },
             ],
             "test",

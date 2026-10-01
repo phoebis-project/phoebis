@@ -411,7 +411,7 @@ impl ToSql for AffinitySource {
 }
 
 /// The period a member's spend budget resets over.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Hash, PartialEq, Eq)]
 pub enum BudgetPeriod {
     Day,
     #[default]
@@ -510,19 +510,40 @@ pub struct PoolMember {
     pub pool_id: String,
     pub account_id: String,
     pub priority: u32,
-    /// `None` is no budget; the member spends without a cap.
-    pub budget_usd: Option<f64>,
-    pub budget_period: BudgetPeriod,
+    /// `None` is no budget over that period; a member may carry one, both, or neither.
+    pub budget_daily_usd: Option<f64>,
+    pub budget_monthly_usd: Option<f64>,
 }
 
-/// What `set_pool_members` writes for one member: its priority beside its own account and spend budget, so a
-/// caller cannot set one without the other.
+impl PoolMember {
+    /// The budget over `period`, if the member carries one.
+    pub fn budget(&self, period: BudgetPeriod) -> Option<f64> {
+        match period {
+            BudgetPeriod::Day => self.budget_daily_usd,
+            BudgetPeriod::Month => self.budget_monthly_usd,
+        }
+    }
+
+    /// Every budget the member carries, with its period, `Day` before `Month`.
+    pub fn budgets(&self) -> impl Iterator<Item = (BudgetPeriod, f64)> + '_ {
+        [BudgetPeriod::Day, BudgetPeriod::Month]
+            .into_iter()
+            .filter_map(|period| self.budget(period).map(|budget| (period, budget)))
+    }
+
+    pub fn budgeted(&self) -> bool {
+        self.budgets().next().is_some()
+    }
+}
+
+/// What `set_pool_members` writes for one member: its priority beside its own account and spend budgets, so a
+/// caller cannot set one without the others.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MemberWrite {
     pub account_id: String,
     pub priority: u32,
-    pub budget_usd: Option<f64>,
-    pub budget_period: BudgetPeriod,
+    pub budget_daily_usd: Option<f64>,
+    pub budget_monthly_usd: Option<f64>,
 }
 
 #[derive(Clone, Debug)]
@@ -691,14 +712,14 @@ impl Store {
                 .collect::<rusqlite::Result<Vec<_>>>()?,
             keys: all_keys(&tx)?,
             members: tx
-                .prepare("SELECT pool_id, account_id, priority, budget_usd, budget_period FROM pool_members ORDER BY pool_id, account_id")?
+                .prepare("SELECT pool_id, account_id, priority, budget_daily_usd, budget_monthly_usd FROM pool_members ORDER BY pool_id, account_id")?
                 .query_map([], |r| {
                     Ok(PoolMember {
                         pool_id: r.get(0)?,
                         account_id: r.get(1)?,
                         priority: r.get::<_, i64>(2)? as u32,
-                        budget_usd: r.get(3)?,
-                        budget_period: r.get(4)?,
+                        budget_daily_usd: r.get(3)?,
+                        budget_monthly_usd: r.get(4)?,
                     })
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
@@ -886,14 +907,14 @@ impl Store {
     pub fn pool_members(&self, pool_id: &str) -> Result<Vec<PoolMember>, StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
         let mut stmt =
-            conn.prepare("SELECT pool_id, account_id, priority, budget_usd, budget_period FROM pool_members WHERE pool_id = ?1 ORDER BY priority, account_id")?;
+            conn.prepare("SELECT pool_id, account_id, priority, budget_daily_usd, budget_monthly_usd FROM pool_members WHERE pool_id = ?1 ORDER BY priority, account_id")?;
         let rows = stmt.query_map(params![pool_id], |r| {
             Ok(PoolMember {
                 pool_id: r.get(0)?,
                 account_id: r.get(1)?,
                 priority: r.get::<_, i64>(2)? as u32,
-                budget_usd: r.get(3)?,
-                budget_period: r.get(4)?,
+                budget_daily_usd: r.get(3)?,
+                budget_monthly_usd: r.get(4)?,
             })
         })?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
@@ -932,13 +953,13 @@ impl Store {
         )?;
         for member in members {
             tx.execute(
-                "INSERT INTO pool_members (pool_id, account_id, priority, budget_usd, budget_period) VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![pool_id, member.account_id, member.priority as i64, member.budget_usd, member.budget_period],
+                "INSERT INTO pool_members (pool_id, account_id, priority, budget_daily_usd, budget_monthly_usd) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![pool_id, member.account_id, member.priority as i64, member.budget_daily_usd, member.budget_monthly_usd],
             )?;
         }
         let diff = serde_json::json!({ "members": members.iter().map(|m| serde_json::json!({
             "account_id": m.account_id, "priority": m.priority,
-            "budget_usd": m.budget_usd, "budget_period": m.budget_period.as_str(),
+            "budget_daily_usd": m.budget_daily_usd, "budget_monthly_usd": m.budget_monthly_usd,
         })).collect::<Vec<_>>() })
         .to_string();
         record_change(&tx, now_ms(), actor, "pool_members_set", pool_id, &diff)?;

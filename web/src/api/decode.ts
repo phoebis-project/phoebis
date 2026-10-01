@@ -317,15 +317,15 @@ export function decodePool(v: unknown): Pool {
     keys: list(p.keys).map(rec).map((k) => ({ enabled: bool(k.enabled, true), id: str(k.id), label: str(k.label), prefix: str(k.prefix) })),
     members: list(p.members).map(rec).map((m) => ({
       accountId: str(m.account_id),
-      budgetPeriod: BUDGET_PERIOD_VALUES.find((x) => x === str(m.budget_period)) ?? 'month',
-      budgetUsd: numOrNull(m.budget_usd),
+      budgetDailyUsd: numOrNull(m.budget_daily_usd),
+      budgetMonthlyUsd: numOrNull(m.budget_monthly_usd),
+      budgetUntil: isoOrNull(m.budget_until),
       // A row from before the router reported eligibility reads as not servable rather than as servable.
       eligible: ELIGIBILITY_VALUES.find((e) => e === str(m.eligible)) ?? 'unavailable',
       // The route answers null for an account it cannot find, which is no API-key upstream either.
       kind: ACCOUNT_KIND_VALUES.find((x) => x === str(m.kind)) ?? 'oauth',
-      periodEnd: isoOrNull(m.period_end),
       priority: num(m.priority),
-      spentUsd: numOrNull(m.spent_usd),
+      spends: list(m.spends).map(rec).map((s) => ({ period: BUDGET_PERIOD_VALUES.find((x) => x === str(s.period)) ?? 'month', periodEnd: isoOrNull(s.period_end), spentUsd: num(s.spent_usd) })),
     })),
     migrateAboveUtilization: numOrNull(p.migrate_above_utilization),
     migrateWhenSpent: bool(p.migrate_when_spent, POOL_ENGINE_DEFAULTS.migrateWhenSpent),
@@ -646,7 +646,7 @@ export const encodePool = (i: PoolInput) => ({
   cache_ttl: { enabled: i.cacheTtl.enabled, inject_when_absent: i.cacheTtl.injectWhenAbsent, metered: encodeTtlRules(i.cacheTtl.metered), plan: encodeTtlRules(i.cacheTtl.plan) },
   enabled: i.status === 'active', model_rules: encodeModelRules(i.modelRules),
   keepalive: { cold_probe_limit: i.keepalive.coldProbeLimit, enabled: i.keepalive.enabled, jitter_seconds_1h: i.keepalive.jitterSeconds1h, jitter_seconds_5m: i.keepalive.jitterSeconds5m, lead_seconds_1h: i.keepalive.leadSeconds1h, lead_seconds_5m: i.keepalive.leadSeconds5m, max_idle_seconds: i.keepalive.maxIdleSeconds, max_idle_ticks: i.keepalive.maxIdleTicks, net_negative_grace_probes: i.keepalive.netNegativeGraceProbes, probe_cap_window_share_per_day: i.keepalive.capWindowSharePerDay, probe_cost_cap_usd_per_day: i.keepalive.costCapUsdPerDay, retry_max_seconds: i.keepalive.retryMaxSeconds, retry_seconds: i.keepalive.retrySeconds, stop_when_net_negative: i.keepalive.stopWhenNetNegative, warm_subagents: i.keepalive.warmSubagents },
-  label: i.name, members: i.members.map((m) => ({ account_id: m.accountId, budget_period: m.budgetPeriod, budget_usd: m.budgetUsd, priority: m.priority })), migrate_above_utilization: i.migrateAboveUtilization,
+  label: i.name, members: i.members.map((m) => ({ account_id: m.accountId, budget_daily_usd: m.budgetDailyUsd, budget_monthly_usd: m.budgetMonthlyUsd, priority: m.priority })), migrate_above_utilization: i.migrateAboveUtilization,
   min_shared_prefix_tokens: i.minSharedPrefixTokens, overage_policy: i.overagePolicy, prefer_subscription: i.preferSubscription, quota_headers: i.quotaHeaders, select_below_utilization: i.selectBelowUtilization,
   session_placement: i.sessionPlacement, strategy: i.strategy, subagent_placement: i.subagentPlacement,
   burn_window_seconds: i.burnWindowSeconds, in_flight_cap: i.inFlightCap, migrate_when_spent: i.migrateWhenSpent, overage_move_grace_minutes: i.overageMoveGraceMinutes, pace_floor: i.paceFloor,

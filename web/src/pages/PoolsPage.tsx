@@ -4,7 +4,7 @@ import { Bar, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } 
 import { api, ApiError, CACHE_TTL_DEFAULTS, KEEPALIVE_TUNING_DEFAULTS, type PoolInput } from '@/api';
 import { POOL_AFFINITY_DEFAULTS, POOL_ENGINE_DEFAULTS, type PoolEngineFields } from '@/api/client';
 import type {
-  Account, AffinityMode, ApiKey, BudgetPeriod, CacheTtl, CreatedApiKey, KeyStatus, MemberEligibility, ModelRule, OveragePolicy, Pool, PoolCacheTtl, PoolKeepalive, PoolMember, PoolStrategy, QuotaHeaders, Session, SessionPlacement,
+  Account, AffinityMode, ApiKey, CacheTtl, CreatedApiKey, KeyStatus, MemberEligibility, ModelRule, OveragePolicy, Pool, PoolCacheTtl, PoolKeepalive, PoolMember, PoolStrategy, QuotaHeaders, Session, SessionPlacement,
   SubagentPlacement, TtlRules, WarmSessions,
 } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
@@ -630,8 +630,8 @@ function PoolCard({
                   </span>
                   <Link to={`/upstreams/${m.accountId}`}>{a?.label ?? m.accountId}</Link>
                   <span className="pool__eligibility">
-                    <MemberBudget member={m} now={now} />
-                    <Eligibility verdict={m.eligible} account={a} now={now} periodEnd={m.periodEnd} />
+                    <MemberBudget member={m} />
+                    <Eligibility verdict={m.eligible} account={a} now={now} periodEnd={m.budgetUntil} />
                   </span>
                 </li>
               );
@@ -658,22 +658,31 @@ function PoolCard({
 }
 
 /**
- * An API-key member's spend against its budget for the period, or that it has none; a subscription member has no
- * budget.
+ * An API-key member's spend against each budget it carries, the day's before the month's, or that it has none; a
+ * subscription member has no budget.
  */
-function MemberBudget({ member, now }: { member: PoolMember; now: number }) {
+function MemberBudget({ member }: { member: PoolMember }) {
   if (member.kind !== 'api_key') return null;
-  if (member.budgetUsd === null) return <span className="muted">no budget</span>;
-  const { budgetUsd: budget, periodEnd, spentUsd: spent } = member;
-  const reached = spent !== null && spent >= budget && periodEnd !== null && Date.parse(periodEnd) > now;
+  const budgets = (
+    [
+      ['day', member.budgetDailyUsd],
+      ['month', member.budgetMonthlyUsd],
+    ] as const
+  ).flatMap(([period, budget]) => (budget === null ? [] : [{ budget, period }]));
+  if (budgets.length === 0) return <span className="muted">no budget</span>;
   return (
     <>
-      <span className="num">
-        {spent === null ? '-' : fmtUsd(spent)} of {fmtUsd(budget)} {member.budgetPeriod === 'day' ? 'today' : 'this month'}
-      </span>
+      {budgets.map(({ budget, period }) => {
+        const spent = member.spends.find((s) => s.period === period)?.spentUsd;
+        return (
+          <span key={period} className="num">
+            {spent === undefined ? '-' : fmtUsd(spent)} of {fmtUsd(budget)} {period === 'day' ? 'today' : 'this month'}
+          </span>
+        );
+      })}
       {/* The route's budget verdict says this itself; the badge stands for a member the route names an earlier
           obstacle for. */}
-      {reached && member.eligible !== 'budget' && <AtBudget periodEnd={periodEnd} />}
+      {member.budgetUntil !== null && member.eligible !== 'budget' && <AtBudget periodEnd={member.budgetUntil} />}
     </>
   );
 }
@@ -705,8 +714,8 @@ interface PoolForm {
   affinity: number;
   affinityMode: AffinityMode;
   autoModeServer: boolean;
-  /** Each member's budget field as typed, empty for none, beside its period; kept for an unticked member too. */
-  budgets: Record<string, { period: BudgetPeriod; usd: string }>;
+  /** Each member's daily and monthly budget fields as typed, empty for none; kept for an unticked member too. */
+  budgets: Record<string, { daily: string; monthly: string }>;
   cacheDiagnostics: boolean | null;
   cacheTtl: PoolCacheTtl;
   capEnabled: boolean;
@@ -780,7 +789,7 @@ const formFrom = (pool: Pool): PoolForm => ({
   affinity: pool.affinityTtlSeconds,
   affinityMode: pool.affinityMode,
   autoModeServer: pool.autoModeServer,
-  budgets: Object.fromEntries(pool.members.map((m) => [m.accountId, { period: m.budgetPeriod, usd: m.budgetUsd === null ? '' : String(m.budgetUsd) }])),
+  budgets: Object.fromEntries(pool.members.map((m) => [m.accountId, { daily: m.budgetDailyUsd === null ? '' : String(m.budgetDailyUsd), monthly: m.budgetMonthlyUsd === null ? '' : String(m.budgetMonthlyUsd) }])),
   cacheDiagnostics: pool.cacheDiagnostics,
   cacheTtl: {
     ...pool.cacheTtl,
@@ -927,7 +936,7 @@ export function PoolDialog({
   const warming = form.keepalive && !keepaliveBlocked;
   // Sessions by warm prefix and subagents by cohort both place by the shared prefix, so either one reads the threshold.
   const prefixEnabled = form.sessionPlacement === 'by_warm_prefix' || form.subagentPlacement === 'by_cohort';
-  const budgetOf = (accountId: string) => form.budgets[accountId] ?? { period: 'month' as const, usd: '' };
+  const budgetOf = (accountId: string) => form.budgets[accountId] ?? { daily: '', monthly: '' };
   const apiKeyIds = new Set(accounts.filter((a) => a.kind === 'api_key').map((a) => a.id));
   const input: PoolInput = {
     ...form.engine,
@@ -945,10 +954,11 @@ export function PoolDialog({
     members: Object.entries(form.members).map(([accountId, priority]) => {
       // A budget belongs to an API-key member, so one left from an earlier tick or stored through the API on any other
       // member goes back as none, which clears it.
-      if (!apiKeyIds.has(accountId)) return { accountId, budgetPeriod: 'month' as const, budgetUsd: null, priority };
+      if (!apiKeyIds.has(accountId)) return { accountId, budgetDailyUsd: null, budgetMonthlyUsd: null, priority };
       const budget = budgetOf(accountId);
       // A field that reads no number goes on as NaN, which the refusals below hold the save for.
-      return { accountId, budgetPeriod: budget.period, budgetUsd: budget.usd.trim() === '' ? null : Number(budget.usd), priority };
+      const usd = (typed: string) => (typed.trim() === '' ? null : Number(typed));
+      return { accountId, budgetDailyUsd: usd(budget.daily), budgetMonthlyUsd: usd(budget.monthly), priority };
     }),
     migrateAboveUtilization: form.migrateOn ? form.migrate / 100 : null,
     // With neither placement reading the threshold it goes back as stored, so an edit left in it holds nothing.
@@ -989,11 +999,14 @@ export function PoolDialog({
   // The band's own sentence alone: a select-below out of its range reads in the footer and on the rail.
   const band = bandRefusal(input);
   const prefixRefusal = refusalOf('Minimum shared prefix, tokens');
-  const budgetRefusal = refusals.find((r) => r.field.startsWith('budget:'));
-  const budgetRefused = budgetRefusal && { label: accounts.find((a) => `budget:${a.id}` === budgetRefusal.field)?.label ?? budgetRefusal.field, refusal: budgetRefusal.text };
+  const budgetRefusal = refusals.find((r) => r.field.startsWith('budget_daily:') || r.field.startsWith('budget_monthly:'));
+  const budgetRefused = budgetRefusal && {
+    label: accounts.find((a) => budgetRefusal.field === `budget_daily:${a.id}` || budgetRefusal.field === `budget_monthly:${a.id}`)?.label ?? budgetRefusal.field,
+    refusal: budgetRefusal.text,
+  };
   const memberAccounts = accounts.filter((a) => a.id in form.members);
-  const setBudget = (accountId: string, patch: Partial<{ period: BudgetPeriod; usd: string }>) =>
-    setForm((f) => ({ ...f, budgets: { ...f.budgets, [accountId]: { ...(f.budgets[accountId] ?? { period: 'month', usd: '' }), ...patch } } }));
+  const setBudget = (accountId: string, patch: Partial<{ daily: string; monthly: string }>) =>
+    setForm((f) => ({ ...f, budgets: { ...f.budgets, [accountId]: { ...(f.budgets[accountId] ?? { daily: '', monthly: '' }), ...patch } } }));
   const readings = memberAccounts.map((a) => ({ fiveHour: windowOf(a, '5h')?.utilization ?? null, id: a.id, label: a.label, sevenDay: windowOf(a, '7d')?.utilization ?? null }));
   // The route's verdict per stored member, so a member in cooldown is no destination for a shed session.
   const verdict = new Map((pool?.members ?? []).map((m) => [m.accountId, m.eligible]));
@@ -1096,7 +1109,7 @@ export function PoolDialog({
           <PageLink to="/upstreams">Upstreams page</PageLink>.
         </p>
         <p className="field__hint">
-          API-key members only. A member whose spend reaches its daily or its monthly budget is skipped until that UTC day or month ends, priced at API list rates; a subscription member follows the <GroupLink id="overage">overage policy</GroupLink> instead.
+          API-key members only. A member whose spend reaches its daily or its monthly budget is skipped until that UTC day or month ends, priced at API list rates; set one, both, or neither.
         </p>
         <div className="table-wrap">
           <table className="table members-table">
@@ -1104,8 +1117,8 @@ export function PoolDialog({
               <tr>
                 <th>Upstream</th>
                 <th className="right">Priority</th>
-                <th className="right">Budget, USD</th>
-                <th>Period</th>
+                <th className="right">Daily budget, USD</th>
+                <th className="right">Monthly budget, USD</th>
               </tr>
             </thead>
             <tbody>
@@ -1153,19 +1166,26 @@ export function PoolDialog({
                             type="number"
                             min={0.01}
                             step="any"
-                            value={budgetOf(a.id).usd}
+                            value={budgetOf(a.id).daily}
                             disabled={!on}
                             placeholder="none"
-                            onChange={(e) => setBudget(a.id, { usd: e.target.value })}
-                            aria-label={`Budget for ${a.label}, USD`}
-                            aria-invalid={invalid(`budget:${a.id}`)}
+                            onChange={(e) => setBudget(a.id, { daily: e.target.value })}
+                            aria-label={`Daily budget for ${a.label}, USD`}
+                            aria-invalid={invalid(`budget_daily:${a.id}`)}
                           />
                         </td>
-                        <td>
-                          <Select value={budgetOf(a.id).period} disabled={!on} onChange={(e) => setBudget(a.id, { period: e.target.value as BudgetPeriod })} aria-label={`Budget period for ${a.label}`} aria-invalid={invalid(`period:${a.id}`)}>
-                            <option value="day">per day</option>
-                            <option value="month">per month</option>
-                          </Select>
+                        <td className="right">
+                          <Input
+                            type="number"
+                            min={0.01}
+                            step="any"
+                            value={budgetOf(a.id).monthly}
+                            disabled={!on}
+                            placeholder="none"
+                            onChange={(e) => setBudget(a.id, { monthly: e.target.value })}
+                            aria-label={`Monthly budget for ${a.label}, USD`}
+                            aria-invalid={invalid(`budget_monthly:${a.id}`)}
+                          />
                         </td>
                       </>
                     ) : (

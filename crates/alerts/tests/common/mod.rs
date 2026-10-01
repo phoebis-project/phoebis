@@ -214,14 +214,14 @@ async fn rig_over(store: Arc<Store>, webhook: Arc<dyn Webhook>, hook: Option<Clo
                 MemberWrite {
                     account_id: "business".into(),
                     priority: 0,
-                    budget_usd: None,
-                    budget_period: phoebis_store::BudgetPeriod::Month,
+                    budget_daily_usd: None,
+                    budget_monthly_usd: None,
                 },
                 MemberWrite {
                     account_id: "direct".into(),
                     priority: 1,
-                    budget_usd: None,
-                    budget_period: phoebis_store::BudgetPeriod::Month,
+                    budget_daily_usd: None,
+                    budget_monthly_usd: None,
                 },
             ],
             "test",

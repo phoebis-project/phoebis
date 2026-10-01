@@ -428,13 +428,14 @@ test('a pool decodes the pin, placement and quota fields and its members\' budge
     'the captured pool holds the store defaults',
   );
   const direct = p.members.find((m) => m.accountId === 'direct');
+  const [report] = row.members[1].spends;
   assert.deepEqual(
-    [direct.kind, direct.budgetUsd, direct.budgetPeriod, direct.spentUsd, direct.periodEnd],
-    ['api_key', 50, 'month', row.members[1].spent_usd, new Date(row.members[1].period_end).toISOString()],
-    'the budgeted API-key member reads its budget and the spend the ledger reported against it',
+    [direct.kind, direct.budgetDailyUsd, direct.budgetMonthlyUsd, direct.budgetUntil, direct.spends],
+    ['api_key', null, 50, null, [{ period: 'month', periodEnd: new Date(report.period_end).toISOString(), spentUsd: report.spent_usd }]],
+    'the budgeted API-key member reads its budgets and the spend the ledger reported against each',
   );
   const business = p.members.find((m) => m.accountId === 'business');
-  assert.deepEqual([business.kind, business.budgetUsd, business.spentUsd, business.periodEnd], ['oauth', null, null, null], 'a member without a budget reads no spend');
+  assert.deepEqual([business.kind, business.budgetDailyUsd, business.budgetMonthlyUsd, business.spends], ['oauth', null, null, []], 'a member without a budget reads no spend');
   assert.deepEqual(p.keys, [{ enabled: true, id: 'desktop', label: 'Desktop', prefix: row.keys[0].prefix }]);
 
   const wire = {
@@ -444,19 +445,23 @@ test('a pool decodes the pin, placement and quota fields and its members\' budge
     session_placement: 'by_warm_prefix',
     min_shared_prefix_tokens: 30_000,
     quota_headers: 'hide',
-    members: [{ ...row.members[1], budget_usd: 12.5, budget_period: 'day', eligible: 'budget' }],
+    members: [{ ...row.members[1], budget_daily_usd: 12.5, budget_monthly_usd: 50, budget_until: 86_400_000, eligible: 'budget' }],
     keys: [{ ...row.keys[0], enabled: false }],
   };
   const q = d.decodePool(wire);
   assert.deepEqual([q.affinityMode, q.subagentPlacement, q.sessionPlacement, q.minSharedPrefixTokens, q.quotaHeaders], ['when_cached', 'with_main', 'by_warm_prefix', 30_000, 'hide']);
-  assert.deepEqual([q.members[0].budgetUsd, q.members[0].budgetPeriod, q.members[0].eligible], [12.5, 'day', 'budget'], 'a member at its budget reads the verdict the route names');
+  assert.deepEqual(
+    [q.members[0].budgetDailyUsd, q.members[0].budgetMonthlyUsd, q.members[0].budgetUntil, q.members[0].eligible],
+    [12.5, 50, new Date(86_400_000).toISOString(), 'budget'],
+    'a member at its budget reads the verdict and the end the route names',
+  );
   assert.equal(q.keys[0].enabled, false);
   const back = d.encodePool({ ...q, name: q.name, status: 'active' });
   assert.deepEqual(
     [back.affinity_mode, back.subagent_placement, back.session_placement, back.min_shared_prefix_tokens, back.quota_headers],
     ['when_cached', 'with_main', 'by_warm_prefix', 30_000, 'hide'],
   );
-  assert.deepEqual(back.members, [{ account_id: 'direct', budget_period: 'day', budget_usd: 12.5, priority: 1 }], 'a member goes back with its budget and nothing the route reports');
+  assert.deepEqual(back.members, [{ account_id: 'direct', budget_daily_usd: 12.5, budget_monthly_usd: 50, priority: 1 }], 'a member goes back with its budgets and nothing the route reports');
   assert.equal('keys' in back, false, 'the keys are the registry\'s, never a pool setting');
 
   const bare = { ...row, members: [{ account_id: 'direct', priority: 0, eligible: 'eligible' }], keys: [{ id: 'k', label: 'K', prefix: 'p' }] };
@@ -467,18 +472,22 @@ test('a pool decodes the pin, placement and quota fields and its members\' budge
     ['always', 'by_cohort', 'by_strategy', 20_000, 'pass'],
     'a field the route leaves out reads the store default',
   );
-  assert.deepEqual([defaults.members[0].budgetUsd, defaults.members[0].budgetPeriod, defaults.members[0].kind], [null, 'month', 'oauth'], 'a member row without the fields reads no budget and no API key');
+  assert.deepEqual(
+    [defaults.members[0].budgetDailyUsd, defaults.members[0].budgetMonthlyUsd, defaults.members[0].budgetUntil, defaults.members[0].spends, defaults.members[0].kind],
+    [null, null, null, [], 'oauth'],
+    'a member row without the fields reads no budget, no spend and no API key',
+  );
   assert.equal(defaults.keys[0].enabled, true, 'a key row without the fields reads the store defaults');
   const odd = d.decodePool({
     ...wire,
     affinity_mode: 'sometimes',
-    members: [{ ...wire.members[0], budget_period: 'week', eligible: 'maybe', kind: 'robot' }],
+    members: [{ ...wire.members[0], eligible: 'maybe', kind: 'robot', spends: [{ period: 'week', period_end: null, spent_usd: 1 }] }],
     quota_headers: 'strip',
     session_placement: 'by_luck',
     subagent_placement: 'alone',
   });
   assert.deepEqual(
-    [odd.affinityMode, odd.quotaHeaders, odd.sessionPlacement, odd.subagentPlacement, odd.members[0].budgetPeriod, odd.members[0].eligible, odd.members[0].kind],
+    [odd.affinityMode, odd.quotaHeaders, odd.sessionPlacement, odd.subagentPlacement, odd.members[0].spends[0].period, odd.members[0].eligible, odd.members[0].kind],
     ['always', 'pass', 'by_strategy', 'by_cohort', 'month', 'unavailable', 'oauth'],
     'every unknown spelling reads its default',
   );

@@ -10,7 +10,7 @@ const as = async (role) => {
 };
 
 /** The pool as the dialog would send it back unchanged, so a case edits only the fields it is about. */
-const poolInputOf = (p) => ({ ...p, members: p.members.map((m) => ({ accountId: m.accountId, budgetPeriod: m.budgetPeriod, budgetUsd: m.budgetUsd, priority: m.priority })) });
+const poolInputOf = (p) => ({ ...p, members: p.members.map((m) => ({ accountId: m.accountId, budgetDailyUsd: m.budgetDailyUsd, budgetMonthlyUsd: m.budgetMonthlyUsd, priority: m.priority })) });
 const storyPool = async (api) => poolInputOf((await api.listPools()).find((p) => p.id === 'all'));
 const keyInput = { affinitySource: 'auto', autoModeServer: null, bodyCaptureHours: null, enabled: true, expiresInDays: null, keepaliveOptOut: false, longContextTwins: true, modelRules: [], modelRulesMode: 'extend', name: 'fresh', notes: null, poolId: 'all' };
 const ruleInputOf = (r) => ({ enabled: r.enabled, kind: r.kind, scope: r.scope, threshold: r.threshold, webhookUrl: r.webhookUrl, windowId: r.windowId });
@@ -168,11 +168,11 @@ test('a pool write round-trips the pin, placement and quota fields and the membe
   const api = await as('admin');
   const all = await storyPool(api);
   const console_ = all.members.find((m) => m.accountId === 'console');
-  assert.deepEqual([console_.budgetUsd, console_.budgetPeriod], [50, 'month'], 'the story budgets its API-key member');
+  assert.deepEqual([console_.budgetDailyUsd, console_.budgetMonthlyUsd], [5, 50], 'the story budgets its API-key member by the day and the month');
   const edit = {
     ...all,
     affinityMode: 'always',
-    members: all.members.map((m) => (m.accountId === 'console' ? { ...m, budgetPeriod: 'day', budgetUsd: 7.5 } : m)),
+    members: all.members.map((m) => (m.accountId === 'console' ? { ...m, budgetDailyUsd: 7.5, budgetMonthlyUsd: null } : m)),
     minSharedPrefixTokens: 30_000,
     quotaHeaders: 'pass',
     sessionPlacement: 'by_strategy',
@@ -183,17 +183,17 @@ test('a pool write round-trips the pin, placement and quota fields and the membe
   for (const pool of [saved, stored]) {
     assert.deepEqual([pool.affinityMode, pool.minSharedPrefixTokens, pool.quotaHeaders, pool.sessionPlacement, pool.subagentPlacement], ['always', 30_000, 'pass', 'by_strategy', 'with_main']);
     const member = pool.members.find((m) => m.accountId === 'console');
-    assert.deepEqual([member.budgetUsd, member.budgetPeriod, member.kind, member.spentUsd, member.periodEnd], [7.5, 'day', 'api_key', null, null], 'the mock keeps no ledger, so a write answers no spend');
+    assert.deepEqual([member.budgetDailyUsd, member.budgetMonthlyUsd, member.kind, member.spends, member.budgetUntil], [7.5, null, 'api_key', [], null], 'the mock keeps no ledger, so a write answers no spend');
   }
   assert.deepEqual(poolInputOf(stored).members, edit.members, 'the members read back as they were written');
   const created = await api.createPool({ ...edit, name: 'budgeted' });
   assert.deepEqual(
-    created.members.map((m) => [m.accountId, m.kind, m.budgetUsd, m.budgetPeriod]),
-    edit.members.map((m) => [m.accountId, m.accountId === 'console' ? 'api_key' : 'oauth', m.budgetUsd, m.budgetPeriod]),
+    created.members.map((m) => [m.accountId, m.kind, m.budgetDailyUsd, m.budgetMonthlyUsd]),
+    edit.members.map((m) => [m.accountId, m.accountId === 'console' ? 'api_key' : 'oauth', m.budgetDailyUsd, m.budgetMonthlyUsd]),
     'a create derives each member\'s kind from its account',
   );
   const bare = await api.createPool({ ...edit, members: [{ accountId: 'console', priority: 0 }], name: 'bare' });
-  assert.deepEqual([bare.members[0].budgetUsd, bare.members[0].budgetPeriod], [null, 'month'], 'a member written without a budget has none, and its period reads a month');
+  assert.deepEqual([bare.members[0].budgetDailyUsd, bare.members[0].budgetMonthlyUsd], [null, null], 'a member written without a budget field has no budget over that period');
 });
 
 test('the story reads a member at its budget as the route does, and a member half way as eligible', async () => {
@@ -201,10 +201,14 @@ test('the story reads a member at its budget as the route does, and a member hal
   const pools = await api.listPools();
   const member = (poolId, accountId) => pools.find((p) => p.id === poolId).members.find((m) => m.accountId === accountId);
   const half = member('all', 'console');
-  assert.deepEqual([half.spentUsd, half.budgetUsd, half.eligible], [25, 50, 'eligible']);
+  assert.deepEqual(
+    [half.spends.map((s) => [s.period, s.spentUsd]), half.budgetDailyUsd, half.budgetMonthlyUsd, half.budgetUntil, half.eligible],
+    [[['day', 1.1], ['month', 25]], 5, 50, null, 'eligible'],
+  );
   const spent = member('codex', 'evals');
-  assert.ok(spent.spentUsd >= spent.budgetUsd && Date.parse(spent.periodEnd) > Date.now(), 'the story spends one member past its budget inside the period');
-  assert.equal(spent.eligible, 'budget');
+  const [day] = spent.spends;
+  assert.ok(day.spentUsd >= spent.budgetDailyUsd && Date.parse(day.periodEnd) > Date.now(), 'the story spends one member past its daily budget inside the day');
+  assert.deepEqual([spent.budgetUntil, spent.eligible], [day.periodEnd, 'budget'], 'the route holds it to the day\'s end, the one budget it reached');
   assert.equal(pools.find((p) => p.id === 'codex').status, 'exhausted', 'its only member at its budget leaves the pool nothing to route to');
 });
 
@@ -276,8 +280,8 @@ test('a pool write with an unknown spelling or a budget the route refuses is ref
     // The route reads the threshold as an unsigned whole number, so any other value fails the body's parse.
     [{ minSharedPrefixTokens: -1 }, 'body must be a JSON object'],
     [{ minSharedPrefixTokens: 1.5 }, 'body must be a JSON object'],
-    [{ members: [{ accountId: 'console', budgetPeriod: 'month', budgetUsd: 0, priority: 0 }] }, 'budget_usd is above 0'],
-    [{ members: [{ accountId: 'console', budgetPeriod: 'week', budgetUsd: 5, priority: 0 }] }, 'budget_period must be day or month'],
+    [{ members: [{ accountId: 'console', budgetDailyUsd: 0, budgetMonthlyUsd: null, priority: 0 }] }, 'budget_daily_usd is above 0'],
+    [{ members: [{ accountId: 'console', budgetDailyUsd: null, budgetMonthlyUsd: -5, priority: 0 }] }, 'budget_monthly_usd is above 0'],
   ];
   for (const [patch, message] of refusals) {
     await assert.rejects(() => api.updatePool('all', { ...all, ...patch }), refusedAs(400, message), message);

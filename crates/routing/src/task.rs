@@ -1201,9 +1201,10 @@ impl Task {
                     .clone();
                 let rows = snapshot
                     .budgeted_members()
-                    .filter_map(|m| {
+                    .flat_map(|m| {
                         self.state
-                            .member_spend_live(&snapshot, &m.pool_id, &m.account_id)
+                            .member_spends_live(&snapshot, &m.pool_id, &m.account_id)
+                            .into_iter()
                             .cloned()
                     })
                     .collect();

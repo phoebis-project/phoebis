@@ -14,7 +14,7 @@ use phoebis_bus::{
 use phoebis_ledger::{Ledger, Metrics, PlanTables, Pricing, Speed};
 use phoebis_oauth::Clock;
 use phoebis_relay::{CacheTtlPolicy, Relay};
-use phoebis_routing::{budget_deadline, PinUsage, RegistrySnapshot, RouterHandle};
+use phoebis_routing::{budget_deadline, MemberSpend, PinUsage, RegistrySnapshot, RouterHandle};
 use phoebis_store::{AccountKind, AccountState, OveragePolicy, Store};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
@@ -1811,7 +1811,7 @@ impl Engine {
 }
 
 pub(crate) struct RouterView {
-    /// `(pool, account)` of every member whose spend row refuses it now: the gate holds a probe pinned there.
+    /// `(pool, account)` of every member whose spend rows refuse it now: the gate holds a probe pinned there.
     pub budgets: BTreeSet<(String, String)>,
     /// A retained model name to the one the router keys its rows on, for the names that differ.
     pub canonical: HashMap<String, String>,
@@ -1892,21 +1892,24 @@ impl Engine {
                 Some((a.id.clone(), tier))
             })
             .collect();
-        let budgets = self
-            .parts
-            .router
-            .member_spends()
-            .await
-            .unwrap_or_default()
+        let mut spends: BTreeMap<(String, String), Vec<MemberSpend>> = BTreeMap::new();
+        for row in self.parts.router.member_spends().await.unwrap_or_default() {
+            spends
+                .entry((row.pool_id.clone(), row.account_id.clone()))
+                .or_default()
+                .push(row);
+        }
+        let budgets = spends
             .into_iter()
-            .filter(|row| {
+            .filter(|((pool_id, account_id), rows)| {
+                let rows = rows.iter().collect::<Vec<_>>();
                 snapshot
-                    .members(&row.pool_id)
+                    .members(pool_id)
                     .iter()
-                    .find(|m| m.account_id == row.account_id)
-                    .is_some_and(|member| budget_deadline(member, row, now).is_some())
+                    .find(|m| &m.account_id == account_id)
+                    .is_some_and(|member| budget_deadline(member, &rows, now).is_some())
             })
-            .map(|row| (row.pool_id, row.account_id))
+            .map(|(member, _)| member)
             .collect();
         RouterView {
             budgets,
@@ -2217,8 +2220,8 @@ mod tests {
             pool_id: "main".into(),
             account_id: account_id.into(),
             priority: 0,
-            budget_usd: None,
-            budget_period: phoebis_store::BudgetPeriod::default(),
+            budget_daily_usd: None,
+            budget_monthly_usd: None,
         };
         let load = phoebis_store::RegistryLoad {
             accounts: vec![

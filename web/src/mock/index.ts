@@ -1,5 +1,5 @@
 import type { AccountPatch, Api, CreateKeyInput, KeyInput, PoolInput } from '@/api/client';
-import { AFFINITY_MODE_VALUES, AFFINITY_SOURCE_VALUES, BUDGET_PERIOD_VALUES, QUOTA_HEADERS_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES, decodeLiveDelta, decodeLiveSnapshot } from '@/api/decode';
+import { AFFINITY_MODE_VALUES, AFFINITY_SOURCE_VALUES, QUOTA_HEADERS_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES, decodeLiveDelta, decodeLiveSnapshot } from '@/api/decode';
 import { ApiError, catalogUnion, slug } from '@/api/http';
 import type {
   Account, AccountCatalog, AccountInput, AlertDeliveryTest, AlertEvent, AlertKind, AlertRule, AlertRuleInput, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, Delivery, KeyModels, LifecycleDelivery, LifecyclePage, LiveEvent, MemberEligibility, ModelEvent,
@@ -107,8 +107,8 @@ const affinityRefusal = (input: Partial<PoolInput>): string | null => {
 /** The member write's refusals, which the routes read once the pool's own fields have passed. */
 const memberRefusal = (members: PoolInput['members']): string | null => {
   for (const m of members) {
-    if (m.budgetUsd != null && !(m.budgetUsd > 0)) return 'budget_usd is above 0';
-    if (m.budgetPeriod !== undefined && !BUDGET_PERIOD_VALUES.some((p) => p === m.budgetPeriod)) return 'budget_period must be day or month';
+    if (m.budgetDailyUsd != null && !(m.budgetDailyUsd > 0)) return 'budget_daily_usd is above 0';
+    if (m.budgetMonthlyUsd != null && !(m.budgetMonthlyUsd > 0)) return 'budget_monthly_usd is above 0';
   }
   return null;
 };
@@ -246,26 +246,40 @@ const statusOf = (a: Account, enabled: boolean): Account['status'] => {
   return cooling(a.cooldowns) ? 'cooldown' : 'ready';
 };
 
+type BudgetedSeed = Pick<PoolMember, 'budgetDailyUsd' | 'budgetMonthlyUsd' | 'spends'>;
+
+/**
+ * The router's end for a member at a budget, which the route answers as `budget_until`: among the budgets whose
+ * report, its period not yet over, has reached the budget, the latest period end, since a day's end clears
+ * nothing while the month's budget stands; null while none is reached.
+ */
+const budgetUntilOf = (member: BudgetedSeed, now: number): string | null =>
+  member.spends
+    .filter((s) => {
+      const budget = s.period === 'day' ? member.budgetDailyUsd : member.budgetMonthlyUsd;
+      return budget !== null && s.spentUsd >= budget && s.periodEnd !== null && Date.parse(s.periodEnd) > now;
+    })
+    .reduce<string | null>((latest, s) => (latest === null || Date.parse(s.periodEnd ?? '') > Date.parse(latest) ? s.periodEnd : latest), null);
+
 /**
  * The pool route's reading of a member, in its order: paused or not ready is unavailable, then an account-wide
- * cooldown, then a spend at or past the member's budget inside the period it was reported for, then overage the
- * router observed under a policy that admits none.
+ * cooldown, then a spend at or past either of the member's budgets inside the period it was reported for, then
+ * overage the router observed under a policy that admits none.
  */
-const eligibilityOf = (a: Account | undefined, policy: PoolInput['overagePolicy'], member: Pick<PoolMember, 'budgetUsd' | 'periodEnd' | 'spentUsd'>): MemberEligibility => {
+const eligibilityOf = (a: Account | undefined, policy: PoolInput['overagePolicy'], member: BudgetedSeed): MemberEligibility => {
   if (!a || !a.routingEnabled || FLAGGED.includes(a.status)) return 'unavailable';
   if (a.cooldowns.some((c) => c.scope === 'account' && Date.parse(c.until) > Date.now())) return 'cooldown';
-  const { budgetUsd: budget, periodEnd, spentUsd: spent } = member;
-  if (budget !== null && spent !== null && spent >= budget && periodEnd !== null && Date.parse(periodEnd) > Date.now()) return 'budget';
+  if (budgetUntilOf(member, Date.now()) !== null) return 'budget';
   if (policy === 'never' && a.overage?.inUse) return 'overage';
   return 'eligible';
 };
 
 /**
  * A written member as the route answers it: the kind read off the account, and no spend, since the mock keeps no
- * ledger to price one from. A member sent without a budget has none, and without a period reads a month.
+ * ledger to price one from. A member sent without a budget field has no budget over that period.
  */
 const writtenMember = (m: PoolInput['members'][number], account: Account | undefined, eligible: (member: Omit<PoolMember, 'eligible'>) => MemberEligibility): PoolMember => {
-  const member = { accountId: m.accountId, budgetPeriod: m.budgetPeriod ?? 'month', budgetUsd: m.budgetUsd ?? null, kind: account?.kind ?? 'oauth', periodEnd: null, priority: m.priority, spentUsd: null };
+  const member = { accountId: m.accountId, budgetDailyUsd: m.budgetDailyUsd ?? null, budgetMonthlyUsd: m.budgetMonthlyUsd ?? null, budgetUntil: null, kind: account?.kind ?? 'oauth', priority: m.priority, spends: [] };
   return { ...member, eligible: eligible(member) };
 };
 
@@ -339,7 +353,7 @@ export class MockApi implements Api {
     ...p,
     members: p.members.map((m) => {
       const account = this.accounts.find((a) => a.id === m.accountId);
-      return { ...m, eligible: eligibilityOf(account, p.overagePolicy, m), kind: account?.kind ?? 'oauth' };
+      return { ...m, budgetUntil: budgetUntilOf(m, Date.now()), eligible: eligibilityOf(account, p.overagePolicy, m), kind: account?.kind ?? 'oauth' };
     }),
   }));
   private rules: AlertRule[] = ALERT_RULES.map((r) => ({ ...r }));
@@ -380,10 +394,22 @@ export class MockApi implements Api {
   }
 
   analyticsBudgets() {
-    // Read off the members as they stand, so a budget set on the Pools form shows here; the route orders by pool,
-    // then upstream.
+    // Read off the members as they stand, so a budget set on the Pools form shows here; one row per budgeted
+    // period, and the route orders by pool, then upstream, then the day ahead of the month, which the stable sort
+    // keeps from the order each member's rows are built in.
     const members = this.pools.flatMap((p) =>
-      p.members.flatMap((m) => (m.budgetUsd === null ? [] : [{ accountId: m.accountId, budgetPeriod: m.budgetPeriod, budgetUsd: m.budgetUsd, periodEnd: m.periodEnd, poolId: p.id, spentUsd: m.spentUsd }])),
+      p.members.flatMap((m) =>
+        (
+          [
+            ['day', m.budgetDailyUsd],
+            ['month', m.budgetMonthlyUsd],
+          ] as const
+        ).flatMap(([budgetPeriod, budgetUsd]) => {
+          if (budgetUsd === null) return [];
+          const spend = m.spends.find((s) => s.period === budgetPeriod);
+          return [{ accountId: m.accountId, budgetPeriod, budgetUsd, periodEnd: spend?.periodEnd ?? null, poolId: p.id, spentUsd: spend?.spentUsd ?? null }];
+        }),
+      ),
     );
     return latency(members.sort((a, b) => a.poolId.localeCompare(b.poolId) || a.accountId.localeCompare(b.accountId)));
   }

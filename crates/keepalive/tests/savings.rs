@@ -1598,8 +1598,8 @@ async fn a_key_moved_to_another_pool_is_capped_and_charged_there() {
             &[phoebis_store::MemberWrite {
                 account_id: "a".to_string(),
                 priority: 0,
-                budget_usd: None,
-                budget_period: phoebis_store::BudgetPeriod::Month,
+                budget_daily_usd: None,
+                budget_monthly_usd: None,
             }],
             "test",
         )
@@ -2271,8 +2271,8 @@ async fn a_zero_window_share_cap_holds_a_subscription_probe_and_admits_an_api_ke
     let member = |account_id: &str, priority| phoebis_store::MemberWrite {
         account_id: account_id.to_string(),
         priority,
-        budget_usd: None,
-        budget_period: phoebis_store::BudgetPeriod::Month,
+        budget_daily_usd: None,
+        budget_monthly_usd: None,
     };
     r.h.store
         .set_pool_members("main", &[member("a", 0), member("o", 1)], "test")

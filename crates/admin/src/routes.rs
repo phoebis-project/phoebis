@@ -28,8 +28,7 @@ use phoebis_routing::{
     SEVEN_DAY, SEVEN_DAY_FABLE,
 };
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, BudgetPeriod, CooldownRow, Identity, NewBundle,
-    PoolMember, StoreError,
+    AccountKind, AccountRow, AccountState, CooldownRow, Identity, NewBundle, PoolMember, StoreError,
 };
 use phoebis_transport::response::ResponseHead;
 use serde::Deserialize;
@@ -1439,27 +1438,17 @@ pub(crate) fn failure(status: StatusCode, message: &str) -> Response {
     (status, Json(json!({ "error": message }))).into_response()
 }
 
-/// The one report matching a budgeted member's pool, account and configured period; `None` without a budget
-/// (a spend against no budget is not this member's row) and `None` for a report the member's own period has
-/// moved past (a stale spend belongs to the period it was summed over, not the one now configured).
-pub(crate) fn member_spend_of<'a>(
+/// The reports of one member, any period: what `phoebis_routing::budget_deadline` reads, so the routes answer the
+/// selector's own verdict rather than a copy of its rule.
+pub(crate) fn spend_rows<'a>(
     spends: &'a [MemberSpend],
     pool_id: &str,
     account_id: &str,
-    budget_usd: Option<f64>,
-    budget_period: BudgetPeriod,
-) -> Option<&'a MemberSpend> {
-    budget_usd?;
+) -> Vec<&'a MemberSpend> {
     spends
         .iter()
-        .find(|s| s.pool_id == pool_id && s.account_id == account_id && s.period == budget_period)
-}
-
-/// Whether `spend` is, right now, an obstacle to `budget`: mirrors the selector's own `budget_exhausted`, so a
-/// report outside its own period (superseded by the next one, or not yet begun) never reads as exhaustion here
-/// either.
-pub(crate) fn budget_exceeded(spend: &MemberSpend, budget: f64, now: i64) -> bool {
-    spend.period_start <= now && now < spend.period_end && spend.spent_usd >= budget
+        .filter(|s| s.pool_id == pool_id && s.account_id == account_id)
+        .collect()
 }
 
 /// Tells an absent field from an explicit `null`, so a `PATCH` can clear a nullable column.
@@ -1495,7 +1484,7 @@ fn set_cookie(status: StatusCode, attributes: &str) -> Response {
 
 #[cfg(test)]
 mod tests {
-    use super::{budget_exceeded, member_spend_of, same_authority};
+    use super::{same_authority, spend_rows};
     use phoebis_routing::MemberSpend;
     use phoebis_store::BudgetPeriod;
 
@@ -1510,62 +1499,32 @@ mod tests {
     }
 
     #[test]
-    fn member_spend_of_pairs_by_period_and_skips_an_unbudgeted_member() {
-        let spends = vec![MemberSpend {
+    fn spend_rows_answers_every_period_of_one_member_and_no_other() {
+        let row = |account_id: &str, period| MemberSpend {
             pool_id: "main".into(),
-            account_id: "a".into(),
-            period: BudgetPeriod::Month,
+            account_id: account_id.into(),
+            period,
             period_start: 0,
             period_end: 2_678_400_000,
             spent_usd: 12.5,
             observed_at: 0,
-        }];
-        assert_eq!(
-            member_spend_of(&spends, "main", "a", Some(50.0), BudgetPeriod::Month)
-                .map(|s| s.spent_usd),
-            Some(12.5),
-            "a matching pool, account and period reads the spend"
-        );
-        assert!(
-            member_spend_of(&spends, "main", "a", Some(50.0), BudgetPeriod::Day).is_none(),
-            "a period the member no longer carries reads null, not the old period's spend"
-        );
-        assert!(
-            member_spend_of(&spends, "main", "a", None, BudgetPeriod::Month).is_none(),
-            "a cleared budget reads null even where a same-period row still matches"
-        );
-        assert!(
-            member_spend_of(&spends, "main", "b", Some(50.0), BudgetPeriod::Month).is_none(),
-            "a different account reads null"
-        );
-    }
-
-    #[test]
-    fn budget_exceeded_reads_false_once_the_reports_own_period_has_passed() {
-        let spend = MemberSpend {
-            pool_id: "main".into(),
-            account_id: "a".into(),
-            period: BudgetPeriod::Month,
-            period_start: 0,
-            period_end: 1_000,
-            spent_usd: 50.0,
-            observed_at: 0,
         };
-        assert!(
-            budget_exceeded(&spend, 50.0, 500),
-            "over budget, inside the report's own period"
+        let spends = vec![
+            row("a", BudgetPeriod::Day),
+            row("a", BudgetPeriod::Month),
+            row("b", BudgetPeriod::Month),
+        ];
+        assert_eq!(
+            spend_rows(&spends, "main", "a")
+                .iter()
+                .map(|s| s.period)
+                .collect::<Vec<_>>(),
+            vec![BudgetPeriod::Day, BudgetPeriod::Month],
+            "both of the member's reports, whatever their period"
         );
         assert!(
-            !budget_exceeded(&spend, 50.0, 1_000),
-            "a report the next period has already superseded is not an obstacle, however far over budget it read"
-        );
-        assert!(
-            !budget_exceeded(&spend, 50.0, -1),
-            "a report whose period has not yet begun (a clock skew) is not an obstacle either"
-        );
-        assert!(
-            !budget_exceeded(&spend, 100.0, 500),
-            "under budget, inside the period"
+            spend_rows(&spends, "other", "a").is_empty(),
+            "the same account under another pool reads none"
         );
     }
 }

@@ -70,11 +70,12 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
     (38, V38),
     (39, V39),
     (40, V40),
+    (41, V41),
 ];
 
 /// The newest schema version this build knows how to read. `prepare` refuses a registry stamped past it
 /// rather than skip migrations it does not carry and misread the tables that follow.
-pub const SCHEMA_VERSION: u32 = 40;
+pub const SCHEMA_VERSION: u32 = 41;
 
 const V2: &str = r#"
 CREATE TABLE IF NOT EXISTS account_models (
@@ -594,4 +595,15 @@ INSERT INTO session_memory_next (key_id, key_generation, session_id, agent_id, r
 DROP TABLE session_memory;
 ALTER TABLE session_memory_next RENAME TO session_memory;
 CREATE INDEX session_memory_seen ON session_memory (last_seen);
+"#;
+
+// A member's daily and monthly budgets stand side by side; the one budget with a period moves into the column its
+// period names.
+const V41: &str = r#"
+ALTER TABLE pool_members ADD COLUMN budget_daily_usd REAL;
+ALTER TABLE pool_members ADD COLUMN budget_monthly_usd REAL;
+UPDATE pool_members SET budget_daily_usd = budget_usd WHERE budget_usd IS NOT NULL AND budget_period = 'day';
+UPDATE pool_members SET budget_monthly_usd = budget_usd WHERE budget_usd IS NOT NULL AND budget_period = 'month';
+ALTER TABLE pool_members DROP COLUMN budget_usd;
+ALTER TABLE pool_members DROP COLUMN budget_period;
 "#;

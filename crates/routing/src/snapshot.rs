@@ -192,7 +192,7 @@ impl RegistrySnapshot {
     pub fn budgeted_members(&self) -> impl Iterator<Item = &PoolMember> {
         self.pools()
             .flat_map(|pool| self.members(&pool.id))
-            .filter(|m| m.budget_usd.is_some())
+            .filter(|m| m.budgeted())
     }
     pub fn term(&self, account_id: &str) -> Option<&SubscriptionTerm> {
         self.terms.get(account_id)

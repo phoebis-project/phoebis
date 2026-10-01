@@ -213,9 +213,9 @@ pub struct Purged {
     pub pins: Vec<(PinKey, &'static str)>,
 }
 
-/// A member's spend in its budget period, as the ledger last answered it; memory only. The period it was summed
-/// over travels with it: a row whose `period` is not the member's configured `budget_period`, or whose bounds do
-/// not hold `now`, is no obstacle.
+/// A member's spend in one budgeted period, as the ledger last answered it; memory only. The period it was summed
+/// over travels with it: a row whose `period` the member carries no budget for, or whose bounds do not hold
+/// `now`, is no obstacle.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MemberSpend {
     pub pool_id: String,
@@ -666,8 +666,9 @@ pub struct RoutingState {
     /// The poll's newest extra-usage state per account, loaded at startup from the rows the last run persisted.
     credits: HashMap<String, CreditsState>,
     in_flight: InFlight,
-    /// The ledger's last-answered spend per pool member, by `(pool_id, account_id)`; memory only.
-    member_spend: HashMap<(String, String), MemberSpend>,
+    /// The ledger's last-answered spend per pool member and budgeted period, by `(pool_id, account_id, period)`;
+    /// memory only.
+    member_spend: HashMap<(String, String, BudgetPeriod), MemberSpend>,
     next_epoch: u64,
     overage: HashMap<String, OverageEvidence>,
     pins: HashMap<PinKey, PinRow>,
@@ -1300,29 +1301,40 @@ impl RoutingState {
         self.affinity.clone()
     }
 
-    pub fn member_spend(&self, pool_id: &str, account_id: &str) -> Option<&MemberSpend> {
-        self.member_spend
-            .get(&(pool_id.to_string(), account_id.to_string()))
+    /// The member's spend rows, one per period the ledger reported, in no fixed order.
+    pub fn member_spends_of(
+        &self,
+        pool_id: &str,
+        account_id: &str,
+    ) -> impl Iterator<Item = &MemberSpend> {
+        let (pool_id, account_id) = (pool_id.to_string(), account_id.to_string());
+        [BudgetPeriod::Day, BudgetPeriod::Month]
+            .into_iter()
+            .filter_map(move |period| {
+                self.member_spend
+                    .get(&(pool_id.clone(), account_id.clone(), period))
+            })
     }
 
-    /// The member's spend row, only while it still matches the snapshot's current budget and period: between
-    /// a period edit and the next report, a stored row from the old period answers `None` here instead of the
-    /// analytics reading a figure that no longer applies.
-    pub fn member_spend_live(
+    /// The member's spend rows, each only while the snapshot's member still carries a budget over its period:
+    /// between a budget's removal and the next report, a stored row of that period is left out here instead of
+    /// the analytics reading a figure that no longer applies.
+    pub fn member_spends_live(
         &self,
         snapshot: &RegistrySnapshot,
         pool_id: &str,
         account_id: &str,
-    ) -> Option<&MemberSpend> {
-        let row = self.member_spend(pool_id, account_id)?;
-        member_spend_matches(snapshot, pool_id, account_id, row.period).then_some(row)
+    ) -> Vec<&MemberSpend> {
+        self.member_spends_of(pool_id, account_id)
+            .filter(|row| member_spend_matches(snapshot, pool_id, account_id, row.period))
+            .collect()
     }
 
     /// Replaces the named members' rows, keeping one only while the snapshot's member still carries a budget
-    /// under the period the row was summed over: an edit of the period retires the old spend at once.
+    /// over the period the row was summed over: removing that budget retires the old spend at once.
     pub fn record_member_spend(&mut self, snapshot: &RegistrySnapshot, rows: Vec<MemberSpend>) {
         for row in rows {
-            let key = (row.pool_id.clone(), row.account_id.clone());
+            let key = (row.pool_id.clone(), row.account_id.clone(), row.period);
             if member_spend_matches(snapshot, &row.pool_id, &row.account_id, row.period) {
                 self.member_spend.insert(key, row);
             } else {
@@ -1654,9 +1666,10 @@ impl RoutingState {
             .purge(now, ttl_of, |account_id| {
                 snapshot.account(account_id).map(|a| a.incarnation)
             });
-        self.member_spend.retain(|(pool_id, account_id), row| {
-            member_spend_matches(snapshot, pool_id, account_id, row.period)
-        });
+        self.member_spend
+            .retain(|(pool_id, account_id, period), _| {
+                member_spend_matches(snapshot, pool_id, account_id, *period)
+            });
         Purged {
             affinity,
             cooldowns,
@@ -1677,9 +1690,9 @@ fn relaned(lane: &str, spelling: &str, dated_id: &str) -> String {
     }
 }
 
-/// Whether the snapshot's member for `(pool_id, account_id)` still carries a budget under `period`: a member
-/// the pool no longer has, one with no budget, or one whose `budget_period` has since changed all answer false,
-/// which retires the row rather than obstructing on a period nobody configured any more.
+/// Whether the snapshot's member for `(pool_id, account_id)` still carries a budget over `period`: a member the
+/// pool no longer has, or one with no budget over that period, answers false, which retires the row rather than
+/// obstructing on a period nobody configured any more.
 fn member_spend_matches(
     snapshot: &RegistrySnapshot,
     pool_id: &str,
@@ -1690,19 +1703,23 @@ fn member_spend_matches(
         .members(pool_id)
         .iter()
         .find(|m| m.account_id == account_id)
-        .is_some_and(|m| m.budget_usd.is_some() && m.budget_period == period)
+        .is_some_and(|m| m.budget(period).is_some())
 }
 
-/// The period's end while the member's spend row refuses it at `now`: the row was summed over the member's
-/// configured period, its bounds hold `now`, and its spend reached the budget. `None` for a member with no
-/// budget or a row from another period.
-pub fn budget_deadline(member: &PoolMember, spend: &MemberSpend, now: i64) -> Option<i64> {
-    let budget = member.budget_usd?;
-    (spend.period == member.budget_period
-        && spend.period_start <= now
-        && now < spend.period_end
-        && spend.spent_usd >= budget)
-        .then_some(spend.period_end)
+/// The end the member's budgets hold it to at `now`: among the periods whose budget the matching row (summed over
+/// that period, its bounds holding `now`) has reached, the latest `period_end`, since a day's end clears nothing
+/// while the month's budget stands. `None` for a member with no budget reached.
+pub fn budget_deadline(member: &PoolMember, spends: &[&MemberSpend], now: i64) -> Option<i64> {
+    member
+        .budgets()
+        .filter_map(|(period, budget)| {
+            spends
+                .iter()
+                .find(|s| s.period == period && s.period_start <= now && now < s.period_end)
+                .filter(|s| s.spent_usd >= budget)
+                .map(|s| s.period_end)
+        })
+        .max()
 }
 
 /// The start of the current overage stretch, on first evidence and on every replacement alike: an account out of

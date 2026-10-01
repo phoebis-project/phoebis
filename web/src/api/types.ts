@@ -305,16 +305,16 @@ export type SubagentPlacement = 'by_cohort' | 'by_strategy' | 'with_main';
 
 export interface PoolMember {
   accountId: string;
-  budgetPeriod: BudgetPeriod;
-  /** Null is no budget. */
-  budgetUsd: number | null;
+  /** Null is no budget over that period; a member may carry one, both, or neither. */
+  budgetDailyUsd: number | null;
+  budgetMonthlyUsd: number | null;
+  /** The router's end for a member at a budget: the latest end among the budgets reached; null while none is. */
+  budgetUntil: string | null;
   eligible: MemberEligibility;
   kind: AccountKind;
-  /** The next UTC day or month boundary, null until the ledger reports. */
-  periodEnd: string | null;
   priority: number;
-  /** The member's spend in the current period, null until the ledger reports or while it has no budget. */
-  spentUsd: number | null;
+  /** One report per budgeted period the ledger has summed; empty until it reports. */
+  spends: { period: BudgetPeriod; periodEnd: string | null; spentUsd: number }[];
 }
 
 /** A key on the pool, as the pool route lists it beside the pool. */

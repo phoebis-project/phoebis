@@ -356,7 +356,7 @@ pub enum SelectResult {
 /// wait for.
 enum Obstacle {
     Attempted,
-    /// The member's spend reached its configured budget; `until` is the period's end.
+    /// The member's spend reached one of its budgets; `until` is the latest end among the budgets reached.
     Budget {
         until: i64,
     },
@@ -388,9 +388,9 @@ fn obstacle_name(obstacle: &Obstacle) -> &'static str {
     }
 }
 
-/// The member's spend at or above its configured budget, still inside the bounds the ledger reported it for:
-/// answers the period's end. A row from another period than the member's configured one, or whose bounds do not
-/// hold `now`, is no obstacle, and neither is a member with no budget configured.
+/// The member's spend at or above either of its budgets, still inside the bounds the ledger reported it for:
+/// answers the latest end among the budgets reached. A row of a period the member carries no budget for, or
+/// whose bounds do not hold `now`, is no obstacle, and neither is a member with no budget configured.
 fn budget_exhausted(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
@@ -402,8 +402,10 @@ fn budget_exhausted(
         .members(pool_id)
         .iter()
         .find(|m| m.account_id == account_id)?;
-    let spend = state.member_spend(pool_id, account_id)?;
-    budget_deadline(member, spend, now)
+    let spends = state
+        .member_spends_of(pool_id, account_id)
+        .collect::<Vec<_>>();
+    budget_deadline(member, &spends, now)
 }
 
 /// Whether an account can still serve a request whose allowance is judged in `window`: the model's own weekly

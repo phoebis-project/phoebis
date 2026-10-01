@@ -5882,20 +5882,26 @@ export const FIXTURES: Record<string, Fixture> = {
               "priority": 0,
               "eligible": "eligible",
               "kind": "oauth",
-              "budget_usd": null,
-              "budget_period": "month",
-              "spent_usd": null,
-              "period_end": null
+              "budget_daily_usd": null,
+              "budget_monthly_usd": null,
+              "budget_until": null,
+              "spends": []
             },
             {
               "account_id": "direct",
               "priority": 1,
               "eligible": "eligible",
               "kind": "api_key",
-              "budget_usd": 50,
-              "budget_period": "month",
-              "spent_usd": 0.0036,
-              "period_end": 2678400000
+              "budget_daily_usd": null,
+              "budget_monthly_usd": 50,
+              "budget_until": null,
+              "spends": [
+                {
+                  "period": "month",
+                  "spent_usd": 0.0036,
+                  "period_end": 2678400000
+                }
+              ]
             }
           ],
           "keys": [

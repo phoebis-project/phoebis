@@ -2677,8 +2677,8 @@ fn members() -> Vec<phoebis_store::MemberWrite> {
         .map(|id| phoebis_store::MemberWrite {
             account_id: id.into(),
             priority: 0,
-            budget_usd: None,
-            budget_period: phoebis_store::BudgetPeriod::Month,
+            budget_daily_usd: None,
+            budget_monthly_usd: None,
         })
         .collect()
 }

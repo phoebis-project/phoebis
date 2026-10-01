@@ -1384,8 +1384,8 @@ async function planLegend(theme) {
  * section, on the title and head types and the card width, and where both cards draw figures, their type too, and a
  * placements row is as tall as a cache row; Member budgets against Placements by rung on the title and head types
  * alone, since the two cards sit in different sections' grids, and Member budgets in the Burn section. Every budget
- * row draws its bar; in the mock's story the member past its budget carries the at-budget badge. The router's seed
- * places nothing and budgets no member, so there the tables draw their empty rows.
+ * row draws its bar, one row per budgeted period; in the mock's story the member past its budget carries the
+ * at-budget badge. The router's seed places nothing and budgets no member, so there the tables draw their empty rows.
  */
 async function analyticsTables(theme) {
   const say = (what) => failures.push(`${theme} /analytics: ${what}`);
@@ -1443,7 +1443,7 @@ async function analyticsTables(theme) {
   for (const bar of read.bars.filter((b) => b === null || !/^[0-9]{3,}x4$/.test(b))) say(`a member budget row draws its bar as ${bar}`);
   if (mock) {
     if (!read.placements?.rows) say('the story places requests by rung, yet the placements card draws no figure');
-    if (read.bars.length === 0) say('the story budgets two members, yet the card lists none');
+    if (read.bars.length !== 3) say(`the story budgets three periods across two members, yet the card lists ${read.bars.length}`);
     if (JSON.stringify(read.atBudget.map((r) => r.upstream)) !== JSON.stringify(['evals'])) say(`the at-budget mark sits on ${JSON.stringify(read.atBudget.map((r) => r.upstream))}, not on evals alone`);
   }
 }

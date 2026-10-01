@@ -110,6 +110,7 @@ const CLOSED = {
   live_messages: { '.recent[].attempts[].outcome': d.ATTEMPT_OUTCOME_VALUES, '.recent[].kind': d.REQUEST_KIND_VALUES },
   pools: {
     '[].members[].eligible': d.ELIGIBILITY_VALUES,
+    '[].members[].spends[].period': d.BUDGET_PERIOD_VALUES,
     '[].overagePolicy': d.OVERAGE_POLICY_VALUES,
     '[].status': d.POOL_STATUS_VALUES,
     '[].strategy': d.POOL_STRATEGY_VALUES,

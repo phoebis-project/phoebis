@@ -1497,7 +1497,7 @@ async fn budgets_route_answers_a_members_spend_against_its_budget() {
         "/admin/pools",
         r#"{"id":"main","label":"Main","strategy":"priority",
         "members":[{"account_id":"business","priority":0},
-                   {"account_id":"direct","priority":1,"budget_usd":50.0,"budget_period":"month"}]}"#,
+                   {"account_id":"direct","priority":1,"budget_daily_usd":20.0,"budget_monthly_usd":50.0}]}"#,
         Some(&cookie),
     )
     .await;
@@ -1505,7 +1505,7 @@ async fn budgets_route_answers_a_members_spend_against_its_budget() {
         &parts.app,
         "/admin/pools",
         r#"{"id":"aux","label":"Aux","strategy":"priority",
-        "members":[{"account_id":"direct","priority":0,"budget_usd":5.0,"budget_period":"day"}]}"#,
+        "members":[{"account_id":"direct","priority":0,"budget_daily_usd":5.0}]}"#,
         Some(&cookie),
     )
     .await;
@@ -1528,8 +1528,8 @@ async fn budgets_route_answers_a_members_spend_against_its_budget() {
     let members = budgets["members"].as_array().unwrap();
     assert_eq!(
         members.len(),
-        2,
-        "business's unbudgeted membership in main is excluded; only the two budgeted rows answer: {budgets}"
+        3,
+        "business's unbudgeted membership in main is excluded; one row answers per budgeted period: {budgets}"
     );
     assert_eq!(
         (
@@ -1541,7 +1541,17 @@ async fn budgets_route_answers_a_members_spend_against_its_budget() {
         (Some("aux"), Some("direct"), Some(5.0), Some("day")),
         "sorted by pool id ahead of main"
     );
-    let member = &members[1];
+    assert_eq!(
+        (
+            members[1]["pool_id"].as_str(),
+            members[1]["account_id"].as_str(),
+            members[1]["budget_usd"].as_f64(),
+            members[1]["budget_period"].as_str(),
+        ),
+        (Some("main"), Some("direct"), Some(20.0), Some("day")),
+        "a member with both budgets answers its day ahead of its month"
+    );
+    let member = &members[2];
     assert_eq!(
         (
             member["pool_id"].as_str(),
@@ -1550,7 +1560,7 @@ async fn budgets_route_answers_a_members_spend_against_its_budget() {
             member["budget_period"].as_str(),
         ),
         (Some("main"), Some("direct"), Some(50.0), Some("month")),
-        "a budgeted member names its pool, account, and budget"
+        "a budgeted period names its pool, account, and budget"
     );
     assert_eq!(
         member["period_end"].as_i64(),

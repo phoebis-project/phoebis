@@ -8,7 +8,7 @@ use std::time::Duration;
 use phoebis_bus::{spawn_subscriber, Bus, Subscriber};
 use phoebis_oauth::Clock;
 use phoebis_routing::{RegistrySnapshot, Report, RouterHandle};
-use phoebis_store::{BudgetPeriod, Store};
+use phoebis_store::Store;
 use tokio::sync::{mpsc, oneshot, watch, Mutex};
 
 use crate::assemble::{Assembler, Record};
@@ -17,7 +17,7 @@ use crate::db::{insert_event_in, insert_request_in, insert_samples_in};
 use crate::events::spawn_event_mirror;
 use crate::metrics::Metrics;
 use crate::pricing::{price_attempts, PriceTable, Pricing};
-use crate::query::member_spends;
+use crate::query::{member_spends, BudgetedMember};
 use crate::record::{AttemptRecord, EventRecord, QuotaSampleRecord, RequestRecord};
 use crate::{LedgerDb, LedgerError};
 
@@ -390,11 +390,19 @@ async fn writer(
     let _ = done.send(());
 }
 
-/// Every pool member with a spend budget, from the snapshot: its pool, account, and configured period.
-fn budgeted_members(snapshot: &RegistrySnapshot) -> Vec<(String, String, BudgetPeriod)> {
+/// Every budgeted period of every pool member with a spend budget, from the snapshot: one entry per budget the
+/// member carries.
+fn budgeted_members(snapshot: &RegistrySnapshot) -> Vec<BudgetedMember> {
     snapshot
         .budgeted_members()
-        .map(|m| (m.pool_id.clone(), m.account_id.clone(), m.budget_period))
+        .flat_map(|m| {
+            m.budgets().map(|(period, _)| BudgetedMember {
+                pool_id: m.pool_id.clone(),
+                account_id: m.account_id.clone(),
+                period,
+                metered_only: false,
+            })
+        })
         .collect()
 }
 
@@ -689,8 +697,8 @@ mod tests {
                 &[phoebis_store::MemberWrite {
                     account_id: "a".into(),
                     priority: 0,
-                    budget_usd: Some(10.0),
-                    budget_period: BudgetPeriod::Month,
+                    budget_daily_usd: None,
+                    budget_monthly_usd: Some(10.0),
                 }],
                 "test",
             )

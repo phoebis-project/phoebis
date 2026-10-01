@@ -1,5 +1,5 @@
 import type { AccountPatch, KeyInput, PoolEngineFields, PoolInput } from '@/api/client';
-import { AFFINITY_MODE_VALUES, BUDGET_PERIOD_VALUES, QUOTA_HEADERS_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES } from '@/api/decode';
+import { AFFINITY_MODE_VALUES, QUOTA_HEADERS_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES } from '@/api/decode';
 import type { Account, AffinitySource, ApiKey, ModelRule, ModelRulesMode, PoolKeepalive } from '@/api/types';
 import { fmtInt, toLocalInput } from './format';
 import { checkPattern } from './patterns';
@@ -84,7 +84,7 @@ export const POOL_GROUPS = ['identity', 'members', 'keys', 'models', 'autoMode',
 export type PoolGroup = (typeof POOL_GROUPS)[number];
 
 export interface PoolRefusal {
-  /** The refused control's accessible name; `priority:<id>`, `budget:<id>`, `period:<id>`, `member:<id>` for a member row; `members` for the missing member. */
+  /** The refused control's accessible name; `priority:<id>`, `budget_daily:<id>`, `budget_monthly:<id>`, `member:<id>` for a member row; `members` for the missing member. */
   field: string;
   group: PoolGroup;
   /** The words the control's callout and the footer read. */
@@ -141,9 +141,9 @@ export function poolRefusals(input: PoolInput, accountIds: ReadonlySet<string>):
     const id = m.accountId;
     refuse('members', `member:${id}`, accountIds.has(id) ? null : `${id} is not an upstream the console lists.`);
     refuse('members', `priority:${id}`, whole(m.priority, 0, Number.MAX_SAFE_INTEGER) ? null : 'Priority is a whole number of 0 or more.');
-    // A member written without the budget fields has no budget and a month, as the member write reads it.
-    refuse('members', `budget:${id}`, m.budgetUsd == null ? null : budgetRefusal(String(m.budgetUsd)));
-    refuse('members', `period:${id}`, BUDGET_PERIOD_VALUES.some((period) => period === (m.budgetPeriod ?? 'month')) ? null : 'A budget period is a day or a month.');
+    // A member written without a budget field has no budget over that period, as the member write reads it.
+    refuse('members', `budget_daily:${id}`, m.budgetDailyUsd == null ? null : budgetRefusal(String(m.budgetDailyUsd)));
+    refuse('members', `budget_monthly:${id}`, m.budgetMonthlyUsd == null ? null : budgetRefusal(String(m.budgetMonthlyUsd)));
   }
 
   refuse('models', 'Model rules', modelRulesRefusal(input.modelRules));

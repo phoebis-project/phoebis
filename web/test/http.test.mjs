@@ -167,7 +167,11 @@ test('the placements read sends the range and the key and pool lists, the budget
   assert.deepEqual([...bare.searchParams.keys()], ['range'], 'an empty key or pool list is left off the query');
   assert.deepEqual([budgetsUrl.pathname, budgetsUrl.search], ['/admin/analytics/budgets', ''], 'the budgets route reads no query');
   assert.deepEqual(placements, [{ cacheReadTokens: 1_000, hitShare: 1, hits: 2, placements: 2, promisedTokens: 1_000, rung: 'content' }]);
-  assert.deepEqual(budgets, [{ accountId: 'direct', budgetPeriod: 'month', budgetUsd: 50, periodEnd: new Date(2_678_400_000).toISOString(), poolId: 'main', spentUsd: 0.0036 }]);
+  // Each of the row's fields reads under its camel-case name with the route's value, the end as an ISO instant.
+  const camel = (name) => name.replace(/_(\w)/g, (_, c) => c.toUpperCase());
+  const decoded = (row) => Object.fromEntries(Object.entries(row).map(([k, v]) => [camel(k), k === 'period_end' ? new Date(v).toISOString() : v]));
+  assert.deepEqual(budgets, bodies['/admin/analytics/budgets'].members.map(decoded));
+  assert.deepEqual([budgets[0].accountId, budgets[0].spentUsd, budgets[0].periodEnd], ['direct', 0.0036, new Date(2_678_400_000).toISOString()]);
 });
 
 test('getSession answers null on 401 without running the hook', async () => {
@@ -278,7 +282,7 @@ test('a pool save is one PATCH that carries the members with the settings', asyn
     cacheTtl: { enabled: false, injectWhenAbsent: false, metered: { main: '5m', models: [], subagent: '5m' }, plan: { main: '1h', models: [], subagent: '5m' } },
     keepalive: { coldProbeLimit: 2, costCapUsdPerDay: null, enabled: false, jitterSeconds1h: 30, jitterSeconds5m: 5, leadSeconds1h: 360, leadSeconds5m: 60, maxIdleSeconds: 3_600, maxIdleTicks: 0, netNegativeGraceProbes: 2, retryMaxSeconds: 300, retrySeconds: 30, stopWhenNetNegative: true, warmSubagents: true },
     affinityMode: 'when_cached',
-    members: [{ accountId: 'business', budgetPeriod: 'month', budgetUsd: null, priority: 0 }, { accountId: 'direct', budgetPeriod: 'day', budgetUsd: 12.5, priority: 1 }],
+    members: [{ accountId: 'business', budgetDailyUsd: null, budgetMonthlyUsd: null, priority: 0 }, { accountId: 'direct', budgetDailyUsd: 12.5, budgetMonthlyUsd: 50, priority: 1 }],
     migrateAboveUtilization: null,
     minSharedPrefixTokens: 30_000,
     modelRules: [],
@@ -295,8 +299,8 @@ test('a pool save is one PATCH that carries the members with the settings', asyn
   assert.deepEqual(calls.map((c) => [c.init.method, c.url]), [['PATCH', '/admin/pools/main']], 'a second write could fail after the first landed');
   const body = JSON.parse(calls[0].init.body);
   assert.deepEqual(body.members, [
-    { account_id: 'business', budget_period: 'month', budget_usd: null, priority: 0 },
-    { account_id: 'direct', budget_period: 'day', budget_usd: 12.5, priority: 1 },
+    { account_id: 'business', budget_daily_usd: null, budget_monthly_usd: null, priority: 0 },
+    { account_id: 'direct', budget_daily_usd: 12.5, budget_monthly_usd: 50, priority: 1 },
   ], 'a member without a budget sends null, which clears a stored one');
   assert.equal(body.select_below_utilization, 0.4);
   assert.deepEqual(

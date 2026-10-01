@@ -1509,7 +1509,7 @@ function BudgetTable({ budgets, error, now }: { budgets: MemberBudget[] | null; 
               // A spend reported for a period that has since ended says nothing about the one running now.
               const reached = b.spentUsd !== null && b.spentUsd >= b.budgetUsd && b.periodEnd !== null && Date.parse(b.periodEnd) > now;
               return (
-                <tr key={`${b.poolId}-${b.accountId}`}>
+                <tr key={`${b.poolId}-${b.accountId}-${b.budgetPeriod}`}>
                   <td className="mono">{b.poolId}</td>
                   <td className="mono">
                     <Link to={`/upstreams/${b.accountId}`}>{b.accountId}</Link>

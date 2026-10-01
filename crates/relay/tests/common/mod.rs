@@ -143,8 +143,8 @@ pub fn member(account_id: &str, priority: u32) -> MemberWrite {
     MemberWrite {
         account_id: account_id.into(),
         priority,
-        budget_usd: None,
-        budget_period: phoebis_store::BudgetPeriod::Month,
+        budget_daily_usd: None,
+        budget_monthly_usd: None,
     }
 }
 
@@ -687,8 +687,8 @@ async fn build(
                     .map(|a| MemberWrite {
                         account_id: a.id.to_string(),
                         priority: a.priority,
-                        budget_usd: None,
-                        budget_period: phoebis_store::BudgetPeriod::Month,
+                        budget_daily_usd: None,
+                        budget_monthly_usd: None,
                     })
                     .collect::<Vec<_>>(),
                 "test",

@@ -1,8 +1,8 @@
 use phoebis_routing::{resolve, Candidate, KeyRefusal, RegistrySnapshot, ResolveError};
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, Affinity, AffinitySource, ApiKeyRow, BudgetPeriod,
-    Failover, ModelRule, OveragePolicy, PoolMember, PoolRow, QuotaHeaders,
-    RegistryLoad, RulesMode, Shedding, Strategy,
+    AccountKind, AccountRow, AccountState, Affinity, AffinitySource, ApiKeyRow,
+    Failover, ModelRule, OveragePolicy, PoolMember, PoolRow, QuotaHeaders, RegistryLoad, RulesMode,
+    Shedding, Strategy,
 };
 
 const DIGEST_KEY: [u8; 32] = [7; 32];
@@ -183,43 +183,43 @@ fn snapshot() -> RegistrySnapshot {
                 pool_id: "main".into(),
                 account_id: "a".into(),
                 priority: 0,
-                budget_usd: None,
-                budget_period: BudgetPeriod::Month,
+                budget_daily_usd: None,
+                budget_monthly_usd: None,
             },
             PoolMember {
                 pool_id: "main".into(),
                 account_id: "b".into(),
                 priority: 1,
-                budget_usd: None,
-                budget_period: BudgetPeriod::Month,
+                budget_daily_usd: None,
+                budget_monthly_usd: None,
             },
             PoolMember {
                 pool_id: "main".into(),
                 account_id: "f".into(),
                 priority: 0,
-                budget_usd: None,
-                budget_period: BudgetPeriod::Month,
+                budget_daily_usd: None,
+                budget_monthly_usd: None,
             },
             PoolMember {
                 pool_id: "mixed".into(),
                 account_id: "a".into(),
                 priority: 0,
-                budget_usd: None,
-                budget_period: BudgetPeriod::Month,
+                budget_daily_usd: None,
+                budget_monthly_usd: None,
             },
             PoolMember {
                 pool_id: "mixed".into(),
                 account_id: "oauth-member".into(),
                 priority: 1,
-                budget_usd: None,
-                budget_period: BudgetPeriod::Month,
+                budget_daily_usd: None,
+                budget_monthly_usd: None,
             },
             PoolMember {
                 pool_id: "mixed".into(),
                 account_id: "g".into(),
                 priority: 2,
-                budget_usd: None,
-                budget_period: BudgetPeriod::Month,
+                budget_daily_usd: None,
+                budget_monthly_usd: None,
             },
         ],
         pools: vec![
