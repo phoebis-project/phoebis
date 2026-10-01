@@ -226,9 +226,10 @@ refused `400` with the error code `body_shape` before anything reaches the upstr
 A conversation is identified by its session header: the session id the client sends names it.
 A turn that follows its own conversation's previous answer within milliseconds waits on its session id,
 at most five milliseconds, for that answer's report to reach the map.
-A key's `affinity_source` fixes one of these rungs instead of walking the whole ladder, and a request that
-does not fit a fixed rung has no identity and no pin. A new session id whose messages continue another conversation of
-the same key keeps its own identity, and is recorded as a fork of that conversation at the depth where the two part.
+A key's
+`affinity_source` fixes one of these rungs instead of walking the whole ladder, and a request that does not fit a fixed
+rung has no identity and no pin. A new session id whose messages continue another conversation of the same key keeps its
+own identity, and is recorded as a fork of that conversation at the depth where the two part.
 
 ## Model rules
 
@@ -294,8 +295,9 @@ and occupies no slot, so its pin or the strategy decides it. It creates no pin, 
 a pin follows it past the cap and the move rules, and one without lands by the strategy and leaves the agent's next
 message to be placed under the cap. An entry's warmth lasts the marker's TTL on its tier; when every marker of the
 request carried one TTL and the response reports its cache writes at the other alone, the reported TTL is the lifetime
-of the boundaries that response wrote, a tier the response only read keeps its marker's lifetime, and a request with
-markers at both TTLs keeps each marker's.
+of the message boundaries that response wrote, and of the static boundaries only when the response read nothing from
+the cache, since the usage names no tier; a static tier the response read from and a tier it only read keep their
+marker's lifetime, and a request with markers at both TTLs keeps each marker's.
 
 The eligible set starts from every account that can serve the canonical model: enabled, paired or keyed, not
 `reauth_required` or `funding_required`, off cooldown, and not already tried by this request. A request sent fast is

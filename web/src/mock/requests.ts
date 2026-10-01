@@ -663,16 +663,27 @@ function seedDrawerBranches() {
 /**
  * The hold a request waited through is its own fact, as the router writes it at completion: the one its serving
  * attempt followed, and on the newest exhausted desktop turn a hold that ran its pool's bound out with every
- * upstream still at its cap, answered without a dispatch, so the log shows a hold no attempt names. Nothing is
+ * upstream still at its cap, answered without a dispatch, so the log shows a hold no attempt names. The oldest
+ * exhausted single-attempt turn on a lane with a second upstream failed over from its attempt and then waited on
+ * that upstream until the bound ran out, so its one attempt predates the hold and names none of it. Nothing is
  * drawn, so every seeded stream keeps its values.
  */
 function seedHolds() {
   for (const r of REQUESTS) r.held = [...r.attempts].reverse().find((a) => a.selection?.cohortHold)?.selection?.cohortHold ?? null;
+  const boundOf = (r: RequestLog) => (poolById.get(r.poolId ?? '')?.retryInPlaceSeconds ?? 10) * 1_000;
   const atCap = REQUESTS.find((r) => r.keyId === 'desktop' && r.kind === 'inference' && r.status === 429 && !REQUEST_EVENTS.has(r.id));
-  if (!atCap) return;
-  const waitedOn = LANES.find((l) => l.keyId === atCap.keyId)?.accountIds.slice(0, 1) ?? [];
-  const heldMs = (poolById.get(atCap.poolId ?? '')?.retryInPlaceSeconds ?? 10) * 1_000;
-  Object.assign(atCap, { accountId: null, attempts: [], costUsd: 0, durationMs: heldMs, errorCode: 'accounts_at_cap', held: { cohort: null, heldMs, waitedOn } });
+  if (atCap) {
+    const waitedOn = LANES.find((l) => l.keyId === atCap.keyId)?.accountIds.slice(0, 1) ?? [];
+    const heldMs = boundOf(atCap);
+    Object.assign(atCap, { accountId: null, attempts: [], costUsd: 0, durationMs: heldMs, errorCode: 'accounts_at_cap', held: { cohort: null, heldMs, waitedOn } });
+  }
+  const laneOf = (r: RequestLog) => LANES.find((l) => l.keyId === r.keyId && l.poolId === r.poolId);
+  const afterAttempt = [...REQUESTS].reverse().find((r) => r !== atCap && r.kind === 'inference' && r.status === 429 && r.attempts.length === 1 && (laneOf(r)?.accountIds.length ?? 0) > 1 && !REQUEST_EVENTS.has(r.id));
+  if (!afterAttempt) return;
+  const failed = afterAttempt.attempts[0];
+  const waitedOn = laneOf(afterAttempt)?.accountIds.filter((id) => id !== failed.accountId).slice(0, 1) ?? [];
+  const heldMs = boundOf(afterAttempt);
+  Object.assign(afterAttempt, { accountId: null, durationMs: (afterAttempt.durationMs ?? 0) + heldMs, errorCode: 'accounts_at_cap', held: { cohort: null, heldMs, waitedOn } });
 }
 
 addStoryEvents();

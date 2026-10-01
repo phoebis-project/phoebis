@@ -2380,7 +2380,7 @@ async fn a_budget_on_a_subscription_member_is_kept_and_a_null_budget_is_accepted
         ((None, None), (None, Some(5.0))),
         "the aux pool stores no budget on the subscription member and 5.0 on the API-key member: {pools}"
     );
-    for (method, path, body, budgets) in [
+    for (method, path, body, expected) in [
         (
             "PATCH",
             "/admin/pools/main",
@@ -2406,7 +2406,7 @@ async fn a_budget_on_a_subscription_member_is_kept_and_a_null_budget_is_accepted
                 member["budget_daily_usd"].as_f64(),
                 member["budget_monthly_usd"].as_f64(),
             ),
-            budgets,
+            expected,
             "{method} {path} keeps the subscription member's budget: {member}"
         );
         assert!(unspent(&member), "{method} {path}: {member}");

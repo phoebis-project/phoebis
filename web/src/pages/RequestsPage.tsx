@@ -557,8 +557,10 @@ function RequestDrawer({ request, requestId, now, onClose }: { now: number; onCl
                 </li>
               ))}
             </ol>
-            {/* A hold that ended with nothing dispatched has no attempt whose trace could name it. */}
-            {r.attempts.length === 0 && r.held && (
+            {/* One builder sums every hold into the row and into the trace of the attempt placed after them, so the two
+                agree only when an attempt followed every wait; a hold that ended with nothing dispatched, or one after
+                an attempt that failed over, is named by no trace. */}
+            {r.held && !r.attempts.some((a) => a.selection?.cohortHold?.heldMs === r.held?.heldMs) && (
               <p className="attempt__hold">
                 held {fmtMs(r.held.heldMs)} on {heldOn(r.held)}
               </p>

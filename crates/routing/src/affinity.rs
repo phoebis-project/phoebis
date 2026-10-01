@@ -225,14 +225,13 @@ impl AffinityMap {
             _ => None,
         };
         let written = written.filter(|w| report.uniform_ttl_ms.is_some_and(|t| t != *w));
-        // The usage names no tier, so the static prefix counts as written only when the cache read stops short of
-        // the size the relay estimated for it: a turn that read its static prefix and wrote its tail leaves the
-        // static boundaries at their marker's lifetime.
+        // The usage names no tier and the static sizes are the relay's estimate from the body's bytes, so only a
+        // response that read nothing proves it wrote the static prefix: an estimate must never grant warmth. A static
+        // prefix the response partly rewrote keeps its marker's lifetime, as one it only read does.
         let read = report
             .prefix_tokens
             .saturating_sub(five.unwrap_or(0) + hour.unwrap_or(0));
-        let static_written = written
-            .filter(|_| read == 0 || report.static_sizes.last().is_some_and(|size| read < *size));
+        let static_written = written.filter(|_| read == 0);
         let message_ttl_ms = report.message_ttl_ms.map(|t| written.unwrap_or(t));
         let static_ttl_ms = report.static_ttl_ms.map(|t| static_written.unwrap_or(t));
         let message_confirmed = report.cache_touched && message_ttl_ms.is_some();
@@ -908,8 +907,19 @@ mod tests {
         );
         assert_eq!(
             recorded_ttls(hour, (hour, hour), (Some(200), Some(0)), 100),
-            (300_000, 300_000),
-            "a read short of the static prefix leaves part of it written, so the static tier takes the split's TTL"
+            (3_600_000, 300_000),
+            "any read leaves the static tier at its marker's lifetime; the written tail takes the split's TTL"
+        );
+    }
+
+    #[test]
+    fn a_read_below_the_estimated_static_size_never_gives_the_static_tier_the_splits_ttl() {
+        let five = Some(300_000);
+        assert_eq!(
+            recorded_ttls(five, (five, five), (Some(0), Some(200)), 100),
+            (300_000, 3_600_000),
+            "the static size is an estimate that can run past the real prefix, so a read short of it proves no static \
+             write: the static boundaries keep five minutes and the message boundary records the hour"
         );
     }
 }

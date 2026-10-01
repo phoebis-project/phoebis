@@ -3193,6 +3193,35 @@ if (failoverRow) {
     const waited = strategyHold.attempts[0].selection.cohortHold.waitedOn;
     results.push({ name: '/requests drawer names the last account a hold with no cohort waited on and the wait', ok: drawn.head.includes('fresh placement') && drawn.head.includes(`held 1.3 s on ${waited[waited.length - 1]} before placing`), missing: [strategyHold.id, drawn.head] });
   }
+  // An attempt placed after every hold names them in its trace, so the drawer draws no line of the row's own.
+  const servedAfterHold = requests.find((r) => r.held !== null && r.attempts.length === 1 && r.attempts[0].selection?.cohortHold?.heldMs === r.held.heldMs);
+  results.push({ name: 'fixture: a request served after its hold', ok: servedAfterHold !== undefined, missing: [] });
+  if (servedAfterHold) {
+    await m.navigate(`/requests/${servedAfterHold.id}`);
+    await m.settle(300);
+    results.push({
+      name: "/requests drawer of a request served after its hold names the hold in the attempt's trace alone",
+      ok: m.container.querySelector('.drawer .attempt__hold') === null && (m.container.querySelector('.drawer .selection-trace')?.textContent ?? '').includes('before placing'),
+      missing: [servedAfterHold.id, m.container.querySelector('.drawer .attempt__hold')?.textContent?.trim() ?? 'no hold line'],
+    });
+  }
+  // An attempt that failed over before the request waited out its bound predates the hold, so its trace names none
+  // of it and the drawer reads the row's own beside the attempt.
+  const heldAfter = requests.find((r) => r.held !== null && r.attempts.length > 0 && r.attempts.every((a) => a.selection?.cohortHold?.heldMs !== r.held.heldMs));
+  results.push({ name: 'fixture: a request held after an attempt that failed over, answered without a second dispatch', ok: heldAfter !== undefined && heldAfter.errorCode === 'accounts_at_cap', missing: [String(heldAfter?.id)] });
+  if (heldAfter) {
+    await m.navigate(`/requests/${heldAfter.id}`);
+    await m.settle(300);
+    const line = m.container.querySelector('.drawer .attempt__hold')?.textContent?.trim() ?? 'no hold line';
+    const on = heldAfter.held.cohort ?? heldAfter.held.waitedOn.at(-1);
+    const { heldMs } = heldAfter.held;
+    const wait = heldMs >= 1000 ? `${(heldMs / 1000).toFixed(heldMs >= 10_000 ? 0 : 1)} s` : `${Math.round(heldMs)} ms`;
+    results.push({
+      name: '/requests drawer of a request held after an attempt names the hold its attempt never followed under Attempts',
+      ok: line === `held ${wait} on ${on}` && m.container.querySelectorAll('.drawer .attempt').length === heldAfter.attempts.length,
+      missing: [heldAfter.id, line],
+    });
+  }
   // With nothing dispatched, no attempt's trace can name the hold, so the drawer reads the row's own.
   const unplaced = requests.find((r) => r.held !== null && r.attempts.length === 0);
   results.push({ name: 'fixture: a request held with nothing dispatched', ok: unplaced !== undefined, missing: [] });

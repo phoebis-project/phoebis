@@ -523,6 +523,7 @@ export function Menu({ items, label = 'Actions' }: { items: { danger?: boolean; 
   const [placement, setPlacement] = useState<MenuPlacement>(IN_FLOW);
   const ref = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   // Where the trigger stood when the list was placed, so a fixed layer can tell whether the page has moved under it.
   const anchor = useRef<DOMRect | null>(null);
   useEffect(() => {
@@ -557,11 +558,31 @@ export function Menu({ items, label = 'Actions' }: { items: { danger?: boolean; 
   // another row. A scroll is read by whether it moved the trigger: the scroll that brought the row into view can
   // report after the click that opened the list, and a scroll inside the list or in another pane moves nothing.
   const floating = open && placement.kind === 'float';
+  const moved = () => {
+    const at = ref.current?.getBoundingClientRect();
+    return !at || !anchor.current || at.top !== anchor.current.top || at.left !== anchor.current.left;
+  };
+  // A refresh that re-sorts the rows moves the trigger with no scroll or resize to report it, so every render of the
+  // open layer reads the trigger by the same rule.
+  useLayoutEffect(() => {
+    if (floating && moved()) setOpen(false);
+  });
+  // The portal draws a floating list after every other control on the page, where Tab from the trigger never reaches
+  // it, so focus moves into the list and back to the trigger when it closes. Focus already elsewhere by then stays.
+  useEffect(() => {
+    if (!floating) return;
+    const list = listRef.current;
+    const trigger = triggerRef.current;
+    list?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus({ preventScroll: true });
+    return () => {
+      const at = document.activeElement;
+      if (!at || at === document.body || list?.contains(at)) trigger?.focus({ preventScroll: true });
+    };
+  }, [floating]);
   useEffect(() => {
     if (!floating) return;
     const onScroll = () => {
-      const at = ref.current?.getBoundingClientRect();
-      if (!at || !anchor.current || at.top !== anchor.current.top || at.left !== anchor.current.left) setOpen(false);
+      if (moved()) setOpen(false);
     };
     const onResize = () => setOpen(false);
     window.addEventListener('scroll', onScroll, true);
@@ -598,7 +619,7 @@ export function Menu({ items, label = 'Actions' }: { items: { danger?: boolean; 
   );
   return (
     <div className="menu" ref={ref}>
-      <button type="button" className="menu__trigger" aria-haspopup="menu" aria-expanded={open} aria-label={label} onClick={() => setOpen((v) => !v)}>
+      <button type="button" ref={triggerRef} className="menu__trigger" aria-haspopup="menu" aria-expanded={open} aria-label={label} onClick={() => setOpen((v) => !v)}>
         <span aria-hidden>···</span>
       </button>
       {/* A modal dialog sits in the top layer, so a layer portalled to the body would draw under it. */}
