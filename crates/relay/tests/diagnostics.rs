@@ -760,7 +760,7 @@ async fn a_strip_retry_spends_no_slot_of_the_budget_so_a_one_attempt_pool_still_
 }
 
 #[tokio::test]
-async fn count_tokens_gets_neither_the_member_nor_the_beta_under_the_option() {
+async fn count_tokens_gets_neither_the_member_nor_the_beta_under_the_switch() {
     let up = FakeUpstream::start(vec![
         Rule {
             path_prefix: "/v1/messages/count_tokens".into(),

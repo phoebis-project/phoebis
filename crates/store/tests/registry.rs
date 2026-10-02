@@ -819,6 +819,15 @@ fn a_store_left_at_42_is_carried_to_43_with_every_unset_diagnostics_switch_off()
     let path = dir.path().join("router.sqlite");
     let store = Store::open(&path, &key).unwrap();
     store.insert_pool(&pool("main"), "test").unwrap();
+    store
+        .insert_pool(
+            &PoolRow {
+                cache_diagnostics: true,
+                ..pool("on")
+            },
+            "test",
+        )
+        .unwrap();
     drop(store);
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
@@ -834,8 +843,8 @@ fn a_store_left_at_42_is_carried_to_43_with_every_unset_diagnostics_switch_off()
             .iter()
             .map(|p| (p.id.as_str(), p.cache_diagnostics))
             .collect::<Vec<_>>(),
-        [("main", false)],
-        "the unset switch reads off"
+        [("main", false), ("on", true)],
+        "the unset switch reads off and a set one keeps its state"
     );
 }
 
