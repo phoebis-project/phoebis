@@ -5154,6 +5154,50 @@ m.unmount();
   localStorage.removeItem('phoebis.mockEmpty');
 }
 
+// Every registry list and ledger read answers nothing under the switch, so each view meets the store a fresh
+// installation has. A view settled with a skeleton still drawn waits for ever, and a needle only an empty store draws
+// proves the switch reached the view's reads: its empty sentence, or the zero it counts where it has none. Settings
+// reads no list and no ledger, so it can only show it still draws whole.
+{
+  localStorage.setItem('phoebis.mockEmpty', '1');
+  const zeroTiles = (c) => [...c.querySelectorAll('.stat-grid .stat__value')].map((v) => v.textContent);
+  const views = [
+    ['/', (c, t) => t.includes('No subscription accounts') && t.includes('No requests'), 'No subscription accounts, No requests'],
+    ['/observe', (c, t) => t.includes('Nothing matches'), 'Nothing matches'],
+    ['/quota', (c, t) => t.includes('0 credentials') && c.querySelector('.qcard') === null, '0 credentials, no account card'],
+    ['/pools', (c) => c.querySelector('.pool-grid')?.childElementCount === 0 && zeroTiles(c).join(' ') === '0 0 0 0 $0.00', 'no pool card, tiles 0 0 0 0 $0.00'],
+    ['/keys', (c, t) => t.includes('No keys yet'), 'No keys yet'],
+    ['/models', (c, t) => t.includes("No keys: a key's processed rules show here once one exists."), 'No keys: ...'],
+    ['/requests', (c, t) => t.includes('No requests match'), 'No requests match'],
+    ['/analytics', (c, t) => t.includes('No traffic in this range.'), 'No traffic in this range.'],
+    ['/sessions', (c, t) => t.includes('No live sessions'), 'No live sessions'],
+    ['/alerts', (c, t) => t.includes('No events.') && t.includes('No session events.'), 'No events., No session events.'],
+    ['/settings', (c, t) => t.includes('Pricing'), 'Pricing'],
+  ];
+  for (const [path, drawn, needle] of views) {
+    const before = problems.length;
+    const page = await mount(path);
+    await page.settle(1200);
+    const skeleton = page.container.querySelector('.skeleton') !== null;
+    const raised = problems.slice(before);
+    const shown = drawn(page.container, page.text());
+    const name = path === '/settings' ? 'empty store: /settings settles with no skeleton and no error' : `empty store: ${path} settles on its empty state with no skeleton and no error`;
+    results.push({ name, ok: !skeleton && raised.length === 0 && shown, missing: [...(skeleton ? ['a .skeleton is still drawn'] : []), ...(shown ? [] : [`no ${needle}`]), ...raised] });
+    page.unmount();
+  }
+  const keys = await mount('/keys');
+  await keys.settle(400);
+  const empty = keys.container.querySelector('.empty');
+  const create = [...(empty?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Create key');
+  const titled = empty?.querySelector('.empty__title')?.textContent === 'No keys yet';
+  create?.click();
+  await keys.settle(250);
+  const opened = [...keys.container.querySelectorAll('dialog[open]')].some((d) => d.textContent?.includes('Create key'));
+  results.push({ name: '/keys an empty registry says no key exists and offers Create key', ok: titled && !!create && opened, missing: [`title ${titled}`, `button ${!!create}`, `dialog ${opened}`] });
+  keys.unmount();
+  localStorage.removeItem('phoebis.mockEmpty');
+}
+
 {
   // The settings answer feeds the shell's version line as well as the page, so a decoder that threw on the date would
   // blank both.

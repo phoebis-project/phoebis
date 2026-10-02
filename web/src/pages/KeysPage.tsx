@@ -6,7 +6,7 @@ import { useChartInk } from '@/components/charts/useChartInk';
 import { PatternEditor, useCatalogSuggestions } from '@/components/PatternEditor';
 import { Tile } from '@/components/ui/Tile';
 import { IconInfo, IconPlus, IconWarning } from '@/components/ui/icons';
-import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, ErrorState, Field, GroupedDialog, Input, Menu, PageLink, SearchInput, Segmented, Select, Skeleton, Toast, Toggle, type DialogGroup } from '@/components/ui/primitives';
+import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, EmptyState, ErrorState, Field, GroupedDialog, Input, Menu, PageLink, SearchInput, Segmented, Select, Skeleton, Toast, Toggle, type DialogGroup } from '@/components/ui/primitives';
 import { clock } from '@/lib/clock';
 import { fmtAbsolute, fmtCompact, fmtDate, fmtInt, fmtRelative, fmtUsd } from '@/lib/format';
 import { KEY_GROUPS, keyFormOf, keyInputOf, keyRefusals, type AutoModeOverride, type CaptureMode, type KeyGroup } from '@/lib/forms';
@@ -271,6 +271,23 @@ export function KeysPage() {
                         )}
                       </tr>
                     ))}
+                {keys.data?.length === 0 && (
+                  // A filter that matches no key keeps the table bare; only a registry with no key at all says so.
+                  <tr>
+                    <td colSpan={8}>
+                      <EmptyState
+                        title="No keys yet"
+                        action={
+                          canMutate && (
+                            <Button size="sm" onClick={() => setDialog({ key: null })}>
+                              Create key
+                            </Button>
+                          )
+                        }
+                      />
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>

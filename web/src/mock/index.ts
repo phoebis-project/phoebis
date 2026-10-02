@@ -2,7 +2,7 @@ import type { AccountPatch, Api, CreateKeyInput, KeyInput, PoolInput } from '@/a
 import { AFFINITY_MODE_VALUES, AFFINITY_SOURCE_VALUES, QUOTA_HEADERS_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES, decodeLiveDelta, decodeLiveSnapshot, decodeSettings } from '@/api/decode';
 import { ApiError, catalogUnion, slug } from '@/api/http';
 import type {
-  Account, AccountCatalog, AccountInput, AlertDeliveryTest, AlertEvent, AlertKind, AlertRule, AlertRuleInput, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, Delivery, KeyModels, LifecycleDelivery, LifecyclePage, LiveEvent, MemberEligibility, ModelEvent,
+  Account, AccountCatalog, AccountInput, AlertDeliveryTest, AlertEvent, AlertKind, AlertRule, AlertRuleInput, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, Delivery, KeepaliveOverview, KeyModels, LifecycleDelivery, LifecyclePage, LiveEvent, MemberEligibility, ModelEvent,
   ModelRule, ModelsState, PairingInput, PairingPreview, PairingSession, Pool, PoolMember, RequestDetail, RequestLog, RequestPage, RequestQuery, Role, RuleCooldown, Session, SessionInfo, Settings, Subscription,
 } from '@/api/types';
 import { urlHost } from '@/lib/format';
@@ -203,7 +203,10 @@ const previewedRole = (): Role | null => {
   }
 };
 
-/** Set to stand in for a fresh installation, whose alert lists are empty until an operator writes a rule. */
+/**
+ * Set to stand in for a fresh installation: every registry list and every ledger read answers nothing, while the
+ * seeded store stays in memory for the next read without the switch.
+ */
 const EMPTY_STORE_KEY = 'phoebis.mockEmpty';
 const emptyStore = (): boolean => {
   try {
@@ -211,6 +214,30 @@ const emptyStore = (): boolean => {
   } catch {
     return false;
   }
+};
+
+/** The keepalive overview of a router with no session and no probe yet. */
+const EMPTY_KEEPALIVE_OVERVIEW: KeepaliveOverview = {
+  agents: { busy: 0, idle: 0, parked: 0 },
+  costToday: [],
+  expiredBetweenTurns24h: 0,
+  netSaved7dUsd: 0,
+  probes24h: { failed: 0, migrated: 0, ok: 0, skipped: 0 },
+  sessions: 0,
+  sessionsWithCompanion: 0,
+};
+
+type WireMetric = { quality: string; series: number[]; value: number | null };
+/** The feed's metrics that need a finished request to read anything, which an idle router answers as null. */
+const NEEDS_FINISHED = new Set(['error_rate', 'ttfb_p50', 'ttfb_p95', 'ttfb_p99']);
+/**
+ * A feed tick as a router with no traffic measures it. The simulator's ticks read its own requests, which an empty
+ * store would never have run.
+ */
+const idleTick = (tick: unknown) => {
+  const t = tick as { metrics: Record<string, WireMetric> };
+  const metrics = Object.fromEntries(Object.entries(t.metrics).map(([key, m]) => [key, { ...m, series: m.series.map(() => 0), value: NEEDS_FINISHED.has(key) ? null : 0 }]));
+  return { ...t, metrics };
 };
 
 function fromCallbackUrl(url: string): { code: string; state: string } | null {
@@ -395,6 +422,7 @@ export class MockApi implements Api {
   }
 
   analyticsBudgets() {
+    if (emptyStore()) return latency([]);
     // Read off the members as they stand, so a budget set on the Pools form shows here; one row per budgeted
     // period, and the route orders by pool, then account, then the day ahead of the month, which the stable sort
     // keeps from the order each member's rows are built in.
@@ -416,7 +444,7 @@ export class MockApi implements Api {
   }
 
   analyticsPlacements(query: Pick<AnalyticsQuery, 'from' | 'keyIds' | 'poolIds' | 'to'>) {
-    return latency(placementsOf(REQUESTS, query));
+    return latency(placementsOf(emptyStore() ? [] : REQUESTS, query));
   }
 
   async cancelPairing(pairingId: string) {
@@ -600,19 +628,19 @@ export class MockApi implements Api {
   }
 
   getAnalyticsBreakdown(query: AnalyticsQuery) {
-    return latency(breakdownOf(ALL_ROLLUPS, query));
+    return latency(breakdownOf(emptyStore() ? [] : ALL_ROLLUPS, query));
   }
 
   getAnalyticsBurn(range: Pick<AnalyticsQuery, 'from' | 'to'>, groupBy: BurnGroup) {
-    return latency(burnOf(ALL_ROLLUPS, range, groupBy));
+    return latency(burnOf(emptyStore() ? [] : ALL_ROLLUPS, range, groupBy));
   }
 
   getAnalyticsRewrites(range: Pick<AnalyticsQuery, 'from' | 'to'>) {
-    return latency(rewritesOf(ACCOUNT_ROLLUPS, range));
+    return latency(rewritesOf(emptyStore() ? [] : ACCOUNT_ROLLUPS, range));
   }
 
   getAnalyticsSeries(query: AnalyticsQuery) {
-    return latency(seriesOf(ALL_ROLLUPS, query));
+    return latency(seriesOf(emptyStore() ? [] : ALL_ROLLUPS, query));
   }
 
   async getCapturedBodies(requestId: string) {
@@ -623,7 +651,7 @@ export class MockApi implements Api {
   }
 
   getKeepaliveOverview() {
-    return latency(KEEPALIVE_OVERVIEW);
+    return latency(emptyStore() ? EMPTY_KEEPALIVE_OVERVIEW : KEEPALIVE_OVERVIEW);
   }
 
   /** Every live model-scoped cooldown across the accounts, folded to the shape the two model routes answer. */
@@ -636,6 +664,8 @@ export class MockApi implements Api {
   }
 
   async getKeyModels(keyId: string): Promise<KeyModels> {
+    // A store without a key processes no rule for any key, so the answer carries none and no pool.
+    if (emptyStore()) return latency({ keyId, longContextTwins: false, modelRulesMode: 'extend', poolId: '', rules: [] });
     const key = this.keys.find((k) => k.id === keyId);
     if (!key) throw new ApiError(404, 'key not found', null);
     const pool = this.pools.find((p) => p.id === key.poolId);
@@ -653,6 +683,7 @@ export class MockApi implements Api {
   }
 
   getModelsState(): Promise<ModelsState> {
+    if (emptyStore()) return latency({ cooldowns: [], permits: [], rejections: [] });
     const byModel = new Map<string, RuleCooldown[]>();
     for (const row of this.modelCooldowns()) {
       const model = row.scope.slice(MODEL_SCOPE_PREFIX.length);
@@ -663,7 +694,9 @@ export class MockApi implements Api {
   }
 
   getOverview() {
-    const last24h = REQUESTS.filter((r) => Date.parse(r.at) >= NOW - DAY);
+    const empty = emptyStore();
+    // The route answers its 24 hourly buckets over an empty ledger too, at zero, so each spark draws a flat line.
+    const last24h = empty ? [] : REQUESTS.filter((r) => Date.parse(r.at) >= NOW - DAY);
     const hourlyMap = new Map<string, { at: string; cost: number; errors: number; requests: number; tokens: number }>();
     for (let i = 23; i >= 0; i -= 1) {
       const at = iso(Math.floor((NOW - i * 3_600_000) / 3_600_000) * 3_600_000);
@@ -691,9 +724,9 @@ export class MockApi implements Api {
     const top = [...errorCodes.entries()].sort((a, b) => b[1] - a[1])[0];
     return latency({
       // Counted off the pools, so the dashboard and the Pools view cannot disagree on the router's pins.
-      activePins: this.pools.reduce((n, p) => n + p.activePins, 0),
+      activePins: empty ? 0 : this.pools.reduce((n, p) => n + p.activePins, 0),
       cost24h: cost,
-      errorRate24h: last24h.length ? last24h.filter((r) => r.status !== 200).length / last24h.length : 0,
+      errorRate24h: last24h.length ? last24h.filter((r) => r.status !== 200).length / last24h.length : null,
       hourly: [...hourlyMap.values()],
       requests24h: last24h.length,
       tokens24h: tokens,
@@ -703,11 +736,11 @@ export class MockApi implements Api {
   }
 
   getQuotaHistory(accountId: string) {
-    return latency(QUOTA_HISTORY.filter((h) => h.accountId === accountId));
+    return latency(emptyStore() ? [] : QUOTA_HISTORY.filter((h) => h.accountId === accountId));
   }
 
   getRequest(id: string): Promise<RequestDetail | null> {
-    const request = requestById.get(id);
+    const request = emptyStore() ? undefined : requestById.get(id);
     return latency(request ? { events: REQUEST_EVENTS.get(id) ?? [], request } : null);
   }
 
@@ -722,13 +755,14 @@ export class MockApi implements Api {
   }
 
   listAccountRollups(from: string, to: string) {
+    if (emptyStore()) return latency([]);
     const fromMs = Date.parse(from);
     const toMs = Date.parse(to);
     return latency(ACCOUNT_ROLLUPS.filter((r) => Date.parse(r.hour) >= fromMs && Date.parse(r.hour) <= toMs));
   }
 
   listAccounts() {
-    return latency(this.accounts);
+    return latency(emptyStore() ? [] : this.accounts);
   }
 
   listAlertDeliveries(eventId: string): Promise<Delivery[]> {
@@ -749,10 +783,11 @@ export class MockApi implements Api {
   }
 
   listCatalog() {
-    return latency(CATALOG);
+    return latency(emptyStore() ? [] : CATALOG);
   }
 
   async listCatalogOf(accountIds: string[]): Promise<CatalogModel[]> {
+    if (emptyStore()) return latency([]);
     const fetched = await Promise.all(
       accountIds.map(async (id) => {
         try {
@@ -766,11 +801,11 @@ export class MockApi implements Api {
   }
 
   listKeepaliveRecipes() {
-    return latency(RECIPES);
+    return latency(emptyStore() ? [] : RECIPES);
   }
 
   listKeys() {
-    return latency(this.keys);
+    return latency(emptyStore() ? [] : this.keys);
   }
 
   listLifecycleDeliveries(kind?: AlertKind, cursor?: string): Promise<LifecyclePage> {
@@ -785,14 +820,15 @@ export class MockApi implements Api {
   }
 
   listPools() {
-    return latency(this.pools.map((p) => this.poolView(p)));
+    return latency(emptyStore() ? [] : this.pools.map((p) => this.poolView(p)));
   }
 
   listQuotaSnapshots() {
-    return latency(QUOTA_SNAPSHOTS);
+    return latency(emptyStore() ? [] : QUOTA_SNAPSHOTS);
   }
 
   listRequests(query: RequestQuery = {}): Promise<RequestPage> {
+    if (emptyStore()) return latency({ nextCursor: null, requests: [] });
     const live = new Map(this.keys.map((k) => [k.id, Date.parse(k.createdAt)]));
     const matched = REQUESTS.filter((r) => matchesQuery(r, query, live)).sort((a, b) => Date.parse(b.at) - Date.parse(a.at) || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
     const after = query.cursor ? matched.filter((r) => isAfterCursor(r, query.cursor!)) : matched;
@@ -804,7 +840,7 @@ export class MockApi implements Api {
   }
 
   listSessions() {
-    return latency(this.sessions);
+    return latency(emptyStore() ? [] : this.sessions);
   }
 
   login(secret: string): Promise<SessionInfo> {
@@ -894,10 +930,16 @@ export class MockApi implements Api {
   }
 
   subscribeLive(handler: (event: LiveEvent) => void) {
+    // An empty store runs no request, so its feed is the snapshot without rows and the idle ticks after it.
+    const empty = emptyStore();
     // Through the decoders the socket's frames take, so every page reads the feed the way the served console does.
     return liveFeed().subscribe((frame) => {
-      if (frame.kind === 'snapshot') return handler({ kind: 'snapshot', snapshot: decodeLiveSnapshot(frame.snapshot) });
-      const delta = decodeLiveDelta(frame.delta);
+      if (frame.kind === 'snapshot') {
+        const snapshot = empty ? { ...frame.snapshot, in_flight: [], recent: [], tick: idleTick(frame.snapshot.tick) } : frame.snapshot;
+        return handler({ kind: 'snapshot', snapshot: decodeLiveSnapshot(snapshot) });
+      }
+      if (empty && frame.delta.type !== 'tick') return;
+      const delta = decodeLiveDelta(empty ? { ...frame.delta, tick: idleTick(frame.delta.tick) } : frame.delta);
       if (delta) handler({ delta, kind: 'delta' });
     });
   }
