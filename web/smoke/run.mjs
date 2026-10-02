@@ -5585,6 +5585,27 @@ m.unmount();
   });
   failed.unmount();
 }
+{
+  failNextCall('getSettings', '/admin/settings', 'the configuration store is unavailable');
+  const failed = await mount('/settings');
+  const pricing = () => [...failed.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Pricing');
+  const error = pricing()?.querySelector('.empty--error');
+  const retry = [...(error?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Try again');
+  results.push({
+    name: "/settings a failed read draws Pricing's error state with Try again",
+    ok: error?.querySelector('.empty__title')?.textContent === 'Could not load the price table' && (error?.textContent ?? '').includes('the configuration store is unavailable') && retry !== undefined,
+    missing: [pricing()?.textContent?.slice(0, 160) ?? 'no Pricing card'],
+  });
+  retry?.click();
+  await failed.settle(400);
+  const models = [...(pricing()?.querySelectorAll('tbody tr') ?? [])].map((tr) => tr.children[0]?.textContent?.trim());
+  results.push({
+    name: "/settings Pricing's Try again reads the price table",
+    ok: models.includes('claude-fable-5-1') && pricing()?.querySelector('.empty--error') === null,
+    missing: models,
+  });
+  failed.unmount();
+}
 
 m = await mount('/settings');
 expect('/settings', m.text(), ['Downstream client configuration', 'Pricing', 'Appearance', 'Access', 'About', 'Theme', 'Time format', 'Admin secret', 'Viewer secret', 'except captured bodies, live previews, question text, and webhook URLs beyond their host', 'Preview as viewer', 'claude-fable-5-1', 'ANTHROPIC_BASE_URL=https://router.example.com', 'CLAUDE_CODE_OAUTH_TOKEN=<key>', '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1', 'CLAUDE_CODE_GATEWAY_HINT_HEADERS=1', 'DISABLE_TELEMETRY=1', 'CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1', 'Inference is served on 127.0.0.1:8080', 'Version', 'Profile', 'Metrics listener', 'Ledger path', 'Pricing path', 'Storage path', "prints this router's"]);
@@ -5989,7 +6010,7 @@ for (const [path, absent, present, heading] of [
   ['/keys', ['Create key'], ['Lifetime cost by key'], 'Keys'],
   ['/pools', ['Create pool', 'Delete', 'Edit'], ['Pace, subscription accounts first'], 'Pools'],
   ['/sessions', ['Release'], ['Cache warming'], 'Sessions'],
-  ['/settings', ['Add model'], ['Keepalive', 'Pricing'], 'Settings'],
+  ['/settings', ['Add model'], ['About', 'Pricing'], 'Settings'],
 ]) {
   await m.navigate(path);
   const t = m.text();

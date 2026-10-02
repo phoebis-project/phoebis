@@ -1317,7 +1317,7 @@ async function keysPageMenus(theme) {
 /**
  * The Settings cards in the order an operator uses them, the client block first with its own snippet, and the
  * listener hint spaced from the Optional group's heading as the block is spaced from the hint, so the heading never
- * sits against the hint's last line.
+ * sits against the hint's last line. The hint reads at the subtitle's size, the size the page's other hints take.
  */
 async function settingsOrder(theme) {
   const say = (what) => failures.push(`${theme} /settings: ${what}`);
@@ -1328,10 +1328,14 @@ async function settingsOrder(theme) {
     const pre = document.querySelector('pre.snippet');
     const hint = pre?.nextElementSibling?.matches('p.snippet__hint') ? pre.nextElementSibling : null;
     const group = hint?.nextElementSibling?.matches('.snippet-group') ? hint.nextElementSibling : null;
+    const subtitle = cards[0]?.querySelector('.card__subtitle');
     return {
       above: pre && hint ? Math.round((hint.getBoundingClientRect().top - pre.getBoundingClientRect().bottom) * 10) / 10 : null,
       below: hint && group ? Math.round((group.getBoundingClientRect().top - hint.getBoundingClientRect().bottom) * 10) / 10 : null,
       blockFirst: Boolean(pre && cards[0]?.contains(pre)),
+      hintLines: hint ? Math.round(hint.getBoundingClientRect().height / parseFloat(getComputedStyle(hint).lineHeight)) : null,
+      hintSize: hint ? getComputedStyle(hint).fontSize : null,
+      subtitleSize: subtitle ? getComputedStyle(subtitle).fontSize : null,
       titles: cards.map((c) => c.querySelector('.card__title')?.textContent?.trim() ?? ''),
     };
   });
@@ -1341,6 +1345,7 @@ async function settingsOrder(theme) {
   if (!read.blockFirst) say("the client block's snippet is not in the first card");
   if (read.above === null || read.below === null) say('no listener hint between the client block and the Optional group');
   else if (read.above < 8 || read.below !== read.above) say(`the hint sits ${read.above} px under the block and ${read.below} px over the Optional group, not one gap on both sides`);
+  if (read.hintSize !== null && read.hintSize !== read.subtitleSize) say(`the hint reads at ${read.hintSize}, the subtitle at ${read.subtitleSize}`);
 }
 
 /**

@@ -145,7 +145,7 @@ export function SettingsPage() {
         </dl>
       </Card>
 
-      <PricingCard canMutate={canMutate} error={settings.error} pricing={s ? s.pricing : null} onToast={setToast} />
+      <PricingCard canMutate={canMutate} error={settings.error} pricing={s ? s.pricing : null} onRetry={settings.reload} onToast={setToast} />
 
       <Card title="Appearance" subtitle="Stored in this browser only.">
         <div className="setting-row">
@@ -242,7 +242,7 @@ export function SettingsPage() {
   );
 }
 
-function PricingCard({ canMutate, error: failed, onToast, pricing: served }: { canMutate: boolean; error: string | null; onToast: (message: string) => void; pricing: Pricing | null }) {
+function PricingCard({ canMutate, error: failed, onRetry, onToast, pricing: served }: { canMutate: boolean; error: string | null; onRetry: () => void; onToast: (message: string) => void; pricing: Pricing | null }) {
   const [applied, setApplied] = useState<Pricing | null>(null);
   const [draft, setDraft] = useState<PriceDraft[] | null>(null);
   const [editing, setEditing] = useState<{ field: PriceField; id: string } | null>(null);
@@ -382,7 +382,7 @@ function PricingCard({ canMutate, error: failed, onToast, pricing: served }: { c
             ) : (
               <tr>
                 <td colSpan={6}>
-                  {failed ? <ErrorState title="Could not load the price table" body={failed} /> : <Skeleton />}
+                  {failed ? <ErrorState title="Could not load the price table" body={failed} action={<Button size="sm" onClick={onRetry}>Try again</Button>} /> : <Skeleton />}
                 </td>
               </tr>
             )}
