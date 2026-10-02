@@ -314,7 +314,7 @@ m = await mount('/observe');
 m.unmount();
 
 m = await mount('/quota');
-expect('/quota', m.text(), ['7 credentials', '3 need attention', 'Refresh all', 'Plan', 'Trial', 'Ends in', 'Extra usage', '$12.34 / $50.00', '5h', '7d', 'Fable', 'n/a', 'not reported', 'resets in', 'Quota windows', 'Credential', '5-hour limit', '7-day limit', 'Fable 7-day limit', 'used ·', 'Weekly', '5-hour', 'Today', 'current window', 'Retry', 'not yet polled', 'polled', 'rate limited', 'backing off since']);
+expect('/quota', m.text(), ['7 accounts', '3 need attention', 'Refresh all', 'Plan', 'Trial', 'Ends in', 'Extra usage', '$12.34 / $50.00', '5h', '7d', 'Fable', 'n/a', 'not reported', 'resets in', 'Quota windows', 'Account', '5-hour limit', '7-day limit', 'Fable 7-day limit', 'left ·', 'Weekly', '5-hour', 'Today', 'current window', 'Retry', 'not yet polled', 'polled', 'rate limited', 'backing off since']);
 {
   const byLabel = new Map((await api.listAccounts()).map((a) => [a.label, a.id]));
   await emailLines('/quota each card names its email on hover, and nothing for one without', [...m.container.querySelectorAll('.qcard__name')].map((n) => [byLabel.get(n.textContent?.trim() ?? '') ?? '', n.getAttribute('title')]));
@@ -362,7 +362,7 @@ expect('/quota', m.text(), ['7 credentials', '3 need attention', 'Refresh all', 
     const chip = [...m.container.querySelectorAll('.qcard__windows .qchip')].find((c) => c.textContent?.trim() === label);
     return [...(chip?.classList ?? [])].find((n) => n.startsWith('qchip--')) ?? 'missing';
   };
-  results.push({ name: '/quota tone breaks at 50% and 20% remaining', ok: toneOf('7d59%') === 'qchip--good' && toneOf('5h38%') === 'qchip--warn' && toneOf('7d12%') === 'qchip--low', missing: [toneOf('7d59%'), toneOf('5h38%'), toneOf('7d12%')] });
+  results.push({ name: '/quota tone breaks at 50% and 20% remaining', ok: toneOf('7d59% left') === 'qchip--good' && toneOf('5h38% left') === 'qchip--warn' && toneOf('7d12% left') === 'qchip--low', missing: [toneOf('7d59% left'), toneOf('5h38% left'), toneOf('7d12% left')] });
   const resets = [...m.container.querySelectorAll('.qcard__windows .qwin__reset')].length;
   results.push({ name: '/quota every chip has a reset label beside it', ok: resets === [...m.container.querySelectorAll('.qcard__windows .qchip')].length, missing: [String(resets)] });
   const aligned = chipRows.map((g) => g.querySelectorAll(':scope > .qwin__chip').length);
@@ -374,8 +374,53 @@ expect('/quota', m.text(), ['7 credentials', '3 need attention', 'Refresh all', 
   const toned = [...m.container.querySelectorAll('.tl-chip__pct')].map((c) => [...c.classList].find((n) => n.startsWith('tl-chip__pct--') || n === 'muted') ?? 'none');
   results.push({ name: '/quota timeline chips tone the percentage only', ok: toned.length > 0 && toned.every((t) => ['muted', 'tl-chip__pct--good', 'tl-chip__pct--low', 'tl-chip__pct--warn'].includes(t)), missing: [...new Set(toned)] });
   const live = [...m.container.querySelectorAll('.lane__bar--live .lane__label')].map((e) => e.textContent ?? '');
-  results.push({ name: '/quota timeline labels the current window with used share and reset', ok: live.length >= 3 && live.every((l) => / used · /.test(l)), missing: live.slice(0, 3) });
+  results.push({ name: '/quota timeline labels the current window with the share left and its reset', ok: live.length >= 3 && live.every((l) => / left · /.test(l)), missing: live.slice(0, 3) });
   results.push({ name: '/quota timeline draws one now line for the whole chart', ok: m.container.querySelectorAll('.timeline__now').length === 1, missing: [String(m.container.querySelectorAll('.timeline__now').length)] });
+  const shares = [...m.container.querySelectorAll('.qcard__windows .qchip__pct, .tl-chip__pct')].map((e) => e.textContent?.trim() ?? '');
+  const liveShares = live.filter((l) => l.includes('%'));
+  const off = [...shares.filter((t) => t !== 'n/a' && t !== 'reset'), ...liveShares].filter((t) => !/\d+% left/.test(t));
+  results.push({ name: '/quota every window share reads N% left', ok: shares.some((t) => /\d+% left/.test(t)) && liveShares.length > 0 && off.length === 0, missing: [...new Set(off)] });
+  const axis = m.container.querySelector('.timeline__axis-label')?.textContent?.trim() ?? 'no axis label';
+  results.push({ name: "/quota the timeline's axis reads Account", ok: axis === 'Account', missing: [axis] });
+}
+{
+  // The story's team was last read two days ago, before its 5-hour window reset, so that window has no reading since.
+  const team = [...m.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === 'team');
+  const [chip, meter, reset] = [...(team?.querySelector('.qcard__windows')?.children ?? [])];
+  const lane = [...m.container.querySelectorAll('.lane')].find((l) => l.querySelector('.lane__name')?.textContent?.trim() === 'team');
+  const laneChip = lane?.querySelector('.tl-chip');
+  const absolute = /^[A-Z][a-z]{2} \d{2}, \d{4}/;
+  const drawn = {
+    chip: [chip?.textContent?.trim(), chip?.classList.contains('qchip--absent'), chip?.getAttribute('title')],
+    meter: meter?.classList.contains('meter--absent'),
+    reset: [reset?.textContent?.trim(), reset?.classList.contains('muted'), absolute.test(reset?.getAttribute('title') ?? '')],
+    lane: [laneChip?.textContent?.trim(), laneChip?.querySelector('.tl-chip__pct')?.classList.contains('muted'), (laneChip?.getAttribute('title') ?? '').endsWith(', no reading since')],
+  };
+  const wanted = {
+    chip: ['5h', true, '5-hour: expired, no reading since the reset'],
+    meter: true,
+    reset: ['expired 2d 0h ago, no reading since', true, true],
+    lane: ['5-hour limit reset', true, true],
+  };
+  // The 5-hour zoom draws the lanes on the 5-hour windows, where team's current bar sits past the reset it last read.
+  const zoom = (label) => [...m.container.querySelectorAll('.timeline button')].find((b) => b.textContent?.trim() === label)?.click();
+  zoom('5-hour');
+  await m.settle();
+  const bar = [...m.container.querySelectorAll('.lane')].find((l) => l.querySelector('.lane__name')?.textContent?.trim() === 'team')?.querySelector('.lane__bar--live');
+  const barLabel = bar?.querySelector('.lane__label')?.textContent?.trim() ?? 'no label';
+  const barTitle = bar?.getAttribute('title') ?? 'no bar';
+  zoom('Weekly');
+  await m.settle();
+  results.push({
+    name: '/quota an expired window reads expired with no share and an empty meter',
+    ok: JSON.stringify(drawn) === JSON.stringify(wanted),
+    missing: [JSON.stringify(drawn)],
+  });
+  results.push({
+    name: "/quota an expired window's current bar carries its reset stamp and no share",
+    ok: bar !== undefined && !barLabel.includes('%') && !barLabel.includes('left') && barLabel.length > 0 && !barTitle.includes('%'),
+    missing: [barLabel, barTitle],
+  });
 }
 {
   // The mock's blocks read the same before and after a refresh, so the check watches the calls the button makes and
@@ -406,7 +451,7 @@ expect('/quota', m.text(), ['7 credentials', '3 need attention', 'Refresh all', 
 {
   // The mock registry holds seven, so the plural is what this can read; the singular is asserted by its absence.
   const count = m.container.querySelector('.quota-meta span')?.textContent ?? 'no count';
-  results.push({ name: '/quota gives the credential count the noun that number takes', ok: count === '7 credentials', missing: [count] });
+  results.push({ name: '/quota gives the account count the noun that number takes', ok: count === '7 accounts', missing: [count] });
   // The route answers from the account's hold or its cache inside either, so the button says when it reads the endpoint.
   const hints = [...m.container.querySelectorAll('.pill')].filter((b) => ['Refresh', 'Refresh all'].includes(b.textContent?.trim() ?? '')).map((b) => b.getAttribute('title') ?? '');
   results.push({ name: '/quota Refresh says it reads the endpoint unless a backoff or a young snapshot holds', ok: hints.length > 1 && hints.every((t) => t === 'reads the endpoint now unless the account is backing off or a snapshot younger than 60 seconds is cached'), missing: [...new Set(hints)] });
@@ -5183,7 +5228,7 @@ m.unmount();
   const views = [
     ['/', (c, t) => t.includes('No subscription accounts') && t.includes('No requests'), 'No subscription accounts, No requests'],
     ['/observe', (c, t) => t.includes('Nothing matches'), 'Nothing matches'],
-    ['/quota', (c, t) => t.includes('0 credentials') && c.querySelector('.qcard') === null, '0 credentials, no account card'],
+    ['/quota', (c, t) => t.includes('0 accounts') && c.querySelector('.qcard') === null, '0 accounts, no account card'],
     ['/pools', (c) => c.querySelector('.pool-grid')?.childElementCount === 0 && zeroTiles(c).join(' ') === '0 0 0 0 $0.00', 'no pool card, tiles 0 0 0 0 $0.00'],
     ['/keys', (c, t) => t.includes('No keys yet'), 'No keys yet'],
     ['/models', (c, t) => t.includes("No keys: a key's processed rules show here once one exists."), 'No keys: ...'],

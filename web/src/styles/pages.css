@@ -436,12 +436,6 @@
   padding: 0 14px 12px;
 }
 
-.qcard__skel-wrap {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-
 .qcard__skel {
   display: flex;
   flex-direction: column;
@@ -502,17 +496,19 @@
  * One line per window: chip, meter, reset. Both outer columns are fixed rather
  * than content-sized, so the three meters start and end on one vertical line
  * whatever the numbers say, and so neighbouring cards agree with each other.
- * The widths are the measured maxima of the widest content each column can
- * ever hold ("Fable 100%" at 81px, "resets in 4h 59m" at 92px) plus slack for
- * a fallback font.
+ * The widths are the widest content each column holds in DejaVu Sans, the
+ * widest fallback the console meets ("Fable 100% left" at 121px, "resets in
+ * 23h 59m" at 109px, "expired 2d 0h ago," at 113px). The meter takes what is
+ * left, 43px in a card at 1280px, and narrows further in a narrower card
+ * rather than push the reset past its edge.
  */
 .qcard__windows {
-  --qwin-chip: 84px;
-  --qwin-reset: 96px;
+  --qwin-chip: 122px;
+  --qwin-reset: 114px;
 
   display: grid;
-  grid-template-columns: var(--qwin-chip) minmax(40px, 1fr) var(--qwin-reset);
-  gap: 9px 10px;
+  grid-template-columns: var(--qwin-chip) minmax(0, 1fr) var(--qwin-reset);
+  gap: 9px 6px;
   align-items: center;
 }
 
@@ -564,6 +560,11 @@
   white-space: nowrap;
 }
 
+/* An expired window's line is longer than the column at any card width, so it wraps. */
+.qwin__reset.muted {
+  white-space: normal;
+}
+
 /* Timeline */
 .timeline {
   padding: 18px 20px;
@@ -613,10 +614,11 @@
 
 /* Chart: one date ruler and one raster, with every credential a row under it. */
 .timeline__chart {
-  /* The chip width is the measured maximum of the longest label this column can
-     hold ("Fable 7-day limit 100%" at 124px) plus slack; the left column is two
-     of those side by side. */
-  --tl-chip: 132px;
+  /* The chip width is the longest label this column holds in DejaVu Sans, the
+     widest fallback the console meets ("Fable 7-day limit 100% left" at 173px).
+     Two of those side by side would leave the fourteen day cells too narrow for
+     their dates at 1280px, so the chips stack and the left column keeps its width. */
+  --tl-chip: 176px;
   --tl-left: 300px;
   --tl-gap: 14px;
 

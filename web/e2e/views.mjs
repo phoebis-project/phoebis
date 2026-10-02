@@ -1363,6 +1363,46 @@ async function quotaPollLines(theme) {
 }
 
 /**
+ * The Quota chips with their shares read "left" against the fixed columns that hold them: every card's window chip and
+ * reset cell and every timeline chip fits its column on one line, the window grid stays inside its card, and an expired
+ * window's longer reset cell may wrap but never runs past its column. The router's seed has no subscription account,
+ * so only the story's pass has chips to read.
+ */
+async function quotaChips(theme) {
+  const say = (what) => failures.push(`${theme} /quota: ${what}`);
+  const read = await page.evaluate(() => {
+    const lines = (el) => {
+      const box = el.getBoundingClientRect();
+      const line = parseFloat(getComputedStyle(el).lineHeight);
+      return Math.round(box.height / line);
+    };
+    const cell = (el) => ({ client: el.clientWidth, lines: lines(el), scroll: el.scrollWidth, text: el.textContent?.trim() ?? '' });
+    return {
+      chips: [...document.querySelectorAll('.qcard__windows .qchip')].map((chip) => ({ ...cell(chip), parts: [...chip.children].map(lines) })),
+      grids: [...document.querySelectorAll('.qcard')].filter((c) => c.querySelector('.qcard__windows')).map((c) => ({ card: Math.round(c.getBoundingClientRect().right), grid: Math.round(c.querySelector('.qcard__windows').getBoundingClientRect().right), name: c.querySelector('.qcard__name')?.textContent?.trim() ?? '' })),
+      lanes: [...document.querySelectorAll('.tl-chip')].map(cell),
+      resets: [...document.querySelectorAll('.qcard__windows .qwin__reset')].map(cell),
+    };
+  });
+  measurements.push(`${theme} /quota chips ${JSON.stringify({ chips: read.chips.map((c) => [c.text, c.client]), lanes: read.lanes.map((c) => [c.text, c.client]), resets: read.resets.map((c) => [c.text, c.client, c.lines]) })}`);
+  if (mock && (read.chips.length === 0 || read.lanes.length === 0)) say('the story has subscription windows, yet no chip is drawn');
+  for (const chip of [...read.chips, ...read.lanes]) {
+    if (chip.scroll > chip.client) say(`the chip ${JSON.stringify(chip.text)} needs ${chip.scroll}px of its ${chip.client}px`);
+  }
+  for (const chip of read.chips) {
+    if (chip.parts.some((n) => n > 1)) say(`the chip ${JSON.stringify(chip.text)} wraps inside its ${chip.client}px`);
+  }
+  for (const reset of read.resets) {
+    if (reset.scroll > reset.client) say(`the reset cell ${JSON.stringify(reset.text)} needs ${reset.scroll}px of its ${reset.client}px`);
+    if (!reset.text.startsWith('expired ') && reset.lines > 1) say(`the reset cell ${JSON.stringify(reset.text)} wraps`);
+  }
+  for (const card of read.grids) {
+    if (card.grid > card.card) say(`${card.name}'s windows run past its card`);
+  }
+  if (mock && !read.resets.some((r) => /^expired .+, no reading since$/.test(r.text))) say("the story's team holds an expired window, yet no reset cell reads it");
+}
+
+/**
  * Both quota donuts against a registry with no subscription account: the seed has one Anthropic-key account, so
  * the cards have no window to draw and must say so instead of drawing a ring that reads as exhausted.
  */
@@ -2408,6 +2448,7 @@ try {
       }
       if (view.path === '/alerts') await alertRuleDialog(theme);
       if (view.path === '/quota') {
+        await quotaChips(theme);
         await quotaPollLines(theme);
         await fastLane(theme, view.path);
       }

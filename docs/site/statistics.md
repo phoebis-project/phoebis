@@ -242,20 +242,22 @@ that fails after its 200 head keeps that status, so a finished request with an e
 
 ### Quota
 
-A card per account shows one row per rate-limit window, filterable by tabs for all accounts, OAuth accounts, and
-Anthropic-key accounts. Each OAuth card's footer says when the poll last asked the endpoint and how it answered, when
+The header counts the accounts and those needing attention. A card per account shows one row per rate-limit window,
+filterable by tabs for all accounts, OAuth accounts, and Anthropic-key accounts, and every window share on the view
+reads as the share left. Each OAuth card's footer says when the poll last asked the endpoint and how it answered, when
 the snapshot it shows was read, and, while the account backs off, since when and when the next attempt comes; Refresh
 reads the endpoint now unless the account is backing off or a fresh snapshot is cached. A card draws the windows the
 ledger sampled in the last day, or the ones the router holds when the ledger has none, whatever the last read said, and
 shows an error in their place only when it holds none; the page counts a card that shows an error, whose last poll
-failed, or that is backing off as needing attention. Each card names the account's plan with the date its subscription
-started and, for an account on the Claude Code trial, when the trial ends; an account marked cancelled says when its
-plan ends, in the serious tone inside a week. A card whose account served a fast-mode request shows a Fast mode line:
-the share of the fast lane's input and output buckets used, as the last answer reported them, with the reset, a bucket
-past its reset reading as refilled, and a chip while the account's fast lane cools, naming the reason (rate limited, or
-credits unavailable) and when it lifts; the account page's Usage card shows the same line and chip. Below the cards, a
-reset timeline lays the same windows across a calendar, zoomable between a two-week weekly view and a three-day 5-hour
-view.
+failed, or that is backing off as needing attention. A window whose reset has passed with no reading since reads as
+expired, with no share and an empty meter, until the next reading. Each card names the account's plan with the date its
+subscription started and, for an account on the Claude Code trial, when the trial ends; an account marked cancelled says
+when its plan ends, in the serious tone inside a week. A card whose account served a fast-mode request shows a Fast mode
+line: the share of the fast lane's input and output buckets used, as the last answer reported them, with the reset, a
+bucket past its reset reading as refilled, and a chip while the account's fast lane cools, naming the reason (rate
+limited, or credits unavailable) and when it lifts; the account page's Usage card shows the same line and chip. Below
+the cards, a reset timeline lays the same windows across a calendar, zoomable between a two-week weekly view and a
+three-day 5-hour view.
 
 ![The Quota view: the cards per account and the reset timeline](assets/quota-light.png#only-light)
 ![The Quota view: the cards per account and the reset timeline](assets/quota-dark.png#only-dark)

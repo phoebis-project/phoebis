@@ -8,7 +8,7 @@ import { IconChevronLeft, IconChevronRight, IconRefresh, IconServer, IconUser, I
 import { Badge, ErrorState, Meter, Pill, Segmented, Select, Skeleton, Tabs } from '@/components/ui/primitives';
 import { fmtAbsolute, fmtCredits, fmtDate, fmtDayShort, fmtEndsIn, fmtPct, fmtRelative, fmtShortTime, upperFirst } from '@/lib/format';
 import { useAsync, useNow } from '@/lib/hooks';
-import { STATUS_LABEL, STATUS_TONE, isSubscription, meterTone, remainingOf, soonestReset, windowOf } from '@/lib/quota';
+import { STATUS_LABEL, STATUS_TONE, isExpired, isSubscription, meterTone, remainingOf, soonestReset, windowOf } from '@/lib/quota';
 
 type Tab = 'all' | 'api_key' | 'oauth';
 type Sort = 'default' | 'soonest';
@@ -56,7 +56,7 @@ export function QuotaPage() {
       <div className="page-head">
         <div>
           <p className="page-head__meta quota-meta">
-            <span>{total} {total === 1 ? 'credential' : 'credentials'}</span>
+            <span>{total} {total === 1 ? 'account' : 'accounts'}</span>
             {attention > 0 && (
               <>
                 <span className="quota-meta__sep" aria-hidden />
@@ -267,8 +267,8 @@ function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshe
   );
 }
 
-/** The short name and the remaining share, in the meter's own color. */
-function WindowChip({ name, window: w, className }: { className: string; name: string; window: RateLimitWindow | null }) {
+/** The short name and the remaining share, in the meter's own color; an expired window has no share to give. */
+function WindowChip({ name, window: w, className, now }: { className: string; name: string; now: number; window: RateLimitWindow | null }) {
   if (!w) {
     return (
       <span className={`${className} qchip qchip--absent`} title={`This plan reports no ${name} window`}>
@@ -277,11 +277,18 @@ function WindowChip({ name, window: w, className }: { className: string; name: s
       </span>
     );
   }
+  if (isExpired(w, now)) {
+    return (
+      <span className={`${className} qchip qchip--absent`} title={`${w.label}: expired, no reading since the reset`}>
+        <span className="qchip__name">{name}</span>
+      </span>
+    );
+  }
   const remaining = remainingOf(w);
   return (
-    <span className={`${className} qchip qchip--${meterTone(remaining)}`} title={`${w.label}: ${fmtPct(remaining)} of the window left`}>
+    <span className={`${className} qchip qchip--${meterTone(remaining)}`} title={`${w.label}: ${fmtPct(remaining)} left`}>
       <span className="qchip__name">{name}</span>
-      <span className="qchip__pct num">{fmtPct(remaining)}</span>
+      <span className="qchip__pct num">{fmtPct(remaining)} left</span>
     </span>
   );
 }
@@ -292,19 +299,25 @@ function WindowChip({ name, window: w, className }: { className: string; name: s
  * every row of every card hands its meter the same starting x.
  */
 function QuotaWindow({ name, window: w, now, soon }: { name: string; now: number; soon: boolean; window: RateLimitWindow | null }) {
+  // The last reading describes a window that has since reset, so its share says nothing until the next one.
+  const live = w && !isExpired(w, now) ? w : null;
   return (
     <>
-      <WindowChip name={name} window={w} className="qwin__chip" />
-      {w ? (
-        <Meter value={remainingOf(w)} tone={meterTone(remainingOf(w))} thin label={`${w.label} remaining`} />
+      <WindowChip name={name} window={w} now={now} className="qwin__chip" />
+      {live ? (
+        <Meter value={remainingOf(live)} tone={meterTone(remainingOf(live))} thin label={`${live.label} remaining`} />
       ) : (
         <div className="meter meter--thin meter--absent" role="presentation">
           <div className="meter__fill" style={{ width: '100%' }} />
         </div>
       )}
-      {w ? (
-        <span className={`qwin__reset ${soon ? 'is-soon' : ''}`} title={`${fmtAbsolute(w.resetsAt)}${soon ? ', the first of this account to recover' : ''}`}>
-          resets {fmtRelative(w.resetsAt, now)}
+      {live ? (
+        <span className={`qwin__reset ${soon ? 'is-soon' : ''}`} title={`${fmtAbsolute(live.resetsAt)}${soon ? ', the first of this account to recover' : ''}`}>
+          resets {fmtRelative(live.resetsAt, now)}
+        </span>
+      ) : w ? (
+        <span className="qwin__reset muted" title={fmtAbsolute(w.resetsAt)}>
+          expired {fmtRelative(w.resetsAt, now)}, no reading since
         </span>
       ) : (
         <span className="qwin__reset muted">not reported</span>
@@ -330,7 +343,7 @@ function spanFor(mode: Mode, offset: number, now: number) {
 }
 
 /** A muted pill: what the window is, and how much of it is left in the meter tone. */
-function LaneChip({ label, window: w }: { label: string; window: RateLimitWindow | null }) {
+function LaneChip({ label, window: w, now }: { label: string; now: number; window: RateLimitWindow | null }) {
   if (!w) {
     return (
       <span className="tl-chip" title={`This plan reports no ${label.toLowerCase()}`}>
@@ -338,10 +351,17 @@ function LaneChip({ label, window: w }: { label: string; window: RateLimitWindow
       </span>
     );
   }
+  if (isExpired(w, now)) {
+    return (
+      <span className="tl-chip" title={`reset ${fmtAbsolute(w.resetsAt)}, no reading since`}>
+        {label} <b className="tl-chip__pct muted">reset</b>
+      </span>
+    );
+  }
   const remaining = remainingOf(w);
   return (
     <span className="tl-chip" title={`${fmtPct(remaining)} of the ${label.toLowerCase()} left, resets ${fmtAbsolute(w.resetsAt)}`}>
-      {label} <b className={`tl-chip__pct num tl-chip__pct--${meterTone(remaining)}`}>{fmtPct(remaining)}</b>
+      {label} <b className={`tl-chip__pct num tl-chip__pct--${meterTone(remaining)}`}>{fmtPct(remaining)} left</b>
     </span>
   );
 }
@@ -411,7 +431,7 @@ function ResetTimeline({ accounts, now }: { accounts: Account[]; now: number }) 
 
       <div className="timeline__chart">
         <div className="timeline__axis">
-          <div className="timeline__axis-label">Credential</div>
+          <div className="timeline__axis-label">Account</div>
           <div className="timeline__cells">
             {cells.map((c) => (
               <div key={c.at} className={`timeline__cell ${c.today ? 'is-today' : ''}`}>
@@ -437,6 +457,9 @@ function ResetTimeline({ accounts, now }: { accounts: Account[]; now: number }) 
           )}
 
           {lanes.map(({ account, window: w }) => {
+            // The bars project the period on from the last reset, but an expired window's share is of the period
+            // before it, so the current bar names no share.
+            const share = isExpired(w, now) ? null : `${fmtPct(remainingOf(w))} left`;
             const period = w.periodHours * HOUR;
             const resetAt = Date.parse(w.resetsAt ?? '');
             const bars: { end: number; start: number; state: 'live' | 'next' | 'past' }[] = [];
@@ -458,9 +481,9 @@ function ResetTimeline({ accounts, now }: { accounts: Account[]; now: number }) 
                     <span className="lane__period">{mode === 'session' ? '5h' : '7d'}</span>
                   </div>
                   <div className="lane__chips">
-                    <LaneChip label="5-hour limit" window={windowOf(account, '5h')} />
-                    <LaneChip label="7-day limit" window={windowOf(account, '7d')} />
-                    <LaneChip label="Fable 7-day limit" window={account.fableWindow} />
+                    <LaneChip label="5-hour limit" window={windowOf(account, '5h')} now={now} />
+                    <LaneChip label="7-day limit" window={windowOf(account, '7d')} now={now} />
+                    <LaneChip label="Fable 7-day limit" window={account.fableWindow} now={now} />
                   </div>
                 </div>
                 <div className="lane__track">
@@ -477,11 +500,11 @@ function ResetTimeline({ accounts, now }: { accounts: Account[]; now: number }) 
                         key={b.start}
                         className={`lane__bar lane__bar--${b.state}`}
                         style={{ left: `${((from - span.startMs) / width) * 100}%`, width: `${wPct}%` }}
-                        title={`${account.label}\n${fmtAbsolute(new Date(b.start).toISOString())} to ${fmtAbsolute(new Date(b.end).toISOString())}${b.state === 'live' ? `\n${fmtPct(w.utilization)} used` : ''}`}
+                        title={`${account.label}\n${fmtAbsolute(new Date(b.start).toISOString())} to ${fmtAbsolute(new Date(b.end).toISOString())}${b.state === 'live' && share ? `\n${share}` : ''}`}
                       >
                         {b.state === 'live' && <span className="lane__elapsed" style={{ width: `${elapsed}%` }} />}
                         {b.end <= span.endMs && <span className="lane__reset-mark" aria-hidden />}
-                        {showLabel && <span className="lane__label">{b.state === 'live' ? `${fmtPct(w.utilization)} used · ${stamp(b.end)}` : stamp(b.end)}</span>}
+                        {showLabel && <span className="lane__label">{b.state === 'live' && share ? `${share} · ${stamp(b.end)}` : stamp(b.end)}</span>}
                       </div>
                     );
                   })}

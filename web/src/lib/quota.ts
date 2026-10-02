@@ -13,6 +13,9 @@ export const remainingOf = (w: RateLimitWindow) => Math.max(0, Math.min(1, 1 - w
 
 export const windowOf = (account: Account, id: WindowId) => account.windows.find((w) => w.id === id) ?? null;
 
+/** A window whose reset has passed with no reading since: the card and the timeline agree on this one test. */
+export const isExpired = (w: RateLimitWindow, now: number) => w.resetsAt !== null && Date.parse(w.resetsAt) < now;
+
 export const isSubscription = (account: Account) => account.kind === 'oauth';
 
 /** The fast lane's two cooldown scopes, its rate limit's and its usage-credits refusal's: each holds fast-mode
