@@ -587,12 +587,12 @@ a throttle that names no `Retry-After`, and a request bound to its account all t
 
 ### In-flight caps
 
-**Per account.** Every wire submission counts against its account from its charge until its response ends: a buffered
-answer when it is returned, a stream for its whole length, whether it finishes, fails, or the client hangs up. The first
-attempt on an account is charged by the selection that chose it, so two selections answered together never read the same
-free slot; a retry on the same account is charged at its dispatch. The count is kept by the router itself; no report is
-involved. A token count is not counted: it occupies no slot, is never passed over at the cap and is never held for one.
-An account at the pool's `in_flight_cap` (default 16) is passed over while a sibling is under it, even a sibling above
+Every wire submission counts against its account from its charge until its response ends: a buffered answer when it is
+returned, a stream for its whole length, whether it finishes, fails, or the client hangs up. The first attempt on an
+account is charged by the selection that chose it, so two selections answered together never read the same free slot; a
+retry on the same account is charged at its dispatch. The count is kept by the router itself; no report is involved. A
+token count is not counted: it occupies no slot, is never passed over at the cap and is never held for one. An account
+at the pool's `in_flight_cap` (default 16) is passed over while a sibling is under it, even a sibling above
 `select_below_utilization`: the cap is a bound, the ceiling a preference. Only when every account that could serve is at
 its cap is the request held: it waits up to `retry_in_place_seconds` for a slot on the account it would have chosen and
 lands there when one frees; past the bound it is selected again with that account passed over, and with every account

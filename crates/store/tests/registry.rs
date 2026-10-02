@@ -771,10 +771,8 @@ const SEED_PRE_V43_KEY: &str = r#"
 UPDATE api_keys SET in_flight_cap = 3, affinity_source = 'content' WHERE id = 'k'; -- rollback
 "#;
 
-// Unformatted so the sweep's marker stays on the line that spells the dropped name.
-#[rustfmt::skip]
 #[test]
-fn a_store_left_at_42_is_carried_to_43_without_the_keys_cap_or_affinity_source() { // removed name
+fn a_store_left_at_42_is_carried_to_43_without_the_keys_cap_or_fixed_source() {
     let dir = tempfile::tempdir().unwrap();
     let storage_key = StorageKey::generate();
     let path = dir.path().join("router.sqlite");
