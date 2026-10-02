@@ -67,10 +67,10 @@ The sidebar shows the views in this order:
 | Settings | The effective bootstrap values (see [Installation](installation.md)). |
 
 The console, the API, the bootstrap file and this site call what the router holds an account and a key the router
-issues a key. The console and this site call the account kind whose credential is a key from the Anthropic Console an
-Anthropic key; the API's kind value stays `api_key`. "Upstream" names the provider's host and the party that answered
-a request (the bootstrap file's `upstream` block, the `upstream_error` and `upstream_unreachable` codes, the
-`upstream_request_id` and `upstream_status` fields, the `phoebis_upstream_ttfb_seconds` metric).
+issues a key. The console and this site call the account kind whose credential is an Anthropic API key an Anthropic key;
+the API's kind value is `api_key`. "Upstream" names the provider's host and the party that answered a request (the
+bootstrap file's `upstream` block, the `upstream_error` and `upstream_unreachable` codes, the `upstream_request_id` and
+`upstream_status` fields, the `phoebis_upstream_ttfb_seconds` metric).
 
 ## What this build does not do
 

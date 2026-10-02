@@ -11,9 +11,9 @@ version.workspace = true
 debug-hooks = []
 
 [dependencies]
+jiff = { workspace = true }
 phoebis-oauth = { path = "../oauth" }
 phoebis-store = { path = "../store" }
-jiff = { workspace = true }
 rand = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -24,9 +24,9 @@ tokio-util = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
+fake-upstream = { path = "../../tests/fake_upstream" }
 phoebis-profile = { path = "../profile" }
 # An integration test builds the library without `cfg(test)`, so the hold it reaches needs the feature on.
 phoebis-routing = { path = ".", features = ["debug-hooks"] }
 phoebis-store = { path = "../store", features = ["debug-hooks"] }
 phoebis-transport = { path = "../transport" }
-fake-upstream = { path = "../../tests/fake_upstream" }

@@ -6,12 +6,12 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
+hmac = { workspace = true }
 phoebis-bus = { path = "../bus" }
 phoebis-ledger = { path = "../ledger" }
 phoebis-oauth = { path = "../oauth" }
 phoebis-routing = { path = "../routing" }
 phoebis-store = { path = "../store" }
-hmac = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
@@ -23,12 +23,13 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 bytes = { workspace = true }
-# An integration test drives the store's injected-failure seam, which needs the feature on.
-phoebis-store = { path = "../store", features = ["debug-hooks"] }
+fake-upstream = { path = "../../tests/fake_upstream" }
 # A backoff test polls a real usage service over the fake upstream, which needs a profile and a control client.
 phoebis-profile = { path = "../profile" }
+# An integration test drives the store's injected-failure seam, which needs the feature on.
+phoebis-store = { path = "../store", features = ["debug-hooks"] }
+# The backoff test's control client.
 phoebis-transport = { path = "../transport" }
-fake-upstream = { path = "../../tests/fake_upstream" }
 rusqlite = { workspace = true }
 tempfile = { workspace = true }
 # The drain tests run on a paused clock, which needs the feature on.

@@ -28,12 +28,12 @@ url = { workspace = true }
 zeroize = { workspace = true }
 
 [dev-dependencies]
-# An integration test builds the library without `cfg(test)`, so the seams it reaches need the feature on.
-phoebis-store = { path = ".", features = ["debug-hooks"] }
 # The migration test reads a stored cache TTL policy the way the relay does, so the two crates' readings of the
 # same JSON cannot drift apart unnoticed.
 phoebis-relay = { path = "../relay" }
 # A lane is built with the routing crate's one constructor, the spelling every pin and entry compares.
 phoebis-routing = { path = "../routing" }
+# An integration test builds the library without `cfg(test)`, so the seams it reaches need the feature on.
+phoebis-store = { path = ".", features = ["debug-hooks"] }
 rusqlite = { workspace = true }
 tempfile = { workspace = true }

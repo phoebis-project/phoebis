@@ -130,9 +130,12 @@ async fn hashed_assets_are_immutable_and_typed_and_a_missing_asset_is_a_404() {
             body.contains("prefers-color-scheme"),
             "the favicon follows the browser's scheme"
         );
-        assert!(
-            phoebis_ui::lookup("favicon-32.png").is_some(),
-            "the PNG fallback is in the bundle"
+        assert_eq!(
+            phoebis_ui::lookup("favicon-32.png")
+                .map(|(_, mime)| mime)
+                .as_deref(),
+            Some("image/png"),
+            "the PNG fallback is in the bundle and served as a PNG"
         );
     }
 }

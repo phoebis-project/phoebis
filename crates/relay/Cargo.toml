@@ -8,13 +8,6 @@ version.workspace = true
 [dependencies]
 axum = { workspace = true }
 bytes = { workspace = true }
-phoebis-bus = { path = "../bus" }
-phoebis-cch = { path = "../cch" }
-phoebis-oauth = { path = "../oauth" }
-phoebis-profile = { path = "../profile" }
-phoebis-routing = { path = "../routing" }
-phoebis-store = { path = "../store" }
-phoebis-transport = { path = "../transport" }
 futures = { workspace = true }
 hmac = { workspace = true }
 http-body-util = { workspace = true }
@@ -22,6 +15,13 @@ httparse = { workspace = true }
 hyper = { workspace = true }
 hyper-util = { workspace = true }
 jiff = { workspace = true }
+phoebis-bus = { path = "../bus" }
+phoebis-cch = { path = "../cch" }
+phoebis-oauth = { path = "../oauth" }
+phoebis-profile = { path = "../profile" }
+phoebis-routing = { path = "../routing" }
+phoebis-store = { path = "../store" }
+phoebis-transport = { path = "../transport" }
 rand = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -35,13 +35,13 @@ url = { workspace = true }
 
 [dev-dependencies]
 boring = { workspace = true }
+fake-upstream = { path = "../../tests/fake_upstream" }
+flate2 = { workspace = true }
 phoebis-bus = { path = "../bus" }
 phoebis-ledger = { path = "../ledger" }
 # The router task's report hold, which the conversation climb's wait tests park a report behind.
 phoebis-routing = { path = "../routing", features = ["debug-hooks"] }
 phoebis-store = { path = "../store", features = ["debug-hooks"] }
-fake-upstream = { path = "../../tests/fake_upstream" }
-flate2 = { workspace = true }
 reqwest = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }

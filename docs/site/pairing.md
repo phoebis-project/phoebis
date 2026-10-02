@@ -8,7 +8,7 @@ afterwards.
 ## Two kinds of account
 
 An `oauth` account is a Claude.ai or Console login, paired through the dialog or the API below. An `api_key`
-account, an Anthropic key in the console, holds a key from the Anthropic Console toward `api.anthropic.com`.
+account, an Anthropic key in the console, holds an Anthropic API key toward `api.anthropic.com`.
 Creating an `api_key` account verifies the key against its host at once: a rejected key answers
 `400 credential rejected by the upstream`, while a host that serves no model list leaves the account ready with the
 error recorded and no models.

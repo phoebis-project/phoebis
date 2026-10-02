@@ -257,4 +257,8 @@ out=$(python3 "$check" routes "$tmp/routes-char.rs" "$tmp/api-char.md" 2>&1) || 
 out=$(python3 "$check" routes "$tmp/routes-char.rs" "$tmp/api-char.md" 2>&1) && fail "a route a char literal hid passed undocumented"
 echo "$out" | grep -q "has no entry for GET /admin/a" || fail "the route after a char literal was not reported as undocumented: $out"
 
+# Unlike the cases above this reads the real tree: the site's favicon is a copy of the console's, and nothing else
+# keeps the two equal.
+cmp -s "$here/web/public/favicon.svg" "$here/docs/site/assets/favicon.svg" || fail "docs/site/assets/favicon.svg differs from web/public/favicon.svg"
+
 echo "check-docs: ok"

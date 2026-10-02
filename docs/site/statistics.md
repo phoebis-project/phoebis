@@ -327,7 +327,7 @@ beside it: the cache-write tokens the first request after a move paid to warm it
 counted, by reason; then a Requests by speed chart, standard and fast per bucket, and an Effort levels card with a bar
 per level the requests asked for. Burn reports a subscription account's spend as the share of its own 5-hour and 7-day
 window and an Anthropic-key account's in dollars, side by side and each split into cached and uncached tokens, grouped
-by account, key, session, or request class; the 5-hour share carries the peak band's weight, the 7-day share none. The
+by account, key, request class, or session; the 5-hour share carries the peak band's weight, the 7-day share none. The
 shares read under the account grouping alone, since shares of different accounts' windows do not add, and the Spend
 per minute chart draws dollars alone, a subscription account's among them only for its fast-mode answers; past the
 seven lines a chart draws, the subscription accounts folded into the rest draw their fast-mode dollars as Other (fast

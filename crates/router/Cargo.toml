@@ -16,6 +16,10 @@ path = "src/main.rs"
 [dependencies]
 anyhow = { workspace = true }
 axum = { workspace = true }
+clap = { workspace = true }
+hyper = { workspace = true }
+hyper-util = { workspace = true }
+jiff = { workspace = true }
 phoebis-admin = { path = "../admin" }
 phoebis-alerts = { path = "../alerts" }
 phoebis-bus = { path = "../bus" }
@@ -30,10 +34,6 @@ phoebis-routing = { path = "../routing" }
 phoebis-store = { path = "../store" }
 phoebis-transport = { path = "../transport" }
 phoebis-ui = { path = "../ui" }
-clap = { workspace = true }
-hyper = { workspace = true }
-hyper-util = { workspace = true }
-jiff = { workspace = true }
 serde = { workspace = true }
 serde_norway = { workspace = true }
 thiserror = { workspace = true }

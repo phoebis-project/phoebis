@@ -31,10 +31,10 @@ tracing = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]
-phoebis-store = { path = "../store", features = ["debug-hooks"] }
 fake-upstream = { path = "../../tests/fake_upstream" }
 futures = { workspace = true }
 http-body-util = { workspace = true }
+phoebis-store = { path = "../store", features = ["debug-hooks"] }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
 tokio-tungstenite = { workspace = true }

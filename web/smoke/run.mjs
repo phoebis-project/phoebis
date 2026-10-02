@@ -97,7 +97,11 @@ const failoverRow = requests.find((r) => r.attempts.length > 1 && r.attempts.som
   localStorage.removeItem('phoebis.mockSession');
   const login = await mount('/');
   expect('login screen without a session', login.text(), ['Admin or viewer secret', 'Log in']);
-  results.push({ name: 'the login view carries the mark and the couplet', ok: login.container.querySelector('.brand__mark svg rect') !== null && login.text().includes('Place every request. Keep every session.'), missing: [] });
+  // Counted by fill, so a cell drawn in a fixed colour (which the theme toggle would not reach) or a dropped body
+  // square fails the check.
+  const markCells = login.container.querySelectorAll('.brand__mark svg rect[fill="var(--mark-cell)"]').length;
+  const markBody = login.container.querySelectorAll('.brand__mark svg rect[fill="var(--mark-body)"]').length;
+  results.push({ name: 'the login view carries the mark, 26 cells and 5 body squares on the theme tokens, and the couplet', ok: markCells === 26 && markBody === 5 && login.text().includes('Place every request. Keep every session.'), missing: [`cells ${markCells}`, `body ${markBody}`] });
   const input = login.container.querySelector('input[type="password"]');
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
   setter.call(input, 'viewer');

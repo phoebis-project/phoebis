@@ -8,11 +8,11 @@ version.workspace = true
 [dependencies]
 base64 = { workspace = true }
 bytes = { workspace = true }
+futures = { workspace = true }
+jiff = { workspace = true }
 phoebis-profile = { path = "../profile" }
 phoebis-store = { path = "../store" }
 phoebis-transport = { path = "../transport" }
-futures = { workspace = true }
-jiff = { workspace = true }
 rand = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -28,6 +28,6 @@ url = { workspace = true }
 debug-hooks = []
 
 [dev-dependencies]
+fake-upstream = { path = "../../tests/fake_upstream" }
 phoebis-oauth = { path = ".", features = ["debug-hooks"] }
 phoebis-store = { path = "../store", features = ["debug-hooks"] }
-fake-upstream = { path = "../../tests/fake_upstream" }

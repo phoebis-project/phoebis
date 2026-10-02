@@ -574,6 +574,10 @@ async fn a_stale_keys_refusal_answers_admissions_401(recreated: bool) {
     let mut body: serde_json::Value =
         serde_json::from_slice(&resp.into_body().collect().await.unwrap().to_bytes()).unwrap();
     let request_id = body["request_id"].as_str().unwrap().to_string();
+    assert!(
+        request_id.starts_with("req_phoebis_") && request_id.len() == 12 + 32,
+        "the local request id is the prefix and 32 hex digits: {request_id}"
+    );
     body.as_object_mut().unwrap().remove("request_id");
 
     let unknown = h
