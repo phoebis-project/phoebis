@@ -4319,32 +4319,71 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     m = await mount('/analytics#nope');
     results.push({ name: '/analytics an unknown hash shows Traffic', ok: mounted() === 'traffic', missing: [mounted()] });
     m.unmount();
-    // The route paths label a failure report; the method names are what count.
-    const reads = failCalls({ getAnalyticsBurn: '/admin/analytics/burn', listAccountRollups: '/admin/analytics/accounts' }, 'counted');
+    // The route paths label a failure report; the method names are what count. A side breakdown carries the page's
+    // query, `keyIds` among it, where a filter's option read carries the range alone.
+    const reads = failCalls({ analyticsBudgets: '/admin/analytics/budgets', analyticsPlacements: '/admin/analytics/placements', getAnalyticsBreakdown: '/admin/analytics/breakdown', getAnalyticsBurn: '/admin/analytics/burn', getAnalyticsRewrites: '/admin/analytics/rewrites', getSettings: '/admin/settings', listAccountRollups: '/admin/analytics/accounts' }, 'counted');
     reads.recover();
+    const side = (groupBy) => reads.calls.getAnalyticsBreakdown.filter(([q]) => q.groupBy === groupBy && q.keyIds !== undefined).length;
+    const counted = () => ({ budgets: reads.calls.analyticsBudgets.length, burn: reads.calls.getAnalyticsBurn.length, effort: side('effort'), model: side('model'), placements: reads.calls.analyticsPlacements.length, pool: side('pool'), rewrites: reads.calls.getAnalyticsRewrites.length, rollups: reads.calls.listAccountRollups.length, settings: reads.calls.getSettings.length });
     m = await mount('/analytics');
-    const before = [reads.calls.getAnalyticsBurn.length, reads.calls.listAccountRollups.length];
-    await tab(m, 'Accounts');
-    const afterAccounts = [reads.calls.getAnalyticsBurn.length, reads.calls.listAccountRollups.length];
-    await tab(m, 'Burn');
-    const afterBurn = [reads.calls.getAnalyticsBurn.length, reads.calls.listAccountRollups.length];
+    // The shell reads the settings once for every page, so the Burn tab's own read is the step it adds.
+    const { settings: shell, ...opened } = counted();
+    const steps = { traffic: JSON.stringify(opened) };
+    for (const [label, id] of [['Accounts', 'accounts'], ['Burn', 'burn'], ['Cache', 'cache'], ['Cache warming', 'cache-warming']]) {
+      const was = counted();
+      await tab(m, label);
+      const now = counted();
+      steps[id] = JSON.stringify(Object.fromEntries(Object.entries(now).filter(([k, v]) => v !== was[k]).map(([k, v]) => [k, v - was[k]])));
+    }
     reads.restore();
-    results.push({ name: '/analytics a section whose tab is not chosen makes none of its own reads', ok: JSON.stringify(before) === '[0,0]' && JSON.stringify(afterAccounts) === '[0,1]' && JSON.stringify(afterBurn) === '[1,1]', missing: [JSON.stringify(before), JSON.stringify(afterAccounts), JSON.stringify(afterBurn)] });
+    const wanted = {
+      accounts: '{"rollups":1}',
+      burn: '{"budgets":1,"burn":1,"settings":1}',
+      cache: '{"model":1,"placements":1}',
+      'cache-warming': '{"pool":1}',
+      traffic: '{"budgets":0,"burn":0,"effort":1,"model":0,"placements":0,"pool":0,"rewrites":1,"rollups":0}',
+    };
+    results.push({ name: '/analytics a section whose tab is not chosen makes none of its own reads', ok: Object.entries(wanted).every(([id, delta]) => steps[id] === delta), missing: [`shell settings ${shell}`, ...Object.entries(steps).map(([id, delta]) => `${id} ${delta}`)] });
     m.unmount();
     {
       // With no filter set, the grouped dimension's options come from the page's own breakdown, which still holds the
-      // grouping before a change until the new read lands; that read is held here so the beat can be read.
+      // grouping before a change until the new read lands; the reads are held here so that beat can be read.
       m = await mount('/analytics');
+      const trigger = (label) => [...m.container.querySelectorAll('.filters .mselect')].find((d) => d.querySelector('.mselect__trigger')?.textContent?.trim().startsWith(label));
+      const listed = (label) => [...(trigger(label)?.querySelectorAll('.mselect__option') ?? [])].map((o) => o.textContent?.trim() ?? '');
       const optionsOf = async (label) => {
-        const filter = [...m.container.querySelectorAll('.filters .mselect')].find((d) => d.querySelector('.mselect__trigger')?.textContent?.trim().startsWith(label));
-        filter?.querySelector('.mselect__trigger')?.click();
+        trigger(label)?.querySelector('.mselect__trigger')?.click();
         await m.settle(60);
-        const listed = [...(filter?.querySelectorAll('.mselect__option') ?? [])].map((o) => o.textContent?.trim() ?? '');
-        filter?.querySelector('.mselect__trigger')?.click();
+        const options = listed(label);
+        trigger(label)?.querySelector('.mselect__trigger')?.click();
         await m.settle(60);
-        return listed;
+        return options;
       };
       const keyLabels = await optionsOf('Key');
+      {
+        // The first pick filters the page, so the Key options stop sharing the breakdown and wait on their own read.
+        const breakdown = api.getAnalyticsBreakdown;
+        let open = () => {};
+        const gate = new Promise((resolve) => {
+          open = resolve;
+        });
+        trigger('Key')?.querySelector('.mselect__trigger')?.click();
+        await m.settle(60);
+        api.getAnalyticsBreakdown = (...args) => gate.then(() => breakdown.apply(api, args));
+        [...(trigger('Key')?.querySelectorAll('.mselect__option') ?? [])].find((o) => o.textContent?.trim() === 'desktop')?.click();
+        await m.settle(300);
+        const during = listed('Key');
+        const summary = trigger('Key')?.querySelector('.mselect__trigger')?.textContent?.trim() ?? '';
+        open();
+        await m.settle(300);
+        api.getAnalyticsBreakdown = breakdown;
+        results.push({ name: '/analytics the first key pick keeps the Key list while the reads it starts are out', ok: keyLabels.length > 1 && JSON.stringify(during) === JSON.stringify(keyLabels) && summary === 'Key (1)', missing: [`keys ${keyLabels.join(',')}`, `during ${during.join(',')}`, summary] });
+        // Clearing leaves the list open, so the trigger closes it.
+        trigger('Key')?.querySelector('.mselect__clear')?.click();
+        await m.settle(400);
+        trigger('Key')?.querySelector('.mselect__trigger')?.click();
+        await m.settle(60);
+      }
       const held = deferNextCall('getAnalyticsBreakdown');
       const select = m.container.querySelector('.filters select.groupby-select');
       if (select) {
@@ -4358,8 +4397,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       const after = await optionsOf('Model');
       held.restore();
       results.push({
-        name: "/analytics a group-by change offers none of the previous grouping's keys while its read is out",
-        ok: keyLabels.length > 0 && held.calls[0]?.[0]?.groupBy === 'model' && during.length === 0 && after.length > 0 && !after.some((o) => keyLabels.includes(o)),
+        name: "/analytics a group-by change keeps the dimension's own keys while its read is out, none of the previous grouping's",
+        ok: keyLabels.length > 0 && held.calls[0]?.[0]?.groupBy === 'model' && during.length > 0 && JSON.stringify(during) === JSON.stringify(after) && !during.some((o) => keyLabels.includes(o)),
         missing: [`keys ${keyLabels.join(',')}`, `held ${held.calls[0]?.[0]?.groupBy}`, `during ${during.join(',')}`, `after ${after.join(',')}`],
       });
       m.unmount();
@@ -4367,6 +4406,10 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     m = await mount(`/analytics?session=${encodeURIComponent(laptopRow.sessionId)}&key=laptop%40${laptopRow.keyGeneration}`);
     await tab(m, 'Latency');
     results.push({ name: '/analytics a tab change keeps the session query', ok: m.location().hash === '#latency' && m.location().search.includes('session=') && m.location().search.includes('key=laptop'), missing: [JSON.stringify(m.location())] });
+    await tab(m, 'Cache warming');
+    m.container.querySelector('.chip--removable button')?.click();
+    await m.settle(400);
+    results.push({ name: '/analytics removing a session chip clears the query and keeps the tab', ok: JSON.stringify(m.location()) === JSON.stringify({ hash: '#cache-warming', pathname: '/analytics', search: '' }) && mounted() === 'cache-warming' && m.container.querySelector('.chip--removable') === null, missing: [JSON.stringify(m.location()), mounted()] });
     m.unmount();
     m = await mount('/analytics');
     // The range is the page's own state, so a fresh mount opens on the day; the session checks below read the three
