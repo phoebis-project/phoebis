@@ -91,7 +91,7 @@ const VIEWS = [
   { path: '/quota', title: 'Quota', wait: '.qcard', slug: 'quota' },
   // Without an account id the page lands on the first account, and the detail head arrives with it.
   { path: '/accounts', title: 'Accounts', wait: '.detail__head', slug: 'accounts' },
-  { path: '/pools', title: 'Pools', wait: '.pool .selection-order', slug: 'pools' },
+  { path: '/pools', title: 'Pools', wait: '.pool .serving', slug: 'pools' },
   { path: '/keys', title: 'Keys', wait: '.card--table tbody tr', slug: 'keys' },
   { path: '/models', title: 'Models', wait: '.models__rules', slug: 'models' },
   { path: '/requests', title: 'Requests', wait: '.requests__table', slug: 'requests' },
@@ -665,27 +665,10 @@ async function poolSelectBelow(theme) {
 /**
  * The load groups against the controls beside them, each measured while its group shows: a preset pill against a
  * session-affinity pill, the overage grace field against the migrate percent field, and a warm-sessions choice
- * against an overage choice. Then the utilization bar's migrate handle and the shedding preview line, and on the
- * pool card the Failover and Moves rows against the Strategy row.
+ * against an overage choice. Then the utilization bar's migrate handle and the shedding preview line.
  */
 async function poolRoutingCards(theme) {
   const say = (what) => failures.push(`${theme} /pools: ${what}`);
-  const rows = await page.evaluate(() => {
-    const policy = [...(document.querySelector('.pool .pool__policy')?.children ?? [])];
-    const read = (label) => {
-      const dd = policy.find((row) => row.querySelector('dt')?.textContent?.trim() === label)?.querySelector('dd');
-      if (!dd) return null;
-      // Heights are left out: a row wraps as its column narrows, however it is drawn.
-      const style = getComputedStyle(dd);
-      return `${style.fontSize} ${style.fontWeight} ${style.color} ${style.lineHeight}`;
-    };
-    return { failover: read('Failover'), moves: read('Moves'), strategy: read('Strategy') };
-  });
-  measurements.push(`${theme} /pools card rows ${JSON.stringify(rows)}`);
-  for (const label of ['failover', 'moves']) {
-    if (rows[label] === null) say(`the pool card has no ${label} row`);
-    else if (rows[label] !== rows.strategy) say(`the card's ${label} row reads ${rows[label]} against the strategy row's ${rows.strategy}`);
-  }
   const dialog = page.locator('dialog[open]');
   try {
     await page.locator('.pool button[aria-label^="Edit pool"]').first().click();
@@ -765,6 +748,42 @@ async function poolRoutingCards(theme) {
   if (!read.preview || !/^(Would (move|mark)|No member is above the threshold)/.test(read.preview)) say(`the shedding preview reads ${JSON.stringify(read.preview)}`);
   await page.keyboard.press('Escape');
   await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => say('the dialog stayed open after Escape'));
+  await atRest();
+}
+
+/**
+ * The first pool card at the pass's viewport and in the 720 px strip: the serving table ends inside the card, and the
+ * six tiles stand on two rows of three, then three rows of two, with a left hairline on every tile but a row's first.
+ */
+async function poolCardLayout(theme) {
+  const say = (what) => failures.push(`${theme} /pools card: ${what}`);
+  const read = () =>
+    page.evaluate(() => {
+      const card = document.querySelector('.pool');
+      const table = card?.querySelector('.serving');
+      const tiles = [...(card?.querySelectorAll('.pool__stats > div') ?? [])];
+      return {
+        cardBottom: card ? card.getBoundingClientRect().bottom : null,
+        lefts: tiles.map((t) => getComputedStyle(t).borderLeftWidth),
+        tableBottom: table ? table.getBoundingClientRect().bottom : null,
+        tops: tiles.map((t) => Math.round(t.getBoundingClientRect().top)),
+      };
+    });
+  const rowsOf = (tops) => [...new Set(tops)].map((top) => tops.filter((t) => t === top).length);
+  const wide = await read();
+  measurements.push(`${theme} /pools card ${JSON.stringify(wide)}`);
+  if (wide.tableBottom === null || wide.cardBottom === null) say('no serving table in the first card');
+  else if (wide.tableBottom > wide.cardBottom) say(`the serving table ends at ${wide.tableBottom}, past the card's bottom at ${wide.cardBottom}`);
+  if (JSON.stringify(rowsOf(wide.tops)) !== '[3,3]') say(`the tiles stand in rows of ${JSON.stringify(rowsOf(wide.tops))}, not two rows of three`);
+  if (JSON.stringify(wide.lefts) !== JSON.stringify(['0px', '1px', '1px', '0px', '1px', '1px'])) say(`the tiles' left hairlines read ${wide.lefts.join(' ')}`);
+  await page.setViewportSize({ height: 800, width: 720 });
+  await settle();
+  const narrow = await read();
+  measurements.push(`${theme} /pools card at 720 px ${JSON.stringify(narrow)}`);
+  if (JSON.stringify(rowsOf(narrow.tops)) !== '[2,2,2]') say(`at 720 px the tiles stand in rows of ${JSON.stringify(rowsOf(narrow.tops))}, not three rows of two`);
+  if (JSON.stringify(narrow.lefts) !== JSON.stringify(['0px', '1px', '0px', '1px', '0px', '1px'])) say(`at 720 px the tiles' left hairlines read ${narrow.lefts.join(' ')}`);
+  await page.setViewportSize({ height: 800, width: 1280 });
+  await settle();
   await atRest();
 }
 
@@ -2629,6 +2648,7 @@ try {
         await poolCachingControls(theme);
         await poolSelectBelow(theme);
         await poolRoutingCards(theme);
+        await poolCardLayout(theme);
         await poolDialogGeometry(theme);
         await poolKeyMenus(theme);
       }

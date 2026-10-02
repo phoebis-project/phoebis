@@ -11,14 +11,14 @@ without the refusal dots (a mark's size, weight and ink, 6 px after its label on
 at the pass's viewport and in the 720 px strip), the expert view's discovery line (below the group's last field, in the
 hint's size and a rail parent's ink), the cell grid through an expert field's wrapper (a half cell beside the plain one,
 a lone field the grid's width), the sidebar's Expert view row above the version line, pool chips, the caching controls,
-the select-below threshold, the routing cards, the compatibility card, the bootstrap cards, the Delete account button,
-the account lines, the alert rule dialog, the remaining cards, the error state, the cost-cap rows, the live feed, the
-wasted-probe rows, the burn cards, the plan legend's model unlisted entry, the placement and budget tables,
-the speed filter, the traffic cards, the fast lane, the request drawer, which opens once the request list's shot
-is taken, the subscription end editor, the catalog popup, the key dialog's cap field and selects, the Pool select
-against the Status select, the cost reference, the agent lines, the fork link, which is
-followed once the session list's shot is taken). A check that opens an editor, a dialog or a row closes it again before
-the view's shot.
+the select-below threshold, the load groups, the pool card's serving table and tiles, the compatibility card, the
+bootstrap cards, the Delete account button, the account lines, the alert rule dialog, the remaining cards, the error
+state, the cost-cap rows, the live feed, the wasted-probe rows, the burn cards, the plan legend's model unlisted entry,
+the placement and budget tables, the speed filter, the traffic cards, the fast lane, the request
+drawer, which opens once the request list's shot is taken, the subscription end editor, the catalog popup, the key
+dialog's cap field and selects, the Pool select against the Status select, the cost reference, the agent lines,
+the fork link, which is followed once the session list's shot is taken). A check that opens an
+editor, a dialog or a row closes it again before the view's shot.
 The script exits non-zero with the list of failures when any of that does not hold.
 
 The screenshot directory has to lie outside the repository, which the script enforces against every worktree `git

@@ -58,7 +58,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { api, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, Expert, failCalls, failNextCall, Field, GroupedDialog, GroupLink, Input, MOCK_VERSION, mount, mountNode, PageLink, React, requestEvents, requests, rollups, stallLive, SwitchedNumber } = await import('./dist/entry.js');
+const { api, AttentionRows, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, Expert, failCalls, failNextCall, Field, GroupedDialog, GroupLink, Input, MOCK_VERSION, mount, mountNode, PageLink, React, requestEvents, requests, rollups, stallLive, SwitchedNumber } = await import('./dist/entry.js');
 
 const results = [];
 function expect(name, text, needles) {
@@ -979,124 +979,148 @@ m.unmount();
 }
 
 m = await mount('/pools');
-expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace', 'Round robin', 'subscription first', 'Within the first priority tier that has an eligible account, the one with the most weekly allowance left per hour until its window resets or its subscription ends; an unsampled account counts as untouched, and ties are random.', 'Within the first priority tier that has an eligible account, each in turn; a restart starts the round again.', 'Prefer plan quota', 'Allow overage', 'Migrate off', 'Select-below off', 'Affinity 10m', 'Affinity off', 'Keep prompt caches warm', 'cold limit 2', 'idle 1h', 'net-negative stop 2', '$4.00/day cap', 'Traffic, 24h', 'Requests per hour', '3-hour average', 'Members', 'eligible', 'cooldown ends', 'overage', 'P1', 'Console workspace', 'codex', 'Evals workspace', 'desktop', 'laptop', 'ci', 'Active pins', 'Edit']);
+expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, subscription accounts first', 'Round robin', 'Priority, then random; subscription accounts first', 'Traffic, 24h', 'Requests per hour', '3-hour average', 'Members', 'Console workspace', 'codex', 'Evals workspace', 'Active pins', 'Moves in the last hour', 'Edit']);
 {
-  const badged = [...m.container.querySelectorAll('.pool')]
-    .filter((card) => [...card.querySelectorAll('.badge')].some((b) => b.textContent?.trim() === 'server-side auto mode off'))
-    .map((card) => card.querySelector('.card__title')?.textContent?.trim());
+  const cards = new Map([...m.container.querySelectorAll('.pool')].map((c) => [c.querySelector('.card__title')?.textContent?.trim(), c]));
+  const card = (name) => cards.get(name);
+  // The counts come from the key list itself, so a key the story adds or moves never breaks the check.
+  const keyCount = new Map();
+  for (const k of await api.listKeys()) keyCount.set(k.poolId, (keyCount.get(k.poolId) ?? 0) + 1);
+  const countWord = (n) => (n === 0 ? 'No keys yet' : n === 1 ? '1 key' : `${n} keys`);
+  const keyLink = (name) => card(name)?.querySelector('.pool__keys');
+  const links = ['all', 'codex', 'studio'].map((name) => [keyLink(name)?.textContent?.trim(), keyLink(name)?.getAttribute('href')]);
+  const wanted = ['all', 'codex', 'studio'].map((id) => [countWord(keyCount.get(id) ?? 0), `/keys?pool=${id}`]);
+  const none = [...cards.entries()].filter(([, c]) => c.querySelector('.pool__keys--none')).map(([name]) => name);
+  results.push({
+    name: '/pools each card links its key count to the Keys page filtered to the pool',
+    ok: JSON.stringify(links) === JSON.stringify(wanted) && JSON.stringify(none) === JSON.stringify(['all', 'codex', 'studio'].filter((id) => !keyCount.get(id))),
+    missing: [...links.flat().map(String), ...wanted.flat(), ...none],
+  });
+  const strip = (name) => [...(card(name)?.querySelectorAll('.pool__features .badge') ?? [])].map((b) => [b.textContent?.trim(), b.getAttribute('href'), b.getAttribute('title')]);
+  results.push({
+    name: '/pools the strip badges the features a pool has on and opens the dialog on their groups',
+    ok:
+      JSON.stringify(strip('all')) === JSON.stringify([['cache TTL', '/pools?edit=all&group=cacheTtl', 'Opens the pool dialog on Cache TTL'], ['keepalive', '/pools?edit=all&group=keepalive', 'Opens the pool dialog on Keepalive']]) &&
+      JSON.stringify(strip('codex')) === JSON.stringify([['load shedding', '/pools?edit=codex&group=shedding', 'Opens the pool dialog on Load shedding']]) &&
+      JSON.stringify(strip('studio')) === JSON.stringify([['server-side auto mode off', '/pools?edit=studio&group=autoMode', 'Opens the pool dialog on Auto mode']]),
+    missing: [...strip('all'), ...strip('codex'), ...strip('studio')].map((b) => b.join(' | ')),
+  });
+  const badged = [...cards.entries()].filter(([, c]) => [...c.querySelectorAll('.badge')].some((b) => b.textContent?.trim() === 'server-side auto mode off')).map(([name]) => name);
   results.push({ name: '/pools the card of a pool with server-side auto mode off carries the badge, and no other card does', ok: JSON.stringify(badged) === '["studio"]', missing: badged });
-  const rowOf = (card, label) => [...card.querySelectorAll('.pool__policy > div')].find((row) => row.querySelector('dt')?.textContent?.trim() === label);
-  const studio = [...m.container.querySelectorAll('.pool')].find((card) => card.querySelector('.card__title')?.textContent?.trim() === 'studio');
-  const autoRows = [...m.container.querySelectorAll('.pool')].map((card) => rowOf(card, 'Auto mode')).filter(Boolean);
-  const ttlChips = [...m.container.querySelectorAll('.pool')].flatMap((card) => [...(rowOf(card, 'Cache TTL')?.querySelectorAll('.badge') ?? [])].map((b) => b.textContent?.trim()));
-  results.push({
-    name: '/pools the auto-mode badge sits on an Auto mode row of its own, drawn only on the card whose check is off',
-    ok: autoRows.length === 1 && studio !== undefined && autoRows[0] === rowOf(studio, 'Auto mode') && autoRows[0]?.querySelector('dd .badge')?.textContent?.trim() === 'server-side auto mode off' && !ttlChips.includes('server-side auto mode off'),
-    missing: [`${autoRows.length} Auto mode rows`, autoRows[0]?.textContent ?? 'no row', ...ttlChips],
-  });
-}
-{
-  const cardMembers = [...(m.container.querySelector('.pool__members ul')?.querySelectorAll('li') ?? [])].map((li) => `${li.children[0]?.textContent?.trim()} ${li.children[1]?.textContent?.trim()}`);
-  results.push({ name: '/pools card orders members by priority then label', ok: JSON.stringify(cardMembers) === JSON.stringify(['P0 business', 'P0 mail', 'P0 personal', 'P1 Console workspace']), missing: cardMembers });
-  // The route's verdict per member, which the selection-order strip beside it reads too: personal is in overage on
-  // an account that needs funding, which the route answers unavailable, not overage.
-  const badges = [...(m.container.querySelector('.pool__members ul')?.querySelectorAll('li .pool__eligibility .badge') ?? [])].map((b) => [b.textContent?.trim(), b.className.replace('badge ', ''), b.getAttribute('title') ?? '']);
-  results.push({
-    name: '/pools card badges each member from the route verdict',
-    ok: badges.length === 4 && badges[0][0] === 'eligible' && badges[1][0].startsWith('cooldown ends') && badges[1][1] === 'badge--warning' && JSON.stringify(badges[2]) === JSON.stringify(['unavailable', 'badge--critical', 'funding required']) && badges[3][0] === 'eligible',
-    missing: badges.map((b) => b.join(' | ')),
-  });
-}
-{
-  const cards = new Map([...m.container.querySelectorAll('.pool')].map((c) => [c.querySelector('.card__title')?.textContent?.trim(), c]));
-  const row = (pool, label) => [...(cards.get(pool)?.querySelectorAll('.pool__policy > div') ?? [])].find((d) => d.querySelector('dt')?.textContent?.trim() === label)?.querySelector('dd')?.textContent?.trim();
-  const rows = [row('all', 'Migration'), row('all', 'Failover'), row('all', 'Moves'), row('codex', 'Migration'), row('codex', 'Failover'), row('codex', 'Moves')];
-  results.push({
-    name: '/pools the card names the shedding and failover presets and lists the moves per hour by reason',
-    ok: JSON.stringify(rows) === JSON.stringify(['Migrate off', 'balanced', '0.5/h overage, 2.0/h spent', 'Shed above 85%, custom', 'custom', 'none in the last hour']),
-    missing: rows.map(String),
-  });
-}
-{
-  const order = m.container.querySelector('.pool .selection-order');
-  const tiers = [...(order?.querySelectorAll('.selection-order__tier') ?? [])].map((t) => t.children[0]?.textContent?.trim());
-  results.push({ name: '/pools the card draws the selection order by tier', ok: JSON.stringify(tiers) === JSON.stringify(['plan P0', 'overage P0', 'Anthropic keys P1']), missing: tiers });
-  const next = [...(order?.querySelectorAll('.badge--accent') ?? [])].map((b) => b.textContent?.trim());
-  results.push({ name: '/pools the next account is marked', ok: next.length >= 1 && next.every((t) => t.startsWith('next')), missing: next });
-  const cooled = [...(order?.querySelectorAll('.badge') ?? [])].find((b) => (b.getAttribute('title') ?? '').includes('cooldown'));
-  results.push({ name: '/pools an ineligible member says why', ok: cooled !== undefined && cooled.textContent.includes('mail'), missing: [cooled?.textContent ?? 'absent'] });
-  expect('/pools the card states the strategy rule', order?.textContent ?? '', ['Within the first priority tier that has an eligible account, the one with the most weekly allowance left per hour until its window resets or its subscription ends; an unsampled account counts as untouched, and ties are random.']);
-}
-{
-  // The card reads the pin mode beside the affinity, both placements, the quota header setting when it hides, and
-  // the marker toggle; a pool with affinity off has no pin mode to read.
-  const cards = new Map([...m.container.querySelectorAll('.pool')].map((c) => [c.querySelector('.card__title')?.textContent?.trim(), c]));
-  const dd = (pool, label) => [...(cards.get(pool)?.querySelectorAll('.pool__policy > div') ?? [])].find((d) => d.querySelector('dt')?.textContent?.trim() === label)?.querySelector('dd');
-  const row = (pool, label) => dd(pool, label)?.textContent?.replace(/\s+/g, ' ').trim() ?? null;
-  const rows = [row('all', 'Sessions'), row('all', 'Placement'), row('all', 'Quota headers'), row('codex', 'Sessions'), row('codex', 'Placement'), row('codex', 'Quota headers')];
-  results.push({
-    name: '/pools the card reads the pin mode, both placements and a hidden quota header family',
-    ok: JSON.stringify(rows) === JSON.stringify(['Affinity 10m, when cached', 'subagents by cohort, sessions by warm prefix from 20k tokens', 'hidden', 'Affinity off', 'subagents by cohort, sessions by strategy', null]),
-    missing: rows.map(String),
-  });
-  const ttl = dd('all', 'Cache TTL');
-  const ttlBadges = [...(ttl?.querySelectorAll('.badge') ?? [])].map((b) => b.textContent?.trim());
-  results.push({
-    name: '/pools the card reads both cache TTL rule sets and badges a pool that adds markers',
-    ok: (ttl?.textContent ?? '').startsWith('plan 1h / 5m, metered 5m / 5m') && ttlBadges.includes('adds markers') && !(dd('codex', 'Cache TTL')?.textContent ?? '').includes('adds markers'),
-    missing: [ttl?.textContent ?? 'no Cache TTL row', ...ttlBadges],
-  });
-  // Each member reads its spend against each budget it carries, the day's before the month's, a subscription
-  // member's as metered spend; the route's budget verdict is the label beside the spend, and the selection order
-  // names it as the reason the member is skipped.
-  const member = (pool, label) => {
-    const li = [...(cards.get(pool)?.querySelectorAll('.pool__members ul li') ?? [])].find((x) => x.children[1]?.textContent?.trim() === label);
-    const cell = li?.querySelector('.pool__eligibility');
-    return {
-      badges: [...(cell?.querySelectorAll('.badge') ?? [])].map((b) => `${b.textContent?.trim()}|${b.className}`),
-      lines: [...(cell?.children ?? [])].filter((c) => c.classList.contains('num')).map((c) => c.textContent?.replace(/\s+/g, ' ').trim()),
-      text: cell?.textContent?.replace(/\s+/g, ' ').trim() ?? 'absent',
-    };
-  };
   const origin = new Date(CLOCK_ORIGIN);
   const dayEnd = new Date(Date.UTC(origin.getUTCFullYear(), origin.getUTCMonth(), origin.getUTCDate() + 1)).toLocaleString('en-US', { day: '2-digit', hour: '2-digit', hourCycle: 'h23', minute: '2-digit', month: 'short' });
-  const half = member('all', 'Console workspace');
-  const metered = member('all', 'business');
-  const none = member('all', 'mail');
-  const spent = member('codex', 'Evals workspace');
+  const status = (name) => card(name)?.querySelector('.pool__status');
+  const sentence = (name) => status(name)?.textContent?.replace(/\s+/g, ' ').trim();
+  const linked = (name) => [...(status(name)?.querySelectorAll('a') ?? [])].map((a) => a.getAttribute('href'));
   results.push({
-    name: '/pools an Anthropic-key member reads its spend against each budget, the day before the month',
-    ok: JSON.stringify(half.lines) === '["$1.10 of $5.00 today","$25.00 of $50.00 this month"]' && JSON.stringify(half.badges) === '["eligible|badge badge--good"]',
-    missing: [...half.lines, ...half.badges],
+    name: '/pools the status sentence says what the badge means for each pool, its accounts linked',
+    ok:
+      sentence('all') === 'Degraded: 2 of 4 members take fresh sessions; the next one goes to business.' &&
+      JSON.stringify(linked('all')) === '["/accounts/business"]' &&
+      sentence('codex') === `Exhausted: no member can take a request until Evals workspace's daily budget resets at ${dayEnd}.` &&
+      JSON.stringify(linked('codex')) === '["/accounts/evals"]' &&
+      sentence('studio') === 'Active: business takes every fresh session.',
+    missing: [sentence('all'), sentence('codex'), sentence('studio')].map(String),
   });
   results.push({
-    name: '/pools a subscription member reads its metered spend against its budget, and a member without one says so',
-    ok: metered.lines.length === 1 && (metered.lines[0] ?? '').startsWith('metered $12.50 of $30.00 this month') && JSON.stringify(metered.badges) === '["eligible|badge badge--good"]' && none.text.startsWith('no budget'),
-    missing: [...metered.lines, ...metered.badges, none.text],
+    name: '/pools no card draws an attention row',
+    ok:
+      m.container.querySelector('.pool .attention') === null,
+    missing: [],
   });
+  const caption = (name) => card(name)?.querySelector('.serving caption');
+  const captions = ['all', 'codex', 'studio'].map((name) => [caption(name)?.textContent?.trim(), caption(name)?.getAttribute('title')]);
+  const fable = 'A request for a Fable model is placed on the Fable window instead, which this card does not draw.';
+  results.push({
+    name: '/pools each serving table names its strategy in a caption titled with the Fable caveat',
+    ok: JSON.stringify(captions) === JSON.stringify([['Pace, subscription accounts first', fable], ['Round robin', fable], ['Priority, then random; subscription accounts first', fable]]),
+    missing: captions.flat().map(String),
+  });
+  const rows = (name) => [...(card(name)?.querySelectorAll('.serving tbody tr') ?? [])];
+  const cell = (tr, i) => tr.children[i];
+  const accountsOf = (name) => rows(name).map((tr) => cell(tr, 1).querySelector('a')?.textContent?.trim());
+  results.push({ name: '/pools the serving table lists the members in selection order', ok: JSON.stringify(accountsOf('all')) === JSON.stringify(['business', 'mail', 'personal', 'Console workspace']), missing: accountsOf('all') });
+  const tiers = rows('all').map((tr) => cell(tr, 0).textContent?.trim());
+  results.push({ name: '/pools the card draws the selection order by tier', ok: JSON.stringify(tiers) === JSON.stringify(['plan P0', 'plan P0', 'overage P0', 'Anthropic keys P1']), missing: tiers });
+  const standing = (name, label) => {
+    const tr = rows(name).find((r) => cell(r, 1).querySelector('a')?.textContent?.trim() === label);
+    const td = tr ? cell(tr, 2) : null;
+    return {
+      badges: [...(td?.querySelectorAll('.badge') ?? [])].map((b) => [b.textContent?.trim(), b.className.replace('badge ', ''), b.getAttribute('title') ?? '']),
+      next: tr?.classList.contains('is-next') ?? false,
+      why: document.getElementById(td?.getAttribute('aria-describedby') ?? '')?.textContent ?? '',
+    };
+  };
+  const verdicts = ['business', 'mail', 'personal', 'Console workspace'].map((l) => standing('all', l));
+  results.push({
+    name: '/pools card badges each member from the route verdict, the next one marked',
+    ok:
+      JSON.stringify(verdicts[0].badges) === '[["next","badge--accent",""]]' &&
+      verdicts[0].next &&
+      verdicts[0].why === 'business: where the next fresh session lands' &&
+      verdicts[1].badges[0]?.[0]?.startsWith('cooldown ends') &&
+      verdicts[1].badges[0]?.[1] === 'badge--warning' &&
+      JSON.stringify(verdicts[2].badges) === JSON.stringify([['unavailable', 'badge--critical', 'funding required']]) &&
+      verdicts[3].badges[0]?.[0] === 'eligible' &&
+      verdicts.slice(1).every((v) => !v.next),
+    missing: verdicts.map((v) => JSON.stringify(v)),
+  });
+  results.push({ name: '/pools an ineligible member says why', ok: standing('all', 'mail').why === 'mail: in cooldown, skipped by selection', missing: [standing('all', 'mail').why] });
+  const spend = (name, label) =>
+    [...(rows(name).find((r) => cell(r, 1).querySelector('a')?.textContent?.trim() === label)?.querySelectorAll('td:nth-child(2) .num') ?? [])].map((s) => s.textContent?.replace(/\s+/g, ' ').trim());
+  results.push({ name: '/pools an Anthropic-key member reads its spend against each budget, the day before the month', ok: JSON.stringify(spend('all', 'Console workspace')) === '["$1.10 of $5.00 today","$25.00 of $50.00 this month"]', missing: spend('all', 'Console workspace') });
+  results.push({
+    name: '/pools a subscription member reads its metered spend against its budget, and a member without one draws no spend line',
+    ok: spend('all', 'business').length === 1 && spend('all', 'business')[0].startsWith('metered $12.50 of $30.00 this month') && spend('all', 'mail').length === 0,
+    missing: [...spend('all', 'business'), String(spend('all', 'mail').length)],
+  });
+  const evals = standing('codex', 'Evals workspace');
   results.push({
     name: "/pools a member at its budget reads the route's verdict beside its spend, until the day ends",
-    ok: JSON.stringify(spent.lines) === '["$20.40 of $20.00 today"]' && JSON.stringify(spent.badges) === JSON.stringify([`at budget until ${dayEnd}|badge badge--warning`]),
-    missing: [...spent.lines, ...spent.badges, dayEnd],
+    ok: JSON.stringify(spend('codex', 'Evals workspace')) === '["$20.40 of $20.00 today"]' && JSON.stringify(evals.badges) === JSON.stringify([[`at budget until ${dayEnd}`, 'badge--warning', '']]) && evals.why === 'Evals workspace: at budget, skipped by selection',
+    missing: [...spend('codex', 'Evals workspace'), ...evals.badges.map((b) => b.join(' | ')), evals.why],
   });
-  const codexOrder = cards.get('codex')?.querySelector('.selection-order')?.textContent ?? '';
-  results.push({ name: '/pools the selection order names the budget as the reason a member is skipped', ok: codexOrder.includes('Evals workspace (at budget)'), missing: [codexOrder.slice(0, 160)] });
-  // The card's lines take the dialog's words, without the links a title attribute cannot hold.
-  const lines = [
-    cards.get('all')?.querySelector('.selection-order__rule')?.textContent ?? '',
-    dd('all', 'Sessions')?.getAttribute('title') ?? null,
-    dd('all', 'Quota headers')?.getAttribute('title') ?? null,
-    dd('all', 'Keep prompt caches warm')?.querySelector('.chips')?.getAttribute('title') ?? null,
-  ];
+  const tiles = (name) => [...(card(name)?.querySelectorAll('.pool__stats > div') ?? [])].map((d) => [d.querySelector('dt')?.textContent?.trim(), d.querySelector('dd')?.textContent?.trim(), d.querySelector('dd')?.getAttribute('title')]);
   results.push({
-    name: "/pools the pool card's lines read the dialog's words",
-    ok:
-      lines[0] === 'Within the first priority tier that has an eligible account, the one with the most weekly allowance left per hour until its window resets or its subscription ends; an unsampled account counts as untouched, and ties are random.' &&
-      lines[1] === 'How long a session stays on its account after its last request; off keeps no pins, and a custom value is at least 60 seconds.' &&
-      lines[2] === "Hide drops the anthropic-ratelimit-unified-* headers from every answer but a 429, so an organization's quota never reads as the key holder's own; a 429 keeps them so the client can resume after the reset. request-id passes either way." &&
-      lines[3] === "Cold limit: probes in a row that find the cache already gone, after which the session's probes pause until its next real request. Idle: how long, or how many probes, without a real request before probing stops. Net-negative stop: probes a session still gets after its probes have cost more than the cache reads they saved.",
-    missing: lines.map(String),
+    name: '/pools six tiles per card, the sixth the moves in the last hour split by reason in its title',
+    ok: tiles('all').length === 6 && JSON.stringify(tiles('all')[5]) === JSON.stringify(['Moves in the last hour', '2.5', 'window spent 2.0, overage 0.5']) && JSON.stringify(tiles('codex')[5]) === JSON.stringify(['Moves in the last hour', '0', 'No session moved in the last hour.']),
+    missing: [...(tiles('all')[5] ?? []), ...(tiles('codex')[5] ?? [])].map(String),
   });
+  results.push({ name: '/pools nothing of the recap, the strip, the member list or the key chips is left', ok: m.container.querySelector('.pool .pool__policy, .pool .selection-order, .pool .pool__members, .pool .pool__eligibility, .pool a.badge[href="/keys"]') === null, missing: [] });
+}
+{
+  // Test data for the rows alone, mounted on their own: the pool card passes an empty list, since no route answers one.
+  // Each condition started a whole number of hours before the instant the rows are drawn at, so its age reads exactly.
+  const { createElement: h } = React;
+  const now = Date.now();
+  const at = (hours) => new Date(now - hours * 3_600_000).toISOString();
+  const items = [
+    { detail: 'The usage poll answered 429; the next read waits 4 minutes.', kind: 'poll_backoff', since: at(2), subject: { id: 'mail', kind: 'account', label: 'mail' } },
+    { detail: 'Every member is out of quota or at its budget.', kind: 'pool_exhausted', since: at(1), subject: { id: 'codex', kind: 'pool', label: 'codex' } },
+    { detail: 'The refresh token was revoked; sign in again.', kind: 'reauth_required', since: at(5), subject: { id: 'team', kind: 'account', label: 'team' } },
+    { detail: 'The client build changed its fingerprint.', kind: 'client_drift', since: at(3), subject: { id: 'cli-2.1.290', kind: 'client', label: 'Claude Code 2.1.290' } },
+  ];
+  const a = await mountNode(h(AttentionRows, { items, now }));
+  const rows = [...a.container.querySelectorAll('ul.attention > li.attention__row')].map((li) => ({
+    href: li.querySelector('a')?.getAttribute('href') ?? null,
+    kind: li.querySelector('.badge')?.textContent?.trim(),
+    subject: li.children[1]?.textContent?.trim(),
+    tag: li.children[1]?.tagName,
+    title: li.getAttribute('title'),
+    tone: li.querySelector('.badge')?.className.replace('badge ', ''),
+  }));
+  const want = [
+    ['Re-auth required', 'badge--critical', 'team', 'A', '/accounts/team', 'The refresh token was revoked; sign in again. (5h 0m ago)'],
+    ['Pool exhausted', 'badge--critical', 'codex', 'SPAN', null, 'Every member is out of quota or at its budget. (1h 0m ago)'],
+    ['Usage poll backing off', 'badge--warning', 'mail', 'A', '/accounts/mail', 'The usage poll answered 429; the next read waits 4 minutes. (2h 0m ago)'],
+    ['Client drift', 'badge--warning', 'Claude Code 2.1.290', 'SPAN', null, 'The client build changed its fingerprint. (3h 0m ago)'],
+  ];
+  const read = rows.map((r) => [r.kind, r.tone, r.subject, r.tag, r.href, r.title]);
+  results.push({ name: 'the attention rows read worst first, an account or a key linked to where it is fixed, a pool or a client named alone, each titled with its detail and age', ok: JSON.stringify(read) === JSON.stringify(want), missing: read.map((r) => r.join(' | ')) });
+  a.unmount();
+  const empty = await mountNode(h(AttentionRows, { items: [], now }));
+  results.push({ name: 'an empty attention list draws nothing', ok: empty.container.innerHTML === '', missing: [empty.container.innerHTML.slice(0, 120)] });
+  empty.unmount();
 }
 {
   const del = [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Delete pool all');
@@ -1268,20 +1292,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace',
       strategy.dispatchEvent(new window.Event('change', { bubbles: true }));
       await m.settle(150);
     };
-    // The card's rule line is the first sentence of the dialog's Strategy hint, so the two cannot drift apart. Each
-    // strategy is read on the card of a pool that holds it.
-    const hint = () => [...(selection?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === 'Strategy')?.querySelector('.field__hint')?.textContent ?? '';
-    const cardRule = (label) =>
-      [...m.container.querySelectorAll('.pool')]
-        .find((c) => [...c.querySelectorAll('.pool__policy > div')].some((d) => d.querySelector('dt')?.textContent?.trim() === 'Strategy' && (d.querySelector('dd')?.textContent ?? '').trim().startsWith(label)))
-        ?.querySelector('.selection-order__rule')?.textContent ?? null;
-    const drift = [];
-    for (const option of [...(strategy?.options ?? [])]) {
-      await choose(option.value);
-      const rule = cardRule(option.textContent?.trim() ?? '');
-      if (!rule || !hint().startsWith(rule)) drift.push(`${option.value}: card ${JSON.stringify(rule)}, hint ${JSON.stringify(hint().slice(0, 80))}`);
-    }
-    results.push({ name: "/pools the Strategy hint opens with the card's rule for each strategy", ok: (strategy?.options.length ?? 0) === 3 && drift.length === 0, missing: drift });
+    for (const option of [...(strategy?.options ?? [])]) await choose(option.value);
     await choose('round_robin');
     results.push({ name: '/pools switching strategies leaves the toggle enabled', ok: toggle?.disabled === false, missing: [toggle?.outerHTML.slice(0, 120) ?? 'absent'] });
     // Back to the stored strategy: this dialog stays open for the checks below, which read the pool as it is saved.
@@ -2049,8 +2060,10 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace',
   const card = [...m.container.querySelectorAll('.pool')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'codex');
   results.push({
     name: '/pools tuning left in a block whose warming is off is not sent and holds nothing',
-    ok: heldWhileOn && freedWhenOff && !(open?.textContent ?? '').includes('Edit pool codex') && (card?.textContent ?? '').includes('Affinity off'),
-    missing: [String(heldWhileOn), String(freedWhenOff), open?.querySelector('.callout--critical')?.textContent ?? 'no callout', card ? '' : 'no codex card'],
+    // The dialog offers active and disabled alone, so the save turns the exhausted pool active, and the write clears
+    // the spend that held its member: the sentence reads what the save left.
+    ok: heldWhileOn && freedWhenOff && !(open?.textContent ?? '').includes('Edit pool codex') && card?.querySelector('.pool__status')?.textContent?.replace(/\s+/g, ' ').trim() === 'Active: Evals workspace takes every fresh session.',
+    missing: [String(heldWhileOn), String(freedWhenOff), open?.querySelector('.callout--critical')?.textContent ?? 'no callout', card?.querySelector('.pool__status')?.textContent ?? 'no codex card'],
   });
   if ((open?.textContent ?? '').includes('Edit pool codex')) {
     [...(open?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
@@ -2089,8 +2102,9 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace',
   m.unmount();
   m = await mount('/pools');
   const card = [...m.container.querySelectorAll('.pool')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'studio');
-  const cell = card?.querySelector('.pool__members ul li .pool__eligibility');
-  const lines = [...(cell?.children ?? [])].map((c) => c.textContent?.replace(/\s+/g, ' ').trim());
+  const row = [...(card?.querySelectorAll('.serving tbody tr') ?? [])].find((tr) => tr.children[1]?.querySelector('a')?.textContent?.trim() === 'business');
+  const lines = [...(row?.querySelectorAll('td:nth-child(2) .num') ?? [])].map((c) => c.textContent?.replace(/\s+/g, ' ').trim());
+  const standingBadges = [...(row?.querySelectorAll('td:nth-child(3) .badge') ?? [])].map((b) => b.textContent?.trim());
   [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool studio')?.click();
   await m.settle(300);
   const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
@@ -2101,12 +2115,13 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace',
   results.push({
     name: '/pools a budget on a subscription member draws its two fields and a save keeps it',
     ok:
-      JSON.stringify(lines) === '["metered - of $30.00 today","metered - of $300.00 this month","eligible"]' &&
+      JSON.stringify(lines) === '["metered - of $30.00 today","metered - of $300.00 this month"]' &&
+      JSON.stringify(standingBadges) === '["next"]' &&
       JSON.stringify(fields) === '["30","300"]' &&
       stored?.budgetDailyUsd === 30 &&
       stored?.budgetMonthlyUsd === 300 &&
       !m.container.querySelector('dialog[open]'),
-    missing: [...lines, ...fields.map((f) => (f === null ? 'no field' : `field ${f}`)), JSON.stringify(stored ?? null)],
+    missing: [...lines, ...standingBadges, ...fields.map((f) => (f === null ? 'no field' : `field ${f}`)), JSON.stringify(stored ?? null)],
   });
   // The story's membership back, so the budgets card below reads the rows the fixture holds.
   await api.updatePool('studio', studio);
@@ -2133,6 +2148,18 @@ m.unmount();
   await q.navigate('/pools?edit=codex&group=shedding');
   await q.settle(200);
   results.push({ name: '/pools a search change on the mounted page opens the dialog on its group', ok: titleOf(q) === 'Edit pool codex' && shown(q) === 'Load shedding' && q.location().search === '', missing: [titleOf(q), shown(q), q.location().search] });
+  q.unmount();
+  // The card's strip writes the same address, and the page reads it on every change, so a second badge opens too.
+  q = await mount('/pools');
+  const poolCard = (name) => [...q.container.querySelectorAll('.pool')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === name);
+  poolCard('all')?.querySelector('.pool__features a[href="/pools?edit=all&group=cacheTtl"]')?.click();
+  await q.settle(300);
+  results.push({ name: "/pools the all card's cache TTL badge opens Edit pool all on Cache TTL and leaves the address at /pools", ok: titleOf(q) === 'Edit pool all' && shown(q) === 'Cache TTL' && q.location().pathname === '/pools' && q.location().search === '', missing: [titleOf(q), shown(q), JSON.stringify(q.location())] });
+  dialogOf(q)?.querySelector('button[aria-label="Close"]')?.click();
+  await q.settle(200);
+  poolCard('codex')?.querySelector('.pool__features a[href="/pools?edit=codex&group=shedding"]')?.click();
+  await q.settle(300);
+  results.push({ name: "/pools the strip's badges open the dialog twice in a row", ok: titleOf(q) === 'Edit pool codex' && shown(q) === 'Load shedding' && q.location().search === '', missing: [titleOf(q), shown(q), q.location().search] });
   q.unmount();
   q = await mount('/pools?edit=nope');
   await q.settle(200);
@@ -5670,7 +5697,7 @@ for (const [path, absent, present, heading] of [
   ['/alerts', ['Create rule', 'Resolve'], ['Rules', 'Events', 'Lifecycle'], 'Alerts'],
   ['/analytics', [], ['Traffic', 'Latency'], 'Analytics'],
   ['/keys', ['Create key'], ['Lifetime cost by key'], 'Keys'],
-  ['/pools', ['Create pool', 'Delete', 'Edit'], ['Selection order'], 'Pools'],
+  ['/pools', ['Create pool', 'Delete', 'Edit'], ['Pace, subscription accounts first'], 'Pools'],
   ['/sessions', ['Release'], ['Cache warming'], 'Sessions'],
   ['/settings', ['Add model'], ['Keepalive', 'Pricing'], 'Settings'],
 ]) {

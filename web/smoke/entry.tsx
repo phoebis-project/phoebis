@@ -11,6 +11,7 @@ import { ALL_ROLLUPS, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, REQUEST_EVE
 import { SETTINGS_SAMPLE } from '@/mock/samples';
 
 export { api, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION };
+export { AttentionRows } from '@/components/AttentionRows';
 export { default as React } from 'react';
 export { Expert, Field, GroupedDialog, GroupLink, Input, PageLink, SwitchedNumber, Toggle } from '@/components/ui/primitives';
 export const MOCK_VERSION = SETTINGS_SAMPLE.about.version;
