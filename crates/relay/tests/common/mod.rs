@@ -940,6 +940,20 @@ pub fn models_request(key: &str, path: &str) -> Request<Body> {
         .unwrap()
 }
 
+/// The profile body with `"speed":"fast"` spliced at the top level, under the session header.
+pub fn fast_request(session: &str) -> Request<Body> {
+    let native = String::from_utf8(body(BodyFixture::Oauth).to_vec())
+        .unwrap()
+        .replacen(r#"{"model""#, r#"{"speed":"fast","model""#, 1);
+    let mut req = request_from_fixture(
+        inference_head(FixtureKind::OauthNonFirstParty),
+        native.as_bytes(),
+        KEY,
+    );
+    set_header(&mut req, "x-claude-code-session-id", session);
+    req
+}
+
 /// The same request carrying a top-level `container`, which binds it to the account that holds the container.
 pub fn non_portable_request(key: &str, session: &str) -> Request<Body> {
     let native = String::from_utf8(body(BodyFixture::Oauth).to_vec())

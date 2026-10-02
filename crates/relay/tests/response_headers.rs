@@ -3,11 +3,9 @@
 mod common;
 use std::time::Duration;
 
-use axum::body::Body;
-use axum::http::{HeaderMap, Request};
+use axum::http::HeaderMap;
 use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
-use phoebis_profile::fixtures::{body, inference_head, BodyFixture, FixtureKind};
 use phoebis_relay::Limits;
 use tower::ServiceExt;
 
@@ -67,20 +65,6 @@ fn event(event: &str, data: &str) -> SseEvent {
         event: event.into(),
         data: data.into(),
     }
-}
-
-/// The profile body with `"speed":"fast"` spliced at the top level, under the session header.
-fn fast_request(session: &str) -> Request<Body> {
-    let native = String::from_utf8(body(BodyFixture::Oauth).to_vec())
-        .unwrap()
-        .replacen(r#"{"model""#, r#"{"speed":"fast","model""#, 1);
-    let mut req = request_from_fixture(
-        inference_head(FixtureKind::OauthNonFirstParty),
-        native.as_bytes(),
-        KEY,
-    );
-    set_header(&mut req, "x-claude-code-session-id", session);
-    req
 }
 
 #[tokio::test]
