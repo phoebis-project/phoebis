@@ -1,5 +1,5 @@
 //! The request log: one row per client request with its attempt trail, the detail with its events, and the
-//! captured bodies for administrators.
+//! captured bodies.
 
 use std::collections::HashMap;
 use std::sync::Arc;

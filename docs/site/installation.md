@@ -72,10 +72,9 @@ tunnel. Then validate it before enabling the service:
 sudo bash -c 'set -a; . /etc/phoebis/phoebis.env; set +a; exec phoebis check-config --config /etc/phoebis/config.yaml'
 ```
 
-`check-config` resolves `admin.secret_env` from the process environment like every other invocation, so the env
-file has to be sourced into this one shell first; plain
-`sudo phoebis check-config --config /etc/phoebis/config.yaml` fails with `environment variable PHOEBIS_ADMIN_SECRET is
-unset or empty`. Once it is clean, `sudo systemctl enable --now phoebis`.
+`check-config` resolves `admin.secret_env` from the process environment like every other invocation, so the env file has
+to be sourced into this one shell first; plain `sudo phoebis check-config --config /etc/phoebis/config.yaml` fails with
+`environment variable PHOEBIS_ADMIN_SECRET is unset or empty`. Once it is clean, `sudo systemctl enable --now phoebis`.
 
 ## Run the container
 
