@@ -750,9 +750,9 @@ async fn probe_outcomes_are_classified() {
             "{status:?}"
         );
     }
-    // An upstream 401 never reaches the engine as a 401: the relay marks the account and fails over, and with
-    // no account left answers the untimed exhaustion 503, which pauses under its own reason whatever marked
-    // the account.
+    // An upstream 401 never reaches the engine as a 401: the relay marks the account, fails over, and with no
+    // account left answers the untimed exhaustion 503 naming the mark, which pauses under the authentication
+    // reason.
     let mut r = rig(RigSpec {
         accounts: vec![api_key("a", A, 0)],
         ..RigSpec::default()
@@ -771,7 +771,7 @@ async fn probe_outcomes_are_classified() {
     r.step().await;
     assert_eq!(
         (r.status("main").reason, r.status("main").next_probe_at),
-        (Reason::ProbePoolExhausted, None)
+        (Reason::ProbeAuthenticationError, None)
     );
     // A 429 on every account is the relay's exhaustion 429: the same pause a single 429 after failover gets.
     let mut r = rig(RigSpec::default()).await;

@@ -464,10 +464,11 @@ fast request's pinned account whose `fast_credits` row stands or whose usage cre
 `fast_rate_limit` (one whose `fast` row is the blocking row that stands latest), `overage`, `paused`, `spent`,
 `subscription_ended`, `unserved`, the account's state when it cannot serve (`disconnected`, `funding_required`,
 `reauth_required`, `unpaired`), or `released` when the selection found nothing else against the account, as with a move
-whose destination emptied. A pin whose creating request was answered 400, 401, 403, or 404, with no cooldown or mark on
-the account and no other turn of the session renewing it meanwhile, records the single reason `client_error`: it never
-served, so the session's next request is placed afresh rather than moved. Releasing a session by hand, from the Sessions
-view or `POST /admin/sessions/{key}/{session}/release`, expires its pin the same way.
+whose destination emptied. A pin whose creating request was answered 400, 403, or 404, or was bound to its account and
+ended at an authentication failure that marked nothing, with no cooldown or mark on the account and no other turn of the
+session renewing it meanwhile, records the single reason `client_error`: it never served, so the session's next request
+is placed afresh rather than moved. Releasing a session by hand, from the Sessions view or
+`POST /admin/sessions/{key}/{session}/release`, expires its pin the same way.
 
 ## Cooldowns and failover
 
@@ -522,8 +523,8 @@ auxiliary class, or a request foreign to the conversation) moves that pin too.
 
 | Upstream result | Cooldown | Failover |
 | --- | --- | --- |
-| 401, or 403 with `authentication_error`, Oauth | Refresh once, else `reauth_required` | Yes, post-refresh |
-| 401, or 403 with `authentication_error`, api_key | `reauth_required` now | Yes |
+| 401, or 403 `authentication_error`, Oauth | Refresh once; `reauth_required` if conclusive | Yes; never forwarded |
+| 401, or 403 `authentication_error`, api_key | `reauth_required` now | Yes; never forwarded |
 | 403 `permission_error` | Model-scoped, one hour, reason permission; credential stays valid | Yes |
 | 404 `not_found_error` naming a model | Model-scoped, `routing.model_rejection_seconds`, reason model_rejected | Yes |
 | 529 | None | No; forwarded, retries |
@@ -566,10 +567,20 @@ their own bounds, as the paragraph after the steps says. Each attempt goes throu
 3. Classify the head. A short throttle on a portable request is waited out on the same account
    ([retry in place](#retry-in-place)). Any other failover row on a portable request records the cooldown, invalidates
    the matching pin, and returns to step 1; on a non-portable request it records the cooldown and commits the failed
-   response instead. Any other row commits and relays the response.
+   response instead. An authentication failure is the exception: it is never committed, and an account it marks keeps
+   its pin, as the paragraph after these steps says. Any other row commits and relays the response.
 4. Once the committed response ends, renew the pin with the usage it carried: the served account is final for this
-   request. A pin this request created and whose answer is `400`, `401`, `403`, or `404` is released instead, since
-   it never served, unless another turn of the session renewed it meanwhile; a `429` keeps the cooldown path of step 3.
+   request. A pin this request created and whose answer is `400`, `403`, or `404` is released instead, since it never
+   served, unless another turn of the session renewed it meanwhile, and so is one a non-portable request created
+   before an authentication failure that marked nothing; a `429` keeps the cooldown path of step 3.
+
+An upstream `401`, or a `403` whose body is an `authentication_error`, never reaches the client. On an OAuth account
+the router refreshes the token once and replays the request on a new token; when the refresh rotates nothing, or on an
+Anthropic-key account, the request fails over to the next eligible account with the pin moved, and a request bound to
+its account, or one with no account left, is answered the router's own `503 accounts_unavailable` with no account
+named. The attempt rows read `auth_failed` with the upstream status, and the account reads `reauth_required` after a
+conclusive failure (a rejected replay, an `invalid_grant`, a token endpoint's `401`), which the Accounts view and the
+`reauth_required` alert show.
 
 A stream commits at its `message_start` event or its first `error` event, whichever comes first; earlier events
 are buffered, up to 64 KiB, and relayed after commit in order; a stream that exceeds the buffer or sends no

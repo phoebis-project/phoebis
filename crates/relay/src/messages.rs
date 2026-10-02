@@ -151,12 +151,17 @@ pub struct RelayOutcome {
     pub cache_ttl_ms: Option<i64>,
     /// `budget` when the selector answered a probe pinned to a member at its spend budget, `operator`,
     /// `subscription_ended` or `attempted` when it answered one on its pinned member's standing
-    /// (`Exhaustion::Pinned`): the obstacles the keepalive holds on rather than pauses as an exhausted pool; `None`
+    /// (`Exhaustion::Pinned`), `reauth_required` when a leg of the probe marked its account for re-authentication
+    /// (`REAUTH_OBSTACLE`): the obstacles the keepalive holds on rather than pauses as an exhausted pool; `None`
     /// otherwise.
     pub obstacle: Option<&'static str>,
     /// The holds this request waited through, the summary `phoebis_routing::cohort_hold` gives; `None` for none.
     pub held: Option<CohortHold>,
 }
+
+/// On `RelayOutcome`: the obstacle a probe's exhaustion carries when a leg of the request marked the pinned
+/// account `reauth_required`; the keepalive pauses under `ProbeAuthenticationError` on it.
+pub const REAUTH_OBSTACLE: &str = "reauth_required";
 
 /// Which side funded the account a request served under, on the response's extensions beside `RelayOutcome`.
 /// The keepalive's probe path is the one reader today: a probe's cost and the credit it later earns price
@@ -607,7 +612,10 @@ fn attempt_outcome(verdict: &Verdict, status: u16, first_event: Option<&[u8]>) -
         {
             AttemptOutcome::RateLimited
         }
-        Verdict::FailOver { .. } if status == 401 => AttemptOutcome::AuthFailed,
+        Verdict::FailOver {
+            mark: Some(AccountState::ReauthRequired),
+            ..
+        } => AttemptOutcome::AuthFailed,
         Verdict::FailOver { .. } => AttemptOutcome::UpstreamError,
         Verdict::StripInjected(_) => AttemptOutcome::UpstreamError,
     }
@@ -1281,6 +1289,10 @@ impl Relay {
         // is a pool at its cap, which frees on its own, not one only an operator can clear.
         let mut held_out = false;
         let mut dialed = false;
+        // Whether a leg of this request marked its account for re-authentication, which a probe's exhaustion
+        // answer names so the keepalive pauses under the authentication reason. Never cleared: a later leg's
+        // failover of another kind does not undo the mark.
+        let mut auth_marked = false;
 
         loop {
             let now = (self.clock)();
@@ -1377,7 +1389,14 @@ impl Relay {
                 }
                 SelectResult::Exhausted(exhaustion) => {
                     return self
-                        .exhausted(&admitted, attempt, &exhaustion, now, held_out && !dialed)
+                        .exhausted(
+                            &admitted,
+                            attempt,
+                            &exhaustion,
+                            now,
+                            held_out && !dialed,
+                            auth_marked,
+                        )
                         .await;
                 }
                 // A slot freed within the bound lets the next selection place there; past it the account is
@@ -1436,10 +1455,22 @@ impl Relay {
             {
                 Leg::AtCap => {
                     return self
-                        .exhausted(&admitted, attempt, &Exhaustion::Untimed, now, false)
+                        .exhausted(
+                            &admitted,
+                            attempt,
+                            &Exhaustion::Untimed,
+                            now,
+                            false,
+                            auth_marked,
+                        )
                         .await;
                 }
-                Leg::FailOver => continue,
+                Leg::FailOver {
+                    auth_marked: marked,
+                } => {
+                    auth_marked |= marked;
+                    continue;
+                }
                 Leg::Respond(mut response) => {
                     // Every kind rides this, not the probe path alone: the keepalive's is the only reader
                     // today, but a request's own funding is a fact of its selection, not of who asked for it.
@@ -1453,7 +1484,8 @@ impl Relay {
     }
 
     /// The answer for a pool with nothing to select, the outcome carrying the exhaustion's code. `at_cap` answers
-    /// an untimed exhaustion as a pool whose accounts are all at their in-flight cap.
+    /// an untimed exhaustion as a pool whose accounts are all at their in-flight cap; `auth_marked` is whether a
+    /// leg of this request marked its account for re-authentication.
     async fn exhausted(
         &self,
         admitted: &Admitted<'_>,
@@ -1461,6 +1493,7 @@ impl Relay {
         exhaustion: &Exhaustion,
         now: i64,
         at_cap: bool,
+        auth_marked: bool,
     ) -> Response {
         let (code, response) = match exhaustion {
             Exhaustion::Untimed if at_cap => {
@@ -1511,6 +1544,18 @@ impl Relay {
         if let Exhaustion::Pinned { obstacle } = exhaustion {
             outcome.obstacle = Some(*obstacle);
         }
+        // Read last, so it overrides `attempted` alone: a probe that tried its marked member is not one to retry,
+        // and no wait clears the mark. A timed answer keeps the quota pause its 429 gets, a budget hold stays
+        // one, and a pinned member's other standings keep their own reasons.
+        if admitted.trace.kind == Kind::Probe
+            && auth_marked
+            && code == "accounts_unavailable"
+            && outcome
+                .obstacle
+                .is_none_or(|obstacle| obstacle == "attempted")
+        {
+            outcome.obstacle = Some(REAUTH_OBSTACLE);
+        }
         self.answer(
             admitted.trace,
             response,
@@ -1543,7 +1588,7 @@ impl Relay {
         // at most once per request.
         let mut credential = match self.credential(account).await {
             Ok(credential) => credential,
-            Err(_) => return Leg::FailOver,
+            Err(_) => return Leg::FailOver { auth_marked: false },
         };
         // Stable across a same-account replay: an OAuth refresh replaces the token, never the account identity
         // it names, so this is read once rather than through the closure below.
@@ -1721,7 +1766,7 @@ impl Relay {
         let authority = dispatch::UPSTREAM_AUTHORITY;
         let Some(addr) = (self.resolver)(authority).await else {
             tracing::warn!(host = %authority, "the upstream host does not resolve");
-            return Leg::FailOver;
+            return Leg::FailOver { auth_marked: false };
         };
         let pool_key = PoolKey {
             account_id: account.id.clone(),
@@ -1804,6 +1849,7 @@ impl Relay {
             let responding = Responding {
                 account,
                 attempt: *attempt,
+                auth_marked: false,
                 cache_ttl_ms: cache_ttl_ms(ttl),
                 caller: admitted.caller,
                 can_retry_in_place: !retried_in_place,
@@ -1934,7 +1980,7 @@ impl Relay {
                     replayed = true;
                     fresh = false;
                 }
-                Next::FailOver => return Leg::FailOver,
+                Next::FailOver { auth_marked } => return Leg::FailOver { auth_marked },
                 Next::Respond(response) => return Leg::Respond(response),
                 // The same account and the same credential once the throttle has passed.
                 Next::RetryInPlace(delay) => {
@@ -2068,6 +2114,47 @@ impl Relay {
                     }
                     (Some(buffered), None)
                 }
+                // Telling a token the refresh would fix from one it would not takes the whole body, so a 401 too
+                // large to read fails over unread, with no refresh and no mark, and never reaches the client.
+                Ok(Drained::TooLarge(_)) if head.status == 401 => {
+                    tracing::debug!(account = %ctx.account.id, "failing over from a 401 too large to inspect");
+                    drop(reader);
+                    ctx.trace
+                        .head(
+                            ctx.attempt,
+                            &head,
+                            None,
+                            AttemptOutcome::AuthFailed,
+                            None,
+                            written_at,
+                            head_at,
+                        )
+                        .await;
+                    let generations = (
+                        ctx.account.incarnation,
+                        ctx.account.lifecycle_generation,
+                        ctx.credential_generation,
+                    );
+                    report_failover(
+                        &self.router,
+                        &ctx.account.id,
+                        &ctx.identity.canonical_model,
+                        None,
+                        None,
+                        ctx.portable.then(|| ctx.pin.cloned()).flatten(),
+                        ctx.request_id,
+                        generations,
+                        (self.clock)(),
+                    );
+                    if ctx.portable {
+                        return Next::FailOver { auth_marked: false };
+                    }
+                    let release = self.release_on(&ctx, head.status);
+                    return Next::Respond(
+                        self.authentication_exhausted(&ctx, &head, outcome, release)
+                            .await,
+                    );
+                }
                 Ok(Drained::TooLarge(prefix)) => {
                     tracing::debug!(account = %ctx.account.id, "forwarding a rejection too large to inspect");
                     let release = self.release_on(&ctx, head.status);
@@ -2193,6 +2280,14 @@ impl Relay {
             Verdict::FailOver { cooldown, .. } => cooldown.as_ref(),
             _ => None,
         };
+        let auth_failed = matches!(
+            verdict,
+            Verdict::Refresh
+                | Verdict::FailOver {
+                    mark: Some(AccountState::ReauthRequired),
+                    ..
+                }
+        );
         ctx.trace
             .head(
                 ctx.attempt,
@@ -2210,9 +2305,9 @@ impl Relay {
             ctx.credential_generation,
         );
 
-        let (cooldown, mark) = match verdict {
+        let (cooldown, mark, moves_pin) = match verdict {
             // A rejected replay is conclusive: the refreshed token was refused too.
-            Verdict::Refresh if ctx.replayed => (None, Some(AccountState::ReauthRequired)),
+            Verdict::Refresh if ctx.replayed => (None, Some(AccountState::ReauthRequired), false),
             Verdict::Refresh => {
                 match self
                     .manager
@@ -2220,13 +2315,11 @@ impl Relay {
                     .await
                 {
                     Ok(token) => return Next::Replay(Credential::from(token)),
-                    // Nothing was replaced, so nothing conclusive happened: the upstream's 401 goes back as
-                    // it came, and the account keeps its state and a pin that already served. Failing over
-                    // would spend another account on a request whose own credential may work again in a
-                    // minute, and invalidating the pin would move a session that has no reason to move; a pin
-                    // this request created is released as any client error's is. An account the refresh found
-                    // marked, by its own invalid_grant or by a disconnect meanwhile, is left to the next selection,
-                    // which ends the pin under the account's state.
+                    // Nothing was replaced, so the account is finished for this request and nothing of the
+                    // upstream's 401 goes back: the request fails over, and a request with no account left, or
+                    // one bound to this account, is answered the router's own exhaustion. An account the refresh
+                    // found marked, by its own invalid_grant or by a disconnect meanwhile, keeps its pin for the
+                    // next selection to end under the account's state; any other failure moves the pin.
                     Err(error) => {
                         tracing::warn!(account = %ctx.account.id, %error, "the rejected token could not be refreshed");
                         let marked = matches!(
@@ -2235,23 +2328,10 @@ impl Relay {
                                 | AcquireError::ReauthRequired
                                 | AcquireError::Unpaired
                         );
-                        let release = (!marked)
-                            .then(|| self.release_on(&ctx, head.status))
-                            .flatten();
-                        let hide_quota = ctx.hides_quota(head.status);
-                        return Next::Respond(
-                            self.forward_buffered(
-                                ctx.trace,
-                                &head,
-                                buffered.unwrap_or_default(),
-                                ctx.caller,
-                                outcome,
-                                release,
-                                None,
-                                hide_quota,
-                            )
-                            .await,
-                        );
+                        if matches!(error, AcquireError::ReauthRequired) {
+                            ctx.auth_marked = true;
+                        }
+                        (None, None, !marked)
                     }
                 }
             }
@@ -2266,7 +2346,11 @@ impl Relay {
                 }
                 return Next::Strip(items);
             }
-            Verdict::FailOver { cooldown, mark } => (cooldown, mark),
+            // An account marked for re-authentication keeps its pin, as a refresh's own mark does: the next
+            // selection moves the session off it under the account's state.
+            Verdict::FailOver { cooldown, mark } => {
+                (cooldown, mark, mark != Some(AccountState::ReauthRequired))
+            }
             Verdict::Commit => {
                 // The key may have been evicted and its record saved while this request was upstream. The
                 // writes below would then build a fresh entry, with no prompt id and none of the session's
@@ -2417,20 +2501,22 @@ impl Relay {
                 return Next::Respond(responded);
             }
         };
+        if mark == Some(AccountState::ReauthRequired) {
+            ctx.auth_marked = true;
+        }
         let retry_in_place = self.retry_in_place(&ctx, &head, cooldown.as_ref(), mark, arrived);
-        // A non-portable request keeps its pin: the failed response goes back to the client on the
-        // account that holds its state, and only the cooldown is recorded. So does one about to retry in place:
-        // the row is there for the siblings, and the pin stays where the retry lands.
+        // A non-portable request keeps its pin: the answer goes back to the client on the account that holds
+        // its state, and only the cooldown is recorded. So does one about to retry in place: the row is there
+        // for the siblings, and the pin stays where the retry lands.
         report_failover(
             &self.router,
             &ctx.account.id,
             &ctx.identity.canonical_model,
             cooldown,
             mark,
-            ctx.portable
+            (ctx.portable && moves_pin && retry_in_place.is_none())
                 .then(|| ctx.pin.cloned())
-                .flatten()
-                .filter(|_| retry_in_place.is_none()),
+                .flatten(),
             ctx.request_id,
             generations,
             arrived,
@@ -2444,7 +2530,9 @@ impl Relay {
         if let Some(held) = held {
             if ctx.portable {
                 drop(reader);
-                return Next::FailOver;
+                return Next::FailOver {
+                    auth_marked: ctx.auth_marked,
+                };
             }
             let guards = ctx.guards();
             return Next::Respond(
@@ -2474,7 +2562,19 @@ impl Relay {
         // added for a status outside that set would forward nothing instead of its own body.
         let buffered = buffered.unwrap_or_default();
         if ctx.portable {
-            return Next::FailOver;
+            return Next::FailOver {
+                auth_marked: ctx.auth_marked,
+            };
+        }
+        if auth_failed {
+            // A non-portable request keeps its account, so its authentication failure is the last word here.
+            let release = moves_pin
+                .then(|| self.release_on(&ctx, head.status))
+                .flatten();
+            return Next::Respond(
+                self.authentication_exhausted(&ctx, &head, outcome, release)
+                    .await,
+            );
         }
         Next::Respond(
             self.forward_buffered(
@@ -2489,6 +2589,35 @@ impl Relay {
             )
             .await,
         )
+    }
+
+    /// The router's own answer when an account's authentication failure is the request's last word: the
+    /// untimed exhaustion body, so the client sees no account and no reason. `release` is the fresh pin this
+    /// request created, sent before the answer as the forwarded error would have sent it.
+    async fn authentication_exhausted(
+        &self,
+        ctx: &Responding<'_>,
+        head: &ResponseHead,
+        mut outcome: RelayOutcome,
+        release: Option<Renewal>,
+    ) -> Response {
+        if let Some(release) = release {
+            release.send((self.clock)(), head.status, None, false);
+        }
+        outcome.error_code = Some("accounts_unavailable".to_string());
+        // A probe bound to its account never reaches the selector's exhaustion, so its own answer names the mark.
+        if ctx.trace.kind == Kind::Probe && ctx.auth_marked {
+            outcome.obstacle = Some(REAUTH_OBSTACLE);
+        }
+        self.answer(
+            ctx.trace,
+            exhaustion_response(&Exhaustion::Untimed, (self.clock)(), ctx.request_id),
+            outcome,
+            None,
+            ResponseFacts::default(),
+            None,
+        )
+        .await
     }
 
     /// The report a pinned answer sends at its end: a renewal, or the release of a pin this request created and
@@ -3092,6 +3221,9 @@ enum NoCredential {
 struct Responding<'a> {
     account: &'a AccountRow,
     attempt: u8,
+    /// Whether this pass marked the account `reauth_required`, carried back to the attempt loop through
+    /// `Next::FailOver` and read by a probe's own answer.
+    auth_marked: bool,
     /// The TTL this pass's body was coupled to, for the outcome the response half builds; `None` off the policy.
     cache_ttl_ms: Option<i64>,
     caller: &'a HeaderMap,
@@ -3163,8 +3295,11 @@ pub(crate) struct Guards {
 
 /// What the response half decided the account loop should do next.
 enum Next {
-    /// This account is finished; another one takes the request.
-    FailOver,
+    /// This account is finished; another one takes the request. `auth_marked` is whether this leg marked the
+    /// account `reauth_required`.
+    FailOver {
+        auth_marked: bool,
+    },
     /// The refreshed token goes back to the same account.
     Replay(Credential),
     Respond(Response),
@@ -3236,7 +3371,10 @@ struct Admitted<'a> {
 /// exhaustion. The account is already in `attempted` in every case.
 enum Leg {
     AtCap,
-    FailOver,
+    /// `auth_marked` is whether the leg marked its account `reauth_required`.
+    FailOver {
+        auth_marked: bool,
+    },
     Respond(Response),
 }
 

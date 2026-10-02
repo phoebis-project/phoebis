@@ -130,13 +130,26 @@ async fn released(
     }
 }
 
-async fn a_fresh_pins_client_error_releases_it(status: u16, respond: Respond) {
+/// How the fresh pin leaves: a client error the caller reads releases it, and an authentication failure the
+/// router answers itself fails over, which invalidates it, so the session's next placement is a move.
+#[derive(Clone, Copy)]
+enum Released {
+    ClientError,
+    Failover,
+}
+
+async fn a_fresh_pins_client_error_releases_it(
+    status: u16,
+    respond: Respond,
+    answer: u16,
+    released_by: Released,
+) {
     let up = FakeUpstream::start(vec![
         Rule {
             path_prefix: "/v1/messages".into(),
             respond,
         },
-        // A 401 is refreshed first; a token endpoint that fails leaves the upstream's own answer to forward.
+        // A 401 is refreshed first; a token endpoint that fails leaves the account to fail over.
         Rule {
             path_prefix: "/v1/oauth/token".into(),
             respond: json(503, "{}"),
@@ -151,39 +164,67 @@ async fn a_fresh_pins_client_error_releases_it(status: u16, respond: Respond) {
         .oneshot(request_for(KEY, MODEL, "s1"))
         .await
         .unwrap();
-    assert_eq!(resp.status().as_u16(), status, "the upstream's own answer");
+    assert_eq!(
+        resp.status().as_u16(),
+        answer,
+        "{status}: the caller's answer"
+    );
     drain(resp).await;
-    assert_eq!(
-        released(&mut events, "s1").await,
-        vec!["client_error"],
-        "{status}: the release names the one reason"
-    );
-    assert!(
-        !pinned(&h, "s1").await,
-        "{status}: the router holds no pin for the session"
-    );
-    let trace = next_trace(&h, "s1").await;
-    assert_eq!(
-        (trace.renewed, trace.moved),
-        (false, None),
-        "{status}: the session's next request is a fresh placement"
-    );
+    match released_by {
+        Released::ClientError => {
+            assert_eq!(
+                released(&mut events, "s1").await,
+                vec!["client_error"],
+                "{status}: the release names the one reason"
+            );
+            assert!(
+                !pinned(&h, "s1").await,
+                "{status}: the router holds no pin for the session"
+            );
+            let trace = next_trace(&h, "s1").await;
+            assert_eq!(
+                (trace.renewed, trace.moved),
+                (false, None),
+                "{status}: the session's next request is a fresh placement"
+            );
+        }
+        Released::Failover => {
+            wait_for_async(Duration::from_secs(5), || async {
+                (!pinned(&h, "s1").await).then_some(())
+            })
+            .await;
+            let trace = next_trace(&h, "s1").await;
+            assert_eq!(
+                (trace.renewed, trace.moved),
+                (false, Some("mark")),
+                "{status}: the session's next placement moves off the invalidated pin"
+            );
+        }
+    }
     up.shutdown().await;
 }
 
 #[tokio::test]
 async fn a_fresh_pins_400_releases_it_and_the_sessions_next_request_is_a_fresh_placement() {
-    a_fresh_pins_client_error_releases_it(400, json(400, INVALID_REQUEST)).await;
+    a_fresh_pins_client_error_releases_it(
+        400,
+        json(400, INVALID_REQUEST),
+        400,
+        Released::ClientError,
+    )
+    .await;
 }
 
 #[tokio::test]
-async fn a_fresh_pins_401_releases_it_and_the_sessions_next_request_is_a_fresh_placement() {
+async fn a_fresh_pins_401_fails_over_and_the_sessions_next_placement_moves_off_it() {
     a_fresh_pins_client_error_releases_it(
         401,
         json(
             401,
             r#"{"type":"error","error":{"type":"authentication_error","message":"expired"}}"#,
         ),
+        503,
+        Released::Failover,
     )
     .await;
 }
@@ -199,13 +240,15 @@ async fn a_fresh_pins_403_releases_it_and_the_sessions_next_request_is_a_fresh_p
             headers: vec![("content-type".into(), "text/html".into())],
             body: b"<html><body><h1>403 Forbidden</h1></body></html>".to_vec(),
         },
+        403,
+        Released::ClientError,
     )
     .await;
 }
 
 #[tokio::test]
 async fn a_fresh_pins_404_releases_it_and_the_sessions_next_request_is_a_fresh_placement() {
-    a_fresh_pins_client_error_releases_it(404, json_404_plain()).await;
+    a_fresh_pins_client_error_releases_it(404, json_404_plain(), 404, Released::ClientError).await;
 }
 
 #[tokio::test]
@@ -354,7 +397,7 @@ async fn a_401_whose_refresh_answers_invalid_grant_leaves_the_pin_to_the_mark() 
         .oneshot(request_for(KEY, MODEL, "s1"))
         .await
         .unwrap();
-    assert_eq!(resp.status().as_u16(), 401, "the upstream's own answer");
+    assert_eq!(resp.status().as_u16(), 503, "the router's own answer");
     drain(resp).await;
     wait_for(Duration::from_secs(5), || {
         (h.store.account("a").unwrap().unwrap().state == AccountState::ReauthRequired).then_some(())
@@ -394,7 +437,7 @@ async fn a_401_on_an_account_disconnected_meanwhile_leaves_the_pin_to_its_state(
     h.store.set_state("a", AccountState::Disconnected).unwrap();
     up.release();
     let resp = inflight.await.unwrap();
-    assert_eq!(resp.status().as_u16(), 401, "the upstream's own answer");
+    assert_eq!(resp.status().as_u16(), 503, "the router's own answer");
     drain(resp).await;
     no_release_within(&mut events, "s1", Duration::from_millis(200)).await;
     assert!(

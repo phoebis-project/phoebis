@@ -1057,14 +1057,17 @@ async fn a_secret_patched_during_admission_dispatches_with_the_new_secret() {
     up.shutdown().await;
 }
 
-#[tokio::test]
-async fn a_401_whose_refresh_rotates_nothing_is_forwarded_and_keeps_the_account() {
-    let up = FakeUpstream::start(vec![
+/// An OAuth 401 whose refresh fails as the token endpoint is down, carrying the headers an upstream 401 sends.
+async fn an_expired_token_and_a_token_endpoint_down() -> FakeUpstream {
+    FakeUpstream::start(vec![
         Rule {
             path_prefix: "/v1/messages".into(),
             respond: Respond::Json {
                 status: 401,
-                headers: vec![],
+                headers: vec![
+                    ("request-id".into(), "req_upstream_401".into()),
+                    ("www-authenticate".into(), "Bearer".into()),
+                ],
                 body:
                     br#"{"type":"error","error":{"type":"authentication_error","message":"expired"}}"#
                         .to_vec(),
@@ -1079,7 +1082,36 @@ async fn a_401_whose_refresh_rotates_nothing_is_forwarded_and_keeps_the_account(
             },
         },
     ])
-    .await;
+    .await
+}
+
+/// The ledger rows of the one request the subscriber saw: the request row and its attempt rows.
+async fn ledger_rows(
+    sub: &mut phoebis_bus::Subscriber,
+) -> (
+    phoebis_ledger::RequestRecord,
+    Vec<phoebis_ledger::AttemptRecord>,
+) {
+    let events = drain_until_complete(sub).await;
+    let mut assembler = Assembler::new(std::sync::Arc::new(|| 0));
+    let records: Vec<Record> = events
+        .into_iter()
+        .flat_map(|e| assembler.observe(e))
+        .collect();
+    records
+        .into_iter()
+        .find_map(|r| match r {
+            Record::Request {
+                request, attempts, ..
+            } => Some((request, attempts)),
+            _ => None,
+        })
+        .expect("the request lands a ledger row")
+}
+
+#[tokio::test]
+async fn a_401_whose_refresh_rotates_nothing_answers_the_routers_503_and_keeps_the_account() {
+    let up = an_expired_token_and_a_token_endpoint_down().await;
     let h = harness_with(
         &up,
         &[oauth("a", A, 0)],
@@ -1093,7 +1125,29 @@ async fn a_401_whose_refresh_rotates_nothing_is_forwarded_and_keeps_the_account(
         .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
         .await
         .unwrap();
-    assert_eq!(resp.status(), 401, "the upstream's own answer");
+    assert_eq!(resp.status(), 503, "the router's own answer");
+    assert_eq!(
+        resp.headers()["x-phoebis-error-code"],
+        "accounts_unavailable"
+    );
+    assert!(resp.headers().contains_key("content-type"));
+    for upstream in ["request-id", "www-authenticate"] {
+        assert!(
+            !resp.headers().contains_key(upstream),
+            "no header of the upstream's 401 reaches the caller: {upstream}"
+        );
+    }
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let text = String::from_utf8(bytes.to_vec()).unwrap();
+    let body: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(
+        body["error"]["message"],
+        "no account in this pool can serve requests"
+    );
+    assert!(
+        !text.contains(r#""a""#) && !text.contains("expired"),
+        "the answer names no account and no reason: {text}"
+    );
     assert_eq!(
         credentials_seen(&up),
         [A],
@@ -1113,10 +1167,116 @@ async fn a_401_whose_refresh_rotates_nothing_is_forwarded_and_keeps_the_account(
         h.store.account("a").unwrap().unwrap().state == AccountState::Ready
     })
     .await;
-    assert!(
-        h.router.pins().await.unwrap().is_empty(),
-        "the pin this request created never served, so the forwarded 401 released it"
+    // The failover invalidated the pin this request created, through a report that lands asynchronously.
+    wait_for_async(Duration::from_secs(2), || async {
+        h.router.pins().await.unwrap().is_empty().then_some(())
+    })
+    .await;
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn an_authentication_failure_as_the_last_word_reads_exhausted_with_auth_failed_attempts() {
+    let up = an_expired_token_and_a_token_endpoint_down().await;
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test");
+    let h = harness_with_bus(&up, &[oauth("a", A, 0)], PoolSpec::default(), bus).await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 503);
+    resp.into_body().collect().await.unwrap();
+    let (request, attempts) = ledger_rows(&mut sub).await;
+    assert_eq!(
+        (
+            request.outcome.as_str(),
+            request.error_code.as_deref(),
+            request.status
+        ),
+        ("exhausted", Some("accounts_unavailable"), Some(503))
     );
+    assert_eq!(
+        attempts
+            .iter()
+            .map(|a| (a.outcome.as_str(), a.upstream_status))
+            .collect::<Vec<_>>(),
+        [("auth_failed", Some(401))]
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_non_portable_requests_401_answers_the_503_on_its_own_account() {
+    let up = an_expired_token_and_a_token_endpoint_down().await;
+    let h = harness(&up, &[oauth("a", A, 0)], PoolSpec::default()).await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(non_portable_request(KEY, "s1"))
+        .await
+        .unwrap();
+    assert_eq!(
+        (
+            resp.status().as_u16(),
+            resp.headers()["x-phoebis-error-code"].to_str().unwrap()
+        ),
+        (503, "accounts_unavailable")
+    );
+    assert_eq!(credentials_seen(&up), [A]);
+    assert_eq!(
+        outcome(&resp).account_id,
+        "a",
+        "the answer is the leg's own, not a reselection's"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_403_authentication_error_reads_auth_failed_on_the_attempt_row() {
+    const KEYED: &str = "sk-ant-api03-KEYED0001";
+    let up = FakeUpstream::start(vec![]).await;
+    up.add_credential_rule(
+        KEYED,
+        "/v1/messages",
+        Respond::Json {
+            status: 403,
+            headers: vec![],
+            body: br#"{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}"#
+                .to_vec(),
+        },
+    );
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test");
+    let h = harness_with_bus(&up, &[api_key("a", KEYED, 0)], PoolSpec::default(), bus).await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(
+        (
+            resp.status().as_u16(),
+            resp.headers()["x-phoebis-error-code"].to_str().unwrap()
+        ),
+        (503, "accounts_unavailable")
+    );
+    resp.into_body().collect().await.unwrap();
+    let (_, attempts) = ledger_rows(&mut sub).await;
+    assert_eq!(
+        attempts
+            .iter()
+            .map(|a| (a.outcome.as_str(), a.upstream_status))
+            .collect::<Vec<_>>(),
+        [("auth_failed", Some(403))]
+    );
+    wait_for(Duration::from_secs(5), || {
+        (h.store.account("a").unwrap().unwrap().state == AccountState::ReauthRequired).then_some(())
+    })
+    .await;
     up.shutdown().await;
 }
 

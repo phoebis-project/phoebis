@@ -190,6 +190,9 @@ unknown-path answers, carries an Anthropic-shaped error body. The two keepalive 
 the [Keepalive](keepalive.md) page; each session they report belongs to the key generation that registered it,
 so a key id created again reaches none of the sessions its previous holder left behind.
 
+pool's members are unusable for the moment, and the answer when an account's authentication failure is the request's
+last word: the router never forwards an upstream `401`, and the answer names no account and no reason.
+
 A token count (`POST /v1/messages/count_tokens`) is relayed through the same selection and failover loop as a
 message and travels as the client sent it under every policy: the markers it carries keep their TTLs, no
 member is added to a marker-less one, no beta follows it, and nothing else in the body is added (the client

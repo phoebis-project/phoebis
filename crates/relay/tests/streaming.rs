@@ -226,9 +226,9 @@ async fn a_chunked_rejection_is_read_and_replayed() {
 }
 
 #[tokio::test]
-async fn a_rejection_too_large_to_read_is_forwarded_rather_than_replayed() {
+async fn a_401_too_large_to_read_fails_over_without_a_refresh_and_ends_at_the_503() {
     // The relay cannot tell whether this rejection is the one that warrants a refresh without holding 200 KiB
-    // of it in memory, so the caller gets the upstream's own answer instead of a local error.
+    // of it in memory, so the account fails over unread and, with no account left, the router answers itself.
     let body = format!(
         r#"{{"type":"error","error":{{"type":"authentication_error","message":"{}"}}}}"#,
         "x".repeat(200 * 1024)
@@ -242,23 +242,48 @@ async fn a_rejection_too_large_to_read_is_forwarded_rather_than_replayed() {
         },
     }])
     .await;
-    let app = common::relay_with(phoebis_store::AccountKind::Oauth, &up).await;
-    let resp = app
-        .oneshot(common::stream_request("phoebis-testkey"))
+    let bus = phoebis_bus::Bus::new();
+    let mut sub = bus.subscribe("test");
+    let h = common::harness_with_bus(
+        &up,
+        &[common::oauth("a", "sk-ant-oat01-AAAA", 0)],
+        common::PoolSpec::default(),
+        bus,
+    )
+    .await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(common::stream_request(common::KEY))
         .await
         .unwrap();
-    assert_eq!(resp.status(), 401);
-    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     assert_eq!(
-        bytes,
-        body.as_bytes(),
-        "the whole rejection reaches the caller, byte for byte"
+        (
+            resp.status().as_u16(),
+            resp.headers()["x-phoebis-error-code"].to_str().unwrap()
+        ),
+        (503, "accounts_unavailable")
+    );
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let answer: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        answer["error"]["message"], "no account in this pool can serve requests",
+        "the router's own body, not the upstream's"
     );
     assert_eq!(
         up.requests().len(),
         1,
         "an unread rejection triggers no refresh and no replay"
     );
+    let events = common::drain_until_complete(&mut sub).await;
+    let heads: Vec<_> = events
+        .iter()
+        .filter_map(|e| match e {
+            phoebis_bus::Event::ResponseHead(head) => Some((head.status, head.outcome)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(heads, [(401, phoebis_bus::AttemptOutcome::AuthFailed)]);
     up.shutdown().await;
 }
 
