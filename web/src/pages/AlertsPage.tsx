@@ -30,12 +30,12 @@ const KIND_HINT: Record<AlertKind, string> = {
     "Fires when a response relayed to a client carries an AskUserQuestion tool call, so the agent is blocked on an answer. It resolves on the session's next request, which is the first sign the user replied, or when the session expires.",
   client_drift:
     'Fires when the billing-hash self-check fails for a client request: the client stamps a hash this build cannot reproduce. Re-pin the router to that client build, then resolve the event here.',
-  funding_required: 'Fires when an API-key upstream is refused for billing reasons. It resolves when an operator clears the funding flag.',
+  funding_required: 'Fires when an Anthropic-key account is refused for billing reasons. It resolves when an operator clears the funding flag.',
   keepalive_cost_cap: "Fires when a pool's daily probe cost cap is reached; probes pause until the next UTC day, which resolves it.",
   poll_backoff:
-    "Fires when an OAuth upstream's usage poll has been backing off from the endpoint's 429 answers for thirty minutes. It resolves on the upstream's next clean poll.",
-  pool_exhausted: 'Fires when a request finds no eligible upstream in the pool. It resolves on the next request the pool serves.',
-  reauth_required: 'Fires when an upstream enters reauth_required. It resolves once the upstream is paired or verified again.',
+    "Fires when an OAuth account's usage poll has been backing off from the endpoint's 429 answers for thirty minutes. It resolves on the account's next clean poll.",
+  pool_exhausted: 'Fires when a request finds no eligible account in the pool. It resolves on the next request the pool serves.',
+  reauth_required: 'Fires when an account enters reauth_required. It resolves once the account is paired or verified again.',
   refresh_failed: 'Fires when a credential refresh fails twice in a row. It resolves on the next refresh that succeeds.',
   session_active: "Posts session_started on a session's first request, or on the companion's session_start, and session_ended when the companion ends the session or it expires unseen; one delivery per event, nothing to resolve.",
   session_idle: 'Posts session_idle once no request has arrived on the session for the number of minutes chosen here; the next request arms it again.',
@@ -81,7 +81,7 @@ const TRIGGER_LABEL: Record<string, string> = { hash: 'the billing-hash check' }
 /** A trigger this build does not know still reads as itself rather than as a gap in the sentence. */
 const triggerLabel = (trigger: string) => TRIGGER_LABEL[trigger] ?? `the ${trigger} check`;
 
-/** The lists a scope's id is resolved against, so a rule names an upstream, a key, or a pool the way its own page does. */
+/** The lists a scope's id is resolved against, so a rule names an account, a key, or a pool the way its own page does. */
 interface Named {
   accounts: Account[];
   keys: ApiKey[];
@@ -91,11 +91,11 @@ interface Named {
 function scopeLabel(scope: AlertRule['scope'], named: Named): string {
   switch (scope.type) {
     case 'account':
-      return `Upstream ${named.accounts.find((a) => a.id === scope.id)?.label ?? scope.id}`;
+      return `Account ${named.accounts.find((a) => a.id === scope.id)?.label ?? scope.id}`;
     case 'all':
       return 'All traffic';
     case 'any_account':
-      return 'Any upstream';
+      return 'Any account';
     case 'key':
       return `Key ${named.keys.find((k) => k.id === scope.id)?.name ?? scope.id}`;
     case 'pool':
@@ -648,7 +648,7 @@ function RuleDialog({
   }, [open, existing]);
 
   const scopeOptions = ALLOWED_SCOPES[kind].flatMap((type) => {
-    if (type === 'account') return accounts.map((a) => ({ label: `Upstream ${a.label}`, value: `account:${a.id}` }));
+    if (type === 'account') return accounts.map((a) => ({ label: `Account ${a.label}`, value: `account:${a.id}` }));
     if (type === 'key') return keys.map((k) => ({ label: `Key ${k.name}`, value: `key:${k.id}` }));
     if (type === 'pool') return pools.map((p) => ({ label: `Pool ${p.name}`, value: `pool:${p.id}` }));
     return [{ label: scopeLabel({ id: null, type }, { accounts, keys, pools }), value: type }];

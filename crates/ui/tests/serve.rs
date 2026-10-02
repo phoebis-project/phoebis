@@ -46,7 +46,7 @@ async fn the_shell_is_served_for_every_app_path_and_never_cached() {
     for path in [
         "/",
         "/pools",
-        "/upstreams/business",
+        "/accounts/business",
         "/requests/req_1",
         "/nope/deeper",
     ] {

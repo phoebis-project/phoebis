@@ -324,7 +324,7 @@ test('a pool save is one PATCH that carries the members with the settings', asyn
   );
 });
 
-test('deleting an upstream calls the account route, and a disconnect keeps to the credentials route', async () => {
+test('deleting an account calls the account route, and a disconnect keeps to the credentials route', async () => {
   const calls = stub(() => answer(204));
   const api = new HttpApi();
   assert.equal(await api.deleteAccount('work seat'), undefined);
@@ -344,7 +344,7 @@ test('listCatalogOf reads each named catalog once and answers the union by id, a
   const calls = stub((url) => catalogs[url] ?? answer(404, { error: 'account not found' }));
   const models = await new HttpApi().listCatalogOf(['alpha', 'beta', 'gamma']);
   assert.deepEqual(calls.map((c) => [c.init.method, c.url]), [['GET', '/admin/accounts/alpha/catalog'], ['GET', '/admin/accounts/beta/catalog'], ['GET', '/admin/accounts/gamma/catalog']]);
-  assert.deepEqual(models.map((m) => m.id), ['claude-haiku-4-5-20251001', 'claude-opus-5', 'claude-sonnet-5'], 'a model two upstreams list appears once, in id order');
+  assert.deepEqual(models.map((m) => m.id), ['claude-haiku-4-5-20251001', 'claude-opus-5', 'claude-sonnet-5'], 'a model two accounts list appears once, in id order');
   assert.equal(models.find((m) => m.id === 'claude-sonnet-5').displayName, 'Sonnet from alpha', 'the first catalog naming an id answers for it');
   assert.equal(failures, 1, 'the failed read still reaches the toast while the union answers');
   const none = stub(() => answer(500));

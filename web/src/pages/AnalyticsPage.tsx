@@ -11,7 +11,7 @@ import { ChartTooltip, Legend, type TooltipRow } from '@/components/charts/Toolt
 import { MultiSelect, type Option } from '@/components/ui/MultiSelect';
 import { IconX } from '@/components/ui/icons';
 import { Badge, Button, Card, ErrorState, Input, Meter, Segmented, Select, Skeleton, Toggle } from '@/components/ui/primitives';
-import { CONVERSATION_CLASSES, foldBurn, isolatedSlots, moveLabel, placementCells, placementRungLabel, readBurn, sizedUpstreams, slotUnpriced, type BurnLine, type BurnLineUnit, type BurnRow } from '@/lib/analytics';
+import { CONVERSATION_CLASSES, foldBurn, isolatedSlots, moveLabel, placementCells, placementRungLabel, readBurn, sizedAccounts, slotUnpriced, type BurnLine, type BurnLineUnit, type BurnRow } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missCount, missLabel, missReasonOrder } from '@/lib/cache';
 import { fmtAbsolute, fmtCompact, fmtDayShort, fmtDuration, fmtHourTick, fmtInt, fmtMs, fmtPct, fmtPeriodEnd, fmtShare, fmtUsd, shortId, toLocalInput, upperFirst } from '@/lib/format';
@@ -29,17 +29,17 @@ type Dim = QueryDim | 'sessionId';
 
 const HOUR = 3_600_000;
 const RANGE_MS: Record<Exclude<Range, 'custom'>, number> = { '1h': HOUR, '24h': 24 * HOUR, '7d': 7 * 24 * HOUR, '30d': 30 * 24 * HOUR };
-const GROUP_LABEL: Record<GroupBy, string> = { account: 'Upstream', client: 'Client', key: 'Key', effort: 'Effort', kind: 'Kind', model: 'Model', pool: 'Pool', request_class: 'Request class', speed: 'Speed', user_agent: 'User agent' };
+const GROUP_LABEL: Record<GroupBy, string> = { account: 'Account', client: 'Client', key: 'Key', effort: 'Effort', kind: 'Kind', model: 'Model', pool: 'Pool', request_class: 'Request class', speed: 'Speed', user_agent: 'User agent' };
 /** The two speeds the rollups file an answer under, standard at the foot of each stacked bar. */
 const SPEED_SERIES = [
   { key: 'standard', label: 'standard', slot: 0 },
   { key: 'fast', label: 'fast', slot: 4 },
 ] as const;
-const BURN_GROUP_LABEL: Record<BurnGroup, string> = { account: 'Upstream', key: 'Key', request_class: 'Request class', session: 'Session' };
-// Upstream first: the route's default, and the one grouping that draws the plan share.
+const BURN_GROUP_LABEL: Record<BurnGroup, string> = { account: 'Account', key: 'Key', request_class: 'Request class', session: 'Session' };
+// Account first: the route's default, and the one grouping that draws the plan share.
 const BURN_GROUPS: BurnGroup[] = ['account', 'key', 'session', 'request_class'];
-const DIM_LABEL: Record<QueryDim, string> = { accountId: 'Upstream', keyId: 'Key', model: 'Model', poolId: 'Pool' };
-// Ordered the way a request travels them rather than alphabetically: the key names the pool, which picks the upstream.
+const DIM_LABEL: Record<QueryDim, string> = { accountId: 'Account', keyId: 'Key', model: 'Model', poolId: 'Pool' };
+// Ordered the way a request travels them rather than alphabetically: the key names the pool, which picks the account.
 const DIMS: QueryDim[] = ['keyId', 'poolId', 'accountId', 'model'];
 /** Filter choices come from a breakdown on that dimension, so every value the range holds is offered. */
 const DIM_GROUP: Record<QueryDim, GroupBy> = { accountId: 'account', keyId: 'key', model: 'model', poolId: 'pool' };
@@ -197,9 +197,9 @@ export function AnalyticsPage() {
   );
   const accountRollups = useAsync(() => api.listAccountRollups(fromIso, toIso), [fromIso, toIso]);
   const burn = useAsync(() => readBurn(api, { from: fromIso, to: toIso }, burnGroup), [fromIso, toIso, burnGroup]);
-  // The plan chart's line category reads each upstream's stored tier against the cost table's tiers.
+  // The plan chart's line category reads each account's stored tier against the cost table's tiers.
   const burnSettings = useAsync(() => api.getSettings(), []);
-  const sized = useMemo(() => (burn.data && burnSettings.data ? sizedUpstreams(burn.data.accounts, burnSettings.data.planTables.cost.tiers) : null), [burn.data, burnSettings.data]);
+  const sized = useMemo(() => (burn.data && burnSettings.data ? sizedAccounts(burn.data.accounts, burnSettings.data.planTables.cost.tiers) : null), [burn.data, burnSettings.data]);
   const rewrites = useAsync(() => api.getAnalyticsRewrites({ from: fromIso, to: toIso }), [fromIso, toIso]);
   // Side groupings on the page's own query, as byModel and byPool are; a session view folds them from the log.
   const bySpeed = useAsync(() => (sessionId === null ? api.getAnalyticsSeries({ ...query, groupBy: 'speed' }) : Promise.resolve<AnalyticsPoint[]>([])), [query, sessionId]);
@@ -276,7 +276,7 @@ export function AnalyticsPage() {
   const speedLoading = sessionId === null ? bySpeed.data === null || bySpeed.stale : loading;
   const effortLoading = sessionId === null ? byEffort.data === null || byEffort.stale : loading;
   const speedError = sessionId === null ? bySpeed.error : null;
-  // Usage credits alone fund a fast answer, on a subscription upstream as on an API key.
+  // Usage credits alone fund a fast answer, on a subscription account as on an Anthropic key.
   const fastSpend = speedPoints.reduce((n, p) => n + (p.groups.find((g) => g.key === 'fast')?.costUsd ?? 0), 0);
   const groupLabel = GROUP_LABEL[groupBy];
 
@@ -695,7 +695,7 @@ export function AnalyticsPage() {
       </Section>
 
       {/* Accounts */}
-      <Section id="accounts" offset={headOffset} title="Upstreams" meta="Peak utilization, ineligible time, and pin churn per upstream">
+      <Section id="accounts" offset={headOffset} title="Accounts" meta="Peak utilization, ineligible time, and pin churn per account">
         <AccountsSection
           accountIds={filters.accountId}
           bucketMs={bucketMs}
@@ -741,7 +741,7 @@ const SECTIONS = [
   { id: 'cache', label: 'Cache' },
   { id: 'cost', label: 'Cost' },
   { id: 'cache-warming', label: 'Cache warming' },
-  { id: 'accounts', label: 'Upstreams' },
+  { id: 'accounts', label: 'Accounts' },
 ];
 
 function SectionBar({ offset, top }: { offset: number; top: number }) {
@@ -1271,15 +1271,15 @@ const CONVERSATION_HINT = CONVERSATION_CLASSES.join(', ');
 const OVERHEAD_HINT = 'every other class, and requests that named none';
 const CLASS_NOTE = `conversation is ${CONVERSATION_HINT}; overhead is ${OVERHEAD_HINT}`;
 
-const SPEND_NOTE = "Dollars per minute: API-key traffic, and a subscription upstream's fast-mode answers; its plan quota spends window share, charted under Plan per hour";
-/** A folded rest of subscription upstreams as the dollars chart names it: its dollars are its members' fast-mode
+const SPEND_NOTE = "Dollars per minute: Anthropic-key traffic, and a subscription account's fast-mode answers; its plan quota spends window share, charted under Plan per hour";
+/** A folded rest of subscription accounts as the dollars chart names it: its dollars are its members' fast-mode
  *  answers, and its own label names the plan unit, which the dollars axis does not chart. */
 const SPEND_REST_LABEL: Record<Exclude<BurnLineUnit, 'usd'>, string> = { unknown: 'Other (fast mode, tier unknown)', window_share: 'Other (fast mode)' };
 const PLAN_NOTE =
-  "The share of each subscription upstream's own 5-hour window (solid) and 7-day window (dashed) its traffic used per hour, the 5-hour share weighed by the peak band";
+  "The share of each subscription account's own 5-hour window (solid) and 7-day window (dashed) its traffic used per hour, the 5-hour share weighed by the peak band";
 const TIER_UNKNOWN_HINT = 'No tier on file, or one the cost table does not size, so no share of its windows is priced';
 const MODEL_UNLISTED_HINT = 'A bucket whose traffic ran on a model the cost table has no row for, or on a cell it leaves unmeasured, prices no share on that window and draws no point';
-const NO_UPSTREAM: ReadonlySet<string> = new Set();
+const NO_ACCOUNT: ReadonlySet<string> = new Set();
 
 /**
  * A plan line's dot, drawn on the slots `isolatedSlots` names alone: the line leaves its null slots unconnected, so a
@@ -1293,12 +1293,12 @@ const isolatedDot = (values: (number | null)[], color: string) => {
 
 /**
  * The burn route's three views of one grouping. A line's colour follows its group within the answer rather than
- * its rank, so a range that reorders the groups does not repaint them; the upstream grouping keeps each upstream's
+ * its rank, so a range that reorders the groups does not repaint them; the account grouping keeps each account's
  * page-wide colour.
  */
 function BurnCharts({ answer, error, groupBy, loading, sized }: { answer: { bucketSeconds: number; points: BurnPoint[] } | null; error: string | null; groupBy: BurnGroup; loading: boolean; sized: ReadonlySet<string> | null }) {
   const ink = useChartInk();
-  const { lines, rows } = useMemo(() => (answer === null ? { lines: [] as BurnLine[], rows: [] as BurnRow[] } : foldBurn(answer.points, groupBy, answer.bucketSeconds, sized ?? NO_UPSTREAM)), [answer, groupBy, sized]);
+  const { lines, rows } = useMemo(() => (answer === null ? { lines: [] as BurnLine[], rows: [] as BurnRow[] } : foldBurn(answer.points, groupBy, answer.bucketSeconds, sized ?? NO_ACCOUNT)), [answer, groupBy, sized]);
   const named = useMemo(() => lines.filter((l) => !l.other).map((l) => l.key).sort(), [lines]);
   const colorOf = (l: BurnLine) => (l.other ? ink.muted : groupBy === 'account' ? accountColor(ink, l.key) : ink.series[Math.min(7, named.indexOf(l.key))]);
   // A session id runs past any legend, so it shows cut the way the session filter's chip cuts it, whole on hover.
@@ -1308,17 +1308,17 @@ function BurnCharts({ answer, error, groupBy, loading, sized }: { answer: { buck
   const label = BURN_GROUP_LABEL[groupBy].toLowerCase();
   // Read off the buckets, not the lines: the class grouping draws its two lines even over a range with no traffic.
   const empty = !loading && error === null && rows.length === 0 ? 'No traffic in this range.' : undefined;
-  const byUpstream = groupBy === 'account';
-  // Every other grouping mixes both kinds of upstream, so its lines chart the dollars their API-key traffic and
-  // fast-mode answers spent; under the upstream grouping a subscription upstream, or a folded rest of them, draws a
+  const byAccount = groupBy === 'account';
+  // Every other grouping mixes both kinds of account, so its lines chart the dollars their Anthropic-key traffic and
+  // fast-mode answers spent; under the account grouping a subscription account, or a folded rest of them, draws a
   // dollar line only for the usage credits its fast-mode answers spent.
-  const spent = lines.map((l, i) => ({ i, l })).filter(({ l }) => !byUpstream || l.unit === 'usd' || l.usdPerMinute > 0);
+  const spent = lines.map((l, i) => ({ i, l })).filter(({ l }) => !byAccount || l.unit === 'usd' || l.usdPerMinute > 0);
   const spendNameOf = (l: BurnLine) => (l.other && l.unit !== 'usd' ? SPEND_REST_LABEL[l.unit] : nameOf(l));
   // One precision for every tick, from the largest figure drawn, so the axis never mixes $0.0070 with $0.01.
   const usdMax = Math.max(0, ...rows.flatMap((r) => spent.map(({ i }) => r.usd[i])));
   const usdDigits = usdMax >= 10 ? 0 : usdMax >= 0.1 ? 2 : usdMax >= 0.01 ? 3 : 4;
-  const planned = lines.map((l, i) => ({ i, l })).filter(({ l }) => byUpstream && !l.other && l.unit === 'window_share');
-  const unpriced = lines.filter((l) => byUpstream && !l.other && l.unit === 'unknown');
+  const planned = lines.map((l, i) => ({ i, l })).filter(({ l }) => byAccount && !l.other && l.unit === 'window_share');
+  const unpriced = lines.filter((l) => byAccount && !l.other && l.unit === 'unknown');
   const shareOf = (share: number | null) => (share === null ? '-' : fmtShare(share));
   return (
     <div className="grid-2">
@@ -1350,10 +1350,10 @@ function BurnCharts({ answer, error, groupBy, loading, sized }: { answer: { buck
 
       <ChartCard
         title="Spend per minute"
-        subtitle={byUpstream ? SPEND_NOTE : `${SPEND_NOTE} when grouped by upstream`}
+        subtitle={byAccount ? SPEND_NOTE : `${SPEND_NOTE} when grouped by account`}
         error={error}
         loading={loading}
-        empty={empty ?? (spent.length === 0 ? 'No upstream spent dollars in this range.' : undefined)}
+        empty={empty ?? (spent.length === 0 ? 'No account spent dollars in this range.' : undefined)}
         legend={spent.map(({ l }) => ({ color: colorOf(l), label: spendNameOf(l), shape: 'line' as const, title: titleOf(l), value: fmtUsd(l.usdPerMinute) }))}
       >
         <LineChart data={rows} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
@@ -1367,7 +1367,7 @@ function BurnCharts({ answer, error, groupBy, loading, sized }: { answer: { buck
         </LineChart>
       </ChartCard>
 
-      {byUpstream && (
+      {byAccount && (
         <ChartCard
           title="Plan per hour"
           subtitle={PLAN_NOTE}
@@ -1378,8 +1378,8 @@ function BurnCharts({ answer, error, groupBy, loading, sized }: { answer: { buck
             (planned.length > 0
               ? undefined
               : unpriced.length > 0
-                ? `No subscription upstream in range has a tier the cost table sizes: ${unpriced.map(nameOf).join(', ')}.`
-                : 'No subscription upstream burned in this range.')
+                ? `No subscription account in range has a tier the cost table sizes: ${unpriced.map(nameOf).join(', ')}.`
+                : 'No subscription account burned in this range.')
           }
           legend={[
             ...planned.flatMap(({ l }) => [
@@ -1398,7 +1398,7 @@ function BurnCharts({ answer, error, groupBy, loading, sized }: { answer: { buck
                 value: shareOf(l.sevenDayPerHour),
               },
             ]),
-            // One entry for every share the table cannot price, whichever upstream and window it fell on; muted, since
+            // One entry for every share the table cannot price, whichever account and window it fell on; muted, since
             // it draws no line of its own.
             ...(planned.some(({ l }) => l.unpriced.fiveHour || l.unpriced.sevenDay)
               ? [
@@ -1443,7 +1443,7 @@ function BurnCharts({ answer, error, groupBy, loading, sized }: { answer: { buck
 }
 
 const PLACEMENT_HINT = "A placement by the conversation's own messages is a hit when the response read the prefix it was promised; one by the static prefix when it read at all";
-const PLACEMENT_UNFILTERED_NOTE = '. The upstream, model and pattern filters above do not apply here';
+const PLACEMENT_UNFILTERED_NOTE = '. The account, model and pattern filters above do not apply here';
 
 /** Placements by rung over the range, narrowed by the key and pool filters, the two the route reads here. */
 function PlacementTable({ error, rows, unfiltered }: { error: string | null; rows: PlacementRow[] | null; unfiltered: boolean }) {
@@ -1486,7 +1486,7 @@ function PlacementTable({ error, rows, unfiltered }: { error: string | null; row
   );
 }
 
-const BUDGET_HINT = "Each budgeted member's spend in its current period, an API-key member's whole spend and a subscription member's metered spend; the range and the filters above do not apply here";
+const BUDGET_HINT = "Each budgeted member's spend in its current period, an Anthropic-key member's whole spend and a subscription member's metered spend; the range and the filters above do not apply here";
 
 /** Spend against each member's budget; a member at its budget is skipped until its period ends. */
 function BudgetTable({ budgets, error, now }: { budgets: MemberBudget[] | null; error: string | null; now: number }) {
@@ -1497,7 +1497,7 @@ function BudgetTable({ budgets, error, now }: { budgets: MemberBudget[] | null; 
           <thead>
             <tr>
               <th>Pool</th>
-              <th>Upstream</th>
+              <th>Account</th>
               <th>Spent</th>
               <th className="right">Budget</th>
               <th>Period ends</th>
@@ -1512,7 +1512,7 @@ function BudgetTable({ budgets, error, now }: { budgets: MemberBudget[] | null; 
                 <tr key={`${b.poolId}-${b.accountId}-${b.budgetPeriod}`}>
                   <td className="mono">{b.poolId}</td>
                   <td className="mono">
-                    <Link to={`/upstreams/${b.accountId}`}>{b.accountId}</Link>
+                    <Link to={`/accounts/${b.accountId}`}>{b.accountId}</Link>
                   </td>
                   <td>
                     <span className="budgets-table__spent">
@@ -1564,7 +1564,7 @@ function peakOf(values: (number | null)[]): number | null {
 }
 
 /**
- * The account rollups carry the range and the upstream alone, so the page's upstream selection narrows them here
+ * The account rollups carry the range and the account alone, so the page's account selection narrows them here
  * and every other filter says it does not apply.
  */
 function AccountsSection({
@@ -1627,7 +1627,7 @@ function AccountsSection({
   }, [rollups, accounts, span, bucketMs]);
   return (
     <>
-      <ChartCard title="Peak 5-hour utilization" subtitle="Highest utilization seen in each bucket, per upstream" loading={loading} legend={accounts.map((a) => ({ color: accountColor(ink, a), label: a, shape: 'line' }))}>
+      <ChartCard title="Peak 5-hour utilization" subtitle="Highest utilization seen in each bucket, per account" loading={loading} legend={accounts.map((a) => ({ color: accountColor(ink, a), label: a, shape: 'line' }))}>
         <LineChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
           <CartesianGrid vertical={false} stroke={ink.grid} />
           <XAxis dataKey="at" tickFormatter={tick} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
@@ -1639,11 +1639,11 @@ function AccountsSection({
         </LineChart>
       </ChartCard>
       <BreakdownTable
-        title="Upstreams in range"
-        subtitle={`Totals for the selected range and upstreams${otherFilters ? '; the key, pool, model, client and session filters and the probes toggle do not apply here' : ''}`}
+        title="Accounts in range"
+        subtitle={`Totals for the selected range and accounts${otherFilters ? '; the key, pool, model, client and session filters and the probes toggle do not apply here' : ''}`}
         error={error}
         loading={loading}
-        groupLabel="Upstream"
+        groupLabel="Account"
         columns={['Peak 5h', 'Peak 7d', 'Peak Fable 7d', 'Time in overage', 'Time in cooldown', 'Pins created', 'Migrated in', 'Migrated out']}
         rows={table.map((r) => ({
           key: r.id,

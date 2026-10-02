@@ -32,7 +32,7 @@ const kindOf = (v) => (v === null || v === undefined ? 'null' : Array.isArray(v)
  * row builds) may not be null where the fixture has a value, nor an empty list where it has rows: that is the
  * mock answering nothing where the console would show something. Deeper, one fixture row cannot tell a
  * required field from a nullable one or a membership from an empty one (a failed request's `ttfbMs`, an
- * account in no pool, an API-key attempt's `windows`), so a null or an empty list there is the row's own
+ * account in no pool, an Anthropic-key attempt's `windows`), so a null or an empty list there is the row's own
  * variation and asks nothing, while every row's key set is checked and every element of a mock list is held
  * to the fixture's first row. `passthrough`, an optional extension of `OPAQUE` a caller supplies per sync row,
  * covers a further path a specific decoder leaves undecoded (a declared `unknown`, such as

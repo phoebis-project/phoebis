@@ -3,25 +3,25 @@ import { Link } from 'react-router-dom';
 import { Button, Card } from '@/components/ui/primitives';
 import { fmtAbsolute, fmtRelative } from '@/lib/format';
 
-/** One scope an upstream cools under: an account's own cooldown row with its id, or a models-state row as is. */
+/** One scope an account cools under: an account's own cooldown row with its id, or a models-state row as is. */
 export type CoolingRow = { accountId: string; reason: string; scope: string; until: string };
 
 const MODEL_SCOPE_PREFIX = 'model:';
 
-/** `Whole upstream` for the account scope, `Fast mode` and `Fast mode credits` for the fast lane's rate limit and
+/** `Whole account` for the account scope, `Fast mode` and `Fast mode credits` for the fast lane's rate limit and
  *  usage-credits refusal, the model id for `model:<id>`. */
 export function scopeLabel(scope: string): string {
-  if (scope === 'account') return 'Whole upstream';
+  if (scope === 'account') return 'Whole account';
   if (scope === 'fast') return 'Fast mode';
   if (scope === 'fast_credits') return 'Fast mode credits';
   return scope.startsWith(MODEL_SCOPE_PREFIX) ? scope.slice(MODEL_SCOPE_PREFIX.length) : scope;
 }
 
 /**
- * The rows an upstream (or a model group) is cooling under, with a clear button per row when `onClear` is given.
- * A model group's rows all share its scope, so `showUpstream` names the upstream each row belongs to.
+ * The rows an account (or a model group) is cooling under, with a clear button per row when `onClear` is given.
+ * A model group's rows all share its scope, so `showAccount` names the account each row belongs to.
  */
-export function CoolingDown({ busy = false, now, onClear, rows, showUpstream = false, title }: { busy?: boolean; now: number; onClear?: (row: CoolingRow) => void; rows: CoolingRow[]; showUpstream?: boolean; title: string }): JSX.Element {
+export function CoolingDown({ busy = false, now, onClear, rows, showAccount = false, title }: { busy?: boolean; now: number; onClear?: (row: CoolingRow) => void; rows: CoolingRow[]; showAccount?: boolean; title: string }): JSX.Element {
   // Null until the operator toggles, so a block that was empty when it mounted still opens once a row arrives.
   const [toggled, setToggled] = useState<boolean | null>(null);
   const open = toggled ?? rows.length > 0;
@@ -51,7 +51,7 @@ export function CoolingDown({ busy = false, now, onClear, rows, showUpstream = f
               <table className="table">
                 <thead>
                   <tr>
-                    {showUpstream && <th>Upstream</th>}
+                    {showAccount && <th>Account</th>}
                     <th>Scope</th>
                     <th>Reason</th>
                     <th>Until</th>
@@ -61,9 +61,9 @@ export function CoolingDown({ busy = false, now, onClear, rows, showUpstream = f
                 <tbody>
                   {rows.map((r) => (
                     <tr key={`${r.accountId}/${r.scope}`}>
-                      {showUpstream && (
+                      {showAccount && (
                         <td>
-                          <Link to={`/upstreams/${r.accountId}`}>{r.accountId}</Link>
+                          <Link to={`/accounts/${r.accountId}`}>{r.accountId}</Link>
                         </td>
                       )}
                       <td>{r.scope === 'account' ? scopeLabel(r.scope) : <span className="mono">{scopeLabel(r.scope)}</span>}</td>

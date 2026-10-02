@@ -150,7 +150,7 @@ function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes
   if (upstreamError) errors.api_error = upstreamError;
 
   return {
-    // Every attempt past the first on a request is a failover, so the two together are what the upstreams saw.
+    // Every attempt past the first on a request is a failover, so the two together are what the accounts saw.
     attempts: requests + failovers,
     cacheHits: sum(counted, (r) => r.cacheHits),
     cacheMisses: sum(counted, (r) => r.cacheMisses),
@@ -333,7 +333,7 @@ export function burnOf(rows: HourlyRollup[], range: Range, groupBy: BurnGroup): 
     const at = Math.floor((Date.parse(r.hour) - first) / bucketMs) * bucketMs + first;
     const oauth = kinds.get(r.accountId) === 'oauth';
     // A fast answer spends usage credits in dollars on either kind and draws no plan window: on a tier the tables
-    // size it reads as a zero share, so the upstream is still a priced one.
+    // size it reads as a zero share, so the account is still a priced one.
     const fast = r.speed === 'fast';
     const group = groupOf(r);
     const byAt = sums.get(group) ?? new Map();
@@ -361,18 +361,18 @@ export function burnOf(rows: HourlyRollup[], range: Range, groupBy: BurnGroup): 
   const tokensOf = (group: string) => [...(sums.get(group)?.values() ?? [])].reduce((n, s) => n + s.cached + s.uncached, 0);
   let groups = [...sums.keys()].sort();
   if (groupBy === 'session') groups = [...groups].sort((a, b) => tokensOf(b) - tokensOf(a)).slice(0, BURN_SESSIONS).sort();
-  // The route answers the shares and the unit under the upstream grouping alone.
-  const byUpstream = groupBy === 'account';
+  // The route answers the shares and the unit under the account grouping alone.
+  const byAccount = groupBy === 'account';
   const points = groups.flatMap((group) =>
     starts.map((at): BurnPoint => {
       const s = sums.get(group)?.get(at) ?? emptyBurn();
-      const kind = byUpstream ? kinds.get(group) : undefined;
+      const kind = byAccount ? kinds.get(group) : undefined;
       return {
         at: iso(at),
         cachedTokens: Math.round(s.cached),
-        fiveHourShare: byUpstream ? bucketShare(s.fiveHour) : null,
+        fiveHourShare: byAccount ? bucketShare(s.fiveHour) : null,
         group,
-        sevenDayShare: byUpstream ? bucketShare(s.sevenDay) : null,
+        sevenDayShare: byAccount ? bucketShare(s.sevenDay) : null,
         tokens: Math.round(s.tokens),
         uncachedTokens: Math.round(s.uncached),
         unit: kind === undefined ? null : kind === 'oauth' ? 'window_share' : 'usd',

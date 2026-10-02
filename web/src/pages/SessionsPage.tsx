@@ -27,10 +27,10 @@ const NO_RECIPE_HINT = 'Nothing probes this session, so its prompt cache expires
 const HISTORICAL_HINT = 'A holder of this key id that no longer exists; the ledger keeps its sessions until they expire';
 const HISTORICAL_NO_RECIPE_HINT = 'Belongs to an earlier holder of this key id; nothing is scheduled for it';
 const HISTORICAL_CAUSE = 'this key id was created again and the session belongs to the earlier holder';
-const KIND_LABEL: Record<Account['kind'], string> = { api_key: 'api key', oauth: 'subscription' };
+const KIND_LABEL: Record<Account['kind'], string> = { api_key: 'Anthropic key', oauth: 'subscription' };
 const KIND_HINT: Record<Account['kind'], string> = {
-  api_key: 'API key upstream: billed per token, no quota windows',
-  oauth: 'Subscription upstream: quota windows apply',
+  api_key: 'Anthropic key account: billed per token, no quota windows',
+  oauth: 'Subscription account: quota windows apply',
 };
 const COMPANION_HINT: Record<CompanionState, string> = {
   none: 'No cache-keepalive companion ever registered for this session. The router still pins it and still sees its requests.',
@@ -42,7 +42,7 @@ const MIGRATED_PROBE_HINT =
   "The probe was served by another account than the recipe's; it paid the write the next request would have paid there, so it counts for neither the cold streak nor the net.";
 const NO_TRAFFIC_HINT = 'This session has no ledgered requests, so there is nothing to show in analytics or observe.';
 const NET_HINT =
-  "What the agent's probes saved minus what they cost, in the unit each probe settled in: a share of the upstream's 5-hour window on plan quota, dollars on an API key or in overage. An agent whose upstream changed funding carries both. A fast-mode session's probes settle in dollars whatever the upstream's funding, since they draw usage credits.";
+  "What the agent's probes saved minus what they cost, in the unit each probe settled in: a share of the account's 5-hour window on plan quota, dollars on an Anthropic key or in overage. An agent whose account changed funding carries both. A fast-mode session's probes settle in dollars whatever the account's funding, since they draw usage credits.";
 
 /** Each balance that is not zero, so an agent that settled in one unit shows that unit alone. */
 const netOf = (agent: Pick<KeepaliveRecipe, 'netFiveHourShare' | 'netUsd'>): { text: string }[] => [
@@ -196,7 +196,7 @@ export function SessionsPage() {
       <div className="page-head">
         <p className="page-head__meta">
           Every Claude Code session the router has seen within the session expiry, and every conversation it identified without a session id, whether or not a cache-keepalive companion registered for it. A pin binds each model a session uses to one
-          upstream, so subagents on another model may sit on another upstream, and with affinity off every request picks again; where cache warming is on, each agent carries a recipe that replays its
+          account, so subagents on another model may sit on another account, and with affinity off every request picks again; where cache warming is on, each agent carries a recipe that replays its
           cacheable prefix just before the prompt cache expires, so the next real turn reads the cache instead of rewriting it.
         </p>
         <CostReferenceLink />
@@ -266,7 +266,7 @@ export function SessionsPage() {
                   <th>Key</th>
                   <th>Session</th>
                   <th>Model</th>
-                  <th>Upstream</th>
+                  <th>Account</th>
                   <th>Last used</th>
                   <th className="right">Requests</th>
                   <th>Last request</th>
@@ -309,7 +309,7 @@ export function SessionsPage() {
         confirmLabel="Release"
         body={
           pending
-            ? `Session ${sessionLabel(pending.session)} loses its pin to ${pending.session.accountId ?? 'its upstream'} and every recipe on it is dropped. The next request picks an upstream again and the prompt cache on ${pending.session.accountId ?? 'it'} goes cold.`
+            ? `Session ${sessionLabel(pending.session)} loses its pin to ${pending.session.accountId ?? 'its account'} and every recipe on it is dropped. The next request picks an account again and the prompt cache on ${pending.session.accountId ?? 'it'} goes cold.`
             : ''
         }
         onConfirm={onConfirmRelease}
@@ -412,7 +412,7 @@ function SessionRows({
             {session.accountId === null ? (
               <span className="muted">-</span>
             ) : (
-              <Link to={`/upstreams/${session.accountId}`} onClick={(e) => e.stopPropagation()}>
+              <Link to={`/accounts/${session.accountId}`} onClick={(e) => e.stopPropagation()}>
                 {session.accountId}
               </Link>
             )}
@@ -510,7 +510,7 @@ function SessionRows({
                 <div className="agents__row agents__row--head">
                   <span>Agent</span>
                   <span>Model</span>
-                  <span>Upstream</span>
+                  <span>Account</span>
                   <span>TTL</span>
                   <span>Next probe</span>
                   <span>Last request</span>

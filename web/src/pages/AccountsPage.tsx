@@ -50,16 +50,16 @@ export function AccountsPage() {
   }, [accounts.data, query, status, sort, now]);
 
   const selected = accounts.data?.find((a) => a.id === accountId) ?? null;
-  // A deleted upstream's URL names a row the reloaded list no longer holds, which leads to the first one as a bare
-  // /upstreams does rather than to a detail that never loads.
+  // A deleted account's URL names a row the reloaded list no longer holds, which leads to the first one as a bare
+  // /accounts does rather than to a detail that never loads.
   useEffect(() => {
-    if (accounts.data && !selected && accounts.data.length) navigate(`/upstreams/${accounts.data[0].id}`, { replace: true });
+    if (accounts.data && !selected && accounts.data.length) navigate(`/accounts/${accounts.data[0].id}`, { replace: true });
   }, [accounts.data, selected, navigate]);
 
   return (
     <div className="accounts">
       <aside className="accounts__list">
-        <SearchInput placeholder="Search upstreams" value={query} onChange={(e) => setQuery(e.target.value)} />
+        <SearchInput placeholder="Search accounts" value={query} onChange={(e) => setQuery(e.target.value)} />
         <div className="accounts__filters">
           <Select value={status} onChange={(e) => setStatus(e.target.value as 'all' | AccountStatus)} aria-label="Status filter">
             <option value="all">All statuses</option>
@@ -78,7 +78,7 @@ export function AccountsPage() {
         </div>
         {canMutate && (
           <Button variant="primary" icon={<IconPlus size={14} />} onClick={() => setAddOpen(true)} className="accounts__add">
-            Add upstream
+            Add account
           </Button>
         )}
         <ul className="account-rows">
@@ -86,7 +86,7 @@ export function AccountsPage() {
             ? accounts.error
               ? (
                   <li>
-                    <ErrorState title="Could not load the upstreams" body={accounts.error} action={<Button size="sm" onClick={accounts.reload}>Try again</Button>} />
+                    <ErrorState title="Could not load the accounts" body={accounts.error} action={<Button size="sm" onClick={accounts.reload}>Try again</Button>} />
                   </li>
                 )
               : [0, 1, 2].map((i) => (
@@ -98,7 +98,7 @@ export function AccountsPage() {
             : list.map((a) => <AccountRow key={a.id} account={a} active={a.id === accountId} now={now} />)}
           {accounts.data && list.length === 0 && (
             <li>
-              <EmptyState title="No upstreams match" body="Clear the search or the status filter." />
+              <EmptyState title="No accounts match" body="Clear the search or the status filter." />
             </li>
           )}
         </ul>
@@ -117,7 +117,7 @@ export function AccountsPage() {
           setAddOpen(false);
           accounts.reload();
           if (kind === 'oauth') setPairing({ accountId: created.id, label: created.label, repair: false });
-          else setToast('API key upstream added');
+          else setToast('Anthropic key added');
         }}
       />
       <PairingDialog
@@ -140,7 +140,7 @@ export function AccountsPage() {
 function AccountRow({ account, active, now }: { account: Account; active: boolean; now: number }) {
   return (
     <li>
-      <Link to={`/upstreams/${account.id}`} className={`account-row ${active ? 'is-active' : ''}`}>
+      <Link to={`/accounts/${account.id}`} className={`account-row ${active ? 'is-active' : ''}`}>
         <div className="account-row__head">
           <span className="account-row__name">{account.label}</span>
           {account.plan && <Badge tone="neutral">{account.plan}</Badge>}
@@ -183,9 +183,9 @@ function AccountDetail({ account, now, onToast, onPair, onChanged }: { account: 
   const trialEndsAt = account.subscription?.trialEndsAt ?? null;
 
   const isOauth = account.kind === 'oauth';
-  // A flagged upstream reports its flag as the status, so routing is the only honest read of whether it takes requests.
+  // A flagged account reports its flag as the status, so routing is the only honest read of whether it takes requests.
   const paused = !account.routingEnabled;
-  // A fast-lane row holds fast-mode requests alone, so the header counts the rows that cool the upstream.
+  // A fast-lane row holds fast-mode requests alone, so the header counts the rows that cool the account.
   const cooldown = account.cooldowns.find((c) => !isFastScope(c.scope)) ?? null;
   const extra = account.extraUsage;
   const overage = account.overage;
@@ -275,7 +275,7 @@ function AccountDetail({ account, now, onToast, onPair, onChanged }: { account: 
                   disabled={busy}
                   onClick={() =>
                     act(
-                      'Verify upstream',
+                      'Verify account',
                       'Sends a models request to the upstream with the stored key and reports the status.',
                       'Verify',
                       async () => {
@@ -293,8 +293,8 @@ function AccountDetail({ account, now, onToast, onPair, onChanged }: { account: 
                 disabled={busy}
                 onClick={() =>
                   act(
-                    paused ? 'Resume upstream' : 'Pause upstream',
-                    'Paused upstreams stay in their pools but receive no new sessions. Pinned sessions migrate on their next request.',
+                    paused ? 'Resume account' : 'Pause account',
+                    'Paused accounts stay in their pools but receive no new sessions. Pinned sessions migrate on their next request.',
                     paused ? 'Resume' : 'Pause',
                     paused ? () => api.resumeAccount(account.id) : () => api.pauseAccount(account.id),
                     paused ? 'Resumed' : 'Paused',
@@ -329,7 +329,7 @@ function AccountDetail({ account, now, onToast, onPair, onChanged }: { account: 
                 disabled={busy}
                 onClick={() =>
                   act(
-                    'Disconnect upstream',
+                    'Disconnect account',
                     `Deletes ${account.label}'s credential. Pool memberships and request history stay; re-pairing stores the credential again.`,
                     'Disconnect',
                     () => api.disconnectAccount(account.id),
@@ -345,19 +345,19 @@ function AccountDetail({ account, now, onToast, onPair, onChanged }: { account: 
                 disabled={busy}
                 onClick={() =>
                   act(
-                    'Delete upstream',
+                    'Delete account',
                     `Removes ${account.label} from every pool it is in and deletes it; request history stays in the ledger.`,
                     'Delete',
                     async () => {
                       await api.deleteAccount(account.id);
-                      navigate('/upstreams');
+                      navigate('/accounts');
                     },
                     'Deleted',
                     true,
                   )
                 }
               >
-                Delete upstream
+                Delete account
               </Button>
             </>
           )}
@@ -368,7 +368,7 @@ function AccountDetail({ account, now, onToast, onPair, onChanged }: { account: 
         <div className="callout callout--critical">
           <IconWarning size={16} />
           <div>
-            <b>Routing is off for this upstream.</b> The refresh token was rejected ({account.credential.lastError}). Re-pair to restore it.
+            <b>Routing is off for this account.</b> The refresh token was rejected ({account.credential.lastError}). Re-pair to restore it.
           </div>
         </div>
       )}
@@ -389,7 +389,7 @@ function AccountDetail({ account, now, onToast, onPair, onChanged }: { account: 
           <KeyValue
             className="kv--spread"
             rows={
-              // The kind decides the card, not the profile: an OAuth upstream has none until it is paired.
+              // The kind decides the card, not the profile: an OAuth account has none until it is paired.
               isOauth
                 ? [
                     { label: 'Type', value: 'OAuth login' },
@@ -405,7 +405,7 @@ function AccountDetail({ account, now, onToast, onPair, onChanged }: { account: 
                     { label: 'Billing type', value: account.subscription?.billingType ?? '-' },
                   ]
                 : [
-                    { label: 'Type', value: 'API key' },
+                    { label: 'Type', value: 'Anthropic key' },
                     { label: 'Windows', value: 'None reported; billed per token' },
                   ]
             }
@@ -449,7 +449,7 @@ function AccountDetail({ account, now, onToast, onPair, onChanged }: { account: 
 
         <Card title="Usage" subtitle="Remaining share of each window" className="card--fill">
           {account.windows.length === 0 && !account.fableWindow ? (
-            <p className="muted">This upstream does not report quota windows.</p>
+            <p className="muted">This account does not report quota windows.</p>
           ) : (
             <WindowTriple account={account} now={now} />
           )}
@@ -492,7 +492,7 @@ function AccountDetail({ account, now, onToast, onPair, onChanged }: { account: 
       )}
 
       <div className="detail__grid">
-        {/* One block per upstream, so each opens on its own rows rather than keeping the last one's toggle. */}
+        {/* One block per account, so each opens on its own rows rather than keeping the last one's toggle. */}
         <CoolingDown
           key={account.id}
           title="Cooling down"
@@ -504,7 +504,7 @@ function AccountDetail({ account, now, onToast, onPair, onChanged }: { account: 
               ? (row) =>
                   act(
                     'Clear cooldown',
-                    'The upstream becomes eligible immediately. If the upstream is still rate limited, the next request re-enters cooldown.',
+                    'The account becomes eligible immediately. If the account is still rate limited, the next request re-enters cooldown.',
                     'Clear',
                     () => api.clearCooldown(account.id, row.scope),
                     'Cooldown cleared',
@@ -630,7 +630,7 @@ function AddAccountDialog({ open, onClose, onDone }: { onClose: () => void; onDo
   const [secret, setSecret] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // A reopened dialog starts blank: the id it last created is taken, and the router refuses a second upstream under it.
+  // A reopened dialog starts blank: the id it last created is taken, and the router refuses a second account under it.
   useEffect(() => {
     if (!open) return;
     setKind('oauth');
@@ -657,15 +657,15 @@ function AddAccountDialog({ open, onClose, onDone }: { onClose: () => void; onDo
     <Dialog
       open={open}
       onClose={onClose}
-      title="Add upstream"
-      subtitle="Subscription logins share your Claude.ai quota. API keys bill per token against a Console workspace."
+      title="Add account"
+      subtitle="Subscription logins share your Claude.ai quota. Anthropic keys bill per token against a Console workspace."
       footer={
         <>
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
           <Button variant="primary" disabled={busy || !id.trim() || !label.trim() || (kind === 'api_key' && !secret)} onClick={() => void create()}>
-            {kind === 'oauth' ? 'Start pairing' : 'Add API key'}
+            {kind === 'oauth' ? 'Start pairing' : 'Add Anthropic key'}
           </Button>
         </>
       }
@@ -673,17 +673,17 @@ function AddAccountDialog({ open, onClose, onDone }: { onClose: () => void; onDo
       {/* The body is a flex column, which would stretch the segmented control across it. */}
       <div className="row">
         <Segmented<'api_key' | 'oauth'>
-          ariaLabel="Upstream type"
+          ariaLabel="Account type"
           value={kind}
           onChange={setKind}
           options={[
             { value: 'oauth', label: 'OAuth login' },
-            { value: 'api_key', label: 'API key' },
+            { value: 'api_key', label: 'Anthropic key' },
           ]}
         />
       </div>
       <div className="form-row">
-        <Field label="Id" hint="Lowercase letters, digits, and dashes; it names the upstream in every log and URL">
+        <Field label="Id" hint="Lowercase letters, digits, and dashes; it names the account in every log and URL">
           <Input value={id} onChange={(e) => setId(e.target.value)} placeholder="work" className="mono" />
         </Field>
         <Field label="Label" hint="Short name used in pools and logs.">
@@ -691,7 +691,7 @@ function AddAccountDialog({ open, onClose, onDone }: { onClose: () => void; onDo
         </Field>
       </div>
       {kind === 'api_key' && (
-        <Field label="API key">
+        <Field label="Anthropic key">
           <Input type="password" autoComplete="off" value={secret} onChange={(e) => setSecret(e.target.value)} placeholder="sk-ant-…" className="mono" />
         </Field>
       )}
@@ -733,7 +733,7 @@ function PairingDialog({ open, accountId, label, repair, onClose, onPaired }: { 
     setPreview(null);
     api.startPairing(accountId).then(
       (s) => {
-        // A pairing that lands after the dialog closed would hold the upstream until its own deadline.
+        // A pairing that lands after the dialog closed would hold the account until its own deadline.
         if (alive) setSession(s);
         else void api.cancelPairing(s.id).catch(() => undefined);
       },
@@ -747,7 +747,7 @@ function PairingDialog({ open, accountId, label, repair, onClose, onPaired }: { 
   }, [open, accountId]);
 
   const dismiss = () => {
-    // The router keeps the upstream busy until the pairing expires, so leaving unconfirmed gives the session back.
+    // The router keeps the account busy until the pairing expires, so leaving unconfirmed gives the session back.
     if (session) void api.cancelPairing(session.id).catch(() => undefined);
     onClose();
   };
@@ -786,7 +786,7 @@ function PairingDialog({ open, accountId, label, repair, onClose, onPaired }: { 
     }
   };
 
-  const title = repair ? `Re-pair ${label}` : `Pair ${label || 'new upstream'}`;
+  const title = repair ? `Re-pair ${label}` : `Pair ${label || 'new account'}`;
   return (
     <Dialog
       open={open}
@@ -877,7 +877,7 @@ function PairingDialog({ open, accountId, label, repair, onClose, onPaired }: { 
 
       {step === 3 && preview && (
         <div className="stack">
-          <p className="secondary">Confirm the identity below to store the refresh token for this upstream.</p>
+          <p className="secondary">Confirm the identity below to store the refresh token for this account.</p>
           <KeyValue
             rows={[
               { label: 'Email', value: preview.email, mono: true },

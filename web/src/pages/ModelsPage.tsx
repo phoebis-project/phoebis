@@ -12,12 +12,12 @@ import { UNDATED_MODEL_NOTE } from '@/lib/patterns';
 
 const RULE_COLUMNS = 4;
 
-/** Upstream links separated by commas, each titled when a title is given. */
-function upstreamLinks(ids: string[], titleOf?: (id: string) => string): ReactNode {
+/** Account links separated by commas, each titled when a title is given. */
+function accountLinks(ids: string[], titleOf?: (id: string) => string): ReactNode {
   return ids.map((id, i) => (
     <span key={id}>
       {i > 0 && ', '}
-      <Link to={`/upstreams/${id}`} title={titleOf?.(id)}>
+      <Link to={`/accounts/${id}`} title={titleOf?.(id)}>
         {id}
       </Link>
     </span>
@@ -32,7 +32,7 @@ function subtitleOf(models: KeyModels): string {
 function CoolingCell({ rule }: { rule: ProcessedRule }) {
   const ids = [...new Set(rule.cooldowns.map((c) => c.accountId))];
   if (ids.length === 0) return <span className="muted">-</span>;
-  return <>{upstreamLinks(ids, (id) => rule.cooldowns.filter((c) => c.accountId === id).map((c) => `${scopeLabel(c.scope)} until ${fmtAbsolute(c.until)}`).join(', '))}</>;
+  return <>{accountLinks(ids, (id) => rule.cooldowns.filter((c) => c.accountId === id).map((c) => `${scopeLabel(c.scope)} until ${fmtAbsolute(c.until)}`).join(', '))}</>;
 }
 
 export function ModelsPage() {
@@ -78,15 +78,15 @@ export function ModelsPage() {
     </tr>
   );
   const rulesBody = keys.error
-    ? row(<ErrorState title="Could not load the API keys" body={keys.error} action={<Button size="sm" onClick={keys.reload}>Try again</Button>} />)
+    ? row(<ErrorState title="Could not load the keys" body={keys.error} action={<Button size="sm" onClick={keys.reload}>Try again</Button>} />)
     : keys.data?.length === 0
-      ? row('No API keys: a key\'s processed rules show here once one exists.', true)
+      ? row('No keys: a key\'s processed rules show here once one exists.', true)
       : processed === null
         ? models.error
           ? row(<ErrorState title="Could not load the key's rules" body={models.error} action={<Button size="sm" onClick={models.reload}>Try again</Button>} />)
           : row(<Skeleton />)
         : processed.rules.length === 0
-          ? row("No rules: every model the pool's upstreams serve is allowed.", true)
+          ? row("No rules: every model the pool's accounts serve is allowed.", true)
           : processed.rules.map((r, i) => (
               <tr key={i}>
                 <td>
@@ -104,7 +104,7 @@ export function ModelsPage() {
     <div className="stack">
       <div className="page-head">
         <p className="page-head__meta">
-          The rules a key's requests are judged by, the first match deciding, and the models upstreams refused: a refused model cools on that upstream alone while the request fails over.
+          The rules a key's requests are judged by, the first match deciding, and the models accounts refused: a refused model cools on that account alone while the request fails over.
         </p>
         {/* The select's wrapper may shrink to nothing, and a two-line description beside it would squeeze it there. */}
         <div style={{ flex: 'none' }}>
@@ -153,10 +153,10 @@ export function ModelsPage() {
             <CoolingDown title="Cooling down" now={now} rows={[]} />
           ) : (
             // One block per model, so each opens on its own rows rather than keeping another model's toggle.
-            state.data.cooldowns.map((g) => <CoolingDown key={g.model} title={g.model} busy={busy} now={now} rows={g.rows} showUpstream onClear={canMutate ? setPending : undefined} />)
+            state.data.cooldowns.map((g) => <CoolingDown key={g.model} title={g.model} busy={busy} now={now} rows={g.rows} showAccount onClear={canMutate ? setPending : undefined} />)
           )}
-          <RecentEvents title="Recent rejections" subtitle="The newest refusals of a model by an upstream" events={state.data?.rejections ?? null} empty="No upstream has refused a model." now={now} />
-          <RecentEvents title="Recent permits" subtitle="The newest requests an upstream served after another refused the model" events={state.data?.permits ?? null} empty="No request was served after a refusal." now={now} permits />
+          <RecentEvents title="Recent rejections" subtitle="The newest refusals of a model by an account" events={state.data?.rejections ?? null} empty="No account has refused a model." now={now} />
+          <RecentEvents title="Recent permits" subtitle="The newest requests an account served after another refused the model" events={state.data?.permits ?? null} empty="No request was served after a refusal." now={now} permits />
         </>
       )}
 
@@ -165,7 +165,7 @@ export function ModelsPage() {
         onClose={() => setPending(null)}
         title="Clear cooldown"
         confirmLabel="Clear"
-        body="The upstream becomes eligible immediately. If the upstream is still rate limited, the next request re-enters cooldown."
+        body="The account becomes eligible immediately. If the account is still rate limited, the next request re-enters cooldown."
         onConfirm={onConfirmClear}
       />
       <Toast message={toast} onDone={() => setToast(null)} />
@@ -182,7 +182,7 @@ function RecentEvents({ empty, events, now, permits = false, subtitle, title }: 
           <thead>
             <tr>
               <th>Time</th>
-              <th>Upstream</th>
+              <th>Account</th>
               <th>Model</th>
               <th>Key</th>
               {permits && <th>Rejected by</th>}
@@ -205,7 +205,7 @@ function RecentEvents({ empty, events, now, permits = false, subtitle, title }: 
               events.map((e, i) => (
                 <tr key={`${e.at}-${e.accountId}-${i}`}>
                   <td title={fmtAbsolute(e.at)}>{e.requestId ? <Link to={`/requests/${e.requestId}`}>{fmtRelative(e.at, now)}</Link> : fmtRelative(e.at, now)}</td>
-                  <td>{upstreamLinks([e.accountId])}</td>
+                  <td>{accountLinks([e.accountId])}</td>
                   <td>
                     <span className="mono">{e.model}</span>
                     {e.wireModel && e.wireModel !== e.model && (
@@ -215,7 +215,7 @@ function RecentEvents({ empty, events, now, permits = false, subtitle, title }: 
                     )}
                   </td>
                   <td className="mono">{e.keyId ?? '-'}</td>
-                  {permits && <td>{upstreamLinks(e.rejectedBy)}</td>}
+                  {permits && <td>{accountLinks(e.rejectedBy)}</td>}
                 </tr>
               ))
             )}

@@ -126,8 +126,8 @@ test('a pin the table cannot price stays in the order unmarked and counts for th
   );
 });
 
-test("the pins of an upstream whose tier the table does not size stay out of the preview, unlike a pin it cannot price", () => {
-  // The route reads no burn for any pin of such an upstream, while the round prices them on the reference tier and
+test("the pins of an account whose tier the table does not size stay out of the preview, unlike a pin it cannot price", () => {
+  // The route reads no burn for any pin of such an account, while the round prices them on the reference tier and
   // sheds them; the preview cannot replay that order, so it leaves them out rather than call them unpriced.
   const team = account('team', 0.95);
   const pins = [pin('team-a', null, false, { accountId: 'team' }), pin('team-b', null, false, { accountId: 'team' })];
@@ -159,11 +159,11 @@ test('two hot members in one unit share the burn by weight, and members in two u
   // The four pins mark 7 of 10; the second member marks 18 of 20.
   const same = replay([hot, second, cool], [...four, ...heavy('window_share')]);
   assert.deepEqual([same.sessions, same.warm, same.members, same.unit, same.burnShare.toFixed(3)], [3, 1, 2, 'window_share', (25 / 30).toFixed(3)]);
-  assert.equal(d.shedPreviewLine(same, true), 'Would move 3 sessions, 1 warm, 83% of the burn in window share, across 2 upstreams.');
+  assert.equal(d.shedPreviewLine(same, true), 'Would move 3 sessions, 1 warm, 83% of the burn in window share, across 2 accounts.');
   const mixed = replay([hot, second, cool], [...four, ...heavy('usd')]);
   assert.deepEqual([mixed.unit, mixed.averaged, mixed.burnShare.toFixed(3)], [null, true, ((0.7 + 0.9) / 2).toFixed(3)], 'a window share and dollars cannot be summed, so each member counts once');
   assert.equal(same.averaged, false);
-  assert.equal(d.shedPreviewLine(mixed, true), "Would move 3 sessions, 1 warm, 80% of each upstream's burn on average, across 2 upstreams.");
+  assert.equal(d.shedPreviewLine(mixed, true), "Would move 3 sessions, 1 warm, 80% of each account's burn on average, across 2 accounts.");
 });
 
 test('with no member under the band the preview marks sessions it cannot move', () => {

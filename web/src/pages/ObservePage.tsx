@@ -20,7 +20,7 @@ type Dim = 'accountId' | 'keyId' | 'model' | 'poolId' | 'sessionId';
 const DIMS: { dim: Dim; label: string }[] = [
   { dim: 'keyId', label: 'Key' },
   { dim: 'poolId', label: 'Pool' },
-  { dim: 'accountId', label: 'Upstream' },
+  { dim: 'accountId', label: 'Account' },
   { dim: 'model', label: 'Model' },
   { dim: 'sessionId', label: 'Session' },
 ];
@@ -298,7 +298,7 @@ export function ObservePage() {
                       <th>Agent</th>
                       <th>Model</th>
                       <th>Client</th>
-                      <th>Upstream</th>
+                      <th>Account</th>
                       <th>Kind</th>
                       <th>Transport</th>
                       <th>Status</th>
@@ -672,7 +672,7 @@ function DetailPane({ r, onClose, canPreview, frozenAt }: { canPreview: boolean;
       <section>
         <h3 className="section-title">Attempts</h3>
         {r.attempts.length === 0 ? (
-          <p className="muted">No upstream selected yet.</p>
+          <p className="muted">No account selected yet.</p>
         ) : (
           <ul className="attempts">
             {r.attempts.map((a) => (

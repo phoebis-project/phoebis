@@ -46,7 +46,7 @@ test('the burn fold reads every token and dollar figure per minute of its bucket
   assert.ok(Math.abs(lines[0].tokensPerMinute - 55) < 1e-9, 'the range average spreads the tokens over both buckets');
 });
 
-test('an upstream burns in the unit its figures come in, a subscription whose tier the cost table does not size in none, and every other grouping in dollars', () => {
+test('an account burns in the unit its figures come in, a subscription whose tier the cost table does not size in none, and every other grouping in dollars', () => {
   const answered = [
     point(0, 'console', { unit: 'usd', usd: 1.2 }),
     point(0, 'personal', { fiveHourShare: 0.01, sevenDayShare: 0.001, unit: 'window_share' }),
@@ -59,10 +59,10 @@ test('an upstream burns in the unit its figures come in, a subscription whose ti
   assert.deepEqual(
     ['console', 'personal', 'tierless', 'idle', 'departed'].map((k) => byKey[k].unit),
     ['usd', 'window_share', 'unknown', 'window_share', 'usd'],
-    'a subscription upstream whose tier the table sizes charts in window share; one whose tier it does not size is tier unknown',
+    'a subscription account whose tier the table sizes charts in window share; one whose tier it does not size is tier unknown',
   );
-  assert.deepEqual([byKey.tierless.fiveHourPeak, byKey.tierless.fiveHourPerHour, byKey.tierless.sevenDayPerHour, byKey.tierless.usdPerMinute], [null, null, null, 0], 'a tier-unknown upstream has no figure to chart');
-  assert.deepEqual([byKey.idle.unit, byKey.idle.fiveHourPeak, byKey.idle.fiveHourPerHour], ['window_share', null, null], 'a sized upstream with no traffic in range priced none, so it reads a dash');
+  assert.deepEqual([byKey.tierless.fiveHourPeak, byKey.tierless.fiveHourPerHour, byKey.tierless.sevenDayPerHour, byKey.tierless.usdPerMinute], [null, null, null, 0], 'a tier-unknown account has no figure to chart');
+  assert.deepEqual([byKey.idle.unit, byKey.idle.fiveHourPeak, byKey.idle.fiveHourPerHour], ['window_share', null, null], 'a sized account with no traffic in range priced none, so it reads a dash');
   assert.ok(d.foldBurn(answered.map((p) => ({ ...p, group: `k-${p.group}` })), 'key', 3_600, NONE).lines.every((l) => l.unit === 'usd'));
 });
 
@@ -76,8 +76,9 @@ test('the burn fold keeps the groups that burn the most tokens and sums the rest
   assert.deepEqual(d.foldBurn([point(0, '-', { cachedTokens: 60 })], 'key', 60, NONE).lines.map((l) => l.label), ['unattributed']);
 });
 
-test('under the upstream grouping the rest folds into one other per unit, so no dollars hide behind a window share', () => {
-  // Seven upstreams burn the most; the three smallest are a priced subscription, a tier-unknown one and an API key.
+test('under the account grouping the rest folds into one other per unit, so no dollars hide behind a window share', () => {
+  // Seven accounts burn the most; the three smallest are a priced subscription, a tier-unknown one and an
+  // Anthropic key.
   const kept = Array.from({ length: 7 }, (_, i) => point(0, `u${i}`, { cachedTokens: 1_000 * (i + 2), fiveHourShare: 0.001, unit: 'window_share' }));
   const answered = [
     ...kept,
@@ -90,8 +91,8 @@ test('under the upstream grouping the rest folds into one other per unit, so no 
   const rest = lines.slice(7);
   assert.deepEqual(rest.map((l) => [l.label, l.unit, l.other]), [['Other (plan)', 'window_share', true], ['Other (tier unknown)', 'unknown', true], ['Other (dollars)', 'usd', true]]);
   assert.equal(new Set(lines.map((l) => l.key)).size, lines.length, 'each line keeps a key of its own');
-  assert.deepEqual([rows[0].cached[7], rows[0].cached[8], rows[0].cached[9]], [120, 90, 60], 'each rest carries its own unit\'s upstreams');
-  assert.deepEqual([rows[0].usd[7], rows[0].usd[8], rows[0].usd[9]], [0, 0, 0.6], 'the dollar side keeps the API-key upstream\'s dollars');
+  assert.deepEqual([rows[0].cached[7], rows[0].cached[8], rows[0].cached[9]], [120, 90, 60], 'each rest carries its own unit\'s accounts');
+  assert.deepEqual([rows[0].usd[7], rows[0].usd[8], rows[0].usd[9]], [0, 0, 0.6], 'the dollar side keeps the Anthropic-key account\'s dollars');
   assert.deepEqual([rows[0].fiveHour[7], rows[0].sevenDay[7]], [null, null], 'a folded rest draws no share');
   const oneUnit = d.foldBurn([...kept, point(0, 'small-key', { cachedTokens: 60, unit: 'usd', usd: 0.6 }), point(0, 'tiny-key', { cachedTokens: 30, unit: 'usd', usd: 0.3 })], 'account', 60, sized);
   assert.deepEqual(oneUnit.lines.slice(7).map((l) => l.label), ['Other (dollars)'], 'a rest of one unit folds into that unit alone');
@@ -129,11 +130,11 @@ test('a bucket with cache writes and output alone is not idle', () => {
 });
 
 test('a known tier whose every share is null is a planned line listed as model unlisted', () => {
-  // A Max 20x upstream whose range traffic ran on a model the table leaves unmeasured throughout.
+  // A Max 20x account whose range traffic ran on a model the table leaves unmeasured throughout.
   const answered = [point(0, 'a', { tokens: 300, uncachedTokens: 300, unit: 'window_share' }), point(HOUR, 'a', { tokens: 200, uncachedTokens: 200, unit: 'window_share' })];
   const [line] = d.foldBurn(answered, 'account', 3_600, new Set(['a'])).lines;
   assert.deepEqual([line.unit, line.fiveHourPerHour, line.sevenDayPerHour, line.unpriced], ['window_share', null, null, { fiveHour: true, sevenDay: true }]);
-  assert.equal(d.foldBurn(answered, 'account', 3_600, NONE).lines[0].unit, 'unknown', 'the same traffic on an upstream whose tier the table does not size');
+  assert.equal(d.foldBurn(answered, 'account', 3_600, NONE).lines[0].unit, 'unknown', 'the same traffic on an account whose tier the table does not size');
 });
 
 test('a known tier with only a priced 7-day share keeps its 7-day series', () => {
@@ -146,7 +147,7 @@ test('a known tier with only a priced 7-day share keeps its 7-day series', () =>
 });
 
 test('a null slot is unpriced only with tokens behind it, so an idle slot on a never-priced window is not', () => {
-  // The upstream prices its 5-hour window and never its 7-day one, so both of its 7-day slots read null.
+  // The account prices its 5-hour window and never its 7-day one, so both of its 7-day slots read null.
   const plan = (at, over) => point(at * HOUR, 'business', { unit: 'window_share', ...over });
   const { lines, rows } = d.foldBurn([plan(0, { fiveHourShare: 0.02, uncachedTokens: 10 }), plan(1, {})], 'account', 3_600, new Set(['business']));
   const [busy, idle] = rows;
@@ -179,11 +180,11 @@ test("the mock's burn fold prices only rows with tokens and nulls a window on an
   for (const rows of [[priced, unpriced], [unpriced, priced]]) assert.equal(shareOf(rows), null, 'a row the table cannot price nulls the window');
 });
 
-test('an upstream is sized when the cost table holds its stored tier', () => {
+test('an account is sized when the cost table holds its stored tier', () => {
   const account = (id, rateLimitTier) => ({ id, kind: rateLimitTier === null ? 'api_key' : 'oauth', subscription: rateLimitTier === null ? null : { rateLimitTier } });
   const accounts = [account('stored', 'default_claude_max_20x'), account('bare', 'claude_max_20x'), account('team', 'claude_team'), account('key', null)];
   const tiers = { default_claude_max_20x: { fiveHour: 1, sevenDay: 1 } };
-  assert.deepEqual([...d.sizedUpstreams(accounts, tiers)].sort(), ['bare', 'stored']);
+  assert.deepEqual([...d.sizedAccounts(accounts, tiers)].sort(), ['bare', 'stored']);
 });
 
 test('a priced bucket between unpriced ones, or at an end beside one, is an isolated slot the plan chart marks', () => {
@@ -197,7 +198,7 @@ test('a priced bucket between unpriced ones, or at an end beside one, is an isol
   assert.deepEqual(d.isolatedSlots([0]), [true], 'a lone bucket draws no segment either');
 });
 
-test('every burn read reads the upstreams again, so a tier a profile refresh supplied sizes the upstream on the next range', async () => {
+test('every burn read reads the accounts again, so a tier a profile refresh supplied sizes the account on the next range', async () => {
   const tiers = { default_claude_max_20x: { fiveHour: 1, sevenDay: 1 } };
   const reads = [null, 'default_claude_max_20x'];
   const source = {
@@ -210,7 +211,7 @@ test('every burn read reads the upstreams again, so a tier a profile refresh sup
   const range = { from: new Date(0).toISOString(), to: new Date(HOUR).toISOString() };
   const before = await d.readBurn(source, range, 'account');
   const after = await d.readBurn(source, range, 'account');
-  assert.deepEqual([d.sizedUpstreams(before.accounts, tiers).has('business'), d.sizedUpstreams(after.accounts, tiers).has('business')], [false, true]);
+  assert.deepEqual([d.sizedAccounts(before.accounts, tiers).has('business'), d.sizedAccounts(after.accounts, tiers).has('business')], [false, true]);
   assert.deepEqual(after.answer, { bucketSeconds: 3_600, points: [] });
 });
 

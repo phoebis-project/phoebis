@@ -101,7 +101,7 @@ export interface ShedPreview {
  * as the router's `burn_decayed` does: cold pins first by burn, then warm ones by burn over their last input size,
  * bounded by the warm-sessions mode. A member's pins share one unit, so its round needs no conversion; members in
  * different units cannot be summed, so their shares are averaged instead. A member without `eligible` counts as
- * eligible, as a member of a pool not saved yet does. `sized` names the upstreams whose tier the cost table sizes.
+ * eligible, as a member of a pool not saved yet does. `sized` names the accounts whose tier the cost table sizes.
  */
 export function shedPreview(
   pool: Pick<Pool, 'burnWindowSeconds' | 'migrateAboveUtilization' | 'shedShare' | 'warmSessions'> & { members: { accountId: string; eligible?: MemberEligibility }[] },
@@ -114,7 +114,7 @@ export function shedPreview(
   if (threshold === null) return { averaged: false, burnShare: 0, cool: false, members: 0, sessions: 0, unit: null, unpriced: 0, warm: 0 };
   const byId = new Map(accounts.map((a) => [a.id, a]));
   const band = threshold - MIGRATE_BAND;
-  // The router's destination readings: a subscription account's two shared windows, an API-key account's worst
+  // The router's destination readings: a subscription account's two shared windows, an Anthropic-key account's worst
   // live one; a window the row does not carry reads as under.
   const under = (a: Account) =>
     a.kind === 'api_key'
@@ -130,7 +130,7 @@ export function shedPreview(
   const windowMs = pool.burnWindowSeconds * 1_000;
   const rounds = hot.map((account) => {
     const pins = sessions
-      // The route reads no burn for a window-share pin of an upstream whose tier the table does not size, while the
+      // The route reads no burn for a window-share pin of an account whose tier the table does not size, while the
       // round prices it on the reference tier and sheds it; the preview cannot replay that order, so it leaves those
       // pins out rather than count them as pins the table cannot price.
       .filter((s) => s.pinned && s.accountId === account.id && (s.burnUnit !== 'window_share' || sized.has(account.id)))
@@ -190,13 +190,13 @@ export function shedPreviewLine(preview: ShedPreview, migrateOn: boolean): strin
   if (!migrateOn) return 'No round runs while migrate above utilization is off.';
   if (preview.members === 0) return 'No member is above the threshold.';
   const of = preview.averaged
-    ? "of each upstream's burn on average"
+    ? "of each account's burn on average"
     : preview.unit === 'window_share'
       ? 'of the burn in window share'
       : preview.unit === 'usd'
         ? 'of the burn in dollars'
         : 'of the burn';
-  const across = preview.members > 1 ? `, across ${preview.members} upstreams` : '';
+  const across = preview.members > 1 ? `, across ${preview.members} accounts` : '';
   const what = `${preview.sessions} ${preview.sessions === 1 ? 'session' : 'sessions'}, ${preview.warm} warm, ${fmtPct(preview.burnShare)} ${of}${across}`;
   const n = preview.unpriced;
   const unpriced = n > 0 ? ` ${n} pin${n === 1 ? '' : 's'} the table cannot price stay${n === 1 ? 's' : ''}.` : '';

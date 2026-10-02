@@ -594,7 +594,7 @@ async fn the_usage_get_says_no_credential_is_stored_for_a_disconnected_or_unpair
     .await;
     assert_eq!(removed.status(), 204);
     let no_credential = (
-        Some("no credential is stored for this upstream; pair it to load quota".into()),
+        Some("no credential is stored for this account; pair it to load quota".into()),
         true,
         Some(0),
     );

@@ -45,8 +45,8 @@ export function QuotaPage() {
     accounts.reload();
     snapshots.reload();
   };
-  // The route answers from the upstream's hold or its cache while either lasts, which is why a refresh can change nothing.
-  const refreshHint = settings.data ? `reads the endpoint now unless the upstream is backing off or a snapshot younger than ${settings.data.usage.cacheTtlSeconds} seconds is cached` : undefined;
+  // The route answers from the account's hold or its cache while either lasts, which is why a refresh can change nothing.
+  const refreshHint = settings.data ? `reads the endpoint now unless the account is backing off or a snapshot younger than ${settings.data.usage.cacheTtlSeconds} seconds is cached` : undefined;
   const refreshAll = async () => {
     setRefreshing(true);
     // A credential the route refuses still reports through its snapshot, so one failure does not hold up the rest.
@@ -83,7 +83,7 @@ export function QuotaPage() {
           tabs={[
             { value: 'all', label: 'All', count: counts.all },
             { value: 'oauth', label: 'OAuth', count: counts.oauth },
-            { value: 'api_key', label: 'API key', count: counts.api_key },
+            { value: 'api_key', label: 'Anthropic key', count: counts.api_key },
           ]}
         />
         <Select value={sort} onChange={(e) => setSort(e.target.value as Sort)} aria-label="Sort">
@@ -93,7 +93,7 @@ export function QuotaPage() {
       </div>
 
       {accounts.error && !accounts.data ? (
-        <ErrorState title="Could not load the upstreams" body={accounts.error} action={<Pill onClick={reload}>Try again</Pill>} />
+        <ErrorState title="Could not load the accounts" body={accounts.error} action={<Pill onClick={reload}>Try again</Pill>} />
       ) : (
         <div className="quota-grid">
           {!accounts.data
@@ -143,7 +143,7 @@ function PollLine({ poll, now }: { now: number; poll: QuotaPoll | null }) {
   );
 }
 
-/** Since when the upstream has been answered 429, and when the poll may ask it again: two lines, so neither wraps. */
+/** Since when the account has been answered 429, and when the poll may ask it again: two lines, so neither wraps. */
 function BackoffLines({ poll, since, now }: { now: number; poll: QuotaPoll; since: string }) {
   const n = poll.rateLimitedInARow;
   const run = `${n} rate-limited ${n === 1 ? 'answer' : 'answers'} in a row`;
@@ -185,7 +185,7 @@ function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshe
   return (
     <article className={`qcard ${failed ? 'is-error' : ''}`}>
       <header className="qcard__head">
-        <span className={`qcard__icon qcard__icon--${account.kind}`} title={account.kind === 'oauth' ? 'Claude.ai subscription' : 'API key upstream'}>
+        <span className={`qcard__icon qcard__icon--${account.kind}`} title={account.kind === 'oauth' ? 'Claude.ai subscription' : 'Anthropic key'}>
           {account.kind === 'oauth' ? <IconAnthropic size={15} /> : <IconServer size={15} />}
         </span>
         <span className="qcard__name mono" title={account.email ?? undefined}>
@@ -217,7 +217,7 @@ function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshe
             </Pill>
           </div>
         ) : !w5 && !w7 && !account.fableWindow ? (
-          <p className="qcard__note muted">No quota windows. API-key upstreams bill per token and are limited only by the workspace tier.</p>
+          <p className="qcard__note muted">No quota windows. Anthropic-key accounts bill per token and are limited only by the workspace tier.</p>
         ) : (
           <div className="qcard__windows">
             <QuotaWindow name="5h" window={w5} now={now} soon={soonest === '5h'} />
@@ -225,7 +225,7 @@ function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshe
             <QuotaWindow name="Fable" window={account.fableWindow} now={now} soon={soonest === '7d_fable'} />
           </div>
         )}
-        {/* Outside the ternary, so an API-key card, which has no windows, shows its fast lane too. */}
+        {/* Outside the ternary, so an Anthropic-key card, which has no windows, shows its fast lane too. */}
         {status !== 'loading' && <FastLane account={account} now={now} />}
       </div>
 
@@ -323,7 +323,7 @@ function QuotaWindow({ name, window: w, now, soon }: { name: string; now: number
         </div>
       )}
       {w ? (
-        <span className={`qwin__reset ${soon ? 'is-soon' : ''}`} title={`${fmtAbsolute(w.resetsAt)}${soon ? ', the first of this upstream to recover' : ''}`}>
+        <span className={`qwin__reset ${soon ? 'is-soon' : ''}`} title={`${fmtAbsolute(w.resetsAt)}${soon ? ', the first of this account to recover' : ''}`}>
           resets {fmtRelative(w.resetsAt, now)}
         </span>
       ) : (

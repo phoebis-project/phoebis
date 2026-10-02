@@ -21,7 +21,7 @@ function Failure({ message }: { message: string }) {
   );
 }
 
-/** An upstream's live model list as the router last fetched it, read when the dialog opens and again on Refresh. */
+/** An account's live model list as the router last fetched it, read when the dialog opens and again on Refresh. */
 export function CatalogDialog({ accountId, label, now, onClose, open }: { accountId: string; label: string; now: number; onClose: () => void; open: boolean }): JSX.Element {
   const [catalog, setCatalog] = useState<AccountCatalog | null>(null);
   const [failure, setFailure] = useState<string | null>(null);

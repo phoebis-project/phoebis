@@ -38,10 +38,10 @@ The console starts every pairing as a `claude_ai` login, authorizing against `cl
 authorizing against `platform.claude.com`, is available through the API. A pairing session expires ten minutes
 after it starts, and the dialog shows the remaining time.
 
-![The Upstreams view: the list on the left, the selected upstream's actions, identity, usage, cooling-down block,
-and credential on the right](assets/upstreams-light.png#only-light)
-![The Upstreams view: the list on the left, the selected upstream's actions, identity, usage, cooling-down block,
-and credential on the right](assets/upstreams-dark.png#only-dark)
+![The Accounts view: the list on the left, the selected account's actions, identity, usage, cooling-down block,
+and credential on the right](assets/accounts-light.png#only-light)
+![The Accounts view: the list on the left, the selected account's actions, identity, usage, cooling-down block,
+and credential on the right](assets/accounts-dark.png#only-dark)
 
 ## With `curl`
 

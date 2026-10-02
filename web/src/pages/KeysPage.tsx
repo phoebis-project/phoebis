@@ -126,7 +126,7 @@ export function KeysPage() {
             </Select>
             {canMutate && (
               <Button variant="primary" icon={<IconPlus size={14} />} onClick={() => setDialog({ key: null })} style={{ marginLeft: 'auto' }}>
-                Create API key
+                Create key
               </Button>
             )}
           </div>
@@ -150,7 +150,7 @@ export function KeysPage() {
                     ? (
                         <tr>
                           <td colSpan={8}>
-                            <ErrorState title="Could not load the API keys" body={keys.error} action={<Button size="sm" onClick={keys.reload}>Try again</Button>} />
+                            <ErrorState title="Could not load the keys" body={keys.error} action={<Button size="sm" onClick={keys.reload}>Try again</Button>} />
                           </td>
                         </tr>
                       )
@@ -215,7 +215,7 @@ export function KeysPage() {
                                       label: 'Rotate',
                                       onConfirm: () =>
                                         void run(async () => {
-                                          setCreated({ key: await api.rotateKey(k.id), title: 'API key rotated' });
+                                          setCreated({ key: await api.rotateKey(k.id), title: 'Key rotated' });
                                         }),
                                     }),
                                 },
@@ -270,7 +270,7 @@ export function KeysPage() {
         pools={poolList}
         onCreated={(c) => {
           setDialog(null);
-          setCreated({ key: c, title: 'API key created' });
+          setCreated({ key: c, title: 'Key created' });
           keys.reload();
         }}
         onUpdated={() => {
@@ -282,7 +282,7 @@ export function KeysPage() {
       <Dialog
         open={created !== null}
         onClose={() => setCreated(null)}
-        title={created?.title ?? 'API key created'}
+        title={created?.title ?? 'Key created'}
         subtitle="Copy the secret now. The router stores only a hash, so it cannot be shown again."
         footer={
           <Button variant="primary" onClick={() => setCreated(null)}>
@@ -323,7 +323,7 @@ export type KeyDialogPool = Pick<Pool, 'autoModeServer' | 'bodyCaptureHours' | '
 const KEY_GROUP_LABEL: Record<KeyGroup, string> = { access: 'Access', capture: 'Capture', key: 'Key', models: 'Models', sessions: 'Sessions' };
 
 /**
- * Create or edit an API key. `existing` switches the dialog to edit mode;
+ * Create or edit a key. `existing` switches the dialog to edit mode;
  * `initialPoolId` with `lockPool` pins the pool when the dialog is opened from
  * inside a pool's own dialog.
  */
@@ -617,7 +617,7 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing
     <GroupedDialog
       open={open}
       onClose={onClose}
-      title={existing ? `Edit ${existing.name}` : 'Create API key'}
+      title={existing ? `Edit ${existing.name}` : 'Create key'}
       railLabel="Key settings"
       groups={groups}
       chosen={chosen}
@@ -653,7 +653,7 @@ function EffectiveList({ processed }: { processed: Loaded<KeyModels | null> }) {
       ) : !rules ? (
         <Skeleton height={28} />
       ) : rules.length === 0 ? (
-        <p className="muted">No rules: every model the pool's upstreams serve is allowed.</p>
+        <p className="muted">No rules: every model the pool's accounts serve is allowed.</p>
       ) : (
         <ol className="effective-rules">
           {rules.map((r, i) => {
@@ -665,7 +665,7 @@ function EffectiveList({ processed }: { processed: Loaded<KeyModels | null> }) {
                 <span className="mono">{r.pattern}</span>
                 {cooling > 0 && (
                   <Badge tone="warning" title={r.cooldowns.map((c) => `${c.accountId}: ${c.scope.replace(/^model:/, '')}`).join(', ')}>
-                    {cooling} {cooling === 1 ? 'upstream' : 'upstreams'} cooling
+                    {cooling} {cooling === 1 ? 'account' : 'accounts'} cooling
                   </Badge>
                 )}
               </li>

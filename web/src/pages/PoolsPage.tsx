@@ -16,7 +16,7 @@ import { SelectionOrder } from '@/components/ui/SelectionOrder';
 import { UtilizationBar } from '@/components/UtilizationBar';
 import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, ErrorState, Field, GroupedDialog, GroupLink, Input, Menu, PageLink, Select, Skeleton, SwitchedNumber, Toast, Toggle, type DialogGroup } from '@/components/ui/primitives';
-import { sizedUpstreams } from '@/lib/analytics';
+import { sizedAccounts } from '@/lib/analytics';
 import { fmtAbsolute, fmtCompact, fmtHourTick, fmtInt, fmtPct, fmtPeriodEnd, fmtRelative, fmtUsd } from '@/lib/format';
 import { ENGINE_BOUNDS, ENGINE_FIELD_LABELS, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_LABELS, POOL_GROUPS, PROBE_TUNING_ROWS, bandRefusal, poolRefusals, type PoolGroup } from '@/lib/forms';
 import { useAsync, useNow } from '@/lib/hooks';
@@ -40,9 +40,9 @@ const AFFINITY_PICKS = [
 ];
 // Ordered best-first: the policy a new pool should usually take comes first.
 const OVERAGE_CHOICES: { body: string; title: string; value: OveragePolicy }[] = [
-  { value: 'prefer_plan', title: 'Prefer plan quota', body: 'move sessions to a sibling with plan quota when this upstream starts billing extra usage' },
+  { value: 'prefer_plan', title: 'Prefer plan quota', body: 'move sessions to a sibling with plan quota when this account starts billing extra usage' },
   { value: 'allow', title: 'Allow', body: 'ignore extra usage' },
-  { value: 'never', title: 'Never', body: 'treat an upstream in extra usage as unavailable until its window resets' },
+  { value: 'never', title: 'Never', body: 'treat an account in extra usage as unavailable until its window resets' },
 ];
 // A pair's hint sits below both fields and a lone field carries its own, keyed by the row's first field.
 const PROBE_HINT: Record<(typeof PROBE_TUNING_ROWS)[number][0], ReactNode> = {
@@ -75,7 +75,7 @@ const orderedAccountIds = (accounts: Account[], members: Record<string, number>)
 // The card's tooltips carry the dialog's words; a title attribute holds no link, so they read without them.
 const KEEPALIVE_SUMMARY_HINT =
   "Cold limit: probes in a row that find the cache already gone, after which the session's probes pause until its next real request. Idle: how long, or how many probes, without a real request before probing stops. Net-negative stop: probes a session still gets after its probes have cost more than the cache reads they saved.";
-const AFFINITY_HINT = 'How long a session stays on its upstream after its last request; off keeps no pins, and a custom value is at least 60 seconds.';
+const AFFINITY_HINT = 'How long a session stays on its account after its last request; off keeps no pins, and a custom value is at least 60 seconds.';
 const QUOTA_HEADERS_HINT =
   "Hide drops the anthropic-ratelimit-unified-* headers from every answer but a 429, so an organization's quota never reads as the key holder's own; a 429 keeps them so the client can resume after the reset. request-id passes either way.";
 // The order the pills read in: the default, the two directions away from it, then a hand-set mix.
@@ -120,17 +120,17 @@ const fmtTokens = (n: number) => fmtCompact(n).toLowerCase();
 const STRATEGY_HINT: Record<PoolStrategy, ReactNode> = {
   pace: (
     <>
-      Within the first <GroupLink id="members">priority tier</GroupLink> that has an eligible upstream, the one with the most weekly allowance left per hour until its window resets or its subscription ends; an unsampled upstream counts as untouched, and ties are random. Each upstream&apos;s windows are on the <PageLink to="/upstreams">Upstreams page</PageLink>.
+      Within the first <GroupLink id="members">priority tier</GroupLink> that has an eligible account, the one with the most weekly allowance left per hour until its window resets or its subscription ends; an unsampled account counts as untouched, and ties are random. Each account&apos;s windows are on the <PageLink to="/accounts">Accounts page</PageLink>.
     </>
   ),
   priority: (
     <>
-      Within the first <GroupLink id="members">priority tier</GroupLink> that has an eligible upstream, any of them at random.
+      Within the first <GroupLink id="members">priority tier</GroupLink> that has an eligible account, any of them at random.
     </>
   ),
   round_robin: (
     <>
-      Within the first <GroupLink id="members">priority tier</GroupLink> that has an eligible upstream, each in turn; a restart starts the round again.
+      Within the first <GroupLink id="members">priority tier</GroupLink> that has an eligible account, each in turn; a restart starts the round again.
     </>
   ),
 };
@@ -188,7 +188,7 @@ export function PoolsPage() {
   return (
     <div className="stack">
       <div className="page-head">
-        <p className="page-head__meta">A pool groups upstreams behind a set of API keys. Requests pick a member by priority, stick to it per session, and fail over when a member hits a rate limit.</p>
+        <p className="page-head__meta">A pool groups accounts behind a set of keys. Requests pick a member by priority, stick to it per session, and fail over when a member hits a rate limit.</p>
         {canMutate && (
           <Button variant="primary" icon={<IconPlus size={14} />} onClick={() => setDialog({ pool: null })}>
             Create pool
@@ -197,8 +197,8 @@ export function PoolsPage() {
       </div>
       <div className="stat-grid stat-grid--5">
         <Tile label="Pools" value={totals ? fmtInt(totals.pools) : null} />
-        <Tile label="Upstreams in pools" value={totals ? fmtInt(totals.accounts) : null} />
-        <Tile label="API keys" value={totals ? fmtInt(totals.keys) : null} />
+        <Tile label="Accounts in pools" value={totals ? fmtInt(totals.accounts) : null} />
+        <Tile label="Keys" value={totals ? fmtInt(totals.keys) : null} />
         <Tile label="Requests, 24h" value={totals ? fmtInt(totals.requests) : null} />
         <Tile label="Cost, 24h" value={totals ? fmtUsd(totals.cost) : null} />
       </div>
@@ -637,7 +637,7 @@ function PoolCard({
                   <span className="pool__prio num" title="Priority">
                     P{m.priority}
                   </span>
-                  <Link to={`/upstreams/${m.accountId}`}>{a?.label ?? m.accountId}</Link>
+                  <Link to={`/accounts/${m.accountId}`}>{a?.label ?? m.accountId}</Link>
                   <span className="pool__eligibility">
                     <MemberBudget member={m} />
                     <Eligibility verdict={m.eligible} account={a} now={now} periodEnd={m.budgetUntil} />
@@ -667,7 +667,7 @@ function PoolCard({
 }
 
 /**
- * A member's spend against each budget it carries, an API-key member's whole spend and a subscription member's
+ * A member's spend against each budget it carries, an Anthropic-key member's whole spend and a subscription member's
  * metered spend (overage and fast answers), or that it has none.
  */
 function MemberBudget({ member }: { member: PoolMember }) {
@@ -707,7 +707,7 @@ function Eligibility({ verdict, account, now, periodEnd }: { account: Account | 
   if (verdict === 'eligible') return <Badge tone="good">eligible</Badge>;
   if (verdict === 'budget') return <AtBudget periodEnd={periodEnd} />;
   if (verdict === 'overage') return <Badge tone="serious">overage</Badge>;
-  if (verdict === 'unavailable') return <Badge tone="critical" title={account ? account.status.replace(/_/g, ' ') : 'not a known upstream'}>unavailable</Badge>;
+  if (verdict === 'unavailable') return <Badge tone="critical" title={account ? account.status.replace(/_/g, ' ') : 'not a known account'}>unavailable</Badge>;
   const until = account?.cooldowns.find((c) => c.scope === 'account')?.until;
   return until ? (
     <Badge tone="warning" title={fmtAbsolute(until)}>
@@ -1017,7 +1017,7 @@ export function PoolDialog({
   const readings = memberAccounts.map((a) => ({ fiveHour: windowOf(a, '5h')?.utilization ?? null, id: a.id, label: a.label, sevenDay: windowOf(a, '7d')?.utilization ?? null }));
   // The route's verdict per stored member, so a member in cooldown is no destination for a shed session.
   const verdict = new Map((pool?.members ?? []).map((m) => [m.accountId, m.eligible]));
-  const sized = useMemo(() => sizedUpstreams(accounts, settings.data?.planTables.cost.tiers ?? {}), [accounts, settings.data]);
+  const sized = useMemo(() => sizedAccounts(accounts, settings.data?.planTables.cost.tiers ?? {}), [accounts, settings.data]);
   const preview = shedPreview({ ...input, members: input.members.map((m) => ({ ...m, eligible: verdict.get(m.accountId) })) }, accounts, sessions, now, sized);
   const setNetNegative = (value: boolean) => setForm((f) => ({ ...f, tuning: { ...f.tuning, stopWhenNetNegative: value } }));
   const setCacheTtl = <K extends keyof PoolCacheTtl>(key: K, value: PoolCacheTtl[K]) => setForm((f) => ({ ...f, cacheTtl: { ...f.cacheTtl, [key]: value } }));
@@ -1112,17 +1112,17 @@ export function PoolDialog({
     members: (
       <div className="cells">
         <p className="field__hint">
-          Lower numbers are tried first: the strategy picks inside the first tier that has an eligible upstream, after the kind order that <GroupLink id="selection">Prioritize subscription upstreams</GroupLink> sets. Each upstream&apos;s windows and state are on the{' '}
-          <PageLink to="/upstreams">Upstreams page</PageLink>.
+          Lower numbers are tried first: the strategy picks inside the first tier that has an eligible account, after the kind order that <GroupLink id="selection">Prioritize subscription accounts</GroupLink> sets. Each account&apos;s windows and state are on the{' '}
+          <PageLink to="/accounts">Accounts page</PageLink>.
         </p>
         <p className="field__hint">
-          A member whose spend reaches its daily or its monthly budget is skipped until that UTC day or month ends, priced at API list rates: an API-key member&apos;s whole spend counts, a subscription member&apos;s metered spend alone (overage and fast answers); set one, both, or neither.
+          A member whose spend reaches its daily or its monthly budget is skipped until that UTC day or month ends, priced at API list rates: an Anthropic-key member&apos;s whole spend counts, a subscription member&apos;s metered spend alone (overage and fast answers); set one, both, or neither.
         </p>
         <div className="table-wrap">
           <table className="table members-table">
             <thead>
               <tr>
-                <th>Upstream</th>
+                <th>Account</th>
                 <th className="right">Priority</th>
                 <th className="right">Daily budget, USD</th>
                 <th className="right">Monthly budget, USD</th>
@@ -1257,7 +1257,7 @@ export function PoolDialog({
             </div>
           )}
           <p className="field__hint">
-            A key reaches only this pool&apos;s members. Create key, Move to and Revoke apply at once, without Save pool; rotation and expiry are on the <PageLink to="/keys">API keys page</PageLink>.
+            A key reaches only this pool&apos;s members. Create key, Move to and Revoke apply at once, without Save pool; rotation and expiry are on the <PageLink to="/keys">Keys page</PageLink>.
           </p>
         </div>
       </>
@@ -1288,7 +1288,7 @@ export function PoolDialog({
           beside
           hint={
             <>
-              Claude Code asks the upstream to review each tool use on the model&apos;s own turn. Off, the router drops that request from every message of this pool&apos;s keys, and the client reviews with classifier requests of its own, billed to the upstream&apos;s windows; a key can override this. The Client page of the documentation explains what the client does in each state.
+              Claude Code asks the upstream to review each tool use on the model&apos;s own turn. Off, the router drops that request from every message of this pool&apos;s keys, and the client reviews with classifier requests of its own, billed to the account&apos;s windows; a key can override this. The Client page of the documentation explains what the client does in each state.
             </>
           }
         >
@@ -1308,15 +1308,15 @@ export function PoolDialog({
           </Select>
         </Field>
         <Field
-          label="Prioritize subscription upstreams"
+          label="Prioritize subscription accounts"
           beside
           hint={
             <>
-              Plan quota first, then upstreams in <GroupLink id="overage">overage</GroupLink>, then API keys; <GroupLink id="members">priority</GroupLink> orders each of those groups.
+              Plan quota first, then accounts in <GroupLink id="overage">overage</GroupLink>, then Anthropic keys; <GroupLink id="members">priority</GroupLink> orders each of those groups.
             </>
           }
         >
-          <Toggle checked={form.preferSubscription} onChange={(v) => set('preferSubscription', v)} label="Prioritize subscription upstreams" />
+          <Toggle checked={form.preferSubscription} onChange={(v) => set('preferSubscription', v)} label="Prioritize subscription accounts" />
         </Field>
       </div>
     ),
@@ -1326,7 +1326,7 @@ export function PoolDialog({
           label="Subagent placement"
           hint={
             <>
-              Where a subagent&apos;s first request lands. By cohort: with the subagents that share its static prefix. With the main conversation: on its parent&apos;s upstream. By strategy: wherever the <GroupLink id="selection">strategy</GroupLink> picks.
+              Where a subagent&apos;s first request lands. By cohort: with the subagents that share its static prefix. With the main conversation: on its parent&apos;s account. By strategy: wherever the <GroupLink id="selection">strategy</GroupLink> picks.
             </>
           }
         >
@@ -1410,7 +1410,7 @@ export function PoolDialog({
           label="Pin sessions"
           hint={
             <>
-              Only when the request caches: a request with no cache marker, and none added by the <GroupLink id="cacheTtl">cache TTL policy</GroupLink>, lands by the <GroupLink id="selection">strategy</GroupLink> and takes no pin. A request bound to its upstream keeps its pin either way.
+              Only when the request caches: a request with no cache marker, and none added by the <GroupLink id="cacheTtl">cache TTL policy</GroupLink>, lands by the <GroupLink id="selection">strategy</GroupLink> and takes no pin. A request bound to its account keeps its pin either way.
             </>
           }
         >
@@ -1556,7 +1556,7 @@ export function PoolDialog({
             hint={
               <>
                 Requests one member serves at once. A member at the cap takes no fresh session while a sibling has room; with every member full, a request waits up to Retry in place for a slot. A key&apos;s own cap is on the{' '}
-                <PageLink to="/keys">API keys page</PageLink>.
+                <PageLink to="/keys">Keys page</PageLink>.
               </>
             }
           >
@@ -1601,7 +1601,7 @@ export function PoolDialog({
           plain
           hint={
             <>
-              For subscription upstreams billing extra usage. A daily or monthly budget in <GroupLink id="members">Members</GroupLink> caps a member&apos;s spend in dollars: an API-key member&apos;s whole spend, a subscription member&apos;s overage and fast answers. The <PageLink to="/upstreams">Upstreams page</PageLink> shows which upstream is in overage.
+              For subscription accounts billing extra usage. A daily or monthly budget in <GroupLink id="members">Members</GroupLink> caps a member&apos;s spend in dollars: an Anthropic-key member&apos;s whole spend, a subscription member&apos;s overage and fast answers. The <PageLink to="/accounts">Accounts page</PageLink> shows which account is in overage.
             </>
           }
         >
@@ -1616,7 +1616,7 @@ export function PoolDialog({
             ))}
           </div>
         </Field>
-        <Field label={ENGINE_FIELD_LABELS.overageMoveGraceMinutes} hint="Under Prefer plan quota, a session stays on an upstream in overage while its window resets within this many minutes; 0 moves it at once.">
+        <Field label={ENGINE_FIELD_LABELS.overageMoveGraceMinutes} hint="Under Prefer plan quota, a session stays on an account in overage while its window resets within this many minutes; 0 moves it at once.">
           <Input
             type="number"
             min={ENGINE_BOUNDS.overageMoveGraceMinutes.min}
@@ -1630,7 +1630,7 @@ export function PoolDialog({
           label={ENGINE_FIELD_LABELS.windDownMinutes}
           hint={
             <>
-              This long before a cancelled subscription ends, its upstream takes new sessions only as the last resort and cold sessions move off. The end is set on the <PageLink to="/upstreams">Upstreams page</PageLink>.
+              This long before a cancelled subscription ends, its account takes new sessions only as the last resort and cold sessions move off. The end is set on the <PageLink to="/accounts">Accounts page</PageLink>.
             </>
           }
         >
@@ -1647,7 +1647,7 @@ export function PoolDialog({
     ),
     cacheTtl: (
       <div className="cells">
-        <Field label="Set the cache TTL for this pool" beside hint="Rewrites every cache marker a request carries to the TTL below, on every upstream of this pool, so the client's own TTL setting has no effect through it.">
+        <Field label="Set the cache TTL for this pool" beside hint="Rewrites every cache marker a request carries to the TTL below, on every account of this pool, so the client's own TTL setting has no effect through it.">
           <Toggle checked={form.cacheTtl.enabled} onChange={(v) => setCacheTtl('enabled', v)} label="Set the cache TTL for this pool" />
         </Field>
         <Field
@@ -1664,7 +1664,7 @@ export function PoolDialog({
         <Field
           label="Write cost"
           plain
-          hint="Plan writes apply while an upstream spends plan quota, where a 1-hour write costs the same as a 5-minute one. Metered writes apply while a write costs money, on an API-key upstream or a subscription upstream in overage: 2x input for an hour against 1.25x for five minutes. Reads cost the same either way."
+          hint="Plan writes apply while an account spends plan quota, where a 1-hour write costs the same as a 5-minute one. Metered writes apply while a write costs money, on an Anthropic-key account or a subscription account in overage: 2x input for an hour against 1.25x for five minutes. Reads cost the same either way."
         >
           <div className="row">
             <CostReferenceLink />
@@ -1709,11 +1709,11 @@ export function PoolDialog({
             beside
             hint={
               <>
-                Probes an idle session shortly before its cache expires, so its next turn reads instead of writes. A probe follows the session&apos;s pin, so <GroupLink id="pinning">Session affinity</GroupLink> must be at least 5m. Subscription upstreams also wait for OAuth prewarm verified on the{' '}
+                Probes an idle session shortly before its cache expires, so its next turn reads instead of writes. A probe follows the session&apos;s pin, so <GroupLink id="pinning">Session affinity</GroupLink> must be at least 5m. Subscription accounts also wait for OAuth prewarm verified on the{' '}
                 <PageLink to="/settings">Settings page</PageLink>.
                 {keepaliveBlocked && (
                   <p className="field__hint">
-                    Needs Session affinity of at least 5 minutes: a probe follows the session&apos;s pin, and a shorter pin cannot keep the session on the upstream it warmed. Set it under <GroupLink id="pinning">Pinning</GroupLink>.
+                    Needs Session affinity of at least 5 minutes: a probe follows the session&apos;s pin, and a shorter pin cannot keep the session on the account it warmed. Set it under <GroupLink id="pinning">Pinning</GroupLink>.
                   </p>
                 )}
               </>
@@ -1762,7 +1762,7 @@ export function PoolDialog({
               input={{ min: 0, step: 0.5, value: form.capUsd, onChange: (e) => set('capUsd', Number(e.target.value)), 'aria-label': 'Daily probe cost cap in dollars', 'aria-invalid': invalid('Daily probe cost cap in dollars') }}
               hint={
                 <>
-                  Per UTC day, for probes paid in dollars: on API-key upstreams, on subscription upstreams in overage, and on models whose 5-hour share the cost table cannot price. Plan-funded probes do not count here. The <CostReferenceLink /> prices a probe.
+                  Per UTC day, for probes paid in dollars: on Anthropic-key accounts, on subscription accounts in overage, and on models whose 5-hour share the cost table cannot price. Plan-funded probes do not count here. The <CostReferenceLink /> prices a probe.
                 </>
               }
             />
@@ -1834,7 +1834,7 @@ export function PoolDialog({
           label="Cache diagnostics"
           hint={
             <>
-              On asks the upstream why a cache read missed, on every upstream of this pool, and the reason lands in the <PageLink to="/requests">request log</PageLink>. Inherit follows the bootstrap setting on the{' '}
+              On asks the upstream why a cache read missed, on every account of this pool, and the reason lands in the <PageLink to="/requests">request log</PageLink>. Inherit follows the bootstrap setting on the{' '}
               <PageLink to="/settings">Settings page</PageLink>.
             </>
           }
@@ -1930,7 +1930,7 @@ export function PoolDialog({
       <Dialog
         open={created !== null}
         onClose={() => setCreated(null)}
-        title="API key created"
+        title="Key created"
         subtitle="Copy the secret now. The router stores only a hash, so it cannot be shown again."
         footer={
           <Button variant="primary" onClick={() => setCreated(null)}>

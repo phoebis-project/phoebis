@@ -2,7 +2,7 @@ import type { Account, Pool, Session } from '@/api/types';
 import { GROUP_LABEL, INELIGIBLE_LABEL, LAST_RESORT_LABEL, RULE_NOTE, STRATEGY_RULE, kindOrdered, selectionOrder } from '@/lib/selection';
 import { Badge } from './primitives';
 
-/** The tiers the router walks for a fresh session, with the upstream the next one lands on marked. */
+/** The tiers the router walks for a fresh session, with the account the next one lands on marked. */
 export function SelectionOrder({ pool, accounts, sessions }: { accounts: Account[]; pool: Pool; sessions: Session[] }) {
   const tiers = selectionOrder(pool, accounts, sessions);
   const grouped = kindOrdered(pool);
@@ -10,7 +10,7 @@ export function SelectionOrder({ pool, accounts, sessions }: { accounts: Account
     <div className={`selection-order ${grouped ? 'selection-order--grouped' : ''}`}>
       {tiers.map((tier) => (
         <div key={`${tier.group}-${tier.priority}`} className="selection-order__tier">
-          <span className="pool__prio num" title={grouped ? `${GROUP_LABEL[tier.group]} upstreams, priority ${tier.priority}` : 'Priority'}>
+          <span className="pool__prio num" title={grouped ? `${GROUP_LABEL[tier.group]} tier, priority ${tier.priority}` : 'Priority'}>
             {grouped ? `${GROUP_LABEL[tier.group]} ` : ''}P{tier.priority}
           </span>
           <span className="chips">
@@ -22,7 +22,7 @@ export function SelectionOrder({ pool, accounts, sessions }: { accounts: Account
                 : isNext
                   ? `${p.account.label}: where the next fresh session lands`
                   : p.lastResort
-                    ? `${p.account.label}: ${LAST_RESORT_LABEL[p.lastResort]}, taken only once no other upstream can take a fresh session`
+                    ? `${p.account.label}: ${LAST_RESORT_LABEL[p.lastResort]}, taken only once no other account can take a fresh session`
                     : p.deferred
                       ? `${p.account.label}: in overage, taken after the plan-funded members of this tier`
                       : `${p.account.label}: rank ${p.rank} in this tier`;

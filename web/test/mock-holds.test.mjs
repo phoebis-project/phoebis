@@ -24,7 +24,7 @@ for (const at of ['2026-09-30T18:07:00Z', '2026-09-29T09:07:00Z']) {
     const bound = (await api.listPools()).find((p) => p.id === row.poolId).retryInPlaceSeconds * 1_000;
     const last = row.held.waitedOn.at(-1);
     assert.deepEqual(row.held, { cohort: null, heldMs: (traced?.heldMs ?? 0) + bound, waitedOn: [...(traced?.waitedOn ?? []), last] });
-    assert.ok(!row.attempts.some((a) => a.accountId === last), 'the last wait is on an upstream the request had not tried');
+    assert.ok(!row.attempts.some((a) => a.accountId === last), 'the last wait is on an account the request had not tried');
     assert.ok(row.attempts.every((a) => a.selection?.cohortHold?.heldMs !== row.held.heldMs), "no attempt's trace names the whole wait");
     assert.equal(row.status, 429);
   });

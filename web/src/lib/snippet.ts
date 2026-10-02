@@ -11,5 +11,5 @@ export const PLACEHOLDER_URL = 'https://router.example.com';
  */
 export function snippetFor(proxyListen: string | null): string {
   const hint = proxyListen === null ? [] : [`# inference is served on ${proxyListen}; use the URL that reaches that listener`];
-  return [...hint, `ANTHROPIC_BASE_URL=${PLACEHOLDER_URL}`, 'CLAUDE_CODE_OAUTH_TOKEN=<api key>', '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1'].join('\n');
+  return [...hint, `ANTHROPIC_BASE_URL=${PLACEHOLDER_URL}`, 'CLAUDE_CODE_OAUTH_TOKEN=<key>', '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1'].join('\n');
 }

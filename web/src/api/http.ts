@@ -159,7 +159,7 @@ export class HttpApi implements Api {
   listAlertEvents = async (state?: 'open' | 'resolved'): Promise<AlertEvent[]> => (await call<{ events: unknown[] }>('GET', `/admin/alerts/events${qs({ state })}`)).events.map(d.decodeAlertEvent);
   listAlertRules = async () => (await call<{ rules: unknown[] }>('GET', '/admin/alerts/rules')).rules.map(d.decodeAlertRule);
   listCatalog = async (): Promise<CatalogModel[]> => {
-    // The decoded status folds a disconnected upstream into 'unpaired' along with one never paired; both are
+    // The decoded status folds a disconnected account into 'unpaired' along with one never paired; both are
     // the accounts a catalog fetch has nothing to ask.
     const accounts = (await this.listAccounts()).filter((a) => a.status !== 'unpaired');
     return this.listCatalogOf(accounts.map((a) => a.id));

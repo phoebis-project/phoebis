@@ -15,7 +15,7 @@ pub enum CredentialKind {
     ApiKey { secret: Secret },
 }
 
-/// Beta only an OAuth credential may claim; an API key that sends it is rejected upstream.
+/// Beta only an OAuth credential may claim; an Anthropic key that sends it is rejected upstream.
 const OAUTH_BETA: &str = "oauth-2025-04-20";
 
 /// Caller headers the relay never repeats upstream: the hop-by-hop ones describe the caller's connection
@@ -190,7 +190,7 @@ pub fn outbound_headers(
     }
     if !saw_credential {
         // An in-process caller presents no credential of its own, so there is no slot to take over. The
-        // measured client puts its API key right after `anthropic-version`, the one position the capture
+        // measured client puts its Anthropic key right after `anthropic-version`, the one position the capture
         // gives for a credential the caller did not place.
         let mut at = out
             .iter()
@@ -253,7 +253,7 @@ fn credential(kind: &CredentialKind) -> (String, String) {
 }
 
 /// Splits `value`, drops every `drop` entry, applies the OAuth claim (inserted for an OAuth account and
-/// stripped for an API key), then appends each `inject` item whose `wire_name` the list still lacks. Returns
+/// stripped for an Anthropic key), then appends each `inject` item whose `wire_name` the list still lacks. Returns
 /// the merged line and exactly the items it appended, so a client-sent beta of the same name is never reported
 /// as the relay's own.
 fn betas(
@@ -566,7 +566,7 @@ mod tests {
         assert_eq!(emitted[2].0, "x-client-request-id");
     }
 
-    /// An API-key credential, so the OAuth claim `betas` would otherwise insert into an empty list never
+    /// An Anthropic-key credential, so the OAuth claim `betas` would otherwise insert into an empty list never
     /// contaminates what these cases check about `inject_betas` alone.
     fn emit_injected(caller: &OriginalHead, inject: &[Injected]) -> OutboundHead {
         outbound_headers(

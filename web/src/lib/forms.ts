@@ -139,7 +139,7 @@ export function poolRefusals(input: PoolInput, accountIds: ReadonlySet<string>):
   refuse('members', 'members', input.members.length > 0 ? null : 'the pool needs a member.');
   for (const m of input.members) {
     const id = m.accountId;
-    refuse('members', `member:${id}`, accountIds.has(id) ? null : `${id} is not an upstream the console lists.`);
+    refuse('members', `member:${id}`, accountIds.has(id) ? null : `${id} is not an account the console lists.`);
     refuse('members', `priority:${id}`, whole(m.priority, 0, Number.MAX_SAFE_INTEGER) ? null : 'Priority is a whole number of 0 or more.');
     // A member written without a budget field has no budget over that period, as the member write reads it.
     refuse('members', `budget_daily:${id}`, m.budgetDailyUsd == null ? null : budgetRefusal(String(m.budgetDailyUsd)));

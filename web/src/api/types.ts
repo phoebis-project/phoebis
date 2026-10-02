@@ -202,18 +202,18 @@ export interface QuotaHistory {
 
 export type QuotaFetchStatus = 'error' | 'loading' | 'success';
 
-/** How the usage endpoint answered an upstream's last attempt. */
+/** How the usage endpoint answered an account's last attempt. */
 export type PollOutcome = 'clean' | 'failed' | 'rate_limited';
 
-/** The poll's standing for an OAuth upstream, kept by the router; null until the poll first asks. */
+/** The poll's standing for an OAuth account, kept by the router; null until the poll first asks. */
 export interface QuotaPoll {
-  /** The first 429 of the run the upstream is in; null outside one. */
+  /** The first 429 of the run the account is in; null outside one. */
   backoffSince: string | null;
   lastAttemptAt: string | null;
   /** When the windows of the last clean answer were read; null until one lands. */
   lastCleanAt: string | null;
   lastOutcome: PollOutcome;
-  /** When the upstream may be asked again; null when its next slot may ask it. */
+  /** When the account may be asked again; null when its next slot may ask it. */
   nextAttemptAt: string | null;
   /** 429s answered in a row; 0 after a clean answer. */
   rateLimitedInARow: number;
@@ -360,7 +360,7 @@ export interface Pool {
   /** Moves that landed on the pool's members in the last hour, by reason. */
   movesPerHour: Record<string, number>;
   name: string;
-  /** Minutes a session stays on an upstream in overage while its window resets within them. */
+  /** Minutes a session stays on an account in overage while its window resets within them. */
   overageMoveGraceMinutes: number;
   overagePolicy: OveragePolicy;
   /** Under Pace, a member with no more than this share of its window left takes a fresh session only as the last resort. */
@@ -384,7 +384,7 @@ export interface Pool {
   subagentPlacement: SubagentPlacement;
   traffic24h: TrafficBucket[];
   warmSessions: WarmSessions;
-  /** Minutes before an upstream's subscription end from which it takes a fresh session only as the last resort. */
+  /** Minutes before an account's subscription end from which it takes a fresh session only as the last resort. */
   windDownMinutes: number;
 }
 
@@ -818,21 +818,21 @@ export interface BurnPoint {
   at: string;
   /** Cache-read tokens. */
   cachedTokens: number;
-  /** A subscription upstream's spend in the bucket as a fraction of its own 5-hour window, the band weighed in; null
-   *  for an API-key upstream, one whose tier is unknown, a bucket with no row the table prices (an idle hour among
+  /** A subscription account's spend in the bucket as a fraction of its own 5-hour window, the band weighed in; null
+   *  for an Anthropic-key account, one whose tier is unknown, a bucket with no row the table prices (an idle hour among
    *  them) or one holding a row the table cannot price, and under every other grouping. */
   fiveHourShare: number | null;
   group: string;
-  /** The same spend as a fraction of the upstream's 7-day window, unbanded. */
+  /** The same spend as a fraction of the account's 7-day window, unbanded. */
   sevenDayShare: number | null;
   /** Every token of the bucket, all five types: zero for a bucket with no traffic the ledger can attribute. */
   tokens: number;
   /** Uncached input tokens. */
   uncachedTokens: number;
-  /** What the upstream spends in: a subscription's window share, even while no tier prices it, or an API key's
-   *  dollars; null under every other grouping, and for an upstream the registry no longer holds. */
+  /** What the account spends in: a subscription's window share, even while no tier prices it, or an Anthropic key's
+   *  dollars; null under every other grouping, and for an account the registry no longer holds. */
   unit: BurnUnit | null;
-  /** An API-key upstream's estimated cost. */
+  /** An Anthropic-key account's estimated cost. */
   usd: number;
 }
 
@@ -847,7 +847,7 @@ export type KeepaliveState = 'busy' | 'idle' | 'parked';
 /** Whether a cache-keepalive companion is registered for the session and still reporting. */
 export type CompanionState = 'none' | 'reporting' | 'silent';
 
-/** Which figure a pin's burn reads: the share of the upstream's own 5-hour window per hour on plan quota, dollars per hour off it. */
+/** Which figure a pin's burn reads: the share of the account's own 5-hour window per hour on plan quota, dollars per hour off it. */
 export type BurnUnit = 'usd' | 'window_share';
 
 export interface Session {
@@ -856,7 +856,7 @@ export interface Session {
   agentId: string | null;
   agents: number;
   /** The pin's typed burn per hour in `burnUnit`, priced when read; 0 for a pin never renewed with usage, null with
-   *  no pin at all, with one whose account left the registry, on a subscription upstream whose tier is unknown, or
+   *  no pin at all, with one whose account left the registry, on a subscription account whose tier is unknown, or
    *  on a model with a cell the table leaves unmeasured. */
   burn: number | null;
   /** When `burn` was last folded, the instant the shedding preview decays it forward from; null with no pin, or for a
@@ -942,7 +942,7 @@ export interface KeepaliveRecipe {
   /** This agent's last real request; null for an agent that has not sent one yet. */
   lastRequestAt: string | null;
   model: string;
-  /** The share of the upstream's 5-hour window the agent's probes saved minus what they cost. */
+  /** The share of the account's 5-hour window the agent's probes saved minus what they cost. */
   netFiveHourShare: number;
   netUsd: number;
   nextProbeAt: string | null;
@@ -1007,11 +1007,11 @@ export interface ClientDriftDetail {
   trigger: string;
 }
 
-/** What a poll_backoff event carried: since when the upstream's usage poll has been answered 429. */
+/** What a poll_backoff event carried: since when the account's usage poll has been answered 429. */
 export interface PollBackoffDetail {
   account: string;
   backoff_since: number;
-  /** Null once the hold has passed and the upstream's next slot may ask it. */
+  /** Null once the hold has passed and the account's next slot may ask it. */
   next_attempt_at: number | null;
   rate_limited_in_a_row: number;
 }

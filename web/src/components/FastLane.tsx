@@ -15,7 +15,7 @@ function laterReset(readings: (FastLaneReading | null)[]): string | null {
 
 const refilled = (r: FastLaneReading, now: number) => r.resetsAt !== null && Date.parse(r.resetsAt) <= now;
 
-/** An upstream's fast lane: the Fast mode line while the router holds a reading, and a chip per fast cooldown;
+/** An account's fast lane: the Fast mode line while the router holds a reading, and a chip per fast cooldown;
  *  nothing when it has neither. */
 export function FastLane({ account, now }: { account: Account; now: number }): JSX.Element | null {
   const lane = account.fastLane;

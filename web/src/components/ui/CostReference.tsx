@@ -7,7 +7,7 @@ import { fmtShare } from '@/lib/format';
 import { useAsync } from '@/lib/hooks';
 import { Button, Dialog, Skeleton } from './primitives';
 
-const CAVEAT = 'API list prices. A subscription upstream on plan quota spends the window share columns instead of money.';
+const CAVEAT = 'API list prices. A subscription account on plan quota spends the window share columns instead of money.';
 /** One term per column group, in table order, so a reader can find the one column they are looking at. */
 const NOTES: { body: ReactNode; term: string }[] = [
   { term: 'Per prefix token', body: 'Every column is per prefix token, so the comparison leaves out the new tokens each turn writes.' },
@@ -68,7 +68,7 @@ const payoffMinutes = (p: FastPrice) => {
 
 const dash = <span className="muted">-</span>;
 
-const FAST_MODE = 'What an answer served in fast mode costs, in dollars; a subscription upstream pays it from usage credits, not its window';
+const FAST_MODE = 'What an answer served in fast mode costs, in dollars; a subscription account pays it from usage credits, not its window';
 
 /** One row of the dollar table: the five cells and what they make a kept-warm prefix cost. */
 function PriceRow({ cells, className, label }: { cells: FastPrice; className?: string; label: ReactNode }) {

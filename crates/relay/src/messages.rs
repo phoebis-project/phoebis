@@ -2664,11 +2664,11 @@ impl Relay {
                     kind: CredentialKind::ApiKey { secret },
                 },
                 Ok(None) => {
-                    tracing::warn!(account = %account.id, "the account has no API key stored");
+                    tracing::warn!(account = %account.id, "the account has no Anthropic key stored");
                     return Err(NoCredential::Unavailable);
                 }
                 Err(error) => {
-                    tracing::error!(account = %account.id, %error, "the stored API key is unreadable");
+                    tracing::error!(account = %account.id, %error, "the stored Anthropic key is unreadable");
                     return Err(NoCredential::Unavailable);
                 }
             },

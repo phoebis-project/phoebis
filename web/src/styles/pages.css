@@ -1087,7 +1087,7 @@
   border-top: 1px solid var(--hairline);
 }
 
-/* A section of its own under the upstream page's usage bars, as extra usage is; the quota card spaces it by its
+/* A section of its own under the account page's usage bars, as extra usage is; the quota card spaces it by its
    body's gap instead. */
 .card .fast-lane {
   padding-top: 14px;
@@ -1251,7 +1251,7 @@
 
 /* The kind order names a tier's group beside its priority, which outgrows the lead column a plain pool needs. */
 .selection-order--grouped .selection-order__tier {
-  grid-template-columns: 72px 1fr;
+  grid-template-columns: 118px 1fr;
 }
 
 .selection-order__rule {

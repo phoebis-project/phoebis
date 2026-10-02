@@ -93,7 +93,7 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
     : null;
   // Drawn whatever the spec says, so pinning or the account's kind never shifts the stream the rows after this
   // one read. A row's burn is the per-hour figure the wire answers for its unit: dollars on the usd roll, a share
-  // of the upstream's 5-hour window on the other.
+  // of the account's 5-hour window on the other.
   const burnRoll = rng.float(0.01, 0.9);
   const burnUsdRoll = rng.float(0.01, 0.5);
   const burnAtRoll = ago(rng.int(2, 40) * MINUTE);
@@ -211,7 +211,7 @@ export const RECIPES: KeepaliveRecipe[] = SESSIONS.flatMap((pin, i) => {
     const accountId = j === 0 ? pin.accountId : sub?.accountId ?? pin.accountId;
     const ttlSeconds = model.includes('haiku') ? 300 : 3_600;
     // The unit a probe settles in follows the serving account's own funding and the probe's typed usage: a share of
-    // the 5-hour window on a subscription upstream whose row for the model prices every type the probe spends,
+    // the 5-hour window on a subscription account whose row for the model prices every type the probe spends,
     // dollars on an api_key one or on a model the table cannot price, the same decision the engine makes. A probe
     // replays a prefix of about 20k tokens at the cache-read rate: about 0.016% of the window, or $0.004.
     const probes = state === 'armed' && reason === null ? j + 1 : 0;

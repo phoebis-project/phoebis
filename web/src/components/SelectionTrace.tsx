@@ -18,7 +18,7 @@ const OBSTACLE_HINT: Record<Obstacle, string> = {
   floor: 'at the Pace floor',
   operator: 'held by an operator',
   overage: 'in overage',
-  ranked: 'ranked behind the upstream chosen',
+  ranked: 'ranked behind the account chosen',
   spent: 'its window spent',
   subscription_ended: 'its subscription ended',
   winding_down: 'winding down toward its subscription end',
@@ -32,7 +32,7 @@ const PLACED: Record<Placement['rung'], (depth: number) => string> = {
   static: (depth) => `placed by its static prefix, depth ${depth}`,
   with_main: () => 'placed with the main conversation',
 };
-const HOLD_HINT = 'Every upstream the placement could land on was at its in-flight cap, so the request waited first';
+const HOLD_HINT = 'Every account the placement could land on was at its in-flight cap, so the request waited first';
 const PROMISE_HINT: Record<Placement['rung'], string> = {
   content: 'A placement by its messages hits when the cache reads the whole prefix it was promised',
   static: 'A placement by its static prefix hits when the cache reads anything',
@@ -63,7 +63,7 @@ export function SelectionTrace({ trace, usage }: { trace: Trace; usage: Usage })
         <span className="muted">Selection</span>
         <span>{strategyLabel(trace.strategy)}</span>
         {trace.tier && (
-          <span className="num" title="The tier the choice was made in: the group, the priority, and whether the upstream was in overage">
+          <span className="num" title="The tier the choice was made in: the group, the priority, and whether the account was in overage">
             group {trace.tier[0]}, priority {trace.tier[1]}
             {trace.tier[2] === 1 ? ', overage' : ''}
           </span>

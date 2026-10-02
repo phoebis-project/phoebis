@@ -1,13 +1,13 @@
 # Browser pass
 
 `views.mjs` drives a headless Chromium over every view of the console in the light and the dark theme. It logs in
-through the login screen, then for each theme visits the dashboard, observe, quota, upstreams (which lands on the first
-upstream through a client-side redirect, since `/upstreams` carries no account id), pools, API keys, request logs,
+through the login screen, then for each theme visits the dashboard, observe, quota, accounts (which lands on the first
+account through a client-side redirect, since `/accounts` carries no account id), pools, keys, request logs,
 analytics, sessions, alerts, and settings. Per view it waits for one element, asserts the document title, records every
 console error and page error, and writes a full-page screenshot to `$PHOEBIS_SCREENSHOT_DIR/<theme>/<view>.png`. Further
 layout assertions ride along, one function each in `views.mjs`, in the order the file defines them (pool chips, the
 caching controls, the select-below threshold, the routing cards, the compatibility card, the bootstrap cards, the Delete
-upstream button, the upstream lines, the alert rule dialog, the remaining cards, the error state, the cost-cap rows, the
+account button, the account lines, the alert rule dialog, the remaining cards, the error state, the cost-cap rows, the
 live feed, the wasted-probe rows, the burn cards, the plan legend's model unlisted entry, the placement and budget
 tables, the speed filter, the traffic cards, the fast lane, the request drawer, which opens once
 the request list's shot is taken, the subscription end editor, the catalog popup, the key dialog's cap field and
@@ -49,10 +49,10 @@ PHOEBIS_SCREENSHOT_DIR=/tmp/phoebis-mock-shots npm run e2e:mock
 from a static server on a loopback port, and runs `mock-pass.mjs`, which drives `views.mjs` against it with the mock's
 admin secret and the clock pinned at `2026-09-16T14:30:00Z`, the weekday afternoon the smoke run pins. The mock's random
 draws are seeded, so two runs write the same screenshots byte for byte, which `diff -r` over the two directories shows.
-Beside the views' shots it writes the open catalog popup's as `<theme>/upstreams-catalog.png`; the router's pass writes
+Beside the views' shots it writes the open catalog popup's as `<theme>/accounts-catalog.png`; the router's pass writes
 one shot per view, which its test counts. The dashboard's remaining cards and its empty state are checked against the
-router's seeded registry alone (`PHOEBIS_E2E_MOCK=1` skips them), since the mock's story has subscription upstreams and
-no empty list on the dashboard. The subscription end editor needs the story's OAuth upstream, so against the router's
+router's seeded registry alone (`PHOEBIS_E2E_MOCK=1` skips them), since the mock's story has subscription accounts and
+no empty list on the dashboard. The subscription end editor needs the story's OAuth account, so against the router's
 seed that part stands down.
 
 ## On a host without Chromium

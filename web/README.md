@@ -1,10 +1,9 @@
 # Phoebis Router web UI
 
-The admin console for Phoebis Router: a self-hosted gateway that sits in front of Claude Code sessions, holds
-several upstreams, groups them into pools, issues API keys, and records per-request statistics. The router's build
-embeds the bundle (`crates/ui`) and serves it from the admin listener, where the console reads and writes the admin
-routes through `HttpApi` in `src/api/http.ts`. `src/api/` also defines the response types, their decoders, and the
-`Api` interface.
+The admin console for Phoebis Router: a self-hosted gateway that sits in front of Claude Code sessions, holds several
+accounts, groups them into pools, issues keys, and records per-request statistics. The router's build embeds the bundle
+(`crates/ui`) and serves it from the admin listener, where the console reads and writes the admin routes through
+`HttpApi` in `src/api/http.ts`. `src/api/` also defines the response types, their decoders, and the `Api` interface.
 
 `MockApi` in `src/mock/index.ts` implements the same interface from fixture data, for the mock's browser pass, the
 smoke checks, the unit tests, and work on a view without a router. It is chosen only when `VITE_PHOEBIS_MOCK=1` is set
@@ -58,16 +57,17 @@ the fixture that lacks one), and back it in `MockApi` from a story row that spre
 - A viewer-mode toggle in Settings that hides every mutating control and the captured-bodies section.
 - Body capture is a pool setting in hours, which every key in the pool inherits unless it sets an override of its own
   or turns capture off for itself; the keys table shows the effective value and marks the inherited ones.
-- Views for the dashboard, observe (a simulated live feed of in-flight and recent requests), quota, upstreams, pools,
-  API keys, request logs, analytics, sessions, alerts, and settings. Upstreams are `account` everywhere in the code,
-  the API and the fixtures; only the copy and the `/upstreams` route say upstream, and `/accounts` redirects there.
+- Views for the dashboard, observe (a simulated live feed of in-flight and recent requests), quota, accounts, pools,
+  keys, request logs, analytics, sessions, alerts, and settings. What the router holds is an account everywhere: the
+  code, the API, the fixtures, the copy and the `/accounts` route; "upstream" names the provider's host and the party
+  that answered a request.
 - The sessions view is one table of every session the router has seen within the session expiry, whether or not a
   cache-keepalive companion registered for it. Each row carries its companion state (reporting, silent since a time,
-  or none), its ledgered request count and last request, and when it drops off the list. The Model and Upstream cells
+  or none), its ledgered request count and last request, and when it drops off the list. The Model and Account cells
   show the main agent's pin plus a "+N" badge for the agents pinned elsewhere, since subagents on another model may
-  sit on another upstream. A re-created pin reads as a small "epoch N" line under the session id, and the expiry
+  sit on another account. A re-created pin reads as a small "epoch N" line under the session id, and the expiry
   reads as a muted line under the last-used time. A row expands into when the session was created and the
-  cache-warming recipe each agent carries: its model, upstream, TTL, next probe, last request, and the reason a held
+  cache-warming recipe each agent carries: its model, account, TTL, next probe, last request, and the reason a held
   probe is not scheduled. An agent still waiting on the first stream event of its own request is armed with no time
   yet, and its next probe reads "on first stream event". A session whose companion went silent keeps its recipes and
   is probed under the pool's idle limits; once those run out the recipe is held for the idle limit and the row reads
@@ -94,7 +94,7 @@ the fixture that lacks one), and back it in `MockApi` from a story row that spre
 - The attempts column in the request log and in observe is a trail of badges, one per attempt, reading "account
   status" in the order the router tried them.
 - Long forms open as a sectioned dialog: a section rail beside one scrolling body, with the rail tracking the scroll
-  position. The pool and API key dialogs use it; small dialogs keep the plain `Dialog`.
+  position. The pool and key dialogs use it; small dialogs keep the plain `Dialog`.
 - A key always belongs to a pool: the key dialog preselects one and locks it when opened from a pool, and the pool
   dialog's key rows offer "Move to…" and "Revoke" rather than a plain remove.
 - Analytics percentiles are read from per-hour latency histograms (64 log-spaced buckets, `src/lib/histogram.ts`)

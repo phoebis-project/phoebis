@@ -1,5 +1,5 @@
 import { lazy, Suspense } from 'react';
-import { createBrowserRouter, Navigate, RouterProvider, useParams } from 'react-router-dom';
+import { createBrowserRouter, Navigate, RouterProvider } from 'react-router-dom';
 import { Shell } from '@/components/shell/Shell';
 import { AccountsPage } from '@/pages/AccountsPage';
 import { AlertsPage } from '@/pages/AlertsPage';
@@ -20,21 +20,14 @@ import { AppSettingsProvider } from './settings';
 // imported from another module, so only a local condition keeps the fixture's chunk out of the served bundle.
 const GroupedDialogFixtureRoute = import.meta.env.VITE_PHOEBIS_MOCK === '1' ? lazy(() => import('@/mock/fixtures/GroupedDialogFixture')) : null;
 
-/** Keeps a bookmarked /accounts/:id landing on the same upstream. */
-function UpstreamRedirect() {
-  const { accountId } = useParams();
-  return <Navigate to={accountId ? `/upstreams/${accountId}` : '/upstreams'} replace />;
-}
-
 export const routes = [
   {
     path: '/',
     element: <Shell />,
     children: [
       { index: true, element: <DashboardPage /> },
-      // The upstreams page answered to /accounts until the copy was renamed.
-      { path: 'accounts', element: <UpstreamRedirect /> },
-      { path: 'accounts/:accountId', element: <UpstreamRedirect /> },
+      { path: 'accounts', element: <AccountsPage /> },
+      { path: 'accounts/:accountId', element: <AccountsPage /> },
       { path: 'alerts', element: <AlertsPage /> },
       { path: 'analytics', element: <AnalyticsPage /> },
       // Bookmarks and links out there still point at the old path.
@@ -48,8 +41,6 @@ export const routes = [
       { path: 'requests/:requestId', element: <RequestsPage /> },
       { path: 'sessions', element: <SessionsPage /> },
       { path: 'settings', element: <SettingsPage /> },
-      { path: 'upstreams', element: <AccountsPage /> },
-      { path: 'upstreams/:accountId', element: <AccountsPage /> },
     ],
   },
   // The fixture the browser pass measures; the served bundle carries neither the path nor the module.

@@ -17,7 +17,7 @@ const SUGGESTION_DELAY_MS = 300;
 
 /**
  * The model ids the named accounts' live catalogs hold, read again once the set has stopped changing for a
- * moment. Nothing is read while `enabled` is off, so a closed dialog asks no upstream for its catalog.
+ * moment. Nothing is read while `enabled` is off, so a closed dialog asks no account for its catalog.
  */
 export function useCatalogSuggestions(accountIds: readonly string[], enabled: boolean): string[] {
   // Account ids are slugs, so a newline never occurs inside one.

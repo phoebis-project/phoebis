@@ -7,7 +7,7 @@ export const PIN_MIGRATION_LABEL: Record<PinMigrationReason, string> = {
   cooldown: 'rate limited',
   drain: 'winding down',
   fast_lane: 'fast lane cooling',
-  mark: 'upstream marked',
+  mark: 'account marked',
   overage: 'overage',
   return_to_plan: 'returned to plan',
   shed: 'shed',
@@ -31,10 +31,10 @@ export const classLegendOf = (requestClass: string): ClassLegend => ((CONVERSATI
 
 /** Lines a burn chart draws before the rest fold into one, the stacked cost chart's limit. */
 export const MAX_BURN_LINES = 7;
-/** The key the folded rest carries, suffixed by its unit under the upstream grouping; no group is looked up by it. */
+/** The key the folded rest carries, suffixed by its unit under the account grouping; no group is looked up by it. */
 export const OTHER_KEY = 'other';
 /**
- * The unit a burn line charts in. `unknown` is a subscription upstream the cost table does not size, its tier missing
+ * The unit a burn line charts in. `unknown` is a subscription account the cost table does not size, its tier missing
  * or one the table has no factors for: it has no share to draw, and dollars only for what its fast-mode answers spent.
  */
 export type BurnLineUnit = BurnUnit | 'unknown';
@@ -52,8 +52,8 @@ export interface BurnLine {
   sevenDayPerHour: number | null;
   tokensPerMinute: number;
   /**
-   * The unit the line is charted in: under the upstream grouping a subscription upstream burns window share and an
-   * API-key one dollars; every other grouping mixes both, so it charts dollars.
+   * The unit the line is charted in: under the account grouping a subscription account burns window share and an
+   * Anthropic-key one dollars; every other grouping mixes both, so it charts dollars.
    */
   unit: BurnLineUnit;
   /**
@@ -119,8 +119,8 @@ export function isolatedSlots(values: (number | null)[]): boolean[] {
 }
 
 /**
- * The burn route's answer with the upstreams beside it, read together: a profile refresh can supply a tier the last
- * read lacked, and the plan chart sizes each upstream from the tiers of the read that answered its buckets.
+ * The burn route's answer with the accounts beside it, read together: a profile refresh can supply a tier the last
+ * read lacked, and the plan chart sizes each account from the tiers of the read that answered its buckets.
  */
 export async function readBurn(
   source: Pick<Api, 'getAnalyticsBurn' | 'listAccounts'>,
@@ -142,10 +142,10 @@ export function tierFactors(tiers: CostTable['tiers'], tier: string): CostTable[
 }
 
 /**
- * The upstreams whose stored tier the cost table sizes, matched as the ledger matches it: as stored, then with the
+ * The accounts whose stored tier the cost table sizes, matched as the ledger matches it: as stored, then with the
  * `default_` prefix taken off or put on.
  */
-export function sizedUpstreams(accounts: Account[], tiers: CostTable['tiers']): Set<string> {
+export function sizedAccounts(accounts: Account[], tiers: CostTable['tiers']): Set<string> {
   return new Set(accounts.filter((a) => a.subscription !== null && tierFactors(tiers, a.subscription.rateLimitTier) !== undefined).map((a) => a.id));
 }
 
@@ -156,18 +156,18 @@ const LEGEND_ORDER: ClassLegend[] = ['conversation', 'overhead'];
 /**
  * The burn route's points as chart lines and rows. The request-class grouping folds into its two legend entries;
  * every other grouping keeps the groups with the most tokens and sums the rest as other, whose shares stay empty
- * since shares of different windows do not add up. Under the upstream grouping the rest folds once per unit, since
- * a subscription upstream's window share and an API-key upstream's dollars chart on different axes. `sized` names
- * the upstreams whose tier the cost table sizes, which chart in window share whatever their buckets priced.
+ * since shares of different windows do not add up. Under the account grouping the rest folds once per unit, since
+ * a subscription account's window share and an Anthropic-key account's dollars chart on different axes. `sized` names
+ * the accounts whose tier the cost table sizes, which chart in window share whatever their buckets priced.
  */
 export function foldBurn(points: BurnPoint[], groupBy: BurnGroup, bucketSeconds: number, sized: ReadonlySet<string>, max = MAX_BURN_LINES): { lines: BurnLine[]; rows: BurnRow[] } {
   const lineOf = (group: string) => (groupBy === 'request_class' ? classLegendOf(group) : group);
   const tokens = new Map<string, number>();
   for (const p of points) tokens.set(lineOf(p.group), (tokens.get(lineOf(p.group)) ?? 0) + p.cachedTokens + p.uncachedTokens);
-  // The category comes from the tier on file rather than from whether a bucket priced, so an upstream whose range
+  // The category comes from the tier on file rather than from whether a bucket priced, so an account whose range
   // ran on unmeasured models alone still charts as a plan line and its unpriced windows show.
-  const byUpstream = groupBy === 'account';
-  const subscribed = new Set(byUpstream ? points.filter((p) => p.unit === 'window_share').map((p) => p.group) : []);
+  const byAccount = groupBy === 'account';
+  const subscribed = new Set(byAccount ? points.filter((p) => p.unit === 'window_share').map((p) => p.group) : []);
   const unitOf = (group: string): BurnLineUnit => (subscribed.has(group) ? (sized.has(group) ? 'window_share' : 'unknown') : 'usd');
   const ranked = [...tokens.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([k]) => k);
   const kept: string[] = groupBy === 'request_class' ? LEGEND_ORDER : ranked.slice(0, max);

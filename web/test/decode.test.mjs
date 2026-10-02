@@ -432,7 +432,7 @@ test('a pool decodes the pin, placement and quota fields and its members\' budge
   assert.deepEqual(
     [direct.kind, direct.budgetDailyUsd, direct.budgetMonthlyUsd, direct.budgetUntil, direct.spends],
     ['api_key', null, 50, null, [{ period: 'month', periodEnd: new Date(report.period_end).toISOString(), spentUsd: report.spent_usd }]],
-    'the budgeted API-key member reads its budgets and the spend the ledger reported against each',
+    'the budgeted Anthropic-key member reads its budgets and the spend the ledger reported against each',
   );
   const business = p.members.find((m) => m.accountId === 'business');
   const [metered] = row.members[0].spends;
@@ -480,7 +480,7 @@ test('a pool decodes the pin, placement and quota fields and its members\' budge
   assert.deepEqual(
     [defaults.members[0].budgetDailyUsd, defaults.members[0].budgetMonthlyUsd, defaults.members[0].budgetUntil, defaults.members[0].spends, defaults.members[0].kind],
     [null, null, null, [], 'oauth'],
-    'a member row without the fields reads no budget, no spend and no API key',
+    'a member row without the fields reads no budget, no spend and no Anthropic key',
   );
   assert.equal(defaults.keys[0].enabled, true, 'a key row without the fields reads the store defaults');
   const odd = d.decodePool({
@@ -633,10 +633,10 @@ test('the burn series decodes each point with its instant, both token sides, and
   assert.deepEqual(
     [direct.group, direct.fiveHourShare, direct.sevenDayShare, direct.unit, direct.usd],
     ['direct', null, null, 'usd', body.points.at(-1).usd],
-    'an API-key point spends dollars and reads no window',
+    'an Anthropic-key point spends dollars and reads no window',
   );
   assert.ok(burn.points.every((p) => isIso(p.at)));
-  // Every grouping but the upstream one answers the shares and the unit as null.
+  // Every grouping but the account one answers the shares and the unit as null.
   const [keyed] = d.decodeBurn({ bucket_seconds: 21_600, points: [{ ...wire, five_hour_share: null, group: 'desktop', seven_day_share: null, unit: null }] }).points;
   assert.deepEqual([keyed.fiveHourShare, keyed.sevenDayShare, keyed.unit], [null, null, null]);
   const { tokens: _, ...untold } = wire;
@@ -758,7 +758,7 @@ test('the fold uses the ledger formulas for failovers, throughput, and cache mis
   const [g] = d.foldGroups([slowStart], 'all');
   assert.ok(g.percentiles.outputTps.p50 >= 90 && g.percentiles.outputTps.p50 <= 110, `p50 ${g.percentiles.outputTps.p50} is the bucket holding 100`);
   assert.equal(d.foldGroups([{ ...slowStart, ttftMs: null }], 'all')[0].histograms.outputTps.reduce((a, b) => a + b, 0), 0, 'no first-content timing, no sample');
-  // An API-key request with writes and no diagnostic is a miss by tokens, whatever the reason says.
+  // An Anthropic-key request with writes and no diagnostic is a miss by tokens, whatever the reason says.
   const apiKey = { ...base, attempts: [{ ...attempt, cacheMissReason: null }], usage: { ...base.usage, cacheRead: 0, cacheWrite5m: 300 } };
   const [m] = d.foldGroups([apiKey], 'all');
   assert.deepEqual([m.cacheHits, m.cacheMisses, m.uncached], [0, 1, 0]);
@@ -880,7 +880,7 @@ test('the downstream snippet keeps the placeholder and names the inference liste
   assert.equal(known[0], '# inference is served on 127.0.0.1:8080; use the URL that reaches that listener');
   assert.equal(known[1], `ANTHROPIC_BASE_URL=${d.PLACEHOLDER_URL}`, 'the admin origin is never substituted here');
   const unknown = d.snippetFor(null).split('\n');
-  assert.deepEqual(unknown, [`ANTHROPIC_BASE_URL=${d.PLACEHOLDER_URL}`, 'CLAUDE_CODE_OAUTH_TOKEN=<api key>', '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1']);
+  assert.deepEqual(unknown, [`ANTHROPIC_BASE_URL=${d.PLACEHOLDER_URL}`, 'CLAUDE_CODE_OAUTH_TOKEN=<key>', '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1']);
 });
 
 test('a session fold groups on the client each row named', () => {

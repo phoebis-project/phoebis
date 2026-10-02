@@ -156,11 +156,11 @@ test('a new pool reads each member the way the pool route does', async () => {
     spare: 'unavailable',
     team: 'unavailable',
   });
-  // Funded again, the upstream the router reads in overage is an obstacle only under a policy that admits none.
+  // Funded again, the account the router reads in overage is an obstacle only under a policy that admits none.
   await api.clearFunding('personal');
   await api.pauseAccount('business');
   const second = await verdicts('second', 'never');
-  assert.deepEqual([second.personal, second.business], ['overage', 'unavailable'], 'a paused upstream is unavailable like a flagged one');
+  assert.deepEqual([second.personal, second.business], ['overage', 'unavailable'], 'a paused account is unavailable like a flagged one');
   assert.equal((await verdicts('third', 'prefer_plan')).personal, 'eligible');
 });
 
@@ -168,7 +168,7 @@ test('a pool write round-trips the pin, placement and quota fields and the membe
   const api = await as('admin');
   const all = await storyPool(api);
   const console_ = all.members.find((m) => m.accountId === 'console');
-  assert.deepEqual([console_.budgetDailyUsd, console_.budgetMonthlyUsd], [5, 50], 'the story budgets its API-key member by the day and the month');
+  assert.deepEqual([console_.budgetDailyUsd, console_.budgetMonthlyUsd], [5, 50], 'the story budgets its Anthropic-key member by the day and the month');
   const edit = {
     ...all,
     affinityMode: 'always',
@@ -342,7 +342,7 @@ test('an account patch is refused where the account route refuses it, and a canc
   const restored = await api.updateAccount('business', { cancelled: false, subscriptionEndsAt: null });
   assert.deepEqual([restored.cancelled, restored.subscription.endsAt], [false, null], 'the end leaves with the flag');
   const unpaired = await api.updateAccount('spare', { cancelled: true, subscriptionEndsAt: end });
-  assert.equal(unpaired.subscription?.endsAt, end, 'an OAuth upstream that never paired still reports the end it was cancelled with');
+  assert.equal(unpaired.subscription?.endsAt, end, 'an OAuth account that never paired still reports the end it was cancelled with');
 });
 
 test('a key cap of 0 is refused on create and edit with the key route\'s text', async () => {
@@ -372,7 +372,7 @@ test('the catalog union names each model once and a failed fetch contributes not
   const ids = (models) => models.map((m) => m.id);
   const business = ids((await api.getAccountCatalog('business')).models);
   assert.ok(business.length > 0, 'the story has a catalog to union');
-  assert.deepEqual(ids(await api.listCatalogOf(['business', 'console', 'personal', 'nobody'])), [...business].sort(), 'the failing upstream and the unknown one add nothing');
+  assert.deepEqual(ids(await api.listCatalogOf(['business', 'console', 'personal', 'nobody'])), [...business].sort(), 'the failing account and the unknown one add nothing');
   assert.deepEqual(await api.listCatalogOf(['personal']), []);
   assert.deepEqual(await api.listCatalogOf([]), []);
 });
@@ -405,6 +405,6 @@ test('the quota snapshots never answer a status or a poll outcome the decoder ca
     assert.deepEqual(snapshots.map((s) => s.status).filter((s) => s !== 'error' && s !== 'success'), [], `read ${read + 1}`);
     const polls = snapshots.map((s) => s.poll);
     assert.deepEqual(polls.filter((p) => p !== null && !['clean', 'failed', 'rate_limited'].includes(p.lastOutcome)), [], `read ${read + 1}`);
-    assert.ok(polls.includes(null) && polls.some((p) => p?.backoffSince), 'the story holds an upstream not yet polled and one backing off');
+    assert.ok(polls.includes(null) && polls.some((p) => p?.backoffSince), 'the story holds an account not yet polled and one backing off');
   }
 });

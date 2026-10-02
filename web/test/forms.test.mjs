@@ -296,7 +296,7 @@ test('a pool refusal names the group its control sits in', () => {
   const cases = [
     [{ name: '' }, refused('Name', 'identity', 'the pool needs a name.')],
     [{ members: [] }, refused('members', 'members', 'the pool needs a member.')],
-    [{ members: [...input.members, { accountId: 'ghost', priority: 0 }] }, refused('member:ghost', 'members', 'ghost is not an upstream the console lists.')],
+    [{ members: [...input.members, { accountId: 'ghost', priority: 0 }] }, refused('member:ghost', 'members', 'ghost is not an account the console lists.')],
     [{ members: [{ accountId: first.accountId, priority: 1.5 }] }, refused('priority:business', 'members', 'Priority is a whole number of 0 or more.')],
     [{ members: [{ ...first, budgetDailyUsd: 0 }] }, refused('budget_daily:business', 'members', 'A budget is a dollar amount above 0; leave it empty for no budget.')],
     [{ members: [{ ...first, budgetMonthlyUsd: -1 }] }, refused('budget_monthly:business', 'members', 'A budget is a dollar amount above 0; leave it empty for no budget.')],

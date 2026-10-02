@@ -16,7 +16,7 @@ function win(id: WindowId, utilization: number, resetsInMs: number, observedAgoM
   };
 }
 
-/** The fast lane's two buckets as the last answer to a fast request on the upstream reported them. */
+/** The fast lane's two buckets as the last answer to a fast request on the account reported them. */
 function fastLane(input: number, output: number, resetsInMs: number): Account['fastLane'] {
   const reading = (utilization: number) => ({ observedAt: ago(40_000), resetsAt: ahead(resetsInMs), utilization });
   return { input: reading(input), output: reading(output) };
@@ -104,7 +104,7 @@ export const ACCOUNTS: Account[] = ([
         until: ahead(1 * HOUR + 12 * MINUTE),
         windowId: '5h',
       },
-      // A second scope, one model, so the upstream's cooling-down block has an account row and a model row.
+      // A second scope, one model, so the account's cooling-down block has an account row and a model row.
       {
         reason: 'model_rejected',
         scope: 'model:claude-opus-5',
@@ -223,7 +223,7 @@ export const ACCOUNTS: Account[] = ([
 export const accountById = new Map(ACCOUNTS.map((a) => [a.id, a]));
 
 export const QUOTA_SNAPSHOTS: QuotaSnapshot[] = ACCOUNTS.map((a) => {
-  if (a.id === 'spare') return { ...QUOTA_SNAPSHOT_SAMPLE, accountId: a.id, error: 'no credential is stored for this upstream; pair it to load quota', fetchedAt: null, poll: null, status: 'error' };
+  if (a.id === 'spare') return { ...QUOTA_SNAPSHOT_SAMPLE, accountId: a.id, error: 'no credential is stored for this account; pair it to load quota', fetchedAt: null, poll: null, status: 'error' };
   // The refresh keeps failing, so every poll fails while the windows of the last clean read still answer.
   if (a.id === 'team') {
     return {

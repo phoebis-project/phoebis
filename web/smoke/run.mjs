@@ -71,8 +71,8 @@ const group = (dlg, label) => [...(dlg?.querySelectorAll('section.dialog-group')
 const rail = (dlg, id) => dlg?.querySelector(`.dialog-rail__group[data-group="${id}"]`);
 
 /**
- * `rows` pairs an upstream id with the line drawn under its name, or null where no line is drawn: the line is the
- * upstream's email, and one without an email draws none rather than its label a second time.
+ * `rows` pairs an account id with the line drawn under its name, or null where no line is drawn: the line is the
+ * account's email, and one without an email draws none rather than its label a second time.
  */
 async function emailLines(name, rows) {
   const emails = new Map((await api.listAccounts()).map((a) => [a.id, a.email]));
@@ -113,7 +113,7 @@ const failoverRow = requests.find((r) => r.attempts.length > 1 && r.attempts.som
 }
 
 {
-  // The time format is a stored preference the toggle lives on Settings alone; a fresh mount of the Upstreams
+  // The time format is a stored preference the toggle lives on Settings alone; a fresh mount of the Accounts
   // list picks up the change from there, read off its first list row's timestamp title.
   const titleOf = async (path) => {
     const page = await mount(path);
@@ -121,12 +121,12 @@ const failoverRow = requests.find((r) => r.attempts.length > 1 && r.attempts.som
     page.unmount();
     return value;
   };
-  const before = await titleOf('/upstreams');
+  const before = await titleOf('/accounts');
   const settings = await mount('/settings');
   [...settings.container.querySelectorAll('[aria-label="Time format"] button')].find((b) => b.textContent?.trim() === '12h')?.click();
   await settings.settle(100);
   settings.unmount();
-  const after = await titleOf('/upstreams');
+  const after = await titleOf('/accounts');
   results.push({ name: 'the time format toggle re-renders every timestamp at once', ok: before !== after && /[AP]M/.test(after), missing: [before, after] });
   const reset = await mount('/settings');
   [...reset.container.querySelectorAll('[aria-label="Time format"] button')].find((b) => b.textContent?.trim() === '24h')?.click();
@@ -140,20 +140,20 @@ results.push({ name: 'data-theme set', ok: document.documentElement.getAttribute
 results.push({ name: 'the shell carries the mark beside the name and no couplet', ok: m.container.querySelector('.sidebar .brand__mark svg rect') !== null && m.container.querySelector('.sidebar .brand__name')?.textContent === 'Phoebis Router' && m.container.querySelector('.sidebar .brand__couplet') === null, missing: [] });
 {
   // The story's pools hold 10, 2 and no pins, all of the pinned sessions sit on business or personal, and the
-  // sessions route answers 17 rows, so a hero counting rows or a note counting every row's upstream reads otherwise.
+  // sessions route answers 17 rows, so a hero counting rows or a note counting every row's account reads otherwise.
   const hero = m.container.querySelector('.sess-summary__hero');
-  results.push({ name: "/ the sessions card counts the router's live pins over the pinned rows' upstreams", ok: hero?.querySelector('.stat__value')?.textContent === '12' && hero?.querySelector('.stat__note')?.textContent === 'active pins across 2 upstreams', missing: [hero?.textContent ?? 'absent'] });
+  results.push({ name: "/ the sessions card counts the router's live pins over the pinned rows' accounts", ok: hero?.querySelector('.stat__value')?.textContent === '12' && hero?.querySelector('.stat__note')?.textContent === 'active pins across 2 accounts', missing: [hero?.textContent ?? 'absent'] });
   const t = m.text();
   results.push({ name: '/ donut center says remaining, not average', ok: !t.includes('average') && (m.container.querySelectorAll('.donut__label').length >= 2), missing: [] });
   const fableAbsent = m.container.querySelectorAll('.account-mini .wbar--absent[title="no Fable window"]').length;
   results.push({ name: '/ account strip greys missing Fable windows', ok: fableAbsent >= 2, missing: [String(fableAbsent)] });
   const triples = [...m.container.querySelectorAll('.account-mini .wbars--3')].filter((el) => el.querySelectorAll('.wbar').length === 3).length;
   results.push({ name: '/ account chips draw three bars', ok: triples >= 4, missing: [String(triples)] });
-  await emailLines('/ each upstream card reads its email under the name, and draws no line without one', [...m.container.querySelectorAll('a.account-mini')].map((c) => [idOf(c), c.querySelector('.account-mini__sub')?.textContent ?? null]));
+  await emailLines('/ each account card reads its email under the name, and draws no line without one', [...m.container.querySelectorAll('a.account-mini')].map((c) => [idOf(c), c.querySelector('.account-mini__sub')?.textContent ?? null]));
   // business cools on its fast lane, the first of its rows and the sooner to lift, and on one model.
   const business = [...m.container.querySelectorAll('a.account-mini')].find((c) => idOf(c) === 'business');
   const cooldownLine = [...(business?.querySelectorAll('.account-mini__foot .muted') ?? [])].map((e) => e.textContent?.trim() ?? '').find((t) => t.startsWith('cooldown ends'));
-  results.push({ name: "/ an upstream's cooldown line reads the row that cools it, never its fast lane's", ok: /^cooldown ends in 5[34]m$/.test(cooldownLine ?? ''), missing: [cooldownLine ?? 'no cooldown line on business'] });
+  results.push({ name: "/ an account's cooldown line reads the row that cools it, never its fast lane's", ok: /^cooldown ends in 5[34]m$/.test(cooldownLine ?? ''), missing: [cooldownLine ?? 'no cooldown line on business'] });
 }
 m.unmount();
 
@@ -163,7 +163,7 @@ m = await mount('/observe');
   expect('/observe metric strip', t, ['Requests per second', 'Active streams', 'Error rate', 'TTFB p50', 'TTFB p95', 'TTFB p99', 'Output tokens per second', 'Estimated cost per minute', 'measured', 'derived', 'estimated']);
   const inflight = m.container.querySelectorAll('.live-table .ldot--inflight').length;
   results.push({ name: '/observe has in-flight rows', ok: inflight >= 1, missing: [String(inflight)] });
-  expect('/observe table columns', t, ['Time', 'Key', 'Session', 'Agent', 'Model', 'Client', 'Upstream', 'Kind', 'Transport', 'Status', 'Attempts', 'Tokens so far', 'tok/s', 'Cost', 'Elapsed', 'Pause', 'In-flight only', ' to ', 'Live']);
+  expect('/observe table columns', t, ['Time', 'Key', 'Session', 'Agent', 'Model', 'Client', 'Account', 'Kind', 'Transport', 'Status', 'Attempts', 'Tokens so far', 'tok/s', 'Cost', 'Elapsed', 'Pause', 'In-flight only', ' to ', 'Live']);
   const chips = m.container.querySelectorAll('.mchip[title*="last minute"]').length;
   results.push({ name: '/observe chips carry quality in title', ok: chips === 8, missing: [String(chips)] });
   const tickLabels = [...m.container.querySelectorAll('.range__tick-label')].map((e) => e.textContent ?? '');
@@ -311,7 +311,7 @@ expect('/quota', m.text(), ['7 credentials', '7 loaded', '3 need attention', 'Re
   const mailEnd = endChips('mail')[0];
   const mailAccount = (await api.listAccounts()).find((a) => a.id === 'mail');
   results.push({
-    name: '/quota a cancelled upstream says when it ends, serious inside a week, and one not cancelled says nothing',
+    name: '/quota a cancelled account says when it ends, serious inside a week, and one not cancelled says nothing',
     ok:
       mailEnd?.textContent?.trim() === 'Ends in 4 days' &&
       mailEnd.classList.contains('chip--serious') &&
@@ -365,7 +365,7 @@ expect('/quota', m.text(), ['7 credentials', '7 loaded', '3 need attention', 'Re
   api.refreshUsage = refreshUsage;
   api.listQuotaSnapshots = listQuotaSnapshots;
   results.push({
-    name: '/quota Refresh all refreshes every subscription upstream, then reads every card again',
+    name: '/quota Refresh all refreshes every subscription account, then reads every card again',
     ok: JSON.stringify(refreshed.sort()) === JSON.stringify(subscriptions) && reads > 0 && m.text().includes('7 loaded'),
     missing: [refreshed.join(','), `reads ${reads}`, m.container.querySelector('.quota-meta')?.textContent ?? 'no meta'],
   });
@@ -374,9 +374,9 @@ expect('/quota', m.text(), ['7 credentials', '7 loaded', '3 need attention', 'Re
   // The mock registry holds seven, so the plural is what this can read; the singular is asserted by its absence.
   const count = m.container.querySelector('.quota-meta span')?.textContent ?? 'no count';
   results.push({ name: '/quota gives the credential count the noun that number takes', ok: count === '7 credentials', missing: [count] });
-  // The route answers from the upstream's hold or its cache inside either, so the button says when it reads the endpoint.
+  // The route answers from the account's hold or its cache inside either, so the button says when it reads the endpoint.
   const hints = [...m.container.querySelectorAll('.pill')].filter((b) => ['Refresh', 'Refresh all'].includes(b.textContent?.trim() ?? '')).map((b) => b.getAttribute('title') ?? '');
-  results.push({ name: '/quota Refresh says it reads the endpoint unless a backoff or a young snapshot holds', ok: hints.length > 1 && hints.every((t) => t === 'reads the endpoint now unless the upstream is backing off or a snapshot younger than 60 seconds is cached'), missing: [...new Set(hints)] });
+  results.push({ name: '/quota Refresh says it reads the endpoint unless a backoff or a young snapshot holds', ok: hints.length > 1 && hints.every((t) => t === 'reads the endpoint now unless the account is backing off or a snapshot younger than 60 seconds is cached'), missing: [...new Set(hints)] });
   const personal = [...m.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === 'personal');
   results.push({ name: '/quota draws the reason the provider gave for its extra usage', ok: personal?.querySelector('.callout')?.textContent?.includes('Payment method declined') === true, missing: [personal?.textContent?.slice(0, 160) ?? 'no personal card'] });
 }
@@ -415,7 +415,7 @@ expect('/quota', m.text(), ['7 credentials', '7 loaded', '3 need attention', 'Re
   const lineOf = (label) => cardOf(label)?.querySelector('.fast-lane__line')?.textContent?.trim() ?? '';
   const chip = cardOf('business')?.querySelector('.fast-lane__cooldown');
   results.push({
-    name: '/quota a card whose upstream answered a fast request reads its fast lane, both shares used and the reset, an API-key card too',
+    name: '/quota a card whose account answered a fast request reads its fast lane, both shares used and the reset, an Anthropic-key card too',
     ok: /^Fast modeinput 100% used, output 64% used, resets in 1[12]m$/.test(lineOf('business')) && /^Fast modeinput 18% used, output 5% used, resets /.test(lineOf('Console workspace')),
     missing: [lineOf('business') || 'no line on business', lineOf('Console workspace') || 'no line on the Console workspace'],
   });
@@ -425,7 +425,7 @@ expect('/quota', m.text(), ['7 credentials', '7 loaded', '3 need attention', 'Re
     missing: [chip ? `${chip.textContent?.trim()} | ${chip.className} | ${chip.getAttribute('title')}` : 'no chip on business'],
   });
   const mail = cardOf('mail');
-  results.push({ name: '/quota a card whose upstream never answered a fast request draws no Fast mode line', ok: mail !== undefined && mail.querySelector('.fast-lane') === null && !(mail.textContent ?? '').includes('Fast mode'), missing: [mail?.textContent?.slice(0, 160) ?? 'no mail card'] });
+  results.push({ name: '/quota a card whose account never answered a fast request draws no Fast mode line', ok: mail !== undefined && mail.querySelector('.fast-lane') === null && !(mail.textContent ?? '').includes('Fast mode'), missing: [mail?.textContent?.slice(0, 160) ?? 'no mail card'] });
 }
 m.unmount();
 
@@ -489,48 +489,59 @@ m.unmount();
   const failed = await mount('/quota');
   const t = failed.text();
   results.push({
-    name: '/quota a failed upstream read draws the error state',
-    ok: t.includes('Could not load the upstreams') && t.includes('the registry is unavailable') && failed.container.querySelector('.qcard') === null,
+    name: '/quota a failed account read draws the error state',
+    ok: t.includes('Could not load the accounts') && t.includes('the registry is unavailable') && failed.container.querySelector('.qcard') === null,
     missing: [t.slice(0, 200)],
   });
   failed.unmount();
 }
 
-m = await mount('/accounts');
-results.push({
-  name: '/accounts redirects to the upstreams page',
-  ok: m.text().includes('Add upstream') && m.container.querySelector('input[placeholder="Search upstreams"]') !== null,
-  missing: [m.text().includes('Add upstream') ? 'has Add upstream' : 'no Add upstream', m.container.querySelector('.search input')?.getAttribute('placeholder') ?? 'no search input'],
+// The memory router exposes no location, so the page in place is read off what the route drew: the heading, the
+// active nav link, and the selected row's link.
+const accountsInPlace = (page) => ({
+  heading: page.container.querySelector('.topbar__title')?.textContent ?? '',
+  nav: page.container.querySelector('.nav__link.is-active')?.getAttribute('href') ?? '',
+  row: page.container.querySelector('a.account-row.is-active')?.getAttribute('href') ?? '',
 });
-results.push({ name: 'nav calls the page Upstreams', ok: [...m.container.querySelectorAll('.nav__link')].some((a) => a.textContent?.trim() === 'Upstreams') && !m.text().includes('Accounts'), missing: [...m.container.querySelectorAll('.nav__link')].map((a) => a.textContent?.trim() ?? '') });
-expect('/upstreams (redirect to first)', m.text(), ['business@example.com', 'Identity', 'OAuth login', 'Max since', 'default_claude_max_20x', 'Billing type', 'Organization', 'Renewal date is not reported by the provider', 'Usage', 'Fable', '7-day trend', 'Pools', 'priority 0', 'Credential', 'Requests', 'Re-pair', 'Pause', 'Disconnect', 'Delete upstream', 'Extra usage this month', 'Add upstream']);
-await emailLines('/upstreams each row reads its email under the name, and draws no line without one', [...m.container.querySelectorAll('a.account-row')].map((r) => [idOf(r), r.querySelector('.account-row__sub')?.textContent ?? null]));
-await emailLines('/upstreams/business the head reads the email under the name', [['business', m.container.querySelector('.detail__ident > .detail__sub.mono')?.textContent ?? null]]);
+m = await mount('/accounts');
+{
+  // Without an account id the page itself lands on the first account, business.
+  const at = accountsInPlace(m);
+  results.push({
+    name: '/accounts is the Accounts page, with Add account and the account search',
+    ok: at.heading === 'Accounts' && at.nav === '/accounts' && at.row === '/accounts/business' && m.text().includes('Add account') && m.container.querySelector('input[placeholder="Search accounts"]') !== null,
+    missing: [JSON.stringify(at), m.text().includes('Add account') ? 'has Add account' : 'no Add account', m.container.querySelector('.search input')?.getAttribute('placeholder') ?? 'no search input'],
+  });
+}
+results.push({ name: 'nav calls the pages Accounts and Keys, and no text names the old page', ok: [...m.container.querySelectorAll('.nav__link')].some((a) => a.textContent?.trim() === 'Accounts') && [...m.container.querySelectorAll('.nav__link')].some((a) => a.textContent?.trim() === 'Keys') && !/\bupstreams\b/i.test(m.text()), missing: [...m.container.querySelectorAll('.nav__link')].map((a) => a.textContent?.trim() ?? '') });
+expect('/accounts (lands on the first)', m.text(), ['business@example.com', 'Identity', 'OAuth login', 'Max since', 'default_claude_max_20x', 'Billing type', 'Organization', 'Renewal date is not reported by the provider', 'Usage', 'Fable', '7-day trend', 'Pools', 'priority 0', 'Credential', 'Requests', 'Re-pair', 'Pause', 'Disconnect', 'Delete account', 'Extra usage this month', 'Add account']);
+await emailLines('/accounts each row reads its email under the name, and draws no line without one', [...m.container.querySelectorAll('a.account-row')].map((r) => [idOf(r), r.querySelector('.account-row__sub')?.textContent ?? null]));
+await emailLines('/accounts/business the head reads the email under the name', [['business', m.container.querySelector('.detail__ident > .detail__sub.mono')?.textContent ?? null]]);
 {
   // business cools on its fast lane, the first of its rows and lifting in 12m, and on one model, lifting in 54m.
   const cardOf = (title) => [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === title);
   const line = cardOf('Usage')?.querySelector('.fast-lane__line')?.textContent?.trim() ?? '';
   const chip = cardOf('Usage')?.querySelector('.fast-lane__cooldown');
   results.push({
-    name: '/upstreams/business the Usage card reads the fast lane line and its cooldown chip',
+    name: '/accounts/business the Usage card reads the fast lane line and its cooldown chip',
     ok: /^Fast modeinput 100% used, output 64% used, resets in 1[12]m$/.test(line) && /^Fast moderate limited, lifts in 1[12]m$/.test(chip?.textContent?.trim() ?? '') && chip.classList.contains('chip--serious'),
     missing: [line || 'no line', chip?.textContent?.trim() ?? 'no chip'],
   });
   const scopes = [...(cardOf('Cooling down')?.querySelectorAll('tbody tr') ?? [])].map((tr) => `${tr.children[0]?.textContent?.trim()} | ${tr.children[1]?.textContent?.trim()}`);
-  results.push({ name: '/upstreams/business the cooling-down block names the fast lane Fast mode', ok: JSON.stringify(scopes) === JSON.stringify(['Fast mode | fast_rate_limit', 'claude-haiku-4-5-20251001 | model_rejected']), missing: scopes });
+  results.push({ name: '/accounts/business the cooling-down block names the fast lane Fast mode', ok: JSON.stringify(scopes) === JSON.stringify(['Fast mode | fast_rate_limit', 'claude-haiku-4-5-20251001 | model_rejected']), missing: scopes });
   const badge = [...m.container.querySelectorAll('.detail__badges .badge')].map((b) => b.textContent?.trim() ?? '').find((t) => t.startsWith('cooldown ends'));
-  results.push({ name: "/upstreams/business the header's cooldown badge reads the model row, never the fast lane's", ok: /^cooldown ends in 5[34]m$/.test(badge ?? ''), missing: [badge ?? 'no cooldown badge'] });
+  results.push({ name: "/accounts/business the header's cooldown badge reads the model row, never the fast lane's", ok: /^cooldown ends in 5[34]m$/.test(badge ?? ''), missing: [badge ?? 'no cooldown badge'] });
 }
 {
   // Clearing business's other rows leaves its fast row alone, and the mock's clear derives the status by the
-  // router's rule (a fast row cools no upstream), so the Ready badge is the rule's answer, not a value set here.
+  // router's rule (a fast row cools no account), so the Ready badge is the rule's answer, not a value set here.
   const story = (await api.listAccounts()).find((a) => a.id === 'business');
   for (const c of story.cooldowns.filter((c) => c.scope !== 'fast')) await api.clearCooldown('business', c.scope);
-  const alone = await mount('/upstreams/business');
+  const alone = await mount('/accounts/business');
   const badges = [...alone.container.querySelectorAll('.detail__badges .badge')].map((b) => b.textContent?.trim() ?? '');
   const t = alone.text();
   results.push({
-    name: '/upstreams an upstream cooling on its fast lane alone reads ready with no cooldown badge, its fast row still listed',
+    name: '/accounts an account cooling on its fast lane alone reads ready with no cooldown badge, its fast row still listed',
     ok: story.status === 'cooldown' && badges[0] === 'Ready' && !badges.some((b) => b.startsWith('cooldown ends')) && t.includes('1 scope cooling') && t.includes('Fast mode') && alone.container.querySelector('.fast-lane__cooldown') !== null,
     missing: [story.status, ...badges],
   });
@@ -540,18 +551,18 @@ await emailLines('/upstreams/business the head reads the email under the name', 
 }
 {
   // The fast lane's credits refusal is a row of its own beside the rate limit: a chip and a cooling-down row each,
-  // and with the model row cleared the mock's rule reads neither fast row as cooling the upstream.
+  // and with the model row cleared the mock's rule reads neither fast row as cooling the account.
   const story = (await api.listAccounts()).find((a) => a.id === 'business');
   const credits = { reason: 'fast_credits', scope: 'fast_credits', setAt: story.cooldowns[0].setAt, until: new Date(Date.now() + 40 * 60_000).toISOString(), windowId: null };
   api.putAccount({ ...story, cooldowns: [...story.cooldowns, credits] });
   for (const c of story.cooldowns.filter((c) => c.scope.startsWith('model:'))) await api.clearCooldown('business', c.scope);
-  const both = await mount('/upstreams/business');
+  const both = await mount('/accounts/business');
   const chips = [...both.container.querySelectorAll('.fast-lane__cooldown')].map((c) => c.textContent?.trim() ?? '');
   const cardOf = (title) => [...both.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === title);
   const scopes = [...(cardOf('Cooling down')?.querySelectorAll('tbody tr') ?? [])].map((tr) => `${tr.children[0]?.textContent?.trim()} | ${tr.children[1]?.textContent?.trim()}`);
   const badges = [...both.container.querySelectorAll('.detail__badges .badge')].map((b) => b.textContent?.trim() ?? '');
   results.push({
-    name: '/upstreams an upstream whose fast lane cools on its rate limit and its credits shows a chip and a row for each and reads ready',
+    name: '/accounts an account whose fast lane cools on its rate limit and its credits shows a chip and a row for each and reads ready',
     ok:
       chips.length === 2 &&
       /^Fast moderate limited, lifts in 1[12]m$/.test(chips[0]) &&
@@ -566,17 +577,17 @@ await emailLines('/upstreams/business the head reads the email under the name', 
 {
   const head = m.container.querySelector('.detail__head');
   const headButtons = [...(head?.querySelectorAll('button') ?? [])].map((b) => b.textContent?.trim());
-  results.push({ name: '/upstreams header holds every action', ok: ['Re-pair', 'Pause', 'Disconnect', 'Delete upstream'].every((l) => headButtons.includes(l)), missing: headButtons });
-  const below = [...m.container.querySelectorAll('.detail > *:not(.detail__head) button')].map((b) => b.textContent?.trim()).filter((t) => ['Re-pair', 'Pair', 'Verify', 'Pause', 'Resume', 'Catalog', 'Clear funding flag', 'Disconnect', 'Delete upstream'].includes(t ?? ''));
-  results.push({ name: '/upstreams no action buttons below header', ok: below.length === 0, missing: below });
+  results.push({ name: '/accounts header holds every action', ok: ['Re-pair', 'Pause', 'Disconnect', 'Delete account'].every((l) => headButtons.includes(l)), missing: headButtons });
+  const below = [...m.container.querySelectorAll('.detail > *:not(.detail__head) button')].map((b) => b.textContent?.trim()).filter((t) => ['Re-pair', 'Pair', 'Verify', 'Pause', 'Resume', 'Catalog', 'Clear funding flag', 'Disconnect', 'Delete account'].includes(t ?? ''));
+  results.push({ name: '/accounts no action buttons below header', ok: below.length === 0, missing: below });
   const dangers = [...(head?.querySelectorAll('.btn--danger') ?? [])].map((b) => b.textContent?.trim());
-  results.push({ name: '/upstreams Disconnect and Delete upstream are danger, and Delete upstream is last', ok: dangers.join('|') === 'Disconnect|Delete upstream' && head?.querySelector('.detail__actions')?.lastElementChild?.textContent?.trim() === 'Delete upstream', missing: dangers });
+  results.push({ name: '/accounts Disconnect and Delete account are danger, and Delete account is last', ok: dangers.join('|') === 'Disconnect|Delete account' && head?.querySelector('.detail__actions')?.lastElementChild?.textContent?.trim() === 'Delete account', missing: dangers });
   const statuses = [...(m.container.querySelector('select[aria-label="Status filter"]')?.options ?? [])].map((o) => o.value);
-  results.push({ name: '/upstreams the status filter offers only the statuses the router reports', ok: statuses.length > 1 && !statuses.includes('disabled'), missing: statuses });
+  results.push({ name: '/accounts the status filter offers only the statuses the router reports', ok: statuses.length > 1 && !statuses.includes('disabled'), missing: statuses });
   {
     const identity = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Identity');
     const labels = [...(identity?.querySelectorAll('.kv__row dt') ?? [])].map((d) => d.textContent?.trim() ?? '');
-    results.push({ name: '/upstreams/business the identity card draws no Trial ends row for a profile without a trial', ok: labels.join('|') === 'Type|Plan|Rate-limit tier|Organization|Billing type', missing: labels });
+    results.push({ name: '/accounts/business the identity card draws no Trial ends row for a profile without a trial', ok: labels.join('|') === 'Type|Plan|Rate-limit tier|Organization|Billing type', missing: labels });
   }
   {
     // The subscription end edits in place on the identity card: ticking prefills the derived end, a cleared date is
@@ -588,7 +599,7 @@ await emailLines('/upstreams/business the head reads the email under the name', 
     const field = () => identity()?.querySelector('input[type="datetime-local"]');
     button('Edit end')?.click();
     await m.settle(100);
-    expect('/upstreams/business the subscription end editor', identity()?.textContent ?? '', [
+    expect('/accounts/business the subscription end editor', identity()?.textContent ?? '', [
       'Cancelled',
       'Ends',
       "Prefilled from the plan's start and its monthly renewal; correct it from the date the plan's billing settings show. An annual plan is marked cancelled in its final month only.",
@@ -599,7 +610,7 @@ await emailLines('/upstreams/business the head reads the email under the name', 
     const derived = (await api.listAccounts()).find((a) => a.id === 'business')?.subscription?.derivedEndsAt ?? '';
     // The smoke runs in UTC, so the field's local value is the instant's own minute.
     results.push({
-      name: '/upstreams/business ticking Cancelled prefills the end the plan derives',
+      name: '/accounts/business ticking Cancelled prefills the end the plan derives',
       ok: before === '' && box()?.checked === true && derived !== '' && field()?.value === derived.slice(0, 16),
       missing: [String(before), String(box()?.checked), field()?.value ?? 'no field', derived],
     });
@@ -609,7 +620,7 @@ await emailLines('/upstreams/business the head reads the email under the name', 
     await m.settle(100);
     const refusal = identity()?.querySelector('[role="alert"]')?.textContent ?? '';
     results.push({
-      name: '/upstreams/business a ticked box whose date was cleared is refused before the save',
+      name: '/accounts/business a ticked box whose date was cleared is refused before the save',
       ok: refusal.includes('A cancelled plan needs the date it ends.') && button('Save')?.disabled === true,
       missing: [refusal || 'no callout', String(button('Save')?.disabled)],
     });
@@ -623,7 +634,7 @@ await emailLines('/upstreams/business the head reads the email under the name', 
     const endRow = [...(identity()?.querySelectorAll('.kv__row') ?? [])].find((r) => r.querySelector('dt')?.textContent?.trim() === 'Ends');
     const endValue = endRow?.querySelector('dd');
     results.push({
-      name: '/upstreams/business unticking clears the date, and a saved end reads as a countdown row after the tier',
+      name: '/accounts/business unticking clears the date, and a saved end reads as a countdown row after the tier',
       ok: cleared === '' && labels().join('|') === 'Type|Plan|Rate-limit tier|Ends|Organization|Billing type' && /^ends in \d+ days$/.test(endValue?.textContent?.trim() ?? '') && (endValue?.getAttribute('title') ?? '') !== '',
       missing: [String(cleared), ...labels(), endRow?.textContent ?? 'no Ends row'],
     });
@@ -636,21 +647,21 @@ await emailLines('/upstreams/business the head reads the email under the name', 
     await m.settle(600);
     const business = (await api.listAccounts()).find((a) => a.id === 'business');
     results.push({
-      name: '/upstreams/business saving the box unticked clears the flag and its end',
+      name: '/accounts/business saving the box unticked clears the flag and its end',
       ok: !labels().includes('Ends') && business?.cancelled === false && business?.subscription?.endsAt === null,
       missing: [...labels(), String(business?.cancelled), String(business?.subscription?.endsAt)],
     });
   }
   const pair = m.container.querySelector('.detail__pair');
-  results.push({ name: '/upstreams identity and usage share a grid', ok: pair !== null && pair.querySelectorAll('.card--fill').length === 2, missing: [] });
+  results.push({ name: '/accounts identity and usage share a grid', ok: pair !== null && pair.querySelectorAll('.card--fill').length === 2, missing: [] });
   const fable = m.container.querySelector('.detail .wbars--3');
-  results.push({ name: '/upstreams usage card has three bars', ok: (fable?.querySelectorAll('.wbar').length ?? 0) === 3, missing: [String(fable?.querySelectorAll('.wbar').length)] });
+  results.push({ name: '/accounts usage card has three bars', ok: (fable?.querySelectorAll('.wbar').length ?? 0) === 3, missing: [String(fable?.querySelectorAll('.wbar').length)] });
 }
 {
   [...(m.container.querySelector('.detail__head')?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Disconnect')?.click();
   await m.settle(250);
   const confirm = [...m.container.querySelectorAll('dialog[open]')].pop();
-  expect('/upstreams Disconnect says what the route deletes and what stays', confirm?.textContent ?? '', ["Deletes business's credential. Pool memberships and request history stay; re-pairing stores the credential again."]);
+  expect('/accounts Disconnect says what the route deletes and what stays', confirm?.textContent ?? '', ["Deletes business's credential. Pool memberships and request history stay; re-pairing stores the credential again."]);
   [...(confirm?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
   await m.settle(200);
 }
@@ -663,13 +674,13 @@ await emailLines('/upstreams/business the head reads the email under the name', 
   [...(confirm?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Pause')?.click();
   await m.settle(600);
   const pauseToast = m.container.querySelector('.toast')?.textContent ?? '';
-  results.push({ name: '/upstreams Pause calls the API and the row reads paused', ok: pauseToast.includes('Paused') && [...m.container.querySelectorAll('.detail__head button')].some((b) => b.textContent?.trim() === 'Resume'), missing: [pauseToast || 'no toast'] });
+  results.push({ name: '/accounts Pause calls the API and the row reads paused', ok: pauseToast.includes('Paused') && [...m.container.querySelectorAll('.detail__head button')].some((b) => b.textContent?.trim() === 'Resume'), missing: [pauseToast || 'no toast'] });
   const resume = [...m.container.querySelectorAll('.detail__head button')].find((b) => b.textContent?.trim() === 'Resume');
   resume?.click();
   await m.settle(250);
   [...([...m.container.querySelectorAll('dialog[open]')].pop()?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Resume')?.click();
   await m.settle(600);
-  results.push({ name: '/upstreams Resume restores the Pause action', ok: [...m.container.querySelectorAll('.detail__head button')].some((b) => b.textContent?.trim() === 'Pause'), missing: [] });
+  results.push({ name: '/accounts Resume restores the Pause action', ok: [...m.container.querySelectorAll('.detail__head button')].some((b) => b.textContent?.trim() === 'Pause'), missing: [] });
   const rename = async (to) => {
     m.container.querySelector('button[aria-label="Edit label"]')?.click();
     await m.settle(150);
@@ -681,32 +692,32 @@ await emailLines('/upstreams/business the head reads the email under the name', 
     await m.settle(600);
   };
   await rename('business renamed');
-  results.push({ name: '/upstreams the label edit renames through the API', ok: m.container.querySelector('.detail__title')?.textContent?.includes('business renamed') && m.text().includes('Label saved'), missing: [] });
+  results.push({ name: '/accounts the label edit renames through the API', ok: m.container.querySelector('.detail__title')?.textContent?.includes('business renamed') && m.text().includes('Label saved'), missing: [] });
   // One mock instance backs every mount, so the label goes back before the pairing and pools checks read it.
   await rename('business');
 }
 {
-  const add = [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Add upstream');
+  const add = [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Add account');
   add?.click();
   await m.settle(300);
   const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
-  results.push({ name: '/upstreams Add upstream opens a dialog', ok: dlg !== null, missing: [String(m.container.querySelectorAll('dialog[open]').length)] });
-  const kinds = [...(dlg?.querySelectorAll('[aria-label="Upstream type"] button') ?? [])];
-  kinds.find((b) => b.textContent?.trim() === 'API key')?.click();
+  results.push({ name: '/accounts Add account opens a dialog', ok: dlg !== null, missing: [String(m.container.querySelectorAll('dialog[open]').length)] });
+  const kinds = [...(dlg?.querySelectorAll('[aria-label="Account type"] button') ?? [])];
+  kinds.find((b) => b.textContent?.trim() === 'Anthropic key')?.click();
   await m.settle(150);
   const fields = [...(dlg?.querySelectorAll('.field__label') ?? [])].map((l) => l.textContent?.trim() ?? '');
   const choices = [...(dlg?.querySelectorAll('[role="group"]') ?? [])].map((g) => g.getAttribute('aria-label') ?? '');
   const inputs = dlg?.querySelectorAll('input').length ?? 0;
-  const subtitle = 'Subscription logins share your Claude.ai quota. API keys bill per token against a Console workspace.';
+  const subtitle = 'Subscription logins share your Claude.ai quota. Anthropic keys bill per token against a Console workspace.';
   results.push({
-    name: '/upstreams the API-key form asks for an id, a label, and the key, and nothing else',
-    ok: JSON.stringify(fields) === JSON.stringify(['Id', 'Label', 'API key']) && JSON.stringify(choices) === JSON.stringify(['Upstream type']) && inputs === 3 && (dlg?.textContent ?? '').includes(subtitle),
+    name: '/accounts the Anthropic-key form asks for an id, a label, and the key, and nothing else',
+    ok: JSON.stringify(fields) === JSON.stringify(['Id', 'Label', 'Anthropic key']) && JSON.stringify(choices) === JSON.stringify(['Account type']) && inputs === 3 && (dlg?.textContent ?? '').includes(subtitle),
     missing: [...fields, ...choices, `${inputs} inputs`, (dlg?.textContent ?? '').includes(subtitle) ? 'subtitle' : 'no subtitle'],
   });
   const pairs = [...(dlg?.querySelectorAll('.form-row') ?? [])].map((r) => [...r.querySelectorAll('.field__label')].map((l) => l.textContent?.trim() ?? ''));
-  const typeBox = dlg?.querySelector('[aria-label="Upstream type"]')?.parentElement;
+  const typeBox = dlg?.querySelector('[aria-label="Account type"]')?.parentElement;
   results.push({
-    name: '/upstreams Id and Label share a row and the type control keeps its content width',
+    name: '/accounts Id and Label share a row and the type control keeps its content width',
     ok: pairs.length === 1 && JSON.stringify(pairs[0]) === JSON.stringify(['Id', 'Label']) && typeBox?.classList.contains('row') === true,
     missing: [JSON.stringify(pairs), `type control in ${typeBox?.className ?? 'nothing'}`],
   });
@@ -720,16 +731,16 @@ await emailLines('/upstreams/business the head reads the email under the name', 
   repair?.click();
   await m.settle(500);
   const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
-  expect('/upstreams pairing step 1', dlg?.textContent ?? '', ['Re-pair business', 'Open in browser', 'Copy', 'claude.ai/oauth/authorize', 'Link expires in', 'I have logged in']);
+  expect('/accounts pairing step 1', dlg?.textContent ?? '', ['Re-pair business', 'Open in browser', 'Copy', 'claude.ai/oauth/authorize', 'Link expires in', 'I have logged in']);
   // Read before step 1 unmounts: the callback the browser lands on carries this state, and the mock now checks it.
   const state = new URLSearchParams((dlg?.querySelector('.pairing__url')?.textContent ?? '').split('?')[1] ?? '').get('state');
   const next = [...(dlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'I have logged in');
   next?.click();
   await m.settle(200);
-  expect('/upstreams pairing step 2', dlg?.textContent ?? '', ['Paste the URL your browser landed on, or the code', 'Registered redirect: http://localhost:54545/callback', 'The page will not load; nothing listens on that port. The URL in the address bar is complete, and the code alone works too.', 'Submit', 'Link expires in']);
+  expect('/accounts pairing step 2', dlg?.textContent ?? '', ['Paste the URL your browser landed on, or the code', 'Registered redirect: http://localhost:54545/callback', 'The page will not load; nothing listens on that port. The URL in the address bar is complete, and the code alone works too.', 'Submit', 'Link expires in']);
   const input = dlg?.querySelector('input[placeholder^="http://localhost"]');
-  results.push({ name: '/upstreams pairing placeholder is the registered redirect', ok: input?.getAttribute('placeholder') === 'http://localhost:54545/callback?code=…&state=…', missing: [input?.getAttribute('placeholder') ?? 'absent'] });
-  results.push({ name: '/upstreams pairing step 1 exposes the state the callback must carry', ok: typeof state === 'string' && state.length > 0, missing: [String(state)] });
+  results.push({ name: '/accounts pairing placeholder is the registered redirect', ok: input?.getAttribute('placeholder') === 'http://localhost:54545/callback?code=…&state=…', missing: [input?.getAttribute('placeholder') ?? 'absent'] });
+  results.push({ name: '/accounts pairing step 1 exposes the state the callback must carry', ok: typeof state === 'string' && state.length > 0, missing: [String(state)] });
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
   const type = async (value) => {
     setter.call(input, value);
@@ -741,13 +752,13 @@ await emailLines('/upstreams/business the head reads the email under the name', 
     const submit = [...(dlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Submit');
     submit?.click();
     await m.settle(900);
-    expect('/upstreams pairing step 3', dlg?.textContent ?? '', ['Email', 'business@example.com', 'Organization', 'Confirm', 'Cancel']);
+    expect('/accounts pairing step 3', dlg?.textContent ?? '', ['Email', 'business@example.com', 'Organization', 'Confirm', 'Cancel']);
     const confirm = [...(dlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Confirm');
     confirm?.click();
     await m.settle(600);
-    results.push({ name: '/upstreams pairing closes after confirm', ok: !m.container.querySelector('dialog[open]'), missing: [] });
+    results.push({ name: '/accounts pairing closes after confirm', ok: !m.container.querySelector('dialog[open]'), missing: [] });
   } else {
-    results.push({ name: '/upstreams pairing callback input found', ok: false, missing: ['input[placeholder^=http://localhost]'] });
+    results.push({ name: '/accounts pairing callback input found', ok: false, missing: ['input[placeholder^=http://localhost]'] });
   }
   // A bare code is the other half of the field's promise, so it gets its own pass through the dialog.
   repair?.click();
@@ -762,24 +773,26 @@ await emailLines('/upstreams/business the head reads the email under the name', 
     await m.settle(100);
     [...(bare?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Submit')?.click();
     await m.settle(900);
-    expect('/upstreams pairing accepts a bare code', bare?.textContent ?? '', ['Email', 'business@example.com', 'Organization', 'Confirm']);
+    expect('/accounts pairing accepts a bare code', bare?.textContent ?? '', ['Email', 'business@example.com', 'Organization', 'Confirm']);
     [...(bare?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
     await m.settle(300);
   } else {
-    results.push({ name: '/upstreams pairing accepts a bare code', ok: false, missing: ['no input on the second pass'] });
+    results.push({ name: '/accounts pairing accepts a bare code', ok: false, missing: ['no input on the second pass'] });
   }
 }
 await m.navigate('/accounts/team');
-expect('/accounts/team redirects and keeps the upstream', m.text(), ['Routing is off', 'invalid_grant', 'Needs re-auth', 'n/a']);
+expect('/accounts/team renders the team account', m.text(), ['Routing is off', 'invalid_grant', 'Needs re-auth', 'n/a']);
 {
+  const at = accountsInPlace(m);
+  results.push({ name: '/accounts/team stays at its path on the Accounts page', ok: at.heading === 'Accounts' && at.nav === '/accounts' && at.row === '/accounts/team', missing: [JSON.stringify(at)] });
   const absent = m.container.querySelectorAll('.detail .wbar--absent[title="no Fable window"]').length;
-  results.push({ name: '/upstreams/team greys the Fable bar', ok: absent === 1, missing: [String(absent)] });
+  results.push({ name: '/accounts/team greys the Fable bar', ok: absent === 1, missing: [String(absent)] });
 }
-await m.navigate('/upstreams/mail');
-expect('/upstreams/mail', m.text(), [
+await m.navigate('/accounts/mail');
+expect('/accounts/mail', m.text(), [
   'Cooling down',
   '2 scopes cooling',
-  'Whole upstream',
+  'Whole account',
   'claude-opus-5',
   'Clear',
   "A deadline is the upstream's own reset or retry-after plus a one-second margin, or the configured fallback when the upstream named none.",
@@ -790,20 +803,20 @@ expect('/upstreams/mail', m.text(), [
 ]);
 {
   const absent = m.container.querySelectorAll('.detail .wbar--absent[title="no Fable window"]').length;
-  results.push({ name: '/upstreams/mail greys the Fable bar', ok: absent === 1, missing: [String(absent)] });
+  results.push({ name: '/accounts/mail greys the Fable bar', ok: absent === 1, missing: [String(absent)] });
   const identity = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Identity');
   const labels = [...(identity?.querySelectorAll('.kv__row dt') ?? [])].map((d) => d.textContent?.trim() ?? '');
-  results.push({ name: '/upstreams/mail the identity card reads the end and the trial end after the tier', ok: labels.join('|') === 'Type|Plan|Rate-limit tier|Ends|Trial ends|Organization|Billing type', missing: labels });
+  results.push({ name: '/accounts/mail the identity card reads the end and the trial end after the tier', ok: labels.join('|') === 'Type|Plan|Rate-limit tier|Ends|Trial ends|Organization|Billing type', missing: labels });
   const value = (label) => [...(identity?.querySelectorAll('.kv__row') ?? [])].find((r) => r.querySelector('dt')?.textContent?.trim() === label)?.querySelector('dd');
   // The story ends the plan five days after the anchor and the trial eight, and the page reads both a moment later.
   results.push({
-    name: '/upstreams/mail both ends count down in whole days, the date on hover',
+    name: '/accounts/mail both ends count down in whole days, the date on hover',
     ok: value('Ends')?.textContent?.trim() === 'ends in 4 days' && value('Trial ends')?.textContent?.trim() === 'ends in 7 days' && Boolean(value('Ends')?.getAttribute('title')) && Boolean(value('Trial ends')?.getAttribute('title')),
     missing: [value('Ends')?.textContent ?? 'no Ends row', value('Trial ends')?.textContent ?? 'no Trial ends row'],
   });
 }
 {
-  // Each row clears its own scope by name, so the upstream's other scope stays through the clear.
+  // Each row clears its own scope by name, so the account's other scope stays through the clear.
   const row = [...m.container.querySelectorAll('.detail tbody tr')].find((r) => r.textContent?.includes('claude-opus-5'));
   [...(row?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Clear')?.click();
   await m.settle(250);
@@ -813,13 +826,13 @@ expect('/upstreams/mail', m.text(), [
   await m.settle(600);
   const t = m.text();
   results.push({
-    name: '/upstreams/mail a row clears its one scope through the confirm',
-    ok: asked.includes('Clear cooldown') && asked.includes('The upstream becomes eligible immediately.') && t.includes('Cooldown cleared') && t.includes('1 scope cooling') && t.includes('Whole upstream') && !t.includes('claude-opus-5'),
+    name: '/accounts/mail a row clears its one scope through the confirm',
+    ok: asked.includes('Clear cooldown') && asked.includes('The account becomes eligible immediately.') && t.includes('Cooldown cleared') && t.includes('1 scope cooling') && t.includes('Whole account') && !t.includes('claude-opus-5'),
     missing: [asked.slice(0, 120) || 'no confirm', t.includes('1 scope cooling') ? '1 scope cooling' : 'no 1 scope cooling', t.includes('claude-opus-5') ? 'the model row stayed' : 'the model row left'],
   });
 }
-await m.navigate('/upstreams/personal');
-expect('/upstreams/personal', m.text(), ['in use', 'Clear funding flag', 'Payment method declined', 'Overage since 3h']);
+await m.navigate('/accounts/personal');
+expect('/accounts/personal', m.text(), ['in use', 'Clear funding flag', 'Payment method declined', 'Overage since 3h']);
 {
   const openCatalog = async () => {
     [...(m.container.querySelector('.detail__head')?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Catalog')?.click();
@@ -832,12 +845,12 @@ expect('/upstreams/personal', m.text(), ['in use', 'Clear funding flag', 'Paymen
   };
   const failed = await openCatalog();
   results.push({
-    name: '/upstreams/personal the catalog popup shows the fetch error in a critical callout',
+    name: '/accounts/personal the catalog popup shows the fetch error in a critical callout',
     ok: failed?.querySelector('.callout--critical')?.textContent?.includes('the models request answered 503') === true && failed.querySelector('table') === null,
     missing: [failed ? (failed.textContent ?? '').slice(0, 160) : 'no dialog'],
   });
   await closeCatalog(failed);
-  await m.navigate('/upstreams/business');
+  await m.navigate('/accounts/business');
   const reads = [];
   const read = api.getAccountCatalog;
   api.getAccountCatalog = (...args) => {
@@ -847,9 +860,9 @@ expect('/upstreams/personal', m.text(), ['in use', 'Clear funding flag', 'Paymen
   const listed = await openCatalog();
   const heads = [...(listed?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim());
   const ids = [...(listed?.querySelectorAll('tbody tr') ?? [])].map((tr) => tr.querySelector('td')?.firstChild?.textContent ?? '');
-  expect('/upstreams/business the catalog popup lists the live catalog', listed?.textContent ?? '', ['As of', 'Refresh', 'claude-sonnet-5', 'Claude Sonnet 5', 'long context', '1,000,000', '128,000']);
+  expect('/accounts/business the catalog popup lists the live catalog', listed?.textContent ?? '', ['As of', 'Refresh', 'claude-sonnet-5', 'Claude Sonnet 5', 'long context', '1,000,000', '128,000']);
   results.push({
-    name: '/upstreams/business the catalog popup reads six columns, sorted by id',
+    name: '/accounts/business the catalog popup reads six columns, sorted by id',
     ok: JSON.stringify(heads) === JSON.stringify(['Model', 'Name', 'Released', 'Input tokens', 'Output tokens', 'Effort levels']) && ids.length > 1 && ids.every((id, i) => i === 0 || ids[i - 1].localeCompare(id) <= 0),
     missing: [...heads, ...ids],
   });
@@ -857,7 +870,7 @@ expect('/upstreams/personal', m.text(), ['in use', 'Clear funding flag', 'Paymen
     const effort = (id) => [...(listed?.querySelectorAll('tbody tr') ?? [])].find((tr) => tr.querySelector('td')?.firstChild?.textContent === id)?.lastElementChild?.textContent?.trim() ?? null;
     const read = { haiku: effort('claude-haiku-4-5-20251001'), opus: effort('claude-opus-5') };
     results.push({
-      name: '/upstreams/business the catalog popup ends each row with the effort levels it lists, a dash for none',
+      name: '/accounts/business the catalog popup ends each row with the effort levels it lists, a dash for none',
       ok: read.haiku === '-' && read.opus === 'low, medium, high, xhigh, max',
       missing: [JSON.stringify(read)],
     });
@@ -866,30 +879,30 @@ expect('/upstreams/personal', m.text(), ['in use', 'Clear funding flag', 'Paymen
   await m.settle(400);
   delete api.getAccountCatalog;
   results.push({
-    name: '/upstreams/business the catalog popup reads on open and again with refresh',
+    name: '/accounts/business the catalog popup reads on open and again with refresh',
     ok: JSON.stringify(reads) === JSON.stringify([['business'], ['business', true]]),
     missing: reads.map((r) => JSON.stringify(r)),
   });
   await closeCatalog(listed);
-  await m.navigate('/upstreams/personal');
+  await m.navigate('/accounts/personal');
 }
 {
   const quarantined = [...m.container.querySelectorAll('.detail__badges .badge')].find((b) => b.textContent?.trim() === 'quarantined');
   results.push({
-    name: '/upstreams/personal a quarantined credential carries its badge and the way out',
+    name: '/accounts/personal a quarantined credential carries its badge and the way out',
     ok: quarantined?.classList.contains('badge--critical') === true && quarantined.getAttribute('title') === "the last refresh's outcome is uncertain; re-pair or wait for the next start to resolve it",
     missing: [quarantined ? `${quarantined.className} ${quarantined.getAttribute('title')}` : 'no quarantined badge'],
   });
   const coolingCard = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Cooling down');
   const coolingSubtitle = coolingCard?.querySelector('.card__subtitle')?.textContent?.trim() ?? '';
   results.push({
-    name: '/upstreams/personal an upstream with no cooldowns reads Nothing cooling down',
+    name: '/accounts/personal an account with no cooldowns reads Nothing cooling down',
     ok: coolingSubtitle === 'Nothing cooling down',
     missing: [coolingSubtitle],
   });
 }
 {
-  // A funding-flagged upstream never reads 'paused', so the header has to take the pause state off routing instead.
+  // A funding-flagged account never reads 'paused', so the header has to take the pause state off routing instead.
   const headButton = (name) => [...(m.container.querySelector('.detail__head')?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === name);
   const confirmAction = async (name) => {
     headButton(name)?.click();
@@ -899,40 +912,40 @@ expect('/upstreams/personal', m.text(), ['in use', 'Clear funding flag', 'Paymen
   };
   await confirmAction('Pause');
   const offersResume = headButton('Resume') !== undefined && m.text().includes('Needs funding');
-  // Back to routing, since the pools and the later upstream checks read this account as the fixture left it.
+  // Back to routing, since the pools and the later account checks read this account as the fixture left it.
   await confirmAction('Resume');
   results.push({
-    name: '/upstreams a flagged upstream pauses and resumes from the header',
+    name: '/accounts a flagged account pauses and resumes from the header',
     ok: offersResume && headButton('Pause') !== undefined,
     missing: [offersResume ? 'resume offered' : 'no Resume while paused', ...[...(m.container.querySelector('.detail__head')?.querySelectorAll('button') ?? [])].map((b) => b.textContent?.trim() ?? '')],
   });
 }
-await m.navigate('/upstreams/console');
-expect('/upstreams/console', m.text(), ['Verify', 'does not report quota windows']);
-await emailLines('/upstreams/console the head draws no line under the name of an upstream without an email', [['console', m.container.querySelector('.detail__ident > .detail__sub.mono')?.textContent ?? null]]);
+await m.navigate('/accounts/console');
+expect('/accounts/console', m.text(), ['Verify', 'does not report quota windows']);
+await emailLines('/accounts/console the head draws no line under the name of an account without an email', [['console', m.container.querySelector('.detail__ident > .detail__sub.mono')?.textContent ?? null]]);
 {
   const identity = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Identity');
   const rows = [...(identity?.querySelectorAll('.kv__row') ?? [])].map((r) => `${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.textContent?.trim()}`);
-  results.push({ name: '/upstreams/console the identity card reads the type and draws no base URL row', ok: rows.includes('Type=API key') && !rows.some((r) => r.startsWith('Base URL=')), missing: rows });
+  results.push({ name: '/accounts/console the identity card reads the type and draws no base URL row', ok: rows.includes('Type=Anthropic key') && !rows.some((r) => r.startsWith('Base URL=')), missing: rows });
 }
-await m.navigate('/upstreams/spare');
+await m.navigate('/accounts/spare');
 {
   const identity = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Identity');
   const rows = [...(identity?.querySelectorAll('.kv__row') ?? [])].map((r) => `${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.textContent?.trim()}`);
   results.push({
-    name: '/upstreams/spare an unpaired OAuth upstream reads as OAuth, never as an API key',
-    ok: (identity?.textContent ?? '').includes('OAuth') && !(identity?.textContent ?? '').includes('API key') && rows.join('|') === 'Type=OAuth login|Plan=unknown until paired|Rate-limit tier=-|Organization=-|Billing type=-',
+    name: '/accounts/spare an unpaired OAuth account reads as OAuth, never as an Anthropic key',
+    ok: (identity?.textContent ?? '').includes('OAuth') && !(identity?.textContent ?? '').includes('Anthropic key') && rows.join('|') === 'Type=OAuth login|Plan=unknown until paired|Rate-limit tier=-|Organization=-|Billing type=-',
     missing: rows,
   });
-  [...(m.container.querySelector('.detail__head')?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Delete upstream')?.click();
+  [...(m.container.querySelector('.detail__head')?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Delete account')?.click();
   await m.settle(250);
   const confirm = [...m.container.querySelectorAll('dialog[open]')].pop();
-  expect('/upstreams Delete upstream names the consequence before it runs', confirm?.textContent ?? '', ['Delete upstream', 'Removes spare from every pool it is in and deletes it; request history stays in the ledger.']);
+  expect('/accounts Delete account names the consequence before it runs', confirm?.textContent ?? '', ['Delete account', 'Removes spare from every pool it is in and deletes it; request history stays in the ledger.']);
   [...(confirm?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Delete')?.click();
   await m.settle(1200);
   const listed = [...m.container.querySelectorAll('.account-row__name')].map((n) => n.textContent?.trim());
   results.push({
-    name: '/upstreams Delete upstream removes the row and leaves for another upstream',
+    name: '/accounts Delete account removes the row and leaves for another account',
     ok: m.text().includes('Deleted') && listed.length > 0 && !listed.includes('spare') && m.container.querySelector('.detail__title')?.textContent?.trim() !== 'spare' && m.container.querySelector('.account-row.is-active') !== null,
     missing: [m.container.querySelector('.toast')?.textContent ?? 'no toast', ...listed],
   });
@@ -948,10 +961,10 @@ m.unmount();
   const metered = spentOf('business');
   const whole = spentOf('console');
   results.push({
-    name: "/analytics a subscription member's spent cell reads its metered spend, an API-key member's its whole spend",
+    name: "/analytics a subscription member's spent cell reads its metered spend, an Anthropic-key member's its whole spend",
     ok:
       card?.querySelector('.card__subtitle')?.textContent ===
-        "Each budgeted member's spend in its current period, an API-key member's whole spend and a subscription member's metered spend; the range and the filters above do not apply here" &&
+        "Each budgeted member's spend in its current period, an Anthropic-key member's whole spend and a subscription member's metered spend; the range and the filters above do not apply here" &&
       metered?.querySelector('.num')?.textContent === 'metered $12.50' &&
       metered?.querySelector('.num .muted')?.textContent === 'metered ' &&
       (whole?.querySelector('.num')?.textContent ?? '').startsWith('$') &&
@@ -962,7 +975,7 @@ m.unmount();
 }
 
 m = await mount('/pools');
-expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace', 'Round robin', 'subscription first', 'Within the first priority tier that has an eligible upstream, the one with the most weekly allowance left per hour until its window resets or its subscription ends; an unsampled upstream counts as untouched, and ties are random.', 'Within the first priority tier that has an eligible upstream, each in turn; a restart starts the round again.', 'Prefer plan quota', 'Allow overage', 'Migrate off', 'Select-below off', 'Affinity 10m', 'Affinity off', 'Keep prompt caches warm', 'cold limit 2', 'idle 1h', 'net-negative stop 2', '$4.00/day cap', 'Traffic, 24h', 'Requests per hour', '3-hour average', 'Members', 'eligible', 'cooldown ends', 'overage', 'P1', 'Console workspace', 'codex', 'Evals workspace', 'desktop', 'laptop', 'ci', 'Active pins', 'Edit']);
+expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace', 'Round robin', 'subscription first', 'Within the first priority tier that has an eligible account, the one with the most weekly allowance left per hour until its window resets or its subscription ends; an unsampled account counts as untouched, and ties are random.', 'Within the first priority tier that has an eligible account, each in turn; a restart starts the round again.', 'Prefer plan quota', 'Allow overage', 'Migrate off', 'Select-below off', 'Affinity 10m', 'Affinity off', 'Keep prompt caches warm', 'cold limit 2', 'idle 1h', 'net-negative stop 2', '$4.00/day cap', 'Traffic, 24h', 'Requests per hour', '3-hour average', 'Members', 'eligible', 'cooldown ends', 'overage', 'P1', 'Console workspace', 'codex', 'Evals workspace', 'desktop', 'laptop', 'ci', 'Active pins', 'Edit']);
 {
   const badged = [...m.container.querySelectorAll('.pool')]
     .filter((card) => [...card.querySelectorAll('.badge')].some((b) => b.textContent?.trim() === 'server-side auto mode off'))
@@ -982,7 +995,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
   const cardMembers = [...(m.container.querySelector('.pool__members ul')?.querySelectorAll('li') ?? [])].map((li) => `${li.children[0]?.textContent?.trim()} ${li.children[1]?.textContent?.trim()}`);
   results.push({ name: '/pools card orders members by priority then label', ok: JSON.stringify(cardMembers) === JSON.stringify(['P0 business', 'P0 mail', 'P0 personal', 'P1 Console workspace']), missing: cardMembers });
   // The route's verdict per member, which the selection-order strip beside it reads too: personal is in overage on
-  // an upstream that needs funding, which the route answers unavailable, not overage.
+  // an account that needs funding, which the route answers unavailable, not overage.
   const badges = [...(m.container.querySelector('.pool__members ul')?.querySelectorAll('li .pool__eligibility .badge') ?? [])].map((b) => [b.textContent?.trim(), b.className.replace('badge ', ''), b.getAttribute('title') ?? '']);
   results.push({
     name: '/pools card badges each member from the route verdict',
@@ -1003,12 +1016,12 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
 {
   const order = m.container.querySelector('.pool .selection-order');
   const tiers = [...(order?.querySelectorAll('.selection-order__tier') ?? [])].map((t) => t.children[0]?.textContent?.trim());
-  results.push({ name: '/pools the card draws the selection order by tier', ok: JSON.stringify(tiers) === JSON.stringify(['plan P0', 'overage P0', 'keys P1']), missing: tiers });
+  results.push({ name: '/pools the card draws the selection order by tier', ok: JSON.stringify(tiers) === JSON.stringify(['plan P0', 'overage P0', 'Anthropic keys P1']), missing: tiers });
   const next = [...(order?.querySelectorAll('.badge--accent') ?? [])].map((b) => b.textContent?.trim());
-  results.push({ name: '/pools the next upstream is marked', ok: next.length >= 1 && next.every((t) => t.startsWith('next')), missing: next });
+  results.push({ name: '/pools the next account is marked', ok: next.length >= 1 && next.every((t) => t.startsWith('next')), missing: next });
   const cooled = [...(order?.querySelectorAll('.badge') ?? [])].find((b) => (b.getAttribute('title') ?? '').includes('cooldown'));
   results.push({ name: '/pools an ineligible member says why', ok: cooled !== undefined && cooled.textContent.includes('mail'), missing: [cooled?.textContent ?? 'absent'] });
-  expect('/pools the card states the strategy rule', order?.textContent ?? '', ['Within the first priority tier that has an eligible upstream, the one with the most weekly allowance left per hour until its window resets or its subscription ends; an unsampled upstream counts as untouched, and ties are random.']);
+  expect('/pools the card states the strategy rule', order?.textContent ?? '', ['Within the first priority tier that has an eligible account, the one with the most weekly allowance left per hour until its window resets or its subscription ends; an unsampled account counts as untouched, and ties are random.']);
 }
 {
   // The card reads the pin mode beside the affinity, both placements, the quota header setting when it hides, and
@@ -1048,7 +1061,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
   const none = member('all', 'mail');
   const spent = member('codex', 'Evals workspace');
   results.push({
-    name: '/pools an API-key member reads its spend against each budget, the day before the month',
+    name: '/pools an Anthropic-key member reads its spend against each budget, the day before the month',
     ok: JSON.stringify(half.lines) === '["$1.10 of $5.00 today","$25.00 of $50.00 this month"]' && JSON.stringify(half.badges) === '["eligible|badge badge--good"]',
     missing: [...half.lines, ...half.badges],
   });
@@ -1074,8 +1087,8 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
   results.push({
     name: "/pools the pool card's lines read the dialog's words",
     ok:
-      lines[0] === 'Within the first priority tier that has an eligible upstream, the one with the most weekly allowance left per hour until its window resets or its subscription ends; an unsampled upstream counts as untouched, and ties are random.' &&
-      lines[1] === 'How long a session stays on its upstream after its last request; off keeps no pins, and a custom value is at least 60 seconds.' &&
+      lines[0] === 'Within the first priority tier that has an eligible account, the one with the most weekly allowance left per hour until its window resets or its subscription ends; an unsampled account counts as untouched, and ties are random.' &&
+      lines[1] === 'How long a session stays on its account after its last request; off keeps no pins, and a custom value is at least 60 seconds.' &&
       lines[2] === "Hide drops the anthropic-ratelimit-unified-* headers from every answer but a 429, so an organization's quota never reads as the key holder's own; a 429 keeps them so the client can resume after the reset. request-id passes either way." &&
       lines[3] === "Cold limit: probes in a row that find the cache already gone, after which the session's probes pause until its next real request. Idle: how long, or how many probes, without a real request before probing stops. Net-negative stop: probes a session still gets after its probes have cost more than the cache reads they saved.",
     missing: lines.map(String),
@@ -1101,7 +1114,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
   await m.settle(300);
   const dlg = m.container.querySelector('dialog[open]');
   const t = dlg?.textContent ?? '';
-  expect('/pools edit dialog prefilled', t, ['Edit pool all', 'Name', 'Status', 'Strategy', 'Session affinity', 'How long a session stays on its upstream after its last request; off keeps no pins, and a custom value is at least 60 seconds.', 'off', '5m', '10m', '1h', '4h', 'custom', 'Migrate above utilization', 'Prefer plan quota:', 'move sessions to a sibling with plan quota when this upstream starts billing extra usage', "caps a member's spend in dollars: an API-key member's whole spend, a subscription member's overage and fast answers.", 'Allow:', 'ignore extra usage', 'Never:', 'treat an upstream in extra usage as unavailable until its window resets', 'Keep prompt caches warm', 'Daily probe cost cap ($)', 'Per UTC day, for probes paid in dollars: on API-key upstreams, on subscription upstreams in overage, and on models whose 5-hour share the cost table cannot price. Plan-funded probes do not count here.', 'Cost reference', 'Probe tuning', 'Members', 'Priority', 'Keys', 'Create key', 'desktop', 'laptop', 'phoebis-8f2a', 'active', "A key reaches only this pool's members. Create key, Move to and Revoke apply at once, without Save pool; rotation and expiry are on the API keys page", 'Save pool', 'Model rules', 'Allow', 'Deny', 'Add rule', 'written with a trailing *']);
+  expect('/pools edit dialog prefilled', t, ['Edit pool all', 'Name', 'Status', 'Strategy', 'Session affinity', 'How long a session stays on its account after its last request; off keeps no pins, and a custom value is at least 60 seconds.', 'off', '5m', '10m', '1h', '4h', 'custom', 'Migrate above utilization', 'Prefer plan quota:', 'move sessions to a sibling with plan quota when this account starts billing extra usage', "caps a member's spend in dollars: an Anthropic-key member's whole spend, a subscription member's overage and fast answers.", 'Allow:', 'ignore extra usage', 'Never:', 'treat an account in extra usage as unavailable until its window resets', 'Keep prompt caches warm', 'Daily probe cost cap ($)', 'Per UTC day, for probes paid in dollars: on Anthropic-key accounts, on subscription accounts in overage, and on models whose 5-hour share the cost table cannot price. Plan-funded probes do not count here.', 'Cost reference', 'Probe tuning', 'Members', 'Priority', 'Keys', 'Create key', 'desktop', 'laptop', 'phoebis-8f2a', 'active', "A key reaches only this pool's members. Create key, Move to and Revoke apply at once, without Save pool; rotation and expiry are on the Keys page", 'Save pool', 'Model rules', 'Allow', 'Deny', 'Add rule', 'written with a trailing *']);
   const nameInput = group(dlg, 'Identity')?.querySelector('input[placeholder="research"]');
   results.push({ name: '/pools edit dialog name prefilled', ok: nameInput?.value === 'all', missing: [nameInput?.value] });
   const keysMulti = [...(dlg?.querySelectorAll('.mselect__trigger') ?? [])].map((b) => b.textContent?.trim()).filter((x) => x?.startsWith('Keys'));
@@ -1179,13 +1192,13 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
     [...(warning?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Pinning')?.click();
     await m.settle(120);
     results.push({ name: '/pools a group link switches the rail', ok: !!warning && JSON.stringify(shown()) === '["Pinning"]' && rail(dlg, 'pinning')?.getAttribute('aria-current') === 'true', missing: shown() });
-    const upstreams = [...(group(dlg, 'Members')?.querySelectorAll('a') ?? [])].find((a) => (a.textContent ?? '').startsWith('Upstreams page'));
+    const accountsLink = [...(group(dlg, 'Members')?.querySelectorAll('a') ?? [])].find((a) => (a.textContent ?? '').startsWith('Accounts page'));
     results.push({
       name: '/pools a page link opens in a new tab',
-      ok: upstreams?.getAttribute('target') === '_blank' && (upstreams?.getAttribute('href') ?? '').endsWith('/upstreams') && upstreams?.querySelector('.sr-only')?.textContent?.trim() === '(opens in a new tab)',
-      missing: [upstreams?.outerHTML.slice(0, 160) ?? 'no Upstreams page link'],
+      ok: accountsLink?.getAttribute('target') === '_blank' && (accountsLink?.getAttribute('href') ?? '').endsWith('/accounts') && accountsLink?.querySelector('.sr-only')?.textContent?.trim() === '(opens in a new tab)',
+      missing: [accountsLink?.outerHTML.slice(0, 160) ?? 'no Accounts page link'],
     });
-    expect('/pools the Keys group states that its actions apply at once', group(dlg, 'Keys')?.textContent ?? '', ["A key reaches only this pool's members. Create key, Move to and Revoke apply at once, without Save pool; rotation and expiry are on the API keys page"]);
+    expect('/pools the Keys group states that its actions apply at once', group(dlg, 'Keys')?.textContent ?? '', ["A key reaches only this pool's members. Create key, Move to and Revoke apply at once, without Save pool; rotation and expiry are on the Keys page"]);
     const overageLabels = [...(group(dlg, 'Overage and plan end')?.querySelectorAll('.field__label') ?? [])].map((l) => l.textContent?.trim());
     results.push({ name: '/pools Overage and plan end holds Overage policy, Overage grace and Wind down', ok: JSON.stringify(overageLabels) === '["Overage policy","Overage grace (min)","Wind down (min)"]', missing: overageLabels });
     results.push({ name: '/pools the pool dialog carries no subtitle', ok: !!dlg && dlg.querySelector(':scope > .dialog__inner > .dialog__head .dialog__subtitle') === null, missing: [dlg?.querySelector(':scope > .dialog__inner > .dialog__head .dialog__subtitle')?.textContent ?? ''] });
@@ -1242,7 +1255,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
   {
     const selection = group(dlg, 'Selection');
     const strategy = selection?.querySelector('select[aria-label="Strategy"]');
-    const toggle = selection?.querySelector('[role="switch"][aria-label="Prioritize subscription upstreams"]');
+    const toggle = selection?.querySelector('[role="switch"][aria-label="Prioritize subscription accounts"]');
     const options = [...(strategy?.querySelectorAll('option') ?? [])].map((o) => o.textContent?.trim());
     results.push({ name: '/pools the strategy select lists Pace, Priority, then random, and Round robin', ok: JSON.stringify(options) === JSON.stringify(['Pace', 'Priority, then random', 'Round robin']), missing: options });
     const choose = async (value) => {
@@ -1380,8 +1393,8 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
       missing: [JSON.stringify(conservative), JSON.stringify(fromConservative), JSON.stringify(pressed('Failover preset'))],
     });
     expect('/pools the overage group states the grace and the wind down', card('Overage and plan end')?.textContent ?? '', [
-      'Under Prefer plan quota, a session stays on an upstream in overage while its window resets within this many minutes; 0 moves it at once.',
-      'This long before a cancelled subscription ends, its upstream takes new sessions only as the last resort and cold sessions move off. The end is set on the Upstreams page',
+      'Under Prefer plan quota, a session stays on an account in overage while its window resets within this many minutes; 0 moves it at once.',
+      'This long before a cancelled subscription ends, its account takes new sessions only as the last resort and cold sessions move off. The end is set on the Accounts page',
     ]);
 
     migrateSwitch?.click();
@@ -1406,7 +1419,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
       ok: JSON.stringify(before) === '["90","90"]' && JSON.stringify(after) === '["89","89"]' && ticks.length === 6 && ticks.includes('business: 5-hour 62%') && util?.querySelector('.ubar__band') !== null,
       missing: [JSON.stringify(before), JSON.stringify(after), ...ticks],
     });
-    expect("/pools the shedding preview replays a round over the hot members' pins", card('Load shedding')?.querySelector('.shed-preview')?.textContent ?? '', ['Would move', 'warm', '% of the burn in window share', 'across 2 upstreams', '2 pins the table cannot price stay.']);
+    expect("/pools the shedding preview replays a round over the hot members' pins", card('Load shedding')?.querySelector('.shed-preview')?.textContent ?? '', ['Would move', 'warm', '% of the burn in window share', 'across 2 accounts', '2 pins the table cannot price stay.']);
 
     // Select-below inside the band under the migrate threshold holds the save and says why.
     const save = () => [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Save pool');
@@ -1605,7 +1618,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
     create?.click();
     await m.settle(700);
     const secret = [...m.container.querySelectorAll('dialog[open]')].pop();
-    expect('/pools key secret shown', secret?.textContent ?? '', ['API key created', 'phoebis-']);
+    expect('/pools key secret shown', secret?.textContent ?? '', ['Key created', 'phoebis-']);
     const done = [...(secret?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Done');
     done?.click();
     await m.settle(200);
@@ -1673,7 +1686,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
       name: '/pools the write cost line says when each rule set applies, and the grid says which TTL a keepalive probe follows',
       ok:
         (writeCost?.querySelector(':scope > .field__hint')?.textContent ?? '') ===
-          'Plan writes apply while an upstream spends plan quota, where a 1-hour write costs the same as a 5-minute one. Metered writes apply while a write costs money, on an API-key upstream or a subscription upstream in overage: 2x input for an hour against 1.25x for five minutes. Reads cost the same either way.' &&
+          'Plan writes apply while an account spends plan quota, where a 1-hour write costs the same as a 5-minute one. Metered writes apply while a write costs money, on an Anthropic-key account or a subscription account in overage: 2x input for an hour against 1.25x for five minutes. Reads cost the same either way.' &&
         gridHint === "The TTL each turn writes with, by agent. A keepalive probe replays the turn under its agent's TTL, so the first probe after a turn and every later one follow the same rule." &&
         meteredMain?.value === '5m',
       missing: [writeCost?.querySelector(':scope > .field__hint')?.textContent ?? 'no write cost hint', gridHint || 'no grid hint', meteredMain?.value ?? 'no metered main select'],
@@ -1721,8 +1734,8 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
       missing: [JSON.stringify(drawn), JSON.stringify(chosen), labelsOf(pinning), labelsOf(placement)],
     });
     expect('/pools the pin and placement hints say what each choice does', `${pinning?.textContent ?? ''} ${placement?.textContent ?? ''}`, [
-      'Only when the request caches: a request with no cache marker, and none added by the cache TTL policy, lands by the strategy and takes no pin. A request bound to its upstream keeps its pin either way.',
-      "Where a subagent's first request lands. By cohort: with the subagents that share its static prefix. With the main conversation: on its parent's upstream. By strategy: wherever the strategy picks.",
+      'Only when the request caches: a request with no cache marker, and none added by the cache TTL policy, lands by the strategy and takes no pin. A request bound to its account keeps its pin either way.',
+      "Where a subagent's first request lands. By cohort: with the subagents that share its static prefix. With the main conversation: on its parent's account. By strategy: wherever the strategy picks.",
       'By warm prefix lands a fresh session where its static prefix is already cached, when the prefix reaches the minimum below; By strategy leaves it to the strategy.',
       "The smallest shared prefix that places a fresh session, or a subagent by cohort, by warmth; below it the strategy decides. Estimated from the request's bytes, not counted by the upstream.",
     ]);
@@ -1762,22 +1775,22 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
         ),
       missing: [JSON.stringify(options(quota)), String(quota?.value)],
     });
-    // Every member row carries a daily and a monthly budget, a subscription member's as an API-key member's; a budget
-    // the member write refuses holds the save.
+    // Every member row carries a daily and a monthly budget, a subscription member's as an Anthropic-key member's; a
+    // budget the member write refuses holds the save.
     const daily = (label) => dlg?.querySelector(`input[aria-label="Daily budget for ${label}, USD"]`);
     const monthly = (label) => dlg?.querySelector(`input[aria-label="Monthly budget for ${label}, USD"]`);
     const field = (f) => [f?.value, f?.getAttribute('placeholder'), f?.getAttribute('min'), f?.getAttribute('step')];
     const rows = [daily('Console workspace'), monthly('Console workspace')].flatMap(field);
     const subscription = [daily('business'), monthly('business')].flatMap(field);
     const hint =
-      "A member whose spend reaches its daily or its monthly budget is skipped until that UTC day or month ends, priced at API list rates: an API-key member's whole spend counts, a subscription member's metered spend alone (overage and fast answers); set one, both, or neither.";
+      "A member whose spend reaches its daily or its monthly budget is skipped until that UTC day or month ends, priced at API list rates: an Anthropic-key member's whole spend counts, a subscription member's metered spend alone (overage and fast answers); set one, both, or neither.";
     const heads = [...(group(dlg, 'Members')?.querySelectorAll('.members-table thead th') ?? [])].map((th) => th.textContent?.trim());
     results.push({
-      name: "/pools every member row carries a daily and a monthly budget field, a subscription member's as an API-key member's",
+      name: "/pools every member row carries a daily and a monthly budget field, a subscription member's as an Anthropic-key member's",
       ok:
         JSON.stringify(rows) === '["5","none","0.01","any","50","none","0.01","any"]' &&
         JSON.stringify(subscription) === '["","none","0.01","any","30","none","0.01","any"]' &&
-        JSON.stringify(heads) === '["Upstream","Priority","Daily budget, USD","Monthly budget, USD"]' &&
+        JSON.stringify(heads) === '["Account","Priority","Daily budget, USD","Monthly budget, USD"]' &&
         daily('team')?.disabled === true &&
         monthly('team')?.disabled === true &&
         (group(dlg, 'Members')?.querySelector('select') ?? null) === null &&
@@ -1820,11 +1833,11 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
     });
   }
 
-  // The gateway dials one host, so the hint no longer distinguishes Anthropic upstreams from custom ones.
+  // The gateway dials one host, so the hint no longer distinguishes Anthropic hosts from custom ones.
   const cacheTtlHint = dlg?.querySelector('button[role="switch"][aria-label="Set the cache TTL for this pool"]')?.closest('.field')?.querySelector('.field__hint')?.textContent?.trim();
   results.push({
-    name: '/pools cache TTL hint applies to every upstream in the pool',
-    ok: cacheTtlHint === "Rewrites every cache marker a request carries to the TTL below, on every upstream of this pool, so the client's own TTL setting has no effect through it.",
+    name: '/pools cache TTL hint applies to every account in the pool',
+    ok: cacheTtlHint === "Rewrites every cache marker a request carries to the TTL below, on every account of this pool, so the client's own TTL setting has no effect through it.",
     missing: [cacheTtlHint ?? 'no hint found'],
   });
 
@@ -1931,9 +1944,9 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
   await m.settle(300);
   const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
   // The dialog sends the toggle on every save, so it has to start where the route seeds a new pool.
-  const prefer = group(dlg, 'Selection')?.querySelector('[role="switch"][aria-label="Prioritize subscription upstreams"]');
+  const prefer = group(dlg, 'Selection')?.querySelector('[role="switch"][aria-label="Prioritize subscription accounts"]');
   results.push({
-    name: '/pools create dialog starts with subscription upstreams prioritized',
+    name: '/pools create dialog starts with subscription accounts prioritized',
     ok: prefer?.getAttribute('aria-checked') === 'true',
     missing: [prefer ? String(prefer.getAttribute('aria-checked')) : 'absent'],
   });
@@ -2097,7 +2110,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Upstreams in pools', 'Pace'
 m.unmount();
 
 m = await mount('/keys');
-expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost', 'Lifetime cost by key', 'phoebis-8f2a', 'phoebis-c41d', 'phoebis-19e7', 'Pool rules', 'revoked', 'Create API key', 'Never', 'still on the previous secret']);
+expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost', 'Lifetime cost by key', 'phoebis-8f2a', 'phoebis-c41d', 'phoebis-19e7', 'Pool rules', 'revoked', 'Create key', 'Never', 'still on the previous secret']);
 {
   // jsdom draws no styles and lays nothing out, so the menu reads the viewport's room below and keeps the list in flow.
   const last = [...m.container.querySelectorAll('.card--table tbody tr')].pop();
@@ -2170,7 +2183,7 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
 }
 {
   // A server refusal holds the footer until the operator edits; then the form's own next hold takes the line.
-  [...m.container.querySelectorAll('button')].find((b) => b.textContent?.includes('Create API key'))?.click();
+  [...m.container.querySelectorAll('button')].find((b) => b.textContent?.includes('Create key'))?.click();
   await m.settle(200);
   const dlg = m.container.querySelector('dialog[open]');
   const type = async (input, value) => {
@@ -2204,13 +2217,13 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
   await m.settle(200);
 }
 {
-  const btn = [...m.container.querySelectorAll('button')].find((b) => b.textContent?.includes('Create API key'));
+  const btn = [...m.container.querySelectorAll('button')].find((b) => b.textContent?.includes('Create key'));
   btn?.click();
   await m.settle(200);
   const dlg = m.container.querySelector('dialog[open]');
   // A hint that ends in a page link is read up to the link, whose text carries a hidden "opens in a new tab".
   const CAP_HINT = "Past this many requests at once the key is refused with a 429 and a Retry-After until one finishes; empty means no cap. The pool's cap per member is under Failover on the";
-  expect('/keys create dialog opens', dlg?.textContent ?? '', ['Create API key', 'Expiry', 'Requests in flight', CAP_HINT, 'Notes', 'Capture request and response bodies', 'Cache warming opt-out', 'Model rules', 'Extend pool rules', 'Replace pool rules', 'from pool', 'List [1m] twins in the models listing', 'written with a trailing *']);
+  expect('/keys create dialog opens', dlg?.textContent ?? '', ['Create key', 'Expiry', 'Requests in flight', CAP_HINT, 'Notes', 'Capture request and response bodies', 'Cache warming opt-out', 'Model rules', 'Extend pool rules', 'Replace pool rules', 'from pool', 'List [1m] twins in the models listing', 'written with a trailing *']);
   {
     // Read while the name is blank, so Key carries its refusal mark; the label span passes over the dot and the note.
     const railLabels = [...(dlg?.querySelectorAll('.dialog-rail__group .dialog-rail__label') ?? [])].map((l) => l.textContent?.trim());
@@ -2354,7 +2367,7 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
     create?.click();
     await m.settle(700);
     const secretDlg = [...m.container.querySelectorAll('dialog[open]')].pop();
-    expect('/keys secret modal', secretDlg?.textContent ?? '', ['API key created', 'phoebis-', 'Copy']);
+    expect('/keys secret modal', secretDlg?.textContent ?? '', ['Key created', 'phoebis-', 'Copy']);
     {
       // Copied is said only once the clipboard took the secret; this is its one display, so a failed or absent
       // clipboard says so and leaves the text on screen to select.
@@ -2485,7 +2498,7 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
   await m.settle(200);
   // A new key opens on its first pool, which is on; notebook sets its own off under a pool that is off.
   const autoModeOf = (dlg) => group(dlg, 'Access')?.querySelector('select[aria-label="Server-side auto mode"]');
-  [...m.container.querySelectorAll('button')].find((b) => b.textContent?.includes('Create API key'))?.click();
+  [...m.container.querySelectorAll('button')].find((b) => b.textContent?.includes('Create key'))?.click();
   await m.settle(200);
   const fresh = [...m.container.querySelectorAll('dialog[open]')].pop();
   const freshOptions = [...(autoModeOf(fresh)?.options ?? [])].map((o) => `${o.value}:${o.textContent?.trim()}`);
@@ -2546,7 +2559,7 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
   const drawn = [...(dlg?.querySelectorAll('.effective-rules li') ?? [])].map(parts);
   const answer = (await api.getKeyModels('laptop')).rules;
   const cooling = (r) => new Set(r.cooldowns.map((c) => c.accountId)).size;
-  const expected = answer.map((r) => [r.level, r.not ? 'Deny' : 'Allow', r.pattern, ...(cooling(r) ? [`${cooling(r)} ${cooling(r) === 1 ? 'upstream' : 'upstreams'} cooling`] : [])].join(' '));
+  const expected = answer.map((r) => [r.level, r.not ? 'Deny' : 'Allow', r.pattern, ...(cooling(r) ? [`${cooling(r)} ${cooling(r) === 1 ? 'account' : 'accounts'} cooling`] : [])].join(' '));
   const own = (await api.listKeys()).find((k) => k.id === 'laptop')?.modelRules ?? [];
   results.push({
     name: "/keys the effective list puts the key's own entries ahead of the pool's, cooling marked",
@@ -2571,7 +2584,7 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
   [...([...m.container.querySelectorAll('dialog[open]')].pop()?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Rotate')?.click();
   await m.settle(600);
   const secret = [...m.container.querySelectorAll('dialog[open]')].pop();
-  expect('/keys Rotate shows the new secret once', secret?.textContent ?? '', ['API key rotated', 'phoebis-', 'Copy']);
+  expect('/keys Rotate shows the new secret once', secret?.textContent ?? '', ['Key rotated', 'phoebis-', 'Copy']);
   [...(secret?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Done')?.click();
   await m.settle(200);
   // The key this run created, so the fixture keys the later pages read about stay where they are.
@@ -2605,7 +2618,7 @@ m = await mount('/models');
   // The route's own answer for the key, so an edit an earlier check made to a key's list is read rather than assumed.
   const answeredRules = async (keyId) => (await api.getKeyModels(keyId)).rules.map((r) => [r.level, r.not ? 'Deny' : 'Allow', r.pattern, [...new Set(r.cooldowns.map((c) => c.accountId))].join(', ') || '-'].join(' | '));
   const nav = [...m.container.querySelectorAll('.nav__link')].map((a) => a.textContent?.trim());
-  results.push({ name: '/models sits in the nav after API keys and titles the page', ok: nav.indexOf('Models') === nav.indexOf('API keys') + 1 && document.title === 'Models - Phoebis Router' && m.container.querySelector('.topbar__title')?.textContent === 'Models', missing: [...nav, document.title] });
+  results.push({ name: '/models sits in the nav after Keys and titles the page', ok: nav.indexOf('Models') === nav.indexOf('Keys') + 1 && document.title === 'Models - Phoebis Router' && m.container.querySelector('.topbar__title')?.textContent === 'Models', missing: [...nav, document.title] });
   // The keys checks leave a key of their own at the head of the list, so the first key is read, not assumed.
   const first = (await api.listKeys())[0];
   expect('/models', m.text(), [`Processed rules for ${first?.name}`, "Extends the pool's rules", 'Level', 'Rule', 'Pattern', 'Cooling', 'Recent rejections', 'Recent permits', 'written with a trailing *', story?.canonicalModel ?? 'no story request']);
@@ -2624,11 +2637,11 @@ m = await mount('/models');
       ok: (rulesCard()?.textContent ?? '').includes('Processed rules for laptop') && JSON.stringify(drawn) === JSON.stringify(laptop) && drawn[0]?.startsWith('key | Allow') && drawn.some((r) => r.startsWith('pool | Deny')) && drawn.some((r) => !r.endsWith('| -')),
       missing: [JSON.stringify(drawn), JSON.stringify(laptop)],
     });
-    // Each upstream in the cooling column is its own link, so the operator reaches the block that clears it.
+    // Each account in the cooling column is its own link, so the operator reaches the block that clears it.
     const links = [...(rulesCard()?.querySelectorAll('tbody td:last-child a') ?? [])].map((a) => a.getAttribute('href'));
-    results.push({ name: '/models the cooling column links each upstream', ok: links.length > 0 && links.every((h) => /^\/upstreams\/[a-z]+$/.test(h ?? '')), missing: links });
+    results.push({ name: '/models the cooling column links each account', ok: links.length > 0 && links.every((h) => /^\/accounts\/[a-z]+$/.test(h ?? '')), missing: links });
     results.push({
-      name: '/models a deny entry carries no cooling upstream even when one cools a model it matches',
+      name: '/models a deny entry carries no cooling account even when one cools a model it matches',
       ok: drawn.includes('key | Deny | * | -'),
       missing: drawn,
     });
@@ -2637,7 +2650,7 @@ m = await mount('/models');
   const groups = [...m.container.querySelectorAll('.card')].filter((c) => state.cooldowns.some((g) => g.model === c.querySelector('.card__title')?.textContent));
   const groupRows = groups.flatMap((c) => [...c.querySelectorAll('tbody tr')].map((tr) => cells(tr).slice(0, 2).join(' | ')));
   const answeredGroupRows = state.cooldowns.flatMap((g) => g.rows.map((r) => `${r.accountId} | ${g.model}`));
-  results.push({ name: '/models draws one cooling-down block per model, each row naming its upstream', ok: state.cooldowns.length > 0 && groups.length === state.cooldowns.length && JSON.stringify(groupRows) === JSON.stringify(answeredGroupRows), missing: [JSON.stringify(groupRows), JSON.stringify(answeredGroupRows)] });
+  results.push({ name: '/models draws one cooling-down block per model, each row naming its account', ok: state.cooldowns.length > 0 && groups.length === state.cooldowns.length && JSON.stringify(groupRows) === JSON.stringify(answeredGroupRows), missing: [JSON.stringify(groupRows), JSON.stringify(answeredGroupRows)] });
   {
     // Recorded rather than sent, so the story's cooldowns stay for the checks after this one.
     const original = api.clearCooldown;
@@ -2654,8 +2667,8 @@ m = await mount('/models');
     api.clearCooldown = original;
     const first = state.cooldowns[0]?.rows[0];
     results.push({
-      name: '/models a row clears its upstream\'s model scope through the Upstreams view\'s confirm',
-      ok: asked.includes('Clear cooldown') && asked.includes('The upstream becomes eligible immediately.') && JSON.stringify(calls) === JSON.stringify([[first?.accountId, first?.scope]]) && m.text().includes('Cooldown cleared'),
+      name: '/models a row clears its account\'s model scope through the Accounts view\'s confirm',
+      ok: asked.includes('Clear cooldown') && asked.includes('The account becomes eligible immediately.') && JSON.stringify(calls) === JSON.stringify([[first?.accountId, first?.scope]]) && m.text().includes('Cooldown cleared'),
       missing: [asked.slice(0, 120) || 'no confirm', JSON.stringify(calls)],
     });
   }
@@ -2692,10 +2705,10 @@ m = await mount('/models');
     const rejected = recentRow('Recent rejections');
     const permitted = recentRow('Recent permits');
     results.push({
-      name: '/models the recent rows link the request and the upstreams and name both spellings',
+      name: '/models the recent rows link the request and the accounts and name both spellings',
       ok:
-        JSON.stringify(hrefs(rejected)) === JSON.stringify([`/requests/${rejection.requestId}`, `/upstreams/${rejection.accountId}`]) &&
-        JSON.stringify(hrefs(permitted)) === JSON.stringify([`/requests/${permit.requestId}`, `/upstreams/${permit.accountId}`, ...permit.rejectedBy.map((id) => `/upstreams/${id}`)]) &&
+        JSON.stringify(hrefs(rejected)) === JSON.stringify([`/requests/${rejection.requestId}`, `/accounts/${rejection.accountId}`]) &&
+        JSON.stringify(hrefs(permitted)) === JSON.stringify([`/requests/${permit.requestId}`, `/accounts/${permit.accountId}`, ...permit.rejectedBy.map((id) => `/accounts/${id}`)]) &&
         (rejected?.textContent ?? '').includes(`${rejection.model}sent as ${rejection.wireModel}`) &&
         (permitted?.textContent ?? '').includes(`${permit.model}sent as ${permit.wireModel}`),
       missing: [rejected?.textContent ?? 'no rejection row', JSON.stringify(hrefs(rejected)), permitted?.textContent ?? 'no permit row', JSON.stringify(hrefs(permitted))],
@@ -2968,7 +2981,7 @@ if (failoverRow) {
   await m.navigate(`/requests/${failoverRow.id}`);
   expect('/requests/:failover drawer', m.text(), ['cooldown set', 'Rate limited', 'used', 'resets']);
   const slots = [...m.container.querySelectorAll('.attempt__windows')].map((u) => [...u.querySelectorAll('li')].map((li) => li.children[0]?.textContent).join(','));
-  // An API-key upstream reports no quota windows at all, so its attempt carries the cache row alone.
+  // An Anthropic-key account reports no quota windows at all, so its attempt carries the cache row alone.
   results.push({
     name: '/requests attempts read all three windows then the cache row, in a fixed order',
     ok: slots.length > 0 && slots.some((s) => s === '5h,7d,Fable,Cache') && slots.every((s) => s === '5h,7d,Fable,Cache' || s === 'Cache'),
@@ -3006,10 +3019,10 @@ if (failoverRow) {
     const summary = [...m.container.querySelectorAll('.kv__row')].map((row) => `${row.querySelector('dt')?.textContent}: ${row.querySelector('dd')?.textContent}`);
     const model = summary.indexOf(`Model: ${story.model}`);
     results.push({ name: '/requests/:story drawer shows the client\'s spelling, then the canonical id', ok: model >= 0 && summary[model + 1] === `Canonical model: ${story.canonicalModel}`, missing: summary.slice(0, 10) });
-    expect('/requests/:story drawer names the upstream that rejected the model and the one that served it', m.text(), ['Canonical model', `Model rejected by ${rejected.accountId}: ${story.model}`, `Model permitted by ${permitted.accountId} after ${rejected.accountId}`]);
+    expect('/requests/:story drawer names the account that rejected the model and the one that served it', m.text(), ['Canonical model', `Model rejected by ${rejected.accountId}: ${story.model}`, `Model permitted by ${permitted.accountId} after ${rejected.accountId}`]);
     const lines = [...m.container.querySelectorAll('.attempt__migration')].filter((p) => p.textContent?.startsWith('Model '));
     const hrefs = lines.map((p) => [...p.querySelectorAll('a')].map((a) => a.getAttribute('href')).join(' '));
-    results.push({ name: '/requests/:story drawer links each upstream the model events name', ok: JSON.stringify(hrefs) === JSON.stringify([`/upstreams/${rejected.accountId}`, `/upstreams/${permitted.accountId} /upstreams/${rejected.accountId}`]), missing: hrefs });
+    results.push({ name: '/requests/:story drawer links each account the model events name', ok: JSON.stringify(hrefs) === JSON.stringify([`/accounts/${rejected.accountId}`, `/accounts/${permitted.accountId} /accounts/${rejected.accountId}`]), missing: hrefs });
     // The route lists the session's events by time, so another request's rejection in the same window arrives
     // with this one's; only the request id the event carries keeps it off this drawer.
     requestEvents.set(story.id, own.map((e) => (e.kind.startsWith('model_') ? { ...e, detail: { ...e.detail, source_request_id: 'req_elsewhere' } } : e)));
@@ -3084,7 +3097,7 @@ if (failoverRow) {
   // over as badges, and the cache read against the request's input.
   const traceOf = (el) => ({ head: el.querySelector('.selection-trace__row')?.textContent ?? '', skipped: [...el.querySelectorAll('.selection-trace__row .badge')].map((b) => b.textContent?.trim()) });
   const shed = requests.find((r) => r.attempts.some((a) => a.selection?.moved === 'shed'));
-  results.push({ name: 'fixture: a request whose session was shed onto its upstream', ok: shed !== undefined, missing: [] });
+  results.push({ name: 'fixture: a request whose session was shed onto its account', ok: shed !== undefined, missing: [] });
   if (shed) {
     await m.navigate(`/requests/${shed.id}`);
     await m.settle(300);
@@ -3372,7 +3385,7 @@ m.unmount();
   const t = page.text();
   const upChoices = await choices();
   const sections = ['traffic', 'latency', 'cache', 'cost', 'cache-warming', 'accounts'].filter((id) => page.container.querySelector(`section#${id}`) === null);
-  const tables = ['Cache by model', 'Cache warming by pool', 'Upstreams in range'].map((title) => `${title} ${tableRows(title)}`);
+  const tables = ['Cache by model', 'Cache warming by pool', 'Accounts in range'].map((title) => `${title} ${tableRows(title)}`);
   const groupBys = outage.calls.getAnalyticsBreakdown.map(([q]) => q.groupBy).sort();
   const reads = { breakdown: groupBys.join(','), rollups: outage.calls.listAccountRollups.length, series: outage.calls.getAnalyticsSeries.length };
   outage.restore();
@@ -3397,7 +3410,7 @@ m.unmount();
 }
 
 m = await mount('/analytics');
-expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'Session', 'Traffic', 'Requests by outcome', 'Failovers', 'Errors by code', 'rate_limit_error', 'Traffic by key', 'Exhausted', 'Rejected', 'Latency', 'Time to first byte', 'Time to first content token', 'Total duration', 'Output tokens per second', 'Distribution', 'samples', 'p50', 'p90', 'p95', 'p99', 'Latency by key', 'Cache', 'Hit ratio and cached share', 'Write cost vs read cost', 'Misses by reason', 'Wasted probes', 'Idle limit ran out', 'Released by an operator', 'Replaced by a new registration', 'Session ended', "Probes on recipes that no real request ever followed, settled when the recipe stopped. A high idle-limit share means the pool's max idle time is set too high for how these sessions are used.", 'expired between turns', 'From the cache diagnostics beta: why the prefix did not hit, for requests that asked. No divergence with zero cache reads means the entry expired between turns.', 'Misses by reason by key', 'Expired between turns', 'Cache by model', 'Writes 5m', 'Writes 1h', 'Cost', 'Cost per request', 'Cost per 1k output tokens', 'Cost by key', 'Cost split', 'Cache read', 'Cache warming', 'Probes by outcome', 'Migrated', 'Gross saved', 'Probe cost', 'Net saved', 'Kept-warm requests', 'Kept-warm tokens', 'Cache warming by pool', 'Upstreams', 'Peak 5-hour utilization', 'Upstreams in range', 'Peak Fable 7d', 'Time in overage', 'Time in cooldown', 'Pins created', 'Migrated in', 'Migrated out', 'desktop', 'laptop', 'in range']);
+expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'Session', 'Traffic', 'Requests by outcome', 'Failovers', 'Errors by code', 'rate_limit_error', 'Traffic by key', 'Exhausted', 'Rejected', 'Latency', 'Time to first byte', 'Time to first content token', 'Total duration', 'Output tokens per second', 'Distribution', 'samples', 'p50', 'p90', 'p95', 'p99', 'Latency by key', 'Cache', 'Hit ratio and cached share', 'Write cost vs read cost', 'Misses by reason', 'Wasted probes', 'Idle limit ran out', 'Released by an operator', 'Replaced by a new registration', 'Session ended', "Probes on recipes that no real request ever followed, settled when the recipe stopped. A high idle-limit share means the pool's max idle time is set too high for how these sessions are used.", 'expired between turns', 'From the cache diagnostics beta: why the prefix did not hit, for requests that asked. No divergence with zero cache reads means the entry expired between turns.', 'Misses by reason by key', 'Expired between turns', 'Cache by model', 'Writes 5m', 'Writes 1h', 'Cost', 'Cost per request', 'Cost per 1k output tokens', 'Cost by key', 'Cost split', 'Cache read', 'Cache warming', 'Probes by outcome', 'Migrated', 'Gross saved', 'Probe cost', 'Net saved', 'Kept-warm requests', 'Kept-warm tokens', 'Cache warming by pool', 'Accounts', 'Peak 5-hour utilization', 'Accounts in range', 'Peak Fable 7d', 'Time in overage', 'Time in cooldown', 'Pins created', 'Migrated in', 'Migrated out', 'desktop', 'laptop', 'in range']);
 {
   const card = (t) => [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === t);
   const legendOf = (t) => [...(card(t)?.querySelectorAll('.legend li') ?? [])].map((li) => [...li.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent?.trim()).join(''));
@@ -3436,14 +3449,14 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
   const dashedOf = (items) => items.filter((li) => li.querySelector('.legend__swatch')?.getAttribute('style')?.includes('repeating-linear-gradient')).map((li) => li.textContent ?? '');
   {
     // `mail` serves the story's Sonnet 5 traffic alone, whose cells the cost table leaves null, and every 7-day cell
-    // is null, so its 5-hour window and every upstream's 7-day window price nothing in the range.
+    // is null, so its 5-hour window and every account's 7-day window price nothing in the range.
     const valueOf = (li) => li.querySelector('.legend__value')?.textContent?.trim() ?? '';
     const labelOf = (li) => [...li.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent?.trim()).join('');
     const fiveHour = planItems.filter((li) => labelOf(li).endsWith('(5-hour)'));
     const sevenDay = planItems.filter((li) => labelOf(li).endsWith('(7-day)'));
     const unlisted = planItems.filter((li) => labelOf(li) === 'model unlisted');
     results.push({
-      name: "/analytics plan per hour draws each priced upstream's 5-hour share, a dash for the unmeasured 7-day window, and one model unlisted entry",
+      name: "/analytics plan per hour draws each priced account's 5-hour share, a dash for the unmeasured 7-day window, and one model unlisted entry",
       ok:
         windows.every((w) => planned.includes(w)) &&
         !planned.some((t) => t.startsWith('console')) &&
@@ -3459,21 +3472,21 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
       missing: planItems.map((li) => `${labelOf(li)}=${valueOf(li)}`),
     });
     // The legend's per-hour mean still ends in `%` over a single gap, so the buckets themselves are read: the
-    // unmeasured model belongs to `mail` alone, and no story row carries it onto a priced upstream.
+    // unmeasured model belongs to `mail` alone, and no story row carries it onto a priced account.
     const gaps = [];
     for (const days of [1, 7]) {
       const burn = await api.getAnalyticsBurn({ from: new Date(Date.now() - days * 86_400_000).toISOString(), to: new Date().toISOString() }, 'account');
       gaps.push(...burn.points.filter((p) => ['business', 'personal'].includes(p.group) && p.tokens > 0 && p.fiveHourShare === null).map((p) => `${days}d ${p.group} ${p.at}`));
     }
-    results.push({ name: '/analytics every bucket with tokens of a priced upstream carries its 5-hour share', ok: gaps.length === 0, missing: gaps });
+    results.push({ name: '/analytics every bucket with tokens of a priced account carries its 5-hour share', ok: gaps.length === 0, missing: gaps });
   }
   const spend = legendOf('Spend per minute');
   const spendDashed = dashedOf([...(card('Spend per minute')?.querySelectorAll('.legend li') ?? [])]);
-  // A subscription upstream spends dollars only on its fast-mode answers, which the story's desktop key sends on Opus.
+  // A subscription account spends dollars only on its fast-mode answers, which the story's desktop key sends on Opus.
   const burned = await api.getAnalyticsBurn({ from: new Date(Date.now() - 24 * 3_600_000).toISOString(), to: new Date().toISOString() }, 'account');
   const fastSpenders = ['business', 'mail', 'personal'].filter((id) => burned.points.some((p) => p.group === id && p.usd > 0));
   results.push({
-    name: "/analytics spend per minute charts dollars alone, a subscription upstream's fast-mode dollars among them, and plan per hour a subscription upstream's two window shares",
+    name: "/analytics spend per minute charts dollars alone, a subscription account's fast-mode dollars among them, and plan per hour a subscription account's two window shares",
     ok:
       spend.includes('console') &&
       spend.includes('evals') &&
@@ -3492,32 +3505,33 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
   await burnGroup('Key');
   const keys = legendOf('Spend per minute');
   results.push({ name: '/analytics the key grouping charts each key in dollars and draws no plan share', ok: keys.includes('desktop') && keys.includes('laptop') && card('Plan per hour') === undefined, missing: keys });
-  await burnGroup('Upstream');
+  await burnGroup('Account');
   {
-    // Past the seven lines a chart draws, subscription upstreams fold into one plan line. Seven standard-only
-    // upstreams keep their lines, and the eighth, the smallest, spent dollars on fast mode alone: the folded rest
+    // Past the seven lines a chart draws, subscription accounts fold into one plan line. Seven standard-only
+    // accounts keep their lines, and the eighth, the smallest, spent dollars on fast mode alone: the folded rest
     // carries them, under a label that names the dollars rather than the plan unit. The eighth is the story's
-    // business upstream, since a line's unit comes from the tier on file and its Max 20x tier is one the table sizes.
+    // business account, since a line's unit comes from the tier on file and its Max 20x tier is one the table sizes.
     const at = new Date(Date.now() - 3_600_000).toISOString();
     api.getAnalyticsBurn = async () => ({ bucketSeconds: 3_600, points: Array.from({ length: 8 }, (_, i) => ({ at, cachedTokens: 0, fiveHourShare: i < 7 ? 0.01 : 0, group: i < 7 ? `plan-${i}` : 'business', sevenDayShare: i < 7 ? 0.001 : 0, tokens: 1_000 * (8 - i), uncachedTokens: 1_000 * (8 - i), unit: 'window_share', usd: i < 7 ? 0 : 0.6 })) });
     await burnGroup('Key');
-    await burnGroup('Upstream');
+    await burnGroup('Account');
     const folded = legendOf('Spend per minute');
     const values = [...(card('Spend per minute')?.querySelectorAll('.legend li .legend__value') ?? [])].map((v) => v.textContent?.trim() ?? '');
     const said = card('Spend per minute')?.textContent ?? '';
+    const grouped = [...m.container.querySelectorAll('#burn .segmented button.is-active')].map((b) => b.textContent?.trim());
     delete api.getAnalyticsBurn;
     await burnGroup('Key');
-    await burnGroup('Upstream');
+    await burnGroup('Account');
     results.push({
-      name: "/analytics spend per minute under the upstream grouping draws a folded rest's fast-mode dollars under a dollar label",
-      ok: JSON.stringify(folded) === JSON.stringify(['Other (fast mode)']) && JSON.stringify(values) === JSON.stringify(['$0.01']) && !said.includes('No upstream spent dollars in this range.'),
-      missing: [...folded, ...values, said.slice(0, 120)],
+      name: "/analytics spend per minute under the account grouping draws a folded rest's fast-mode dollars under a dollar label",
+      ok: JSON.stringify(folded) === JSON.stringify(['Other (fast mode)']) && JSON.stringify(values) === JSON.stringify(['$0.01']) && grouped.includes('Account') && !said.includes('No account spent dollars in this range.'),
+      missing: [...folded, ...values, ...grouped, said.slice(0, 120)],
     });
   }
 
   {
     // jsdom lays nothing out, so the plan chart's container reads a browser's size here and the chart draws its
-    // lines, dots and tooltip. `business` is a Max 20x upstream the cost table sizes: its middle hour priced, and the
+    // lines, dots and tooltip. `business` is a Max 20x account the cost table sizes: its middle hour priced, and the
     // hours either side carried traffic on a cell the table leaves unmeasured, so the 5-hour series reads
     // [null, 0.05, null] and the 7-day one is null throughout.
     const hours = [11, 12, 13].map((h) => Date.UTC(2026, 8, 16, h));
@@ -3527,7 +3541,7 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
       return this.classList.contains('recharts-responsive-container') ? { bottom: 220, height: 220, left: 0, right: 600, top: 0, width: 600, x: 0, y: 0 } : measure.call(this);
     };
     await burnGroup('Key');
-    await burnGroup('Upstream');
+    await burnGroup('Account');
     const plan = card('Plan per hour');
     const dots = [...(plan?.querySelectorAll('.recharts-line-dots .recharts-line-dot') ?? [])];
     const curves = [...(plan?.querySelectorAll('.recharts-line-curve') ?? [])].map((c) => c.getAttribute('d')).filter((d) => d !== null);
@@ -3557,7 +3571,7 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
     window.HTMLElement.prototype.getBoundingClientRect = measure;
     delete api.getAnalyticsBurn;
     await burnGroup('Key');
-    await burnGroup('Upstream');
+    await burnGroup('Account');
   }
 
   // Placements by rung sit in the Cache section, each budgeted member's spend in the Burn section.
@@ -3591,7 +3605,7 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
     name: '/analytics the burn section shows each budgeted period of a member against its budget with a bar per row',
     ok:
       card('Member budgets')?.closest('.analytics-section')?.id === 'burn' &&
-      JSON.stringify(budgeted.heads) === JSON.stringify(['Pool', 'Upstream', 'Spent', 'Budget', 'Period ends']) &&
+      JSON.stringify(budgeted.heads) === JSON.stringify(['Pool', 'Account', 'Spent', 'Budget', 'Period ends']) &&
       budgets.length === 4 &&
       JSON.stringify(budgets.filter((b) => b.kind === 'oauth').map((b) => [b.poolId, b.accountId, b.budgetPeriod])) === '[["all","business","month"]]' &&
       JSON.stringify(budgeted.rows.map((r) => [r[0], r[1]])) === JSON.stringify(budgets.map((b) => [b.poolId, b.accountId])) &&
@@ -3738,17 +3752,17 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
     const columnSum = (i) => body.reduce((n, row) => n + Number(row[i + 1].replace(/,/g, '')), 0);
     results.push({ name: '/analytics panel counts equal the per-group column sums', ok: order.every((label, i) => panel[label] === columnSum(i)), missing: order.map((label, i) => `${label} ${panel[label]} vs ${columnSum(i)}`) });
     const ci = body.find((row) => row[0] === 'ci') ?? [];
-    results.push({ name: '/analytics an API-key upstream only ever reads Not requested', ok: ci.length > 0 && ci.slice(1, 8).every((v) => v === '0') && Number(ci[8]) > 0 && ci[9] === '0', missing: ci });
+    results.push({ name: '/analytics an Anthropic-key account only ever reads Not requested', ok: ci.length > 0 && ci.slice(1, 8).every((v) => v === '0') && Number(ci[8]) > 0 && ci[9] === '0', missing: ci });
     const meta = m.container.querySelector('#cache .analytics-section__meta')?.textContent ?? '';
     const metaExpired = Number(/([\d,]+) expired between turns/.exec(meta)?.[1].replace(/,/g, '') ?? -1);
     results.push({ name: '/analytics cache meta matches the table expired column', ok: metaExpired === columnSum(8), missing: [String(metaExpired), String(columnSum(8))] });
   }
   {
-    // The account rollups carry the range and the upstream alone, so the section takes the upstream selection and
+    // The account rollups carry the range and the account alone, so the section takes the account selection and
     // says the other filters do not reach it.
-    const upstreamTable = () => [...m.container.querySelectorAll('.card--table')].find((c) => (c.textContent ?? '').startsWith('Upstreams in range'));
-    const upstreamRows = () => [...(upstreamTable()?.querySelectorAll('tbody tr') ?? [])].map((tr) => tr.children[0]?.textContent?.trim() ?? '');
-    const every = upstreamRows();
+    const accountTable = () => [...m.container.querySelectorAll('.card--table')].find((c) => (c.textContent ?? '').startsWith('Accounts in range'));
+    const accountRows = () => [...(accountTable()?.querySelectorAll('tbody tr') ?? [])].map((tr) => tr.children[0]?.textContent?.trim() ?? '');
+    const every = accountRows();
     const filter = (label) => [...m.container.querySelectorAll('.filters .mselect')].find((d) => d.querySelector('.mselect__trigger')?.textContent?.trim().startsWith(label));
     const toggle = async (label, value) => {
       filter(label)?.querySelector('.mselect__trigger')?.click();
@@ -3759,18 +3773,18 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
       await m.settle(150);
     };
     const picked = every[0] ?? '';
-    const subtitle = () => upstreamTable()?.querySelector('.card__subtitle')?.textContent?.trim() ?? '';
-    const ignored = 'Totals for the selected range and upstreams; the key, pool, model, client and session filters and the probes toggle do not apply here';
-    await toggle('Upstream', picked);
-    const narrowed = upstreamRows();
+    const subtitle = () => accountTable()?.querySelector('.card__subtitle')?.textContent?.trim() ?? '';
+    const ignored = 'Totals for the selected range and accounts; the key, pool, model, client and session filters and the probes toggle do not apply here';
+    await toggle('Account', picked);
+    const narrowed = accountRows();
     const plain = subtitle();
     await toggle('Key', 'desktop');
     const noted = subtitle();
     await toggle('Key', 'desktop');
-    await toggle('Upstream', picked);
+    await toggle('Account', picked);
     results.push({
-      name: '/analytics the upstreams section takes the upstream selection and names the filters it ignores',
-      ok: every.length > 1 && JSON.stringify(narrowed) === JSON.stringify([picked]) && plain === 'Totals for the selected range and upstreams' && noted === ignored && JSON.stringify(upstreamRows()) === JSON.stringify(every),
+      name: '/analytics the accounts section takes the account selection and names the filters it ignores',
+      ok: every.length > 1 && JSON.stringify(narrowed) === JSON.stringify([picked]) && plain === 'Totals for the selected range and accounts' && noted === ignored && JSON.stringify(accountRows()) === JSON.stringify(every),
       missing: [`every ${every.join(',')}`, `narrowed ${narrowed.join(',')}`, plain, noted],
     });
     // A session view reads the request log for every other section, while this one keeps the range's rollups,
@@ -3789,14 +3803,14 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
     };
     await commitSession(requests.find((r) => r.sessionId !== null).sessionId);
     const bySession = subtitle();
-    const sessionRows = upstreamRows();
+    const sessionRows = accountRows();
     await commitSession('');
     await probes();
     const byProbes = subtitle();
     await probes();
     results.push({
-      name: '/analytics the upstreams section says the session filter and the probes toggle do not reach it',
-      ok: bySession === ignored && JSON.stringify(sessionRows) === JSON.stringify(every) && byProbes === ignored && subtitle() === 'Totals for the selected range and upstreams',
+      name: '/analytics the accounts section says the session filter and the probes toggle do not reach it',
+      ok: bySession === ignored && JSON.stringify(sessionRows) === JSON.stringify(every) && byProbes === ignored && subtitle() === 'Totals for the selected range and accounts',
       missing: [`session ${bySession}`, `rows ${sessionRows.join(',')}`, `probes ${byProbes}`, `after ${subtitle()}`],
     });
   }
@@ -3914,7 +3928,7 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
   const hints = m.container.querySelectorAll('[title="±1 bucket"]').length;
   results.push({ name: '/analytics percentile labels carry the bucket hint', ok: hints >= 8, missing: [String(hints)] });
   const dims = [...m.container.querySelectorAll('.filters .mselect__trigger')].map((b) => b.textContent?.trim());
-  results.push({ name: '/analytics has a filter per dimension', ok: ['Key', 'Pool', 'Upstream', 'Model'].every((d) => dims.includes(d)), missing: dims });
+  results.push({ name: '/analytics has a filter per dimension', ok: ['Key', 'Pool', 'Account', 'Model'].every((d) => dims.includes(d)), missing: dims });
   const custom = [...m.container.querySelectorAll('.segmented button')].find((b) => b.textContent?.trim() === 'Custom');
   custom?.click();
   await m.settle(300);
@@ -3923,9 +3937,8 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
   const hist = m.container.querySelectorAll('.hist__bars').length;
   results.push({ name: '/analytics draws four histograms', ok: hist === 4, missing: [String(hist)] });
   const bar = [...m.container.querySelectorAll('.section-bar__link')].map((b) => b.textContent?.trim());
-  results.push({ name: '/analytics section bar lists every section', ok: JSON.stringify(bar) === JSON.stringify(['Traffic', 'Burn', 'Latency', 'Cache', 'Cost', 'Cache warming', 'Upstreams']), missing: bar });
-  // The Upstreams entry anchors on the section id `accounts`, which the rename deliberately left alone.
-  const targets = [...m.container.querySelectorAll('.section-bar__link')].map((b) => (b.textContent?.trim() === 'Upstreams' ? 'accounts' : b.textContent?.trim().toLowerCase().replace(/ /g, '-')));
+  results.push({ name: '/analytics section bar lists every section', ok: JSON.stringify(bar) === JSON.stringify(['Traffic', 'Burn', 'Latency', 'Cache', 'Cost', 'Cache warming', 'Accounts']), missing: bar });
+  const targets = [...m.container.querySelectorAll('.section-bar__link')].map((b) => b.textContent?.trim().toLowerCase().replace(/ /g, '-'));
   results.push({ name: '/analytics each bar entry has a section to scroll to', ok: targets.every((id) => m.container.querySelector(`.analytics-section#${id}`) !== null), missing: targets });
   results.push({ name: '/analytics marks one section active', ok: m.container.querySelectorAll('.section-bar__link.is-active').length === 1, missing: [] });
   const cost = [...m.container.querySelectorAll('.section-bar__link')].find((b) => b.textContent?.trim() === 'Cost');
@@ -4121,7 +4134,7 @@ results.push({ name: '/keepalive redirects to /sessions', ok: m.text().includes(
 m.unmount();
 
 m = await mount('/sessions');
-expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agents', 'busy', 'idle', 'parked', 'Cache probes, 24h', 'ok (', 'migrated', 'skipped', 'failed', 'Expired between turns, 24h', 'misses cache warming exists to prevent', 'Probe cost today', 'of $4.00', 'uncapped', 'Net saved, 7d', 'Cost reference', 'Key', 'Session', 'Model', 'Upstream', 'Last used', 'expires in', 'Requests', 'Last request', 'Agents', 'Companion', 'Cache warming', 'Next probe', 'Expand all', 'epoch 2', 'reporting', 'silent', 'since ', 'none', 'no recipe', 'not scheduled', 'claude-fable-5-1']);
+expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agents', 'busy', 'idle', 'parked', 'Cache probes, 24h', 'ok (', 'migrated', 'skipped', 'failed', 'Expired between turns, 24h', 'misses cache warming exists to prevent', 'Probe cost today', 'of $4.00', 'uncapped', 'Net saved, 7d', 'Cost reference', 'Key', 'Session', 'Model', 'Account', 'Last used', 'expires in', 'Requests', 'Last request', 'Agents', 'Companion', 'Cache warming', 'Next probe', 'Expand all', 'epoch 2', 'reporting', 'silent', 'since ', 'none', 'no recipe', 'not scheduled', 'claude-fable-5-1']);
 {
   const meters = m.container.querySelectorAll('.cost-caps .meter').length;
   results.push({ name: '/sessions cost meter against cap', ok: meters === 1, missing: [String(meters)] });
@@ -4143,8 +4156,8 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
   const ciCells = ci.map((r) => [r.children[10]?.textContent?.trim(), r.children[11]?.textContent?.trim()]);
   results.push({ name: '/sessions ci sessions read no recipe, not scheduled', ok: ciCells.every(([k, n]) => k === 'no recipe' && n === 'not scheduled'), missing: ciCells.flat() });
   results.push({ name: '/sessions rows start collapsed', ok: m.container.querySelectorAll('.srow__detail').length === 0, missing: [] });
-  const kinds = [...m.container.querySelectorAll('.srow__account .badge')].map((b) => b.textContent?.trim()).filter((t) => t === 'api key' || t === 'subscription');
-  results.push({ name: '/sessions account cells carry a kind badge', ok: kinds.length === 16 && kinds.includes('subscription') && kinds.includes('api key'), missing: [...new Set(kinds)] });
+  const kinds = [...m.container.querySelectorAll('.srow__account .badge')].map((b) => b.textContent?.trim()).filter((t) => t === 'Anthropic key' || t === 'subscription');
+  results.push({ name: '/sessions account cells carry a kind badge', ok: kinds.length === 16 && kinds.includes('subscription') && kinds.includes('Anthropic key'), missing: [...new Set(kinds)] });
   {
     const unrouted = rows().find((r) => r.children[3]?.textContent?.trim() === '-');
     results.push({
@@ -4346,7 +4359,7 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
   rows()[0]?.click();
   await m.settle(150);
   const detail = m.container.querySelector('.srow__detail');
-  expect('/sessions row expands into its agents', detail?.textContent ?? '', ['Created', ' ago', 'Agent', 'Model', 'Upstream', 'TTL', 'Next probe', 'Last request', 'Net', 'State', 'main']);
+  expect('/sessions row expands into its agents', detail?.textContent ?? '', ['Created', ' ago', 'Agent', 'Model', 'Account', 'TTL', 'Next probe', 'Last request', 'Net', 'State', 'main']);
   {
     const mainAgent = [...(detail?.querySelectorAll('.agents__row') ?? [])].find((r) => r.textContent?.startsWith('main'))?.textContent ?? '';
     results.push({
@@ -4424,15 +4437,15 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
     });
     // The story's Opus 5 and Sonnet 5 cells are null, so a probe on either settles in dollars on a subscription too.
     const agentRows = [...m.container.querySelectorAll('.agents__row:not(.agents__row--head)')].map((row) => ({
+      account: row.children[2]?.textContent?.trim(),
       model: row.children[1]?.textContent?.trim(),
       net: [...(row.querySelector('.agents__net')?.children ?? [])].map((part) => part.textContent?.trim()).join(' | '),
-      upstream: row.children[2]?.textContent?.trim(),
     }));
-    const unlisted = agentRows.filter((r) => ['business', 'personal'].includes(r.upstream) && ['claude-opus-5', 'claude-sonnet-5'].includes(r.model));
+    const unlisted = agentRows.filter((r) => ['business', 'personal'].includes(r.account) && ['claude-opus-5', 'claude-sonnet-5'].includes(r.model));
     results.push({
-      name: '/sessions an agent on a subscription upstream whose model the cost table cannot price settles its probes in dollars',
+      name: '/sessions an agent on a subscription account whose model the cost table cannot price settles its probes in dollars',
       ok: unlisted.length > 0 && unlisted.every((r) => !r.net.includes('of the 5-hour window')) && unlisted.some((r) => r.net.startsWith('-$')),
-      missing: unlisted.map((r) => `${r.upstream} ${r.model}: ${r.net}`),
+      missing: unlisted.map((r) => `${r.account} ${r.model}: ${r.net}`),
     });
   }
   const collapseAll = [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Collapse all');
@@ -4448,7 +4461,7 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
   const costDlg = [...m.container.querySelectorAll('dialog[open]')].pop();
   expect('/sessions cost reference dialog', costDlg?.textContent ?? '', [
     'Cost reference',
-    'API list prices. A subscription upstream on plan quota spends the window share columns instead of money.',
+    'API list prices. A subscription account on plan quota spends the window share columns instead of money.',
     'Model',
     'Uncached input',
     'Cache write 5m',
@@ -4921,11 +4934,11 @@ expect('/alerts', m.text(), ['Rules', 'Create rule', 'Re-auth required', 'Utiliz
   const scopesFor = async (kind) => { setValue.call(kindSelect, kind); kindSelect.dispatchEvent(new window.Event('change', { bubbles: true })); await m.settle(150); return [...(dlg?.querySelectorAll('select')[1]?.options ?? [])].map((o) => o.textContent?.trim()); };
   results.push({ name: '/alerts client_drift scopes to all traffic only', ok: JSON.stringify(await scopesFor('client_drift')) === JSON.stringify(['All traffic']), missing: [] });
   const reauth = await scopesFor('reauth_required');
-  results.push({ name: '/alerts reauth_required scopes by any upstream or one upstream', ok: reauth[0] === 'Any upstream' && reauth.some((o) => o.startsWith('Upstream ')) && !reauth.includes('All traffic'), missing: reauth });
+  results.push({ name: '/alerts reauth_required scopes by any account or one account', ok: reauth[0] === 'Any account' && reauth.some((o) => o.startsWith('Account ')) && !reauth.includes('All traffic'), missing: reauth });
   const cap = await scopesFor('keepalive_cost_cap');
   results.push({ name: '/alerts keepalive_cost_cap scopes by pool or all', ok: cap.includes('All traffic') && cap.some((o) => o.startsWith('Pool ')) && !cap.some((o) => o.startsWith('Key ')), missing: cap });
   const backoff = await scopesFor('poll_backoff');
-  results.push({ name: '/alerts poll_backoff scopes by any upstream or one upstream', ok: backoff[0] === 'Any upstream' && backoff.some((o) => o.startsWith('Upstream ')) && !backoff.includes('All traffic') && !backoff.some((o) => o.startsWith('Pool ')), missing: backoff });
+  results.push({ name: '/alerts poll_backoff scopes by any account or one account', ok: backoff[0] === 'Any account' && backoff.some((o) => o.startsWith('Account ')) && !backoff.includes('All traffic') && !backoff.some((o) => o.startsWith('Pool ')), missing: backoff });
   await scopesFor('utilization_above');
   const windows = [...(dlg?.querySelectorAll('select')[2]?.options ?? [])].map((o) => o.textContent?.trim());
   results.push({ name: '/alerts utilization windows include the Fable window under the shared label', ok: JSON.stringify(windows) === JSON.stringify(['5-hour', '7-day', '7-day Fable']), missing: windows });
@@ -5158,7 +5171,7 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
   results.push({ name: '/settings defines every environment variable in order', ok: JSON.stringify(terms) === JSON.stringify(want), missing: terms });
   expect('/settings variable definitions', m.text(), [
     "Points Claude Code at the router. Every model request and the cache-keepalive companion's reports go here.",
-    'Holds the router API key. Claude Code treats it as a subscription credential',
+    'Holds the router key. Claude Code treats it as a subscription credential',
     'an ANTHROPIC_API_KEY would switch those off.',
     'Makes Claude Code send its first-party request shape to the router',
     'It also switches off gateway model discovery, and being an internal variable a future build may drop it.',
@@ -5355,7 +5368,8 @@ m.unmount();
 m = await mount('/keys');
 {
   const t = m.text();
-  results.push({ name: 'viewer: /keys hides Create API key', ok: !t.includes('Create API key'), missing: [] });
+  const heading = m.container.querySelector('.topbar__title')?.textContent ?? '';
+  results.push({ name: 'viewer: /keys is the Keys page and hides Create key', ok: heading === 'Keys' && !t.includes('Create key'), missing: [heading] });
   results.push({ name: 'viewer: role badge', ok: t.includes('viewer'), missing: [] });
   // A control a page forgets to hide would still reach the router's gate, so the mock answers it the same way.
   const refused = await api.createKey({ bodyCaptureHours: null, enabled: true, expiresInDays: null, keepaliveOptOut: false, longContextTwins: true, modelRules: [], modelRulesMode: 'extend', name: 'viewer-write', notes: null, poolId: 'all' }).then(() => null, (e) => e);
@@ -5366,32 +5380,33 @@ m = await mount('/keys');
   });
 }
 // Every control named here is a button, and a label is matched against the buttons rather than against the page
-// text because the copy carries the same words: the upstreams status filter alone offers "Paused". A closed
+// text because the copy carries the same words: the accounts status filter alone offers "Paused". A closed
 // dialog's own markup is in the DOM on every page and reaches nobody, so it is filtered out.
-for (const [path, absent, present] of [
-  ['/', [], ['viewer']],
-  ['/alerts', ['Create rule', 'Resolve'], ['Rules', 'Events', 'Lifecycle']],
-  ['/analytics', [], ['Traffic', 'Latency']],
-  ['/keys', ['Create API key'], ['Lifetime cost by key']],
-  ['/pools', ['Create pool', 'Delete', 'Edit'], ['Selection order']],
-  ['/sessions', ['Release'], ['Cache warming']],
-  ['/settings', ['Add model'], ['Keepalive', 'Pricing']],
-  ['/upstreams/business', ['Add upstream', 'Clear', 'Clear funding flag', 'Delete upstream', 'Disconnect', 'Pause', 'Re-pair', 'Resume', 'Verify'], ['Catalog', 'Identity']],
+for (const [path, absent, present, heading] of [
+  ['/', [], ['viewer'], 'Dashboard'],
+  ['/accounts/business', ['Add account', 'Clear', 'Clear funding flag', 'Delete account', 'Disconnect', 'Pause', 'Re-pair', 'Resume', 'Verify'], ['Catalog', 'Identity'], 'Accounts'],
+  ['/alerts', ['Create rule', 'Resolve'], ['Rules', 'Events', 'Lifecycle'], 'Alerts'],
+  ['/analytics', [], ['Traffic', 'Latency'], 'Analytics'],
+  ['/keys', ['Create key'], ['Lifetime cost by key'], 'Keys'],
+  ['/pools', ['Create pool', 'Delete', 'Edit'], ['Selection order'], 'Pools'],
+  ['/sessions', ['Release'], ['Cache warming'], 'Sessions'],
+  ['/settings', ['Add model'], ['Keepalive', 'Pricing'], 'Settings'],
 ]) {
   await m.navigate(path);
   const t = m.text();
   const reachable = (selector) => [...m.container.querySelectorAll(selector)].filter((e) => e.closest('dialog') === null);
   const labels = reachable('button').map((b) => b.textContent?.trim());
+  const title = m.container.querySelector('.topbar__title')?.textContent ?? '';
   results.push({
     name: `viewer: ${path} hides every mutating control`,
-    ok: absent.every((a) => !labels.includes(a)) && present.every((p) => t.includes(p)),
-    missing: [...absent.filter((a) => labels.includes(a)).map((a) => `offers ${a}`), ...present.filter((p) => !t.includes(p)).map((p) => `lacks ${p}`)],
+    ok: title === heading && absent.every((a) => !labels.includes(a)) && present.every((p) => t.includes(p)),
+    missing: [...(title === heading ? [] : [`titled ${title}`]), ...absent.filter((a) => labels.includes(a)).map((a) => `offers ${a}`), ...present.filter((p) => !t.includes(p)).map((p) => `lacks ${p}`)],
   });
   // The sessions row keeps its menu for the two jumps that only read.
   results.push({ name: `viewer: ${path} has no row menu`, ok: path === '/sessions' || reachable('.menu__trigger').length === 0, missing: [] });
 }
-await m.navigate('/upstreams/business');
-results.push({ name: 'viewer: /upstreams has no Edit label button', ok: m.container.querySelector('button[aria-label="Edit label"]') === null, missing: [] });
+await m.navigate('/accounts/business');
+results.push({ name: 'viewer: /accounts has no Edit label button', ok: m.container.querySelector('button[aria-label="Edit label"]') === null, missing: [] });
 await m.navigate(`/requests/${laptopRow.id}`);
 {
   const t = m.text();
@@ -5400,7 +5415,8 @@ await m.navigate(`/requests/${laptopRow.id}`);
 await m.navigate('/accounts/business');
 {
   const t = m.text();
-  results.push({ name: 'viewer: /accounts hides actions', ok: !t.includes('Disconnect') && !t.includes('Add upstream'), missing: [] });
+  const at = accountsInPlace(m);
+  results.push({ name: 'viewer: /accounts/business stays at its path on the Accounts page and hides actions', ok: at.heading === 'Accounts' && at.nav === '/accounts' && at.row === '/accounts/business' && !t.includes('Disconnect') && !t.includes('Add account'), missing: [JSON.stringify(at)] });
 }
 await m.navigate('/alerts');
 {

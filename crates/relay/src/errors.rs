@@ -104,10 +104,10 @@ pub(crate) fn accounts_at_cap(retry_after_seconds: u64) -> Failure {
 /// help an attacker enumerate, and the downstream client acts on the status alone.
 pub(crate) fn auth_failure(error: &AuthError) -> Failure {
     let (code, message) = match error {
-        AuthError::Ambiguous => ("auth_ambiguous", "present exactly one API key"),
-        AuthError::Malformed => ("auth_malformed", "the API key header is malformed"),
-        AuthError::Missing => ("auth_missing", "an API key is required"),
-        AuthError::Unknown => ("auth_unknown", "the presented API key is not valid"),
+        AuthError::Ambiguous => ("auth_ambiguous", "present exactly one key"),
+        AuthError::Malformed => ("auth_malformed", "the key header is malformed"),
+        AuthError::Missing => ("auth_missing", "a key is required"),
+        AuthError::Unknown => ("auth_unknown", "the presented key is not valid"),
     };
     Failure {
         status: StatusCode::UNAUTHORIZED,
@@ -248,7 +248,7 @@ pub(crate) fn key_refusal(_: &KeyRefusal) -> Failure {
         status: StatusCode::UNAUTHORIZED,
         error_type: "authentication_error",
         code: "auth_unknown",
-        message: "the presented API key is not valid",
+        message: "the presented key is not valid",
         retry_after: None,
     }
 }

@@ -12,10 +12,9 @@ const NAV: { icon: ReactNode; label: string; to: string }[] = [
   { to: '/', label: 'Dashboard', icon: <IconGrid size={16} /> },
   { to: '/observe', label: 'Observe', icon: <IconActivity size={16} /> },
   { to: '/quota', label: 'Quota', icon: <IconGauge size={16} /> },
-  // Called upstreams on screen; the data model, the API and the mock still say account.
-  { to: '/upstreams', label: 'Upstreams', icon: <IconUser size={16} /> },
+  { to: '/accounts', label: 'Accounts', icon: <IconUser size={16} /> },
   { to: '/pools', label: 'Pools', icon: <IconLayers size={16} /> },
-  { to: '/keys', label: 'API keys', icon: <IconKey size={16} /> },
+  { to: '/keys', label: 'Keys', icon: <IconKey size={16} /> },
   { to: '/models', label: 'Models', icon: <IconShield size={16} /> },
   { to: '/requests', label: 'Requests', icon: <IconList size={16} /> },
   { to: '/analytics', label: 'Analytics', icon: <IconChart size={16} /> },
@@ -26,9 +25,10 @@ const NAV: { icon: ReactNode; label: string; to: string }[] = [
 
 export const PAGE_TITLES: Record<string, string> = {
   '/': 'Dashboard',
+  '/accounts': 'Accounts',
   '/alerts': 'Alerts',
   '/analytics': 'Analytics',
-  '/keys': 'API keys',
+  '/keys': 'Keys',
   '/models': 'Models',
   '/observe': 'Observe',
   '/pools': 'Pools',
@@ -36,7 +36,6 @@ export const PAGE_TITLES: Record<string, string> = {
   '/requests': 'Requests',
   '/sessions': 'Sessions',
   '/settings': 'Settings',
-  '/upstreams': 'Upstreams',
 };
 
 export function Shell() {

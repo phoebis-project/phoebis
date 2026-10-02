@@ -190,7 +190,7 @@ test('the mock stores a key edit\'s enabled flag and expiry and folds them into 
   assert.equal((await api.updateKey('batch', { ...edit, enabled: true, expiresAt: null })).expiresAt, null);
 });
 
-test('the mock deletes an upstream with its pool memberships, and a disconnect keeps the identity', async () => {
+test('the mock deletes an account with its pool memberships, and a disconnect keeps the identity', async () => {
   const api = await admin();
   assert.ok((await api.listPools()).some((p) => p.members.some((m) => m.accountId === 'mail')), 'the story puts mail in a pool');
   await api.deleteAccount('mail');

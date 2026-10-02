@@ -18,8 +18,8 @@ if (Number.isNaN(clockOrigin)) {
   console.error('PHOEBIS_E2E_CLOCK is not an instant');
   process.exit(2);
 }
-// The dashboard's remaining cards and its empty state are read against the router's seeded registry (one API-key
-// upstream, a list with nothing in it); the mock's story has subscription upstreams and no empty list there.
+// The dashboard's remaining cards and its empty state are read against the router's seeded registry (one Anthropic-key
+// account, a list with nothing in it); the mock's story has subscription accounts and no empty list there.
 const mock = process.env.PHOEBIS_E2E_MOCK === '1';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -89,10 +89,10 @@ const VIEWS = [
   { path: '/', title: 'Dashboard', wait: '.stat-grid', slug: 'dashboard' },
   { path: '/observe', title: 'Observe', wait: '.mchip', slug: 'observe' },
   { path: '/quota', title: 'Quota', wait: '.qcard', slug: 'quota' },
-  // Without an account id the page redirects to the first upstream, and the detail head arrives with it.
-  { path: '/upstreams', title: 'Upstreams', wait: '.detail__head', slug: 'upstreams' },
+  // Without an account id the page lands on the first account, and the detail head arrives with it.
+  { path: '/accounts', title: 'Accounts', wait: '.detail__head', slug: 'accounts' },
   { path: '/pools', title: 'Pools', wait: '.pool .selection-order', slug: 'pools' },
-  { path: '/keys', title: 'API keys', wait: '.card--table tbody tr', slug: 'keys' },
+  { path: '/keys', title: 'Keys', wait: '.card--table tbody tr', slug: 'keys' },
   { path: '/models', title: 'Models', wait: '.models__rules', slug: 'models' },
   { path: '/requests', title: 'Requests', wait: '.requests__table', slug: 'requests' },
   { path: '/analytics', title: 'Analytics', wait: '#cache-warming', slug: 'analytics' },
@@ -1182,11 +1182,11 @@ async function bootstrapCards(theme) {
 }
 
 /**
- * The Upstreams head's Delete upstream button against the Disconnect button beside it: the same danger variant in
+ * The Accounts head's Delete account button against the Disconnect button beside it: the same danger variant in
  * the same action row, so a box, an ink, or a line that differs between the two is the defect to catch.
  */
-async function deleteUpstreamButton(theme) {
-  const say = (what) => failures.push(`${theme} /upstreams: ${what}`);
+async function deleteAccountButton(theme) {
+  const say = (what) => failures.push(`${theme} /accounts: ${what}`);
   const pair = await page.evaluate(() => {
     const actions = document.querySelector('.detail__head .detail__actions');
     const button = (text) => [...(actions?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === text);
@@ -1205,27 +1205,27 @@ async function deleteUpstreamButton(theme) {
       };
     };
     const disconnect = button('Disconnect');
-    const remove = button('Delete upstream');
+    const remove = button('Delete account');
     return disconnect && remove ? { disconnect: read(disconnect), last: actions.lastElementChild === remove, remove: read(remove) } : null;
   });
   if (!pair) {
-    say('the Disconnect and Delete upstream buttons are not both drawn to compare');
+    say('the Disconnect and Delete account buttons are not both drawn to compare');
     return;
   }
-  measurements.push(`${theme} /upstreams disconnect ${JSON.stringify(pair.disconnect)}`);
-  measurements.push(`${theme} /upstreams delete upstream ${JSON.stringify(pair.remove)}`);
-  if (!pair.last) say('Delete upstream is not the last action in the head');
+  measurements.push(`${theme} /accounts disconnect ${JSON.stringify(pair.disconnect)}`);
+  measurements.push(`${theme} /accounts delete account ${JSON.stringify(pair.remove)}`);
+  if (!pair.last) say('Delete account is not the last action in the head');
   const differs = ['background', 'border', 'color', 'font', 'height', 'padding', 'radius', 'top'].filter((key) => String(pair.remove[key]) !== String(pair.disconnect[key]));
-  if (differs.length) say(`the Delete upstream button's ${differs.join(', ')} differs from the Disconnect button's`);
+  if (differs.length) say(`the Delete account button's ${differs.join(', ')} differs from the Disconnect button's`);
 }
 
 /**
- * The line under an upstream's name on the dashboard, in the Upstreams list and head, and in the pool dialog's
- * members table is its email, and an upstream without one draws no line: its label a second time says nothing,
- * and an empty line reads as a value that failed to load. The router's seed has one API-key upstream and no
+ * The line under an account's name on the dashboard, in the Accounts list and head, and in the pool dialog's
+ * members table is its email, and an account without one draws no line: its label a second time says nothing,
+ * and an empty line reads as a value that failed to load. The router's seed has one Anthropic-key account and no
  * email, so every line is absent there; the mock's story has both kinds, so each view draws both.
  */
-async function upstreamLines(theme, path) {
+async function accountLines(theme, path) {
   const say = (what) => failures.push(`${theme} ${path}: ${what}`);
   const dialog = page.locator('dialog[open]');
   if (path === '/pools') {
@@ -1246,14 +1246,14 @@ async function upstreamLines(theme, path) {
       ...[...document.querySelectorAll('dialog[open] .members-table tbody td:first-child label')].map((l) => pair(l.querySelector('span:nth-child(2)'), l.querySelector('span:nth-child(3)'))),
     ];
   });
-  if (lines.length === 0) say('no upstream line to read');
+  if (lines.length === 0) say('no account line to read');
   for (const { name, sub } of lines) {
     if (sub === null) continue;
     if (sub === name) say(`the line under ${name} repeats its label`);
     else if (!sub.includes('@')) say(`the line under ${name} reads ${JSON.stringify(sub)}, not an email`);
   }
-  if (!mock && lines.some((l) => l.sub !== null)) say(`the seeded upstream has no email, yet a line is drawn under ${lines.filter((l) => l.sub !== null).map((l) => l.name).join(', ')}`);
-  if (mock && !(lines.some((l) => l.sub === null) && lines.some((l) => l.sub !== null))) say('the story has upstreams with and without an email, but the view does not draw both');
+  if (!mock && lines.some((l) => l.sub !== null)) say(`the seeded account has no email, yet a line is drawn under ${lines.filter((l) => l.sub !== null).map((l) => l.name).join(', ')}`);
+  if (mock && !(lines.some((l) => l.sub === null) && lines.some((l) => l.sub !== null))) say('the story has accounts with and without an email, but the view does not draw both');
   if (path === '/pools') {
     await page.keyboard.press('Escape');
     await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => say('the dialog stayed open after Escape'));
@@ -1282,7 +1282,7 @@ const measureInput = (label) =>
  * threshold pair for a minutes field as the condition changes. The minutes input is measured against the
  * threshold input it stands in for, since a control that reads smaller than the one it replaces is the defect
  * this dialog would show first. It also reads the body's headings, Rule, Condition and Delivery in that order,
- * with Enabled the first field. A usage poll rule names an upstream or any upstream and nothing else.
+ * with Enabled the first field. A usage poll rule names an account or any account and nothing else.
  */
 async function alertRuleDialog(theme) {
   const say = (what) => failures.push(`${theme} /alerts: ${what}`);
@@ -1310,7 +1310,7 @@ async function alertRuleDialog(theme) {
     const threshold = await measureInput('Threshold (%)');
     await condition.selectOption({ label: 'Usage poll backing off' });
     const backoffScopes = await control('Scope', 'select').locator('option').allTextContents();
-    if (backoffScopes[0] !== 'Any upstream' || backoffScopes.some((o) => o === 'All traffic' || o.startsWith('Pool ') || o.startsWith('Key '))) say(`the usage poll condition offers ${JSON.stringify(backoffScopes)} rather than the upstream scopes`);
+    if (backoffScopes[0] !== 'Any account' || backoffScopes.some((o) => o === 'All traffic' || o.startsWith('Pool ') || o.startsWith('Key '))) say(`the usage poll condition offers ${JSON.stringify(backoffScopes)} rather than the account scopes`);
     if ((await control('Window', 'select').count()) !== 0 || (await control('Threshold (%)', 'input').count()) !== 0) say('the usage poll condition offers a threshold or a window, which its fixed thirty minutes leaves no room for');
     if (!minutes || !threshold) say('the minutes input and the threshold input are not both drawn to compare');
     else {
@@ -1330,7 +1330,7 @@ async function alertRuleDialog(theme) {
 /**
  * Each Quota card's poll lines against the Refresh pill beside them: the lines end before the pill starts and
  * inside the card, the backoff line reads in the serious ink rather than the muted ink of the lines above it, and
- * no line wraps. The router's seed has no subscription upstream, so only the story's pass has lines to read.
+ * no line wraps. The router's seed has no subscription account, so only the story's pass has lines to read.
  */
 async function quotaPollLines(theme) {
   const say = (what) => failures.push(`${theme} /quota: ${what}`);
@@ -1347,7 +1347,7 @@ async function quotaPollLines(theme) {
   );
   const polled = cards.filter((c) => c.lines.some((l) => /^(polled |not yet polled)/.test(l.text)));
   measurements.push(`${theme} /quota poll lines ${JSON.stringify(polled.map((c) => ({ name: c.name, lines: c.lines.map((l) => [l.text, l.right, l.height]), pillLeft: c.pillLeft })))}`);
-  if (mock && polled.length === 0) say('the story has subscription upstreams, yet no card draws a poll line');
+  if (mock && polled.length === 0) say('the story has subscription accounts, yet no card draws a poll line');
   for (const card of polled) {
     for (const line of card.lines) {
       if (card.pillLeft !== null && line.right > card.pillLeft) say(`${card.name}'s line ${JSON.stringify(line.text)} ends at ${line.right}px, past the Refresh pill at ${card.pillLeft}px`);
@@ -1359,11 +1359,11 @@ async function quotaPollLines(theme) {
       if (muted && line.color === muted.color) say(`${card.name}'s backoff line reads in the muted ink of the lines above it`);
     }
   }
-  if (mock && !polled.some((c) => c.lines.some((l) => l.serious))) say('the story backs one upstream off, yet no card draws a backoff line');
+  if (mock && !polled.some((c) => c.lines.some((l) => l.serious))) say('the story backs one account off, yet no card draws a backoff line');
 }
 
 /**
- * Both quota donuts against a registry with no subscription upstream: the seed has one API-key upstream, so
+ * Both quota donuts against a registry with no subscription account: the seed has one Anthropic-key account, so
  * the cards have no window to draw and must say so instead of drawing a ring that reads as exhausted.
  */
 async function remainingCards(theme) {
@@ -1376,8 +1376,8 @@ async function remainingCards(theme) {
     failures.push(`${theme} /: ${cards.length} remaining cards, expected 5h and 7d`);
     return;
   }
-  for (const card of cards.filter((c) => !c.text.includes('No subscription upstreams'))) {
-    failures.push(`${theme} /: the "${card.title}" card draws a ring on a registry with no subscription upstream (${card.text.slice(0, 80)})`);
+  for (const card of cards.filter((c) => !c.text.includes('No subscription accounts'))) {
+    failures.push(`${theme} /: the "${card.title}" card draws a ring on a registry with no subscription account (${card.text.slice(0, 80)})`);
   }
 }
 
@@ -1530,8 +1530,8 @@ async function burnCards(theme) {
 }
 
 /**
- * The Plan per hour legend's model unlisted entry against its neighbours: the entry before it, a planned upstream's
- * 7-day entry, on type and swatch size, and, where an upstream whose tier the cost table does not size draws a tier
+ * The Plan per hour legend's model unlisted entry against its neighbours: the entry before it, a planned account's
+ * 7-day entry, on type and swatch size, and, where an account whose tier the cost table does not size draws a tier
  * unknown entry beside it, that muted entry on type, swatch size and colour too. In the mock's story the entry draws
  * for `mail`, whose Sonnet 5 traffic the table cannot price; the router's seed bills no subscription traffic, so
  * there the pass records that the entry is not drawn.
@@ -1559,7 +1559,7 @@ async function planLegend(theme) {
     return;
   }
   if (read.unlisted === null) {
-    if (mock) failures.push(`${theme} /analytics: the story's mail upstream runs on a model the table cannot price, yet no model unlisted entry draws`);
+    if (mock) failures.push(`${theme} /analytics: the story's mail account runs on a model the table cannot price, yet no model unlisted entry draws`);
     return;
   }
   failures.push(...compare(read.unlisted, read.neighbour, ['type', 'swatch'], `${theme} /analytics: the model unlisted entry against the entry before it`));
@@ -1614,7 +1614,7 @@ async function analyticsTables(theme) {
     const spent = (tr) => tr.children[2].querySelector('.num');
     const word = (el) => (el ? `${getComputedStyle(el).fontFamily}/${getComputedStyle(el).fontSize}` : null);
     return {
-      atBudget: budgetRows.filter(atBudget).map((tr) => ({ badge: badge(atBudget(tr)), upstream: tr.children[1].textContent?.trim() })),
+      atBudget: budgetRows.filter(atBudget).map((tr) => ({ account: tr.children[1].textContent?.trim(), badge: badge(atBudget(tr)) })),
       bars: budgetRows.map((tr) => {
         const bar = tr.querySelector('.meter');
         return bar ? `${Math.round(bar.getBoundingClientRect().width)}x${Math.round(bar.getBoundingClientRect().height)}` : null;
@@ -1623,7 +1623,7 @@ async function analyticsTables(theme) {
       cache: box('Cache by model'),
       metered: budgetRows
         .filter((tr) => spent(tr)?.querySelector('.muted'))
-        .map((tr) => ({ figure: word(spent(tr)), text: spent(tr)?.textContent, upstream: tr.children[1].textContent?.trim(), word: word(spent(tr)?.querySelector('.muted')) })),
+        .map((tr) => ({ account: tr.children[1].textContent?.trim(), figure: word(spent(tr)), text: spent(tr)?.textContent, word: word(spent(tr)?.querySelector('.muted')) })),
       placements: box('Placements by rung'),
     };
   });
@@ -1637,9 +1637,9 @@ async function analyticsTables(theme) {
   if (mock) {
     if (!read.placements?.rows) say('the story places requests by rung, yet the placements card draws no figure');
     if (read.bars.length !== 4) say(`the story budgets four periods across three members, yet the card lists ${read.bars.length}`);
-    if (JSON.stringify(read.atBudget.map((r) => r.upstream)) !== JSON.stringify(['evals'])) say(`the at-budget mark sits on ${JSON.stringify(read.atBudget.map((r) => r.upstream))}, not on evals alone`);
-    if (JSON.stringify(read.metered.map((r) => [r.upstream, r.text])) !== JSON.stringify([['business', 'metered $12.50']])) say(`the metered word sits on ${JSON.stringify(read.metered.map((r) => [r.upstream, r.text]))}, not on business alone`);
-    for (const r of read.metered.filter((r) => r.word !== r.figure)) say(`the metered word on ${r.upstream} reads ${r.word}, not the figure's ${r.figure}`);
+    if (JSON.stringify(read.atBudget.map((r) => r.account)) !== JSON.stringify(['evals'])) say(`the at-budget mark sits on ${JSON.stringify(read.atBudget.map((r) => r.account))}, not on evals alone`);
+    if (JSON.stringify(read.metered.map((r) => [r.account, r.text])) !== JSON.stringify([['business', 'metered $12.50']])) say(`the metered word sits on ${JSON.stringify(read.metered.map((r) => [r.account, r.text]))}, not on business alone`);
+    for (const r of read.metered.filter((r) => r.word !== r.figure)) say(`the metered word on ${r.account} reads ${r.word}, not the figure's ${r.figure}`);
   }
 }
 
@@ -1709,10 +1709,10 @@ async function trafficCards(theme) {
 }
 
 /**
- * An upstream's fast lane against the card it sits in: on the Quota view the Fast mode line takes the Plan chip's
+ * An account's fast lane against the card it sits in: on the Quota view the Fast mode line takes the Plan chip's
  * type and label colour, and a cooldown chip is the Plan chip's box (type, height, padding, corners); on the
- * upstream page the lane is a section of the Usage card as extra usage is, with the same rule and spacing. Only a
- * subscription card draws a Plan chip and only an upstream with extra usage draws its section, so the check measures
+ * account page the lane is a section of the Usage card as extra usage is, with the same rule and spacing. Only a
+ * subscription card draws a Plan chip and only an account with extra usage draws its section, so the check measures
  * a lane on a card with a Plan chip, compares each part where drawn, and stands down where the neighbour is missing,
  * as it does against the router's seed, which answers no fast request; the mock's story draws every part.
  */
@@ -1743,7 +1743,7 @@ async function fastLane(theme, path) {
   });
   measurements.push(`${theme} ${path} fast lane ${JSON.stringify(read)}`);
   if (!read.drawn) {
-    if (mock) failures.push(`${theme} ${path}: the story's first upstream holds a fast lane, yet none is drawn`);
+    if (mock) failures.push(`${theme} ${path}: the story's first account holds a fast lane, yet none is drawn`);
     return;
   }
   if (path === '/quota') {
@@ -1808,18 +1808,18 @@ const compare = (mine, neighbour, keys, what) => {
 };
 
 /**
- * The identity card's subscription end editor on an OAuth upstream: its date field is the box of the status filter
+ * The identity card's subscription end editor on an OAuth account: its date field is the box of the status filter
  * beside the list (the page's other plain control; the label editor's field takes the heading's type), its checkbox
  * label the field label's type, its Save the size of the Edit end button it opened from, and opening it moves no row
- * of the card. Ticking the box prefills a date. The router's seed has only an API-key upstream, which has no editor,
- * so there the check stands down; the mock's first upstream is an OAuth one.
+ * of the card. Ticking the box prefills a date. The router's seed has only an Anthropic-key account, which has no
+ * editor, so there the check stands down; the mock's first account is an OAuth one.
  */
 async function subscriptionEndForm(theme) {
-  const say = (what) => failures.push(`${theme} /upstreams: ${what}`);
+  const say = (what) => failures.push(`${theme} /accounts: ${what}`);
   const identity = page.locator('.card', { has: page.locator('.card__title', { hasText: 'Identity' }) });
   const open = identity.getByRole('button', { name: 'Edit end', exact: true });
   if ((await open.count()) === 0) {
-    if (mock) say('the first upstream is an OAuth one in the story, yet its identity card has no Edit end button');
+    if (mock) say('the first account is an OAuth one in the story, yet its identity card has no Edit end button');
     return;
   }
   const firstRow = () => identity.locator('.kv__row dt').first().evaluate((dt) => Math.round(dt.getBoundingClientRect().top - dt.closest('.card').getBoundingClientRect().top));
@@ -1855,7 +1855,7 @@ async function subscriptionEndForm(theme) {
   });
   const save = await identity.getByRole('button', { name: 'Save', exact: true }).evaluate(button);
   const rowAfter = await firstRow();
-  measurements.push(`${theme} /upstreams subscription end ${JSON.stringify({ ...read, save })}`);
+  measurements.push(`${theme} /accounts subscription end ${JSON.stringify({ ...read, save })}`);
   if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(read.prefill ?? '')) say(`ticking Cancelled left the end ${JSON.stringify(read.prefill)} rather than the derived date`);
   for (const finding of [
     // A select keeps room for its chevron, so the padding is left out.
@@ -1871,15 +1871,15 @@ async function subscriptionEndForm(theme) {
 }
 
 /**
- * The Add upstream dialog on Upstreams: the type control keeps its content width, which the body's flex column
+ * The Add account dialog on Accounts: the type control keeps its content width, which the body's flex column
  * would otherwise stretch across the dialog, and Id and Label sit side by side as two equal inputs, the mono Id as
  * tall as the Label.
  */
-async function addUpstreamDialog(theme) {
-  const say = (what) => failures.push(`${theme} /upstreams add upstream: ${what}`);
+async function addAccountDialog(theme) {
+  const say = (what) => failures.push(`${theme} /accounts add account: ${what}`);
   const dialog = page.locator('dialog[open]');
   try {
-    await page.getByRole('button', { name: 'Add upstream', exact: true }).click();
+    await page.getByRole('button', { name: 'Add account', exact: true }).click();
     await dialog.waitFor({ state: 'visible', timeout: 15_000 });
     const read = await dialog.evaluate((el) => {
       const body = el.querySelector('.dialog__body');
@@ -1889,7 +1889,7 @@ async function addUpstreamDialog(theme) {
         const box = field?.querySelector('input')?.getBoundingClientRect();
         return box ? { height: box.height, left: Math.round(box.left), top: Math.round(box.top), width: Math.round(box.width) } : null;
       };
-      const type = el.querySelector('[aria-label="Upstream type"]')?.getBoundingClientRect();
+      const type = el.querySelector('[aria-label="Account type"]')?.getBoundingClientRect();
       return {
         body: body && style ? Math.round(body.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)) : null,
         id: input('Id'),
@@ -1897,7 +1897,7 @@ async function addUpstreamDialog(theme) {
         type: type ? Math.round(type.width) : null,
       };
     });
-    measurements.push(`${theme} /upstreams add upstream ${JSON.stringify(read)}`);
+    measurements.push(`${theme} /accounts add account ${JSON.stringify(read)}`);
     if (!read.type || !read.body) say('the type control and the body are not both drawn to measure');
     else if (read.type >= read.body) say(`the type control is ${read.type} px across a ${read.body} px body rather than its content width`);
     if (!read.id || !read.label) say('the Id and Label inputs are not both drawn to compare');
@@ -1915,13 +1915,13 @@ async function addUpstreamDialog(theme) {
 }
 
 /**
- * The upstream page's catalog popup: the Effort levels column closes the table, its heading the box of the Output
+ * The account page's catalog popup: the Effort levels column closes the table, its heading the box of the Output
  * tokens heading beside it and its cells the type of the Name cells, the other plain text column; no row's levels
  * wrap and the table fits the dialog without scrolling. The mock pass writes the open popup's shot beside the
  * view's; the router's pass keeps to one shot per view, which its test counts.
  */
 async function catalogDialog(theme) {
-  const say = (what) => failures.push(`${theme} /upstreams catalog: ${what}`);
+  const say = (what) => failures.push(`${theme} /accounts catalog: ${what}`);
   const dialog = page.locator('dialog[open]');
   try {
     await page.locator('.detail__head button', { hasText: 'Catalog' }).click();
@@ -1953,15 +1953,15 @@ async function catalogDialog(theme) {
         wrapped: rows.filter((r) => lines(r.lastElementChild) > 1).map((r) => r.firstElementChild?.textContent?.trim()),
       };
     });
-    measurements.push(`${theme} /upstreams catalog ${JSON.stringify(read)}`);
+    measurements.push(`${theme} /accounts catalog ${JSON.stringify(read)}`);
     if (read.headings.at(-1) !== 'Effort levels') say(`the last heading reads ${JSON.stringify(read.headings.at(-1))}, not "Effort levels"`);
-    failures.push(...compare(read.effortHead, read.outputHead, ['color', 'font', 'height', 'padding'], `${theme} /upstreams catalog: the Effort levels heading against Output tokens`));
-    failures.push(...compare(read.effortCell, read.nameCell, ['color', 'font', 'padding'], `${theme} /upstreams catalog: an Effort levels cell against its Name cell`));
+    failures.push(...compare(read.effortHead, read.outputHead, ['color', 'font', 'height', 'padding'], `${theme} /accounts catalog: the Effort levels heading against Output tokens`));
+    failures.push(...compare(read.effortCell, read.nameCell, ['color', 'font', 'padding'], `${theme} /accounts catalog: an Effort levels cell against its Name cell`));
     if (read.wrapped.length) say(`the effort levels wrap on ${read.wrapped.join(', ')}`);
     if (read.overflow === null || read.overflow > 0) say(`the table runs ${read.overflow} px past the dialog`);
     if (mock) {
       await atRest();
-      await dialog.screenshot({ path: join(shots, theme, 'upstreams-catalog.png') });
+      await dialog.screenshot({ path: join(shots, theme, 'accounts-catalog.png') });
     }
   } catch (error) {
     say(`the popup never drew its table (${error instanceof Error ? error.message : String(error)})`);
@@ -1999,7 +1999,7 @@ async function keyCapField(theme) {
   const say = (what) => failures.push(`${theme} /keys: ${what}`);
   const dialog = page.locator('dialog[open]');
   try {
-    await page.getByRole('button', { name: 'Create API key', exact: true }).first().click();
+    await page.getByRole('button', { name: 'Create key', exact: true }).first().click();
     await dialog.waitFor({ state: 'visible', timeout: 15_000 });
   } catch (error) {
     say(`the create dialog never opened (${error instanceof Error ? error.message : String(error)})`);
@@ -2126,7 +2126,7 @@ async function keyDialogGeometry(theme) {
     }
   };
   try {
-    await openBy(() => page.getByRole('button', { name: 'Create API key', exact: true }).first().click());
+    await openBy(() => page.getByRole('button', { name: 'Create key', exact: true }).first().click());
     await walk('create');
     await close('create');
     await openBy(editOf(rows.first()));
@@ -2255,7 +2255,7 @@ async function agentLines(theme) {
 }
 
 /**
- * The Sessions table's fork badge against the Upstream cell's kind badge: the fork
+ * The Sessions table's fork badge against the Account cell's kind badge: the fork
  * badge measures the same box and sits on
  * the session id's line. Both seeds record a fork, so both passes measure the fork badge; only the mock's pass fails
  * when none is drawn.
@@ -2364,7 +2364,7 @@ try {
         await remainingCards(theme);
         await errorStateBox(theme);
       }
-      if (['/', '/pools', '/upstreams'].includes(view.path)) await upstreamLines(theme, view.path);
+      if (['/', '/pools', '/accounts'].includes(view.path)) await accountLines(theme, view.path);
       if (view.path === '/observe') await liveFeed(theme);
       if (view.path === '/sessions') {
         await costCapRows(theme);
@@ -2391,11 +2391,11 @@ try {
         await compatibilityCard(theme);
         await bootstrapCards(theme);
       }
-      if (view.path === '/upstreams') {
+      if (view.path === '/accounts') {
         await fastLane(theme, view.path);
-        await deleteUpstreamButton(theme);
+        await deleteAccountButton(theme);
         await subscriptionEndForm(theme);
-        await addUpstreamDialog(theme);
+        await addAccountDialog(theme);
         await catalogDialog(theme);
       }
       if (view.path === '/keys') {

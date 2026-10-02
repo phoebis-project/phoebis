@@ -3468,7 +3468,7 @@ usage:
     assert_eq!(root.headers()["cache-control"], "no-store");
     assert!(root.text().await.unwrap().contains("<div id=\"root\">"));
     let deep = client
-        .get(format!("http://127.0.0.1:{admin_port}/upstreams/business"))
+        .get(format!("http://127.0.0.1:{admin_port}/accounts/business"))
         .send()
         .await
         .unwrap();

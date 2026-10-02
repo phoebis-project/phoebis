@@ -2,13 +2,13 @@ import type { Account, MemberEligibility, Pool, PoolStrategy, Session } from '@/
 
 /** One sentence per strategy, the card's rule line and the first sentence of the dialog's Strategy hint; a later strategy adds its entry here. */
 export const STRATEGY_RULE: Record<PoolStrategy, string> = {
-  pace: 'Within the first priority tier that has an eligible upstream, the one with the most weekly allowance left per hour until its window resets or its subscription ends; an unsampled upstream counts as untouched, and ties are random.',
-  priority: 'Within the first priority tier that has an eligible upstream, any of them at random.',
-  round_robin: 'Within the first priority tier that has an eligible upstream, each in turn; a restart starts the round again.',
+  pace: 'Within the first priority tier that has an eligible account, the one with the most weekly allowance left per hour until its window resets or its subscription ends; an unsampled account counts as untouched, and ties are random.',
+  priority: 'Within the first priority tier that has an eligible account, any of them at random.',
+  round_robin: 'Within the first priority tier that has an eligible account, each in turn; a restart starts the round again.',
 };
 export const STRATEGY_LABEL: Record<PoolStrategy, string> = { pace: 'Pace', priority: 'Priority, then random', round_robin: 'Round robin' };
 /** The kind tiers, in the order selection walks them. */
-export const GROUP_LABEL = ['plan', 'overage', 'keys'] as const;
+export const GROUP_LABEL = ['plan', 'overage', 'Anthropic keys'] as const;
 
 /** Whether selection walks the kind tiers for this pool: the operator's answer alone. */
 export const kindOrdered = (pool: Pool) => pool.preferSubscription;
@@ -55,9 +55,9 @@ function endOf(account: Account, now: number): number | null {
 
 /**
  * Remaining allowance and the reset that refills it: a subscription account reads the shared 7-day window, an
- * API-key account the worst window its row reports, with no reset. A window whose reset has passed, or none at all,
- * reads as untouched. The router ranks an API-key account by its per-model buckets, which the account row does not
- * carry, so for one this order is a preview; the request drawer's trace shows the order the router took.
+ * Anthropic-key account the worst window its row reports, with no reset. A window whose reset has passed, or none at
+ * all, reads as untouched. The router ranks an Anthropic-key account by its per-model buckets, which the account row
+ * does not carry, so for one this order is a preview; the request drawer's trace shows the order the router took.
  */
 function remainingOf(account: Account, now: number): { remaining: number; reset: number | null } {
   const live = account.windows.filter((w) => w.resetsAt === null || Date.parse(w.resetsAt) > now);
@@ -69,8 +69,8 @@ function remainingOf(account: Account, now: number): { remaining: number; reset:
 
 /**
  * Remaining allowance over the hours to the earlier of the window's reset and the account's end, so an account that
- * runs out sooner is spent first; an unsampled account counts as untouched, the full week's worth of it. An API-key
- * account scores by its remaining allowance alone, since its buckets refill within a minute.
+ * runs out sooner is spent first; an unsampled account counts as untouched, the full week's worth of it. An
+ * Anthropic-key account scores by its remaining allowance alone, since its buckets refill within a minute.
  */
 function paceScore(account: Account, now: number): number {
   const { remaining, reset } = remainingOf(account, now);
@@ -99,7 +99,7 @@ function resortOf(pool: Pool, account: Account, now: number): { lastResort: Last
   return { lastResort: windingDown ? 'winding_down' : atFloor ? 'floor' : null, order: (windingDown ? 2 : 0) + (atFloor ? 1 : 0) };
 }
 
-/** Which kind tier an upstream sits in; a member the accounts list does not carry has no kind, so it leads. */
+/** Which kind tier an account sits in; a member the accounts list does not carry has no kind, so it leads. */
 const groupOf = (account: Account | undefined): 0 | 1 | 2 => (account?.kind === 'api_key' ? 2 : account?.extraUsage?.inUse ? 1 : 0);
 
 /** The order the router walks for a fresh session of this pool, from the data the routes already serve. */
@@ -124,7 +124,7 @@ export function selectionOrder(pool: Pool, accounts: Account[], sessions: Sessio
         return [
           {
             account,
-            // Under the kind order an upstream in overage already has a tier of its own, so deferring it inside
+            // Under the kind order an account in overage already has a tier of its own, so deferring it inside
             // one would rank it behind its own siblings twice.
             deferred: !grouped && pool.overagePolicy === 'prefer_plan' && Boolean(account.extraUsage?.inUse),
             ineligible,

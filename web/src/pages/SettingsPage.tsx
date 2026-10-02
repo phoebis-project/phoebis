@@ -20,7 +20,7 @@ const ENV_TERMS: { body: string; term: string }[] = [
   },
   {
     term: 'CLAUDE_CODE_OAUTH_TOKEN',
-    body: 'Holds the router API key. Claude Code treats it as a subscription credential, which keeps the one-hour cache TTL, the unified rate-limit headers, and the automatic continue after a usage window resets; an ANTHROPIC_API_KEY would switch those off.',
+    body: 'Holds the router key. Claude Code treats it as a subscription credential, which keeps the one-hour cache TTL, the unified rate-limit headers, and the automatic continue after a usage window resets; an ANTHROPIC_API_KEY would switch those off.',
   },
   {
     term: '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1',
@@ -180,7 +180,7 @@ export function SettingsPage() {
 
       <PricingCard canMutate={canMutate} error={settings.error} pricing={s ? s.pricing : null} onToast={setToast} />
 
-      <Card title="Sessions" subtitle="A session leaves the Sessions view once it has gone this long without a request. Its pin and any cache-warming recipe expire with it, so the next request picks an upstream afresh.">
+      <Card title="Sessions" subtitle="A session leaves the Sessions view once it has gone this long without a request. Its pin and any cache-warming recipe expire with it, so the next request picks an account afresh.">
         {s ? (
           <>
             <KeyValue rows={[{ label: 'Session expiry', value: expiryLabel(s.sessions.expireAfterSeconds), mono: true, title: EXPIRY_NOTE }]} />
@@ -200,7 +200,7 @@ export function SettingsPage() {
               rows={[
                 { label: 'Ledger (days)', value: s.retention.ledgerDays === 0 ? 'forever' : fmtInt(s.retention.ledgerDays), mono: true, title: 'Per-request rows, attempts, and events; 0 keeps them forever.' },
                 { label: 'Rollups (days)', value: s.retention.rollupDays === 0 ? 'forever' : fmtInt(s.retention.rollupDays), mono: true, title: 'Hourly rollups; 0 keeps them forever.' },
-                { label: 'Quota samples (days)', value: fmtInt(s.retention.quotaSamplesDays), mono: true, title: '5-minute utilization samples per upstream.' },
+                { label: 'Quota samples (days)', value: fmtInt(s.retention.quotaSamplesDays), mono: true, title: '5-minute utilization samples per account.' },
                 { label: 'Body capture, max hours', value: fmtInt(s.retention.bodyCaptureMaxHours), mono: true, title: "Upper bound for any pool's or key's capture retention." },
               ]}
             />
@@ -224,7 +224,7 @@ export function SettingsPage() {
                 { label: 'Max retained bytes', value: fmtInt(s.keepalive.maxRetainedBytes), mono: true, title: 'Total size of the prefixes held for replay.' },
                 { label: 'Max sessions', value: fmtInt(s.keepalive.maxSessions), mono: true, title: 'Sessions that may carry a recipe at once.' },
                 { label: 'Max workers', value: fmtInt(s.keepalive.maxWorkers), mono: true, title: 'Probes the router runs in parallel.' },
-                { label: 'OAuth prewarm verified', value: s.keepalive.oauthPrewarmVerified ? 'yes' : 'no', mono: true, title: 'Whether a subscription upstream has been checked to accept a prewarm probe.' },
+                { label: 'OAuth prewarm verified', value: s.keepalive.oauthPrewarmVerified ? 'yes' : 'no', mono: true, title: 'Whether a subscription account has been checked to accept a prewarm probe.' },
               ]}
             />
             <p className="muted" style={{ marginTop: 10 }}>
@@ -261,7 +261,7 @@ export function SettingsPage() {
 
       <Card
         title="Downstream client configuration"
-        subtitle="Export these in the shell that launches Claude Code. Replace the token with a key from the API keys page."
+        subtitle="Export these in the shell that launches Claude Code. Replace the token with a key from the Keys page."
         actions={<CopyButton text={snippet} label="Copy snippet" size="md" />}
       >
         <pre className="snippet">{snippet}</pre>

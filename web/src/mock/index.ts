@@ -238,7 +238,7 @@ function questionFor(e: AlertEvent, viewer: boolean): AlertEvent {
 
 /** A flag outranks the enabled bit and the cooldowns in the status the account view folds, so pausing never hides one. */
 const FLAGGED: Account['status'][] = ['funding_required', 'reauth_required', 'unpaired'];
-/** A fast-lane row holds fast-mode requests alone, so the upstream cools only under another scope's row. */
+/** A fast-lane row holds fast-mode requests alone, so the account cools only under another scope's row. */
 const cooling = (cooldowns: Account['cooldowns']) => cooldowns.some((c) => !isFastScope(c.scope));
 const statusOf = (a: Account, enabled: boolean): Account['status'] => {
   if (FLAGGED.includes(a.status)) return a.status;
@@ -396,7 +396,7 @@ export class MockApi implements Api {
 
   analyticsBudgets() {
     // Read off the members as they stand, so a budget set on the Pools form shows here; one row per budgeted
-    // period, and the route orders by pool, then upstream, then the day ahead of the month, which the stable sort
+    // period, and the route orders by pool, then account, then the day ahead of the month, which the stable sort
     // keeps from the order each member's rows are built in.
     const members = this.pools.flatMap((p) =>
       p.members.flatMap((m) =>

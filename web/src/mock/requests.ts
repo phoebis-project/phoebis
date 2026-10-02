@@ -76,12 +76,12 @@ export const LANES: Lane[] = [
 ];
 
 /**
- * The upstream that carries the story's unmeasured traffic alone: it serves Sonnet 5, whose cells the cost table
- * leaves `null`, whatever the lane drew, so its buckets read no share while the other subscription upstreams'
+ * The account that carries the story's unmeasured traffic alone: it serves Sonnet 5, whose cells the cost table
+ * leaves `null`, whatever the lane drew, so its buckets read no share while the other subscription accounts'
  * buckets stay priced.
  */
-const UNPRICED_UPSTREAM = 'mail';
-const modelOn = (accountId: string, drawn: string) => (accountId === UNPRICED_UPSTREAM ? 'claude-sonnet-5' : drawn);
+const UNPRICED_ACCOUNT = 'mail';
+const modelOn = (accountId: string, drawn: string) => (accountId === UNPRICED_ACCOUNT ? 'claude-sonnet-5' : drawn);
 
 /** Probes exist only where the pool keeps caches warm and the key has not opted out, and so does anything kept warm by one. */
 export function warmsCaches(keyId: string, poolId: string): boolean {
@@ -186,7 +186,7 @@ const missRng = createRng(1_517);
 function diagnosed(attempts: Attempt[], kind: RequestKind): Attempt[] {
   return attempts.map((a) => {
     if (a.upstreamStatus !== 200 || kind === 'count_tokens') return a;
-    // An API-key upstream in this fixture answers without the beta, so the client never sees a comparison.
+    // An Anthropic-key account in this fixture answers without the beta, so the client never sees a comparison.
     if (ACCOUNTS.find((x) => x.id === a.accountId)?.kind !== 'oauth') return { ...a, cacheMissReason: 'not_requested' as const };
     // A failover lands on an account that never saw the turn before this one.
     if (a.index > 0) return { ...a, cacheMissReason: 'previous_message_not_found' as const };
@@ -386,8 +386,8 @@ function buildRequests(): RequestLog[] {
   if (unsampled) {
     unsampled.attempts = unsampled.attempts.map((a) => ({ ...a, windows: a.windows.map((w) => (w.id === '7d' ? { ...w, utilization: null } : w)) }));
   }
-  // The drawer and the Models view need one request an upstream refused the model of. The newest desktop turn that
-  // failed over past a 429 to an API-key upstream or to the unmeasured one takes it: the client spelled the model
+  // The drawer and the Models view need one request an account refused the model of. The newest desktop turn that
+  // failed over past a 429 to an Anthropic-key account or to the unmeasured one takes it: the client spelled the model
   // without the date the router resolved it to, and a pool member the request had not tried answered 404 for that
   // model first. The cost table has no row for that model, so its tokens never land in a priced subscription's
   // share. Nothing here draws from a stream, so every row after it keeps its values.
@@ -396,9 +396,9 @@ function buildRequests(): RequestLog[] {
     r.kind === 'inference' &&
     r.outcome === 'succeeded' &&
     r.sessionId !== null &&
-    (r.accountId === UNPRICED_UPSTREAM || ACCOUNTS.find((a) => a.id === r.accountId)?.kind === 'api_key');
+    (r.accountId === UNPRICED_ACCOUNT || ACCOUNTS.find((a) => a.id === r.accountId)?.kind === 'api_key');
   // The draw skips by the local hour, so at some clocks no such turn failed over past a 429; the newest turn those
-  // upstreams served then takes the story, which keeps it at every clock.
+  // accounts served then takes the story, which keeps it at every clock.
   const story = rows.find((r) => storyTurn(r) && r.attempts.some((a) => a.outcome === 'rate_limited' && a.cooldownSet)) ?? rows.find(storyTurn);
   const rejecter = story && LANES.find((l) => l.keyId === story.keyId)?.accountIds.find((id) => !story.attempts.some((a) => a.accountId === id));
   if (story && rejecter) {
@@ -423,7 +423,7 @@ function buildRequests(): RequestLog[] {
     story.costUsd = Math.round(costOf(story.model, story.usage) * 10_000) / 10_000;
   }
   // Fast mode is the client's own toggle and serves Opus: the desktop key's Opus turns asked for it and were
-  // answered fast by whichever upstream served them.
+  // answered fast by whichever account served them.
   for (const r of rows) {
     if (!fastTurn(r.keyId, r.model, r.kind)) continue;
     r.shape = { ...r.shape, requestedSpeed: 'fast' };
@@ -436,7 +436,7 @@ function buildRequests(): RequestLog[] {
 /** A turn the story runs in fast mode: the desktop key's Opus inference. */
 const fastTurn = (keyId: string | null, model: string, kind: RequestKind) => keyId === 'desktop' && model.includes('opus') && kind === 'inference';
 
-/** The rejection story's refused attempt: an upstream refuses a model it does not serve before any inference runs. */
+/** The rejection story's refused attempt: an account refuses a model it does not serve before any inference runs. */
 const REJECTION_MS = 180;
 
 export const REQUESTS: RequestLog[] = buildRequests();
@@ -541,7 +541,7 @@ function placementOf(p: Rng, r: RequestLog): Placement | null {
 }
 
 /**
- * Half the subagents placed afresh first waited on their cohort's account, every upstream at its cap. The wait
+ * Half the subagents placed afresh first waited on their cohort's account, every account at its cap. The wait
  * draws from a stream of its own, so every placement drawn after a hold keeps its values.
  */
 const cohortHoldOf = (p: Rng, w: Rng, r: RequestLog, placement: Placement | null, accountId: string): CohortHold | null =>
@@ -597,7 +597,7 @@ function traceRequests() {
       }
       const account = accountOf.get(a.accountId);
       const overage = account?.overage?.inUse === true ? 1 : 0;
-      // The kind order walks the plan-funded subscriptions, the ones in overage, then the API keys.
+      // The kind order walks the plan-funded subscriptions, the ones in overage, then the Anthropic keys.
       const group = pool?.preferSubscription ? (account?.kind === 'api_key' ? 2 : overage) : 0;
       const priority = pool?.members.find((m) => m.accountId === a.accountId)?.priority ?? 0;
       const tried = new Set(all.slice(0, i).map((x) => x.accountId));
@@ -663,8 +663,8 @@ function seedDrawerBranches() {
 /**
  * The hold a request waited through is its own fact, as the router writes it at completion: the one its serving
  * attempt followed, and on the newest exhausted desktop turn a hold that ran its pool's bound out with every
- * upstream still at its cap, answered without a dispatch, so the log shows a hold no attempt names. One more failed
- * turn failed over from its attempts and then waited on an upstream of its lane it had not tried until the bound ran
+ * account still at its cap, answered without a dispatch, so the log shows a hold no attempt names. One more failed
+ * turn failed over from its attempts and then waited on an account of its lane it had not tried until the bound ran
  * out, so no attempt's trace names the whole wait. Nothing is drawn, so every seeded stream keeps its values.
  */
 function seedHolds() {
@@ -1037,7 +1037,7 @@ function accountRollups(): AccountRollup[] {
     sampleIndex.set(`${hist.accountId}|${hist.windowId}`, byHour);
   }
   for (const account of ACCOUNTS) {
-    // An upstream never paired has never been sampled, so it has no hours to report.
+    // An account never paired has never been sampled, so it has no hours to report.
     if (account.kind !== 'oauth' || account.status === 'unpaired') continue;
     let drift5 = h.float(0.2, 0.7);
     let drift7 = h.float(0.3, 0.8);

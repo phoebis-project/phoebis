@@ -22,7 +22,7 @@ const COLUMNS = [
   { id: 'time', label: 'Time' },
   { id: 'key', label: 'Key' },
   { id: 'pool', label: 'Pool' },
-  { id: 'account', label: 'Upstream' },
+  { id: 'account', label: 'Account' },
   { id: 'model', label: 'Model' },
   { id: 'client', label: 'Client' },
   { id: 'kind', label: 'Kind' },
@@ -52,22 +52,22 @@ const OUTCOME_LABEL: Record<Attempt['outcome'], string> = {
 
 const PIN_RELEASE_LABEL: Record<PinReleaseReason, string> = {
   attempted: 'already tried by this request',
-  budget: 'upstream at its budget',
+  budget: 'account at its budget',
   client_error: 'client error',
   cooldown: 'account cooled',
-  deleted: 'upstream deleted',
-  disconnected: 'upstream disconnected',
+  deleted: 'account deleted',
+  disconnected: 'account disconnected',
   expired: 'pin idle past the affinity window',
   fast_credits: 'usage credits unavailable for fast mode',
   fast_rate_limit: 'fast lane rate limited',
   funding_required: 'funding required',
   overage: 'in overage',
-  paused: 'upstream paused',
+  paused: 'account paused',
   reauth_required: 'needs re-auth',
-  released: 'nothing else stood against the upstream',
+  released: 'nothing else stood against the account',
   spent: 'window spent',
   subscription_ended: 'subscription ended',
-  unpaired: 'upstream unpaired',
+  unpaired: 'account unpaired',
   unserved: 'model no longer served here',
 };
 const releaseLabel = (reasons: unknown): string =>
@@ -78,8 +78,8 @@ const releaseLabel = (reasons: unknown): string =>
     })
     .join(', ');
 
-/** Where a hold waited: its cohort's upstream, else the last one it waited on. */
-const heldOn = (h: CohortHold) => h.cohort ?? h.waitedOn[h.waitedOn.length - 1] ?? 'an upstream';
+/** Where a hold waited: its cohort's account, else the last one it waited on. */
+const heldOn = (h: CohortHold) => h.cohort ?? h.waitedOn[h.waitedOn.length - 1] ?? 'an account';
 /** The badge rounds the wait, so its hover carries it whole with where it was placed, as the drawer names it. */
 const heldTitle = (h: CohortHold) => `waited ${fmtInt(h.heldMs)} ms on ${heldOn(h)}`;
 
@@ -180,7 +180,7 @@ export function RequestsPage() {
     <div className={`requests ${requestId ? 'has-drawer' : ''}`}>
       <div className="stack">
         <div className="filters">
-          <SearchInput placeholder="Search id, session, key, upstream, model, error" value={search} onChange={(e) => setSearch(e.target.value)} className="filters__search" />
+          <SearchInput placeholder="Search id, session, key, account, model, error" value={search} onChange={(e) => setSearch(e.target.value)} className="filters__search" />
           <Select value={range} onChange={(e) => setRange(e.target.value)} aria-label="Date range">
             {RANGES.map((r) => (
               <option key={r.value} value={r.value}>
@@ -190,7 +190,7 @@ export function RequestsPage() {
           </Select>
           <MultiSelect label="Keys" options={(keys.data ?? []).map((k) => ({ label: k.name, value: k.id }))} value={keyIds} onChange={setKeyIds} mono />
           <MultiSelect label="Pools" options={(pools.data ?? []).map((p) => ({ label: p.name, value: p.id }))} value={poolIds} onChange={setPoolIds} mono />
-          <MultiSelect label="Upstreams" options={(accounts.data ?? []).map((a) => ({ label: a.label, value: a.id }))} value={accountIds} onChange={setAccountIds} />
+          <MultiSelect label="Accounts" options={(accounts.data ?? []).map((a) => ({ label: a.label, value: a.id }))} value={accountIds} onChange={setAccountIds} />
           <MultiSelect label="Models" options={(catalog.data ?? []).map((m) => ({ label: m.id, value: m.id }))} value={models} onChange={setModels} searchable mono />
           {/* `.mono` shrinks the text to 0.92em, which would leave these controls shorter than the rest of the bar. */}
           <Input value={clientPattern} onChange={(e) => setClientPattern(e.target.value)} placeholder="Client pattern" aria-label="Client pattern" title="* matches any run of characters, ? one; a backslash quotes either" className="mono" style={{ fontSize: 'inherit', width: 180 }} />
@@ -270,7 +270,7 @@ export function RequestsPage() {
                   {visible.has('time') && <th>Time</th>}
                   {visible.has('key') && <th>Key</th>}
                   {visible.has('pool') && <th>Pool</th>}
-                  {visible.has('account') && <th>Upstream</th>}
+                  {visible.has('account') && <th>Account</th>}
                   {visible.has('model') && <th>Model</th>}
                   {visible.has('client') && <th>Client</th>}
                   {visible.has('kind') && <th>Kind</th>}
@@ -464,7 +464,7 @@ function RequestDrawer({ request, requestId, now, onClose }: { now: number; onCl
                 { label: 'User agent', value: r.userAgent ? shortAgent(r.userAgent) : '-', mono: true, title: r.userAgent ?? undefined },
                 { label: 'Key', value: r.keyId ?? '-', mono: true },
                 { label: 'Pool', value: r.poolId ?? '-', mono: true },
-                { label: 'Upstream', value: r.accountId === null ? '-' : <Link to={`/upstreams/${r.accountId}`}>{r.accountId}</Link> },
+                { label: 'Account', value: r.accountId === null ? '-' : <Link to={`/accounts/${r.accountId}`}>{r.accountId}</Link> },
                 { label: 'Model', value: r.model, mono: true },
                 ...(r.canonicalModel !== r.model ? [{ label: 'Canonical model', value: r.canonicalModel, mono: true }] : []),
                 { label: 'Kind', value: `${r.kind.replace('_', ' ')}, ${r.transport === 'sse' ? 'SSE' : 'JSON'}` },
@@ -513,7 +513,7 @@ function RequestDrawer({ request, requestId, now, onClose }: { now: number; onCl
                 <li key={a.index} className={`attempt attempt--${a.outcome}`}>
                   <div className="attempt__head">
                     <span className="attempt__index">{a.index + 1}</span>
-                    <Link to={`/upstreams/${a.accountId}`}>{a.accountId}</Link>
+                    <Link to={`/accounts/${a.accountId}`}>{a.accountId}</Link>
                     <StatusBadge status={a.upstreamStatus} />
                     <span className="secondary">{OUTCOME_LABEL[a.outcome]}</span>
                     <span className="muted num" style={{ marginLeft: 'auto' }}>
@@ -569,11 +569,11 @@ function RequestDrawer({ request, requestId, now, onClose }: { now: number; onCl
               if (e.kind === 'pin_expired') {
                 return (
                   <p className="attempt__migration" key={`${e.at}-${e.accountId ?? '-'}`} title={fmtAbsolute(e.at)}>
-                    Session released from {e.accountId ? <Link to={`/upstreams/${e.accountId}`}>{e.accountId}</Link> : '-'}: {releaseLabel(e.detail?.reasons)}
+                    Session released from {e.accountId ? <Link to={`/accounts/${e.accountId}`}>{e.accountId}</Link> : '-'}: {releaseLabel(e.detail?.reasons)}
                   </p>
                 );
               }
-              const account = e.accountId ? <Link to={`/upstreams/${e.accountId}`}>{e.accountId}</Link> : '-';
+              const account = e.accountId ? <Link to={`/accounts/${e.accountId}`}>{e.accountId}</Link> : '-';
               if (e.kind === 'model_rejected') {
                 return (
                   <p className="attempt__migration" key={`${e.kind}-${e.at}-${e.accountId ?? '-'}`} title={fmtAbsolute(e.at)}>
@@ -589,7 +589,7 @@ function RequestDrawer({ request, requestId, now, onClose }: { now: number; onCl
                     {rejectedBy.map((id, i) => (
                       <span key={id}>
                         {i > 0 && ', '}
-                        <Link to={`/upstreams/${id}`}>{id}</Link>
+                        <Link to={`/accounts/${id}`}>{id}</Link>
                       </span>
                     ))}
                   </p>
@@ -599,8 +599,8 @@ function RequestDrawer({ request, requestId, now, onClose }: { now: number; onCl
               const from = String(e.detail?.from_account ?? '-');
               return (
                 <p className="attempt__migration" key={`${e.at}-${from}`} title={fmtAbsolute(e.at)}>
-                  Session moved from <Link to={`/upstreams/${from}`}>{from}</Link> to{' '}
-                  {e.accountId ? <Link to={`/upstreams/${e.accountId}`}>{e.accountId}</Link> : '-'}: {moveLabel(reason)}
+                  Session moved from <Link to={`/accounts/${from}`}>{from}</Link> to{' '}
+                  {e.accountId ? <Link to={`/accounts/${e.accountId}`}>{e.accountId}</Link> : '-'}: {moveLabel(reason)}
                 </p>
               );
             })}

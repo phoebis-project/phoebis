@@ -60,7 +60,7 @@ function accountStatus(a: Rec, cooldowns: unknown[]): Account['status'] {
   if (state === 'reauth_required' || state === 'funding_required') return state;
   if (state === 'unpaired' || state === 'disconnected') return 'unpaired';
   if (!bool(a.enabled, true)) return 'paused';
-  // A fast-lane row holds fast-mode requests alone: the upstream still serves its standard traffic.
+  // A fast-lane row holds fast-mode requests alone: the account still serves its standard traffic.
   if (cooldowns.some((c) => !isFastScope(str(rec(c).scope)))) return 'cooldown';
   return 'ready';
 }
@@ -322,7 +322,7 @@ export function decodePool(v: unknown): Pool {
       budgetUntil: isoOrNull(m.budget_until),
       // A row from before the router reported eligibility reads as not servable rather than as servable.
       eligible: ELIGIBILITY_VALUES.find((e) => e === str(m.eligible)) ?? 'unavailable',
-      // The route answers null for an account it cannot find, which is no API-key upstream either.
+      // The route answers null for an account it cannot find, which is no Anthropic-key account either.
       kind: ACCOUNT_KIND_VALUES.find((x) => x === str(m.kind)) ?? 'oauth',
       priority: num(m.priority),
       spends: list(m.spends).map(rec).map((s) => ({ period: BUDGET_PERIOD_VALUES.find((x) => x === str(s.period)) ?? 'month', periodEnd: isoOrNull(s.period_end), spentUsd: num(s.spent_usd) })),

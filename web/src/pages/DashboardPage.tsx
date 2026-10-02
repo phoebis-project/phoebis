@@ -39,12 +39,12 @@ export function DashboardPage() {
       </div>
 
       <div className="grid-2">
-        <RemainingCard title="5h remaining" subtitle="Subscription upstreams, 5-hour window" windowId="5h" accounts={accounts.data} />
-        <RemainingCard title="7d remaining" subtitle="Subscription upstreams, 7-day window" windowId="7d" accounts={accounts.data} />
+        <RemainingCard title="5h remaining" subtitle="Subscription accounts, 5-hour window" windowId="5h" accounts={accounts.data} />
+        <RemainingCard title="7d remaining" subtitle="Subscription accounts, 7-day window" windowId="7d" accounts={accounts.data} />
       </div>
 
       <section>
-        <h2 className="section-title">Upstreams</h2>
+        <h2 className="section-title">Accounts</h2>
         <div className="account-strip">
           {accounts.data
             ? accounts.data.map((a) => <AccountMini key={a.id} account={a} now={now} />)
@@ -100,8 +100,8 @@ function RemainingCard({ title, subtitle, windowId, accounts }: { accounts: Acco
   return (
     <Card title={title} subtitle={subtitle}>
       {accounts && rows.length === 0 ? (
-        // A registry of API-key upstreams alone has no window to draw, and an empty ring reads as exhausted.
-        <EmptyState title="No subscription upstreams" body="A subscription upstream reports the window this card draws." />
+        // A registry of Anthropic-key accounts alone has no window to draw, and an empty ring reads as exhausted.
+        <EmptyState title="No subscription accounts" body="A subscription account reports the window this card draws." />
       ) : accounts ? (
         <div className="remaining">
           <Donut
@@ -115,7 +115,7 @@ function RemainingCard({ title, subtitle, windowId, accounts }: { accounts: Acco
             {rows.map((r) => (
               <li key={r.id} className={hover && hover !== r.id ? 'is-dim' : ''} title={`${fmtPct(shareOfPool(r.remaining))} of pooled capacity`}>
                 <span className="legend__swatch" style={{ background: r.color }} />
-                <Link to={`/upstreams/${r.id}`}>{r.label}</Link>
+                <Link to={`/accounts/${r.id}`}>{r.label}</Link>
                 <span className="num">{fmtPct(r.remaining)}</span>
               </li>
             ))}
@@ -129,10 +129,10 @@ function RemainingCard({ title, subtitle, windowId, accounts }: { accounts: Acco
 }
 
 function AccountMini({ account, now }: { account: Account; now: number }) {
-  // A fast-lane row holds fast-mode requests alone, so the line reads a row that cools the upstream.
+  // A fast-lane row holds fast-mode requests alone, so the line reads a row that cools the account.
   const cooldown = account.cooldowns.find((c) => !isFastScope(c.scope));
   return (
-    <Link to={`/upstreams/${account.id}`} className="card card--padded account-mini">
+    <Link to={`/accounts/${account.id}`} className="card card--padded account-mini">
       <div className="account-mini__head">
         <span className="account-mini__name">{account.label}</span>
         <Badge tone={STATUS_TONE[account.status]} dot>
@@ -148,7 +148,7 @@ function AccountMini({ account, now }: { account: Account; now: number }) {
             cooldown ends {fmtRelative(cooldown.until, now)}
           </span>
         )}
-        {account.kind === 'api_key' && <span className="muted">API key upstream</span>}
+        {account.kind === 'api_key' && <span className="muted">Anthropic key</span>}
       </div>
     </Link>
   );
@@ -162,7 +162,7 @@ function RecentTable({ rows, error }: { error: string | null; rows: RequestLog[]
           <tr>
             <th>Time</th>
             <th>Key</th>
-            <th>Upstream</th>
+            <th>Account</th>
             <th>Model</th>
             <th>Status</th>
             <th className="right">TTFB</th>
@@ -225,7 +225,7 @@ export function StatusBadge({ status, attempts = 1 }: { attempts?: number; statu
 
 /**
  * The hero is the router's own pin count: the session rows also hold sessions the ledger or the keepalive engine
- * alone knows and earlier key holders' ones, so only the rows still pinned name the upstreams.
+ * alone knows and earlier key holders' ones, so only the rows still pinned name the accounts.
  */
 function SessionsSummary({ activePins, sessions }: { activePins: number | null; sessions: Session[] | null }) {
   if (!sessions || activePins === null) return <Skeleton height={80} />;
@@ -239,7 +239,7 @@ function SessionsSummary({ activePins, sessions }: { activePins: number | null; 
     <div className="sess-summary">
       <div className="sess-summary__hero">
         <span className="stat__value">{activePins}</span>
-        <span className="stat__note">active pins across {new Set(sessions.filter((p) => p.pinned).map((p) => p.accountId)).size} upstreams</span>
+        <span className="stat__note">active pins across {new Set(sessions.filter((p) => p.pinned).map((p) => p.accountId)).size} accounts</span>
       </div>
       <dl className="sess-summary__grid">
         <div>
