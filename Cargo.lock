@@ -1548,7 +1548,7 @@ dependencies = [
  "fake-upstream",
  "futures",
  "http-body-util",
- "phoebis-alerts",
+ "phoebis-attention",
  "phoebis-bus",
  "phoebis-keepalive",
  "phoebis-ledger",
@@ -1575,12 +1575,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "phoebis-alerts"
+name = "phoebis-attention"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "bytes",
  "fake-upstream",
- "hmac",
+ "http-body-util",
  "phoebis-bus",
  "phoebis-ledger",
  "phoebis-oauth",
@@ -1588,15 +1589,11 @@ dependencies = [
  "phoebis-routing",
  "phoebis-store",
  "phoebis-transport",
- "rand 0.10.2",
- "reqwest",
- "rusqlite",
- "serde",
  "serde_json",
- "sha2 0.10.9",
  "tempfile",
  "tokio",
  "tokio-util",
+ "tower",
  "tracing",
 ]
 
@@ -1788,7 +1785,7 @@ dependencies = [
  "hyper-util",
  "jiff",
  "phoebis-admin",
- "phoebis-alerts",
+ "phoebis-attention",
  "phoebis-bus",
  "phoebis-cch",
  "phoebis-keepalive",
