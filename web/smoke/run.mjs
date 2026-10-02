@@ -956,10 +956,17 @@ await m.navigate('/accounts/spare');
 }
 m.unmount();
 
+// Picks an Analytics tab on the given mount and lets its section's reads land; a check reads its counts afterwards.
+const tab = async (page, label) => {
+  [...page.container.querySelectorAll('.section-bar [role="tab"]')].find((b) => b.textContent?.trim() === label)?.click();
+  await page.settle(700);
+};
+
 {
   // Read while the story stands: the pool checks below write both budgeted pools, and a write answers no spend until
-  // the ledger reports again, which would leave no figure for the word to qualify.
+  // the ledger reports again, which would leave no figure for the word to qualify. The card sits on the Burn tab.
   const early = await mount('/analytics');
+  await tab(early, 'Burn');
   const card = [...early.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Member budgets');
   const spentOf = (account) => [...(card?.querySelectorAll('tbody tr') ?? [])].find((tr) => tr.children[1]?.textContent?.trim() === account)?.children[2];
   const metered = spentOf('business');
@@ -3674,7 +3681,8 @@ m.unmount();
 }
 
 // An outage of the ledger fails every analytics read at once, the section and filter-choice reads beside the three
-// the error state names, and Try again is the one control that reads again, so it has to reach all of them.
+// the error state names, and Try again is the one control that reads again, so it has to reach all of them. A section
+// whose tab is not chosen reads nothing, so Try again reads the shown one's and the next tab reads its own.
 {
   const outage = failCalls({ getAnalyticsBreakdown: '/admin/analytics/breakdown', getAnalyticsSeries: '/admin/analytics/series', listAccountRollups: '/admin/analytics/accounts' }, 'the ledger is unavailable');
   const page = await mount('/analytics');
@@ -3697,43 +3705,69 @@ m.unmount();
   await page.settle(900);
   const t = page.text();
   const upChoices = await choices();
-  const sections = ['traffic', 'latency', 'cache', 'cost', 'cache-warming', 'accounts'].filter((id) => page.container.querySelector(`section#${id}`) === null);
-  const tables = ['Cache by model', 'Cache warming by pool', 'Accounts in range'].map((title) => `${title} ${tableRows(title)}`);
+  const traffic = page.container.querySelector('section#traffic') !== null;
+  const others = ['burn', 'latency', 'cache', 'cost', 'cache-warming', 'accounts'].filter((id) => page.container.querySelector(`section#${id}`) !== null);
+  const trafficRows = tableRows('Traffic by key');
   const groupBys = outage.calls.getAnalyticsBreakdown.map(([q]) => q.groupBy).sort();
   const reads = { breakdown: groupBys.join(','), rollups: outage.calls.listAccountRollups.length, series: outage.calls.getAnalyticsSeries.length };
+  await tab(page, 'Accounts');
+  const rollupsOnAccounts = outage.calls.listAccountRollups.length;
+  const accountRows = tableRows('Accounts in range');
   outage.restore();
   results.push({
-    name: '/analytics Try again after a page-wide outage reads every section and filter choice again',
+    name: '/analytics Try again after a page-wide outage reads the shown section and every filter choice again',
     ok:
       downText.includes('Could not load the analytics for these filters') &&
       downChoices.length === 4 &&
       downChoices.every((c) => c.endsWith(' 0')) &&
       !t.includes('Could not load the analytics for these filters') &&
       !t.includes('Could not load this breakdown') &&
-      sections.length === 0 &&
-      tables.every((row) => !row.endsWith(' 0')) &&
+      traffic &&
+      others.length === 0 &&
+      trafficRows > 0 &&
       upChoices.length === 4 &&
       upChoices.every((c) => !c.endsWith(' 0')) &&
-      reads.breakdown === 'account,effort,key,key,model,model,pool,pool' &&
-      reads.rollups === 1 &&
-      reads.series === 2,
-    missing: [`down ${downChoices.join(',')}`, `up ${upChoices.join(',')}`, `sections missing ${sections.join(',')}`, ...tables, JSON.stringify(reads), t.includes('Could not load this breakdown') ? 'a breakdown still failed' : ''],
+      reads.breakdown === 'account,effort,key,model,pool' &&
+      reads.rollups === 0 &&
+      reads.series === 2 &&
+      rollupsOnAccounts === 1 &&
+      accountRows > 0,
+    missing: [`down ${downChoices.join(',')}`, `up ${upChoices.join(',')}`, `traffic ${traffic}`, `also mounted ${others.join(',')}`, `Traffic by key ${trafficRows}`, JSON.stringify(reads), `rollups on Accounts ${rollupsOnAccounts}`, `Accounts in range ${accountRows}`, t.includes('Could not load this breakdown') ? 'a breakdown still failed' : ''],
   });
   page.unmount();
 }
 
 m = await mount('/analytics');
-expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'Session', 'Traffic', 'Requests by outcome', 'Failovers', 'Errors by code', 'rate_limit_error', 'Traffic by key', 'Exhausted', 'Rejected', 'Latency', 'Time to first byte', 'Time to first content token', 'Total duration', 'Output tokens per second', 'Distribution', 'samples', 'p50', 'p90', 'p95', 'p99', 'Latency by key', 'Cache', 'Hit ratio and cached share', 'Write cost vs read cost', 'Misses by reason', 'Wasted probes', 'Idle limit ran out', 'Released by an operator', 'Replaced by a new registration', 'Session ended', "Probes on recipes that no real request ever followed, settled when the recipe stopped. A high idle-limit share means the pool's max idle time is set too high for how these sessions are used.", 'expired between turns', 'From the cache diagnostics beta: why the prefix did not hit, for requests that asked. No divergence with zero cache reads means the entry expired between turns.', 'Misses by reason by key', 'Expired between turns', 'Cache by model', 'Writes 5m', 'Writes 1h', 'Cost', 'Cost per request', 'Cost per 1k output tokens', 'Cost by key', 'Cost split', 'Cache read', 'Cache warming', 'Probes by outcome', 'Migrated', 'Gross saved', 'Probe cost', 'Net saved', 'Kept-warm requests', 'Kept-warm tokens', 'Cache warming by pool', 'Accounts', 'Peak 5-hour utilization', 'Accounts in range', 'Peak Fable 7d', 'Time in overage', 'Time in cooldown', 'Pins created', 'Migrated in', 'Migrated out', 'desktop', 'laptop', 'in range']);
+// The page opens on Traffic and shows one section at a time, so each list holds the words its own tab draws.
+expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'Session', 'Traffic', 'Requests by outcome', 'Failovers', 'Errors by code', 'rate_limit_error', 'Traffic by key', 'Exhausted', 'Rejected', 'desktop', 'laptop', 'in range']);
+await tab(m, 'Latency');
+expect('/analytics latency tab', m.text(), ['Latency', 'Time to first byte', 'Time to first content token', 'Total duration', 'Output tokens per second', 'Distribution', 'samples', 'p50', 'p90', 'p95', 'p99', 'Latency by key']);
+await tab(m, 'Cache');
+expect('/analytics cache tab', m.text(), ['Cache', 'Hit ratio and cached share', 'Write cost vs read cost', 'Misses by reason', 'expired between turns', 'From the cache diagnostics beta: why the prefix did not hit, for requests that asked. No divergence with zero cache reads means the entry expired between turns.', 'Misses by reason by key', 'Expired between turns', 'Cache by model', 'Writes 5m', 'Writes 1h']);
+await tab(m, 'Cost');
+expect('/analytics cost tab', m.text(), ['Cost', 'Cost per request', 'Cost per 1k output tokens', 'Cost by key', 'Cost split', 'Cache read']);
+await tab(m, 'Cache warming');
+expect('/analytics cache warming tab', m.text(), ['Cache warming', 'Probes by outcome', 'Migrated', 'Gross saved', 'Probe cost', 'Net saved', 'Kept-warm requests', 'Kept-warm tokens', 'Wasted probes', 'Idle limit ran out', 'Released by an operator', 'Replaced by a new registration', 'Session ended', "Probes on recipes that no real request ever followed, settled when the recipe stopped. A high idle-limit share means the pool's max idle time is set too high for how these sessions are used.", 'Cache warming by pool']);
+await tab(m, 'Accounts');
+expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilization', 'Accounts in range', 'Peak Fable 7d', 'Time in overage', 'Time in cooldown', 'Pins created', 'Migrated in', 'Migrated out']);
 {
   const card = (t) => [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === t);
   const legendOf = (t) => [...(card(t)?.querySelectorAll('.legend li') ?? [])].map((li) => [...li.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent?.trim()).join(''));
-  const burnGroup = async (label) => {
-    [...m.container.querySelectorAll('#burn .segmented button')].find((b) => b.textContent?.trim() === label)?.click();
+  const setSelect = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
+  // Takes the grouping's key, the option's value, as the page's own state holds it.
+  const burnGroup = async (value) => {
+    const select = m.container.querySelector('#burn select[aria-label="Burn group by"]');
+    if (select) {
+      setSelect.call(select, value);
+      select.dispatchEvent(new window.Event('change', { bubbles: true }));
+    }
     await m.settle(700);
   };
-  expect('/analytics burn section', m.text(), ['Burn', 'Tokens per minute', 'Spend per minute', 'Plan per hour', 'Migration rewrites', 'Moves']);
+  await tab(m, 'Burn');
+  expect('/analytics burn section', m.text(), ['Burn', 'Tokens per minute', 'Spend per minute', 'Plan per hour']);
+  await tab(m, 'Traffic');
   {
-    expect('/analytics speed and effort', m.text(), ['Requests by speed', 'Standard and fast per bucket, stacked', 'Effort levels', 'Requests per effort level in range', 'Fast mode spend', 'usage credits, at the fast cells']);
+    expect('/analytics speed and effort', m.text(), ['Requests by speed', 'Standard and fast per bucket, stacked', 'Effort levels', 'Requests per effort level in range']);
     // The two cards close the Traffic section's grid, after the rewrites card.
     const grid = card('Migration rewrites')?.parentElement;
     const titles = [...(grid?.children ?? [])].map((c) => c.querySelector('.card__title')?.textContent?.trim());
@@ -3746,9 +3780,12 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
       ok: fastDay !== undefined && fastDay.requests > 0 && speedLegend.length === 2 && speedLegend[0].startsWith('standard') && speedLegend[1] === `fast${fastDay.requests}`,
       missing: [...speedLegend, `fast ${fastDay?.requests}`],
     });
+    await tab(m, 'Cost');
+    expect('/analytics fast mode spend tile', m.text(), ['Fast mode spend', 'usage credits, at the fast cells']);
     const tile = [...m.container.querySelectorAll('#cost .stat')].find((t) => t.querySelector('.stat__label')?.textContent?.trim() === 'Fast mode spend');
     const drawn = Number((tile?.querySelector('.stat__value')?.textContent ?? '').replace(/[$,]/g, ''));
     results.push({ name: "/analytics the Fast mode spend tile reads the fast answers' dollars in range", ok: fastDay !== undefined && fastDay.costUsd > 0 && Math.abs(drawn - fastDay.costUsd) < 0.01, missing: [tile?.textContent ?? 'no tile', String(fastDay?.costUsd)] });
+    await tab(m, 'Traffic');
   }
   const failovers = card('Failovers');
   results.push({ name: '/analytics the migration rewrites card sits beside Failovers', ok: failovers !== undefined && failovers.nextElementSibling === card('Migration rewrites'), missing: [failovers?.nextElementSibling?.querySelector('.card__title')?.textContent ?? 'no sibling'] });
@@ -3756,6 +3793,7 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
   const moveLegend = legendOf('Migration rewrites').slice(2);
   results.push({ name: '/analytics the rewrites legend names each move reason the range holds', ok: Object.keys(moves.moves).length > 1 && moveLegend.length === Object.keys(moves.moves).length && moveLegend.includes('Rate limited') && moveLegend.includes('Shed'), missing: moveLegend });
 
+  await tab(m, 'Burn');
   const planned = legendOf('Plan per hour');
   const windows = ['business', 'mail', 'personal'].flatMap((id) => [`${id} (5-hour)`, `${id} (7-day)`]);
   const planItems = [...(card('Plan per hour')?.querySelectorAll('.legend li') ?? [])];
@@ -3811,14 +3849,14 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
     missing: [...spend, ...spendDashed, `fast spenders ${fastSpenders.join(',')}`],
   });
 
-  await burnGroup('Request class');
+  await burnGroup('request_class');
   const classes = legendOf('Tokens per minute');
   results.push({ name: '/analytics the request class grouping splits conversation from overhead', ok: JSON.stringify(classes) === JSON.stringify(['conversation', 'overhead']) && card('Plan per hour') === undefined, missing: classes });
   expect('/analytics burn by request class', m.text(), ['conversation', 'overhead', 'compaction, main, subagent']);
-  await burnGroup('Key');
+  await burnGroup('key');
   const keys = legendOf('Spend per minute');
   results.push({ name: '/analytics the key grouping charts each key in dollars and draws no plan share', ok: keys.includes('desktop') && keys.includes('laptop') && card('Plan per hour') === undefined, missing: keys });
-  await burnGroup('Account');
+  await burnGroup('account');
   {
     // Past the seven lines a chart draws, subscription accounts fold into one plan line. Seven standard-only
     // accounts keep their lines, and the eighth, the smallest, spent dollars on fast mode alone: the folded rest
@@ -3826,19 +3864,19 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
     // business account, since a line's unit comes from the tier on file and its Max 20x tier is one the table sizes.
     const at = new Date(Date.now() - 3_600_000).toISOString();
     api.getAnalyticsBurn = async () => ({ bucketSeconds: 3_600, points: Array.from({ length: 8 }, (_, i) => ({ at, cachedTokens: 0, fiveHourShare: i < 7 ? 0.01 : 0, group: i < 7 ? `plan-${i}` : 'business', sevenDayShare: i < 7 ? 0.001 : 0, tokens: 1_000 * (8 - i), uncachedTokens: 1_000 * (8 - i), unit: 'window_share', usd: i < 7 ? 0 : 0.6 })) });
-    await burnGroup('Key');
-    await burnGroup('Account');
+    await burnGroup('key');
+    await burnGroup('account');
     const folded = legendOf('Spend per minute');
     const values = [...(card('Spend per minute')?.querySelectorAll('.legend li .legend__value') ?? [])].map((v) => v.textContent?.trim() ?? '');
     const said = card('Spend per minute')?.textContent ?? '';
-    const grouped = [...m.container.querySelectorAll('#burn .segmented button.is-active')].map((b) => b.textContent?.trim());
+    const grouped = m.container.querySelector('#burn select[aria-label="Burn group by"]')?.value ?? null;
     delete api.getAnalyticsBurn;
-    await burnGroup('Key');
-    await burnGroup('Account');
+    await burnGroup('key');
+    await burnGroup('account');
     results.push({
       name: "/analytics spend per minute under the account grouping draws a folded rest's fast-mode dollars under a dollar label",
-      ok: JSON.stringify(folded) === JSON.stringify(['Other (fast mode)']) && JSON.stringify(values) === JSON.stringify(['$0.01']) && grouped.includes('Account') && !said.includes('No account spent dollars in this range.'),
-      missing: [...folded, ...values, ...grouped, said.slice(0, 120)],
+      ok: JSON.stringify(folded) === JSON.stringify(['Other (fast mode)']) && JSON.stringify(values) === JSON.stringify(['$0.01']) && grouped === 'account' && !said.includes('No account spent dollars in this range.'),
+      missing: [...folded, ...values, `grouped by ${grouped}`, said.slice(0, 120)],
     });
   }
 
@@ -3853,8 +3891,8 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
     window.HTMLElement.prototype.getBoundingClientRect = function () {
       return this.classList.contains('recharts-responsive-container') ? { bottom: 220, height: 220, left: 0, right: 600, top: 0, width: 600, x: 0, y: 0 } : measure.call(this);
     };
-    await burnGroup('Key');
-    await burnGroup('Account');
+    await burnGroup('key');
+    await burnGroup('account');
     const plan = card('Plan per hour');
     const dots = [...(plan?.querySelectorAll('.recharts-line-dots .recharts-line-dot') ?? [])];
     const curves = [...(plan?.querySelectorAll('.recharts-line-curve') ?? [])].map((c) => c.getAttribute('d')).filter((d) => d !== null);
@@ -3883,8 +3921,8 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
     });
     window.HTMLElement.prototype.getBoundingClientRect = measure;
     delete api.getAnalyticsBurn;
-    await burnGroup('Key');
-    await burnGroup('Account');
+    await burnGroup('key');
+    await burnGroup('account');
   }
 
   // Placements by rung sit in the Cache section, each budgeted member's spend in the Burn section.
@@ -3892,6 +3930,7 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
     heads: [...(card(t)?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim()),
     rows: [...(card(t)?.querySelectorAll('tbody tr') ?? [])].map((tr) => [...tr.children].map((td) => td.textContent?.trim())),
   });
+  await tab(m, 'Cache');
   const placements = await api.analyticsPlacements({ from: new Date(Date.now() - 24 * 3_600_000).toISOString(), to: new Date().toISOString() });
   const placed = tableOf('Placements by rung');
   const WORDS = { content: 'by its messages', static: 'by its static prefix', with_main: 'with the main conversation' };
@@ -3910,6 +3949,7 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
     ok: card('Placements by rung')?.querySelector('.card__subtitle')?.textContent === "A placement by the conversation's own messages is a hit when the response read the prefix it was promised; one by the static prefix when it read at all",
     missing: [card('Placements by rung')?.querySelector('.card__subtitle')?.textContent ?? 'no subtitle'],
   });
+  await tab(m, 'Burn');
   const budgets = await api.analyticsBudgets();
   const budgeted = tableOf('Member budgets');
   const budgetRows = [...(card('Member budgets')?.querySelectorAll('tbody tr') ?? [])];
@@ -3940,8 +3980,10 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
 }
 {
   const cardByTitle = (t) => [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === t);
-  const missCard = cardByTitle('Misses by reason');
-  const wasteCard = cardByTitle('Wasted probes');
+  // Looked up at each read: a card exists only while its tab is chosen, so a node held across a switch is detached.
+  const missCard = () => cardByTitle('Misses by reason');
+  const wasteCard = () => cardByTitle('Wasted probes');
+  await tab(m, 'Cache');
   {
     const legend = [...(cardByTitle('Tokens')?.querySelectorAll('.legend li') ?? [])].map((li) => [...li.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent?.trim()).join(''));
     results.push({
@@ -3950,19 +3992,20 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
       missing: legend,
     });
   }
-  const bars = [...(missCard?.querySelectorAll('.hbars--reasons li') ?? [])].map((li) => li.children[0]?.textContent?.trim());
+  const bars = [...(missCard()?.querySelectorAll('.hbars--reasons li') ?? [])].map((li) => li.children[0]?.textContent?.trim());
   const labels = ['History edited', 'Model changed', 'No divergence', 'Not requested', 'Previous message not found', 'System prompt changed', 'Tools changed', 'Unavailable'];
   results.push({ name: '/analytics misses-by-reason draws a bar per reason', ok: bars.length === 8 && labels.every((l) => bars.includes(l)), missing: bars });
-  const counts = [...(missCard?.querySelectorAll('.hbars--reasons li .num') ?? [])].map((n) => Number(n.textContent?.trim().split(' ')[0].replace(/,/g, '')));
+  const counts = [...(missCard()?.querySelectorAll('.hbars--reasons li .num') ?? [])].map((n) => Number(n.textContent?.trim().split(' ')[0].replace(/,/g, '')));
   results.push({ name: '/analytics misses-by-reason sorts by count', ok: counts.length === 8 && counts.every((v, i) => i === 0 || counts[i - 1] >= v), missing: counts.map(String) });
   results.push({ name: '/analytics misses-by-reason counts something', ok: counts.some((v) => v > 0), missing: counts.map(String) });
-  const shares = [...(missCard?.querySelectorAll('.hbars--reasons li .num .muted') ?? [])].map((n) => n.textContent?.trim());
+  const shares = [...(missCard()?.querySelectorAll('.hbars--reasons li .num .muted') ?? [])].map((n) => n.textContent?.trim());
   results.push({ name: '/analytics misses-by-reason shows a share per reason', ok: shares.length === 8 && shares.every((v) => /^\d+\.\d%$/.test(v ?? '')), missing: shares });
   const cacheMeta = m.container.querySelector('#cache .analytics-section__meta')?.textContent ?? '';
   results.push({ name: '/analytics cache meta puts expired between turns next to hit ratio', ok: /hit ratio, \d[\d,]* expired between turns,/.test(cacheMeta), missing: [cacheMeta] });
-  results.push({ name: '/analytics wasted probes lives in the cache warming section', ok: wasteCard?.closest('.analytics-section')?.id === 'cache-warming' && m.container.querySelector('#cache')?.contains(wasteCard) === false, missing: [wasteCard?.closest('.analytics-section')?.id ?? 'no card'] });
+  await tab(m, 'Cache warming');
+  results.push({ name: '/analytics wasted probes lives in the cache warming section', ok: wasteCard()?.closest('.analytics-section')?.id === 'cache-warming' && m.container.querySelector('#cache') === null, missing: [wasteCard()?.closest('.analytics-section')?.id ?? 'no card', `cache mounted ${m.container.querySelector('#cache') !== null}`] });
   {
-    const reasonRows = [...(wasteCard?.querySelectorAll('.hbars--reasons li') ?? [])];
+    const reasonRows = [...(wasteCard()?.querySelectorAll('.hbars--reasons li') ?? [])];
     results.push({ name: '/analytics wasted probe rows align their label at the top', ok: reasonRows.length === 4 && reasonRows.every((li) => li.classList.contains('hbars__row--top')), missing: [] });
   }
   {
@@ -3971,6 +4014,7 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
     results.push({ name: '/analytics group-by offers the client class and the user agent', ok: offered.includes('Client') && offered.includes('User agent'), missing: offered });
     results.push({ name: '/analytics group-by offers the speed', ok: offered.includes('Speed'), missing: offered });
   }
+  await tab(m, 'Traffic');
   {
     const setArea = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
     const setSelect = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
@@ -4053,6 +4097,7 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
     await m.settle(900);
     await groupBy('Key');
   }
+  await tab(m, 'Cache');
   const reasonTable = [...m.container.querySelectorAll('.card--table')].map((c) => c.textContent ?? '').find((t) => t.startsWith('Misses by reason by key')) ?? '';
   results.push({ name: '/analytics misses-by-reason table breaks down per group', ok: labels.every((l) => reasonTable.includes(l)) && reasonTable.includes('Expired between turns') && reasonTable.includes('desktop'), missing: [reasonTable.slice(0, 160)] });
   {
@@ -4061,7 +4106,7 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
     const order = ['No divergence', 'Model changed', 'System prompt changed', 'Tools changed', 'History edited', 'Previous message not found', 'Unavailable', 'Not requested'];
     const heads = [...(table?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim());
     results.push({ name: '/analytics reason columns follow the documented order', ok: JSON.stringify(heads) === JSON.stringify(['Key', ...order, 'Expired between turns']), missing: heads });
-    const panel = Object.fromEntries([...(missCard?.querySelectorAll('.hbars--reasons li') ?? [])].map((li) => [li.children[0]?.textContent?.trim(), Number(li.children[2]?.textContent?.trim().split(' ')[0].replace(/,/g, ''))]));
+    const panel = Object.fromEntries([...(missCard()?.querySelectorAll('.hbars--reasons li') ?? [])].map((li) => [li.children[0]?.textContent?.trim(), Number(li.children[2]?.textContent?.trim().split(' ')[0].replace(/,/g, ''))]));
     const columnSum = (i) => body.reduce((n, row) => n + Number(row[i + 1].replace(/,/g, '')), 0);
     results.push({ name: '/analytics panel counts equal the per-group column sums', ok: order.every((label, i) => panel[label] === columnSum(i)), missing: order.map((label, i) => `${label} ${panel[label]} vs ${columnSum(i)}`) });
     const ci = body.find((row) => row[0] === 'ci') ?? [];
@@ -4073,6 +4118,7 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
   {
     // The account rollups carry the range and the account alone, so the section takes the account selection and
     // says the other filters do not reach it.
+    await tab(m, 'Accounts');
     const accountTable = () => [...m.container.querySelectorAll('.card--table')].find((c) => (c.textContent ?? '').startsWith('Accounts in range'));
     const accountRows = () => [...(accountTable()?.querySelectorAll('tbody tr') ?? [])].map((tr) => tr.children[0]?.textContent?.trim() ?? '');
     const every = accountRows();
@@ -4127,6 +4173,7 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
       missing: [`session ${bySession}`, `rows ${sessionRows.join(',')}`, `probes ${byProbes}`, `after ${subtitle()}`],
     });
   }
+  await tab(m, 'Cache warming');
   {
     const warming = [...m.container.querySelectorAll('.card--table')].find((c) => (c.textContent ?? '').startsWith('Cache warming by pool'));
     const codex = [...(warming?.querySelectorAll('tbody tr') ?? [])].map((tr) => [...tr.children].map((td) => td.textContent?.trim() ?? '')).find((row) => row[0] === 'codex') ?? [];
@@ -4159,6 +4206,7 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
   {
     // The earlier holder of `desktop` spent its hours in the second week back, so the month is the range that
     // holds both groups; the later checks read the day, which it is put back to at the end.
+    await tab(m, 'Traffic');
     const range = (label) => [...m.container.querySelectorAll('.segmented button')].find((b) => b.textContent?.trim() === label);
     range('30d')?.click();
     await m.settle(700);
@@ -4197,6 +4245,7 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
     }
     // One hour of the month reports a reason the console has no label for; the table lists it under its own name
     // after the eight it knows, and the panel draws a bar for it.
+    await tab(m, 'Cache');
     const reasonHeads = [...([...m.container.querySelectorAll('.card--table')].find((c) => (c.textContent ?? '').startsWith('Misses by reason by key'))?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim());
     const monthBars = [...([...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Misses by reason')?.querySelectorAll('.hbars--reasons li') ?? [])].map((li) => li.children[0]?.textContent?.trim());
     results.push({
@@ -4204,6 +4253,7 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
       ok: JSON.stringify(reasonHeads.slice(-3)) === JSON.stringify(['Not requested', 'future_reason', 'Expired between turns']) && monthBars.length === 9 && monthBars.includes('future_reason'),
       missing: [...reasonHeads, ...monthBars],
     });
+    await tab(m, 'Traffic');
     const keyFilter = [...m.container.querySelectorAll('.filters .mselect')].find((d) => d.querySelector('.mselect__trigger')?.textContent?.trim().startsWith('Key'));
     const pick = async (label) => {
       keyFilter?.querySelector('.mselect__trigger')?.click();
@@ -4228,6 +4278,7 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
     range('24h')?.click();
     await m.settle(700);
   }
+  await tab(m, 'Cache warming');
   {
     const legend = [...m.container.querySelectorAll('.legend li')].map((li) => li.textContent?.trim() ?? '');
     const migrated = [...m.container.querySelectorAll('.legend li')].find((li) => (li.textContent ?? '').startsWith('Migrated'));
@@ -4238,6 +4289,7 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
     });
   }
   results.push({ name: '/analytics filter bar is sticky', ok: m.container.querySelector('.filters.filters--sticky') !== null, missing: [m.container.querySelector('.filters')?.className ?? 'no filter bar'] });
+  await tab(m, 'Latency');
   const hints = m.container.querySelectorAll('[title="±1 bucket"]').length;
   results.push({ name: '/analytics percentile labels carry the bucket hint', ok: hints >= 8, missing: [String(hints)] });
   const dims = [...m.container.querySelectorAll('.filters .mselect__trigger')].map((b) => b.textContent?.trim());
@@ -4249,15 +4301,82 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
   results.push({ name: '/analytics custom range shows from/to', ok: pickers === 2, missing: [String(pickers)] });
   const hist = m.container.querySelectorAll('.hist__bars').length;
   results.push({ name: '/analytics draws four histograms', ok: hist === 4, missing: [String(hist)] });
-  const bar = [...m.container.querySelectorAll('.section-bar__link')].map((b) => b.textContent?.trim());
-  results.push({ name: '/analytics section bar lists every section', ok: JSON.stringify(bar) === JSON.stringify(['Traffic', 'Burn', 'Latency', 'Cache', 'Cost', 'Cache warming', 'Accounts']), missing: bar });
-  const targets = [...m.container.querySelectorAll('.section-bar__link')].map((b) => b.textContent?.trim().toLowerCase().replace(/ /g, '-'));
-  results.push({ name: '/analytics each bar entry has a section to scroll to', ok: targets.every((id) => m.container.querySelector(`.analytics-section#${id}`) !== null), missing: targets });
-  results.push({ name: '/analytics marks one section active', ok: m.container.querySelectorAll('.section-bar__link.is-active').length === 1, missing: [] });
-  const cost = [...m.container.querySelectorAll('.section-bar__link')].find((b) => b.textContent?.trim() === 'Cost');
-  cost?.click();
-  await m.settle(150);
-  results.push({ name: '/analytics clicking a bar entry moves the highlight', ok: cost?.classList.contains('is-active') === true, missing: [...m.container.querySelectorAll('.section-bar__link.is-active')].map((b) => b.textContent) });
+  await tab(m, 'Traffic');
+  {
+    const strip = () => [...m.container.querySelectorAll('.section-bar [role="tab"]')];
+    results.push({ name: '/analytics the strip lists the seven tabs in order with one selected', ok: JSON.stringify(strip().map((b) => b.textContent?.trim())) === JSON.stringify(['Traffic', 'Burn', 'Latency', 'Cache', 'Cost', 'Cache warming', 'Accounts']) && strip().filter((b) => b.getAttribute('aria-selected') === 'true').map((b) => b.textContent?.trim()).join() === 'Traffic' && m.container.querySelector('.section-bar [role="tablist"]')?.getAttribute('aria-label') === 'Sections', missing: strip().map((b) => `${b.textContent} ${b.getAttribute('aria-selected')}`) });
+    const mounted = () => [...m.container.querySelectorAll('.analytics-section')].map((s) => s.id).join();
+    results.push({ name: '/analytics shows Traffic alone and mounts no other section', ok: mounted() === 'traffic' && m.container.querySelector('#traffic')?.getAttribute('role') === 'tabpanel' && m.container.querySelector('#traffic')?.getAttribute('aria-labelledby') === 'tab-traffic', missing: [mounted()] });
+    await tab(m, 'Burn');
+    results.push({ name: '/analytics a tab click writes its hash and mounts its section alone', ok: m.location().hash === '#burn' && m.location().pathname === '/analytics' && mounted() === 'burn', missing: [JSON.stringify(m.location()), mounted()] });
+    const selects = ['.filters select.groupby-select', '#burn select.groupby-select[aria-label="Burn group by"]'].map((s) => m.container.querySelector(s));
+    results.push({ name: "/analytics both group-by controls are selects of one class, Burn's named and explained beside it", ok: selects.every((s) => s !== null) && [...(selects[1]?.options ?? [])].map((o) => o.textContent).join() === 'Account,Key,Session,Request class' && (m.container.querySelector('#burn .analytics-groupby__reason')?.textContent ?? '') === "Burn groups by account, key, session or request class alone; the plan shares read under Account, since shares of different accounts' windows do not add.", missing: selects.map((s) => s?.outerHTML.slice(0, 80) ?? 'missing') });
+    await tab(m, 'Traffic');
+    m.unmount();
+    m = await mount('/analytics#burn');
+    results.push({ name: '/analytics#burn shows Burn', ok: mounted() === 'burn' && strip().find((b) => b.getAttribute('aria-selected') === 'true')?.textContent?.trim() === 'Burn', missing: [mounted()] });
+    m.unmount();
+    m = await mount('/analytics#nope');
+    results.push({ name: '/analytics an unknown hash shows Traffic', ok: mounted() === 'traffic', missing: [mounted()] });
+    m.unmount();
+    // The route paths label a failure report; the method names are what count.
+    const reads = failCalls({ getAnalyticsBurn: '/admin/analytics/burn', listAccountRollups: '/admin/analytics/accounts' }, 'counted');
+    reads.recover();
+    m = await mount('/analytics');
+    const before = [reads.calls.getAnalyticsBurn.length, reads.calls.listAccountRollups.length];
+    await tab(m, 'Accounts');
+    const afterAccounts = [reads.calls.getAnalyticsBurn.length, reads.calls.listAccountRollups.length];
+    await tab(m, 'Burn');
+    const afterBurn = [reads.calls.getAnalyticsBurn.length, reads.calls.listAccountRollups.length];
+    reads.restore();
+    results.push({ name: '/analytics a section whose tab is not chosen makes none of its own reads', ok: JSON.stringify(before) === '[0,0]' && JSON.stringify(afterAccounts) === '[0,1]' && JSON.stringify(afterBurn) === '[1,1]', missing: [JSON.stringify(before), JSON.stringify(afterAccounts), JSON.stringify(afterBurn)] });
+    m.unmount();
+    {
+      // With no filter set, the grouped dimension's options come from the page's own breakdown, which still holds the
+      // grouping before a change until the new read lands; that read is held here so the beat can be read.
+      m = await mount('/analytics');
+      const optionsOf = async (label) => {
+        const filter = [...m.container.querySelectorAll('.filters .mselect')].find((d) => d.querySelector('.mselect__trigger')?.textContent?.trim().startsWith(label));
+        filter?.querySelector('.mselect__trigger')?.click();
+        await m.settle(60);
+        const listed = [...(filter?.querySelectorAll('.mselect__option') ?? [])].map((o) => o.textContent?.trim() ?? '');
+        filter?.querySelector('.mselect__trigger')?.click();
+        await m.settle(60);
+        return listed;
+      };
+      const keyLabels = await optionsOf('Key');
+      const held = deferNextCall('getAnalyticsBreakdown');
+      const select = m.container.querySelector('.filters select.groupby-select');
+      if (select) {
+        Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set.call(select, 'model');
+        select.dispatchEvent(new window.Event('change', { bubbles: true }));
+      }
+      await m.settle(300);
+      const during = await optionsOf('Model');
+      held.release();
+      await m.settle(300);
+      const after = await optionsOf('Model');
+      held.restore();
+      results.push({
+        name: "/analytics a group-by change offers none of the previous grouping's keys while its read is out",
+        ok: keyLabels.length > 0 && held.calls[0]?.[0]?.groupBy === 'model' && during.length === 0 && after.length > 0 && !after.some((o) => keyLabels.includes(o)),
+        missing: [`keys ${keyLabels.join(',')}`, `held ${held.calls[0]?.[0]?.groupBy}`, `during ${during.join(',')}`, `after ${after.join(',')}`],
+      });
+      m.unmount();
+    }
+    m = await mount(`/analytics?session=${encodeURIComponent(laptopRow.sessionId)}&key=laptop%40${laptopRow.keyGeneration}`);
+    await tab(m, 'Latency');
+    results.push({ name: '/analytics a tab change keeps the session query', ok: m.location().hash === '#latency' && m.location().search.includes('session=') && m.location().search.includes('key=laptop'), missing: [JSON.stringify(m.location())] });
+    m.unmount();
+    m = await mount('/analytics');
+    // The range is the page's own state, so a fresh mount opens on the day; the session checks below read the three
+    // days the Custom range opens on, as they did before the remount.
+    [...m.container.querySelectorAll('[aria-label="Range"] button')].find((b) => b.textContent?.trim() === 'Custom')?.click();
+    await m.settle(300);
+    const range = [...m.container.querySelectorAll('[aria-label="Range"] button[aria-pressed="true"]')].map((b) => b.textContent?.trim()).join();
+    const pickers = m.container.querySelectorAll('.filters input[type="datetime-local"]').length;
+    results.push({ name: '/analytics the session checks after the remount read the Custom range', ok: range === 'Custom' && pickers === 2 && m.location().search === '', missing: [`range ${range}`, `pickers ${pickers}`, m.location().search] });
+  }
   {
     const field = () => [...m.container.querySelectorAll('.filters input')].find((i) => i.getAttribute('type') === 'search');
     const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
@@ -4268,11 +4387,14 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
       input?.dispatchEvent(new window.KeyboardEvent('keydown', { bubbles: true, key: 'Enter' }));
       await m.settle(900);
     };
+    // Cache warming is the section whose meta names the request log as a session view's source.
+    await tab(m, 'Cache warming');
     await commit(requests.find((r) => r.sessionId !== null).sessionId);
     const entered = m.text().includes('From the request log');
     await commit('');
     results.push({ name: '/analytics the session field enters and leaves the session view', ok: entered && !m.text().includes('From the request log'), missing: [`entered ${entered}`, `left ${!m.text().includes('From the request log')}`] });
   }
+  await tab(m, 'Traffic');
   {
     // A session view answers every section from the request log, so the client, user agent, and effort controls
     // have to reach the local fold exactly as they reach the routes.
@@ -4372,6 +4494,7 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
     m.container.querySelector('.chip--removable button')?.click();
     await m.settle(900);
     await groupBy('Key');
+    await tab(m, 'Cache warming');
     results.push({ name: '/analytics removing the session chip leaves the session view', ok: !m.text().includes('From the request log'), missing: [] });
   }
 }
@@ -4914,11 +5037,13 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
   (await jump('View in analytics'))?.click();
   await m.settle(900);
   results.push({ name: '/sessions View in analytics pre-filters the session', ok: chipText().some((c) => c.startsWith('Session')) && m.text().includes('Cache warming'), missing: chipText() });
+  await tab(m, 'Cache warming');
   results.push({ name: '/analytics a session view says it reads the request log', ok: m.text().includes('From the request log'), missing: [] });
   {
     // The request log carries one cost total and no probe or kept-warm facts, so a session view draws those
     // figures as unavailable rather than as zero.
     const tiles = [...m.container.querySelectorAll('#cache-warming > .tiles-row .stat__value')].map((v) => v.textContent?.trim());
+    await tab(m, 'Cache');
     const costCard = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Write cost vs read cost');
     const costLegend = [...(costCard?.querySelectorAll('.legend__value') ?? [])].map((v) => v.textContent?.trim());
     results.push({
@@ -4927,6 +5052,7 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
       missing: [...tiles, ...costLegend],
     });
   }
+  await tab(m, 'Traffic');
   {
     // The request log takes the same four filters the rollup query does, so a model the session never used
     // empties the page instead of leaving every number where it was.

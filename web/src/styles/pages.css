@@ -2505,33 +2505,23 @@
   position: sticky;
   top: 52px;
   z-index: 4;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 2px;
   padding: 8px 0;
   background: color-mix(in srgb, var(--page) 92%, transparent);
   backdrop-filter: blur(8px);
-  border-bottom: 1px solid var(--hairline);
 }
 
-.section-bar__link {
-  padding: 5px 12px;
-  font-size: 13px;
-  color: var(--ink-2);
-  background: none;
-  border: 0;
-  border-radius: var(--radius-sm);
+/* One shape for the page's and Burn's group-by: a 160 px select after its label; Burn's reason wraps under it on a
+   narrow page. */
+.groupby-select {
+  width: 160px;
 }
 
-.section-bar__link:hover {
-  color: var(--ink);
-  background: var(--surface-2);
+.analytics-groupby {
+  flex-wrap: wrap;
 }
 
-.section-bar__link.is-active {
-  font-weight: 600;
-  color: var(--accent-ink);
-  background: var(--accent-soft);
+.analytics-groupby__reason {
+  font-size: 12.5px;
 }
 
 .analytics-section {

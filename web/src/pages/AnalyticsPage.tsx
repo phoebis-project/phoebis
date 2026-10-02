@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, ComposedChart, Dot, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '@/api';
 import { foldGroups, foldRequests, loadSessionRequests, sumGroups } from '@/api/fold';
 import type { AccountRollup, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, CacheMissReason, CostSplit, LatencyHistograms, MemberBudget, PlacementRow, RequestLog, RewritePoint } from '@/api/types';
@@ -10,14 +10,13 @@ import { useChartInk } from '@/components/charts/useChartInk';
 import { ChartTooltip, Legend, type TooltipRow } from '@/components/charts/Tooltip';
 import { MultiSelect, type Option } from '@/components/ui/MultiSelect';
 import { IconX } from '@/components/ui/icons';
-import { Badge, Button, Card, ErrorState, Input, Meter, Segmented, Select, Skeleton, Toggle } from '@/components/ui/primitives';
+import { Badge, Button, Card, ErrorState, Input, Meter, Segmented, Select, Skeleton, Tabs, Toggle } from '@/components/ui/primitives';
 import { CONVERSATION_CLASSES, foldBurn, isolatedSlots, moveLabel, placementCells, placementRungLabel, readBurn, sizedAccounts, slotUnpriced, type BurnLine, type BurnLineUnit, type BurnRow } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missCount, missLabel, missReasonOrder } from '@/lib/cache';
 import { fmtAbsolute, fmtCompact, fmtDayShort, fmtDuration, fmtHourTick, fmtInt, fmtMs, fmtPct, fmtPeriodEnd, fmtShare, fmtUsd, shortId, toLocalInput, upperFirst } from '@/lib/format';
 import { BUCKET_COUNT, BUCKET_EDGES, PERCENTILE_HINT, histogramCount } from '@/lib/histogram';
-import { useAsync } from '@/lib/hooks';
-import { scrollToSection, useScrollSpy } from '@/lib/scroll';
+import { useAsync, type Loaded } from '@/lib/hooks';
 
 type Range = '1h' | '24h' | '30d' | '7d' | 'custom';
 /** The dimensions the breakdown route groups on; `all` is the ungrouped total every section reads. */
@@ -105,9 +104,15 @@ function timeTip<T extends { at: number }>(rows: (p: T) => TooltipRow[]) {
   };
 }
 
-/** Every key the range holds on one dimension, read once per range so a filter never hides its own options. */
-function useDimensionKeys(from: string, to: string, groupBy: GroupBy) {
-  return useAsync(() => api.getAnalyticsBreakdown({ from, groupBy, to }), [from, to, groupBy]);
+/**
+ * Every key the range holds on one dimension, read once per range so a filter never hides its own options. With no
+ * filter set and the page grouped on this dimension, the page's breakdown is that very read and answers for it; while
+ * it reloads it may still hold the previous grouping's keys, so it offers nothing until the new answer lands.
+ */
+function useDimensionKeys(from: string, to: string, groupBy: GroupBy, shared?: Loaded<AnalyticsGroup[]>): Loaded<AnalyticsGroup[] | null> {
+  const own = useAsync(() => (shared ? Promise.resolve(null) : api.getAnalyticsBreakdown({ from, groupBy, to })), [from, groupBy, to, shared !== undefined]);
+  if (shared === undefined) return own;
+  return shared.stale ? { ...shared, data: null } : shared;
 }
 
 const optionsOf = (rows: AnalyticsGroup[] | null): Option[] => (rows ?? []).map((g) => ({ label: g.label, value: g.key })).sort((a, b) => a.label.localeCompare(b.label));
@@ -125,10 +130,19 @@ export function AnalyticsPage() {
   const [burnGroup, setBurnGroup] = useState<BurnGroup>('account');
   const filtersRef = useRef<HTMLDivElement>(null);
   const filtersHeight = useStickyHeight(filtersRef);
-  // Three bars stack at the top now, and the filter bar wraps at narrow widths,
-  // so the jump offset is measured rather than assumed.
-  const headOffset = SECTION_OFFSET + filtersHeight;
-  const [searchParams, setSearchParams] = useSearchParams();
+  const location = useLocation();
+  const navigate = useNavigate();
+  // The hash is the tab: a link or a reload lands on the section it names, and a change replaces the entry with the
+  // search kept, so a session filter survives and Back leaves the page rather than walking the tabs.
+  const tab = useMemo<SectionId>(() => {
+    const id = location.hash.slice(1);
+    return SECTIONS.some((s) => s.id === id) ? (id as SectionId) : 'traffic';
+  }, [location.hash]);
+  const chooseTab = (id: SectionId) => {
+    navigate({ hash: `#${id}`, pathname: location.pathname, search: location.search }, { replace: true });
+    scroller()?.scrollTo?.({ top: 0 });
+  };
+  const [searchParams] = useSearchParams();
   const sessionParam = searchParams.get('session');
   // A session id is one session per key lifetime, so a drill-down from a session row names the lifetime too.
   const sessionKey = sessionParam === null ? null : searchParams.get('key');
@@ -151,7 +165,8 @@ export function AnalyticsPage() {
     const next = new URLSearchParams(searchParams);
     next.delete('key');
     next.delete('session');
-    setSearchParams(next, { replace: true });
+    const search = next.toString();
+    navigate({ hash: location.hash, pathname: location.pathname, search: search ? `?${search}` : '' }, { replace: true });
   };
 
   const span = useMemo(() => {
@@ -178,8 +193,9 @@ export function AnalyticsPage() {
   // A session view answers every section from the request log, so the rollup reads stay home while one is set.
   const series = useAsync(() => (sessionId === null ? api.getAnalyticsSeries(query) : Promise.resolve<AnalyticsPoint[]>([])), [query, sessionId]);
   const breakdown = useAsync(() => (sessionId === null ? api.getAnalyticsBreakdown(query) : Promise.resolve<AnalyticsGroup[]>([])), [query, sessionId]);
-  const byModel = useAsync(() => (sessionId === null ? api.getAnalyticsBreakdown({ ...query, groupBy: 'model' }) : Promise.resolve<AnalyticsGroup[]>([])), [query, sessionId]);
-  const byPool = useAsync(() => (sessionId === null ? api.getAnalyticsBreakdown({ ...query, groupBy: 'pool' }) : Promise.resolve<AnalyticsGroup[]>([])), [query, sessionId]);
+  // A read only a hidden tab draws answers null without a request, and runs once its tab is chosen.
+  const byModel = useAsync(() => (tab === 'cache' && sessionId === null ? api.getAnalyticsBreakdown({ ...query, groupBy: 'model' }) : Promise.resolve<AnalyticsGroup[] | null>(sessionId === null ? null : [])), [query, sessionId, tab]);
+  const byPool = useAsync(() => (tab === 'cache-warming' && sessionId === null ? api.getAnalyticsBreakdown({ ...query, groupBy: 'pool' }) : Promise.resolve<AnalyticsGroup[] | null>(sessionId === null ? null : [])), [query, sessionId, tab]);
   const log = useAsync(
     () =>
       sessionId === null
@@ -195,24 +211,26 @@ export function AnalyticsPage() {
           ),
     [classPattern, userAgentPattern, filters, fromIso, includeProbes, sessionId, sessionKey, toIso],
   );
-  const accountRollups = useAsync(() => api.listAccountRollups(fromIso, toIso), [fromIso, toIso]);
-  const burn = useAsync(() => readBurn(api, { from: fromIso, to: toIso }, burnGroup), [fromIso, toIso, burnGroup]);
+  const accountRollups = useAsync(() => (tab === 'accounts' ? api.listAccountRollups(fromIso, toIso) : Promise.resolve(null)), [fromIso, toIso, tab]);
+  const burn = useAsync(() => (tab === 'burn' ? readBurn(api, { from: fromIso, to: toIso }, burnGroup) : Promise.resolve(null)), [fromIso, toIso, burnGroup, tab]);
   // The plan chart's line category reads each account's stored tier against the cost table's tiers.
-  const burnSettings = useAsync(() => api.getSettings(), []);
+  const burnSettings = useAsync(() => (tab === 'burn' ? api.getSettings() : Promise.resolve(null)), [tab]);
   const sized = useMemo(() => (burn.data && burnSettings.data ? sizedAccounts(burn.data.accounts, burnSettings.data.planTables.cost.tiers) : null), [burn.data, burnSettings.data]);
-  const rewrites = useAsync(() => api.getAnalyticsRewrites({ from: fromIso, to: toIso }), [fromIso, toIso]);
+  const rewrites = useAsync(() => (tab === 'traffic' ? api.getAnalyticsRewrites({ from: fromIso, to: toIso }) : Promise.resolve(null)), [fromIso, toIso, tab]);
   // Side groupings on the page's own query, as byModel and byPool are; a session view folds them from the log.
   const bySpeed = useAsync(() => (sessionId === null ? api.getAnalyticsSeries({ ...query, groupBy: 'speed' }) : Promise.resolve<AnalyticsPoint[]>([])), [query, sessionId]);
-  const byEffort = useAsync(() => (sessionId === null ? api.getAnalyticsBreakdown({ ...query, groupBy: 'effort' }) : Promise.resolve<AnalyticsGroup[]>([])), [query, sessionId]);
+  const byEffort = useAsync(() => (tab === 'traffic' && sessionId === null ? api.getAnalyticsBreakdown({ ...query, groupBy: 'effort' }) : Promise.resolve<AnalyticsGroup[] | null>(sessionId === null ? null : [])), [query, sessionId, tab]);
   const placements = useAsync(
-    () => (sessionId === null ? api.analyticsPlacements({ from: fromIso, keyIds: filters.keyId, poolIds: filters.poolId, to: toIso }) : Promise.resolve<PlacementRow[]>([])),
-    [fromIso, toIso, filters.keyId, filters.poolId, sessionId],
+    () => (tab === 'cache' && sessionId === null ? api.analyticsPlacements({ from: fromIso, keyIds: filters.keyId, poolIds: filters.poolId, to: toIso }) : Promise.resolve<PlacementRow[] | null>(sessionId === null ? null : [])),
+    [fromIso, toIso, filters.keyId, filters.poolId, sessionId, tab],
   );
-  const budgets = useAsync(() => api.analyticsBudgets(), []);
-  const accountKeys = useDimensionKeys(fromIso, toIso, DIM_GROUP.accountId);
-  const keyKeys = useDimensionKeys(fromIso, toIso, DIM_GROUP.keyId);
-  const modelKeys = useDimensionKeys(fromIso, toIso, DIM_GROUP.model);
-  const poolKeys = useDimensionKeys(fromIso, toIso, DIM_GROUP.poolId);
+  const budgets = useAsync(() => (tab === 'burn' ? api.analyticsBudgets() : Promise.resolve(null)), [tab]);
+  // With no filter and no session the page's breakdown is the range's whole key list on its grouping.
+  const plain = sessionId === null && filters.accountId.length === 0 && filters.keyId.length === 0 && filters.model.length === 0 && filters.poolId.length === 0 && classPattern.trim() === '' && userAgentPattern.trim() === '' && !includeProbes && agentGroups === undefined;
+  const accountKeys = useDimensionKeys(fromIso, toIso, DIM_GROUP.accountId, plain && groupBy === DIM_GROUP.accountId ? breakdown : undefined);
+  const keyKeys = useDimensionKeys(fromIso, toIso, DIM_GROUP.keyId, plain && groupBy === DIM_GROUP.keyId ? breakdown : undefined);
+  const modelKeys = useDimensionKeys(fromIso, toIso, DIM_GROUP.model, plain && groupBy === DIM_GROUP.model ? breakdown : undefined);
+  const poolKeys = useDimensionKeys(fromIso, toIso, DIM_GROUP.poolId, plain && groupBy === DIM_GROUP.poolId ? breakdown : undefined);
   const options = useMemo<Record<QueryDim, Option[]>>(
     () => ({ accountId: optionsOf(accountKeys.data), keyId: optionsOf(keyKeys.data), model: optionsOf(modelKeys.data), poolId: optionsOf(poolKeys.data) }),
     [accountKeys.data, keyKeys.data, modelKeys.data, poolKeys.data],
@@ -307,7 +325,7 @@ export function AnalyticsPage() {
         <span className="filters__sep" aria-hidden />
         <label className="row">
           <span className="muted">Group by</span>
-          <Select value={groupBy} onChange={(e) => setGroupBy(e.target.value as GroupBy)}>
+          <Select value={groupBy} onChange={(e) => setGroupBy(e.target.value as GroupBy)} className="groupby-select">
             {(Object.keys(GROUP_LABEL) as GroupBy[]).map((g) => (
               <option key={g} value={g}>
                 {GROUP_LABEL[g]}
@@ -375,7 +393,9 @@ export function AnalyticsPage() {
         )}
       </div>
 
-      <SectionBar offset={headOffset} top={TOPBAR_HEIGHT + filtersHeight} />
+      <div className="section-bar" style={{ top: TOPBAR_HEIGHT + filtersHeight }}>
+        <Tabs<SectionId> label="Sections" value={tab} onChange={chooseTab} tabs={SECTIONS.map((s) => ({ controls: s.id === tab ? s.id : undefined, id: `tab-${s.id}`, label: s.label, value: s.id }))} />
+      </div>
 
       {failure !== null && (
         <ErrorState
@@ -390,323 +410,337 @@ export function AnalyticsPage() {
       )}
       {empty && <div className="empty">No traffic in this range.</div>}
 
-      {/* Traffic */}
-      <Section id="traffic" shown={shown} offset={headOffset} title="Traffic" meta={loading ? undefined : `${fmtInt(totals.requests)} requests, ${fmtPct(errorRateOf(totals), 1)} errors`}>
-        <div className="grid-2">
-          <ChartCard title="Requests by outcome" subtitle="Per bucket, stacked" loading={loading} legend={OUTCOME_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, value: fmtInt(totals[s.key]) }))}>
-            <BarChart data={buckets} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} barCategoryGap={2}>
-              <CartesianGrid vertical={false} stroke={ink.grid} />
-              <XAxis dataKey="at" tickFormatter={tick} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
-              <YAxis tickLine={false} axisLine={false} width={36} allowDecimals={false} />
-              <Tooltip cursor={{ fill: ink.grid, opacity: 0.6 }} content={timeTip<Bucket>((p) => OUTCOME_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, value: fmtInt(p[s.key]) })))} />
-              {OUTCOME_SERIES.map((s, i) => (
-                <Bar key={s.key} dataKey={s.key} stackId="a" fill={ink.series[s.slot]} stroke={ink.surface} strokeWidth={1} maxBarSize={22} radius={i === OUTCOME_SERIES.length - 1 ? [3, 3, 0, 0] : 0} isAnimationActive={false} />
-              ))}
-            </BarChart>
-          </ChartCard>
+      {tab === 'traffic' && (
+        <Section id="traffic" shown={shown} title="Traffic" meta={loading ? undefined : `${fmtInt(totals.requests)} requests, ${fmtPct(errorRateOf(totals), 1)} errors`}>
+          <div className="grid-2">
+            <ChartCard title="Requests by outcome" subtitle="Per bucket, stacked" loading={loading} legend={OUTCOME_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, value: fmtInt(totals[s.key]) }))}>
+              <BarChart data={buckets} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} barCategoryGap={2}>
+                <CartesianGrid vertical={false} stroke={ink.grid} />
+                <XAxis dataKey="at" tickFormatter={tick} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
+                <YAxis tickLine={false} axisLine={false} width={36} allowDecimals={false} />
+                <Tooltip cursor={{ fill: ink.grid, opacity: 0.6 }} content={timeTip<Bucket>((p) => OUTCOME_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, value: fmtInt(p[s.key]) })))} />
+                {OUTCOME_SERIES.map((s, i) => (
+                  <Bar key={s.key} dataKey={s.key} stackId="a" fill={ink.series[s.slot]} stroke={ink.surface} strokeWidth={1} maxBarSize={22} radius={i === OUTCOME_SERIES.length - 1 ? [3, 3, 0, 0] : 0} isAnimationActive={false} />
+                ))}
+              </BarChart>
+            </ChartCard>
 
-          <Card title="Errors by code" subtitle="Non-200 responses in range">
-            {loading ? <Skeleton height={90} /> : <ErrorBars errors={totals.errors} color={ink.series[7]} />}
-          </Card>
+            <Card title="Errors by code" subtitle="Non-200 responses in range">
+              {loading ? <Skeleton height={90} /> : <ErrorBars errors={totals.errors} color={ink.series[7]} />}
+            </Card>
 
-          {/* Failovers and the rewrites share a row, so what a move cost the cache sits beside the failovers. */}
-          <ChartCard title="Failovers" subtitle="Attempts that moved to another member" loading={loading} legend={[{ color: ink.series[3], label: 'Failovers', shape: 'line', value: fmtInt(totals.failovers) }]}>
-            <LineChart data={buckets} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
-              <CartesianGrid vertical={false} stroke={ink.grid} />
-              <XAxis dataKey="at" tickFormatter={tick} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
-              <YAxis tickLine={false} axisLine={false} width={36} allowDecimals={false} />
-              <Tooltip cursor={{ stroke: ink.axis }} content={timeTip<Bucket>((p) => [{ color: ink.series[3], label: 'failovers', value: fmtInt(p.failovers) }])} />
-              <Line type="monotone" dataKey="failovers" stroke={ink.series[3]} strokeWidth={2} dot={false} isAnimationActive={false} />
-            </LineChart>
-          </ChartCard>
+            {/* Failovers and the rewrites share a row, so what a move cost the cache sits beside the failovers. */}
+            <ChartCard title="Failovers" subtitle="Attempts that moved to another member" loading={loading} legend={[{ color: ink.series[3], label: 'Failovers', shape: 'line', value: fmtInt(totals.failovers) }]}>
+              <LineChart data={buckets} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
+                <CartesianGrid vertical={false} stroke={ink.grid} />
+                <XAxis dataKey="at" tickFormatter={tick} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
+                <YAxis tickLine={false} axisLine={false} width={36} allowDecimals={false} />
+                <Tooltip cursor={{ stroke: ink.axis }} content={timeTip<Bucket>((p) => [{ color: ink.series[3], label: 'failovers', value: fmtInt(p.failovers) }])} />
+                <Line type="monotone" dataKey="failovers" stroke={ink.series[3]} strokeWidth={2} dot={false} isAnimationActive={false} />
+              </LineChart>
+            </ChartCard>
 
-          <RewritesCard answer={rewrites.stale ? null : rewrites.data} error={rewrites.error} loading={rewrites.data === null || rewrites.stale} tick={tick} unfiltered={unfiltered} />
+            <RewritesCard answer={rewrites.stale ? null : rewrites.data} error={rewrites.error} loading={rewrites.data === null || rewrites.stale} tick={tick} unfiltered={unfiltered} />
 
-          <SpeedCard points={speedPoints} error={speedError} loading={speedLoading} tick={tick} />
+            <SpeedCard points={speedPoints} error={speedError} loading={speedLoading} tick={tick} />
 
-          <Card title="Effort levels" subtitle="Requests per effort level in range">
-            {sessionId === null && byEffort.error !== null ? (
-              <ErrorState title="Could not load effort levels" body={byEffort.error} />
-            ) : effortLoading ? (
-              <Skeleton height={90} />
-            ) : (
-              <EffortBars groups={effortGroups} color={ink.series[2]} />
-            )}
-          </Card>
-        </div>
-        <BreakdownTable
-          title={`Traffic by ${groupLabel.toLowerCase()}`}
-          loading={loading}
-          groupLabel={groupLabel}
-          columns={['Requests', 'OK', 'Rate limited', 'Failed', 'Exhausted', 'Rejected', 'Error rate', 'Failovers', 'Search', 'Fetch']}
-          rows={groups.map((g) => ({
-            key: g.key,
-            label: g.label,
-            // Search and Fetch count the server-tool calls the group's answers made, not tokens.
-            cells: [fmtInt(g.requests), fmtInt(g.succeeded), fmtInt(g.rateLimited), fmtInt(g.failed), fmtInt(g.exhausted), fmtInt(g.rejected), fmtPct(errorRateOf(g), 1), fmtInt(g.failovers), fmtInt(g.tokens.webSearch), fmtInt(g.tokens.webFetch)],
-          }))}
-        />
-      </Section>
-
-      {/* Burn */}
-      <Section id="burn" offset={headOffset} title="Burn" meta={`Tokens, spend and plan share over the range${unfiltered ? UNFILTERED_NOTE : ''}`}>
-        <div className="row">
-          <span className="muted">Group by</span>
-          <Segmented<BurnGroup> ariaLabel="Burn group by" value={burnGroup} onChange={setBurnGroup} options={BURN_GROUPS.map((g) => ({ label: BURN_GROUP_LABEL[g], value: g }))} />
-        </div>
-        <BurnCharts answer={burn.stale ? null : (burn.data?.answer ?? null)} error={burn.error ?? burnSettings.error} groupBy={burnGroup} loading={burn.data === null || burn.stale || sized === null} sized={sized} />
-        <BudgetTable budgets={budgets.data} error={budgets.error} now={now} />
-      </Section>
-
-      {/* Latency */}
-      <Section id="latency" shown={shown} offset={headOffset} title="Latency" meta="Percentiles read from merged per-hour histograms">
-        <div className="stack">
-          {LATENCY_METRICS.map((m) => (
-            <LatencyRow key={m.key} metric={m} series={buckets} totals={totals} loading={loading} tick={tick} />
-          ))}
-        </div>
-        <BreakdownTable
-          title={`Latency by ${groupLabel.toLowerCase()}`}
-          loading={loading}
-          groupLabel={groupLabel}
-          columns={[
-            'Requests',
-            <PctLabel key="a" text="TTFB p50" />,
-            <PctLabel key="b" text="TTFB p99" />,
-            <PctLabel key="c" text="TTFT p99" />,
-            <PctLabel key="d" text="Duration p99" />,
-            <PctLabel key="e" text="tok/s p50" />,
-          ]}
-          rows={groups.map((g) => ({
-            key: g.key,
-            label: g.label,
-            cells: [
-              fmtInt(g.requests),
-              fmtMs(g.percentiles.ttfbMs.p50),
-              fmtMs(g.percentiles.ttfbMs.p99),
-              fmtMs(g.percentiles.ttftMs.p99),
-              fmtMs(g.percentiles.durationMs.p99),
-              g.percentiles.outputTps.p50 === null ? '-' : g.percentiles.outputTps.p50.toFixed(0),
-            ],
-          }))}
-        />
-      </Section>
-
-      {/* Cache */}
-      <Section id="cache" shown={shown} offset={headOffset} title="Cache" meta={loading ? undefined : `${fmtPct(hitRatioOf(totals) ?? 0)} hit ratio, ${fmtInt(totals.expiredBetweenTurns)} expired between turns, ${fmtPct(cachedShareOf(totals) ?? 0)} of input read from cache`}>
-        <div className="grid-2">
-          <ChartCard title="Tokens" subtitle="Per bucket, stacked by kind" loading={loading} legend={TOKEN_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, value: fmtCompact(totals.tokens[s.key]) }))}>
-            <BarChart data={buckets} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} barCategoryGap={2}>
-              <CartesianGrid vertical={false} stroke={ink.grid} />
-              <XAxis dataKey="at" tickFormatter={tick} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
-              <YAxis tickFormatter={(v: number) => fmtCompact(v)} tickLine={false} axisLine={false} width={44} />
-              <Tooltip cursor={{ fill: ink.grid, opacity: 0.6 }} content={timeTip<Bucket>((p) => TOKEN_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, value: fmtCompact(p.tokens[s.key]) })))} />
-              {TOKEN_SERIES.map((s, i) => (
-                <Bar key={s.key} dataKey={`tokens.${s.key}`} stackId="a" fill={ink.series[s.slot]} stroke={ink.surface} strokeWidth={1} maxBarSize={22} radius={i === TOKEN_SERIES.length - 1 ? [3, 3, 0, 0] : 0} isAnimationActive={false} />
-              ))}
-            </BarChart>
-          </ChartCard>
-
-          <ChartCard
-            title="Hit ratio and cached share"
-            subtitle="Share of requests that read the cache, and share of input tokens served from it"
-            loading={loading}
-            legend={[
-              { color: ink.series[0], label: 'Cache hit ratio', shape: 'line', value: fmtPct(hitRatioOf(totals) ?? 0) },
-              { color: ink.series[2], label: 'Cached share of input', shape: 'line', value: fmtPct(cachedShareOf(totals) ?? 0) },
-            ]}
-          >
-            <LineChart data={buckets.map((b) => ({ ...b, hitRatio: pct100(hitRatioOf(b)), cachedShare: pct100(cachedShareOf(b)) }))} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
-              <CartesianGrid vertical={false} stroke={ink.grid} />
-              <XAxis dataKey="at" tickFormatter={tick} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
-              <YAxis domain={[0, 100]} ticks={[0, 25, 50, 75, 100]} tickFormatter={(v: number) => `${v}%`} tickLine={false} axisLine={false} width={40} />
-              <Tooltip
-                cursor={{ stroke: ink.axis }}
-                content={timeTip<Bucket & { cachedShare: number | null; hitRatio: number | null }>((p) => [
-                  { color: ink.series[0], label: 'cache hit ratio', value: p.hitRatio === null ? '-' : `${p.hitRatio.toFixed(0)}%` },
-                  { color: ink.series[2], label: 'cached share of input', value: p.cachedShare === null ? '-' : `${p.cachedShare.toFixed(0)}%` },
-                ])}
-              />
-              <Line type="monotone" dataKey="hitRatio" stroke={ink.series[0]} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
-              <Line type="monotone" dataKey="cachedShare" stroke={ink.series[2]} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
-            </LineChart>
-          </ChartCard>
-
-          <ChartCard
-            title="Write cost vs read cost"
-            subtitle="USD per bucket spent writing the cache and reading it back"
-            loading={loading}
-            legend={[
-              { color: ink.series[3], label: 'Write cost', value: usdOrDash(totals.cost.cacheWrite) },
-              { color: ink.series[2], label: 'Read cost', value: usdOrDash(totals.cost.cacheRead) },
-            ]}
-          >
-            <BarChart data={buckets} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} barCategoryGap={4} barGap={2}>
-              <CartesianGrid vertical={false} stroke={ink.grid} />
-              <XAxis dataKey="at" tickFormatter={tick} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
-              <YAxis tickFormatter={(v: number) => `$${v.toFixed(v >= 10 ? 0 : 1)}`} tickLine={false} axisLine={false} width={44} />
-              <Tooltip
-                cursor={{ fill: ink.grid, opacity: 0.6 }}
-                content={timeTip<Bucket>((p) => [
-                  { color: ink.series[3], label: 'write cost', value: split === null ? '-' : usdOrDash(p.cost.cacheWrite) },
-                  { color: ink.series[2], label: 'read cost', value: split === null ? '-' : usdOrDash(p.cost.cacheRead) },
-                ])}
-              />
-              {split !== null && <Bar dataKey="cost.cacheWrite" fill={ink.series[3]} maxBarSize={12} radius={[3, 3, 0, 0]} isAnimationActive={false} />}
-              {split !== null && <Bar dataKey="cost.cacheRead" fill={ink.series[2]} maxBarSize={12} radius={[3, 3, 0, 0]} isAnimationActive={false} />}
-            </BarChart>
-          </ChartCard>
-
-          <Card title="Misses by reason" subtitle={MISS_REASON_BLURB}>
-            {loading ? <Skeleton height={190} /> : <ReasonBars totals={totals} />}
-          </Card>
-        </div>
-        <MissReasonsByGroup groups={groups} groupLabel={groupLabel} loading={loading} />
-        {sessionId === null && <CacheByModel groups={byModel.stale ? [] : (byModel.data ?? [])} error={byModel.error} loading={byModel.data === null || byModel.stale} />}
-        {/* The route reads no session, so a session view has no placements of its own to show. */}
-        {sessionId === null && (
-          <PlacementTable
-            error={placements.error}
-            rows={placements.stale ? null : placements.data}
-            unfiltered={filters.accountId.length > 0 || filters.model.length > 0 || userAgentPattern.trim() !== '' || classPattern.trim() !== ''}
-          />
-        )}
-      </Section>
-
-      {/* Cost */}
-      <Section id="cost" shown={shown} offset={headOffset} title="Cost" meta={loading ? undefined : `${fmtUsd(totals.costUsd)} in range`}>
-        <div className="tiles-row">
-          <Tile label="Estimated cost" value={loading ? null : fmtUsd(totals.costUsd)} note="at the effective price list" />
-          <Tile label="Cost per request" value={loading ? null : fmtUsd(totals.requests ? totals.costUsd / totals.requests : 0)} note={`${fmtInt(totals.requests)} requests`} />
-          <Tile label="Cost per 1k output tokens" value={loading ? null : fmtUsd(totals.tokens.output ? (totals.costUsd / totals.tokens.output) * 1000 : 0)} note={`${fmtCompact(totals.tokens.output)} output tokens`} />
-          <Tile label="Fast mode spend" value={speedError !== null ? '-' : speedLoading ? null : fmtUsd(fastSpend)} note="usage credits, at the fast cells" />
-        </div>
-        <div className="grid-2">
-          <CostByGroup points={points} groupBy={groupBy} groupSlot={groupSlot} loading={loading} tick={tick} />
-          <Card title="Cost split" subtitle="Share of spend by token kind for the range">
-            {/* The request summary carries one total and no split, so a session view has nothing to draw here. */}
-            {sessionId !== null ? <p className="muted">{SESSION_COST_NOTE}</p> : loading || split === null ? <Skeleton height={148} /> : <CostDonut cost={split} />}
-          </Card>
-        </div>
-        {sessionId === null && (
+            <Card title="Effort levels" subtitle="Requests per effort level in range">
+              {sessionId === null && byEffort.error !== null ? (
+                <ErrorState title="Could not load effort levels" body={byEffort.error} />
+              ) : effortLoading ? (
+                <Skeleton height={90} />
+              ) : (
+                <EffortBars groups={effortGroups} color={ink.series[2]} />
+              )}
+            </Card>
+          </div>
           <BreakdownTable
-            title={`Cost by ${groupLabel.toLowerCase()}`}
+            title={`Traffic by ${groupLabel.toLowerCase()}`}
             loading={loading}
             groupLabel={groupLabel}
-            columns={['Requests', 'Cost', 'Input', 'Cache read', 'Cache write', 'Output', 'Per request', 'Per 1k output']}
+            columns={['Requests', 'OK', 'Rate limited', 'Failed', 'Exhausted', 'Rejected', 'Error rate', 'Failovers', 'Search', 'Fetch']}
+            rows={groups.map((g) => ({
+              key: g.key,
+              label: g.label,
+              // Search and Fetch count the server-tool calls the group's answers made, not tokens.
+              cells: [fmtInt(g.requests), fmtInt(g.succeeded), fmtInt(g.rateLimited), fmtInt(g.failed), fmtInt(g.exhausted), fmtInt(g.rejected), fmtPct(errorRateOf(g), 1), fmtInt(g.failovers), fmtInt(g.tokens.webSearch), fmtInt(g.tokens.webFetch)],
+            }))}
+          />
+        </Section>
+      )}
+
+      {tab === 'burn' && (
+        <Section id="burn" shown={shown} title="Burn" meta={`Tokens, spend and plan share over the range${unfiltered ? UNFILTERED_NOTE : ''}`}>
+          <div className="row analytics-groupby">
+            <span className="muted">Group by</span>
+            <Select value={burnGroup} onChange={(e) => setBurnGroup(e.target.value as BurnGroup)} aria-label="Burn group by" className="groupby-select">
+              {BURN_GROUPS.map((g) => (
+                <option key={g} value={g}>
+                  {BURN_GROUP_LABEL[g]}
+                </option>
+              ))}
+            </Select>
+            <span className="muted analytics-groupby__reason">Burn groups by account, key, session or request class alone; the plan shares read under Account, since shares of different accounts&apos; windows do not add.</span>
+          </div>
+          <BurnCharts answer={burn.stale ? null : (burn.data?.answer ?? null)} error={burn.error ?? burnSettings.error} groupBy={burnGroup} loading={burn.data === null || burn.stale || sized === null} sized={sized} />
+          <BudgetTable budgets={budgets.data} error={budgets.error} now={now} />
+        </Section>
+      )}
+
+      {tab === 'latency' && (
+        <Section id="latency" shown={shown} title="Latency" meta="Percentiles read from merged per-hour histograms">
+          <div className="stack">
+            {LATENCY_METRICS.map((m) => (
+              <LatencyRow key={m.key} metric={m} series={buckets} totals={totals} loading={loading} tick={tick} />
+            ))}
+          </div>
+          <BreakdownTable
+            title={`Latency by ${groupLabel.toLowerCase()}`}
+            loading={loading}
+            groupLabel={groupLabel}
+            columns={[
+              'Requests',
+              <PctLabel key="a" text="TTFB p50" />,
+              <PctLabel key="b" text="TTFB p99" />,
+              <PctLabel key="c" text="TTFT p99" />,
+              <PctLabel key="d" text="Duration p99" />,
+              <PctLabel key="e" text="tok/s p50" />,
+            ]}
             rows={groups.map((g) => ({
               key: g.key,
               label: g.label,
               cells: [
                 fmtInt(g.requests),
-                fmtUsd(g.costUsd),
-                fmtUsd(g.cost.input),
-                usdOrDash(g.cost.cacheRead),
-                usdOrDash(g.cost.cacheWrite),
-                fmtUsd(g.cost.output),
-                fmtUsd(g.requests ? g.costUsd / g.requests : 0),
-                fmtUsd(g.tokens.output ? (g.costUsd / g.tokens.output) * 1000 : 0),
+                fmtMs(g.percentiles.ttfbMs.p50),
+                fmtMs(g.percentiles.ttfbMs.p99),
+                fmtMs(g.percentiles.ttftMs.p99),
+                fmtMs(g.percentiles.durationMs.p99),
+                g.percentiles.outputTps.p50 === null ? '-' : g.percentiles.outputTps.p50.toFixed(0),
               ],
             }))}
           />
-        )}
-      </Section>
+        </Section>
+      )}
 
-      {/* Cache warming */}
-      <Section id="cache-warming" shown={shown} offset={headOffset} title="Cache warming" meta={sessionId === null ? 'Probe rows are always counted here, whatever the toggle above says' : SESSION_SOURCE_NOTE}>
-        <div className="tiles-row">
-          <Tile label="Gross saved" value={loading ? null : savings === null ? '-' : fmtUsd(savings.grossUsd)} note="cache writes avoided by kept-warm reads" />
-          <Tile label="Probe cost" value={loading ? null : savings === null ? '-' : fmtUsd(savings.probeCostUsd)} note={savings === null ? UNAVAILABLE_NOTE : `${fmtInt(probesOf(totals))} probes`} />
-          <Tile
-            label="Net saved"
-            value={loading ? null : savings === null ? '-' : fmtUsd(savings.grossUsd - savings.probeCostUsd)}
-            note="gross saved minus probe cost"
-            tone={savings !== null && savings.grossUsd - savings.probeCostUsd < 0 ? 'critical' : undefined}
-          />
-          <Tile label="Kept warm" value={loading ? null : keptWarm === null ? '-' : fmtInt(keptWarm.requests)} note={keptWarm === null ? UNAVAILABLE_NOTE : `${fmtCompact(keptWarm.tokens)} tokens read warm`} />
-        </div>
-        <div className="grid-2">
-          <ChartCard title="Probes by outcome" subtitle="Per bucket, stacked" loading={loading} legend={PROBE_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, title: s.hint, value: savings === null ? '-' : fmtInt(totals.probes[s.key]) }))}>
-            <BarChart data={buckets} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} barCategoryGap={2}>
-              <CartesianGrid vertical={false} stroke={ink.grid} />
-              <XAxis dataKey="at" tickFormatter={tick} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
-              <YAxis tickLine={false} axisLine={false} width={36} allowDecimals={false} />
-              <Tooltip cursor={{ fill: ink.grid, opacity: 0.6 }} content={timeTip<Bucket>((p) => PROBE_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, title: s.hint, value: savings === null ? '-' : fmtInt(p.probes[s.key]) })))} />
-              {savings !== null &&
-                PROBE_SERIES.map((s, i) => (
-                  <Bar key={s.key} dataKey={`probes.${s.key}`} stackId="a" fill={ink.series[s.slot]} stroke={ink.surface} strokeWidth={1} maxBarSize={22} radius={i === PROBE_SERIES.length - 1 ? [3, 3, 0, 0] : 0} isAnimationActive={false} />
+      {tab === 'cache' && (
+        <Section id="cache" shown={shown} title="Cache" meta={loading ? undefined : `${fmtPct(hitRatioOf(totals) ?? 0)} hit ratio, ${fmtInt(totals.expiredBetweenTurns)} expired between turns, ${fmtPct(cachedShareOf(totals) ?? 0)} of input read from cache`}>
+          <div className="grid-2">
+            <ChartCard title="Tokens" subtitle="Per bucket, stacked by kind" loading={loading} legend={TOKEN_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, value: fmtCompact(totals.tokens[s.key]) }))}>
+              <BarChart data={buckets} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} barCategoryGap={2}>
+                <CartesianGrid vertical={false} stroke={ink.grid} />
+                <XAxis dataKey="at" tickFormatter={tick} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
+                <YAxis tickFormatter={(v: number) => fmtCompact(v)} tickLine={false} axisLine={false} width={44} />
+                <Tooltip cursor={{ fill: ink.grid, opacity: 0.6 }} content={timeTip<Bucket>((p) => TOKEN_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, value: fmtCompact(p.tokens[s.key]) })))} />
+                {TOKEN_SERIES.map((s, i) => (
+                  <Bar key={s.key} dataKey={`tokens.${s.key}`} stackId="a" fill={ink.series[s.slot]} stroke={ink.surface} strokeWidth={1} maxBarSize={22} radius={i === TOKEN_SERIES.length - 1 ? [3, 3, 0, 0] : 0} isAnimationActive={false} />
                 ))}
-            </BarChart>
-          </ChartCard>
+              </BarChart>
+            </ChartCard>
 
-          <ChartCard
-            title="Savings"
-            subtitle="Gross saved and probe cost per bucket; the line is the net"
-            loading={loading}
-            legend={[
-              { color: ink.series[2], label: 'Gross saved', value: savings === null ? '-' : fmtUsd(savings.grossUsd) },
-              { color: ink.series[3], label: 'Probe cost', value: savings === null ? '-' : fmtUsd(savings.probeCostUsd) },
-              { color: ink.ink2, label: 'Net saved', shape: 'line', value: savings === null ? '-' : <NetValue value={savings.grossUsd - savings.probeCostUsd} /> },
-            ]}
-          >
-            <ComposedChart data={buckets.map((b) => ({ ...b, net: b.savings === null ? null : b.savings.grossUsd - b.savings.probeCostUsd }))} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} barCategoryGap={4} barGap={2}>
-              <CartesianGrid vertical={false} stroke={ink.grid} />
-              <XAxis dataKey="at" tickFormatter={tick} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
-              <YAxis tickFormatter={(v: number) => `$${v.toFixed(v >= 10 ? 0 : 2)}`} tickLine={false} axisLine={false} width={48} />
-              <Tooltip
-                cursor={{ fill: ink.grid, opacity: 0.6 }}
-                content={timeTip<Bucket & { net: number | null }>((p) => [
-                  { color: ink.series[2], label: 'gross saved', value: savings === null || p.savings === null ? '-' : fmtUsd(p.savings.grossUsd) },
-                  { color: ink.series[3], label: 'probe cost', value: savings === null || p.savings === null ? '-' : fmtUsd(p.savings.probeCostUsd) },
-                  { color: ink.ink2, label: 'net', value: savings === null || p.net === null ? '-' : <NetValue value={p.net} /> },
-                ])}
-              />
-              {savings !== null && <Bar dataKey="savings.grossUsd" fill={ink.series[2]} maxBarSize={12} radius={[3, 3, 0, 0]} isAnimationActive={false} />}
-              {savings !== null && <Bar dataKey="savings.probeCostUsd" fill={ink.series[3]} maxBarSize={12} radius={[3, 3, 0, 0]} isAnimationActive={false} />}
-              {savings !== null && <Line type="monotone" dataKey="net" stroke={ink.ink2} strokeWidth={2} dot={false} isAnimationActive={false} />}
-            </ComposedChart>
-          </ChartCard>
+            <ChartCard
+              title="Hit ratio and cached share"
+              subtitle="Share of requests that read the cache, and share of input tokens served from it"
+              loading={loading}
+              legend={[
+                { color: ink.series[0], label: 'Cache hit ratio', shape: 'line', value: fmtPct(hitRatioOf(totals) ?? 0) },
+                { color: ink.series[2], label: 'Cached share of input', shape: 'line', value: fmtPct(cachedShareOf(totals) ?? 0) },
+              ]}
+            >
+              <LineChart data={buckets.map((b) => ({ ...b, hitRatio: pct100(hitRatioOf(b)), cachedShare: pct100(cachedShareOf(b)) }))} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
+                <CartesianGrid vertical={false} stroke={ink.grid} />
+                <XAxis dataKey="at" tickFormatter={tick} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
+                <YAxis domain={[0, 100]} ticks={[0, 25, 50, 75, 100]} tickFormatter={(v: number) => `${v}%`} tickLine={false} axisLine={false} width={40} />
+                <Tooltip
+                  cursor={{ stroke: ink.axis }}
+                  content={timeTip<Bucket & { cachedShare: number | null; hitRatio: number | null }>((p) => [
+                    { color: ink.series[0], label: 'cache hit ratio', value: p.hitRatio === null ? '-' : `${p.hitRatio.toFixed(0)}%` },
+                    { color: ink.series[2], label: 'cached share of input', value: p.cachedShare === null ? '-' : `${p.cachedShare.toFixed(0)}%` },
+                  ])}
+                />
+                <Line type="monotone" dataKey="hitRatio" stroke={ink.series[0]} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
+                <Line type="monotone" dataKey="cachedShare" stroke={ink.series[2]} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
+              </LineChart>
+            </ChartCard>
 
-          <Card title="Wasted probes" subtitle={WASTED_PROBE_BLURB}>
-            {loading ? <Skeleton height={190} /> : savings === null ? <p className="muted">{WARMING_UNAVAILABLE}</p> : <WastedProbes savings={savings} probes={probesOf(totals)} />}
-          </Card>
+            <ChartCard
+              title="Write cost vs read cost"
+              subtitle="USD per bucket spent writing the cache and reading it back"
+              loading={loading}
+              legend={[
+                { color: ink.series[3], label: 'Write cost', value: usdOrDash(totals.cost.cacheWrite) },
+                { color: ink.series[2], label: 'Read cost', value: usdOrDash(totals.cost.cacheRead) },
+              ]}
+            >
+              <BarChart data={buckets} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} barCategoryGap={4} barGap={2}>
+                <CartesianGrid vertical={false} stroke={ink.grid} />
+                <XAxis dataKey="at" tickFormatter={tick} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
+                <YAxis tickFormatter={(v: number) => `$${v.toFixed(v >= 10 ? 0 : 1)}`} tickLine={false} axisLine={false} width={44} />
+                <Tooltip
+                  cursor={{ fill: ink.grid, opacity: 0.6 }}
+                  content={timeTip<Bucket>((p) => [
+                    { color: ink.series[3], label: 'write cost', value: split === null ? '-' : usdOrDash(p.cost.cacheWrite) },
+                    { color: ink.series[2], label: 'read cost', value: split === null ? '-' : usdOrDash(p.cost.cacheRead) },
+                  ])}
+                />
+                {split !== null && <Bar dataKey="cost.cacheWrite" fill={ink.series[3]} maxBarSize={12} radius={[3, 3, 0, 0]} isAnimationActive={false} />}
+                {split !== null && <Bar dataKey="cost.cacheRead" fill={ink.series[2]} maxBarSize={12} radius={[3, 3, 0, 0]} isAnimationActive={false} />}
+              </BarChart>
+            </ChartCard>
 
-          <ChartCard title="Kept-warm requests" subtitle="Requests whose cache read followed a probe" loading={loading} legend={[{ color: ink.series[0], label: 'Kept-warm requests', value: keptWarm === null ? '-' : fmtInt(keptWarm.requests) }]}>
-            <BarChart data={buckets} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} barCategoryGap={2}>
-              <CartesianGrid vertical={false} stroke={ink.grid} />
-              <XAxis dataKey="at" tickFormatter={tick} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
-              <YAxis tickLine={false} axisLine={false} width={36} allowDecimals={false} />
-              <Tooltip cursor={{ fill: ink.grid, opacity: 0.6 }} content={timeTip<Bucket>((p) => [{ color: ink.series[0], label: 'kept-warm requests', value: keptWarm === null || p.keptWarm === null ? '-' : fmtInt(p.keptWarm.requests) }])} />
-              {keptWarm !== null && <Bar dataKey="keptWarm.requests" fill={ink.series[0]} maxBarSize={22} radius={[3, 3, 0, 0]} isAnimationActive={false} />}
-            </BarChart>
-          </ChartCard>
+            <Card title="Misses by reason" subtitle={MISS_REASON_BLURB}>
+              {loading ? <Skeleton height={190} /> : <ReasonBars totals={totals} />}
+            </Card>
+          </div>
+          <MissReasonsByGroup groups={groups} groupLabel={groupLabel} loading={loading} />
+          {sessionId === null && <CacheByModel groups={byModel.stale ? [] : (byModel.data ?? [])} error={byModel.error} loading={byModel.data === null || byModel.stale} />}
+          {/* The route reads no session, so a session view has no placements of its own to show. */}
+          {sessionId === null && (
+            <PlacementTable
+              error={placements.error}
+              rows={placements.stale ? null : placements.data}
+              unfiltered={filters.accountId.length > 0 || filters.model.length > 0 || userAgentPattern.trim() !== '' || classPattern.trim() !== ''}
+            />
+          )}
+        </Section>
+      )}
 
-          <ChartCard title="Kept-warm tokens" subtitle="Cache-read tokens on those requests" loading={loading} legend={[{ color: ink.series[2], label: 'Kept-warm tokens', value: keptWarm === null ? '-' : fmtCompact(keptWarm.tokens) }]}>
-            <BarChart data={buckets} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} barCategoryGap={2}>
-              <CartesianGrid vertical={false} stroke={ink.grid} />
-              <XAxis dataKey="at" tickFormatter={tick} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
-              <YAxis tickFormatter={(v: number) => fmtCompact(v)} tickLine={false} axisLine={false} width={44} />
-              <Tooltip cursor={{ fill: ink.grid, opacity: 0.6 }} content={timeTip<Bucket>((p) => [{ color: ink.series[2], label: 'kept-warm tokens', value: keptWarm === null || p.keptWarm === null ? '-' : fmtCompact(p.keptWarm.tokens) }])} />
-              {keptWarm !== null && <Bar dataKey="keptWarm.tokens" fill={ink.series[2]} maxBarSize={22} radius={[3, 3, 0, 0]} isAnimationActive={false} />}
-            </BarChart>
-          </ChartCard>
-        </div>
-        <KeepaliveByPool groups={poolGroups} error={sessionId === null ? byPool.error : null} loading={sessionId === null ? byPool.data === null || byPool.stale : loading} />
-      </Section>
+      {tab === 'cost' && (
+        <Section id="cost" shown={shown} title="Cost" meta={loading ? undefined : `${fmtUsd(totals.costUsd)} in range`}>
+          <div className="tiles-row">
+            <Tile label="Estimated cost" value={loading ? null : fmtUsd(totals.costUsd)} note="at the effective price list" />
+            <Tile label="Cost per request" value={loading ? null : fmtUsd(totals.requests ? totals.costUsd / totals.requests : 0)} note={`${fmtInt(totals.requests)} requests`} />
+            <Tile label="Cost per 1k output tokens" value={loading ? null : fmtUsd(totals.tokens.output ? (totals.costUsd / totals.tokens.output) * 1000 : 0)} note={`${fmtCompact(totals.tokens.output)} output tokens`} />
+            <Tile label="Fast mode spend" value={speedError !== null ? '-' : speedLoading ? null : fmtUsd(fastSpend)} note="usage credits, at the fast cells" />
+          </div>
+          <div className="grid-2">
+            <CostByGroup points={points} groupBy={groupBy} groupSlot={groupSlot} loading={loading} tick={tick} />
+            <Card title="Cost split" subtitle="Share of spend by token kind for the range">
+              {/* The request summary carries one total and no split, so a session view has nothing to draw here. */}
+              {sessionId !== null ? <p className="muted">{SESSION_COST_NOTE}</p> : loading || split === null ? <Skeleton height={148} /> : <CostDonut cost={split} />}
+            </Card>
+          </div>
+          {sessionId === null && (
+            <BreakdownTable
+              title={`Cost by ${groupLabel.toLowerCase()}`}
+              loading={loading}
+              groupLabel={groupLabel}
+              columns={['Requests', 'Cost', 'Input', 'Cache read', 'Cache write', 'Output', 'Per request', 'Per 1k output']}
+              rows={groups.map((g) => ({
+                key: g.key,
+                label: g.label,
+                cells: [
+                  fmtInt(g.requests),
+                  fmtUsd(g.costUsd),
+                  fmtUsd(g.cost.input),
+                  usdOrDash(g.cost.cacheRead),
+                  usdOrDash(g.cost.cacheWrite),
+                  fmtUsd(g.cost.output),
+                  fmtUsd(g.requests ? g.costUsd / g.requests : 0),
+                  fmtUsd(g.tokens.output ? (g.costUsd / g.tokens.output) * 1000 : 0),
+                ],
+              }))}
+            />
+          )}
+        </Section>
+      )}
 
-      {/* Accounts */}
-      <Section id="accounts" offset={headOffset} title="Accounts" meta="Peak utilization, ineligible time, and pin churn per account">
-        <AccountsSection
-          accountIds={filters.accountId}
-          bucketMs={bucketMs}
-          error={accountRollups.error}
-          loading={accountRollups.data === null || accountRollups.stale}
-          otherFilters={otherFilters}
-          rollups={accountRollups.stale ? null : accountRollups.data}
-          span={span}
-          tick={tick}
-        />
-      </Section>
+      {tab === 'cache-warming' && (
+        <Section id="cache-warming" shown={shown} title="Cache warming" meta={sessionId === null ? 'Probe rows are always counted here, whatever the toggle above says' : SESSION_SOURCE_NOTE}>
+          <div className="tiles-row">
+            <Tile label="Gross saved" value={loading ? null : savings === null ? '-' : fmtUsd(savings.grossUsd)} note="cache writes avoided by kept-warm reads" />
+            <Tile label="Probe cost" value={loading ? null : savings === null ? '-' : fmtUsd(savings.probeCostUsd)} note={savings === null ? UNAVAILABLE_NOTE : `${fmtInt(probesOf(totals))} probes`} />
+            <Tile
+              label="Net saved"
+              value={loading ? null : savings === null ? '-' : fmtUsd(savings.grossUsd - savings.probeCostUsd)}
+              note="gross saved minus probe cost"
+              tone={savings !== null && savings.grossUsd - savings.probeCostUsd < 0 ? 'critical' : undefined}
+            />
+            <Tile label="Kept warm" value={loading ? null : keptWarm === null ? '-' : fmtInt(keptWarm.requests)} note={keptWarm === null ? UNAVAILABLE_NOTE : `${fmtCompact(keptWarm.tokens)} tokens read warm`} />
+          </div>
+          <div className="grid-2">
+            <ChartCard title="Probes by outcome" subtitle="Per bucket, stacked" loading={loading} legend={PROBE_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, title: s.hint, value: savings === null ? '-' : fmtInt(totals.probes[s.key]) }))}>
+              <BarChart data={buckets} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} barCategoryGap={2}>
+                <CartesianGrid vertical={false} stroke={ink.grid} />
+                <XAxis dataKey="at" tickFormatter={tick} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
+                <YAxis tickLine={false} axisLine={false} width={36} allowDecimals={false} />
+                <Tooltip cursor={{ fill: ink.grid, opacity: 0.6 }} content={timeTip<Bucket>((p) => PROBE_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, title: s.hint, value: savings === null ? '-' : fmtInt(p.probes[s.key]) })))} />
+                {savings !== null &&
+                  PROBE_SERIES.map((s, i) => (
+                    <Bar key={s.key} dataKey={`probes.${s.key}`} stackId="a" fill={ink.series[s.slot]} stroke={ink.surface} strokeWidth={1} maxBarSize={22} radius={i === PROBE_SERIES.length - 1 ? [3, 3, 0, 0] : 0} isAnimationActive={false} />
+                  ))}
+              </BarChart>
+            </ChartCard>
+
+            <ChartCard
+              title="Savings"
+              subtitle="Gross saved and probe cost per bucket; the line is the net"
+              loading={loading}
+              legend={[
+                { color: ink.series[2], label: 'Gross saved', value: savings === null ? '-' : fmtUsd(savings.grossUsd) },
+                { color: ink.series[3], label: 'Probe cost', value: savings === null ? '-' : fmtUsd(savings.probeCostUsd) },
+                { color: ink.ink2, label: 'Net saved', shape: 'line', value: savings === null ? '-' : <NetValue value={savings.grossUsd - savings.probeCostUsd} /> },
+              ]}
+            >
+              <ComposedChart data={buckets.map((b) => ({ ...b, net: b.savings === null ? null : b.savings.grossUsd - b.savings.probeCostUsd }))} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} barCategoryGap={4} barGap={2}>
+                <CartesianGrid vertical={false} stroke={ink.grid} />
+                <XAxis dataKey="at" tickFormatter={tick} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
+                <YAxis tickFormatter={(v: number) => `$${v.toFixed(v >= 10 ? 0 : 2)}`} tickLine={false} axisLine={false} width={48} />
+                <Tooltip
+                  cursor={{ fill: ink.grid, opacity: 0.6 }}
+                  content={timeTip<Bucket & { net: number | null }>((p) => [
+                    { color: ink.series[2], label: 'gross saved', value: savings === null || p.savings === null ? '-' : fmtUsd(p.savings.grossUsd) },
+                    { color: ink.series[3], label: 'probe cost', value: savings === null || p.savings === null ? '-' : fmtUsd(p.savings.probeCostUsd) },
+                    { color: ink.ink2, label: 'net', value: savings === null || p.net === null ? '-' : <NetValue value={p.net} /> },
+                  ])}
+                />
+                {savings !== null && <Bar dataKey="savings.grossUsd" fill={ink.series[2]} maxBarSize={12} radius={[3, 3, 0, 0]} isAnimationActive={false} />}
+                {savings !== null && <Bar dataKey="savings.probeCostUsd" fill={ink.series[3]} maxBarSize={12} radius={[3, 3, 0, 0]} isAnimationActive={false} />}
+                {savings !== null && <Line type="monotone" dataKey="net" stroke={ink.ink2} strokeWidth={2} dot={false} isAnimationActive={false} />}
+              </ComposedChart>
+            </ChartCard>
+
+            <Card title="Wasted probes" subtitle={WASTED_PROBE_BLURB}>
+              {loading ? <Skeleton height={190} /> : savings === null ? <p className="muted">{WARMING_UNAVAILABLE}</p> : <WastedProbes savings={savings} probes={probesOf(totals)} />}
+            </Card>
+
+            <ChartCard title="Kept-warm requests" subtitle="Requests whose cache read followed a probe" loading={loading} legend={[{ color: ink.series[0], label: 'Kept-warm requests', value: keptWarm === null ? '-' : fmtInt(keptWarm.requests) }]}>
+              <BarChart data={buckets} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} barCategoryGap={2}>
+                <CartesianGrid vertical={false} stroke={ink.grid} />
+                <XAxis dataKey="at" tickFormatter={tick} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
+                <YAxis tickLine={false} axisLine={false} width={36} allowDecimals={false} />
+                <Tooltip cursor={{ fill: ink.grid, opacity: 0.6 }} content={timeTip<Bucket>((p) => [{ color: ink.series[0], label: 'kept-warm requests', value: keptWarm === null || p.keptWarm === null ? '-' : fmtInt(p.keptWarm.requests) }])} />
+                {keptWarm !== null && <Bar dataKey="keptWarm.requests" fill={ink.series[0]} maxBarSize={22} radius={[3, 3, 0, 0]} isAnimationActive={false} />}
+              </BarChart>
+            </ChartCard>
+
+            <ChartCard title="Kept-warm tokens" subtitle="Cache-read tokens on those requests" loading={loading} legend={[{ color: ink.series[2], label: 'Kept-warm tokens', value: keptWarm === null ? '-' : fmtCompact(keptWarm.tokens) }]}>
+              <BarChart data={buckets} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} barCategoryGap={2}>
+                <CartesianGrid vertical={false} stroke={ink.grid} />
+                <XAxis dataKey="at" tickFormatter={tick} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
+                <YAxis tickFormatter={(v: number) => fmtCompact(v)} tickLine={false} axisLine={false} width={44} />
+                <Tooltip cursor={{ fill: ink.grid, opacity: 0.6 }} content={timeTip<Bucket>((p) => [{ color: ink.series[2], label: 'kept-warm tokens', value: keptWarm === null || p.keptWarm === null ? '-' : fmtCompact(p.keptWarm.tokens) }])} />
+                {keptWarm !== null && <Bar dataKey="keptWarm.tokens" fill={ink.series[2]} maxBarSize={22} radius={[3, 3, 0, 0]} isAnimationActive={false} />}
+              </BarChart>
+            </ChartCard>
+          </div>
+          <KeepaliveByPool groups={poolGroups} error={sessionId === null ? byPool.error : null} loading={sessionId === null ? byPool.data === null || byPool.stale : loading} />
+        </Section>
+      )}
+
+      {tab === 'accounts' && (
+        <Section id="accounts" shown={shown} title="Accounts" meta="Peak utilization, ineligible time, and pin churn per account">
+          <AccountsSection
+            accountIds={filters.accountId}
+            bucketMs={bucketMs}
+            error={accountRollups.error}
+            loading={accountRollups.data === null || accountRollups.stale}
+            otherFilters={otherFilters}
+            rollups={accountRollups.stale ? null : accountRollups.data}
+            span={span}
+            tick={tick}
+          />
+        </Section>
+      )}
     </div>
   );
 }
@@ -715,11 +749,8 @@ const pct100 = (v: number | null) => (v === null ? null : v * 100);
 
 /** Height of the shell's sticky topbar; every bar the page sticks rides under it. */
 const TOPBAR_HEIGHT = 52;
-// The topbar and the section bar both stick, so a section scrolled to the top
-// has to clear them; the filter bar's measured height is added on top.
-const SECTION_OFFSET = 100;
 
-/** Live border-box height of a sticky bar, so anchors below it can clear it. */
+/** Live border-box height of a sticky bar, so the bar below it can dock against it. */
 function useStickyHeight(ref: RefObject<HTMLElement | null>): number {
   const [height, setHeight] = useState(0);
   useEffect(() => {
@@ -742,37 +773,16 @@ const SECTIONS = [
   { id: 'cost', label: 'Cost' },
   { id: 'cache-warming', label: 'Cache warming' },
   { id: 'accounts', label: 'Accounts' },
-];
+] as const;
+type SectionId = (typeof SECTIONS)[number]['id'];
 
-function SectionBar({ offset, top }: { offset: number; top: number }) {
-  const [active, select] = useScrollSpy(
-    SECTIONS.map((s) => s.id),
-    { offset },
-  );
-  return (
-    <nav className="section-bar" aria-label="Sections" style={{ top }}>
-      {SECTIONS.map((s) => (
-        <button
-          key={s.id}
-          type="button"
-          className={`section-bar__link ${s.id === active ? 'is-active' : ''}`}
-          aria-current={s.id === active ? 'true' : undefined}
-          onClick={() => {
-            select(s.id);
-            scrollToSection(s.id, { offset });
-          }}
-        >
-          {s.label}
-        </button>
-      ))}
-    </nav>
-  );
-}
+/** The element the page scrolls; jsdom implements no `scrollTo` on it, so a caller guards the call. */
+const scroller = (): Element | null => document.scrollingElement;
 
-function Section({ id, title, meta, offset, shown = true, children }: { children: ReactNode; id: string; meta?: string; offset: number; shown?: boolean; title: string }) {
+function Section({ id, title, meta, shown = true, children }: { children: ReactNode; id: SectionId; meta?: string; shown?: boolean; title: string }) {
   if (!shown) return null;
   return (
-    <section className="analytics-section" id={id} style={{ scrollMarginTop: offset }}>
+    <section className="analytics-section" id={id} role="tabpanel" aria-labelledby={`tab-${id}`}>
       <header className="analytics-section__head">
         <h2 className="analytics-section__title">{title}</h2>
         {meta && <span className="analytics-section__meta">{meta}</span>}

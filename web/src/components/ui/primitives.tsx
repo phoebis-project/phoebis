@@ -181,11 +181,11 @@ export function SwitchedNumber({ checked, disabled, hint, input, label, numberLa
   );
 }
 
-export function Tabs<T extends string>({ value, onChange, tabs }: { onChange: (v: T) => void; tabs: { count?: number; label: string; value: T }[]; value: T }) {
+export function Tabs<T extends string>({ label, onChange, tabs, value }: { label?: string; onChange: (v: T) => void; tabs: { controls?: string; count?: number; id?: string; label: string; value: T }[]; value: T }) {
   return (
-    <div className="tabs" role="tablist">
+    <div className="tabs" role="tablist" aria-label={label}>
       {tabs.map((t) => (
-        <button key={t.value} type="button" role="tab" aria-selected={t.value === value} className={t.value === value ? 'is-active' : ''} onClick={() => onChange(t.value)}>
+        <button key={t.value} type="button" role="tab" id={t.id} aria-controls={t.controls} aria-selected={t.value === value} className={t.value === value ? 'is-active' : ''} onClick={() => onChange(t.value)}>
           {t.label}
           {t.count !== undefined && <span className="tabs__count">{t.count}</span>}
         </button>

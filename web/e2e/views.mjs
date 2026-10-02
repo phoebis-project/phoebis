@@ -95,7 +95,10 @@ const VIEWS = [
   { path: '/keys', title: 'Keys', wait: '.card--table tbody tr', slug: 'keys' },
   { path: '/models', title: 'Models', wait: '.models__rules', slug: 'models' },
   { path: '/requests', title: 'Requests', wait: '.requests__table', slug: 'requests' },
-  { path: '/analytics', title: 'Analytics', wait: '#cache-warming', slug: 'analytics' },
+  { path: '/analytics', title: 'Analytics', wait: '.analytics-section#traffic', slug: 'analytics' },
+  // The page shows one section at a time, so the site's Cache warming shot is a view of its own; like the catalog
+  // shot it is the mock pass's alone, whose story the site's screenshots come from.
+  { path: '/analytics#cache-warming', title: 'Analytics', wait: '.analytics-section#cache-warming', slug: 'analytics-cache-warming', mockOnly: true },
   { path: '/sessions', title: 'Sessions', wait: '.sessions-table', slug: 'sessions' },
   { path: '/alerts', title: 'Alerts', wait: '.card--table', slug: 'alerts' },
   { path: '/settings', title: 'Settings', wait: '.envdl', slug: 'settings' },
@@ -1695,72 +1698,112 @@ async function liveFeed(theme) {
   if (banner.includes('Reconnecting')) failures.push(`${theme} /observe: the feed is reconnecting (${banner})`);
 }
 
-async function wastedProbeRows(theme) {
+/**
+ * Picks an Analytics tab by its exact accessible name, since a text match on Cache also meets Cache warming and
+ * Playwright's strict mode refuses the click. The page's timers stand still and a mock read lands on one, so the
+ * clock moves after the click; the tab counts as open once its section holds no placeholder. Answers whether it did.
+ */
+async function tabTo(theme, label) {
+  const tab = page.locator('.section-bar').getByRole('tab', { name: label, exact: true });
+  // A tab that is not selected names no panel, so the section's id comes from the tab's own.
+  const section = (await tab.getAttribute('id')).replace(/^tab-/, '');
+  await tab.click();
+  await advance(LOAD_MS);
   try {
     await page.waitForFunction(
-      () => {
-        const card = [...document.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent === 'Wasted probes');
-        return !!card?.querySelector('.hbars--reasons li');
+      (id) => {
+        const el = document.getElementById(id);
+        return el !== null && el.querySelector('.skeleton') === null;
       },
-      null,
+      section,
       { timeout: 15_000 },
     );
+    return true;
   } catch {
-    failures.push(`${theme} /analytics: the wasted-probes card drew no reason row`);
-    return;
+    failures.push(`${theme} /analytics: the ${label} tab never finished loading its section`);
+    return false;
   }
-  const rows = await page.evaluate(() => {
-    const card = [...document.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent === 'Wasted probes');
-    return [...card.querySelectorAll('.hbars--reasons li')].map((li) => {
-      const label = li.children[0];
-      const track = [...li.children].find((el) => /__track$/.test(el.className ?? '')) ?? li.children[1];
-      // A range over the label's text, not the label's own box: the label is the tallest item in the grid
-      // row, so its box spans every line it wrapped to and would swallow a bar that floated off the first.
-      const range = document.createRange();
-      range.selectNodeContents(label);
-      const line = range.getClientRects()[0];
-      const bar = track.getBoundingClientRect();
-      return { label: label.textContent, line: { bottom: line.bottom, top: line.top }, middle: (bar.top + bar.bottom) / 2 };
+}
+
+async function wastedProbeRows(theme) {
+  try {
+    if (!(await tabTo(theme, 'Cache warming'))) return;
+    try {
+      await page.waitForFunction(
+        () => {
+          const card = [...document.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent === 'Wasted probes');
+          return !!card?.querySelector('.hbars--reasons li');
+        },
+        null,
+        { timeout: 15_000 },
+      );
+    } catch {
+      failures.push(`${theme} /analytics: the wasted-probes card drew no reason row`);
+      return;
+    }
+    const rows = await page.evaluate(() => {
+      const card = [...document.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent === 'Wasted probes');
+      return [...card.querySelectorAll('.hbars--reasons li')].map((li) => {
+        const label = li.children[0];
+        const track = [...li.children].find((el) => /__track$/.test(el.className ?? '')) ?? li.children[1];
+        // A range over the label's text, not the label's own box: the label is the tallest item in the grid
+        // row, so its box spans every line it wrapped to and would swallow a bar that floated off the first.
+        const range = document.createRange();
+        range.selectNodeContents(label);
+        const line = range.getClientRects()[0];
+        const bar = track.getBoundingClientRect();
+        return { label: label.textContent, line: { bottom: line.bottom, top: line.top }, middle: (bar.top + bar.bottom) / 2 };
+      });
     });
-  });
-  for (const row of rows.filter((r) => r.middle < r.line.top || r.middle > r.line.bottom)) {
-    failures.push(`${theme} /analytics: the "${row.label}" bar is centred on ${row.middle.toFixed(1)}, outside its label's first line from ${row.line.top.toFixed(1)} to ${row.line.bottom.toFixed(1)}`);
+    for (const row of rows.filter((r) => r.middle < r.line.top || r.middle > r.line.bottom)) {
+      failures.push(`${theme} /analytics: the "${row.label}" bar is centred on ${row.middle.toFixed(1)}, outside its label's first line from ${row.line.top.toFixed(1)} to ${row.line.bottom.toFixed(1)}`);
+    }
+  } finally {
+    await tabTo(theme, 'Traffic');
   }
 }
 
 /**
  * The burn section and the rewrites card against the Failovers card they sit beside: the same title type, the same
- * width in the grid, and, where a card drew a chart, the same chart height. The rewrites card follows Failovers.
+ * width in the grid, and, where a card drew a chart, the same chart height. The rewrites card follows Failovers. The
+ * burn cards are read on the Burn tab, Failovers and the rewrites card on Traffic.
  */
 async function burnCards(theme) {
+  // The named cards the shown tab draws, and whether the rewrites card follows Failovers there.
+  const read = (titles) =>
+    page.evaluate((titles) => {
+      const card = (t) => [...document.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === t);
+      const box = (title) => {
+        const el = card(title);
+        if (!el) return null;
+        const head = getComputedStyle(el.querySelector('.card__title'));
+        const chart = el.querySelector('.recharts-responsive-container');
+        return { chart: chart ? Math.round(chart.getBoundingClientRect().height) : null, title, type: `${head.fontSize}/${head.fontWeight}`, width: Math.round(el.getBoundingClientRect().width) };
+      };
+      return { beside: card('Failovers') !== undefined && card('Failovers').nextElementSibling === card('Migration rewrites'), boxes: titles.map(box).filter(Boolean) };
+    }, titles);
   try {
-    await page.waitForFunction(() => [...document.querySelectorAll('.card__title')].some((t) => t.textContent === 'Migration rewrites') && !document.querySelector('#burn .skeleton'), null, { timeout: 15_000 });
-  } catch {
-    failures.push(`${theme} /analytics: the burn section never finished loading`);
-    return;
-  }
-  const cards = await page.evaluate(() => {
-    const card = (t) => [...document.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === t);
-    const box = (title) => {
-      const el = card(title);
-      if (!el) return null;
-      const head = getComputedStyle(el.querySelector('.card__title'));
-      const chart = el.querySelector('.recharts-responsive-container');
-      return { chart: chart ? Math.round(chart.getBoundingClientRect().height) : null, title, type: `${head.fontSize}/${head.fontWeight}`, width: Math.round(el.getBoundingClientRect().width) };
-    };
-    return { beside: card('Failovers')?.nextElementSibling === card('Migration rewrites'), boxes: ['Failovers', 'Migration rewrites', 'Tokens per minute', 'Spend per minute', 'Plan per hour'].map(box).filter(Boolean) };
-  });
-  measurements.push(`${theme} /analytics burn cards ${JSON.stringify(cards.boxes)}`);
-  if (!cards.beside) failures.push(`${theme} /analytics: the migration rewrites card does not follow Failovers`);
-  const [reference, ...rest] = cards.boxes;
-  if (!reference || reference.title !== 'Failovers') {
-    failures.push(`${theme} /analytics: no Failovers card to measure the burn cards against`);
-    return;
-  }
-  for (const b of rest) {
-    if (b.type !== reference.type) failures.push(`${theme} /analytics: "${b.title}" titles in ${b.type} against Failovers' ${reference.type}`);
-    if (b.width !== reference.width) failures.push(`${theme} /analytics: "${b.title}" is ${b.width}px wide against Failovers' ${reference.width}px`);
-    if (b.chart !== null && b.chart !== reference.chart) failures.push(`${theme} /analytics: "${b.title}" draws a ${b.chart}px chart against Failovers' ${reference.chart}px`);
+    if (!(await tabTo(theme, 'Traffic'))) return;
+    const failovers = await read(['Failovers']);
+    if (!(await tabTo(theme, 'Burn'))) return;
+    const burn = await read(['Tokens per minute', 'Spend per minute', 'Plan per hour']);
+    if (!(await tabTo(theme, 'Traffic'))) return;
+    const rewrites = await read(['Migration rewrites']);
+    const cards = { beside: rewrites.beside, boxes: [...failovers.boxes, ...rewrites.boxes, ...burn.boxes] };
+    measurements.push(`${theme} /analytics burn cards ${JSON.stringify(cards.boxes)}`);
+    if (!cards.beside) failures.push(`${theme} /analytics: the migration rewrites card does not follow Failovers`);
+    const [reference, ...rest] = cards.boxes;
+    if (!reference || reference.title !== 'Failovers') {
+      failures.push(`${theme} /analytics: no Failovers card to measure the burn cards against`);
+      return;
+    }
+    for (const b of rest) {
+      if (b.type !== reference.type) failures.push(`${theme} /analytics: "${b.title}" titles in ${b.type} against Failovers' ${reference.type}`);
+      if (b.width !== reference.width) failures.push(`${theme} /analytics: "${b.title}" is ${b.width}px wide against Failovers' ${reference.width}px`);
+      if (b.chart !== null && b.chart !== reference.chart) failures.push(`${theme} /analytics: "${b.title}" draws a ${b.chart}px chart against Failovers' ${reference.chart}px`);
+    }
+  } finally {
+    await tabTo(theme, 'Traffic');
   }
 }
 
@@ -1772,33 +1815,38 @@ async function burnCards(theme) {
  * there the pass records that the entry is not drawn.
  */
 async function planLegend(theme) {
-  const read = await page.evaluate(() => {
-    const card = [...document.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Plan per hour');
-    if (!card) return null;
-    const items = [...card.querySelectorAll('.legend li')];
-    const label = (li) => [...li.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent?.trim()).join('');
-    const value = (li) => li.querySelector('.legend__value')?.textContent?.trim() ?? null;
-    const box = (li) => {
-      if (!li) return null;
-      const s = getComputedStyle(li);
-      const swatch = li.querySelector('.legend__swatch');
-      const r = swatch?.getBoundingClientRect();
-      return { color: swatch ? getComputedStyle(swatch).backgroundColor : null, label: label(li), swatch: r ? `${Math.round(r.width)}x${Math.round(r.height)}` : null, type: `${s.fontFamily}/${s.fontSize}/${s.fontWeight}`, value: value(li) };
-    };
-    const at = items.findIndex((li) => label(li) === 'model unlisted');
-    return { neighbour: at > 0 ? box(items[at - 1]) : null, tierUnknown: box(items.find((li) => value(li) === 'tier unknown')), unlisted: at < 0 ? null : box(items[at]) };
-  });
-  measurements.push(`${theme} /analytics plan legend ${JSON.stringify(read)}`);
-  if (read === null) {
-    failures.push(`${theme} /analytics: no Plan per hour card to read the legend of`);
-    return;
+  try {
+    if (!(await tabTo(theme, 'Burn'))) return;
+    const read = await page.evaluate(() => {
+      const card = [...document.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Plan per hour');
+      if (!card) return null;
+      const items = [...card.querySelectorAll('.legend li')];
+      const label = (li) => [...li.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent?.trim()).join('');
+      const value = (li) => li.querySelector('.legend__value')?.textContent?.trim() ?? null;
+      const box = (li) => {
+        if (!li) return null;
+        const s = getComputedStyle(li);
+        const swatch = li.querySelector('.legend__swatch');
+        const r = swatch?.getBoundingClientRect();
+        return { color: swatch ? getComputedStyle(swatch).backgroundColor : null, label: label(li), swatch: r ? `${Math.round(r.width)}x${Math.round(r.height)}` : null, type: `${s.fontFamily}/${s.fontSize}/${s.fontWeight}`, value: value(li) };
+      };
+      const at = items.findIndex((li) => label(li) === 'model unlisted');
+      return { neighbour: at > 0 ? box(items[at - 1]) : null, tierUnknown: box(items.find((li) => value(li) === 'tier unknown')), unlisted: at < 0 ? null : box(items[at]) };
+    });
+    measurements.push(`${theme} /analytics plan legend ${JSON.stringify(read)}`);
+    if (read === null) {
+      failures.push(`${theme} /analytics: no Plan per hour card to read the legend of`);
+      return;
+    }
+    if (read.unlisted === null) {
+      if (mock) failures.push(`${theme} /analytics: the story's mail account runs on a model the table cannot price, yet no model unlisted entry draws`);
+      return;
+    }
+    failures.push(...compare(read.unlisted, read.neighbour, ['type', 'swatch'], `${theme} /analytics: the model unlisted entry against the entry before it`));
+    if (read.tierUnknown) failures.push(...compare(read.unlisted, read.tierUnknown, ['type', 'swatch', 'color'], `${theme} /analytics: the model unlisted entry against the tier unknown entry`));
+  } finally {
+    await tabTo(theme, 'Traffic');
   }
-  if (read.unlisted === null) {
-    if (mock) failures.push(`${theme} /analytics: the story's mail account runs on a model the table cannot price, yet no model unlisted entry draws`);
-    return;
-  }
-  failures.push(...compare(read.unlisted, read.neighbour, ['type', 'swatch'], `${theme} /analytics: the model unlisted entry against the entry before it`));
-  if (read.tierUnknown) failures.push(...compare(read.unlisted, read.tierUnknown, ['type', 'swatch', 'color'], `${theme} /analytics: the model unlisted entry against the tier unknown entry`));
 }
 
 /**
@@ -1808,73 +1856,74 @@ async function planLegend(theme) {
  * alone, since the two cards sit in different sections' grids, and Member budgets in the Burn section. Every budget
  * row draws its bar, one row per budgeted period; in the mock's story the member past its budget carries the
  * at-budget badge, and the subscription member's spend leads with the muted word metered in the figure's own type.
- * The router's seed places nothing and budgets no member, so there the tables draw their empty rows.
+ * The router's seed places nothing and budgets no member, so there the tables draw their empty rows. Each section
+ * shows on its own tab, so the Cache tables are read there and Member budgets on Burn.
  */
 async function analyticsTables(theme) {
   const say = (what) => failures.push(`${theme} /analytics: ${what}`);
-  try {
-    await page.waitForFunction(
-      () => ['Placements by rung', 'Member budgets'].every((t) => [...document.querySelectorAll('.card__title')].some((x) => x.textContent === t)) && !document.querySelector('#cache .skeleton, #burn .skeleton'),
-      null,
-      { timeout: 15_000 },
-    );
-  } catch {
-    say('the placements and member budgets cards never finished loading');
-    return;
-  }
-  const read = await page.evaluate(() => {
-    const card = (t) => [...document.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === t);
-    const type = (el) => (el ? `${getComputedStyle(el).fontFamily}/${getComputedStyle(el).fontSize}/${getComputedStyle(el).fontWeight}` : null);
-    const badge = (el) => {
-      if (!el) return null;
-      const s = getComputedStyle(el);
-      return `${s.fontFamily}/${s.fontSize}/${s.lineHeight}/${s.paddingTop}/${s.paddingLeft}/${Math.round(el.getBoundingClientRect().height)}`;
-    };
-    const box = (title) => {
-      const el = card(title);
-      if (!el) return null;
-      const row = el.querySelector('tbody tr');
-      return {
-        figure: type(el.querySelector('tbody td.num')),
-        head: type(el.querySelector('thead th')),
-        row: row ? Math.round(row.getBoundingClientRect().height) : null,
-        rows: el.querySelectorAll('tbody td.num').length > 0,
-        section: el.closest('.analytics-section')?.id ?? null,
-        title: type(el.querySelector('.card__title')),
-        width: Math.round(el.getBoundingClientRect().width),
+  // The tables the shown tab draws; a card on another tab is not mounted and reads as null.
+  const tables = () =>
+    page.evaluate(() => {
+      const card = (t) => [...document.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === t);
+      const type = (el) => (el ? `${getComputedStyle(el).fontFamily}/${getComputedStyle(el).fontSize}/${getComputedStyle(el).fontWeight}` : null);
+      const badge = (el) => {
+        if (!el) return null;
+        const s = getComputedStyle(el);
+        return `${s.fontFamily}/${s.fontSize}/${s.lineHeight}/${s.paddingTop}/${s.paddingLeft}/${Math.round(el.getBoundingClientRect().height)}`;
       };
-    };
-    const budgetRows = [...(card('Member budgets')?.querySelectorAll('tbody tr') ?? [])].filter((tr) => tr.children.length === 5);
-    const atBudget = (tr) => [...tr.querySelectorAll('.badge')].find((b) => b.textContent?.trim() === 'at budget');
-    const spent = (tr) => tr.children[2].querySelector('.num');
-    const word = (el) => (el ? `${getComputedStyle(el).fontFamily}/${getComputedStyle(el).fontSize}` : null);
-    return {
-      atBudget: budgetRows.filter(atBudget).map((tr) => ({ account: tr.children[1].textContent?.trim(), badge: badge(atBudget(tr)) })),
-      bars: budgetRows.map((tr) => {
-        const bar = tr.querySelector('.meter');
-        return bar ? `${Math.round(bar.getBoundingClientRect().width)}x${Math.round(bar.getBoundingClientRect().height)}` : null;
-      }),
-      budgets: box('Member budgets'),
-      cache: box('Cache by model'),
-      metered: budgetRows
-        .filter((tr) => spent(tr)?.querySelector('.muted'))
-        .map((tr) => ({ account: tr.children[1].textContent?.trim(), figure: word(spent(tr)), text: spent(tr)?.textContent, word: word(spent(tr)?.querySelector('.muted')) })),
-      placements: box('Placements by rung'),
-    };
-  });
-  measurements.push(`${theme} /analytics placement and budget tables ${JSON.stringify(read)}`);
-  const drawn = (a, b, keys) => (a?.rows && b?.rows ? keys : []);
-  failures.push(...compare(read.placements, read.cache, ['title', 'head', 'width', ...drawn(read.placements, read.cache, ['figure', 'row'])], `${theme} /analytics: "Placements by rung" against "Cache by model"`));
-  failures.push(...compare(read.budgets, read.placements, ['title', 'head'], `${theme} /analytics: "Member budgets" against "Placements by rung"`));
-  if (read.placements?.section !== 'cache') say(`the placements card sits in ${read.placements?.section}, not the Cache section`);
-  if (read.budgets?.section !== 'burn') say(`the member budgets card sits in ${read.budgets?.section}, not the Burn section`);
-  for (const bar of read.bars.filter((b) => b === null || !/^[0-9]{3,}x4$/.test(b))) say(`a member budget row draws its bar as ${bar}`);
-  if (mock) {
-    if (!read.placements?.rows) say('the story places requests by rung, yet the placements card draws no figure');
-    if (read.bars.length !== 4) say(`the story budgets four periods across three members, yet the card lists ${read.bars.length}`);
-    if (JSON.stringify(read.atBudget.map((r) => r.account)) !== JSON.stringify(['evals'])) say(`the at-budget mark sits on ${JSON.stringify(read.atBudget.map((r) => r.account))}, not on evals alone`);
-    if (JSON.stringify(read.metered.map((r) => [r.account, r.text])) !== JSON.stringify([['business', 'metered $12.50']])) say(`the metered word sits on ${JSON.stringify(read.metered.map((r) => [r.account, r.text]))}, not on business alone`);
-    for (const r of read.metered.filter((r) => r.word !== r.figure)) say(`the metered word on ${r.account} reads ${r.word}, not the figure's ${r.figure}`);
+      const box = (title) => {
+        const el = card(title);
+        if (!el) return null;
+        const row = el.querySelector('tbody tr');
+        return {
+          figure: type(el.querySelector('tbody td.num')),
+          head: type(el.querySelector('thead th')),
+          row: row ? Math.round(row.getBoundingClientRect().height) : null,
+          rows: el.querySelectorAll('tbody td.num').length > 0,
+          section: el.closest('.analytics-section')?.id ?? null,
+          title: type(el.querySelector('.card__title')),
+          width: Math.round(el.getBoundingClientRect().width),
+        };
+      };
+      const budgetRows = [...(card('Member budgets')?.querySelectorAll('tbody tr') ?? [])].filter((tr) => tr.children.length === 5);
+      const atBudget = (tr) => [...tr.querySelectorAll('.badge')].find((b) => b.textContent?.trim() === 'at budget');
+      const spent = (tr) => tr.children[2].querySelector('.num');
+      const word = (el) => (el ? `${getComputedStyle(el).fontFamily}/${getComputedStyle(el).fontSize}` : null);
+      return {
+        atBudget: budgetRows.filter(atBudget).map((tr) => ({ account: tr.children[1].textContent?.trim(), badge: badge(atBudget(tr)) })),
+        bars: budgetRows.map((tr) => {
+          const bar = tr.querySelector('.meter');
+          return bar ? `${Math.round(bar.getBoundingClientRect().width)}x${Math.round(bar.getBoundingClientRect().height)}` : null;
+        }),
+        budgets: box('Member budgets'),
+        cache: box('Cache by model'),
+        metered: budgetRows
+          .filter((tr) => spent(tr)?.querySelector('.muted'))
+          .map((tr) => ({ account: tr.children[1].textContent?.trim(), figure: word(spent(tr)), text: spent(tr)?.textContent, word: word(spent(tr)?.querySelector('.muted')) })),
+        placements: box('Placements by rung'),
+      };
+    });
+  try {
+    if (!(await tabTo(theme, 'Cache'))) return;
+    const onCache = await tables();
+    if (!(await tabTo(theme, 'Burn'))) return;
+    const read = { ...(await tables()), cache: onCache.cache, placements: onCache.placements };
+    measurements.push(`${theme} /analytics placement and budget tables ${JSON.stringify(read)}`);
+    const drawn = (a, b, keys) => (a?.rows && b?.rows ? keys : []);
+    failures.push(...compare(read.placements, read.cache, ['title', 'head', 'width', ...drawn(read.placements, read.cache, ['figure', 'row'])], `${theme} /analytics: "Placements by rung" against "Cache by model"`));
+    failures.push(...compare(read.budgets, read.placements, ['title', 'head'], `${theme} /analytics: "Member budgets" against "Placements by rung"`));
+    if (read.placements?.section !== 'cache') say(`the placements card sits in ${read.placements?.section}, not the Cache section`);
+    if (read.budgets?.section !== 'burn') say(`the member budgets card sits in ${read.budgets?.section}, not the Burn section`);
+    for (const bar of read.bars.filter((b) => b === null || !/^[0-9]{3,}x4$/.test(b))) say(`a member budget row draws its bar as ${bar}`);
+    if (mock) {
+      if (!read.placements?.rows) say('the story places requests by rung, yet the placements card draws no figure');
+      if (read.bars.length !== 4) say(`the story budgets four periods across three members, yet the card lists ${read.bars.length}`);
+      if (JSON.stringify(read.atBudget.map((r) => r.account)) !== JSON.stringify(['evals'])) say(`the at-budget mark sits on ${JSON.stringify(read.atBudget.map((r) => r.account))}, not on evals alone`);
+      if (JSON.stringify(read.metered.map((r) => [r.account, r.text])) !== JSON.stringify([['business', 'metered $12.50']])) say(`the metered word sits on ${JSON.stringify(read.metered.map((r) => [r.account, r.text]))}, not on business alone`);
+      for (const r of read.metered.filter((r) => r.word !== r.figure)) say(`the metered word on ${r.account} reads ${r.word}, not the figure's ${r.figure}`);
+    }
+  } finally {
+    await tabTo(theme, 'Traffic');
   }
 }
 
@@ -1900,47 +1949,75 @@ async function speedFilter(theme) {
  * The Traffic section's speed chart and effort bars and the Cost section's fast-mode tile, each against the
  * neighbour it copies: Requests by speed against Requests by outcome (title type, card width, chart height),
  * Effort levels against Errors by code (title type, card width, and where both draw bars, the bar row, its label
- * type and its track), Fast mode spend against Estimated cost (the tile box and its figure's type).
+ * type and its track), Fast mode spend against Estimated cost (the tile box and its figure's type). The cards are
+ * read on the Traffic tab and the tiles on Cost.
  */
 async function trafficCards(theme) {
-  try {
-    await page.waitForFunction(() => ['Requests by speed', 'Effort levels'].every((t) => [...document.querySelectorAll('.card__title')].some((x) => x.textContent === t)) && !document.querySelector('#traffic .skeleton, #cost .skeleton'), null, { timeout: 15_000 });
-  } catch {
-    failures.push(`${theme} /analytics: the speed and effort cards never finished loading`);
-    return;
-  }
-  const read = await page.evaluate(() => {
-    const card = (t) => [...document.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === t);
-    const type = (el) => (el ? `${getComputedStyle(el).fontFamily}/${getComputedStyle(el).fontSize}/${getComputedStyle(el).fontWeight}` : null);
-    const box = (title) => {
-      const el = card(title);
-      if (!el) return null;
-      const chart = el.querySelector('.recharts-responsive-container');
-      const bar = el.querySelector('.hbars li');
-      return {
-        bar: bar ? Math.round(bar.getBoundingClientRect().height) : null,
-        chart: chart ? Math.round(chart.getBoundingClientRect().height) : null,
-        label: type(bar?.children[0]),
-        section: el.closest('.analytics-section')?.id ?? null,
-        title: type(el.querySelector('.card__title')),
-        track: bar ? Math.round(bar.querySelector('.hbars__track').getBoundingClientRect().height) : null,
-        width: Math.round(el.getBoundingClientRect().width),
+  // The cards and tiles the shown tab draws; one on another tab is not mounted and reads as null.
+  const cards = () =>
+    page.evaluate(() => {
+      const card = (t) => [...document.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === t);
+      const type = (el) => (el ? `${getComputedStyle(el).fontFamily}/${getComputedStyle(el).fontSize}/${getComputedStyle(el).fontWeight}` : null);
+      const box = (title) => {
+        const el = card(title);
+        if (!el) return null;
+        const chart = el.querySelector('.recharts-responsive-container');
+        const bar = el.querySelector('.hbars li');
+        return {
+          bar: bar ? Math.round(bar.getBoundingClientRect().height) : null,
+          chart: chart ? Math.round(chart.getBoundingClientRect().height) : null,
+          label: type(bar?.children[0]),
+          section: el.closest('.analytics-section')?.id ?? null,
+          title: type(el.querySelector('.card__title')),
+          track: bar ? Math.round(bar.querySelector('.hbars__track').getBoundingClientRect().height) : null,
+          width: Math.round(el.getBoundingClientRect().width),
+        };
       };
-    };
-    const tile = (label) => {
-      const el = [...document.querySelectorAll('#cost .stat')].find((t) => t.querySelector('.stat__label')?.textContent?.trim() === label);
-      if (!el) return null;
-      const b = el.getBoundingClientRect();
-      return { height: Math.round(b.height), value: type(el.querySelector('.stat__value')), width: Math.round(b.width) };
-    };
-    return { effort: box('Effort levels'), errors: box('Errors by code'), estimated: tile('Estimated cost'), fastSpend: tile('Fast mode spend'), outcome: box('Requests by outcome'), speed: box('Requests by speed') };
-  });
-  measurements.push(`${theme} /analytics speed and effort ${JSON.stringify(read)}`);
-  failures.push(...compare(read.speed, read.outcome, ['chart', 'section', 'title', 'width'], `${theme} /analytics: "Requests by speed" against "Requests by outcome"`));
-  const bars = read.effort?.bar !== null && read.errors?.bar !== null ? ['bar', 'label', 'track'] : [];
-  failures.push(...compare(read.effort, read.errors, ['section', 'title', 'width', ...bars], `${theme} /analytics: "Effort levels" against "Errors by code"`));
-  failures.push(...compare(read.fastSpend, read.estimated, ['height', 'value', 'width'], `${theme} /analytics: the Fast mode spend tile against Estimated cost`));
-  if (read.effort?.bar === null) failures.push(`${theme} /analytics: the Effort levels card draws no bar, though every request asks for a level or none`);
+      const tile = (label) => {
+        const el = [...document.querySelectorAll('#cost .stat')].find((t) => t.querySelector('.stat__label')?.textContent?.trim() === label);
+        if (!el) return null;
+        const b = el.getBoundingClientRect();
+        return { height: Math.round(b.height), value: type(el.querySelector('.stat__value')), width: Math.round(b.width) };
+      };
+      return { effort: box('Effort levels'), errors: box('Errors by code'), estimated: tile('Estimated cost'), fastSpend: tile('Fast mode spend'), outcome: box('Requests by outcome'), speed: box('Requests by speed') };
+    });
+  try {
+    if (!(await tabTo(theme, 'Traffic'))) return;
+    const onTraffic = await cards();
+    if (!(await tabTo(theme, 'Cost'))) return;
+    const onCost = await cards();
+    const read = { ...onTraffic, estimated: onCost.estimated, fastSpend: onCost.fastSpend };
+    measurements.push(`${theme} /analytics speed and effort ${JSON.stringify(read)}`);
+    failures.push(...compare(read.speed, read.outcome, ['chart', 'section', 'title', 'width'], `${theme} /analytics: "Requests by speed" against "Requests by outcome"`));
+    const bars = read.effort?.bar !== null && read.errors?.bar !== null ? ['bar', 'label', 'track'] : [];
+    failures.push(...compare(read.effort, read.errors, ['section', 'title', 'width', ...bars], `${theme} /analytics: "Effort levels" against "Errors by code"`));
+    failures.push(...compare(read.fastSpend, read.estimated, ['height', 'value', 'width'], `${theme} /analytics: the Fast mode spend tile against Estimated cost`));
+    if (read.effort?.bar === null) failures.push(`${theme} /analytics: the Effort levels card draws no bar, though every request asks for a level or none`);
+  } finally {
+    await tabTo(theme, 'Traffic');
+  }
+}
+
+/**
+ * The tab strip docks under the sticky filter bar: on Latency, the longest section, scrolled to the page's end, the
+ * strip's top sits on the filter bar's bottom, the height the page measured from the bar.
+ */
+async function stickyStrip(theme) {
+  try {
+    if (!(await tabTo(theme, 'Latency'))) return;
+    await page.evaluate(() => window.scrollTo(0, document.scrollingElement.scrollHeight));
+    await settle();
+    const read = await page.evaluate(() => ({
+      filters: document.querySelector('.filters--sticky')?.getBoundingClientRect().bottom ?? null,
+      scrolled: Math.round(document.scrollingElement.scrollTop),
+      strip: document.querySelector('.section-bar')?.getBoundingClientRect().top ?? null,
+    }));
+    measurements.push(`${theme} /analytics sticky strip ${JSON.stringify(read)}`);
+    if (read.scrolled === 0) failures.push(`${theme} /analytics: the Latency tab does not scroll, so the strip's dock is not measured`);
+    if (read.filters === null || read.strip === null || read.strip !== read.filters) failures.push(`${theme} /analytics: scrolled to the end, the tab strip's top is ${read.strip} against the filter bar's bottom ${read.filters}`);
+  } finally {
+    await tabTo(theme, 'Traffic');
+  }
 }
 
 /**
@@ -2733,6 +2810,7 @@ try {
     mkdirSync(join(shots, theme), { recursive: true });
     await page.evaluate((t) => localStorage.setItem('phoebis.theme', t), theme);
     for (const view of VIEWS) {
+      if (view.mockOnly && !mock) continue;
       at = `${theme} ${view.path}`;
       await page.goto(`${base}${view.path}`);
       await booted();
@@ -2776,6 +2854,7 @@ try {
         await planLegend(theme);
         await analyticsTables(theme);
         await trafficCards(theme);
+        await stickyStrip(theme);
       }
       if (view.path === '/settings') {
         await compatibilityCard(theme);
@@ -2854,5 +2933,5 @@ if (failures.length) {
   console.error(`${failures.length} failures:\n  ${failures.join('\n  ')}`);
   process.exit(1);
 }
-console.log(`browser pass: ${VIEWS.length} views in 2 themes, screenshots under ${shots}`);
+console.log(`browser pass: ${VIEWS.filter((view) => mock || !view.mockOnly).length} views in 2 themes, screenshots under ${shots}`);
 for (const line of measurements) console.log(`  ${line}`);
