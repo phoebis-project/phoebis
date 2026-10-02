@@ -14,8 +14,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
-      # Actions does not evaluate `secrets` in a step's `if`, so the companion steps test this copy instead.
-      COMPANION_READ_TOKEN: ${{ secrets.COMPANION_READ_TOKEN }}
+      # A step's `if` cannot read `secrets`, so the companion steps test this boolean; the token itself reaches only
+      # the checkout that uses it.
+      HAS_COMPANION_TOKEN: ${{ secrets.COMPANION_READ_TOKEN != '' }}
       # The console is built once below and embedded as it is, as the image's builder does.
       PHOEBIS_SKIP_UI_BUILD: "1"
     steps:
@@ -26,7 +27,7 @@ jobs:
       - run: rustup toolchain install && rustup show active-toolchain
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 22
+          node-version-file: web/.nvmrc
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: npm ci --no-audit --no-fund && npm run build
@@ -41,18 +42,18 @@ jobs:
           PHOEBIS_UI_EXPECT: bundle
       # The companion registration test is opt-in in code; the checkout below is what opts in, and only while the
       # companion repository is private behind a read token.
-      - if: env.COMPANION_READ_TOKEN != ''
+      - if: env.HAS_COMPANION_TOKEN == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: daystrom-labs/phoebis-keepalive
           path: companion
-          token: ${{ env.COMPANION_READ_TOKEN }}
+          token: ${{ secrets.COMPANION_READ_TOKEN }}
           persist-credentials: false
-      - if: env.COMPANION_READ_TOKEN != ''
+      - if: env.HAS_COMPANION_TOKEN == 'true'
         run: cargo test -p phoebis-router --test end_to_end the_companion_registers --locked
         env:
           PHOEBIS_COMPANION_DIR: ${{ github.workspace }}/companion
-      - if: env.COMPANION_READ_TOKEN == ''
+      - if: env.HAS_COMPANION_TOKEN != 'true'
         run: echo "::notice::the companion registration test was skipped because COMPANION_READ_TOKEN is unset"
   web:
     runs-on: ubuntu-24.04
@@ -64,7 +65,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 22
+          node-version-file: web/.nvmrc
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: npm ci --no-audit --no-fund
