@@ -5439,6 +5439,20 @@ m.unmount();
     results.push({ name: 'grouped dialog: a reset to an expert-only group while the mode is off shows the first shown group', ok: JSON.stringify(read) === JSON.stringify(['One,Three', 'One', 'one', 'null']), missing: read });
   }
   f.unmount();
+  // The page already holds Two when the address names it, so the heading can take focus only once the mode is on and
+  // Two's section has mounted.
+  f = await mountNode(h(Fixture, { expertOnly: true, initialGroup: 'two', start: 'two' }));
+  {
+    const c = f.container;
+    const read = [texts(c, '.dialog-rail__group .dialog-rail__label').join(), shown(c), String(localStorage.getItem('phoebis.expertView'))];
+    results.push({
+      name: 'grouped dialog: opening on the expert-only group the page already holds turns the mode on and focuses its heading',
+      ok: JSON.stringify(read) === JSON.stringify(['One,Two,Three', 'Two', 'on']) && heading(c, 'Two') !== null && document.activeElement === heading(c, 'Two'),
+      missing: [...read, `focus ${focused()}`],
+    });
+  }
+  f.unmount();
+  localStorage.removeItem('phoebis.expertView');
   f = await mountNode(h(Fixture, { expertOnly: true, initialGroup: 'two' }));
   {
     const c = f.container;

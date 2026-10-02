@@ -458,7 +458,8 @@ export function GroupedDialog({
   // with no rail entry current, so the first shown group takes its place. The rail and the panels draw it in this
   // render: a page's reset that runs after the hand-off and names the hidden group again leaves the page's state as
   // it was, and React renders nothing more.
-  const lost = open && shown.length > 0 && !shown.some((g) => g.id === chosen) ? shown[0].id : null;
+  const chosenShown = shown.some((g) => g.id === chosen);
+  const lost = open && shown.length > 0 && !chosenShown ? shown[0].id : null;
   const current = lost ?? chosen;
   useEffect(() => {
     if (lost !== null) onChoose(lost);
@@ -474,17 +475,19 @@ export function GroupedDialog({
   };
   const choose = (id: string, focus: 'heading' | 'refused' = 'heading') => {
     if (expertOnlyOff(id)) setExpertView(true);
-    if (id === chosen) {
+    if (id === chosen && chosenShown) {
       focusIn(id, focus);
       return;
     }
     pending.current = { focus, id };
-    onChoose(id);
+    if (id !== chosen) onChoose(id);
   };
   // Every group shown starts the body at its top. Focus moves only for a choice, to the group's heading or, for Go
   // to, its refused control, and for the group the address named: the page's reset chooses that group after this
-  // effect has run, so the choice waits here until `chosen` matches it. A group the page sets itself on open leaves
-  // focus where the browser put it, so a field's autoFocus still wins.
+  // effect has run, so the choice waits here until `chosen` matches it. A group the mode hid mounts its section only in
+  // the render after the mode turns on, so the choice also waits for the group to be shown, even when the page already
+  // holds it. A group the page sets itself on open leaves focus where the browser put it, so a field's autoFocus still
+  // wins.
   useEffect(() => {
     if (!open) {
       wasOpen.current = false;
@@ -500,10 +503,10 @@ export function GroupedDialog({
     }
     bodyRef.current?.scrollTo?.({ top: 0 });
     const choice = pending.current;
-    if (choice === null || choice.id !== chosen) return;
+    if (choice === null || choice.id !== chosen || !chosenShown) return;
     pending.current = null;
     focusIn(chosen, choice.focus);
-  }, [open, chosen, initialGroup]);
+  }, [open, chosen, chosenShown, initialGroup]);
   const runs: { groups: DialogGroup[]; parent?: string }[] = [];
   for (const g of shown) {
     const last = runs[runs.length - 1];
