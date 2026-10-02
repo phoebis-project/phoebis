@@ -2128,33 +2128,53 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
 }
 m.unmount();
 
-// Until the key list is read, an empty list says nothing about a pool's keys: the count line waits while the read is
-// out, and a failed read says the list is unavailable rather than "No keys yet" in the warning ink.
+// Until the key list is read, an empty list says nothing about a pool's keys: the count line and the Keys tile wait
+// while the read is out, and a failed read says the list is unavailable rather than "No keys yet" in the warning ink.
 {
   const lineOf = (page) => [...page.container.querySelectorAll('.pool')].map((c) => {
     const line = c.querySelector('.pool__keys');
     return line ? [line.tagName, line.className.trim(), line.textContent?.trim()] : null;
   });
+  const tileOf = (page) => [...page.container.querySelectorAll('.pool')].map((c) => {
+    const dd = [...c.querySelectorAll('.pool__stats > div')].find((d) => d.querySelector('dt')?.textContent?.trim() === 'Keys')?.querySelector('dd');
+    return dd ? [dd.textContent?.trim(), dd.querySelector('.muted')?.textContent?.trim() ?? null] : ['no tile'];
+  });
   const held = deferNextCall('listKeys');
   let p = await mount('/pools');
   const waiting = lineOf(p);
+  const waitingTiles = tileOf(p);
   held.release();
   held.restore();
   await p.settle(300);
   const loaded = lineOf(p);
+  const loadedTiles = tileOf(p);
   results.push({
-    name: '/pools the key count line draws nothing while the key list loads, then the count',
-    ok: waiting.length > 0 && waiting.every((l) => l === null) && loaded.length === waiting.length && loaded.every((l) => l?.[0] === 'A'),
-    missing: [...waiting, ...loaded].map((l) => JSON.stringify(l)),
+    name: '/pools the key count line and the Keys tile draw nothing while the key list loads, then the count',
+    ok:
+      waiting.length > 0 &&
+      waiting.every((l) => l === null) &&
+      waitingTiles.every((t) => JSON.stringify(t) === '["",null]') &&
+      loaded.length === waiting.length &&
+      loaded.every((l) => l?.[0] === 'A') &&
+      loadedTiles.every((t) => /^[0-9]+$/.test(t[0] ?? '') && t[1] === null) &&
+      loaded.every((l, i) => l?.[2] === (loadedTiles[i][0] === '1' ? '1 key' : loadedTiles[i][0] === '0' ? 'No keys yet' : `${loadedTiles[i][0]} keys`)),
+    missing: [...waiting, ...waitingTiles, ...loaded, ...loadedTiles].map((l) => JSON.stringify(l)),
   });
   p.unmount();
   failNextCall('listKeys', '/admin/keys', 'the key store is unavailable');
   p = await mount('/pools');
   const failed = lineOf(p);
+  const failedTiles = tileOf(p);
   results.push({
-    name: '/pools a failed key read says the keys are unavailable in the muted ink, never "No keys yet"',
-    ok: failed.length > 0 && failed.every((l) => JSON.stringify(l) === JSON.stringify(['SPAN', 'pool__keys pool__keys--unread', 'Keys unavailable'])) && !p.text().includes('No keys yet') && p.container.querySelector('.pool__keys--none') === null,
-    missing: failed.map((l) => JSON.stringify(l)),
+    name: '/pools a failed key read says the keys are unavailable in the muted ink, never "No keys yet", and the Keys tile reads n/a',
+    ok:
+      failed.length > 0 &&
+      failed.every((l) => JSON.stringify(l) === JSON.stringify(['SPAN', 'pool__keys pool__keys--unread', 'Keys unavailable'])) &&
+      failedTiles.length === failed.length &&
+      failedTiles.every((t) => JSON.stringify(t) === '["n/a","n/a"]') &&
+      !p.text().includes('No keys yet') &&
+      p.container.querySelector('.pool__keys--none') === null,
+    missing: [...failed, ...failedTiles].map((l) => JSON.stringify(l)),
   });
   p.unmount();
 }

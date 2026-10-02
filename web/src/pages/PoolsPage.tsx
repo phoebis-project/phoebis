@@ -449,7 +449,7 @@ function PoolCard({
   attention: AttentionItem[];
   canMutate: boolean;
   keys: ApiKey[];
-  /** Until the key list has loaded, `keys` is empty whatever the pool holds, so the count line waits on this. */
+  /** Until the key list has loaded, `keys` is empty whatever the pool holds, so the count line and the tile wait. */
   keysRead: 'failed' | 'loaded' | 'loading';
   now: number;
   onDelete: () => void;
@@ -653,7 +653,7 @@ function PoolCard({
         </div>
         <div>
           <dt>Keys</dt>
-          <dd className="num">{keys.length}</dd>
+          <dd className="num">{keysRead === 'loaded' ? keys.length : keysRead === 'failed' && <span className="muted">n/a</span>}</dd>
         </div>
         <div>
           <dt>Requests 24h</dt>
