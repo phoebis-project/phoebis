@@ -16,14 +16,11 @@ Both databases are SQLite, and both run in WAL mode. A plain file copy taken whi
 mid-transaction and split either database file from its `-wal` file, losing the last transactions in between.
 SQLite's own `.backup` avoids that by copying a consistent snapshot instead.
 
-Both run with `synchronous = NORMAL`. A process crash loses nothing that committed, since the WAL is written before a
-commit returns; a power loss or an operating-system crash may lose the last transactions that were not yet synced to
-disk. For the registry those are the routing state of the last moments (affinity, cooldowns, credits, overage, pins,
-session memory and windows), which the next requests re-derive, and the operator's latest other changes, such as a
-creation or a pool edit, which the operator makes again. Every access-control change (an account's deletion or
-disconnect; a key's deletion, edit, revocation or rotation, its switch and its expiry included), every credential and
-secret write, and every refresh attempt's record syncs at `FULL` before it is acknowledged, so a power loss never
-restores an access the operator removed.
+A process crash loses nothing that committed, since the WAL is written before a commit returns. The ledger runs with
+`synchronous = NORMAL`, so a power loss or an operating-system crash may lose its last transactions. The registry runs
+with `synchronous = FULL`, so every change an operator, a pairing or a token refresh makes is on disk before it is
+acknowledged, and only the routing state the router records from traffic, such as pins and cooldowns, commits at
+`NORMAL`: a power loss may take its last moments, which the next requests re-derive.
 
 Create the destination directory before either backup, and make it private first: `.backup` does not carry the
 source file's `0600` mode onto the copy it creates, and the ledger backup holds the prompts and tool results its

@@ -737,29 +737,31 @@ pub fn spawn(
             match tokio::task::spawn_blocking(move || land(&store, batch)).await {
                 Ok(Landed {
                     moved,
-                    failed,
+                    refused,
                     skipped,
+                    stopped,
                     left,
+                    rekey,
                 }) => {
-                    if let Some(failed) = failed {
-                        if left > 0 {
-                            tracing::error!(
-                                error = %failed.error,
-                                batch = size,
-                                skipped,
-                                left,
-                                "the store failed every write: {left} of {size} routing state writes left unapplied"
-                            );
-                        } else {
-                            tracing::error!(
-                                error = %failed.error,
-                                batch = size,
-                                skipped,
-                                "{skipped} of {size} routing state writes failed and were skipped"
-                            );
-                        }
-                        retry = failed.rekey;
+                    if let Some(stopped) = stopped {
+                        tracing::error!(
+                            error = %stopped,
+                            refused = refused.as_ref().map(tracing::field::display),
+                            batch = size,
+                            skipped,
+                            left,
+                            "a database-wide failure left {left} of {size} routing state writes unapplied, \
+                             after {skipped} refused"
+                        );
+                    } else if let Some(refused) = refused {
+                        tracing::error!(
+                            error = %refused,
+                            batch = size,
+                            skipped,
+                            "{skipped} of {size} routing state writes failed and were skipped"
+                        );
                     }
+                    retry = rekey;
                     // An account-state mark that moved the row changes what the snapshot has to say, so the
                     // loop is asked for a reload once the write is on disk rather than before.
                     if moved {
@@ -845,20 +847,16 @@ pub fn spawn(
     Ok(handle)
 }
 
-/// What one wake landed: whether an account-state mark moved its row, the failure that cost it writes with the
-/// refused rekey the writer tries once more, how many writes the store refused one by one, and how many were left
-/// unapplied once the store failed for every write.
+/// What one wake landed, all of it routing state the store commits at `NORMAL`, which the next requests re-derive
+/// when a power loss takes the last of it. `refused` is the first write the store refused on its own and `skipped`
+/// how many it refused; `stopped` is a database-wide failure that gave up the rest of the wake and `left` how many
+/// writes it left unapplied, counting the one it met; `rekey` is the refused rekey the writer tries once more.
 struct Landed {
     moved: bool,
-    failed: Option<Failed>,
+    refused: Option<StoreError>,
     skipped: usize,
+    stopped: Option<StoreError>,
     left: usize,
-}
-
-/// The failure that cost a wake writes, carrying a refused rekey when there was one: the one write the writer tries
-/// again.
-struct Failed {
-    error: StoreError,
     rekey: Option<Box<RekeyWrite>>,
 }
 
@@ -883,15 +881,17 @@ fn land(store: &Store, batch: Vec<StateWrite>) -> Landed {
     match store.write_routing(|tx| apply_in(tx, &batch)) {
         Ok(moved) => Landed {
             moved,
-            failed: None,
+            refused: None,
             skipped: 0,
+            stopped: None,
             left: 0,
+            rekey: None,
         },
         Err(error) => {
             let landed = replay(store, batch);
             // A replay that met no refusal says nothing about why the transaction failed: an outside holder of
             // the file's lock or a disk that failed once.
-            if landed.failed.is_none() {
+            if landed.refused.is_none() && landed.stopped.is_none() {
                 tracing::warn!(
                     %error,
                     batch = size,
@@ -906,8 +906,9 @@ fn land(store: &Store, batch: Vec<StateWrite>) -> Landed {
 fn replay(store: &Store, batch: Vec<StateWrite>) -> Landed {
     let size = batch.len();
     let mut moved = false;
-    let mut error = None;
+    let mut refused = None;
     let mut skipped = 0;
+    let mut stopped = None;
     let mut left = 0;
     let mut refused_rekeys = Vec::new();
     let mut writes = batch.into_iter().enumerate();
@@ -935,7 +936,7 @@ fn replay(store: &Store, batch: Vec<StateWrite>) -> Landed {
             // wake is given up at once; its rekeys still join the one retry.
             Err(failure) if failure.is_database_wide() => {
                 left = size - index;
-                error = Some(failure);
+                stopped = Some(failure);
                 for write in std::iter::once(write).chain(writes.map(|(_, write)| write)) {
                     if let StateWrite::Rekey(rekey) = write {
                         refuse_rekey(&mut refused_rekeys, rekey);
@@ -943,9 +944,9 @@ fn replay(store: &Store, batch: Vec<StateWrite>) -> Landed {
                 }
                 break;
             }
-            Err(refused) => {
+            Err(refusal) => {
                 skipped += 1;
-                error.get_or_insert(refused);
+                refused.get_or_insert(refusal);
                 if let StateWrite::Rekey(rekey) = write {
                     refuse_rekey(&mut refused_rekeys, rekey);
                 }
@@ -954,14 +955,13 @@ fn replay(store: &Store, batch: Vec<StateWrite>) -> Landed {
     }
     Landed {
         moved,
+        refused,
+        skipped,
+        stopped,
+        left,
         // One retry per wake, as the loop's `retry` holds: the first refused rekey still standing; any after it
         // is dropped.
-        failed: error.map(|error| Failed {
-            error,
-            rekey: refused_rekeys.into_iter().next().map(Box::new),
-        }),
-        skipped,
-        left,
+        rekey: refused_rekeys.into_iter().next().map(Box::new),
     }
 }
 
@@ -2275,11 +2275,7 @@ mod tests {
             ],
         );
         assert_eq!(landed.skipped, 2);
-        let carried = landed
-            .failed
-            .expect("the two refusals")
-            .rekey
-            .expect("a rekey to retry");
+        let carried = landed.rekey.expect("a rekey to retry");
         assert_eq!(
             carried.resolution.dated_id, "claude-sonnet-4-5-20251001",
             "the latest resolution of the spelling"
@@ -2367,11 +2363,8 @@ mod tests {
             (0, 3),
             "the first write's busy answer gave up the wake rather than waiting it out once per write"
         );
-        assert!(landed
-            .failed
-            .expect("the busy store")
-            .error
-            .is_database_wide());
+        assert!(landed.stopped.expect("the busy store").is_database_wide());
+        assert!(landed.refused.is_none());
         assert!(store.load_routing().unwrap().cooldowns.is_empty());
     }
 }

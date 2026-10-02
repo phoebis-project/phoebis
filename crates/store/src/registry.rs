@@ -2,13 +2,13 @@
 //! change log every write appends to.
 
 use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput, ValueRef};
-use rusqlite::{params, Connection, OptionalExtension, Transaction};
+use rusqlite::{params, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
 #[cfg(any(test, feature = "debug-hooks"))]
 use std::sync::atomic::Ordering;
 
 use crate::credentials::store_api_key_secret;
-use crate::{durably, AccountRow, AccountState, Secret, Store, StoreError, LOCK_POISONED};
+use crate::{AccountRow, AccountState, Secret, Store, StoreError, LOCK_POISONED};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Strategy {
@@ -1035,49 +1035,44 @@ impl Store {
         Ok(now)
     }
 
-    /// Synced at `FULL`: a disable or an expiry a power loss undid would hand the key its access back.
     pub fn update_api_key(&self, row: &ApiKeyRow, actor: &str) -> Result<(), StoreError> {
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
-        durably(&mut conn, |conn| {
-            let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-            if tx.query_row(
-                "SELECT COUNT(*) FROM pools WHERE id = ?1",
-                params![row.pool_id],
-                |r| r.get::<_, i64>(0),
-            )? == 0
-            {
-                return Err(StoreError::PoolNotFound(row.pool_id.clone()));
-            }
-            let updated = tx.execute(
-                "UPDATE api_keys SET label = ?2, notes = ?3, pool_id = ?4, enabled = ?5, expires_at = ?6, model_rules_json = ?7, model_rules_mode = ?8, long_context_twins = ?9, keepalive_opt_out = ?10, body_capture_hours = ?11, in_flight_cap = ?12, affinity_source = ?13, auto_mode_server = ?14 WHERE id = ?1",
-                params![
-                    row.id,
-                    row.label,
-                    row.notes,
-                    row.pool_id,
-                    row.enabled,
-                    row.expires_at,
-                    rules_json(&row.model_rules)?,
-                    row.model_rules_mode,
-                    row.long_context_twins,
-                    row.keepalive_opt_out,
-                    row.body_capture_hours.map(|h| h as i64),
-                    row.in_flight_cap.map(|c| c as i64),
-                    row.affinity_source,
-                    row.auto_mode_server
-                ],
-            )?;
-            if updated == 0 {
-                return Err(StoreError::KeyNotFound(row.id.clone()));
-            }
-            record_change(&tx, now_ms(), actor, "key_updated", &row.id, &key_diff(row))?;
-            tx.commit()?;
-            Ok(())
-        })
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        if tx.query_row(
+            "SELECT COUNT(*) FROM pools WHERE id = ?1",
+            params![row.pool_id],
+            |r| r.get::<_, i64>(0),
+        )? == 0
+        {
+            return Err(StoreError::PoolNotFound(row.pool_id.clone()));
+        }
+        let updated = tx.execute(
+            "UPDATE api_keys SET label = ?2, notes = ?3, pool_id = ?4, enabled = ?5, expires_at = ?6, model_rules_json = ?7, model_rules_mode = ?8, long_context_twins = ?9, keepalive_opt_out = ?10, body_capture_hours = ?11, in_flight_cap = ?12, affinity_source = ?13, auto_mode_server = ?14 WHERE id = ?1",
+            params![
+                row.id,
+                row.label,
+                row.notes,
+                row.pool_id,
+                row.enabled,
+                row.expires_at,
+                rules_json(&row.model_rules)?,
+                row.model_rules_mode,
+                row.long_context_twins,
+                row.keepalive_opt_out,
+                row.body_capture_hours.map(|h| h as i64),
+                row.in_flight_cap.map(|c| c as i64),
+                row.affinity_source,
+                row.auto_mode_server
+            ],
+        )?;
+        if updated == 0 {
+            return Err(StoreError::KeyNotFound(row.id.clone()));
+        }
+        record_change(&tx, now_ms(), actor, "key_updated", &row.id, &key_diff(row))?;
+        tx.commit()?;
+        Ok(())
     }
 
-    /// Synced at `FULL`: a rotation a power loss undid would refuse the new secret and let the replaced one in
-    /// past its grace.
     pub fn rotate_api_key(
         &self,
         id: &str,
@@ -1087,85 +1082,77 @@ impl Store {
         actor: &str,
     ) -> Result<(), StoreError> {
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
-        durably(&mut conn, |conn| {
-            let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-            let current: Option<(Vec<u8>, String)> = tx
-                .query_row(
-                    "SELECT secret_digest, prefix FROM api_keys WHERE id = ?1 AND revoked_at IS NULL",
-                    params![id],
-                    |r| Ok((r.get(0)?, r.get(1)?)),
-                )
-                .optional()?;
-            let Some((old_digest, old_prefix)) = current else {
-                return Err(StoreError::KeyNotFound(id.to_string()));
-            };
-            tx.execute(
-                "DELETE FROM api_key_retired_secrets WHERE expires_at <= ?1",
-                params![at],
-            )?;
-            // Replace, never insert beside: the grace covers the secret this rotation retires and no earlier one.
-            tx.execute(
-                "INSERT OR REPLACE INTO api_key_retired_secrets (key_id, secret_digest, prefix, retired_at, expires_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![id, old_digest, old_prefix, at, at + ROTATION_GRACE_MS],
-            )?;
-            // A new grace starts unpresented: a stamp under the retired secret this rotation just replaced would
-            // otherwise read as if it belonged to the one this rotation creates.
-            tx.execute(
-                "UPDATE api_keys SET secret_digest = ?2, prefix = ?3, rotated_at = ?4, retired_secret_last_used_at = NULL WHERE id = ?1",
-                params![id, digest, prefix, at],
-            )?;
-            record_change(
-                &tx,
-                at,
-                actor,
-                "key_rotated",
-                id,
-                &serde_json::json!({ "prefix": prefix, "previous_secret_until": at + ROTATION_GRACE_MS }).to_string(),
-            )?;
-            tx.commit()?;
-            Ok(())
-        })
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let current: Option<(Vec<u8>, String)> = tx
+            .query_row(
+                "SELECT secret_digest, prefix FROM api_keys WHERE id = ?1 AND revoked_at IS NULL",
+                params![id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        let Some((old_digest, old_prefix)) = current else {
+            return Err(StoreError::KeyNotFound(id.to_string()));
+        };
+        tx.execute(
+            "DELETE FROM api_key_retired_secrets WHERE expires_at <= ?1",
+            params![at],
+        )?;
+        // Replace, never insert beside: the grace covers the secret this rotation retires and no earlier one.
+        tx.execute(
+            "INSERT OR REPLACE INTO api_key_retired_secrets (key_id, secret_digest, prefix, retired_at, expires_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![id, old_digest, old_prefix, at, at + ROTATION_GRACE_MS],
+        )?;
+        // A new grace starts unpresented: a stamp under the retired secret this rotation just replaced would
+        // otherwise read as if it belonged to the one this rotation creates.
+        tx.execute(
+            "UPDATE api_keys SET secret_digest = ?2, prefix = ?3, rotated_at = ?4, retired_secret_last_used_at = NULL WHERE id = ?1",
+            params![id, digest, prefix, at],
+        )?;
+        record_change(
+            &tx,
+            at,
+            actor,
+            "key_rotated",
+            id,
+            &serde_json::json!({ "prefix": prefix, "previous_secret_until": at + ROTATION_GRACE_MS }).to_string(),
+        )?;
+        tx.commit()?;
+        Ok(())
     }
 
-    /// Synced at `FULL`: a revocation a power loss undid would hand the key its access back.
     pub fn revoke_api_key(&self, id: &str, at: i64, actor: &str) -> Result<(), StoreError> {
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
-        durably(&mut conn, |conn| {
-            let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-            tx.execute(
-                "DELETE FROM api_key_retired_secrets WHERE key_id = ?1",
-                params![id],
-            )?;
-            let updated = tx.execute(
-                "UPDATE api_keys SET revoked_at = COALESCE(revoked_at, ?2), enabled = 0 WHERE id = ?1",
-                params![id, at],
-            )?;
-            if updated == 0 {
-                return Err(StoreError::KeyNotFound(id.to_string()));
-            }
-            record_change(&tx, at, actor, "key_revoked", id, "{}")?;
-            tx.commit()?;
-            Ok(())
-        })
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        tx.execute(
+            "DELETE FROM api_key_retired_secrets WHERE key_id = ?1",
+            params![id],
+        )?;
+        let updated = tx.execute(
+            "UPDATE api_keys SET revoked_at = COALESCE(revoked_at, ?2), enabled = 0 WHERE id = ?1",
+            params![id, at],
+        )?;
+        if updated == 0 {
+            return Err(StoreError::KeyNotFound(id.to_string()));
+        }
+        record_change(&tx, at, actor, "key_revoked", id, "{}")?;
+        tx.commit()?;
+        Ok(())
     }
 
-    /// Synced at `FULL`: a deletion a power loss undid would restore the key.
     pub fn delete_api_key(&self, id: &str, actor: &str) -> Result<(), StoreError> {
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
-        durably(&mut conn, |conn| {
-            let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-            if tx.execute("DELETE FROM api_keys WHERE id = ?1", params![id])? == 0 {
-                return Err(StoreError::KeyNotFound(id.to_string()));
-            }
-            tx.execute("DELETE FROM pins WHERE key_id = ?1", params![id])?;
-            // Nothing reads these rows again, since a key created under the id next takes a later generation;
-            // dropping them here spares the retention purge a table of dead entries.
-            tx.execute("DELETE FROM session_memory WHERE key_id = ?1", params![id])?;
-            let now = now_ms();
-            record_change(&tx, now, actor, "key_deleted", id, "{}")?;
-            tx.commit()?;
-            Ok(())
-        })
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        if tx.execute("DELETE FROM api_keys WHERE id = ?1", params![id])? == 0 {
+            return Err(StoreError::KeyNotFound(id.to_string()));
+        }
+        tx.execute("DELETE FROM pins WHERE key_id = ?1", params![id])?;
+        // Nothing reads these rows again, since a key created under the id next takes a later generation;
+        // dropping them here spares the retention purge a table of dead entries.
+        tx.execute("DELETE FROM session_memory WHERE key_id = ?1", params![id])?;
+        let now = now_ms();
+        record_change(&tx, now, actor, "key_deleted", id, "{}")?;
+        tx.commit()?;
+        Ok(())
     }
 
     /// `last_used_at` always; `retired_secret_last_used_at` only for a retired presentation whose `rotated_at`
@@ -1197,109 +1184,94 @@ impl Store {
         actor: &str,
     ) -> Result<(), StoreError> {
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
-        let write = |conn: &mut Connection| {
-            let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-            let identity_json = row
-                .identity
-                .as_ref()
-                .map(serde_json::to_string)
-                .transpose()?;
-            tx.execute(
-                "INSERT INTO accounts (id, kind, label, enabled, identity_json, incarnation, lifecycle_generation, revision, state, created_at, updated_at) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?9, ?6, 1, ?7, ?8, ?8)",
-                params![
-                    row.id,
-                    row.kind,
-                    row.label,
-                    row.enabled,
-                    identity_json,
-                    row.lifecycle_generation as i64,
-                    row.state,
-                    at,
-                    crate::accounts::next_incarnation(&tx, &row.id)? as i64,
-                ],
-            )?;
-            if let Some(secret) = secret {
-                store_api_key_secret(&tx, &self.key, &row.id, secret)?;
-            }
-            record_change(
-                &tx,
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let identity_json = row
+            .identity
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()?;
+        tx.execute(
+            "INSERT INTO accounts (id, kind, label, enabled, identity_json, incarnation, lifecycle_generation, revision, state, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?9, ?6, 1, ?7, ?8, ?8)",
+            params![
+                row.id,
+                row.kind,
+                row.label,
+                row.enabled,
+                identity_json,
+                row.lifecycle_generation as i64,
+                row.state,
                 at,
-                actor,
-                "account_created",
-                &row.id,
-                &serde_json::json!({
-                    "kind": row.kind.as_str(),
-                    "label": row.label,
-                })
-                .to_string(),
-            )?;
-            tx.commit()?;
-            Ok(())
-        };
-        // The secret is sealed inside the transaction, so the whole of it syncs at `FULL` when one rides along.
-        if secret.is_some() {
-            durably(&mut conn, write)
-        } else {
-            write(&mut conn)
+                crate::accounts::next_incarnation(&tx, &row.id)? as i64,
+            ],
+        )?;
+        if let Some(secret) = secret {
+            store_api_key_secret(&tx, &self.key, &row.id, secret)?;
         }
+        record_change(
+            &tx,
+            at,
+            actor,
+            "account_created",
+            &row.id,
+            &serde_json::json!({
+                "kind": row.kind.as_str(),
+                "label": row.label,
+            })
+            .to_string(),
+        )?;
+        tx.commit()?;
+        Ok(())
     }
 
     /// A verified edit lands whole: discovery ran against the staged secret, and the row moving underneath
     /// (a disconnect, a deletion) means the verdict is about a slot that no longer exists.
     pub fn commit_account_update(&self, u: &AccountUpdate<'_>) -> Result<(), StoreError> {
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
-        let write = |conn: &mut Connection| {
-            let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-            let updated = tx.execute(
-                "UPDATE accounts SET label = ?2, state = ?3, \
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let updated = tx.execute(
+            "UPDATE accounts SET label = ?2, state = ?3, \
              revision = revision + 1, updated_at = ?4 \
              WHERE id = ?1 AND lifecycle_generation = ?5 AND revision = ?6",
-                params![
-                    u.id,
-                    u.label,
-                    u.state,
-                    u.at,
-                    u.lifecycle_generation as i64,
-                    u.expected_revision as i64,
-                ],
-            )?;
-            if updated == 0 {
-                let exists: i64 = tx.query_row(
-                    "SELECT COUNT(*) FROM accounts WHERE id = ?1",
-                    params![u.id],
-                    |r| r.get(0),
-                )?;
-                return Err(if exists > 0 {
-                    StoreError::Stale
-                } else {
-                    StoreError::AccountNotFound(u.id.to_string())
-                });
-            }
-            if let Some(secret) = u.secret {
-                store_api_key_secret(&tx, &self.key, u.id, secret)?;
-            }
-            record_change(
-                &tx,
-                u.at,
-                u.actor,
-                "account_updated",
+            params![
                 u.id,
-                &serde_json::json!({
-                    "label": u.label,
-                    "secret": u.secret.is_some(),
-                    "state": u.state.as_str(),
-                })
-                .to_string(),
+                u.label,
+                u.state,
+                u.at,
+                u.lifecycle_generation as i64,
+                u.expected_revision as i64,
+            ],
+        )?;
+        if updated == 0 {
+            let exists: i64 = tx.query_row(
+                "SELECT COUNT(*) FROM accounts WHERE id = ?1",
+                params![u.id],
+                |r| r.get(0),
             )?;
-            tx.commit()?;
-            Ok(())
-        };
-        if u.secret.is_some() {
-            durably(&mut conn, write)
-        } else {
-            write(&mut conn)
+            return Err(if exists > 0 {
+                StoreError::Stale
+            } else {
+                StoreError::AccountNotFound(u.id.to_string())
+            });
         }
+        if let Some(secret) = u.secret {
+            store_api_key_secret(&tx, &self.key, u.id, secret)?;
+        }
+        record_change(
+            &tx,
+            u.at,
+            u.actor,
+            "account_updated",
+            u.id,
+            &serde_json::json!({
+                "label": u.label,
+                "secret": u.secret.is_some(),
+                "state": u.state.as_str(),
+            })
+            .to_string(),
+        )?;
+        tx.commit()?;
+        Ok(())
     }
 
     /// Where a mirror starts: the newest change, read off the primary key rather than by loading a log

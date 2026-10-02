@@ -77,9 +77,9 @@ const CANARY_NONCE_LEN: usize = 12;
 
 #[cfg(test)]
 thread_local! {
-    /// The `synchronous` value the last `durably` write on this thread committed under, so a test proves each
-    /// write's own setting rather than the connection's resting one.
-    static DURABLY_SAW: std::cell::Cell<Option<i64>> = const { std::cell::Cell::new(None) };
+    /// The `synchronous` value the last routing commit on this thread ran under, so a test reads the level
+    /// inside the commit rather than the connection's resting one.
+    static ROUTING_COMMIT_SAW: std::cell::Cell<Option<i64>> = const { std::cell::Cell::new(None) };
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -616,13 +616,9 @@ fn prepare(conn: &mut Connection, on_disk: bool) -> Result<(), StoreError> {
         // WAL lets the router task's reads run beside an admin write; an in-memory database has no journal.
         // Unlike `foreign_keys` this rewrites the database header, so it waits behind the version check too.
         conn.pragma_update(None, "journal_mode", "WAL")?;
-        // A power loss may lose the last transactions not yet synced: routing state the next requests re-derive
-        // (affinity, cooldowns, credits, memory, overage, pins, windows) and the operator's other changes, made
-        // again by hand. A write whose loss would restore what the operator removed sets `FULL` for itself
-        // through `durably`: every access-control change (an account's deletion or disconnect; a key's deletion,
-        // edit, revocation or rotation), the credential and secret writes, and the refresh-attempt records, since
-        // a rotation lost there retires a refresh token the endpoint already replaced.
-        conn.pragma_update(None, "synchronous", "NORMAL")?;
+        // Every change an operator or the pairing flow is told has landed is on disk before its commit returns;
+        // `routing_commit` alone relaxes, since the next requests re-derive the routing state a power loss takes.
+        conn.pragma_update(None, "synchronous", "FULL")?;
     }
     conn.execute_batch(schema::SCHEMA)?;
     for (version, sql) in schema::MIGRATIONS {
@@ -638,27 +634,6 @@ fn prepare(conn: &mut Connection, on_disk: bool) -> Result<(), StoreError> {
         tx.commit()?;
     }
     Ok(())
-}
-
-/// Runs `f` with `synchronous = FULL` on this connection and `NORMAL` after it, so a write whose loss would cost
-/// a re-pairing or restore an access the operator removed is synced to disk before its commit returns.
-pub(crate) fn durably<T>(
-    conn: &mut Connection,
-    f: impl FnOnce(&mut Connection) -> Result<T, StoreError>,
-) -> Result<T, StoreError> {
-    conn.pragma_update(None, "synchronous", "FULL")?;
-    let result = f(conn);
-    #[cfg(test)]
-    DURABLY_SAW.set(
-        conn.pragma_query_value(None, "synchronous", |row| row.get(0))
-            .ok(),
-    );
-    // The write has landed or failed by now, and its answer is the caller's; a connection left at `FULL` only
-    // syncs more than it needs to.
-    if let Err(error) = conn.pragma_update(None, "synchronous", "NORMAL") {
-        tracing::warn!(%error, "the registry connection stays at synchronous = FULL after a durable write");
-    }
-    result
 }
 
 /// A connection that has never run `prepare` has no `meta` table yet, which reads as version 0 so the check
@@ -1066,22 +1041,66 @@ mod tests {
     }
 
     #[test]
-    fn an_opened_registry_reads_synchronous_normal_and_a_five_second_busy_timeout() {
+    fn an_opened_registry_reads_synchronous_full_and_a_five_second_busy_timeout() {
         let dir = tempfile::tempdir().unwrap();
         let store = on_disk(&dir);
-        assert_eq!(pragma(&store, "synchronous"), 1, "NORMAL");
-        // rusqlite sets five seconds at every open as well, so this half guards the named value rather than
-        // proving a change.
+        // SQLite's own default is `FULL` as well, and rusqlite sets five seconds at every open, so this test
+        // guards the named values rather than proving a change.
+        assert_eq!(pragma(&store, "synchronous"), 2, "FULL");
         assert_eq!(pragma(&store, "busy_timeout"), 5_000);
     }
 
+    fn cooldown(account_id: &str, scope: &str) -> CooldownRow {
+        CooldownRow {
+            account_id: account_id.into(),
+            scope: scope.into(),
+            until: 10_000,
+            set_at: 0,
+            reason: "rate_limit".into(),
+            window: "five_hour".into(),
+            source_request_id: None,
+            incarnation: 1,
+        }
+    }
+
     #[test]
-    fn a_credential_commit_runs_at_full_and_leaves_normal_behind() {
+    fn a_routing_write_commits_at_normal_and_leaves_full_behind() {
         let dir = tempfile::tempdir().unwrap();
         let store = on_disk(&dir);
-        with_a_credential(&store);
-        assert_eq!(DURABLY_SAW.take(), Some(2), "FULL under the commit");
-        assert_eq!(pragma(&store, "synchronous"), 1, "NORMAL after it");
+        store
+            .insert_account(&account("a", AccountKind::ApiKey))
+            .unwrap();
+        ROUTING_COMMIT_SAW.take();
+
+        store.upsert_cooldown(&cooldown("a", "account")).unwrap();
+        assert_eq!(
+            ROUTING_COMMIT_SAW.take(),
+            Some(1),
+            "NORMAL under a per-write method"
+        );
+        assert_eq!(pragma(&store, "synchronous"), 2, "FULL after it");
+        store
+            .write_routing(|tx| tx.upsert_cooldown(&cooldown("a", "model:claude-opus-5")))
+            .unwrap();
+        assert_eq!(
+            ROUTING_COMMIT_SAW.take(),
+            Some(1),
+            "NORMAL under a wake's transaction"
+        );
+        assert_eq!(pragma(&store, "synchronous"), 2, "FULL after it");
+        assert!(store
+            .upsert_cooldown(&cooldown("ghost", "account"))
+            .is_err());
+        assert_eq!(
+            ROUTING_COMMIT_SAW.take(),
+            Some(1),
+            "NORMAL under a refused write"
+        );
+        assert_eq!(
+            pragma(&store, "synchronous"),
+            2,
+            "FULL after the refusal too"
+        );
     }
 
     fn pool(id: &str) -> PoolRow {
@@ -1110,217 +1129,39 @@ mod tests {
         }
     }
 
-    fn api_key(store: &Store, id: &str, pool_id: &str) -> ApiKeyRow {
-        ApiKeyRow {
-            id: id.into(),
-            label: id.into(),
-            notes: None,
-            pool_id: pool_id.into(),
-            enabled: true,
-            revoked_at: None,
-            expires_at: None,
-            model_rules: Vec::new(),
-            model_rules_mode: RulesMode::Extend,
-            long_context_twins: true,
-            keepalive_opt_out: false,
-            body_capture_hours: None,
-            secret_digest: store.api_key_digest("phoebis-test-not-a-secret").to_vec(),
-            prefix: "test0000".into(),
-            created_at: 0,
-            rotated_at: None,
-            last_used_at: None,
-            retired_secret_last_used_at: None,
-            in_flight_cap: None,
-            affinity_source: AffinitySource::Auto,
-            auto_mode_server: None,
-        }
-    }
-
     #[test]
-    fn a_revocation_and_a_refresh_attempts_record_run_at_full_and_leave_normal_behind() {
+    fn a_registry_write_commits_at_full_throughout() {
         let dir = tempfile::tempdir().unwrap();
         let store = on_disk(&dir);
-        with_a_credential(&store);
         store.insert_pool(&pool("p"), "test").unwrap();
-        store
-            .insert_api_key(&api_key(&store, "k", "p"), "test")
-            .unwrap();
-        DURABLY_SAW.take();
+        ROUTING_COMMIT_SAW.take();
 
-        store.revoke_api_key("k", 2_000, "test").unwrap();
-        assert_eq!(DURABLY_SAW.take(), Some(2), "FULL under the revocation");
-        assert_eq!(pragma(&store, "synchronous"), 1, "NORMAL after it");
-        assert!(matches!(
-            store.revoke_api_key("gone", 2_000, "test"),
-            Err(StoreError::KeyNotFound(_))
-        ));
+        with_a_credential(&store);
         assert_eq!(
-            DURABLY_SAW.take(),
-            Some(2),
-            "FULL under a refused revocation"
+            ROUTING_COMMIT_SAW.take(),
+            None,
+            "no credential write relaxes"
         );
         assert_eq!(
             pragma(&store, "synchronous"),
-            1,
-            "NORMAL after the refusal too"
+            2,
+            "FULL after the credential commit"
         );
-
-        let generation = store.credential_generation("a").unwrap().unwrap();
-        let attempt = store.open_refresh_attempt("a", 1, 1, generation).unwrap();
-        assert_eq!(
-            DURABLY_SAW.take(),
-            Some(2),
-            "FULL under the attempt's intent"
-        );
-        assert_eq!(pragma(&store, "synchronous"), 1, "NORMAL after it");
         store
-            .resolve_refresh_attempt(attempt, 1, AttemptOutcome::Failed("test".into()))
-            .unwrap();
-        assert_eq!(
-            DURABLY_SAW.take(),
-            Some(2),
-            "FULL under the attempt's resolution"
-        );
-        assert_eq!(pragma(&store, "synchronous"), 1, "NORMAL after it");
-    }
-
-    /// Reads and clears the seam: `Some(2)` after a write `durably` ran, `None` after one it did not, and the
-    /// connection at `NORMAL` after either.
-    #[track_caller]
-    fn assert_synced(store: &Store, at_full: bool, what: &str) {
-        assert_eq!(DURABLY_SAW.take(), at_full.then_some(2), "{what}");
-        assert_eq!(pragma(store, "synchronous"), 1, "{what}: NORMAL after it");
-    }
-
-    /// An on-disk registry holding account `a` with a credential, pool `p` and key `k`, the seam cleared.
-    fn keyed(dir: &tempfile::TempDir) -> Store {
-        let store = on_disk(dir);
-        with_a_credential(&store);
-        store.insert_pool(&pool("p"), "test").unwrap();
-        store
-            .insert_api_key(&api_key(&store, "k", "p"), "test")
-            .unwrap();
-        DURABLY_SAW.take();
-        store
-    }
-
-    #[test]
-    fn a_key_edit_runs_at_full_and_leaves_normal_behind() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = keyed(&dir);
-        store
-            .update_api_key(
-                &ApiKeyRow {
+            .update_pool(
+                &PoolRow {
                     enabled: false,
-                    expires_at: Some(5_000),
-                    ..api_key(&store, "k", "p")
+                    ..pool("p")
                 },
                 "test",
             )
             .unwrap();
-        assert_synced(&store, true, "a key disabled and given an expiry");
-    }
-
-    #[test]
-    fn a_key_rotation_runs_at_full_and_leaves_normal_behind() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = keyed(&dir);
-        let digest = store.api_key_digest("phoebis-test-rotated-not-a-secret");
-        store
-            .rotate_api_key("k", &digest, "test0001", 2_000, "test")
-            .unwrap();
-        assert_synced(&store, true, "a key rotation");
-    }
-
-    #[test]
-    fn a_key_deletion_runs_at_full_and_leaves_normal_behind() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = keyed(&dir);
-        store.delete_api_key("k", "test").unwrap();
-        assert_synced(&store, true, "a key deletion");
-    }
-
-    #[test]
-    fn a_disconnect_runs_at_full_and_leaves_normal_behind() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = keyed(&dir);
-        store.bump_lifecycle("a").unwrap();
-        assert_synced(&store, true, "a disconnect");
-    }
-
-    #[test]
-    fn an_account_deletion_runs_at_full_and_leaves_normal_behind() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = keyed(&dir);
-        store.delete_account("a", "test").unwrap();
-        assert_synced(&store, true, "an account deletion");
-    }
-
-    #[test]
-    fn an_anthropic_key_secret_write_runs_at_full_and_leaves_normal_behind() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = keyed(&dir);
-        store
-            .insert_account(&account("vendor", AccountKind::ApiKey))
-            .unwrap();
-        store
-            .set_api_key_secret("vendor", &Secret::new("sk-ant-test-not-a-key"))
-            .unwrap();
-        assert_synced(&store, true, "an Anthropic key's secret");
-    }
-
-    #[test]
-    fn an_account_created_with_a_secret_runs_at_full_and_one_without_stays_at_normal() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = keyed(&dir);
-        let secret = Secret::new("sk-ant-test-not-a-key");
-        store
-            .create_account(
-                &account("vendor", AccountKind::ApiKey),
-                Some(&secret),
-                2_000,
-                "test",
-            )
-            .unwrap();
-        assert_synced(&store, true, "a creation carrying a secret");
-        store
-            .create_account(&account("other", AccountKind::ApiKey), None, 2_000, "test")
-            .unwrap();
-        assert_synced(&store, false, "a creation without one");
-    }
-
-    #[test]
-    fn an_account_update_with_a_secret_runs_at_full_and_one_without_stays_at_normal() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = keyed(&dir);
-        let secret = Secret::new("sk-ant-test-not-a-key");
-        store
-            .create_account(
-                &account("vendor", AccountKind::ApiKey),
-                Some(&secret),
-                2_000,
-                "test",
-            )
-            .unwrap();
-        DURABLY_SAW.take();
-        let update = |secret: Option<&Secret>| {
-            store
-                .commit_account_update(&AccountUpdate {
-                    id: "vendor",
-                    expected_revision: store.account("vendor").unwrap().unwrap().revision,
-                    lifecycle_generation: 1,
-                    label: "vendor",
-                    secret,
-                    state: AccountState::Ready,
-                    at: 3_000,
-                    actor: "test",
-                })
-                .unwrap();
-        };
-        update(Some(&secret));
-        assert_synced(&store, true, "an update carrying a secret");
-        update(None);
-        assert_synced(&store, false, "an update without one");
+        assert_eq!(ROUTING_COMMIT_SAW.take(), None, "no pool edit relaxes");
+        assert_eq!(
+            pragma(&store, "synchronous"),
+            2,
+            "FULL after the pool's disable"
+        );
     }
 
     #[test]

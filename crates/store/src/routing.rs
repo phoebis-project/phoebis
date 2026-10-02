@@ -302,14 +302,27 @@ impl Store {
         self.routing_commit(|conn| in_transaction(conn, |tx| f(&mut RoutingTx { tx })))
     }
 
-    /// One routing commit under the lock, counted while the lock is still held, so a test that sees the rows
-    /// sees the count too.
+    /// One routing commit under the lock, at `synchronous = NORMAL` while every other write of the connection runs
+    /// at `FULL`: the routing state is what the next requests re-derive, so it alone skips the sync. Counted while
+    /// the lock is still held, so a test that sees the rows sees the count too.
     pub(crate) fn routing_commit<T>(
         &self,
         f: impl FnOnce(&mut Connection) -> Result<T, StoreError>,
     ) -> Result<T, StoreError> {
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
-        let value = f(&mut conn)?;
+        conn.pragma_update(None, "synchronous", "NORMAL")?;
+        let result = f(&mut conn);
+        #[cfg(test)]
+        crate::ROUTING_COMMIT_SAW.set(
+            conn.pragma_query_value(None, "synchronous", |row| row.get(0))
+                .ok(),
+        );
+        // The write has landed or failed by now and its answer is the caller's, but a connection left at `NORMAL`
+        // would relax the operator's next write too, so the failure is an error line.
+        if let Err(error) = conn.pragma_update(None, "synchronous", "FULL") {
+            tracing::error!(%error, "the registry connection stays at synchronous = NORMAL after a routing write");
+        }
+        let value = result?;
         #[cfg(any(test, feature = "debug-hooks"))]
         self.routing_commits
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
