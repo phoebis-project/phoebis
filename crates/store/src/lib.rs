@@ -149,6 +149,8 @@ pub struct Store {
     _lock: Option<lock::ProcessLock>,
     #[cfg(any(test, feature = "debug-hooks"))]
     fail_next_load: AtomicBool,
+    #[cfg(any(test, feature = "debug-hooks"))]
+    fail_next_refresh_read: AtomicBool,
 }
 
 impl Store {
@@ -193,6 +195,8 @@ impl Store {
             _lock: Some(process_lock),
             #[cfg(any(test, feature = "debug-hooks"))]
             fail_next_load: AtomicBool::new(false),
+            #[cfg(any(test, feature = "debug-hooks"))]
+            fail_next_refresh_read: AtomicBool::new(false),
         })
     }
 
@@ -206,6 +210,8 @@ impl Store {
             _lock: None,
             #[cfg(any(test, feature = "debug-hooks"))]
             fail_next_load: AtomicBool::new(false),
+            #[cfg(any(test, feature = "debug-hooks"))]
+            fail_next_refresh_read: AtomicBool::new(false),
         })
     }
 
@@ -232,6 +238,13 @@ impl Store {
     #[doc(hidden)]
     pub fn debug_fail_next_load(&self) {
         self.fail_next_load.store(true, Ordering::SeqCst);
+    }
+
+    /// The next holder read errors, so the attention reader's failure path has a test.
+    #[cfg(any(test, feature = "debug-hooks"))]
+    #[doc(hidden)]
+    pub fn debug_fail_next_refresh_read(&self) {
+        self.fail_next_refresh_read.store(true, Ordering::SeqCst);
     }
 }
 

@@ -73,6 +73,7 @@ const UNDO_V43: &str = r#"
 ALTER TABLE pools ADD COLUMN quota_headers TEXT NOT NULL DEFAULT 'pass'; -- rollback
 ALTER TABLE api_keys ADD COLUMN in_flight_cap INTEGER; -- rollback
 ALTER TABLE api_keys ADD COLUMN affinity_source TEXT NOT NULL DEFAULT 'auto'; -- rollback
+DROP INDEX refresh_attempts_holder_resolved;
 "#;
 
 #[test]
