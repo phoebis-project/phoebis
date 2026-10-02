@@ -4,7 +4,7 @@ import { api } from '@/api';
 import { useSession } from '@/app/session';
 import { useAppSettings, type ThemeChoice } from '@/app/settings';
 import { useAsync } from '@/lib/hooks';
-import { Badge, Button, Segmented, Toast } from '@/components/ui/primitives';
+import { Badge, Button, Descriptions, Segmented, Toast } from '@/components/ui/primitives';
 import { IconActivity, IconBell, IconChart, IconGauge, IconGrid, IconKey, IconLayers, IconList, IconMonitor, IconMoon, IconSessions, IconShield, IconSliders, IconSun, IconUser } from '@/components/ui/icons';
 import { Mark } from '@/components/ui/Mark';
 
@@ -80,22 +80,24 @@ export function Shell() {
           </button>
           <h1 className="topbar__title">{title}</h1>
           <div className="topbar__right">
-            <Badge tone={role === 'admin' ? 'accent' : 'neutral'} title={role === 'admin' ? 'Admin secret: full read and write' : 'Viewer secret: read everything except captured bodies, live previews, question text, and webhook URLs beyond their host'}>
-              {role}
-            </Badge>
-            <Button variant="ghost" size="sm" aria-label="Log out" onClick={() => void logout()}>
-              Log out
-            </Button>
-            <Segmented<ThemeChoice>
-              ariaLabel="Theme"
-              value={theme}
-              onChange={setTheme}
-              options={[
-                { value: 'light', label: <IconSun size={15} />, name: 'Light' },
-                { value: 'dark', label: <IconMoon size={15} />, name: 'Dark' },
-                { value: 'system', label: <IconMonitor size={15} />, name: 'System' },
-              ]}
-            />
+            <Descriptions>
+              <Badge tone={role === 'admin' ? 'accent' : 'neutral'} title={role === 'admin' ? 'Admin secret: full read and write' : 'Viewer secret: read everything except captured bodies, live previews, question text, and webhook URLs beyond their host'}>
+                {role}
+              </Badge>
+              <Button variant="ghost" size="sm" aria-label="Log out" onClick={() => void logout()}>
+                Log out
+              </Button>
+              <Segmented<ThemeChoice>
+                ariaLabel="Theme"
+                value={theme}
+                onChange={setTheme}
+                options={[
+                  { value: 'light', label: <IconSun size={15} />, name: 'Light' },
+                  { value: 'dark', label: <IconMoon size={15} />, name: 'Dark' },
+                  { value: 'system', label: <IconMonitor size={15} />, name: 'System' },
+                ]}
+              />
+            </Descriptions>
           </div>
         </header>
         <main className="content">

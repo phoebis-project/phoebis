@@ -11,7 +11,7 @@ import { ChartTooltip, Legend } from '@/components/charts/Tooltip';
 import { CoolingDown } from '@/components/CoolingDown';
 import { FastLane } from '@/components/FastLane';
 import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
-import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, EmptyState, ErrorState, Field, Input, KeyValue, Meter, SearchInput, Segmented, Select, Skeleton } from '@/components/ui/primitives';
+import { Badge, Button, Card, ConfirmDialog, CopyButton, Descriptions, Dialog, EmptyState, ErrorState, Field, Input, KeyValue, Meter, SearchInput, Segmented, Select, Skeleton } from '@/components/ui/primitives';
 import { WindowTriple } from '@/components/ui/QuotaBars';
 import { fmtAbsolute, fmtCredits, fmtDate, fmtDayShort, fmtDuration, fmtEndsIn, fmtInt, fmtRelative } from '@/lib/format';
 import { accountPatchOf, subscriptionEndFormOf, subscriptionEndRefusal, tickCancelled, type SubscriptionEndForm } from '@/lib/forms';
@@ -107,7 +107,9 @@ export function AccountsPage() {
       </aside>
       <section className="accounts__detail">
         {selected ? (
-          <AccountDetail account={selected} now={now} onBusyChange={setDetailBusy} onToast={notify} onPair={(repair) => setPairing({ accountId: selected.id, label: selected.label, repair })} onChanged={accounts.reload} />
+          <Descriptions>
+            <AccountDetail account={selected} now={now} onBusyChange={setDetailBusy} onToast={notify} onPair={(repair) => setPairing({ accountId: selected.id, label: selected.label, repair })} onChanged={accounts.reload} />
+          </Descriptions>
         ) : (
           <Skeleton height={400} />
         )}

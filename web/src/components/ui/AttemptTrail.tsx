@@ -1,6 +1,7 @@
 import type { AttemptOutcome } from '@/api/types';
 import { fmtAbsolute } from '@/lib/format';
 import type { BadgeTone } from '@/lib/quota';
+import { useDescription } from './primitives';
 
 /** The shape shared by a ledger attempt and a live one; the live one has no status until its head lands. */
 export interface TrailAttempt {
@@ -28,14 +29,23 @@ const lineFor = (a: TrailAttempt) =>
 
 /** One badge per attempt in the order they were tried, so a failover reads as "mail 429, business 200". */
 export function AttemptTrail({ attempts }: { attempts: TrailAttempt[] }) {
+  const title = attempts.map(lineFor).join('\n');
+  const described = useDescription(title);
   if (attempts.length === 0) return <span className="muted">none</span>;
   return (
-    <span className="trail" title={attempts.map(lineFor).join('\n')}>
-      {attempts.map((a) => (
-        <span key={a.index} className={`trail__step badge badge--${toneOf(a.upstreamStatus)}`}>
-          {a.accountId} <span className="num">{a.upstreamStatus ?? '…'}</span>
+    <>
+      <span className="trail" title={title} aria-describedby={described?.id}>
+        {attempts.map((a) => (
+          <span key={a.index} className={`trail__step badge badge--${toneOf(a.upstreamStatus)}`}>
+            {a.accountId} <span className="num">{a.upstreamStatus ?? '…'}</span>
+          </span>
+        ))}
+      </span>
+      {described?.sibling && (
+        <span id={described.id} className="sr-only">
+          {title}
         </span>
-      ))}
-    </span>
+      )}
+    </>
   );
 }

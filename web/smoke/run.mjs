@@ -5885,6 +5885,83 @@ else localStorage.setItem('phoebis.role', roleBeforePreview);
 }
 
 {
+  // The descriptions beside titles, late in the run like the checks after them, so the real time their mounts take
+  // moves none of the story's relative times the earlier checks read.
+  // React's ids carry colons, which a selector would have to escape, so a reference is resolved by id.
+  const describedBy = (el) => {
+    const id = el?.getAttribute('aria-describedby');
+    return id ? document.getElementById(id) : null;
+  };
+  const describes = (el) => !!el?.getAttribute('title') && describedBy(el)?.textContent === el.getAttribute('title');
+  const why = (el) => (el ? `${el.getAttribute('aria-describedby') ?? 'no aria-describedby'} for ${JSON.stringify(el.getAttribute('title'))}` : 'absent');
+
+  const page = await mount(`/requests/${laptopRow.id}`);
+  await page.settle(300);
+  const four = {
+    badge: page.container.querySelector('.drawer .badge[title]'),
+    row: page.container.querySelector('.drawer dd[title]'),
+    trail: page.container.querySelector('.trail[title]'),
+    role: page.container.querySelector('.topbar__right .badge'),
+  };
+  results.push({
+    name: 'a titled badge, a key-value row, an attempt trail and the role badge describe themselves',
+    ok: Object.values(four).every(describes),
+    missing: Object.entries(four)
+      .filter(([, el]) => !describes(el))
+      .map(([kind, el]) => `${kind}: ${why(el)}`),
+  });
+
+  // A node inside a cell would change the cell's text, which the Status, Companion and trail reads take whole.
+  const cellOf = (node) => node?.closest('td, .agents__row > span') ?? null;
+  const expandAll = async () => {
+    [...page.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Expand all')?.click();
+    await page.settle(300);
+  };
+  const cells = [];
+  for (const [path, open] of [['/observe'], ['/requests'], ['/sessions', expandAll]]) {
+    await page.navigate(path);
+    await open?.();
+    const described = [...page.container.querySelectorAll('[aria-describedby]')].filter((el) => cellOf(el) !== null);
+    const stray = described.filter((el) => describedBy(el) === null || cellOf(describedBy(el)) !== null);
+    cells.push({ path, count: described.length, stray: stray.map(why) });
+  }
+  results.push({
+    name: 'a described badge or trail in a cell points outside every cell',
+    ok: cells.every((c) => c.count > 0 && c.stray.length === 0),
+    missing: cells.map((c) => `${c.path}: ${c.count} described in cells, stray ${JSON.stringify(c.stray)}`),
+  });
+
+  // A badge outside every host keeps its title alone, so a page that draws one outside a card or a dialog loses its
+  // description; the fork marker draws its own badge-styled element rather than a Badge.
+  const loose = [];
+  let seen = 0;
+  const sweep = (where) => {
+    for (const badge of page.container.querySelectorAll('.badge[title]:not(.srow__fork)')) {
+      seen += 1;
+      if (!describes(badge)) loose.push(`${where}: ${why(badge)}`);
+    }
+  };
+  for (const path of ['/', '/accounts', '/alerts', '/analytics', '/keys', '/models', '/observe', '/pools', '/quota', '/requests', `/requests/${laptopRow.id}`, '/sessions', '/settings']) {
+    await page.navigate(path);
+    if (path === '/sessions') await expandAll();
+    sweep(path);
+  }
+  await page.navigate('/keys');
+  [...page.container.querySelectorAll('.card--table tbody tr')].find((r) => r.children[0]?.querySelector('b')?.textContent?.trim() === 'laptop')?.querySelector('.menu__trigger')?.click();
+  await page.settle(120);
+  [...page.container.querySelectorAll('[role="menuitem"]')].find((b) => b.textContent?.trim() === 'Edit')?.click();
+  await page.settle(700);
+  const inDialog = page.container.querySelectorAll('dialog[open] .effective-rules .badge[title]').length;
+  sweep('/keys laptop dialog');
+  results.push({
+    name: 'every titled badge in the console sits under a host and describes through it',
+    ok: loose.length === 0 && inDialog > 0,
+    missing: [`${seen} titled badges, ${inDialog} in the open key dialog's effective list`, ...loose],
+  });
+  page.unmount();
+}
+
+{
   // The login checks below start signed out, each on a fresh mount, and put the stored session back at the end. They
   // run last, so the real time their mounts take does not move the story's relative times the checks above read.
   localStorage.removeItem('phoebis.mockSession');

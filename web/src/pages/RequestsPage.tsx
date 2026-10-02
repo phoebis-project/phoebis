@@ -8,7 +8,7 @@ import { SelectionTrace } from '@/components/SelectionTrace';
 import { AttemptTrail } from '@/components/ui/AttemptTrail';
 import { MultiSelect } from '@/components/ui/MultiSelect';
 import { IconChevronLeft, IconChevronRight, IconChevronsLeft, IconColumns, IconRefresh, IconX } from '@/components/ui/icons';
-import { Badge, Button, Card, CopyButton, EmptyState, ErrorState, Input, KeyValue, SearchInput, Select, Skeleton, Toggle } from '@/components/ui/primitives';
+import { Badge, Button, Card, CopyButton, Descriptions, EmptyState, ErrorState, Input, KeyValue, SearchInput, Select, Skeleton, Toggle } from '@/components/ui/primitives';
 import { moveLabel } from '@/lib/analytics';
 import { autoModeLabel } from '@/lib/autoMode';
 import { isDivergence, missLabel } from '@/lib/cache';
@@ -393,7 +393,11 @@ export function RequestsPage() {
         </Card>
       </div>
 
-      {requestId && <RequestDrawer request={selected} requestId={requestId} now={now} onClose={() => navigate('/requests')} />}
+      {requestId && (
+        <Descriptions>
+          <RequestDrawer request={selected} requestId={requestId} now={now} onClose={() => navigate('/requests')} />
+        </Descriptions>
+      )}
     </div>
   );
 }

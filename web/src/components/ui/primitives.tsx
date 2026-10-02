@@ -1,4 +1,4 @@
-import { createContext, Fragment, useContext, useEffect, useId, useLayoutEffect, useRef, useState, type ButtonHTMLAttributes, type CSSProperties, type FocusEvent, type HTMLAttributes, type InputHTMLAttributes, type KeyboardEvent, type ReactNode, type SelectHTMLAttributes } from 'react';
+import { createContext, Fragment, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ButtonHTMLAttributes, type CSSProperties, type FocusEvent, type HTMLAttributes, type InputHTMLAttributes, type KeyboardEvent, type ReactNode, type SelectHTMLAttributes } from 'react';
 import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
 import type { ToastItem } from '@/app/session';
@@ -7,9 +7,60 @@ import { floatAt, menuPlacement, type MenuPlacement } from '@/lib/menu';
 import type { BadgeTone } from '@/lib/quota';
 import { IconCheck, IconChevron, IconCopy, IconSearch, IconWarning, IconX } from './icons';
 
-export function Badge({ tone = 'neutral', children, dot = false, title }: { children: ReactNode; dot?: boolean; title?: string; tone?: BadgeTone }) {
+const DescriptionHost = createContext<{ base: string; register: (text: string) => () => void } | null>(null);
+// The id derives from the text, so a described element points at its entry in its first render, before the entry draws.
+const entryId = (base: string, text: string) => `${base}-${encodeURIComponent(text)}`;
+
+/**
+ * Holds the descriptions of the titled elements inside it in one hidden node after its content. A node beside each
+ * element would join the text of the cell or list item that holds it, which readers and checks take whole.
+ */
+export function Descriptions({ children }: { children: ReactNode }) {
+  const base = useId();
+  const [counts, setCounts] = useState<ReadonlyMap<string, number>>(() => new Map());
+  const register = useCallback((text: string) => {
+    setCounts((m) => new Map(m).set(text, (m.get(text) ?? 0) + 1));
+    return () =>
+      setCounts((m) => {
+        const next = new Map(m);
+        const n = (next.get(text) ?? 1) - 1;
+        if (n > 0) next.set(text, n);
+        else next.delete(text);
+        return next;
+      });
+  }, []);
+  const host = useMemo(() => ({ base, register }), [base, register]);
   return (
-    <span className={`badge badge--${tone}`} title={title}>
+    <DescriptionHost.Provider value={host}>
+      {children}
+      {counts.size > 0 && (
+        <div className="sr-only">
+          {[...counts.keys()].map((t) => (
+            <span key={t} id={entryId(base, t)}>
+              {t}
+            </span>
+          ))}
+        </div>
+      )}
+    </DescriptionHost.Provider>
+  );
+}
+
+/** Null without text; under a host the id of the host's entry, else an own id the caller renders a sibling node for. */
+export function useDescription(text: string | undefined): { id: string; sibling: boolean } | null {
+  const host = useContext(DescriptionHost);
+  const own = useId();
+  useEffect(() => (host && text ? host.register(text) : undefined), [host, text]);
+  if (!text) return null;
+  return host ? { id: entryId(host.base, text), sibling: false } : { id: own, sibling: true };
+}
+
+export function Badge({ tone = 'neutral', children, dot = false, title }: { children: ReactNode; dot?: boolean; title?: string; tone?: BadgeTone }) {
+  const described = useDescription(title);
+  // Outside every host the title alone describes the badge: a node beside it would join its parent's text.
+  const hosted = described && !described.sibling ? described.id : undefined;
+  return (
+    <span className={`badge badge--${tone}`} title={title} aria-describedby={hosted}>
       {dot && <span className="badge__dot" aria-hidden />}
       {children}
     </span>
@@ -55,16 +106,18 @@ export function Segmented<T extends string>({ value, options, onChange, ariaLabe
 export function Card({ children, className = '', title, subtitle, actions, padded = true }: { actions?: ReactNode; children: ReactNode; className?: string; padded?: boolean; subtitle?: ReactNode; title?: ReactNode }) {
   return (
     <section className={`card ${padded ? 'card--padded' : ''} ${className}`}>
-      {(title || actions) && (
-        <header className="card__head">
-          <div>
-            {title && <h2 className="card__title">{title}</h2>}
-            {subtitle && <p className="card__subtitle">{subtitle}</p>}
-          </div>
-          {actions && <div className="card__actions">{actions}</div>}
-        </header>
-      )}
-      {children}
+      <Descriptions>
+        {(title || actions) && (
+          <header className="card__head">
+            <div>
+              {title && <h2 className="card__title">{title}</h2>}
+              {subtitle && <p className="card__subtitle">{subtitle}</p>}
+            </div>
+            {actions && <div className="card__actions">{actions}</div>}
+          </header>
+        )}
+        {children}
+      </Descriptions>
     </section>
   );
 }
@@ -248,6 +301,15 @@ function useModalDialog(open: boolean, onClose: () => void) {
   return ref;
 }
 
+/** A titled element in a dialog describes through the dialog's own node, which no list item or cell of it holds. */
+function DialogInner({ children }: { children: ReactNode }) {
+  return (
+    <div className="dialog__inner">
+      <Descriptions>{children}</Descriptions>
+    </div>
+  );
+}
+
 export function Dialog({ open, onClose, title, subtitle, children, footer, width = 560 }: { children: ReactNode; footer?: ReactNode; onClose: () => void; open: boolean; subtitle?: ReactNode; title: ReactNode; width?: number }) {
   const ref = useModalDialog(open, onClose);
   const titleId = useId();
@@ -261,7 +323,7 @@ export function Dialog({ open, onClose, title, subtitle, children, footer, width
         if (e.target === ref.current) onClose();
       }}
     >
-      <div className="dialog__inner">
+      <DialogInner>
         <header className="dialog__head">
           <div>
             <h2 id={titleId} className="dialog__title">
@@ -275,7 +337,7 @@ export function Dialog({ open, onClose, title, subtitle, children, footer, width
         </header>
         <div className="dialog__body">{children}</div>
         {footer && <footer className="dialog__foot">{footer}</footer>}
-      </div>
+      </DialogInner>
     </dialog>
   );
 }
@@ -410,7 +472,7 @@ export function GroupedDialog({
           if (e.target === ref.current) onClose();
         }}
       >
-        <div className="dialog__inner">
+        <DialogInner>
           <header className="dialog__head">
             <div>
               <h2 id={titleId} className="dialog__title">
@@ -482,7 +544,7 @@ export function GroupedDialog({
             </p>
             <div className="dialog__actions">{footer}</div>
           </footer>
-        </div>
+        </DialogInner>
       </dialog>
     </GroupChoice.Provider>
   );
@@ -686,14 +748,21 @@ export function Menu({ items, label = 'Actions', onOpenChange }: { items: { dang
 }
 
 export function KeyValue({ rows, className = '' }: { className?: string; rows: { label: string; mono?: boolean; title?: string; value: ReactNode }[] }) {
+  const base = useId();
+  // The node follows the dd inside the row, so the dd's own text stays the value alone.
   return (
     <dl className={`kv ${className}`}>
-      {rows.map((r) => (
+      {rows.map((r, i) => (
         <div key={r.label} className="kv__row">
           <dt>{r.label}</dt>
-          <dd className={r.mono ? 'mono' : ''} title={r.title}>
+          <dd className={r.mono ? 'mono' : ''} title={r.title} aria-describedby={r.title ? `${base}-${i}` : undefined}>
             {r.value}
           </dd>
+          {r.title && (
+            <span id={`${base}-${i}`} className="sr-only">
+              {r.title}
+            </span>
+          )}
         </div>
       ))}
     </dl>
