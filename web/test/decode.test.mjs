@@ -874,13 +874,9 @@ test('a recipe held because every account of its pool was exhausted keeps that r
   assert.equal(recipe.state, 'held');
 });
 
-test('the downstream snippet keeps the placeholder and names the inference listener when it is known', () => {
-  const known = d.snippetFor('127.0.0.1:8080').split('\n');
-  assert.equal(known.length, 4);
-  assert.equal(known[0], '# inference is served on 127.0.0.1:8080; use the URL that reaches that listener');
-  assert.equal(known[1], `ANTHROPIC_BASE_URL=${d.PLACEHOLDER_URL}`, 'the admin origin is never substituted here');
-  const unknown = d.snippetFor(null).split('\n');
-  assert.deepEqual(unknown, [`ANTHROPIC_BASE_URL=${d.PLACEHOLDER_URL}`, 'CLAUDE_CODE_OAUTH_TOKEN=<key>', '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1']);
+test('the downstream snippet is the six recommended lines with the public URL left to the operator', () => {
+  assert.equal(d.PLACEHOLDER_URL, 'https://router.example.com');
+  assert.deepEqual(d.snippetFor().split('\n'), [`ANTHROPIC_BASE_URL=${d.PLACEHOLDER_URL}`, 'CLAUDE_CODE_OAUTH_TOKEN=<key>', '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1', 'CLAUDE_CODE_GATEWAY_HINT_HEADERS=1', 'DISABLE_TELEMETRY=1', 'CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1']);
 });
 
 test('a session fold groups on the client each row named', () => {

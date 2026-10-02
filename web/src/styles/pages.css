@@ -1850,6 +1850,10 @@
   margin-bottom: 10px;
 }
 
+.snippet__hint {
+  margin-bottom: 10px;
+}
+
 .probe-bar {
   display: flex;
   gap: 2px;

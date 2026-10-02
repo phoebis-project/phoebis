@@ -5561,38 +5561,53 @@ m.unmount();
   localStorage.removeItem('phoebis.mockEmpty');
 }
 
+// A failed settings read draws About's error state with Try again rather than a skeleton for ever; the client block
+// needs no read, so it keeps its placeholder URL and only the listener hint waits for the answer.
+{
+  failNextCall('getSettings', '/admin/settings', 'the configuration store is unavailable');
+  const failed = await mount('/settings');
+  const about = () => [...failed.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'About');
+  const error = about()?.querySelector('.empty--error');
+  const retry = [...(error?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Try again');
+  const block = failed.container.querySelector('pre.snippet');
+  results.push({
+    name: "/settings a failed read draws About's error state with Try again and keeps the client block's placeholder",
+    ok: error?.querySelector('.empty__title')?.textContent === 'Could not load the settings' && (error?.textContent ?? '').includes('the configuration store is unavailable') && retry !== undefined && about()?.querySelector('.skeleton') === null && (block?.textContent ?? '').split('\n')[0] === 'ANTHROPIC_BASE_URL=https://router.example.com' && failed.container.querySelector('.snippet__hint') === null,
+    missing: [about()?.textContent?.slice(0, 160) ?? 'no About card', (block?.textContent ?? 'no block').split('\n')[0], failed.container.querySelector('.snippet__hint')?.textContent?.slice(0, 60) ?? 'no hint'],
+  });
+  retry?.click();
+  await failed.settle(400);
+  const rows = [...(about()?.querySelectorAll('.kv__row dt') ?? [])].map((dt) => dt.textContent?.trim());
+  results.push({
+    name: '/settings Try again reads the settings into About and the hint beside the block',
+    ok: JSON.stringify(rows) === JSON.stringify(['Version', 'Profile', 'Metrics listener', 'Ledger path', 'Pricing path', 'Storage path']) && about()?.querySelector('.empty--error') === null && failed.container.querySelector('pre.snippet + p.snippet__hint') !== null,
+    missing: rows,
+  });
+  failed.unmount();
+}
+
 m = await mount('/settings');
-expect('/settings', m.text(), ['Appearance', 'Theme', 'Time format', 'Access', 'Admin secret', 'Viewer secret', 'except captured bodies, live previews, question text, and webhook URLs beyond their host', 'Preview as viewer', 'Pricing', 'claude-fable-5-1', 'Sessions', 'Session expiry', '24h', 'Retention', 'deleted by the hourly purge', 'Ledger (days)', 'Rollups (days)', 'Quota samples (days)', 'Body capture, max hours', 'stats.rollup_retention_days', 'Downstream client configuration', 'ANTHROPIC_BASE_URL=https://router.example.com', 'inference is served on 127.0.0.1:8080', 'CC_KEEPALIVE_OWNER_ID=$(uuidgen)', 'About', 'claude-code-2.1.269-linux-x64', MOCK_VERSION]);
+expect('/settings', m.text(), ['Downstream client configuration', 'Pricing', 'Appearance', 'Access', 'About', 'Theme', 'Time format', 'Admin secret', 'Viewer secret', 'except captured bodies, live previews, question text, and webhook URLs beyond their host', 'Preview as viewer', 'claude-fable-5-1', 'ANTHROPIC_BASE_URL=https://router.example.com', 'CLAUDE_CODE_OAUTH_TOKEN=<key>', '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1', 'CLAUDE_CODE_GATEWAY_HINT_HEADERS=1', 'DISABLE_TELEMETRY=1', 'CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1', 'Inference is served on 127.0.0.1:8080', 'Version', 'Profile', 'Metrics listener', 'Ledger path', 'Pricing path', 'Storage path', "prints this router's"]);
 results.push({ name: '/settings has no statusline mention', ok: !/statusline/i.test(m.text()), missing: [] });
-{
-  // Each row names its bootstrap key the way the compatibility card does, since the route reads these and never writes them.
-  const card = (title) => [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === title);
-  const rows = (title) => [...(card(title)?.querySelectorAll('.kv__row') ?? [])].map((r) => [`${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.textContent?.trim()}`, r.querySelector('dd')?.getAttribute('title') ?? '']);
-  const want = {
-    Compatibility: [['Cache diagnostics=off', 'compatibility.cache_diagnostics'], ['Profile=claude-code-2.1.269-linux-x64', '']],
-    Quota: [['Sample retention (days)=30', 'quota.sample_retention_days']],
-    Routing: [['Catalog cache (seconds)=60', 'routing.catalog_cache_seconds'], ['Catalog refresh (seconds)=21,600', 'routing.catalog_refresh_seconds'], ['Cooldown fallback (seconds)=60', 'routing.cooldown_fallback_seconds'], ['Model rejection (seconds)=3,600', 'routing.model_rejection_seconds'], ['Max attempts=3', 'routing.max_attempts'], ['Startup fetch (seconds)=5', 'routing.startup_fetch_seconds']],
-    Storage: [['Ledger path=./data/ledger.sqlite', 'stats.ledger_path'], ['Pricing path=./pricing.yaml', 'stats.pricing_path'], ['Storage path=./data/router.sqlite', 'storage.path']],
-    Usage: [['Cache TTL (seconds)=60', 'usage.cache_ttl_seconds'], ['Refresh concurrency=2', 'usage.refresh_concurrency']],
-  };
-  for (const [title, expected] of Object.entries(want)) {
-    const got = rows(title);
-    const ok = got.length === expected.length && expected.every(([row, key], i) => got[i][0] === row && (key === '' ? got[i][1] === '' : got[i][1] === `Set by ${key} in the bootstrap file`));
-    results.push({ name: `/settings the ${title} card reads the route's block with its bootstrap keys`, ok, missing: got.map((g) => g.join(' | ')) });
-  }
-}
-// The label and its value run together in textContent, which is what pins the URL to the About row.
-expect('/settings read-only bootstrap values', m.text(), ['Set by sessions.expire_after_seconds in the bootstrap file', 'Max retained bytes', 'Max workers', 'Listeners', 'HTTP/1.1', 'Public URLhttps://router.home.example']);
-{
-  const t = m.text();
-  results.push({ name: '/settings has no BoringSSL line', ok: !t.includes('BoringSSL') && t.includes('Transport'), missing: [`BoringSSL absent ${!t.includes('BoringSSL')}`, `Transport present ${t.includes('Transport')}`] });
-}
 results.push({ name: '/settings has no retention save button', ok: ![...m.container.querySelectorAll('button')].some((b) => b.textContent?.trim() === 'Save retention'), missing: [] });
 {
-  // The 24h needle above also matches the time-format control, so the expiry is read off its own card.
-  const card = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Sessions');
-  const rows = [...(card?.querySelectorAll('.kv__row') ?? [])].map((r) => `${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.textContent?.trim()}`);
-  results.push({ name: '/settings reads the session expiry as a value, not a control', ok: rows.join('|') === 'Session expiry=24h' && card?.querySelector('button') === null, missing: rows });
+  const titles = [...m.container.querySelectorAll('.settings > .card .card__title')].map((t) => t.textContent?.trim());
+  results.push({ name: '/settings the cards run client block, Pricing, Appearance, Access, About', ok: JSON.stringify(titles) === JSON.stringify(['Downstream client configuration', 'Pricing', 'Appearance', 'Access', 'About']), missing: titles });
+  const subtitle = m.container.querySelector('.settings > .card')?.querySelector('.card__subtitle')?.textContent;
+  results.push({ name: "/settings the client block's subtitle names the settings file and the shell", ok: subtitle === "Put it in the env block of the client's settings file or export it in the shell that launches the client, and replace the token with a key from the Keys page.", missing: [subtitle ?? 'no subtitle'] });
+  const about = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'About');
+  const rows = [...(about?.querySelectorAll('.kv__row') ?? [])].map((r) => `${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.textContent?.trim()}`);
+  results.push({ name: '/settings About lists the version, the profile, the metrics listener and the three paths, then the installation sentence', ok: JSON.stringify(rows) === JSON.stringify([`Version=${MOCK_VERSION}`, 'Profile=claude-code-2.1.269-linux-x64', 'Metrics listener=127.0.0.1:9464', 'Ledger path=./data/ledger.sqlite', 'Pricing path=./pricing.yaml', 'Storage path=./data/router.sqlite']) && (about?.textContent ?? '').includes("The values the configuration file sets are on the installation page; phoebis check-config prints this router's.") && !(about?.textContent ?? '').includes('Public URL'), missing: rows });
+  const mirrored = ['Body capture, max hours', 'Cache TTL (seconds)', 'Catalog refresh (seconds)', 'Max workers', 'Sample retention (days)'].filter((w) => m.text().includes(w));
+  results.push({ name: '/settings carries no mirror words', ok: mirrored.length === 0, missing: mirrored });
+  results.push({ name: '/settings no card reads a configuration mirror', ok: ['Sessions', 'Retention', 'Keepalive', 'Listeners', 'Compatibility', 'Quota', 'Routing', 'Storage', 'Usage'].every((t) => !titles.includes(t)) && !m.text().includes('Session expiry') && !m.text().includes('HTTP/1.1') && !m.text().includes('https://router.home.example'), missing: titles });
+  const block = m.container.querySelector('pre.snippet');
+  const hint = block?.nextElementSibling;
+  results.push({
+    name: '/settings the client block keeps the placeholder and names the proxy listener beside it with why',
+    ok: (block?.textContent ?? '').split('\n')[0] === 'ANTHROPIC_BASE_URL=https://router.example.com' && !(block?.textContent ?? '').includes('127.0.0.1') && hint?.matches('p.snippet__hint') === true && hint.querySelector('code')?.textContent === '127.0.0.1:8080' && hint.textContent?.replace(/\s+/g, ' ').trim() === 'Inference is served on 127.0.0.1:8080, the address the proxy listener binds. Replace the placeholder with the URL that reaches it: a bind address cannot name the public endpoint, since a TLS proxy, a port mapping or another host name can stand between Claude Code and the listener.',
+    missing: [block?.textContent?.split('\n')[0] ?? 'no block', hint?.outerHTML.slice(0, 160) ?? 'no hint'],
+  });
 }
 {
   expect('/settings pricing meta', m.text(), ['Effective Sep 30, 2026', 'source: shipped']);
@@ -5678,8 +5693,8 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
 {
   const snippets = [...m.container.querySelectorAll('.snippet')].map((pre) => pre.textContent?.trim() ?? '');
   results.push({
-    name: '/settings main snippet is the three required lines under the listener hint',
-    ok: snippets[0]?.split('\n').length === 4 && snippets[0].startsWith('# inference is served on 127.0.0.1:8080') && snippets[0].includes('ANTHROPIC_BASE_URL=https://router.example.com') && !snippets[0].includes('CC_KEEPALIVE_OWNER_ID'),
+    name: '/settings the main snippet is the six recommended lines',
+    ok: JSON.stringify(snippets[0]?.split('\n')) === JSON.stringify(['ANTHROPIC_BASE_URL=https://router.example.com', 'CLAUDE_CODE_OAUTH_TOKEN=<key>', '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1', 'CLAUDE_CODE_GATEWAY_HINT_HEADERS=1', 'DISABLE_TELEMETRY=1', 'CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1']) && !snippets[0].split('\n').some((l) => l.startsWith('#')),
     missing: [snippets[0] ?? 'absent'],
   });
   results.push({
@@ -5695,17 +5710,23 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
     'ANTHROPIC_BASE_URL',
     'CLAUDE_CODE_OAUTH_TOKEN',
     '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1',
+    'CLAUDE_CODE_GATEWAY_HINT_HEADERS=1',
+    'DISABLE_TELEMETRY=1',
+    'CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1',
     'CC_KEEPALIVE_OWNER_ID and ANTHROPIC_CUSTOM_HEADERS',
     'CC_KEEPALIVE_MANAGEMENT_URL and CC_KEEPALIVE_TOKEN',
     'CLAUDE_CODE_PROMPT_CACHE_TTL=5m',
   ];
   results.push({ name: '/settings defines every environment variable in order', ok: JSON.stringify(terms) === JSON.stringify(want), missing: terms });
   expect('/settings variable definitions', m.text(), [
-    "Points Claude Code at the router. Every model request and the cache-keepalive companion's reports go here.",
+    "Points Claude Code at the router's proxy listener, at the URL that reaches it from the client's machine; the address under the block is where the router binds it. Every model request and the cache-keepalive companion's reports go here.",
     'Holds the router key. Claude Code treats it as a subscription credential',
     'an ANTHROPIC_API_KEY would switch those off.',
     'Makes Claude Code send its first-party request shape to the router',
     'It also switches off gateway model discovery, and being an internal variable a future build may drop it.',
+    'Makes the client send its gateway hint headers (the agent type, the compaction marks and the tool durations), which the request log and the analytics read; under the first-party flag above they arrive anyway.',
+    "Stops the client's telemetry batches, which it posts to api.anthropic.com with the credential it holds, behind the router the key's secret.",
+    'Lets fast mode work behind the router: without it the client asks api.anthropic.com whether the organization has fast mode, the check fails with a router key, and fast mode stays off.',
     'Optional hardening.',
     'They need a wrapper script, since the env block of Claude Code',
     'Not needed. The companion defaults them to ANTHROPIC_BASE_URL and CLAUDE_CODE_OAUTH_TOKEN.',

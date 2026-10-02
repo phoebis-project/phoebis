@@ -368,11 +368,12 @@ its subtitle says so.
 
 ### Settings
 
-Settings covers appearance, access (the admin and viewer secrets and what each may do), pricing, sessions, retention,
-keepalive, listeners, the downstream client block, compatibility, and an about panel. Four more cards show the
-bootstrap file's quota, routing, storage, and usage blocks: the sample retention, the catalog cache window, the
-cooldown fallback, the model rejection window, and the attempt limit, the ledger, pricing, and storage paths, and the
-usage cache TTL and refresh concurrency.
+Settings opens on the downstream client configuration, the six-line environment block that points Claude Code at the
+router with a reason under each line. Its base URL is a placeholder for the URL that reaches the proxy listener, and
+the address the listener binds shows beside the block. Then come the price table, the appearance and time-format
+choices, the access secrets and what each may do, and an About card with the version, the profile, the metrics
+listener and the three storage paths. The values the configuration file sets are on the [installation
+page](installation.md) and `phoebis check-config` prints them.
 
 ## Alerts
 

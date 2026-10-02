@@ -1315,108 +1315,32 @@ async function keysPageMenus(theme) {
 }
 
 /**
- * The compatibility card on Settings, and its geometry against the About card it sits above. The two carry the
- * same kind of read-only rows from the same bootstrap file, so a card that reads smaller than its neighbour is
- * the defect this page would show first.
+ * The Settings cards in the order an operator uses them, the client block first with its own snippet, and the
+ * listener hint spaced from the Optional group's heading as the block is spaced from the hint, so the heading never
+ * sits against the hint's last line.
  */
-async function compatibilityCard(theme) {
+async function settingsOrder(theme) {
   const say = (what) => failures.push(`${theme} /settings: ${what}`);
+  // The hint waits on the settings read, which the cargo pass answers from the router rather than on the clock.
+  await page.waitForSelector('pre.snippet + p.snippet__hint', { timeout: 5_000 }).catch(() => {});
   const read = await page.evaluate(() => {
-    const card = (title) => [...document.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent === title);
-    // Both cards print the running profile, so that row is what the two are compared through: `.kv__row` is
-    // `display: contents` and has no box of its own, and the rest of the rows carry different kinds of value.
-    // The cards hold different row counts, so the rows are compared by their pitch rather than their total height.
-    const measure = (el) => {
-      const style = getComputedStyle(el);
-      const kv = el.querySelector('.kv');
-      const rows = el.querySelectorAll('.kv__row').length;
-      const profile = [...el.querySelectorAll('.kv__row')].find((r) => r.querySelector('dt')?.textContent === 'Profile');
-      const dt = profile?.querySelector('dt');
-      const dd = profile?.querySelector('dd');
-      return {
-        background: style.backgroundColor,
-        border: `${style.borderWidth} ${style.borderStyle} ${style.borderTopColor}`,
-        labelFont: dt ? getComputedStyle(dt).fontSize : null,
-        padding: `${style.paddingTop} ${style.paddingRight} ${style.paddingBottom} ${style.paddingLeft}`,
-        profileHeight: dd ? dd.getBoundingClientRect().height : null,
-        profileText: (dd?.textContent ?? '').trim(),
-        rowPitch: kv && rows ? (kv.getBoundingClientRect().height + parseFloat(getComputedStyle(kv).rowGap)) / rows : null,
-        titleFont: getComputedStyle(el.querySelector('.card__title')).fontSize,
-        valueFont: dd ? getComputedStyle(dd).fontSize : null,
-      };
-    };
-    const compatibility = card('Compatibility');
-    const about = card('About');
-    const row = compatibility ? [...compatibility.querySelectorAll('.kv__row')].find((r) => r.querySelector('dt')?.textContent === 'Cache diagnostics') : null;
+    const cards = [...document.querySelectorAll('.settings > .card')];
+    const pre = document.querySelector('pre.snippet');
+    const hint = pre?.nextElementSibling?.matches('p.snippet__hint') ? pre.nextElementSibling : null;
+    const group = hint?.nextElementSibling?.matches('.snippet-group') ? hint.nextElementSibling : null;
     return {
-      about: about ? measure(about) : null,
-      compatibility: compatibility ? measure(compatibility) : null,
-      diagnostics: row ? { title: row.querySelector('dd')?.getAttribute('title') ?? '', value: (row.querySelector('dd')?.textContent ?? '').trim() } : null,
+      above: pre && hint ? Math.round((hint.getBoundingClientRect().top - pre.getBoundingClientRect().bottom) * 10) / 10 : null,
+      below: hint && group ? Math.round((group.getBoundingClientRect().top - hint.getBoundingClientRect().bottom) * 10) / 10 : null,
+      blockFirst: Boolean(pre && cards[0]?.contains(pre)),
+      titles: cards.map((c) => c.querySelector('.card__title')?.textContent?.trim() ?? ''),
     };
   });
-  const missing = [!read.compatibility && 'Compatibility', !read.about && 'About'].filter(Boolean);
-  if (missing.length) {
-    say(`no card titled ${missing.map((m) => JSON.stringify(m)).join(' or ')}`);
-    return;
-  }
-  if (!read.diagnostics) say('the compatibility card has no "Cache diagnostics" row');
-  else if (read.diagnostics.value !== 'off') say(`cache diagnostics reads ${JSON.stringify(read.diagnostics.value)} on a registry whose bootstrap file sets nothing`);
-  else if (!read.diagnostics.title.includes('compatibility.cache_diagnostics')) say(`the cache diagnostics row names ${JSON.stringify(read.diagnostics.title)} as where it is set`);
-  measurements.push(`${theme} /settings compatibility card ${JSON.stringify(read.compatibility)}`);
-  measurements.push(`${theme} /settings about card ${JSON.stringify(read.about)}`);
-  const differs = ['background', 'border', 'labelFont', 'padding', 'profileHeight', 'profileText', 'rowPitch', 'titleFont', 'valueFont'].filter((key) => String(read.compatibility[key]) !== String(read.about[key]));
-  if (differs.length) say(`the compatibility card's ${differs.join(', ')} differs from the About card's`);
-}
-
-/**
- * The quota, routing, storage, and usage cards against the compatibility card above them: the same kind of
- * read-only rows from the same bootstrap file, so a card whose box, type, or row pitch differs is the defect to
- * catch, and so is a row that does not name the key that sets it.
- */
-async function bootstrapCards(theme) {
-  const say = (what) => failures.push(`${theme} /settings: ${what}`);
-  const read = await page.evaluate(() => {
-    const card = (title) => [...document.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent === title);
-    const measure = (el) => {
-      const style = getComputedStyle(el);
-      const kv = el.querySelector('.kv');
-      const rows = [...el.querySelectorAll('.kv__row')];
-      // A mono value is what the compatibility card's profile row and every number or path row here share.
-      const dd = rows.map((r) => r.querySelector('dd')).find((d) => d?.classList.contains('mono'));
-      const dt = rows[0]?.querySelector('dt');
-      const subtitle = el.querySelector('.card__subtitle');
-      return {
-        background: style.backgroundColor,
-        border: `${style.borderWidth} ${style.borderStyle} ${style.borderTopColor}`,
-        labelFont: dt ? `${getComputedStyle(dt).fontSize} ${getComputedStyle(dt).color}` : null,
-        noted: rows.filter((r) => (r.querySelector('dd')?.getAttribute('title') ?? '').endsWith('in the bootstrap file')).length,
-        padding: `${style.paddingTop} ${style.paddingRight} ${style.paddingBottom} ${style.paddingLeft}`,
-        rowPitch: kv && rows.length ? (kv.getBoundingClientRect().height + parseFloat(getComputedStyle(kv).rowGap)) / rows.length : null,
-        rows: rows.length,
-        subtitleFont: subtitle ? `${getComputedStyle(subtitle).fontSize} ${getComputedStyle(subtitle).color}` : null,
-        titleFont: getComputedStyle(el.querySelector('.card__title')).fontSize,
-        valueFont: dd ? `${getComputedStyle(dd).fontSize} ${getComputedStyle(dd).fontFamily}` : null,
-        valueHeight: dd ? dd.getBoundingClientRect().height : null,
-      };
-    };
-    return Object.fromEntries(['Compatibility', 'Quota', 'Routing', 'Storage', 'Usage'].map((title) => [title, card(title) ? measure(card(title)) : null]));
-  });
-  if (!read.Compatibility) {
-    say('no card titled "Compatibility" to measure the bootstrap cards against');
-    return;
-  }
-  measurements.push(`${theme} /settings compatibility card rows ${JSON.stringify(read.Compatibility)}`);
-  for (const title of ['Quota', 'Routing', 'Storage', 'Usage']) {
-    const got = read[title];
-    if (!got) {
-      say(`no card titled ${JSON.stringify(title)}`);
-      continue;
-    }
-    measurements.push(`${theme} /settings ${title.toLowerCase()} card ${JSON.stringify(got)}`);
-    if (got.rows === 0 || got.noted !== got.rows) say(`the ${title} card has ${got.rows - got.noted} of ${got.rows} rows that name no bootstrap key`);
-    const differs = ['background', 'border', 'labelFont', 'padding', 'rowPitch', 'subtitleFont', 'titleFont', 'valueFont', 'valueHeight'].filter((key) => String(got[key]) !== String(read.Compatibility[key]));
-    if (differs.length) say(`the ${title} card's ${differs.join(', ')} differs from the compatibility card's`);
-  }
+  measurements.push(`${theme} /settings cards ${JSON.stringify(read)}`);
+  const want = ['Downstream client configuration', 'Pricing', 'Appearance', 'Access', 'About'];
+  if (JSON.stringify(read.titles) !== JSON.stringify(want)) say(`the cards run ${JSON.stringify(read.titles)}, not ${JSON.stringify(want)}`);
+  if (!read.blockFirst) say("the client block's snippet is not in the first card");
+  if (read.above === null || read.below === null) say('no listener hint between the client block and the Optional group');
+  else if (read.above < 8 || read.below !== read.above) say(`the hint sits ${read.above} px under the block and ${read.below} px over the Optional group, not one gap on both sides`);
 }
 
 /**
@@ -2856,10 +2780,7 @@ try {
         await trafficCards(theme);
         await stickyStrip(theme);
       }
-      if (view.path === '/settings') {
-        await compatibilityCard(theme);
-        await bootstrapCards(theme);
-      }
+      if (view.path === '/settings') await settingsOrder(theme);
       if (view.path === '/accounts') {
         await fastLane(theme, view.path);
         await deleteAccountButton(theme);
