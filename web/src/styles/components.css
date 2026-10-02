@@ -993,6 +993,8 @@ textarea.input {
   position: sticky;
   top: -8px;
   z-index: 1;
+  display: flex;
+  align-items: baseline;
   padding: 3px 10px;
   font-size: 11px;
   font-weight: 600;
@@ -1006,7 +1008,6 @@ textarea.input {
 }
 
 .dialog-rail__group {
-  position: relative;
   padding: 4px 10px;
   font-size: 13px;
   line-height: 1.25;
@@ -1020,6 +1021,9 @@ textarea.input {
 /* Under a parent a group indents 10 px past the parent's label and gives up 1 px of vertical padding a side, which is
    what keeps the rail inside its height once the runs stand 14 px apart. A flat rail has no parent and keeps 4 px. */
 .dialog-rail__run.has-parent .dialog-rail__group {
+  position: relative;
+  display: flex;
+  align-items: baseline;
   padding: 3px 10px 3px 20px;
 }
 
@@ -1034,25 +1038,39 @@ textarea.input {
   background: var(--accent-soft);
 }
 
-/* A face wider than the one the rail is sized for cuts one label short, where a wrap would grow the row and push the
-   rail past its height. */
-.dialog-rail__label {
-  display: block;
+/* The dot follows its label, so nothing on the flat rail sits at the right edge. */
+.dialog-rail__dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-left: 6px;
+  vertical-align: middle;
+  background: var(--critical-ink);
+  border-radius: 50%;
+}
+
+/* Under a parent a row is one flex line: a mark after the label keeps its width, and the label gives way to an
+   ellipsis on a face wider than the one the rail is sized for, where a wrap would grow the row and push the rail past
+   its height. */
+.dialog-rail__run.has-parent .dialog-rail__label {
+  flex: 0 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+.dialog-rail__run.has-parent .dialog-rail__mark {
+  flex: none;
+}
+
 /* In the row's right padding, so a refusal costs the label no width; a parent's sticky box anchors it as a group's
    relative one does. */
-.dialog-rail__dot {
+.dialog-rail__run.has-parent .dialog-rail__dot {
   position: absolute;
   top: 50%;
   right: 2px;
-  width: 6px;
-  height: 6px;
-  background: var(--critical-ink);
-  border-radius: 50%;
+  margin-left: 0;
   transform: translateY(-50%);
 }
 

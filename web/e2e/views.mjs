@@ -2127,10 +2127,10 @@ const KEY_GROUP_LABELS = ['Key', 'Access', 'Models', 'Sessions', 'Capture'];
 
 /**
  * The key dialog on the grouped frame, on create and on edit: the frame and a flat rail of five groups that fits it,
- * 8 px apart with no line between them, each group inside one window of the body with the layout `groupGeometry`
- * reads, the moving warning leading Key on an edit that changes the pool, the bodies warning leading Capture while
- * capture is on, and a revoked key's Enabled switch drawn and disabled. Nothing is saved: every dialog leaves by
- * Escape.
+ * 8 px apart with no line between them and a refusal dot 6 px after its label on its line, each group inside one
+ * window of the body with the layout `groupGeometry` reads, the moving warning leading Key on an edit that changes the
+ * pool, the bodies warning leading Capture while capture is on, and a revoked key's Enabled switch drawn and disabled.
+ * Nothing is saved: every dialog leaves by Escape.
  */
 async function keyDialogGeometry(theme) {
   const sayIn = (where, what) => failures.push(`${theme} /keys dialog${where ? ` ${where}` : ''}: ${what}`);
@@ -2154,7 +2154,15 @@ async function keyDialogGeometry(theme) {
       const box = el.getBoundingClientRect();
       const rail = el.querySelector('.dialog-rail');
       const runs = [...el.querySelectorAll('.dialog-rail__run')];
+      const dots = [...el.querySelectorAll('.dialog-rail__group')]
+        .filter((b) => b.querySelector('.dialog-rail__dot'))
+        .map((b) => {
+          const label = b.querySelector('.dialog-rail__label').getBoundingClientRect();
+          const dot = b.querySelector('.dialog-rail__dot').getBoundingClientRect();
+          return { after: +(dot.left - label.right).toFixed(2), group: b.dataset.group, onLine: dot.top >= label.top && dot.bottom <= label.bottom };
+        });
       return {
+        dots,
         gaps: runs.slice(1).map((run, i) => run.getBoundingClientRect().top - runs[i].getBoundingClientRect().bottom),
         height: box.height,
         labels: [...el.querySelectorAll('.dialog-rail__group .dialog-rail__label')].map((l) => l.textContent?.trim()),
@@ -2169,6 +2177,9 @@ async function keyDialogGeometry(theme) {
     if (JSON.stringify(frame.labels) !== JSON.stringify(KEY_GROUP_LABELS) || frame.parents !== 0) sayIn(mode, `the rail reads ${JSON.stringify(frame.labels)} under ${frame.parents} parents`);
     // Each group of a flat rail is a run of its own, so the pool rail's 14 px and hairline between runs would reach it.
     if (frame.gaps.some((gap) => Math.abs(gap - 8) > 0.5) || JSON.stringify(frame.lines) !== JSON.stringify(['none'])) sayIn(mode, `the rail's entries stand ${frame.gaps.join(', ')} px apart with ${frame.lines.join(', ')} before them, not 8 px with none`);
+    // A flat rail keeps its dot in the label's line, where the parented rail moves it into the row's right padding.
+    if (mode === 'create' && !frame.dots.length) sayIn(mode, 'the empty name draws no refusal dot on the rail to read');
+    for (const dot of frame.dots) if (Math.abs(dot.after - 6) > 0.5 || !dot.onLine) sayIn(mode, `the ${dot.group} entry's refusal dot sits ${dot.after} px past its label${dot.onLine ? '' : ' and off its line'}, not 6 px after it on its line`);
     if (!frame.rail || frame.rail.scrollHeight > frame.rail.clientHeight) sayIn(mode, `the rail scrolls: ${JSON.stringify(frame.rail)}`);
     for (const group of KEY_GROUP_LABELS) {
       const where = `${mode} ${group}`;
