@@ -72,14 +72,36 @@ export function KeysPage() {
 
   const poolList = useMemo(() => pools.data ?? [], [pools.data]);
   const poolById = useMemo(() => new Map(poolList.map((p) => [p.id, p])), [poolList]);
+  // The pool filter is the address: the select reads `?pool=<id>` and writes it back, so a reload keeps the filter and
+  // the pool card's key count link lands on it. An id no pool carries reads as All pools and leaves the address once
+  // the pools have loaded; while a dialog query is still in the address, its own effect goes first. All pools is the
+  // empty string, which no pool id can be, since `all` is a real pool's id.
+  const poolParam = useMemo(() => new URLSearchParams(location.search).get('pool'), [location.search]);
+  const poolFilter = poolParam !== null && poolById.has(poolParam) ? poolParam : '';
+  const writePool = (id: string) => {
+    const params = new URLSearchParams(location.search);
+    if (id === '') params.delete('pool');
+    else params.set('pool', id);
+    const search = params.toString();
+    navigate({ hash: location.hash, pathname: location.pathname, search: search ? `?${search}` : '' }, { replace: true });
+  };
+  useEffect(() => {
+    if (poolParam === null || !pools.data || poolById.has(poolParam)) return;
+    const params = new URLSearchParams(location.search);
+    if (params.has('edit')) return;
+    params.delete('pool');
+    const search = params.toString();
+    navigate({ hash: location.hash, pathname: location.pathname, search: search ? `?${search}` : '' }, { replace: true });
+  }, [location, navigate, poolById, poolParam, pools.data]);
   const rows = useMemo(
     () =>
       (keys.data ?? []).filter((k) => {
+        if (poolFilter !== '' && k.poolId !== poolFilter) return false;
         if (status !== 'all' && k.status !== status) return false;
         const q = query.trim().toLowerCase();
         return !q || k.name.toLowerCase().includes(q) || k.prefix.includes(q) || k.poolId.includes(q);
       }),
-    [keys.data, query, status],
+    [keys.data, poolFilter, query, status],
   );
 
   const totals = keys.data
@@ -148,6 +170,14 @@ export function KeysPage() {
               <option value="disabled">Disabled</option>
               <option value="expired">Expired</option>
               <option value="revoked">Revoked</option>
+            </Select>
+            <Select value={poolFilter} onChange={(e) => writePool(e.target.value)} aria-label="Pool">
+              <option value="">All pools</option>
+              {poolList.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
             </Select>
             {canMutate && (
               <Button variant="primary" icon={<IconPlus size={14} />} onClick={() => setDialog({ initialGroup: null, key: null })} style={{ marginLeft: 'auto' }}>

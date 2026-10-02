@@ -2345,6 +2345,47 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
   const select = m.container.querySelector('.table-toolbar select');
   results.push({ name: '/keys the status filter offers disabled', ok: [...(select?.options ?? [])].map((o) => o.value).includes('disabled'), missing: [...(select?.options ?? [])].map((o) => o.value) });
 }
+// The Pool select is the address: `?pool=<id>` filters the rows, All pools clears it, and an unknown id reads as All
+// pools and leaves the address.
+{
+  // The /pools checks above move a key into codex and create one in all, so every count is the store's at this point.
+  const stored = await api.listKeys();
+  const inPool = (id) => stored.filter((key) => key.poolId === id).length;
+  // A filter that keeps every row, or none, would pass the cell reads without filtering anything.
+  const narrows = (id) => inPool(id) > 0 && inPool(id) < stored.length;
+  const poolCells = (page) => [...page.container.querySelectorAll('.card--table tbody tr td:nth-child(3)')].map((td) => td.textContent?.trim());
+  const select = (page) => page.container.querySelector('.table-toolbar select[aria-label="Pool"]');
+  let k = await mount('/keys?pool=codex');
+  results.push({ name: "/keys?pool=codex lists the pool's keys alone with the Pool select on codex", ok: narrows('codex') && poolCells(k).length === inPool('codex') && poolCells(k).every((c) => c === 'codex') && select(k)?.value === 'codex', missing: [`expected ${inPool('codex')} of ${stored.length}`, ...poolCells(k), select(k)?.value ?? 'no select'] });
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
+  const choosePool = async (page, id) => {
+    const target = select(page);
+    if (!target) return;
+    setter.call(target, id);
+    target.dispatchEvent(new window.Event('change', { bubbles: true }));
+    await page.settle(200);
+  };
+  await choosePool(k, '');
+  results.push({ name: '/keys All pools lists every key and leaves /keys', ok: !!select(k) && poolCells(k).length === stored.length && k.location().pathname === '/keys' && k.location().search === '', missing: [`${poolCells(k).length} of ${stored.length}`, JSON.stringify(k.location())] });
+  await choosePool(k, 'all');
+  results.push({ name: '/keys the pool named all filters to its own keys and stays in the address', ok: narrows('all') && poolCells(k).length === inPool('all') && poolCells(k).every((c) => c === 'all') && select(k)?.value === 'all' && k.location().search === '?pool=all', missing: [`expected ${inPool('all')} of ${stored.length}`, ...poolCells(k), select(k)?.value ?? 'no select', k.location().search] });
+  k.unmount();
+  k = await mount('/keys?pool=all');
+  results.push({ name: "/keys?pool=all lists the all pool's keys alone with the Pool select on it", ok: narrows('all') && poolCells(k).length === inPool('all') && poolCells(k).every((c) => c === 'all') && select(k)?.value === 'all' && k.location().search === '?pool=all', missing: [`expected ${inPool('all')} of ${stored.length}`, ...poolCells(k), select(k)?.value ?? 'no select', k.location().search] });
+  k.unmount();
+  k = await mount('/keys?pool=nope');
+  results.push({ name: '/keys?pool=nope leaves All pools and clears the address', ok: select(k)?.value === '' && poolCells(k).length === stored.length && k.location().search === '', missing: [select(k)?.value ?? 'no select', `${poolCells(k).length} of ${stored.length}`, k.location().search] });
+  k.unmount();
+  k = await mount('/keys?pool=codex&edit=batch&group=models');
+  await k.settle(200);
+  const dlg = k.container.querySelector('dialog[open]');
+  results.push({
+    name: '/keys the pool filter survives the dialog query',
+    ok: [...(dlg?.querySelectorAll('section.dialog-group:not([hidden])') ?? [])].map((s) => s.getAttribute('aria-label')).join() === 'Models' && k.location().search === '?pool=codex' && narrows('codex') && poolCells(k).length === inPool('codex') && poolCells(k).every((c) => c === 'codex'),
+    missing: [k.location().search, `expected ${inPool('codex')} of ${stored.length}`, ...poolCells(k)],
+  });
+  k.unmount();
+}
 {
   const captureOf = (name) => {
     const tr = [...m.container.querySelectorAll('.card--table tbody tr')].find((row) => row.children[0]?.querySelector('b')?.textContent?.trim() === name);

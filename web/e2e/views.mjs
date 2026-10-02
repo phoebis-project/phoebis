@@ -2389,6 +2389,24 @@ async function keyDialogGeometry(theme) {
   await atRest();
 }
 
+/** The toolbar's Pool select against the Status select beside it: the same box and type. */
+async function keysPoolSelect(theme) {
+  const read = await page.evaluate(() => {
+    const box = (el) => {
+      if (!el) return null;
+      const s = getComputedStyle(el);
+      return { backgroundColor: s.backgroundColor, borderRadius: s.borderRadius, fontSize: s.fontSize, height: el.getBoundingClientRect().height, paddingLeft: s.paddingLeft, paddingRight: s.paddingRight };
+    };
+    return { pool: box(document.querySelector('.table-toolbar select[aria-label="Pool"]')), status: box(document.querySelector('select[aria-label="Status"]')) };
+  });
+  measurements.push(`${theme} /keys Pool select ${JSON.stringify(read)}`);
+  if (!read.pool) {
+    failures.push(`${theme} /keys: the toolbar draws no Pool select`);
+    return;
+  }
+  failures.push(...compare(read.pool, read.status, ['backgroundColor', 'borderRadius', 'fontSize', 'height', 'paddingLeft', 'paddingRight'], `${theme} /keys: the Pool select against the Status select`));
+}
+
 /**
  * The cost reference dialog from Sessions: the dollar table and the window share table below it each fit the dialog
  * without a sideways scroll, and their Model columns end at one edge; the window groups' heads, their column heads
@@ -2633,6 +2651,7 @@ try {
         await catalogDialog(theme);
       }
       if (view.path === '/keys') {
+        await keysPoolSelect(theme);
         await keyCapField(theme);
         await keyDialogGeometry(theme);
         await keysPageMenus(theme);
