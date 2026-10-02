@@ -558,7 +558,13 @@ export function decodeAlertEvent(v: unknown): AlertEvent {
 
 const priceCells = (m: Rec): FastPrice => ({ cacheReadPerM: num(m.cache_read_per_m), cacheWrite1hPerM: num(m.cache_write_1h_per_m), cacheWrite5mPerM: num(m.cache_write_5m_per_m), inputPerM: num(m.input_per_m), outputPerM: num(m.output_per_m) });
 const price = (m: Rec): ModelPrice => ({ ...priceCells(m), fast: m.fast && typeof m.fast === 'object' ? priceCells(rec(m.fast)) : null, model: str(m.model) });
-export const decodePricing = (v: unknown): Settings['pricing'] => ({ effectiveDate: new Date(str(rec(v).effective, '1970-01-01')).toISOString(), models: list(rec(v).models).map(rec).map(price), source: str(rec(v).source) });
+// The pricing file's effective date is free text: one that does not parse is kept as sent rather than throwing, which
+// would fail the whole settings answer and every page that reads it.
+export const decodePricing = (v: unknown): Settings['pricing'] => {
+  const effective = str(rec(v).effective, '');
+  const parsed = Date.parse(effective);
+  return { effective, effectiveDate: Number.isNaN(parsed) ? null : new Date(parsed).toISOString(), models: list(rec(v).models).map(rec).map(price), source: str(rec(v).source) };
+};
 
 const planModelCells = (v: unknown): PlanModelCells => {
   const m = rec(v);

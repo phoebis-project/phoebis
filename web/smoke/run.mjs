@@ -58,7 +58,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { api, countCalls, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, failCalls, failNextCall, Field, GroupedDialog, GroupLink, Input, MOCK_VERSION, mount, mountNode, PageLink, React, requestEvents, requests, rollups, stallLive, SwitchedNumber, tick } = await import('./dist/entry.js');
+const { api, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, failCalls, failNextCall, Field, GroupedDialog, GroupLink, Input, MOCK_VERSION, mount, mountNode, PageLink, React, requestEvents, requests, rollups, SETTINGS_WIRE, stallLive, SwitchedNumber, tick } = await import('./dist/entry.js');
 
 const results = [];
 /**
@@ -5152,6 +5152,20 @@ m.unmount();
   expect('/alerts an empty filtered result names the condition', empty.text(), ['No client drift events.']);
   empty.unmount();
   localStorage.removeItem('phoebis.mockEmpty');
+}
+
+{
+  // The settings answer feeds the shell's version line as well as the page, so a decoder that threw on the date would
+  // blank both.
+  const { getSettings } = api;
+  api.getSettings = () => Promise.resolve(decodeSettings({ ...SETTINGS_WIRE, pricing: { ...SETTINGS_WIRE.pricing, effective: 'v3' } }));
+  const page = await mount('/settings');
+  const sidebar = page.container.querySelector('.sidebar')?.textContent ?? '';
+  const pricing = [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Pricing');
+  const subtitle = pricing?.querySelector('.card__subtitle')?.textContent ?? '';
+  results.push({ name: '/settings a free-text pricing date still draws the sidebar version', ok: sidebar.includes(MOCK_VERSION) && subtitle.startsWith('Effective v3,'), missing: [sidebar.slice(0, 120), subtitle || 'no Pricing subtitle'] });
+  api.getSettings = getSettings;
+  page.unmount();
 }
 
 m = await mount('/settings');

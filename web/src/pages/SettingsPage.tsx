@@ -427,7 +427,8 @@ function PricingCard({ canMutate, error: failed, onToast, pricing: served }: { c
       }
       next.push(price);
     }
-    setApplied({ effectiveDate: new Date().toISOString(), models: next, source: 'edited by hand' });
+    const at = new Date().toISOString();
+    setApplied({ effective: at, effectiveDate: at, models: next, source: 'edited by hand' });
     setDraft(null);
     setEditing(null);
     setError(null);
@@ -437,7 +438,7 @@ function PricingCard({ canMutate, error: failed, onToast, pricing: served }: { c
   return (
     <Card
       title="Pricing"
-      subtitle={pricing ? `Effective ${fmtDate(pricing.effectiveDate)}, source: ${sourceLabel(pricing.source)}` : undefined}
+      subtitle={pricing ? `Effective ${pricing.effectiveDate ? fmtDate(pricing.effectiveDate) : pricing.effective}, source: ${sourceLabel(pricing.source)}` : undefined}
       actions={
         handEdit && (
           <Button

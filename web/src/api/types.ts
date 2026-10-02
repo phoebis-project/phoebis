@@ -1141,8 +1141,11 @@ export interface Settings {
   keepalive: { leaseSeconds: number; maxAgents: number; maxRequestBytes: number; maxRetainedBytes: number; maxSessions: number; maxWorkers: number; oauthPrewarmVerified: boolean };
   listeners: { admin: string; metrics: string; proxy: string };
   planTables: PlanTables;
-  /** The price table shown to the user and used to cost the ledger. */
-  pricing: { effectiveDate: string; models: ModelPrice[]; source: string };
+  /**
+   * The price table shown to the user and used to cost the ledger. `effective` is the date as the router sent it,
+   * `effectiveDate` the instant it parses to, or null when it is not a date.
+   */
+  pricing: { effective: string; effectiveDate: string | null; models: ModelPrice[]; source: string };
   quota: { sampleRetentionDays: number };
   retention: { bodyCaptureMaxHours: number; ledgerDays: number; quotaSamplesDays: number; rollupDays: number };
   routing: { catalogCacheSeconds: number; catalogRefreshSeconds: number; cooldownFallbackSeconds: number; maxAttempts: number; modelRejectionSeconds: number; startupFetchSeconds: number };

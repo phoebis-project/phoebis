@@ -1,7 +1,8 @@
-import type { AlertEvent, AlertRule, BurnUnit, CompanionState, KeepaliveOverview, KeepaliveRecipe, LifecycleDelivery, PlanModelCells, RecipeReason, Session, Settings } from '@/api/types';
+import type { AlertEvent, AlertRule, BurnUnit, CompanionState, FastPrice, KeepaliveOverview, KeepaliveRecipe, LifecycleDelivery, ModelPrice, PlanModelCells, RecipeReason, Session } from '@/api/types';
 import { own } from '@/lib/analytics';
 import { accountById } from './accounts';
 import { PRICES } from './catalog';
+import { FIXTURES } from './generated/fixtures';
 import { keyById } from './pools';
 import { DELETED_HOLDER_GENERATION, REQUESTS, SESSION_IDS } from './requests';
 import { createRng } from './rng';
@@ -832,20 +833,26 @@ export const LIFECYCLE_DELIVERIES: LifecycleDelivery[] = [
   },
 ];
 
-export const SETTINGS: Settings = {
-  ...SETTINGS_SAMPLE,
-  about: { profile: 'claude-code-2.1.269-linux-x64', publicUrl: 'https://router.home.example', version: SETTINGS_SAMPLE.about.version },
-  access: { adminConfigured: true, viewerConfigured: true },
-  compatibility: { cacheDiagnostics: false, profile: 'claude-code-2.1.269-linux-x64' },
-  keepalive: { leaseSeconds: 90, maxAgents: 1024, maxRequestBytes: 8_388_608, maxRetainedBytes: 268_435_456, maxSessions: 128, maxWorkers: 4, oauthPrewarmVerified: false },
+const priceCellsWire = (p: FastPrice) => ({ cache_read_per_m: p.cacheReadPerM, cache_write_1h_per_m: p.cacheWrite1hPerM, cache_write_5m_per_m: p.cacheWrite5mPerM, input_per_m: p.inputPerM, output_per_m: p.outputPerM });
+const priceWire = (p: ModelPrice) => ({ ...priceCellsWire(p), fast: p.fast ? priceCellsWire(p.fast) : null, model: p.model });
+const settingsFixture = FIXTURES.settings.body as Record<string, Record<string, unknown>>;
+
+/**
+ * The settings answer in the route's own shape, so the mock's settings reach the pages through the decoder the router's
+ * answer goes through. The route answers the cost table the ledger ships, so the captured table stands as it is.
+ */
+export const SETTINGS_WIRE = {
+  ...settingsFixture,
+  about: { profile: 'claude-code-2.1.269-linux-x64', public_url: 'https://router.home.example', version: SETTINGS_SAMPLE.about.version },
+  access: { admin_configured: true, viewer_configured: true },
+  compatibility: { cache_diagnostics: false, profile: 'claude-code-2.1.269-linux-x64' },
+  keepalive: { lease_seconds: 90, max_agents: 1024, max_request_bytes: 8_388_608, max_retained_bytes: 268_435_456, max_sessions: 128, max_workers: 4, oauth_prewarm_verified: false },
   listeners: { admin: '127.0.0.1:8081', metrics: '127.0.0.1:9464', proxy: '127.0.0.1:8080' },
-  // The route answers the table the ledger ships, so the captured answer is the table itself.
-  planTables: SETTINGS_SAMPLE.planTables,
-  pricing: { effectiveDate: '2026-09-30', models: PRICES, source: 'shipped' },
-  quota: { sampleRetentionDays: 30 },
-  retention: { bodyCaptureMaxHours: 72, ledgerDays: 90, quotaSamplesDays: 30, rollupDays: 400 },
-  routing: { catalogCacheSeconds: 60, catalogRefreshSeconds: 21_600, cooldownFallbackSeconds: 60, maxAttempts: 3, modelRejectionSeconds: 3_600, startupFetchSeconds: 5 },
-  sessions: { expireAfterSeconds: 86_400 },
-  storage: { ledgerPath: './data/ledger.sqlite', path: './data/router.sqlite', pricingPath: './pricing.yaml' },
-  usage: { cacheTtlSeconds: 60, refreshConcurrency: 2 },
+  pricing: { ...settingsFixture.pricing, effective: '2026-09-30', models: PRICES.map(priceWire), source: 'shipped' },
+  quota: { sample_retention_days: 30 },
+  retention: { body_capture_max_hours: 72, ledger_days: 90, quota_samples_days: 30, rollup_days: 400 },
+  routing: { catalog_cache_seconds: 60, catalog_refresh_seconds: 21_600, cooldown_fallback_seconds: 60, max_attempts: 3, model_rejection_seconds: 3_600, startup_fetch_seconds: 5 },
+  sessions: { expire_after_seconds: 86_400 },
+  storage: { ledger_path: './data/ledger.sqlite', path: './data/router.sqlite', pricing_path: './pricing.yaml' },
+  usage: { cache_ttl_seconds: 60, refresh_concurrency: 2 },
 };

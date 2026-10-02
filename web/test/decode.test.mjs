@@ -1051,6 +1051,18 @@ test('settings decode the cost table with its tiers and null for unmeasured', ()
   assert.deepEqual(d.decodeSettings(bare).planTables, { cost: { bands: [], effective: '', tiers: {}, windows: {} } }, 'an answer without the tables reads as empty ones');
 });
 
+test('a pricing effective date that is not a date decodes as the string sent with no parsed date', () => {
+  const wire = fixture('settings');
+  const pricingOf = (effective) => d.decodeSettings({ ...wire, pricing: { ...wire.pricing, effective } }).pricing;
+  for (const effective of ['v3', '', 'Q3 2026']) {
+    const pricing = pricingOf(effective);
+    assert.deepEqual([pricing.effective, pricing.effectiveDate], [effective, null], `${JSON.stringify(effective)} is kept as sent`);
+    assert.equal(pricing.models.length, wire.pricing.models.length, 'the table beside it still decodes');
+  }
+  const dated = pricingOf('2026-10-01');
+  assert.deepEqual([dated.effective, dated.effectiveDate], ['2026-10-01', '2026-10-01T00:00:00.000Z'], 'a date keeps its text and parses');
+});
+
 test('an account patch encodes the cancelled flag and its end', () => {
   const end = '2026-10-19T09:15:00.000Z';
   assert.deepEqual(d.encodeAccountPatch({ cancelled: true, subscriptionEndsAt: end }), { cancelled: true, subscription_ends_at: Date.parse(end) }, 'the route takes milliseconds');

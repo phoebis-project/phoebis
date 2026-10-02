@@ -1,5 +1,5 @@
 import type { AccountPatch, Api, CreateKeyInput, KeyInput, PoolInput } from '@/api/client';
-import { AFFINITY_MODE_VALUES, AFFINITY_SOURCE_VALUES, QUOTA_HEADERS_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES, decodeLiveDelta, decodeLiveSnapshot } from '@/api/decode';
+import { AFFINITY_MODE_VALUES, AFFINITY_SOURCE_VALUES, QUOTA_HEADERS_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES, decodeLiveDelta, decodeLiveSnapshot, decodeSettings } from '@/api/decode';
 import { ApiError, catalogUnion, slug } from '@/api/http';
 import type {
   Account, AccountCatalog, AccountInput, AlertDeliveryTest, AlertEvent, AlertKind, AlertRule, AlertRuleInput, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, Delivery, KeyModels, LifecycleDelivery, LifecyclePage, LiveEvent, MemberEligibility, ModelEvent,
@@ -14,7 +14,7 @@ import { ACCOUNTS, QUOTA_HISTORY, QUOTA_SNAPSHOTS } from './accounts';
 import { breakdownOf, burnOf, placementsOf, rewritesOf, seriesOf } from './analytics';
 import { CATALOG } from './catalog';
 import { liveFeed } from './live';
-import { ALERT_EVENTS, ALERT_RULES, KEEPALIVE_OVERVIEW, LIFECYCLE_DELIVERIES, RECIPES, SESSIONS, SETTINGS } from './operations';
+import { ALERT_EVENTS, ALERT_RULES, KEEPALIVE_OVERVIEW, LIFECYCLE_DELIVERIES, RECIPES, SESSIONS, SETTINGS_WIRE } from './operations';
 import { KEYS, POOLS } from './pools';
 import { ACCOUNT_ROLLUPS, ALL_ROLLUPS, REQUEST_EVENTS, REQUESTS, capturedBodiesFor, requestById } from './requests';
 import { createRng } from './rng';
@@ -361,7 +361,7 @@ export class MockApi implements Api {
   private secretRng = createRng(MOCK_SEED);
   private session: SessionInfo | null = null;
   private sessions: Session[] = [...SESSIONS];
-  private settings: Settings = { ...SETTINGS };
+  private settings: Settings = decodeSettings(SETTINGS_WIRE);
 
   /** The role the console is drawn for: a preview first, as the session provider reads it, then the signed-in one. */
   private role(): Role | null {
