@@ -185,8 +185,8 @@ rendered:
 | `phoebis_account_cooldown_seconds` | gauge | `account`, `scope` |
 | `phoebis_account_overage_in_use` | gauge | `account` |
 | `phoebis_account_ratelimit_utilization` | gauge | `account`, `window` |
-| `phoebis_alert_deliveries_total` | counter | `outcome`, `rule` |
 | `phoebis_attempts_total` | counter | `account`, `model`, `outcome` |
+| `phoebis_attention` | gauge | `kind`, `subject` |
 | `phoebis_bus_dropped_total` | counter | `subscriber` |
 | `phoebis_bus_subscriber_panics_total` | counter | `subscriber` |
 | `phoebis_keepalive_agents` | gauge | `state` |
@@ -370,109 +370,3 @@ Settings covers appearance, access (the admin secret's status), pricing, session
 downstream client block, compatibility, and an about panel. Four more cards show the bootstrap file's quota, routing,
 storage, and usage blocks: the sample retention, the catalog cache window, the cooldown fallback, the model rejection
 window, and the attempt limit, the ledger, pricing, and storage paths, and the usage cache TTL and refresh concurrency.
-
-## Alerts
-
-A rule names a kind, a scope, a webhook URL, an optional secret, and an enabled flag; only `utilization_above`
-also takes a threshold from 0 to 1 and a window of `5h`, `7d`, or `7d_oi`, and `session_idle` takes a threshold in
-whole minutes from 1 to 10080. `all` and `any_account` take no scope id; `account`, `key`, and `pool` each require
-one.
-
-| Kind | Label | Scopes |
-| --- | --- | --- |
-| `ask_user_question` | Waiting for user input | `all`, `key`, `pool` |
-| `client_drift` | Client drift | `all` |
-| `funding_required` | Funding required | `account`, `any_account` |
-| `keepalive_cost_cap` | Probe cost cap reached | `all`, `pool` |
-| `poll_backoff` | Usage poll backing off | `account`, `any_account` |
-| `pool_exhausted` | Pool exhausted | `all`, `pool` |
-| `reauth_required` | Re-auth required | `account`, `any_account` |
-| `refresh_failed` | Credential refresh failed | `account`, `any_account` |
-| `session_active` | Session active | `all`, `key`, `pool` |
-| `session_idle` | Session idle | `all`, `key`, `pool` |
-| `session_parked` | Session parked | `all`, `key`, `pool` |
-| `subagent_active` | Subagent active | `all`, `key`, `pool` |
-| `utilization_above` | Utilization above threshold | `account`, `all`, `any_account`, `key`, `pool` |
-
-**Waiting for user input** fires when a response relayed to a client carries an AskUserQuestion tool call, so the
-agent is blocked on an answer; it resolves on the session's next request, the first sign the user replied, or
-when the session expires. Once the captured body it was read from has passed its own retention, the question
-text is withheld from the webhook the same way it is from the API and the console.
-
-**Client drift** fires when a self-check fails for a client request: the client stamped a billing hash, or a
-`cc_version` suffix, this build cannot reproduce; re-pinning the router to that client build and resolving the event by
-hand clears it.
-
-**Funding required** fires when an Anthropic-key account is refused for billing reasons and resolves when an operator
-clears the funding flag.
-
-**Probe cost cap reached** fires when a pool's daily probe cost cap is reached; probes pause until the next UTC
-day, which resolves it, as removing the cap resolves it at the next poll.
-
-**Usage poll backing off** fires when an OAuth account's usage poll has been backing off from the endpoint's 429
-answers for thirty minutes, counted from the run's first 429, and resolves on the account's next clean poll, or once
-the account is disconnected or its credential removed, since the poll no longer asks about it. The detail names the
-account, since when it has backed off, when the next attempt comes, and how many 429s it answered in a row. An event
-left open across a restart resolves once the account's first poll reads clean.
-
-**Pool exhausted** fires when a request finds no eligible account in the pool and resolves on the next request
-the pool serves.
-
-**Re-auth required** fires when an account enters the reauth-required state and resolves once the account is
-paired or verified again.
-
-**Credential refresh failed** fires when a credential refresh fails twice in a row, an attempt whose answer was
-lost counting as a failure, and resolves on the next refresh that succeeds. The detail names the account, the
-length of the run, the last error, and `outcome`: `failed` for a refresh the token endpoint refused, `uncertain`
-for one whose answer never arrived, so the token may or may not have rotated upstream.
-
-The four session kinds are events rather than conditions: a rule of one of them receives one delivery per event
-as it happens, opens nothing, and has nothing to resolve. `session_active` receives `session_started` and
-`session_ended`, `subagent_active` receives `subagent_started` and `subagent_ended`, `session_parked` receives
-`session_parked` and `session_resumed`, and `session_idle` receives `session_idle`. A delivery goes to every
-enabled rule of the kind whose scope matches the session at that moment, so a rule enabled mid-session receives
-the session's later events and no start it missed; after a restart nothing is posted, since the router no longer
-knows which sessions live, and a live session's next event is posted as it comes. A graceful stop posts the end of
-every session it still tracks, so a session whose start was posted is never left open across the restart. Each
-delivery lands in the event log as `lifecycle` with the event's name, and the Alerts view lists them as a log.
-
-**Session active** posts `session_started` on a session's first request through the router, or on the keepalive
-companion's `session_start` when that comes first, and `session_ended` on the companion's `session_end` or when
-the session has been silent for `sessions.expire_after_seconds`, checked every second. A heartbeat from the
-companion counts as a sign of life there, so a session whose user has stepped away is not ended while its client
-is still attended. The detail's `source` says which side posted the event: `request`, `companion`, `expiry`, or
-`shutdown`.
-
-**Session idle** posts `session_idle` once no request has arrived on the session for the rule's threshold in
-minutes, measured from the session's last request on any of its agents, once per crossing; the session's next
-request arms the rule again.
-
-**Session parked** posts `session_parked` when the companion reports the main agent parked and `session_resumed`
-on the main agent's next request or when the companion reports the agent busy or idle again; without a companion
-for the session neither happens.
-
-**Subagent active** posts `subagent_started` on a subagent's first request, or on the companion's `agent_start`,
-and `subagent_ended` when the companion releases the agent, when the session ends, or at the session's expiry.
-The detail names the parent agent when the client sent `x-claude-code-parent-agent-id`.
-
-**Utilization above threshold** fires when the router's reading of the chosen window, carried forward between heads and
-polls as the [routing page](routing.md#the-windows-the-router-works-from) says, reaches the threshold and resolves once
-a sample reads five points below it.
-
-For the other ten kinds at most one open event exists per rule and subject; an event resolves either on the
-condition its description names or by hand, through Resolve. A webhook may not point at `localhost` or a
-`.localhost` name, a loopback, link-local, or unspecified address; the refusal reads `webhook_url must not point
-at {reason}`, and the same check runs again on every delivery against whatever address DNS actually answers with,
-since a name can resolve differently over time.
-
-A delivery posts a JSON body with the keys `detail`, `kind`, `opened_at`, `resolved_at`, `router`, `rule`,
-`state` (`opened` or `resolved` for an event's two transitions, `event` for a session event, whose `opened_at`
-is the event's time and whose `resolved_at` is null), and `subject`, in that order. When the rule has a secret,
-the body carries an `x-phoebis-signature: sha256=<hex>` header, an HMAC-SHA256 of the raw bytes keyed by the
-secret; a rule with a secret never posts unsigned. Delivery makes three attempts, the first immediate and the
-next two after waits of 1 and 4 seconds; each request has a 10-second timeout and follows no redirect, since a
-redirect would carry the signature to a URL it was never computed for. A 2xx response counts as delivered, and
-Test fires one synthetic delivery through the same path.
-
-![The Alerts view: the rules, the events with deliveries, and the lifecycle log](assets/alerts-light.png#only-light)
-![The Alerts view: the rules, the events with deliveries, and the lifecycle log](assets/alerts-dark.png#only-dark)

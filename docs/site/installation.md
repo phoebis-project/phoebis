@@ -158,10 +158,9 @@ so it is safe to run against a production file while the router is up. It prints
 Further warning lines name a storage key file, data directory or database whose mode or owner is wider than the router
 expects; the router starts either way and logs the same warnings.
 
-On shutdown, Ctrl-C or SIGTERM, the router drains in-flight requests for up to 30 seconds and then ends whatever
-is still running. That 30 seconds also covers the keepalive shutdown and the alert engine's own drain ahead of
-it, so a slow keepalive shutdown leaves the listeners whatever is left of the one budget rather than a fresh
-30 seconds of their own.
+On shutdown, Ctrl-C or SIGTERM, the router drains in-flight requests for up to 30 seconds and then ends whatever is
+still running. That 30 seconds also covers the keepalive shutdown ahead of it, so a slow keepalive shutdown leaves the
+listeners whatever is left of the one budget rather than a fresh 30 seconds of their own.
 
 `health` loads the file the way `check-config` does, so it needs the same environment. It connects to
 `proxy.listen`, or to the loopback address of the same family when the listener is bound on every interface,

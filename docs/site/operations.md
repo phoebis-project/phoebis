@@ -6,11 +6,10 @@ publishing this site, and releasing the container image.
 
 ## Backup
 
-The router's state lives in three files: `storage.path`, the registry of accounts, sealed credentials, pools,
-keys, alert rules, pricing versions, pins, cooldowns, and the relay's session memory; `stats.ledger_path`, the
-ledger of requests, attempts, events, samples, rollups, and captured bodies; and `storage.encryption_key_file`,
-the key that seals every credential the registry holds. No script in this repository takes a backup of any of
-them.
+The router's state lives in three files: `storage.path`, the registry of accounts, sealed credentials, pools, keys,
+pricing versions, pins, cooldowns, and the relay's session memory; `stats.ledger_path`, the ledger of requests,
+attempts, events, samples, rollups, and captured bodies; and `storage.encryption_key_file`, the key that seals every
+credential the registry holds. No script in this repository takes a backup of any of them.
 
 Both databases are SQLite, and both run in WAL mode. A plain file copy taken while the service is running can land
 mid-transaction and split either database file from its `-wal` file, losing the last transactions in between.
@@ -56,9 +55,9 @@ empty at mode `0600` before the key ever reaches it. Writing through a redirect 
 the key world-readable for the moment between the file's creation and a later `chmod`, and an interrupted run would
 leave it that way for good.
 
-The key seals OAuth credential bundles, Anthropic-key secrets, and alert secrets. `Store::digest_key` also derives, from
-this same key, the digest every downstream key authenticates against: the secrets the admin API mints and hands to
-clients and the companion.
+The key seals OAuth credential bundles and Anthropic-key secrets. `Store::digest_key` also derives, from this same key,
+the digest every downstream key authenticates against: the secrets the admin API mints and hands to clients and the
+companion.
 
 There is no re-key command, so recovering from a lost or replaced key means:
 
@@ -67,7 +66,7 @@ There is no re-key command, so recovering from a lost or replaced key means:
   just replaced, that read fails, and the pairing dialog answers `500 storage failure`. Disconnect the account
   first, from the Accounts view's Disconnect or `DELETE /admin/accounts/{id}/credentials`, which deletes the
   credential without reading it and leaves the account's identity bound to the same slot, then re-pair.
-- Re-entering every `api_key` secret and alert secret under the new key.
+- Re-entering every `api_key` secret under the new key.
 - Rotating every downstream key. Replacing the storage key changes what `digest_key` derives, so every digest
   already stored against the old key stops matching a client's presented secret, and every existing downstream key
   starts answering `401`. Rotate each one (`POST /admin/keys/{id}/rotate`) or recreate it, then distribute the new

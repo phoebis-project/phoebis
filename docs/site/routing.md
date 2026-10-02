@@ -345,8 +345,8 @@ startup, so a restart, and an account whose first poll the endpoint refuses, rou
 router never fetches usage at a selection; use of an account outside the router shows in the next head or poll, so a
 decision can lag it by up to five minutes plus any backoff, and by up to one more interval after a failed poll or a
 restart. The [Quota view](statistics.md#quota) shows when the poll last asked the endpoint for each OAuth account and
-how it answered, and while an account backs off, since when and when its next attempt comes; a `poll_backoff`
-[alert](statistics.md#alerts) fires once an account has backed off for thirty minutes.
+how it answered, and while an account backs off, since when and when its next attempt comes; the `poll_backoff`
+condition of the [`phoebis_attention` gauge](statistics.md) holds once an account has backed off for thirty minutes.
 
 ### Moves
 
@@ -623,8 +623,9 @@ pinned to a member at its budget is answered with the end of the latest period w
 whatever its siblings hold. A probe whose pinned account is disabled or past its subscription's end is answered `503`
 `accounts_unavailable` whatever its siblings hold, and so is one that already tried its pinned account while a sibling
 could take it, where moving would otherwise land the pin on that sibling; such a probe never moves the pin, and its
-request row reads rejected rather than exhausted, so the pool exhaustion alert does not count it. A probe that already
-tried its pinned account with no sibling to take it gets the pool's own answer above.
+request row reads rejected rather than exhausted, so the `pool_exhausted` condition of the `phoebis_attention` gauge
+does not count it. A probe that already tried its pinned account with no sibling to take it gets the pool's own answer
+above.
 
 Every answer the router commits loses the upstream's rate-limit headers, the `anthropic-ratelimit-*` families and the
 `anthropic-fast-*` token family, so an organization's standing never reads as the key holder's own and a client sees
