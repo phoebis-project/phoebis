@@ -3,7 +3,7 @@
 # against scripts/build-fixtures.py --check --through-router, in one command.
 #
 # Usage: PHOEBIS_CAPTURE_OAUTH_KEY=<router key> PHOEBIS_CAPTURE_API_KEY=<router key> \
-#        ROUTER_ADMIN_SECRET=<secret> [ROUTER_VIEWER_SECRET=<secret>] [PHOEBIS_CAPTURE_BASELINE=<dir>] \
+#        PHOEBIS_ADMIN_SECRET=<secret> [PHOEBIS_VIEWER_SECRET=<secret>] [PHOEBIS_CAPTURE_BASELINE=<dir>] \
 #        scripts/capture-through-router.sh <path-to-claude-binary> <output-dir> <config.yaml>
 #
 # Mirrors scripts/capture-baseline.sh: the same credential refusal, the same `unshare -rn` re-exec (so this
@@ -20,8 +20,8 @@
 #   (storage.path in <config.yaml>) and would otherwise race the running service's refresh attempts and
 #   keepalive leases on the same accounts, since both would believe themselves the only writer. Run this as the
 #   store's owner:
-#     sudo -u phoebis env PHOEBIS_CAPTURE_OAUTH_KEY=... PHOEBIS_CAPTURE_API_KEY=... ROUTER_ADMIN_SECRET=... \
-#       ROUTER_VIEWER_SECRET=... scripts/capture-through-router.sh <binary> <output-dir> <config.yaml>
+#     sudo -u phoebis env PHOEBIS_CAPTURE_OAUTH_KEY=... PHOEBIS_CAPTURE_API_KEY=... PHOEBIS_ADMIN_SECRET=... \
+#       PHOEBIS_VIEWER_SECRET=... scripts/capture-through-router.sh <binary> <output-dir> <config.yaml>
 # - This script and scripts/capture-baseline.sh share the same client state root (/tmp/cc-capture), the pinning
 #   its own header documents, so they must never run at the same time: the fixture bodies embed that path (and
 #   its cfg-<name> children) in the system prompt, and a capture rooted anywhere else fails --check on every
@@ -67,8 +67,8 @@ if [[ -z "${PHOEBIS_CAPTURE_OAUTH_KEY:-}" || -z "${PHOEBIS_CAPTURE_API_KEY:-}" ]
   echo "capture-through-router.sh: PHOEBIS_CAPTURE_OAUTH_KEY and PHOEBIS_CAPTURE_API_KEY must both be set" >&2
   exit 1
 fi
-if [[ -z "${ROUTER_ADMIN_SECRET:-}" ]]; then
-  echo "capture-through-router.sh: ROUTER_ADMIN_SECRET must be set; the capture instance loads the same config" >&2
+if [[ -z "${PHOEBIS_ADMIN_SECRET:-}" ]]; then
+  echo "capture-through-router.sh: PHOEBIS_ADMIN_SECRET must be set; the capture instance loads the same config" >&2
   exit 1
 fi
 
@@ -170,7 +170,7 @@ done < <(grep -E '^\s*(secret_env|viewer_secret_env):' "$OUT/config.yaml" | sed 
 # Exported inside the subshell rather than passed to `env`, so the secrets never sit in a process's argv
 # between the assignment and the exec.
 (
-  export ROUTER_ADMIN_SECRET="$ROUTER_ADMIN_SECRET" ROUTER_VIEWER_SECRET="${ROUTER_VIEWER_SECRET:-}"
+  export PHOEBIS_ADMIN_SECRET="$PHOEBIS_ADMIN_SECRET" PHOEBIS_VIEWER_SECRET="${PHOEBIS_VIEWER_SECRET:-}"
   exec "$PHOEBIS_BIN" --config "$OUT/config.yaml"
 ) >"$OUT/phoebis.log" 2>&1 &
 ROUTER_PID=$!

@@ -1607,7 +1607,10 @@ fn shared_secrets_are_rejected_and_plain_http_is_allowed_on_any_address() {
     ));
     assert!(load(&config_with(dir.path(), "public", public_plain)).is_ok());
     let pinned = load(&config_with(dir.path(), "pinned", public_plain_with_origin)).unwrap();
-    assert_eq!(pinned.admin.origin.as_deref(), Some("http://phoebis.lan:8081"));
+    assert_eq!(
+        pinned.admin.origin.as_deref(),
+        Some("http://phoebis.lan:8081")
+    );
     assert!(matches!(
         load(&config_with(dir.path(), "origin", public_secure)),
         Err(ConfigError::MissingOrigin)

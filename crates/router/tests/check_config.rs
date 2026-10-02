@@ -106,8 +106,8 @@ fn every_shipped_deploy_config_passes_check_config() {
         "config.example.yaml",
     ] {
         let out = phoebis()
-            .env("ROUTER_ADMIN_SECRET", "deploy-check-admin-secret")
-            .env("ROUTER_VIEWER_SECRET", "deploy-check-viewer-secret")
+            .env("PHOEBIS_ADMIN_SECRET", "deploy-check-admin-secret")
+            .env("PHOEBIS_VIEWER_SECRET", "deploy-check-viewer-secret")
             .args(["check-config", "--config"])
             .arg(deploy.join(name))
             .output()

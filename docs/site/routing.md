@@ -631,10 +631,10 @@ rendered as `five_hour`, because the client treats an unknown claim as no claim.
 and the message is `every account in this pool is rate limited`. With every account at its in-flight cap past the hold,
 `phoebis` answers `429` with error code `accounts_at_cap` and a `Retry-After` of at most 19 seconds ([in-flight
 caps](#in-flight-caps)), since the pool frees on its own. For anything only an operator can clear, such as a pool whose
-accounts are all paused, `phoebis` answers `503` with error code `accounts_unavailable`, message `no account in this pool
-can serve requests`, and no `retry-after`. A request admitted under a key that was deleted, or deleted and created again
-under its id, before it was routed is refused with the `401` admission answers a key the registry does not hold (see
-[What the proxy accepts](client.md#what-the-proxy-accepts)). A pool whose every member has reached its spend budget
+accounts are all paused, `phoebis` answers `503` with error code `accounts_unavailable`, message `no account in this
+pool can serve requests`, and no `retry-after`. A request admitted under a key that was deleted, or deleted and created
+again under its id, before it was routed is refused with the `401` admission answers a key the registry does not hold
+(see [What the proxy accepts](client.md#what-the-proxy-accepts)). A pool whose every member has reached its spend budget
 answers `429` with the `overage` claim, the same one an account in overage carries (see [Pools](#pools)), and a probe
 pinned to a member at its budget is answered with the end of the latest period whose budget is reached as its reset,
 whatever its siblings hold. A probe whose pinned account is disabled or past its subscription's end is answered `503`

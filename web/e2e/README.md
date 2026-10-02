@@ -51,9 +51,9 @@ admin secret and the clock pinned at `2026-09-16T14:30:00Z`, the weekday afterno
 draws are seeded, so two runs write the same screenshots byte for byte, which `diff -r` over the two directories shows.
 Beside the views' shots it writes the open catalog popup's as `<theme>/upstreams-catalog.png`; the router's pass writes
 one shot per view, which its test counts. The dashboard's remaining cards and its empty state are checked against the
-router's seeded registry alone (`PHOEBIS_E2E_MOCK=1` skips them), since the mock's story has subscription upstreams and no
-empty list on the dashboard. The subscription end editor needs the story's OAuth upstream, so against the router's seed
-that part stands down.
+router's seeded registry alone (`PHOEBIS_E2E_MOCK=1` skips them), since the mock's story has subscription upstreams and
+no empty list on the dashboard. The subscription end editor needs the story's OAuth upstream, so against the router's
+seed that part stands down.
 
 ## On a host without Chromium
 

@@ -53,7 +53,7 @@ application/json` (the curl lines below already carry it). Log in first and keep
 ```sh
 curl -sS -c jar.txt -X POST https://phoebis.example/admin/session \
   -H 'content-type: application/json' -H 'origin: https://phoebis.example' \
-  -d '{"secret":"'"$ROUTER_ADMIN_SECRET"'"}'
+  -d '{"secret":"'"$PHOEBIS_ADMIN_SECRET"'"}'
 ```
 
 Start a pairing session for the account slot. The answer carries an `id` and an `authorization_url`; `login`

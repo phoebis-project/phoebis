@@ -175,7 +175,7 @@ jobs:
           tmp=$(mktemp -d)
           head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$tmp/storage.key"
           chmod 0444 "$tmp/storage.key"
-          printf 'ROUTER_ADMIN_SECRET=smoke-admin\nROUTER_VIEWER_SECRET=smoke-viewer\nRUST_LOG=info\n' > "$tmp/phoebis.env"
+          printf 'PHOEBIS_ADMIN_SECRET=smoke-admin\nPHOEBIS_VIEWER_SECRET=smoke-viewer\nRUST_LOG=info\n' > "$tmp/phoebis.env"
           docker run --rm --env-file "$tmp/phoebis.env" \
             -v "$PWD/deploy/config.container.yaml:/etc/phoebis/config.yaml:ro" \
             -v "$tmp/storage.key:/run/secrets/router-storage-key:ro" "$REF" check-config

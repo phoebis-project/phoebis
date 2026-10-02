@@ -6,8 +6,8 @@ admin:
   # With plain_http the session cookie is served without Secure and origin is optional, on any address. Left
   # false here, so origin is required and TLS is terminated in front.
   plain_http: false
-  secret_env: ROUTER_ADMIN_SECRET
-  viewer_secret_env: ROUTER_VIEWER_SECRET
+  secret_env: PHOEBIS_ADMIN_SECRET
+  viewer_secret_env: PHOEBIS_VIEWER_SECRET
 compatibility:
   # Opt-in: forces the cache-diagnosis beta and a previous_message_id toward api.anthropic.com for every client.
   cache_diagnostics: false

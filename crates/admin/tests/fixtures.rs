@@ -73,11 +73,11 @@ fn hold(planted: &[String], name: &str, route: &str, body: Value) {
         .unwrap();
         return;
     }
-    let committed: Value = serde_json::from_str(
-        &std::fs::read_to_string(&path)
-            .unwrap_or_else(|_| panic!("{name}.json is missing; run with PHOEBIS_WRITE_FIXTURES=1")),
-    )
-    .unwrap();
+    let committed: Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap_or_else(|_| {
+            panic!("{name}.json is missing; run with PHOEBIS_WRITE_FIXTURES=1")
+        }))
+        .unwrap();
     assert_eq!(shape(&committed["body"]), shape(&captured["body"]), "{name}: the committed fixture's shape differs from the live answer; re-capture and update the decoder");
 }
 

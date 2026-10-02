@@ -11,10 +11,10 @@ gets.
 cargo build --release
 ```
 
-The binary lands at `target/release/phoebis`. The embedded console needs Node 20.19 or a later 20, or 22.12 or later, and
-npm on the path: the build script runs `npm ci` and `npm run build` in `web/` whenever the bundle is missing or older
-than its sources. `PHOEBIS_SKIP_UI_BUILD=1` builds the binary without it, and the admin listener then serves a placeholder
-page in place of the console.
+The binary lands at `target/release/phoebis`. The embedded console needs Node 20.19 or a later 20, or 22.12 or later,
+and npm on the path: the build script runs `npm ci` and `npm run build` in `web/` whenever the bundle is missing or
+older than its sources. `PHOEBIS_SKIP_UI_BUILD=1` builds the binary without it, and the admin listener then serves a
+placeholder page in place of the console.
 
 The toolchain is pinned in `rust-toolchain.toml` to 1.96.1, and BoringSSL builds from source, which needs cmake,
 clang, and libclang.
@@ -30,7 +30,7 @@ sed -e "s#/run/secrets/router-storage-key#$HOME/.config/phoebis/storage.key#" \
   -e 's/plain_http: false/plain_http: true/' -e '/^  origin:/d' \
   deploy/config.example.yaml > ~/.config/phoebis/config.yaml
 export PHOEBIS_CONFIG=$HOME/.config/phoebis/config.yaml
-export ROUTER_ADMIN_SECRET=$(openssl rand -base64 36) ROUTER_VIEWER_SECRET=$(openssl rand -base64 36)
+export PHOEBIS_ADMIN_SECRET=$(openssl rand -base64 36) PHOEBIS_VIEWER_SECRET=$(openssl rand -base64 36)
 target/release/phoebis
 ```
 
@@ -58,9 +58,9 @@ empty at 0600 before the key is written, rather than through a redirect, because
 leave it world-readable between the write and a later `chmod`. The key seals every credential in
 `router.sqlite`, so it stays out of any backup that carries the database.
 
-`deploy/phoebis.service` runs the process as the `phoebis` user with `EnvironmentFile=/etc/phoebis/phoebis.env`; `phoebis` never
-reads the environment file itself, systemd hands the values over. `TimeoutStopSec=40` covers the 30-second
-drain, and `ProtectSystem=strict` with `StateDirectory=phoebis` is the hardening around it.
+`deploy/phoebis.service` runs the process as the `phoebis` user with `EnvironmentFile=/etc/phoebis/phoebis.env`;
+`phoebis` never reads the environment file itself, systemd hands the values over. `TimeoutStopSec=40` covers the
+30-second drain, and `ProtectSystem=strict` with `StateDirectory=phoebis` is the hardening around it.
 
 Edit `/etc/phoebis/config.yaml` next. The installed file's paths are relative and its key file is
 `/run/secrets/router-storage-key`, so point `storage.encryption_key_file` at `/etc/phoebis/storage.key`,
@@ -74,7 +74,7 @@ sudo bash -c 'set -a; . /etc/phoebis/phoebis.env; set +a; exec phoebis check-con
 
 `check-config` resolves `admin.secret_env` and `admin.viewer_secret_env` from the process environment like every
 other invocation, so the env file has to be sourced into this one shell first; plain
-`sudo phoebis check-config --config /etc/phoebis/config.yaml` fails with `environment variable ROUTER_ADMIN_SECRET is
+`sudo phoebis check-config --config /etc/phoebis/config.yaml` fails with `environment variable PHOEBIS_ADMIN_SECRET is
 unset or empty`. Once it is clean, `sudo systemctl enable --now phoebis`.
 
 ## Run the container
@@ -128,17 +128,17 @@ clear; that is the same trust decision the proxy port's publication already make
 false`, set `origin` to the front's `https://` URL, terminate TLS in front of the published port, and open exactly
 the hostname and port `origin` names: a login from any other origin is refused with `403`.
 
-The named volume `phoebis-data` takes the image's ownership of `/var/lib/phoebis` on first use; a bind mount in its place
-needs `chown 65532` on the host directory first. A price table dropped at `/var/lib/phoebis/pricing.yaml` on the volume
-is read at the next start, as `stats.pricing_path` in the container configuration names it. Pulling the image needs
-`docker login ghcr.io` with a token carrying `read:packages` while the repository is private. Upgrading is on the
+The named volume `phoebis-data` takes the image's ownership of `/var/lib/phoebis` on first use; a bind mount in its
+place needs `chown 65532` on the host directory first. A price table dropped at `/var/lib/phoebis/pricing.yaml` on the
+volume is read at the next start, as `stats.pricing_path` in the container configuration names it. Pulling the image
+needs `docker login ghcr.io` with a token carrying `read:packages` while the repository is private. Upgrading is on the
 [operations page](operations.md#upgrades).
 
 ## Commands
 
 | Command | Effect |
 | --- | --- |
-| `phoebis --config ./config.yaml` | Serves the three listeners until Ctrl-C or SIGTERM, then drains for up to 30 seconds. |
+| `phoebis --config ./config.yaml` | Serves the three listeners until Ctrl-C or SIGTERM, then drains up to 30 seconds. |
 | `phoebis check-config --config ./config.yaml` | Validates the file, prints the listeners and routing, and exits. |
 | `phoebis health --config ./config.yaml` | Probes the proxy listener and exits 0 when it answers, 1 otherwise. |
 | `phoebis --version` | Prints the version. |
@@ -185,10 +185,10 @@ one would silently turn the read-only login into a full one, and `phoebis` refus
 | Variable | Named by | Holds |
 | --- | --- | --- |
 | `PHOEBIS_CONFIG` | `phoebis` itself, when `--config` is absent | The path of the bootstrap file. |
-| `ROUTER_ADMIN_SECRET` | `admin.secret_env` | The admin login, which reaches every admin route. |
-| `ROUTER_VIEWER_SECRET` | `admin.viewer_secret_env` | The read-only admin login. |
+| `PHOEBIS_ADMIN_SECRET` | `admin.secret_env` | The admin login, which reaches every admin route. |
+| `PHOEBIS_VIEWER_SECRET` | `admin.viewer_secret_env` | The read-only admin login. |
 
-Pick your own names; `ROUTER_ADMIN_SECRET` and `ROUTER_VIEWER_SECRET` are what the example file happens to use.
+Pick your own names; `PHOEBIS_ADMIN_SECRET` and `PHOEBIS_VIEWER_SECRET` are what the example file happens to use.
 `admin.viewer_secret_env` is the one line you may delete outright, for no read-only login. `RUST_LOG` sets the log
 filter and defaults to `info`.
 Nothing else is named here: an account's upstream credential and the keys downstream clients present belong to
@@ -205,8 +205,8 @@ admin:
   # With plain_http the session cookie is served without Secure and origin is optional, on any address. Left
   # false here, so origin is required and TLS is terminated in front.
   plain_http: false
-  secret_env: ROUTER_ADMIN_SECRET
-  viewer_secret_env: ROUTER_VIEWER_SECRET
+  secret_env: PHOEBIS_ADMIN_SECRET
+  viewer_secret_env: PHOEBIS_VIEWER_SECRET
 compatibility:
   # Opt-in: forces the cache-diagnosis beta and a previous_message_id toward api.anthropic.com for every client.
   cache_diagnostics: false

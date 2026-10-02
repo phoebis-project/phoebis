@@ -7,8 +7,8 @@ admin:
   # secret at login and the session cookie on every call cross that LAN in the clear.
   listen: 0.0.0.0:8081
   plain_http: true
-  secret_env: ROUTER_ADMIN_SECRET
-  viewer_secret_env: ROUTER_VIEWER_SECRET
+  secret_env: PHOEBIS_ADMIN_SECRET
+  viewer_secret_env: PHOEBIS_VIEWER_SECRET
 compatibility:
   # Opt-in: forces the cache-diagnosis beta and a previous_message_id toward api.anthropic.com for every client.
   cache_diagnostics: false

@@ -16,9 +16,9 @@ forms bound, in the route's own wording, so a form that drifts from its route fa
 
 ```sh
 npm install
-npm run dev                    # http://127.0.0.1:5173, /admin proxied to a router on 127.0.0.1:8081
+npm run dev                        # http://127.0.0.1:5173, /admin proxied to a router on 127.0.0.1:8081
 VITE_PHOEBIS_MOCK=1 npm run dev    # the same page against the mock; sign in with admin or viewer
-npm run build                  # typecheck, then bundle into dist/
+npm run build                      # typecheck, then bundle into dist/
 ```
 
 The other scripts:
