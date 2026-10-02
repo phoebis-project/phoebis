@@ -1081,7 +1081,8 @@ test('settings decode the cost table with its tiers and null for unmeasured', ()
 test('a pricing effective date that is not a date decodes as the string sent with no parsed date', () => {
   const wire = fixture('settings');
   const pricingOf = (effective) => d.decodeSettings({ ...wire, pricing: { ...wire.pricing, effective } }).pricing;
-  for (const effective of ['v3', '', 'Q3 2026']) {
+  // V8 reads some free text as a date ("version 3" as March 2001), so only text that opens with an ISO date counts.
+  for (const effective of ['v3', '', 'Q3 2026', 'version 3', 'rev 2']) {
     const pricing = pricingOf(effective);
     assert.deepEqual([pricing.effective, pricing.effectiveDate], [effective, null], `${JSON.stringify(effective)} is kept as sent`);
     assert.equal(pricing.models.length, wire.pricing.models.length, 'the table beside it still decodes');
