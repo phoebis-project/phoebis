@@ -1082,11 +1082,11 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   });
   const tiles = (name) => [...(card(name)?.querySelectorAll('.pool__stats > div') ?? [])].map((d) => [d.querySelector('dt')?.textContent?.trim(), d.querySelector('dd')?.textContent?.trim(), d.querySelector('dd')?.getAttribute('title')]);
   results.push({
-    name: '/pools six tiles per card, the sixth the moves in the last hour split by reason in its title',
-    ok: tiles('all').length === 6 && JSON.stringify(tiles('all')[5]) === JSON.stringify(['Moves in the last hour', '2.5', 'window spent 2.0, overage 0.5']) && JSON.stringify(tiles('codex')[5]) === JSON.stringify(['Moves in the last hour', '0', 'No session moved in the last hour.']),
+    name: '/pools six tiles per card, the sixth the count of moves in the last hour split by reason in its title',
+    ok: tiles('all').length === 6 && JSON.stringify(tiles('all')[5]) === JSON.stringify(['Moves in the last hour', '3', 'window spent 2, overage 1']) && JSON.stringify(tiles('codex')[5]) === JSON.stringify(['Moves in the last hour', '0', 'No session moved in the last hour.']),
     missing: [...(tiles('all')[5] ?? []), ...(tiles('codex')[5] ?? [])].map(String),
   });
-  results.push({ name: '/pools nothing of the recap, the strip, the member list or the key chips is left', ok: m.container.querySelector('.pool .pool__policy, .pool .selection-order, .pool .pool__members, .pool .pool__eligibility, .pool a.badge[href="/keys"]') === null, missing: [] });
+  results.push({ name: '/pools nothing of the recap, the selection-order strip, the member list or the key chips is left', ok: m.container.querySelector('.pool .pool__policy, .pool .selection-order, .pool .pool__members, .pool .pool__eligibility, .pool a.badge[href="/keys"]') === null, missing: [] });
 }
 {
   // Test data for the rows alone, mounted on their own: the pool card passes an empty list, since no route answers one.
@@ -2127,6 +2127,37 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   await api.updatePool('studio', studio);
 }
 m.unmount();
+
+// Until the key list is read, an empty list says nothing about a pool's keys: the count line waits while the read is
+// out, and a failed read says the list is unavailable rather than "No keys yet" in the warning ink.
+{
+  const lineOf = (page) => [...page.container.querySelectorAll('.pool')].map((c) => {
+    const line = c.querySelector('.pool__keys');
+    return line ? [line.tagName, line.className.trim(), line.textContent?.trim()] : null;
+  });
+  const held = deferNextCall('listKeys');
+  let p = await mount('/pools');
+  const waiting = lineOf(p);
+  held.release();
+  held.restore();
+  await p.settle(300);
+  const loaded = lineOf(p);
+  results.push({
+    name: '/pools the key count line draws nothing while the key list loads, then the count',
+    ok: waiting.length > 0 && waiting.every((l) => l === null) && loaded.length === waiting.length && loaded.every((l) => l?.[0] === 'A'),
+    missing: [...waiting, ...loaded].map((l) => JSON.stringify(l)),
+  });
+  p.unmount();
+  failNextCall('listKeys', '/admin/keys', 'the key store is unavailable');
+  p = await mount('/pools');
+  const failed = lineOf(p);
+  results.push({
+    name: '/pools a failed key read says the keys are unavailable in the muted ink, never "No keys yet"',
+    ok: failed.length > 0 && failed.every((l) => JSON.stringify(l) === JSON.stringify(['SPAN', 'pool__keys pool__keys--unread', 'Keys unavailable'])) && !p.text().includes('No keys yet') && p.container.querySelector('.pool__keys--none') === null,
+    missing: failed.map((l) => JSON.stringify(l)),
+  });
+  p.unmount();
+}
 
 // The address opens a dialog on a named group: a link, a reload or a typed address lands on the group, and the
 // entry is replaced by the bare route.

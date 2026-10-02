@@ -235,6 +235,7 @@ export function PoolsPage() {
                 key={p.id}
                 pool={p}
                 keys={keysByPool.get(p.id) ?? []}
+                keysRead={keys.data ? 'loaded' : keys.error ? 'failed' : 'loading'}
                 accounts={accounts.data ?? []}
                 accountById={accountById}
                 // No route answers the attention list yet, so the card draws no row.
@@ -433,6 +434,7 @@ function CacheTtlOverrides({
 function PoolCard({
   pool,
   keys,
+  keysRead,
   accounts,
   accountById,
   attention,
@@ -447,6 +449,8 @@ function PoolCard({
   attention: AttentionItem[];
   canMutate: boolean;
   keys: ApiKey[];
+  /** Until the key list has loaded, `keys` is empty whatever the pool holds, so the count line waits on this. */
+  keysRead: 'failed' | 'loaded' | 'loading';
   now: number;
   onDelete: () => void;
   onEdit: () => void;
@@ -469,11 +473,12 @@ function PoolCard({
   // The selection order skips a member the accounts list does not carry, so the table lists it after the tiers.
   const unlisted = pool.members.filter((m) => !accountById.has(m.accountId));
   const pinsOf = (id: string) => sessions.filter((s) => s.pinned && s.accountId === id).length;
-  const moveRates = Object.entries(pool.movesPerHour)
-    .filter(([, rate]) => rate > 0)
+  // The route counts the moves of the last hour by reason, so every figure is a whole number.
+  const moveCounts = Object.entries(pool.movesPerHour)
+    .filter(([, count]) => count > 0)
     .sort(([, a], [, b]) => b - a);
-  const movesTotal = moveRates.reduce((s, [, rate]) => s + rate, 0);
-  const movesTitle = moveRates.length === 0 ? 'No session moved in the last hour.' : moveRates.map(([reason, rate]) => `${moveLabel(reason)} ${rate.toFixed(1)}`).join(', ');
+  const movesTotal = moveCounts.reduce((s, [, count]) => s + count, 0);
+  const movesTitle = moveCounts.length === 0 ? 'No session moved in the last hour.' : moveCounts.map(([reason, count]) => `${moveLabel(reason)} ${fmtInt(count)}`).join(', ');
   return (
     <Card padded={false} className="pool">
       <header className="pool__head">
@@ -482,9 +487,13 @@ function PoolCard({
           <Badge tone={POOL_STATUS_TONE[pool.status]} dot>
             {pool.status}
           </Badge>
-          <Link to={`/keys?pool=${pool.id}`} className={`pool__keys ${keys.length === 0 ? 'pool__keys--none' : ''}`}>
-            {keys.length === 0 ? 'No keys yet' : keys.length === 1 ? '1 key' : `${keys.length} keys`}
-          </Link>
+          {keysRead === 'loaded' ? (
+            <Link to={`/keys?pool=${pool.id}`} className={`pool__keys ${keys.length === 0 ? 'pool__keys--none' : ''}`}>
+              {keys.length === 0 ? 'No keys yet' : keys.length === 1 ? '1 key' : `${keys.length} keys`}
+            </Link>
+          ) : (
+            keysRead === 'failed' && <span className="pool__keys pool__keys--unread">Keys unavailable</span>
+          )}
           {canMutate && (
             <>
               <Button size="sm" variant="ghost" icon={<IconPencil size={13} />} onClick={onEdit} className="pool__edit" aria-label={`Edit pool ${pool.name}`}>
@@ -661,7 +670,7 @@ function PoolCard({
         <div>
           <dt>Moves in the last hour</dt>
           <dd className="num" title={movesTitle}>
-            {movesTotal === 0 ? '0' : movesTotal.toFixed(1)}
+            {fmtInt(movesTotal)}
           </dd>
         </div>
       </dl>
