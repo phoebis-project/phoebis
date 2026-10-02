@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { api, MOCK, type Role, type SessionInfo } from '@/api';
-import { ApiError, setHooks } from '@/api/http';
+import { ApiError, SessionNotKept, setHooks } from '@/api/http';
 import { Button, Input } from '@/components/ui/primitives';
 import { Mark } from '@/components/ui/Mark';
 
@@ -107,13 +107,15 @@ export function LoginScreen({ notice, onLoggedIn }: { notice: string | null; onL
       onLoggedIn(await api.login(secret));
     } catch (e) {
       setError(
-        e instanceof ApiError && e.status === 429
-          ? 'Too many failed logins; try again in a minute.'
-          : e instanceof ApiError && e.status === 401
-            ? 'That secret does not match.'
-            : e instanceof Error
-              ? e.message
-              : String(e),
+        e instanceof SessionNotKept
+          ? 'The router accepted the secret, but the browser kept no session cookie. The usual causes: a proxy that rewrites the path or drops Set-Cookie, cookies blocked for this site, or a Secure cookie served over plain HTTP.'
+          : e instanceof ApiError && e.status === 429
+            ? 'Too many failed logins; try again in a minute.'
+            : e instanceof ApiError && e.status === 401
+              ? 'That secret does not match.'
+              : e instanceof Error
+                ? e.message
+                : String(e),
       );
     } finally {
       setBusy(false);

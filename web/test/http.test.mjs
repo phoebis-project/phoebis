@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { ApiError, HttpApi, call, setHooks, slug } from './dist/api.js';
+import { ApiError, HttpApi, SessionNotKept, call, setHooks, slug } from './dist/api.js';
 
 const answer = (status, body, headers = {}) => ({ headers: { get: (k) => headers[k.toLowerCase()] ?? null }, ok: status >= 200 && status < 300, status, text: async () => (body === undefined ? '' : JSON.stringify(body)), json: async () => body });
 const stub = (handler) => { const calls = []; globalThis.fetch = async (url, init = {}) => { calls.push({ init, url }); return handler(url, init); }; return calls; };
@@ -197,6 +197,12 @@ test('getSession answers null on 401 without running the hook', async () => {
   assert.equal(unauthorized, 0);
   stub(() => answer(200, { role: 'viewer', session_id: 's' }));
   assert.deepEqual(await new HttpApi().getSession(), { role: 'viewer', sessionId: 's' });
+});
+
+test('a login the router accepted with no cookie kept raises SessionNotKept', async () => {
+  const calls = stub((_url, init) => (init.method === 'POST' ? answer(204) : answer(401, { error: 'no admin session' })));
+  await assert.rejects(new HttpApi().login('secret'), (e) => e instanceof SessionNotKept && !(e instanceof ApiError));
+  assert.deepEqual(calls.map((c) => c.init.method ?? 'GET'), ['POST', 'GET'], 'the session read follows the accepted login');
 });
 
 test('the live feed reconnects behind a live session and stops once it is gone', async () => {

@@ -3,7 +3,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { createMemoryRouter, MemoryRouter, RouterProvider } from 'react-router-dom';
 import { api } from '@/api';
 import { decodeSettings } from '@/api/decode';
-import { ApiError, reportFailure } from '@/api/http';
+import { ApiError, reportFailure, SessionNotKept } from '@/api/http';
 import type { LiveEvent } from '@/api/types';
 import { routes } from '@/app/App';
 import { SessionProvider } from '@/app/session';
@@ -14,7 +14,7 @@ import { ALL_ROLLUPS, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, REQUEST_EVE
 import { SETTINGS_SAMPLE } from '@/mock/samples';
 import { fakeClock } from './clock';
 
-export { api, decodeSettings, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, SETTINGS_WIRE };
+export { api, decodeSettings, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, SessionNotKept, SETTINGS_WIRE };
 export { default as React } from 'react';
 export { Field, GroupedDialog, GroupLink, Input, PageLink, SwitchedNumber, Toggle } from '@/components/ui/primitives';
 export const MOCK_VERSION = SETTINGS_SAMPLE.about.version;

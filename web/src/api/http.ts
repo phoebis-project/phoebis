@@ -12,6 +12,13 @@ export class ApiError extends Error {
   }
 }
 
+/** The router took the secret, yet the session read that follows finds no session: the browser dropped the cookie. */
+export class SessionNotKept extends Error {
+  constructor() {
+    super('the router accepted the secret but the browser kept no session cookie');
+  }
+}
+
 /** What a failed call reports: the route it was, and the server's own message where there was one. */
 export interface Failure {
   message: string | null;
@@ -210,7 +217,7 @@ export class HttpApi implements Api {
   login = async (secret: string): Promise<SessionInfo> => {
     await call<void>('POST', '/admin/session', { secret });
     const me = await this.getSession();
-    if (!me) throw new ApiError(401, 'the session did not take', null);
+    if (!me) throw new SessionNotKept();
     return me;
   };
   logout = () => call<void>('DELETE', '/admin/session');

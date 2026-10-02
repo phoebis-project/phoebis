@@ -58,7 +58,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { api, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, failCalls, failNextCall, Field, GroupedDialog, GroupLink, Input, MOCK_VERSION, mount, mountNode, PageLink, React, requestEvents, requests, rollups, SETTINGS_WIRE, stallLive, SwitchedNumber, tick } = await import('./dist/entry.js');
+const { api, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, failCalls, failNextCall, Field, GroupedDialog, GroupLink, Input, MOCK_VERSION, mount, mountNode, PageLink, React, requestEvents, requests, rollups, SessionNotKept, SETTINGS_WIRE, stallLive, SwitchedNumber, tick } = await import('./dist/entry.js');
 
 const results = [];
 /**
@@ -129,6 +129,34 @@ const failoverRow = requests.find((r) => r.attempts.length > 1 && r.attempts.som
   await login.settle(400);
   results.push({ name: 'Log out returns to the login screen', ok: login.text().includes('Admin or viewer secret'), missing: [] });
   login.unmount();
+  localStorage.setItem('phoebis.mockSession', 'admin');
+}
+
+{
+  // The login checks below start signed out, each on a fresh mount, and put the stored session back at the end.
+  localStorage.removeItem('phoebis.mockSession');
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  const attempt = async (page, secret) => {
+    const input = page.container.querySelector('input[type="password"]');
+    setter.call(input, secret);
+    input.dispatchEvent(new window.Event('input', { bubbles: true }));
+    [...page.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Log in')?.click();
+    await page.settle(500);
+  };
+  const alertOf = (page) => page.container.querySelector('.login__card [role="alert"]')?.textContent ?? '';
+
+  api.login = () => Promise.reject(new SessionNotKept());
+  const kept = await mount('/');
+  await attempt(kept, 'admin');
+  const cookie = alertOf(kept);
+  results.push({
+    name: 'login screen names the cookie when the router accepted the secret and no session followed',
+    ok: cookie === 'The router accepted the secret, but the browser kept no session cookie. The usual causes: a proxy that rewrites the path or drops Set-Cookie, cookies blocked for this site, or a Secure cookie served over plain HTTP.',
+    missing: [cookie || 'no alert'],
+  });
+  delete api.login;
+  kept.unmount();
+
   localStorage.setItem('phoebis.mockSession', 'admin');
 }
 
