@@ -9,6 +9,7 @@ import { OUTCOME_SERIES, PERCENTILES, PROBE_SERIES, TOKEN_SERIES, accountColor }
 import { useChartInk } from '@/components/charts/useChartInk';
 import { ChartTooltip, Legend, type TooltipRow } from '@/components/charts/Tooltip';
 import { MultiSelect, type Option } from '@/components/ui/MultiSelect';
+import { Tile } from '@/components/ui/Tile';
 import { IconX } from '@/components/ui/icons';
 import { Badge, Button, Card, ErrorState, Input, Meter, Segmented, Select, Skeleton, Toggle } from '@/components/ui/primitives';
 import { CONVERSATION_CLASSES, foldBurn, isolatedSlots, moveLabel, placementCells, placementRungLabel, readBurn, sizedAccounts, slotUnpriced, type BurnLine, type BurnLineUnit, type BurnRow } from '@/lib/analytics';
@@ -824,16 +825,6 @@ function ChartCard({
         </>
       )}
     </Card>
-  );
-}
-
-function Tile({ label, value, note, tone }: { label: string; note?: string; tone?: 'critical'; value: string | null }) {
-  return (
-    <div className="stat stat--compact">
-      <span className="stat__label">{label}</span>
-      <span className={`stat__value ${tone === 'critical' ? 'is-critical' : ''}`}>{value ?? <Skeleton width={70} height={22} />}</span>
-      {note && <span className="stat__note">{note}</span>}
-    </div>
   );
 }
 

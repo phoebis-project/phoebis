@@ -4,6 +4,7 @@ import { api } from '@/api';
 import type { Account, ApiKey, CompanionState, KeepaliveOverview, KeepaliveRecipe, KeepaliveState, Pool, RecipeState, Session } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
 import { CostReferenceLink } from '@/components/ui/CostReference';
+import { Tile } from '@/components/ui/Tile';
 import { IconChevron } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Menu, Meter, Skeleton, Toast } from '@/components/ui/primitives';
 import { fmtAbsolute, fmtDuration, fmtInt, fmtPct, fmtRelative, fmtShare, fmtUsd, shortId } from '@/lib/format';
@@ -591,16 +592,6 @@ function OtherPins({ agents }: { agents: KeepaliveRecipe[] }) {
     <Badge tone="neutral" title={`Agents pinned elsewhere:\n${agents.map((a) => `${a.agentId}: ${a.model} on ${a.accountId}`).join('\n')}`}>
       +{agents.length}
     </Badge>
-  );
-}
-
-function Tile({ label, value, note, tone }: { label: string; note: string | null; tone?: 'critical' | 'warning'; value: string | null }) {
-  return (
-    <div className="stat stat--compact">
-      <span className="stat__label">{label}</span>
-      <span className={`stat__value ${tone ? `is-${tone}` : ''}`}>{value ?? <Skeleton width={60} height={22} />}</span>
-      <span className="stat__note">{note ?? <Skeleton width={90} />}</span>
-    </div>
   );
 }
 

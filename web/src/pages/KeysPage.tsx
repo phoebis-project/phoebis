@@ -4,6 +4,7 @@ import type { AffinitySource, ApiKey, CreatedApiKey, KeyModels, KeyStatus, Model
 import { useAppSettings } from '@/app/settings';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { PatternEditor, useCatalogSuggestions } from '@/components/PatternEditor';
+import { Tile } from '@/components/ui/Tile';
 import { IconInfo, IconPlus, IconWarning } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, ErrorState, Field, GroupedDialog, Input, Menu, PageLink, SearchInput, Segmented, Select, Skeleton, Toast, Toggle, type DialogGroup } from '@/components/ui/primitives';
 import { clock } from '@/lib/clock';
@@ -317,15 +318,6 @@ export function KeysPage() {
       </Dialog>
       <ConfirmDialog open={confirm !== null} onClose={() => setConfirm(null)} title={confirm?.title ?? ''} body={confirm?.body ?? ''} confirmLabel={confirm?.label} danger={confirm?.danger} onConfirm={() => confirm?.onConfirm()} />
       <Toast message={toast} onDone={() => setToast(null)} />
-    </div>
-  );
-}
-
-function Tile({ label, value }: { label: string; value: string | null }) {
-  return (
-    <div className="stat stat--compact">
-      <span className="stat__label">{label}</span>
-      <span className="stat__value">{value ?? <Skeleton width={60} height={22} />}</span>
     </div>
   );
 }

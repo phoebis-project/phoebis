@@ -13,6 +13,7 @@ import { ChartTooltip, Legend } from '@/components/charts/Tooltip';
 import { PatternEditor, useCatalogSuggestions } from '@/components/PatternEditor';
 import { CostReferenceLink } from '@/components/ui/CostReference';
 import { SelectionOrder } from '@/components/ui/SelectionOrder';
+import { Tile } from '@/components/ui/Tile';
 import { UtilizationBar } from '@/components/UtilizationBar';
 import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, ErrorState, Field, GroupedDialog, GroupLink, Input, Menu, PageLink, Select, Skeleton, SwitchedNumber, Toast, Toggle, type DialogGroup } from '@/components/ui/primitives';
@@ -260,15 +261,6 @@ export function PoolsPage() {
         }}
       />
       <Toast message={toast} onDone={() => setToast(null)} />
-    </div>
-  );
-}
-
-function Tile({ label, value }: { label: string; value: string | null }) {
-  return (
-    <div className="stat stat--compact">
-      <span className="stat__label">{label}</span>
-      <span className="stat__value">{value ?? <Skeleton width={60} height={22} />}</span>
     </div>
   );
 }

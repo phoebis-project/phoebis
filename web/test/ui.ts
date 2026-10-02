@@ -2,6 +2,7 @@
 // the components were bundled with.
 export { act, createElement, useEffect, useState } from 'react';
 export { createRoot } from 'react-dom/client';
+export { PATTERN_GRAMMAR, PatternInput } from '@/components/ui/PatternInput';
 export { Menu } from '@/components/ui/primitives';
 export { installClock } from '@/lib/clock';
 export { useAsync, useNow } from '@/lib/hooks';
