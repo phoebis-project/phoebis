@@ -807,7 +807,7 @@ fn a_store_left_at_42_is_carried_to_43_without_the_keys_cap_or_fixed_source() {
 }
 
 /// A rule, its open event and the event's delivery, planted at version 42.
-const SEED_PRE_V43_ALERTS: &str = r#"
+const SEED_PRE_V43_TABLES: &str = r#"
 INSERT INTO alert_rules (id, kind, scope_type, webhook_url, created_at, updated_at) VALUES ('r', 'pool_exhausted', 'all', 'http://127.0.0.1:9/hook', 1, 1); -- rollback
 INSERT INTO alert_events (id, rule_id, kind, subject, state, opened_at) VALUES ('e', 'r', 'pool_exhausted', 'main', 'open', 2); -- rollback
 INSERT INTO alert_deliveries (event_id, rule_id, kind, subject, state, attempt, at) VALUES ('e', 'r', 'pool_exhausted', 'main', 'opened', 1, 3); -- rollback
@@ -825,7 +825,7 @@ fn a_store_left_at_42_is_carried_to_43_without_the_alert_tables() {
     drop(Store::open(&path, &key).unwrap());
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V43} UPDATE meta SET value = '42' WHERE key = 'schema_version'; {SEED_PRE_V43_ALERTS}"
+        "{UNDO_V43} UPDATE meta SET value = '42' WHERE key = 'schema_version'; {SEED_PRE_V43_TABLES}"
     ))
     .unwrap();
     drop(conn);

@@ -1008,11 +1008,13 @@ async function keysPageMenus(theme) {
     if (found.room && found.room.below >= found.room.need && found.placement !== 'down') sayIn(`the list takes ${found.placement} though ${found.room.below} px below hold its ${found.room.need}`);
     return found;
   };
-  // A fixed layer stays where it was drawn, so a scroll that moves its trigger closes it, and so does a resize. A
-  // 450 px window is shorter than the filtered page, so the page has somewhere to scroll.
+  // A fixed layer stays where it was drawn, so a scroll that moves its trigger closes it, and so does a resize. The
+  // window is shorter than the filtered page at both widths, the sidebar's height included, so the page has somewhere
+  // to scroll.
+  const short = 400;
   const closes = async (width) => {
-    const sayIn = (what) => say(`at ${width} by 450 px, the filtered table's layer: ${what}`);
-    await page.setViewportSize({ height: 450, width });
+    const sayIn = (what) => say(`at ${width} by ${short} px, the filtered table's layer: ${what}`);
+    await page.setViewportSize({ height: short, width });
     await settle();
     const open = async () => {
       await scrollFor('last');
@@ -1030,15 +1032,15 @@ async function keysPageMenus(theme) {
     });
     await settle();
     const afterScroll = await page.locator('.menu__list').count();
-    measurements.push(`${theme} /keys menu at ${width} by 450 px, the layer after a scroll that moved its trigger ${moved} px: ${afterScroll} lists open`);
+    measurements.push(`${theme} /keys menu at ${width} by ${short} px, the layer after a scroll that moved its trigger ${moved} px: ${afterScroll} lists open`);
     if (moved === 0) sayIn('the page did not scroll, so its close on a scroll went unread');
     else if (afterScroll !== 0) sayIn(`stayed open after a scroll moved its trigger ${moved} px`);
     if (afterScroll !== 0) await triggerOf('last').click();
     if ((await open()) !== 1) return sayIn('did not open again to read its close on a resize');
-    await page.setViewportSize({ height: 440, width });
+    await page.setViewportSize({ height: short - 10, width });
     await settle();
     const afterResize = await page.locator('.menu__list').count();
-    measurements.push(`${theme} /keys menu at ${width} by 450 px, the layer after a resize: ${afterResize} lists open`);
+    measurements.push(`${theme} /keys menu at ${width} by ${short} px, the layer after a resize: ${afterResize} lists open`);
     if (afterResize !== 0) {
       sayIn('stayed open after a resize');
       await triggerOf('last').click();
