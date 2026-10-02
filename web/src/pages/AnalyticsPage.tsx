@@ -107,20 +107,19 @@ function timeTip<T extends { at: number }>(rows: (p: T) => TooltipRow[]) {
 /**
  * Every key the range holds on one dimension, read once per range so a filter never hides its own options. With no
  * filter set and the page grouped on this dimension, the page's breakdown is that very read and answers for it. While
- * the source is out (the breakdown reloading, perhaps still on the previous grouping, or the own read starting once a
- * filter is set), the last answer current for this range stands in, so an open list keeps this dimension's own keys.
+ * the source is out (the breakdown reloading, perhaps still on the previous grouping, the own read starting once a
+ * filter is set, or either one reading a new range), the last answer that was current stands in, so a list never
+ * blanks and only ever offers this dimension's own keys.
  */
 function useDimensionKeys(from: string, to: string, groupBy: GroupBy, shared?: Loaded<AnalyticsGroup[]>): Loaded<AnalyticsGroup[] | null> {
   const own = useAsync(() => (shared ? Promise.resolve(null) : api.getAnalyticsBreakdown({ from, groupBy, to })), [from, groupBy, to, shared !== undefined]);
   const source = shared ?? own;
-  const range = `${from}|${to}`;
   const current = source.stale ? null : source.data;
-  const [last, setLast] = useState<{ keys: AnalyticsGroup[]; range: string } | null>(null);
+  const [last, setLast] = useState<AnalyticsGroup[] | null>(null);
   useEffect(() => {
-    if (current !== null) setLast({ keys: current, range });
-  }, [current, range]);
-  if (current !== null) return source;
-  return { ...source, data: last !== null && last.range === range ? last.keys : null };
+    if (current !== null) setLast(current);
+  }, [current]);
+  return current !== null ? source : { ...source, data: last };
 }
 
 const optionsOf = (rows: AnalyticsGroup[] | null): Option[] => (rows ?? []).map((g) => ({ label: g.label, value: g.key })).sort((a, b) => a.label.localeCompare(b.label));

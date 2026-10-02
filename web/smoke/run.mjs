@@ -4398,9 +4398,42 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       held.restore();
       results.push({
         name: "/analytics a group-by change keeps the dimension's own keys while its read is out, none of the previous grouping's",
-        ok: keyLabels.length > 0 && held.calls[0]?.[0]?.groupBy === 'model' && during.length > 0 && JSON.stringify(during) === JSON.stringify(after) && !during.some((o) => keyLabels.includes(o)),
-        missing: [`keys ${keyLabels.join(',')}`, `held ${held.calls[0]?.[0]?.groupBy}`, `during ${during.join(',')}`, `after ${after.join(',')}`],
+        // An empty key list on the held read proves the pick above was cleared, so the Model list took the shared path.
+        ok: keyLabels.length > 0 && held.calls[0]?.[0]?.groupBy === 'model' && held.calls[0]?.[0]?.keyIds?.length === 0 && during.length > 0 && JSON.stringify(during) === JSON.stringify(after) && !during.some((o) => keyLabels.includes(o)),
+        missing: [`keys ${keyLabels.join(',')}`, `held ${held.calls[0]?.[0]?.groupBy}`, `held key ids ${JSON.stringify(held.calls[0]?.[0]?.keyIds)}`, `during ${during.join(',')}`, `after ${after.join(',')}`],
       });
+      {
+        // With a filter set every list reads its own keys, and a range change sends each read out again; a list keeps
+        // the keys it showed until its new answer lands.
+        const pool = trigger('Pool');
+        pool?.querySelector('.mselect__trigger')?.click();
+        await m.settle(60);
+        const picked = pool?.querySelector('.mselect__option');
+        const poolName = picked?.textContent?.trim() ?? '';
+        picked?.click();
+        await m.settle(700);
+        pool?.querySelector('.mselect__trigger')?.click();
+        await m.settle(60);
+        const shown = await optionsOf('Key');
+        const breakdown = api.getAnalyticsBreakdown;
+        let open = () => {};
+        const gate = new Promise((resolve) => {
+          open = resolve;
+        });
+        api.getAnalyticsBreakdown = (...args) => gate.then(() => breakdown.apply(api, args));
+        [...m.container.querySelectorAll('[aria-label="Range"] button')].find((b) => b.textContent?.trim() === '7d')?.click();
+        await m.settle(300);
+        trigger('Key')?.querySelector('.mselect__trigger')?.click();
+        await m.settle(60);
+        const during = listed('Key');
+        const empty = trigger('Key')?.querySelector('.mselect__empty') !== null;
+        trigger('Key')?.querySelector('.mselect__trigger')?.click();
+        await m.settle(60);
+        open();
+        await m.settle(300);
+        api.getAnalyticsBreakdown = breakdown;
+        results.push({ name: '/analytics a range change with a filter set keeps each list while its read is out', ok: poolName !== '' && shown.length > 1 && JSON.stringify(during) === JSON.stringify(shown) && !empty, missing: [`pool ${poolName}`, `keys ${shown.join(',')}`, `during ${during.join(',')}`, `no matches ${empty}`] });
+      }
       m.unmount();
     }
     m = await mount(`/analytics?session=${encodeURIComponent(laptopRow.sessionId)}&key=laptop%40${laptopRow.keyGeneration}`);
