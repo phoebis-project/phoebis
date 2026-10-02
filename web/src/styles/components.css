@@ -1488,12 +1488,19 @@ textarea.input {
   color: var(--ink-2);
 }
 
-/* The lead and the paragraph it discloses stack beside the head's action. */
+/* The lead and the paragraph it discloses stack beside the head's action; the paragraph's own 4 px top margin makes
+   the 2 px gap read as 6 px. */
 .page-head__lead {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 2px;
   min-width: 0;
+}
+
+/* The head's action keeps the top right on one line, so opening the paragraph neither drops nor wraps it. */
+.page-head__lead + .link-btn {
+  flex-shrink: 0;
+  align-self: flex-start;
 }
 
 .stack {

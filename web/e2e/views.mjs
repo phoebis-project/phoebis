@@ -2427,10 +2427,11 @@ async function keysPoolSelect(theme) {
 }
 
 /**
- * The Sessions head: closed, it stays under 60 px and the disclosure ends the lead's paragraph, at most two lines, on
- * the sentence's last line where both fit and flush left on the next line where they do not (1280 px wraps it, 1440 px
- * does not); opened, the paragraph lands between the lead and the tiles while Cost reference keeps the row's right
- * end. Both heights are recorded with the viewport, and the second click leaves the head closed for the shot.
+ * The Sessions head at 1280 by 800, where the disclosure wraps, and at 1440 by 900, where it does not: closed, the head
+ * stays under 60 px and the disclosure ends the lead's paragraph, at most two lines, on the sentence's last line where
+ * both fit and flush left on the next line where they do not; opened, the paragraph lands 6 px under the lead and
+ * above the tiles. Cost reference stays one line at the head's top right in both states. The heights and Cost
+ * reference's place are recorded per viewport, and the head is left closed at the pass's viewport for the shot.
  */
 async function sessionsLead(theme) {
   const say = (what) => failures.push(`${theme} /sessions: ${what}`);
@@ -2473,6 +2474,7 @@ async function sessionsLead(theme) {
       return {
         button: box(btn),
         cost: box(cost),
+        costLineHeight: cost ? parseFloat(getComputedStyle(cost).lineHeight) : null,
         expanded: btn?.getAttribute('aria-expanded') ?? null,
         head: box(head),
         lead: box(lead),
@@ -2484,36 +2486,61 @@ async function sessionsLead(theme) {
         wrap: box(wrap),
       };
     });
-  const closed = await read();
-  await button.click();
-  await settle();
-  const open = await read();
-  await button.click();
-  await settle();
-  const after = await read();
-  await atRest();
-  const px = (b) => (b ? Math.round(b.height) : null);
-  measurements.push(`${theme} /sessions lead ${JSON.stringify({ closed: px(closed.head), open: px(open.head), viewport: page.viewportSize() })}`);
-  if (closed.head === null || closed.head.height >= 60) say(`the closed head is ${px(closed.head) ?? 'not'}px tall, not under 60px`);
-  if (closed.para === null || closed.para.height !== 0 || closed.expanded !== 'false') say(`the closed head shows the paragraph (${px(closed.para)}px, aria-expanded ${closed.expanded})`);
-  const { button: b, lead: p, line, lineHeight, words } = closed;
-  if (b === null || p === null || line === null || lineHeight === null || words === null) say('the lead has no sentence, button or paragraph to measure');
-  else {
-    if (Math.abs(b.bottom - p.bottom) > 1) say(`the disclosure ends at ${Math.round(b.bottom)}px, not on the lead's last line ending at ${Math.round(p.bottom)}px`);
-    if (p.height > 2 * lineHeight + 1) say(`the lead runs ${Math.round(p.height)}px tall, past two ${lineHeight}px lines`);
-    const onLine = Math.abs(b.top - line.top) <= 2;
-    const nextLineFlush = b.top > line.top + 2 && Math.abs(words - p.left) <= 1;
-    if (!onLine && !nextLineFlush) {
-      say(`the disclosure's words start at ${Math.round(words)},${Math.round(b.top)}px, neither on the sentence's last line (top ${Math.round(line.top)}px) nor flush with the lead's left at ${Math.round(p.left)}px on the next`);
+  const px = (n) => (typeof n === 'number' ? Math.round(n) : null);
+  const at = (b) => (b ? `${px(b.left)},${px(b.top)}` : 'none');
+  for (const viewport of [
+    { height: 800, width: 1280 },
+    { height: 900, width: 1440 },
+  ]) {
+    const where = `at ${viewport.width} by ${viewport.height}`;
+    await page.setViewportSize(viewport);
+    await settle();
+    const closed = await read();
+    await button.click();
+    await settle();
+    const open = await read();
+    await button.click();
+    await settle();
+    const after = await read();
+    measurements.push(
+      `${theme} /sessions lead ${where} ${JSON.stringify({
+        closed: px(closed.head?.height),
+        cost: { closed: at(closed.cost), open: at(open.cost) },
+        gap: open.para && open.lead ? px(open.para.top - open.lead.bottom) : null,
+        open: px(open.head?.height),
+      })}`,
+    );
+    if (closed.head === null || closed.head.height >= 60) say(`${where} the closed head is ${px(closed.head?.height) ?? 'not'}px tall, not under 60px`);
+    if (closed.para === null || closed.para.height !== 0 || closed.expanded !== 'false') say(`${where} the closed head shows the paragraph (${px(closed.para?.height)}px, aria-expanded ${closed.expanded})`);
+    const { button: b, lead: p, line, lineHeight, words } = closed;
+    if (b === null || p === null || line === null || lineHeight === null || words === null) say(`${where} the lead has no sentence, button or paragraph to measure`);
+    else {
+      if (Math.abs(b.bottom - p.bottom) > 1) say(`${where} the disclosure ends at ${px(b.bottom)}px, not on the lead's last line ending at ${px(p.bottom)}px`);
+      if (p.height > 2 * lineHeight + 1) say(`${where} the lead runs ${px(p.height)}px tall, past two ${lineHeight}px lines`);
+      const onLine = Math.abs(b.top - line.top) <= 2;
+      const nextLineFlush = b.top > line.top + 2 && Math.abs(words - p.left) <= 1;
+      if (!onLine && !nextLineFlush) {
+        say(`${where} the disclosure's words start at ${px(words)},${px(b.top)}px, neither on the sentence's last line (top ${px(line.top)}px) nor flush with the lead's left at ${px(p.left)}px on the next`);
+      }
     }
+    if (open.expanded !== 'true' || open.para === null || open.para.height === 0) say(`${where} a click left the paragraph closed`);
+    else {
+      if (open.lead === null || Math.abs(open.para.top - open.lead.bottom - 6) > 1) say(`${where} the opened paragraph starts ${open.lead ? px(open.para.top - open.lead.bottom) : 'with no lead'}px under the lead, not 6px`);
+      if (open.tiles === null || open.para.bottom > open.tiles.top) say(`${where} the opened paragraph ends at ${px(open.para.bottom)}px, past the tiles' top at ${px(open.tiles?.top) ?? 'none'}px`);
+      if (open.cost === null || open.wrap === null || open.cost.right < open.wrap.right) say(`${where} Cost reference ends at ${px(open.cost?.right) ?? 'none'}px, short of the lead's right at ${px(open.wrap?.right) ?? 'none'}px`);
+    }
+    const { cost: shut, costLineHeight } = closed;
+    if (shut === null || open.cost === null || costLineHeight === null) say(`${where} the head has no Cost reference to measure`);
+    else {
+      if (Math.abs(open.cost.top - shut.top) > 0.5 || Math.abs(open.cost.left - shut.left) > 0.5) say(`${where} Cost reference moves from ${at(shut)} to ${at(open.cost)} when the paragraph opens`);
+      if (shut.top - (closed.head?.top ?? shut.top) > 0.5) say(`${where} Cost reference starts ${px(shut.top - closed.head.top)}px below the head's top`);
+      for (const [state, c] of [['closed', shut], ['open', open.cost]]) if (c.height > costLineHeight + 1) say(`${where} Cost reference runs ${px(c.height)}px tall ${state}, past one ${costLineHeight}px line`);
+    }
+    if (after.expanded !== 'false' || px(after.head?.height) !== px(closed.head?.height)) say(`${where} a second click leaves the head ${px(after.head?.height)}px tall against ${px(closed.head?.height)}px closed`);
   }
-  if (open.expanded !== 'true' || open.para === null || open.para.height === 0) say('a click left the paragraph closed');
-  else {
-    if (open.lead === null || open.para.top < open.lead.bottom) say(`the opened paragraph starts at ${Math.round(open.para.top)}px, above the lead's bottom at ${open.lead ? Math.round(open.lead.bottom) : 'none'}px`);
-    if (open.tiles === null || open.para.bottom > open.tiles.top) say(`the opened paragraph ends at ${Math.round(open.para.bottom)}px, past the tiles' top at ${open.tiles ? Math.round(open.tiles.top) : 'none'}px`);
-    if (open.cost === null || open.wrap === null || open.cost.right < open.wrap.right) say(`Cost reference ends at ${open.cost ? Math.round(open.cost.right) : 'none'}px, short of the lead's right at ${open.wrap ? Math.round(open.wrap.right) : 'none'}px`);
-  }
-  if (after.expanded !== 'false' || px(after.head) !== px(closed.head)) say(`a second click leaves the head ${px(after.head)}px tall against ${px(closed.head)}px closed`);
+  await page.setViewportSize({ height: 800, width: 1280 });
+  await settle();
+  await atRest();
 }
 
 /**
