@@ -25,7 +25,9 @@ A `ledger_gap` event names one of these reasons:
 | `in_flight_cap` | The 16,384 requests in flight was reached; the oldest entry was evicted to make room. |
 
 The request row names the key, the pool, the session, the agent, and the model; the kind and transport of the
-call; the status and outcome; the error code; the time to first byte and to first token; the duration; the bytes
+call; the status and outcome (`canceled`, `exhausted`, `failed`, `incomplete` for a committed answer whose body ended
+before its end, `rejected`, `succeeded`); the error code (`stream_cut`, `stream_incomplete` or `stream_stalled` under
+`incomplete`); the time to first byte and to first token; the duration; the bytes
 sent and received; whether the response was served kept warm; whether its body was captured; and the client's
 user agent and class (`claude-code/<entrypoint>` or `other`), the gateway hints it sent (the agent
 type, the compaction and context-compacted markers, and the summed tool durations of the turn before), the turn origin
@@ -269,7 +271,10 @@ model-scoped cooldown grouped by model with a clear button per row, and the newe
 ### Requests
 
 The table lists thirteen columns: time, key, pool, account, model, client, kind, transport, status,
-attempts, TTFB, tokens, and cost. The client column shows the class the router derived from the user agent
+attempts, TTFB, tokens, and cost. A request whose answer committed and then ended short reads `incomplete` with the code
+that says how: `stream_cut` when the connection or the decoder failed mid-body, `stream_incomplete` when the stream
+closed without its `message_stop`, `stream_stalled` when the upstream went silent past the idle bound. The client column
+shows the class the router derived from the user agent
 (`claude-code/<entrypoint>` or `other`), with the agent type beneath it on a subagent's turn.
 One row is one client request however many attempts it took, and
 the attempt trail reads as "mail 429, business 200" when a 429 on the first account failed over to a 200 on the second.
@@ -419,7 +424,7 @@ account, since when it has backed off, when the next attempt comes, and how many
 left open across a restart resolves once the account's first poll reads clean.
 
 **Pool exhausted** fires when a request finds no eligible account in the pool and resolves on the next request
-the pool serves.
+the pool serves; an `incomplete` answer neither fires nor resolves it.
 
 **Re-auth required** fires when an account enters the reauth-required state and resolves once the account is
 paired or verified again.

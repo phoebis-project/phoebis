@@ -1357,7 +1357,9 @@ impl Engine {
         let reason = match complete.outcome {
             Outcome::Succeeded => None,
             Outcome::Canceled => Some(Reason::RequestCanceled),
-            Outcome::Failed | Outcome::Exhausted => Some(Reason::RequestFailed),
+            Outcome::Failed | Outcome::Exhausted | Outcome::Incomplete => {
+                Some(Reason::RequestFailed)
+            }
             Outcome::Rejected => Some(Reason::RequestRejected),
         };
         if let Some(reason) = reason {

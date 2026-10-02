@@ -364,7 +364,7 @@ async fn a_failover_publishes_a_head_per_attempt_and_the_completion_names_the_se
 }
 
 #[tokio::test]
-async fn a_gzipped_json_200_the_caller_accepts_as_is_still_yields_usage_and_a_huge_one_does_not() {
+async fn a_gzipped_json_200_the_caller_accepts_as_is_yields_usage_and_so_does_one_past_64_kib() {
     use std::io::Write;
     let small = br#"{"id":"msg_3","type":"message","usage":{"input_tokens":11,"output_tokens":2},"diagnostics":{"cache_miss_reason":{"type":"tools_changed"}}}"#;
     let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
@@ -409,10 +409,9 @@ async fn a_gzipped_json_200_the_caller_accepts_as_is_still_yields_usage_and_a_hu
         ),
         (Some(11), Some(2), Some("tools_changed"))
     );
-    // Past the inspection bound the usage is unknown, and the client still gets every byte.
     let padding = format!(
         r#"{{"id":"msg_4","type":"message","pad":"{}","usage":{{"input_tokens":1,"output_tokens":1}}}}"#,
-        "x".repeat(70 * 1024)
+        "x".repeat(200 * 1024)
     );
     up.set_rule_after(
         0,
@@ -435,9 +434,44 @@ async fn a_gzipped_json_200_the_caller_accepts_as_is_still_yields_usage_and_a_hu
     let Some(Event::RequestComplete(complete)) = events.last() else {
         panic!()
     };
+    assert_eq!(
+        complete
+            .usage
+            .as_ref()
+            .map(|u| (u.input_tokens, u.output_tokens)),
+        Some((Some(1), Some(1))),
+        "read up to the request bound, not 64 KiB"
+    );
+    // The same answer on a router whose request bound it outgrows: the client still gets every byte. The bound
+    // sits above the 112 KiB fixture request, which a lower one would refuse before any answer.
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test");
+    let small = harness_with_bus_limits(
+        &up,
+        &[oauth("a", A, 0)],
+        PoolSpec::default(),
+        bus,
+        Limits {
+            max_request_bytes: 150 << 10,
+            ..default_limits()
+        },
+    )
+    .await;
+    let resp = small
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s3"))
+        .await
+        .unwrap();
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(body.len(), padding.len());
+    let (events, _) = drain_until_complete(&mut sub).await;
+    let Some(Event::RequestComplete(complete)) = events.last() else {
+        panic!()
+    };
     assert!(
         complete.usage.is_none(),
-        "a body past 64 KiB is not inspected"
+        "past the request bound the usage stays unknown"
     );
     up.shutdown().await;
 }
@@ -516,7 +550,8 @@ async fn an_sse_error_after_the_head_a_lost_upstream_and_a_cancelled_account_eac
     };
     assert_eq!(
         (complete.outcome, complete.error_code.as_deref()),
-        (Outcome::Failed, Some("upstream_unreachable"))
+        (Outcome::Incomplete, Some("stream_cut")),
+        "the body ended before its end"
     );
     // The account is deleted under a stalled stream: the completion says canceled with the client's 503.
     up.set_rule_after(

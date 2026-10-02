@@ -853,3 +853,239 @@ async fn a_relayed_stream_is_delivered_frame_by_frame_as_the_upstream_writes() {
     );
     up.shutdown().await;
 }
+
+/// A harness with a bus on `limits`, and the subscriber that reads what the relay published.
+async fn bus_harness(
+    up: &FakeUpstream,
+    limits: phoebis_relay::Limits,
+) -> (common::Harness, phoebis_bus::Subscriber) {
+    let bus = phoebis_bus::Bus::new();
+    let sub = bus.subscribe("test");
+    let h = common::harness_with_bus_limits(
+        up,
+        &[common::oauth("a", "sk-ant-oat01-AAAA", 0)],
+        common::PoolSpec::default(),
+        bus,
+        limits,
+    )
+    .await;
+    (h, sub)
+}
+
+/// The completion the body task published for the one request the test sent.
+async fn completion(sub: &mut phoebis_bus::Subscriber) -> phoebis_bus::RequestComplete {
+    common::drain_until_complete(sub)
+        .await
+        .into_iter()
+        .find_map(|e| match e {
+            phoebis_bus::Event::RequestComplete(complete) => Some(complete),
+            _ => None,
+        })
+        .expect("the request completed")
+}
+
+fn rendered(events: &[SseEvent]) -> String {
+    events
+        .iter()
+        .map(|e| format!("event: {}\ndata: {}\n\n", e.event, e.data))
+        .collect()
+}
+
+#[tokio::test]
+async fn a_stream_closed_cleanly_after_message_start_without_message_stop_reads_incomplete() {
+    let events = vec![message_start_event(), text_delta_event("hi")];
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: Respond::Sse {
+            status: 200,
+            headers: vec![],
+            events: events.clone(),
+            delay_between: Duration::from_millis(2),
+        },
+    }])
+    .await;
+    let (h, mut sub) = bus_harness(&up, common::default_limits()).await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(common::stream_request(common::KEY))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(
+        String::from_utf8(body.to_vec()).unwrap(),
+        rendered(&events),
+        "the client gets every byte the upstream sent"
+    );
+    let complete = completion(&mut sub).await;
+    assert_eq!(
+        (complete.outcome, complete.error_code.as_deref()),
+        (phoebis_bus::Outcome::Incomplete, Some("stream_incomplete")),
+        "a clean close before message_stop is not a success"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_stream_cut_by_the_reader_mid_body_reads_stream_cut() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: Respond::DropAfterHead,
+    }])
+    .await;
+    let (h, mut sub) = bus_harness(&up, common::default_limits()).await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(common::stream_request(common::KEY))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    assert!(
+        resp.into_body().collect().await.is_err(),
+        "the body ends in an error"
+    );
+    let complete = completion(&mut sub).await;
+    assert_eq!(
+        (complete.outcome, complete.error_code.as_deref()),
+        (phoebis_bus::Outcome::Incomplete, Some("stream_cut")),
+        "the head committed, so the cut is no unreachable upstream"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_stream_silent_past_the_idle_bound_reads_stream_stalled() {
+    // The stall sends an event-stream head and nothing more, so the hold commits at its own deadline before the
+    // body loop's idle bound can run; both are short so the test does not wait out the defaults.
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: Respond::Stall {
+            status: 200,
+            headers: vec![],
+            events: vec![],
+        },
+    }])
+    .await;
+    let (h, mut sub) = bus_harness(
+        &up,
+        phoebis_relay::Limits {
+            hold_timeout: Duration::from_millis(100),
+            idle_timeout: Duration::from_millis(300),
+            ..common::default_limits()
+        },
+    )
+    .await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(common::stream_request(common::KEY))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    assert!(
+        resp.into_body().collect().await.is_err(),
+        "the body ends in an error at the idle bound"
+    );
+    let complete = completion(&mut sub).await;
+    assert_eq!(
+        (complete.outcome, complete.error_code.as_deref()),
+        (phoebis_bus::Outcome::Incomplete, Some("stream_stalled"))
+    );
+    up.release();
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_stream_whose_parser_overflowed_keeps_the_heads_outcome() {
+    // One event far past the parser's bound: the parser is dropped there and cannot see whether a message_stop
+    // came, so a clean close proves nothing either way.
+    let events = vec![
+        message_start_event(),
+        text_delta_event(&"x".repeat(4 * phoebis_relay::INSPECT_BUFFER)),
+    ];
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: Respond::Sse {
+            status: 200,
+            headers: vec![],
+            events: events.clone(),
+            delay_between: Duration::from_millis(2),
+        },
+    }])
+    .await;
+    let (h, mut sub) = bus_harness(&up, common::default_limits()).await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(common::stream_request(common::KEY))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(body.len(), rendered(&events).len());
+    let complete = completion(&mut sub).await;
+    assert_eq!(
+        (complete.outcome, complete.error_code.as_deref()),
+        (phoebis_bus::Outcome::Succeeded, None)
+    );
+    up.shutdown().await;
+}
+
+fn gzipped_stream(events: &[SseEvent]) -> Respond {
+    Respond::Chunked {
+        status: 200,
+        headers: vec![
+            ("Content-Type".into(), "text/event-stream".into()),
+            ("Content-Encoding".into(), "gzip".into()),
+        ],
+        body: gzip(rendered(events).as_bytes()),
+    }
+}
+
+#[tokio::test]
+async fn a_gzipped_stream_passed_through_as_is_is_read_for_its_message_stop_on_the_bus_copy() {
+    // The caller takes the upstream's coding, so the bus decodes a copy of its own; that decoder flushes every
+    // piece it is fed, so a message_stop cannot sit unread in its tail at the end.
+    let events = [
+        message_start_event(),
+        text_delta_event("hi"),
+        message_stop_event(),
+    ];
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: gzipped_stream(&events),
+    }])
+    .await;
+    let (h, mut sub) = bus_harness(&up, common::default_limits()).await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(common::stream_request(common::KEY))
+        .await
+        .unwrap();
+    assert_eq!(resp.headers().get("content-encoding").unwrap(), "gzip");
+    resp.into_body().collect().await.unwrap();
+    let complete = completion(&mut sub).await;
+    assert_eq!(
+        (complete.outcome, complete.error_code.as_deref()),
+        (phoebis_bus::Outcome::Succeeded, None)
+    );
+    up.set_rule_after(0, "/v1/messages", gzipped_stream(&events[..2]));
+    let resp = h
+        .app
+        .clone()
+        .oneshot(common::stream_request(common::KEY))
+        .await
+        .unwrap();
+    assert_eq!(resp.headers().get("content-encoding").unwrap(), "gzip");
+    resp.into_body().collect().await.unwrap();
+    let complete = completion(&mut sub).await;
+    assert_eq!(
+        (complete.outcome, complete.error_code.as_deref()),
+        (phoebis_bus::Outcome::Incomplete, Some("stream_incomplete")),
+        "the same stream without its stop"
+    );
+    up.shutdown().await;
+}

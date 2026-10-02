@@ -207,6 +207,8 @@ pub enum Outcome {
     Canceled,
     Exhausted,
     Failed,
+    /// A committed answer whose body ended before its end; the error code says how.
+    Incomplete,
     Rejected,
     Succeeded,
 }
@@ -217,6 +219,7 @@ impl Outcome {
             Outcome::Canceled => "canceled",
             Outcome::Exhausted => "exhausted",
             Outcome::Failed => "failed",
+            Outcome::Incomplete => "incomplete",
             Outcome::Rejected => "rejected",
             Outcome::Succeeded => "succeeded",
         }

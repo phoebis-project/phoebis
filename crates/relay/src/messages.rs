@@ -3270,6 +3270,7 @@ impl Relay {
                 parser: event_stream.then(|| SseParser::new(INSPECT_BUFFER)),
                 // A committed JSON answer is inspected for its usage block; a rejection or a stream is not.
                 json: (!event_stream && head.status == 200).then(Vec::new),
+                json_bound: self.limits.max_request_bytes,
                 usage: Usage::default(),
                 response: ResponseFacts::default(),
                 index: 0,
@@ -3277,6 +3278,7 @@ impl Relay {
                 first_content_at: None,
                 saw_tool_use: false,
                 stream_error: None,
+                saw_stop: false,
                 status: head.status,
                 message_id: None,
                 pending_message_id: None,
