@@ -10,7 +10,7 @@ __pycache__/
 
 # Runtime data
 /config.yaml
-/deploy/phoebis.env
+/deploy/*.env
 /deploy/storage.key
 /data/
 *.sqlite

@@ -236,11 +236,6 @@ export const IconShield = (p: Props) => (
     <path d="M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6l-8-3Z" />
   </svg>
 );
-export const IconAnthropic = (p: Props) => (
-  <svg {...base({ ...p, strokeWidth: 0 })} fill="currentColor">
-    <path d="M13.9 4h3.4l6.2 16h-3.4l-6.2-16ZM6.8 4h3.6l6.1 16h-3.5l-1.3-3.4H5.6L4.3 20H.9L6.8 4Zm-.3 9.9h4.4L8.7 8.2 6.5 13.9Z" />
-  </svg>
-);
 export const IconServer = (p: Props) => (
   <svg {...base(p)}>
     <rect x="3" y="4" width="18" height="6" rx="1.5" />

@@ -12,7 +12,7 @@
 **/*.sqlite-wal
 /config.yaml
 data/
-deploy/phoebis.env
+deploy/*.env
 docs/
 site/
 target/

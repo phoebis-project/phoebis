@@ -4,7 +4,7 @@ import type { Account, PollOutcome, QuotaPoll, QuotaSnapshot, RateLimitWindow } 
 import { accountColor } from '@/components/charts/theme';
 import { FastLane } from '@/components/FastLane';
 import { useChartInk } from '@/components/charts/useChartInk';
-import { IconAnthropic, IconChevronLeft, IconChevronRight, IconRefresh, IconServer, IconWarning } from '@/components/ui/icons';
+import { IconChevronLeft, IconChevronRight, IconRefresh, IconServer, IconUser, IconWarning } from '@/components/ui/icons';
 import { Badge, ErrorState, Meter, Pill, Segmented, Select, Skeleton, Tabs } from '@/components/ui/primitives';
 import { fmtAbsolute, fmtCredits, fmtDate, fmtDayShort, fmtEndsIn, fmtPct, fmtRelative, fmtShortTime, upperFirst } from '@/lib/format';
 import { useAsync, useNow } from '@/lib/hooks';
@@ -186,7 +186,7 @@ function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshe
     <article className={`qcard ${failed ? 'is-error' : ''}`}>
       <header className="qcard__head">
         <span className={`qcard__icon qcard__icon--${account.kind}`} title={account.kind === 'oauth' ? 'Claude.ai subscription' : 'Anthropic key'}>
-          {account.kind === 'oauth' ? <IconAnthropic size={15} /> : <IconServer size={15} />}
+          {account.kind === 'oauth' ? <IconUser size={15} /> : <IconServer size={15} />}
         </span>
         <span className="qcard__name mono" title={account.email ?? undefined}>
           {account.label}
