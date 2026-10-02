@@ -369,7 +369,7 @@ impl Store {
     /// Drops every window and credits row whose incarnation is not its account's; the router's purge tick calls
     /// it.
     pub fn purge_stale_windows(&self) -> Result<usize, StoreError> {
-        self.routing_commit(|conn| purge_stale_windows_on(conn))
+        self.routing_commit(|conn| in_transaction(conn, |tx| purge_stale_windows_on(tx)))
     }
 
     /// All or nothing: a crash or a failed statement part way through would leave rows under the dated id with no

@@ -4,7 +4,7 @@ use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput, 
 use rusqlite::{params, OptionalExtension, Row};
 
 use crate::registry::SubscriptionTerm;
-use crate::{Store, StoreError, LOCK_POISONED, PENDING_WHERE};
+use crate::{durably, Store, StoreError, LOCK_POISONED, PENDING_WHERE};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AccountKind {
@@ -308,72 +308,80 @@ impl Store {
     }
 
     /// Disconnects the account: the new lifecycle generation invalidates any refresh in flight for the
-    /// old one, and both credential kinds are deleted so a disconnected slot cannot keep spending money.
+    /// old one, and both credential kinds are deleted so a disconnected slot cannot keep spending money. Synced
+    /// at `FULL`, since a disconnect a power loss undid would restore the credentials it deleted.
     pub fn bump_lifecycle(&self, id: &str) -> Result<u64, StoreError> {
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
-        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        let now = jiff::Timestamp::now().as_millisecond();
-        let updated = tx.execute(
-            "UPDATE accounts SET lifecycle_generation = lifecycle_generation + 1, state = ?2, \
-             revision = revision + 1, updated_at = ?3 WHERE id = ?1",
-            params![id, AccountState::Disconnected, now],
-        )?;
-        if updated == 0 {
-            return Err(StoreError::AccountNotFound(id.to_string()));
-        }
-        let new_generation: i64 = tx.query_row(
-            "SELECT lifecycle_generation FROM accounts WHERE id = ?1",
-            params![id],
-            |row| row.get(0),
-        )?;
-        tx.execute("DELETE FROM credentials WHERE account_id = ?1", params![id])?;
-        tx.execute(
-            "DELETE FROM api_key_secrets WHERE account_id = ?1",
-            params![id],
-        )?;
-        // A disconnect settles every open attempt: one still in flight from before the disconnect would block
-        // every refresh after re-pairing, and an uncertain one would quarantine the re-paired account at start.
-        tx.execute(
-            &format!(
-                "UPDATE refresh_attempts SET resolved_at = ?2, outcome = 'failed', detail = 'disconnected' \
-                 WHERE account_id = ?1 AND ({PENDING_WHERE})"
-            ),
-            params![id, now],
-        )?;
-        tx.commit()?;
-        Ok(new_generation as u64)
+        durably(&mut conn, |conn| {
+            let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            let now = jiff::Timestamp::now().as_millisecond();
+            let updated = tx.execute(
+                "UPDATE accounts SET lifecycle_generation = lifecycle_generation + 1, state = ?2, \
+                 revision = revision + 1, updated_at = ?3 WHERE id = ?1",
+                params![id, AccountState::Disconnected, now],
+            )?;
+            if updated == 0 {
+                return Err(StoreError::AccountNotFound(id.to_string()));
+            }
+            let new_generation: i64 = tx.query_row(
+                "SELECT lifecycle_generation FROM accounts WHERE id = ?1",
+                params![id],
+                |row| row.get(0),
+            )?;
+            tx.execute("DELETE FROM credentials WHERE account_id = ?1", params![id])?;
+            tx.execute(
+                "DELETE FROM api_key_secrets WHERE account_id = ?1",
+                params![id],
+            )?;
+            // A disconnect settles every open attempt: one still in flight from before the disconnect would block
+            // every refresh after re-pairing, and an uncertain one would quarantine the re-paired account at start.
+            tx.execute(
+                &format!(
+                    "UPDATE refresh_attempts SET resolved_at = ?2, outcome = 'failed', detail = 'disconnected' \
+                     WHERE account_id = ?1 AND ({PENDING_WHERE})"
+                ),
+                params![id, now],
+            )?;
+            tx.commit()?;
+            Ok(new_generation as u64)
+        })
     }
 
     /// The row goes, the count of how often its id has been used stays: whatever is still in flight for the
     /// deleted slot names an incarnation the tombstone has already moved past, so it cannot land on whatever
-    /// takes the id next.
+    /// takes the id next. Synced at `FULL`, as a disconnect is.
     pub fn delete_account(&self, id: &str, actor: &str) -> Result<(), StoreError> {
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
-        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        let now = jiff::Timestamp::now().as_millisecond();
-        let incarnation: Option<i64> = tx
-            .query_row(
-                "SELECT incarnation FROM accounts WHERE id = ?1",
+        durably(&mut conn, |conn| {
+            let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            let now = jiff::Timestamp::now().as_millisecond();
+            let incarnation: Option<i64> = tx
+                .query_row(
+                    "SELECT incarnation FROM accounts WHERE id = ?1",
+                    params![id],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            let incarnation =
+                incarnation.ok_or_else(|| StoreError::AccountNotFound(id.to_string()))?;
+            tx.execute("DELETE FROM accounts WHERE id = ?1", params![id])?;
+            // An open attempt is the deleted holder's, and left standing it would block the next holder's first
+            // refresh or quarantine it at the next start. A settled one stays as history under its incarnation.
+            tx.execute(
+                &format!(
+                    "DELETE FROM refresh_attempts WHERE account_id = ?1 AND ({PENDING_WHERE})"
+                ),
                 params![id],
-                |row| row.get(0),
-            )
-            .optional()?;
-        let incarnation = incarnation.ok_or_else(|| StoreError::AccountNotFound(id.to_string()))?;
-        tx.execute("DELETE FROM accounts WHERE id = ?1", params![id])?;
-        // An open attempt is the deleted holder's, and left standing it would block the next holder's first
-        // refresh or quarantine it at the next start. A settled one stays as history under its incarnation.
-        tx.execute(
-            &format!("DELETE FROM refresh_attempts WHERE account_id = ?1 AND ({PENDING_WHERE})"),
-            params![id],
-        )?;
-        tx.execute(
-            "INSERT INTO account_tombstones (id, incarnation) VALUES (?1, ?2) \
-             ON CONFLICT(id) DO UPDATE SET incarnation = max(account_tombstones.incarnation, excluded.incarnation)",
-            params![id, incarnation],
-        )?;
-        crate::registry::record_change(&tx, now, actor, "account_deleted", id, "{}")?;
-        tx.commit()?;
-        Ok(())
+            )?;
+            tx.execute(
+                "INSERT INTO account_tombstones (id, incarnation) VALUES (?1, ?2) \
+                 ON CONFLICT(id) DO UPDATE SET incarnation = max(account_tombstones.incarnation, excluded.incarnation)",
+                params![id, incarnation],
+            )?;
+            crate::registry::record_change(&tx, now, actor, "account_deleted", id, "{}")?;
+            tx.commit()?;
+            Ok(())
+        })
     }
 
     /// `expected_revision` is the revision the caller built the update from: an edit assembled out of a row

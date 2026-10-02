@@ -361,46 +361,46 @@ impl Store {
             // `last_error` is cleared here rather than through a separate call: the connection mutex is not
             // reentrant, and a credential that just committed has nothing stale left to explain.
             tx.execute(
-            "INSERT INTO credentials (account_id, generation, lifecycle_generation, sealed, nonce, issued_at, expires_at, refresh_expires_at, scopes, updated_at, last_error) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, NULL) \
-             ON CONFLICT(account_id) DO UPDATE SET generation = excluded.generation, lifecycle_generation = excluded.lifecycle_generation, \
-             sealed = excluded.sealed, nonce = excluded.nonce, issued_at = excluded.issued_at, expires_at = excluded.expires_at, \
-             refresh_expires_at = excluded.refresh_expires_at, scopes = excluded.scopes, updated_at = excluded.updated_at, last_error = NULL",
-            params![
-                account_id,
-                new_generation as i64,
-                lifecycle_generation as i64,
-                sealed,
-                nonce,
-                bundle.issued_at,
-                bundle.expires_at,
-                bundle.refresh_expires_at,
-                bundle.scopes,
-                now,
-            ],
-        )?;
+                "INSERT INTO credentials (account_id, generation, lifecycle_generation, sealed, nonce, issued_at, expires_at, refresh_expires_at, scopes, updated_at, last_error) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, NULL) \
+                 ON CONFLICT(account_id) DO UPDATE SET generation = excluded.generation, lifecycle_generation = excluded.lifecycle_generation, \
+                 sealed = excluded.sealed, nonce = excluded.nonce, issued_at = excluded.issued_at, expires_at = excluded.expires_at, \
+                 refresh_expires_at = excluded.refresh_expires_at, scopes = excluded.scopes, updated_at = excluded.updated_at, last_error = NULL",
+                params![
+                    account_id,
+                    new_generation as i64,
+                    lifecycle_generation as i64,
+                    sealed,
+                    nonce,
+                    bundle.issued_at,
+                    bundle.expires_at,
+                    bundle.refresh_expires_at,
+                    bundle.scopes,
+                    now,
+                ],
+            )?;
 
             // Whatever else was still open for this account was waiting on the bundle this commit replaces, so
             // it has its answer. Leaving one open would block every later refresh of the new credential and
             // quarantine the account at the next start.
             tx.execute(
-            &format!(
-                "UPDATE refresh_attempts SET resolved_at = ?2, outcome = 'failed', detail = 'superseded' \
-                 WHERE account_id = ?1 AND id IS NOT ?3 AND ({PENDING_WHERE})"
-            ),
-            params![account_id, now, attempt_id.map(|id| id as i64)],
-        )?;
+                &format!(
+                    "UPDATE refresh_attempts SET resolved_at = ?2, outcome = 'failed', detail = 'superseded' \
+                     WHERE account_id = ?1 AND id IS NOT ?3 AND ({PENDING_WHERE})"
+                ),
+                params![account_id, now, attempt_id.map(|id| id as i64)],
+            )?;
 
             if let Some(id) = attempt_id {
                 // Scoped by account_id, not just id: an attempt_id that belongs to another account must not
                 // be resolved by this commit, even by accident.
                 let updated = tx.execute(
-                &format!(
-                    "UPDATE refresh_attempts SET resolved_at = ?2, outcome = 'committed', detail = NULL \
-                     WHERE id = ?1 AND account_id = ?3 AND ({PENDING_WHERE})"
-                ),
-                params![id as i64, now, account_id],
-            )?;
+                    &format!(
+                        "UPDATE refresh_attempts SET resolved_at = ?2, outcome = 'committed', detail = NULL \
+                         WHERE id = ?1 AND account_id = ?3 AND ({PENDING_WHERE})"
+                    ),
+                    params![id as i64, now, account_id],
+                )?;
                 // A row that exists but was already settled elsewhere, by a disconnect for instance, leaves the
                 // commit alone: the tokens in hand were rotated upstream and losing them to a rollback would
                 // strand the account on a refresh token the endpoint has already replaced.

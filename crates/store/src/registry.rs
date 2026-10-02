@@ -1035,44 +1035,49 @@ impl Store {
         Ok(now)
     }
 
+    /// Synced at `FULL`: a disable or an expiry a power loss undid would hand the key its access back.
     pub fn update_api_key(&self, row: &ApiKeyRow, actor: &str) -> Result<(), StoreError> {
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
-        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        if tx.query_row(
-            "SELECT COUNT(*) FROM pools WHERE id = ?1",
-            params![row.pool_id],
-            |r| r.get::<_, i64>(0),
-        )? == 0
-        {
-            return Err(StoreError::PoolNotFound(row.pool_id.clone()));
-        }
-        let updated = tx.execute(
-            "UPDATE api_keys SET label = ?2, notes = ?3, pool_id = ?4, enabled = ?5, expires_at = ?6, model_rules_json = ?7, model_rules_mode = ?8, long_context_twins = ?9, keepalive_opt_out = ?10, body_capture_hours = ?11, in_flight_cap = ?12, affinity_source = ?13, auto_mode_server = ?14 WHERE id = ?1",
-            params![
-                row.id,
-                row.label,
-                row.notes,
-                row.pool_id,
-                row.enabled,
-                row.expires_at,
-                rules_json(&row.model_rules)?,
-                row.model_rules_mode,
-                row.long_context_twins,
-                row.keepalive_opt_out,
-                row.body_capture_hours.map(|h| h as i64),
-                row.in_flight_cap.map(|c| c as i64),
-                row.affinity_source,
-                row.auto_mode_server
-            ],
-        )?;
-        if updated == 0 {
-            return Err(StoreError::KeyNotFound(row.id.clone()));
-        }
-        record_change(&tx, now_ms(), actor, "key_updated", &row.id, &key_diff(row))?;
-        tx.commit()?;
-        Ok(())
+        durably(&mut conn, |conn| {
+            let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            if tx.query_row(
+                "SELECT COUNT(*) FROM pools WHERE id = ?1",
+                params![row.pool_id],
+                |r| r.get::<_, i64>(0),
+            )? == 0
+            {
+                return Err(StoreError::PoolNotFound(row.pool_id.clone()));
+            }
+            let updated = tx.execute(
+                "UPDATE api_keys SET label = ?2, notes = ?3, pool_id = ?4, enabled = ?5, expires_at = ?6, model_rules_json = ?7, model_rules_mode = ?8, long_context_twins = ?9, keepalive_opt_out = ?10, body_capture_hours = ?11, in_flight_cap = ?12, affinity_source = ?13, auto_mode_server = ?14 WHERE id = ?1",
+                params![
+                    row.id,
+                    row.label,
+                    row.notes,
+                    row.pool_id,
+                    row.enabled,
+                    row.expires_at,
+                    rules_json(&row.model_rules)?,
+                    row.model_rules_mode,
+                    row.long_context_twins,
+                    row.keepalive_opt_out,
+                    row.body_capture_hours.map(|h| h as i64),
+                    row.in_flight_cap.map(|c| c as i64),
+                    row.affinity_source,
+                    row.auto_mode_server
+                ],
+            )?;
+            if updated == 0 {
+                return Err(StoreError::KeyNotFound(row.id.clone()));
+            }
+            record_change(&tx, now_ms(), actor, "key_updated", &row.id, &key_diff(row))?;
+            tx.commit()?;
+            Ok(())
+        })
     }
 
+    /// Synced at `FULL`: a rotation a power loss undid would refuse the new secret and let the replaced one in
+    /// past its grace.
     pub fn rotate_api_key(
         &self,
         id: &str,
@@ -1082,42 +1087,44 @@ impl Store {
         actor: &str,
     ) -> Result<(), StoreError> {
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
-        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        let current: Option<(Vec<u8>, String)> = tx
-            .query_row(
-                "SELECT secret_digest, prefix FROM api_keys WHERE id = ?1 AND revoked_at IS NULL",
-                params![id],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .optional()?;
-        let Some((old_digest, old_prefix)) = current else {
-            return Err(StoreError::KeyNotFound(id.to_string()));
-        };
-        tx.execute(
-            "DELETE FROM api_key_retired_secrets WHERE expires_at <= ?1",
-            params![at],
-        )?;
-        // Replace, never insert beside: the grace covers the secret this rotation retires and no earlier one.
-        tx.execute(
-            "INSERT OR REPLACE INTO api_key_retired_secrets (key_id, secret_digest, prefix, retired_at, expires_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![id, old_digest, old_prefix, at, at + ROTATION_GRACE_MS],
-        )?;
-        // A new grace starts unpresented: a stamp under the retired secret this rotation just replaced would
-        // otherwise read as if it belonged to the one this rotation creates.
-        tx.execute(
-            "UPDATE api_keys SET secret_digest = ?2, prefix = ?3, rotated_at = ?4, retired_secret_last_used_at = NULL WHERE id = ?1",
-            params![id, digest, prefix, at],
-        )?;
-        record_change(
-            &tx,
-            at,
-            actor,
-            "key_rotated",
-            id,
-            &serde_json::json!({ "prefix": prefix, "previous_secret_until": at + ROTATION_GRACE_MS }).to_string(),
-        )?;
-        tx.commit()?;
-        Ok(())
+        durably(&mut conn, |conn| {
+            let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            let current: Option<(Vec<u8>, String)> = tx
+                .query_row(
+                    "SELECT secret_digest, prefix FROM api_keys WHERE id = ?1 AND revoked_at IS NULL",
+                    params![id],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .optional()?;
+            let Some((old_digest, old_prefix)) = current else {
+                return Err(StoreError::KeyNotFound(id.to_string()));
+            };
+            tx.execute(
+                "DELETE FROM api_key_retired_secrets WHERE expires_at <= ?1",
+                params![at],
+            )?;
+            // Replace, never insert beside: the grace covers the secret this rotation retires and no earlier one.
+            tx.execute(
+                "INSERT OR REPLACE INTO api_key_retired_secrets (key_id, secret_digest, prefix, retired_at, expires_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![id, old_digest, old_prefix, at, at + ROTATION_GRACE_MS],
+            )?;
+            // A new grace starts unpresented: a stamp under the retired secret this rotation just replaced would
+            // otherwise read as if it belonged to the one this rotation creates.
+            tx.execute(
+                "UPDATE api_keys SET secret_digest = ?2, prefix = ?3, rotated_at = ?4, retired_secret_last_used_at = NULL WHERE id = ?1",
+                params![id, digest, prefix, at],
+            )?;
+            record_change(
+                &tx,
+                at,
+                actor,
+                "key_rotated",
+                id,
+                &serde_json::json!({ "prefix": prefix, "previous_secret_until": at + ROTATION_GRACE_MS }).to_string(),
+            )?;
+            tx.commit()?;
+            Ok(())
+        })
     }
 
     /// Synced at `FULL`: a revocation a power loss undid would hand the key its access back.
@@ -1198,20 +1205,20 @@ impl Store {
                 .map(serde_json::to_string)
                 .transpose()?;
             tx.execute(
-            "INSERT INTO accounts (id, kind, label, enabled, identity_json, incarnation, lifecycle_generation, revision, state, created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?9, ?6, 1, ?7, ?8, ?8)",
-            params![
-                row.id,
-                row.kind,
-                row.label,
-                row.enabled,
-                identity_json,
-                row.lifecycle_generation as i64,
-                row.state,
-                at,
-                crate::accounts::next_incarnation(&tx, &row.id)? as i64,
-            ],
-        )?;
+                "INSERT INTO accounts (id, kind, label, enabled, identity_json, incarnation, lifecycle_generation, revision, state, created_at, updated_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?9, ?6, 1, ?7, ?8, ?8)",
+                params![
+                    row.id,
+                    row.kind,
+                    row.label,
+                    row.enabled,
+                    identity_json,
+                    row.lifecycle_generation as i64,
+                    row.state,
+                    at,
+                    crate::accounts::next_incarnation(&tx, &row.id)? as i64,
+                ],
+            )?;
             if let Some(secret) = secret {
                 store_api_key_secret(&tx, &self.key, &row.id, secret)?;
             }

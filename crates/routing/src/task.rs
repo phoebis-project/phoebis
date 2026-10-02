@@ -739,14 +739,25 @@ pub fn spawn(
                     moved,
                     failed,
                     skipped,
+                    left,
                 }) => {
                     if let Some(failed) = failed {
-                        tracing::error!(
-                            error = %failed.error,
-                            batch = size,
-                            skipped,
-                            "a routing state write failed and was skipped; the rest of its batch landed"
-                        );
+                        if left > 0 {
+                            tracing::error!(
+                                error = %failed.error,
+                                batch = size,
+                                skipped,
+                                left,
+                                "the store failed every write: {left} of {size} routing state writes left unapplied"
+                            );
+                        } else {
+                            tracing::error!(
+                                error = %failed.error,
+                                batch = size,
+                                skipped,
+                                "{skipped} of {size} routing state writes failed and were skipped"
+                            );
+                        }
                         retry = failed.rekey;
                     }
                     // An account-state mark that moved the row changes what the snapshot has to say, so the
@@ -834,16 +845,18 @@ pub fn spawn(
     Ok(handle)
 }
 
-/// What one wake landed: whether an account-state mark moved its row, the first write the store refused with the
-/// refused rekey the writer tries once more, and how many writes it skipped.
+/// What one wake landed: whether an account-state mark moved its row, the failure that cost it writes with the
+/// refused rekey the writer tries once more, how many writes the store refused one by one, and how many were left
+/// unapplied once the store failed for every write.
 struct Landed {
     moved: bool,
     failed: Option<Failed>,
     skipped: usize,
+    left: usize,
 }
 
-/// The first write of a wake the store refused, carrying a refused rekey when there was one: the one write the
-/// writer tries again.
+/// The failure that cost a wake writes, carrying a refused rekey when there was one: the one write the writer tries
+/// again.
 struct Failed {
     error: StoreError,
     rekey: Option<Box<RekeyWrite>>,
@@ -866,22 +879,39 @@ async fn retry_rekey(store: &Arc<Store>, rekey: Box<RekeyWrite>) {
 /// One transaction for the wake's batch. A refusal rolls the whole of it back, and the batch is replayed one write
 /// per commit, so the refused write is the only one lost.
 fn land(store: &Store, batch: Vec<StateWrite>) -> Landed {
+    let size = batch.len();
     match store.write_routing(|tx| apply_in(tx, &batch)) {
         Ok(moved) => Landed {
             moved,
             failed: None,
             skipped: 0,
+            left: 0,
         },
-        Err(_) => replay(store, batch),
+        Err(error) => {
+            let landed = replay(store, batch);
+            // A replay that met no refusal says nothing about why the transaction failed: an outside holder of
+            // the file's lock or a disk that failed once.
+            if landed.failed.is_none() {
+                tracing::warn!(
+                    %error,
+                    batch = size,
+                    "a wake's routing state transaction failed and its replay landed every write"
+                );
+            }
+            landed
+        }
     }
 }
 
 fn replay(store: &Store, batch: Vec<StateWrite>) -> Landed {
+    let size = batch.len();
     let mut moved = false;
     let mut error = None;
     let mut skipped = 0;
+    let mut left = 0;
     let mut refused_rekeys = Vec::new();
-    for write in batch {
+    let mut writes = batch.into_iter().enumerate();
+    while let Some((index, write)) = writes.next() {
         match apply_one(store, &write) {
             Ok(mark_moved) => {
                 moved |= mark_moved;
@@ -901,11 +931,23 @@ fn replay(store: &Store, batch: Vec<StateWrite>) -> Landed {
                     });
                 }
             }
+            // Every write after this one would wait out the same lock or meet the same disk, so the rest of the
+            // wake is given up at once; its rekeys still join the one retry.
+            Err(failure) if failure.is_database_wide() => {
+                left = size - index;
+                error = Some(failure);
+                for write in std::iter::once(write).chain(writes.map(|(_, write)| write)) {
+                    if let StateWrite::Rekey(rekey) = write {
+                        refuse_rekey(&mut refused_rekeys, rekey);
+                    }
+                }
+                break;
+            }
             Err(refused) => {
                 skipped += 1;
                 error.get_or_insert(refused);
                 if let StateWrite::Rekey(rekey) = write {
-                    refused_rekeys.push(rekey);
+                    refuse_rekey(&mut refused_rekeys, rekey);
                 }
             }
         }
@@ -919,7 +961,15 @@ fn replay(store: &Store, batch: Vec<StateWrite>) -> Landed {
             rekey: refused_rekeys.into_iter().next().map(Box::new),
         }),
         skipped,
+        left,
     }
+}
+
+/// The newest refused rekey of a spelling is the latest resolution, so it replaces an earlier refused one rather
+/// than queueing behind it.
+fn refuse_rekey(refused_rekeys: &mut Vec<RekeyWrite>, rekey: RekeyWrite) {
+    refused_rekeys.retain(|earlier| earlier.resolution.spelling != rekey.resolution.spelling);
+    refused_rekeys.push(rekey);
 }
 
 /// Reports whether any account-state mark in the batch actually moved its row, which is the one write here
@@ -2174,4 +2224,154 @@ pub fn sample_from_usage(
         }
     };
     (sample, overage)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+    use std::sync::mpsc;
+
+    use phoebis_store::{AccountKind, AccountRow, ResolutionRow, StorageKey};
+
+    use super::*;
+
+    fn cooldown(account_id: &str, scope: &str) -> CooldownRow {
+        CooldownRow {
+            account_id: account_id.into(),
+            scope: scope.into(),
+            until: 10_000,
+            set_at: 0,
+            reason: "rate_limit".into(),
+            window: "five_hour".into(),
+            source_request_id: None,
+            incarnation: 1,
+        }
+    }
+
+    /// A rekey whose moved cooldown names an account the store does not hold, which
+    /// `cooldowns.account_id REFERENCES accounts(id)` refuses.
+    fn refused_rekey(spelling: &str, dated_id: &str) -> StateWrite {
+        StateWrite::Rekey(RekeyWrite {
+            resolution: ResolutionRow {
+                spelling: spelling.into(),
+                dated_id: dated_id.into(),
+                resolved_at: 1_000,
+            },
+            delete_pins: Vec::new(),
+            upsert_pins: Vec::new(),
+            delete_cooldowns: Vec::new(),
+            upsert_cooldowns: vec![cooldown("ghost", &format!("model:{dated_id}"))],
+        })
+    }
+
+    #[test]
+    fn of_two_refused_rekeys_of_one_spelling_the_newer_is_the_one_retried() {
+        let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+        let landed = replay(
+            &store,
+            vec![
+                refused_rekey("claude-sonnet-4-5", "claude-sonnet-4-5-20250929"),
+                refused_rekey("claude-sonnet-4-5", "claude-sonnet-4-5-20251001"),
+            ],
+        );
+        assert_eq!(landed.skipped, 2);
+        let carried = landed
+            .failed
+            .expect("the two refusals")
+            .rekey
+            .expect("a rekey to retry");
+        assert_eq!(
+            carried.resolution.dated_id, "claude-sonnet-4-5-20251001",
+            "the latest resolution of the spelling"
+        );
+    }
+
+    /// A directory under the system's temporary one, removed on drop.
+    struct Scratch(PathBuf);
+
+    impl Scratch {
+        fn new(name: &str) -> Scratch {
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            Scratch(
+                std::env::temp_dir().join(format!("phoebis-{name}-{}-{nanos}", std::process::id())),
+            )
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn a_lock_held_past_the_busy_timeout_stops_the_replay_at_its_first_write() {
+        let scratch = Scratch::new("replay-busy");
+        let key = StorageKey::generate();
+        let path = scratch.path().join("store").join("router.sqlite");
+        let store = Store::open(&path, &key).unwrap();
+        store
+            .insert_account(&AccountRow {
+                id: "a".into(),
+                kind: AccountKind::ApiKey,
+                label: "a".into(),
+                enabled: true,
+                identity: None,
+                lifecycle_generation: 1,
+                incarnation: 1,
+                revision: 1,
+                state: AccountState::Ready,
+            })
+            .unwrap();
+        // A second store on the same file, as a backup or an operator's `sqlite3` would hold it: the process lock
+        // is per directory, and SQLite resolves the link to the one file and its one WAL.
+        let linked = scratch.path().join("holder").join("router.sqlite");
+        std::fs::create_dir_all(linked.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&path, &linked).unwrap();
+        let holder = Store::open(&linked, &key).unwrap();
+        let (locked, held) = mpsc::channel();
+        let (release, released) = mpsc::channel::<()>();
+        let holding = std::thread::spawn(move || {
+            holder
+                .write_routing(|_| {
+                    locked.send(()).unwrap();
+                    let _ = released.recv();
+                    Ok(())
+                })
+                .unwrap();
+        });
+        held.recv().unwrap();
+
+        let landed = replay(
+            &store,
+            [
+                "model:claude-haiku-4-5",
+                "model:claude-opus-5",
+                "model:claude-sonnet-5",
+            ]
+            .map(|scope| StateWrite::UpsertCooldown(cooldown("a", scope)))
+            .into(),
+        );
+        release.send(()).unwrap();
+        holding.join().unwrap();
+
+        assert_eq!(
+            (landed.skipped, landed.left),
+            (0, 3),
+            "the first write's busy answer gave up the wake rather than waiting it out once per write"
+        );
+        assert!(landed
+            .failed
+            .expect("the busy store")
+            .error
+            .is_database_wide());
+        assert!(store.load_routing().unwrap().cooldowns.is_empty());
+    }
 }

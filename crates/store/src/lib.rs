@@ -129,6 +129,23 @@ pub enum StoreError {
     Stale,
 }
 
+impl StoreError {
+    /// Whether the failure is the database's rather than one write's: a lock another connection held past
+    /// `BUSY_TIMEOUT`, a failing disk or a full one, which every write after it meets as well.
+    pub fn is_database_wide(&self) -> bool {
+        matches!(
+            self,
+            StoreError::Sqlite(rusqlite::Error::SqliteFailure(failure, _))
+                if matches!(
+                    failure.code,
+                    rusqlite::ErrorCode::DatabaseBusy
+                        | rusqlite::ErrorCode::DiskFull
+                        | rusqlite::ErrorCode::SystemIoFailure
+                )
+        )
+    }
+}
+
 /// What `check-config` learns about a registry file without opening it as the router does.
 #[derive(Debug, PartialEq, Eq)]
 pub enum CanaryRead {
@@ -318,6 +335,7 @@ impl Store {
             db_path,
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )?;
+        conn.busy_timeout(BUSY_TIMEOUT)?;
         let mismatch = || StoreError::KeyMismatch {
             path: db_path.to_path_buf(),
         };
@@ -583,6 +601,7 @@ fn open_canary(key: &StorageKey, value: &str) -> Result<Vec<u8>, StoreError> {
 /// Runs the v1 `SCHEMA`, then every migration above the stored `schema_version`, each inside its own
 /// transaction, so a crash mid-migration leaves the version at the last one that actually committed.
 fn prepare(conn: &mut Connection, on_disk: bool) -> Result<(), StoreError> {
+    conn.busy_timeout(BUSY_TIMEOUT)?;
     // A per-connection setting, never written to the database file, so it costs nothing to set before the
     // version is even known.
     conn.pragma_update(None, "foreign_keys", "ON")?;
@@ -597,14 +616,14 @@ fn prepare(conn: &mut Connection, on_disk: bool) -> Result<(), StoreError> {
         // WAL lets the router task's reads run beside an admin write; an in-memory database has no journal.
         // Unlike `foreign_keys` this rewrites the database header, so it waits behind the version check too.
         conn.pragma_update(None, "journal_mode", "WAL")?;
-        // A power loss may lose the last transactions not yet synced, which the next requests re-derive (pins,
-        // windows, cooldowns, overage, credits, affinity, memory); a write later traffic cannot reconstruct (a
-        // credential commit, a key's secret, a revocation or deletion, a refresh attempt's record) sets `FULL` for
-        // itself, since a rotation lost there retires a refresh token the endpoint already replaced and a
-        // revocation lost there restores a key.
+        // A power loss may lose the last transactions not yet synced: routing state the next requests re-derive
+        // (affinity, cooldowns, credits, memory, overage, pins, windows) and the operator's other changes, made
+        // again by hand. A write whose loss would restore what the operator removed sets `FULL` for itself
+        // through `durably`: every access-control change (an account's deletion or disconnect; a key's deletion,
+        // edit, revocation or rotation), the credential and secret writes, and the refresh-attempt records, since
+        // a rotation lost there retires a refresh token the endpoint already replaced.
         conn.pragma_update(None, "synchronous", "NORMAL")?;
     }
-    conn.busy_timeout(BUSY_TIMEOUT)?;
     conn.execute_batch(schema::SCHEMA)?;
     for (version, sql) in schema::MIGRATIONS {
         if *version <= current {
@@ -621,8 +640,8 @@ fn prepare(conn: &mut Connection, on_disk: bool) -> Result<(), StoreError> {
     Ok(())
 }
 
-/// Runs `f` with `synchronous = FULL` on this connection and `NORMAL` after it, so a write whose loss costs a
-/// re-pairing or restores a revoked key is synced to disk before its commit returns.
+/// Runs `f` with `synchronous = FULL` on this connection and `NORMAL` after it, so a write whose loss would cost
+/// a re-pairing or restore an access the operator removed is synced to disk before its commit returns.
 pub(crate) fn durably<T>(
     conn: &mut Connection,
     f: impl FnOnce(&mut Connection) -> Result<T, StoreError>,
@@ -634,7 +653,11 @@ pub(crate) fn durably<T>(
         conn.pragma_query_value(None, "synchronous", |row| row.get(0))
             .ok(),
     );
-    conn.pragma_update(None, "synchronous", "NORMAL")?;
+    // The write has landed or failed by now, and its answer is the caller's; a connection left at `FULL` only
+    // syncs more than it needs to.
+    if let Err(error) = conn.pragma_update(None, "synchronous", "NORMAL") {
+        tracing::warn!(%error, "the registry connection stays at synchronous = FULL after a durable write");
+    }
     result
 }
 
@@ -1159,6 +1182,174 @@ mod tests {
             "FULL under the attempt's resolution"
         );
         assert_eq!(pragma(&store, "synchronous"), 1, "NORMAL after it");
+    }
+
+    /// Reads and clears the seam: `Some(2)` after a write `durably` ran, `None` after one it did not, and the
+    /// connection at `NORMAL` after either.
+    #[track_caller]
+    fn assert_synced(store: &Store, at_full: bool, what: &str) {
+        assert_eq!(DURABLY_SAW.take(), at_full.then_some(2), "{what}");
+        assert_eq!(pragma(store, "synchronous"), 1, "{what}: NORMAL after it");
+    }
+
+    /// An on-disk registry holding account `a` with a credential, pool `p` and key `k`, the seam cleared.
+    fn keyed(dir: &tempfile::TempDir) -> Store {
+        let store = on_disk(dir);
+        with_a_credential(&store);
+        store.insert_pool(&pool("p"), "test").unwrap();
+        store
+            .insert_api_key(&api_key(&store, "k", "p"), "test")
+            .unwrap();
+        DURABLY_SAW.take();
+        store
+    }
+
+    #[test]
+    fn a_key_edit_runs_at_full_and_leaves_normal_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = keyed(&dir);
+        store
+            .update_api_key(
+                &ApiKeyRow {
+                    enabled: false,
+                    expires_at: Some(5_000),
+                    ..api_key(&store, "k", "p")
+                },
+                "test",
+            )
+            .unwrap();
+        assert_synced(&store, true, "a key disabled and given an expiry");
+    }
+
+    #[test]
+    fn a_key_rotation_runs_at_full_and_leaves_normal_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = keyed(&dir);
+        let digest = store.api_key_digest("phoebis-test-rotated-not-a-secret");
+        store
+            .rotate_api_key("k", &digest, "test0001", 2_000, "test")
+            .unwrap();
+        assert_synced(&store, true, "a key rotation");
+    }
+
+    #[test]
+    fn a_key_deletion_runs_at_full_and_leaves_normal_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = keyed(&dir);
+        store.delete_api_key("k", "test").unwrap();
+        assert_synced(&store, true, "a key deletion");
+    }
+
+    #[test]
+    fn a_disconnect_runs_at_full_and_leaves_normal_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = keyed(&dir);
+        store.bump_lifecycle("a").unwrap();
+        assert_synced(&store, true, "a disconnect");
+    }
+
+    #[test]
+    fn an_account_deletion_runs_at_full_and_leaves_normal_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = keyed(&dir);
+        store.delete_account("a", "test").unwrap();
+        assert_synced(&store, true, "an account deletion");
+    }
+
+    #[test]
+    fn an_anthropic_key_secret_write_runs_at_full_and_leaves_normal_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = keyed(&dir);
+        store
+            .insert_account(&account("vendor", AccountKind::ApiKey))
+            .unwrap();
+        store
+            .set_api_key_secret("vendor", &Secret::new("sk-ant-test-not-a-key"))
+            .unwrap();
+        assert_synced(&store, true, "an Anthropic key's secret");
+    }
+
+    #[test]
+    fn an_account_created_with_a_secret_runs_at_full_and_one_without_stays_at_normal() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = keyed(&dir);
+        let secret = Secret::new("sk-ant-test-not-a-key");
+        store
+            .create_account(
+                &account("vendor", AccountKind::ApiKey),
+                Some(&secret),
+                2_000,
+                "test",
+            )
+            .unwrap();
+        assert_synced(&store, true, "a creation carrying a secret");
+        store
+            .create_account(&account("other", AccountKind::ApiKey), None, 2_000, "test")
+            .unwrap();
+        assert_synced(&store, false, "a creation without one");
+    }
+
+    #[test]
+    fn an_account_update_with_a_secret_runs_at_full_and_one_without_stays_at_normal() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = keyed(&dir);
+        let secret = Secret::new("sk-ant-test-not-a-key");
+        store
+            .create_account(
+                &account("vendor", AccountKind::ApiKey),
+                Some(&secret),
+                2_000,
+                "test",
+            )
+            .unwrap();
+        DURABLY_SAW.take();
+        let update = |secret: Option<&Secret>| {
+            store
+                .commit_account_update(&AccountUpdate {
+                    id: "vendor",
+                    expected_revision: store.account("vendor").unwrap().unwrap().revision,
+                    lifecycle_generation: 1,
+                    label: "vendor",
+                    secret,
+                    state: AccountState::Ready,
+                    at: 3_000,
+                    actor: "test",
+                })
+                .unwrap();
+        };
+        update(Some(&secret));
+        assert_synced(&store, true, "an update carrying a secret");
+        update(None);
+        assert_synced(&store, false, "an update without one");
+    }
+
+    #[test]
+    fn a_held_lock_a_failing_disk_or_a_full_one_is_database_wide_and_a_refused_row_is_not() {
+        let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+        let refused = store
+            .upsert_cooldown(&CooldownRow {
+                account_id: "ghost".into(),
+                scope: "account".into(),
+                until: 10_000,
+                set_at: 0,
+                reason: "rate_limit".into(),
+                window: "five_hour".into(),
+                source_request_id: None,
+                incarnation: 1,
+            })
+            .unwrap_err();
+        assert!(!refused.is_database_wide(), "{refused}");
+        for code in [
+            rusqlite::ffi::SQLITE_BUSY,
+            rusqlite::ffi::SQLITE_FULL,
+            rusqlite::ffi::SQLITE_IOERR_WRITE,
+        ] {
+            let error = StoreError::Sqlite(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(code),
+                None,
+            ));
+            assert!(error.is_database_wide(), "{error}");
+        }
     }
 
     #[test]
