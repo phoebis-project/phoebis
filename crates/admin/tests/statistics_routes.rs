@@ -109,9 +109,7 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
     );
     let text = settings.to_string();
     assert!(
-        !text.contains("admin-secret")
-            && !text.contains("viewer-secret")
-            && !text.contains("secret_env"),
+        !text.contains("admin-secret") && !text.contains("secret_env"),
         "no secret and no secret's variable name"
     );
     parts
@@ -444,11 +442,10 @@ async fn a_pin_the_ledger_has_no_row_for_reports_no_request_count() {
 }
 
 #[tokio::test]
-async fn the_live_route_is_gated_and_the_preview_follows_the_role() {
+async fn the_live_route_is_gated_and_every_session_receives_the_preview() {
     let parts = common::admin_parts_full().await;
     let addr = common::serve(parts.app.clone()).await;
     let admin = login(&parts.app, "admin-secret").await;
-    let viewer = login(&parts.app, "viewer-secret").await;
     let connect = |cookie: Option<String>| {
         let mut request =
             tokio_tungstenite::tungstenite::client::IntoClientRequest::into_client_request(
@@ -503,9 +500,7 @@ async fn the_live_route_is_gated_and_the_preview_follows_the_role() {
     );
     let _ = same_ws.close(None).await;
     let (mut admin_ws, _) = connect(Some(admin.clone())).await.unwrap();
-    let (mut viewer_ws, _) = connect(Some(viewer)).await.unwrap();
     assert_eq!(common::next_text(&mut admin_ws).await["kind"], "snapshot");
-    assert_eq!(common::next_text(&mut viewer_ws).await["kind"], "snapshot");
     // Straight onto the bus: a capturing request and one text chunk.
     parts.bus.publish(Event::RequestObserved(RequestObserved {
         request_id: "live-1".into(),
@@ -540,15 +535,6 @@ async fn the_live_route_is_gated_and_the_preview_follows_the_role() {
     assert!(admin_seen
         .iter()
         .any(|d| d["type"] == "preview" && d["chunk"] == "secret prompt text"));
-    let viewer_seen = common::deltas_for(&mut viewer_ws, Duration::from_millis(500)).await;
-    assert!(
-        viewer_seen.iter().any(|d| d["type"] == "started"),
-        "the viewer sees the request"
-    );
-    assert!(
-        viewer_seen.iter().all(|d| d["type"] != "preview"),
-        "and never its text"
-    );
     let past = json(
         get(
             &parts.app,
@@ -565,23 +551,8 @@ async fn the_live_route_is_gated_and_the_preview_follows_the_role() {
     assert_eq!(past["entries"][0]["id"], "live-1");
     assert!(
         past["entries"][0]["preview"].is_null(),
-        "a past read carries no preview for anyone"
+        "a past read carries no preview"
     );
-    let viewer_cookie = login(&parts.app, "viewer-secret").await;
-    let past = json(
-        get(
-            &parts.app,
-            &format!(
-                "/admin/live/snapshot?from={}&to={}",
-                common::NOW - 1,
-                common::NOW + 1
-            ),
-            Some(&viewer_cookie),
-        )
-        .await,
-    )
-    .await;
-    assert!(past["entries"][0]["preview"].is_null());
     let by_instant = json(
         get(
             &parts.app,
@@ -622,7 +593,6 @@ async fn the_live_route_is_gated_and_the_preview_follows_the_role() {
         "a plain GET is not an upgrade"
     );
     let _ = admin_ws.close(None).await;
-    let _ = viewer_ws.close(None).await;
 }
 
 #[tokio::test]

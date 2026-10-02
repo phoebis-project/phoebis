@@ -30,7 +30,7 @@ test('a 401 outside the login runs the unauthorized hook and the login 401 does 
   await assert.rejects(call('GET', '/admin/keys'));
   await assert.rejects(call('POST', '/admin/session', { secret: 'x' }));
   assert.equal(unauthorized, 1);
-  stub(() => answer(403, { error: 'the viewer role cannot change anything' }));
+  stub(() => answer(403, { error: 'origin is not allowed' }));
   await assert.rejects(new HttpApi().pauseAccount('a'));
   assert.equal(forbidden, 1);
 });
@@ -195,8 +195,8 @@ test('getSession answers null on 401 without running the hook', async () => {
   stub(() => answer(401, { error: 'no admin session' }));
   assert.equal(await new HttpApi().getSession(), null);
   assert.equal(unauthorized, 0);
-  stub(() => answer(200, { role: 'viewer', session_id: 's' }));
-  assert.deepEqual(await new HttpApi().getSession(), { role: 'viewer', sessionId: 's' });
+  stub(() => answer(200, { session_id: 's' }));
+  assert.deepEqual(await new HttpApi().getSession(), { role: 'admin', sessionId: 's' });
 });
 
 test('the live feed reconnects behind a live session and stops once it is gone', async () => {
@@ -215,7 +215,7 @@ test('the live feed reconnects behind a live session and stops once it is gone',
   setHooks({ onFailure: () => undefined, onForbidden: () => undefined, onUnauthorized: () => { unauthorized += 1; } });
   const settle = () => new Promise((r) => setTimeout(r, 1_200));
 
-  stub(() => answer(200, { role: 'admin', session_id: 's' }));
+  stub(() => answer(200, { session_id: 's' }));
   const live = new HttpApi().subscribeLive(() => undefined);
   assert.equal(sockets[0].url, 'ws://router.test/admin/live');
   sockets[0].onclose();

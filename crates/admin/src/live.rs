@@ -1,4 +1,4 @@
-//! The live feed's two routes: the upgrade, whose preview right follows the session's role, and the past
+//! The live feed's two routes: the upgrade, whose every connection carries the output preview, and the past
 //! snapshot for the range control.
 
 use std::collections::HashMap;
@@ -12,7 +12,7 @@ use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
 
 use crate::routes::{failure, Caller};
-use crate::{AdminState, Role};
+use crate::AdminState;
 
 const PAST_WINDOW_MS: i64 = 30 * 60 * 1_000;
 
@@ -32,14 +32,13 @@ pub(crate) async fn upgrade(
     let Some(slot) = state.live.slot() else {
         return failure(StatusCode::SERVICE_UNAVAILABLE, "live feed at capacity");
     };
-    let preview = caller.role == Role::Admin;
     let live = state.live.clone();
     let sessions = state.sessions.clone();
     let clock = state.clock.clone();
     let session_id = caller.session_id;
     let alive: phoebis_live::SessionCheck =
         Box::new(move || sessions.is_live(&session_id, (clock)()));
-    upgrade.on_upgrade(move |socket| async move { live.attach(socket, preview, alive, slot).await })
+    upgrade.on_upgrade(move |socket| async move { live.attach(socket, alive, slot).await })
 }
 
 // The error is a rendered HTTP response, returned once per request and dropped; boxing it would buy a
@@ -83,6 +82,6 @@ pub(crate) async fn past(
     if from > to {
         return failure(StatusCode::BAD_REQUEST, "from must not be after to");
     }
-    // A past read never carries a preview, whatever the role: the feed strips it before the entries leave.
+    // A past read never carries a preview: the feed strips it before the entries leave.
     Json(state.live.past(from, to)).into_response()
 }

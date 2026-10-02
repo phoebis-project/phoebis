@@ -28,14 +28,12 @@ pub(crate) async fn close_ended(socket: WebSocket) {
     let _ = sink.close().await;
 }
 
-/// Serves a socket: the snapshot first, then the broadcast, filtered of previews when the client may not see
-/// them. Returns when the client closes, the socket fails, the client falls behind, the session ends, or the
-/// feed shuts down.
+/// Serves a socket: the snapshot first, then the broadcast. Returns when the client closes, the socket fails,
+/// the client falls behind, the session ends, or the feed shuts down.
 pub(crate) async fn serve(
     socket: WebSocket,
     snapshot: LiveSnapshot,
     mut deltas: broadcast::Receiver<Delta>,
-    preview: bool,
     alive: SessionCheck,
     cancel: CancellationToken,
 ) {
@@ -92,7 +90,7 @@ pub(crate) async fn serve(
             _ = cancel.cancelled() => break,
             received = deltas.recv() => match received {
                 Ok(delta) => {
-                    if delta.cursor() <= after || (delta.is_preview() && !preview) {
+                    if delta.cursor() <= after {
                         continue;
                     }
                     let text = serde_json::to_string(&LiveEvent::Delta { delta }).expect("a delta serializes");

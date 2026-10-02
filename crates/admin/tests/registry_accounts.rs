@@ -178,24 +178,6 @@ async fn patching_deleting_and_disconnecting_accounts() {
             .status(),
         404
     );
-    let viewer = login(&app, "viewer-secret").await;
-    assert_eq!(
-        patch(
-            &app,
-            "/admin/accounts/business",
-            r#"{"label":"x"}"#,
-            Some(&viewer)
-        )
-        .await
-        .status(),
-        403
-    );
-    assert_eq!(
-        delete(&app, "/admin/accounts/business", Some(&viewer))
-            .await
-            .status(),
-        403
-    );
 }
 
 #[tokio::test]
@@ -432,15 +414,6 @@ async fn the_catalog_route_answers_the_live_list_caches_it_and_refreshes_on_dema
     .await;
     assert_eq!(refreshed["models"].as_array().unwrap().len(), 2);
     assert_eq!(probes(), before + 1, "?refresh=1 adds one");
-
-    let viewer = login(&app, "viewer-secret").await;
-    assert_eq!(
-        get(&app, "/admin/accounts/direct/catalog", Some(&viewer))
-            .await
-            .status(),
-        200,
-        "a viewer may GET"
-    );
 
     up.set_rule_after(
         0,

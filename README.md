@@ -32,7 +32,7 @@ sed -e "s#/run/secrets/router-storage-key#$HOME/.config/phoebis/storage.key#" \
   -e 's/plain_http: false/plain_http: true/' -e '/^  origin:/d' \
   deploy/config.example.yaml > ~/.config/phoebis/config.yaml
 export PHOEBIS_CONFIG=$HOME/.config/phoebis/config.yaml
-export PHOEBIS_ADMIN_SECRET=$(openssl rand -base64 36) PHOEBIS_VIEWER_SECRET=$(openssl rand -base64 36)
+export PHOEBIS_ADMIN_SECRET=$(openssl rand -base64 36)
 target/release/phoebis
 ```
 

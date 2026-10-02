@@ -177,7 +177,7 @@ jobs:
           chmod 0444 "$tmp/storage.key"
           # check-config and the router refuse a secret shorter than 16 characters.
           printf 'PHOEBIS_ADMIN_SECRET=smoke-admin-secret-0000\n' > "$tmp/phoebis.env"
-          printf 'PHOEBIS_VIEWER_SECRET=smoke-viewer-secret-0000\nRUST_LOG=info\n' >> "$tmp/phoebis.env"
+          printf 'RUST_LOG=info\n' >> "$tmp/phoebis.env"
           docker run --rm --env-file "$tmp/phoebis.env" \
             -v "$PWD/deploy/config.container.yaml:/etc/phoebis/config.yaml:ro" \
             -v "$tmp/storage.key:/run/secrets/router-storage-key:ro" "$REF" check-config

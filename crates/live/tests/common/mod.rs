@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use axum::body::Body;
 use axum::extract::ws::WebSocketUpgrade;
-use axum::extract::{Query, State};
+use axum::extract::State;
 use axum::http::Request;
 use axum::routing::get;
 use axum::Router;
@@ -50,11 +50,6 @@ pub struct Harness {
     pub router: RouterHandle,
     pub store: Arc<Store>,
     pub ws_addr: std::net::SocketAddr,
-}
-
-#[derive(serde::Deserialize)]
-struct Preview {
-    preview: Option<bool>,
 }
 
 /// One OAuth account `a` serving `claude-sonnet-4-5` in pool `main` with `capture_hours`; the key is `KEY`.
@@ -250,21 +245,16 @@ pub async fn harness(up: &FakeUpstream, capture_hours: u32) -> Harness {
     let ws_app = Router::new()
         .route(
             "/live",
-            get(
-                move |State(feed): State<LiveFeed>,
-                      Query(q): Query<Preview>,
-                      ws: WebSocketUpgrade| {
-                    let alive = route_alive.clone();
-                    async move {
-                        let slot = feed.slot().expect("room");
-                        let check: SessionCheck = Box::new(move || alive.load(Ordering::SeqCst));
-                        ws.on_upgrade(move |socket| async move {
-                            feed.attach(socket, q.preview.unwrap_or(true), check, slot)
-                                .await
-                        })
-                    }
-                },
-            ),
+            get(move |State(feed): State<LiveFeed>, ws: WebSocketUpgrade| {
+                let alive = route_alive.clone();
+                async move {
+                    let slot = feed.slot().expect("room");
+                    let check: SessionCheck = Box::new(move || alive.load(Ordering::SeqCst));
+                    ws.on_upgrade(
+                        move |socket| async move { feed.attach(socket, check, slot).await },
+                    )
+                }
+            }),
         )
         .with_state(ws_feed);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -308,11 +298,10 @@ pub fn request_for(key: &str, model: &str, session: &str) -> Request<Body> {
 pub type Client =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
-pub async fn connect(h: &Harness, preview: bool) -> Client {
-    let (client, _) =
-        tokio_tungstenite::connect_async(format!("ws://{}/live?preview={preview}", h.ws_addr))
-            .await
-            .unwrap();
+pub async fn connect(h: &Harness) -> Client {
+    let (client, _) = tokio_tungstenite::connect_async(format!("ws://{}/live", h.ws_addr))
+        .await
+        .unwrap();
     client
 }
 

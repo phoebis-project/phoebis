@@ -7113,8 +7113,7 @@ export const FIXTURES: Record<string, Fixture> = {
   "session": {
     "route": "GET /admin/session",
     "body": {
-      "role": "admin",
-      "session_id": "moe4hEthlxQ643ChFWaTuN1ichGrOhomLC1gY2s1ui8"
+      "session_id": "I3jdjWesQq2KU4uVjECxAtM_VIN6Zit69aY-fdmjsAM"
     }
   },
   "sessions": {
@@ -7390,8 +7389,7 @@ export const FIXTURES: Record<string, Fixture> = {
         "public_url": null
       },
       "access": {
-        "admin_configured": true,
-        "viewer_configured": true
+        "admin_configured": true
       },
       "keepalive": {
         "max_agents": 1024,

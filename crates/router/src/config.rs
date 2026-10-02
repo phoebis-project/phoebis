@@ -50,10 +50,6 @@ pub struct AdminConfig {
     #[serde(default = "unresolved", skip)]
     pub secret: Secret,
     pub secret_env: String,
-    #[serde(default, skip)]
-    pub viewer_secret: Option<Secret>,
-    #[serde(default)]
-    pub viewer_secret_env: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -159,8 +155,6 @@ pub enum ConfigError {
     CatalogRefreshOutOfRange { value: u64 },
     #[error("routing.cooldown_fallback_seconds must be between 1 and 3600, not {value}")]
     CooldownFallbackOutOfRange { value: u64 },
-    #[error("{first} and {second} resolve to the same secret")]
-    DuplicateSecret { first: String, second: String },
     #[error("{0}")]
     Keepalive(#[from] LimitsError),
     #[error("stats.ledger_path {path} must name a database file inside a directory")]
@@ -215,7 +209,6 @@ pub fn load(path: &Path) -> Result<Config, ConfigError> {
     let mut config: Config = serde_norway::from_str(&text)?;
     check_shape(&config)?;
     resolve_secrets(&mut config)?;
-    check_secrets_are_distinct(&config)?;
     Ok(config)
 }
 
@@ -227,8 +220,6 @@ impl fmt::Debug for AdminConfig {
             .field("plain_http", &self.plain_http)
             .field("secret", &"***")
             .field("secret_env", &self.secret_env)
-            .field("viewer_secret", &self.viewer_secret.as_ref().map(|_| "***"))
-            .field("viewer_secret_env", &self.viewer_secret_env)
             .finish()
     }
 }
@@ -420,38 +411,12 @@ fn same_file(left: &Path, right: &Path) -> bool {
 
 fn resolve_secrets(config: &mut Config) -> Result<(), ConfigError> {
     config.admin.secret = from_env(&config.admin.secret_env)?;
-    config.admin.viewer_secret = match &config.admin.viewer_secret_env {
-        None => None,
-        Some(name) => Some(from_env(name)?),
-    };
     Ok(())
 }
 
-/// A viewer secret equal to the administration one silently turns the read-only login into a full one,
-/// which is a configuration mistake that only shows up as a surprise in production.
-fn check_secrets_are_distinct(config: &Config) -> Result<(), ConfigError> {
-    let mut held: Vec<(String, &Secret)> =
-        vec![("the admin secret".to_string(), &config.admin.secret)];
-    if let Some(viewer) = &config.admin.viewer_secret {
-        held.push(("the viewer secret".to_string(), viewer));
-    }
-    for (index, (first, left)) in held.iter().enumerate() {
-        for (second, right) in held.iter().skip(index + 1) {
-            if left.expose() == right.expose() {
-                return Err(ConfigError::DuplicateSecret {
-                    first: first.clone(),
-                    second: second.clone(),
-                });
-            }
-        }
-    }
-    Ok(())
-}
-
-/// The example file's own placeholders (`deploy/phoebis.env.example`), so a config copied without editing them
+/// The example file's own placeholder (`deploy/phoebis.env.example`), so a config copied without editing it
 /// refuses to start rather than run with a secret every reader of the repository already knows.
 const PLACEHOLDER_ADMIN_SECRET: &str = "replace-with-a-long-random-string";
-const PLACEHOLDER_VIEWER_SECRET: &str = "replace-with-a-different-long-random-string";
 
 fn from_env(name: &str) -> Result<Secret, ConfigError> {
     let value = match std::env::var(name) {
@@ -468,7 +433,7 @@ fn from_env(name: &str) -> Result<Secret, ConfigError> {
             name: name.to_string(),
         });
     }
-    if value == PLACEHOLDER_ADMIN_SECRET || value == PLACEHOLDER_VIEWER_SECRET {
+    if value == PLACEHOLDER_ADMIN_SECRET {
         return Err(ConfigError::PlaceholderSecret {
             name: name.to_string(),
         });
@@ -934,7 +899,7 @@ mod tests {
     }
 
     #[test]
-    fn the_examples_two_placeholders_refuse_with_placeholder_secret() {
+    fn the_example_files_placeholder_refuses_with_placeholder_secret() {
         let dir = tempfile::tempdir().unwrap();
         std::env::set_var(
             "TEST_CFG_PLACEHOLDER_ADMIN",
@@ -943,14 +908,6 @@ mod tests {
         assert!(matches!(
             load(&file_with_secret_env(dir.path(), "placeholder-admin", "TEST_CFG_PLACEHOLDER_ADMIN")),
             Err(ConfigError::PlaceholderSecret { name }) if name == "TEST_CFG_PLACEHOLDER_ADMIN"
-        ));
-        std::env::set_var(
-            "TEST_CFG_PLACEHOLDER_VIEWER",
-            "replace-with-a-different-long-random-string",
-        );
-        assert!(matches!(
-            load(&file_with_secret_env(dir.path(), "placeholder-viewer", "TEST_CFG_PLACEHOLDER_VIEWER")),
-            Err(ConfigError::PlaceholderSecret { name }) if name == "TEST_CFG_PLACEHOLDER_VIEWER"
         ));
     }
 

@@ -7,7 +7,7 @@ use std::sync::Arc;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::{Extension, Json};
+use axum::Json;
 use phoebis_ledger::{
     list_requests, request_by_id, request_events, AttemptRecord, LiveKeys, RequestFilter,
     RequestRecord,
@@ -15,8 +15,8 @@ use phoebis_ledger::{
 use serde_json::{json, Value};
 
 use crate::analytics::ledger_failure;
-use crate::routes::{failure, Caller};
-use crate::{AdminState, Role};
+use crate::routes::failure;
+use crate::AdminState;
 
 const DEFAULT_LIMIT: usize = 50;
 const MAX_LIMIT: usize = 500;
@@ -229,16 +229,8 @@ pub(crate) fn event_json(e: &phoebis_ledger::EventRecord) -> Value {
 
 pub(crate) async fn bodies(
     State(state): State<Arc<AdminState>>,
-    Extension(caller): Extension<Caller>,
     Path(id): Path<String>,
 ) -> Response {
-    // The gate lets a viewer through on every GET; bodies are prompts, so this one route checks the role itself.
-    if caller.role != Role::Admin {
-        return failure(
-            StatusCode::FORBIDDEN,
-            "captured bodies are for administrators",
-        );
-    }
     let as_json_or_text = |bytes: &[u8]| {
         serde_json::from_slice::<Value>(bytes)
             .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(bytes).into_owned()))

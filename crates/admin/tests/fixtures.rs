@@ -31,14 +31,14 @@ fn shape(v: &Value) -> Value {
 }
 
 /// Every secret this capture plants or the router mints for it, bound where it is created so a seed that
-/// grows a new one has to name it here as well. The three literals are the harness's own configuration.
+/// grows a new one has to name it here as well. The two literals are the harness's own configuration.
 fn planted(
     access_token: &str,
     refresh_token: &str,
     key_secret: &str,
     rule_secret: &str,
 ) -> Vec<String> {
-    let mut needles: Vec<String> = ["admin-secret", "viewer-secret", "sk-ant-"]
+    let mut needles: Vec<String> = ["admin-secret", "sk-ant-"]
         .into_iter()
         .map(str::to_string)
         .collect();

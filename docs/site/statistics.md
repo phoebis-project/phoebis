@@ -157,9 +157,8 @@ Body capture is off until a key or a pool asks for it. Once asked for, a capture
 bodies of that key or pool in the ledger for the hours it names, each body cut at 8 MiB if the stream ran longer,
 the row keeping the length it ran to so the drawer can say how much was dropped, and each captured body is dropped
 once its hours run out. `stats.body_capture_max_hours` is the ceiling a key or pool may ask for, because the
-bodies are prompts and how long they are kept is the operator's call rather than the caller's. Only the admin role
-reads bodies: a viewer's request for them is answered `403 captured bodies are for administrators`. The console
-shows a captured body in the request drawer, with a control to copy it. A captured request body is the body as the
+bodies are prompts and how long they are kept is the operator's call rather than the caller's. The console shows a
+captured body in the request drawer, with a control to copy it. A captured request body is the body as the
 client sent it, so a session in auto mode shows its `safeguards` member whole, the machine's permission rules and paths
 included, whether or not the router dropped it on the way upstream.
 
@@ -217,8 +216,7 @@ session, like every other admin route. After the upgrade the socket sends one `{
 message and then a `{"kind": "delta", ...}` message for every change. The feed keeps 30 minutes or 2,048
 finished requests, whichever bound is reached first; a request or response preview inside a message is at most
 4 KiB; and a client that falls 1,024 messages behind the broadcast is disconnected rather than left to grow an
-unbounded backlog. A session logged in with the viewer secret sees no preview on the socket, and a past
-snapshot carries no preview whatever the role. The socket closes `1008 session ended` once its session ends,
+unbounded backlog. A past snapshot carries no preview. The socket closes `1008 session ended` once its session ends,
 and at most 64 sockets are served at once, a further one refused `503 live feed at capacity` until one closes.
 
 ## The console's views
@@ -368,7 +366,7 @@ its subtitle says so.
 
 ### Settings
 
-Settings covers appearance, access (the admin and viewer secrets and what each may do), pricing, sessions, retention,
+Settings covers appearance, access (the admin secret's status), pricing, sessions, retention,
 keepalive, listeners, the downstream client block, compatibility, and an about panel. Four more cards show the
 bootstrap file's quota, routing, storage, and usage blocks: the sample retention, the catalog cache window, the
 cooldown fallback, the model rejection window, and the attempt limit, the ledger, pricing, and storage paths, and the
@@ -476,9 +474,6 @@ secret; a rule with a secret never posts unsigned. Delivery makes three attempts
 next two after waits of 1 and 4 seconds; each request has a 10-second timeout and follows no redirect, since a
 redirect would carry the signature to a URL it was never computed for. A 2xx response counts as delivered, and
 Test fires one synthetic delivery through the same path.
-
-A viewer sees a rule's webhook host and never its full URL, since the URL can carry the receiver's credential in
-its path or query.
 
 ![The Alerts view: the rules, the events with deliveries, and the lifecycle log](assets/alerts-light.png#only-light)
 ![The Alerts view: the rules, the events with deliveries, and the lifecycle log](assets/alerts-dark.png#only-dark)

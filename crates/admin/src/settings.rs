@@ -16,7 +16,7 @@ pub(crate) async fn show(State(state): State<Arc<AdminState>>) -> Response {
     let tables = &state.tables;
     Json(json!({
         "about": { "profile": s.profile, "version": env!("CARGO_PKG_VERSION"), "public_url": s.admin_origin },
-        "access": { "admin_configured": true, "viewer_configured": s.viewer_configured },
+        "access": { "admin_configured": true },
         "keepalive": s.keepalive,
         "listeners": { "admin": s.admin_listen, "metrics": s.metrics_listen, "proxy": s.proxy_listen },
         "plan_tables": { "cost": tables.cost },

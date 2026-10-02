@@ -40,7 +40,7 @@ use phoebis_store::{NewBundle, Store};
 use phoebis_transport::control::ControlClient;
 
 pub use routes::router;
-pub use session::{AdminSecrets, LoginError, Role, Sessions};
+pub use session::{AdminSecrets, LoginError, Sessions};
 
 // A poisoned vault mutex means a prior panic happened while a pending bundle was being moved, so what
 // is still held, and what was already committed, can no longer be told apart.
@@ -112,7 +112,6 @@ pub struct SettingsView {
     pub storage_path: String,
     pub usage_cache_ttl_seconds: u64,
     pub usage_refresh_concurrency: usize,
-    pub viewer_configured: bool,
 }
 
 /// Credentials exchanged during pairing, held between the callback and the operator's confirmation.

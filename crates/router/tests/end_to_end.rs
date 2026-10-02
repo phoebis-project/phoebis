@@ -1575,15 +1575,13 @@ usage:
 }
 
 #[test]
-fn shared_secrets_are_rejected_and_plain_http_is_allowed_on_any_address() {
+fn plain_http_is_allowed_on_any_address_and_a_secure_listener_needs_an_origin() {
     use phoebis_router::config::{load, ConfigError};
     let dir = tempfile::tempdir().unwrap();
     let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     std::env::set_var("TEST_ADMIN_SECRET", "admin-secret-001");
-    std::env::set_var("TEST_VIEWER_SECRET", "viewer-secret-01");
-    std::env::set_var("TEST_SHARED_SECRET", "admin-secret-001");
-    let loopback_plain = "  listen: 127.0.0.1:8081\n  secret_env: TEST_ADMIN_SECRET\n  viewer_secret_env: TEST_VIEWER_SECRET\n  plain_http: true";
-    let shared = "  listen: 127.0.0.1:8081\n  secret_env: TEST_ADMIN_SECRET\n  viewer_secret_env: TEST_SHARED_SECRET\n  plain_http: true";
+    let loopback_plain =
+        "  listen: 127.0.0.1:8081\n  secret_env: TEST_ADMIN_SECRET\n  plain_http: true";
     let public_plain =
         "  listen: 0.0.0.0:8081\n  secret_env: TEST_ADMIN_SECRET\n  plain_http: true";
     let public_plain_with_origin =
@@ -1591,10 +1589,6 @@ fn shared_secrets_are_rejected_and_plain_http_is_allowed_on_any_address() {
     let public_secure =
         "  listen: 0.0.0.0:8081\n  secret_env: TEST_ADMIN_SECRET\n  plain_http: false";
     assert!(load(&config_with(dir.path(), "ok", loopback_plain)).is_ok());
-    assert!(matches!(
-        load(&config_with(dir.path(), "dup", shared)),
-        Err(ConfigError::DuplicateSecret { .. })
-    ));
     assert!(load(&config_with(dir.path(), "public", public_plain)).is_ok());
     let pinned = load(&config_with(dir.path(), "pinned", public_plain_with_origin)).unwrap();
     assert_eq!(
@@ -3482,9 +3476,10 @@ usage:
         200,
         "the session route answers JSON, not the shell"
     );
-    assert_eq!(
-        api.json::<serde_json::Value>().await.unwrap()["role"],
-        "admin"
+    let session = api.json::<serde_json::Value>().await.unwrap();
+    assert!(
+        session["session_id"].is_string() && session.get("role").is_none(),
+        "the session answer names the session and no role: {session}"
     );
     let unknown = client.get(admin("/nope")).send().await.unwrap();
     assert_eq!(
@@ -3531,7 +3526,7 @@ async fn the_ui_passes_the_browser_pass_over_every_view_in_both_themes() {
     .unwrap();
     let (proxy_port, admin_port, metrics_port) = (free_port(), free_port(), free_port());
     let yaml = format!(
-        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\n  viewer_secret_env: TEST_VIEWER_SECRET\n  plain_http: true\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nrouting:\n  cooldown_fallback_seconds: 3600\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
+        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\n  plain_http: true\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nrouting:\n  cooldown_fallback_seconds: 3600\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
         ledger = dir.path().join("ledger.sqlite").display(), key = dir.path().join("storage.key").display(), db = dir.path().join("phoebis.sqlite").display(), addr = up.addr(), ca = dir.path().join("ca.pem").display(),
     );
     let cfg_path = dir.path().join("config.yaml");
@@ -3539,7 +3534,6 @@ async fn the_ui_passes_the_browser_pass_over_every_view_in_both_themes() {
     let config = {
         let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         std::env::set_var("TEST_ADMIN_SECRET", "admin-secret-001");
-        std::env::set_var("TEST_VIEWER_SECRET", "viewer-secret-01");
         phoebis_router::config::load(&cfg_path).unwrap()
     };
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();

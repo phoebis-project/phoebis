@@ -17,7 +17,7 @@ use rand::Rng;
 use serde_json::{json, Value};
 
 use crate::pools::valid_slug;
-use crate::routes::{double_option, failure, reload_or_refuse, store_failure};
+use crate::routes::{double_option, failure, reload_or_refuse, store_failure, CreatedId};
 use crate::rules::{parse_mode, parse_rules, RuleInput};
 use crate::AdminState;
 
@@ -312,7 +312,9 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
     // A key this route just created has never rotated, so no session can present a retired secret of it.
     let mut v = key_json(&state.router.snapshot(), &row, &week, &lifetime, 0);
     v["secret"] = json!(secret);
-    (StatusCode::CREATED, Json(v)).into_response()
+    let mut response = (StatusCode::CREATED, Json(v)).into_response();
+    response.extensions_mut().insert(CreatedId(row.id));
+    response
 }
 
 pub(crate) async fn patch(

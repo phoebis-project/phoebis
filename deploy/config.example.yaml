@@ -7,7 +7,6 @@ admin:
   # false here, so origin is required and TLS is terminated in front.
   plain_http: false
   secret_env: PHOEBIS_ADMIN_SECRET
-  viewer_secret_env: PHOEBIS_VIEWER_SECRET
 keepalive:
   # Process-wide limits only. Whether a pool's sessions are probed, and the probe tuning, are pool settings in
   # the registry. The largest retained recipe follows the relay's 32 MiB request body bound.

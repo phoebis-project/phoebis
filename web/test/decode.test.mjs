@@ -1060,7 +1060,7 @@ test('an account patch encodes the cancelled flag and its end', () => {
 
 test('settings, pricing, pairing, quota, and usage decode', () => {
   const s = d.decodeSettings(fixture('settings'));
-  assert.equal(s.access.viewerConfigured, true);
+  assert.equal(s.access.viewerConfigured, false);
   assert.equal(s.about.publicUrl, null);
   assert.equal(s.sessions.expireAfterSeconds, 86400);
   assert.deepEqual(

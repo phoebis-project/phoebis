@@ -327,11 +327,6 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         sessions: Arc::new(Sessions::new(SESSION_IDLE, SESSION_ABSOLUTE)),
         secrets: AdminSecrets {
             admin: Secret::new(config.admin.secret.expose()),
-            viewer: config
-                .admin
-                .viewer_secret
-                .as_ref()
-                .map(|secret| Secret::new(secret.expose())),
         },
         clock: clock.clone(),
         plain_http: config.admin.plain_http,
@@ -373,7 +368,6 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             storage_path: config.storage.path.display().to_string(),
             usage_cache_ttl_seconds: config.usage.cache_ttl_seconds,
             usage_refresh_concurrency: config.usage.refresh_concurrency,
-            viewer_configured: config.admin.viewer_secret.is_some(),
         }),
         // Cloned rather than moved: the local binding still serves the companion router and the shutdown
         // sequence below.

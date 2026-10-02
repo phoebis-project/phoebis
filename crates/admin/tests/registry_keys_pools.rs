@@ -266,12 +266,6 @@ async fn pools_are_created_edited_and_deleted_with_their_members_and_validation(
         204
     );
     assert_eq!(get(&app, "/admin/pools", Some(&cookie)).await.status(), 200);
-    let viewer = login(&app, "viewer-secret").await;
-    assert_eq!(get(&app, "/admin/pools", Some(&viewer)).await.status(), 200);
-    assert_eq!(
-        get(&app, "/admin/sessions", Some(&viewer)).await.status(),
-        200
-    );
 }
 
 #[tokio::test]
@@ -519,25 +513,6 @@ async fn keys_are_issued_once_rotated_revoked_and_never_shown_again() {
         .status(),
         409,
         "or re-enabled"
-    );
-    let viewer = login(&app, "viewer-secret").await;
-    assert_eq!(get(&app, "/admin/keys", Some(&viewer)).await.status(), 200);
-    assert_eq!(
-        post(
-            &app,
-            "/admin/keys",
-            r#"{"id":"k2","label":"x","pool_id":"main"}"#,
-            Some(&viewer)
-        )
-        .await
-        .status(),
-        403
-    );
-    assert_eq!(
-        post(&app, "/admin/keys/desktop/rotate", "", Some(&viewer))
-            .await
-            .status(),
-        403
     );
 }
 

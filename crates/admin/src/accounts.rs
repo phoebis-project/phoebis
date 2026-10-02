@@ -14,7 +14,7 @@ use phoebis_store::{AccountKind, AccountRow, AccountState, AccountUpdate, Secret
 use serde_json::{json, Value};
 
 use crate::routes::{
-    account, account_json, double_option, failure, reload_or_refuse, store_failure,
+    account, account_json, double_option, failure, reload_or_refuse, store_failure, CreatedId,
 };
 use crate::AdminState;
 
@@ -125,7 +125,12 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
         return refusal;
     }
     match account(&state, &row.id) {
-        Ok(row) => (StatusCode::CREATED, Json(account_json(&state, &row).await)).into_response(),
+        Ok(row) => {
+            let mut response =
+                (StatusCode::CREATED, Json(account_json(&state, &row).await)).into_response();
+            response.extensions_mut().insert(CreatedId(row.id));
+            response
+        }
         Err(refusal) => refusal,
     }
 }

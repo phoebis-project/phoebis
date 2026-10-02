@@ -30,7 +30,7 @@ sed -e "s#/run/secrets/router-storage-key#$HOME/.config/phoebis/storage.key#" \
   -e 's/plain_http: false/plain_http: true/' -e '/^  origin:/d' \
   deploy/config.example.yaml > ~/.config/phoebis/config.yaml
 export PHOEBIS_CONFIG=$HOME/.config/phoebis/config.yaml
-export PHOEBIS_ADMIN_SECRET=$(openssl rand -base64 36) PHOEBIS_VIEWER_SECRET=$(openssl rand -base64 36)
+export PHOEBIS_ADMIN_SECRET=$(openssl rand -base64 36)
 target/release/phoebis
 ```
 
@@ -53,9 +53,9 @@ sudo install -m 0644 crates/ledger/pricing.yaml /etc/phoebis/pricing.yaml
 sudo systemctl daemon-reload
 ```
 
-Edit `/etc/phoebis/phoebis.env` and replace both secrets with long random strings that differ. The key file is created
-empty at 0600 before the key is written, rather than through a redirect, because a `tee` under `umask 022` would
-leave it world-readable between the write and a later `chmod`. The key seals every credential in
+Edit `/etc/phoebis/phoebis.env` and replace the secret with a long random string. The key file is created empty at
+0600 before the key is written, rather than through a redirect, because a `tee` under `umask 022` would leave it
+world-readable between the write and a later `chmod`. The key seals every credential in
 `router.sqlite`, so it stays out of any backup that carries the database.
 
 `deploy/phoebis.service` runs the process as the `phoebis` user with `EnvironmentFile=/etc/phoebis/phoebis.env`;
@@ -72,8 +72,8 @@ tunnel. Then validate it before enabling the service:
 sudo bash -c 'set -a; . /etc/phoebis/phoebis.env; set +a; exec phoebis check-config --config /etc/phoebis/config.yaml'
 ```
 
-`check-config` resolves `admin.secret_env` and `admin.viewer_secret_env` from the process environment like every
-other invocation, so the env file has to be sourced into this one shell first; plain
+`check-config` resolves `admin.secret_env` from the process environment like every other invocation, so the env
+file has to be sourced into this one shell first; plain
 `sudo phoebis check-config --config /etc/phoebis/config.yaml` fails with `environment variable PHOEBIS_ADMIN_SECRET is
 unset or empty`. Once it is clean, `sudo systemctl enable --now phoebis`.
 
@@ -97,8 +97,8 @@ sudo install -m 0400 -o 65532 -g 65532 /dev/null storage.key
 head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' | sudo tee storage.key >/dev/null
 ```
 
-Edit `phoebis.env` and replace both secrets with long random strings that differ; both it and `storage.key` hold
-secrets and stay out of version control. The key file is owned by uid 65532 at mode `0400` because Compose
+Edit `phoebis.env` and replace the secret with a long random string; both it and `storage.key` hold secrets and
+stay out of version control. The key file is owned by uid 65532 at mode `0400` because Compose
 mounts a file secret with the host file's owner and mode, and that uid is the one the process runs as. Set
 `image:` in `compose.yaml` to the version you want, then:
 
@@ -176,20 +176,16 @@ seconds ([the container](#run-the-container)).
 The bootstrap file names environment variables and never holds a secret. `phoebis` resolves them at startup and
 refuses to start when one is unset or empty, with `environment variable {name} is unset or empty` and nothing
 else. A value shorter than 16 characters refuses with `environment variable {name} holds a secret shorter than
-16 characters`, and either of the example file's own placeholders refuses with `environment variable {name}
-still holds the example placeholder`. The two admin secrets must differ: a viewer secret that equals the admin
-one would silently turn the read-only login into a full one, and `phoebis` refuses to start with `{first} and
-{second} resolve to the same secret`.
+16 characters`, and the example file's own placeholder refuses with `environment variable {name} still holds the
+example placeholder`.
 
 | Variable | Named by | Holds |
 | --- | --- | --- |
 | `PHOEBIS_CONFIG` | `phoebis` itself, when `--config` is absent | The path of the bootstrap file. |
 | `PHOEBIS_ADMIN_SECRET` | `admin.secret_env` | The admin login, which reaches every admin route. |
-| `PHOEBIS_VIEWER_SECRET` | `admin.viewer_secret_env` | The read-only admin login. |
 
-Pick your own names; `PHOEBIS_ADMIN_SECRET` and `PHOEBIS_VIEWER_SECRET` are what the example file happens to use.
-`admin.viewer_secret_env` is the one line you may delete outright, for no read-only login. `RUST_LOG` sets the log
-filter and defaults to `info`.
+Pick your own name; `PHOEBIS_ADMIN_SECRET` is what the example file happens to use. `RUST_LOG` sets the log filter
+and defaults to `info`.
 Nothing else is named here: an account's upstream credential and the keys downstream clients present belong to
 the registry, not the bootstrap file.
 
@@ -205,7 +201,6 @@ admin:
   # false here, so origin is required and TLS is terminated in front.
   plain_http: false
   secret_env: PHOEBIS_ADMIN_SECRET
-  viewer_secret_env: PHOEBIS_VIEWER_SECRET
 keepalive:
   # Process-wide limits only. Whether a pool's sessions are probed, and the probe tuning, are pool settings in
   # the registry. The largest retained recipe follows the relay's 32 MiB request body bound.
@@ -266,13 +261,17 @@ defaults, what they accept, and the message a refused value gets.
 
 Required.
 
+Phoebis Router is built for one operator: one admin secret reaches every route, and the console is that person's
+own. Every mutation through the admin API, a create, an edit, a delete or a login, is written to the log as one
+`info` line naming its method, route, status, entity and session id, never its body or a secret; the host's journal
+is the trail.
+
 | Key | Default | Accepts |
 | --- | --- | --- |
 | `listen` | required | a socket address |
 | `origin` | unset | the origin every mutation's `Origin` header must equal; required unless `plain_http` |
 | `plain_http` | `false` | `true` serves the console over plain HTTP on any address |
 | `secret_env` | required | the variable holding the admin secret |
-| `viewer_secret_env` | unset | the variable holding the read-only secret |
 
 With `plain_http: true` the session cookie is issued without `Secure` and `origin` may be left unset. On a
 loopback listener behind an SSH tunnel that costs nothing. On any other address the admin secret at login and
@@ -288,8 +287,6 @@ Refused with:
 - `listen`: a YAML error
 - `origin`: `admin.origin is required unless admin.plain_http is set`
 - `secret_env`: `environment variable {name} is unset or empty`
-- `viewer_secret_env`: the same message, plus `{first} and {second} resolve to the same secret` when it equals
-  the admin secret
 
 ### keepalive
 

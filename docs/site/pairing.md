@@ -138,5 +138,3 @@ The Accounts view offers these actions, each calling its own route:
 
 The console warns before Clear cooldown runs: "The account becomes eligible immediately. If the account is still
 rate limited, the next request re-enters cooldown."
-
-A viewer sees every one of these pages and none of the buttons but Catalog, and may refresh usage and the catalog.

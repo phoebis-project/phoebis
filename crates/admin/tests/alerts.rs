@@ -1,5 +1,5 @@
 //! The alerts routes: rules with their validation and their secret kept out of every answer, events with their
-//! deliveries and the state filter, the test delivery, the operator's resolve, and the viewer's limits.
+//! deliveries and the state filter, the test delivery, and the operator's resolve.
 mod common;
 use common::{delete, get, json, login, patch, post};
 
@@ -226,8 +226,7 @@ async fn rules_are_created_validated_edited_tested_and_deleted_without_leaking_t
 }
 
 #[tokio::test]
-async fn events_list_with_their_deliveries_filter_by_state_and_resolve_by_hand_and_the_viewer_reads_only(
-) {
+async fn events_list_with_their_deliveries_filter_by_state_and_resolve_by_hand() {
     use phoebis_alerts::{Kind, Signal};
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
@@ -328,36 +327,6 @@ async fn events_list_with_their_deliveries_filter_by_state_and_resolve_by_hand_a
     )
     .await;
     assert_eq!(deliveries["deliveries"].as_array().unwrap().len(), 3);
-    let viewer = login(&parts.app, "viewer-secret").await;
-    assert_eq!(
-        get(&parts.app, "/admin/alerts/rules", Some(&viewer))
-            .await
-            .status(),
-        200
-    );
-    assert_eq!(
-        get(&parts.app, "/admin/alerts/events", Some(&viewer))
-            .await
-            .status(),
-        200
-    );
-    assert_eq!(
-        post(
-            &parts.app,
-            &format!("/admin/alerts/events/{id}/resolve"),
-            "",
-            Some(&viewer)
-        )
-        .await
-        .status(),
-        403
-    );
-    assert_eq!(
-        post(&parts.app, "/admin/alerts/rules", "{}", Some(&viewer))
-            .await
-            .status(),
-        403
-    );
     parts.webhook.answer(Ok(200));
     let resolved = post(
         &parts.app,
@@ -506,13 +475,6 @@ async fn lifecycle_deliveries_are_listed_newest_first_by_kind_and_refuse_another
     )
     .await;
     assert_eq!(refused.status(), 400);
-    let viewer = login(&parts.app, "viewer-secret").await;
-    assert_eq!(
-        get(&parts.app, "/admin/alerts/deliveries", Some(&viewer))
-            .await
-            .status(),
-        200
-    );
 }
 
 #[tokio::test]
@@ -603,113 +565,6 @@ async fn lifecycle_deliveries_continue_below_a_cursor_and_refuse_a_malformed_one
     .await;
     assert_eq!(malformed.status(), 400);
     assert_eq!(json(malformed).await["error"], "cursor is <at>:<id>");
-    let viewer = login(&parts.app, "viewer-secret").await;
-    assert_eq!(
-        get(
-            &parts.app,
-            &format!("/admin/alerts/deliveries?cursor={cursor}"),
-            Some(&viewer),
-        )
-        .await
-        .status(),
-        200
-    );
-}
-
-/// The question in a detail is text out of a captured response body, which the viewer may not read on
-/// `/admin/requests/{id}/bodies` either.
-#[tokio::test]
-async fn a_viewer_reads_an_event_without_the_question_its_detail_carries() {
-    use phoebis_alerts::{Kind, Signal};
-    let parts = common::admin_parts_full().await;
-    let cookie = login(&parts.app, "admin-secret").await;
-    let created = post(&parts.app, "/admin/alerts/rules", r#"{"kind":"ask_user_question","scope":{"type":"all"},"webhook_url":"http://127.0.0.1:1/hook"}"#, Some(&cookie)).await;
-    assert_eq!(created.status(), 201);
-    parts.alerts.signal(&Signal {
-        kind: Kind::AskUserQuestion,
-        account_id: None,
-        key_id: Some("desktop".into()),
-        pool_id: None,
-        subject: "sess-1".into(),
-        detail: serde_json::json!({ "agent": "main", "key": "desktop", "question": "Which branch should I push?", "session": "sess-1" }),
-    });
-    parts.alerts.wait_idle().await;
-    let seen = json(get(&parts.app, "/admin/alerts/events", Some(&cookie)).await).await;
-    let detail = &seen["events"][0]["detail"];
-    assert_eq!(
-        detail["question"].as_str(),
-        Some("Which branch should I push?")
-    );
-    assert!(
-        detail.get("question_redacted").is_none(),
-        "an admin reads the text and is told nothing about redaction"
-    );
-    let viewer = login(&parts.app, "viewer-secret").await;
-    let seen = json(get(&parts.app, "/admin/alerts/events", Some(&viewer)).await).await;
-    let event = &seen["events"][0];
-    assert_eq!(
-        (
-            event["detail"]["question"].as_null(),
-            event["detail"]["question_redacted"].as_bool(),
-            event["detail"]["session"].as_str()
-        ),
-        (Some(()), Some(true), Some("sess-1")),
-        "the text goes, the redaction is stated, every other field stays"
-    );
-    assert!(!seen.to_string().contains("Which branch"));
-    let id = event["id"].as_str().unwrap();
-    let deliveries = json(
-        get(
-            &parts.app,
-            &format!("/admin/alerts/events/{id}/deliveries"),
-            Some(&viewer),
-        )
-        .await,
-    )
-    .await;
-    assert_eq!(deliveries["deliveries"].as_array().unwrap().len(), 1);
-}
-
-#[tokio::test]
-async fn a_viewer_reads_a_rules_destination_and_none_of_the_credentials_in_its_url() {
-    let parts = common::admin_parts_full().await;
-    let cookie = login(&parts.app, "admin-secret").await;
-    // The three places a receiver can take a credential in its URL: the userinfo, the path and the query.
-    let url = "https://tokenuser:tokenpass@hooks.example:8443/services/pathtoken?key=querytoken";
-    let created = post(
-        &parts.app,
-        "/admin/alerts/rules",
-        &format!(r#"{{"kind":"client_drift","scope":{{"type":"all"}},"webhook_url":"{url}"}}"#),
-        Some(&cookie),
-    )
-    .await;
-    assert_eq!(created.status(), 201);
-    let listed = json(get(&parts.app, "/admin/alerts/rules", Some(&cookie)).await).await;
-    assert_eq!(
-        listed["rules"][0]["webhook_url"].as_str(),
-        Some(url),
-        "an admin edits the rule, so an admin reads it whole"
-    );
-    let viewer = login(&parts.app, "viewer-secret").await;
-    let listed = json(get(&parts.app, "/admin/alerts/rules", Some(&viewer)).await).await;
-    assert_eq!(
-        listed["rules"][0]["webhook_url"].as_str(),
-        Some("hooks.example:8443"),
-        "the destination, and nothing that authenticates to it"
-    );
-    let body = listed.to_string();
-    for sentinel in [
-        "/services/",
-        "pathtoken",
-        "querytoken",
-        "tokenpass",
-        "tokenuser",
-    ] {
-        assert!(
-            !body.contains(sentinel),
-            "the viewer's answer carries {sentinel}: {body}"
-        );
-    }
 }
 
 #[tokio::test]
