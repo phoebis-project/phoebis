@@ -248,10 +248,3 @@ export const IconServer = (p: Props) => (
     <path d="M7 7h.01M7 17h.01" />
   </svg>
 );
-export const IconRoute = (p: Props) => (
-  <svg {...base(p)}>
-    <circle cx="5" cy="18" r="2.5" />
-    <circle cx="19" cy="6" r="2.5" />
-    <path d="M7.5 18H12a4 4 0 0 0 4-4v-1a4 4 0 0 1 4-4h-3.5" />
-  </svg>
-);

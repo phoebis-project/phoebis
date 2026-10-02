@@ -116,6 +116,25 @@ async fn hashed_assets_are_immutable_and_typed_and_a_missing_asset_is_a_404() {
         );
         assert!(body.contains("data-theme"));
     }
+    let (status, headers, body) = send("GET", "/favicon.svg").await;
+    if phoebis_ui::is_placeholder() {
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    } else {
+        assert_eq!(status, StatusCode::OK);
+        assert!(headers["content-type"]
+            .to_str()
+            .unwrap()
+            .starts_with("image/svg+xml"));
+        assert_eq!(headers["cache-control"], "no-store");
+        assert!(
+            body.contains("prefers-color-scheme"),
+            "the favicon follows the browser's scheme"
+        );
+        assert!(
+            phoebis_ui::lookup("favicon-32.png").is_some(),
+            "the PNG fallback is in the bundle"
+        );
+    }
 }
 
 #[tokio::test]

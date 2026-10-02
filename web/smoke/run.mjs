@@ -97,6 +97,7 @@ const failoverRow = requests.find((r) => r.attempts.length > 1 && r.attempts.som
   localStorage.removeItem('phoebis.mockSession');
   const login = await mount('/');
   expect('login screen without a session', login.text(), ['Admin or viewer secret', 'Log in']);
+  results.push({ name: 'the login view carries the mark and the couplet', ok: login.container.querySelector('.brand__mark svg rect') !== null && login.text().includes('Place every request. Keep every session.'), missing: [] });
   const input = login.container.querySelector('input[type="password"]');
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
   setter.call(input, 'viewer');
@@ -136,6 +137,7 @@ const failoverRow = requests.find((r) => r.attempts.length > 1 && r.attempts.som
 let m = await mount('/');
 expect('/ dashboard', m.text(), ['Requests, 24h', 'Tokens, 24h', 'Estimated cost, 24h', 'Error rate, 24h', '5h remaining', '7d remaining', 'remaining', 'business', 'personal', 'Cooling down', 'Overage active', 'Needs re-auth', 'Recent requests', 'Sticky pins and cache-warming agents', 'active pins', 'admin', 'Fable', 'n/a']);
 results.push({ name: 'data-theme set', ok: document.documentElement.getAttribute('data-theme') === 'light', missing: [document.documentElement.getAttribute('data-theme')] });
+results.push({ name: 'the shell carries the mark beside the name and no couplet', ok: m.container.querySelector('.sidebar .brand__mark svg rect') !== null && m.container.querySelector('.sidebar .brand__name')?.textContent === 'Phoebis Router' && m.container.querySelector('.sidebar .brand__couplet') === null, missing: [] });
 {
   // The story's pools hold 10, 2 and no pins, all of the pinned sessions sit on business or personal, and the
   // sessions route answers 17 rows, so a hero counting rows or a note counting every row's upstream reads otherwise.

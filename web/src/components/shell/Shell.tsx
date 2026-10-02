@@ -5,7 +5,8 @@ import { useSession } from '@/app/session';
 import { useAppSettings, type ThemeChoice } from '@/app/settings';
 import { useAsync } from '@/lib/hooks';
 import { Badge, Button, Segmented, Toast } from '@/components/ui/primitives';
-import { IconActivity, IconBell, IconChart, IconGauge, IconGrid, IconKey, IconLayers, IconList, IconMonitor, IconMoon, IconSessions, IconShield, IconSliders, IconSun, IconUser, IconRoute } from '@/components/ui/icons';
+import { IconActivity, IconBell, IconChart, IconGauge, IconGrid, IconKey, IconLayers, IconList, IconMonitor, IconMoon, IconSessions, IconShield, IconSliders, IconSun, IconUser } from '@/components/ui/icons';
+import { Mark } from '@/components/ui/Mark';
 
 const NAV: { icon: ReactNode; label: string; to: string }[] = [
   { to: '/', label: 'Dashboard', icon: <IconGrid size={16} /> },
@@ -57,7 +58,7 @@ export function Shell() {
       <aside className="sidebar">
         <div className="brand">
           <span className="brand__mark" aria-hidden>
-            <IconRoute size={18} />
+            <Mark size={20} />
           </span>
           <span className="brand__name">Phoebis Router</span>
         </div>

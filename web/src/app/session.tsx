@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 import { api, MOCK, type Role, type SessionInfo } from '@/api';
 import { ApiError, setHooks } from '@/api/http';
 import { Button, Input } from '@/components/ui/primitives';
-import { IconRoute } from '@/components/ui/icons';
+import { Mark } from '@/components/ui/Mark';
 
 /** Only the mock build previews a role, and the smoke runner remounts between checks, so the choice outlives a mount. */
 const PREVIEW_KEY = 'phoebis.role';
@@ -130,9 +130,10 @@ export function LoginScreen({ notice, onLoggedIn }: { notice: string | null; onL
       >
         <div className="brand">
           <span className="brand__mark" aria-hidden>
-            <IconRoute size={18} />
+            <Mark size={48} />
           </span>
           <span className="brand__name">Phoebis Router</span>
+          <p className="brand__couplet">Place every request. Keep every session.</p>
         </div>
         <label className="field">
           <span className="field__label">Admin or viewer secret</span>

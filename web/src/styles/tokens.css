@@ -18,6 +18,9 @@
   --accent-ring: rgba(9, 105, 218, 0.35);
   --on-accent: #ffffff;
 
+  --mark-cell: #16181d;
+  --mark-body: #e9b800;
+
   --good: #0ca30c;
   --good-ink: #006300;
   --good-soft: #e2f4e2;
@@ -81,6 +84,9 @@
   --accent-soft: #388bfd1a;
   --accent-ring: rgba(68, 147, 248, 0.4);
   --on-accent: #0d1117;
+
+  --mark-cell: #f2f3f5;
+  --mark-body: #ffd23f;
 
   --good: #0ca30c;
   --good-ink: #5ed35e;
