@@ -1349,7 +1349,7 @@ async fn a_plan_funded_probe_on_a_model_with_an_unmeasured_cell_settles_in_dolla
     );
 }
 
-/// A model neither table prices (Fable 5: every cost cell null, no dollar row) settles a plan-funded probe in
+/// A model neither table prices (Sonnet 4.6: no cost row, no dollar row) settles a plan-funded probe in
 /// dollars at the price table's dearest cells, never at zero, so the dollar cap and the net both bound it while the
 /// share cap cannot.
 #[tokio::test]
@@ -1365,7 +1365,7 @@ async fn a_plan_funded_probe_on_a_model_neither_table_prices_books_the_dearest_c
     })
     .await;
     r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
-    r.observe_with("main", &body_on("claude-fable-5")).await;
+    r.observe_with("main", &body_on("claude-sonnet-4-6")).await;
     r.advance(270_000);
     r.step().await;
     let status = r.status("main");
