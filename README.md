@@ -1,13 +1,12 @@
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/site/assets/phoebis-router.svg">
-  <img src="docs/site/assets/phoebis-router-light.svg" alt="" width="64" height="64">
-</picture>
+<!-- markdownlint-disable-file MD033 MD041 -->
+<div align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.svg">
+    <img src="assets/logo-light.svg" alt="Phoebis Router" width="360">
+  </picture>
+</div>
 
-# Phoebis Router
-
-A router for Claude Code.
-
-Every request lands on the right account. Phoebis is a genus of sulphur butterflies, migrants of the Americas that
+Phoebis Router is a router for Claude Code. Phoebis is a genus of sulphur butterflies, migrants of the Americas that
 land on the right flower. A downstream client points at `phoebis` with a key the router issued; `phoebis` puts the
 request on the wire to Anthropic, under credentials it holds itself, and picks
 those credentials from a pool of accounts with sticky sessions, quota-driven failover, prompt-cache keepalive,
@@ -71,3 +70,7 @@ Nothing in this build has talked to Anthropic yet. The wire shapes come from a c
 Linux x64, and every test runs against a loopback fake upstream that replays those fixtures. A first live run
 against `api.anthropic.com` is still ahead, and until it happens, treat the relayed shape as verified against the
 capture only.
+
+## License
+
+Released under the MIT license. See [`LICENSE`](LICENSE) for the full text.

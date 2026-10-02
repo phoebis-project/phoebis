@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 280 170" role="img" aria-label="Phoebis Router">
+  <title>Phoebis Router</title>
+
+  <!-- Editable master; the wordmark needs Audiowide installed (SIL Open Font License, fonts.google.com/specimen/Audiowide)
+       and the tagline DejaVu Sans. Regenerate the self-contained copy the README uses:
+       rsvg-convert -f svg logo-dark.svg -o ../logo-dark.svg -->
+  <!-- The Pixel mark: a sulphur butterfly on a seven-by-seven grid of rounded cells, the body in the accent -->
+  <g transform="translate(96.8,8) scale(0.9)">
+    <rect x="18" y="6" width="10" height="10" rx="2.5" fill="#F2F3F5"/>
+    <rect x="66" y="6" width="10" height="10" rx="2.5" fill="#F2F3F5"/>
+    <rect x="30" y="18" width="10" height="10" rx="2.5" fill="#F2F3F5"/>
+    <rect x="54" y="18" width="10" height="10" rx="2.5" fill="#F2F3F5"/>
+    <rect x="6" y="30" width="10" height="10" rx="2.5" fill="#F2F3F5"/>
+    <rect x="18" y="30" width="10" height="10" rx="2.5" fill="#F2F3F5"/>
+    <rect x="42" y="30" width="10" height="10" rx="2.5" fill="#FFD23F"/>
+    <rect x="66" y="30" width="10" height="10" rx="2.5" fill="#F2F3F5"/>
+    <rect x="78" y="30" width="10" height="10" rx="2.5" fill="#F2F3F5"/>
+    <rect x="6" y="42" width="10" height="10" rx="2.5" fill="#F2F3F5"/>
+    <rect x="18" y="42" width="10" height="10" rx="2.5" fill="#F2F3F5"/>
+    <rect x="30" y="42" width="10" height="10" rx="2.5" fill="#F2F3F5"/>
+    <rect x="42" y="42" width="10" height="10" rx="2.5" fill="#FFD23F"/>
+    <rect x="54" y="42" width="10" height="10" rx="2.5" fill="#F2F3F5"/>
+    <rect x="66" y="42" width="10" height="10" rx="2.5" fill="#F2F3F5"/>
+    <rect x="78" y="42" width="10" height="10" rx="2.5" fill="#F2F3F5"/>
+    <rect x="6" y="54" width="10" height="10" rx="2.5" fill="#F2F3F5"/>
+    <rect x="18" y="54" width="10" height="10" rx="2.5" fill="#F2F3F5"/>
+    <rect x="30" y="54" width="10" height="10" rx="2.5" fill="#F2F3F5"/>
+    <rect x="42" y="54" width="10" height="10" rx="2.5" fill="#FFD23F"/>
+    <rect x="54" y="54" width="10" height="10" rx="2.5" fill="#F2F3F5"/>
+    <rect x="66" y="54" width="10" height="10" rx="2.5" fill="#F2F3F5"/>
+    <rect x="78" y="54" width="10" height="10" rx="2.5" fill="#F2F3F5"/>
+    <rect x="18" y="66" width="10" height="10" rx="2.5" fill="#F2F3F5"/>
+    <rect x="30" y="66" width="10" height="10" rx="2.5" fill="#F2F3F5"/>
+    <rect x="42" y="66" width="10" height="10" rx="2.5" fill="#FFD23F"/>
+    <rect x="54" y="66" width="10" height="10" rx="2.5" fill="#F2F3F5"/>
+    <rect x="66" y="66" width="10" height="10" rx="2.5" fill="#F2F3F5"/>
+    <rect x="30" y="78" width="10" height="10" rx="2.5" fill="#F2F3F5"/>
+    <rect x="42" y="78" width="10" height="10" rx="2.5" fill="#FFD23F"/>
+    <rect x="54" y="78" width="10" height="10" rx="2.5" fill="#F2F3F5"/>
+  </g>
+
+  <text x="140" y="128" text-anchor="middle" font-family="Audiowide" font-size="30" fill="#F2F3F5">Phoebis</text>
+  <text x="140" y="152" text-anchor="middle" font-family="DejaVu Sans" font-size="12" letter-spacing="0.3" fill="#A3A9B5">Every request lands on the right account.</text>
+</svg>
