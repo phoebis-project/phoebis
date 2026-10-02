@@ -81,6 +81,165 @@ fn hold(planted: &[String], name: &str, route: &str, body: Value) {
     assert_eq!(shape(&committed["body"]), shape(&captured["body"]), "{name}: the committed fixture's shape differs from the live answer; re-capture and update the decoder");
 }
 
+/// A value past its field's type fails the body's parse, and that sentence names no bound, so such a probe keeps
+/// its status alone.
+const UNPARSED: &str = "body must be a JSON object";
+const POOL_ROUTE: &str = "PATCH /admin/pools/{id}";
+const KEY_ROUTE: &str = "PATCH /admin/keys/{id}";
+
+/// The route's answer to every bound the console holds and to one past it: the keepalive policy's, the pool
+/// engine's, the model rule count's and both caps'. An admitted probe is written back at once from the list read
+/// taken before the probes, so each probe meets the seeded pool and key, as the captures after these do.
+async fn bound_probes(app: &axum::Router, cookie: &str) -> Value {
+    let pools = json(get(app, "/admin/pools", Some(cookie)).await).await;
+    let pool = pools["pools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["id"] == "main")
+        .expect("the seeded pool is listed")
+        .clone();
+    let keys = json(get(app, "/admin/keys", Some(cookie)).await).await;
+    let key = keys["keys"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|k| k["id"] == "desktop")
+        .expect("the seeded key is listed")
+        .clone();
+
+    // Each row: the path, the route, the field as the route names it, the value, the body and its restore.
+    let mut table: Vec<(&str, &str, String, u64, Value, Value)> = Vec::new();
+    for (field, min, max) in [
+        ("cold_probe_limit", 1, 20),
+        ("jitter_seconds_1h", 0, 3_599),
+        ("jitter_seconds_5m", 0, 299),
+        ("lead_seconds_1h", 0, 3_599),
+        ("lead_seconds_5m", 0, 299),
+        ("max_idle_seconds", 0, 31_536_000),
+        ("max_idle_ticks", 0, 1_000_000),
+        ("net_negative_grace_probes", 0, 100),
+        ("retry_max_seconds", 1, 604_800),
+        ("retry_seconds", 1, 3_600),
+    ] {
+        // The policy refuses a retry ceiling under its base, which would mask either bound's own answer, so each
+        // of the pair is probed against the other's widest setting.
+        let companion = match field {
+            "retry_max_seconds" => Some(("retry_seconds", 1)),
+            "retry_seconds" => Some(("retry_max_seconds", 604_800)),
+            _ => None,
+        };
+        let values = if min > 0 {
+            vec![min, min - 1, max, max + 1]
+        } else {
+            vec![min, max, max + 1]
+        };
+        for value in values {
+            let mut set = j!({ field: value });
+            let mut stored = j!({ field: pool["keepalive"][field] });
+            if let Some((other, widest)) = companion {
+                set[other] = j!(widest);
+                stored[other] = pool["keepalive"][other].clone();
+            }
+            table.push((
+                "/admin/pools/main",
+                POOL_ROUTE,
+                format!("keepalive.{field}"),
+                value,
+                j!({ "keepalive": set }),
+                j!({ "keepalive": stored }),
+            ));
+        }
+    }
+    for (field, values) in [
+        ("burn_window_seconds", &[60, 59][..]),
+        ("source_dwell_seconds", &[60, 59]),
+        ("retry_in_place_seconds", &[0, 300, 301]),
+        ("overage_move_grace_minutes", &[0, 300, 301]),
+        ("wind_down_minutes", &[0, 10_080, 10_081]),
+        ("in_flight_cap", &[1, 0, 4_294_967_295, 4_294_967_296]),
+    ] {
+        for &value in values {
+            table.push((
+                "/admin/pools/main",
+                POOL_ROUTE,
+                field.into(),
+                value,
+                j!({ field: value }),
+                j!({ field: pool[field] }),
+            ));
+        }
+    }
+    for count in [256, 257] {
+        let rule = j!({ "pattern": "claude-haiku-*", "not": true });
+        table.push((
+            "/admin/pools/main",
+            POOL_ROUTE,
+            "model_rules".into(),
+            count,
+            j!({ "model_rules": vec![rule; count as usize] }),
+            j!({ "model_rules": pool["model_rules"] }),
+        ));
+    }
+    for value in [1, 0, 4_294_967_295, 4_294_967_296] {
+        table.push((
+            "/admin/keys/desktop",
+            KEY_ROUTE,
+            "in_flight_cap".into(),
+            value,
+            j!({ "in_flight_cap": value }),
+            j!({ "in_flight_cap": key["in_flight_cap"] }),
+        ));
+    }
+
+    let mut probes = Vec::new();
+    for (path, route, field, value, body, restore) in table {
+        let response = patch(app, path, &body.to_string(), Some(cookie)).await;
+        let status = response.status();
+        let answer = json(response).await;
+        let mut probe =
+            j!({ "route": route, "field": field, "value": value, "status": status.as_u16() });
+        if status.is_success() {
+            let restored = patch(app, path, &restore.to_string(), Some(cookie)).await;
+            assert_eq!(
+                restored.status(),
+                200,
+                "{field} {value}: the stored value is written back"
+            );
+        } else if let Some(error) = answer["error"].as_str().filter(|e| *e != UNPARSED) {
+            probe["error"] = j!(error);
+        }
+        probes.push(probe);
+    }
+
+    let unstamped = |mut pool: Value| {
+        pool.as_object_mut().unwrap().remove("updated_at");
+        pool
+    };
+    let after = json(get(app, "/admin/pools", Some(cookie)).await).await;
+    let restored = after["pools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["id"] == "main")
+        .unwrap()
+        .clone();
+    assert_eq!(
+        unstamped(restored),
+        unstamped(pool),
+        "the probes leave the pool as seeded"
+    );
+    let after = json(get(app, "/admin/keys", Some(cookie)).await).await;
+    let restored = after["keys"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|k| k["id"] == "desktop")
+        .unwrap();
+    assert_eq!(restored, &key, "the probes leave the key as seeded");
+    Value::Array(probes)
+}
+
 fn request(
     key_generation: i64,
     id: &str,
@@ -806,6 +965,25 @@ async fn every_route_is_captured_and_holds_its_shape() {
             name,
             &format!("GET {route}"),
             json(response).await,
+        );
+    }
+    let probes = bound_probes(app, &cookie).await;
+    hold(
+        &planted,
+        "bound_refusals",
+        "PATCH /admin/pools/{id}, PATCH /admin/keys/{id}",
+        j!({ "probes": probes.clone() }),
+    );
+    // `hold` compares shapes, which a moved bound or sentence keeps; the web tests hold the form and the mock to
+    // these values, so a route that moves one fails here instead of leaving them on the old answers.
+    if std::env::var_os("PHOEBIS_WRITE_FIXTURES").is_none() {
+        let committed: Value = serde_json::from_str(
+            &std::fs::read_to_string(dir().join("bound_refusals.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            committed["body"]["probes"], probes,
+            "a route answers a bound probe differently; re-capture and move the console's copy with it"
         );
     }
     // The deliveries route needs the id the events answer carries, so it is captured after the loop.

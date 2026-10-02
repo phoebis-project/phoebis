@@ -396,3 +396,31 @@ test("the key dialog maps the server-side auto mode override to inherit, on, or 
   const sent = (choice) => d.keyInputOf({ ...form, autoModeServer: choice }, NOW).autoModeServer;
   assert.deepEqual([sent('inherit'), sent('on'), sent('off')], [null, true, false]);
 });
+
+// The route refuses a retry ceiling under its base, which would mask either bound's own answer, so the capture sends
+// each of the pair with the other at its widest setting, and the replay does the same.
+const RETRY_PAIR = { 'keepalive.retry_max_seconds': { retrySeconds: 1 }, 'keepalive.retry_seconds': { retryMaxSeconds: 604_800 } };
+const camel = (s) => s.replace(/_([a-z0-9])/g, (_, c) => c.toUpperCase());
+
+test('the form admits and refuses the values the routes do', () => {
+  const { probes } = fixture('bound_refusals');
+  assert.ok(probes.length > 0);
+  for (const { field, route, status, value } of probes) {
+    let admitted;
+    if (route === 'PATCH /admin/keys/{id}') {
+      assert.equal(field, 'in_flight_cap');
+      admitted = d.keyRefusals({ inFlightCap: String(value), modelRules: [], name: 'Desktop', poolId: 'main' }).length === 0;
+    } else if (field.startsWith('keepalive.')) {
+      const key = camel(field.slice('keepalive.'.length));
+      assert.ok(key in d.KEEPALIVE_BOUNDS, `${field} is a field the form bounds`);
+      admitted = d.validatePoolInput(tuned({ ...RETRY_PAIR[field], [key]: value }), accounts);
+    } else if (field === 'model_rules') {
+      admitted = d.validatePoolInput({ ...input, modelRules: Array.from({ length: value }, () => ({ not: true, pattern: 'claude-haiku-*' })) }, accounts);
+    } else {
+      const key = camel(field);
+      assert.ok(key in d.ENGINE_BOUNDS, `${field} is a field the form bounds`);
+      admitted = d.validatePoolInput({ ...input, [key]: value }, accounts);
+    }
+    assert.equal(admitted, status >= 200 && status < 300, `${route} ${field} ${value}: the route answered ${status}`);
+  }
+});

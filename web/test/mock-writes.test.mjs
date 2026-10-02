@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import * as d from './dist/api.js';
+
+const fixture = (name) => JSON.parse(readFileSync(new URL(`./fixtures/${name}.json`, import.meta.url), 'utf8')).body;
 
 /** A fresh mock signed in the way the login screen signs a browser in. */
 const as = async (role) => {
@@ -406,5 +409,38 @@ test('the quota snapshots never answer a status or a poll outcome the decoder ca
     const polls = snapshots.map((s) => s.poll);
     assert.deepEqual(polls.filter((p) => p !== null && !['clean', 'failed', 'rate_limited'].includes(p.lastOutcome)), [], `read ${read + 1}`);
     assert.ok(polls.includes(null) && polls.some((p) => p?.backoffSince), 'the story holds an account not yet polled and one backing off');
+  }
+});
+
+test('the mock answers each captured bound probe with the route\'s status and sentence', async () => {
+  const api = await as('admin');
+  // The probes write the router's seeded pool `main`, which the story does not hold, so each pool probe replays on
+  // the story pool `all` from its stored input. The rule count is left out: the mock judges a rule list with the
+  // form's own check, which the form's test holds to these probes.
+  const base = await storyPool(api);
+  const probes = fixture('bound_refusals').probes.filter((p) => p.field !== 'model_rules');
+  const camel = (s) => s.replace(/_([a-z0-9])/g, (_, c) => c.toUpperCase());
+  // The capture sends each of the retry pair with the other at its widest setting, as the route's pair rule asks.
+  const pair = { 'keepalive.retry_max_seconds': { retrySeconds: 1 }, 'keepalive.retry_seconds': { retryMaxSeconds: 604_800 } };
+  const replay = ({ field, route, value }) => {
+    if (route === 'PATCH /admin/keys/{id}') return api.updateKey('desktop', { ...keyInput, expiresAt: undefined, inFlightCap: value, name: 'desktop' });
+    if (field.startsWith('keepalive.')) return api.updatePool('all', { ...base, keepalive: { ...base.keepalive, ...pair[field], [camel(field.slice('keepalive.'.length))]: value } });
+    return api.updatePool('all', { ...base, [camel(field)]: value });
+  };
+  // Every write waits out the mock's latency, so the probes run side by side; each sends a whole input, so none
+  // reads another's.
+  const answers = await Promise.allSettled(probes.map(replay));
+  for (const [i, { error, field, route, status, value }] of probes.entries()) {
+    const answer = answers[i];
+    const label = `${route} ${field} ${value}`;
+    if (status >= 200 && status < 300) {
+      assert.equal(answer.status, 'fulfilled', `${label}: the route admitted it, the mock answered ${answer.reason?.message}`);
+      continue;
+    }
+    assert.equal(answer.status, 'rejected', `${label}: the route answered ${status}`);
+    assert.ok(answer.reason instanceof d.ApiError, label);
+    assert.equal(answer.reason.status, status, label);
+    // A value past the field's type fails the route's parse, whose sentence the capture leaves out.
+    if (error !== undefined) assert.equal(answer.reason.message, error, label);
   }
 });

@@ -73,7 +73,9 @@ const keyRulesRefusal = (input: Partial<Pick<KeyInput, 'affinitySource' | 'inFli
   const mode = input.modelRulesMode;
   const rules = rulesRefusal(input.modelRules) ?? (mode === undefined || mode === 'extend' || mode === 'replace' ? null : 'model_rules_mode is extend or replace');
   if (rules) return rules;
-  if (input.inFlightCap === 0) return 'in_flight_cap is at least 1';
+  // The route's parse refuses a cap past the u32 ceiling; the mock answers the floor's sentence, as for a pool's cap.
+  const cap = input.inFlightCap;
+  if (cap != null && !(Number.isInteger(cap) && cap >= 1 && cap <= 4_294_967_295)) return 'in_flight_cap is at least 1';
   if (input.affinitySource !== undefined && !AFFINITY_SOURCE_VALUES.some((a) => a === input.affinitySource)) {
     return 'affinity_source must be auto, session, user_id, content, or whole_key';
   }

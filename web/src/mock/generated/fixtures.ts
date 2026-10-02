@@ -3892,6 +3892,370 @@ export const FIXTURES: Record<string, Fixture> = {
       ]
     }
   },
+  "bound_refusals": {
+    "route": "PATCH /admin/pools/{id}, PATCH /admin/keys/{id}",
+    "body": {
+      "probes": [
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "keepalive.cold_probe_limit",
+          "value": 1,
+          "status": 200
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "keepalive.cold_probe_limit",
+          "value": 0,
+          "status": 400,
+          "error": "keepalive.cold_probe_limit must be between 1 and 20, not 0"
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "keepalive.cold_probe_limit",
+          "value": 20,
+          "status": 200
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "keepalive.cold_probe_limit",
+          "value": 21,
+          "status": 400,
+          "error": "keepalive.cold_probe_limit must be between 1 and 20, not 21"
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "keepalive.jitter_seconds_1h",
+          "value": 0,
+          "status": 200
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "keepalive.jitter_seconds_1h",
+          "value": 3599,
+          "status": 200
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "keepalive.jitter_seconds_1h",
+          "value": 3600,
+          "status": 400,
+          "error": "keepalive.jitter_seconds_1h must be between 0 and 3599, not 3600"
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "keepalive.jitter_seconds_5m",
+          "value": 0,
+          "status": 200
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "keepalive.jitter_seconds_5m",
+          "value": 299,
+          "status": 200
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "keepalive.jitter_seconds_5m",
+          "value": 300,
+          "status": 400,
+          "error": "keepalive.jitter_seconds_5m must be between 0 and 299, not 300"
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "keepalive.lead_seconds_1h",
+          "value": 0,
+          "status": 200
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "keepalive.lead_seconds_1h",
+          "value": 3599,
+          "status": 200
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "keepalive.lead_seconds_1h",
+          "value": 3600,
+          "status": 400,
+          "error": "keepalive.lead_seconds_1h must be between 0 and 3599, not 3600"
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "keepalive.lead_seconds_5m",
+          "value": 0,
+          "status": 200
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "keepalive.lead_seconds_5m",
+          "value": 299,
+          "status": 200
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "keepalive.lead_seconds_5m",
+          "value": 300,
+          "status": 400,
+          "error": "keepalive.lead_seconds_5m must be between 0 and 299, not 300"
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "keepalive.max_idle_seconds",
+          "value": 0,
+          "status": 200
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "keepalive.max_idle_seconds",
+          "value": 31536000,
+          "status": 200
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "keepalive.max_idle_seconds",
+          "value": 31536001,
+          "status": 400,
+          "error": "keepalive.max_idle_seconds must be between 0 and 31536000, not 31536001"
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "keepalive.max_idle_ticks",
+          "value": 0,
+          "status": 200
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "keepalive.max_idle_ticks",
+          "value": 1000000,
+          "status": 200
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "keepalive.max_idle_ticks",
+          "value": 1000001,
+          "status": 400,
+          "error": "keepalive.max_idle_ticks must be between 0 and 1000000, not 1000001"
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "keepalive.net_negative_grace_probes",
+          "value": 0,
+          "status": 200
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "keepalive.net_negative_grace_probes",
+          "value": 100,
+          "status": 200
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "keepalive.net_negative_grace_probes",
+          "value": 101,
+          "status": 400,
+          "error": "keepalive.net_negative_grace_probes must be between 0 and 100, not 101"
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "keepalive.retry_max_seconds",
+          "value": 1,
+          "status": 200
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "keepalive.retry_max_seconds",
+          "value": 0,
+          "status": 400,
+          "error": "keepalive.retry_max_seconds must be between 1 and 604800, not 0"
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "keepalive.retry_max_seconds",
+          "value": 604800,
+          "status": 200
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "keepalive.retry_max_seconds",
+          "value": 604801,
+          "status": 400,
+          "error": "keepalive.retry_max_seconds must be between 1 and 604800, not 604801"
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "keepalive.retry_seconds",
+          "value": 1,
+          "status": 200
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "keepalive.retry_seconds",
+          "value": 0,
+          "status": 400,
+          "error": "keepalive.retry_seconds must be between 1 and 3600, not 0"
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "keepalive.retry_seconds",
+          "value": 3600,
+          "status": 200
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "keepalive.retry_seconds",
+          "value": 3601,
+          "status": 400,
+          "error": "keepalive.retry_seconds must be between 1 and 3600, not 3601"
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "burn_window_seconds",
+          "value": 60,
+          "status": 200
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "burn_window_seconds",
+          "value": 59,
+          "status": 400,
+          "error": "burn_window_seconds is at least 60"
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "source_dwell_seconds",
+          "value": 60,
+          "status": 200
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "source_dwell_seconds",
+          "value": 59,
+          "status": 400,
+          "error": "source_dwell_seconds is at least 60"
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "retry_in_place_seconds",
+          "value": 0,
+          "status": 200
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "retry_in_place_seconds",
+          "value": 300,
+          "status": 200
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "retry_in_place_seconds",
+          "value": 301,
+          "status": 400,
+          "error": "retry_in_place_seconds is 0 to 300"
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "overage_move_grace_minutes",
+          "value": 0,
+          "status": 200
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "overage_move_grace_minutes",
+          "value": 300,
+          "status": 200
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "overage_move_grace_minutes",
+          "value": 301,
+          "status": 400,
+          "error": "overage_move_grace_minutes is 0 to 300"
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "wind_down_minutes",
+          "value": 0,
+          "status": 200
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "wind_down_minutes",
+          "value": 10080,
+          "status": 200
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "wind_down_minutes",
+          "value": 10081,
+          "status": 400,
+          "error": "wind_down_minutes is at most 10080 (one week)"
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "in_flight_cap",
+          "value": 1,
+          "status": 200
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "in_flight_cap",
+          "value": 0,
+          "status": 400,
+          "error": "in_flight_cap is at least 1"
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "in_flight_cap",
+          "value": 4294967295,
+          "status": 200
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "in_flight_cap",
+          "value": 4294967296,
+          "status": 400
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "model_rules",
+          "value": 256,
+          "status": 200
+        },
+        {
+          "route": "PATCH /admin/pools/{id}",
+          "field": "model_rules",
+          "value": 257,
+          "status": 400,
+          "error": "model_rules holds at most 256 entries"
+        },
+        {
+          "route": "PATCH /admin/keys/{id}",
+          "field": "in_flight_cap",
+          "value": 1,
+          "status": 200
+        },
+        {
+          "route": "PATCH /admin/keys/{id}",
+          "field": "in_flight_cap",
+          "value": 0,
+          "status": 400,
+          "error": "in_flight_cap is at least 1"
+        },
+        {
+          "route": "PATCH /admin/keys/{id}",
+          "field": "in_flight_cap",
+          "value": 4294967295,
+          "status": 200
+        },
+        {
+          "route": "PATCH /admin/keys/{id}",
+          "field": "in_flight_cap",
+          "value": 4294967296,
+          "status": 400
+        }
+      ]
+    }
+  },
   "dashboard": {
     "route": "GET /admin/dashboard",
     "body": {

@@ -65,8 +65,8 @@ const SYNC = {
   sessions: { decode: (b) => b.sessions.map(d.decodeSession), mock: (api) => api.listSessions() },
   settings: { decode: (b) => d.decodeSettings(b), mock: (api) => api.getSettings() },
 };
-/** Fixtures captured for their route's shape alone: no decoder and no `Api` method reads them today. */
-const UNCONSUMED = ['live_past', 'pool_traffic', 'pricing', 'sessions_costs', 'system'];
+/** Fixtures no decoder and no `Api` method reads: captured for their route's shape, or read by a test of their own. */
+const UNCONSUMED = ['bound_refusals', 'live_past', 'pool_traffic', 'pricing', 'sessions_costs', 'system'];
 
 test('the generated fixtures module is a fresh render', () => {
   const committed = readFileSync(new URL('../src/mock/generated/fixtures.ts', import.meta.url), 'utf8');
