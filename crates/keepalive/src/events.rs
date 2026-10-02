@@ -274,7 +274,7 @@ impl Inner {
         let renews_lease = ev.event == "heartbeat";
         match ev.event.as_str() {
             // One per session per lease interval, and the only sign of life a session that just waits for
-            // its user gives: without it nothing tells the alerts the session is still attended.
+            // its user gives: without it nothing tells a consumer of the channel the session is still attended.
             "heartbeat" => self.emit(SessionLifecycle::Heartbeat {
                 key_id: key.0.clone(),
                 session_id: key.1.clone(),

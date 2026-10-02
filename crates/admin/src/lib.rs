@@ -5,8 +5,8 @@
 #![recursion_limit = "256"]
 
 mod accounts;
-mod alerts;
 mod analytics;
+mod attention;
 mod dashboard;
 mod keepalive;
 mod keys;
@@ -25,7 +25,6 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use phoebis_alerts::Alerts;
 use phoebis_bus::Bus;
 use phoebis_keepalive::{Engine, KeepaliveLimits};
 use phoebis_ledger::{Ledger, Metrics, Pricing};
@@ -80,11 +79,8 @@ pub struct AdminState {
     pub tables: Arc<phoebis_ledger::PlanTables>,
     pub settings: Arc<SettingsView>,
     pub keepalive: Arc<Engine>,
-    pub alerts: Arc<Alerts>,
-    /// Whether a rule may aim its webhook at loopback, a link-local address, or the unspecified address. Off
-    /// everywhere but the test harness, whose receiver is on loopback: the deliverer posts wherever a rule
-    /// points and follows no redirect, so the alert routes are the only place a destination is checked.
-    pub allow_local_webhooks: bool,
+    /// The condition reader the metrics listener scrapes too, so the attention route and a scrape never disagree.
+    pub attention: Arc<phoebis_attention::Attention>,
 }
 
 /// The running configuration an operator reads back from the admin API. Every secret is left out, and so is

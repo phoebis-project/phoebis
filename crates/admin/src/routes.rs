@@ -35,7 +35,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::{
-    accounts, alerts, analytics, dashboard, keepalive, keys, live, models, pools, pricing,
+    accounts, analytics, attention, dashboard, keepalive, keys, live, models, pools, pricing,
     requests, sessions, settings, AdminState, LoginError,
 };
 
@@ -72,25 +72,6 @@ pub fn router(state: Arc<AdminState>) -> Router {
         .route("/admin/accounts/{id}/usage", get(usage_latest))
         .route("/admin/accounts/{id}/usage/refresh", post(usage_refresh))
         .route("/admin/accounts/{id}/verify", post(verify))
-        .route("/admin/alerts/deliveries", get(alerts::list_lifecycle))
-        .route("/admin/alerts/events", get(alerts::list_events))
-        .route(
-            "/admin/alerts/events/{id}/deliveries",
-            get(alerts::list_deliveries),
-        )
-        .route(
-            "/admin/alerts/events/{id}/resolve",
-            post(alerts::resolve_event),
-        )
-        .route(
-            "/admin/alerts/rules",
-            get(alerts::list_rules).post(alerts::create_rule),
-        )
-        .route(
-            "/admin/alerts/rules/{id}",
-            patch(alerts::patch_rule).delete(alerts::delete_rule),
-        )
-        .route("/admin/alerts/rules/{id}/test", post(alerts::test_rule))
         .route("/admin/analytics/accounts", get(analytics::accounts))
         .route("/admin/analytics/breakdown", get(analytics::breakdown))
         .route("/admin/analytics/budgets", get(analytics::budgets))
@@ -98,6 +79,7 @@ pub fn router(state: Arc<AdminState>) -> Router {
         .route("/admin/analytics/placements", get(analytics::placements))
         .route("/admin/analytics/rewrites", get(analytics::rewrites))
         .route("/admin/analytics/series", get(analytics::series))
+        .route("/admin/attention", get(attention::show))
         .route("/admin/dashboard", get(dashboard::show))
         .route("/admin/keepalive/overview", get(keepalive::overview))
         .route("/admin/keepalive/recipes", get(keepalive::recipes))
@@ -949,7 +931,6 @@ async fn system(State(state): State<Arc<AdminState>>) -> Response {
             "running_probes": keepalive_stats.running_probes,
             "sessions": keepalive_stats.sessions,
         },
-        "alerts": state.alerts.stats(),
     }))
     .into_response()
 }

@@ -1394,8 +1394,8 @@ async fn a_probe_fails_over_to_an_oauth_sibling_as_a_real_request_does() {
 }
 
 /// A probe held on its pinned member's pause answers the probe alone while a sibling could serve: the relay hands
-/// the keepalive the obstacle, and the completion reads rejected rather than exhausted, so the pool exhaustion
-/// alert, which reads only an exhausted completion, is not raised for a pool that can still serve.
+/// the keepalive the obstacle, and the completion reads rejected rather than exhausted, so the gauge's pool exhaustion
+/// condition, which reads only an exhausted completion, does not hold for a pool that can still serve.
 #[tokio::test]
 async fn a_probe_held_on_its_pinned_members_pause_completes_rejected_beside_a_sibling_that_can_serve(
 ) {

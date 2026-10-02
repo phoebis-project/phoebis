@@ -266,7 +266,7 @@ pub struct EngineParts {
     /// same value the relay's `Limits` gets, so the probe gate and the selector read one account the same way.
     pub cooldown_fallback: Duration,
     pub ledger: Ledger,
-    /// Where the companion's reports reach the alert inputs; `None` when nothing is listening.
+    /// Where the companion's reports go when a consumer is wired; `None` when nothing is listening, as in the binary.
     pub lifecycle: Option<LifecycleSender>,
     pub limits: KeepaliveLimits,
     /// The relay's per-body bound: the largest body a recipe may retain, so every request the relay accepts is
@@ -608,8 +608,8 @@ impl Engine {
             for agent in agents {
                 inner.discard(&key, &agent, Reason::Reset, None);
             }
-            // The alerts post a session's end once, so one already announced by the companion gets none here;
-            // the rest end now, as they would at the expiry, since nothing will report for them again.
+            // A session ends once on the channel, so one already announced by the companion gets none here; the
+            // rest end now, as they would at the expiry, since nothing will report for them again.
             if !inner.sessions[&key].ended {
                 inner.emit(SessionLifecycle::SessionEnded {
                     key_id: key.0.clone(),
@@ -617,8 +617,8 @@ impl Engine {
                 });
             }
         }
-        // The ends above are the channel's last messages: with the sender gone the consumer's `recv()` returns
-        // `None` once it has drained them, which is what the alert inputs' shutdown joins on.
+        // The ends above are the channel's last messages: with the sender gone a consumer's `recv()` returns `None`
+        // once it has drained them, which is what its shutdown can join on.
         inner.lifecycle = None;
         inner.sessions.clear();
         inner.pending.clear();
@@ -652,8 +652,8 @@ impl Inner {
         }
     }
 
-    /// A send never blocks and a closed receiver is the alerts having shut down first, which loses nothing worth
-    /// a log line.
+    /// A send never blocks and a closed receiver is a consumer that shut down first, which loses nothing worth a log
+    /// line.
     pub(crate) fn emit(&self, event: SessionLifecycle) {
         if let Some(tx) = &self.lifecycle {
             let _ = tx.send(event);
@@ -845,7 +845,7 @@ impl Inner {
             }
             self.agents -= agents.len();
             // A session whose companion reported its end was announced then; the entry outlives the report
-            // only so a result still in flight finds it, and the alerts resolve on one end, not two.
+            // only so a result still in flight finds it, and the channel carries one end, not two.
             let announced = self.sessions.remove(&key).is_some_and(|s| s.ended);
             if !announced {
                 self.emit(SessionLifecycle::SessionEnded {

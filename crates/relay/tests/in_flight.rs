@@ -422,7 +422,7 @@ async fn a_hold_that_would_leave_no_attempt_for_a_dial_answers_the_exhaustion_at
             429,
             Some("accounts_at_cap")
         ),
-        "a pool at its cap is an exhausted pool to the ledger and the alerts"
+        "a pool at its cap is an exhausted pool to the ledger and the attention gauge"
     );
     assert!(waited < HELD_FOR, "answered without waiting: {waited:?}");
     assert_eq!(posts(&up), 1, "nothing was dialled for the held request");

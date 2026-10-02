@@ -1,4 +1,4 @@
-//! The lifecycle channel: the companion's reports and the session expiry, as the alert inputs read them.
+//! The lifecycle channel: the companion's reports and the session expiry, as a consumer of the channel reads them.
 mod common;
 use std::time::Duration;
 
@@ -58,7 +58,7 @@ fn agent(id: &str, started: bool) -> SessionLifecycle {
 }
 
 #[tokio::test]
-async fn the_companions_reports_become_the_lifecycle_events_the_alerts_read() {
+async fn the_companions_reports_become_the_lifecycle_events_the_attention_read() {
     let (tx, mut rx) = lifecycle_channel();
     let mut r = rig(RigSpec {
         lifecycle: Some(tx),
@@ -70,7 +70,7 @@ async fn the_companions_reports_become_the_lifecycle_events_the_alerts_read() {
     assert_eq!(
         drain(&mut rx),
         [],
-        "a request of the session says nothing here: the request side is the alerts' own"
+        "a request of the session says nothing here: requests reach a consumer off the bus"
     );
     r.event(Event {
         event: "agent_start".into(),
@@ -243,7 +243,7 @@ async fn a_close_ends_every_live_session_once_and_an_announced_one_not_again() {
             rx.try_recv(),
             Err(tokio::sync::mpsc::error::TryRecvError::Disconnected)
         ),
-        "the close drops the sender too: the alerts consumer's drain ends on that and nothing else"
+        "the close drops the sender too: a consumer's drain ends on that and nothing else"
     );
 }
 
