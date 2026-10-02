@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use phoebis_oauth::{Clock, UsageSnapshot};
 use phoebis_store::{
-    AccountState, CooldownRow, PinBurn, PinKey, PinRow, RekeyWrite, Store, StoreError,
+    AccountState, CooldownRow, PinBurn, PinKey, PinRow, RekeyWrite, RoutingTx, Store, StoreError,
 };
 use tokio::sync::{broadcast, mpsc, oneshot, Notify};
 use tokio::time::Instant;
@@ -722,26 +722,41 @@ pub fn spawn(
         let mut retry: Option<Box<RekeyWrite>> = None;
         // One batch at a time, in order: two blocking writes racing on separate threads could land a delete
         // before the upsert it was meant to follow.
-        while let Some(batch) = writes.recv().await {
+        while let Some(first) = writes.recv().await {
             if let Some(rekey) = retry.take() {
                 retry_rekey(&writer_store, rekey).await;
             }
+            // Everything queued since the last wake lands in one commit, so the registry pays one commit per
+            // wake, and wakes coalesce under load.
+            let mut batch = first;
+            while let Ok(more) = writes.try_recv() {
+                batch.extend(more);
+            }
             let store = writer_store.clone();
             let size = batch.len();
-            match tokio::task::spawn_blocking(move || apply(&store, batch)).await {
-                // An account-state mark that moved the row changes what the snapshot has to say, so the
-                // loop is asked for a reload once the write is on disk rather than before.
-                Ok(Ok(moved)) => {
+            match tokio::task::spawn_blocking(move || land(&store, batch)).await {
+                Ok(Landed {
+                    moved,
+                    failed,
+                    skipped,
+                }) => {
+                    if let Some(failed) = failed {
+                        tracing::error!(
+                            error = %failed.error,
+                            batch = size,
+                            skipped,
+                            "a routing state write failed and was skipped; the rest of its batch landed"
+                        );
+                        retry = failed.rekey;
+                    }
+                    // An account-state mark that moved the row changes what the snapshot has to say, so the
+                    // loop is asked for a reload once the write is on disk rather than before.
                     if moved {
                         if let Some(tx) = writer_tx.upgrade() {
                             let (reply, _rx) = oneshot::channel();
                             let _ = tx.send(Command::Reload { reply }).await;
                         }
                     }
-                }
-                Ok(Err(failed)) => {
-                    tracing::error!(error = %failed.error, batch = size, "a routing state write failed");
-                    retry = failed.rekey;
                 }
                 Err(error) => {
                     tracing::error!(%error, batch = size, "a routing state write panicked, its batch is lost")
@@ -819,17 +834,19 @@ pub fn spawn(
     Ok(handle)
 }
 
-/// A batch that stopped at a failed write, carrying that write when it was a rekey: the one write the writer
-/// tries again.
+/// What one wake landed: whether an account-state mark moved its row, the first write the store refused with the
+/// refused rekey the writer tries once more, and how many writes it skipped.
+struct Landed {
+    moved: bool,
+    failed: Option<Failed>,
+    skipped: usize,
+}
+
+/// The first write of a wake the store refused, carrying a refused rekey when there was one: the one write the
+/// writer tries again.
 struct Failed {
     error: StoreError,
     rekey: Option<Box<RekeyWrite>>,
-}
-
-impl From<StoreError> for Failed {
-    fn from(error: StoreError) -> Failed {
-        Failed { error, rekey: None }
-    }
 }
 
 async fn retry_rekey(store: &Arc<Store>, rekey: Box<RekeyWrite>) {
@@ -846,9 +863,68 @@ async fn retry_rekey(store: &Arc<Store>, rekey: Box<RekeyWrite>) {
     }
 }
 
+/// One transaction for the wake's batch. A refusal rolls the whole of it back, and the batch is replayed one write
+/// per commit, so the refused write is the only one lost.
+fn land(store: &Store, batch: Vec<StateWrite>) -> Landed {
+    match store.write_routing(|tx| apply_in(tx, &batch)) {
+        Ok(moved) => Landed {
+            moved,
+            failed: None,
+            skipped: 0,
+        },
+        Err(_) => replay(store, batch),
+    }
+}
+
+fn replay(store: &Store, batch: Vec<StateWrite>) -> Landed {
+    let mut moved = false;
+    let mut error = None;
+    let mut skipped = 0;
+    let mut refused_rekeys = Vec::new();
+    for write in batch {
+        match apply_one(store, &write) {
+            Ok(mark_moved) => {
+                moved |= mark_moved;
+                // The rekey's upsert carries no generation check, so retrying a refused one after a later rekey
+                // of its spelling landed would put the older mapping back and restore the rows the later one moved.
+                if let StateWrite::Rekey(landed) = &write {
+                    let spelling = &landed.resolution.spelling;
+                    refused_rekeys.retain(|refused: &RekeyWrite| {
+                        let superseded = &refused.resolution.spelling == spelling;
+                        if superseded {
+                            tracing::info!(
+                                %spelling,
+                                "a refused model resolution's rekey is dropped: a later one of its spelling landed"
+                            );
+                        }
+                        !superseded
+                    });
+                }
+            }
+            Err(refused) => {
+                skipped += 1;
+                error.get_or_insert(refused);
+                if let StateWrite::Rekey(rekey) = write {
+                    refused_rekeys.push(rekey);
+                }
+            }
+        }
+    }
+    Landed {
+        moved,
+        // One retry per wake, as the loop's `retry` holds: the first refused rekey still standing; any after it
+        // is dropped.
+        failed: error.map(|error| Failed {
+            error,
+            rekey: refused_rekeys.into_iter().next().map(Box::new),
+        }),
+        skipped,
+    }
+}
+
 /// Reports whether any account-state mark in the batch actually moved its row, which is the one write here
 /// that the registry snapshot has to be rebuilt from.
-fn apply(store: &Store, batch: Vec<StateWrite>) -> Result<bool, Failed> {
+fn apply_in(tx: &mut RoutingTx<'_>, batch: &[StateWrite]) -> Result<bool, StoreError> {
     let mut moved = false;
     for write in batch {
         match write {
@@ -859,49 +935,75 @@ fn apply(store: &Store, batch: Vec<StateWrite>) -> Result<bool, Failed> {
                 lifecycle_generation,
                 credential_generation,
             } => {
-                moved |= store.set_state_if_generations(
-                    &account_id,
-                    state,
-                    incarnation,
-                    lifecycle_generation,
-                    credential_generation,
+                moved |= tx.set_state_if_generations(
+                    account_id,
+                    *state,
+                    *incarnation,
+                    *lifecycle_generation,
+                    *credential_generation,
                 )?;
             }
             StateWrite::DeleteAffinity(keys) => {
-                store.delete_affinity(&keys)?;
+                tx.delete_affinity(keys)?;
             }
             StateWrite::DeleteCooldown(account_id, scope) => {
-                store.delete_cooldown(&account_id, &scope)?;
+                tx.delete_cooldown(account_id, scope)?;
             }
             StateWrite::DeletePin(key) => {
-                store.delete_pin(&key)?;
+                tx.delete_pin(key)?;
             }
             StateWrite::PurgeStaleWindows => {
-                store.purge_stale_windows()?;
+                tx.purge_stale_windows()?;
             }
-            StateWrite::Rekey(rekey) => {
-                if let Err(error) = store.rekey_resolution(&rekey) {
-                    return Err(Failed {
-                        error,
-                        rekey: Some(Box::new(rekey)),
-                    });
-                }
-            }
-            StateWrite::UpsertAffinity(rows) => store.upsert_affinity(&rows)?,
-            StateWrite::UpsertCooldown(row) => store.upsert_cooldown(&row)?,
+            StateWrite::Rekey(rekey) => tx.rekey_resolution(rekey)?,
+            StateWrite::UpsertAffinity(rows) => tx.upsert_affinity(rows)?,
+            StateWrite::UpsertCooldown(row) => tx.upsert_cooldown(row)?,
             StateWrite::UpsertCredits(row) => {
-                store.upsert_credits(&row)?;
+                tx.upsert_credits(row)?;
             }
             StateWrite::UpsertOverage(row) => {
-                store.upsert_overage(&row)?;
+                tx.upsert_overage(row)?;
             }
-            StateWrite::UpsertPin(row) => store.upsert_pin(&row)?,
+            StateWrite::UpsertPin(row) => tx.upsert_pin(row)?,
             StateWrite::UpsertWindow(row) => {
-                store.upsert_window(&row)?;
+                tx.upsert_window(row)?;
             }
         }
     }
     Ok(moved)
+}
+
+/// One write through the store's own method for it, its own commit; answers whether an account-state mark moved
+/// its row.
+fn apply_one(store: &Store, write: &StateWrite) -> Result<bool, StoreError> {
+    match write {
+        StateWrite::AccountState {
+            account_id,
+            state,
+            incarnation,
+            lifecycle_generation,
+            credential_generation,
+        } => store.set_state_if_generations(
+            account_id,
+            *state,
+            *incarnation,
+            *lifecycle_generation,
+            *credential_generation,
+        ),
+        StateWrite::DeleteAffinity(keys) => store.delete_affinity(keys).map(|_| false),
+        StateWrite::DeleteCooldown(account_id, scope) => {
+            store.delete_cooldown(account_id, scope).map(|_| false)
+        }
+        StateWrite::DeletePin(key) => store.delete_pin(key).map(|_| false),
+        StateWrite::PurgeStaleWindows => store.purge_stale_windows().map(|_| false),
+        StateWrite::Rekey(rekey) => store.rekey_resolution(rekey).map(|()| false),
+        StateWrite::UpsertAffinity(rows) => store.upsert_affinity(rows).map(|()| false),
+        StateWrite::UpsertCooldown(row) => store.upsert_cooldown(row).map(|()| false),
+        StateWrite::UpsertCredits(row) => store.upsert_credits(row).map(|_| false),
+        StateWrite::UpsertOverage(row) => store.upsert_overage(row).map(|_| false),
+        StateWrite::UpsertPin(row) => store.upsert_pin(row).map(|()| false),
+        StateWrite::UpsertWindow(row) => store.upsert_window(row).map(|_| false),
+    }
 }
 
 impl Task {

@@ -491,7 +491,7 @@ its next request, and rows older than `sessions.memory_retention_days` are dropp
 
 `stats.ledger_path` names a second SQLite file, the statistics ledger, under the same rules: the name is used
 as given, the parent directory is created at mode 0700 and the file at 0600. It runs in WAL mode with
-`synchronous = NORMAL`, so a crash loses at most the last transactions before a checkpoint. A request's facts
+`synchronous = NORMAL`, so a power loss may lose the last transactions before a checkpoint. A request's facts
 are never dropped: a request record waits for room in the ledger's channel, so a ledger writer that stalls
 holds the request path rather than losing request facts; only captured bodies stay best-effort, since a stream
 may outrun its recorder, and a `ledger_gap` event records what was lost. Captured bodies live in this file,

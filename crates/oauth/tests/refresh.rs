@@ -1146,6 +1146,32 @@ async fn an_attempt_another_holder_of_the_id_left_is_closed_at_start_rather_than
     up.shutdown().await;
 }
 
+/// The shape a power loss between the durable intent and the commit leaves: the attempt's row on disk and the
+/// credentials still the bundle it named. A row whose bundle a later commit replaced is closed `superseded`
+/// instead, which `an_attempt_another_holder_of_the_id_left_is_closed_at_start_rather_than_quarantining` and the
+/// store's `a_commit_supersedes_an_attempt_left_open_by_the_bundle_it_replaces` cover.
+#[tokio::test]
+async fn an_attempt_row_without_its_commit_quarantines_the_account_at_start() {
+    let now = Arc::new(AtomicI64::new(1_000_000));
+    let (mgr, store, up) = manager_with(vec![], now).await;
+    let generation = store
+        .commit_credentials("a", 1, 1, None, None, &old_bundle(1_200_000))
+        .unwrap();
+    store.open_refresh_attempt("a", 1, 1, generation).unwrap();
+
+    assert_eq!(mgr.recover_on_start().unwrap(), vec!["a".to_string()]);
+    assert_eq!(
+        store.account("a").unwrap().unwrap().state,
+        AccountState::ReauthRequired
+    );
+    let attempt = store.last_refresh_attempt("a", 1).unwrap().unwrap();
+    assert_eq!(
+        (attempt.outcome.as_deref(), attempt.detail.as_deref()),
+        (Some("failed"), Some("quarantined at start"))
+    );
+    up.shutdown().await;
+}
+
 #[tokio::test]
 async fn an_unreadable_credential_row_quarantines_its_account_instead_of_failing_the_start() {
     let now = Arc::new(AtomicI64::new(1_000_000));

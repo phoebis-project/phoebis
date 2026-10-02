@@ -3,7 +3,7 @@
 use rusqlite::{params, OptionalExtension};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
-use crate::{crypto, StorageKey, Store, StoreError, LOCK_POISONED, PENDING_WHERE};
+use crate::{crypto, durably, StorageKey, Store, StoreError, LOCK_POISONED, PENDING_WHERE};
 
 // The gate of `open_refresh_attempt` reads an attempt still in flight alone. An attempt resolved `uncertain` does
 // not block here: the refresh manager spaces the retry by its floor, and the startup quarantine still reads the
@@ -293,73 +293,74 @@ impl Store {
             )));
         }
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
-        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        durably(&mut conn, |conn| {
+            let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
 
-        let account: Option<(i64, i64)> = tx
-            .query_row(
-                "SELECT incarnation, lifecycle_generation FROM accounts WHERE id = ?1",
-                params![account_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .optional()?;
-        let (account_incarnation, account_lifecycle) =
-            account.ok_or_else(|| StoreError::AccountNotFound(account_id.to_string()))?;
-        if account_incarnation as u64 != incarnation
-            || account_lifecycle as u64 != lifecycle_generation
-        {
-            return Err(StoreError::Disconnected);
-        }
+            let account: Option<(i64, i64)> = tx
+                .query_row(
+                    "SELECT incarnation, lifecycle_generation FROM accounts WHERE id = ?1",
+                    params![account_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?;
+            let (account_incarnation, account_lifecycle) =
+                account.ok_or_else(|| StoreError::AccountNotFound(account_id.to_string()))?;
+            if account_incarnation as u64 != incarnation
+                || account_lifecycle as u64 != lifecycle_generation
+            {
+                return Err(StoreError::Disconnected);
+            }
 
-        let existing: Option<(i64, Vec<u8>, Vec<u8>)> = tx
-            .query_row(
-                "SELECT generation, sealed, nonce FROM credentials WHERE account_id = ?1",
-                params![account_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .optional()?;
+            let existing: Option<(i64, Vec<u8>, Vec<u8>)> = tx
+                .query_row(
+                    "SELECT generation, sealed, nonce FROM credentials WHERE account_id = ?1",
+                    params![account_id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .optional()?;
 
-        let current_generation = existing
-            .as_ref()
-            .map(|(generation, _, _)| *generation as u64);
-        if current_generation != expected_generation {
-            return Err(StoreError::Stale);
-        }
+            let current_generation = existing
+                .as_ref()
+                .map(|(generation, _, _)| *generation as u64);
+            if current_generation != expected_generation {
+                return Err(StoreError::Stale);
+            }
 
-        let refresh_token = match &bundle.refresh_token {
-            Some(secret) => Some(secret.expose().to_owned()),
-            // A refresh response that omits the refresh token means "unchanged", not "cleared";
-            // decrypt the row being replaced to carry its refresh token forward.
-            None => match &existing {
-                Some((generation, sealed, nonce)) => {
-                    let plaintext = Zeroizing::new(crypto::open(
-                        &self.key,
-                        &credential_aad(account_id, *generation),
-                        nonce,
-                        sealed,
-                    )?);
-                    let mut previous: SealedTokens = serde_json::from_slice(&plaintext)?;
-                    previous.refresh_token.take()
-                }
-                None => None,
-            },
-        };
+            let refresh_token = match &bundle.refresh_token {
+                Some(secret) => Some(secret.expose().to_owned()),
+                // A refresh response that omits the refresh token means "unchanged", not "cleared";
+                // decrypt the row being replaced to carry its refresh token forward.
+                None => match &existing {
+                    Some((generation, sealed, nonce)) => {
+                        let plaintext = Zeroizing::new(crypto::open(
+                            &self.key,
+                            &credential_aad(account_id, *generation),
+                            nonce,
+                            sealed,
+                        )?);
+                        let mut previous: SealedTokens = serde_json::from_slice(&plaintext)?;
+                        previous.refresh_token.take()
+                    }
+                    None => None,
+                },
+            };
 
-        let new_generation = current_generation.map_or(1, |generation| generation + 1);
-        let payload = SealedTokens {
-            access_token: bundle.access_token.expose().to_owned(),
-            refresh_token,
-        };
-        let plaintext = Zeroizing::new(serde_json::to_vec(&payload)?);
-        let (nonce, sealed) = crypto::seal(
-            &self.key,
-            &credential_aad(account_id, new_generation as i64),
-            &plaintext,
-        )?;
-        let now = jiff::Timestamp::now().as_millisecond();
+            let new_generation = current_generation.map_or(1, |generation| generation + 1);
+            let payload = SealedTokens {
+                access_token: bundle.access_token.expose().to_owned(),
+                refresh_token,
+            };
+            let plaintext = Zeroizing::new(serde_json::to_vec(&payload)?);
+            let (nonce, sealed) = crypto::seal(
+                &self.key,
+                &credential_aad(account_id, new_generation as i64),
+                &plaintext,
+            )?;
+            let now = jiff::Timestamp::now().as_millisecond();
 
-        // `last_error` is cleared here rather than through a separate call: the connection mutex is not
-        // reentrant, and a credential that just committed has nothing stale left to explain.
-        tx.execute(
+            // `last_error` is cleared here rather than through a separate call: the connection mutex is not
+            // reentrant, and a credential that just committed has nothing stale left to explain.
+            tx.execute(
             "INSERT INTO credentials (account_id, generation, lifecycle_generation, sealed, nonce, issued_at, expires_at, refresh_expires_at, scopes, updated_at, last_error) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, NULL) \
              ON CONFLICT(account_id) DO UPDATE SET generation = excluded.generation, lifecycle_generation = excluded.lifecycle_generation, \
@@ -379,10 +380,10 @@ impl Store {
             ],
         )?;
 
-        // Whatever else was still open for this account was waiting on the bundle this commit replaces, so
-        // it has its answer. Leaving one open would block every later refresh of the new credential and
-        // quarantine the account at the next start.
-        tx.execute(
+            // Whatever else was still open for this account was waiting on the bundle this commit replaces, so
+            // it has its answer. Leaving one open would block every later refresh of the new credential and
+            // quarantine the account at the next start.
+            tx.execute(
             &format!(
                 "UPDATE refresh_attempts SET resolved_at = ?2, outcome = 'failed', detail = 'superseded' \
                  WHERE account_id = ?1 AND id IS NOT ?3 AND ({PENDING_WHERE})"
@@ -390,26 +391,27 @@ impl Store {
             params![account_id, now, attempt_id.map(|id| id as i64)],
         )?;
 
-        if let Some(id) = attempt_id {
-            // Scoped by account_id, not just id: an attempt_id that belongs to another account must not
-            // be resolved by this commit, even by accident.
-            let updated = tx.execute(
+            if let Some(id) = attempt_id {
+                // Scoped by account_id, not just id: an attempt_id that belongs to another account must not
+                // be resolved by this commit, even by accident.
+                let updated = tx.execute(
                 &format!(
                     "UPDATE refresh_attempts SET resolved_at = ?2, outcome = 'committed', detail = NULL \
                      WHERE id = ?1 AND account_id = ?3 AND ({PENDING_WHERE})"
                 ),
                 params![id as i64, now, account_id],
             )?;
-            // A row that exists but was already settled elsewhere, by a disconnect for instance, leaves the
-            // commit alone: the tokens in hand were rotated upstream and losing them to a rollback would
-            // strand the account on a refresh token the endpoint has already replaced.
-            if updated == 0 && !attempt_exists(&tx, id, Some(account_id))? {
-                return Err(StoreError::AttemptNotFound(id));
+                // A row that exists but was already settled elsewhere, by a disconnect for instance, leaves the
+                // commit alone: the tokens in hand were rotated upstream and losing them to a rollback would
+                // strand the account on a refresh token the endpoint has already replaced.
+                if updated == 0 && !attempt_exists(&tx, id, Some(account_id))? {
+                    return Err(StoreError::AttemptNotFound(id));
+                }
             }
-        }
 
-        tx.commit()?;
-        Ok(new_generation)
+            tx.commit()?;
+            Ok(new_generation)
+        })
     }
 
     pub fn api_key_secret(&self, account_id: &str) -> Result<Option<Secret>, StoreError> {
@@ -433,11 +435,13 @@ impl Store {
     /// an endpoint, so a holder that captured the row before the rotation has to see that it moved.
     pub fn set_api_key_secret(&self, account_id: &str, secret: &Secret) -> Result<(), StoreError> {
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
-        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        store_api_key_secret(&tx, &self.key, account_id, secret)?;
-        crate::accounts::bump_revision(&tx, account_id)?;
-        tx.commit()?;
-        Ok(())
+        durably(&mut conn, |conn| {
+            let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            store_api_key_secret(&tx, &self.key, account_id, secret)?;
+            crate::accounts::bump_revision(&tx, account_id)?;
+            tx.commit()?;
+            Ok(())
+        })
     }
 
     /// The generation of whatever credential the account holds, whichever of the two tables holds it. An
@@ -577,22 +581,26 @@ impl Store {
         lifecycle_generation: u64,
         credential_generation: u64,
     ) -> Result<u64, StoreError> {
-        let conn = self.conn.lock().expect(LOCK_POISONED);
-        let pending: bool = conn.query_row(
-            &format!("SELECT EXISTS(SELECT 1 FROM refresh_attempts WHERE account_id = ?1 AND ({IN_FLIGHT_WHERE}))"),
-            params![account_id],
-            |row| row.get(0),
-        )?;
-        if pending {
-            return Err(StoreError::AttemptPending);
-        }
-        let now = jiff::Timestamp::now().as_millisecond();
-        conn.execute(
-            "INSERT INTO refresh_attempts (account_id, incarnation, lifecycle_generation, credential_generation, started_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![account_id, incarnation as i64, lifecycle_generation as i64, credential_generation as i64, now],
-        )?;
-        Ok(conn.last_insert_rowid() as u64)
+        let mut conn = self.conn.lock().expect(LOCK_POISONED);
+        // The intent is on disk before the caller sends the token request: it is what the startup recovery
+        // quarantines the account by when the answer never lands.
+        durably(&mut conn, |conn| {
+            let pending: bool = conn.query_row(
+                &format!("SELECT EXISTS(SELECT 1 FROM refresh_attempts WHERE account_id = ?1 AND ({IN_FLIGHT_WHERE}))"),
+                params![account_id],
+                |row| row.get(0),
+            )?;
+            if pending {
+                return Err(StoreError::AttemptPending);
+            }
+            let now = jiff::Timestamp::now().as_millisecond();
+            conn.execute(
+                "INSERT INTO refresh_attempts (account_id, incarnation, lifecycle_generation, credential_generation, started_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![account_id, incarnation as i64, lifecycle_generation as i64, credential_generation as i64, now],
+            )?;
+            Ok(conn.last_insert_rowid() as u64)
+        })
     }
 
     /// Settles an attempt, but only one that is still open: unresolved, or resolved uncertain, as `PENDING_WHERE`
@@ -611,42 +619,44 @@ impl Store {
         outcome: AttemptOutcome,
     ) -> Result<bool, StoreError> {
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
-        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        let now = jiff::Timestamp::now().as_millisecond();
-        let (label, detail) = match outcome {
-            AttemptOutcome::Committed => ("committed", None),
-            AttemptOutcome::Failed(detail) => ("failed", Some(detail)),
-            AttemptOutcome::Uncertain(detail) => ("uncertain", Some(detail)),
-        };
-        let account_id: Option<String> = tx
-            .query_row(
-                "SELECT account_id FROM refresh_attempts WHERE id = ?1",
-                params![attempt_id as i64],
-                |row| row.get(0),
-            )
-            .optional()?;
-        let Some(account_id) = account_id else {
-            return Err(StoreError::AttemptNotFound(attempt_id));
-        };
-        let current: Option<i64> = tx
-            .query_row(
-                "SELECT incarnation FROM accounts WHERE id = ?1",
-                params![account_id],
-                |row| row.get(0),
-            )
-            .optional()?;
-        if current.is_some_and(|current| current as u64 != incarnation) {
-            return Err(StoreError::Stale);
-        }
-        let updated = tx.execute(
-            &format!(
-                "UPDATE refresh_attempts SET resolved_at = ?2, outcome = ?3, detail = ?4 \
+        durably(&mut conn, |conn| {
+            let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            let now = jiff::Timestamp::now().as_millisecond();
+            let (label, detail) = match outcome {
+                AttemptOutcome::Committed => ("committed", None),
+                AttemptOutcome::Failed(detail) => ("failed", Some(detail)),
+                AttemptOutcome::Uncertain(detail) => ("uncertain", Some(detail)),
+            };
+            let account_id: Option<String> = tx
+                .query_row(
+                    "SELECT account_id FROM refresh_attempts WHERE id = ?1",
+                    params![attempt_id as i64],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            let Some(account_id) = account_id else {
+                return Err(StoreError::AttemptNotFound(attempt_id));
+            };
+            let current: Option<i64> = tx
+                .query_row(
+                    "SELECT incarnation FROM accounts WHERE id = ?1",
+                    params![account_id],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if current.is_some_and(|current| current as u64 != incarnation) {
+                return Err(StoreError::Stale);
+            }
+            let updated = tx.execute(
+                &format!(
+                    "UPDATE refresh_attempts SET resolved_at = ?2, outcome = ?3, detail = ?4 \
                  WHERE id = ?1 AND ({PENDING_WHERE})"
-            ),
-            params![attempt_id as i64, now, label, detail],
-        )?;
-        tx.commit()?;
-        Ok(updated > 0)
+                ),
+                params![attempt_id as i64, now, label, detail],
+            )?;
+            tx.commit()?;
+            Ok(updated > 0)
+        })
     }
 
     // The partial index in the schema exists for this query: an attempt still in flight, or one that

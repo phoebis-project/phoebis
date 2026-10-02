@@ -1,9 +1,10 @@
 //! Routing state that survives a restart: session pins, cooldowns, and the overage evidence per account.
 
 use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput, ValueRef};
-use rusqlite::{params, Connection, TransactionBehavior};
+use rusqlite::{params, Connection, Transaction, TransactionBehavior};
 
-use crate::{Store, StoreError, LOCK_POISONED};
+use crate::accounts::set_state_if_generations_on;
+use crate::{AccountState, Store, StoreError, LOCK_POISONED};
 
 /// The identity a pin is held under: one conversation of one agent under one key, per model.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -290,71 +291,57 @@ impl Store {
         Ok(load)
     }
 
+    /// One transaction for a batch of routing writes: the mutex taken once, `BEGIN IMMEDIATE`, every write of
+    /// the closure against it, one commit. An error rolls the whole batch back and is the caller's to replay.
+    pub fn write_routing<T>(
+        &self,
+        f: impl FnOnce(&mut RoutingTx<'_>) -> Result<T, StoreError>,
+    ) -> Result<T, StoreError> {
+        #[cfg(any(test, feature = "debug-hooks"))]
+        self.park_on_routing_hold();
+        self.routing_commit(|conn| in_transaction(conn, |tx| f(&mut RoutingTx { tx })))
+    }
+
+    /// One routing commit under the lock, counted while the lock is still held, so a test that sees the rows
+    /// sees the count too.
+    pub(crate) fn routing_commit<T>(
+        &self,
+        f: impl FnOnce(&mut Connection) -> Result<T, StoreError>,
+    ) -> Result<T, StoreError> {
+        let mut conn = self.conn.lock().expect(LOCK_POISONED);
+        let value = f(&mut conn)?;
+        #[cfg(any(test, feature = "debug-hooks"))]
+        self.routing_commits
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(value)
+    }
+
     pub fn upsert_pin(&self, pin: &PinRow) -> Result<(), StoreError> {
-        upsert_pin_on(&self.conn.lock().expect(LOCK_POISONED), pin)
+        self.routing_commit(|conn| upsert_pin_on(conn, pin))
     }
 
     pub fn delete_pin(&self, key: &PinKey) -> Result<bool, StoreError> {
-        delete_pin_on(&self.conn.lock().expect(LOCK_POISONED), key)
+        self.routing_commit(|conn| delete_pin_on(conn, key))
     }
 
     /// Every row lands or none does; a row under an existing (model, hash) replaces it.
     pub fn upsert_affinity(&self, rows: &[AffinityRow]) -> Result<(), StoreError> {
-        let mut conn = self.conn.lock().expect(LOCK_POISONED);
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        {
-            let mut stmt = tx.prepare(&format!(
-                "INSERT INTO affinity ({AFFINITY_COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12) \
-                 ON CONFLICT(model, hash) DO UPDATE SET \
-                   chain = excluded.chain, account_id = excluded.account_id, incarnation = excluded.incarnation, \
-                   written_at = excluded.written_at, ttl_ms = excluded.ttl_ms, prefix_tokens = excluded.prefix_tokens, \
-                   key_id = excluded.key_id, key_generation = excluded.key_generation, root = excluded.root, \
-                   lane = excluded.lane"
-            ))?;
-            for row in rows {
-                stmt.execute(params![
-                    row.model,
-                    row.hash,
-                    row.chain,
-                    row.account_id,
-                    row.incarnation as i64,
-                    row.written_at,
-                    row.ttl_ms,
-                    row.prefix_tokens as i64,
-                    row.key_id,
-                    row.key_generation,
-                    row.root,
-                    row.lane
-                ])?;
-            }
-        }
-        tx.commit()?;
-        Ok(())
+        self.routing_commit(|conn| in_transaction(conn, |tx| upsert_affinity_on(tx, rows)))
     }
 
     /// One transaction for the whole batch, as `upsert_affinity` takes, so a large purge costs one commit.
     pub fn delete_affinity(&self, keys: &[(String, String)]) -> Result<usize, StoreError> {
-        let mut conn = self.conn.lock().expect(LOCK_POISONED);
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let mut deleted = 0;
-        {
-            let mut stmt = tx.prepare("DELETE FROM affinity WHERE model = ?1 AND hash = ?2")?;
-            for (model, hash) in keys {
-                deleted += stmt.execute(params![model, hash])?;
-            }
-        }
-        tx.commit()?;
-        Ok(deleted)
+        self.routing_commit(|conn| in_transaction(conn, |tx| delete_affinity_on(tx, keys)))
     }
 
     /// The later deadline always wins: a short `Retry-After` arriving after a long unified reset must not
     /// release an account the provider still refuses.
     pub fn upsert_cooldown(&self, row: &CooldownRow) -> Result<(), StoreError> {
-        upsert_cooldown_on(&self.conn.lock().expect(LOCK_POISONED), row)
+        self.routing_commit(|conn| upsert_cooldown_on(conn, row))
     }
 
     pub fn delete_cooldown(&self, account_id: &str, scope: &str) -> Result<bool, StoreError> {
-        delete_cooldown_on(&self.conn.lock().expect(LOCK_POISONED), account_id, scope)
+        self.routing_commit(|conn| delete_cooldown_on(conn, account_id, scope))
     }
 
     pub fn purge_cooldowns_before(&self, now: i64) -> Result<usize, StoreError> {
@@ -363,109 +350,32 @@ impl Store {
     }
 
     pub fn upsert_overage(&self, row: &OverageRow) -> Result<bool, StoreError> {
-        let conn = self.conn.lock().expect(LOCK_POISONED);
-        // A reading from another holder of the id is no timeline to be newer than.
-        let written = conn.execute("INSERT INTO overage_state (account_id, in_use, since, reset, observed_at, source, incarnation) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
-             ON CONFLICT(account_id) DO UPDATE SET in_use = excluded.in_use, since = excluded.since, reset = excluded.reset, observed_at = excluded.observed_at, source = excluded.source, incarnation = excluded.incarnation \
-             WHERE excluded.observed_at > overage_state.observed_at OR excluded.incarnation <> overage_state.incarnation",
-            params![row.account_id, row.in_use, row.since, row.reset, row.observed_at, row.source, row.incarnation as i64])?;
-        Ok(written > 0)
+        self.routing_commit(|conn| upsert_overage_on(conn, row))
     }
 
     /// Written only while `row.incarnation` is the account's current one, and only when newer than the stored
     /// row: one statement, so a write queued for a holder the id has since left lands nowhere. Answers whether a
     /// row was written.
     pub fn upsert_window(&self, row: &WindowRow) -> Result<bool, StoreError> {
-        let conn = self.conn.lock().expect(LOCK_POISONED);
-        // The `WHERE` on the select is what lets SQLite parse the `ON CONFLICT` of an insert-select, and it is
-        // the incarnation check too: a deleted and re-paired id answers no row, so nothing is inserted.
-        let written = conn.execute(
-            "INSERT INTO usage_windows (account_id, window, utilization, reset, observed_at, incarnation) \
-             SELECT ?1, ?2, ?3, ?4, ?5, ?6 FROM accounts WHERE id = ?1 AND incarnation = ?6 \
-             ON CONFLICT(account_id, window) DO UPDATE SET utilization = excluded.utilization, \
-               reset = excluded.reset, observed_at = excluded.observed_at, incarnation = excluded.incarnation \
-             WHERE excluded.observed_at > usage_windows.observed_at",
-            params![
-                row.account_id,
-                row.window,
-                row.utilization,
-                row.reset,
-                row.observed_at,
-                row.incarnation as i64
-            ],
-        )?;
-        Ok(written > 0)
+        self.routing_commit(|conn| upsert_window_on(conn, row))
     }
 
     /// Written as `upsert_window` writes a window: only for the account's current incarnation, and only when
     /// newer than the stored row or when that row is a previous holder's. Answers whether a row was written.
     pub fn upsert_credits(&self, row: &CreditsRow) -> Result<bool, StoreError> {
-        let conn = self.conn.lock().expect(LOCK_POISONED);
-        let written = conn.execute(
-            "INSERT INTO usage_credits (account_id, enabled, disabled_reason, utilization, observed_at, incarnation) \
-             SELECT ?1, ?2, ?3, ?4, ?5, ?6 FROM accounts WHERE id = ?1 AND incarnation = ?6 \
-             ON CONFLICT(account_id) DO UPDATE SET enabled = excluded.enabled, \
-               disabled_reason = excluded.disabled_reason, utilization = excluded.utilization, \
-               observed_at = excluded.observed_at, incarnation = excluded.incarnation \
-             WHERE excluded.observed_at > usage_credits.observed_at \
-               OR excluded.incarnation <> usage_credits.incarnation",
-            params![
-                row.account_id,
-                row.enabled,
-                row.disabled_reason,
-                row.utilization,
-                row.observed_at,
-                row.incarnation as i64
-            ],
-        )?;
-        Ok(written > 0)
+        self.routing_commit(|conn| upsert_credits_on(conn, row))
     }
 
     /// Drops every window and credits row whose incarnation is not its account's; the router's purge tick calls
     /// it.
     pub fn purge_stale_windows(&self) -> Result<usize, StoreError> {
-        let conn = self.conn.lock().expect(LOCK_POISONED);
-        let windows = conn.execute(
-            "DELETE FROM usage_windows WHERE NOT EXISTS (SELECT 1 FROM accounts \
-             WHERE accounts.id = usage_windows.account_id AND accounts.incarnation = usage_windows.incarnation)",
-            [],
-        )?;
-        let credits = conn.execute(
-            "DELETE FROM usage_credits WHERE NOT EXISTS (SELECT 1 FROM accounts \
-             WHERE accounts.id = usage_credits.account_id AND accounts.incarnation = usage_credits.incarnation)",
-            [],
-        )?;
-        Ok(windows + credits)
+        self.routing_commit(|conn| purge_stale_windows_on(conn))
     }
 
     /// All or nothing: a crash or a failed statement part way through would leave rows under the dated id with no
     /// spelling row to find them by after a restart, or a row deleted under the spelling and never re-inserted.
     pub fn rekey_resolution(&self, rekey: &RekeyWrite) -> Result<(), StoreError> {
-        let mut conn = self.conn.lock().expect(LOCK_POISONED);
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        tx.execute(
-            "INSERT INTO model_resolutions (spelling, dated_id, resolved_at) VALUES (?1, ?2, ?3) \
-             ON CONFLICT(spelling) DO UPDATE SET dated_id = excluded.dated_id, resolved_at = excluded.resolved_at",
-            params![
-                rekey.resolution.spelling,
-                rekey.resolution.dated_id,
-                rekey.resolution.resolved_at
-            ],
-        )?;
-        for key in &rekey.delete_pins {
-            delete_pin_on(&tx, key)?;
-        }
-        for pin in &rekey.upsert_pins {
-            upsert_pin_on(&tx, pin)?;
-        }
-        for (account_id, scope) in &rekey.delete_cooldowns {
-            delete_cooldown_on(&tx, account_id, scope)?;
-        }
-        for row in &rekey.upsert_cooldowns {
-            upsert_cooldown_on(&tx, row)?;
-        }
-        tx.commit()?;
-        Ok(())
+        self.routing_commit(|conn| in_transaction(conn, |tx| rekey_resolution_on(tx, rekey)))
     }
 
     /// The persisted map on its own: the accessor seeds the catalog cache's published map at start.
@@ -485,6 +395,85 @@ impl Store {
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
     }
+}
+
+/// The routing writes on one open transaction; each is the inner form of the public method of the same name.
+pub struct RoutingTx<'a> {
+    pub(crate) tx: &'a Transaction<'a>,
+}
+
+impl RoutingTx<'_> {
+    pub fn delete_affinity(&mut self, keys: &[(String, String)]) -> Result<usize, StoreError> {
+        delete_affinity_on(self.tx, keys)
+    }
+
+    pub fn delete_cooldown(&mut self, account_id: &str, scope: &str) -> Result<bool, StoreError> {
+        delete_cooldown_on(self.tx, account_id, scope)
+    }
+
+    pub fn delete_pin(&mut self, key: &PinKey) -> Result<bool, StoreError> {
+        delete_pin_on(self.tx, key)
+    }
+
+    pub fn purge_stale_windows(&mut self) -> Result<usize, StoreError> {
+        purge_stale_windows_on(self.tx)
+    }
+
+    pub fn rekey_resolution(&mut self, rekey: &RekeyWrite) -> Result<(), StoreError> {
+        rekey_resolution_on(self.tx, rekey)
+    }
+
+    pub fn set_state_if_generations(
+        &mut self,
+        id: &str,
+        state: AccountState,
+        incarnation: u64,
+        lifecycle_generation: u64,
+        credential_generation: u64,
+    ) -> Result<bool, StoreError> {
+        set_state_if_generations_on(
+            self.tx,
+            id,
+            state,
+            incarnation,
+            lifecycle_generation,
+            credential_generation,
+        )
+    }
+
+    pub fn upsert_affinity(&mut self, rows: &[AffinityRow]) -> Result<(), StoreError> {
+        upsert_affinity_on(self.tx, rows)
+    }
+
+    pub fn upsert_cooldown(&mut self, row: &CooldownRow) -> Result<(), StoreError> {
+        upsert_cooldown_on(self.tx, row)
+    }
+
+    pub fn upsert_credits(&mut self, row: &CreditsRow) -> Result<bool, StoreError> {
+        upsert_credits_on(self.tx, row)
+    }
+
+    pub fn upsert_overage(&mut self, row: &OverageRow) -> Result<bool, StoreError> {
+        upsert_overage_on(self.tx, row)
+    }
+
+    pub fn upsert_pin(&mut self, pin: &PinRow) -> Result<(), StoreError> {
+        upsert_pin_on(self.tx, pin)
+    }
+
+    pub fn upsert_window(&mut self, row: &WindowRow) -> Result<bool, StoreError> {
+        upsert_window_on(self.tx, row)
+    }
+}
+
+fn in_transaction<T>(
+    conn: &mut Connection,
+    f: impl FnOnce(&Transaction<'_>) -> Result<T, StoreError>,
+) -> Result<T, StoreError> {
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let value = f(&tx)?;
+    tx.commit()?;
+    Ok(value)
 }
 
 // `burn_from` reads each copy's five columns in this order, the plain copy first.
@@ -583,4 +572,131 @@ fn delete_cooldown_on(
         "DELETE FROM cooldowns WHERE account_id = ?1 AND scope = ?2",
         params![account_id, scope],
     )? > 0)
+}
+
+fn upsert_affinity_on(conn: &Connection, rows: &[AffinityRow]) -> Result<(), StoreError> {
+    let mut stmt = conn.prepare(&format!(
+        "INSERT INTO affinity ({AFFINITY_COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12) \
+         ON CONFLICT(model, hash) DO UPDATE SET \
+           chain = excluded.chain, account_id = excluded.account_id, incarnation = excluded.incarnation, \
+           written_at = excluded.written_at, ttl_ms = excluded.ttl_ms, prefix_tokens = excluded.prefix_tokens, \
+           key_id = excluded.key_id, key_generation = excluded.key_generation, root = excluded.root, \
+           lane = excluded.lane"
+    ))?;
+    for row in rows {
+        stmt.execute(params![
+            row.model,
+            row.hash,
+            row.chain,
+            row.account_id,
+            row.incarnation as i64,
+            row.written_at,
+            row.ttl_ms,
+            row.prefix_tokens as i64,
+            row.key_id,
+            row.key_generation,
+            row.root,
+            row.lane
+        ])?;
+    }
+    Ok(())
+}
+
+fn delete_affinity_on(conn: &Connection, keys: &[(String, String)]) -> Result<usize, StoreError> {
+    let mut deleted = 0;
+    let mut stmt = conn.prepare("DELETE FROM affinity WHERE model = ?1 AND hash = ?2")?;
+    for (model, hash) in keys {
+        deleted += stmt.execute(params![model, hash])?;
+    }
+    Ok(deleted)
+}
+
+fn upsert_overage_on(conn: &Connection, row: &OverageRow) -> Result<bool, StoreError> {
+    // A reading from another holder of the id is no timeline to be newer than.
+    let written = conn.execute("INSERT INTO overage_state (account_id, in_use, since, reset, observed_at, source, incarnation) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
+         ON CONFLICT(account_id) DO UPDATE SET in_use = excluded.in_use, since = excluded.since, reset = excluded.reset, observed_at = excluded.observed_at, source = excluded.source, incarnation = excluded.incarnation \
+         WHERE excluded.observed_at > overage_state.observed_at OR excluded.incarnation <> overage_state.incarnation",
+        params![row.account_id, row.in_use, row.since, row.reset, row.observed_at, row.source, row.incarnation as i64])?;
+    Ok(written > 0)
+}
+
+fn upsert_window_on(conn: &Connection, row: &WindowRow) -> Result<bool, StoreError> {
+    // The `WHERE` on the select is what lets SQLite parse the `ON CONFLICT` of an insert-select, and it is
+    // the incarnation check too: a deleted and re-paired id answers no row, so nothing is inserted.
+    let written = conn.execute(
+        "INSERT INTO usage_windows (account_id, window, utilization, reset, observed_at, incarnation) \
+         SELECT ?1, ?2, ?3, ?4, ?5, ?6 FROM accounts WHERE id = ?1 AND incarnation = ?6 \
+         ON CONFLICT(account_id, window) DO UPDATE SET utilization = excluded.utilization, \
+           reset = excluded.reset, observed_at = excluded.observed_at, incarnation = excluded.incarnation \
+         WHERE excluded.observed_at > usage_windows.observed_at",
+        params![
+            row.account_id,
+            row.window,
+            row.utilization,
+            row.reset,
+            row.observed_at,
+            row.incarnation as i64
+        ],
+    )?;
+    Ok(written > 0)
+}
+
+fn upsert_credits_on(conn: &Connection, row: &CreditsRow) -> Result<bool, StoreError> {
+    let written = conn.execute(
+        "INSERT INTO usage_credits (account_id, enabled, disabled_reason, utilization, observed_at, incarnation) \
+         SELECT ?1, ?2, ?3, ?4, ?5, ?6 FROM accounts WHERE id = ?1 AND incarnation = ?6 \
+         ON CONFLICT(account_id) DO UPDATE SET enabled = excluded.enabled, \
+           disabled_reason = excluded.disabled_reason, utilization = excluded.utilization, \
+           observed_at = excluded.observed_at, incarnation = excluded.incarnation \
+         WHERE excluded.observed_at > usage_credits.observed_at \
+           OR excluded.incarnation <> usage_credits.incarnation",
+        params![
+            row.account_id,
+            row.enabled,
+            row.disabled_reason,
+            row.utilization,
+            row.observed_at,
+            row.incarnation as i64
+        ],
+    )?;
+    Ok(written > 0)
+}
+
+fn purge_stale_windows_on(conn: &Connection) -> Result<usize, StoreError> {
+    let windows = conn.execute(
+        "DELETE FROM usage_windows WHERE NOT EXISTS (SELECT 1 FROM accounts \
+         WHERE accounts.id = usage_windows.account_id AND accounts.incarnation = usage_windows.incarnation)",
+        [],
+    )?;
+    let credits = conn.execute(
+        "DELETE FROM usage_credits WHERE NOT EXISTS (SELECT 1 FROM accounts \
+         WHERE accounts.id = usage_credits.account_id AND accounts.incarnation = usage_credits.incarnation)",
+        [],
+    )?;
+    Ok(windows + credits)
+}
+
+fn rekey_resolution_on(conn: &Connection, rekey: &RekeyWrite) -> Result<(), StoreError> {
+    conn.execute(
+        "INSERT INTO model_resolutions (spelling, dated_id, resolved_at) VALUES (?1, ?2, ?3) \
+         ON CONFLICT(spelling) DO UPDATE SET dated_id = excluded.dated_id, resolved_at = excluded.resolved_at",
+        params![
+            rekey.resolution.spelling,
+            rekey.resolution.dated_id,
+            rekey.resolution.resolved_at
+        ],
+    )?;
+    for key in &rekey.delete_pins {
+        delete_pin_on(conn, key)?;
+    }
+    for pin in &rekey.upsert_pins {
+        upsert_pin_on(conn, pin)?;
+    }
+    for (account_id, scope) in &rekey.delete_cooldowns {
+        delete_cooldown_on(conn, account_id, scope)?;
+    }
+    for row in &rekey.upsert_cooldowns {
+        upsert_cooldown_on(conn, row)?;
+    }
+    Ok(())
 }

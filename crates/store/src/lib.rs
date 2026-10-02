@@ -15,8 +15,11 @@ pub mod permissions;
 
 use std::path::{Path, PathBuf};
 #[cfg(any(test, feature = "debug-hooks"))]
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
+#[cfg(any(test, feature = "debug-hooks"))]
+use std::sync::{Arc, Condvar};
+use std::time::Duration;
 
 use base64::Engine;
 use hmac::{Hmac, Mac};
@@ -47,8 +50,12 @@ pub use registry::{
 };
 pub use routing::{
     AffinityChain, AffinityRow, CooldownRow, CreditsRow, OverageRow, PinBurn, PinKey, PinRow,
-    RekeyWrite, ResolutionRow, RoutingLoad, WindowRow,
+    RekeyWrite, ResolutionRow, RoutingLoad, RoutingTx, WindowRow,
 };
+
+/// The wait on another writer of the registry file (a backup, an operator's `sqlite3`) before a write fails
+/// `SQLITE_BUSY`: rusqlite's own default, named so the registry rides no library default.
+pub const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 // A poisoned store mutex means a prior panic happened while a write was in flight; the store's
 // on-disk state may be half-written, so continuing past that point is not safe.
@@ -67,6 +74,13 @@ const CANARY_AAD: &str = "storage_key_canary";
 const CANARY_PLAINTEXT: &[u8] = b"phoebis-storage-key-canary";
 // The nonce `crypto::seal` draws, stored as the first bytes of the canary's value.
 const CANARY_NONCE_LEN: usize = 12;
+
+#[cfg(test)]
+thread_local! {
+    /// The `synchronous` value the last `durably` write on this thread committed under, so a test proves each
+    /// write's own setting rather than the connection's resting one.
+    static DURABLY_SAW: std::cell::Cell<Option<i64>> = const { std::cell::Cell::new(None) };
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -188,6 +202,10 @@ pub struct Store {
     fail_next_credential_commit: AtomicBool,
     #[cfg(any(test, feature = "debug-hooks"))]
     fail_next_load: AtomicBool,
+    #[cfg(any(test, feature = "debug-hooks"))]
+    routing_commits: AtomicU64,
+    #[cfg(any(test, feature = "debug-hooks"))]
+    routing_hold: Mutex<Option<Arc<HoldGate>>>,
 }
 
 impl Store {
@@ -235,6 +253,10 @@ impl Store {
             fail_next_credential_commit: AtomicBool::new(false),
             #[cfg(any(test, feature = "debug-hooks"))]
             fail_next_load: AtomicBool::new(false),
+            #[cfg(any(test, feature = "debug-hooks"))]
+            routing_commits: AtomicU64::new(0),
+            #[cfg(any(test, feature = "debug-hooks"))]
+            routing_hold: Mutex::new(None),
         })
     }
 
@@ -251,6 +273,10 @@ impl Store {
             fail_next_credential_commit: AtomicBool::new(false),
             #[cfg(any(test, feature = "debug-hooks"))]
             fail_next_load: AtomicBool::new(false),
+            #[cfg(any(test, feature = "debug-hooks"))]
+            routing_commits: AtomicU64::new(0),
+            #[cfg(any(test, feature = "debug-hooks"))]
+            routing_hold: Mutex::new(None),
         })
     }
 
@@ -314,6 +340,37 @@ impl Store {
         }
     }
 
+    /// Transactions committed through `write_routing` and autocommits of the per-write methods since the
+    /// store opened; the proof that a burst of reports lands in one commit.
+    #[cfg(any(test, feature = "debug-hooks"))]
+    #[doc(hidden)]
+    pub fn debug_routing_commits(&self) -> u64 {
+        self.routing_commits.load(Ordering::SeqCst)
+    }
+
+    /// Parks the next `write_routing` before its transaction until the hold is released, so a test can queue a
+    /// burst of batches behind one wake.
+    #[cfg(any(test, feature = "debug-hooks"))]
+    #[doc(hidden)]
+    pub fn debug_hold_next_routing_write(&self) -> RoutingWriteHold {
+        let gate = Arc::new(HoldGate::default());
+        *self.routing_hold.lock().expect(HOLD_POISONED) = Some(gate.clone());
+        RoutingWriteHold(gate)
+    }
+
+    /// Before the connection's lock, so the store stays readable while the writer waits.
+    #[cfg(any(test, feature = "debug-hooks"))]
+    fn park_on_routing_hold(&self) {
+        let armed = self.routing_hold.lock().expect(HOLD_POISONED).take();
+        if let Some(gate) = armed {
+            gate.parked.store(true, Ordering::SeqCst);
+            let mut released = gate.released.lock().expect(HOLD_POISONED);
+            while !*released {
+                released = gate.opened.wait(released).expect(HOLD_POISONED);
+            }
+        }
+    }
+
     /// Test support: drops the canary row, the shape of a registry sealed before the canary existed.
     #[cfg(any(test, feature = "debug-hooks"))]
     #[doc(hidden)]
@@ -323,6 +380,44 @@ impl Store {
             .expect(LOCK_POISONED)
             .execute("DELETE FROM meta WHERE key = 'storage_key_canary'", [])?;
         Ok(())
+    }
+}
+
+#[cfg(any(test, feature = "debug-hooks"))]
+const HOLD_POISONED: &str = "routing write hold mutex poisoned by a prior panic";
+
+/// A test's hold on the next `write_routing`, from `Store::debug_hold_next_routing_write`.
+#[cfg(any(test, feature = "debug-hooks"))]
+#[doc(hidden)]
+pub struct RoutingWriteHold(Arc<HoldGate>);
+
+#[cfg(any(test, feature = "debug-hooks"))]
+#[derive(Default)]
+struct HoldGate {
+    parked: AtomicBool,
+    released: Mutex<bool>,
+    opened: Condvar,
+}
+
+#[cfg(any(test, feature = "debug-hooks"))]
+impl RoutingWriteHold {
+    /// Whether a `write_routing` waits on the hold; a test polls it before it queues what should land behind.
+    pub fn is_parked(&self) -> bool {
+        self.0.parked.load(Ordering::SeqCst)
+    }
+
+    pub fn release(self) {
+        drop(self);
+    }
+}
+
+/// Dropping the hold releases it too, so a test that fails with the writer parked does not leave a blocking
+/// thread its runtime waits on at shutdown.
+#[cfg(any(test, feature = "debug-hooks"))]
+impl Drop for RoutingWriteHold {
+    fn drop(&mut self) {
+        *self.0.released.lock().expect(HOLD_POISONED) = true;
+        self.0.opened.notify_all();
     }
 }
 
@@ -502,7 +597,14 @@ fn prepare(conn: &mut Connection, on_disk: bool) -> Result<(), StoreError> {
         // WAL lets the router task's reads run beside an admin write; an in-memory database has no journal.
         // Unlike `foreign_keys` this rewrites the database header, so it waits behind the version check too.
         conn.pragma_update(None, "journal_mode", "WAL")?;
+        // A power loss may lose the last transactions not yet synced, which the next requests re-derive (pins,
+        // windows, cooldowns, overage, credits, affinity, memory); a write later traffic cannot reconstruct (a
+        // credential commit, a key's secret, a revocation or deletion, a refresh attempt's record) sets `FULL` for
+        // itself, since a rotation lost there retires a refresh token the endpoint already replaced and a
+        // revocation lost there restores a key.
+        conn.pragma_update(None, "synchronous", "NORMAL")?;
     }
+    conn.busy_timeout(BUSY_TIMEOUT)?;
     conn.execute_batch(schema::SCHEMA)?;
     for (version, sql) in schema::MIGRATIONS {
         if *version <= current {
@@ -517,6 +619,23 @@ fn prepare(conn: &mut Connection, on_disk: bool) -> Result<(), StoreError> {
         tx.commit()?;
     }
     Ok(())
+}
+
+/// Runs `f` with `synchronous = FULL` on this connection and `NORMAL` after it, so a write whose loss costs a
+/// re-pairing or restores a revoked key is synced to disk before its commit returns.
+pub(crate) fn durably<T>(
+    conn: &mut Connection,
+    f: impl FnOnce(&mut Connection) -> Result<T, StoreError>,
+) -> Result<T, StoreError> {
+    conn.pragma_update(None, "synchronous", "FULL")?;
+    let result = f(conn);
+    #[cfg(test)]
+    DURABLY_SAW.set(
+        conn.pragma_query_value(None, "synchronous", |row| row.get(0))
+            .ok(),
+    );
+    conn.pragma_update(None, "synchronous", "NORMAL")?;
+    result
 }
 
 /// A connection that has never run `prepare` has no `meta` table yet, which reads as version 0 so the check
@@ -907,6 +1026,139 @@ mod tests {
             .expect("read_canary answered while the store was open");
         assert_eq!(answer.unwrap(), CanaryRead::Matches);
         conn.execute_batch("ROLLBACK").unwrap();
+    }
+
+    /// On disk: `synchronous` on an in-memory registry syncs nothing, so only a file proves the setting.
+    fn on_disk(dir: &tempfile::TempDir) -> Store {
+        Store::open(&dir.path().join("router.sqlite"), &StorageKey::generate()).unwrap()
+    }
+
+    fn pragma(store: &Store, name: &str) -> i64 {
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .pragma_query_value(None, name, |row| row.get(0))
+            .unwrap()
+    }
+
+    #[test]
+    fn an_opened_registry_reads_synchronous_normal_and_a_five_second_busy_timeout() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = on_disk(&dir);
+        assert_eq!(pragma(&store, "synchronous"), 1, "NORMAL");
+        // rusqlite sets five seconds at every open as well, so this half guards the named value rather than
+        // proving a change.
+        assert_eq!(pragma(&store, "busy_timeout"), 5_000);
+    }
+
+    #[test]
+    fn a_credential_commit_runs_at_full_and_leaves_normal_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = on_disk(&dir);
+        with_a_credential(&store);
+        assert_eq!(DURABLY_SAW.take(), Some(2), "FULL under the commit");
+        assert_eq!(pragma(&store, "synchronous"), 1, "NORMAL after it");
+    }
+
+    fn pool(id: &str) -> PoolRow {
+        PoolRow {
+            id: id.into(),
+            label: id.into(),
+            enabled: true,
+            strategy: Strategy::Priority,
+            affinity_ttl_seconds: 3600,
+            overage_policy: OveragePolicy::PreferPlan,
+            migrate_above_utilization: None,
+            select_below_utilization: None,
+            model_rules: Vec::new(),
+            keepalive_json: "{}".into(),
+            body_capture_hours: 0,
+            prefer_subscription: false,
+            shedding: Shedding::default(),
+            failover: Failover::default(),
+            cache_ttl_json: "{}".into(),
+            cache_diagnostics: None,
+            auto_mode_server: true,
+            affinity: Affinity::default(),
+            quota_headers: QuotaHeaders::Pass,
+            created_at: 0,
+            updated_at: 0,
+        }
+    }
+
+    fn api_key(store: &Store, id: &str, pool_id: &str) -> ApiKeyRow {
+        ApiKeyRow {
+            id: id.into(),
+            label: id.into(),
+            notes: None,
+            pool_id: pool_id.into(),
+            enabled: true,
+            revoked_at: None,
+            expires_at: None,
+            model_rules: Vec::new(),
+            model_rules_mode: RulesMode::Extend,
+            long_context_twins: true,
+            keepalive_opt_out: false,
+            body_capture_hours: None,
+            secret_digest: store.api_key_digest("phoebis-test-not-a-secret").to_vec(),
+            prefix: "test0000".into(),
+            created_at: 0,
+            rotated_at: None,
+            last_used_at: None,
+            retired_secret_last_used_at: None,
+            in_flight_cap: None,
+            affinity_source: AffinitySource::Auto,
+            auto_mode_server: None,
+        }
+    }
+
+    #[test]
+    fn a_revocation_and_a_refresh_attempts_record_run_at_full_and_leave_normal_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = on_disk(&dir);
+        with_a_credential(&store);
+        store.insert_pool(&pool("p"), "test").unwrap();
+        store
+            .insert_api_key(&api_key(&store, "k", "p"), "test")
+            .unwrap();
+        DURABLY_SAW.take();
+
+        store.revoke_api_key("k", 2_000, "test").unwrap();
+        assert_eq!(DURABLY_SAW.take(), Some(2), "FULL under the revocation");
+        assert_eq!(pragma(&store, "synchronous"), 1, "NORMAL after it");
+        assert!(matches!(
+            store.revoke_api_key("gone", 2_000, "test"),
+            Err(StoreError::KeyNotFound(_))
+        ));
+        assert_eq!(
+            DURABLY_SAW.take(),
+            Some(2),
+            "FULL under a refused revocation"
+        );
+        assert_eq!(
+            pragma(&store, "synchronous"),
+            1,
+            "NORMAL after the refusal too"
+        );
+
+        let generation = store.credential_generation("a").unwrap().unwrap();
+        let attempt = store.open_refresh_attempt("a", 1, 1, generation).unwrap();
+        assert_eq!(
+            DURABLY_SAW.take(),
+            Some(2),
+            "FULL under the attempt's intent"
+        );
+        assert_eq!(pragma(&store, "synchronous"), 1, "NORMAL after it");
+        store
+            .resolve_refresh_attempt(attempt, 1, AttemptOutcome::Failed("test".into()))
+            .unwrap();
+        assert_eq!(
+            DURABLY_SAW.take(),
+            Some(2),
+            "FULL under the attempt's resolution"
+        );
+        assert_eq!(pragma(&store, "synchronous"), 1, "NORMAL after it");
     }
 
     #[test]

@@ -16,6 +16,12 @@ Both databases are SQLite, and both run in WAL mode. A plain file copy taken whi
 mid-transaction and split either database file from its `-wal` file, losing the last transactions in between.
 SQLite's own `.backup` avoids that by copying a consistent snapshot instead.
 
+Both run with `synchronous = NORMAL`. A process crash loses nothing that committed, since the WAL is written before a
+commit returns; a power loss or an operating-system crash may lose the last transactions that were not yet synced to
+disk: for the registry the pins, windows, cooldowns, overage, credits, affinity and session memory of the last moments,
+which the next requests re-derive, and never a write that later traffic cannot reconstruct: a credential commit, an API
+key's secret, a key's revocation or deletion, and a refresh attempt's record, which sync at `FULL`.
+
 Create the destination directory before either backup, and make it private first: `.backup` does not carry the
 source file's `0600` mode onto the copy it creates, and the ledger backup holds the prompts and tool results its
 captured bodies contain, in plain text.

@@ -43,7 +43,7 @@ impl LedgerDb {
         }
         let mut writer = Connection::open(path)?;
         writer.pragma_update(None, "journal_mode", "WAL")?;
-        // A crash loses at most the last transactions before a checkpoint, which the spec accepts for a
+        // A power loss may lose the last transactions before a checkpoint, which the spec accepts for a
         // best-effort ledger; `FULL` would fsync on every request.
         writer.pragma_update(None, "synchronous", "NORMAL")?;
         prepare(&mut writer)?;
