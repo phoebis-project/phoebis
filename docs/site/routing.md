@@ -640,7 +640,9 @@ are never refused for want of one: the probe is the router's own traffic, and a 
 count is held across every attempt, retry, and hold, so a request sleeping in a retry in place keeps its key's slot. A
 request past the cap is refused before it reaches an account: `429` with the error type `rate_limit_error`, the error
 code `key_in_flight_cap`, and a `Retry-After` of the pool's `retry_in_place_seconds`, one second when that is 0. The
-refused request is observed with its body and gets its own request row under that code.
+refused request is observed without its body, since the key's permit is taken before the body is read, and gets its own
+request row under that code; `proxy.key_body_reads` bounds the bodies arriving on one key at once the same way
+([installation](installation.md#proxy)).
 
 ### When nothing can serve
 

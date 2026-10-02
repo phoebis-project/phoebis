@@ -66,6 +66,36 @@ impl Failure {
     }
 }
 
+/// The error code of a request refused because the bodies in flight already hold the process's byte budget.
+pub const BODY_BUDGET_EXHAUSTED: &str = "body_budget_exhausted";
+
+/// 503 `api_error`, the message `the router holds as many request bytes as it allows`, no `Retry-After`: the
+/// router refuses rather than queues, and a body freeing room says nothing about when.
+pub(crate) fn body_budget_exhausted() -> Failure {
+    Failure {
+        status: StatusCode::SERVICE_UNAVAILABLE,
+        error_type: "api_error",
+        code: BODY_BUDGET_EXHAUSTED,
+        message: "the router holds as many request bytes as it allows",
+        retry_after: None,
+    }
+}
+
+/// The error code of a request refused because its key already has as many bodies arriving as it may.
+pub const KEY_BODY_READS: &str = "key_body_reads";
+
+/// 429 `rate_limit_error`, the message `this key has as many request bodies arriving as it allows`,
+/// `Retry-After: 1`: a slot frees as soon as one of the key's bodies has arrived.
+pub(crate) fn key_body_reads() -> Failure {
+    Failure {
+        status: StatusCode::TOO_MANY_REQUESTS,
+        error_type: "rate_limit_error",
+        code: KEY_BODY_READS,
+        message: "this key has as many request bodies arriving as it allows",
+        retry_after: Some(1),
+    }
+}
+
 /// The error code of the per-key cap refusal.
 pub const KEY_IN_FLIGHT_CAP: &str = "key_in_flight_cap";
 

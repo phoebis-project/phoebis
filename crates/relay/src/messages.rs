@@ -44,6 +44,7 @@ use tokio_util::task::TaskTracker;
 
 use crate::billing::{restorable_version, Restore};
 use crate::body::{tier_ttls, uniform_ttl};
+use crate::budget::{BodyBudget, BodyReads};
 use crate::casing::OriginalHead;
 use crate::catalog::CatalogService;
 use crate::chains::Chains;
@@ -52,9 +53,9 @@ use crate::classify::{
 };
 use crate::dispatch::{self, until_cancelled, AttemptFailure, Sent};
 use crate::errors::{
-    accounts_at_cap, auth_failure, key_in_flight_cap, key_refusal, relay_failure, Failure,
-    ACCOUNTS_AT_CAP, ACCOUNT_CANCELLED, METHOD_NOT_ALLOWED, MODEL_NOT_ALLOWED, MODEL_REJECTED,
-    NOT_FOUND, ROUTER_UNAVAILABLE, UPSTREAM_UNREACHABLE,
+    accounts_at_cap, auth_failure, body_budget_exhausted, key_body_reads, key_in_flight_cap,
+    key_refusal, relay_failure, Failure, ACCOUNTS_AT_CAP, ACCOUNT_CANCELLED, METHOD_NOT_ALLOWED,
+    MODEL_NOT_ALLOWED, MODEL_REJECTED, NOT_FOUND, ROUTER_UNAVAILABLE, UPSTREAM_UNREACHABLE,
 };
 use crate::exhaustion::exhaustion_response;
 use crate::facts::{BodyFacts, ClientHints};
@@ -121,16 +122,21 @@ const QUOTA_FAMILY_PREFIX: &str = "anthropic-ratelimit-unified-";
 
 #[derive(Clone, Copy, Debug)]
 pub struct Limits {
+    /// The bytes of request bodies the process holds at once, across every connection.
+    pub body_budget_bytes: u64,
     /// The longest a request's bodies may be kept, whatever a key or pool was left holding: an operator who
     /// lowers the global maximum means it from the next request, not from the next write of every stored row.
     pub body_capture_max_hours: u32,
+    /// How long a request body may take to arrive after authentication.
+    pub body_read_timeout: Duration,
     /// How long an account is cooled when the upstream rejected it without saying for how long.
     pub cooldown_fallback: Duration,
     pub head_timeout: Duration,
     pub hold_timeout: Duration,
-    /// The longest an upstream may go silent mid-stream before the relay gives up, and the longest a request
-    /// body may take to arrive after authentication.
+    /// The longest an upstream may go silent mid-stream before the relay gives up.
     pub idle_timeout: Duration,
+    /// The bodies one key may have arriving at once; a key's own `in_flight_cap`, when set, replaces it.
+    pub key_body_reads: u32,
     pub max_request_bytes: usize,
     /// How long an account is skipped for a model it answered 404 for.
     pub model_rejection: Duration,
@@ -208,6 +214,8 @@ pub struct Relay {
     /// Every body task `relay_body` spawns runs under this, so a shutdown can wait for the completion a body
     /// task publishes after its connection was cut.
     bodies: TaskTracker,
+    body_budget: Arc<BodyBudget>,
+    body_reads: BodyReads,
     bus: Option<Bus>,
     /// The bootstrap default under `compatibility.cache_diagnostics`; a pool's own setting overrides it.
     cache_diagnostics: bool,
@@ -245,6 +253,8 @@ impl Relay {
     ) -> Relay {
         Relay {
             bodies: TaskTracker::new(),
+            body_budget: BodyBudget::new(limits.body_budget_bytes),
+            body_reads: BodyReads::default(),
             bus: None,
             cache_diagnostics: false,
             catalog,
@@ -601,6 +611,17 @@ fn client_facts(
     }
 }
 
+/// The declared body length, when the caller sent one the relay can read; a chunked body has none.
+fn content_length(headers: &HeaderMap) -> Option<usize> {
+    headers
+        .get(header::CONTENT_LENGTH)?
+        .to_str()
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
+}
+
 /// The request outcome a local answer implies; a body that ends badly overrides it at the end of the body.
 fn outcome_of(outcome: &RelayOutcome) -> Outcome {
     match outcome.error_code.as_deref() {
@@ -944,14 +965,104 @@ impl Relay {
             .body_capture_hours(&key)
             .min(self.limits.body_capture_max_hours);
         let client_version = self.drift.check(&parts.headers);
-        // A caller that stops sending holds a task and a buffer for nothing; the idle bound the stream side
-        // already gives an upstream is the fair one here too.
-        let body_read = match tokio::time::timeout(
-            self.limits.idle_timeout,
-            axum::body::to_bytes(body, self.limits.max_request_bytes),
-        )
-        .await
-        {
+        let retired = presented == Presented::Retired;
+        let pool = snapshot.pool(&key.pool_id);
+        let failover = pool.map(|p| p.failover).unwrap_or_default();
+        // One permit for the whole request, held across every attempt, retry in place and hold until the
+        // response ends. Taken before a body byte is buffered, so a refused request holds no body and is observed
+        // without one; the kind is known from the head. The check and the increment are one call under the
+        // table's lock. The cap bounds a key's conversations: a keepalive probe is the router's own traffic and a
+        // token count is no turn, so neither takes a slot or is refused for want of one.
+        let admission = match trace.kind {
+            Kind::Inference => self
+                .router
+                .in_flight()
+                .try_acquire_key(&key.id, key.in_flight_cap, (self.clock)())
+                .map(Some),
+            Kind::CountTokens | Kind::Probe => Some(None),
+        };
+        let mut key_permit = match admission {
+            Some(permit) => permit,
+            None => {
+                let seconds = pool.map_or(1, |p| p.failover.retry_in_place_seconds.max(1));
+                return self
+                    .refused_before_body(
+                        &trace,
+                        &key,
+                        &parts.headers,
+                        capture_hours,
+                        retired,
+                        key_in_flight_cap(seconds),
+                        client_version.as_deref(),
+                    )
+                    .await;
+            }
+        };
+        // The bodies arriving on a key and the bytes of them the process holds are bounded before the read, so a
+        // flood of slow or large bodies is refused rather than buffered. A probe's body is the router's own and
+        // already in memory, so it takes neither and has no deadline to keep.
+        let (read_permit, mut reservation) = match trace.kind {
+            Kind::Probe => (None, None),
+            Kind::CountTokens | Kind::Inference => {
+                let read_bound = key.in_flight_cap.unwrap_or(self.limits.key_body_reads);
+                let Some(read_permit) = self.body_reads.try_acquire(&key.id, read_bound) else {
+                    return self
+                        .refused_before_body(
+                            &trace,
+                            &key,
+                            &parts.headers,
+                            capture_hours,
+                            retired,
+                            key_body_reads(),
+                            client_version.as_deref(),
+                        )
+                        .await;
+                };
+                let declared = content_length(&parts.headers);
+                if declared.is_some_and(|n| n > self.limits.max_request_bytes) {
+                    return self
+                        .refused_before_body(
+                            &trace,
+                            &key,
+                            &parts.headers,
+                            capture_hours,
+                            retired,
+                            relay_failure(&RelayError::BodyTooLarge),
+                            client_version.as_deref(),
+                        )
+                        .await;
+                }
+                // A chunked body may run to the per-body bound, so it holds that much until it has been read.
+                let Some(reservation) = self
+                    .body_budget
+                    .try_reserve(declared.unwrap_or(self.limits.max_request_bytes) as u64)
+                else {
+                    return self
+                        .refused_before_body(
+                            &trace,
+                            &key,
+                            &parts.headers,
+                            capture_hours,
+                            retired,
+                            body_budget_exhausted(),
+                            client_version.as_deref(),
+                        )
+                        .await;
+                };
+                (Some(read_permit), Some(reservation))
+            }
+        };
+        // A caller that stops sending holds a task and a buffer for nothing; the read has its own deadline, under
+        // the stream's idle bound.
+        let read = axum::body::to_bytes(body, self.limits.max_request_bytes);
+        let read = match trace.kind {
+            Kind::Probe => Ok(read.await),
+            Kind::CountTokens | Kind::Inference => {
+                tokio::time::timeout(self.limits.body_read_timeout, read).await
+            }
+        };
+        drop(read_permit);
+        let body_read = match read {
             Ok(Ok(raw)) => Ok(raw),
             Err(_) => Err(RelayError::BodyTimeout),
             Ok(Err(error)) => {
@@ -971,35 +1082,24 @@ impl Relay {
         let raw = match body_read {
             Ok(raw) => raw,
             Err(error) => {
-                trace
-                    .observed(
-                        Some(&key),
-                        None,
-                        &parts.headers,
-                        Bytes::new(),
-                        false,
-                        capture_hours,
-                        RequestShape::default(),
-                        None,
-                        Vec::new(),
-                        client_facts(&parts.headers, None, None),
-                        None,
-                        presented == Presented::Retired,
-                        key.rotated_at,
-                    )
-                    .await;
                 return self
-                    .refused(
+                    .refused_before_body(
                         &trace,
-                        0,
+                        &key,
+                        &parts.headers,
+                        capture_hours,
+                        retired,
                         relay_failure(&error),
-                        Some(&key),
-                        None,
                         client_version.as_deref(),
                     )
                     .await;
             }
         };
+        if let Some(reservation) = &mut reservation {
+            // The declared length frames the body and the per-body bound caps a chunked one, so the read never
+            // holds more than was reserved: this only shrinks, and a shrink never fails.
+            let _ = reservation.resize(raw.len() as u64);
+        }
         let facts = BodyFacts::read(&raw);
         let auto_mode_server = snapshot.auto_mode_server(&key);
         let auto_mode = facts.shape.safeguards.then_some(if auto_mode_server {
@@ -1049,54 +1149,6 @@ impl Relay {
                 )
                 .await;
         }
-        let pool = snapshot.pool(&key.pool_id);
-        let failover = pool.map(|p| p.failover).unwrap_or_default();
-        // One permit for the whole request, held across every attempt, retry in place and hold until the
-        // response ends. Taken once the body is read, so a refusal is observed with it, and before anything is
-        // selected; the check and the increment are one call under the table's lock. The cap bounds a key's
-        // conversations: a keepalive probe is the router's own traffic and a token count is no turn, so
-        // neither takes a slot or is refused for want of one.
-        let admission = match trace.kind {
-            Kind::Inference => self
-                .router
-                .in_flight()
-                .try_acquire_key(&key.id, key.in_flight_cap, (self.clock)())
-                .map(Some),
-            Kind::CountTokens | Kind::Probe => Some(None),
-        };
-        let mut key_permit = match admission {
-            Some(permit) => permit,
-            None => {
-                trace
-                    .observed(
-                        Some(&key),
-                        None,
-                        &parts.headers,
-                        raw.clone(),
-                        stream,
-                        capture_hours,
-                        facts.shape.clone(),
-                        None,
-                        Vec::new(),
-                        client_facts(&parts.headers, None, Some(&facts)),
-                        auto_mode,
-                        presented == Presented::Retired,
-                        key.rotated_at,
-                    )
-                    .await;
-                let seconds = pool.map_or(1, |p| p.failover.retry_in_place_seconds.max(1));
-                return self
-                    .refused(
-                        &trace,
-                        0,
-                        key_in_flight_cap(seconds),
-                        Some(&key),
-                        None,
-                        client_version.as_deref(),
-                    )
-                    .await;
-            }
-        };
         let mut identity = match identify(&parts.headers, &raw) {
             Ok(identity) => identity,
             Err(error) => {
@@ -2870,6 +2922,40 @@ impl Relay {
                 Err(NoCredential::Stale)
             }
         }
+    }
+
+    /// A refusal with no body to observe: decided on the head before the read, or on a read that ended without
+    /// a whole body. The observation carries the client facts the head alone gives.
+    #[allow(clippy::too_many_arguments)]
+    async fn refused_before_body(
+        &self,
+        trace: &Trace,
+        key: &ApiKeyRow,
+        headers: &HeaderMap,
+        capture_hours: u32,
+        presented_retired: bool,
+        failure: Failure,
+        client_version: Option<&str>,
+    ) -> Response {
+        trace
+            .observed(
+                Some(key),
+                None,
+                headers,
+                Bytes::new(),
+                false,
+                capture_hours,
+                RequestShape::default(),
+                None,
+                Vec::new(),
+                client_facts(headers, None, None),
+                None,
+                presented_retired,
+                key.rotated_at,
+            )
+            .await;
+        self.refused(trace, 0, failure, Some(key), None, client_version)
+            .await
     }
 
     async fn refused(

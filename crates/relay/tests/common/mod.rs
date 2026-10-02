@@ -893,12 +893,15 @@ fn trust_fake_ca(builder: &mut boring::ssl::SslConnectorBuilder, up: &FakeUpstre
 /// Bounds no test is meant to reach unless it asks for them.
 pub fn default_limits() -> Limits {
     Limits {
+        body_budget_bytes: 512 << 20,
         // The configuration's own default, so a test that wants the cap to bite asks for it.
         body_capture_max_hours: 72,
+        body_read_timeout: Duration::from_secs(60),
         cooldown_fallback: Duration::from_secs(60),
         head_timeout: Duration::from_secs(10),
         hold_timeout: Duration::from_secs(30),
         idle_timeout: Duration::from_secs(600),
+        key_body_reads: 128,
         max_request_bytes: 32 << 20,
         model_rejection: Duration::from_secs(3_600),
     }

@@ -4,6 +4,7 @@
 mod auth;
 mod billing;
 mod body;
+mod budget;
 mod cache_ttl;
 mod casing;
 mod catalog;

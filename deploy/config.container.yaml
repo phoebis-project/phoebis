@@ -26,6 +26,11 @@ keepalive:
   oauth_prewarm_verified: false
 proxy:
   listen: 0.0.0.0:8317
+  # The bounds on the request bodies the proxy holds, at their defaults; uncomment a key to change it.
+  # body_budget_bytes: 536870912
+  # body_read_seconds: 60
+  # key_body_reads: 128
+  # max_request_bytes: 33554432
 quota:
   sample_retention_days: 30
 routing:

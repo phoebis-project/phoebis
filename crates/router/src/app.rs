@@ -37,7 +37,7 @@ const DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
 /// The native client gives a request ten minutes (`X-Stainless-Timeout: 600`), so neither the wait for the
 /// response head nor the wait between stream events gives up before the caller itself would.
 const HEAD_TIMEOUT: Duration = Duration::from_secs(600);
-const IDLE_TIMEOUT: Duration = Duration::from_secs(600);
+pub const IDLE_TIMEOUT: Duration = Duration::from_secs(600);
 
 // A completion is never dropped now, so an in-flight entry silent this long belongs to a stream the relay
 // itself ended at its idle timeout: the assembler's TTL must outwait it, or a still-open stream would be aged
@@ -56,9 +56,6 @@ const HEADER_READ_TIMEOUT: Duration = Duration::from_secs(30);
 const PROXY_MAX_CONNECTIONS: usize = 4_096;
 const ADMIN_MAX_CONNECTIONS: usize = 256;
 const METRICS_MAX_CONNECTIONS: usize = 64;
-
-/// Well past the largest measured request; a body beyond it is refused rather than buffered.
-const MAX_REQUEST_BYTES: usize = 32 << 20;
 
 /// An upstream connection idle for longer than this is likely to have been closed at the other end already,
 /// and reusing it costs a failed write and a retry.
@@ -252,12 +249,15 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             resolver.clone(),
             clock.clone(),
             Limits {
+                body_budget_bytes: config.proxy.body_budget_bytes,
                 body_capture_max_hours: config.stats.body_capture_max_hours,
+                body_read_timeout: Duration::from_secs(config.proxy.body_read_seconds),
                 cooldown_fallback: Duration::from_secs(config.routing.cooldown_fallback_seconds),
                 head_timeout: HEAD_TIMEOUT,
                 hold_timeout: HOLD_TIMEOUT,
                 idle_timeout: IDLE_TIMEOUT,
-                max_request_bytes: MAX_REQUEST_BYTES,
+                key_body_reads: config.proxy.key_body_reads,
+                max_request_bytes: config.proxy.max_request_bytes,
                 model_rejection: Duration::from_secs(config.routing.model_rejection_seconds),
             },
             catalog.clone(),

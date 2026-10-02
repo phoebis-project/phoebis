@@ -71,7 +71,27 @@ pub struct CompatConfig {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProxyConfig {
+    /// The bytes of request bodies the process holds at once, across every connection, 512 MiB by default.
+    #[serde(default = "default_body_budget_bytes")]
+    pub body_budget_bytes: u64,
+    /// How long a request body may take to arrive after authentication, under the stream idle bound.
+    #[serde(default = "default_body_read_seconds")]
+    pub body_read_seconds: u64,
+    /// How many request bodies one key may have arriving at once; a key's own `in_flight_cap`, when set,
+    /// replaces it for that key.
+    #[serde(default = "default_key_body_reads")]
+    pub key_body_reads: u32,
     pub listen: SocketAddr,
+    /// The per-body bound, the Messages API's own request limit by default; a larger value is refused.
+    #[serde(default = "default_max_request_bytes")]
+    pub max_request_bytes: usize,
+    /// Whether a restored billing placeholder is signed with this build's formula; off until a server
+    /// rejection of the placeholder proves it necessary.
+    #[serde(default)]
+    pub sign_cch_placeholder: bool,
+    /// How the edited body leaves toward the upstream: `auto` mirrors the client, `on` always gzip, `off` never.
+    #[serde(default = "default_upstream_gzip")]
+    pub upstream_gzip: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -171,8 +191,16 @@ pub struct UpstreamConfig {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
+    #[error("proxy.body_budget_bytes must be at most 1099511627776, not {value}")]
+    BodyBudgetTooLarge { value: u64 },
+    #[error(
+        "proxy.body_budget_bytes must be at least proxy.max_request_bytes ({minimum}), not {value}"
+    )]
+    BodyBudgetTooSmall { minimum: usize, value: u64 },
     #[error("stats.body_capture_max_hours must be between 1 and 168, not {value}")]
     BodyCaptureMaxOutOfRange { value: u32 },
+    #[error("proxy.body_read_seconds must be between 1 and {max}, not {value}")]
+    BodyReadOutOfRange { max: u64, value: u64 },
     #[error("routing.catalog_cache_seconds must be between 1 and 86400, not {value}")]
     CatalogCacheOutOfRange { value: u64 },
     #[error("routing.catalog_refresh_seconds must be between 60 and 604800, not {value}")]
@@ -181,8 +209,12 @@ pub enum ConfigError {
     DuplicateSecret { first: String, second: String },
     #[error("{0}")]
     Keepalive(#[from] LimitsError),
+    #[error("proxy.key_body_reads must be between 1 and 4096, not {value}")]
+    KeyBodyReadsOutOfRange { value: u32 },
     #[error("stats.ledger_path {path} must name a database file inside a directory")]
     LedgerPath { path: PathBuf },
+    #[error("proxy.max_request_bytes must be between 1024 and 33554432, not {value}")]
+    MaxRequestBytesOutOfRange { value: usize },
     #[error("sessions.memory_cap must be between 1 and 1048576, not {value}")]
     MemoryCapOutOfRange { value: usize },
     #[error("sessions.memory_idle_seconds must be between 60 and 31536000, not {value}")]
@@ -220,6 +252,8 @@ pub enum ConfigError {
     Syntax(#[from] serde_norway::Error),
     #[error("compatibility.profile {name} is not a profile this build carries")]
     UnknownProfile { name: String },
+    #[error("proxy.upstream_gzip must be auto, on or off, not {value}")]
+    UpstreamGzipInvalid { value: String },
     #[error("usage.refresh_concurrency must be at least 1")]
     ZeroRefreshConcurrency,
 }
@@ -323,7 +357,44 @@ fn check_shape(config: &Config) -> Result<(), ConfigError> {
             path: config.storage.path.clone(),
         });
     }
-
+    let proxy = &config.proxy;
+    // The upstream refuses a larger request itself, so a higher bound would only buffer what it turns away.
+    if !(1_024..=33_554_432).contains(&proxy.max_request_bytes) {
+        return Err(ConfigError::MaxRequestBytesOutOfRange {
+            value: proxy.max_request_bytes,
+        });
+    }
+    // A budget under one body at the per-body bound refuses a body the bound itself admits.
+    if proxy.body_budget_bytes < proxy.max_request_bytes as u64 {
+        return Err(ConfigError::BodyBudgetTooSmall {
+            minimum: proxy.max_request_bytes,
+            value: proxy.body_budget_bytes,
+        });
+    }
+    if proxy.body_budget_bytes > 1 << 40 {
+        return Err(ConfigError::BodyBudgetTooLarge {
+            value: proxy.body_budget_bytes,
+        });
+    }
+    // Under the stream idle bound: a body that takes as long as the client's own ten minutes leaves no time to
+    // answer it.
+    let body_read_max = crate::app::IDLE_TIMEOUT.as_secs() - 1;
+    if !(1..=body_read_max).contains(&proxy.body_read_seconds) {
+        return Err(ConfigError::BodyReadOutOfRange {
+            max: body_read_max,
+            value: proxy.body_read_seconds,
+        });
+    }
+    if !(1..=4_096).contains(&proxy.key_body_reads) {
+        return Err(ConfigError::KeyBodyReadsOutOfRange {
+            value: proxy.key_body_reads,
+        });
+    }
+    if !matches!(proxy.upstream_gzip.as_str(), "auto" | "on" | "off") {
+        return Err(ConfigError::UpstreamGzipInvalid {
+            value: proxy.upstream_gzip.clone(),
+        });
+    }
     if !(1..=604_800).contains(&config.routing.model_rejection_seconds) {
         return Err(ConfigError::ModelRejectionOutOfRange {
             value: config.routing.model_rejection_seconds,
@@ -524,8 +595,18 @@ fn from_env(name: &str) -> Result<Secret, ConfigError> {
     Ok(Secret::new(&value))
 }
 
+/// Room for 512 one-MiB bodies at once, or sixteen at the per-body bound: a household whose keys carry agent tools
+/// that fan out.
+fn default_body_budget_bytes() -> u64 {
+    512 << 20
+}
+
 fn default_body_capture_max() -> u32 {
     72
+}
+
+fn default_body_read_seconds() -> u64 {
+    60
 }
 
 fn default_catalog_cache() -> u64 {
@@ -540,8 +621,17 @@ fn default_cooldown_fallback() -> u64 {
     60
 }
 
+fn default_key_body_reads() -> u32 {
+    128
+}
+
 fn default_ledger_path() -> PathBuf {
     "./data/ledger.sqlite".into()
+}
+
+/// The Messages API's own request limit, so the router never refuses a body the upstream would accept.
+fn default_max_request_bytes() -> usize {
+    32 << 20
 }
 
 fn default_metrics_listen() -> SocketAddr {
@@ -574,6 +664,10 @@ fn default_session_expiry() -> u64 {
 
 fn default_startup_fetch() -> u64 {
     5
+}
+
+fn default_upstream_gzip() -> String {
+    "auto".into()
 }
 
 fn default_memory_cap() -> usize {
@@ -634,6 +728,128 @@ mod tests {
         let path = dir.join(format!("{name}.yaml"));
         std::fs::write(&path, yaml).unwrap();
         path
+    }
+
+    /// `file`'s own template fixes the `proxy` block at `listen` alone; this one carries the caller's further keys
+    /// under it.
+    fn file_with_proxy(dir: &std::path::Path, name: &str, keys: &str) -> std::path::PathBuf {
+        let key = dir.join("storage.key");
+        std::fs::write(
+            &key,
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        )
+        .unwrap();
+        let yaml = format!(
+            "admin:\n  listen: 127.0.0.1:0\n  secret_env: TEST_CFG_ADMIN\n  plain_http: true\n\
+             compatibility:\n  profile: claude-code-2.1.269-linux-x64\nproxy:\n  listen: 127.0.0.1:0\n{keys}\
+             storage:\n  encryption_key_file: {}\n  path: {}\nusage:\n  cache_ttl_seconds: 60\n  \
+             refresh_concurrency: 2\n",
+            key.display(),
+            dir.join("router.sqlite").display()
+        );
+        let path = dir.join(format!("{name}.yaml"));
+        std::fs::write(&path, yaml).unwrap();
+        path
+    }
+
+    #[test]
+    fn the_proxy_keys_default_and_refuse_outside_their_bounds() {
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("TEST_CFG_ADMIN", "admin-secret-001");
+        let proxy = load(&file(dir.path(), "defaults", "")).unwrap().proxy;
+        assert_eq!(
+            (
+                proxy.body_budget_bytes,
+                proxy.body_read_seconds,
+                proxy.key_body_reads,
+                proxy.max_request_bytes,
+                proxy.sign_cch_placeholder,
+                proxy.upstream_gzip.as_str()
+            ),
+            (536_870_912, 60, 128, 33_554_432, false, "auto")
+        );
+        for (name, keys, expected) in [
+            (
+                "max-request-low",
+                "  max_request_bytes: 1023\n",
+                "proxy.max_request_bytes must be between 1024 and 33554432, not 1023",
+            ),
+            (
+                "max-request-high",
+                "  max_request_bytes: 33554433\n",
+                "proxy.max_request_bytes must be between 1024 and 33554432, not 33554433",
+            ),
+            (
+                "budget-small",
+                "  body_budget_bytes: 1024\n",
+                "proxy.body_budget_bytes must be at least proxy.max_request_bytes (33554432), not 1024",
+            ),
+            (
+                "budget-large",
+                "  body_budget_bytes: 1099511627777\n",
+                "proxy.body_budget_bytes must be at most 1099511627776, not 1099511627777",
+            ),
+            (
+                "read-zero",
+                "  body_read_seconds: 0\n",
+                "proxy.body_read_seconds must be between 1 and 599, not 0",
+            ),
+            (
+                "read-long",
+                "  body_read_seconds: 600\n",
+                "proxy.body_read_seconds must be between 1 and 599, not 600",
+            ),
+            (
+                "reads-zero",
+                "  key_body_reads: 0\n",
+                "proxy.key_body_reads must be between 1 and 4096, not 0",
+            ),
+            (
+                "reads-high",
+                "  key_body_reads: 4097\n",
+                "proxy.key_body_reads must be between 1 and 4096, not 4097",
+            ),
+            (
+                "gzip",
+                "  upstream_gzip: gzip\n",
+                "proxy.upstream_gzip must be auto, on or off, not gzip",
+            ),
+        ] {
+            let error = load(&file_with_proxy(dir.path(), name, keys)).unwrap_err();
+            assert_eq!(error.to_string(), expected, "{name}");
+        }
+        let edges = load(&file_with_proxy(
+            dir.path(),
+            "edges",
+            "  body_budget_bytes: 1099511627776\n  body_read_seconds: 599\n  key_body_reads: 4096\n  \
+             max_request_bytes: 1024\n  sign_cch_placeholder: true\n  upstream_gzip: off\n",
+        ))
+        .unwrap()
+        .proxy;
+        assert_eq!(
+            (
+                edges.body_budget_bytes,
+                edges.body_read_seconds,
+                edges.key_body_reads,
+                edges.max_request_bytes,
+                edges.sign_cch_placeholder,
+                edges.upstream_gzip.as_str()
+            ),
+            (1 << 40, 599, 4_096, 1_024, true, "off")
+        );
+        let low = load(&file_with_proxy(
+            dir.path(),
+            "low",
+            "  body_budget_bytes: 1024\n  body_read_seconds: 1\n  key_body_reads: 1\n  \
+             max_request_bytes: 1024\n  upstream_gzip: on\n",
+        ))
+        .unwrap()
+        .proxy;
+        assert_eq!(
+            (low.body_budget_bytes, low.upstream_gzip.as_str()),
+            (1_024, "on"),
+            "a budget of one body at the per-body bound is enough"
+        );
     }
 
     #[test]

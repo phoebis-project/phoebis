@@ -152,16 +152,17 @@ while the router is up. It prints, in order:
 2. `proxy listens on {config.proxy.listen}`
 3. `admin listens on {config.admin.listen}`
 4. `metrics listens on {config.stats.metrics_listen}`
-5. `profile {config.compatibility.profile}`
-6. `routing: cooldown_fallback {n}s, model_rejection {n}s, catalog cache {n}s, catalog refresh {n}s, startup fetch {n}s`
-7. `ledger at {config.stats.ledger_path}`
-8. `retention {n days|forever}, rollups {n days|forever}, samples {n} days`
-9. `keepalive: lease {n}s, {n} sessions, {n} agents, {n} workers, {n} MiB retained, oauth prewarm
-   {verified|unverified}`
-10. the registry line, `registry at {config.storage.path} does not exist yet; the first start creates it` when the
+5. `proxy: body budget {n} bytes, body read {n}s, key body reads {n}, max request {n} bytes`
+6. `profile {config.compatibility.profile}`
+7. `routing: cooldown_fallback {n}s, model_rejection {n}s, catalog cache {n}s, catalog refresh {n}s, startup fetch {n}s`
+8. `ledger at {config.stats.ledger_path}`
+9. `retention {n days|forever}, rollups {n days|forever}, samples {n} days`
+10. `keepalive: lease {n}s, {n} sessions, {n} agents, {n} workers, {n} MiB retained, oauth prewarm
+    {verified|unverified}`
+11. the registry line, `registry at {config.storage.path} does not exist yet; the first start creates it` when the
     registry is not there yet, or `registry at {config.storage.path} has no key canary yet; a sealed row opens under
     the key, and the next start seals one` for a registry from before the canary
-11. `warning: environment variable {name} is unset or empty`, once per unset secret variable
+12. `warning: environment variable {name} is unset or empty`, once per unset secret variable
 
 Further warning lines name a storage key file, data directory or database whose mode or owner is wider than the router
 expects; the router starts either way and logs the same warnings.
@@ -230,6 +231,11 @@ keepalive:
   oauth_prewarm_verified: false
 proxy:
   listen: 127.0.0.1:8317
+  # The bounds on the request bodies the proxy holds, at their defaults; uncomment a key to change it.
+  # body_budget_bytes: 536870912
+  # body_read_seconds: 60
+  # key_body_reads: 128
+  # max_request_bytes: 33554432
 quota:
   # How long quota and extra-usage samples are kept.
   sample_retention_days: 30
@@ -346,7 +352,32 @@ session frees its slot at once, though its tombstone stays until the session exp
 
 ### proxy
 
-Required: `listen`, a socket address, refused with a YAML error.
+Required: `listen`, a socket address, refused with a YAML error. Four keys bound the request bodies the proxy holds;
+they are tunable in the file for power users and have no console control.
+
+| Key | Default | Accepts |
+| --- | --- | --- |
+| `body_budget_bytes` | `536870912` | `max_request_bytes` to 2^40 |
+| `body_read_seconds` | `60` | 1 to 599 |
+| `key_body_reads` | `128` | 1 to 4096 |
+| `max_request_bytes` | `33554432` | 1024 to 33554432 |
+
+Refused with:
+
+- `body_budget_bytes`: `proxy.body_budget_bytes must be at least proxy.max_request_bytes ({minimum}), not {value}`;
+  and `proxy.body_budget_bytes must be at most 1099511627776, not {value}` past 2^40
+- `body_read_seconds`: `proxy.body_read_seconds must be between 1 and 599, not {value}`
+- `key_body_reads`: `proxy.key_body_reads must be between 1 and 4096, not {value}`
+- `max_request_bytes`: `proxy.max_request_bytes must be between 1024 and 33554432, not {value}`
+
+`max_request_bytes` is the per-body bound, the Messages API's own request limit, so the router never refuses what the
+upstream accepts, and a value above it is refused as pointless. `body_budget_bytes` is the bytes of bodies the whole
+process holds at once, sized for a household whose keys carry agent tools that fan out (512 one-MiB bodies, or sixteen
+at the per-body bound); a request that would pass it is refused with the router's own `503 body_budget_exhausted`.
+`key_body_reads` bounds the bodies one key has arriving at once, or the key's own `in_flight_cap` when it is set; a
+request past it is refused `429 key_body_reads` with `Retry-After: 1`. `body_read_seconds` is how long a body may take
+to arrive after authentication, under the stream's idle bound of 600 seconds; a body that takes longer is answered
+`408 request_timeout`.
 
 ### quota
 
@@ -460,9 +491,9 @@ accounts' usage and profile fetches may run at once, at least 1, refused with
 `usage.refresh_concurrency must be at least 1`.
 
 The checks above run in a fixed order at load, not block by block: `compatibility.profile`, then
-`admin`'s loopback-or-origin rule, then `usage.refresh_concurrency`, `storage.path`, the `keepalive` bounds,
-`routing.catalog_cache_seconds`, `routing.startup_fetch_seconds`,
-`routing.catalog_refresh_seconds`, the four `sessions` keys,
+`admin`'s loopback-or-origin rule, then `usage.refresh_concurrency`, `storage.path`, the `proxy` bounds,
+`routing.model_rejection_seconds`, the `keepalive` bounds, `routing.catalog_cache_seconds`,
+`routing.startup_fetch_seconds`, `routing.catalog_refresh_seconds`, the four `sessions` keys,
 `stats.body_capture_max_hours`, `stats.rollup_retention_days`, `quota.sample_retention_days`, `stats.ledger_path`,
 and last whether `stats.ledger_path` and `storage.path` name the same file. The first failure is the one reported,
 so fix the file top to bottom to find the next one.
@@ -512,7 +543,6 @@ Rows in alphabetical order of the limit's name. None of these has a bootstrap ke
 | --- | --- |
 | Admin login throttle | Five failed logins per minute, then `too many failed logins, try again in a minute`. |
 | Admin session lifetime | 15 minutes idle, 12 hours absolute. |
-| Body read timeout | 600 seconds for a request body to arrive after authentication, the same as the stream idle wait. |
 | Chunk framing | 1 KiB per chunk-size line and 16 KiB of trailers from an upstream. |
 | Connection cap | 4,096 on the proxy listener, 256 on the admin listener, 64 on the metrics listener. |
 | Cooldown booking | Seven days ahead of each announcement; a later announcement books the next stretch. |
@@ -524,7 +554,7 @@ Rows in alphabetical order of the limit's name. None of these has a bootstrap ke
 | Ledger channel | 4,096 records; a request waits for room, an event or sample past it drops as a `ledger_gap`. |
 | Live feed | 30 minutes or 2,048 finished requests kept; a client behind by 1,024 messages is disconnected. |
 | Name resolution | 5 seconds per lookup of an upstream or catalog host. |
-| Relay waits | 600 seconds for a response head, 600 seconds between stream events, a 32 MiB request cap. |
+| Relay waits | 600 seconds for a response head, 600 seconds between stream events. |
 | Stream hold before commit | 30 seconds or 64 KiB, whichever comes first. |
 | Upstream connection pool | 8 idle connections per account and host pair, discarded after 60 seconds idle. |
 | User agent | 256 bytes kept on a request row and a live entry; a longer value is cut. |

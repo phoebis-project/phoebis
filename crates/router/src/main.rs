@@ -46,6 +46,13 @@ fn main() -> anyhow::Result<()> {
             println!("proxy listens on {}", config.proxy.listen);
             println!("admin listens on {}", config.admin.listen);
             println!("metrics listens on {}", config.stats.metrics_listen);
+            println!(
+                "proxy: body budget {} bytes, body read {}s, key body reads {}, max request {} bytes",
+                config.proxy.body_budget_bytes,
+                config.proxy.body_read_seconds,
+                config.proxy.key_body_reads,
+                config.proxy.max_request_bytes
+            );
             println!("profile {}", config.compatibility.profile);
             println!(
                 "routing: cooldown_fallback {}s, model_rejection {}s, catalog cache {}s, \

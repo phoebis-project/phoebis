@@ -232,8 +232,8 @@ name or its `cch=` spelled with an escape, or a key on its path carried more tha
 reaches the upstream: `400` with the error code `body_shape` and a message naming the member. A body whose top-level
 object nests deeper than the relay reads is refused `400` with the error code `invalid_body`.
 
-A request body that does not finish arriving within the compiled-in wait after authentication is refused `408`
-with the error code `request_timeout` and the message `the request body did not arrive in time`.
+A request body that does not finish arriving within `proxy.body_read_seconds` (60 by default) after authentication is
+refused `408` with the error code `request_timeout` and the message `the request body did not arrive in time`.
 
 A caller that stops sending before its body is complete is refused `400` with the error code
 `request_incomplete` and the message `the request body ended before it was complete`.
@@ -243,6 +243,14 @@ account: `429` with the error type `rate_limit_error`, the error code `key_in_fl
 pool's `retry_in_place_seconds`, one second when that is 0. A request counts from its admission until its response ends,
 a stream for its whole length. A `count_tokens` request takes no slot on the key or on the account and is never held or
 refused for want of one.
+
+A request body larger than `proxy.max_request_bytes` (32 MiB by default), declared or arriving, is refused `413` with
+the error code `request_too_large`. A request whose body would take the router past `proxy.body_budget_bytes` of bodies
+in flight is refused `503` `api_error` with the error code `body_budget_exhausted` and the message `the router holds as
+many request bytes as it allows`, with no `Retry-After`; a request past the key's bound on bodies arriving at once
+(`proxy.key_body_reads`, or the key's own `in_flight_cap` when set) is refused `429 rate_limit_error` `key_body_reads`
+with `Retry-After: 1`. Each of these, the key cap's `429` included, is refused before its body is read and observed
+without one.
 
 ### How a request is identified
 

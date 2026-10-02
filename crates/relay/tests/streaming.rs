@@ -741,17 +741,21 @@ async fn a_compressed_chunk_that_expands_past_the_bound_ends_the_stream_with_an_
     up.shutdown().await;
 }
 
-#[tokio::test]
-async fn a_body_that_stops_arriving_is_refused_at_the_idle_timeout() {
+/// A request whose body sends a prefix and then stalls, on a relay with `limits`; the sender keeps it open.
+async fn stalled_body(
+    limits: phoebis_relay::Limits,
+) -> (
+    FakeUpstream,
+    common::Harness,
+    Request<Body>,
+    tokio::sync::mpsc::Sender<Result<Bytes, std::io::Error>>,
+) {
     let up = FakeUpstream::start(vec![]).await;
     let h = common::harness_with_limits(
         &up,
         &[common::oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
         common::PoolSpec::default(),
-        phoebis_relay::Limits {
-            idle_timeout: Duration::from_millis(300),
-            ..common::default_limits()
-        },
+        limits,
     )
     .await;
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(1);
@@ -764,11 +768,42 @@ async fn a_body_that_stops_arriving_is_refused_at_the_idle_timeout() {
         .header("content-type", "application/json")
         .body(body)
         .unwrap();
-    let resp = h.app.clone().oneshot(request).await.unwrap();
+    (up, h, request, tx)
+}
+
+#[tokio::test]
+async fn a_body_that_stops_arriving_is_refused_at_the_body_read_deadline() {
+    let (up, h, request, tx) = stalled_body(phoebis_relay::Limits {
+        body_read_timeout: Duration::from_millis(300),
+        ..common::default_limits()
+    })
+    .await;
+    let resp = tokio::time::timeout(Duration::from_secs(5), h.app.clone().oneshot(request))
+        .await
+        .expect("refused at the body read deadline")
+        .unwrap();
     assert_eq!(resp.status(), 408);
     assert_eq!(
         resp.headers().get("x-phoebis-error-code").unwrap(),
         "request_timeout"
+    );
+    drop(tx);
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_stalled_body_is_refused_by_the_read_deadline_and_not_the_stream_idle_bound() {
+    let (up, h, request, tx) = stalled_body(phoebis_relay::Limits {
+        body_read_timeout: Duration::from_secs(5),
+        idle_timeout: Duration::from_millis(300),
+        ..common::default_limits()
+    })
+    .await;
+    let waited =
+        tokio::time::timeout(Duration::from_millis(600), h.app.clone().oneshot(request)).await;
+    assert!(
+        waited.is_err(),
+        "the body still had its own deadline to arrive in past the idle bound"
     );
     drop(tx);
     up.shutdown().await;

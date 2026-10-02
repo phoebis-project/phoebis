@@ -863,11 +863,14 @@ async fn app_with_webhook_policy(
     // The admin harness had no relay before this task; keepalive needs one to probe through, even though
     // nothing here drives its scheduler.
     let limits = Limits {
+        body_budget_bytes: 512 << 20,
         body_capture_max_hours: BODY_CAPTURE_MAX_HOURS,
+        body_read_timeout: Duration::from_secs(60),
         cooldown_fallback: Duration::from_secs(60),
         head_timeout: Duration::from_secs(10),
         hold_timeout: Duration::from_secs(30),
         idle_timeout: Duration::from_secs(600),
+        key_body_reads: 128,
         max_request_bytes: 32 << 20,
         model_rejection: Duration::from_secs(3_600),
     };
