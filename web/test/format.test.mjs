@@ -95,6 +95,19 @@ test('dollar ticks step as fmtUsd does, with one precision for every tick of an 
   assert.equal(usdTickDigits([]), 2, 'an axis with nothing drawn reads cents');
 });
 
+test('a dollar axis under a tenth of a cent adds a decimal per decade, so its ticks still read apart', () => {
+  const axis = (ticks) => ticks.map((v) => fmtUsdTick(v, usdTickDigits(ticks)));
+  // The ticks Recharts picks for a $0.0003 and a $0.00033 maximum; four decimals read them $0.0001, $0.0001 and
+  // $0.0003, $0.0003.
+  assert.deepEqual(axis([0, 0.000075, 0.00015, 0.000225, 0.0003]), ['$0.00000', '$0.00007', '$0.00015', '$0.00022', '$0.00030']);
+  const finer = axis([0, 0.000085, 0.00017, 0.000255, 0.00034]);
+  assert.equal(new Set(finer).size, finer.length, `every tick reads apart: ${finer.join(' ')}`);
+  assert.equal(usdTickDigits([0.001]), 4, 'a tenth of a cent keeps the four decimals');
+  assert.equal(usdTickDigits([0.0009]), 5);
+  assert.equal(usdTickDigits([0.00009]), 6);
+  assert.equal(usdTickDigits([1e-12]), 8, 'the decimals stop at eight');
+});
+
 test('a negative dollar tick puts its sign before the currency, and a tick at zero carries none', () => {
   assert.deepEqual(['-$5.00', '$0.00', '$5.00'], [-5, 0, 5].map((v) => fmtUsdTick(v, usdTickDigits([-5, 0, 5]))));
   assert.equal(usdTickDigits([-12, 3]), 0, 'the precision reads the largest figure either side of zero');

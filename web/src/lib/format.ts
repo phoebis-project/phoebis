@@ -28,12 +28,14 @@ export const fmtUsd = (n: number, v = n + 0) => (Math.abs(v) > 0 && Math.abs(v) 
 /**
  * The decimals every tick of one dollar axis carries, read once from the largest figure the axis draws either side of
  * zero, so the axis never mixes $0.0040 with $0.01 and no two of its ticks read the same: whole dollars from 10, cents
- * from 10 cents, a tenth of a cent from a cent, four decimals under a cent, and cents for an axis at zero.
+ * from 10 cents, a tenth of a cent from a cent, four decimals from a tenth of a cent, one more per decade below that up
+ * to eight, and cents for an axis at zero.
  */
 export function usdTickDigits(values: Iterable<number>): number {
   let max = 0;
   for (const v of values) max = Math.max(max, Math.abs(v));
-  return max >= 10 ? 0 : max >= 0.1 || max === 0 ? 2 : max >= 0.01 ? 3 : 4;
+  if (max === 0) return 2;
+  return max >= 10 ? 0 : max >= 0.1 ? 2 : max >= 0.01 ? 3 : max >= 0.001 ? 4 : Math.min(8, Math.floor(-Math.log10(max)) + 2);
 }
 /** A dollar axis tick at the axis's `usdTickDigits`; a figure that rounds to zero carries no sign. */
 export const fmtUsdTick = (v: number, digits: number) => {
