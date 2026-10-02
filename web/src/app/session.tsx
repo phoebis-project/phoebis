@@ -30,11 +30,24 @@ interface SessionState {
 
 const Ctx = createContext<SessionState | null>(null);
 
+/** What the session read found: still asking, no session, no answer (its status, 0 when none came), or the session. */
+type Probe = 'pending' | 'none' | { noAnswer: number } | SessionInfo;
+const sessionOf = (probe: Probe): SessionInfo | null => (typeof probe === 'object' && !('noAnswer' in probe) ? probe : null);
+
 export function SessionProvider({ children }: { children: ReactNode }) {
-  const [session, setSession] = useState<SessionInfo | null | undefined>(undefined);
+  const [probe, setProbe] = useState<Probe>('pending');
   const [notice, setNotice] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [previewRole, setStoredPreviewRole] = useState<Role | null>(storedPreview);
+
+  // The card stays drawn while a Retry runs, and an answer that lands after a login went through leaves the session be.
+  const probeSession = useCallback(() => {
+    const settle = (next: Probe) => setProbe((current) => (sessionOf(current) ? current : next));
+    api.getSession().then(
+      (s) => settle(s ?? 'none'),
+      (e: unknown) => settle({ noAnswer: e instanceof ApiError ? e.status : 0 }),
+    );
+  }, []);
 
   useEffect(() => {
     setHooks({
@@ -45,18 +58,18 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       onForbidden: (message) => setToast(message),
       onUnauthorized: () => {
         setNotice('Your session ended; log in again.');
-        setSession(null);
+        setProbe('none');
       },
     });
-    api.getSession().then(setSession, () => setSession(null));
-  }, []);
+    probeSession();
+  }, [probeSession]);
 
   const logout = useCallback(async () => {
     try {
       await api.logout();
     } finally {
       setNotice(null);
-      setSession(null);
+      setProbe('none');
     }
   }, []);
 
@@ -71,20 +84,28 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const session = sessionOf(probe);
   const value = useMemo<SessionState | null>(
     () => (session ? { clearToast: () => setToast(null), logout, previewRole, role: (MOCK && previewRole) || session.role, sessionId: session.sessionId, setPreviewRole, toast } : null),
     [session, toast, logout, previewRole, setPreviewRole],
   );
 
-  if (session === undefined) return null;
-  if (!session || !value)
+  if (probe === 'pending')
+    return (
+      <main className="login">
+        <Brand />
+      </main>
+    );
+  if (!value)
     return (
       <LoginScreen
         notice={notice}
         onLoggedIn={(s) => {
           setNotice(null);
-          setSession(s);
+          setProbe(s);
         }}
+        onRetry={probeSession}
+        outage={typeof probe === 'object' && 'noAnswer' in probe ? probe.noAnswer : null}
       />
     );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
@@ -96,7 +117,20 @@ export function useSession(): SessionState {
   return v;
 }
 
-export function LoginScreen({ notice, onLoggedIn }: { notice: string | null; onLoggedIn: (s: SessionInfo) => void }) {
+function Brand() {
+  return (
+    <div className="brand">
+      <span className="brand__mark" aria-hidden>
+        <Mark size={48} />
+      </span>
+      <span className="brand__name">Phoebis Router</span>
+      <p className="brand__couplet">Place every request. Keep every session.</p>
+    </div>
+  );
+}
+
+/** `outage` is the status of a session read the router did not answer as 2xx or 401, 0 when no answer came at all. */
+export function LoginScreen({ notice, onLoggedIn, onRetry, outage }: { notice: string | null; onLoggedIn: (s: SessionInfo) => void; onRetry: () => void; outage: number | null }) {
   const [secret, setSecret] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -113,9 +147,11 @@ export function LoginScreen({ notice, onLoggedIn }: { notice: string | null; onL
             ? 'Too many failed logins; try again in a minute.'
             : e instanceof ApiError && e.status === 401
               ? 'That secret does not match.'
-              : e instanceof Error
-                ? e.message
-                : String(e),
+              : e instanceof ApiError && e.status === 0
+                ? 'The router did not answer.'
+                : e instanceof Error
+                  ? e.message
+                  : String(e),
       );
     } finally {
       setBusy(false);
@@ -130,13 +166,7 @@ export function LoginScreen({ notice, onLoggedIn }: { notice: string | null; onL
           void submit();
         }}
       >
-        <div className="brand">
-          <span className="brand__mark" aria-hidden>
-            <Mark size={48} />
-          </span>
-          <span className="brand__name">Phoebis Router</span>
-          <p className="brand__couplet">Place every request. Keep every session.</p>
-        </div>
+        <Brand />
         <label className="field">
           <span className="field__label">Admin or viewer secret</span>
           <Input type="password" autoComplete="current-password" autoFocus value={secret} onChange={(e) => setSecret(e.target.value)} />
@@ -145,6 +175,16 @@ export function LoginScreen({ notice, onLoggedIn }: { notice: string | null; onL
           <p className="secondary" role="status">
             {notice}
           </p>
+        )}
+        {outage !== null && (
+          <div className="row">
+            <p className="pairing__expired" role="alert">
+              The router did not answer{outage ? ` (${outage})` : ''}.
+            </p>
+            <Button size="sm" onClick={onRetry}>
+              Retry
+            </Button>
+          </div>
         )}
         {error && (
           <p className="pairing__expired" role="alert">

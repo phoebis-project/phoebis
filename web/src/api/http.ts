@@ -174,7 +174,13 @@ export class HttpApi implements Api {
   };
   getSession = async (): Promise<SessionInfo | null> => {
     // Read straight through: a missing session is the normal first load, not a lost one for the hook to report.
-    const response = await fetch('/admin/session', { credentials: 'same-origin' });
+    let response: Response;
+    try {
+      response = await fetch('/admin/session', { credentials: 'same-origin' });
+    } catch (e) {
+      // Raised as `call` raises it, so the login screen can tell a router that never answered from "no session".
+      throw new ApiError(0, e instanceof Error ? e.message : String(e), null);
+    }
     if (response.status === 401) return null;
     if (!response.ok) throw new ApiError(response.status, `GET /admin/session answered ${response.status}`, null);
     const r = (await response.json()) as { role: string; session_id: string };

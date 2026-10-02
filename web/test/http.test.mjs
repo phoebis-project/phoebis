@@ -199,6 +199,13 @@ test('getSession answers null on 401 without running the hook', async () => {
   assert.deepEqual(await new HttpApi().getSession(), { role: 'viewer', sessionId: 's' });
 });
 
+test('the session probe raises the status it got and 0 for no answer', async () => {
+  stub(() => answer(503, { error: 'service unavailable' }));
+  await assert.rejects(new HttpApi().getSession(), (e) => e instanceof ApiError && e.status === 503);
+  stub(() => Promise.reject(new TypeError('fetch failed')));
+  await assert.rejects(new HttpApi().getSession(), (e) => e instanceof ApiError && e.status === 0 && e.message === 'fetch failed');
+});
+
 test('a login the router accepted with no cookie kept raises SessionNotKept', async () => {
   const calls = stub((_url, init) => (init.method === 'POST' ? answer(204) : answer(401, { error: 'no admin session' })));
   await assert.rejects(new HttpApi().login('secret'), (e) => e instanceof SessionNotKept && !(e instanceof ApiError));

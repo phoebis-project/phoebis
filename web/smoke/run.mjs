@@ -133,34 +133,6 @@ const failoverRow = requests.find((r) => r.attempts.length > 1 && r.attempts.som
 }
 
 {
-  // The login checks below start signed out, each on a fresh mount, and put the stored session back at the end.
-  localStorage.removeItem('phoebis.mockSession');
-  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-  const attempt = async (page, secret) => {
-    const input = page.container.querySelector('input[type="password"]');
-    setter.call(input, secret);
-    input.dispatchEvent(new window.Event('input', { bubbles: true }));
-    [...page.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Log in')?.click();
-    await page.settle(500);
-  };
-  const alertOf = (page) => page.container.querySelector('.login__card [role="alert"]')?.textContent ?? '';
-
-  api.login = () => Promise.reject(new SessionNotKept());
-  const kept = await mount('/');
-  await attempt(kept, 'admin');
-  const cookie = alertOf(kept);
-  results.push({
-    name: 'login screen names the cookie when the router accepted the secret and no session followed',
-    ok: cookie === 'The router accepted the secret, but the browser kept no session cookie. The usual causes: a proxy that rewrites the path or drops Set-Cookie, cookies blocked for this site, or a Secure cookie served over plain HTTP.',
-    missing: [cookie || 'no alert'],
-  });
-  delete api.login;
-  kept.unmount();
-
-  localStorage.setItem('phoebis.mockSession', 'admin');
-}
-
-{
   // The time format is a stored preference the toggle lives on Settings alone; a fresh mount of the Accounts
   // list picks up the change from there, read off its first list row's timestamp title.
   const titleOf = async (path) => {
@@ -5703,6 +5675,98 @@ await m.navigate('/observe');
 m.unmount();
 if (roleBeforePreview === null) localStorage.removeItem('phoebis.role');
 else localStorage.setItem('phoebis.role', roleBeforePreview);
+
+{
+  // The login checks below start signed out, each on a fresh mount, and put the stored session back at the end. They
+  // run last, so the real time their mounts take does not move the story's relative times the checks above read.
+  localStorage.removeItem('phoebis.mockSession');
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  const attempt = async (page, secret) => {
+    const input = page.container.querySelector('input[type="password"]');
+    setter.call(input, secret);
+    input.dispatchEvent(new window.Event('input', { bubbles: true }));
+    [...page.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Log in')?.click();
+    await page.settle(500);
+  };
+  const alertOf = (page) => page.container.querySelector('.login__card [role="alert"]')?.textContent ?? '';
+
+  api.login = () => Promise.reject(new SessionNotKept());
+  const kept = await mount('/');
+  await attempt(kept, 'admin');
+  const cookie = alertOf(kept);
+  results.push({
+    name: 'login screen names the cookie when the router accepted the secret and no session followed',
+    ok: cookie === 'The router accepted the secret, but the browser kept no session cookie. The usual causes: a proxy that rewrites the path or drops Set-Cookie, cookies blocked for this site, or a Secure cookie served over plain HTTP.',
+    missing: [cookie || 'no alert'],
+  });
+  delete api.login;
+  kept.unmount();
+
+  const held = deferNextCall('getSession');
+  const probing = await mount('/');
+  const brand = probing.container.querySelector('.login .brand .brand__name')?.textContent ?? '';
+  const fieldWhileHeld = probing.container.querySelector('.field') !== null;
+  held.release();
+  await probing.settle();
+  held.restore();
+  results.push({
+    name: 'the brand draws while the session probe is held',
+    ok: brand === 'Phoebis Router' && !fieldWhileHeld && probing.container.querySelector('.login__card .field') !== null,
+    missing: [brand || 'no brand', fieldWhileHeld ? 'a field drawn while the probe is held' : 'no field while held', probing.container.querySelector('.login__card .field') ? 'card after the answer' : 'no card after the answer'],
+  });
+  probing.unmount();
+
+  // The status outcome: the probe answered with a status other than 2xx and 401.
+  failNextCall('getSession', '/admin/session', 'service unavailable');
+  const down = await mount('/');
+  const outage = down.container.querySelector('.login__card .pairing__expired')?.textContent ?? '';
+  const retry = [...down.container.querySelectorAll('.login__card button')].find((b) => b.textContent?.trim() === 'Retry');
+  const secret = down.container.querySelector('.login__card input[type="password"]');
+  results.push({
+    name: 'login screen says the router did not answer with the status and offers Retry',
+    ok: outage === 'The router did not answer (503).' && retry !== undefined && secret !== null && !secret.disabled,
+    missing: [outage || 'no sentence', retry ? 'Retry' : 'no Retry', secret ? (secret.disabled ? 'secret disabled' : 'secret field') : 'no secret field'],
+  });
+  retry?.click();
+  await down.settle();
+  const cardAfterRetry = down.container.querySelector('.login__card input[type="password"]') !== null;
+  const outageAfterRetry = down.container.querySelector('.login__card .pairing__expired')?.textContent ?? '';
+  await attempt(down, 'admin');
+  results.push({
+    name: 'Retry after recovery lands on the dashboard',
+    ok: retry !== undefined && cardAfterRetry && outageAfterRetry === '' && down.container.querySelector('.stat-grid') !== null,
+    missing: [cardAfterRetry ? 'card kept' : 'no card after Retry', outageAfterRetry || 'no sentence after Retry', down.container.querySelector('.stat-grid') ? 'dashboard' : 'no dashboard'],
+  });
+  down.unmount();
+  await api.logout();
+  localStorage.removeItem('phoebis.mockSession');
+
+  // The no-answer outcome: the probe never reached the router.
+  failNextCall('getSession', '/admin/session', 'Failed to fetch', { network: true });
+  const unreached = await mount('/');
+  const silent = unreached.container.querySelector('.login__card .pairing__expired')?.textContent ?? '';
+  results.push({
+    name: 'login screen says the router did not answer on a network failure',
+    ok: silent === 'The router did not answer.' && [...unreached.container.querySelectorAll('.login__card button')].some((b) => b.textContent?.trim() === 'Retry'),
+    missing: [silent || 'no sentence'],
+  });
+  unreached.unmount();
+
+  // The no-session outcome, then a login attempt that never reached the router.
+  failNextCall('login', '/admin/session', 'Failed to fetch', { network: true });
+  const attempted = await mount('/');
+  const outageBefore = attempted.container.querySelector('.login__card .pairing__expired');
+  await attempt(attempted, 'admin');
+  const said = alertOf(attempted);
+  results.push({
+    name: 'a login attempt the router did not answer says so',
+    ok: outageBefore === null && said === 'The router did not answer.' && !attempted.text().includes('Failed to fetch'),
+    missing: [outageBefore ? 'an outage sentence before the attempt' : 'no outage before', said || 'no alert'],
+  });
+  attempted.unmount();
+
+  localStorage.setItem('phoebis.mockSession', 'admin');
+}
 
 const failed = results.filter((r) => !r.ok);
 for (const r of results) console.log(`${r.ok ? 'PASS' : 'FAIL'}  ${r.name}${r.ok ? '' : `  missing: ${JSON.stringify(r.missing)}`}`);

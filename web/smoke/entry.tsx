@@ -53,14 +53,18 @@ api.subscribeLive = (handler: (event: LiveEvent) => void) =>
  * Fails one mock call the way the transport fails a real one: the rejection reaches the page's `useAsync`,
  * and the route reaches the shell's toast, which the mock would otherwise never report because it never goes
  * through `call`. The override puts the original method back as it fires, so a retry reads the mock again.
+ * `network` fails it as a router that never answered, with status 0.
  */
-export const failNextCall = (name: string, path: string, message: string) => {
+export const failNextCall = (name: string, path: string, message: string, options: { network?: boolean } = {}) => {
   const mock = api as unknown as Record<string, () => unknown>;
   const original = mock[name].bind(api);
+  const status = options.network ? 0 : 503;
   mock[name] = () => {
     mock[name] = original;
-    reportFailure({ message, path, status: 503 });
-    return Promise.reject(new ApiError(503, message, null));
+    // The transport reads the session straight through and keeps the login's refusals to the login screen, so
+    // neither one reaches the shell.
+    if (name !== 'getSession' && name !== 'login') reportFailure({ message, path, status });
+    return Promise.reject(new ApiError(status, message, null));
   };
 };
 
