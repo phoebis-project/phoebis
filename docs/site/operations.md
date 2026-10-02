@@ -56,16 +56,16 @@ empty at mode `0600` before the key ever reaches it. Writing through a redirect 
 the key world-readable for the moment between the file's creation and a later `chmod`, and an interrupted run would
 leave it that way for good.
 
-The key seals OAuth credential bundles, API-key secrets, and alert secrets. `Store::digest_key` also derives, from this
-same key, the digest every downstream key authenticates against: the secrets the admin API mints and hands to clients
-and the companion.
+The key seals OAuth credential bundles, Anthropic-key secrets, and alert secrets. `Store::digest_key` also derives, from
+this same key, the digest every downstream key authenticates against: the secrets the admin API mints and hands to
+clients and the companion.
 
 There is no re-key command, so recovering from a lost or replaced key means:
 
 - Re-pairing every `oauth` account, after disconnecting it first. Confirming a pairing reads the account's
   existing credential to check its generation before committing the replacement; sealed under the key that was
   just replaced, that read fails, and the pairing dialog answers `500 storage failure`. Disconnect the account
-  first, from the Upstreams view's Disconnect or `DELETE /admin/accounts/{id}/credentials`, which deletes the
+  first, from the Accounts view's Disconnect or `DELETE /admin/accounts/{id}/credentials`, which deletes the
   credential without reading it and leaves the account's identity bound to the same slot, then re-pair.
 - Re-entering every `api_key` secret and alert secret under the new key.
 - Rotating every downstream key. Replacing the storage key changes what `digest_key` derives, so every digest
@@ -115,7 +115,7 @@ Stainless headers, the three beta lists, the control-plane URLs and client id, a
 checked against the fixtures under `crates/profile/fixtures/`.
 A newer client build is not relayed in its own shape automatically: headers travel as the
 client sends them, with the `anthropic-beta` line copied as sent and edited for three betas only: the OAuth beta,
-claimed for a subscription credential and stripped for an API key on every request that carries the line; the
+claimed for a subscription credential and stripped for an Anthropic key on every request that carries the line; the
 cache-diagnosis beta under `cache_diagnostics` (the compatibility option or the pool's own); and the extended-TTL beta
 the cache TTL rewrite adds or drops. The profile's beta lists record what the measured client sends, as the fixtures
 show, and the fields the router restores for a Claude Code request are the ones on the [client

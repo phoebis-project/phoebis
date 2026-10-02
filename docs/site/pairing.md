@@ -8,15 +8,17 @@ afterwards.
 ## Two kinds of account
 
 An `oauth` account is a Claude.ai or Console login, paired through the dialog or the API below. An `api_key`
-account holds a key toward `api.anthropic.com`. Creating an `api_key` account verifies the key against its host
-at once: a rejected key answers `400 credential rejected by the upstream`, while a host that serves no model
-list leaves the account ready with the error recorded and no models.
+account, an Anthropic key in the console, holds a key from the Anthropic Console toward `api.anthropic.com`.
+Creating an `api_key` account verifies the key against its host at once: a rejected key answers
+`400 credential rejected by the upstream`, while a host that serves no model list leaves the account ready with the
+error recorded and no models.
 
 ## Through the console
 
-Open Upstreams and choose Add upstream. The dialog's subtitle names the choice: subscription logins share your Claude.ai
-quota, while API keys bill per token against a Console workspace. Pick OAuth login, give the upstream an id (lowercase
-letters, digits, and dashes; it names the upstream in every log and URL) and a label, then choose Start pairing.
+Open Accounts and choose Add account. The dialog's subtitle names the choice: subscription logins share your Claude.ai
+quota, while Anthropic keys bill per token against a Console workspace. Pick OAuth login, give the account an id
+(lowercase letters, digits, and dashes; it names the account in every log and URL) and a label, then choose Start
+pairing.
 
 The pairing dialog runs three steps.
 
@@ -32,7 +34,7 @@ port; the URL in the address bar is complete, and the code alone works too.
 
 ### Confirm
 
-Confirm the identity shown, the account's email and organization, to store the refresh token for this upstream.
+Confirm the identity shown, the account's email and organization, to store the refresh token for this account.
 
 The console starts every pairing as a `claude_ai` login, authorizing against `claude.com`; a `console` login,
 authorizing against `platform.claude.com`, is available through the API. A pairing session expires ten minutes
@@ -107,7 +109,7 @@ every example above, and sends no `Origin`.
 | State | What puts an account there | What moves it on |
 | --- | --- | --- |
 | `disconnected` | Disconnect, on an `oauth` account | Pair or Re-pair |
-| `funding_required` | An `api_key` upstream named its credit balance | Clear funding, back to `ready` |
+| `funding_required` | The upstream named an `api_key` account's credit balance | Clear funding, back to `ready` |
 | `ready` | Pairing confirms, an `api_key` verifies, or a hold clears | Reauth, funding, or Disconnect |
 | `reauth_required` | A definitive credential failure; see note below | Re-pair, or a new `api_key` secret |
 | `unpaired` | No credential yet, or Disconnect on an `api_key` account | Pairing, or a stored `api_key` secret |
@@ -117,24 +119,24 @@ re-pair, for the whole flow; the console tracks progress through the pairing ses
 Renewing an access token leaves the account's state at `ready` for the whole attempt, win or lose; only a
 definitive failure moves it.
 
-`reauth_required` follows a single definitive failure, never a retry count: a 401 from an `api_key` upstream, an
+`reauth_required` follows a single definitive failure, never a retry count: a 401 on an `api_key` account, an
 `oauth` refresh that finds no stored token, gets a 401 or `invalid_grant` from the token endpoint, or resolves to
 a mismatched identity, or a request retried once with a freshly refreshed token that still comes back 401.
 
-The Upstreams view offers these actions, each calling its own route:
+The Accounts view offers these actions, each calling its own route:
 
 | Action | What it does |
 | --- | --- |
-| Catalog | Opens the upstream's live model list, as of the last fetch, with a refresh. |
-| Clear cooldown | Clears one scope of the cooling-down block: the whole upstream, its fast lane, or one model. |
+| Catalog | Opens the account's live model list, as of the last fetch, with a refresh. |
+| Clear cooldown | Clears one scope of the cooling-down block: the whole account, its fast lane, or one model. |
 | Clear funding | Clears a `funding_required` account back to `ready`. |
-| Delete upstream | Removes the account from every pool and deletes it; request history stays in the ledger. |
+| Delete account | Removes the account from every pool and deletes it; request history stays in the ledger. |
 | Disconnect | Removes the credential; request history stays in the ledger. |
 | Pair or Re-pair | Opens the pairing dialog described above. |
 | Pause and Resume | A paused account takes no traffic. |
 | Verify | `api_key` only; asks the account's host for its model list. |
 
-The console warns before Clear cooldown runs: "The upstream becomes eligible immediately. If the upstream is
-still rate limited, the next request re-enters cooldown."
+The console warns before Clear cooldown runs: "The account becomes eligible immediately. If the account is still
+rate limited, the next request re-enters cooldown."
 
 A viewer sees every one of these pages and none of the buttons but Catalog, and may refresh usage and the catalog.

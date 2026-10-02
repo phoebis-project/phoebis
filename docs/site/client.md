@@ -24,9 +24,9 @@ the router and by the companion alike.
 ### CLAUDE_CODE_OAUTH_TOKEN
 
 Holds the router key's secret, the one shown once at creation or rotation. Put it here rather than in
-`ANTHROPIC_API_KEY`: the client gates three behaviours on a subscriber check that an API key never passes, the
-one-hour cache TTL for the main conversation, the parsing of the unified rate-limit headers on a 429, and the
-automatic continue after a usage-limit reset. An `ANTHROPIC_API_KEY` gives all three up.
+`ANTHROPIC_API_KEY`: the client gates three behaviours on a subscriber check that a credential in `ANTHROPIC_API_KEY`
+never passes, the one-hour cache TTL for the main conversation, the parsing of the unified rate-limit headers on a 429,
+and the automatic continue after a usage-limit reset. An `ANTHROPIC_API_KEY` gives all three up.
 
 ### `_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL`
 
@@ -91,8 +91,8 @@ Optional; needed to use fast mode behind the router. The client checks whether f
 organization by asking `api.anthropic.com` directly with the session's credential, ignoring `ANTHROPIC_BASE_URL`;
 with a router key that check fails as a connectivity error and fast mode stays off. With this variable set the
 client skips the check and sends `speed: "fast"` when you switch fast mode on. The router reads the speed from
-the request and the answer: a fast request is served on an upstream whose fast lane is open, priced in dollars
-from usage credits, and moved to a sibling when an upstream's fast lane cools (see
+the request and the answer: a fast request is served on an account whose fast lane is open, priced in dollars
+from usage credits, and moved to a sibling when an account's fast lane cools (see
 [Cooldowns and failover](routing.md#cooldowns-and-failover)); it draws no plan window.
 
 ### For the keepalive companion
@@ -121,9 +121,9 @@ the model's own turn: every session post carries a `safeguards` member near the 
 permission rules with their literal text, the working and home directories, the trusted directories, the git state
 and the user identity) and the `dangerous-tool-use-2026-09-03` beta, and the answer's `message_delta` carries one
 verdict per tool use. A Max account answered a verdict for every reviewed tool use through a gateway that relays the
-member unchanged, as the router does with the setting on; an API-key account has not been measured. A session post that
-asks takes two to four seconds against one to two for one that does not, and the client's own classifier request about
-1.3 seconds.
+member unchanged, as the router does with the setting on; an Anthropic-key account has not been measured. A session post
+that asks takes two to four seconds against one to two for one that does not, and the client's own classifier request
+about 1.3 seconds.
 
 What the router does with that request is the pool's **Support server-side auto mode** setting, on by default,
 which a key can override ([routing](routing.md#pools)):
@@ -134,7 +134,7 @@ which a key can override ([routing](routing.md#pools)):
   billing hash. The upstream then evaluates nothing, and one completed answer without a verdict latches the client
   for the rest of its process, subagents included, across `/clear` and `/compact`: from then on it sends one
   classifier request of its own per reviewed tool use, on its Sonnet default rather than the session's model, about
-  52,000 cached input tokens each, billed to the upstream's windows and absent from the client's own cost line, while
+  52,000 cached input tokens each, billed to the account's windows and absent from the client's own cost line, while
   the beta stays in its header and the router keeps dropping it. The first session post under the off state still
   asks, so a session that starts there costs one asking round. The request log records each request whose member the
   router dropped as `stripped`, and the client's classifier requests as ordinary requests of their session
@@ -263,7 +263,7 @@ are the router's hourly rollups under the key, probes left out, the same rollups
 window is summed from whole hourly buckets, so it starts at the top of an hour: the `from` the answer reports is that
 hour, up to an hour earlier than the window's name, and the figures cover it all. The figures are this key's own from
 its creation: a deleted key's usage stays under the key it belonged to, so a later key under the same id never reads it,
-and each window starts where its name says. Nothing about the upstream accounts is answered, and the secret never is.
+and each window starts where its name says. Nothing about the accounts is answered, and the secret never is.
 
 ```sh title="The document"
 curl -sS -H "Authorization: Bearer $CLAUDE_CODE_OAUTH_TOKEN" https://<router host>/v1/usage | jq .windows.\"24h\"
@@ -277,15 +277,15 @@ refused exactly as `/v1/messages` refuses it, in the Anthropic error shape.
 ## The models listing
 
 `GET /v1/models` on the proxy listener answers the key that presents it with the models it may route to: every enabled
-upstream of the key's pool is asked for its catalog through the router's cache ([routing](routing.md#catalogs)),
+account of the key's pool is asked for its catalog through the router's cache ([routing](routing.md#catalogs)),
 the same cache the router derives a model's dated id from, so a request naming an undated id is routed,
 priced and recorded under the newest dated snapshot the listing holds for it; the pool's and the key's [model
-rules](routing.md#model-rules) are applied to each id, one row is kept per id (the first upstream in priority
+rules](routing.md#model-rules) are applied to each id, one row is kept per id (the first account in priority
 order that lists it), and the rows are sorted by id. The shape is the API's own: `data[]` of `id`, `type`,
 `display_name`, `created_at`, `max_input_tokens`, and `max_tokens` as the upstream reports them, with `first_id`,
 `last_id`, and `has_more`; `limit` (1 to 1000, default 20), `after_id`, and `before_id` page it, and a `limit`
-outside its range is refused `400 invalid_limit`. An upstream whose fetch failed contributes nothing until the
-next fetch, and a model that is cooling down on an upstream still lists. `GET /v1/models/{id}` answers the one row,
+outside its range is refused `400 invalid_limit`. An account whose fetch failed contributes nothing until the
+next fetch, and a model that is cooling down on an account still lists. `GET /v1/models/{id}` answers the one row,
 or `404 not_found_error` with the message `model: {id}`; an id with a slash may be sent as is or percent-encoded.
 
 Beside every model whose `max_input_tokens` is above 200,000 the listing carries a twin whose id ends in `[1m]`

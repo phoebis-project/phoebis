@@ -31,7 +31,7 @@ against that cost, per pool and per hour, and `GET /admin/keepalive/overview` re
 can go negative when probes outspend what they save.
 
 A probe of a request sent fast runs fast too, since the replay keeps the body as sent: it draws usage credits at the
-fast rates, settles in dollars whatever the upstream's funding, and counts toward the dollar cap and no share cap; a
+fast rates, settles in dollars whatever the account's funding, and counts toward the dollar cap and no share cap; a
 probe the upstream served at standard speed is priced at the standard cells. A request it kept warm saves the input cell
 less the cache-read cell of the speed its own answer was served at, the fast cells when it was served fast and the
 standard cells when the upstream answered it at standard speed. The upstream shares no cached prefix across speeds, so a
@@ -141,7 +141,7 @@ even written. `GET /admin/pools` answers the full policy with every default fill
 Both daily caps count per UTC day and are kept in `router.sqlite` as each probe settles, so a restart resumes them
 where they stood. A probe settled in dollars counts toward its pool's `probe_cost_cap_usd_per_day`: one on an api_key
 account or a subscription account in overage, a plan-funded one the cost table cannot price (see [The cost
-reference](#the-cost-reference)), and a fast-mode session's whatever the upstream's funding. A probe settled in the
+reference](#the-cost-reference)), and a fast-mode session's whatever the account's funding. A probe settled in the
 window share counts toward its account's `probe_cap_window_share_per_day`, and a migrated probe toward neither.
 
 ## The cost reference
@@ -187,7 +187,7 @@ tier's factor from the same file (Max 5x 0.25 and Pro 0.05 of Max 20x's 5-hour w
 unmeasured). A cell the plan meter has not measured shows a dash; a dated model id reads the cells of its undated name;
 a model the cost table has no row for shows a dash in every cell.
 
-The prices carry one caveat: "API list prices. A subscription upstream on plan quota spends the window share columns
+The prices carry one caveat: "API list prices. A subscription account on plan quota spends the window share columns
 instead of money." A recipe's own net follows the same split: the share of the account's 5-hour window, the band inside
 each probe's price, on a subscription account outside overage, and dollars on an api_key account or one in overage; a
 plan-funded probe whose token types the cost table cannot price on the account's tier (no row, or a cell left unmeasured
@@ -200,8 +200,8 @@ adds one where `inject_when_absent` is on); with the policy off, when the recipe
 of its prefix for an hour. A probe settled in dollars on a model the price table does not list prices at the table's
 dearest cell of each type, never at zero, so the dollar cap and the net still bound it; a request such a probe kept warm
 saves at the same cells, so its net stays positive while the cache saves more than the probes cost. Whatever the
-upstream's funding, a fast-mode session's net is a dollar net, since its probes draw usage credits. Each agent line of
-the Sessions view shows its net, as "N% of the 5-hour window", in dollars, or both for an agent whose upstream changed
+account's funding, a fast-mode session's net is a dollar net, since its probes draw usage credits. Each agent line of
+the Sessions view shows its net, as "N% of the 5-hour window", in dollars, or both for an agent whose account changed
 funding while it was warmed.
 
 The four shipped rows, all prices in USD per million tokens:
@@ -291,7 +291,7 @@ a forked session's fork badge](assets/sessions-dark.png#only-dark)
 
 The Sessions view opens with tiles for the session count, the cache-warming agents by state, cache probes in the last 24
 hours by outcome, sessions whose cache expired between turns, net savings over 7 days, and the day's probe cost per pool
-against its cap. Its table lists one row per session (key, session, model, upstream, last used, requests,
+against its cap. Its table lists one row per session (key, session, model, account, last used, requests,
 last request, agents, companion, cache warming, next probe), and opening a row expands into the recipe each of its
 agents carries. A session's menu offers Release, and, once it has ledgered traffic, "View in analytics" and "View in
 observe"; the analytics view opens on the requests of the key holder the row belongs to. The view reads its sessions

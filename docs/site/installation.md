@@ -228,14 +228,14 @@ quota:
   # How long quota and extra-usage samples are kept.
   sample_retention_days: 30
 routing:
-  # How long an upstream's model list is held before it is read again for the console and the models listing.
+  # How long an account's model list is held before it is read again for the console and the models listing.
   catalog_cache_seconds: 60
-  # How often every enabled upstream's model listing is read again.
+  # How often every enabled account's model listing is read again.
   catalog_refresh_seconds: 21600
   cooldown_fallback_seconds: 60
   # Upstream attempts per client request across distinct accounts, 1 to 8.
   max_attempts: 3
-  # How long an upstream that answered 404 for a model is skipped for that model.
+  # How long an account whose upstream answered 404 for a model is skipped for that model.
   model_rejection_seconds: 3600
   # How long the proxy listener waits at startup for the model listings and the usage snapshots.
   startup_fetch_seconds: 5
@@ -315,9 +315,9 @@ Refused with:
 
 With `cache_diagnostics` on, every request toward `api.anthropic.com` carries the `cache-diagnosis-2026-04-07` beta and
 a `diagnostics.previous_message_id` naming the previous answer on the same key, conversation, agent, model, and
-upstream, so the response's cache-miss reason lands in the request log. A pool overrides it with its own
+account, so the response's cache-miss reason lands in the request log. A pool overrides it with its own
 `cache_diagnostics`. The id follows the session memory: it survives a restart through the registry copy and starts at
-`null` on an upstream the conversation moved to.
+`null` on an account the conversation moved to.
 
 ### keepalive
 

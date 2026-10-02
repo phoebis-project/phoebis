@@ -53,9 +53,9 @@ The sidebar shows the views in this order:
 | Dashboard | Shown above: 24-hour tiles, remaining subscription quota, and recent requests and sessions. |
 | Observe | The live feed (see [Statistics and alerts](statistics.md)). |
 | Quota | Each account's usage windows and reset timing (see [Statistics and alerts](statistics.md)). |
-| Upstreams | Accounts and their credentials (see [Pairing an account](pairing.md)). |
+| Accounts | Accounts and their credentials (see [Pairing an account](pairing.md)). |
 | Pools | Pools and their members (see [Pools, keys, and routing](routing.md)). |
-| API keys | Downstream keys and the pool each routes into (see [Pools, keys, and routing](routing.md)). |
+| Keys | Downstream keys and the pool each routes into (see [Pools, keys, and routing](routing.md)). |
 | Models | A key's model rules, cooldowns, and rejections (see [Pools, keys, and routing](routing.md)). |
 | Requests | Individual relayed requests (see [Statistics and alerts](statistics.md)). |
 | Analytics | Hourly rollups and cost (see [Statistics and alerts](statistics.md)). |
@@ -63,8 +63,11 @@ The sidebar shows the views in this order:
 | Alerts | Webhook alert rules and their events (see [Statistics and alerts](statistics.md)). |
 | Settings | The effective bootstrap values (see [Installation](installation.md)). |
 
-The console calls an account an "upstream" everywhere the API and the bootstrap file call it an "account"; the
-rest of this site keeps to "account".
+The console, the API, the bootstrap file and this site call what the router holds an account and a key the router
+issues a key. The console and this site call the account kind whose credential is a key from the Anthropic Console an
+Anthropic key; the API's kind value stays `api_key`. "Upstream" names the provider's host and the party that answered
+a request (the bootstrap file's `upstream` block, the `upstream_error` and `upstream_unreachable` codes, the
+`upstream_request_id` and `upstream_status` fields, the `phoebis_upstream_ttfb_seconds` metric).
 
 ## What this build does not do
 

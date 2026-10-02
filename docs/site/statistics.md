@@ -50,11 +50,11 @@ by the static prefix, by a subagent's fallback to its parent agent's pin, or, wi
 any request's landing on another agent's pin of its session, is a hit when it read at all.
 
 A budgeted pool member's spend sums the priced hourly rollups over each period it carries a budget for, the current UTC
-day and the current month, an API-key member's rows whole, a subscription member's metered rows alone (`overage` and
-`fast`); a keepalive probe's cost counts toward it the same as any other request's, since a probe on an API-key member
-still draws real money. The table in force is fixed at startup, so a member held at its budget waits for the period to
-end or its budget to be raised, rather than for a price correction. The rollups file each hour's traffic under who paid
-for it: the plan, overage, or a fast answer's usage credits, as the response reported it.
+day and the current month, an Anthropic-key member's rows whole, a subscription member's metered rows alone (`overage`
+and `fast`); a keepalive probe's cost counts toward it the same as any other request's, since a probe on an
+Anthropic-key member still draws real money. The table in force is fixed at startup, so a member held at its budget
+waits for the period to end or its budget to be raised, rather than for a price correction. The rollups file each hour's
+traffic under who paid for it: the plan, overage, or a fast answer's usage credits, as the response reported it.
 
 A model an upstream rejected leaves two events in the log: `model_rejected` names the refusing account and the
 spelling the request carried, `model_permitted` the account that served the same request afterwards; the request
@@ -103,12 +103,12 @@ without them at the standard cells.
 ## Plan meter
 
 A subscription account's plan-side figures read as a share of its own 5-hour window and of its 7-day window, a percent
-with the window named; an API-key account, and a subscription account in overage, read dollars.
+with the window named; an Anthropic-key account, and a subscription account in overage, read dollars.
 
 A fast answer draws no plan window: it adds nothing to the share, the prediction, the burn a shedding round ranks by, or
 the reconciliation. It reads as a zero share in Plan per hour, and its dollars count toward the burn route's `usd`,
 which Spend per minute charts under every grouping; a member's budget counts them at the fast cells, a subscription
-member's as an API-key member's.
+member's as an Anthropic-key member's.
 
 The cost table (`crates/ledger/cost_table.yaml`) ships beside the price table: per window, model and token type, the
 share of a Max 20x subscription's window that one million tokens consume, a number where the plan meter measured the
@@ -173,7 +173,7 @@ included, whether or not the router dropped it on the way upstream.
 | Hourly rollups | `stats.rollup_retention_days` (400 days; 0 forever, otherwise at least `stats.retention_days`) |
 
 The purge that enforces these runs once an hour. Every five-minute poll's reading is kept for
-`quota.sample_retention_days`, so an idle upstream adds 288 quota rows per window per day.
+`quota.sample_retention_days`, so an idle account adds 288 quota rows per window per day.
 
 ## Metrics
 
@@ -227,7 +227,7 @@ and at most 64 sockets are served at once, a further one refused `503 live feed 
 
 Four tiles report requests, tokens, estimated cost, and the error rate over the last 24 hours; two cards below
 them show the 5-hour and 7-day quota remaining for each subscription account; and the page ends with the most
-recent requests and a sessions card that leads with the router's live pins and the upstreams they sit on.
+recent requests and a sessions card that leads with the router's live pins and the accounts they sit on.
 
 ### Observe
 
@@ -242,37 +242,38 @@ that fails after its 200 head keeps that status, so a finished request with an e
 
 ### Quota
 
-A card per upstream shows one row per rate-limit window, filterable by tabs for all accounts, OAuth accounts, and
-API-key accounts. Each OAuth card's footer says when the poll last asked the endpoint and how it answered, when the
-snapshot it shows was read, and, while the upstream backs off, since when and when the next attempt comes; Refresh reads
-the endpoint now unless the upstream is backing off or a fresh snapshot is cached. A card draws the windows the ledger
-sampled in the last day, or the ones the router holds when the ledger has none, whatever the last read said, and shows
-an error in their place only when it holds none; the page counts a card that shows an error, whose last poll failed, or
-that is backing off as needing attention. Each card names the account's plan with the date its subscription started and,
-for an account on the Claude Code trial, when the trial ends; an account marked cancelled says when its plan ends, in
-the serious tone inside a week. A card whose upstream answered a fast-mode request shows a Fast mode line: the share of
-the fast lane's input and output buckets used, as the last answer reported them, with the reset, a bucket past its reset
-reading as refilled, and a chip while the upstream's fast lane cools, naming the reason (rate limited, or credits
-unavailable) and when it lifts; the upstream page's Usage card shows the same line and chip. Below the cards, a reset
-timeline lays the same windows across a calendar, zoomable between a two-week weekly view and a three-day 5-hour view.
+A card per account shows one row per rate-limit window, filterable by tabs for all accounts, OAuth accounts, and
+Anthropic-key accounts. Each OAuth card's footer says when the poll last asked the endpoint and how it answered, when
+the snapshot it shows was read, and, while the account backs off, since when and when the next attempt comes; Refresh
+reads the endpoint now unless the account is backing off or a fresh snapshot is cached. A card draws the windows the
+ledger sampled in the last day, or the ones the router holds when the ledger has none, whatever the last read said, and
+shows an error in their place only when it holds none; the page counts a card that shows an error, whose last poll
+failed, or that is backing off as needing attention. Each card names the account's plan with the date its subscription
+started and, for an account on the Claude Code trial, when the trial ends; an account marked cancelled says when its
+plan ends, in the serious tone inside a week. A card whose account served a fast-mode request shows a Fast mode line:
+the share of the fast lane's input and output buckets used, as the last answer reported them, with the reset, a bucket
+past its reset reading as refilled, and a chip while the account's fast lane cools, naming the reason (rate limited, or
+credits unavailable) and when it lifts; the account page's Usage card shows the same line and chip. Below the cards, a
+reset timeline lays the same windows across a calendar, zoomable between a two-week weekly view and a three-day 5-hour
+view.
 
-![The Quota view: the cards per upstream and the reset timeline](assets/quota-light.png#only-light)
-![The Quota view: the cards per upstream and the reset timeline](assets/quota-dark.png#only-dark)
+![The Quota view: the cards per account and the reset timeline](assets/quota-light.png#only-light)
+![The Quota view: the cards per account and the reset timeline](assets/quota-dark.png#only-dark)
 
 ### Models
 
-The Models view lists a key's processed rules with their level and the upstreams cooling for a matching model, every
+The Models view lists a key's processed rules with their level and the accounts cooling for a matching model, every
 model-scoped cooldown grouped by model with a clear button per row, and the newest rejections and permits
 ([routing](routing.md#model-rules)).
 
 ### Requests
 
-The table lists thirteen columns: time, key, pool, upstream, model, client, kind, transport, status,
+The table lists thirteen columns: time, key, pool, account, model, client, kind, transport, status,
 attempts, TTFB, tokens, and cost. The client column shows the class the router derived from the user agent
 (`claude-code/<entrypoint>` or `other`), with the agent type beneath it on a subagent's turn.
 One row is one client request however many attempts it took, and
 the attempt trail reads as "mail 429, business 200" when a 429 on the first account failed over to a 200 on the second.
-A request that waited for a slot while every upstream was at its cap carries a held marker beside its attempts with the
+A request that waited for a slot while every account was at its cap carries a held marker beside its attempts with the
 time it waited. Filters narrow the table: the user agent filter takes a pattern (`claude-cli/2.1.*`, `*sdk-cli*`; `*`
 for any run of characters, `?` for one, a backslash quoting either, and a value with no wildcard matching in full), the
 client filter takes a pattern over the class (`claude-code/*`), the agent type and turn origin filters pick from the
@@ -282,14 +283,14 @@ the request's detail, which shows the user agent, the model as the
 client spelled it and, when it differs, the canonical id the router recorded, its auto-mode standing (asked for a
 server-side check under an on setting; carried the safeguards member under an off setting, which the dispatch drops;
 refused for its body shape; or not requested), and the client hints: the agent type, the compaction and
-context-compacted markers, the turn origin, and the tool time before the turn; the trail names an upstream that rejected
-the model and the one that served it. The drawer's effort is the level the upstream applies: when the client sends a
+context-compacted markers, the turn origin, and the tool time before the turn; the trail names an account the model was
+rejected on and the one that served it. The drawer's effort is the level the upstream applies: when the client sends a
 per-turn control entry, the last entry's level, else the request's top-level `output_config.effort`; a turn that ends
 with such an entry still counts as the user's turn, so it starts its own prompt. The table holds the requests up to the
 moment you opened it, so paging does not shift as new ones arrive; Refresh brings it up to now. When the session moved
-during the request, the drawer says from which upstream to which and why: rate limited, wound down, upstream marked,
+during the request, the drawer says from which account to which and why: rate limited, wound down, account marked,
 over its plan, back to plan, load shed, or window spent. When its pin was released without a move, the drawer says from
-which upstream and every reason the router found, among: already tried this request, the upstream at its spend budget,
+which account and every reason the router found, among: already tried this request, the account at its spend budget,
 the creating request's own client error, an account cooldown, the account deleted, disconnected, idle past the affinity
 window, funding required, in overage, paused, needing reauthorization, released outright, window spent, the subscription
 ended, never paired, or no longer serving the model. The drawer also shows the strategy the selection used, the tier it
@@ -298,7 +299,7 @@ answered the request and by how many of its input tokens, and every candidate th
 obstacle in its way: already tried, above the ceiling, at its in-flight cap, at its spend budget, an account cooldown,
 at the pace floor, an operator hold, in overage, ranked behind another candidate, its subscription ended, its window
 spent, or winding down. A placement names where it landed: by its messages or by its static prefix at the depth that
-matched, or with the main conversation. A request held while every upstream was at its cap names the upstream it was
+matched, or with the main conversation. A request held while every account was at its cap names the account it was
 held on: its cohort's, or else the last one it waited on, and how long it waited. The cache line reads a placement as a
 hit or a miss against the prefix it was promised: a placement by its messages is a hit when the response read at least
 that prefix, one by its static prefix when it read anything, and one with the main conversation keeps the plain cache
@@ -310,7 +311,7 @@ line.
 ### Analytics
 
 A range control offers 1 hour, 24 hours, 7 days, 30 days, or a custom span, and a group-by control regroups every chart
-and table by client, effort, key, kind, model, pool, request class, speed, upstream, or user agent; the client grouping
+and table by account, client, effort, key, kind, model, pool, request class, speed, or user agent; the client grouping
 reads the class and the user agent grouping the raw agent. The request class shown by this grouping is the value the
 client sent on its class header, verbatim, so a class a client adds later shows up under its own name; a classless
 request folds under the reserved value alongside a keepalive credit. The speed grouping reads the speed the answer
@@ -322,27 +323,27 @@ as the request log's, and under the user agent grouping a pattern list names the
 `claude-cli/2.0.*` as two groups, every other agent under `other`.
 
 Traffic reports request volume by outcome and the error rate, with a Failovers chart and a Migration rewrites card
-beside it: the cache-write tokens the first request after a move paid to warm its new upstream, and the moves the range
+beside it: the cache-write tokens the first request after a move paid to warm its new account, and the moves the range
 counted, by reason; then a Requests by speed chart, standard and fast per bucket, and an Effort levels card with a bar
 per level the requests asked for. Burn reports a subscription account's spend as the share of its own 5-hour and 7-day
-window and an api-key account's in dollars, side by side and each split into cached and uncached tokens, grouped by
-upstream, key, session, or request class; the 5-hour share carries the peak band's weight, the 7-day share none. The
-shares read under the upstream grouping alone, since shares of different upstreams' windows do not add, and the Spend
-per minute chart draws dollars alone, a subscription upstream's among them only for its fast-mode answers; past the
-seven lines a chart draws, the subscription upstreams folded into the rest draw their fast-mode dollars as Other (fast
-mode), or Other (fast mode, tier unknown) for those whose tier the cost table does not size. The key, request class and
-upstream groupings read the hourly rollups, which fold a request under the hour it arrived in and weigh it by that
-hour's band rather than at its completion, where the meter charges it. Grouped by upstream, it adds a Plan per hour
-chart: the share of each subscription upstream's 5-hour window, solid, and of its 7-day window, dashed, that its traffic
+window and an Anthropic-key account's in dollars, side by side and each split into cached and uncached tokens, grouped
+by account, key, session, or request class; the 5-hour share carries the peak band's weight, the 7-day share none. The
+shares read under the account grouping alone, since shares of different accounts' windows do not add, and the Spend
+per minute chart draws dollars alone, a subscription account's among them only for its fast-mode answers; past the
+seven lines a chart draws, the subscription accounts folded into the rest draw their fast-mode dollars as Other (fast
+mode), or Other (fast mode, tier unknown) for those whose tier the cost table does not size. The account, key and
+request class groupings read the hourly rollups, which fold a request under the hour it arrived in and weigh it by that
+hour's band rather than at its completion, where the meter charges it. Grouped by account, it adds a Plan per hour
+chart: the share of each subscription account's 5-hour window, solid, and of its 7-day window, dashed, that its traffic
 used per hour, a bucket the table cannot price (a model it has no row for, or a cell it leaves unmeasured) listed under
 one model unlisted legend entry and drawn as a gap, a priced hour with a gap or the range's edge on both sides marked
-with a dot, an hour with no traffic counted as zero on a window the upstream priced in the range, a window with no
-priced bucket shown as a dash, and an upstream whose tier the table does not size listed as tier unknown. Latency
+with a dot, an hour with no traffic counted as zero on a window the account priced in the range, a window with no
+priced bucket shown as a dash, and an account whose tier the table does not size listed as tier unknown. Latency
 reports percentiles read from the merged per-hour histograms; Cache reports the hit ratio, tokens that expired between
 turns, the share of input served from cache, and the output split into thinking and plain output; Cost reports the
 estimated spend for the range and a Fast mode spend tile, the dollars fast-mode answers drew from usage credits; Cache
 warming reports what probes cost against what they saved, where a fast-mode session's probes and credits read as dollars
-and file under speed `fast`; and Upstreams reports peak utilization, ineligible time, and pin churn per upstream.
+and file under speed `fast`; and Accounts reports peak utilization, ineligible time, and pin churn per account.
 
 The Cache section closes with Placements by rung: the attempts in the range the router placed by a warm prefix or beside
 the main conversation rather than by its strategy, counted by rung (by the conversation's own messages, by its static
@@ -359,7 +360,7 @@ Cooldown time books to the hour it elapses in as the interval runs, and a cooldo
 hours it never held. A cooldown is booked up to seven days ahead of the announcement that set it, and a later
 announcement books the next stretch. Filtered to one session, the view sums the request log instead of the rollups, and
 the cost split, the cache write and read costs, and the Cache warming figures read as unavailable because the request
-log does not carry them; the Upstreams section keeps reading the rollups for the range, since they carry no session, and
+log does not carry them; the Accounts section keeps reading the rollups for the range, since they carry no session, and
 its subtitle says so.
 
 ![The Analytics view: the range and group-by controls over seven report sections](assets/analytics-light.png#only-light)
@@ -405,22 +406,22 @@ text is withheld from the webhook the same way it is from the API and the consol
 `cc_version` suffix, this build cannot reproduce; re-pinning the router to that client build and resolving the event by
 hand clears it.
 
-**Funding required** fires when an API-key upstream is refused for billing reasons and resolves when an operator
+**Funding required** fires when an Anthropic-key account is refused for billing reasons and resolves when an operator
 clears the funding flag.
 
 **Probe cost cap reached** fires when a pool's daily probe cost cap is reached; probes pause until the next UTC
 day, which resolves it, as removing the cap resolves it at the next poll.
 
-**Usage poll backing off** fires when an OAuth upstream's usage poll has been backing off from the endpoint's 429
-answers for thirty minutes, counted from the run's first 429, and resolves on the upstream's next clean poll, or once
-the upstream is disconnected or its credential removed, since the poll no longer asks about it. The detail names the
-upstream, since when it has backed off, when the next attempt comes, and how many 429s it answered in a row. An event
-left open across a restart resolves once the upstream's first poll reads clean.
+**Usage poll backing off** fires when an OAuth account's usage poll has been backing off from the endpoint's 429
+answers for thirty minutes, counted from the run's first 429, and resolves on the account's next clean poll, or once
+the account is disconnected or its credential removed, since the poll no longer asks about it. The detail names the
+account, since when it has backed off, when the next attempt comes, and how many 429s it answered in a row. An event
+left open across a restart resolves once the account's first poll reads clean.
 
-**Pool exhausted** fires when a request finds no eligible upstream in the pool and resolves on the next request
+**Pool exhausted** fires when a request finds no eligible account in the pool and resolves on the next request
 the pool serves.
 
-**Re-auth required** fires when an upstream enters the reauth-required state and resolves once the upstream is
+**Re-auth required** fires when an account enters the reauth-required state and resolves once the account is
 paired or verified again.
 
 **Credential refresh failed** fires when a credential refresh fails twice in a row, an attempt whose answer was
