@@ -16,7 +16,7 @@ import { CONVERSATION_CLASSES, foldBurn, isolatedSlots, moveLabel, placementCell
 import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missCount, missLabel, missReasonOrder } from '@/lib/cache';
 import { clock } from '@/lib/clock';
-import { fmtAbsolute, fmtCompact, fmtDayShort, fmtDuration, fmtHourTick, fmtInt, fmtMs, fmtPct, fmtPeriodEnd, fmtShare, fmtUsd, shortId, toLocalInput, upperFirst } from '@/lib/format';
+import { fmtAbsolute, fmtCompact, fmtDayShort, fmtDuration, fmtHourTick, fmtInt, fmtMs, fmtPct, fmtPeriodEnd, fmtShare, fmtUsd, fmtUsdTick, shortId, toLocalInput, upperFirst, usdTickDigits } from '@/lib/format';
 import { BUCKET_COUNT, BUCKET_EDGES, PERCENTILE_HINT, histogramCount } from '@/lib/histogram';
 import { useAsync } from '@/lib/hooks';
 import { scrollToSection, useScrollSpy } from '@/lib/scroll';
@@ -75,6 +75,15 @@ const cachedShareOf = (g: AnalyticsGroup) => (inputOf(g) ? g.tokens.cacheRead / 
 const errorRateOf = (g: AnalyticsGroup) => (g.requests ? (g.requests - g.succeeded) / g.requests : 0);
 const probesOf = (g: AnalyticsGroup) => g.probes.ok + g.probes.skipped + g.probes.failed;
 const usdOrDash = (v: number | null) => (v === null ? '-' : fmtUsd(v));
+/**
+ * A dollar axis's tick labels, all at the one precision the largest figure the axis draws sets. That precision lets a
+ * label run to $10.00 or $0.0050, which the chart's box clips on an axis narrower than 56 px, so every dollar axis
+ * takes that width.
+ */
+const usdTicks = (values: Iterable<number>) => {
+  const digits = usdTickDigits(values);
+  return (v: number) => fmtUsdTick(v, digits);
+};
 /** The split as the donut draws it, or null for a group folded from request rows, which carry one total. */
 const knownSplit = (c: AnalyticsGroup['cost']): CostSplit | null => (c.cacheRead === null || c.cacheWrite === null ? null : { ...c, cacheRead: c.cacheRead, cacheWrite: c.cacheWrite });
 
@@ -546,7 +555,7 @@ export function AnalyticsPage() {
             <BarChart data={buckets} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} barCategoryGap={4} barGap={2}>
               <CartesianGrid vertical={false} stroke={ink.grid} />
               <XAxis dataKey="at" tickFormatter={tick} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
-              <YAxis tickFormatter={(v: number) => `$${v.toFixed(v >= 10 ? 0 : 1)}`} tickLine={false} axisLine={false} width={44} />
+              <YAxis tickFormatter={usdTicks(buckets.flatMap((b) => [b.cost.cacheWrite ?? 0, b.cost.cacheRead ?? 0]))} tickLine={false} axisLine={false} width={56} />
               <Tooltip
                 cursor={{ fill: ink.grid, opacity: 0.6 }}
                 content={timeTip<Bucket>((p) => [
@@ -654,7 +663,7 @@ export function AnalyticsPage() {
             <ComposedChart data={buckets.map((b) => ({ ...b, net: b.savings === null ? null : b.savings.grossUsd - b.savings.probeCostUsd }))} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} barCategoryGap={4} barGap={2}>
               <CartesianGrid vertical={false} stroke={ink.grid} />
               <XAxis dataKey="at" tickFormatter={tick} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
-              <YAxis tickFormatter={(v: number) => `$${v.toFixed(v >= 10 ? 0 : 2)}`} tickLine={false} axisLine={false} width={48} />
+              <YAxis tickFormatter={usdTicks(buckets.flatMap((b) => (b.savings === null ? [] : [b.savings.grossUsd, b.savings.probeCostUsd, b.savings.grossUsd - b.savings.probeCostUsd])))} tickLine={false} axisLine={false} width={56} />
               <Tooltip
                 cursor={{ fill: ink.grid, opacity: 0.6 }}
                 content={timeTip<Bucket & { net: number | null }>((p) => [
@@ -1179,7 +1188,7 @@ function CostByGroup({ points, groupBy, groupSlot, loading, tick }: { groupBy: G
       <AreaChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
         <CartesianGrid vertical={false} stroke={ink.grid} />
         <XAxis dataKey="at" tickFormatter={tick} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
-        <YAxis tickFormatter={(v: number) => `$${v.toFixed(v >= 10 ? 0 : 1)}`} tickLine={false} axisLine={false} width={44} />
+        <YAxis tickFormatter={usdTicks(data.map((row) => keys.reduce((n, k) => n + row[k], 0)))} tickLine={false} axisLine={false} width={56} />
         <Tooltip cursor={{ stroke: ink.axis }} content={timeTip<Record<string, number> & { at: number }>((p) => keys.map((k) => ({ color: color(k), label: label(k), value: fmtUsd(p[k] ?? 0) })))} />
         {keys.map((k) => (
           <Area key={k} type="monotone" dataKey={k} stackId="a" stroke={color(k)} strokeWidth={1.5} fill={color(k)} fillOpacity={0.35} dot={false} isAnimationActive={false} />
@@ -1306,9 +1315,6 @@ function BurnCharts({ answer, error, groupBy, loading, sized }: { answer: { buck
   // dollar line only for the usage credits its fast-mode answers spent.
   const spent = lines.map((l, i) => ({ i, l })).filter(({ l }) => !byAccount || l.unit === 'usd' || l.usdPerMinute > 0);
   const spendNameOf = (l: BurnLine) => (l.other && l.unit !== 'usd' ? SPEND_REST_LABEL[l.unit] : nameOf(l));
-  // One precision for every tick, from the largest figure drawn, so the axis never mixes $0.0070 with $0.01.
-  const usdMax = Math.max(0, ...rows.flatMap((r) => spent.map(({ i }) => r.usd[i])));
-  const usdDigits = usdMax >= 10 ? 0 : usdMax >= 0.1 ? 2 : usdMax >= 0.01 ? 3 : 4;
   const planned = lines.map((l, i) => ({ i, l })).filter(({ l }) => byAccount && !l.other && l.unit === 'window_share');
   const unpriced = lines.filter((l) => byAccount && !l.other && l.unit === 'unknown');
   const shareOf = (share: number | null) => (share === null ? '-' : fmtShare(share));
@@ -1351,7 +1357,7 @@ function BurnCharts({ answer, error, groupBy, loading, sized }: { answer: { buck
         <LineChart data={rows} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
           <CartesianGrid vertical={false} stroke={ink.grid} />
           <XAxis dataKey="at" tickFormatter={tick} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
-          <YAxis tickFormatter={(v: number) => `$${v.toFixed(usdDigits)}`} tickLine={false} axisLine={false} width={56} />
+          <YAxis tickFormatter={usdTicks(rows.flatMap((r) => spent.map(({ i }) => r.usd[i])))} tickLine={false} axisLine={false} width={56} />
           <Tooltip cursor={{ stroke: ink.axis }} content={timeTip<BurnRow>((r) => spent.map(({ i, l }) => ({ color: colorOf(l), label: spendNameOf(l), title: titleOf(l), value: fmtUsd(r.usd[i]) })))} />
           {spent.map(({ i, l }) => (
             <Line key={i} type="monotone" dataKey={(r: BurnRow) => r.usd[i]} stroke={colorOf(l)} strokeWidth={2} dot={false} isAnimationActive={false} />

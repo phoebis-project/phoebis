@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { earlierHolderLabel, fmtAbsolute, fmtEndsIn, fmtHourTick, fmtShare, fmtShortTime, fmtTime, fmtUsd, placementHit, setTimeFormat } from './dist/api.js';
+import { earlierHolderLabel, fmtAbsolute, fmtEndsIn, fmtHourTick, fmtShare, fmtShortTime, fmtTime, fmtUsd, fmtUsdTick, placementHit, setTimeFormat, undatedModel, usdTickDigits } from './dist/api.js';
 
 test('a placement is a hit when the cache read what it promised: a content one its prefix, any other one anything', () => {
   const content = { depth: 3, prefixTokens: 130_000, rung: 'content' };
@@ -71,4 +71,34 @@ test('a window share reads as a percent to three significant digits with no trai
   assert.equal(fmtShare(0.125), '12.5%');
   assert.equal(fmtShare(0.0061), '0.61%', 'a trailing zero drops');
   assert.equal(fmtShare(0.0000571), '0.00571%', 'a small share keeps its three digits');
+});
+
+test('a dated model id reads undated, any other as sent', () => {
+  assert.equal(undatedModel('claude-haiku-4-5-20251001'), 'claude-haiku-4-5', 'the date suffix the catalog lists drops');
+  assert.equal(undatedModel('claude-opus-4-1'), 'claude-opus-4-1');
+  assert.equal(undatedModel('claude-sonnet-4-5'), 'claude-sonnet-4-5');
+  assert.equal(undatedModel('claude-sonnet-4-5-2025'), 'claude-sonnet-4-5-2025', 'a shorter number is no date');
+  assert.equal(undatedModel('claude-sonnet-4-5-202510011'), 'claude-sonnet-4-5-202510011', 'nor is a longer one');
+});
+
+test('dollar ticks step as fmtUsd does, with one precision for every tick of an axis', () => {
+  const axis = (ticks) => ticks.map((v) => fmtUsdTick(v, usdTickDigits(ticks)));
+  assert.deepEqual(axis([12.4]), ['$12'], 'whole dollars from 10');
+  assert.deepEqual(axis([3.5]), ['$3.50'], 'cents under 10');
+  assert.deepEqual(axis([0.005]), ['$0.0050'], 'four decimals under a cent');
+  assert.deepEqual(axis([0]), ['$0.00'], 'an axis at zero reads cents');
+  assert.deepEqual(axis([0, 10, 20, 30]), ['$0', '$10', '$20', '$30']);
+  assert.deepEqual(axis([0, 2.5, 5, 7.5]), ['$0.00', '$2.50', '$5.00', '$7.50']);
+  // Labelled one by one, these would read $0.00, $0.0040, $0.0080, $0.01 and $0.02, with two ticks at $0.01.
+  assert.deepEqual(axis([0, 0.004, 0.008, 0.012, 0.016]), ['$0.000', '$0.004', '$0.008', '$0.012', '$0.016'], 'a sub-dime axis keeps every tick apart');
+  assert.deepEqual(axis([0, 0.0015, 0.003, 0.0045, 0.006]), ['$0.0000', '$0.0015', '$0.0030', '$0.0045', '$0.0060']);
+  assert.equal(usdTickDigits([]), 2, 'an axis with nothing drawn reads cents');
+});
+
+test('a negative dollar tick puts its sign before the currency, and a tick at zero carries none', () => {
+  assert.deepEqual(['-$5.00', '$0.00', '$5.00'], [-5, 0, 5].map((v) => fmtUsdTick(v, usdTickDigits([-5, 0, 5]))));
+  assert.equal(usdTickDigits([-12, 3]), 0, 'the precision reads the largest figure either side of zero');
+  assert.equal(fmtUsdTick(-12, 0), '-$12');
+  assert.equal(fmtUsdTick(-0, 2), '$0.00');
+  assert.equal(fmtUsdTick(-0.001, 2), '$0.00', 'a figure that rounds to zero reads as zero');
 });

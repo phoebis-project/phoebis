@@ -25,6 +25,23 @@ export const bytesDropped = (seen: number, stored: number) => Math.max(0, seen -
 // `n + 0` folds a negative zero onto a positive one: an empty sum of f64 costs reaches the wire as -0.0 and
 // Intl would print its sign as "-$0.00".
 export const fmtUsd = (n: number, v = n + 0) => (Math.abs(v) > 0 && Math.abs(v) < 0.01 ? usd4.format(v) : usd.format(v));
+/**
+ * The decimals every tick of one dollar axis carries, read once from the largest figure the axis draws either side of
+ * zero, so the axis never mixes $0.0040 with $0.01 and no two of its ticks read the same: whole dollars from 10, cents
+ * from 10 cents, a tenth of a cent from a cent, four decimals under a cent, and cents for an axis at zero.
+ */
+export function usdTickDigits(values: Iterable<number>): number {
+  let max = 0;
+  for (const v of values) max = Math.max(max, Math.abs(v));
+  return max >= 10 ? 0 : max >= 0.1 || max === 0 ? 2 : max >= 0.01 ? 3 : 4;
+}
+/** A dollar axis tick at the axis's `usdTickDigits`; a figure that rounds to zero carries no sign. */
+export const fmtUsdTick = (v: number, digits: number) => {
+  const text = Math.abs(v).toFixed(digits);
+  return `${v < 0 && Number(text) !== 0 ? '-' : ''}$${text}`;
+};
+/** A dated model id's label: the catalog lists `claude-haiku-4-5-20251001`, the operator reads `claude-haiku-4-5`. */
+export const undatedModel = (id: string) => id.replace(/-\d{8}$/, '');
 export const fmtPct = (ratio: number, digits = 0) => `${(ratio * 100).toFixed(digits)}%`;
 /** A share of a window as a percent to three significant digits, trailing zeros dropped: 8.41%, 0.219%, 12.5%. */
 export const fmtShare = (ratio: number) => `${Number((ratio * 100).toPrecision(3))}%`;
