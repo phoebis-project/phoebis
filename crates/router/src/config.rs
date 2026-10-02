@@ -77,7 +77,8 @@ pub struct ProxyConfig {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StorageConfig {
-    /// A file holding exactly 32 raw bytes or 64 hex characters, outside the database it unseals.
+    /// A file holding exactly 32 raw bytes, or 64 hex characters with at most one trailing newline, outside the
+    /// database it unseals.
     pub encryption_key_file: PathBuf,
     pub path: PathBuf,
 }
@@ -225,14 +226,21 @@ pub enum ConfigError {
 
 /// Reads, parses, and validates the bootstrap file, resolving every secret from the environment.
 pub fn load(path: &Path) -> Result<Config, ConfigError> {
+    let mut config = load_unresolved(path)?;
+    resolve_secrets(&mut config)?;
+    check_secrets_are_distinct(&config)?;
+    Ok(config)
+}
+
+/// Reads, parses and validates the bootstrap file and leaves every secret unresolved, for `check-config`,
+/// which must run without the environment the service gets from its unit.
+pub fn load_unresolved(path: &Path) -> Result<Config, ConfigError> {
     let text = std::fs::read_to_string(path).map_err(|source| ConfigError::Read {
         path: path.to_path_buf(),
         source,
     })?;
-    let mut config: Config = serde_norway::from_str(&text)?;
+    let config: Config = serde_norway::from_str(&text)?;
     check_shape(&config)?;
-    resolve_secrets(&mut config)?;
-    check_secrets_are_distinct(&config)?;
     Ok(config)
 }
 
@@ -432,18 +440,38 @@ fn same_file(left: &Path, right: &Path) -> bool {
     }
 }
 
-fn resolve_secrets(config: &mut Config) -> Result<(), ConfigError> {
-    config.admin.secret = from_env(&config.admin.secret_env)?;
-    config.admin.viewer_secret = match &config.admin.viewer_secret_env {
-        None => None,
-        Some(name) => Some(from_env(name)?),
-    };
-    Ok(())
+/// One of the two steps `load` runs after `load_unresolved`, exposed so `check-config` can warn instead of refuse.
+///
+/// Both variables are read before it answers, and a set secret it refuses is reported ahead of an unset one:
+/// `check-config` passes over an unset variable after warning about it, so the refusal is the finding that must
+/// reach it, whichever variable holds the refused value.
+pub fn resolve_secrets(config: &mut Config) -> Result<(), ConfigError> {
+    let admin = from_env(&config.admin.secret_env);
+    let viewer = config
+        .admin
+        .viewer_secret_env
+        .as_deref()
+        .map(from_env)
+        .transpose();
+    match (admin, viewer) {
+        (Ok(admin), Ok(viewer)) => {
+            config.admin.secret = admin;
+            config.admin.viewer_secret = viewer;
+            Ok(())
+        }
+        (Err(ConfigError::MissingSecret { .. }), Err(refused))
+            if !matches!(refused, ConfigError::MissingSecret { .. }) =>
+        {
+            Err(refused)
+        }
+        (Err(error), _) | (_, Err(error)) => Err(error),
+    }
 }
 
-/// A viewer secret equal to the administration one silently turns the read-only login into a full one,
-/// which is a configuration mistake that only shows up as a surprise in production.
-fn check_secrets_are_distinct(config: &Config) -> Result<(), ConfigError> {
+/// The other step `load` runs after `load_unresolved`. A viewer secret equal to the administration one silently
+/// turns the read-only login into a full one, which is a configuration mistake that only shows up as a surprise in
+/// production.
+pub fn check_secrets_are_distinct(config: &Config) -> Result<(), ConfigError> {
     let mut held: Vec<(String, &Secret)> =
         vec![("the admin secret".to_string(), &config.admin.secret)];
     if let Some(viewer) = &config.admin.viewer_secret {

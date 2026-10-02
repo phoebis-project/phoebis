@@ -43,6 +43,7 @@ tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
 fake-upstream = { path = "../../tests/fake_upstream" }
+phoebis-store = { path = "../store", features = ["debug-hooks"] }
 reqwest = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }

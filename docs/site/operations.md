@@ -54,7 +54,15 @@ The key is 32 raw bytes or 64 hex characters, held in the file `storage.encrypti
 installation creates it with `head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n'`, written into a file created
 empty at mode `0600` before the key ever reaches it. Writing through a redirect under the usual umask would leave
 the key world-readable for the moment between the file's creation and a later `chmod`, and an interrupted run would
-leave it that way for good.
+leave it that way for good. The key file may end in one newline after the 64 hex characters, so a key written as a
+line is accepted too, such as `printf '%s\n' "$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"` written into
+that same empty file.
+
+The registry carries a canary sealed under the key at its first open, and every open proves the key against it before
+any credential is read: a restore onto a host whose key file differs, or a key regenerated after the file was moved,
+is refused at start and by `check-config` with `the storage key does not match the registry at {path}`; a registry
+from before the canary existed is proved against its first sealed credential instead, by `check-config` and at start,
+and sealed at that start.
 
 The key seals OAuth credential bundles, Anthropic-key secrets, and alert secrets. `Store::digest_key` also derives, from
 this same key, the digest every downstream key authenticates against: the secrets the admin API mints and hands to
@@ -77,12 +85,10 @@ There is no re-key command, so recovering from a lost or replaced key means:
 
 1. Build the new binary: `cargo build --release`.
 2. Validate the live configuration file with the binary just built, not the one still installed, since step 5 is
-   what replaces that one: `sudo bash -c 'set -a; . /etc/phoebis/phoebis.env; set +a; exec target/release/phoebis
-   check-config --config /etc/phoebis/config.yaml'`. `check-config` resolves its secrets from the process environment,
-   and only systemd's `EnvironmentFile` loads `/etc/phoebis/phoebis.env` automatically, so sourcing it into this one
-   shell is what lets the command run at all; skipping that fails with `environment variable PHOEBIS_ADMIN_SECRET is
-   unset or empty`. `check-config` opens neither the store nor a socket, so it is safe to run while the old binary still
-   serves traffic.
+   what replaces that one: `sudo target/release/phoebis check-config --config /etc/phoebis/config.yaml`. The secrets
+   are optional here (an unset one prints a warning), and `check-config` takes no lock and opens no socket, so it is
+   safe to run while the old binary still serves traffic; it reads the key file and proves it against the registry's
+   canary, so a key file that drifted is caught before the restart.
 3. Read the [changelog](changelog.md) for a bootstrap key that changed.
 4. Take the [backup](#backup) above.
 5. Install the new binary: `sudo install -m 0755 target/release/phoebis /usr/local/bin/phoebis`.

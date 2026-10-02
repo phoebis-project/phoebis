@@ -55,7 +55,7 @@ pub struct AlertDeliveryRow {
     pub error: Option<String>,
 }
 
-fn secret_aad(rule_id: &str) -> String {
+pub(crate) fn secret_aad(rule_id: &str) -> String {
     format!("{rule_id}:alert_secret")
 }
 

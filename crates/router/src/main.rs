@@ -3,6 +3,7 @@
 
 use std::path::PathBuf;
 
+use anyhow::Context;
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
@@ -27,7 +28,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Validate the configuration and list what it binds, without opening the store or a listener.
+    /// Validate the configuration, the key file and the registry's key canary, taking no lock and opening no socket.
     CheckConfig,
     /// Probe the proxy listener's `/api/hello`: exit 0 when it answers 200, 1 otherwise.
     Health,
@@ -35,7 +36,10 @@ enum Command {
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
-    let config = phoebis_router::config::load(&cli.config)?;
+    let mut config = match cli.command {
+        Some(Command::CheckConfig) => phoebis_router::config::load_unresolved(&cli.config)?,
+        _ => phoebis_router::config::load(&cli.config)?,
+    };
     match cli.command {
         Some(Command::CheckConfig) => {
             println!("{} is valid", cli.config.display());
@@ -73,6 +77,33 @@ fn main() -> anyhow::Result<()> {
                     "unverified"
                 }
             );
+            let key_file = &config.storage.encryption_key_file;
+            let key = phoebis_store::StorageKey::from_file(key_file)
+                .with_context(|| format!("reading storage.encryption_key_file {}", key_file.display()))?;
+            match phoebis_store::Store::read_canary(&config.storage.path, &key)? {
+                phoebis_store::CanaryRead::NoRegistry => println!(
+                    "registry at {} does not exist yet; the first start creates it",
+                    config.storage.path.display()
+                ),
+                phoebis_store::CanaryRead::SealedRowMatches => println!(
+                    "registry at {} has no key canary yet; its first sealed row opens under the key, and the \
+                     next start seals one",
+                    config.storage.path.display()
+                ),
+                phoebis_store::CanaryRead::Absent | phoebis_store::CanaryRead::Matches => {}
+            }
+            for name in [Some(&config.admin.secret_env), config.admin.viewer_secret_env.as_ref()].into_iter().flatten() {
+                if std::env::var(name).map_or(true, |v| v.is_empty()) {
+                    println!("warning: environment variable {name} is unset or empty");
+                }
+            }
+            match phoebis_router::config::resolve_secrets(&mut config) {
+                Ok(()) => phoebis_router::config::check_secrets_are_distinct(&config)?,
+                // An unset variable was warned about above: the file is checked without the unit's environment.
+                // A set one the start refuses (too short, the example's placeholder) is the same finding here.
+                Err(phoebis_router::config::ConfigError::MissingSecret { .. }) => {}
+                Err(error) => return Err(error.into()),
+            }
             for warning in phoebis_store::permissions::check_private_file(&config.storage.encryption_key_file, 0o600) {
                 println!("warning: {warning}");
             }

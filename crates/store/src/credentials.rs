@@ -129,11 +129,11 @@ pub struct LastAttempt {
 // (generation, sealed, nonce, issued_at, expires_at, refresh_expires_at, scopes, lifecycle_generation)
 type CredentialRow = (i64, Vec<u8>, Vec<u8>, i64, i64, Option<i64>, String, i64);
 
-fn credential_aad(account_id: &str, generation: i64) -> String {
+pub(crate) fn credential_aad(account_id: &str, generation: i64) -> String {
     format!("{account_id}:{generation}")
 }
 
-fn api_key_aad(account_id: &str) -> String {
+pub(crate) fn api_key_aad(account_id: &str) -> String {
     format!("{account_id}:api_key")
 }
 

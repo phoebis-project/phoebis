@@ -72,10 +72,10 @@ tunnel. Then validate it before enabling the service:
 sudo bash -c 'set -a; . /etc/phoebis/phoebis.env; set +a; exec phoebis check-config --config /etc/phoebis/config.yaml'
 ```
 
-`check-config` resolves `admin.secret_env` and `admin.viewer_secret_env` from the process environment like every
-other invocation, so the env file has to be sourced into this one shell first; plain
-`sudo phoebis check-config --config /etc/phoebis/config.yaml` fails with `environment variable PHOEBIS_ADMIN_SECRET is
-unset or empty`. Once it is clean, `sudo systemctl enable --now phoebis`.
+`check-config` reads `admin.secret_env` and `admin.viewer_secret_env` from the process environment when they are set
+and prints `warning: environment variable PHOEBIS_ADMIN_SECRET is unset or empty` when they are not, so sourcing the
+env file is optional for it; the service and `phoebis health` still refuse an unset secret. Once it is clean,
+`sudo systemctl enable --now phoebis`.
 
 ## Run the container
 
@@ -139,13 +139,14 @@ needs `docker login ghcr.io` with a token carrying `read:packages` while the rep
 | Command | Effect |
 | --- | --- |
 | `phoebis --config ./config.yaml` | Serves the three listeners until Ctrl-C or SIGTERM, then drains up to 30 seconds. |
-| `phoebis check-config --config ./config.yaml` | Validates the file, prints the listeners and routing, and exits. |
+| `phoebis check-config --config ./config.yaml` | Validates the file, the key file and the registry's key canary. |
 | `phoebis health --config ./config.yaml` | Probes the proxy listener and exits 0 when it answers, 1 otherwise. |
 | `phoebis --version` | Prints the version. |
 
 `--config` defaults to `./config.yaml`; when the flag is absent and `PHOEBIS_CONFIG` is set, every subcommand reads
-that path instead, and the flag wins when both are given. `check-config` opens neither the store nor a socket,
-so it is safe to run against a production file while the router is up. It prints, in order:
+that path instead, and the flag wins when both are given. `check-config` takes no lock, runs no migration and opens
+no socket; it reads the key file and the registry's canary read-only, so it is safe to run against a production file
+while the router is up. It prints, in order:
 
 1. `{config path} is valid`
 2. `proxy listens on {config.proxy.listen}`
@@ -157,6 +158,10 @@ so it is safe to run against a production file while the router is up. It prints
 8. `retention {n days|forever}, rollups {n days|forever}, samples {n} days`
 9. `keepalive: lease {n}s, {n} sessions, {n} agents, {n} workers, {n} MiB retained, oauth prewarm
    {verified|unverified}`
+10. the registry line, `registry at {config.storage.path} does not exist yet; the first start creates it` when the
+    registry is not there yet, or `registry at {config.storage.path} has no key canary yet; its first sealed row opens
+    under the key, and the next start seals one` for a registry from before the canary
+11. `warning: environment variable {name} is unset or empty`, once per unset secret variable
 
 Further warning lines name a storage key file, data directory or database whose mode or owner is wider than the router
 expects; the router starts either way and logs the same warnings.
