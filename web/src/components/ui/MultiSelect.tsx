@@ -70,7 +70,16 @@ export function MultiSelect({ label, options, value, onChange, searchable = fals
         {value.length === 0 && <IconChevron size={14} />}
       </button>
       {value.length > 0 && (
-        <button type="button" className="mselect__clear" aria-label={`Clear ${label}`} onClick={() => onChange([])}>
+        <button
+          type="button"
+          className="mselect__clear"
+          aria-label={`Clear ${label}`}
+          onClick={() => {
+            // The button leaves as the value empties, which would drop the focus on it to the body.
+            triggerRef.current?.focus();
+            onChange([]);
+          }}
+        >
           <IconX size={12} />
         </button>
       )}

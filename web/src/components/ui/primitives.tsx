@@ -601,8 +601,10 @@ export function Menu({ items, label = 'Actions', onOpenChange }: { items: { dang
       if (!at || at === document.body || list?.contains(at)) trigger?.focus({ preventScroll: true });
     };
   }, [open, floating]);
-  // Escape stops at the menu, since a dialog around it closes on the same key.
+  // The keys act while the list is open, from the list or from the trigger a Shift+Tab leaves focus on. Escape stops
+  // at the menu, since a dialog around it closes on the same key.
   const onKeys = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (!open) return;
     if (e.key === 'Escape') {
       e.preventDefault();
       e.stopPropagation();
@@ -653,7 +655,6 @@ export function Menu({ items, label = 'Actions', onOpenChange }: { items: { dang
       role="menu"
       style={placement.kind === 'float' ? { left: placement.left, top: placement.top } : undefined}
       onBlur={closeOnLeave}
-      onKeyDown={onKeys}
     >
       {items.map((item) => (
         <button
@@ -674,7 +675,7 @@ export function Menu({ items, label = 'Actions', onOpenChange }: { items: { dang
     </div>
   );
   return (
-    <div className="menu" ref={ref}>
+    <div className="menu" ref={ref} onKeyDown={onKeys}>
       <button type="button" ref={triggerRef} className="menu__trigger" aria-haspopup="menu" aria-expanded={open} aria-label={label} onClick={() => setOpen((v) => !v)}>
         <span aria-hidden>···</span>
       </button>

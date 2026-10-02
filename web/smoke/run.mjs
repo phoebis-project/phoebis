@@ -5750,13 +5750,16 @@ else localStorage.setItem('phoebis.role', roleBeforePreview);
   await page.settle(150);
   const clear = agentType?.querySelector('.mselect__clear');
   const nested = page.container.querySelector('button [role="button"]');
-  results.push({
-    name: 'a clear control is a button beside the trigger, not inside it',
-    ok: nested === null && clear?.tagName === 'BUTTON' && clear.getAttribute('type') === 'button' && clear.parentElement === agentType && clear.previousElementSibling === agentOpener,
-    missing: [nested ? `a ${named(nested)} inside a button` : 'nothing nested', clear ? `${named(clear)} after ${named(clear.previousElementSibling)}` : 'no clear control'],
-  });
+  const beside = `${named(clear)} after ${named(clear?.previousElementSibling)}`;
+  const besideOk = nested === null && clear?.tagName === 'BUTTON' && clear.getAttribute('type') === 'button' && clear.parentElement === agentType && clear.previousElementSibling === agentOpener;
   clear?.click();
   await page.settle(150);
+  const clearedOnto = document.activeElement === agentOpener;
+  results.push({
+    name: 'a clear control is a button beside the trigger, not inside it',
+    ok: besideOk && clearedOnto,
+    missing: [nested ? `a ${named(nested)} inside a button` : 'nothing nested', clear ? beside : 'no clear control', `focus after the clear on ${named(document.activeElement)}`],
+  });
   press('Escape');
   await page.settle(50);
   page.unmount();

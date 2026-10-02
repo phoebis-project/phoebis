@@ -10,7 +10,7 @@ for (const key of ['document', 'navigator', 'HTMLElement', 'Element', 'Node', 'g
 globalThis.window = window;
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 after(() => window.close());
-const { act, createElement: h, createRoot, Menu, MultiSelect } = await import('./dist/ui.js');
+const { act, createElement: h, createRoot, Menu, MultiSelect, useState } = await import('./dist/ui.js');
 
 // jsdom lays nothing out, so the boxes the placement reads are stood in: a clipping wrap whose 80 px client box is too
 // short for the 141 px list on either side of any row, and each row's menu 40 px below the one before it, read from
@@ -191,8 +191,12 @@ test('a filter list opens onto its search field, the arrows move between it and 
   assert.equal(m.container.querySelector('.mselect__list'), null, 'a Tab out of the list closes it');
 });
 
-test('a closed filter lets Escape through from its trigger and from its clear button, a button of its own beside the trigger', () => {
-  const m = mounted(filter({ value: ['200'] }));
+test('a closed filter lets Escape through from its trigger and from its clear button, a button of its own beside the trigger that hands focus to the trigger as it clears', () => {
+  function Held() {
+    const [value, setValue] = useState(['200']);
+    return h(MultiSelect, { label: 'Status', onChange: setValue, options: statuses, value });
+  }
+  const m = mounted(h(Held));
   const opener = m.container.querySelector('.mselect__trigger');
   const clear = m.container.querySelector('.mselect__clear');
   assert.ok(clear?.tagName === 'BUTTON' && clear.previousElementSibling === opener && m.container.querySelector('button [role="button"]') === null, 'the clear control is a button after the trigger, not inside it');
@@ -202,4 +206,27 @@ test('a closed filter lets Escape through from its trigger and from its clear bu
   const fromClear = press('Escape');
   assert.ok(!fromTrigger.defaultPrevented && !fromClear.defaultPrevented, 'no handler takes the key');
   assert.deepEqual(atDocument, ['Escape', 'Escape'], "a drawer's Escape listener hears the key while the list is closed");
+  act(() => clear.click());
+  assert.equal(m.container.querySelector('.mselect__clear'), null, 'the cleared filter draws no clear button');
+  assert.ok(document.activeElement === opener, 'focus goes to the trigger rather than leave with the clear button');
+});
+
+test('an open menu answers its keys from the trigger too', () => {
+  const m = mounted(loose(actions));
+  const opener = m.container.querySelector('.menu__trigger');
+  act(() => opener.focus());
+  const closed = press('Escape');
+  assert.ok(!closed.defaultPrevented && atDocument.includes('Escape'), 'with the list closed the trigger lets Escape through');
+  atDocument.length = 0;
+  act(() => opener.click());
+  // A Shift+Tab out of the in-flow list lands on the trigger, which leaves the list open.
+  act(() => opener.focus());
+  assert.ok(m.container.querySelector('.menu__list') && document.activeElement === opener, 'the list stays open with focus on its trigger');
+  press('ArrowDown');
+  assert.equal(focused(), 'Edit', 'ArrowDown from the trigger moves into the list');
+  act(() => opener.focus());
+  const escape = press('Escape');
+  assert.equal(m.container.querySelector('.menu__list'), null, 'Escape from the trigger closes the list');
+  assert.ok(document.activeElement === opener, 'focus stays on the trigger');
+  assert.ok(escape.defaultPrevented && !atDocument.includes('Escape'), 'the menu takes the key, so a dialog around it never hears it');
 });
