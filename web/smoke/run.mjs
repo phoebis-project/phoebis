@@ -2167,6 +2167,57 @@ m.unmount();
   q.unmount();
 }
 
+// On create the rail marks what a first pool needs; the marks are decoration with a hidden description, so an entry's
+// name stays its label, and they stay while the refusal dots come and go.
+{
+  const c = await mount('/pools');
+  [...c.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Create pool')?.click();
+  await c.settle(300);
+  const dlg = [...c.container.querySelectorAll('dialog[open]')].pop();
+  const markOf = (id) => rail(dlg, id)?.querySelector('.dialog-rail__mark');
+  const described = (id) =>
+    (rail(dlg, id)?.getAttribute('aria-describedby') ?? '')
+      .split(' ')
+      .filter(Boolean)
+      .map((ref) => document.getElementById(ref)?.textContent?.trim());
+  const marks = ['identity', 'members', 'keys', 'models'].map((id) => markOf(id)?.textContent?.trim() ?? null);
+  results.push({
+    name: '/pools Create pool marks Identity and Members needed and Keys after saving, each hidden from the name and read in the description',
+    ok:
+      JSON.stringify(marks) === '["needed","needed","after saving",null]' &&
+      markOf('identity')?.getAttribute('aria-hidden') === 'true' &&
+      JSON.stringify(described('identity')) === '["needed","holds a refusal"]' &&
+      JSON.stringify(described('keys')) === '["after saving"]' &&
+      rail(dlg, 'identity')?.querySelector('.dialog-rail__label')?.textContent === 'Identity' &&
+      (dlg?.querySelectorAll('.dialog-rail__mark').length ?? 0) === 3,
+    missing: [...marks.map(String), ...described('identity'), ...described('keys')],
+  });
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  const name = dlg?.querySelector('input[placeholder="research"]');
+  if (name) {
+    setter.call(name, 'first');
+    name.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await c.settle(150);
+  }
+  results.push({
+    name: '/pools a named pool reads Identity needed without the dot',
+    ok: markOf('identity')?.textContent?.trim() === 'needed' && rail(dlg, 'identity')?.querySelector('.dialog-rail__dot') === null && JSON.stringify(described('identity')) === '["needed"]',
+    missing: described('identity'),
+  });
+  dlg?.querySelector('button[aria-label="Close"]')?.click();
+  await c.settle(200);
+  [...c.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool all')?.click();
+  await c.settle(300);
+  const edit = [...c.container.querySelectorAll('dialog[open]')].pop();
+  results.push({ name: '/pools Edit pool all carries no mark', ok: (edit?.querySelector('.dialog__title')?.textContent ?? '') === 'Edit pool all' && edit?.querySelector('.dialog-rail__mark') === null, missing: [] });
+  c.unmount();
+  const k = await mount('/keys');
+  [...k.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Create key')?.click();
+  await k.settle(300);
+  results.push({ name: '/keys Create key carries no mark', ok: [...k.container.querySelectorAll('dialog[open]')].pop()?.querySelector('.dialog-rail__mark') === null, missing: [] });
+  k.unmount();
+}
+
 // The expert view: a browser preference switched from the sidebar, read by the dialogs alone.
 {
   const sw = (page) => page.container.querySelector('.sidebar__status button[role="switch"][aria-label="Expert view"]');

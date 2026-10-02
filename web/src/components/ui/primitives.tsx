@@ -286,6 +286,8 @@ export interface DialogGroup {
   /** Unique within the dialog; the rail button, the section and its heading carry it. */
   id: string;
   label: string;
+  /** A word after the label on the rail, drawn aria-hidden and repeated in the entry's description: "needed". */
+  mark?: string;
   /** The rail heading this group sits under; consecutive groups that share one form a run under it. */
   parent?: string;
   /** Marks the group and its parent on the rail while a refusal sits in the group. */
@@ -515,10 +517,12 @@ export function GroupedDialog({
   }
   const flat = shown.every((g) => g.parent === undefined);
   const labelOf = (id: string) => groups.find((g) => g.id === id)?.label ?? id;
-  // The dot is decoration and the announcement sits outside the button, so the button's name stays its label and a
-  // lookup by name or by the label span never meets the refusal's words.
+  // The dot and the mark are decoration and their words sit outside the button, so the button's name stays its label
+  // and a lookup by name or by the label span never meets them.
   const railId = useId();
   const noteId = (key: string) => `${railId}-${key}-refused`;
+  const markId = (key: string) => `${railId}-${key}-mark`;
+  const describedBy = (g: DialogGroup) => [g.mark ? markId(g.id) : null, g.refused ? noteId(g.id) : null].filter(Boolean).join(' ') || undefined;
   const dot = <span className="dialog-rail__dot" aria-hidden />;
   const note = (key: string) => (
     <span id={noteId(key)} className="sr-only">
@@ -566,10 +570,20 @@ export function GroupedDialog({
                     )}
                     {run.groups.map((g) => (
                       <Fragment key={g.id}>
-                        <button type="button" className="dialog-rail__group" data-group={g.id} aria-current={g.id === current ? 'true' : undefined} aria-describedby={g.refused ? noteId(g.id) : undefined} onClick={() => choose(g.id)}>
+                        <button type="button" className="dialog-rail__group" data-group={g.id} aria-current={g.id === current ? 'true' : undefined} aria-describedby={describedBy(g)} onClick={() => choose(g.id)}>
                           <span className="dialog-rail__label">{g.label}</span>
+                          {g.mark && (
+                            <span className="dialog-rail__mark" aria-hidden>
+                              {g.mark}
+                            </span>
+                          )}
                           {g.refused && dot}
                         </button>
+                        {g.mark && (
+                          <span id={markId(g.id)} className="sr-only">
+                            {g.mark}
+                          </span>
+                        )}
                         {g.refused && note(g.id)}
                       </Fragment>
                     ))}

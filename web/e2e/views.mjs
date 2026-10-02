@@ -202,10 +202,13 @@ async function atRest() {
  * whatever the outcome, since the rail's fit rests on text widths the browser's font decides. With Identity chosen,
  * with and without the refusals, the rail's two levels are read: every group 10 px right of its parent's label, the
  * runs 14 px apart with a hairline of the split's colour between them, and a parent in --ink-2 at rest and under the
- * pointer alike. With expert fields and the mode off, a group's discovery line sits below its last field in the hint's
- * size and a parent's ink, and the cell grid reaches a field through its wrapper. Then the rail outgrows its height
- * twice, on a 700 px viewport and with six more entries at 800 px: it scrolls, and once scrolled to its end the parent
- * heading of the run passing its top holds there in the rail's own colour, over the groups that pass under it.
+ * pointer alike. On create the marked rail keeps that fit with and without the refusals, and its levels; the marks of
+ * Identity and Keys read 11 px at weight 400 in a resting parent's ink, 6 px after their label on its line and clear
+ * of the refusal dot, at the pass's viewport and in the 720 px strip. With expert fields and the mode off, a group's
+ * discovery line sits below its last field in the hint's size and a parent's ink, and the cell grid reaches a field
+ * through its wrapper. Then the rail outgrows its height twice, on a 700 px viewport and with six more entries at
+ * 800 px: it scrolls, and once scrolled to its end the parent heading of the run passing its top holds there in the
+ * rail's own colour, over the groups that pass under it.
  */
 async function groupedDialogFixture(theme) {
   const say = (what) => failures.push(`${theme} /fixtures/grouped-dialog: ${what}`);
@@ -298,6 +301,53 @@ async function groupedDialogFixture(theme) {
     if (rest !== ink) sayIn(`the Routing parent rests in ${rest}, not the ${ink} of --ink-2`);
     if (hovered !== rest) sayIn(`the Routing parent reads ${hovered} under the pointer and ${rest} at rest`);
     await page.mouse.move(0, 0);
+  };
+  // A mark is a note on its entry, so it keeps the eyebrow's size, a plain weight under the chosen entry's 600 and a
+  // resting parent's ink, follows its label on the label's line, and stops short of the refusal dot where one draws.
+  const marks = async (state) => {
+    await page.mouse.move(0, 0);
+    await settle();
+    const read = await page.evaluate(() => {
+      const dialog = document.querySelector('dialog[open]');
+      // Routing is never the chosen run here, so its parent rests in the ink the strip keeps for the runs not chosen.
+      const ink = getComputedStyle(dialog.querySelector('.dialog-rail__parent[data-parent="Routing"]')).color;
+      const entries = ['identity', 'keys'].map((id) => {
+        const entry = dialog.querySelector(`.dialog-rail__group[data-group="${id}"]`);
+        const label = entry?.querySelector('.dialog-rail__label')?.getBoundingClientRect();
+        const mark = entry?.querySelector('.dialog-rail__mark');
+        if (!label || !mark) return { id, mark: null };
+        const box = mark.getBoundingClientRect();
+        const dot = entry.querySelector('.dialog-rail__dot')?.getBoundingClientRect() ?? null;
+        const style = getComputedStyle(mark);
+        return {
+          after: box.left - label.right,
+          bottoms: [label.bottom, box.bottom],
+          color: style.color,
+          fontSize: style.fontSize,
+          fontWeight: style.fontWeight,
+          id,
+          mark: mark.textContent,
+          toDot: dot ? dot.left - box.right : null,
+          tops: [label.top, box.top],
+        };
+      });
+      return { entries, ink };
+    });
+    measurements.push(`${theme} /fixtures/grouped-dialog ${state} marks ${JSON.stringify(read)}`);
+    const sayIn = (what) => say(`${state}: ${what}`);
+    for (const entry of read.entries) {
+      if (entry.mark === null) {
+        sayIn(`${entry.id} draws no mark`);
+        continue;
+      }
+      if (entry.fontSize !== '11px') sayIn(`the ${entry.id} mark reads ${entry.fontSize}, not 11px`);
+      if (entry.fontWeight !== '400') sayIn(`the ${entry.id} mark reads weight ${entry.fontWeight}, not 400`);
+      if (entry.color !== read.ink) sayIn(`the ${entry.id} mark draws in ${entry.color}, not the ${read.ink} of a resting parent`);
+      if (Math.abs(entry.after - 6) > 0.5) sayIn(`the ${entry.id} mark starts ${entry.after} px after its label, not 6`);
+      // On the label's baseline the smaller word sits inside the label's line box; a wrap would put it below.
+      if (entry.tops[1] < entry.tops[0] - 0.5 || entry.bottoms[1] > entry.bottoms[0] + 0.5) sayIn(`the ${entry.id} mark spans ${entry.tops[1]} to ${entry.bottoms[1]}, off its label's line at ${entry.tops[0]} to ${entry.bottoms[0]}`);
+      if (entry.toDot !== null && entry.toDot <= 0) sayIn(`the ${entry.id} mark's right edge stands ${entry.toDot} px from the refusal dot's left edge, not left of it`);
+    }
   };
   const scrolls = async (state, frame) => {
     await page.evaluate(() => {
@@ -412,6 +462,18 @@ async function groupedDialogFixture(theme) {
     await check('Overage and plan end chosen, both refused');
     await choose('utilization');
     await check('Utilization thresholds chosen, both refused');
+    await load('?create=1');
+    await check('Identity chosen, marked');
+    await levels('Identity chosen, marked');
+    await marks('Identity chosen, marked');
+    await load('?create=1&refused=identity,members');
+    await check('Identity chosen, marked and refused');
+    await marks('Identity chosen, marked and refused');
+    // Identity's run is the chosen one, so its marked entries draw in the strip below the parents.
+    await page.setViewportSize({ height: 800, width: 720 });
+    await load('?create=1&refused=identity,members');
+    await marks('at 720 px, marked and refused');
+    await page.setViewportSize({ height: 800, width: 1280 });
     await load('?expert=identity');
     await discovery('Identity with an expert field, the mode off');
     // Both wrapped fields show through their refusal with the mode off, so the grid is read without turning it on.

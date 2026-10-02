@@ -5,12 +5,16 @@ import { POOL_GROUPS, type PoolGroup } from '@/lib/forms';
 import { POOL_RAIL } from '@/lib/poolRail';
 
 const list = (value: string | null) => (value ?? '').split(',').filter(Boolean);
+// A copy of the pool dialog's create marks, so the fixture draws the page's words without importing the page.
+const CREATE_MARKS: Partial<Record<PoolGroup, string>> = { identity: 'needed', keys: 'after saving', members: 'needed' };
 
 export default function GroupedDialogFixture() {
   // `?refused=<id>,<id>` marks groups refused, since the dot widens a rail entry and the pass measures that state;
   // `?expert=<id>,<id>` wraps one more field per listed group, and `?expertOnly=<id>,<id>` replaces a group's plain
   // field by a wrapped one and declares the group expert only, so the checks reach the line and the rail rule now.
+  // `?create=1` sets the create marks, which the pass measures with and without the refusal dots.
   const [params] = useSearchParams();
+  const create = params.get('create') === '1';
   const refused = list(params.get('refused'));
   const expert = list(params.get('expert'));
   const expertOnly = list(params.get('expertOnly'));
@@ -47,6 +51,7 @@ export default function GroupedDialogFixture() {
       expertOnly: only,
       id,
       label,
+      mark: create ? CREATE_MARKS[id] : undefined,
       parent,
       refused: refused.includes(id),
     };
