@@ -196,12 +196,15 @@ async function atRest() {
 
 /**
  * The grouped dialog on a mock-only fixture that carries the pool dialog's eighteen groups under five parents: the
- * frame keeps its fixed size, no rail row wraps and the rail holds all 23 entries without scrolling at the pass's
- * viewport. The two longest labels are read chosen, refused, and both, since the chosen weight and the refusal dot
- * widen an entry. The numbers go to the measurements whatever the outcome, since the rail's fit rests on text widths
- * the browser's font decides. Then the rail outgrows its height twice, on a 700 px viewport and with six more entries
- * at 800 px: it scrolls, and once scrolled to its end the parent heading of the run passing its top holds there in
- * the rail's own colour, over the groups that pass under it.
+ * frame keeps its fixed size, no rail row wraps, no label is cut short and the rail holds all 23 entries without
+ * scrolling either way at the pass's viewport. The two longest labels are read chosen, refused, and both, since the
+ * chosen weight widens a label and the refusal dot takes the row's right padding. The numbers go to the measurements
+ * whatever the outcome, since the rail's fit rests on text widths the browser's font decides. With Identity chosen,
+ * with and without the refusals, the rail's two levels are read: every group 10 px right of its parent's label, the
+ * runs 14 px apart with a hairline of the split's colour between them, and a parent in --ink-2 at rest and under the
+ * pointer alike. Then the rail outgrows its height twice, on a 700 px viewport and with six more entries at 800 px: it
+ * scrolls, and once scrolled to its end the parent heading of the run passing its top holds there in the rail's own
+ * colour, over the groups that pass under it.
  */
 async function groupedDialogFixture(theme) {
   const say = (what) => failures.push(`${theme} /fixtures/grouped-dialog: ${what}`);
@@ -232,11 +235,14 @@ async function groupedDialogFixture(theme) {
           return b.getBoundingClientRect().height > parseFloat(style.lineHeight) + parseFloat(style.paddingTop) + parseFloat(style.paddingBottom) + 0.5;
         })
         .map((b) => b.querySelector('.dialog-rail__label')?.textContent);
+      // A label too wide for its row ends in an ellipsis rather than wrapping, so the cut is read apart from the wrap.
+      const truncated = [...rail.querySelectorAll('.dialog-rail__label')].filter((l) => l.scrollWidth > l.clientWidth).map((l) => l.textContent);
       return {
         frame: { height: box.height, width: box.width },
         groups: rail.querySelectorAll('.dialog-rail__group').length,
         parents: rail.querySelectorAll('.dialog-rail__parent').length,
-        rail: { clientHeight: rail.clientHeight, entries, scrollHeight: rail.scrollHeight, width: rail.getBoundingClientRect().width },
+        rail: { clientHeight: rail.clientHeight, clientWidth: rail.clientWidth, entries, scrollHeight: rail.scrollHeight, scrollWidth: rail.scrollWidth, width: rail.getBoundingClientRect().width },
+        truncated,
         wrapped,
       };
     });
@@ -245,7 +251,52 @@ async function groupedDialogFixture(theme) {
     if (read.frame.width !== 1040 || read.frame.height !== 752) sayIn(`the frame measures ${read.frame.width} by ${read.frame.height}, not 1040 by 752`);
     if (read.groups !== 18 || read.parents !== 5) sayIn(`the rail draws ${read.groups} groups under ${read.parents} parents, not 18 under 5`);
     if (read.wrapped.length) sayIn(`${read.wrapped.join(', ')} wraps onto a second line`);
+    if (read.truncated.length) sayIn(`${read.truncated.join(', ')} is cut short by its ellipsis`);
     if (read.rail.scrollHeight > read.rail.clientHeight) sayIn(`the rail scrolls: ${read.rail.scrollHeight} px of entries in ${read.rail.clientHeight} px`);
+    if (read.rail.scrollWidth > read.rail.clientWidth) sayIn(`the rail overflows sideways: ${read.rail.scrollWidth} px of entries in ${read.rail.clientWidth} px`);
+  };
+  const levels = async (state) => {
+    const read = await page.evaluate(() => {
+      const dialog = document.querySelector('dialog[open]');
+      const runs = [...dialog.querySelectorAll('.dialog-rail__run')];
+      const gaps = runs.slice(1).map((run, i) => run.getBoundingClientRect().top - runs[i].getBoundingClientRect().bottom);
+      const lines = runs.slice(1).map((run) => {
+        const style = getComputedStyle(run, '::before');
+        return { color: style.backgroundColor, height: style.height, top: style.top };
+      });
+      const hairline = getComputedStyle(dialog.querySelector('.dialog__rail-split')).borderTopColor;
+      const indents = runs
+        .filter((run) => run.classList.contains('has-parent'))
+        .flatMap((run) => {
+          const left = run.querySelector('.dialog-rail__parent .dialog-rail__label').getBoundingClientRect().left;
+          return [...run.querySelectorAll('.dialog-rail__group .dialog-rail__label')].map((label) => label.getBoundingClientRect().left - left);
+        });
+      return { gaps, hairline, indents, lines };
+    });
+    measurements.push(`${theme} /fixtures/grouped-dialog ${state} levels ${JSON.stringify(read)}`);
+    const sayIn = (what) => say(`${state}: ${what}`);
+    if (read.gaps.some((gap) => Math.abs(gap - 14) > 0.5)) sayIn(`the runs stand ${read.gaps.join(', ')} px apart, not 14`);
+    if (read.lines.some((line) => line.height !== '1px' || line.top !== '-7px' || line.color !== read.hairline)) sayIn(`a run's hairline reads ${JSON.stringify(read.lines)} against the split's ${read.hairline}`);
+    if (read.indents.some((indent) => Math.abs(indent - 10) > 0.5)) sayIn(`a group starts ${read.indents.join(', ')} px right of its parent's label, not 10`);
+    const parent = page.locator('.dialog-rail__parent[data-parent="Routing"]');
+    // The pointer may rest on the rail from the last choice, so it leaves before the parent is read at rest.
+    await page.mouse.move(0, 0);
+    await settle();
+    const { ink, rest } = await parent.evaluate((el) => {
+      // A computed color holds the value, never the token's name, so the token is resolved on a probe of its own.
+      const probe = document.body.appendChild(document.createElement('span'));
+      probe.style.color = 'var(--ink-2)';
+      const resolved = getComputedStyle(probe).color;
+      probe.remove();
+      return { ink: resolved, rest: getComputedStyle(el).color };
+    });
+    await parent.hover();
+    await settle();
+    const hovered = await parent.evaluate((el) => getComputedStyle(el).color);
+    measurements.push(`${theme} /fixtures/grouped-dialog ${state} Routing parent ${JSON.stringify({ hovered, ink, rest })}`);
+    if (rest !== ink) sayIn(`the Routing parent rests in ${rest}, not the ${ink} of --ink-2`);
+    if (hovered !== rest) sayIn(`the Routing parent reads ${hovered} under the pointer and ${rest} at rest`);
+    await page.mouse.move(0, 0);
   };
   const scrolls = async (state, frame) => {
     await page.evaluate(() => {
@@ -288,12 +339,14 @@ async function groupedDialogFixture(theme) {
   try {
     await load('');
     await check('Identity chosen');
+    await levels('Identity chosen');
     await choose('overage');
     await check('Overage and plan end chosen');
     await choose('utilization');
     await check('Utilization thresholds chosen');
     await load('?refused=overage,utilization');
     await check('Identity chosen, both refused');
+    await levels('Identity chosen, both refused');
     await choose('overage');
     await check('Overage and plan end chosen, both refused');
     await choose('utilization');
@@ -683,12 +736,13 @@ const disabledIn = (dialog, label, selectors) =>
   );
 
 /**
- * The pool dialog's frame and every group's layout at the pass's viewport, then the frame at 720 px. Every group is
- * chosen and read while it shows: its height against the body's window, every cell against the two columns, every
- * label beside its switch or above its control, every control and hint as wide as its field, every dependent drawn
- * and disabled while its switch is off or its preset is not Custom, the warnings at their ends of their groups, no
- * clipped select, nothing pushed apart or past the frame, and the mono Name input as tall as the Status select beside
- * it.
+ * The pool dialog's frame and every group's layout at the pass's viewport, then the frame and the rail's strips at
+ * 720 px. Every group is chosen and read while it shows: its height against the body's window, every cell against the
+ * two columns, every label beside its switch or above its control, every control and hint as wide as its field, every
+ * dependent drawn and disabled while its switch is off or its preset is not Custom, the warnings at their ends of their
+ * groups, no clipped select, nothing pushed apart or past the frame, and the mono Name input as tall as the Status
+ * select beside it. The strips draw their groups without the column rail's indent and hairline, and a parent there
+ * answers the pointer.
  */
 async function poolDialogGeometry(theme) {
   const sayIn = (group, what) => failures.push(`${theme} /pools dialog${group ? ` ${group}` : ''}: ${what}`);
@@ -827,14 +881,33 @@ async function poolDialogGeometry(theme) {
       return {
         chosen: chosen.length > 0 && chosen.every((g) => visible(g) && g.getBoundingClientRect().top >= lowest - 1),
         height: box.height,
+        lines: [...new Set([...el.querySelectorAll('.dialog-rail__run + .dialog-rail__run')].map((run) => getComputedStyle(run, '::before').content))],
         others: others.every((g) => g.getBoundingClientRect().width === 0),
         parents: parents.filter(visible).length,
+        rows: [...new Set(chosen.map((g) => getComputedStyle(g).padding))],
         width: box.width,
       };
     });
     measurements.push(`${theme} /pools dialog at 720 px ${JSON.stringify(narrow)}`);
     if (narrow.width !== 720 || narrow.height !== 800) sayIn(null, `at 720 px the frame measures ${narrow.width} by ${narrow.height}, not 720 by 800`);
     if (narrow.parents !== 5 || !narrow.chosen || !narrow.others) sayIn(null, `at 720 px the strips read ${JSON.stringify(narrow)}: five parents above the body and the chosen run's groups under them`);
+    // On a strip the column rail's indent and hairline would read as stray marks.
+    if (JSON.stringify(narrow.rows) !== JSON.stringify(['4px 10px'])) sayIn(null, `at 720 px the chosen run's groups pad ${narrow.rows.join(', ')}, not 4px 10px`);
+    if (JSON.stringify(narrow.lines) !== JSON.stringify(['none'])) sayIn(null, `at 720 px a run draws ${narrow.lines.join(', ')} before it, not none`);
+    // A strip's parent is the one way to reach its run's groups, so it answers the pointer in the chosen parent's ink.
+    const routing = dialog.locator('.dialog-rail__parent[data-parent="Routing"]');
+    await page.mouse.move(0, 0);
+    await settle();
+    const rest = await routing.evaluate((el) => getComputedStyle(el).color);
+    await routing.hover();
+    await settle();
+    const hover = await dialog.evaluate((el) => ({
+      chosen: getComputedStyle(el.querySelector('.dialog-rail__run.is-chosen .dialog-rail__parent')).color,
+      routing: getComputedStyle(el.querySelector('.dialog-rail__parent[data-parent="Routing"]')).color,
+    }));
+    await page.mouse.move(0, 0);
+    measurements.push(`${theme} /pools dialog at 720 px Routing parent ${JSON.stringify({ ...hover, rest })}`);
+    if (hover.routing === rest || hover.routing !== hover.chosen) sayIn(null, `at 720 px the Routing parent reads ${hover.routing} under the pointer and ${rest} at rest, not the chosen parent's ${hover.chosen}`);
     await close();
   } catch (error) {
     sayIn(null, `at 720 px: ${error instanceof Error ? error.message : String(error)}`);
@@ -2054,9 +2127,10 @@ const KEY_GROUP_LABELS = ['Key', 'Access', 'Models', 'Sessions', 'Capture'];
 
 /**
  * The key dialog on the grouped frame, on create and on edit: the frame and a flat rail of five groups that fits it,
- * each group inside one window of the body with the layout `groupGeometry` reads, the moving warning leading Key on an
- * edit that changes the pool, the bodies warning leading Capture while capture is on, and a revoked key's Enabled
- * switch drawn and disabled. Nothing is saved: every dialog leaves by Escape.
+ * 8 px apart with no line between them, each group inside one window of the body with the layout `groupGeometry`
+ * reads, the moving warning leading Key on an edit that changes the pool, the bodies warning leading Capture while
+ * capture is on, and a revoked key's Enabled switch drawn and disabled. Nothing is saved: every dialog leaves by
+ * Escape.
  */
 async function keyDialogGeometry(theme) {
   const sayIn = (where, what) => failures.push(`${theme} /keys dialog${where ? ` ${where}` : ''}: ${what}`);
@@ -2079,9 +2153,12 @@ async function keyDialogGeometry(theme) {
     const frame = await dialog.evaluate((el) => {
       const box = el.getBoundingClientRect();
       const rail = el.querySelector('.dialog-rail');
+      const runs = [...el.querySelectorAll('.dialog-rail__run')];
       return {
+        gaps: runs.slice(1).map((run, i) => run.getBoundingClientRect().top - runs[i].getBoundingClientRect().bottom),
         height: box.height,
         labels: [...el.querySelectorAll('.dialog-rail__group .dialog-rail__label')].map((l) => l.textContent?.trim()),
+        lines: [...new Set(runs.slice(1).map((run) => getComputedStyle(run, '::before').content))],
         parents: el.querySelectorAll('.dialog-rail__parent').length,
         rail: rail ? { clientHeight: rail.clientHeight, scrollHeight: rail.scrollHeight } : null,
         width: box.width,
@@ -2090,6 +2167,8 @@ async function keyDialogGeometry(theme) {
     measurements.push(`${theme} /keys dialog ${mode} frame ${JSON.stringify(frame)}`);
     if (frame.width !== 1040 || frame.height !== 752) sayIn(mode, `the frame measures ${frame.width} by ${frame.height}, not 1040 by 752`);
     if (JSON.stringify(frame.labels) !== JSON.stringify(KEY_GROUP_LABELS) || frame.parents !== 0) sayIn(mode, `the rail reads ${JSON.stringify(frame.labels)} under ${frame.parents} parents`);
+    // Each group of a flat rail is a run of its own, so the pool rail's 14 px and hairline between runs would reach it.
+    if (frame.gaps.some((gap) => Math.abs(gap - 8) > 0.5) || JSON.stringify(frame.lines) !== JSON.stringify(['none'])) sayIn(mode, `the rail's entries stand ${frame.gaps.join(', ')} px apart with ${frame.lines.join(', ')} before them, not 8 px with none`);
     if (!frame.rail || frame.rail.scrollHeight > frame.rail.clientHeight) sayIn(mode, `the rail scrolls: ${JSON.stringify(frame.rail)}`);
     for (const group of KEY_GROUP_LABELS) {
       const where = `${mode} ${group}`;
