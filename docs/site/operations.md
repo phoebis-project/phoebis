@@ -78,7 +78,7 @@ There is no re-key command, so recovering from a lost or replaced key means:
 1. Build the new binary: `cargo build --release`.
 2. Validate the live configuration file with the binary just built, not the one still installed, since step 5 is
    what replaces that one: `sudo bash -c 'set -a; . /etc/phoebis/phoebis.env; set +a; exec target/release/phoebis
-   check-config --config /etc/phoebis/config.yaml'`. `check-config` resolves its secrets from the process environment,
+   check-config --config /etc/phoebis/config.yaml'`. `check-config` resolves its secret from the process environment,
    and only systemd's `EnvironmentFile` loads `/etc/phoebis/phoebis.env` automatically, so sourcing it into this one
    shell is what lets the command run at all; skipping that fails with `environment variable PHOEBIS_ADMIN_SECRET is
    unset or empty`. `check-config` opens neither the store nor a socket, so it is safe to run while the old binary still

@@ -1,7 +1,7 @@
 //! The bootstrap file: the settings the process needs before it can serve anything, and the rules that
 //! refuse a configuration nobody should be able to start.
 //!
-//! Secrets are named here, never written here: every one of them is the name of an environment variable
+//! The admin secret is named here, never written here: the file holds the name of the environment variable
 //! that `load` resolves, so a configuration file can be read by anyone who may read the deployment.
 
 use std::fmt;

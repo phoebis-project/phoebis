@@ -1,5 +1,5 @@
 # The container: every listener binds all interfaces and the host publishes the ports it wants (deploy/compose.yaml
-# publishes the proxy to the LAN and the console and metrics on the host's loopback). Secrets come from the
+# publishes the proxy to the LAN and the console and metrics on the host's loopback). The admin secret comes from the
 # environment file and the key from the mounted secret; the databases live on the volume at /var/lib/phoebis.
 admin:
   # plain_http serves the console over plain HTTP on whatever address the host publishes 8081 on, with no origin
