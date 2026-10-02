@@ -1990,10 +1990,9 @@ const measureSelect = (label) =>
 
 /**
  * The key dialog's Requests in flight field under Access against the Name field under Key: the same input box and the
- * same hint type as the Pool field's. A cap of 0 raises the refusal in Access and holds the Create button. The
- * Affinity source select under Sessions is the Expiry select's box, on a full row,
- * and its hint the Pool hint's type. The Server-side auto mode select under Access is the Expiry select's box, and
- * its hint the Pool hint's type.
+ * same hint type as the Pool field's. The Affinity source select under Sessions is
+ * the Expiry select's box, on a full row, and its hint the Pool hint's type; the Server-side auto mode select
+ * under Access is the Expiry select's box, and its hint the Pool hint's type.
  */
 async function keyCapField(theme) {
   const say = (what) => failures.push(`${theme} /keys: ${what}`);
@@ -2039,12 +2038,6 @@ async function keyCapField(theme) {
   measurements.push(`${theme} /keys Server-side auto mode select ${JSON.stringify({ expiry, hints, select: autoMode })}`);
   for (const finding of compare(autoMode, expiry, ['background', 'border', 'font', 'height', 'padding', 'width'], 'the Server-side auto mode select against the Expiry select')) say(finding);
   if (!hints.autoMode || hints.autoMode !== hints.pool) say(`the Server-side auto mode hint reads ${hints.autoMode} against the Pool hint's ${hints.pool}`);
-  await show('Access');
-  const access = dialog.locator('section.dialog-group[aria-label="Access"]');
-  await access.locator('input[aria-label="Requests in flight"]').fill('0');
-  await settle();
-  const refused = await access.locator('[role="alert"]', { hasText: 'Requests in flight' }).count();
-  if (refused !== 1) say(`a cap of 0 raised ${refused} refusals in Access, not one`);
   await page.keyboard.press('Escape');
   await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => say('the dialog stayed open after Escape'));
   await atRest();

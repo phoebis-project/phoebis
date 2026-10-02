@@ -1,5 +1,5 @@
 import type {
-  Account, AccountCatalog, AccountRollup, AffinityMode, AffinitySource, AlertEvent, AlertRule, AlertRuleInput, AnalyticsGroup, AnalyticsPoint, ApiKey, AttemptOutcome, AttemptResponse, BudgetPeriod, BurnPoint, BurnUnit, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
+  Account, AccountCatalog, AccountRollup, AffinityMode, AlertEvent, AlertRule, AlertRuleInput, AnalyticsGroup, AnalyticsPoint, ApiKey, AttemptOutcome, AttemptResponse, BudgetPeriod, BurnPoint, BurnUnit, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
   CohortHold, Delivery, FastLaneReading, FastPrice, GuardVerdict, KeepaliveOverview, KeepaliveRecipe, KeyModels, LifecycleDelivery, LifecyclePage, LiveAttempt, LiveDelta, LiveMetric, LiveRequest, LiveSnapshot, LiveTick, MemberBudget, MemberEligibility, ModelEvent, ModelPrice, ModelRule, ModelRulesMode,
   ModelsState, Overview, PairingSession, PinMigrationReason, PinReleaseReason, Placement, PlacementRow, PlanBand, PlanModelCells, PlanTables, Pool, PoolCacheTtl, QuotaHistory, QuotaPoll, QuotaSnapshot, RateLimitWindow, RequestEvent, RequestLog, RequestPage, RequestShape, RewritePoint,
   RuleCooldown, SelectionTrace, Session, SessionLifecycleDetail, SessionPlacement, Settings, SubagentPlacement, Subscription, TtlRules, WarmSessions, WindowId,
@@ -233,14 +233,12 @@ export function decodeKey(v: unknown): ApiKey {
   // A row from a route that reports no `enabled` is taken as on rather than off.
   const enabled = bool(k.enabled, true);
   return {
-    affinitySource: AFFINITY_SOURCE_VALUES.find((s) => s === str(k.affinity_source)) ?? 'auto',
     autoModeServer: k.auto_mode_server === true ? true : k.auto_mode_server === false ? false : null,
     bodyCaptureHours: numOrNull(k.body_capture_hours),
     createdAt: isoOr(k.created_at, epoch),
     enabled,
     expiresAt: expires,
     id: str(k.id),
-    inFlightCap: numOrNull(k.in_flight_cap),
     keepaliveOptOut: bool(k.keepalive_opt_out),
     lastUsedAt: isoOrNull(k.last_used_at),
     lifetime: { cost: num(rec(k.lifetime).cost_usd), requests: num(rec(k.lifetime).requests) },
@@ -260,7 +258,6 @@ export function decodeKey(v: unknown): ApiKey {
 }
 
 export const AFFINITY_MODE_VALUES = ['always', 'when_cached'] as const satisfies readonly AffinityMode[];
-export const AFFINITY_SOURCE_VALUES = ['auto', 'content', 'session', 'user_id', 'whole_key'] as const satisfies readonly AffinitySource[];
 export const BUDGET_PERIOD_VALUES = ['day', 'month'] as const satisfies readonly BudgetPeriod[];
 export const ELIGIBILITY_VALUES = ['budget', 'cooldown', 'eligible', 'overage', 'unavailable'] as const satisfies readonly MemberEligibility[];
 export const SESSION_PLACEMENT_VALUES = ['by_strategy', 'by_warm_prefix'] as const satisfies readonly SessionPlacement[];
@@ -634,9 +631,8 @@ const encodeTtlRules = (r: TtlRules) => ({ main: r.main, models: r.models.map((m
 
 export const encodeAccountPatch = (p: AccountPatch) => ({ cancelled: p.cancelled, subscription_ends_at: p.subscriptionEndsAt === null ? null : Date.parse(p.subscriptionEndsAt) });
 export const encodeKey = (i: KeyInput) => ({
-  affinity_source: i.affinitySource, auto_mode_server: i.autoModeServer, body_capture_hours: i.bodyCaptureHours, enabled: i.enabled,
+  auto_mode_server: i.autoModeServer, body_capture_hours: i.bodyCaptureHours, enabled: i.enabled,
   ...(i.expiresAt === undefined ? {} : { expires_at: i.expiresAt === null ? null : Date.parse(i.expiresAt) }),
-  ...(i.inFlightCap === undefined ? {} : { in_flight_cap: i.inFlightCap }),
   keepalive_opt_out: i.keepaliveOptOut, label: i.name, long_context_twins: i.longContextTwins,
   model_rules: encodeModelRules(i.modelRules), model_rules_mode: i.modelRulesMode, notes: i.notes, pool_id: i.poolId,
 });

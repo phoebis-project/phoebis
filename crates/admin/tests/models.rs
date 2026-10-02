@@ -5,8 +5,8 @@ use common::{get, json, login, NOW};
 use phoebis_ledger::EventRecord;
 use phoebis_routing::{Report, MODEL_REJECTED_REASON};
 use phoebis_store::{
-    Affinity, AffinitySource, ApiKeyRow, CooldownRow, Failover, MemberWrite,
-    ModelRule, OveragePolicy, PoolRow, RulesMode, Shedding, Strategy,
+    Affinity, ApiKeyRow, CooldownRow, Failover, MemberWrite, ModelRule,
+    OveragePolicy, PoolRow, RulesMode, Shedding, Strategy,
 };
 use serde_json::json as j;
 
@@ -121,8 +121,6 @@ async fn the_key_models_route_answers_the_processed_list_with_the_matching_coold
                 rotated_at: None,
                 last_used_at: None,
                 retired_secret_last_used_at: None,
-                in_flight_cap: None,
-                affinity_source: AffinitySource::Auto,
                 auto_mode_server: None,
             },
             "test",

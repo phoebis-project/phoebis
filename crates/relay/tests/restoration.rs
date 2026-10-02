@@ -9,9 +9,7 @@ use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
 use http_body_util::BodyExt;
 use phoebis_profile::fixtures::{body, inference_head, BodyFixture, FixtureKind};
 use phoebis_relay::MemoryKey;
-use phoebis_store::{
-    AccountKind, AffinitySource, ApiKeyRow, RulesMode, StorageKey, Store,
-};
+use phoebis_store::{AccountKind, ApiKeyRow, RulesMode, StorageKey, Store};
 use tower::ServiceExt;
 
 const UUID_RE_LEN: usize = 36;
@@ -826,8 +824,6 @@ async fn a_key_created_again_under_a_used_id_reads_none_of_the_previous_holders_
                 rotated_at: None,
                 last_used_at: None,
                 retired_secret_last_used_at: None,
-                in_flight_cap: None,
-                affinity_source: AffinitySource::Auto,
                 auto_mode_server: None,
             },
             "test",

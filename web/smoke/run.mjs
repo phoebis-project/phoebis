@@ -2154,23 +2154,6 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
     missing: effective,
   });
   const subsOf = (name) => [...([...m.container.querySelectorAll('.card--table tbody tr')].find((row) => row.children[0]?.querySelector('b')?.textContent?.trim() === name)?.children[0]?.querySelectorAll('.sub') ?? [])].map((sub) => sub.textContent?.trim());
-  results.push({
-    name: "/keys a key's in-flight cap reads under its name, and a key without one draws no line",
-    ok: subsOf('laptop').includes('at most 8 in flight') && !subsOf('desktop').some((t) => t?.includes('in flight')),
-    missing: [JSON.stringify(subsOf('laptop')), JSON.stringify(subsOf('desktop'))],
-  });
-}
-{
-  // The key table's tooltips carry the dialog's words for the cap, less its page link.
-  const laptop = [...m.container.querySelectorAll('.card--table tbody tr')].find((row) => row.children[0]?.querySelector('b')?.textContent?.trim() === 'laptop');
-  const capTitle = [...(laptop?.children[0]?.querySelectorAll('.sub') ?? [])].find((s) => s.textContent?.trim() === 'at most 8 in flight')?.getAttribute('title');
-  results.push({
-    name: "/keys the table's tooltips read the dialog's words",
-    ok:
-      m.container.querySelector('dialog[open]') === null &&
-      capTitle === 'Past this many requests at once the key is refused with a 429 and a Retry-After until one finishes; empty means no cap.',
-    missing: [String(capTitle)],
-  });
 }
 {
   // A server refusal holds the footer until the operator edits; then the form's own next hold takes the line.
@@ -2192,17 +2175,17 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
   const refused = read();
   await type(dlg?.querySelector('input[placeholder="workstation"]'), 'taken-2');
   const corrected = read();
-  await type(group(dlg, 'Access')?.querySelector('input[aria-label="Requests in flight"]'), '0');
-  const capped = read();
+  await type(dlg?.querySelector('input[placeholder="workstation"]'), '');
+  const blank = read();
   results.push({
     name: "/keys a corrected field clears the server's refusal and the next local refusal takes the footer",
     ok:
       refused === 'held | name is taken' &&
       status() !== null &&
       corrected === 'free | Every group saves together.' &&
-      capped === 'held | Save is held: Requests in flight is a whole number of at least 1; leave it empty for no cap.Go to Access' &&
+      blank === 'held | Save is held: the key needs a name.Go to Key' &&
       (dlg?.open ?? false),
-    missing: [refused, corrected, capped],
+    missing: [refused, corrected, blank],
   });
   [...(dlg?.querySelectorAll('.dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
   await m.settle(200);
@@ -2298,36 +2281,6 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
     expect('/keys the Affinity source select carries its hint', sessions?.textContent ?? '', [
       "What names a conversation for pinning. Automatic takes the first of: the session id, a parent id the client sends back, the user id, the messages, the key. A fixed source uses that alone, and a request without it gets no pin. How long a pin lasts is the pool's Session affinity on the",
     ]);
-    const cap = access?.querySelector('input[aria-label="Requests in flight"]');
-    const set = (v) => {
-      if (!cap) return;
-      Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(cap, v);
-      cap.dispatchEvent(new window.Event('input', { bubbles: true }));
-    };
-    const empty = cap?.value;
-    set('0');
-    await m.settle(80);
-    // The name is typed above, so the cap is the first hold and the footer names it.
-    const refused = access?.querySelector('[role="alert"]')?.textContent ?? '';
-    const line = dlg?.querySelector('.dialog__status')?.textContent ?? '';
-    const invalid = cap?.getAttribute('aria-invalid');
-    const accessEntry = rail(dlg, 'access');
-    const marked = Boolean(accessEntry?.querySelector('.dialog-rail__dot'));
-    set('3');
-    await m.settle(80);
-    results.push({
-      name: '/keys a cap of 0 is refused in the form, and a whole number from 1 is taken',
-      ok:
-        empty === '' &&
-        cap?.getAttribute('placeholder') === 'No cap' &&
-        refused.includes('Requests in flight is a whole number of at least 1') &&
-        line === 'Save is held: Requests in flight is a whole number of at least 1; leave it empty for no cap.Go to Access' &&
-        invalid === 'true' &&
-        marked &&
-        !access?.querySelector('[role="alert"]') &&
-        cap?.getAttribute('aria-invalid') === null,
-      missing: [String(empty), refused || 'no refusal', line, String(invalid), accessEntry ? `marked: ${marked}` : 'no rail entry', access?.querySelector('[role="alert"]')?.textContent ?? ''],
-    });
   }
   {
     // A new key extends its pool's list, drawn read-only after its own rows; replacing the list drops them.
@@ -2394,7 +2347,6 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
     }
     await m.settle(200);
     expect('/keys table has new key', m.text(), ['smoke']);
-    results.push({ name: '/keys a key created with a cap stores it', ok: (await api.listKeys()).find((k) => k.id === 'smoke')?.inFlightCap === 3, missing: [String((await api.listKeys()).find((k) => k.id === 'smoke')?.inFlightCap)] });
     const done = [...m.container.querySelectorAll('dialog[open] button')].find((b) => b.textContent?.trim() === 'Done');
     done?.click();
     await m.settle(200);
@@ -2468,7 +2420,6 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
     missing: [String(off), saved ? '' : 'the dialog stayed open', rowOf('batch')?.querySelector('td:nth-child(7) .badge')?.textContent?.trim() ?? 'no batch row'],
   });
   const laptopDlg = await editOf('laptop');
-  const laptopCap = laptopDlg?.querySelector('input[aria-label="Requests in flight"]')?.value;
   const captureWarning = group(laptopDlg, 'Capture')?.querySelector('.callout--warning')?.textContent ?? '';
   results.push({
     name: "/keys the capture warning names what a session in auto mode sends with every request",
@@ -2477,7 +2428,6 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
   });
   foot(laptopDlg, 'Cancel')?.click();
   await m.settle(200);
-  results.push({ name: "/keys the edit dialog opens with the key's in-flight cap", ok: laptopCap === '8', missing: [String(laptopCap)] });
   const ci = await editOf('ci');
   const lock = ci?.querySelector('button[role="switch"][aria-label="Enabled"]');
   results.push({

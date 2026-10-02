@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use fake_upstream::{FakeUpstream, RecordedRequest, Respond, Rule};
 use phoebis_relay::Relay;
-use phoebis_store::{AccountKind, AffinitySource, ApiKeyRow, RulesMode};
+use phoebis_store::{AccountKind, ApiKeyRow, RulesMode};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tower::ServiceExt;
@@ -408,8 +408,6 @@ async fn an_lf_terminated_head_ends_where_hyper_ends_it() {
                 rotated_at: None,
                 last_used_at: None,
                 retired_secret_last_used_at: None,
-                in_flight_cap: None,
-                affinity_source: AffinitySource::Auto,
                 auto_mode_server: None,
             },
             "test",

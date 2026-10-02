@@ -1,5 +1,5 @@
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, AccountUpdate, Affinity, AffinitySource, ApiKeyRow,
+    AccountKind, AccountRow, AccountState, AccountUpdate, Affinity, ApiKeyRow,
     Failover, Identity, MemberWrite, MemoryKey, MemoryRecord, MemoryStore, ModelRule,
     OveragePolicy, PinBurn, PoolRow, RulesMode, Secret, Shedding, StorageKey, Store, StoreError,
     Strategy, SubscriptionRow,
@@ -141,6 +141,8 @@ const UNDO_V42: &str = "DROP INDEX IF EXISTS alert_deliveries_event; CREATE INDE
 // The exact reverse of `V43`, one statement per line, the marker on each line that restores a dropped name.
 const UNDO_V43: &str = r#"
 ALTER TABLE pools ADD COLUMN quota_headers TEXT NOT NULL DEFAULT 'pass'; -- rollback
+ALTER TABLE api_keys ADD COLUMN in_flight_cap INTEGER; -- rollback
+ALTER TABLE api_keys ADD COLUMN affinity_source TEXT NOT NULL DEFAULT 'auto'; -- rollback
 "#;
 
 fn account(id: &str, kind: AccountKind) -> AccountRow {
@@ -202,8 +204,6 @@ fn key(store: &Store, id: &str, pool_id: &str, secret: &str) -> ApiKeyRow {
         rotated_at: None,
         last_used_at: None,
         retired_secret_last_used_at: None,
-        in_flight_cap: None,
-        affinity_source: AffinitySource::Auto,
         auto_mode_server: None,
     }
 }
@@ -622,10 +622,6 @@ fn a_pin_a_pool_a_member_and_a_key_from_before_the_affinity_columns_read_the_def
     );
 
     let key = migrated.api_key("k").unwrap().unwrap();
-    assert_eq!(
-        key.affinity_source,
-        AffinitySource::Auto
-    );
 }
 
 /// A version-38 pool's `cache_ttl_json` as the app wrote it then, the `keepalive` key in both sets: a seed that
@@ -768,6 +764,40 @@ fn a_store_left_at_42_is_carried_to_43_without_the_pools_header_switch() {
     drop(migrated);
     let columns = columns_of(&path, "pools");
     assert!(!columns.contains("quota_headers"), "{columns:?}"); // removed name
+}
+
+/// A key that capped its requests and fixed its source, planted at version 42.
+const SEED_PRE_V43_KEY: &str = r#"
+UPDATE api_keys SET in_flight_cap = 3, affinity_source = 'content' WHERE id = 'k'; -- rollback
+"#;
+
+// Unformatted so the sweep's marker stays on the line that spells the dropped name.
+#[rustfmt::skip]
+#[test]
+fn a_store_left_at_42_is_carried_to_43_without_the_keys_cap_or_affinity_source() { // removed name
+    let dir = tempfile::tempdir().unwrap();
+    let storage_key = StorageKey::generate();
+    let path = dir.path().join("router.sqlite");
+    let store = Store::open(&path, &storage_key).unwrap();
+    store.insert_pool(&pool("main"), "test").unwrap();
+    store
+        .insert_api_key(&key(&store, "k", "main", "phoebis-k-secret"), "test")
+        .unwrap();
+    drop(store);
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch(&format!(
+        "{UNDO_V43} UPDATE meta SET value = '42' WHERE key = 'schema_version'; {SEED_PRE_V43_KEY}"
+    ))
+    .unwrap();
+    drop(conn);
+    let migrated = Store::open(&path, &storage_key).unwrap();
+    assert_eq!(migrated.schema_version().unwrap(), 43);
+    let read = migrated.api_key("k").unwrap().expect("the key reads back");
+    assert_eq!((read.label.as_str(), read.pool_id.as_str()), ("k", "main"));
+    drop(migrated);
+    let columns = columns_of(&path, "api_keys");
+    assert!(!columns.contains("in_flight_cap"), "{columns:?}"); // removed name
+    assert!(!columns.contains("affinity_source"), "{columns:?}"); // removed name
 }
 
 #[test]

@@ -4796,12 +4796,10 @@ export const FIXTURES: Record<string, Fixture> = {
       "keepalive_opt_out": false,
       "body_capture_hours": null,
       "effective_body_capture_hours": 24,
-      "in_flight_cap": null,
-      "affinity_source": "auto",
       "auto_mode_server": null,
       "effective_auto_mode_server": true,
-      "prefix": "T5R8yG7v",
-      "created_at": 1790825302587,
+      "prefix": "siMD5FH6",
+      "created_at": 1790970798387,
       "rotated_at": null,
       "last_used_at": null,
       "retired_secret_last_used_at": null,
@@ -4864,23 +4862,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "keepalive_opt_out": false,
           "body_capture_hours": null,
           "effective_body_capture_hours": 24,
-          "in_flight_cap": null,
-          "affinity_source": "auto",
           "auto_mode_server": null,
           "effective_auto_mode_server": true,
-          "prefix": "T5R8yG7v",
-          "created_at": 1790825302587,
+          "prefix": "siMD5FH6",
+          "created_at": 1790970798387,
           "rotated_at": null,
           "last_used_at": null,
           "retired_secret_last_used_at": null,
           "sessions_on_retired_secret": 0,
           "usage_7d": {
-            "cost_usd": 0.0036,
+            "cost_usd": 0.018,
             "requests": 4,
             "tokens": 7200
           },
           "lifetime": {
-            "cost_usd": 0.0036,
+            "cost_usd": 0.018,
             "requests": 4
           }
         }
@@ -7295,9 +7291,19 @@ export const FIXTURES: Record<string, Fixture> = {
   "sessions_costs": {
     "route": "GET /admin/sessions/costs",
     "body": {
-      "version": "2026-09-30",
-      "effective": "2026-09-30",
+      "version": "2026-10-01",
+      "effective": "2026-10-01",
       "models": [
+        {
+          "model": "claude-fable-5",
+          "input_per_m": 10,
+          "cache_write_5m_per_m": 12.5,
+          "cache_write_1h_per_m": 20,
+          "cache_read_per_m": 0.25,
+          "output_per_m": 50,
+          "reads_per_write_5m": 50,
+          "fast": null
+        },
         {
           "model": "claude-fable-5-1",
           "input_per_m": 10,
@@ -7309,7 +7315,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "fast": null
         },
         {
-          "model": "claude-haiku-4-5-20251001",
+          "model": "claude-haiku-4-5",
           "input_per_m": 1,
           "cache_write_5m_per_m": 1.25,
           "cache_write_1h_per_m": 2,
@@ -7368,6 +7374,16 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "model": "claude-sonnet-5",
+          "input_per_m": 2,
+          "cache_write_5m_per_m": 2.5,
+          "cache_write_1h_per_m": 4,
+          "cache_read_per_m": 0.2,
+          "output_per_m": 10,
+          "reads_per_write_5m": 12.5,
+          "fast": null
+        },
+        {
+          "model": "claude-sonnet-5-5",
           "input_per_m": 2,
           "cache_write_5m_per_m": 2.5,
           "cache_write_1h_per_m": 4,

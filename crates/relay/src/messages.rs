@@ -27,8 +27,7 @@ use phoebis_routing::{
     SelectionTrace, BUDGET_WINDOW, MODEL_REJECTED_REASON,
 };
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, MemoryStore,
-    Store,
+    AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, MemoryStore, Store,
 };
 use phoebis_transport::control::Resolver;
 use phoebis_transport::decode::{decoder, encoding, Decoder, Encoding};
@@ -50,9 +49,9 @@ use crate::classify::{
 };
 use crate::dispatch::{self, until_cancelled, AttemptFailure, Sent};
 use crate::errors::{
-    accounts_at_cap, auth_failure, key_in_flight_cap, key_refusal, relay_failure, Failure,
-    ACCOUNTS_AT_CAP, ACCOUNT_CANCELLED, METHOD_NOT_ALLOWED, MODEL_NOT_ALLOWED, MODEL_REJECTED,
-    NOT_FOUND, ROUTER_UNAVAILABLE, UPSTREAM_UNREACHABLE,
+    accounts_at_cap, auth_failure, key_refusal, relay_failure, Failure, ACCOUNTS_AT_CAP,
+    ACCOUNT_CANCELLED, METHOD_NOT_ALLOWED, MODEL_NOT_ALLOWED, MODEL_REJECTED, NOT_FOUND,
+    ROUTER_UNAVAILABLE, UPSTREAM_UNREACHABLE,
 };
 use crate::exhaustion::exhaustion_response;
 use crate::facts::{BodyFacts, ClientHints};
@@ -986,50 +985,15 @@ impl Relay {
         let pool = snapshot.pool(&key.pool_id);
         let failover = pool.map(|p| p.failover).unwrap_or_default();
         // One permit for the whole request, held across every attempt, retry in place and hold until the
-        // response ends. Taken once the body is read, so a refusal is observed with it, and before anything is
-        // selected; the check and the increment are one call under the table's lock. The cap bounds a key's
-        // conversations: a keepalive probe is the router's own traffic and a token count is no turn, so
-        // neither takes a slot or is refused for want of one.
-        let admission = match trace.kind {
-            Kind::Inference => self
-                .router
-                .in_flight()
-                .try_acquire_key(&key.id, key.in_flight_cap, (self.clock)())
-                .map(Some),
-            Kind::CountTokens | Kind::Probe => Some(None),
-        };
-        let mut key_permit = match admission {
-            Some(permit) => permit,
-            None => {
-                trace
-                    .observed(
-                        Some(&key),
-                        None,
-                        &parts.headers,
-                        raw.clone(),
-                        stream,
-                        capture_hours,
-                        facts.shape.clone(),
-                        None,
-                        Vec::new(),
-                        client_facts(&parts.headers, None, Some(&facts)),
-                        auto_mode,
-                        presented == Presented::Retired,
-                        key.rotated_at,
-                    )
-                    .await;
-                let seconds = pool.map_or(1, |p| p.failover.retry_in_place_seconds.max(1));
-                return self
-                    .refused(
-                        &trace,
-                        0,
-                        key_in_flight_cap(seconds),
-                        Some(&key),
-                        None,
-                        client_version.as_deref(),
-                    )
-                    .await;
-            }
+        // response ends; it counts the key's requests and bounds nothing. A keepalive probe is the router's own
+        // traffic and a token count is no turn, so neither takes a slot.
+        let mut key_permit = match trace.kind {
+            Kind::Inference => Some(
+                self.router
+                    .in_flight()
+                    .try_acquire_key(&key.id, (self.clock)()),
+            ),
+            Kind::CountTokens | Kind::Probe => None,
         };
         let mut identity = match identify(&parts.headers, &raw) {
             Ok(identity) => identity,

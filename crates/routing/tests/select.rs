@@ -8,10 +8,10 @@ use phoebis_routing::{
     SEVEN_DAY, SEVEN_DAY_FABLE,
 };
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, Affinity, AffinityMode, AffinitySource, ApiKeyRow,
-    BudgetPeriod, CooldownRow, Failover, OveragePolicy, PinBurn, PinKey, PinRow,
-    PoolMember, PoolRow, RegistryLoad, RoutingLoad, RulesMode, SessionPlacement, Shedding,
-    Strategy, SubagentPlacement, SubscriptionTerm, WarmSessions,
+    AccountKind, AccountRow, AccountState, Affinity, AffinityMode, ApiKeyRow, BudgetPeriod,
+    CooldownRow, Failover, OveragePolicy, PinBurn, PinKey, PinRow, PoolMember,
+    PoolRow, RegistryLoad, RoutingLoad, RulesMode, SessionPlacement, Shedding, Strategy,
+    SubagentPlacement, SubscriptionTerm, WarmSessions,
 };
 use rand::rngs::StdRng;
 use rand::SeedableRng;
@@ -122,8 +122,6 @@ fn load_of(pool: Pool, unavailable: &[(&str, bool, AccountState)]) -> RegistryLo
             rotated_at: None,
             last_used_at: None,
             retired_secret_last_used_at: None,
-            in_flight_cap: None,
-            affinity_source: AffinitySource::Auto,
             auto_mode_server: None,
         }],
         members: pool
@@ -3859,8 +3857,6 @@ fn two_pools_sharing_an_account_share_its_entries() {
         rotated_at: None,
         last_used_at: None,
         retired_secret_last_used_at: None,
-        in_flight_cap: None,
-        affinity_source: AffinitySource::Auto,
         auto_mode_server: None,
     };
     let pool = |id: &str| PoolRow {

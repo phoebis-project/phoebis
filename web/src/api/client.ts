@@ -3,7 +3,6 @@ import type {
   AccountCatalog,
   AccountInput,
   AccountRollup,
-  AffinitySource,
   AlertDeliveryTest,
   AlertEvent,
   AlertKind,
@@ -61,14 +60,11 @@ export interface AccountPatch {
 }
 
 export interface KeyInput {
-  affinitySource: AffinitySource;
   autoModeServer: boolean | null;
   bodyCaptureHours: number | null;
   enabled: boolean;
   /** An ISO instant, or null for no expiry; undefined leaves the stored expiry alone. */
   expiresAt?: string | null;
-  /** Null clears the cap; undefined leaves the stored one alone. */
-  inFlightCap?: number | null;
   keepaliveOptOut: boolean;
   longContextTwins: boolean;
   modelRules: ModelRule[];

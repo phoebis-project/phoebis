@@ -20,9 +20,9 @@ use phoebis_profile::{
 use phoebis_relay::{router, CatalogService, Limits, OriginalHead, Relay, RelayOutcome};
 use phoebis_routing::{spawn, RouterConfig, RouterHandle};
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, Affinity, AffinitySource, ApiKeyRow,
-    Failover, Identity, MemberWrite, ModelRule, NewBundle, OveragePolicy, PoolRow, RulesMode,
-    Secret, Shedding, StorageKey, Store, Strategy,
+    AccountKind, AccountRow, AccountState, Affinity, ApiKeyRow, Failover, Identity,
+    MemberWrite, ModelRule, NewBundle, OveragePolicy, PoolRow, RulesMode, Secret, Shedding,
+    StorageKey, Store, Strategy,
 };
 use phoebis_transport::request::parse_head;
 // The polls live with the fake so every integration suite has them; the call sites here name them as before.
@@ -109,8 +109,6 @@ pub struct PoolSpec {
     pub failover: Failover,
     /// The harness key's own override of `auto_mode_server`; `None` inherits the pool's.
     pub key_auto_mode_server: Option<bool>,
-    /// The harness key's own `in_flight_cap`; the pool's rows are the rest of this spec.
-    pub key_in_flight_cap: Option<u32>,
     pub migrate_above_utilization: Option<f64>,
     pub model_rules: Vec<ModelRule>,
     pub overage_policy: OveragePolicy,
@@ -126,7 +124,6 @@ impl Default for PoolSpec {
             cache_ttl: "{}",
             failover: Failover::default(),
             key_auto_mode_server: None,
-            key_in_flight_cap: None,
             migrate_above_utilization: None,
             model_rules: Vec::new(),
             overage_policy: OveragePolicy::PreferPlan,
@@ -698,8 +695,6 @@ async fn build(
                     rotated_at: None,
                     last_used_at: None,
                     retired_secret_last_used_at: None,
-                    in_flight_cap: pool.key_in_flight_cap,
-                    affinity_source: AffinitySource::Auto,
                     auto_mode_server: pool.key_auto_mode_server,
                 },
                 "test",

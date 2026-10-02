@@ -67,10 +67,12 @@ fn rows_outlive_a_reopen_of_the_on_disk_store() {
 // The reverse of the registry's member budgets migration, so a store stamped back below it can run it again. One
 // line with the marker last; the trailing `\n` ends the marker's comment.
 const UNDO_V41: &str = "ALTER TABLE pool_members ADD COLUMN budget_usd REAL; ALTER TABLE pool_members ADD COLUMN budget_period TEXT NOT NULL DEFAULT 'month'; UPDATE pool_members SET budget_usd = COALESCE(budget_monthly_usd, budget_daily_usd), budget_period = CASE WHEN budget_monthly_usd IS NULL AND budget_daily_usd IS NOT NULL THEN 'day' ELSE 'month' END; ALTER TABLE pool_members DROP COLUMN budget_monthly_usd; ALTER TABLE pool_members DROP COLUMN budget_daily_usd; -- rollback\n";
-// The reverse of the registry's header switch migration, so a store stamped back below it can run it again; the
-// marker ends the line that restores the dropped column.
+// The reverse of the registry's version 43, so a store stamped back below it can run it again; the marker ends each
+// line that restores a dropped column.
 const UNDO_V43: &str = r#"
 ALTER TABLE pools ADD COLUMN quota_headers TEXT NOT NULL DEFAULT 'pass'; -- rollback
+ALTER TABLE api_keys ADD COLUMN in_flight_cap INTEGER; -- rollback
+ALTER TABLE api_keys ADD COLUMN affinity_source TEXT NOT NULL DEFAULT 'auto'; -- rollback
 "#;
 
 #[test]

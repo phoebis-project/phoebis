@@ -2240,8 +2240,6 @@ mod tests {
                 rotated_at: None,
                 last_used_at: None,
                 retired_secret_last_used_at: None,
-                in_flight_cap: None,
-                affinity_source: phoebis_store::AffinitySource::default(),
                 auto_mode_server: None,
             }],
             members: vec![member("a"), member("o")],

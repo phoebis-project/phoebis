@@ -1,5 +1,5 @@
 import type { AccountPatch, Api, CreateKeyInput, KeyInput, PoolInput } from '@/api/client';
-import { AFFINITY_MODE_VALUES, AFFINITY_SOURCE_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES, decodeLiveDelta, decodeLiveSnapshot } from '@/api/decode';
+import { AFFINITY_MODE_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES, decodeLiveDelta, decodeLiveSnapshot } from '@/api/decode';
 import { ApiError, catalogUnion, slug } from '@/api/http';
 import type {
   Account, AccountCatalog, AccountInput, AlertDeliveryTest, AlertEvent, AlertKind, AlertRule, AlertRuleInput, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, Delivery, KeyModels, LifecycleDelivery, LifecyclePage, LiveEvent, MemberEligibility, ModelEvent,
@@ -66,17 +66,13 @@ const rulesRefusal = (rules: ModelRule[] | undefined): string | null =>
   rules === undefined ? null : modelRulesRefusal(rules);
 
 /**
- * The key routes read the list, the mode, the cap, then the affinity source, so a body wrong in
- * two is refused for the first. An absent field is the stored one, or the default on a create.
+ * The key routes read the list, then the mode, so a body wrong in both is refused for the list. An absent field is the
+ * stored one, or the default on a create.
  */
-const keyRulesRefusal = (input: Partial<Pick<KeyInput, 'affinitySource' | 'inFlightCap' | 'modelRules' | 'modelRulesMode'>>): string | null => {
+const keyRulesRefusal = (input: Partial<Pick<KeyInput, 'modelRules' | 'modelRulesMode'>>): string | null => {
   const mode = input.modelRulesMode;
   const rules = rulesRefusal(input.modelRules) ?? (mode === undefined || mode === 'extend' || mode === 'replace' ? null : 'model_rules_mode is extend or replace');
   if (rules) return rules;
-  if (input.inFlightCap === 0) return 'in_flight_cap is at least 1';
-  if (input.affinitySource !== undefined && !AFFINITY_SOURCE_VALUES.some((a) => a === input.affinitySource)) {
-    return 'affinity_source must be auto, session, user_id, content, or whole_key';
-  }
   return null;
 };
 
@@ -506,7 +502,6 @@ export class MockApi implements Api {
       prefix: secret.slice(0, 12),
       poolId: input.poolId,
       // The route's defaults for a body that leaves these fields out, which a caller outside the console may.
-      affinitySource: input.affinitySource ?? 'auto',
       autoModeServer: input.autoModeServer ?? null,
       longContextTwins: input.longContextTwins ?? true,
       modelRules: input.modelRules ?? [],
@@ -514,7 +509,6 @@ export class MockApi implements Api {
       status: 'active',
       createdAt: iso(NOW),
       expiresAt: input.expiresInDays ? iso(NOW + input.expiresInDays * DAY) : null,
-      inFlightCap: input.inFlightCap ?? null,
       keepaliveOptOut: input.keepaliveOptOut,
       lastUsedAt: null,
       notes: input.notes,

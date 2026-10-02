@@ -1025,7 +1025,6 @@ export function PoolDialog({
   const moveKey = async () => {
     if (!moving || !moveTo) return;
     await api.updateKey(moving.id, {
-      affinitySource: moving.affinitySource,
       autoModeServer: moving.autoModeServer,
       bodyCaptureHours: moving.bodyCaptureHours,
       enabled: moving.enabled,

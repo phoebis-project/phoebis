@@ -2792,8 +2792,6 @@ async fn a_startup_poll_the_endpoint_refuses_routes_the_first_request_from_the_p
                     rotated_at: None,
                     last_used_at: None,
                     retired_secret_last_used_at: None,
-                    in_flight_cap: None,
-                    affinity_source: phoebis_store::AffinitySource::Auto,
                     auto_mode_server: None,
                 },
                 "test",

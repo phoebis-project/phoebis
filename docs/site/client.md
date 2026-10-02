@@ -230,20 +230,16 @@ with the error code `request_timeout` and the message `the request body did not 
 A caller that stops sending before its body is complete is refused `400` with the error code
 `request_incomplete` and the message `the request body ended before it was complete`.
 
-A Messages request on a key that already has its `in_flight_cap` of requests in flight is refused before it reaches any
-account: `429` with the error type `rate_limit_error`, the error code `key_in_flight_cap`, and a `Retry-After` of the
-pool's `retry_in_place_seconds`, one second when that is 0. A request counts from its admission until its response ends,
-a stream for its whole length. A `count_tokens` request takes no slot on the key or on the account and is never held or
-refused for want of one.
+A `count_tokens` request takes no slot of the pool's per-account [in-flight cap](routing.md#in-flight-caps) and is
+never held or refused for want of one.
 
 ### How a request is identified
 
 A conversation is identified by the `x-claude-code-session-id` header.
-A key's `affinity_source` can fix one of these instead of the router walking the whole
-list. Every one of these hints is optional: a client that sends none of them is still relayed.
-A client that forks a session under a new id, whose messages
-continue an earlier conversation of the same key, keeps the new id as that session's own identity; the fork is
-recorded beside it, visible in the console, without moving the new session off the account its own history names.
+Every one of these hints is optional: a client that sends none of them is still relayed.
+A client that forks a session under a new id, whose messages continue
+an earlier conversation of the same key, keeps the new id as that session's own identity; the fork is recorded beside
+it, visible in the console, without moving the new session off the account its own history names.
 
 ### The per-turn effort form
 

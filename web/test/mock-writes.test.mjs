@@ -12,7 +12,7 @@ const as = async (role) => {
 /** The pool as the dialog would send it back unchanged, so a case edits only the fields it is about. */
 const poolInputOf = (p) => ({ ...p, members: p.members.map((m) => ({ accountId: m.accountId, budgetDailyUsd: m.budgetDailyUsd, budgetMonthlyUsd: m.budgetMonthlyUsd, priority: m.priority })) });
 const storyPool = async (api) => poolInputOf((await api.listPools()).find((p) => p.id === 'all'));
-const keyInput = { affinitySource: 'auto', autoModeServer: null, bodyCaptureHours: null, enabled: true, expiresInDays: null, keepaliveOptOut: false, longContextTwins: true, modelRules: [], modelRulesMode: 'extend', name: 'fresh', notes: null, poolId: 'all' };
+const keyInput = { autoModeServer: null, bodyCaptureHours: null, enabled: true, expiresInDays: null, keepaliveOptOut: false, longContextTwins: true, modelRules: [], modelRulesMode: 'extend', name: 'fresh', notes: null, poolId: 'all' };
 const ruleInputOf = (r) => ({ enabled: r.enabled, kind: r.kind, scope: r.scope, threshold: r.threshold, webhookUrl: r.webhookUrl, windowId: r.windowId });
 const newRule = { enabled: true, kind: 'utilization_above', scope: { id: 'all', type: 'pool' }, threshold: 0.8, webhookUrl: 'https://hooks.example.com/phoebis/new', windowId: '5h' };
 
@@ -223,18 +223,6 @@ test('a pool answers its keys from the key registry', async () => {
   assert.ok((await keysOf('studio')).some(([id]) => id === 'laptop') && !(await keysOf('all')).some(([id]) => id === 'laptop'), 'a moved key answers under its new pool alone');
 });
 
-test("a key write stores the affinity source", async () => {
-  const api = await as('admin');
-  const { key } = await api.createKey({ ...keyInput, affinitySource: 'content', name: 'strict' });
-  assert.deepEqual([key.affinitySource], ['content']);
-  const edited = await api.updateKey('strict', { ...keyInput, affinitySource: 'whole_key', expiresAt: undefined, name: 'strict' });
-  assert.deepEqual([edited.affinitySource], ['whole_key']);
-  const plain = { ...keyInput, name: 'plain' };
-  delete plain.affinitySource;
-  const { key: bare } = await api.createKey(plain);
-  assert.deepEqual([bare.affinitySource], ['auto'], "a body without the field takes the route's default");
-});
-
 test("a key write stores the server-side auto mode override and a pool write stores the switch", async () => {
   const api = await as('admin');
   const { key: inheriting } = await api.createKey({ ...keyInput, name: 'inheriting' });
@@ -254,18 +242,6 @@ test("a key write stores the server-side auto mode override and a pool write sto
   assert.equal(created.autoModeServer, true, "a new pool without the field takes the route's default");
 });
 
-test("a key write with an unknown affinity source is refused with the route's text", async () => {
-  const api = await as('admin');
-  const before = await api.listKeys();
-  const refusals = [
-    [{ affinitySource: 'hash' }, 'affinity_source must be auto, session, user_id, content, or whole_key'],
-  ];
-  for (const [patch, message] of refusals) {
-    await assert.rejects(() => api.createKey({ ...keyInput, ...patch, name: 'refused' }), refusedAs(400, message), `${message} on create`);
-    await assert.rejects(() => api.updateKey('laptop', { ...keyInput, ...patch, expiresAt: undefined, name: 'laptop' }), refusedAs(400, message), message);
-  }
-  assert.deepEqual(await api.listKeys(), before, 'a refused write stores nothing');
-});
 
 test('a pool write with an unknown spelling or a budget the route refuses is refused with the route\'s text', async () => {
   const api = await as('admin');
@@ -341,16 +317,6 @@ test('an account patch is refused where the account route refuses it, and a canc
   assert.deepEqual([restored.cancelled, restored.subscription.endsAt], [false, null], 'the end leaves with the flag');
   const unpaired = await api.updateAccount('spare', { cancelled: true, subscriptionEndsAt: end });
   assert.equal(unpaired.subscription?.endsAt, end, 'an OAuth account that never paired still reports the end it was cancelled with');
-});
-
-test('a key cap of 0 is refused on create and edit with the key route\'s text', async () => {
-  const api = await as('admin');
-  const refused = refusedAs(400, 'in_flight_cap is at least 1');
-  await assert.rejects(() => api.createKey({ ...keyInput, inFlightCap: 0 }), refused);
-  await assert.rejects(() => api.updateKey('laptop', { ...keyInput, name: 'laptop', inFlightCap: 0 }), refused);
-  assert.equal((await api.updateKey('laptop', { ...keyInput, name: 'laptop', inFlightCap: 3 })).inFlightCap, 3);
-  assert.equal((await api.updateKey('laptop', { ...keyInput, name: 'laptop', inFlightCap: null })).inFlightCap, null, 'null clears the cap');
-  assert.equal((await api.createKey({ ...keyInput, name: 'capped', inFlightCap: 2 })).key.inFlightCap, 2);
 });
 
 test('a model-scoped cooldown reads its window from its reason, not a fixed model_rejection value', async () => {

@@ -171,7 +171,6 @@ export const KEYS: ApiKey[] = [
   {
     ...KEY_SAMPLE,
     id: 'desktop',
-    affinitySource: 'auto',
     autoModeServer: null,
     name: 'desktop',
     prefix: 'phoebis-8f2a',
@@ -197,15 +196,10 @@ export const KEYS: ApiKey[] = [
   {
     ...KEY_SAMPLE,
     id: 'laptop',
-    // A Claude Code install on a shared machine: the
-    // session id alone keeps its conversations apart.
-    affinitySource: 'session',
     autoModeServer: null,
     name: 'laptop',
     prefix: 'phoebis-c41d',
     poolId: 'all',
-    // A cap on a shared laptop key, so a runaway loop cannot hold every in-flight slot the pool has.
-    inFlightCap: 8,
     modelRules: [
       { not: false, pattern: 'claude-haiku-4-5-20251001' },
       { not: false, pattern: 'claude-sonnet-5' },
@@ -229,7 +223,6 @@ export const KEYS: ApiKey[] = [
   {
     ...KEY_SAMPLE,
     id: 'batch',
-    affinitySource: 'auto',
     autoModeServer: null,
     name: 'batch',
     prefix: 'phoebis-5b70',
@@ -253,7 +246,6 @@ export const KEYS: ApiKey[] = [
   {
     ...KEY_SAMPLE,
     id: 'ci',
-    affinitySource: 'auto',
     autoModeServer: null,
     name: 'ci',
     prefix: 'phoebis-19e7',
@@ -281,7 +273,6 @@ export const KEYS: ApiKey[] = [
   {
     ...KEY_SAMPLE,
     id: 'notebook',
-    affinitySource: 'auto',
     // Off under a pool that is off, so the key dialog reads an explicit key value beside the pool's.
     autoModeServer: false,
     name: 'notebook',

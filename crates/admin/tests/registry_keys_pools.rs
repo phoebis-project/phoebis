@@ -1,6 +1,6 @@
 mod common;
 use common::{delete, get, json, login, patch, post, put};
-use phoebis_store::{Affinity, AffinitySource};
+use phoebis_store::Affinity;
 
 #[tokio::test]
 async fn pools_are_created_edited_and_deleted_with_their_members_and_validation() {
@@ -957,8 +957,6 @@ async fn sessions_list_live_pins_and_a_release_expires_them() {
                 rotated_at: None,
                 last_used_at: None,
                 retired_secret_last_used_at: None,
-                in_flight_cap: None,
-                affinity_source: AffinitySource::Auto,
                 auto_mode_server: None,
             },
             "test",
@@ -1287,109 +1285,6 @@ async fn an_overage_whose_reset_has_passed_no_longer_marks_the_pool() {
         (Some("active"), Some("eligible")),
         "a reset that has passed no longer counts as overage evidence for eligibility"
     );
-}
-
-#[tokio::test]
-async fn a_key_carries_an_in_flight_cap_that_null_clears_and_zero_is_refused() {
-    let (app, _up) = common::admin_app().await;
-    let cookie = login(&app, "admin-secret").await;
-    post(
-        &app,
-        "/admin/pools",
-        r#"{"id":"main","label":"Main","strategy":"priority"}"#,
-        Some(&cookie),
-    )
-    .await;
-    let created = json(
-        post(
-            &app,
-            "/admin/keys",
-            r#"{"id":"desktop","label":"Desktop","pool_id":"main","in_flight_cap":4}"#,
-            Some(&cookie),
-        )
-        .await,
-    )
-    .await;
-    assert_eq!(created["in_flight_cap"].as_u64(), Some(4));
-    let refused = patch(
-        &app,
-        "/admin/keys/desktop",
-        r#"{"in_flight_cap":0}"#,
-        Some(&cookie),
-    )
-    .await;
-    assert_eq!(refused.status(), 400);
-    assert_eq!(
-        json(refused).await["error"].as_str(),
-        Some("in_flight_cap is at least 1")
-    );
-    let cleared = json(
-        patch(
-            &app,
-            "/admin/keys/desktop",
-            r#"{"in_flight_cap":null}"#,
-            Some(&cookie),
-        )
-        .await,
-    )
-    .await;
-    assert!(
-        cleared["in_flight_cap"].is_null(),
-        "an explicit null clears the stored cap"
-    );
-}
-
-#[tokio::test]
-async fn a_key_accepts_its_affinity_source_and_refuses_a_bad_value() {
-    let (app, _up) = common::admin_app().await;
-    let cookie = login(&app, "admin-secret").await;
-    post(
-        &app,
-        "/admin/pools",
-        r#"{"id":"main","label":"Main","strategy":"priority"}"#,
-        Some(&cookie),
-    )
-    .await;
-    let created = json(
-        post(
-            &app,
-            "/admin/keys",
-            r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
-            Some(&cookie),
-        )
-        .await,
-    )
-    .await;
-    assert_eq!(
-        created["affinity_source"].as_str(),
-        Some("auto"),
-        "the source defaults to auto"
-    );
-    let patched = json(
-        patch(
-            &app,
-            "/admin/keys/desktop",
-            r#"{"affinity_source":"content"}"#,
-            Some(&cookie),
-        )
-        .await,
-    )
-    .await;
-    assert_eq!(
-        patched["affinity_source"].as_str(),
-        Some("content"),
-        "a patch round-trips the source"
-    );
-    for (body, message) in [
-        (
-            r#"{"affinity_source":"whatever"}"#,
-            "affinity_source must be auto, session, user_id, content, or whole_key",
-        ),
-    ] {
-        let refused = patch(&app, "/admin/keys/desktop", body, Some(&cookie)).await;
-        assert_eq!(refused.status(), 400, "{body}");
-        assert_eq!(json(refused).await["error"].as_str(), Some(message));
-    }
 }
 
 #[tokio::test]

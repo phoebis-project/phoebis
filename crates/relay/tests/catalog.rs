@@ -11,8 +11,8 @@ use http_body_util::BodyExt;
 use phoebis_bus::{Bus, Event};
 use phoebis_relay::{Warmth, ERROR_HOLD, MAX_BODY};
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, AffinitySource, ApiKeyRow, NewBundle,
-    RekeyWrite, ResolutionRow, RulesMode, Secret, StorageKey, Store,
+    AccountKind, AccountRow, AccountState, ApiKeyRow, NewBundle, RekeyWrite,
+    ResolutionRow, RulesMode, Secret, StorageKey, Store,
 };
 use tower::ServiceExt;
 
@@ -684,8 +684,6 @@ async fn a_listing_that_drops_the_dated_entry_keeps_the_dated_id_and_its_denial_
                 rotated_at: None,
                 last_used_at: None,
                 retired_secret_last_used_at: None,
-                in_flight_cap: None,
-                affinity_source: AffinitySource::Auto,
                 auto_mode_server: None,
             },
             "test",

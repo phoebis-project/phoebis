@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { api } from '@/api';
-import type { AffinitySource, ApiKey, CreatedApiKey, KeyModels, KeyStatus, ModelRule, ModelRulesMode, Pool } from '@/api/types';
+import type { ApiKey, CreatedApiKey, KeyModels, KeyStatus, ModelRule, ModelRulesMode, Pool } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { PatternEditor, useCatalogSuggestions } from '@/components/PatternEditor';
@@ -20,10 +20,10 @@ const MODES: { label: string; value: ModelRulesMode }[] = [
   { label: 'Replace pool rules', value: 'replace' },
 ];
 const RETIRED_SECRET_HINT = 'Sessions whose newest request presented the previous secret; a session that registered a companion and sent no request since counts as switched.';
-// The dialog's hint for the cap, less its page link, so the table's tooltip says the same.
 const IN_FLIGHT_CAP_HINT = 'Past this many requests at once the key is refused with a 429 and a Retry-After until one finishes; empty means no cap.';
+type AffinitySourceChoice = 'auto' | 'content' | 'session' | 'user_id' | 'whole_key';
 // The climb's own order, which Automatic runs.
-const AFFINITY_SOURCES: { label: string; value: AffinitySource }[] = [
+const AFFINITY_SOURCES: { label: string; value: AffinitySourceChoice }[] = [
   { label: 'Automatic', value: 'auto' },
   { label: 'Session id', value: 'session' },
   { label: 'User id', value: 'user_id' },
@@ -175,11 +175,6 @@ export function KeysPage() {
                             )}
                           </span>
                           {k.keepaliveOptOut && <span className="sub">keepalive off</span>}
-                          {k.inFlightCap !== null && (
-                            <span className="sub" title={IN_FLIGHT_CAP_HINT}>
-                              at most {fmtInt(k.inFlightCap)} in flight
-                            </span>
-                          )}
                         </td>
                         <td className="mono">{k.prefix}…</td>
                         <td className="mono">{k.poolId}</td>
@@ -336,7 +331,7 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing
   const [modelRulesMode, setModelRulesMode] = useState<ModelRulesMode>('extend');
   const [expiry, setExpiry] = useState('never');
   const [inFlightCap, setInFlightCap] = useState('');
-  const [affinitySource, setAffinitySource] = useState<AffinitySource>('auto');
+  const [affinitySource, setAffinitySource] = useState<AffinitySourceChoice>('auto');
   const [autoModeServer, setAutoModeServer] = useState<AutoModeOverride>('inherit');
   const [notes, setNotes] = useState('');
   const [captureMode, setCaptureMode] = useState<CaptureMode>('inherit');
@@ -352,7 +347,7 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing
   const maxHours = settings.data?.retention.bodyCaptureMaxHours ?? 72;
   const effectiveHours = captureMode === 'inherit' ? poolHours : captureMode === 'off' ? 0 : captureHours;
   const suggestions = useCatalogSuggestions(pool?.members.map((m) => m.accountId) ?? [], open);
-  const refusals = keyRefusals({ inFlightCap, modelRules, name, poolId });
+  const refusals = keyRefusals({ modelRules, name, poolId });
   const refusedFields = new Set(refusals.map((r) => r.field));
   const refusedGroups = new Set<KeyGroup>(refusals.map((r) => r.group));
   const invalid = (field: string) => (refusedFields.has(field) ? true : undefined);
@@ -373,8 +368,8 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing
     setModelRules(form.modelRules);
     setModelRulesMode(form.modelRulesMode);
     setExpiry(form.expiry);
-    setInFlightCap(form.inFlightCap);
-    setAffinitySource(form.affinitySource);
+    setInFlightCap('');
+    setAffinitySource('auto');
     setAutoModeServer(form.autoModeServer);
     setNotes(form.notes);
     setCaptureMode(form.captureMode);
@@ -393,7 +388,7 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing
   const submit = async () => {
     setBusy(true);
     setError(null);
-    const form = { affinitySource, autoModeServer, captureHours, captureMode, enabled, expiry, inFlightCap, longContextTwins, modelRules, modelRulesMode, name, notes, optOut, poolId };
+    const form = { autoModeServer, captureHours, captureMode, enabled, expiry, longContextTwins, modelRules, modelRulesMode, name, notes, optOut, poolId };
     const input = keyInputOf(form, Date.now());
     try {
       if (existing) {
@@ -539,7 +534,7 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing
             </>
           }
         >
-          <Select value={affinitySource} onChange={(e) => setAffinitySource(e.target.value as AffinitySource)} aria-label="Affinity source">
+          <Select value={affinitySource} onChange={(e) => setAffinitySource(e.target.value as AffinitySourceChoice)} aria-label="Affinity source">
             {AFFINITY_SOURCES.map((s) => (
               <option key={s.value} value={s.value}>
                 {s.label}

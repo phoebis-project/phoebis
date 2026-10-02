@@ -293,8 +293,6 @@ export type MemberEligibility = 'budget' | 'cooldown' | 'eligible' | 'overage' |
 
 /** Whether a session's pin is made for every request, or only for one whose body carries a cache marker. */
 export type AffinityMode = 'always' | 'when_cached';
-/** What a key identifies a conversation by: the climb's first source that answers, or one source alone. */
-export type AffinitySource = 'auto' | 'content' | 'session' | 'user_id' | 'whole_key';
 export type BudgetPeriod = 'day' | 'month';
 /** Where a fresh session with no pin lands: by the strategy, or where its static prefix is warm. */
 export type SessionPlacement = 'by_strategy' | 'by_warm_prefix';
@@ -388,7 +386,6 @@ export interface Pool {
 export type KeyStatus = 'active' | 'disabled' | 'expired' | 'revoked';
 
 export interface ApiKey {
-  affinitySource: AffinitySource;
   /** Null inherits the pool's `autoModeServer`; true or false overrides it for this key. */
   autoModeServer: boolean | null;
   /** Hours of captured bodies for this key; null inherits the pool, 0 turns capture off here. */
@@ -398,8 +395,6 @@ export interface ApiKey {
   enabled: boolean;
   expiresAt: string | null;
   id: string;
-  /** Requests in flight the key may hold; null is no cap. */
-  inFlightCap: number | null;
   /** Sessions on this key never receive cache-warming probes. */
   keepaliveOptOut: boolean;
   lastUsedAt: string | null;

@@ -619,7 +619,10 @@ CREATE INDEX alert_deliveries_event ON alert_deliveries (event_id, id) WHERE eve
 "#;
 
 // The relay hides the rate-limit header families on every committed answer and keeps them on a rate limit, so no
-// pool chooses; the switch's column goes with the choice.
+// pool chooses; the switch's column goes with the choice. A key bounds none of its requests and every key climbs
+// the whole conversation climb, so the key's cap and its affinity source go the same way.
 const V43: &str = r#"
 ALTER TABLE pools DROP COLUMN quota_headers;
+ALTER TABLE api_keys DROP COLUMN in_flight_cap;
+ALTER TABLE api_keys DROP COLUMN affinity_source;
 "#;

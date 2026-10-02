@@ -179,7 +179,6 @@ creation and to rotation and nowhere else; the console shows it once, in a modal
 | `model_rules`, `model_rules_mode`, `long_context_twins` | see Model rules and the client page's models listing |
 | `keepalive_opt_out` | `false` by default |
 | `body_capture_hours` | unset inherits the pool's; `0` turns it off; capped by `stats.body_capture_max_hours` |
-| `affinity_source` | `auto`, `session`, `user_id`, `content`, or `whole_key`, default `auto`; see [Clients](#clients) |
 | `auto_mode_server` | `true`, `false`, or unset (inherits the pool's); see below |
 
 A key's `auto_mode_server` refuses a value of another type with `auto_mode_server must be true, false, or null`;
@@ -192,9 +191,7 @@ session in auto mode sends the machine's permission rules with their literal tex
 and its git remotes with every request. Only the admin secret can read them."
 
 The key form sets
-`auto_mode_server` as **Server-side auto mode** (Inherit, naming the pool's value, On, or Off) in its Access group, and
-`affinity_source` as **Affinity source** (Automatic, Session id, User id, Conversation content, or Whole key) in its
-Sessions group.
+`auto_mode_server` as **Server-side auto mode** (Inherit, naming the pool's value, On, or Off) in its Access group.
 
 ![The Keys view: stat tiles and the table of keys with prefix, pool, usage, and actions][kl]
 ![The Keys view: stat tiles and the table of keys with prefix, pool, usage, and actions][kd]
@@ -221,10 +218,8 @@ refused `400` with the error code `body_shape` before anything reaches the upstr
 A conversation is identified by its session header: the session id the client sends names it.
 A turn that follows its own conversation's previous answer within milliseconds waits on its session id,
 at most five milliseconds, for that answer's report to reach the map.
-A key's
-`affinity_source` fixes one of these rungs instead of walking the whole ladder, and a request that does not fit a fixed
-rung has no identity and no pin. A new session id whose messages continue another conversation of the same key keeps its
-own identity, and is recorded as a fork of that conversation at the depth where the two part.
+A new session id whose messages continue another conversation of the
+same key keeps its own identity, and is recorded as a fork of that conversation at the depth where the two part.
 
 ## Model rules
 
@@ -609,14 +604,6 @@ answered the same `429` at once. A request that dialled an account before its ho
 to hold for, keep the `503 accounts_unavailable` below. A request whose session already holds a pin under any agent is
 never held, and a move whose every destination is at its cap is not made: the pin renews in place and the next request
 judges the move again; a held subagent waits where its cohort is.
-
-**Per key.** A key's own `in_flight_cap`, unset by default, counts each Messages request once, from its admission,
-before anything is selected, until its response ends. A keepalive probe and a `count_tokens` request take no slot and
-are never refused for want of one: the probe is the router's own traffic, and a token count is no conversation turn. The
-count is held across every attempt, retry, and hold, so a request sleeping in a retry in place keeps its key's slot. A
-request past the cap is refused before it reaches an account: `429` with the error type `rate_limit_error`, the error
-code `key_in_flight_cap`, and a `Retry-After` of the pool's `retry_in_place_seconds`, one second when that is 0. The
-refused request is observed with its body and gets its own request row under that code.
 
 ### When nothing can serve
 

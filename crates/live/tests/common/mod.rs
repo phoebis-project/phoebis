@@ -24,9 +24,9 @@ use phoebis_profile::{
 use phoebis_relay::{router, CatalogService, Limits, Relay};
 use phoebis_routing::{spawn as spawn_router, RouterConfig, RouterHandle};
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, Affinity, AffinitySource, ApiKeyRow,
-    Failover, Identity, MemberWrite, NewBundle, OveragePolicy, PoolRow, RulesMode, Secret,
-    Shedding, StorageKey, Store, Strategy,
+    AccountKind, AccountRow, AccountState, Affinity, ApiKeyRow, Failover, Identity,
+    MemberWrite, NewBundle, OveragePolicy, PoolRow, RulesMode, Secret, Shedding, StorageKey, Store,
+    Strategy,
 };
 use phoebis_transport::request::parse_head;
 // The polls live with the fake so every integration suite has them; only some of them are used here.
@@ -150,8 +150,6 @@ pub async fn harness(up: &FakeUpstream, capture_hours: u32) -> Harness {
                 rotated_at: None,
                 last_used_at: None,
                 retired_secret_last_used_at: None,
-                in_flight_cap: None,
-                affinity_source: AffinitySource::Auto,
                 auto_mode_server: None,
             },
             "test",
