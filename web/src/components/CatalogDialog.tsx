@@ -54,7 +54,7 @@ export function CatalogDialog({ accountId, label, now, onClose, open }: { accoun
     return () => {
       latest.current += 1;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // read is a closure rebuilt per render; the dialog reads once per open and account.
   }, [open, accountId]);
 
   const models = catalog ? [...catalog.models].sort((a, b) => a.id.localeCompare(b.id)) : [];

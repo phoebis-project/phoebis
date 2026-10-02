@@ -911,7 +911,6 @@ export function PoolDialog({
     setChosen('identity');
     // `accounts` is read but not tracked: the parent hands down a fresh array on
     // every render, and reacting to that would wipe the form mid-edit.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, pool]);
   // The server's refusal describes the form it was sent; every control writes through `setForm`, so the next edit
   // takes it away, while a failed save changes no field and leaves it standing.

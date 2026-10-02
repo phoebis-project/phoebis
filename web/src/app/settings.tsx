@@ -46,7 +46,7 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo<AppSettings>(
     () => ({ canMutate: role === 'admin', formatVersion, resolvedTheme, role, setTheme, setTimeFormat, theme, timeFormat: storedFormat }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // The setters are left out: setTimeFormat is rebuilt every render, and the context value must not be.
     [formatVersion, resolvedTheme, role, theme, storedFormat],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

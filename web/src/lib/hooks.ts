@@ -87,7 +87,7 @@ export function useAsync<T>(load: () => Promise<T>, deps: readonly unknown[] = [
     return () => {
       current.alive = false;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Callers pass load inline, a new closure each render, so the deps alone decide when the effect reads again.
   }, [...deps, nonce]);
 
   useEffect(() => {

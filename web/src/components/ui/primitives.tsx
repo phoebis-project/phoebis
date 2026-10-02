@@ -441,7 +441,7 @@ export function GroupedDialog({
     const choice = pending.current;
     pending.current = null;
     if (open && choice?.id === chosen) focusIn(chosen, choice.focus);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Only a chosen group moves focus; the focus helper and the body ref change without one.
   }, [open, chosen]);
   const runs: { groups: DialogGroup[]; parent?: string }[] = [];
   for (const g of groups) {
