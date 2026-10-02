@@ -16,6 +16,7 @@ import { fakeClock } from './clock';
 
 export { api, decodeSettings, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, SessionNotKept, SETTINGS_WIRE };
 export { default as React } from 'react';
+export { AttemptTrail } from '@/components/ui/AttemptTrail';
 export { Field, GroupedDialog, GroupLink, Input, PageLink, SwitchedNumber, Toggle } from '@/components/ui/primitives';
 export const MOCK_VERSION = SETTINGS_SAMPLE.about.version;
 export const requestEvents = REQUEST_EVENTS;
@@ -167,9 +168,10 @@ function mounted(container: HTMLElement, root: Root, navigate: Mounted['navigate
     navigate,
     settle: (ms = 400) => wait(ms),
     text: () => {
-      // Closed <dialog> elements keep their text in the DOM but are not visible.
+      // Closed <dialog> elements keep their text in the DOM but are not visible, and a description host's node repeats
+      // titles no sighted reader sees, so a needle that only a title carries cannot pass on it.
       const clone = container.cloneNode(true) as HTMLElement;
-      clone.querySelectorAll('dialog:not([open])').forEach((d) => d.remove());
+      clone.querySelectorAll('dialog:not([open]), [data-descriptions]').forEach((d) => d.remove());
       return clone.textContent ?? '';
     },
     unmount: () => {

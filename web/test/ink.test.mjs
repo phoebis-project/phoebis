@@ -91,7 +91,7 @@ test('only placeholders, disabled controls and decorative strokes read --ink-3',
   const stray = [];
   for (const name of ['base', 'components', 'pages']) {
     for (const rule of rules(sheet(name))) {
-      if (!rule.decls.some((d) => d.includes('var(--ink-3)'))) continue;
+      if (!rule.decls.some((d) => /var\(\s*--ink-3\b/.test(d))) continue;
       for (const selector of rule.selectors) {
         if (!INK3_ALLOWED.has(selector)) stray.push(`${name}.css ${[...rule.within, selector].join(' ')}`);
       }

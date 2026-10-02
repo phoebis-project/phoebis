@@ -33,8 +33,9 @@ export function Descriptions({ children }: { children: ReactNode }) {
   return (
     <DescriptionHost.Provider value={host}>
       {children}
+      {/* Marked so a whole-page text read can leave out the copies no sighted reader sees. */}
       {counts.size > 0 && (
-        <div className="sr-only">
+        <div className="sr-only" data-descriptions="">
           {[...counts.keys()].map((t) => (
             <span key={t} id={entryId(base, t)}>
               {t}

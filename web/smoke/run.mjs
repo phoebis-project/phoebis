@@ -65,7 +65,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { api, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, failCalls, failNextCall, Field, GroupedDialog, GroupLink, Input, MOCK_VERSION, mount, mountNode, PageLink, React, requestEvents, requests, rollups, SessionNotKept, SETTINGS_WIRE, stallLive, SwitchedNumber, tick } = await import('./dist/entry.js');
+const { api, AttemptTrail, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, failCalls, failNextCall, Field, GroupedDialog, GroupLink, Input, MOCK_VERSION, mount, mountNode, PageLink, React, requestEvents, requests, rollups, SessionNotKept, SETTINGS_WIRE, stallLive, SwitchedNumber, tick } = await import('./dist/entry.js');
 
 const results = [];
 /**
@@ -3114,7 +3114,12 @@ await m.navigate(`/requests/${desktopRow.id}`);
 expect('/requests/:desktop drawer', m.text(), ['Not captured for this key']);
 if (failoverRow) {
   await m.navigate(`/requests/${failoverRow.id}`);
-  expect('/requests/:failover drawer', m.text(), ['cooldown set', 'Rate limited', 'used', 'resets']);
+  {
+    // Read from the drawer's badge, since the list's trail titles carry the same words.
+    const missing = ['Rate limited', 'used', 'resets'].filter((n) => !m.text().includes(n));
+    const cooldown = m.container.querySelector('.drawer .attempt__cooldown .badge')?.textContent ?? '';
+    results.push({ name: '/requests/:failover drawer', ok: missing.length === 0 && cooldown === 'cooldown set', missing: [...missing, cooldown ? `badge ${JSON.stringify(cooldown)}` : 'no cooldown badge in the drawer'] });
+  }
   const slots = [...m.container.querySelectorAll('.attempt__windows')].map((u) => [...u.querySelectorAll('li')].map((li) => li.children[0]?.textContent).join(','));
   // An Anthropic-key account reports no quota windows at all, so its attempt carries the cache row alone.
   results.push({
@@ -5934,18 +5939,20 @@ else localStorage.setItem('phoebis.role', roleBeforePreview);
   // A badge outside every host keeps its title alone, so a page that draws one outside a card or a dialog loses its
   // description; the fork marker draws its own badge-styled element rather than a Badge.
   const loose = [];
-  let seen = 0;
+  const counts = [];
   const sweep = (where) => {
-    for (const badge of page.container.querySelectorAll('.badge[title]:not(.srow__fork)')) {
-      seen += 1;
-      if (!describes(badge)) loose.push(`${where}: ${why(badge)}`);
-    }
+    const badges = [...page.container.querySelectorAll('.badge[title]:not(.srow__fork)')];
+    for (const badge of badges) if (!describes(badge)) loose.push(`${where}: ${why(badge)}`);
+    counts.push({ onPage: badges.filter((b) => !b.closest('.topbar')).length, seen: badges.length, where });
   };
   for (const path of ['/', '/accounts', '/alerts', '/analytics', '/keys', '/models', '/observe', '/pools', '/quota', '/requests', `/requests/${laptopRow.id}`, '/sessions', '/settings']) {
     await page.navigate(path);
     if (path === '/sessions') await expandAll();
     sweep(path);
   }
+  // A navigation that drew nothing would pass the sweep empty: the role badge is on every route, and these pages
+  // draw titled badges of their own in the story.
+  const thin = counts.filter((c) => c.seen === 0 || (['/accounts', '/observe', '/pools', '/requests', '/sessions'].includes(c.where) && c.onPage === 0));
   await page.navigate('/keys');
   [...page.container.querySelectorAll('.card--table tbody tr')].find((r) => r.children[0]?.querySelector('b')?.textContent?.trim() === 'laptop')?.querySelector('.menu__trigger')?.click();
   await page.settle(120);
@@ -5955,10 +5962,21 @@ else localStorage.setItem('phoebis.role', roleBeforePreview);
   sweep('/keys laptop dialog');
   results.push({
     name: 'every titled badge in the console sits under a host and describes through it',
-    ok: loose.length === 0 && inDialog > 0,
-    missing: [`${seen} titled badges, ${inDialog} in the open key dialog's effective list`, ...loose],
+    ok: loose.length === 0 && thin.length === 0 && inDialog > 0,
+    missing: [`${inDialog} in the open key dialog's effective list`, ...counts.map((c) => `${c.where}: ${c.seen} titled, ${c.onPage} on the page`), ...loose],
   });
   page.unmount();
+
+  // No page draws a trail outside a host, so the fallback is mounted alone.
+  const lone = await mountNode(React.createElement(AttemptTrail, { attempts: [{ accountId: 'business', cooldownSet: null, index: 0, outcome: 'succeeded', upstreamStatus: 200 }] }));
+  const trail = lone.container.querySelector('.trail');
+  const node = describedBy(trail);
+  results.push({
+    name: 'a trail outside every host describes through a node beside it',
+    ok: node !== null && node === trail.nextElementSibling && node.textContent === '1. business: succeeded, HTTP 200, no cooldown set' && node.textContent === trail.getAttribute('title') && trail.textContent === 'business 200',
+    missing: [why(trail), node ? JSON.stringify(node.textContent) : 'no node', JSON.stringify(trail?.textContent ?? '')],
+  });
+  lone.unmount();
 }
 
 {
