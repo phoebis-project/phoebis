@@ -5797,15 +5797,24 @@ else localStorage.setItem('phoebis.role', roleBeforePreview);
     ok: outage === 'The router did not answer (503).' && retry !== undefined && secret !== null && !secret.disabled,
     missing: [outage || 'no sentence', retry ? 'Retry' : 'no Retry', secret ? (secret.disabled ? 'secret disabled' : 'secret field') : 'no secret field'],
   });
+  // Typed before Retry and read while the probe is held, so a Retry that dropped the card for the brand fails here.
+  if (secret) {
+    setter.call(secret, 'admin');
+    secret.dispatchEvent(new window.Event('input', { bubbles: true }));
+  }
+  const reprobe = deferNextCall('getSession');
   retry?.click();
+  await down.settle(100);
+  const typedWhileHeld = down.container.querySelector('.login__card input[type="password"]')?.value ?? null;
+  reprobe.release();
   await down.settle();
-  const cardAfterRetry = down.container.querySelector('.login__card input[type="password"]') !== null;
+  reprobe.restore();
   const outageAfterRetry = down.container.querySelector('.login__card .pairing__expired')?.textContent ?? '';
   await attempt(down, 'admin');
   results.push({
     name: 'Retry after recovery lands on the dashboard',
-    ok: retry !== undefined && cardAfterRetry && outageAfterRetry === '' && down.container.querySelector('.stat-grid') !== null,
-    missing: [cardAfterRetry ? 'card kept' : 'no card after Retry', outageAfterRetry || 'no sentence after Retry', down.container.querySelector('.stat-grid') ? 'dashboard' : 'no dashboard'],
+    ok: retry !== undefined && reprobe.calls.length === 1 && typedWhileHeld === 'admin' && outageAfterRetry === '' && down.container.querySelector('.stat-grid') !== null,
+    missing: [`${reprobe.calls.length} probes`, typedWhileHeld === null ? 'no card while Retry runs' : `typed ${JSON.stringify(typedWhileHeld)} while Retry runs`, outageAfterRetry || 'no sentence after Retry', down.container.querySelector('.stat-grid') ? 'dashboard' : 'no dashboard'],
   });
   down.unmount();
   await api.logout();

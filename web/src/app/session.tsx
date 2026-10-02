@@ -41,7 +41,10 @@ export interface ToastItem {
   path: string | null;
 }
 
-/** Long enough to read the route a failure names; a confirmation keeps the dwell the pages always gave it. */
+/**
+ * Long enough to read the route a failure names. A confirmation only acknowledges the action just taken, for the 2.4 s
+ * the smoke run's confirmation reads are timed against.
+ */
 const FAILURE_MS = 6_000;
 const CONFIRMATION_MS = 2_400;
 const isConfirmation = (t: ToastItem) => t.dwellMs === CONFIRMATION_MS;
