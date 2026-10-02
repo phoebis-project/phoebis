@@ -159,6 +159,10 @@ expect('/ dashboard', m.text(), ['Requests, 24h', 'Tokens, 24h', 'Estimated cost
 results.push({ name: 'data-theme set', ok: document.documentElement.getAttribute('data-theme') === 'light', missing: [document.documentElement.getAttribute('data-theme')] });
 results.push({ name: 'the shell carries the mark beside the name and no couplet', ok: m.container.querySelector('.sidebar .brand__mark svg rect') !== null && m.container.querySelector('.sidebar .brand__name')?.textContent === 'Phoebis Router' && m.container.querySelector('.sidebar .brand__couplet') === null, missing: [] });
 {
+  const named = [...m.container.querySelectorAll('.segmented[aria-label="Theme"] button')].map((b) => [b.getAttribute('aria-label'), b.getAttribute('title')]);
+  results.push({ name: 'the theme buttons carry their names', ok: JSON.stringify(named) === JSON.stringify([['Light', 'Light'], ['Dark', 'Dark'], ['System', 'System']]), missing: named.map((n) => n.join(' / ')) });
+}
+{
   // The story's pools hold 10, 2 and no pins, all of the pinned sessions sit on business or personal, and the
   // sessions route answers 17 rows, so a hero counting rows or a note counting every row's account reads otherwise.
   const hero = m.container.querySelector('.sess-summary__hero');

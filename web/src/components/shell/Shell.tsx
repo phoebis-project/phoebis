@@ -91,9 +91,9 @@ export function Shell() {
               value={theme}
               onChange={setTheme}
               options={[
-                { value: 'light', label: <IconSun size={15} /> },
-                { value: 'dark', label: <IconMoon size={15} /> },
-                { value: 'system', label: <IconMonitor size={15} /> },
+                { value: 'light', label: <IconSun size={15} />, name: 'Light' },
+                { value: 'dark', label: <IconMoon size={15} />, name: 'Dark' },
+                { value: 'system', label: <IconMonitor size={15} />, name: 'System' },
               ]}
             />
           </div>

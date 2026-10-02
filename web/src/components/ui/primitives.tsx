@@ -40,11 +40,11 @@ export function Pill({ children, active = false, onClick, disabled, title, icon 
   );
 }
 
-export function Segmented<T extends string>({ value, options, onChange, ariaLabel }: { ariaLabel: string; onChange: (v: T) => void; options: { label: ReactNode; value: T }[]; value: T }) {
+export function Segmented<T extends string>({ value, options, onChange, ariaLabel }: { ariaLabel: string; onChange: (v: T) => void; options: { label: ReactNode; name?: string; value: T }[]; value: T }) {
   return (
     <div className="segmented" role="group" aria-label={ariaLabel}>
       {options.map((o) => (
-        <button key={o.value} type="button" className={o.value === value ? 'is-active' : ''} aria-pressed={o.value === value} onClick={() => onChange(o.value)}>
+        <button key={o.value} type="button" className={o.value === value ? 'is-active' : ''} aria-label={o.name} title={o.name} aria-pressed={o.value === value} onClick={() => onChange(o.value)}>
           {o.label}
         </button>
       ))}
