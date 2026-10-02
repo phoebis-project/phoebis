@@ -68,7 +68,7 @@
 }
 
 .chip__label {
-  color: var(--ink-3);
+  color: var(--ink-2);
 }
 
 .chip--serious {
@@ -196,7 +196,7 @@
 
 .wbar__reset {
   font-size: 12px;
-  color: var(--ink-3);
+  color: var(--ink-2);
   white-space: nowrap;
 }
 
@@ -328,7 +328,7 @@
 .pool__stats dt,
 .pool__policy dt {
   font-size: 12px;
-  color: var(--ink-3);
+  color: var(--ink-2);
 }
 
 .sess-summary__grid dd,
@@ -552,14 +552,14 @@
 }
 
 .qchip--absent {
-  color: var(--ink-3);
+  color: var(--ink-2);
   background: var(--surface-2);
 }
 
 /* Right-aligned so the fixed column ends flush with the card's other content. */
 .qwin__reset {
   font-size: 12px;
-  color: var(--ink-3);
+  color: var(--ink-2);
   text-align: right;
   white-space: nowrap;
 }
@@ -638,7 +638,7 @@
 .timeline__axis-label {
   padding-bottom: 8px;
   font-size: 10.5px;
-  color: var(--ink-3);
+  color: var(--ink-2);
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
@@ -663,7 +663,7 @@
 }
 
 .timeline__cell-head {
-  color: var(--ink-3);
+  color: var(--ink-2);
 }
 
 .timeline__cell-sub {
@@ -774,7 +774,7 @@
   padding: 0 6px;
   font-family: var(--font-mono);
   font-size: 10px;
-  color: var(--ink-3);
+  color: var(--ink-2);
   background: var(--surface-3);
   border-radius: var(--radius-pill);
 }
@@ -799,7 +799,7 @@
   width: var(--tl-chip);
   padding: 1px 8px;
   font-size: 10.5px;
-  color: var(--ink-3);
+  color: var(--ink-2);
   white-space: nowrap;
   background: var(--surface-2);
   border: 1px solid var(--hairline);
@@ -877,7 +877,7 @@
   overflow: hidden;
   font-family: var(--font-mono);
   font-size: 10.5px;
-  color: var(--ink-3);
+  color: var(--ink-2);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1107,7 +1107,7 @@
 
 .fast-lane__label {
   margin-right: 6px;
-  color: var(--ink-3);
+  color: var(--ink-2);
   white-space: nowrap;
 }
 
@@ -1238,7 +1238,7 @@
 .pool__prio {
   font-family: var(--font-mono);
   font-size: 11px;
-  color: var(--ink-3);
+  color: var(--ink-2);
 }
 
 .selection-order {
@@ -1490,7 +1490,7 @@
   position: relative;
   height: 14px;
   font-size: 11px;
-  color: var(--ink-3);
+  color: var(--ink-2);
 }
 
 .shed-preview {
@@ -2070,7 +2070,7 @@
 }
 
 .wbar--absent .wbar__label {
-  color: var(--ink-3);
+  color: var(--ink-2);
 }
 
 .meter--absent {
@@ -2138,7 +2138,7 @@
   padding: 0;
   margin: 0;
   font-size: 12.5px;
-  color: var(--ink-3);
+  color: var(--ink-2);
   list-style: none;
 }
 
@@ -2349,7 +2349,7 @@
 .agents__created {
   margin: 0 0 8px;
   font-size: 12px;
-  color: var(--ink-3);
+  color: var(--ink-2);
 }
 
 .agents {
@@ -2380,7 +2380,7 @@
 
 .agents__row--head {
   font-size: 12px;
-  color: var(--ink-3);
+  color: var(--ink-2);
   border-bottom: 1px solid var(--hairline);
 }
 
@@ -2538,7 +2538,7 @@
 
 .analytics-section__meta {
   font-size: 12.5px;
-  color: var(--ink-3);
+  color: var(--ink-2);
 }
 
 .filters__range {
@@ -2574,7 +2574,7 @@
 
 .hist__title {
   font-size: 12px;
-  color: var(--ink-3);
+  color: var(--ink-2);
 }
 
 .hist__bars {
@@ -2599,7 +2599,7 @@
   display: flex;
   justify-content: space-between;
   font-size: 11px;
-  color: var(--ink-3);
+  color: var(--ink-2);
 }
 
 .pct-label {
@@ -2714,7 +2714,7 @@
 .mchip__quality {
   font-size: 10.5px;
   font-weight: 500;
-  color: var(--ink-3);
+  color: var(--ink-2);
   cursor: help;
 }
 
@@ -2807,7 +2807,7 @@
 }
 
 .range__now.is-anchored .range__now-label {
-  color: var(--ink-3);
+  color: var(--ink-2);
 }
 
 .range__bound {
@@ -2860,7 +2860,7 @@
   left: 50%;
   font-size: 10.5px;
   line-height: 1;
-  color: var(--ink-3);
+  color: var(--ink-2);
   white-space: nowrap;
   transform: translateX(-50%);
 }

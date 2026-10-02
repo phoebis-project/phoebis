@@ -562,7 +562,7 @@ function PoolCard({
           <ResponsiveContainer width="100%" height={170}>
             <ComposedChart data={data} margin={{ top: 6, right: 4, bottom: 0, left: 4 }} barCategoryGap={2}>
               <XAxis dataKey="at" tickFormatter={(v: number) => fmtHourTick(v)} tickLine={false} axisLine={{ stroke: ink.axis }} interval={5} minTickGap={24} />
-              <YAxis width={32} tickLine={false} axisLine={false} tick={{ fill: ink.ink3, fontSize: 11 }} allowDecimals={false} />
+              <YAxis width={32} tickLine={false} axisLine={false} tick={{ fill: ink.ink2, fontSize: 11 }} allowDecimals={false} />
               <Tooltip
                 cursor={{ fill: ink.grid, opacity: 0.6 }}
                 content={({ payload }) => {
