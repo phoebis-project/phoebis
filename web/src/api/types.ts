@@ -95,6 +95,9 @@ export interface Account {
   routingEnabled: boolean;
   status: AccountStatus;
   subscription: Subscription | null;
+  /** The poll's standing and its last snapshot's error and instant, as the usage route answers them; null for an
+   * Anthropic-key account, which the poll never reads. */
+  usage: QuotaSnapshot | null;
   /** The 5-hour and 7-day windows; the Fable window is `fableWindow`. */
   windows: RateLimitWindow[];
 }
@@ -200,7 +203,7 @@ export interface QuotaHistory {
   windowId: WindowId;
 }
 
-export type QuotaFetchStatus = 'error' | 'loading' | 'success';
+export type QuotaFetchStatus = 'error' | 'success';
 
 /** How the usage endpoint answered an account's last attempt. */
 export type PollOutcome = 'clean' | 'failed' | 'rate_limited';

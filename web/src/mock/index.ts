@@ -10,7 +10,7 @@ import { modelRulesRefusal, type NumericKeepaliveKey } from '@/lib/forms';
 import { matchesPattern } from '@/lib/pattern';
 import { matchesPattern as matchesModelPattern, processRules } from '@/lib/patterns';
 import { isFastScope } from '@/lib/quota';
-import { ACCOUNTS, QUOTA_HISTORY, QUOTA_SNAPSHOTS } from './accounts';
+import { ACCOUNTS, QUOTA_HISTORY, usageOf } from './accounts';
 import { breakdownOf, burnOf, placementsOf, rewritesOf, seriesOf } from './analytics';
 import { CATALOG } from './catalog';
 import { liveFeed } from './live';
@@ -489,6 +489,7 @@ export class MockApi implements Api {
 
   async createAccount(input: AccountInput): Promise<Account> {
     this.mutation();
+    const status: Account['status'] = input.kind === 'oauth' ? 'unpaired' : 'ready';
     const account: Account = {
       ...ACCOUNT_SAMPLE,
       cooldowns: [],
@@ -504,8 +505,9 @@ export class MockApi implements Api {
       pools: [],
       requests: { last24h: 0, last7d: 0, lifetime: 0 },
       routingEnabled: true,
-      status: input.kind === 'oauth' ? 'unpaired' : 'ready',
+      status,
       subscription: null,
+      usage: usageOf({ id: input.id, kind: input.kind, status }),
       windows: [],
     };
     this.accounts = [...this.accounts, account];
@@ -823,10 +825,6 @@ export class MockApi implements Api {
 
   listPools() {
     return latency(emptyStore() ? [] : this.pools.map((p) => this.poolView(p)));
-  }
-
-  listQuotaSnapshots() {
-    return latency(emptyStore() ? [] : QUOTA_SNAPSHOTS);
   }
 
   listRequests(query: RequestQuery = {}): Promise<RequestPage> {

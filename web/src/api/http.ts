@@ -1,6 +1,6 @@
 import type { AccountPatch, Api, CreateKeyInput, KeyInput, PoolInput } from './client';
 import * as d from './decode';
-import type { Account, AccountCatalog, AccountInput, AlertDeliveryTest, AlertEvent, AlertKind, AlertRule, AlertRuleInput, AnalyticsGroup, AnalyticsPoint, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, LiveEvent, PairingInput, PairingPreview, QuotaSnapshot, RequestDetail, RequestQuery, SessionInfo } from './types';
+import type { Account, AccountCatalog, AccountInput, AlertDeliveryTest, AlertEvent, AlertKind, AlertRule, AlertRuleInput, AnalyticsGroup, AnalyticsPoint, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, LiveEvent, PairingInput, PairingPreview, RequestDetail, RequestQuery, SessionInfo } from './types';
 
 export class ApiError extends Error {
   code: string | null;
@@ -212,18 +212,6 @@ export class HttpApi implements Api {
   listKeys = async () => (await call<{ keys: unknown[] }>('GET', '/admin/keys')).keys.map(d.decodeKey);
   listLifecycleDeliveries = async (kind?: AlertKind, cursor?: string) => d.decodeLifecyclePage(await call('GET', `/admin/alerts/deliveries${qs({ cursor, kind })}`));
   listPools = async () => (await call<{ pools: unknown[] }>('GET', '/admin/pools')).pools.map(d.decodePool);
-  listQuotaSnapshots = async (): Promise<QuotaSnapshot[]> => {
-    const accounts = (await this.listAccounts()).filter((a) => a.kind === 'oauth');
-    return Promise.all(
-      accounts.map(async (a) => {
-        try {
-          return d.decodeSnapshot(a.id, await call('GET', `/admin/accounts/${enc(a.id)}/usage`));
-        } catch (e) {
-          return { accountId: a.id, error: e instanceof Error ? e.message : String(e), fetchedAt: null, poll: null, status: 'error' as const };
-        }
-      }),
-    );
-  };
   listRequests = async (q: RequestQuery = {}) =>
     d.decodeRequestPage(
       await call('GET', `/admin/requests${qs({ accounts: q.accountIds, agent_types: q.agentTypes, client: q.client, cursor: q.cursor, from: q.from ? Date.parse(q.from) : undefined, held: q.held, include_probes: q.includeProbes, keys: q.keyIds, kinds: q.kind ? [q.kind] : undefined, limit: q.limit, models: q.models, pools: q.poolIds, speeds: q.speeds, statuses: q.statuses?.map(String), text: q.search, to: q.to ? Date.parse(q.to) : undefined, turn_origins: q.turnOrigins, user_agent: q.userAgent })}`),

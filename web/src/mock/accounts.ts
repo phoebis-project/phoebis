@@ -218,12 +218,14 @@ export const ACCOUNTS: Account[] = ([
     requests: { last24h: 0, last7d: 0, lifetime: 0 },
     cooldowns: [],
   },
-] satisfies Account[]).map((a) => ({ ...a, plan: planName(a.subscription) }));
+] satisfies Account[]).map((a) => ({ ...a, plan: planName(a.subscription), usage: usageOf(a) }));
 
 export const accountById = new Map(ACCOUNTS.map((a) => [a.id, a]));
 
-export const QUOTA_SNAPSHOTS: QuotaSnapshot[] = ACCOUNTS.map((a) => {
-  if (a.id === 'spare') return { ...QUOTA_SNAPSHOT_SAMPLE, accountId: a.id, error: 'no credential is stored for this account; pair it to load quota', fetchedAt: null, poll: null, status: 'error' };
+/** The poll block the route answers on a row: none for an Anthropic-key account, which the poll never reads. */
+export function usageOf(a: Pick<Account, 'id' | 'kind' | 'status'>): QuotaSnapshot | null {
+  if (a.kind === 'api_key') return null;
+  if (a.status === 'unpaired') return { ...QUOTA_SNAPSHOT_SAMPLE, accountId: a.id, error: 'no credential is stored for this account; pair it to load quota', fetchedAt: null, poll: null, status: 'error' };
   // The refresh keeps failing, so every poll fails while the windows of the last clean read still answer.
   if (a.id === 'team') {
     return {
@@ -248,7 +250,7 @@ export const QUOTA_SNAPSHOTS: QuotaSnapshot[] = ACCOUNTS.map((a) => {
   }
   const poll = QUOTA_SNAPSHOT_SAMPLE.poll && { ...QUOTA_SNAPSHOT_SAMPLE.poll, lastAttemptAt: ago(40_000), lastCleanAt: ago(40_000) };
   return { ...QUOTA_SNAPSHOT_SAMPLE, accountId: a.id, error: null, fetchedAt: ago(40_000), poll, status: 'success' };
-});
+}
 
 const SAMPLE_STEP = 5 * MINUTE;
 const HISTORY_SPAN = 7 * DAY;

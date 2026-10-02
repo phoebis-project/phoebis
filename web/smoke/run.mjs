@@ -314,7 +314,7 @@ m = await mount('/observe');
 m.unmount();
 
 m = await mount('/quota');
-expect('/quota', m.text(), ['7 credentials', '7 loaded', '3 need attention', 'Refresh all', 'Plan', 'Trial', 'Ends in', 'Extra usage', '$12.34 / $50.00', '5h', '7d', 'Fable', 'n/a', 'not reported', 'resets in', 'Quota windows', 'Credential', '5-hour limit', '7-day limit', 'Fable 7-day limit', 'used ·', 'Weekly', '5-hour', 'Today', 'current window', 'Retry', 'not yet polled', 'polled', 'rate limited', 'backing off since']);
+expect('/quota', m.text(), ['7 credentials', '3 need attention', 'Refresh all', 'Plan', 'Trial', 'Ends in', 'Extra usage', '$12.34 / $50.00', '5h', '7d', 'Fable', 'n/a', 'not reported', 'resets in', 'Quota windows', 'Credential', '5-hour limit', '7-day limit', 'Fable 7-day limit', 'used ·', 'Weekly', '5-hour', 'Today', 'current window', 'Retry', 'not yet polled', 'polled', 'rate limited', 'backing off since']);
 {
   const byLabel = new Map((await api.listAccounts()).map((a) => [a.label, a.id]));
   await emailLines('/quota each card names its email on hover, and nothing for one without', [...m.container.querySelectorAll('.qcard__name')].map((n) => [byLabel.get(n.textContent?.trim() ?? '') ?? '', n.getAttribute('title')]));
@@ -378,27 +378,29 @@ expect('/quota', m.text(), ['7 credentials', '7 loaded', '3 need attention', 'Re
   results.push({ name: '/quota timeline draws one now line for the whole chart', ok: m.container.querySelectorAll('.timeline__now').length === 1, missing: [String(m.container.querySelectorAll('.timeline__now').length)] });
 }
 {
-  // The mock's snapshots read the same before and after a refresh, so the check watches the calls the button makes.
+  // The mock's blocks read the same before and after a refresh, so the check watches the calls the button makes and
+  // what the one list read after them carries: every subscription row's poll block.
   const subscriptions = (await api.listAccounts()).filter((a) => a.kind === 'oauth').map((a) => a.id).sort();
   const refreshed = [];
-  let reads = 0;
-  const { listQuotaSnapshots, refreshUsage } = api;
+  const reads = [];
+  const { listAccounts, refreshUsage } = api;
   api.refreshUsage = (id) => {
     refreshed.push(id);
     return refreshUsage.call(api, id);
   };
-  api.listQuotaSnapshots = () => {
-    reads += 1;
-    return listQuotaSnapshots.call(api);
+  api.listAccounts = async () => {
+    const rows = await listAccounts.call(api);
+    reads.push({ afterPosts: refreshed.length, blocks: rows.flatMap((a) => (a.usage ? [a.usage.accountId] : [])).sort() });
+    return rows;
   };
   [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Refresh all')?.click();
   await m.settle(1_200);
   api.refreshUsage = refreshUsage;
-  api.listQuotaSnapshots = listQuotaSnapshots;
+  api.listAccounts = listAccounts;
   results.push({
     name: '/quota Refresh all refreshes every subscription account, then reads every card again',
-    ok: JSON.stringify(refreshed.sort()) === JSON.stringify(subscriptions) && reads > 0 && m.text().includes('7 loaded'),
-    missing: [refreshed.join(','), `reads ${reads}`, m.container.querySelector('.quota-meta')?.textContent ?? 'no meta'],
+    ok: JSON.stringify(refreshed.sort()) === JSON.stringify(subscriptions) && JSON.stringify(reads) === JSON.stringify([{ afterPosts: subscriptions.length, blocks: subscriptions }]),
+    missing: [refreshed.join(','), `reads ${JSON.stringify(reads)}`],
   });
 }
 {
@@ -498,10 +500,11 @@ m.unmount();
   stale.unmount();
 }
 
-// The route answers no error beside windows, but a read of it that failed does; the card draws what it holds.
+// A block's error can stand beside windows the ledger sampled, as before the poll's first read after a restart; the card
+// draws what it holds.
 {
-  const { listQuotaSnapshots } = api;
-  api.listQuotaSnapshots = async () => (await listQuotaSnapshots.call(api)).map((s) => (s.accountId === 'team' ? { ...s, error: 'the admin API timed out', poll: null, status: 'error' } : s));
+  const { listAccounts } = api;
+  api.listAccounts = async () => (await listAccounts.call(api)).map((a) => (a.id === 'team' ? { ...a, usage: { ...a.usage, error: 'the admin API timed out', poll: null, status: 'error' } } : a));
   const held = await mount('/quota');
   const cardOf = (label) => [...held.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === label);
   const team = cardOf('team');
@@ -510,7 +513,7 @@ m.unmount();
     ok: Boolean(team?.querySelector('.qcard__windows')) && !team?.querySelector('.qcard__error') && !team?.classList.contains('is-error') && Boolean(cardOf('spare')?.querySelector('.qcard__error')),
     missing: [team?.textContent?.slice(0, 160) ?? 'no team card'],
   });
-  api.listQuotaSnapshots = listQuotaSnapshots;
+  api.listAccounts = listAccounts;
   held.unmount();
 }
 

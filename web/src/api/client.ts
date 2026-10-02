@@ -39,7 +39,6 @@ import type {
   PoolKeepalive,
   PoolStrategy,
   QuotaHistory,
-  QuotaSnapshot,
   RequestDetail,
   RequestPage,
   RequestQuery,
@@ -205,7 +204,6 @@ export interface Api {
   /** The session events as they were posted; a lifecycle rule opens no event, so this log is all there is to read. */
   listLifecycleDeliveries(kind?: AlertKind, cursor?: string): Promise<LifecyclePage>;
   listPools(): Promise<Pool[]>;
-  listQuotaSnapshots(): Promise<QuotaSnapshot[]>;
   listRequests(query?: RequestQuery): Promise<RequestPage>;
   listSessions(): Promise<Session[]>;
   login(secret: string): Promise<SessionInfo>;

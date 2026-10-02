@@ -149,6 +149,7 @@ export function decodeAccount(v: unknown): Account {
     routingEnabled: bool(a.enabled, true),
     status: accountStatus(a, cooldowns),
     subscription,
+    usage: a.usage === null || a.usage === undefined ? null : decodeSnapshot(str(a.id), a.usage),
     windows: windows.filter((w) => w.id !== '7d_fable'),
   };
 }

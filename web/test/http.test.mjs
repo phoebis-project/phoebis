@@ -74,6 +74,14 @@ test('createAccount sends the id, kind, label, and secret in snake_case', async 
   assert.deepEqual([calls[0].init.method, calls[0].url, JSON.parse(calls[0].init.body)], ['POST', '/admin/accounts', { id: 'console', kind: 'api_key', label: 'Console', secret: 'sk-ant-api03-FAKE' }]);
 });
 
+test('the accounts list carries the poll standing and no usage route is read', async () => {
+  const body = JSON.parse(readFileSync(new URL('./fixtures/accounts.json', import.meta.url), 'utf8')).body;
+  const calls = stub(() => answer(200, body));
+  const accounts = await new HttpApi().listAccounts();
+  assert.deepEqual(calls.map((c) => [c.init.method ?? 'GET', c.url]), [['GET', '/admin/accounts']], 'one read of the list, no usage read per account');
+  assert.deepEqual(accounts.map((a) => [a.id, a.usage?.poll?.lastOutcome ?? a.usage]), [['business', 'clean'], ['direct', null]]);
+});
+
 test('updateAccount is one PATCH that carries the cancelled flag and the end in milliseconds', async () => {
   const body = JSON.parse(readFileSync(new URL('./fixtures/account.json', import.meta.url), 'utf8')).body;
   const calls = stub(() => answer(200, { ...body, cancelled: true }));

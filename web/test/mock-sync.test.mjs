@@ -31,7 +31,7 @@ const SYNC = {
   account: { decode: (b) => d.decodeAccount(b), mock: async (api) => (await api.listAccounts()).find((a) => a.id === 'business') },
   account_catalog: { decode: (b) => d.decodeAccountCatalog(b), mock: (api) => api.getAccountCatalog('business') },
   account_quota: { decode: (b) => d.decodeQuotaHistory(b), mock: (api) => api.getQuotaHistory('business') },
-  account_usage: { decode: (b) => d.decodeSnapshot('business', b), mock: async (api) => (await api.listQuotaSnapshots()).find((s) => s.accountId === 'business') },
+  account_usage: { decode: (b) => d.decodeSnapshot('business', b), mock: async (api) => (await api.listAccounts()).find((a) => a.id === 'business').usage },
   accounts: { decode: (b) => b.accounts.map(d.decodeAccount), mock: (api) => api.listAccounts() },
   alert_deliveries: { decode: (b) => b.deliveries.map(d.decodeDelivery), mock: async (api) => { for (const e of await api.listAlertEvents()) { const rows = await api.listAlertDeliveries(e.id); if (rows.length) return rows; } throw new Error('no mock alert event carries a delivery'); } },
   alert_events: { decode: (b) => b.events.map(d.decodeAlertEvent), mock: (api) => api.listAlertEvents() },

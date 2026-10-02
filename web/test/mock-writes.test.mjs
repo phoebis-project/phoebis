@@ -55,7 +55,7 @@ const EXEMPT = ['login', 'logout', 'refreshUsage'];
 const READS = [
   'analyticsBudgets', 'analyticsPlacements', 'getAccountCatalog', 'getAnalyticsBreakdown', 'getAnalyticsBurn', 'getAnalyticsRewrites', 'getAnalyticsSeries', 'getCapturedBodies', 'getKeepaliveOverview', 'getKeyModels', 'getModelsState', 'getOverview', 'getQuotaHistory', 'getRequest', 'getSession', 'getSettings',
   'listAccountRollups', 'listAccounts', 'listAlertDeliveries', 'listAlertEvents', 'listAlertRules', 'listCatalog', 'listCatalogOf', 'listKeepaliveRecipes', 'listKeys', 'listLifecycleDeliveries',
-  'listPools', 'listQuotaSnapshots', 'listRequests', 'listSessions', 'subscribeLive',
+  'listPools', 'listRequests', 'listSessions', 'subscribeLive',
 ];
 
 const refusedAs = (status, message) => (e) => e instanceof d.ApiError && e.status === status && e.message === message && e.code === null;
@@ -404,7 +404,9 @@ test('an unknown id is refused with the route\'s own 404 text, which the console
 test('the quota snapshots never answer a status or a poll outcome the decoder cannot produce', async () => {
   const api = await as('admin');
   for (let read = 0; read < 2; read += 1) {
-    const snapshots = await api.listQuotaSnapshots();
+    const accounts = await api.listAccounts();
+    assert.deepEqual(accounts.filter((a) => (a.kind === 'api_key') !== (a.usage === null)).map((a) => a.id), [], `read ${read + 1}: a block on every subscription row and none on an Anthropic-key row`);
+    const snapshots = accounts.flatMap((a) => (a.usage ? [a.usage] : []));
     assert.deepEqual(snapshots.map((s) => s.status).filter((s) => s !== 'error' && s !== 'success'), [], `read ${read + 1}`);
     const polls = snapshots.map((s) => s.poll);
     assert.deepEqual(polls.filter((p) => p !== null && !['clean', 'failed', 'rate_limited'].includes(p.lastOutcome)), [], `read ${read + 1}`);

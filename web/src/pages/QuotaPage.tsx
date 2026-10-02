@@ -8,21 +8,21 @@ import { IconChevronLeft, IconChevronRight, IconRefresh, IconServer, IconUser, I
 import { Badge, ErrorState, Meter, Pill, Segmented, Select, Skeleton, Tabs } from '@/components/ui/primitives';
 import { fmtAbsolute, fmtCredits, fmtDate, fmtDayShort, fmtEndsIn, fmtPct, fmtRelative, fmtShortTime, upperFirst } from '@/lib/format';
 import { useAsync, useNow } from '@/lib/hooks';
-import { STATUS_LABEL, STATUS_TONE, meterTone, remainingOf, soonestReset, windowOf } from '@/lib/quota';
+import { STATUS_LABEL, STATUS_TONE, isSubscription, meterTone, remainingOf, soonestReset, windowOf } from '@/lib/quota';
 
 type Tab = 'all' | 'api_key' | 'oauth';
 type Sort = 'default' | 'soonest';
 
 export function QuotaPage() {
   const accounts = useAsync(() => api.listAccounts(), [], { refreshMs: 30_000 });
-  const snapshots = useAsync(() => api.listQuotaSnapshots(), [], { refreshMs: 30_000 });
   const settings = useAsync(() => api.getSettings(), [], { refreshMs: 30_000 });
   const now = useNow();
   const [tab, setTab] = useState<Tab>('all');
   const [sort, setSort] = useState<Sort>('default');
   const [refreshing, setRefreshing] = useState(false);
 
-  const snapById = useMemo(() => new Map((snapshots.data ?? []).map((s) => [s.accountId, s])), [snapshots.data]);
+  // Each subscription row carries its poll block, so the list read is the one read of every card's standing.
+  const snapById = useMemo(() => new Map((accounts.data ?? []).filter(isSubscription).flatMap((a) => (a.usage ? [[a.id, a.usage] as const] : []))), [accounts.data]);
 
   const visible = useMemo(() => {
     const list = (accounts.data ?? []).filter((a) => tab === 'all' || a.kind === tab);
@@ -37,14 +37,10 @@ export function QuotaPage() {
   }, [accounts.data, tab, sort, now]);
 
   const total = accounts.data?.length ?? 0;
-  const loaded = (snapshots.data ?? []).filter((s) => s.status !== 'loading').length;
-  const attention = (snapshots.data ?? []).filter((s) => s.status === 'error' || needsAttention(s.poll)).length;
+  const attention = [...snapById.values()].filter((s) => s.status === 'error' || needsAttention(s.poll)).length;
   const counts = { all: total, api_key: (accounts.data ?? []).filter((a) => a.kind === 'api_key').length, oauth: (accounts.data ?? []).filter((a) => a.kind === 'oauth').length };
 
-  const reload = () => {
-    accounts.reload();
-    snapshots.reload();
-  };
+  const reload = () => accounts.reload();
   // The route answers from the account's hold or its cache while either lasts, which is why a refresh can change nothing.
   const refreshHint = settings.data ? `reads the endpoint now unless the account is backing off or a snapshot younger than ${settings.data.usage.cacheTtlSeconds} seconds is cached` : undefined;
   const refreshAll = async () => {
@@ -61,8 +57,6 @@ export function QuotaPage() {
         <div>
           <p className="page-head__meta quota-meta">
             <span>{total} {total === 1 ? 'credential' : 'credentials'}</span>
-            <span className="quota-meta__sep" aria-hidden />
-            <span className={loaded ? '' : 'muted'}>{loaded} loaded</span>
             {attention > 0 && (
               <>
                 <span className="quota-meta__sep" aria-hidden />
@@ -197,19 +191,7 @@ function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshe
       </header>
 
       <div className="qcard__body">
-        {status === 'loading' ? (
-          <div className="qcard__skel-wrap" aria-busy="true">
-            <span className="sr-only">Loading quota</span>
-            <div className="qcard__skel">
-              <Skeleton width="40%" />
-              <Skeleton height={4} />
-            </div>
-            <div className="qcard__skel">
-              <Skeleton width="55%" />
-              <Skeleton height={4} />
-            </div>
-          </div>
-        ) : failed ? (
+        {failed ? (
           <div className="qcard__error" role="alert">
             <p>{snapshot?.error}</p>
             <Pill onClick={() => void onRefresh()} disabled={busy} icon={<IconRefresh size={13} className={busy ? 'spin' : ''} />}>
@@ -226,10 +208,10 @@ function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshe
           </div>
         )}
         {/* Outside the ternary, so an Anthropic-key card, which has no windows, shows its fast lane too. */}
-        {status !== 'loading' && <FastLane account={account} now={now} />}
+        <FastLane account={account} now={now} />
       </div>
 
-      {status !== 'loading' && (account.plan || endsAt || trialEndsAt || extra?.enabled) && (
+      {(account.plan || endsAt || trialEndsAt || extra?.enabled) && (
         <div className="qcard__chips">
           {account.plan && (
             <span className="chip" title={account.subscription?.rateLimitTier || undefined}>
@@ -260,29 +242,27 @@ function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshe
         </div>
       )}
 
-      {status !== 'loading' && extra?.disabledReason && (
+      {extra?.disabledReason && (
         <div className="callout callout--warning qcard__flag">
           <IconWarning size={14} />
           <div>{extra.disabledReason}</div>
         </div>
       )}
 
-      {status !== 'loading' && (
-        <footer className="qcard__foot">
-          <div className="qcard__status">
-            {snapshot && account.kind === 'oauth' && <PollLine poll={snapshot.poll} now={now} />}
-            {snapshot?.fetchedAt && (
-              <span className="muted" title={fmtAbsolute(snapshot.fetchedAt)}>
-                checked {fmtRelative(snapshot.fetchedAt, now)}
-              </span>
-            )}
-            {snapshot?.poll?.backoffSince && <BackoffLines poll={snapshot.poll} since={snapshot.poll.backoffSince} now={now} />}
-          </div>
-          <Pill onClick={() => void onRefresh()} disabled={busy} title={refreshHint} icon={<IconRefresh size={13} className={busy ? 'spin' : ''} />}>
-            Refresh
-          </Pill>
-        </footer>
-      )}
+      <footer className="qcard__foot">
+        <div className="qcard__status">
+          {snapshot && account.kind === 'oauth' && <PollLine poll={snapshot.poll} now={now} />}
+          {snapshot?.fetchedAt && (
+            <span className="muted" title={fmtAbsolute(snapshot.fetchedAt)}>
+              checked {fmtRelative(snapshot.fetchedAt, now)}
+            </span>
+          )}
+          {snapshot?.poll?.backoffSince && <BackoffLines poll={snapshot.poll} since={snapshot.poll.backoffSince} now={now} />}
+        </div>
+        <Pill onClick={() => void onRefresh()} disabled={busy} title={refreshHint} icon={<IconRefresh size={13} className={busy ? 'spin' : ''} />}>
+          Refresh
+        </Pill>
+      </footer>
     </article>
   );
 }

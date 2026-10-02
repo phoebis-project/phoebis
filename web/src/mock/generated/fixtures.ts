@@ -108,6 +108,18 @@ export const FIXTURES: Record<string, Fixture> = {
         "last_24h": 4,
         "last_7d": 4,
         "lifetime": 4
+      },
+      "usage": {
+        "error": null,
+        "fetched_at": 1000000,
+        "poll": {
+          "backoff_since": null,
+          "last_attempt_at": 1000000,
+          "last_clean_at": 1000000,
+          "last_outcome": "clean",
+          "next_attempt_at": null,
+          "rate_limited_in_a_row": 0
+        }
       }
     }
   },
@@ -337,6 +349,18 @@ export const FIXTURES: Record<string, Fixture> = {
             "last_24h": 4,
             "last_7d": 4,
             "lifetime": 4
+          },
+          "usage": {
+            "error": null,
+            "fetched_at": 1000000,
+            "poll": {
+              "backoff_since": null,
+              "last_attempt_at": 1000000,
+              "last_clean_at": 1000000,
+              "last_outcome": "clean",
+              "next_attempt_at": null,
+              "rate_limited_in_a_row": 0
+            }
           }
         },
         {
@@ -366,7 +390,8 @@ export const FIXTURES: Record<string, Fixture> = {
             "last_24h": 1,
             "last_7d": 1,
             "lifetime": 1
-          }
+          },
+          "usage": null
         }
       ]
     }

@@ -608,6 +608,76 @@ async fn the_usage_get_says_no_credential_is_stored_for_a_disconnected_or_unpair
 }
 
 #[tokio::test]
+async fn the_accounts_list_carries_each_oauth_rows_poll_standing_and_null_for_an_anthropic_key_account(
+) {
+    use common::{get, json, login, post, NOW};
+    let h = common::admin_parts_polled(std::time::Duration::from_secs(60)).await;
+    let cookie = login(&h.app, "admin-secret").await;
+    let created = post(
+        &h.app,
+        "/admin/accounts",
+        r#"{"id":"spare","kind":"oauth","label":"Spare"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(created.status(), 201);
+    let created = json(created).await;
+    let no_credential = serde_json::json!({
+        "error": "no credential is stored for this account; pair it to load quota",
+        "fetched_at": null,
+        "poll": null,
+    });
+    assert_eq!(
+        created["usage"], no_credential,
+        "a write answers the row with its block"
+    );
+    h.usage.poll("business").await.unwrap();
+    let asked = || {
+        h.up.requests()
+            .iter()
+            .filter(|r| r.line.starts_with("GET /api/oauth/usage"))
+            .count()
+    };
+    let polled = asked();
+
+    let listed = json(get(&h.app, "/admin/accounts", Some(&cookie)).await).await;
+    let row = |id: &str| {
+        listed["accounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|a| a["id"] == id)
+            .unwrap()["usage"]
+            .clone()
+    };
+    let business = row("business");
+    assert_eq!(business["poll"]["last_outcome"], "clean", "{business}");
+    assert_eq!(business["fetched_at"], NOW, "{business}");
+    assert!(business["error"].is_null(), "{business}");
+    // The usage route's own answer is the reference the block is composed to match.
+    let usage = json(get(&h.app, "/admin/accounts/business/usage", Some(&cookie)).await).await;
+    assert_eq!(
+        business,
+        serde_json::json!({ "error": usage["error"], "fetched_at": usage["fetched_at"], "poll": usage["poll"] }),
+    );
+    assert_eq!(row("spare"), no_credential);
+    assert!(
+        row("direct").is_null(),
+        "the poll never reads an Anthropic-key account"
+    );
+    assert_eq!(
+        json(get(&h.app, "/admin/accounts/business", Some(&cookie)).await).await["usage"],
+        business,
+        "the single read carries the block the list does"
+    );
+    assert_eq!(
+        asked(),
+        polled,
+        "the list reads the poll's standing, never the endpoint"
+    );
+}
+
+#[tokio::test]
 async fn an_account_whose_snapshot_holds_no_windows_answers_the_windows_the_router_holds() {
     use common::{get, json, login, wait_json, NOW};
     use phoebis_routing::{Report, UtilizationSample, WindowReading, FIVE_HOUR, SEVEN_DAY};

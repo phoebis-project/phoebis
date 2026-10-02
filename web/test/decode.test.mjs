@@ -36,7 +36,7 @@ test('an account decodes with its windows, plan, pools, and models', () => {
   assert.equal(a.email, 'test@example.invalid');
   assert.deepEqual(
     Object.keys(a).sort(),
-    ['cancelled', 'cooldowns', 'credential', 'email', 'extraUsage', 'fableWindow', 'fastLane', 'id', 'kind', 'label', 'overage', 'plan', 'pools', 'requests', 'routingEnabled', 'status', 'subscription', 'windows'],
+    ['cancelled', 'cooldowns', 'credential', 'email', 'extraUsage', 'fableWindow', 'fastLane', 'id', 'kind', 'label', 'overage', 'plan', 'pools', 'requests', 'routingEnabled', 'status', 'subscription', 'usage', 'windows'],
     'an account decodes to the fields the console draws and nothing more',
   );
 });
@@ -84,6 +84,22 @@ test('the account list folds state, enabled, and cooldowns onto one status', () 
   assert.equal(d.decodeAccount({ ...fixture('account'), state: 'funding_required' }).status, 'funding_required');
   assert.equal(d.decodeAccount({ ...fixture('account'), state: 'unpaired' }).status, 'unpaired');
   assert.equal(d.decodeAccount({ ...fixture('account'), cooldowns: [{ scope: 'account', until: 1, reason: 'rate_limit', window: '5h', set_at: 0 }] }).status, 'cooldown');
+});
+
+test('an account row decodes its usage block and null for an Anthropic-key account', () => {
+  const rows = fixture('accounts').accounts;
+  const [business, direct] = ['business', 'direct'].map((id) => d.decodeAccount(rows.find((r) => r.id === id)));
+  const at = d.iso(rows.find((r) => r.id === 'business').usage.poll.last_attempt_at);
+  assert.deepEqual(business.usage, {
+    accountId: 'business',
+    error: null,
+    fetchedAt: d.iso(rows.find((r) => r.id === 'business').usage.fetched_at),
+    poll: { backoffSince: null, lastAttemptAt: at, lastCleanAt: at, lastOutcome: 'clean', nextAttemptAt: null, rateLimitedInARow: 0 },
+    status: 'success',
+  });
+  assert.equal(direct.usage, null, 'the poll never reads an Anthropic-key account');
+  const spare = d.decodeAccount({ ...rows[0], id: 'spare', usage: { error: 'no credential is stored for this account; pair it to load quota', fetched_at: null, poll: null } }).usage;
+  assert.deepEqual([spare.accountId, spare.status, spare.fetchedAt, spare.poll], ['spare', 'error', null, null], 'the sentence standing in for a snapshot reads as an error');
 });
 
 test('an account cooling on its fast lane alone reads ready, and one with an account row beside it reads cooldown', () => {

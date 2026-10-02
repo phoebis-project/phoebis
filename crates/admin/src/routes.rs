@@ -426,6 +426,26 @@ async fn disconnect(State(state): State<Arc<AdminState>>, Path(id): Path<String>
     StatusCode::NO_CONTENT.into_response()
 }
 
+/// The poll's standing on an account and the sentence that answers while nothing composes a snapshot. The poll never
+/// asks an account without a credential, so no read is coming: the card says what the operator can do, and a
+/// standing left from before the credential went would describe nothing current.
+fn poll_standing(state: &AdminState, row: &AccountRow) -> (Option<PollStatus>, &'static str) {
+    if matches!(
+        row.state,
+        AccountState::Disconnected | AccountState::Unpaired
+    ) {
+        (
+            None,
+            "no credential is stored for this account; pair it to load quota",
+        )
+    } else {
+        (
+            state.usage.poll_status(&row.id),
+            "the poll has not read this account yet",
+        )
+    }
+}
+
 /// `GET .../usage`: the poll's latest snapshot and standing, with no read of the endpoint. A snapshot with no
 /// windows gives way to the windows the router holds, persisted from the last run or read since, so a card
 /// never reads as an error while windows exist; the error answers only when none do.
@@ -434,22 +454,7 @@ async fn usage_latest(State(state): State<Arc<AdminState>>, Path(id): Path<Strin
         Ok(row) => row,
         Err(refusal) => return refusal,
     };
-    // The poll never asks an account without a credential, so no read is coming: the card says what the
-    // operator can do, and a standing left from before the credential went would describe nothing current.
-    let no_credential = matches!(
-        row.state,
-        AccountState::Disconnected | AccountState::Unpaired
-    );
-    let poll = if no_credential {
-        None
-    } else {
-        state.usage.poll_status(&id)
-    };
-    let unread = if no_credential {
-        "no credential is stored for this account; pair it to load quota"
-    } else {
-        "the poll has not read this account yet"
-    };
+    let (poll, unread) = poll_standing(&state, &row);
     let latest = state.usage.latest(&id);
     let held = match &latest {
         Some(snapshot) if has_windows(snapshot) => None,
@@ -1156,6 +1161,22 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
         }
     }
     let fast_lane = ctx.held.get(&row.id).and_then(fast_lane_json);
+    // Composed as the usage `GET` composes its answer, over the router's windows the list already read once, so one
+    // list read carries every account's standing. The poll never reads an Anthropic-key account.
+    let usage = (row.kind == AccountKind::Oauth).then(|| {
+        let (poll, unread) = poll_standing(state, row);
+        let latest = state.usage.latest(&row.id);
+        let held = match &latest {
+            Some(snapshot) if has_windows(snapshot) => None,
+            _ => ctx.held.get(&row.id).cloned(),
+        };
+        let answer = compose_usage(&row.id, latest, held);
+        json!({
+            "error": answer.as_ref().map_or(Some(unread), |s| s.error.as_deref()),
+            "fetched_at": answer.as_ref().map(|s| s.fetched_at),
+            "poll": poll.as_ref().map(poll_json),
+        })
+    });
     json!({
         "id": row.id,
         "kind": match row.kind { AccountKind::ApiKey => "api_key", AccountKind::Oauth => "oauth" },
@@ -1206,6 +1227,7 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
         "extra_usage": ctx.extra.iter().find(|e| e.account_id == row.id).map(|e| json!({ "currency": e.currency, "disabled_reason": e.disabled_reason, "in_use": e.in_use, "is_enabled": e.is_enabled, "monthly_limit": e.monthly_limit, "used_credits": e.used_credits, "utilization": e.utilization, "observed_at": e.bucket * 1_000 })),
         "pools": ctx.members.iter().filter(|m| m.account_id == row.id).map(|m| json!({ "pool_id": m.pool_id, "priority": m.priority })).collect::<Vec<_>>(),
         "requests": { "last_24h": ctx.day.get(&row.id).map_or(0, |t| t.requests), "last_7d": ctx.week.get(&row.id).map_or(0, |t| t.requests), "lifetime": ctx.lifetime.get(&row.id).map_or(0, |t| t.requests) },
+        "usage": usage,
     })
 }
 
@@ -1296,22 +1318,25 @@ fn compose_usage(
     })
 }
 
+/// The poll's standing as the usage `GET` and every account row answer it.
+fn poll_json(status: &PollStatus) -> Value {
+    json!({
+        "backoff_since": status.backoff_since,
+        "last_attempt_at": status.last_attempt_at,
+        "last_clean_at": status.last_clean_at,
+        "last_outcome": status.last_outcome,
+        "next_attempt_at": status.next_attempt_at,
+        "rate_limited_in_a_row": status.rate_limited_in_a_row,
+    })
+}
+
 /// `snapshot` is the answer, or the error that stands in for it when there is none.
 fn usage_json(
     id: &str,
     snapshot: Result<&UsageSnapshot, &str>,
     poll: Option<&PollStatus>,
 ) -> Value {
-    let poll = poll.map(|status| {
-        json!({
-            "backoff_since": status.backoff_since,
-            "last_attempt_at": status.last_attempt_at,
-            "last_clean_at": status.last_clean_at,
-            "last_outcome": status.last_outcome,
-            "next_attempt_at": status.next_attempt_at,
-            "rate_limited_in_a_row": status.rate_limited_in_a_row,
-        })
-    });
+    let poll = poll.map(poll_json);
     let snapshot = match snapshot {
         Ok(snapshot) => snapshot,
         // Zero is the unstamped generation, as the ledger stamps a row it has no identity for.
