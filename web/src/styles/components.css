@@ -1488,6 +1488,14 @@ textarea.input {
   color: var(--ink-2);
 }
 
+/* The lead and the paragraph it discloses stack beside the head's action. */
+.page-head__lead {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
 .stack {
   display: flex;
   flex-direction: column;

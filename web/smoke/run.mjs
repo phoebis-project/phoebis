@@ -4449,6 +4449,20 @@ m.unmount();
 m = await mount('/sessions');
 expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agents', 'busy', 'idle', 'parked', 'Cache probes, 24h', 'ok (', 'migrated', 'skipped', 'failed', 'Expired between turns, 24h', 'misses cache warming exists to prevent', 'Probe cost today', 'of $4.00', 'uncapped', 'Net saved, 7d', 'Cost reference', 'Key', 'Session', 'Model', 'Account', 'Last used', 'expires in', 'Requests', 'Last request', 'Agents', 'Companion', 'Cache warming', 'Next probe', 'Expand all', 'epoch 2', 'reporting', 'silent', 'since ', 'none', 'no recipe', 'not scheduled', 'claude-fable-5-1']);
 {
+  const lead = m.container.querySelector('.page-head__lead');
+  const how = () => [...(lead?.querySelectorAll('button.link-btn') ?? [])].find((b) => b.textContent?.trim() === 'How pins and recipes work');
+  const para = () => document.getElementById(how()?.getAttribute('aria-controls') ?? '');
+  const words = 'Every Claude Code session the router has seen within the session expiry, and every conversation it identified without a session id, whether or not a cache-keepalive companion registered for it. A pin binds each model a session uses to one account, so subagents on another model may sit on another account, and with affinity off every request picks again; where cache warming is on, each agent carries a recipe that replays its cacheable prefix just before the prompt cache expires, so the next real turn reads the cache instead of rewriting it.';
+  results.push({ name: '/sessions the head reads the lead sentence and the closed disclosure', ok: (lead?.firstElementChild?.textContent?.replace(/\s+/g, ' ').trim() ?? '').startsWith("Every session within the session expiry, with the account each model is pinned to and each agent's cache-warming recipe.") && how()?.getAttribute('aria-expanded') === 'false', missing: [lead?.textContent?.slice(0, 160) ?? 'no lead'] });
+  results.push({ name: '/sessions the disclosure controls a paragraph that exists while closed', ok: para() !== null && para()?.hidden === true, missing: [how()?.getAttribute('aria-controls') ?? 'no aria-controls'] });
+  how()?.click();
+  await m.settle(100);
+  results.push({ name: '/sessions a click opens the paragraph word for word and says so', ok: how()?.getAttribute('aria-expanded') === 'true' && para()?.hidden === false && para()?.textContent?.replace(/\s+/g, ' ').trim() === words && how()?.textContent?.trim() === 'How pins and recipes work', missing: [para()?.textContent?.replace(/\s+/g, ' ').slice(0, 120) ?? 'no paragraph'] });
+  how()?.click();
+  await m.settle(100);
+  results.push({ name: '/sessions a second click closes the paragraph', ok: how()?.getAttribute('aria-expanded') === 'false' && para()?.hidden === true, missing: [] });
+}
+{
   const meters = m.container.querySelectorAll('.cost-caps .meter').length;
   results.push({ name: '/sessions cost meter against cap', ok: meters === 1, missing: [String(meters)] });
   const tiles = [...m.container.querySelectorAll('.stat--compact')].map((t) => ({ label: t.querySelector('.stat__label')?.textContent?.trim(), value: t.querySelector('.stat__value')?.textContent?.trim(), warn: t.querySelector('.stat__value')?.classList.contains('is-warning') === true }));

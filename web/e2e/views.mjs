@@ -2427,6 +2427,96 @@ async function keysPoolSelect(theme) {
 }
 
 /**
+ * The Sessions head: closed, it stays under 60 px and the disclosure ends the lead's paragraph, at most two lines, on
+ * the sentence's last line where both fit and flush left on the next line where they do not (1280 px wraps it, 1440 px
+ * does not); opened, the paragraph lands between the lead and the tiles while Cost reference keeps the row's right
+ * end. Both heights are recorded with the viewport, and the second click leaves the head closed for the shot.
+ */
+async function sessionsLead(theme) {
+  const say = (what) => failures.push(`${theme} /sessions: ${what}`);
+  const button = page.locator('.page-head__lead button.link-btn', { hasText: 'How pins and recipes work' });
+  if ((await button.count()) !== 1) {
+    say('the head has no How pins and recipes work button');
+    return;
+  }
+  const read = () =>
+    page.evaluate(() => {
+      const box = (el) => {
+        if (!el) return null;
+        const { bottom, height, left, right, top } = el.getBoundingClientRect();
+        return { bottom, height, left, right, top };
+      };
+      const head = document.querySelector('.page-head');
+      const wrap = head?.querySelector('.page-head__lead');
+      const lead = wrap?.firstElementChild;
+      const btn = lead?.querySelector('button.link-btn');
+      // useId's ids carry colons, which a #id selector rejects.
+      const para = btn ? document.getElementById(btn.getAttribute('aria-controls') ?? '') : null;
+      const cost = [...(head?.children ?? [])].find((e) => e.tagName === 'BUTTON' && e.textContent?.trim() === 'Cost reference');
+      // The sentence's last line box, the one the button follows when both fit.
+      const text = lead?.firstChild;
+      let line = null;
+      if (text?.nodeType === Node.TEXT_NODE) {
+        const range = document.createRange();
+        range.selectNodeContents(text);
+        const rects = [...range.getClientRects()];
+        const last = rects[rects.length - 1];
+        line = last ? { bottom: last.bottom, top: last.top } : null;
+      }
+      // The words' own left edge: a button's padding moves its words without moving its box.
+      let words = null;
+      if (btn) {
+        const range = document.createRange();
+        range.selectNodeContents(btn);
+        words = range.getBoundingClientRect().left;
+      }
+      return {
+        button: box(btn),
+        cost: box(cost),
+        expanded: btn?.getAttribute('aria-expanded') ?? null,
+        head: box(head),
+        lead: box(lead),
+        lineHeight: lead ? parseFloat(getComputedStyle(lead).lineHeight) : null,
+        line,
+        para: box(para),
+        tiles: box(document.querySelector('.stat-grid')),
+        words,
+        wrap: box(wrap),
+      };
+    });
+  const closed = await read();
+  await button.click();
+  await settle();
+  const open = await read();
+  await button.click();
+  await settle();
+  const after = await read();
+  await atRest();
+  const px = (b) => (b ? Math.round(b.height) : null);
+  measurements.push(`${theme} /sessions lead ${JSON.stringify({ closed: px(closed.head), open: px(open.head), viewport: page.viewportSize() })}`);
+  if (closed.head === null || closed.head.height >= 60) say(`the closed head is ${px(closed.head) ?? 'not'}px tall, not under 60px`);
+  if (closed.para === null || closed.para.height !== 0 || closed.expanded !== 'false') say(`the closed head shows the paragraph (${px(closed.para)}px, aria-expanded ${closed.expanded})`);
+  const { button: b, lead: p, line, lineHeight, words } = closed;
+  if (b === null || p === null || line === null || lineHeight === null || words === null) say('the lead has no sentence, button or paragraph to measure');
+  else {
+    if (Math.abs(b.bottom - p.bottom) > 1) say(`the disclosure ends at ${Math.round(b.bottom)}px, not on the lead's last line ending at ${Math.round(p.bottom)}px`);
+    if (p.height > 2 * lineHeight + 1) say(`the lead runs ${Math.round(p.height)}px tall, past two ${lineHeight}px lines`);
+    const onLine = Math.abs(b.top - line.top) <= 2;
+    const nextLineFlush = b.top > line.top + 2 && Math.abs(words - p.left) <= 1;
+    if (!onLine && !nextLineFlush) {
+      say(`the disclosure's words start at ${Math.round(words)},${Math.round(b.top)}px, neither on the sentence's last line (top ${Math.round(line.top)}px) nor flush with the lead's left at ${Math.round(p.left)}px on the next`);
+    }
+  }
+  if (open.expanded !== 'true' || open.para === null || open.para.height === 0) say('a click left the paragraph closed');
+  else {
+    if (open.lead === null || open.para.top < open.lead.bottom) say(`the opened paragraph starts at ${Math.round(open.para.top)}px, above the lead's bottom at ${open.lead ? Math.round(open.lead.bottom) : 'none'}px`);
+    if (open.tiles === null || open.para.bottom > open.tiles.top) say(`the opened paragraph ends at ${Math.round(open.para.bottom)}px, past the tiles' top at ${open.tiles ? Math.round(open.tiles.top) : 'none'}px`);
+    if (open.cost === null || open.wrap === null || open.cost.right < open.wrap.right) say(`Cost reference ends at ${open.cost ? Math.round(open.cost.right) : 'none'}px, short of the lead's right at ${open.wrap ? Math.round(open.wrap.right) : 'none'}px`);
+  }
+  if (after.expanded !== 'false' || px(after.head) !== px(closed.head)) say(`a second click leaves the head ${px(after.head)}px tall against ${px(closed.head)}px closed`);
+}
+
+/**
  * The cost reference dialog from Sessions: the dollar table and the window share table below it each fit the dialog
  * without a sideways scroll, and their Model columns end at one edge; the window groups' heads, their column heads
  * and their cells read in the type of the price columns above them; a row the cost table covers is the height of
@@ -2637,6 +2727,7 @@ try {
       if (['/', '/pools', '/accounts'].includes(view.path)) await accountLines(theme, view.path);
       if (view.path === '/observe') await liveFeed(theme);
       if (view.path === '/sessions') {
+        await sessionsLead(theme);
         await costCapRows(theme);
         await costReference(theme);
         await agentLines(theme);
