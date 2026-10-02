@@ -7,8 +7,10 @@ import type { LiveEvent } from '@/api/types';
 import { routes } from '@/app/App';
 import { SessionProvider } from '@/app/session';
 import { AppSettingsProvider } from '@/app/settings';
+import { installClock } from '@/lib/clock';
 import { ALL_ROLLUPS, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, REQUEST_EVENTS, REQUESTS } from '@/mock/requests';
 import { SETTINGS_SAMPLE } from '@/mock/samples';
+import { fakeClock } from './clock';
 
 export { api, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION };
 export { default as React } from 'react';
@@ -18,6 +20,17 @@ export const requestEvents = REQUEST_EVENTS;
 export const requests = REQUESTS;
 // The mock's raw hourly rows, so a check can read the story itself rather than a page's derivation of it.
 export const rollups = ALL_ROLLUPS;
+
+// One clock for the whole run, live until a mount freezes it, so a check that moves time moves every timer a page
+// armed through the clock module and none of the real ones the settles wait on.
+const fake = fakeClock();
+installClock(fake);
+
+/**
+ * Moves a frozen clock by `ms`, firing each timer due inside the span at its own deadline; on a live clock it
+ * throws, so a check that forgot `mount(path, { now })` fails at once instead of racing real time.
+ */
+export const tick = (ms: number) => fake.tick(ms);
 
 /**
  * Drops the feed's ticks so a check can watch the page notice the silence. Only the ticks: the deltas keep
@@ -112,6 +125,23 @@ export const deferNextCall = (name: string) => {
   };
 };
 
+/** A pass-through spy on one mock method: every call's arguments, in order, until `restore()` puts the method back. */
+export const countCalls = (name: string) => {
+  const mock = api as unknown as Record<string, (...args: unknown[]) => unknown>;
+  const original = mock[name];
+  const calls: unknown[][] = [];
+  mock[name] = (...args: unknown[]) => {
+    calls.push(args);
+    return original.apply(api, args);
+  };
+  return {
+    calls,
+    restore: () => {
+      mock[name] = original;
+    },
+  };
+};
+
 // Set once at load so every mount starts signed in; the login checks clear it and put it back themselves.
 localStorage.setItem('phoebis.mockSession', 'admin');
 
@@ -139,11 +169,14 @@ function mounted(container: HTMLElement, root: Root, navigate: Mounted['navigate
     unmount: () => {
       root.unmount();
       container.remove();
+      fake.freeze(null);
     },
   };
 }
 
-export async function mount(path: string): Promise<Mounted> {
+/** `now` freezes the clock at that instant before the first render, so only `tick` moves it or fires a timer. */
+export async function mount(path: string, options: { now?: number } = {}): Promise<Mounted> {
+  if (options.now !== undefined) fake.freeze(options.now);
   const container = document.createElement('div');
   document.body.appendChild(container);
   const root = createRoot(container);

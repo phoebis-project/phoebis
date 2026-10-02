@@ -6,6 +6,7 @@ import { useChartInk } from '@/components/charts/useChartInk';
 import { PatternEditor, useCatalogSuggestions } from '@/components/PatternEditor';
 import { IconInfo, IconPlus, IconWarning } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, ErrorState, Field, GroupedDialog, Input, Menu, PageLink, SearchInput, Segmented, Select, Skeleton, Toast, Toggle, type DialogGroup } from '@/components/ui/primitives';
+import { clock } from '@/lib/clock';
 import { fmtAbsolute, fmtCompact, fmtDate, fmtInt, fmtRelative, fmtUsd } from '@/lib/format';
 import { KEY_GROUPS, keyFormOf, keyInputOf, keyRefusals, type AutoModeOverride, type CaptureMode, type KeyGroup } from '@/lib/forms';
 import { useAsync, useNow, type Loaded } from '@/lib/hooks';
@@ -394,7 +395,7 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing
     setBusy(true);
     setError(null);
     const form = { affinitySource, autoModeServer, captureHours, captureMode, enabled, expiry, inFlightCap, longContextTwins, modelRules, modelRulesMode, name, notes, optOut, poolId };
-    const input = keyInputOf(form, Date.now());
+    const input = keyInputOf(form, clock.now());
     try {
       if (existing) {
         const updated = await api.updateKey(existing.id, input);

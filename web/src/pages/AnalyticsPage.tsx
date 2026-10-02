@@ -14,6 +14,7 @@ import { Badge, Button, Card, ErrorState, Input, Meter, Segmented, Select, Skele
 import { CONVERSATION_CLASSES, foldBurn, isolatedSlots, moveLabel, placementCells, placementRungLabel, readBurn, sizedAccounts, slotUnpriced, type BurnLine, type BurnLineUnit, type BurnRow } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missCount, missLabel, missReasonOrder } from '@/lib/cache';
+import { clock } from '@/lib/clock';
 import { fmtAbsolute, fmtCompact, fmtDayShort, fmtDuration, fmtHourTick, fmtInt, fmtMs, fmtPct, fmtPeriodEnd, fmtShare, fmtUsd, shortId, toLocalInput, upperFirst } from '@/lib/format';
 import { BUCKET_COUNT, BUCKET_EDGES, PERCENTILE_HINT, histogramCount } from '@/lib/histogram';
 import { useAsync } from '@/lib/hooks';
@@ -113,7 +114,7 @@ function useDimensionKeys(from: string, to: string, groupBy: GroupBy) {
 const optionsOf = (rows: AnalyticsGroup[] | null): Option[] => (rows ?? []).map((g) => ({ label: g.label, value: g.key })).sort((a, b) => a.label.localeCompare(b.label));
 
 export function AnalyticsPage() {
-  const now = useMemo(() => Date.now(), []);
+  const now = useMemo(() => clock.now(), []);
   const [range, setRange] = useState<Range>('24h');
   const [custom, setCustom] = useState({ from: toLocalInput(now - 3 * 24 * HOUR), to: toLocalInput(now) });
   const [groupBy, setGroupBy] = useState<GroupBy>('key');

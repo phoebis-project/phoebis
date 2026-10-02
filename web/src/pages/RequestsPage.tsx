@@ -13,6 +13,7 @@ import { moveLabel } from '@/lib/analytics';
 import { autoModeLabel } from '@/lib/autoMode';
 import { isDivergence, missLabel } from '@/lib/cache';
 import { AGENT_TYPES, CLIENT_CLASS_CHARS, TURN_ORIGINS } from '@/lib/client';
+import { clock } from '@/lib/clock';
 import { bytesDropped, fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortAgent, shortId, tokensTotal } from '@/lib/format';
 import { useAsync, useNow } from '@/lib/hooks';
 import { requestTrail } from '@/lib/trail';
@@ -121,7 +122,7 @@ export function RequestsPage() {
   const [stack, setStack] = useState<(string | undefined)[]>([]);
   // The range ends where the list was loaded, so a cursor page is read against the window its cursor came from;
   // Refresh moves the end to now.
-  const [loadedAt, setLoadedAt] = useState(() => Date.now());
+  const [loadedAt, setLoadedAt] = useState(() => clock.now());
 
   const query = useMemo<RequestQuery>(() => {
     const r = RANGES.find((x) => x.value === range) ?? RANGES[2];
@@ -136,7 +137,7 @@ export function RequestsPage() {
   };
   const refresh = () => {
     resetPaging();
-    setLoadedAt(Date.now());
+    setLoadedAt(clock.now());
   };
   useEffect(resetPaging, [search, userAgent, clientPattern, agentTypes, turnOrigins, speeds, held, keyIds, poolIds, accountIds, models, statuses, kind, range, pageSize]);
 

@@ -1,6 +1,7 @@
 import { createContext, Fragment, useContext, useEffect, useId, useLayoutEffect, useRef, useState, type ButtonHTMLAttributes, type CSSProperties, type HTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes } from 'react';
 import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
+import { clock } from '@/lib/clock';
 import { floatAt, menuPlacement, type MenuPlacement } from '@/lib/menu';
 import type { BadgeTone } from '@/lib/quota';
 import { IconCheck, IconChevron, IconCopy, IconSearch, IconWarning, IconX } from './icons';
@@ -518,8 +519,17 @@ export function ConfirmDialog({ open, onClose, onConfirm, title, body, confirmLa
 const IN_FLOW: MenuPlacement = { kind: 'down' };
 const CLIPPING = new Set(['auto', 'clip', 'hidden', 'scroll']);
 
-export function Menu({ items, label = 'Actions' }: { items: { danger?: boolean; disabled?: boolean; label: string; onClick: () => void; title?: string }[]; label?: string }) {
+export function Menu({ items, label = 'Actions', onOpenChange }: { items: { danger?: boolean; disabled?: boolean; label: string; onClick: () => void; title?: string }[]; label?: string; onOpenChange?: (open: boolean) => void }) {
   const [open, setOpen] = useState(false);
+  // A page that holds its refresh while a menu is open counts the open ones, so a closed menu says nothing as it
+  // mounts and one that unmounts open still reports itself closed.
+  const openChange = useRef(onOpenChange);
+  openChange.current = onOpenChange;
+  useEffect(() => {
+    if (!open) return;
+    openChange.current?.(true);
+    return () => openChange.current?.(false);
+  }, [open]);
   const [placement, setPlacement] = useState<MenuPlacement>(IN_FLOW);
   const ref = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -653,11 +663,14 @@ export function KeyValue({ rows, className = '' }: { className?: string; rows: {
 }
 
 export function Toast({ message, onDone }: { message: string | null; onDone: () => void }) {
+  // Callers pass a fresh callback on every render; keying the dwell on it would restart the timer with each one.
+  const done = useRef(onDone);
+  done.current = onDone;
   useEffect(() => {
     if (!message) return;
-    const id = window.setTimeout(onDone, 2400);
-    return () => window.clearTimeout(id);
-  }, [message, onDone]);
+    const id = clock.setTimeout(() => done.current(), 2400);
+    return () => clock.clearTimeout(id);
+  }, [message]);
   if (!message) return null;
   return (
     <div className="toast" role="status">

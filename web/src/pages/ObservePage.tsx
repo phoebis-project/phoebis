@@ -9,6 +9,7 @@ import { AttemptTrail } from '@/components/ui/AttemptTrail';
 import { MultiSelect } from '@/components/ui/MultiSelect';
 import { IconExpand, IconPause, IconPlay, IconWarning, IconX } from '@/components/ui/icons';
 import { Badge, Button, Card, EmptyState, KeyValue, Meter, Segmented, Select, Skeleton, Toggle } from '@/components/ui/primitives';
+import { clock } from '@/lib/clock';
 import { fmtAbsolute, fmtCompact, fmtDuration, fmtInt, fmtMs, fmtPct, fmtShortTime, fmtTime, fmtUsd, shortAgent, shortId, tokensTotal } from '@/lib/format';
 import { PERCENTILE_HINT } from '@/lib/histogram';
 import { useNow } from '@/lib/hooks';
@@ -118,7 +119,7 @@ export function ObservePage() {
     () =>
       api.subscribeLive((e: LiveEvent) => {
         storeRef.current = e.kind === 'snapshot' ? fromSnapshot(e.snapshot) : applyDelta(storeRef.current, e.delta);
-        if (e.kind === 'snapshot' || e.delta.type === 'tick') lastTickAt.current = Date.now();
+        if (e.kind === 'snapshot' || e.delta.type === 'tick') lastTickAt.current = clock.now();
         if (!pausedRef.current) setView(storeRef.current);
       }),
     [],
@@ -127,7 +128,7 @@ export function ObservePage() {
   const togglePause = () => {
     const next = paused === null;
     pausedRef.current = next;
-    setPaused(next ? Date.now() : null);
+    setPaused(next ? clock.now() : null);
     if (!next) setView(storeRef.current);
   };
 
@@ -136,7 +137,7 @@ export function ObservePage() {
   // Against the arrival stamp, never the tick's own `at`: that carries the router's clock, and the banner has
   // to mean the feed went quiet rather than that the two clocks disagree. A pause freezes the view on purpose.
   const connected = view.tick === null ? false : paused !== null || wallClock - lastTickAt.current < 5_000;
-  const nowMs = view.tick ? Date.parse(view.tick.at) : Date.now();
+  const nowMs = view.tick ? Date.parse(view.tick.at) : clock.now();
   const historical = span.endS < RING_SPAN_S;
   const windowStart = (historical ? anchor ?? nowMs : nowMs) - RING_SPAN_S * 1000;
   const fromMs = windowStart + span.startS * 1000;
@@ -553,12 +554,12 @@ const LiveRow = memo(function LiveRow({ r, selected, onSelect, frozenAt }: { fro
 
 /** A clock that only runs while `active`, so finished rows hold no timer. */
 function useClock(active: boolean, intervalMs: number): number {
-  const [now, setNow] = useState(() => Date.now());
+  const [now, setNow] = useState(() => clock.now());
   useEffect(() => {
     if (!active) return;
-    setNow(Date.now());
-    const id = window.setInterval(() => setNow(Date.now()), intervalMs);
-    return () => window.clearInterval(id);
+    setNow(clock.now());
+    const id = clock.setInterval(() => setNow(clock.now()), intervalMs);
+    return () => clock.clearInterval(id);
   }, [active, intervalMs]);
   return now;
 }

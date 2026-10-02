@@ -34,10 +34,31 @@ export const setHooks = (next: Hooks) => {
   hooks = next;
 };
 
+let quiet = false;
+
+/**
+ * Runs `fn` with the failure reports of the calls it starts dropped, so a refresh that continues a failing streak does
+ * not toast the failure the streak's first read already reported. The window closes before `fn`'s promise settles,
+ * so only the calls started inside it are quiet.
+ */
+export function quietly<T>(fn: () => T): T {
+  const was = quiet;
+  quiet = true;
+  try {
+    return fn();
+  } finally {
+    quiet = was;
+  }
+}
+
 /** The one place a failed call is reported from, so the mock build can stand in for the transport too. */
-export const reportFailure = (failure: Failure) => hooks.onFailure(failure);
+export const reportFailure = (failure: Failure) => {
+  if (!quiet) hooks.onFailure(failure);
+};
 
 export async function call<T = unknown>(method: string, path: string, body?: unknown, raw = false): Promise<T> {
+  // Read before the first await: the quiet window is synchronous, and the report comes after the answer.
+  const silent = quiet;
   // The login screen draws every refusal of its own route, and the shell that would toast one mounts only after
   // the next login succeeds, where it would report a failure the operator has already read.
   const login = method === 'POST' && path === '/admin/session';
@@ -47,7 +68,7 @@ export async function call<T = unknown>(method: string, path: string, body?: unk
   } catch (e) {
     // A router that never answered: the page below draws its error state, and the hook says which route.
     const message = e instanceof Error ? e.message : String(e);
-    if (!login) reportFailure({ message, path, status: 0 });
+    if (!login && !silent) reportFailure({ message, path, status: 0 });
     throw new ApiError(0, message, null);
   }
   if (response.status === 204) return undefined as T;
@@ -66,7 +87,7 @@ export async function call<T = unknown>(method: string, path: string, body?: unk
       else if (response.status === 403) hooks.onForbidden(message);
       // A 404 is how the routes answer for a request or a body the router never kept, which the page reading
       // it draws as a state of its own; everything else is a failure the operator has to be told about.
-      else if (response.status !== 404) reportFailure({ message: answered, path, status: response.status });
+      else if (response.status !== 404 && !silent) reportFailure({ message: answered, path, status: response.status });
     }
     throw new ApiError(response.status, message, response.headers.get('x-phoebis-error-code'));
   }
