@@ -76,14 +76,15 @@ Every field, in the order the request body takes them:
 | `model_rules` | empty | an ordered list of `{pattern, not}` entries, at most 256; see Model rules |
 | `keepalive` | disabled | a policy object; its defaults are on the [Keepalive page](keepalive.md) |
 | `cache_ttl` | off | a policy object, `inject_when_absent` off by default; see below |
-| `cache_diagnostics` | unset (inherits) | `true`, `false`, or `null` |
+| `cache_diagnostics` | `false` | `true` or `false`: `cache_diagnostics must be true or false` |
 | `auto_mode_server` | `true` | `true` or `false`: `auto_mode_server must be true or false` |
 | `body_capture_hours` | `0` (off) | `body_capture_hours exceeds stats.body_capture_max_hours` |
 | `wind_down_minutes` | `30` | 0 to 10,080 (a week) |
 | `members` | none | create only; replaced wholesale by `PUT /admin/pools/{id}/members` |
 
-`cache_diagnostics`, the pool dialog's Cache diagnostics switch, forces the cache-diagnosis beta and the
-`previous_message_id` member toward `api.anthropic.com` for this pool's requests; `null` reads off.
+The pool's `cache_diagnostics`, the pool dialog's Cache diagnostics switch, forces the cache-diagnosis beta and the
+`previous_message_id` member toward `api.anthropic.com` for this pool's requests, whatever the client; off by default,
+and `count_tokens` is never touched.
 
 `auto_mode_server` is whether the client's server-side auto mode checks travel to the upstream. On, the default,
 the router passes the request for a check and its verdict through unchanged; off, it drops the request so the

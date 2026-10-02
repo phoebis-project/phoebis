@@ -289,8 +289,17 @@ fn apply(state: &AdminState, row: &mut PoolRow, input: &PoolInput) -> Result<(),
         };
         row.cache_ttl_json = serde_json::to_string(&policy).unwrap_or_else(|_| "{}".into());
     }
-    if let Some(diagnostics) = input.cache_diagnostics {
-        row.cache_diagnostics = diagnostics;
+    if let Some(switch) = input.cache_diagnostics {
+        // A null names neither state of the switch, so it is refused rather than read as one of them.
+        row.cache_diagnostics = match switch {
+            Some(on) => on,
+            None => {
+                return Err(failure(
+                    StatusCode::BAD_REQUEST,
+                    "cache_diagnostics must be true or false",
+                ))
+            }
+        };
     }
     if let Some(value) = &input.auto_mode_server {
         row.auto_mode_server = match value {
@@ -493,7 +502,7 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
         shedding: Shedding::default(),
         failover: Failover::default(),
         cache_ttl_json: "{}".into(),
-        cache_diagnostics: None,
+        cache_diagnostics: false,
         auto_mode_server: true,
         affinity: Affinity::default(),
         created_at: now,

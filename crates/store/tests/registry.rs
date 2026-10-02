@@ -138,7 +138,8 @@ const UNDO_V40: &str =
 // a seeded version-40 store is faithful. One line with the marker last; the trailing `\n` ends the marker's comment.
 const UNDO_V41: &str = "ALTER TABLE pool_members ADD COLUMN budget_usd REAL; ALTER TABLE pool_members ADD COLUMN budget_period TEXT NOT NULL DEFAULT 'month'; UPDATE pool_members SET budget_usd = COALESCE(budget_monthly_usd, budget_daily_usd), budget_period = CASE WHEN budget_monthly_usd IS NULL AND budget_daily_usd IS NOT NULL THEN 'day' ELSE 'month' END; ALTER TABLE pool_members DROP COLUMN budget_monthly_usd; ALTER TABLE pool_members DROP COLUMN budget_daily_usd; -- rollback\n";
 const UNDO_V42: &str = "DROP INDEX IF EXISTS alert_deliveries_event; CREATE INDEX alert_deliveries_event ON alert_deliveries (event_id, id);";
-// The exact reverse of `V43`, one statement per line, the marker on each line that restores a dropped name.
+// The reverse of `V43`, one statement per line, the marker on each line that restores a dropped name. Storing an
+// unset diagnostics switch off needs no reverse, since its statement runs on any state.
 const UNDO_V43: &str = r#"
 ALTER TABLE pools ADD COLUMN quota_headers TEXT NOT NULL DEFAULT 'pass'; -- rollback
 ALTER TABLE api_keys ADD COLUMN in_flight_cap INTEGER; -- rollback
@@ -184,7 +185,7 @@ fn pool(id: &str) -> PoolRow {
         shedding: Shedding::default(),
         failover: Failover::default(),
         cache_ttl_json: "{}".into(),
-        cache_diagnostics: None,
+        cache_diagnostics: false,
         auto_mode_server: true,
         affinity: Affinity::default(),
         created_at: 1,
@@ -279,7 +280,7 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
         .unwrap();
     again.insert_pool(&pool("main"), "test").unwrap();
     assert_eq!(again.pools().unwrap()[0].cache_ttl_json, "{}");
-    assert!(again.pools().unwrap()[0].cache_diagnostics.is_none());
+    assert!(!again.pools().unwrap()[0].cache_diagnostics);
     drop(again);
     // What a database written before a cooldown recorded when it was set looks like on disk.
     let conn = rusqlite::Connection::open(&path).unwrap();
@@ -804,6 +805,38 @@ fn a_store_left_at_42_is_carried_to_43_without_the_keys_cap_or_fixed_source() {
     let columns = columns_of(&path, "api_keys");
     assert!(!columns.contains("in_flight_cap"), "{columns:?}"); // removed name
     assert!(!columns.contains("affinity_source"), "{columns:?}"); // removed name
+}
+
+/// A pool whose diagnostics switch was left unset, planted at version 42.
+const SEED_PRE_V43_DIAGNOSTICS: &str = r#"
+UPDATE pools SET cache_diagnostics = NULL WHERE id = 'main'; -- rollback
+"#;
+
+#[test]
+fn a_store_left_at_42_is_carried_to_43_with_every_unset_diagnostics_switch_off() {
+    let dir = tempfile::tempdir().unwrap();
+    let key = StorageKey::generate();
+    let path = dir.path().join("router.sqlite");
+    let store = Store::open(&path, &key).unwrap();
+    store.insert_pool(&pool("main"), "test").unwrap();
+    drop(store);
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch(&format!(
+        "{UNDO_V43} UPDATE meta SET value = '42' WHERE key = 'schema_version'; {SEED_PRE_V43_DIAGNOSTICS}"
+    ))
+    .unwrap();
+    drop(conn);
+    let migrated = Store::open(&path, &key).unwrap();
+    assert_eq!(migrated.schema_version().unwrap(), 43);
+    let pools = migrated.pools().expect("an unset switch reads as a bool");
+    assert_eq!(
+        pools
+            .iter()
+            .map(|p| (p.id.as_str(), p.cache_diagnostics))
+            .collect::<Vec<_>>(),
+        [("main", false)],
+        "the unset switch reads off"
+    );
 }
 
 /// A rule, its open event and the event's delivery, planted at version 42.

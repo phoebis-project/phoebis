@@ -271,7 +271,7 @@ test('a pool decodes its policy, status, members, and traffic', () => {
   assert.equal(p.keepalive.warmSubagents, true);
   assert.equal(p.cacheTtl.enabled, false);
   assert.equal(p.cacheTtl.plan.main, '1h');
-  assert.equal(p.cacheDiagnostics, null);
+  assert.equal(p.cacheDiagnostics, false);
   assert.equal(p.status, 'active');
   assert.equal(p.traffic24h.length, 24);
   assert.ok(isIso(p.traffic24h[0].at));
@@ -329,6 +329,7 @@ test("a pool's cache TTL decodes the two rule sets and encodes them back", () =>
   assert.equal(back.cache_diagnostics, true);
   assert.equal(back.keepalive.warm_subagents, false);
   assert.equal(d.decodePool({ ...row, cache_diagnostics: false }).cacheDiagnostics, false);
+  assert.equal('cache_diagnostics' in d.encodePool({ ...p, name: p.name, cacheDiagnostics: null, status: 'active' }), false, 'an unset switch is left out, so a new pool starts off');
 });
 
 test('a pool decodes its server-side auto mode switch, on when the row carries none, and encodes it back', () => {
@@ -1055,12 +1056,13 @@ test('settings, pricing, pairing, quota, and usage decode', () => {
   const snapshot = d.decodeSnapshot('business', fixture('account_usage'));
   assert.equal(snapshot.status, 'success');
   const at = new Date(fixture('account_usage').poll.last_attempt_at).toISOString();
-  assert.deepEqual(snapshot.poll, { backoffSince: null, lastAttemptAt: at, lastCleanAt: at, lastOutcome: 'clean', nextAttemptAt: null, rateLimitedInARow: 0 }, 'a clean poll');
-  const held = d.decodeSnapshot('mail', { error: 'usage request rate-limited', fetched_at: 1_000, poll: { backoff_since: 60_000, last_attempt_at: 120_000, last_clean_at: 1_000, last_outcome: 'rate_limited', next_attempt_at: 240_000, rate_limited_in_a_row: 2 } });
+  assert.deepEqual(snapshot.poll, { backoffSince: null, lastAttemptAt: at, lastCleanAt: at, lastError: null, lastOutcome: 'clean', nextAttemptAt: null, rateLimitedInARow: 0 }, 'a clean poll');
+  const hold = 'the usage endpoint rate-limited the account; next attempt at 1970-01-01 00:04:00 UTC';
+  const held = d.decodeSnapshot('mail', { error: 'usage request rate-limited', fetched_at: 1_000, poll: { backoff_since: 60_000, last_attempt_at: 120_000, last_clean_at: 1_000, last_error: hold, last_outcome: 'rate_limited', next_attempt_at: 240_000, rate_limited_in_a_row: 2 } });
   assert.deepEqual(
     [held.status, held.poll],
-    ['error', { backoffSince: '1970-01-01T00:01:00.000Z', lastAttemptAt: '1970-01-01T00:02:00.000Z', lastCleanAt: '1970-01-01T00:00:01.000Z', lastOutcome: 'rate_limited', nextAttemptAt: '1970-01-01T00:04:00.000Z', rateLimitedInARow: 2 }],
-    'a poll backing off keeps each instant and the count',
+    ['error', { backoffSince: '1970-01-01T00:01:00.000Z', lastAttemptAt: '1970-01-01T00:02:00.000Z', lastCleanAt: '1970-01-01T00:00:01.000Z', lastError: hold, lastOutcome: 'rate_limited', nextAttemptAt: '1970-01-01T00:04:00.000Z', rateLimitedInARow: 2 }],
+    'a poll backing off keeps each instant, the count and the last error',
   );
   assert.equal(d.decodeSnapshot('spare', { error: 'the poll has not read this account yet', fetched_at: null, poll: null }).poll, null, 'no poll before the first ask');
   assert.equal(d.decodeSnapshot('a', { poll: { last_outcome: 'somewhere_new' } }).poll.lastOutcome, 'failed', 'an outcome this build does not know reads as a failure');

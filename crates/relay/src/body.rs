@@ -26,8 +26,8 @@ pub enum Markerless {
 }
 
 /// The native edit's inputs: the account identity and model every request needs, the restoration a
-/// `claude-cli/` inference request carries, the diagnostics member `compatibility.cache_diagnostics` forces, and
-/// the pool's cache TTL policy.
+/// `claude-cli/` inference request carries, the diagnostics member the pool's `cache_diagnostics` switch forces,
+/// and the pool's cache TTL policy.
 pub struct NativeEdit<'a> {
     pub account_uuid: Option<&'a str>,
     pub upstream_model: &'a str,
@@ -61,7 +61,7 @@ pub struct VersionCheck<'a> {
     pub prompt_units: [u16; 3],
 }
 
-/// The beta the relay claims for itself under `compatibility.cache_diagnostics`; a client-sent one is never
+/// The beta the relay claims for itself under the pool's `cache_diagnostics` switch; a client-sent one is never
 /// reported as injected, since its 400 is the client's to handle.
 pub const CACHE_DIAGNOSIS_BETA: &str = Injected::CacheDiagnosisBeta.wire_name();
 /// The beta a one-hour cache TTL pairs with; dropped from the caller's list for a five-minute body.

@@ -317,6 +317,7 @@ test('a pool save is one PATCH that carries the members with the settings', asyn
     { account_id: 'direct', budget_daily_usd: 12.5, budget_monthly_usd: 50, priority: 1 },
   ], 'a member without a budget sends null, which clears a stored one');
   assert.equal(body.select_below_utilization, 0.4);
+  assert.equal('cache_diagnostics' in body, false, 'an unset switch is not sent');
   assert.deepEqual(
     [body.affinity_mode, body.subagent_placement, body.session_placement, body.min_shared_prefix_tokens],
     ['when_cached', 'with_main', 'by_warm_prefix', 30_000],

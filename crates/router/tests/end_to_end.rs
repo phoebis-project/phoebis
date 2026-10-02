@@ -2765,7 +2765,7 @@ async fn a_startup_poll_the_endpoint_refuses_routes_the_first_request_from_the_p
                     shedding: phoebis_store::Shedding::default(),
                     failover: phoebis_store::Failover::default(),
                     cache_ttl_json: "{}".into(),
-                    cache_diagnostics: None,
+                    cache_diagnostics: false,
                     auto_mode_server: true,
                     affinity: phoebis_store::Affinity::default(),
                     created_at: 0,

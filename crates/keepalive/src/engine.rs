@@ -2259,7 +2259,7 @@ mod tests {
                 shedding: phoebis_store::Shedding::default(),
                 failover: phoebis_store::Failover::default(),
                 cache_ttl_json: cache_ttl_json.into(),
-                cache_diagnostics: None,
+                cache_diagnostics: false,
                 auto_mode_server: true,
                 affinity: phoebis_store::Affinity::default(),
                 created_at: 0,

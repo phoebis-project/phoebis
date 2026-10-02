@@ -826,6 +826,118 @@ mod service {
     }
 
     #[tokio::test]
+    async fn the_last_error_names_a_failed_attempt_and_a_usage_429_until_a_clean_poll_clears_it() {
+        let now = Arc::new(AtomicI64::new(1_000_000));
+        let up = FakeUpstream::start(vec![Rule {
+            path_prefix: "/api/oauth/usage".into(),
+            respond: Respond::Json {
+                status: 503,
+                headers: vec![],
+                body: b"{}".to_vec(),
+            },
+        }])
+        .await;
+        let service = service_for(
+            &up,
+            store_with_bundle_until(1_000_000 + 86_400_000),
+            Duration::from_secs(1),
+            &now,
+        );
+        let last_error = |service: &UsageService| service.poll_status("a").unwrap().last_error;
+        let clean = || Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: control_response(ControlFixture::Usage).to_vec(),
+        };
+
+        service.snapshot("a").await.unwrap();
+        assert_eq!(
+            last_error(&service).as_deref(),
+            Some("usage request rejected with status 503"),
+            "a failed attempt keeps its message"
+        );
+
+        up.set_rule_after(0, "/api/oauth/usage", clean());
+        now.store(1_002_000, Ordering::SeqCst);
+        assert!(service.snapshot("a").await.unwrap().error.is_none());
+        assert_eq!(last_error(&service), None, "a clean poll clears it");
+
+        up.set_rule_after(0, "/api/oauth/usage", rate_limited_bare().respond);
+        now.store(1_004_000, Ordering::SeqCst);
+        service.snapshot("a").await.unwrap();
+        assert_eq!(
+            last_error(&service).as_deref(),
+            Some("the usage endpoint rate-limited the account; next attempt at 1970-01-01 00:18:44 UTC"),
+            "a usage 429 keeps the held answer's sentence"
+        );
+
+        up.set_rule_after(0, "/api/oauth/usage", clean());
+        now.store(1_125_000, Ordering::SeqCst);
+        assert!(service.snapshot("a").await.unwrap().error.is_none());
+        assert_eq!(
+            last_error(&service),
+            None,
+            "the clean poll past the hold clears it"
+        );
+        up.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_profile_429_sets_the_last_error_to_its_hold_with_or_without_a_reading_held() {
+        let now = Arc::new(AtomicI64::new(1_000_000));
+        let up = FakeUpstream::start(vec![
+            Rule {
+                path_prefix: "/api/oauth/profile".into(),
+                respond: Respond::Json {
+                    status: 429,
+                    headers: vec![("retry-after".into(), "120".into())],
+                    body: b"{}".to_vec(),
+                },
+            },
+            Rule {
+                path_prefix: "/api/oauth/usage".into(),
+                respond: Respond::Json {
+                    status: 200,
+                    headers: vec![],
+                    body: control_response(ControlFixture::Usage).to_vec(),
+                },
+            },
+        ])
+        .await;
+        let service = service_for(
+            &up,
+            store_with_bundle_until(1_000_000 + 86_400_000),
+            Duration::from_secs(1),
+            &now,
+        );
+        let last_error = |service: &UsageService| service.poll_status("a").unwrap().last_error;
+
+        assert!(service.profile("a").await.is_err());
+        assert_eq!(
+            last_error(&service).as_deref(),
+            Some("the profile endpoint rate-limited the account; next attempt at 1970-01-01 00:18:40 UTC"),
+            "a profile 429 before any reading sets the hold's sentence"
+        );
+
+        now.store(1_121_000, Ordering::SeqCst);
+        assert!(service.snapshot("a").await.unwrap().error.is_none());
+        assert_eq!(
+            last_error(&service),
+            None,
+            "a clean poll past the hold clears it"
+        );
+
+        now.store(1_200_000, Ordering::SeqCst);
+        assert!(service.profile("a").await.is_err());
+        assert_eq!(
+            last_error(&service).as_deref(),
+            Some("the profile endpoint rate-limited the account; next attempt at 1970-01-01 00:22:00 UTC"),
+            "a profile 429 over a clean reading sets it again"
+        );
+        up.shutdown().await;
+    }
+
+    #[tokio::test]
     async fn a_profile_retry_after_past_fifteen_minutes_holds_the_account_fifteen() {
         let now = Arc::new(AtomicI64::new(1_000_000));
         let up = FakeUpstream::start(vec![

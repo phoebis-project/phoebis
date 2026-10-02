@@ -115,8 +115,8 @@ list, checked against the fixtures under `crates/profile/fixtures/`.
 A newer client build is not relayed in its own shape automatically: headers travel as the
 client sends them, with the `anthropic-beta` line copied as sent and edited for three betas only: the OAuth beta,
 claimed for a subscription credential and stripped for an Anthropic key on every request that carries the line; the
-cache-diagnosis beta under `cache_diagnostics` (the compatibility option or the pool's own); and the extended-TTL beta
-the cache TTL rewrite adds or drops. The profile's beta lists record what the measured client sends, as the fixtures
+cache-diagnosis beta under the pool's `cache_diagnostics` switch; and the extended-TTL beta the cache TTL rewrite adds
+or drops. The profile's beta lists record what the measured client sends, as the fixtures
 show, and the fields the router restores for a Claude Code request are the ones on the
 [client page](client.md#the-environment-block), not what a newer client might add.
 

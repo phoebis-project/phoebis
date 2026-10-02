@@ -123,7 +123,7 @@ const POOL_ROWS: PoolSeed[] = [
     affinityTtlSeconds: 0,
     keepalive: { ...KEEPALIVE_TUNING_DEFAULTS, enabled: false, costCapUsdPerDay: null },
     autoModeServer: true,
-    cacheDiagnostics: null,
+    cacheDiagnostics: false,
     cacheTtl: { ...CACHE_TTL_DEFAULTS },
     bodyCaptureHours: 0,
     modelRules: [
@@ -151,7 +151,7 @@ const POOL_ROWS: PoolSeed[] = [
     keepalive: { ...KEEPALIVE_TUNING_DEFAULTS, enabled: false, costCapUsdPerDay: null },
     // Off, so the pool card's badge and the key dialog's Inherit label each read both states in the story.
     autoModeServer: false,
-    cacheDiagnostics: null,
+    cacheDiagnostics: false,
     cacheTtl: { ...CACHE_TTL_DEFAULTS },
     bodyCaptureHours: 0,
     modelRules: [],

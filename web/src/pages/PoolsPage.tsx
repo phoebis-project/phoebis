@@ -542,7 +542,7 @@ function PoolCard({
                   <span className="muted">off</span>
                 )}
                 {/* Outside the branch above: a pool that rewrites no breakpoint can still force diagnostics. */}
-                {pool.cacheDiagnostics !== null && <Badge tone="neutral">diagnostics {pool.cacheDiagnostics ? 'on' : 'off'}</Badge>}
+                {pool.cacheDiagnostics && <Badge tone="neutral">diagnostics on</Badge>}
               </span>
             </dd>
           </div>

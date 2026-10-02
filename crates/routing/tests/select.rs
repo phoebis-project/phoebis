@@ -151,7 +151,7 @@ fn load_of(pool: Pool, unavailable: &[(&str, bool, AccountState)]) -> RegistryLo
             shedding: pool.shedding,
             failover: pool.failover,
             cache_ttl_json: "{}".into(),
-            cache_diagnostics: None,
+            cache_diagnostics: false,
             auto_mode_server: true,
             affinity: Affinity {
                 mode: pool.mode,
@@ -3875,7 +3875,7 @@ fn two_pools_sharing_an_account_share_its_entries() {
         shedding: Shedding::default(),
         failover: Failover::default(),
         cache_ttl_json: "{}".into(),
-        cache_diagnostics: None,
+        cache_diagnostics: false,
         auto_mode_server: true,
         affinity: Affinity::default(),
         created_at: 0,

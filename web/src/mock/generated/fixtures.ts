@@ -209,6 +209,7 @@ export const FIXTURES: Record<string, Fixture> = {
         "backoff_since": null,
         "last_attempt_at": 1000000,
         "last_clean_at": 1000000,
+        "last_error": null,
         "last_outcome": "clean",
         "next_attempt_at": null,
         "rate_limited_in_a_row": 0
@@ -5758,11 +5759,11 @@ export const FIXTURES: Record<string, Fixture> = {
               "subagent": "1h"
             }
           },
-          "cache_diagnostics": null,
+          "cache_diagnostics": false,
           "auto_mode_server": true,
           "body_capture_hours": 24,
-          "created_at": 1790967513836,
-          "updated_at": 1790967513836,
+          "created_at": 1790980211538,
+          "updated_at": 1790980211538,
           "members": [
             {
               "account_id": "business",
@@ -5801,7 +5802,7 @@ export const FIXTURES: Record<string, Fixture> = {
             {
               "id": "desktop",
               "label": "Desktop",
-              "prefix": "C7-7xk7N",
+              "prefix": "w60V8RQt",
               "enabled": true
             }
           ],

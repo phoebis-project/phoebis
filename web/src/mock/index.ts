@@ -486,6 +486,8 @@ export class MockApi implements Api {
       ...POOL_SAMPLE,
       ...input,
       activePins: 0,
+      // An unset switch is left out of the body, and the route starts a pool off.
+      cacheDiagnostics: input.cacheDiagnostics ?? false,
       cost24h: 0,
       id,
       members: input.members.map((m) => {
@@ -851,6 +853,8 @@ export class MockApi implements Api {
     const next: Omit<Pool, 'keys'> = {
       ...current,
       ...input,
+      // An unset switch is left out of the body, and the route keeps the stored one.
+      cacheDiagnostics: input.cacheDiagnostics ?? current.cacheDiagnostics,
       // Eligibility is the router's reading of live cooldowns and overages, not something a save can set. A save
       // does rewrite the budget, and a write answers no spend here, so a budget verdict is read again.
       members: input.members.map((m) => {

@@ -1989,10 +1989,10 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace',
   await m.settle(300);
   const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
   const ttlToggle = [...(group(dlg, 'Cache TTL')?.querySelectorAll('button[role="switch"]') ?? [])].find((b) => b.getAttribute('aria-label') === 'Set the cache TTL for this pool');
-  const diagnostics = [...(group(dlg, 'Cache diagnostics')?.querySelectorAll('select') ?? [])].find((s) => [...s.options].map((o) => o.textContent?.trim()).join('|') === 'Inherit the bootstrap setting|On|Off');
+  const diagnostics = group(dlg, 'Cache diagnostics')?.querySelector('select');
   results.push({
-    name: '/pools a pool that rewrites no breakpoint still offers the TTL block and the diagnostics override',
-    ok: ttlToggle?.getAttribute('aria-checked') === 'false' && diagnostics?.value === 'inherit',
+    name: '/pools a pool that rewrites no breakpoint still offers the TTL block and the diagnostics switch',
+    ok: ttlToggle?.getAttribute('aria-checked') === 'false' && diagnostics?.value === 'off',
     missing: [ttlToggle ? '' : 'no cache TTL toggle', String(ttlToggle?.getAttribute('aria-checked')), diagnostics ? '' : 'no diagnostics select', String(diagnostics?.value)],
   });
   // Subagents by cohort read the threshold too, so it is enabled with sessions by strategy.

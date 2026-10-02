@@ -20,7 +20,7 @@ fn pool(id: &str) -> PoolRow {
         shedding: Shedding::default(),
         failover: Failover::default(),
         cache_ttl_json: "{}".into(),
-        cache_diagnostics: None,
+        cache_diagnostics: false,
         auto_mode_server: true,
         affinity: Affinity::default(),
         created_at: 1,

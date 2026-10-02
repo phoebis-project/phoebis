@@ -212,6 +212,8 @@ export interface QuotaPoll {
   lastAttemptAt: string | null;
   /** When the windows of the last clean answer were read; null until one lands. */
   lastCleanAt: string | null;
+  /** The message of the last attempt that was not clean; null after a clean one. */
+  lastError: string | null;
   lastOutcome: PollOutcome;
   /** When the account may be asked again; null when its next slot may ask it. */
   nextAttemptAt: string | null;
@@ -335,8 +337,8 @@ export interface Pool {
   bodyCaptureHours: number;
   /** The time constant of each pin's burn average, which a shedding round sizes its target from. */
   burnWindowSeconds: number;
-  /** Null inherits the bootstrap option `compatibility.cache_diagnostics`; true or false overrides it for this pool. */
-  cacheDiagnostics: boolean | null;
+  /** The pool's switch for the cache-diagnosis beta and `diagnostics.previous_message_id`; off by default. */
+  cacheDiagnostics: boolean;
   /** Always answered; `enabled` off is how a pool that rewrites no breakpoint reads. */
   cacheTtl: PoolCacheTtl;
   cost24h: number;

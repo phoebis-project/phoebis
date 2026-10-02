@@ -927,7 +927,7 @@ async fn sessions_list_live_pins_and_a_release_expires_them() {
                 shedding: phoebis_store::Shedding::default(),
                 failover: phoebis_store::Failover::default(),
                 cache_ttl_json: "{}".into(),
-                cache_diagnostics: None,
+                cache_diagnostics: false,
                 auto_mode_server: true,
                 affinity: Affinity::default(),
                 created_at: common::NOW,
@@ -1511,7 +1511,7 @@ async fn a_round_robin_pool_created_with_prefer_subscription_answers_the_flag() 
 }
 
 #[tokio::test]
-async fn a_pool_carries_a_cache_ttl_policy_and_a_diagnostics_override() {
+async fn a_pool_carries_a_cache_ttl_policy_and_its_diagnostics_switch() {
     let (app, _up) = common::admin_app().await;
     let cookie = login(&app, "admin-secret").await;
     let created = json(post(&app, "/admin/pools", r#"{"id":"cached","label":"Cached","cache_ttl":{"enabled":true,"plan":{"main":"1h","subagent":"5m","models":[{"model":"claude-haiku-4-5-20251001","main":"5m","subagent":"5m"}]},"metered":{"main":"5m"}},"cache_diagnostics":true}"#, Some(&cookie)).await).await;
@@ -1520,31 +1520,11 @@ async fn a_pool_carries_a_cache_ttl_policy_and_a_diagnostics_override() {
         "claude-haiku-4-5-20251001"
     );
     assert_eq!(created["cache_diagnostics"], true);
-    let plain = json(
-        post(
-            &app,
-            "/admin/pools",
-            r#"{"id":"plain","label":"Plain"}"#,
-            Some(&cookie),
-        )
-        .await,
-    )
-    .await;
-    assert_eq!(
-        (
-            plain["cache_ttl"]["enabled"].as_bool(),
-            plain["cache_ttl"]["plan"]["main"].as_str(),
-            plain["cache_ttl"]["metered"]["main"].as_str(),
-            plain["cache_diagnostics"].is_null()
-        ),
-        (Some(false), Some("1h"), Some("5m"), true),
-        "defaults are answered in full; null inherits the bootstrap option"
-    );
     let patched = json(
         patch(
             &app,
             "/admin/pools/cached",
-            r#"{"cache_ttl":{"plan":{"subagent":"1h"}},"cache_diagnostics":null}"#,
+            r#"{"cache_ttl":{"plan":{"subagent":"1h"}}}"#,
             Some(&cookie),
         )
         .await,
@@ -1554,10 +1534,10 @@ async fn a_pool_carries_a_cache_ttl_policy_and_a_diagnostics_override() {
         (
             patched["cache_ttl"]["plan"]["subagent"].as_str(),
             patched["cache_ttl"]["metered"]["main"].as_str(),
-            patched["cache_diagnostics"].is_null()
+            patched["cache_diagnostics"].as_bool()
         ),
-        (Some("1h"), Some("5m"), true),
-        "a partial policy merges over the stored one, one set at a time"
+        (Some("1h"), Some("5m"), Some(true)),
+        "a partial policy merges over the stored one, one set at a time, and an omitted switch keeps its state"
     );
     let repatched = json(
         patch(
@@ -1607,6 +1587,81 @@ async fn a_pool_carries_a_cache_ttl_policy_and_a_diagnostics_override() {
             "{body}"
         );
     }
+}
+
+#[tokio::test]
+async fn a_new_pool_starts_with_its_diagnostics_switch_off() {
+    let (app, _up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    let plain = json(
+        post(
+            &app,
+            "/admin/pools",
+            r#"{"id":"plain","label":"Plain"}"#,
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        (
+            plain["cache_ttl"]["enabled"].as_bool(),
+            plain["cache_ttl"]["plan"]["main"].as_str(),
+            plain["cache_ttl"]["metered"]["main"].as_str(),
+            plain["cache_diagnostics"].as_bool()
+        ),
+        (Some(false), Some("1h"), Some("5m"), Some(false)),
+        "defaults are answered in full, and the switch starts off"
+    );
+}
+
+#[tokio::test]
+async fn a_null_diagnostics_switch_is_refused_and_the_stored_one_stands() {
+    let (app, _up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    let refused = post(
+        &app,
+        "/admin/pools",
+        r#"{"id":"unset","label":"Unset","cache_diagnostics":null}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(refused.status(), 400, "a create sending null is refused");
+    assert_eq!(
+        json(refused).await["error"],
+        "cache_diagnostics must be true or false"
+    );
+    post(
+        &app,
+        "/admin/pools",
+        r#"{"id":"cached","label":"Cached","cache_diagnostics":true}"#,
+        Some(&cookie),
+    )
+    .await;
+    let refused = patch(
+        &app,
+        "/admin/pools/cached",
+        r#"{"cache_diagnostics":null}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(refused.status(), 400, "a patch sending null is refused");
+    assert_eq!(
+        json(refused).await["error"],
+        "cache_diagnostics must be true or false"
+    );
+    let listed = json(get(&app, "/admin/pools", Some(&cookie)).await).await;
+    let ids_and_switches: Vec<_> = listed["pools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| (p["id"].as_str().unwrap(), p["cache_diagnostics"].as_bool()))
+        .collect();
+    assert_eq!(
+        ids_and_switches,
+        [("cached", Some(true))],
+        "the refused create stored nothing and the refused patch left the switch on"
+    );
 }
 
 #[tokio::test]

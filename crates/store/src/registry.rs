@@ -401,8 +401,7 @@ pub struct PoolRow {
     pub shedding: Shedding,
     pub failover: Failover,
     pub cache_ttl_json: String,
-    /// `None` inherits `compatibility.cache_diagnostics`; `Some` overrides it for this pool.
-    pub cache_diagnostics: Option<bool>,
+    pub cache_diagnostics: bool,
     /// Whether the client's server-side auto mode checks travel; off, the relay drops them so the client
     /// falls back to its own classifier requests.
     pub auto_mode_server: bool,
@@ -1263,7 +1262,7 @@ fn row_to_pool(r: &rusqlite::Row<'_>) -> rusqlite::Result<PoolRow> {
             wind_down_minutes: r.get::<_, i64>(23)? as u32,
         },
         cache_ttl_json: r.get(24)?,
-        cache_diagnostics: r.get::<_, Option<bool>>(25)?,
+        cache_diagnostics: r.get::<_, bool>(25)?,
         affinity: Affinity {
             mode: r.get(26)?,
             subagent_placement: r.get(27)?,

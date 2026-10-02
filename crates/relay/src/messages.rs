@@ -186,8 +186,6 @@ pub struct Relay {
     /// task publishes after its connection was cut.
     bodies: TaskTracker,
     bus: Option<Bus>,
-    /// The bootstrap default under `compatibility.cache_diagnostics`; a pool's own setting overrides it.
-    cache_diagnostics: bool,
     catalog: Arc<CatalogService>,
     pub(crate) clock: Clock,
     drift: DriftGuard,
@@ -218,7 +216,6 @@ impl Relay {
         Relay {
             bodies: TaskTracker::new(),
             bus: None,
-            cache_diagnostics: false,
             catalog,
             clock,
             drift: DriftGuard,
@@ -245,15 +242,6 @@ impl Relay {
     pub fn with_bus(self, bus: Bus) -> Relay {
         Relay {
             bus: Some(bus),
-            ..self
-        }
-    }
-
-    /// Opt-in, off by default: forces the cache-diagnosis beta and `diagnostics.previous_message_id` toward
-    /// `api.anthropic.com` for a request whose pool leaves `cache_diagnostics` unset.
-    pub fn with_cache_diagnostics(self, enabled: bool) -> Relay {
-        Relay {
-            cache_diagnostics: enabled,
             ..self
         }
     }
@@ -1152,12 +1140,11 @@ impl Relay {
             }
             _ => None,
         };
-        // The pool's own setting overrides the bootstrap default; either way a `count_tokens` request never
-        // gets it, since its public schema has no slot for the beta or the member to land in.
+        // The pool's switch alone; a request with no pool reads off. A `count_tokens` request never gets it, since
+        // its public schema has no slot for the beta or the member to land in.
         let cache_diagnostics_on = snapshot
             .pool(&key.pool_id)
-            .and_then(|p| p.cache_diagnostics)
-            .unwrap_or(self.cache_diagnostics);
+            .is_some_and(|p| p.cache_diagnostics);
         let diagnostics = cache_diagnostics_on && trace.kind != Kind::CountTokens;
         let cache_ttl_policy = snapshot
             .pool(&key.pool_id)
@@ -3165,9 +3152,9 @@ struct Admitted<'a> {
     /// chain.
     chains: Option<&'a Chains>,
     client_version: Option<String>,
-    /// `compatibility.cache_diagnostics`, or the pool's own override, resolved at admission and never for a
-    /// `count_tokens` request: the public schema refuses an unknown top-level member and the beta names nothing
-    /// there, and a 400 on that path must never latch the account for its inference requests.
+    /// The pool's `cache_diagnostics` switch, resolved at admission and never for a `count_tokens` request: the
+    /// public schema refuses an unknown top-level member and the beta names nothing there, and a 400 on that path
+    /// must never latch the account for its inference requests.
     diagnostics: bool,
     fallback_ms: i64,
     /// The request carried `speed: "fast"`: fast eligibility applies to its selections and its throttles cool the

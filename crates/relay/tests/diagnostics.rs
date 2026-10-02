@@ -127,7 +127,7 @@ async fn the_beta_and_the_member_are_added_when_absent_with_the_previous_id_acro
         &up,
         &[oauth("a", A, 0), oauth("b", B, 1)],
         PoolSpec {
-            cache_diagnostics: Some(true),
+            cache_diagnostics: true,
             ..Default::default()
         },
     )
@@ -191,7 +191,7 @@ async fn an_immediate_next_request_carries_the_id_the_last_answer_named() {
         &up,
         &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
         PoolSpec {
-            cache_diagnostics: Some(true),
+            cache_diagnostics: true,
             ..Default::default()
         },
     )
@@ -231,7 +231,7 @@ async fn a_flush_after_the_answer_completes_carries_its_id_to_the_store() {
         &up,
         &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
         PoolSpec {
-            cache_diagnostics: Some(true),
+            cache_diagnostics: true,
             ..Default::default()
         },
     )
@@ -280,7 +280,7 @@ async fn an_unsent_retry_still_lands_a_well_formed_edit_and_a_present_member_or_
         &up,
         &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
         PoolSpec {
-            cache_diagnostics: Some(true),
+            cache_diagnostics: true,
             ..Default::default()
         },
     )
@@ -323,18 +323,16 @@ async fn an_unsent_retry_still_lands_a_well_formed_edit_and_a_present_member_or_
 }
 
 #[tokio::test]
-async fn the_option_is_inherited_overridden_and_off_by_default() {
-    // The pool leaves cache_diagnostics unset and the relay's own default is off: nothing is added.
+async fn the_switch_is_off_by_default_and_on_for_the_pool_that_sets_it() {
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
         respond: json_200(),
     }])
     .await;
-    let h = harness_with_cache_diagnostics_default(
+    let h = harness(
         &up,
         &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
         PoolSpec::default(),
-        false,
     )
     .await;
     h.app
@@ -347,46 +345,18 @@ async fn the_option_is_inherited_overridden_and_off_by_default() {
     assert!(!has_diagnostics(&sent.body));
     up.shutdown().await;
 
-    // The relay's own default is on and the pool leaves it unset: it inherits and is added.
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
         respond: json_200(),
     }])
     .await;
-    let h = harness_with_cache_diagnostics_default(
-        &up,
-        &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
-        PoolSpec::default(),
-        true,
-    )
-    .await;
-    h.app
-        .clone()
-        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
-        .await
-        .unwrap();
-    let sent = &up.requests()[0];
-    assert!(beta_header(sent)
-        .unwrap()
-        .split(',')
-        .any(|t| t == CACHE_DIAGNOSIS_BETA));
-    assert!(has_diagnostics(&sent.body));
-    up.shutdown().await;
-
-    // The pool overrides the relay's own true default with an explicit false: nothing is added.
-    let up = FakeUpstream::start(vec![Rule {
-        path_prefix: "/v1/messages".into(),
-        respond: json_200(),
-    }])
-    .await;
-    let h = harness_with_cache_diagnostics_default(
+    let h = harness(
         &up,
         &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
         PoolSpec {
-            cache_diagnostics: Some(false),
+            cache_diagnostics: true,
             ..Default::default()
         },
-        true,
     )
     .await;
     h.app
@@ -394,9 +364,73 @@ async fn the_option_is_inherited_overridden_and_off_by_default() {
         .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
         .await
         .unwrap();
+    assert_diagnosed_turn(&up.requests()[0], None);
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_full_shape_request_gets_the_beta_and_the_member_on_a_pool_with_the_switch_on() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let h = harness(
+        &up,
+        &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
+        PoolSpec {
+            cache_diagnostics: true,
+            ..Default::default()
+        },
+    )
+    .await;
+    let req = request_from_fixture(
+        inference_head(FixtureKind::OauthFirstParty),
+        body(BodyFixture::FirstParty9b244),
+        KEY,
+    );
+    let resp = h.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_diagnosed_turn(&up.requests()[0], None);
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_clients_own_beta_passes_through_once_with_the_switch_off_and_no_member_is_added() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let h = harness(
+        &up,
+        &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
+        PoolSpec::default(),
+    )
+    .await;
+    let mut req = request_for(KEY, "claude-sonnet-4-5", "s1");
+    let sent_list = req
+        .headers()
+        .get("anthropic-beta")
+        .map(|v| format!("{},{CACHE_DIAGNOSIS_BETA}", v.to_str().unwrap()))
+        .unwrap_or_else(|| CACHE_DIAGNOSIS_BETA.to_string());
+    set_header(&mut req, "anthropic-beta", &sent_list);
+    let resp = h.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), 200);
     let sent = &up.requests()[0];
-    assert!(!beta_header(sent).is_some_and(|b| b.split(',').any(|t| t == CACHE_DIAGNOSIS_BETA)));
-    assert!(!has_diagnostics(&sent.body));
+    assert_eq!(
+        beta_header(sent)
+            .expect("the beta line is present")
+            .split(',')
+            .filter(|t| t.trim() == CACHE_DIAGNOSIS_BETA)
+            .count(),
+        1,
+        "the client's own beta arrives once"
+    );
+    assert!(
+        !has_diagnostics(&sent.body),
+        "the relay adds no member with the switch off"
+    );
     up.shutdown().await;
 }
 
@@ -409,7 +443,7 @@ async fn a_400_naming_the_injected_beta_strips_it_retries_once_on_the_same_accou
         &up,
         &[api_key("acct", ACCT_SECRET, 0)],
         PoolSpec {
-            cache_diagnostics: Some(true),
+            cache_diagnostics: true,
             ..Default::default()
         },
     )
@@ -528,7 +562,7 @@ async fn a_400_naming_a_beta_the_client_sent_is_forwarded_unchanged() {
         &up,
         &[api_key("acct", ACCT_SECRET, 0)],
         PoolSpec {
-            cache_diagnostics: Some(true),
+            cache_diagnostics: true,
             ..Default::default()
         },
     )
@@ -571,7 +605,7 @@ async fn a_400_naming_the_generated_request_id_strips_the_header_and_retries() {
         &up,
         &[api_key("acct", ACCT_SECRET, 0)],
         PoolSpec {
-            cache_diagnostics: Some(true),
+            cache_diagnostics: true,
             ..Default::default()
         },
     )
@@ -613,7 +647,7 @@ async fn a_400_naming_the_diagnostics_member_strips_the_member_and_a_second_400_
         &up,
         &[api_key("acct", ACCT_SECRET, 0)],
         PoolSpec {
-            cache_diagnostics: Some(true),
+            cache_diagnostics: true,
             ..Default::default()
         },
     )
@@ -648,7 +682,7 @@ async fn a_strip_retry_spends_no_slot_of_the_budget_so_a_one_attempt_pool_still_
         &up,
         &[api_key("acct", ACCT_SECRET, 0)],
         PoolSpec {
-            cache_diagnostics: Some(true),
+            cache_diagnostics: true,
             ..Default::default()
         },
         limits,
@@ -701,7 +735,7 @@ async fn a_strip_retry_spends_no_slot_of_the_budget_so_a_one_attempt_pool_still_
         &up2,
         &[oauth("a", A, 0), oauth("b", B, 1)],
         PoolSpec {
-            cache_diagnostics: Some(true),
+            cache_diagnostics: true,
             ..Default::default()
         },
         limits2,
@@ -746,7 +780,7 @@ async fn count_tokens_gets_neither_the_member_nor_the_beta_under_the_option() {
         &up,
         &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
         PoolSpec {
-            cache_diagnostics: Some(true),
+            cache_diagnostics: true,
             ..Default::default()
         },
     )
@@ -799,7 +833,7 @@ async fn a_probe_names_the_sessions_previous_message_id_and_its_own_answer_is_ne
         &up,
         &[api_key("acct", ACCT_SECRET, 0)],
         PoolSpec {
-            cache_diagnostics: Some(true),
+            cache_diagnostics: true,
             ..Default::default()
         },
     )

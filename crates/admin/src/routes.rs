@@ -1359,6 +1359,7 @@ fn usage_json(
             "backoff_since": status.backoff_since,
             "last_attempt_at": status.last_attempt_at,
             "last_clean_at": status.last_clean_at,
+            "last_error": status.last_error,
             "last_outcome": status.last_outcome,
             "next_attempt_at": status.next_attempt_at,
             "rate_limited_in_a_row": status.rate_limited_in_a_row,
