@@ -284,7 +284,7 @@ mod tests {
             ),
             ("2026-10-01", "2026-10-01", "shipped")
         );
-        assert_eq!(table.models.len(), 6);
+        assert_eq!(table.models.len(), 8);
         let cells = |p: &ModelPrice| {
             (
                 p.input,
