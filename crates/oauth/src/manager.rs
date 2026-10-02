@@ -330,16 +330,22 @@ impl CredentialManager {
     }
 
     /// The backoff the manager last armed on the account: a refusal's, a token-endpoint 5xx's or an uncertain
-    /// attempt's. `None` when nothing holds the account off; once elapsed it reads as an instant already past
-    /// until the next refresh drops it. The relay reads it to wait out a short backoff on the same account rather
-    /// than spend another account on a request whose own credential may work again in seconds.
+    /// attempt's. The relay reads it to wait out a short backoff on the same account rather than spend another
+    /// account on a request whose own credential may work again in seconds.
+    ///
+    /// `None` when nothing holds the account off or the clock is past the instant: an entry left by a refresh that
+    /// failed before reading it is not this failure's backoff, and a wait of zero on it would spend the request's
+    /// one hold. At the instant itself it still reads as armed, so a clock that reaches it between the arming and
+    /// this read ends the wait rather than skipping the retry.
     pub fn backoff(&self, account_id: &str) -> Option<Backoff> {
+        let now = (self.inner.clock)();
         self.inner
             .not_before
             .lock()
             .expect(LOCK_POISONED)
             .get(account_id)
             .map(|(backoff, _)| *backoff)
+            .filter(|backoff| backoff.until >= now)
     }
 
     /// The instant, on the manager's clock, before which no refresh of the account runs: the backoff a refusal,
@@ -920,6 +926,34 @@ mod tests {
             up.requests().is_empty(),
             "a token rotated a moment ago is not rotated again"
         );
+        up.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_backoff_past_its_instant_reads_as_nothing_armed() {
+        let now = 1_000_000;
+        let (manager, _store, up) = manager_at(now).await;
+        let arm = |until: i64| {
+            manager.inner.not_before.lock().unwrap().insert(
+                "a".into(),
+                (
+                    Backoff {
+                        until,
+                        length_ms: SERVER_ERROR_BACKOFF_MS,
+                    },
+                    Armed::Uncertain,
+                ),
+            );
+        };
+        arm(now + 1);
+        assert_eq!(manager.backoff_until("a"), Some(now + 1));
+        // A clock stepped to the instant ends the wait on it; the backoff still reads as the one armed.
+        arm(now);
+        assert_eq!(manager.backoff_until("a"), Some(now));
+        // What a refresh that failed before `holding_off` leaves behind, since nothing dropped it.
+        arm(now - 1);
+        assert_eq!(manager.backoff("a"), None);
+        assert_eq!(manager.backoff_until("a"), None);
         up.shutdown().await;
     }
 

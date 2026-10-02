@@ -577,16 +577,16 @@ their own bounds, as the paragraph after the steps says. Each attempt goes throu
 
 An upstream `401`, or a `403` whose body is an `authentication_error`, never reaches the client. On an OAuth account the
 router refreshes the token and replays the request on a new token. A refresh the token endpoint refused without rotating
-anything is tried a second time within about five seconds; after a token endpoint's `5xx` or a lost answer the request
-is held on the same account for up to a minute, then refreshed a second time, so a session keeps its warm account
-through the endpoint's bad minute, which is waited out once per request. A `Retry-After` past that minute, a second
-failure, or an Anthropic-key account's failure fails the request over to the next eligible account with the pin moved,
-and a request bound to its account, or one with no account left, is answered the router's own `503 accounts_unavailable`
-with no account named. The failover as a whole, its waits included, ends within the request's own deadline, ten minutes
-less a margin: past it the request is answered `503 accounts_unavailable` rather than tried on another account. The
-attempt rows read `auth_failed` with the upstream status, and the account reads `reauth_required` after a conclusive
-failure (a rejected replay, an `invalid_grant`, a token endpoint's `401`), which the Accounts view and the
-`reauth_required` alert show.
+anything is tried a second time within the transient backoff, about five seconds unless the endpoint asked for longer;
+after a token endpoint's `5xx` or a lost answer the request is held on the same account for up to a minute, then
+refreshed a second time, so a session keeps its warm account through the endpoint's bad minute, which is waited out once
+per request. A `Retry-After` past that minute, a second failure, or an Anthropic-key account's failure fails the request
+over to the next eligible account with the pin moved, and a request bound to its account, or one with no account left,
+is answered the router's own `503 accounts_unavailable` with no account named. The failover, its waits included, starts
+no new leg past the request's own deadline, ten minutes less a margin: past it the request is answered
+`503 accounts_unavailable` rather than tried on another account. The attempt rows read `auth_failed` with the upstream
+status, and the account reads `reauth_required` after a conclusive failure (a rejected replay, an `invalid_grant`, a
+token endpoint's `401`), which the Accounts view and the `reauth_required` alert show.
 
 A stream commits at its `message_start` event or its first `error` event, whichever comes first; earlier events
 are buffered, up to 64 KiB, and relayed after commit in order; a stream that exceeds the buffer or sends no

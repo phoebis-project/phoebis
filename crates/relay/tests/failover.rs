@@ -1092,7 +1092,16 @@ async fn ledger_rows(
     phoebis_ledger::RequestRecord,
     Vec<phoebis_ledger::AttemptRecord>,
 ) {
-    let events = drain_until_complete(sub).await;
+    rows_of(drain_until_complete(sub).await)
+}
+
+/// The rows one request's events assemble into, for a test that also reads the events themselves.
+fn rows_of(
+    events: Vec<phoebis_bus::Event>,
+) -> (
+    phoebis_ledger::RequestRecord,
+    Vec<phoebis_ledger::AttemptRecord>,
+) {
     let mut assembler = Assembler::new(std::sync::Arc::new(|| 0));
     let records: Vec<Record> = events
         .into_iter()
@@ -1498,10 +1507,11 @@ async fn six_accounts_with_lost_refresh_answers_hold_once_and_answer_within_the_
 #[tokio::test]
 async fn a_wait_that_would_pass_the_request_deadline_ends_at_it_with_the_exhaustion_answer() {
     let up = an_expired_token_and_a_token_endpoint_down().await;
-    // 40 s exceeds the margin, so the request's deadline is 10 s past its admission.
+    // 40 s exceeds the margin, so the request's deadline is 10 s past its admission. `b` is free, so only the
+    // deadline at the loop's head keeps the request from selecting it once the wait on `a` ends.
     let h = harness_with_limits(
         &up,
-        &[oauth("a", A, 0)],
+        &[oauth("a", A, 0), oauth("b", B, 1)],
         PoolSpec::default(),
         phoebis_relay::Limits {
             head_timeout: Duration::from_secs(40),
@@ -1527,6 +1537,120 @@ async fn a_wait_that_would_pass_the_request_deadline_ends_at_it_with_the_exhaust
         token_posts(&up),
         1,
         "the floor was not waited out past the request's deadline"
+    );
+    assert_eq!(
+        credentials_seen(&up),
+        [A],
+        "no new leg started past the deadline"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_short_refusal_waited_out_on_one_account_leaves_the_floor_to_the_next() {
+    // Unscoped, for the replay on the refreshed token; each account's own token answers 401.
+    let up = FakeUpstream::start(vec![
+        Rule {
+            path_prefix: "/v1/messages".into(),
+            respond: json_200(),
+        },
+        Rule {
+            path_prefix: "/v1/oauth/token".into(),
+            respond: Respond::Json {
+                status: 429,
+                headers: vec![],
+                body: b"{}".to_vec(),
+            },
+        },
+    ])
+    .await;
+    up.add_credential_rule(A, "/v1/messages", expired());
+    up.add_credential_rule(B, "/v1/messages", expired());
+    // `a`'s refresh and its retry answer 429, `b`'s first refresh loses its answer.
+    up.set_rule_after(2, "/v1/oauth/token", Respond::CloseAfterRequest);
+    let h = harness(
+        &up,
+        &[
+            oauth("a", A, 0),
+            TestAccount {
+                uuid: Some(ACCOUNT_UUID),
+                ..oauth("b", B, 1)
+            },
+        ],
+        PoolSpec::default(),
+    )
+    .await;
+    let inflight = spawned(&h, request_for(KEY, "claude-sonnet-4-5", "s1"));
+    step_to_backoff(&h, &up, "a").await;
+    assert_eq!(
+        h.clock.load(std::sync::atomic::Ordering::SeqCst),
+        NOW + 5_000,
+        "the 429 armed the transient backoff, and the request waited it out on `a`"
+    );
+    wait_for(Duration::from_secs(5), || {
+        (token_posts(&up) == 3).then_some(())
+    })
+    .await;
+    wait_for(Duration::from_secs(5), || h.manager.backoff_until("b")).await;
+    stays_for(Duration::from_millis(300), || !inflight.is_finished()).await;
+    up.set_rule_after(3, "/v1/oauth/token", token_answer());
+    step_to_backoff(&h, &up, "b").await;
+    assert_eq!(
+        h.clock.load(std::sync::atomic::Ordering::SeqCst),
+        NOW + 65_000,
+        "the lost answer armed the floor, which the transient wait on `a` did not spend"
+    );
+    let resp = answered(inflight).await;
+    assert_eq!(
+        (resp.status().as_u16(), outcome(&resp).account_id.as_str()),
+        (200, "b")
+    );
+    assert_eq!(
+        token_posts(&up),
+        4,
+        "two on `a`, the second after its transient backoff, then two on `b` around its floor"
+    );
+    assert_eq!(credentials_seen(&up), [A, B, "sk-ant-oat01-PLACEHOLDER"]);
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_hold_the_accounts_removal_cancels_keeps_one_head_and_completes_canceled() {
+    let up = an_expired_token_and_a_token_endpoint_down().await;
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test");
+    let h = harness_with_bus(&up, &[oauth("a", A, 0)], PoolSpec::default(), bus).await;
+    let inflight = spawned(&h, request_for(KEY, "claude-sonnet-4-5", "s1"));
+    wait_for(Duration::from_secs(5), || h.manager.backoff_until("a")).await;
+    stays_for(Duration::from_millis(300), || !inflight.is_finished()).await;
+    h.store.delete_account("a", "test").unwrap();
+    h.router.reload().await.unwrap();
+    let resp = answered(inflight).await;
+    assert_eq!(
+        (
+            resp.status().as_u16(),
+            resp.headers()["x-phoebis-error-code"].to_str().unwrap()
+        ),
+        (503, "account_cancelled")
+    );
+    resp.into_body().collect().await.unwrap();
+    let events = drain_until_complete(&mut sub).await;
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| matches!(e, phoebis_bus::Event::ResponseHead(_)))
+            .count(),
+        1,
+        "the attempt's head is the 401 the hold followed"
+    );
+    let (request, attempts) = rows_of(events);
+    assert_eq!(request.outcome.as_str(), "canceled");
+    assert_eq!(
+        attempts
+            .iter()
+            .map(|a| (a.outcome.as_str(), a.upstream_status))
+            .collect::<Vec<_>>(),
+        [("auth_failed", Some(401))]
     );
     up.shutdown().await;
 }

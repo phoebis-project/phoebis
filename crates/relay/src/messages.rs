@@ -2405,9 +2405,10 @@ impl Relay {
                                 Waited::Cleared => {}
                                 // The loop head answers the exhaustion past the deadline; this account is done.
                                 Waited::Deadline => break (None, None, true),
+                                // The 401's head is this attempt's, published before the verdict.
                                 Waited::Cancelled => {
                                     return Next::Respond(
-                                        self.cancelled(&ctx, &head, written_at).await,
+                                        self.cancelled_after_head(&ctx, head.status).await,
                                     )
                                 }
                             }
@@ -2948,12 +2949,19 @@ impl Relay {
                 (self.clock)(),
             )
             .await;
+        self.cancelled_after_head(ctx, head.status).await
+    }
+
+    /// The caller's answer once the account left the router after this attempt's head was published: the request
+    /// completes `canceled` and the attempt keeps the outcome its head recorded, since a second head for the same
+    /// attempt would overwrite that outcome in the ledger.
+    async fn cancelled_after_head(&self, ctx: &Responding<'_>, status: u16) -> Response {
         let outcome = self.outcome(
             ctx.trace,
             Some(ctx.key),
             Some(ctx.identity),
             &ctx.account.id,
-            head.status,
+            status,
             ctx.attempt,
             true,
             None,

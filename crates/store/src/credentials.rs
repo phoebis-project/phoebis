@@ -10,6 +10,15 @@ use crate::{crypto, StorageKey, Store, StoreError, LOCK_POISONED, PENDING_WHERE}
 // attempt through `PENDING_WHERE`.
 const IN_FLIGHT_WHERE: &str = "resolved_at IS NULL";
 
+// `PENDING_WHERE` as one term is the predicate of the partial index `refresh_attempts_pending`, so SQLite answers
+// this read from that index rather than the table.
+fn holder_pending_query() -> String {
+    format!(
+        "SELECT EXISTS(SELECT 1 FROM refresh_attempts \
+         WHERE account_id = ?1 AND incarnation = ?2 AND ({PENDING_WHERE}))"
+    )
+}
+
 /// A secret string that zeroizes its buffer on drop and never prints its value.
 #[derive(Zeroize, ZeroizeOnDrop)]
 pub struct Secret(String);
@@ -662,6 +671,22 @@ impl Store {
             .map_err(StoreError::from)
     }
 
+    /// Whether the holder `incarnation` names has an attempt still open, which a restart quarantines the account
+    /// for: one in flight, or one resolved uncertain, whatever a later retry beside it answered.
+    pub fn has_pending_refresh_attempt(
+        &self,
+        account_id: &str,
+        incarnation: u64,
+    ) -> Result<bool, StoreError> {
+        let conn = self.conn.lock().expect(LOCK_POISONED);
+        conn.query_row(
+            &holder_pending_query(),
+            params![account_id, incarnation as i64],
+            |row| row.get(0),
+        )
+        .map_err(StoreError::from)
+    }
+
     /// The newest attempt of the holder `incarnation` names: a previous holder's history under the same id is
     /// not this one's.
     pub fn last_refresh_attempt(
@@ -677,5 +702,28 @@ impl Store {
         )
         .optional()
         .map_err(StoreError::from)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_holders_pending_read_is_answered_from_the_partial_index() {
+        let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+        let conn = store.conn.lock().unwrap();
+        let plan: Vec<String> = conn
+            .prepare(&format!("EXPLAIN QUERY PLAN {}", holder_pending_query()))
+            .unwrap()
+            .query_map(params!["a", 1], |row| row.get(3))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert!(
+            plan.iter()
+                .any(|detail| detail.contains("USING INDEX refresh_attempts_pending")),
+            "{plan:?}"
+        );
     }
 }
