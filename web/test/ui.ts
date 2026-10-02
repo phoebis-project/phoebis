@@ -4,6 +4,7 @@ export { act, createElement, useEffect, useState } from 'react';
 export { createRoot } from 'react-dom/client';
 export { ApiError, setHooks } from '@/api/http';
 export { queueToast } from '@/app/session';
+export { MultiSelect } from '@/components/ui/MultiSelect';
 export { PATTERN_GRAMMAR, PatternInput } from '@/components/ui/PatternInput';
 export { Menu } from '@/components/ui/primitives';
 export { installClock } from '@/lib/clock';

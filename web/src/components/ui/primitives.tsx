@@ -1,4 +1,4 @@
-import { createContext, Fragment, useContext, useEffect, useId, useLayoutEffect, useRef, useState, type ButtonHTMLAttributes, type CSSProperties, type HTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes } from 'react';
+import { createContext, Fragment, useContext, useEffect, useId, useLayoutEffect, useRef, useState, type ButtonHTMLAttributes, type CSSProperties, type FocusEvent, type HTMLAttributes, type InputHTMLAttributes, type KeyboardEvent, type ReactNode, type SelectHTMLAttributes } from 'react';
 import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
 import type { ToastItem } from '@/app/session';
@@ -587,10 +587,12 @@ export function Menu({ items, label = 'Actions', onOpenChange }: { items: { dang
   useLayoutEffect(() => {
     if (floating && moved()) setOpen(false);
   });
-  // The portal draws a floating list after every other control on the page, where Tab from the trigger never reaches
-  // it, so focus moves into the list and back to the trigger when it closes. Focus already elsewhere by then stays.
+  // Focus enters the list as it opens, so the list's keys reach it, and returns to the trigger when the list closes;
+  // focus already elsewhere by then stays. A list that floats draws in flow first and moves into the portal, taking the
+  // focused item with it, so the portalled list takes focus again: the portal draws it after every other control on
+  // the page, where Tab from the trigger never reaches it.
   useEffect(() => {
-    if (!floating) return;
+    if (!open) return;
     const list = listRef.current;
     const trigger = triggerRef.current;
     list?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus({ preventScroll: true });
@@ -598,7 +600,39 @@ export function Menu({ items, label = 'Actions', onOpenChange }: { items: { dang
       const at = document.activeElement;
       if (!at || at === document.body || list?.contains(at)) trigger?.focus({ preventScroll: true });
     };
-  }, [floating]);
+  }, [open, floating]);
+  // Escape stops at the menu, since a dialog around it closes on the same key.
+  const onKeys = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      triggerRef.current?.focus({ preventScroll: true });
+      setOpen(false);
+      return;
+    }
+    const items = [...(listRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)') ?? [])];
+    const at = items.indexOf(e.target as HTMLButtonElement);
+    const to =
+      e.key === 'ArrowDown'
+        ? items[(at + 1) % items.length]
+        : e.key === 'ArrowUp'
+          ? items[(at <= 0 ? items.length : at) - 1]
+          : e.key === 'Home'
+            ? items[0]
+            : e.key === 'End'
+              ? items[items.length - 1]
+              : undefined;
+    if (!to) return;
+    e.preventDefault();
+    to.focus();
+  };
+  // Safari, and Firefox on macOS, give a clicked button no focus, so a click on an item blurs the list naming no
+  // element; a blur closes the list only when it names an element outside the list and the trigger, whose own click
+  // toggles the list.
+  const closeOnLeave = (e: FocusEvent<HTMLDivElement>) => {
+    const to = e.relatedTarget;
+    if (to && !listRef.current?.contains(to) && !triggerRef.current?.contains(to)) setOpen(false);
+  };
   useEffect(() => {
     if (!floating) return;
     const onScroll = () => {
@@ -618,6 +652,8 @@ export function Menu({ items, label = 'Actions', onOpenChange }: { items: { dang
       className={placement.kind === 'down' ? 'menu__list' : `menu__list menu__list--${placement.kind}`}
       role="menu"
       style={placement.kind === 'float' ? { left: placement.left, top: placement.top } : undefined}
+      onBlur={closeOnLeave}
+      onKeyDown={onKeys}
     >
       {items.map((item) => (
         <button

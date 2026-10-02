@@ -22,6 +22,13 @@ window.HTMLDialogElement.prototype.close = function () {
   this.removeAttribute('open');
   this.dispatchEvent(new window.Event('close'));
 };
+// A browser asks the topmost modal dialog to close on an Escape no handler took, through a cancelable cancel event;
+// jsdom makes no such request, so a popup inside a dialog that let the key through would go unnoticed here.
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape' || e.defaultPrevented) return;
+  const dialog = [...document.querySelectorAll('dialog[open]')].pop();
+  if (dialog?.dispatchEvent(new window.Event('cancel', { cancelable: true }))) dialog.close();
+});
 
 const problems = [];
 const noise = /width\(0\) and height\(0\)|ResponsiveContainer|act\(\.\.\.\)/;
@@ -5679,6 +5686,130 @@ await m.navigate('/observe');
 m.unmount();
 if (roleBeforePreview === null) localStorage.removeItem('phoebis.role');
 else localStorage.setItem('phoebis.role', roleBeforePreview);
+
+{
+  // The popups from the keyboard, late in the run like the checks after them, so the real time their mounts take moves
+  // none of the story's relative times the earlier checks read. jsdom has no Tab navigation, so a Tab out is a focus
+  // moved to a control outside the popup.
+  const press = (key, at = document.activeElement) => at?.dispatchEvent(new window.KeyboardEvent('keydown', { bubbles: true, cancelable: true, key }));
+  const named = (el) => (el === document.body ? 'the body' : `${el?.tagName.toLowerCase()} ${el?.className} ${el?.textContent?.trim().slice(0, 30)}`);
+
+  let page = await mount('/requests');
+  const filter = (label) => [...page.container.querySelectorAll('.filters .mselect')].find((d) => d.querySelector('.mselect__trigger')?.textContent?.trim().startsWith(label));
+  const agentType = filter('Agent type');
+  const agentOpener = agentType?.querySelector('.mselect__trigger');
+  agentOpener?.click();
+  await page.settle(100);
+  const labels = [...(agentType?.querySelectorAll('.mselect__option') ?? [])].map((o) => o.textContent?.trim());
+  const at = () => (agentType?.querySelector('.mselect__list')?.contains(document.activeElement) ? document.activeElement?.textContent?.trim() : named(document.activeElement));
+  const moves = [at()];
+  for (const key of ['ArrowDown', 'ArrowUp', 'End', 'Home']) {
+    press(key);
+    await page.settle(50);
+    moves.push(at());
+  }
+  press('Escape');
+  await page.settle(50);
+  const escaped = [agentType?.querySelector('.mselect__list') === null, document.activeElement === agentOpener];
+  agentOpener?.click();
+  await page.settle(100);
+  const reopened = agentType?.querySelector('.mselect__list') !== null;
+  page.container.querySelector('input.filters__search')?.focus();
+  await page.settle(50);
+  const tabbedOut = agentType?.querySelector('.mselect__list') === null;
+  const wanted = [labels[0], labels[1], labels[0], labels.at(-1), labels[0]];
+  results.push({
+    name: 'the Agent type filter opens onto its first option and the keys move, close and return focus',
+    ok: labels.length > 2 && JSON.stringify(moves) === JSON.stringify(wanted) && escaped.every(Boolean) && reopened && tabbedOut,
+    missing: [`moves ${JSON.stringify(moves)} against ${JSON.stringify(wanted)}`, `Escape closed ${escaped[0]}, on the trigger ${escaped[1]}`, `reopened ${reopened}, a Tab out closed ${tabbedOut}`],
+  });
+
+  const models = filter('Models');
+  models?.querySelector('.mselect__trigger')?.click();
+  await page.settle(100);
+  const search = models?.querySelector('.mselect__search');
+  const onSearch = search != null && document.activeElement === search;
+  press('ArrowDown');
+  await page.settle(50);
+  const first = models?.querySelector('.mselect__option');
+  const down = first != null && document.activeElement === first;
+  press('ArrowUp');
+  await page.settle(50);
+  const up = search != null && document.activeElement === search;
+  press('Escape');
+  await page.settle(50);
+  results.push({
+    name: 'the Models filter opens onto its search field',
+    ok: onSearch && down && up && models?.querySelector('.mselect__list') === null,
+    missing: [`on the search field ${onSearch}`, `ArrowDown to the first option ${down}`, `ArrowUp back ${up}`, named(document.activeElement)],
+  });
+
+  agentOpener?.click();
+  await page.settle(100);
+  [...(agentType?.querySelectorAll('.mselect__option') ?? [])].find((o) => o.textContent?.trim() === labels[0])?.click();
+  await page.settle(150);
+  const clear = agentType?.querySelector('.mselect__clear');
+  const nested = page.container.querySelector('button [role="button"]');
+  results.push({
+    name: 'a clear control is a button beside the trigger, not inside it',
+    ok: nested === null && clear?.tagName === 'BUTTON' && clear.getAttribute('type') === 'button' && clear.parentElement === agentType && clear.previousElementSibling === agentOpener,
+    missing: [nested ? `a ${named(nested)} inside a button` : 'nothing nested', clear ? `${named(clear)} after ${named(clear.previousElementSibling)}` : 'no clear control'],
+  });
+  clear?.click();
+  await page.settle(150);
+  press('Escape');
+  await page.settle(50);
+  page.unmount();
+
+  page = await mount('/keys');
+  const keyRow = page.container.querySelector('.card--table tbody tr');
+  const keyOpener = keyRow?.querySelector('.menu__trigger');
+  keyOpener?.click();
+  await page.settle(100);
+  const firstItem = keyRow?.querySelector('.menu__list [role="menuitem"]:not(:disabled)');
+  const openedOn = firstItem != null && document.activeElement === firstItem;
+  press('Escape');
+  await page.settle(50);
+  results.push({
+    name: '/keys a row menu opens onto its first item and Escape returns focus to its trigger',
+    ok: openedOn && keyRow?.querySelector('.menu__list') === null && document.activeElement === keyOpener,
+    missing: [`on ${openedOn ? 'the first item' : named(document.activeElement)}`, `list ${keyRow?.querySelector('.menu__list') ? 'open' : 'closed'}`, named(document.activeElement)],
+  });
+  page.unmount();
+
+  // The pool dialog is a modal dialog, so an Escape the key menu inside it lets through would close the dialog too.
+  page = await mount('/pools');
+  let dlg = null;
+  let keyMenu = null;
+  for (const edit of [...page.container.querySelectorAll('button[aria-label^="Edit pool "]')]) {
+    edit.click();
+    await page.settle(300);
+    dlg = [...page.container.querySelectorAll('dialog[open]')].pop() ?? null;
+    rail(dlg, 'keys')?.click();
+    await page.settle(150);
+    keyMenu = group(dlg, 'Keys')?.querySelector('tbody .menu__trigger') ?? null;
+    if (keyMenu) break;
+    [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
+    await page.settle(200);
+  }
+  keyMenu?.click();
+  await page.settle(100);
+  const inMenu = keyMenu?.closest('.menu')?.querySelector('.menu__list')?.contains(document.activeElement) === true && document.activeElement?.getAttribute('role') === 'menuitem';
+  press('Escape');
+  await page.settle(150);
+  const menuClosed = document.querySelector('.menu__list') === null;
+  const onOpener = keyMenu !== null && document.activeElement === keyMenu;
+  const dialogKept = dlg?.hasAttribute('open') === true;
+  press('Escape', keyMenu);
+  await page.settle(200);
+  const dialogClosed = page.container.querySelector('dialog[open]') === null;
+  results.push({
+    name: 'Escape inside a key menu closes the menu and never reaches the dialog',
+    ok: inMenu && menuClosed && onOpener && dialogKept && dialogClosed,
+    missing: [keyMenu ? `focus in the menu ${inMenu}` : 'no key menu in any pool dialog', `menu closed ${menuClosed}`, `on the trigger ${onOpener}`, `dialog kept ${dialogKept}`, `a second Escape closed it ${dialogClosed}`],
+  });
+  page.unmount();
+}
 
 {
   // The shell's toast queue, each check on the frozen clock with its failures set before the mount unless it says
