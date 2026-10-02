@@ -235,7 +235,7 @@ export const QUOTA_SNAPSHOTS: QuotaSnapshot[] = ACCOUNTS.map((a) => {
       status: 'success',
     };
   }
-  // Past thirty minutes of 429s, so the poll_backoff event on the alerts page is open for this one.
+  // Past thirty minutes of 429s, so the poll_backoff condition holds for this one.
   if (a.id === 'mail') {
     return {
       ...QUOTA_SNAPSHOT_SAMPLE,

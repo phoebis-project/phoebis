@@ -2,10 +2,9 @@ import type { AccountPatch, Api, CreateKeyInput, KeyInput, PoolInput } from '@/a
 import { AFFINITY_MODE_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES, decodeLiveDelta, decodeLiveSnapshot } from '@/api/decode';
 import { ApiError, catalogUnion, slug } from '@/api/http';
 import type {
-  Account, AccountCatalog, AccountInput, AlertDeliveryTest, AlertEvent, AlertKind, AlertRule, AlertRuleInput, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, Delivery, KeyModels, LifecycleDelivery, LifecyclePage, LiveEvent, MemberEligibility, ModelEvent,
+  Account, AccountCatalog, AccountInput, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, KeyModels, LiveEvent, MemberEligibility, ModelEvent,
   ModelRule, ModelsState, PairingInput, PairingPreview, PairingSession, Pool, PoolMember, RequestDetail, RequestLog, RequestPage, RequestQuery, Role, RuleCooldown, Session, SessionInfo, Settings, Subscription,
 } from '@/api/types';
-import { urlHost } from '@/lib/format';
 import { modelRulesRefusal, type NumericKeepaliveKey } from '@/lib/forms';
 import { matchesPattern } from '@/lib/pattern';
 import { matchesPattern as matchesModelPattern, processRules } from '@/lib/patterns';
@@ -14,11 +13,11 @@ import { ACCOUNTS, QUOTA_HISTORY, QUOTA_SNAPSHOTS } from './accounts';
 import { breakdownOf, burnOf, placementsOf, rewritesOf, seriesOf } from './analytics';
 import { CATALOG } from './catalog';
 import { liveFeed } from './live';
-import { ALERT_EVENTS, ALERT_RULES, KEEPALIVE_OVERVIEW, LIFECYCLE_DELIVERIES, RECIPES, SESSIONS, SETTINGS } from './operations';
+import { KEEPALIVE_OVERVIEW, RECIPES, SESSIONS, SETTINGS } from './operations';
 import { KEYS, POOLS } from './pools';
 import { ACCOUNT_ROLLUPS, ALL_ROLLUPS, REQUEST_EVENTS, REQUESTS, capturedBodiesFor, requestById } from './requests';
 import { createRng } from './rng';
-import { ACCOUNT_SAMPLE, ALERT_RULE_SAMPLE, KEY_SAMPLE, PAIRING_SAMPLE, POOL_SAMPLE } from './samples';
+import { ACCOUNT_SAMPLE, KEY_SAMPLE, PAIRING_SAMPLE, POOL_SAMPLE } from './samples';
 import { DAY, MINUTE, NOW, ago, ahead, iso } from './time';
 
 // Fixed, like the live feed's draw: a pass over the mock reads the same secrets every run.
@@ -32,14 +31,6 @@ const VIEWER_WRITE = 'the viewer role cannot change anything';
 const VIEWER_BODIES = 'captured bodies are for administrators';
 const KEY_TAKEN = 'a key with this id exists';
 const POOL_TAKEN = 'a pool with this id exists';
-
-/** The part of the rule check a dialog can reach, in the route's order and wording; create and edit share it. */
-const ruleRefusal = (input: AlertRuleInput): string | null => {
-  if (input.kind !== 'utilization_above') return null;
-  if (input.threshold === null || !(input.threshold >= 0 && input.threshold <= 1)) return 'utilization_above needs a threshold between 0 and 1';
-  if (input.windowId === null) return 'utilization_above needs a window of 5h, 7d, or 7d_oi';
-  return null;
-};
 
 /**
  * The policy check's bounds in its own order and wording, written out apart from the form's table so a form that
@@ -198,9 +189,9 @@ const previewedRole = (): Role | null => {
   }
 };
 
-/** Set to stand in for a fresh installation, whose alert lists are empty until an operator writes a rule. */
-const EMPTY_STORE_KEY = 'phoebis.mockEmpty';
-const emptyStore = (): boolean => {
+/** Set to stand in for a fresh installation, whose lists are empty. */
+export const EMPTY_STORE_KEY = 'phoebis.mockEmpty';
+export const emptyStore = (): boolean => {
   try {
     return localStorage.getItem(EMPTY_STORE_KEY) === '1';
   } catch {
@@ -218,17 +209,6 @@ function fromCallbackUrl(url: string): { code: string; state: string } | null {
   const code = params.get('code');
   const state = params.get('state');
   return code && state ? { code, state } : null;
-}
-
-/**
- * What the events route hands a caller: the question text came out of a captured body, so past that body's deadline
- * it is gone for every role, and before it a viewer, who may not read the body either, gets it blanked with a flag.
- */
-function questionFor(e: AlertEvent, viewer: boolean): AlertEvent {
-  if (e.detail === null || !('question' in e.detail)) return e;
-  const expiresAt = e.detail.question_expires_at;
-  if (typeof expiresAt === 'number' && Date.now() >= expiresAt) return { ...e, detail: { ...e.detail, question: null } };
-  return viewer ? { ...e, detail: { ...e.detail, question: null, question_redacted: true } } : e;
 }
 
 /** A flag outranks the enabled bit and the cooldowns in the status the account view folds, so pausing never hides one. */
@@ -325,24 +305,9 @@ function isAfterCursor(r: RequestLog, cursor: string): boolean {
   return rowAt < at || (rowAt === at && r.id < id);
 }
 
-/** The lifecycle route's cursor is the same `<at>:<id>` shape, but the delivery id is the table's integer key
- * rather than the request's string one, so the tie-break compares numbers. */
-function isAfterLifecycleCursor(d: LifecycleDelivery, cursor: string): boolean {
-  const sep = cursor.indexOf(':');
-  const at = Number(cursor.slice(0, sep));
-  const id = Number(cursor.slice(sep + 1));
-  const rowAt = Date.parse(d.at);
-  return rowAt < at || (rowAt === at && d.id < id);
-}
-
 export class MockApi implements Api {
   private accounts = ACCOUNTS.map((a) => ({ ...a }));
-  private events: AlertEvent[] = ALERT_EVENTS.map((e) => ({ ...e }));
   private keys: ApiKey[] = [...KEYS];
-  private lifecycle: LifecycleDelivery[] = LIFECYCLE_DELIVERIES.map((d) => ({ ...d }));
-  // Public so a check can set its own page size; the default sits below the nine-row seed so the control renders
-  // in the mock bundle without extra setup, while a smoke check that wants the route's own cap sets it to 500.
-  lifecyclePageSize = 6;
   private pairings = new Map<string, { accountId: string; state: string }>();
   // The route reads every member's kind and verdict afresh on each answer; the story's are read once, at load.
   private pools: Omit<Pool, 'keys'>[] = POOLS.map((p) => ({
@@ -352,7 +317,6 @@ export class MockApi implements Api {
       return { ...m, budgetUntil: budgetUntilOf(m, Date.now()), eligible: eligibilityOf(account, p.overagePolicy, m), kind: account?.kind ?? 'oauth' };
     }),
   }));
-  private rules: AlertRule[] = ALERT_RULES.map((r) => ({ ...r }));
   private secretRng = createRng(MOCK_SEED);
   private session: SessionInfo | null = null;
   private sessions: Session[] = [...SESSIONS];
@@ -477,14 +441,6 @@ export class MockApi implements Api {
     return latency(account, 300);
   }
 
-  async createAlertRule(input: AlertRuleInput): Promise<AlertRule> {
-    this.mutation();
-    const refusal = ruleRefusal(input);
-    if (refusal) throw new ApiError(400, refusal, null);
-    const rule: AlertRule = { ...ALERT_RULE_SAMPLE, createdAt: iso(NOW), enabled: input.enabled, hasSecret: Boolean(input.secret), id: `rule_${this.token(6)}`, kind: input.kind, scope: input.scope, threshold: input.threshold, updatedAt: iso(NOW), webhookUrl: input.webhookUrl, windowId: input.windowId };
-    this.rules = [...this.rules, rule];
-    return latency(rule, 250);
-  }
 
   async createKey(input: CreateKeyInput): Promise<CreatedApiKey> {
     this.mutation();
@@ -555,11 +511,6 @@ export class MockApi implements Api {
     return latency(undefined, 250);
   }
 
-  async deleteAlertRule(id: string) {
-    this.mutation();
-    this.rules = this.rules.filter((r) => r.id !== id);
-    return latency(undefined, 200);
-  }
 
   async deleteKey(id: string) {
     this.mutation();
@@ -724,22 +675,8 @@ export class MockApi implements Api {
     return latency(this.accounts);
   }
 
-  listAlertDeliveries(eventId: string): Promise<Delivery[]> {
-    return latency(this.events.find((e) => e.id === eventId)?.deliveries ?? []);
-  }
 
-  listAlertEvents(state?: 'open' | 'resolved') {
-    const stored = emptyStore() ? [] : this.events;
-    const viewer = this.role() !== 'admin';
-    const events = stored.map((e) => questionFor(e, viewer));
-    return latency(state ? events.filter((e) => e.state === state) : events);
-  }
 
-  listAlertRules() {
-    const rules = emptyStore() ? [] : this.rules;
-    // A webhook URL can carry the receiver's credential in its path, so the route answers a viewer the host alone.
-    return latency(this.role() === 'admin' ? rules : rules.map((r) => ({ ...r, webhookUrl: urlHost(r.webhookUrl) })));
-  }
 
   listCatalog() {
     return latency(CATALOG);
@@ -766,16 +703,6 @@ export class MockApi implements Api {
     return latency(this.keys);
   }
 
-  listLifecycleDeliveries(kind?: AlertKind, cursor?: string): Promise<LifecyclePage> {
-    const rows = emptyStore() ? [] : this.lifecycle.filter((d) => kind === undefined || d.kind === kind);
-    const sorted = [...rows].sort((a, b) => Date.parse(b.at) - Date.parse(a.at) || b.id - a.id);
-    const after = cursor ? sorted.filter((d) => isAfterLifecycleCursor(d, cursor)) : sorted;
-    const page = after.slice(0, this.lifecyclePageSize);
-    const last = page[page.length - 1];
-    // The route's own rule: a full page carries a cursor even when nothing lies beyond it, so a page exactly the
-    // seed's size still says so, the way an operator's log can land on that boundary too.
-    return latency({ deliveries: page, nextCursor: page.length === this.lifecyclePageSize && last ? `${Date.parse(last.at)}:${last.id}` : null });
-  }
 
   listPools() {
     return latency(this.pools.map((p) => this.poolView(p)));
@@ -835,14 +762,6 @@ export class MockApi implements Api {
     return latency(this.putAccount({ ...this.account(accountId), label }), 250);
   }
 
-  async resolveAlertEvent(id: string): Promise<AlertEvent> {
-    this.mutation();
-    const event = this.events.find((e) => e.id === id);
-    if (!event) return Promise.reject(new ApiError(404, 'alert event not found', null));
-    const next: AlertEvent = { ...event, resolvedAt: iso(NOW), state: 'resolved' };
-    this.events = this.events.map((e) => (e.id === id ? next : e));
-    return latency(next, 250);
-  }
 
   async resumeAccount(accountId: string) {
     this.mutation();
@@ -895,12 +814,6 @@ export class MockApi implements Api {
     });
   }
 
-  async testAlertRule(id: string): Promise<AlertDeliveryTest> {
-    this.mutation();
-    const rule = this.rules.find((r) => r.id === id);
-    if (!rule) return Promise.reject(new ApiError(404, 'alert rule not found', null));
-    return latency({ error: null, status: 200 }, 400);
-  }
 
   /** The account route's refusals in its order and words; the end is kept only while the flag stands. */
   async updateAccount(accountId: string, patch: AccountPatch): Promise<Account> {
@@ -916,21 +829,6 @@ export class MockApi implements Api {
     return latency(this.putAccount({ ...a, cancelled: patch.cancelled, subscription }), 250);
   }
 
-  async updateAlertRule(id: string, input: AlertRuleInput): Promise<AlertRule> {
-    this.mutation();
-    const rule = this.rules.find((r) => r.id === id);
-    if (!rule) return Promise.reject(new ApiError(404, 'alert rule not found', null));
-    // An open event resolves under the rule's kind, so the route holds the kind still while one is open.
-    const open = this.events.filter((e) => e.ruleId === id && e.state === 'open').length;
-    if (input.kind !== rule.kind && open > 0) throw new ApiError(409, `the condition cannot change while ${open} ${open === 1 ? 'event is' : 'events are'} open for this rule`, null);
-    const refusal = ruleRefusal(input);
-    if (refusal) throw new ApiError(400, refusal, null);
-    // An absent secret leaves the stored one alone, so the badge only turns off when an empty string clears it.
-    const hasSecret = input.secret === undefined ? rule.hasSecret : input.secret !== '';
-    const next: AlertRule = { ...rule, enabled: input.enabled, hasSecret, kind: input.kind, scope: input.scope, threshold: input.threshold, updatedAt: iso(NOW), webhookUrl: input.webhookUrl, windowId: input.windowId };
-    this.rules = this.rules.map((r) => (r.id === id ? next : r));
-    return latency(next, 250);
-  }
 
   async updateKey(id: string, input: KeyInput): Promise<ApiKey> {
     this.mutation();

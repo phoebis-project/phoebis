@@ -13,8 +13,6 @@ const as = async (role) => {
 const poolInputOf = (p) => ({ ...p, members: p.members.map((m) => ({ accountId: m.accountId, budgetDailyUsd: m.budgetDailyUsd, budgetMonthlyUsd: m.budgetMonthlyUsd, priority: m.priority })) });
 const storyPool = async (api) => poolInputOf((await api.listPools()).find((p) => p.id === 'all'));
 const keyInput = { autoModeServer: null, bodyCaptureHours: null, enabled: true, expiresInDays: null, keepaliveOptOut: false, longContextTwins: true, modelRules: [], modelRulesMode: 'extend', name: 'fresh', notes: null, poolId: 'all' };
-const ruleInputOf = (r) => ({ enabled: r.enabled, kind: r.kind, scope: r.scope, threshold: r.threshold, webhookUrl: r.webhookUrl, windowId: r.windowId });
-const newRule = { enabled: true, kind: 'utilization_above', scope: { id: 'all', type: 'pool' }, threshold: 0.8, webhookUrl: 'https://hooks.example.com/phoebis/new', windowId: '5h' };
 
 /** Every `Api` method the gate treats as a write, called with inputs the admin would be answered for. */
 const WRITES = [
@@ -24,25 +22,20 @@ const WRITES = [
   ['completePairing', (api) => api.completePairing('pair_unknown', { code: 'code', state: 'state' })],
   ['confirmPairing', (api) => api.confirmPairing('pair_unknown')],
   ['createAccount', (api) => api.createAccount({ id: 'fresh', kind: 'api_key', label: 'Fresh', secret: 'sk-ant-api03-FAKE' })],
-  ['createAlertRule', (api) => api.createAlertRule(newRule)],
   ['createKey', (api) => api.createKey(keyInput)],
   ['createPool', async (api) => api.createPool({ ...(await storyPool(api)), name: 'fresh' })],
   ['deleteAccount', (api) => api.deleteAccount('spare')],
-  ['deleteAlertRule', (api) => api.deleteAlertRule('rule_7d')],
   ['deleteKey', (api) => api.deleteKey('batch')],
   ['deletePool', (api) => api.deletePool('codex')],
   ['disconnectAccount', (api) => api.disconnectAccount('business')],
   ['pauseAccount', (api) => api.pauseAccount('business')],
   ['releaseSession', async (api) => { const s = (await api.listSessions()).find((x) => !x.historical); return api.releaseSession(s.keyId, s.sessionId); }],
   ['renameAccount', (api) => api.renameAccount('business', 'Renamed')],
-  ['resolveAlertEvent', async (api) => api.resolveAlertEvent((await api.listAlertEvents('open'))[0].id)],
   ['resumeAccount', (api) => api.resumeAccount('team')],
   ['revokeKey', (api) => api.revokeKey('laptop')],
   ['rotateKey', (api) => api.rotateKey('laptop')],
   ['startPairing', (api) => api.startPairing('team')],
-  ['testAlertRule', (api) => api.testAlertRule('rule_7d')],
   ['updateAccount', (api) => api.updateAccount('business', { cancelled: true, subscriptionEndsAt: '2026-10-19T09:15:00.000Z' })],
-  ['updateAlertRule', async (api) => api.updateAlertRule('rule_7d', ruleInputOf((await api.listAlertRules()).find((r) => r.id === 'rule_7d')))],
   ['updateKey', (api) => api.updateKey('laptop', { ...keyInput, name: 'laptop', expiresAt: undefined })],
   ['updatePool', async (api) => api.updatePool('all', await storyPool(api))],
   ['verifyAccount', (api) => api.verifyAccount('business')],
@@ -51,7 +44,7 @@ const WRITES = [
 const EXEMPT = ['login', 'logout', 'refreshUsage'];
 const READS = [
   'analyticsBudgets', 'analyticsPlacements', 'getAccountCatalog', 'getAnalyticsBreakdown', 'getAnalyticsBurn', 'getAnalyticsRewrites', 'getAnalyticsSeries', 'getCapturedBodies', 'getKeepaliveOverview', 'getKeyModels', 'getModelsState', 'getOverview', 'getQuotaHistory', 'getRequest', 'getSession', 'getSettings',
-  'listAccountRollups', 'listAccounts', 'listAlertDeliveries', 'listAlertEvents', 'listAlertRules', 'listCatalog', 'listCatalogOf', 'listKeepaliveRecipes', 'listKeys', 'listLifecycleDeliveries',
+  'listAccountRollups', 'listAccounts', 'listCatalog', 'listCatalogOf', 'listKeepaliveRecipes', 'listKeys',
   'listPools', 'listQuotaSnapshots', 'listRequests', 'listSessions', 'subscribeLive',
 ];
 
@@ -63,11 +56,11 @@ test('the write table names every method of the client, so a new write cannot mi
 
 test('every write refuses a viewer with the gate\'s 403 and changes nothing', async () => {
   const api = await as('viewer');
-  const before = await Promise.all([api.listAccounts(), api.listAlertRules(), api.listKeys(), api.listPools(), api.listSessions()]);
+  const before = await Promise.all([api.listAccounts(), api.listKeys(), api.listPools(), api.listSessions()]);
   for (const [name, invoke] of WRITES) {
     await assert.rejects(() => invoke(api), refusedAs(403, 'the viewer role cannot change anything'), name);
   }
-  assert.deepEqual(await Promise.all([api.listAccounts(), api.listAlertRules(), api.listKeys(), api.listPools(), api.listSessions()]), before);
+  assert.deepEqual(await Promise.all([api.listAccounts(), api.listKeys(), api.listPools(), api.listSessions()]), before);
 });
 
 test('a viewer may still refresh usage and log out, which the gate lets through', async () => {
@@ -83,37 +76,6 @@ test('captured bodies are the admin\'s, as the bodies route answers a viewer', a
   await assert.rejects(() => viewer.getCapturedBodies(captured.id), refusedAs(403, 'captured bodies are for administrators'));
   const admin = await as('admin');
   assert.notEqual(await admin.getCapturedBodies(captured.id), null);
-});
-
-test('a viewer is answered the webhook host alone, where the admin reads the whole URL', async () => {
-  const viewer = await as('viewer');
-  const admin = await as('admin');
-  const full = (await admin.listAlertRules()).find((r) => r.id === 'rule_7d').webhookUrl;
-  assert.equal(full, 'https://hooks.example.com/phoebis/quota');
-  assert.deepEqual([...new Set((await viewer.listAlertRules()).map((r) => r.webhookUrl))], ['hooks.example.com']);
-});
-
-test('a utilization rule without its threshold or its window is refused with the route\'s text', async () => {
-  const api = await as('admin');
-  const count = (await api.listAlertRules()).length;
-  await assert.rejects(() => api.createAlertRule({ ...newRule, threshold: null }), refusedAs(400, 'utilization_above needs a threshold between 0 and 1'));
-  await assert.rejects(() => api.createAlertRule({ ...newRule, windowId: null }), refusedAs(400, 'utilization_above needs a window of 5h, 7d, or 7d_oi'));
-  const rule = (await api.listAlertRules()).find((r) => r.id === 'rule_7d');
-  await assert.rejects(() => api.updateAlertRule('rule_7d', { ...ruleInputOf(rule), windowId: null }), refusedAs(400, 'utilization_above needs a window of 5h, 7d, or 7d_oi'), 'create and patch refuse the same rows');
-  assert.equal((await api.listAlertRules()).length, count, 'a refused rule is not stored');
-  assert.equal((await api.createAlertRule(newRule)).windowId, '5h');
-});
-
-test('a rule with an open event keeps its condition until the event resolves', async () => {
-  const api = await as('admin');
-  const rule = (await api.listAlertRules()).find((r) => r.id === 'rule_7d');
-  const open = (await api.listAlertEvents('open')).filter((e) => e.ruleId === 'rule_7d');
-  assert.equal(open.length, 1, 'the story holds one open event on this rule');
-  const moved = { ...ruleInputOf(rule), kind: 'pool_exhausted', threshold: null, windowId: null };
-  await assert.rejects(() => api.updateAlertRule('rule_7d', moved), refusedAs(409, 'the condition cannot change while 1 event is open for this rule'));
-  assert.equal((await api.updateAlertRule('rule_7d', { ...ruleInputOf(rule), threshold: 0.85 })).threshold, 0.85, 'an edit that keeps the kind saves');
-  await api.resolveAlertEvent(open[0].id);
-  assert.equal((await api.updateAlertRule('rule_7d', moved)).kind, 'pool_exhausted');
 });
 
 test('a key or a pool whose id is taken is refused with the route\'s 409', async () => {
@@ -345,10 +307,7 @@ test('a refusal never carries an error code, which the router sets for an unavai
   const api = await as('admin');
   const missing = [
     () => api.renameAccount('nobody', 'x'),
-    () => api.resolveAlertEvent('nothing'),
     () => api.rotateKey('nothing'),
-    () => api.testAlertRule('nothing'),
-    () => api.updateAlertRule('nothing', newRule),
   ];
   for (const call of missing) await assert.rejects(call, (e) => e instanceof d.ApiError && e.status === 404 && e.code === null);
 });
@@ -356,10 +315,7 @@ test('a refusal never carries an error code, which the router sets for an unavai
 test('an unknown id is refused with the route\'s own 404 text, which the console shows as the toast body', async () => {
   const api = await as('admin');
   await assert.rejects(() => api.renameAccount('nobody', 'x'), refusedAs(404, 'account not found'));
-  await assert.rejects(() => api.resolveAlertEvent('nothing'), refusedAs(404, 'alert event not found'));
   await assert.rejects(() => api.rotateKey('nothing'), refusedAs(404, 'key not found'));
-  await assert.rejects(() => api.testAlertRule('nothing'), refusedAs(404, 'alert rule not found'));
-  await assert.rejects(() => api.updateAlertRule('nothing', newRule), refusedAs(404, 'alert rule not found'));
 });
 
 test('the quota snapshots never answer a status or a poll outcome the decoder cannot produce', async () => {

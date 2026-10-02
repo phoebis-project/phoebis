@@ -371,163 +371,6 @@ export const FIXTURES: Record<string, Fixture> = {
       ]
     }
   },
-  "alert_deliveries": {
-    "route": "GET /admin/alerts/events/{id}/deliveries",
-    "body": {
-      "deliveries": [
-        {
-          "at": 1000000,
-          "attempt": 1,
-          "error": "refused",
-          "id": 1,
-          "state": "opened",
-          "status": null
-        },
-        {
-          "at": 1000000,
-          "attempt": 2,
-          "error": null,
-          "id": 2,
-          "state": "opened",
-          "status": 500
-        },
-        {
-          "at": 1000000,
-          "attempt": 3,
-          "error": null,
-          "id": 3,
-          "state": "opened",
-          "status": 200
-        }
-      ]
-    }
-  },
-  "alert_events": {
-    "route": "GET /admin/alerts/events",
-    "body": {
-      "events": [
-        {
-          "deliveries": [
-            {
-              "at": 1000000,
-              "attempt": 1,
-              "error": "refused",
-              "id": 1,
-              "state": "opened",
-              "status": null
-            },
-            {
-              "at": 1000000,
-              "attempt": 2,
-              "error": null,
-              "id": 2,
-              "state": "opened",
-              "status": 500
-            },
-            {
-              "at": 1000000,
-              "attempt": 3,
-              "error": null,
-              "id": 3,
-              "state": "opened",
-              "status": 200
-            }
-          ],
-          "detail": {
-            "client_version": "2.1.274",
-            "key": "desktop",
-            "trigger": "hash"
-          },
-          "id": "evt_28275f0b45357e43",
-          "kind": "client_drift",
-          "opened_at": 1000000,
-          "resolved_at": null,
-          "rule_id": "rule_949a6589d28d7e79",
-          "state": "open",
-          "subject": "client 2.1.274"
-        }
-      ]
-    }
-  },
-  "alert_lifecycle": {
-    "route": "GET /admin/alerts/deliveries",
-    "body": {
-      "deliveries": [
-        {
-          "at": 1000000,
-          "attempt": 1,
-          "detail": {
-            "key": "desktop",
-            "pool": "main",
-            "session": "e2e-ui",
-            "source": "request",
-            "event": "session_started"
-          },
-          "error": null,
-          "event": "session_started",
-          "id": 4,
-          "kind": "session_active",
-          "rule_id": "rule_946d620d8cad0d1a",
-          "state": "event",
-          "status": 200,
-          "subject": "desktop, session e2e-ui"
-        }
-      ],
-      "next_cursor": null
-    }
-  },
-  "alert_rules": {
-    "route": "GET /admin/alerts/rules",
-    "body": {
-      "rules": [
-        {
-          "created_at": 1000000,
-          "enabled": true,
-          "has_secret": false,
-          "id": "rule_f7e5ccff600c841c",
-          "kind": "poll_backoff",
-          "scope": {
-            "id": "business",
-            "type": "account"
-          },
-          "threshold": null,
-          "updated_at": 1000000,
-          "webhook_url": "http://127.0.0.1:1/backoff",
-          "window": null
-        },
-        {
-          "created_at": 1000000,
-          "enabled": false,
-          "has_secret": false,
-          "id": "rule_949a6589d28d7e79",
-          "kind": "client_drift",
-          "scope": {
-            "id": null,
-            "type": "all"
-          },
-          "threshold": null,
-          "updated_at": 1000000,
-          "webhook_url": "http://127.0.0.1:1/drift",
-          "window": null
-        },
-        {
-          "created_at": 1000000,
-          "enabled": true,
-          "has_secret": true,
-          "id": "rule_40a16c1770551c2a",
-          "kind": "utilization_above",
-          "scope": {
-            "id": "main",
-            "type": "pool"
-          },
-          "threshold": 0.9,
-          "updated_at": 1000000,
-          "webhook_url": "http://127.0.0.1:1/hook",
-          "window": "7d_oi"
-        }
-      ]
-    }
-  },
   "analytics_accounts": {
     "route": "GET /admin/analytics/accounts?range=24h",
     "body": {
@@ -3888,6 +3731,33 @@ export const FIXTURES: Record<string, Fixture> = {
               }
             }
           ]
+        }
+      ]
+    }
+  },
+  "attention": {
+    "route": "GET /admin/attention",
+    "body": {
+      "items": [
+        {
+          "kind": "pool_exhausted",
+          "subject": {
+            "type": "pool",
+            "id": "main",
+            "label": "Main"
+          },
+          "link": {
+            "page": "pools",
+            "id": "main"
+          },
+          "pools": [
+            "main"
+          ],
+          "since": 1000000,
+          "detail": {
+            "key": "desktop",
+            "pool": "main"
+          }
         }
       ]
     }
@@ -7683,7 +7553,7 @@ export const FIXTURES: Record<string, Fixture> = {
       "storage_ok": true,
       "ledger": {
         "schema_version": 25,
-        "written": 15,
+        "written": 13,
         "dropped": 0,
         "write_failures": 0,
         "gaps": 0,
@@ -7700,13 +7570,18 @@ export const FIXTURES: Record<string, Fixture> = {
           "subscriber": "live",
           "dropped": 0,
           "panics": 0
+        },
+        {
+          "subscriber": "attention",
+          "dropped": 0,
+          "panics": 0
         }
       ],
       "live": {
         "clients": 0,
         "in_flight": 0
       },
-      "pricing_unknown_models": 4,
+      "pricing_unknown_models": 0,
       "gaps": [],
       "keepalive": {
         "agents": 1,
@@ -7714,12 +7589,6 @@ export const FIXTURES: Record<string, Fixture> = {
         "retained_bytes": 116,
         "running_probes": 0,
         "sessions": 1
-      },
-      "alerts": {
-        "deliveries_failed": 0,
-        "deliveries_ok": 2,
-        "open": 1,
-        "rules": 3
       }
     }
   }

@@ -1,6 +1,6 @@
 import type { AccountPatch, Api, CreateKeyInput, KeyInput, PoolInput } from './client';
 import * as d from './decode';
-import type { Account, AccountCatalog, AccountInput, AlertDeliveryTest, AlertEvent, AlertKind, AlertRule, AlertRuleInput, AnalyticsGroup, AnalyticsPoint, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, LiveEvent, PairingInput, PairingPreview, QuotaSnapshot, RequestDetail, RequestQuery, SessionInfo } from './types';
+import type { Account, AccountCatalog, AccountInput, AnalyticsGroup, AnalyticsPoint, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, LiveEvent, PairingInput, PairingPreview, QuotaSnapshot, RequestDetail, RequestQuery, SessionInfo } from './types';
 
 export class ApiError extends Error {
   code: string | null;
@@ -105,7 +105,6 @@ export class HttpApi implements Api {
   };
   confirmPairing = (pairingId: string) => call<void>('POST', `/admin/oauth/sessions/${enc(pairingId)}/confirm`);
   createAccount = async (input: AccountInput): Promise<Account> => d.decodeAccount(await call('POST', '/admin/accounts', { id: input.id, kind: input.kind, label: input.label, secret: input.secret }));
-  createAlertRule = async (input: AlertRuleInput): Promise<AlertRule> => d.decodeAlertRule(await call('POST', '/admin/alerts/rules', d.encodeRule(input)));
   createKey = async (input: CreateKeyInput): Promise<CreatedApiKey> => {
     const expires_at = input.expiresInDays === null ? null : Date.now() + input.expiresInDays * 86_400_000;
     const r = await call<Record<string, unknown>>('POST', '/admin/keys', { ...d.encodeKey(input), expires_at, id: slug(input.name) });
@@ -113,7 +112,6 @@ export class HttpApi implements Api {
   };
   createPool = async (input: PoolInput) => d.decodePool(await call('POST', '/admin/pools', { ...d.encodePool(input), id: slug(input.name) }));
   deleteAccount = (accountId: string) => call<void>('DELETE', `/admin/accounts/${enc(accountId)}`);
-  deleteAlertRule = (id: string) => call<void>('DELETE', `/admin/alerts/rules/${enc(id)}`);
   deleteKey = (id: string) => call<void>('DELETE', `/admin/keys/${enc(id)}`);
   deletePool = (id: string) => call<void>('DELETE', `/admin/pools/${enc(id)}`);
   disconnectAccount = (accountId: string) => call<void>('DELETE', `/admin/accounts/${enc(accountId)}/credentials`);
@@ -156,9 +154,6 @@ export class HttpApi implements Api {
   getSettings = async () => d.decodeSettings(await call('GET', '/admin/settings'));
   listAccountRollups = async (from: string, to: string) => d.decodeAccountRollups(await call('GET', `/admin/analytics/accounts?range=${range(from, to)}`));
   listAccounts = async () => (await call<{ accounts: unknown[] }>('GET', '/admin/accounts')).accounts.map(d.decodeAccount);
-  listAlertDeliveries = async (eventId: string) => (await call<{ deliveries: unknown[] }>('GET', `/admin/alerts/events/${enc(eventId)}/deliveries`)).deliveries.map(d.decodeDelivery);
-  listAlertEvents = async (state?: 'open' | 'resolved'): Promise<AlertEvent[]> => (await call<{ events: unknown[] }>('GET', `/admin/alerts/events${qs({ state })}`)).events.map(d.decodeAlertEvent);
-  listAlertRules = async () => (await call<{ rules: unknown[] }>('GET', '/admin/alerts/rules')).rules.map(d.decodeAlertRule);
   listCatalog = async (): Promise<CatalogModel[]> => {
     // The decoded status folds a disconnected account into 'unpaired' along with one never paired; both are
     // the accounts a catalog fetch has nothing to ask.
@@ -168,7 +163,6 @@ export class HttpApi implements Api {
   listCatalogOf = async (accountIds: string[]): Promise<CatalogModel[]> => catalogUnion(await Promise.all(accountIds.map((id) => this.getAccountCatalog(id).catch(() => null))));
   listKeepaliveRecipes = async () => (await call<{ recipes: unknown[] }>('GET', '/admin/keepalive/recipes')).recipes.map(d.decodeRecipe);
   listKeys = async () => (await call<{ keys: unknown[] }>('GET', '/admin/keys')).keys.map(d.decodeKey);
-  listLifecycleDeliveries = async (kind?: AlertKind, cursor?: string) => d.decodeLifecyclePage(await call('GET', `/admin/alerts/deliveries${qs({ cursor, kind })}`));
   listPools = async () => (await call<{ pools: unknown[] }>('GET', '/admin/pools')).pools.map(d.decodePool);
   listQuotaSnapshots = async (): Promise<QuotaSnapshot[]> => {
     const accounts = (await this.listAccounts()).filter((a) => a.kind === 'oauth');
@@ -200,7 +194,6 @@ export class HttpApi implements Api {
   };
   releaseSession = (keyId: string, sessionId: string) => call<void>('POST', `/admin/sessions/${enc(keyId)}/${enc(sessionId)}/release`);
   renameAccount = async (accountId: string, label: string) => d.decodeAccount(await call('PATCH', `/admin/accounts/${enc(accountId)}`, { label }));
-  resolveAlertEvent = async (id: string) => d.decodeAlertEvent(await call('POST', `/admin/alerts/events/${enc(id)}/resolve`));
   resumeAccount = (accountId: string) => call<void>('POST', `/admin/accounts/${enc(accountId)}/resume`);
   revokeKey = (id: string) => call<void>('POST', `/admin/keys/${enc(id)}/revoke`);
   rotateKey = async (id: string): Promise<CreatedApiKey> => {
@@ -270,12 +263,7 @@ export class HttpApi implements Api {
       socket?.close();
     };
   };
-  testAlertRule = async (id: string): Promise<AlertDeliveryTest> => {
-    const r = await call<Record<string, unknown>>('POST', `/admin/alerts/rules/${enc(id)}/test`);
-    return { error: (r.error as string | null) ?? null, status: typeof r.status === 'number' ? r.status : null };
-  };
   updateAccount = async (accountId: string, patch: AccountPatch) => d.decodeAccount(await call('PATCH', `/admin/accounts/${enc(accountId)}`, d.encodeAccountPatch(patch)));
-  updateAlertRule = async (id: string, input: AlertRuleInput) => d.decodeAlertRule(await call('PATCH', `/admin/alerts/rules/${enc(id)}`, d.encodeRule(input)));
   updateKey = async (id: string, input: KeyInput): Promise<ApiKey> => d.decodeKey(await call('PATCH', `/admin/keys/${enc(id)}`, d.encodeKey(input)));
   // One write, so a refused member list cannot leave the settings saved behind a dialog that reports a failure.
   updatePool = async (id: string, input: PoolInput) => d.decodePool(await call('PATCH', `/admin/pools/${enc(id)}`, d.encodePool(input)));

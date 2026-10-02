@@ -2,7 +2,6 @@ import { lazy, Suspense } from 'react';
 import { createBrowserRouter, Navigate, RouterProvider } from 'react-router-dom';
 import { Shell } from '@/components/shell/Shell';
 import { AccountsPage } from '@/pages/AccountsPage';
-import { AlertsPage } from '@/pages/AlertsPage';
 import { AnalyticsPage } from '@/pages/AnalyticsPage';
 import { DashboardPage } from '@/pages/DashboardPage';
 import { KeysPage } from '@/pages/KeysPage';
@@ -28,7 +27,6 @@ export const routes = [
       { index: true, element: <DashboardPage /> },
       { path: 'accounts', element: <AccountsPage /> },
       { path: 'accounts/:accountId', element: <AccountsPage /> },
-      { path: 'alerts', element: <AlertsPage /> },
       { path: 'analytics', element: <AnalyticsPage /> },
       // Bookmarks and links out there still point at the old path.
       { path: 'keepalive', element: <Navigate to="/sessions" replace /> },

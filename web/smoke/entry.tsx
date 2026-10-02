@@ -80,38 +80,6 @@ export const failCalls = (routes: Record<string, string>, message: string) => {
   };
 };
 
-/**
- * Holds the next call to the named mock method behind a promise until `release()` resolves it, the way a slow
- * upstream answer lands after the caller has moved on. A recording pass-through replaces the method as soon as
- * the held call is made, so a later call is never blocked behind it; every call from then on, the held one
- * included, is recorded with its arguments in the returned `calls` list, as `failCalls`'s `recover` records them,
- * until `restore()` puts the original method back.
- */
-export const deferNextCall = (name: string) => {
-  const mock = api as unknown as Record<string, (...args: unknown[]) => unknown>;
-  const original = mock[name].bind(api);
-  const calls: unknown[][] = [];
-  let fire: () => void = () => {};
-  const gate = new Promise<void>((resolve) => {
-    fire = resolve;
-  });
-  mock[name] = (...args: unknown[]) => {
-    mock[name] = (...rest: unknown[]) => {
-      calls.push(rest);
-      return original(...rest);
-    };
-    calls.push(args);
-    return gate.then(() => original(...args));
-  };
-  return {
-    calls,
-    release: () => fire(),
-    restore: () => {
-      mock[name] = original;
-    },
-  };
-};
-
 // Set once at load so every mount starts signed in; the login checks clear it and put it back themselves.
 localStorage.setItem('phoebis.mockSession', 'admin');
 

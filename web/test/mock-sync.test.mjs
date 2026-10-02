@@ -33,11 +33,6 @@ const SYNC = {
   account_quota: { decode: (b) => d.decodeQuotaHistory(b), mock: (api) => api.getQuotaHistory('business') },
   account_usage: { decode: (b) => d.decodeSnapshot('business', b), mock: async (api) => (await api.listQuotaSnapshots()).find((s) => s.accountId === 'business') },
   accounts: { decode: (b) => b.accounts.map(d.decodeAccount), mock: (api) => api.listAccounts() },
-  alert_deliveries: { decode: (b) => b.deliveries.map(d.decodeDelivery), mock: async (api) => { for (const e of await api.listAlertEvents()) { const rows = await api.listAlertDeliveries(e.id); if (rows.length) return rows; } throw new Error('no mock alert event carries a delivery'); } },
-  alert_events: { decode: (b) => b.events.map(d.decodeAlertEvent), mock: (api) => api.listAlertEvents() },
-  // Past the mock's own page size, so the closed-set walk below meets every seeded row rather than one page of them.
-  alert_lifecycle: { decode: (b) => d.decodeLifecyclePage(b), mock: (api) => { api.lifecyclePageSize = 500; return api.listLifecycleDeliveries(); } },
-  alert_rules: { decode: (b) => b.rules.map(d.decodeAlertRule), mock: (api) => api.listAlertRules() },
   analytics_accounts: { decode: (b) => d.decodeAccountRollups(b), mock: (api) => api.listAccountRollups(day, now) },
   analytics_breakdown: { decode: (b) => b.rows.map(d.decodeAnalyticsGroup), mock: (api) => api.getAnalyticsBreakdown(query) },
   analytics_breakdown_speed: { decode: (b) => b.rows.map(d.decodeAnalyticsGroup), mock: (api) => api.getAnalyticsBreakdown({ ...query, groupBy: 'speed' }) },
@@ -66,7 +61,7 @@ const SYNC = {
   settings: { decode: (b) => d.decodeSettings(b), mock: (api) => api.getSettings() },
 };
 /** Fixtures captured for their route's shape alone: no decoder and no `Api` method reads them today. */
-const UNCONSUMED = ['live_past', 'pool_traffic', 'pricing', 'sessions_costs', 'system'];
+const UNCONSUMED = ['attention', 'live_past', 'pool_traffic', 'pricing', 'sessions_costs', 'system'];
 
 test('the generated fixtures module is a fresh render', () => {
   const committed = readFileSync(new URL('../src/mock/generated/fixtures.ts', import.meta.url), 'utf8');
@@ -102,8 +97,6 @@ const REQUEST_CLASS_VALUES = ['auxiliary', 'compaction', 'main', 'subagent', 'wo
  */
 const CLOSED = {
   accounts: { '[].kind': d.ACCOUNT_KIND_VALUES },
-  alert_lifecycle: { '.deliveries[].event': d.LIFECYCLE_EVENT_VALUES },
-  alert_rules: { '[].kind': d.ALERT_KIND_VALUES, '[].scope.type': d.SCOPE_TYPE_VALUES, '[].windowId': [...d.WINDOW_ID_VALUES, null] },
   analytics_budgets: { '[].budgetPeriod': d.BUDGET_PERIOD_VALUES, '[].kind': d.ACCOUNT_KIND_VALUES },
   analytics_placements: { '[].rung': d.PLACEMENT_RUNG_VALUES },
   keepalive_recipes: { '[].reason': [...d.RECIPE_REASON_VALUES, null], '[].state': d.RECIPE_STATE_VALUES },

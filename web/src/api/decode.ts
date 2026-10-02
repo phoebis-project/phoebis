@@ -1,8 +1,8 @@
 import type {
-  Account, AccountCatalog, AccountRollup, AffinityMode, AlertEvent, AlertRule, AlertRuleInput, AnalyticsGroup, AnalyticsPoint, ApiKey, AttemptOutcome, AttemptResponse, BudgetPeriod, BurnPoint, BurnUnit, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
-  CohortHold, Delivery, FastLaneReading, FastPrice, GuardVerdict, KeepaliveOverview, KeepaliveRecipe, KeyModels, LifecycleDelivery, LifecyclePage, LiveAttempt, LiveDelta, LiveMetric, LiveRequest, LiveSnapshot, LiveTick, MemberBudget, MemberEligibility, ModelEvent, ModelPrice, ModelRule, ModelRulesMode,
+  Account, AccountCatalog, AccountRollup, AffinityMode, AnalyticsGroup, AnalyticsPoint, ApiKey, AttemptOutcome, AttemptResponse, BudgetPeriod, BurnPoint, BurnUnit, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
+  CohortHold, FastLaneReading, FastPrice, GuardVerdict, KeepaliveOverview, KeepaliveRecipe, KeyModels, LiveAttempt, LiveDelta, LiveMetric, LiveRequest, LiveSnapshot, LiveTick, MemberBudget, MemberEligibility, ModelEvent, ModelPrice, ModelRule, ModelRulesMode,
   ModelsState, Overview, PairingSession, PinMigrationReason, PinReleaseReason, Placement, PlacementRow, PlanBand, PlanModelCells, PlanTables, Pool, PoolCacheTtl, QuotaHistory, QuotaPoll, QuotaSnapshot, RateLimitWindow, RequestEvent, RequestLog, RequestPage, RequestShape, RewritePoint,
-  RuleCooldown, SelectionTrace, Session, SessionLifecycleDetail, SessionPlacement, Settings, SubagentPlacement, Subscription, TtlRules, WarmSessions, WindowId,
+  RuleCooldown, SelectionTrace, Session, SessionPlacement, Settings, SubagentPlacement, Subscription, TtlRules, WarmSessions, WindowId,
 } from './types';
 import { ACCOUNT_KIND_VALUES, AUTO_MODE_VALUES } from './types';
 import { CACHE_TTL_DEFAULTS, METERED_TTL_DEFAULTS, PLAN_TTL_DEFAULTS, POOL_AFFINITY_DEFAULTS, POOL_ENGINE_DEFAULTS, type AccountPatch, type KeyInput, type PoolInput } from './client';
@@ -409,7 +409,6 @@ export function decodeRequest(v: unknown): RequestLog {
 }
 
 export const decodeRequestPage = (v: unknown): RequestPage => ({ nextCursor: strOrNull(rec(v).next_cursor), requests: list(rec(v).requests).map(decodeRequest) });
-export const decodeLifecyclePage = (v: unknown): LifecyclePage => ({ deliveries: list(rec(v).deliveries).map(decodeLifecycleDelivery), nextCursor: strOrNull(rec(v).next_cursor) });
 // The four counts are the route's own; nothing here measures the request or the response it passes through.
 export const decodeBodies = (v: unknown): CapturedBodies => { const b = rec(v); return { request: b.request, requestBytesSeen: num(b.request_bytes_seen), requestBytesStored: num(b.request_bytes_stored), requestId: str(b.request_id), requestTruncated: bool(b.request_truncated), response: b.response, responseBytesSeen: num(b.response_bytes_seen), responseBytesStored: num(b.response_bytes_stored), responseTruncated: bool(b.response_truncated) }; };
 export const decodeRequestEvent = (v: unknown): RequestEvent => ({ accountId: strOrNull(rec(v).account_id), at: isoOr(rec(v).at, epoch), detail: rec(v).detail === null || rec(v).detail === undefined ? null : rec(rec(v).detail), keyId: strOrNull(rec(v).key_id), kind: str(rec(v).kind), model: strOrNull(rec(v).model), sessionId: strOrNull(rec(v).session_id) });
@@ -531,25 +530,7 @@ export function decodeKeepaliveOverview(v: unknown): KeepaliveOverview {
   return { agents: { busy: num(rec(o.agents).busy), idle: num(rec(o.agents).idle), parked: num(rec(o.agents).parked) }, costToday: list(o.cost_today).map(rec).map((c) => ({ capUsd: numOrNull(c.cap_usd), poolId: str(c.pool_id), usd: num(c.usd) })), expiredBetweenTurns24h: num(o.expired_between_turns_24h), netSaved7dUsd: num(o.net_saved_7d_usd), probes24h: { failed: num(p.failed), migrated: num(p.migrated), ok: num(p.ok), skipped: num(p.skipped) }, sessions: num(o.sessions), sessionsWithCompanion: num(o.sessions_with_companion) };
 }
 
-export const ALERT_KIND_VALUES = ['ask_user_question', 'client_drift', 'funding_required', 'keepalive_cost_cap', 'poll_backoff', 'pool_exhausted', 'reauth_required', 'refresh_failed', 'session_active', 'session_idle', 'session_parked', 'subagent_active', 'utilization_above'] as const;
-export const SCOPE_TYPE_VALUES = ['account', 'all', 'any_account', 'key', 'pool'] as const;
 export const WINDOW_ID_VALUES = ['5h', '7d', '7d_oi'] as const;
-const scopeOf = (v: unknown): AlertRule['scope'] => { const s = rec(v); return { id: strOrNull(s.id), type: SCOPE_TYPE_VALUES.find((t) => t === str(s.type)) ?? 'all' }; };
-export function decodeAlertRule(v: unknown): AlertRule {
-  const r = rec(v);
-  return { createdAt: isoOr(r.created_at, epoch), enabled: bool(r.enabled), hasSecret: bool(r.has_secret), id: str(r.id), kind: ALERT_KIND_VALUES.find((k) => k === str(r.kind)) ?? 'utilization_above', scope: scopeOf(r.scope), threshold: numOrNull(r.threshold), updatedAt: isoOr(r.updated_at, epoch), webhookUrl: str(r.webhook_url), windowId: WINDOW_ID_VALUES.find((w) => w === str(r.window)) ?? null };
-}
-export const decodeDelivery = (v: unknown): Delivery => ({ at: isoOr(rec(v).at, epoch), attempt: num(rec(v).attempt), error: strOrNull(rec(v).error), state: str(rec(v).state) === 'resolved' ? 'resolved' : 'opened', status: numOrNull(rec(v).status) });
-export const LIFECYCLE_EVENT_VALUES = ['session_ended', 'session_idle', 'session_parked', 'session_resumed', 'session_started', 'subagent_ended', 'subagent_started'] as const;
-// An event name a later router adds still reads as a row: the log is worth more whole than exact.
-export function decodeLifecycleDelivery(v: unknown): LifecycleDelivery {
-  const d = rec(v);
-  return { at: isoOr(d.at, epoch), attempt: num(d.attempt), detail: (d.detail && typeof d.detail === 'object' ? d.detail : {}) as SessionLifecycleDetail, error: strOrNull(d.error), event: LIFECYCLE_EVENT_VALUES.find((e) => e === str(d.event)) ?? 'session_started', id: num(d.id), kind: ALERT_KIND_VALUES.find((k) => k === str(d.kind)) ?? 'session_active', ruleId: str(d.rule_id), status: numOrNull(d.status), subject: str(d.subject) };
-}
-export function decodeAlertEvent(v: unknown): AlertEvent {
-  const e = rec(v);
-  return { deliveries: list(e.deliveries).map(decodeDelivery), detail: e.detail && typeof e.detail === 'object' ? (e.detail as Record<string, unknown>) : null, id: str(e.id), kind: ALERT_KIND_VALUES.find((k) => k === str(e.kind)) ?? 'utilization_above', openedAt: isoOr(e.opened_at, epoch), resolvedAt: isoOrNull(e.resolved_at), ruleId: str(e.rule_id), state: str(e.state) === 'resolved' ? 'resolved' : 'open', subject: str(e.subject) };
-}
 
 const priceCells = (m: Rec): FastPrice => ({ cacheReadPerM: num(m.cache_read_per_m), cacheWrite1hPerM: num(m.cache_write_1h_per_m), cacheWrite5mPerM: num(m.cache_write_5m_per_m), inputPerM: num(m.input_per_m), outputPerM: num(m.output_per_m) });
 const price = (m: Rec): ModelPrice => ({ ...priceCells(m), fast: m.fast && typeof m.fast === 'object' ? priceCells(rec(m.fast)) : null, model: str(m.model) });
@@ -647,4 +628,3 @@ export const encodePool = (i: PoolInput) => ({
   burn_window_seconds: i.burnWindowSeconds, in_flight_cap: i.inFlightCap, migrate_when_spent: i.migrateWhenSpent, overage_move_grace_minutes: i.overageMoveGraceMinutes, pace_floor: i.paceFloor,
   retry_in_place_seconds: i.retryInPlaceSeconds, shed_share: i.shedShare, source_dwell_seconds: i.sourceDwellSeconds, warm_sessions: i.warmSessions, wind_down_minutes: i.windDownMinutes,
 });
-export const encodeRule = (i: AlertRuleInput) => ({ enabled: i.enabled, kind: i.kind, scope: i.scope, ...(i.secret === undefined ? {} : { secret: i.secret }), threshold: i.threshold, webhook_url: i.webhookUrl, window: i.windowId });

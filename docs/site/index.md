@@ -63,7 +63,6 @@ The sidebar shows the views in this order:
 | Requests | Individual relayed requests (see [Statistics and alerts](statistics.md)). |
 | Analytics | Hourly rollups and cost (see [Statistics and alerts](statistics.md)). |
 | Sessions | Session pins and keepalive recipes (see [Keepalive](keepalive.md)). |
-| Alerts | Webhook alert rules and their events (see [Statistics and alerts](statistics.md)). |
 | Settings | The effective bootstrap values (see [Installation](installation.md)). |
 
 The console, the API, the bootstrap file and this site call what the router holds an account and a key the router

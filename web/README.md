@@ -58,9 +58,9 @@ the fixture that lacks one), and back it in `MockApi` from a story row that spre
 - Body capture is a pool setting in hours, which every key in the pool inherits unless it sets an override of its own
   or turns capture off for itself; the keys table shows the effective value and marks the inherited ones.
 - Views for the dashboard, observe (a simulated live feed of in-flight and recent requests), quota, accounts, pools,
-  keys, request logs, analytics, sessions, alerts, and settings. What the router holds is an account everywhere: the
-  code, the API, the fixtures, the copy and the `/accounts` route; "upstream" names the provider's host and the party
-  that answered a request.
+  keys, request logs, analytics, sessions, and settings. What the router holds is an account everywhere: the code, the
+  API, the fixtures, the copy and the `/accounts` route; "upstream" names the provider's host and the party that
+  answered a request.
 - The sessions view is one table of every session the router has seen within the session expiry, whether or not a
   cache-keepalive companion registered for it. Each row carries its companion state (reporting, silent since a time,
   or none), its ledgered request count and last request, and when it drops off the list. The Model and Account cells

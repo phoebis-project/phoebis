@@ -31,19 +31,6 @@ export const fmtShare = (ratio: number) => `${Number((ratio * 100).toPrecision(3
 export const fmtMs = (ms: number | null) => (ms === null ? '-' : ms >= 1000 ? `${(ms / 1000).toFixed(ms >= 10_000 ? 0 : 1)} s` : `${Math.round(ms)} ms`);
 export const fmtCredits = (credits: number) => usd.format(credits / 100);
 
-/**
- * The host an absolute http URL names, with its port, or the whole string when it does not parse as one. A
- * webhook URL may carry a token in its path or query, so a viewer is shown this much of it and no more.
- */
-export function urlHost(value: string): string {
-  try {
-    const url = new URL(value);
-    return url.protocol === 'http:' || url.protocol === 'https:' ? url.host : value;
-  } catch {
-    return value;
-  }
-}
-
 export function fmtDuration(ms: number): string {
   const abs = Math.abs(ms);
   const m = Math.floor(abs / 60_000);
