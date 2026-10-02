@@ -567,8 +567,9 @@ their own bounds, as the paragraph after the steps says. Each attempt goes throu
 3. Classify the head. A short throttle on a portable request is waited out on the same account
    ([retry in place](#retry-in-place)). Any other failover row on a portable request records the cooldown, invalidates
    the matching pin, and returns to step 1; on a non-portable request it records the cooldown and commits the failed
-   response instead. An authentication failure is the exception: it is never committed, and an account it marks keeps
-   its pin, as the paragraph after these steps says. Any other row commits and relays the response.
+   response instead. An authentication failure is the exception: it is never committed (see the paragraph after these
+   steps), and the failover leaves the pin of an account it marks for the next selection to end. Any other row commits
+   and relays the response.
 4. Once the committed response ends, renew the pin with the usage it carried: the served account is final for this
    request. A pin this request created and whose answer is `400`, `403`, or `404` is released instead, since it never
    served, unless another turn of the session renewed it meanwhile, and so is one a non-portable request created

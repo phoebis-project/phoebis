@@ -2114,8 +2114,9 @@ impl Relay {
                     }
                     (Some(buffered), None)
                 }
-                // Telling a token the refresh would fix from one it would not takes the whole body, so a 401 too
-                // large to read fails over unread, with no refresh and no mark, and never reaches the client.
+                // The body is past the buffer bound, so nothing can be read that would justify a refresh or a
+                // mark: the leg fails over once, unmarked, rather than act on a head nobody classified, and the
+                // 401 never reaches the client.
                 Ok(Drained::TooLarge(_)) if head.status == 401 => {
                     tracing::debug!(account = %ctx.account.id, "failing over from a 401 too large to inspect");
                     drop(reader);

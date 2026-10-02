@@ -138,7 +138,7 @@ enum Released {
     Failover,
 }
 
-async fn a_fresh_pins_client_error_releases_it(
+async fn a_fresh_pins_client_error_ends_as_the_variant_says(
     status: u16,
     respond: Respond,
     answer: u16,
@@ -206,7 +206,7 @@ async fn a_fresh_pins_client_error_releases_it(
 
 #[tokio::test]
 async fn a_fresh_pins_400_releases_it_and_the_sessions_next_request_is_a_fresh_placement() {
-    a_fresh_pins_client_error_releases_it(
+    a_fresh_pins_client_error_ends_as_the_variant_says(
         400,
         json(400, INVALID_REQUEST),
         400,
@@ -217,7 +217,7 @@ async fn a_fresh_pins_400_releases_it_and_the_sessions_next_request_is_a_fresh_p
 
 #[tokio::test]
 async fn a_fresh_pins_401_fails_over_and_the_sessions_next_placement_moves_off_it() {
-    a_fresh_pins_client_error_releases_it(
+    a_fresh_pins_client_error_ends_as_the_variant_says(
         401,
         json(
             401,
@@ -233,7 +233,7 @@ async fn a_fresh_pins_401_fails_over_and_the_sessions_next_placement_moves_off_i
 /// answers, commits as the client's own to read.
 #[tokio::test]
 async fn a_fresh_pins_403_releases_it_and_the_sessions_next_request_is_a_fresh_placement() {
-    a_fresh_pins_client_error_releases_it(
+    a_fresh_pins_client_error_ends_as_the_variant_says(
         403,
         Respond::Json {
             status: 403,
@@ -248,7 +248,13 @@ async fn a_fresh_pins_403_releases_it_and_the_sessions_next_request_is_a_fresh_p
 
 #[tokio::test]
 async fn a_fresh_pins_404_releases_it_and_the_sessions_next_request_is_a_fresh_placement() {
-    a_fresh_pins_client_error_releases_it(404, json_404_plain(), 404, Released::ClientError).await;
+    a_fresh_pins_client_error_ends_as_the_variant_says(
+        404,
+        json_404_plain(),
+        404,
+        Released::ClientError,
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -449,6 +455,272 @@ async fn a_401_on_an_account_disconnected_meanwhile_leaves_the_pin_to_its_state(
             .iter()
             .all(|r| !r.line.starts_with("POST /v1/oauth/token")),
         "the refresh stopped at the account's state"
+    );
+    up.shutdown().await;
+}
+
+const KEYED_A: &str = "sk-ant-api03-KEYEDAAAA";
+const KEYED_B: &str = "sk-ant-api03-KEYEDBBBB";
+const INVALID_KEY: &str =
+    r#"{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}"#;
+
+/// The answer, the mark and the pin after an authentication failure that marked the session's only account: the
+/// router's own 503, the account `reauth_required`, and the pin left on it for the next selection to end.
+async fn a_marked_account_keeps_the_pin(h: &Harness) {
+    let mut events = h.router.subscribe_events();
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, MODEL, "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 503, "the router's own answer");
+    drain(resp).await;
+    wait_for(Duration::from_secs(5), || {
+        (h.store.account("a").unwrap().unwrap().state == AccountState::ReauthRequired).then_some(())
+    })
+    .await;
+    no_release_within(&mut events, "s1", Duration::from_millis(200)).await;
+    assert!(
+        pinned(h, "s1").await,
+        "the mark leaves the pin on the account for the next selection to end"
+    );
+    assert!(
+        h.router
+            .pins()
+            .await
+            .unwrap()
+            .iter()
+            .any(|p| p.session_id == "s1" && p.account_id == "a"),
+        "the pin still names the marked account"
+    );
+}
+
+#[tokio::test]
+async fn an_api_keys_401_marks_the_account_and_leaves_the_pin_on_it() {
+    let up = FakeUpstream::start(vec![]).await;
+    up.add_credential_rule(KEYED_A, "/v1/messages", json(401, INVALID_KEY));
+    let h = harness(&up, &[api_key("a", KEYED_A, 0)], PoolSpec::default()).await;
+    a_marked_account_keeps_the_pin(&h).await;
+    assert_eq!(credentials_seen(&up), [KEYED_A]);
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_refused_replay_marks_the_account_and_leaves_the_pin_on_it() {
+    let up = FakeUpstream::start(vec![
+        Rule {
+            path_prefix: "/v1/messages".into(),
+            respond: json(401, EXPIRED),
+        },
+        Rule {
+            path_prefix: "/v1/oauth/token".into(),
+            respond: Respond::Json {
+                status: 200,
+                headers: vec![],
+                body: phoebis_profile::fixtures::control_response(
+                    phoebis_profile::fixtures::ControlFixture::Token,
+                )
+                .to_vec(),
+            },
+        },
+    ])
+    .await;
+    // The token fixture names `ACCOUNT_UUID`, so the refresh rotates rather than refusing a mismatched identity.
+    let paired = TestAccount {
+        uuid: Some(ACCOUNT_UUID),
+        ..oauth("a", A, 0)
+    };
+    let h = harness(&up, &[paired], PoolSpec::default()).await;
+    a_marked_account_keeps_the_pin(&h).await;
+    assert_eq!(
+        credentials_seen(&up).len(),
+        2,
+        "the rejected token and the replay on the refreshed one"
+    );
+    up.shutdown().await;
+}
+
+/// The session's pin events in the order the router emitted them, up to the first one that puts the pin on `to`.
+async fn pin_events_until_created_on(
+    events: &mut broadcast::Receiver<RouterEvent>,
+    session: &str,
+    to: &str,
+) -> Vec<RouterEvent> {
+    let mut seen = Vec::new();
+    loop {
+        let event = next_event(events).await;
+        let (ours, done) = match &event {
+            RouterEvent::PinCreated {
+                session_id,
+                account_id,
+                ..
+            } => (
+                session_id == session,
+                session_id == session && account_id == to,
+            ),
+            RouterEvent::PinMigrated {
+                session_id,
+                to_account,
+                ..
+            } => (
+                session_id == session,
+                session_id == session && to_account == to,
+            ),
+            RouterEvent::PinExpired { session_id, .. } => (session_id == session, false),
+            _ => (false, false),
+        };
+        if ours {
+            seen.push(event);
+        }
+        if done {
+            return seen;
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_marked_accounts_pin_ends_at_the_failovers_selection_and_the_sibling_takes_a_fresh_one() {
+    let up = FakeUpstream::start(vec![]).await;
+    up.add_credential_rule(KEYED_A, "/v1/messages", json(401, INVALID_KEY));
+    up.add_credential_rule(KEYED_B, "/v1/messages", json_200());
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test");
+    let h = harness_with_bus(
+        &up,
+        &[api_key("a", KEYED_A, 0), api_key("b", KEYED_B, 1)],
+        PoolSpec::default(),
+        bus,
+    )
+    .await;
+    let mut events = h.router.subscribe_events();
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, MODEL, "s1"))
+        .await
+        .unwrap();
+    assert_eq!(
+        (resp.status().as_u16(), outcome(&resp).account_id.as_str()),
+        (200, "b")
+    );
+    drain(resp).await;
+    let pins: Vec<(&str, String, Vec<&str>)> = pin_events_until_created_on(&mut events, "s1", "b")
+        .await
+        .into_iter()
+        .map(|event| match event {
+            RouterEvent::PinCreated { account_id, .. } => ("created", account_id, vec![]),
+            RouterEvent::PinExpired {
+                account_id,
+                reasons,
+                ..
+            } => ("expired", account_id, reasons),
+            RouterEvent::PinMigrated {
+                to_account, reason, ..
+            } => panic!("the pin moved to {to_account} under {reason}"),
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(
+        pins,
+        [
+            ("created", "a".to_string(), vec![]),
+            ("expired", "a".to_string(), vec!["attempted"]),
+            ("created", "b".to_string(), vec![]),
+        ],
+        "the failover's selection ends the marked account's pin and places a fresh one, with no move under a mark"
+    );
+    let events = drain_until_complete(&mut sub).await;
+    let traces: Vec<serde_json::Value> = events
+        .iter()
+        .filter_map(|e| match e {
+            Event::AccountSelected(selected) => selected.selection.as_deref(),
+            _ => None,
+        })
+        .map(|json| serde_json::from_str(json).unwrap())
+        .collect();
+    assert_eq!(
+        traces.last().map(|t| &t["moved"]),
+        Some(&serde_json::Value::Null),
+        "the serving placement is a fresh one, not a move"
+    );
+    wait_for(Duration::from_secs(5), || {
+        (h.store.account("a").unwrap().unwrap().state == AccountState::ReauthRequired).then_some(())
+    })
+    .await;
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_non_portable_fresh_pins_401_that_marked_nothing_releases_it() {
+    let up = FakeUpstream::start(vec![
+        Rule {
+            path_prefix: "/v1/messages".into(),
+            respond: json(401, EXPIRED),
+        },
+        Rule {
+            path_prefix: "/v1/oauth/token".into(),
+            respond: json(503, "{}"),
+        },
+    ])
+    .await;
+    let h = harness(&up, &[oauth("a", A, 0)], PoolSpec::default()).await;
+    let mut events = h.router.subscribe_events();
+    let resp = h
+        .app
+        .clone()
+        .oneshot(non_portable_request(KEY, "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 503, "the router's own answer");
+    drain(resp).await;
+    assert_eq!(
+        released(&mut events, "s1").await,
+        vec!["client_error"],
+        "the pin this request created never served"
+    );
+    assert!(!pinned(&h, "s1").await);
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_non_portable_401_too_large_to_read_answers_the_503_and_releases_its_fresh_pin() {
+    let body = format!(
+        r#"{{"type":"error","error":{{"type":"authentication_error","message":"{}"}}}}"#,
+        "x".repeat(200 * 1024)
+    );
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json(401, &body),
+    }])
+    .await;
+    let h = harness(&up, &[oauth("a", A, 0)], PoolSpec::default()).await;
+    let mut events = h.router.subscribe_events();
+    let resp = h
+        .app
+        .clone()
+        .oneshot(non_portable_request(KEY, "s1"))
+        .await
+        .unwrap();
+    assert_eq!(
+        (
+            resp.status().as_u16(),
+            resp.headers()["x-phoebis-error-code"].to_str().unwrap(),
+            outcome(&resp).account_id.as_str()
+        ),
+        (503, "accounts_unavailable", "a"),
+        "the leg's own answer on the account it is bound to"
+    );
+    drain(resp).await;
+    assert_eq!(
+        up.requests().len(),
+        1,
+        "an unread rejection triggers no refresh and no replay"
+    );
+    assert_eq!(
+        released(&mut events, "s1").await,
+        vec!["client_error"],
+        "the pin this request created never served"
     );
     up.shutdown().await;
 }

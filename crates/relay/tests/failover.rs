@@ -1280,6 +1280,162 @@ async fn a_403_authentication_error_reads_auth_failed_on_the_attempt_row() {
     up.shutdown().await;
 }
 
+const KEYED_A: &str = "sk-ant-api03-KEYEDAAAA";
+const KEYED_B: &str = "sk-ant-api03-KEYEDBBBB";
+
+fn invalid_key() -> Respond {
+    Respond::Json {
+        status: 401,
+        headers: vec![],
+        body: br#"{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}"#
+            .to_vec(),
+    }
+}
+
+/// The engine's own probe under the harness key.
+fn probe_of(h: &Harness, allow_oauth: bool) -> phoebis_relay::Probe {
+    phoebis_relay::Probe {
+        key_id: "desktop".into(),
+        key_generation: h.store.api_key("desktop").unwrap().unwrap().created_at,
+        allow_oauth,
+    }
+}
+
+/// The probe's answer as the keepalive reads it: the status, the code and the obstacle.
+fn probe_answer(
+    resp: &axum::http::Response<axum::body::Body>,
+) -> (u16, String, Option<&'static str>) {
+    let o = outcome(resp);
+    (
+        resp.status().as_u16(),
+        o.error_code.unwrap_or_default(),
+        o.obstacle,
+    )
+}
+
+#[tokio::test]
+async fn a_probe_whose_leg_marks_its_pinned_account_names_the_mark_though_a_sibling_is_free() {
+    let up = FakeUpstream::start(vec![]).await;
+    up.add_credential_rule(KEYED_A, "/v1/messages", invalid_key());
+    up.push_credential_rule(KEYED_A, "/v1/messages", json_200());
+    up.add_credential_rule(KEYED_B, "/v1/messages", json_200());
+    let h = harness(
+        &up,
+        &[api_key("a", KEYED_A, 0), api_key("b", KEYED_B, 1)],
+        PoolSpec::default(),
+    )
+    .await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(outcome(&resp).account_id, "a");
+    resp.into_body().collect().await.unwrap();
+    let probed = h
+        .relay
+        .probe(
+            probe_of(&h, false),
+            request_for(KEY, "claude-sonnet-4-5", "s1"),
+        )
+        .await;
+    assert_eq!(
+        probe_answer(&probed),
+        (503, "accounts_unavailable".into(), Some("reauth_required")),
+        "the probe that tried its pinned member is answered under the mark its own leg set"
+    );
+    assert_eq!(
+        credentials_seen(&up),
+        [KEYED_A, KEYED_A],
+        "the free sibling is never dialled for the probe"
+    );
+    assert!(
+        h.router
+            .pins()
+            .await
+            .unwrap()
+            .iter()
+            .any(|p| p.session_id == "s1" && p.account_id == "a"),
+        "the probe moved no pin"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_probe_whose_refresh_answers_invalid_grant_names_the_mark() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/oauth/token".into(),
+        respond: Respond::Json {
+            status: 400,
+            headers: vec![],
+            body: br#"{"error":"invalid_grant","error_description":"revoked"}"#.to_vec(),
+        },
+    }])
+    .await;
+    up.add_credential_rule(
+        A,
+        "/v1/messages",
+        Respond::Json {
+            status: 401,
+            headers: vec![],
+            body:
+                br#"{"type":"error","error":{"type":"authentication_error","message":"expired"}}"#
+                    .to_vec(),
+        },
+    );
+    up.push_credential_rule(A, "/v1/messages", json_200());
+    let h = harness(&up, &[oauth("a", A, 0)], PoolSpec::default()).await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    resp.into_body().collect().await.unwrap();
+    let probed = h
+        .relay
+        .probe(
+            probe_of(&h, true),
+            request_for(KEY, "claude-sonnet-4-5", "s1"),
+        )
+        .await;
+    assert_eq!(
+        probe_answer(&probed),
+        (503, "accounts_unavailable".into(), Some("reauth_required")),
+        "the refresh's own mark reaches the probe's answer"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_non_portable_probe_whose_leg_marks_its_account_names_the_mark() {
+    let up = FakeUpstream::start(vec![]).await;
+    up.add_credential_rule(KEYED_A, "/v1/messages", invalid_key());
+    up.push_credential_rule(KEYED_A, "/v1/messages", json_200());
+    let h = harness(&up, &[api_key("a", KEYED_A, 0)], PoolSpec::default()).await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(non_portable_request(KEY, "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    resp.into_body().collect().await.unwrap();
+    let probed = h
+        .relay
+        .probe(probe_of(&h, false), non_portable_request(KEY, "s1"))
+        .await;
+    assert_eq!(
+        probe_answer(&probed),
+        (503, "accounts_unavailable".into(), Some("reauth_required")),
+        "a probe bound to its account names the mark on its own answer"
+    );
+    assert_eq!(outcome(&probed).account_id, "a");
+    up.shutdown().await;
+}
+
 #[tokio::test]
 async fn a_pre_selection_refusal_carries_the_client_version() {
     let up = FakeUpstream::start(vec![Rule {

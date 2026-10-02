@@ -3427,6 +3427,30 @@ fn a_probe_that_already_tried_its_pinned_account_answers_attempted_and_moves_not
     );
 }
 
+/// The probe's own attempt marked `a` for re-authentication, and the mark reached the snapshot before the probe's
+/// reselection: `a` reads as the operator's obstacle, yet it is still the member this probe tried.
+#[test]
+fn a_probe_whose_attempt_marked_its_pinned_account_answers_attempted_and_moves_nothing() {
+    let marked = snapshot_with(a_before_b(), &[("a", true, AccountState::ReauthRequired)]);
+    let (result, writes, pinned) = probe_after_a_pin_on_a(&snapshot(a_before_b()), &marked, &["a"]);
+    assert_eq!(
+        result,
+        SelectResult::Exhausted(Exhaustion::Pinned {
+            obstacle: "attempted"
+        }),
+        "the probe answers its own attempt rather than moving to the free sibling"
+    );
+    assert_eq!(
+        pinned.as_deref(),
+        Some("a"),
+        "the pin still names a after the probe"
+    );
+    assert!(
+        writes.is_empty(),
+        "the probe moves no pin and releases nothing: {writes:?}"
+    );
+}
+
 #[test]
 fn a_probe_that_tried_its_pinned_account_with_no_sibling_left_answers_the_pools_exhaustion() {
     let s = snapshot(a_before_b());
