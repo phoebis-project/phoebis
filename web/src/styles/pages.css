@@ -365,9 +365,11 @@
   gap: 12px;
 }
 
+/* At 316px the narrowest card still leaves its meter the 36px floor, so the grid reflows before a meter shrinks
+   past it. */
 .quota-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(316px, 1fr));
   gap: 14px;
 }
 
@@ -499,15 +501,15 @@
  * The widths are the widest content each column holds in DejaVu Sans, the
  * widest fallback the console meets ("Fable 100% left" at 121px, "resets in
  * 23h 59m" at 109px, "expired 2d 0h ago," at 113px). The meter takes what is
- * left, 43px in a card at 1280px, and narrows further in a narrower card
- * rather than push the reset past its edge.
+ * left, 43px in a card at 1280px and never under 36px, the floor the card
+ * grid's minimum width keeps.
  */
 .qcard__windows {
   --qwin-chip: 122px;
   --qwin-reset: 114px;
 
   display: grid;
-  grid-template-columns: var(--qwin-chip) minmax(0, 1fr) var(--qwin-reset);
+  grid-template-columns: var(--qwin-chip) minmax(36px, 1fr) var(--qwin-reset);
   gap: 9px 6px;
   align-items: center;
 }

@@ -617,8 +617,9 @@ export class MockApi implements Api {
   async disconnectAccount(accountId: string) {
     this.mutation();
     const a = this.account(accountId);
-    // The route drops the credential and leaves the identity, so the row still says whose it was.
-    this.putAccount({ ...a, credential: { accessTokenExpiresAt: null, lastError: null, lastRefreshAt: null, quarantined: false, refreshTokenExpiresAt: null }, status: 'unpaired' });
+    // The route drops the credential and leaves the identity, so the row still says whose it was; with no credential
+    // the poll's standing goes too.
+    this.putAccount({ ...a, credential: { accessTokenExpiresAt: null, lastError: null, lastRefreshAt: null, quarantined: false, refreshTokenExpiresAt: null }, status: 'unpaired', usage: usageOf({ ...a, status: 'unpaired' }) });
     return latency(undefined, 250);
   }
 
