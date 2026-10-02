@@ -1,7 +1,6 @@
 //! SQLite registry and encrypted credentials.
 
 mod accounts;
-mod alerts;
 mod budgets;
 mod credentials;
 mod lock;
@@ -26,10 +25,6 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 
 pub use accounts::{
     AccountKind, AccountRow, AccountState, Identity, SubscriptionRow, INFERENCE_HOST,
-};
-pub use alerts::{
-    event_deliveries_sql, events_deliveries_sql, lifecycle_deliveries_sql, webhook_host,
-    AlertDeliveryRow, AlertEventRow, AlertRuleRow,
 };
 pub use budgets::{BudgetRow, BudgetScope};
 pub use credentials::{
@@ -61,8 +56,6 @@ const PENDING_WHERE: &str = "resolved_at IS NULL OR outcome = 'uncertain'";
 pub enum StoreError {
     #[error("account {0} not found")]
     AccountNotFound(String),
-    #[error("alert rule {0} not found")]
-    AlertRuleNotFound(String),
     #[error("refresh attempt {0} not found")]
     AttemptNotFound(u64),
     #[error("a refresh attempt is already pending for this account")]

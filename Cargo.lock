@@ -1850,7 +1850,6 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tracing",
- "url",
  "zeroize",
 ]
 

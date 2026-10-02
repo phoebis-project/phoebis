@@ -124,8 +124,8 @@ const UNDO_V34: &str = "CREATE TABLE plan_fits (account_id TEXT NOT NULL REFEREN
 const UNDO_V35: &str = "ALTER TABLE pools DROP COLUMN auto_mode_server; ALTER TABLE api_keys DROP COLUMN auto_mode_server;";
 const UNDO_V36: &str = "ALTER TABLE pins DROP COLUMN lane; ALTER TABLE affinity DROP COLUMN lane;";
 const UNDO_V37: &str = "DROP TABLE usage_credits;";
-// The reverse of `V38`'s column drop, so `UNDO_V33` can drop the column again on the replay; the alert rows `V38`
-// deleted are not restored, since no older version needs them. The trailing `\n` ends the marker's comment.
+// The reverse of `V38`'s column drop, so `UNDO_V33` can drop the column again on the replay; the rows `V38` deleted
+// are not restored, since no older version needs them. The trailing `\n` ends the marker's comment.
 const UNDO_V38: &str = "ALTER TABLE keepalive_budgets ADD COLUMN five_hour_share_unmeasured INTEGER NOT NULL DEFAULT 0; -- rollback\n";
 // The reverse of `V39`: each set's dropped key back at the set's `main`, the value `V29` wrote it with, so a seeded
 // version-38 store is faithful. One line with the marker last; the trailing `\n` ends the marker's comment.
@@ -143,6 +143,13 @@ const UNDO_V43: &str = r#"
 ALTER TABLE pools ADD COLUMN quota_headers TEXT NOT NULL DEFAULT 'pass'; -- rollback
 ALTER TABLE api_keys ADD COLUMN in_flight_cap INTEGER; -- rollback
 ALTER TABLE api_keys ADD COLUMN affinity_source TEXT NOT NULL DEFAULT 'auto'; -- rollback
+CREATE TABLE alert_rules (id TEXT PRIMARY KEY, kind TEXT NOT NULL, scope_type TEXT NOT NULL, scope_id TEXT, threshold REAL, window TEXT, webhook_url TEXT NOT NULL, secret_sealed BLOB, secret_nonce BLOB, enabled INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL); -- rollback
+CREATE TABLE alert_events (id TEXT PRIMARY KEY, rule_id TEXT NOT NULL REFERENCES alert_rules(id) ON DELETE CASCADE, kind TEXT NOT NULL, subject TEXT NOT NULL, state TEXT NOT NULL CHECK (state IN ('open', 'resolved')), opened_at INTEGER NOT NULL, resolved_at INTEGER, detail_json TEXT); -- rollback
+CREATE UNIQUE INDEX alert_events_open ON alert_events (rule_id, subject) WHERE state = 'open'; -- rollback
+CREATE TABLE alert_deliveries (id INTEGER PRIMARY KEY AUTOINCREMENT, event_id TEXT REFERENCES alert_events(id) ON DELETE CASCADE, rule_id TEXT NOT NULL DEFAULT '', kind TEXT NOT NULL DEFAULT '', subject TEXT NOT NULL DEFAULT '', event TEXT, detail_json TEXT, state TEXT NOT NULL CHECK (state IN ('event', 'opened', 'resolved')), attempt INTEGER NOT NULL, at INTEGER NOT NULL, status INTEGER, error TEXT); -- rollback
+CREATE INDEX alert_deliveries_event ON alert_deliveries (event_id, id) WHERE event_id IS NOT NULL; -- rollback
+CREATE INDEX alert_deliveries_lifecycle_at ON alert_deliveries (at, id) WHERE event_id IS NULL; -- rollback
+CREATE INDEX alert_deliveries_lifecycle_kind ON alert_deliveries (kind, at, id) WHERE event_id IS NULL; -- rollback
 DROP INDEX refresh_attempts_holder_resolved;
 "#;
 
@@ -799,6 +806,55 @@ fn a_store_left_at_42_is_carried_to_43_without_the_keys_cap_or_fixed_source() {
     assert!(!columns.contains("affinity_source"), "{columns:?}"); // removed name
 }
 
+/// A rule, its open event and the event's delivery, planted at version 42.
+const SEED_PRE_V43_ALERTS: &str = r#"
+INSERT INTO alert_rules (id, kind, scope_type, webhook_url, created_at, updated_at) VALUES ('r', 'pool_exhausted', 'all', 'http://127.0.0.1:9/hook', 1, 1); -- rollback
+INSERT INTO alert_events (id, rule_id, kind, subject, state, opened_at) VALUES ('e', 'r', 'pool_exhausted', 'main', 'open', 2); -- rollback
+INSERT INTO alert_deliveries (event_id, rule_id, kind, subject, state, attempt, at) VALUES ('e', 'r', 'pool_exhausted', 'main', 'opened', 1, 3); -- rollback
+"#;
+
+/// Every table and index the store's schema names, so a test can see what a migration left.
+const SCHEMA_OBJECTS: &str =
+    "SELECT name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY name";
+
+#[test]
+fn a_store_left_at_42_is_carried_to_43_without_the_alert_tables() {
+    let dir = tempfile::tempdir().unwrap();
+    let key = StorageKey::generate();
+    let path = dir.path().join("router.sqlite");
+    drop(Store::open(&path, &key).unwrap());
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch(&format!(
+        "{UNDO_V43} UPDATE meta SET value = '42' WHERE key = 'schema_version'; {SEED_PRE_V43_ALERTS}"
+    ))
+    .unwrap();
+    drop(conn);
+    let migrated = Store::open(&path, &key).unwrap();
+    assert_eq!(migrated.schema_version().unwrap(), 43);
+    drop(migrated);
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    let objects: Vec<String> = conn
+        .prepare(SCHEMA_OBJECTS)
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    let dropped = ["alert_deliveries", "alert_events", "alert_rules"]; // removed name
+    assert!(
+        dropped.iter().all(|t| !objects.contains(&t.to_string())),
+        "the three tables are gone: {objects:?}"
+    );
+    assert!(
+        !objects.iter().any(|n| n.starts_with("alert_")),
+        "and their indexes with them: {objects:?}"
+    );
+    assert!(
+        objects.contains(&"refresh_attempts_holder_resolved".to_string()),
+        "the holder's own refresh index is in place: {objects:?}"
+    );
+}
+
 #[test]
 fn the_pins_columns_after_the_rebuild_are_the_old_set_plus_the_agent() {
     let dir = tempfile::tempdir().unwrap();
@@ -1132,14 +1188,12 @@ fn a_registry_from_before_the_auto_mode_columns_reopens_every_pool_on_and_every_
     );
 }
 
-/// Planted at version 37 through the columns `V18` gave the deliveries: a rule of the retired drift kind with an open
-/// event, that event's delivery (its kind left empty, as a delivery written before `V18` reads) and a lifecycle
-/// delivery naming the rule's kind; a `utilization_above` rule with an open event and its delivery; and a day's
-/// budget row with its share flagged. One line, so the marker that ends it covers every statement.
-const HELD_AT_37: &str = "INSERT INTO alert_rules (id, kind, scope_type, scope_id, threshold, window, webhook_url, enabled, created_at, updated_at) VALUES ('r-drift', 'meter_drift', 'account', 'a', NULL, NULL, 'http://127.0.0.1:9/hook', 1, 1, 1), ('r-kept', 'utilization_above', 'account', 'a', 0.8, 'five_hour', 'http://127.0.0.1:9/hook', 1, 1, 1); INSERT INTO alert_events (id, rule_id, kind, subject, state, opened_at) VALUES ('e-drift', 'r-drift', 'meter_drift', 'a', 'open', 2), ('e-kept', 'r-kept', 'utilization_above', 'a', 'open', 2); INSERT INTO alert_deliveries (event_id, rule_id, kind, subject, state, attempt, at) VALUES ('e-drift', '', '', '', 'opened', 1, 3), (NULL, 'r-drift', 'meter_drift', 'a', 'event', 1, 4), ('e-kept', 'r-kept', 'utilization_above', 'a', 'opened', 1, 3); INSERT INTO keepalive_budgets (day, scope, id, usd, five_hour_share, five_hour_share_unmeasured) VALUES ('2026-09-30', 'account', 'a', 0.0, 0.25, 1); -- rollback\n";
+/// Planted at version 37: a day's budget row with its share flagged. One line, so the marker that ends it covers the
+/// statement.
+const HELD_AT_37: &str = "INSERT INTO keepalive_budgets (day, scope, id, usd, five_hour_share, five_hour_share_unmeasured) VALUES ('2026-09-30', 'account', 'a', 0.0, 0.25, 1); -- rollback\n";
 
 #[test]
-fn a_store_left_at_37_is_carried_to_38_without_the_budget_flag_or_the_retired_alert_rows() {
+fn a_store_left_at_37_is_carried_to_38_without_the_budget_flag() {
     let dir = tempfile::tempdir().unwrap();
     let key = StorageKey::generate();
     let path = dir.path().join("router.sqlite");
@@ -1152,26 +1206,6 @@ fn a_store_left_at_37_is_carried_to_38_without_the_budget_flag_or_the_retired_al
     drop(conn);
     let migrated = Store::open(&path, &key).unwrap();
     assert_eq!(migrated.schema_version().unwrap(), 43);
-    assert_eq!(
-        migrated
-            .alert_rules()
-            .unwrap()
-            .iter()
-            .map(|r| (r.id.as_str(), r.kind.as_str()))
-            .collect::<Vec<_>>(),
-        [("r-kept", "utilization_above")],
-        "the retired kind's rule is gone and the kept one stays"
-    );
-    assert_eq!(
-        migrated
-            .alert_events(None, 10)
-            .unwrap()
-            .iter()
-            .map(|e| (e.id.as_str(), e.state.as_str()))
-            .collect::<Vec<_>>(),
-        [("e-kept", "open")],
-        "the retired kind's event is gone and the kept one is still open"
-    );
     let budgets = migrated.keepalive_budgets("2026-09-30").unwrap();
     assert_eq!(
         budgets
@@ -1182,20 +1216,6 @@ fn a_store_left_at_37_is_carried_to_38_without_the_budget_flag_or_the_retired_al
         "the day's row keeps its share"
     );
     drop(migrated);
-    let conn = rusqlite::Connection::open(&path).unwrap();
-    let deliveries: Vec<Option<String>> = conn
-        .prepare("SELECT event_id FROM alert_deliveries ORDER BY id")
-        .unwrap()
-        .query_map([], |r| r.get(0))
-        .unwrap()
-        .collect::<rusqlite::Result<_>>()
-        .unwrap();
-    assert_eq!(
-        deliveries,
-        [Some("e-kept".to_string())],
-        "the retired event's delivery and the retired kind's lifecycle delivery are gone"
-    );
-    drop(conn);
     assert_eq!(
         columns_of(&path, "keepalive_budgets"),
         ["day", "five_hour_share", "id", "scope", "usd"]
