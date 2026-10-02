@@ -1,6 +1,7 @@
-import { createContext, Fragment, useContext, useEffect, useId, useLayoutEffect, useRef, useState, type ButtonHTMLAttributes, type CSSProperties, type HTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes } from 'react';
+import { createContext, Fragment, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ButtonHTMLAttributes, type CSSProperties, type HTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes } from 'react';
 import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
+import { useAppSettings } from '@/app/settings';
 import { floatAt, menuPlacement, type MenuPlacement } from '@/lib/menu';
 import type { BadgeTone } from '@/lib/quota';
 import { IconCheck, IconChevron, IconCopy, IconSearch, IconWarning, IconX } from './icons';
@@ -280,6 +281,8 @@ export function Dialog({ open, onClose, title, subtitle, children, footer, width
 
 export interface DialogGroup {
   body: ReactNode;
+  /** Every field of the group is expert: it leaves the rail while the mode is off, unless it holds a refusal. */
+  expertOnly?: boolean;
   /** Unique within the dialog; the rail button, the section and its heading carry it. */
   id: string;
   label: string;
@@ -308,6 +311,89 @@ export function PageLink({ to, children }: { children: ReactNode; to: string }) 
       {children}
       <span className="sr-only"> (opens in a new tab)</span>
     </Link>
+  );
+}
+
+interface ExpertRegistry {
+  drop: (id: string) => void;
+  /** Whether the mode is on: with it, every wrapper renders its field. */
+  on: boolean;
+  set: (id: string, hidden: boolean) => void;
+}
+
+const ExpertGroup = createContext<ExpertRegistry | null>(null);
+
+/**
+ * Wraps one expert field of a dialog group. With the mode on, or while the field holds a refusal, it renders the
+ * field; otherwise nothing, and the group's line counts it. Each wrapper registers itself, so the count can never
+ * drift from the fields a group wraps. The box is `display: contents`, so a wrapped cell keeps its place in the grid.
+ */
+export function Expert({ children, refused = false }: { children: ReactNode; refused?: boolean }) {
+  const registry = useContext(ExpertGroup);
+  const id = useId();
+  const shown = registry === null || registry.on || refused;
+  useEffect(() => {
+    if (registry === null) return;
+    registry.set(id, !shown);
+    return () => registry.drop(id);
+  }, [id, registry, shown]);
+  return shown ? <div className="expert">{children}</div> : null;
+}
+
+function DialogGroupPanel({ chosen, group, on, register, turnOn }: { chosen: string; group: DialogGroup; on: boolean; register: (id: string, el: HTMLElement | null) => void; turnOn: () => void }) {
+  const [hidden, setHidden] = useState<Map<string, boolean>>(new Map());
+  const set = useCallback((id: string, isHidden: boolean) => setHidden((m) => (m.get(id) === isHidden ? m : new Map(m).set(id, isHidden))), []);
+  const drop = useCallback(
+    (id: string) =>
+      setHidden((m) => {
+        if (!m.has(id)) return m;
+        const next = new Map(m);
+        next.delete(id);
+        return next;
+      }),
+    [],
+  );
+  const registry = useMemo<ExpertRegistry>(() => ({ drop, on, set }), [drop, on, set]);
+  const count = [...hidden.values()].filter(Boolean).length;
+  const ref = useRef<HTMLElement | null>(null);
+  // Set by the line's button: once the mode is on and the fields render, the group's first expert field takes focus.
+  const revealing = useRef(false);
+  useEffect(() => {
+    if (!on || !revealing.current) return;
+    revealing.current = false;
+    ref.current?.querySelector<HTMLElement>('.expert input, .expert select, .expert textarea, .expert button')?.focus();
+  }, [on]);
+  return (
+    <section
+      className="dialog-group"
+      aria-label={group.label}
+      hidden={group.id !== chosen}
+      ref={(el) => {
+        ref.current = el;
+        register(group.id, el);
+      }}
+    >
+      <h3 className="dialog-group__title" tabIndex={-1}>
+        {group.label}
+      </h3>
+      <ExpertGroup.Provider value={registry}>{group.body}</ExpertGroup.Provider>
+      {count > 0 && (
+        <p className="field__hint dialog-group__more">
+          {count === 1 ? '1 more setting in the' : `${count} more settings in the`}
+          <button
+            type="button"
+            className="link-btn dialog-group__more-link"
+            aria-label="Turn on the expert view"
+            onClick={() => {
+              revealing.current = true;
+              turnOn();
+            }}
+          >
+            expert view
+          </button>
+        </p>
+      )}
+    </section>
   );
 }
 
@@ -362,12 +448,32 @@ export function GroupedDialog({
   // A choice made through the rail, a hint link, Go to or the address, waiting for the page to show its group.
   const pending = useRef<{ focus: 'heading' | 'refused'; id: string } | null>(null);
   const wasOpen = useRef(false);
+  const { expertView, setExpertView } = useAppSettings();
+  // While the mode is off a group whose every field is expert has nothing plain to show, so it leaves the rail and
+  // its section with it; a refused one stays, since a refusal never hides. Every path that chooses such a group turns
+  // the mode on in the same update, so no render shows a chosen group the rail lacks.
+  const shown = expertView ? groups : groups.filter((g) => !g.expertOnly || g.refused);
+  const expertOnlyOff = (id: string) => !expertView && groups.some((g) => g.id === id && g.expertOnly && !g.refused);
+  // A reset or a first group can name a group the filter took off, which would leave the dialog on a hidden panel
+  // with no rail entry current, so the first shown group takes its place. The rail and the panels draw it in this
+  // render: a page's reset that runs after the hand-off and names the hidden group again leaves the page's state as
+  // it was, and React renders nothing more.
+  const lost = open && shown.length > 0 && !shown.some((g) => g.id === chosen) ? shown[0].id : null;
+  const current = lost ?? chosen;
+  useEffect(() => {
+    if (lost !== null) onChoose(lost);
+  }, [lost, onChoose]);
+  const register = useCallback((id: string, el: HTMLElement | null) => {
+    if (el) sections.current.set(id, el);
+    else sections.current.delete(id);
+  }, []);
   const focusIn = (id: string, focus: 'heading' | 'refused') => {
     const section = sections.current.get(id);
     const control = focus === 'refused' ? section?.querySelector<HTMLElement>('[aria-invalid="true"]') : null;
     (control ?? section?.querySelector<HTMLElement>('.dialog-group__title'))?.focus();
   };
   const choose = (id: string, focus: 'heading' | 'refused' = 'heading') => {
+    if (expertOnlyOff(id)) setExpertView(true);
     if (id === chosen) {
       focusIn(id, focus);
       return;
@@ -387,7 +493,10 @@ export function GroupedDialog({
     }
     if (!wasOpen.current) {
       wasOpen.current = true;
-      if (initialGroup !== null) pending.current = { focus: 'heading', id: initialGroup };
+      if (initialGroup !== null) {
+        if (expertOnlyOff(initialGroup)) setExpertView(true);
+        pending.current = { focus: 'heading', id: initialGroup };
+      }
     }
     bodyRef.current?.scrollTo?.({ top: 0 });
     const choice = pending.current;
@@ -396,12 +505,12 @@ export function GroupedDialog({
     focusIn(chosen, choice.focus);
   }, [open, chosen, initialGroup]);
   const runs: { groups: DialogGroup[]; parent?: string }[] = [];
-  for (const g of groups) {
+  for (const g of shown) {
     const last = runs[runs.length - 1];
     if (last && last.parent !== undefined && last.parent === g.parent) last.groups.push(g);
     else runs.push({ groups: [g], parent: g.parent });
   }
-  const flat = groups.every((g) => g.parent === undefined);
+  const flat = shown.every((g) => g.parent === undefined);
   const labelOf = (id: string) => groups.find((g) => g.id === id)?.label ?? id;
   // The dot is decoration and the announcement sits outside the button, so the button's name stays its label and a
   // lookup by name or by the label span never meets the refusal's words.
@@ -439,7 +548,7 @@ export function GroupedDialog({
           <div className="dialog__rail-split">
             <nav className={`dialog-rail ${flat ? 'dialog-rail--flat' : ''}`} aria-label={railLabel}>
               {runs.map((run, i) => {
-                const isChosen = run.groups.some((g) => g.id === chosen);
+                const isChosen = run.groups.some((g) => g.id === current);
                 const refused = run.groups.some((g) => g.refused);
                 return (
                   <div key={run.parent ?? run.groups[0].id} className={`dialog-rail__run ${run.parent ? 'has-parent' : ''} ${isChosen ? 'is-chosen' : ''}`}>
@@ -454,7 +563,7 @@ export function GroupedDialog({
                     )}
                     {run.groups.map((g) => (
                       <Fragment key={g.id}>
-                        <button type="button" className="dialog-rail__group" data-group={g.id} aria-current={g.id === chosen ? 'true' : undefined} aria-describedby={g.refused ? noteId(g.id) : undefined} onClick={() => choose(g.id)}>
+                        <button type="button" className="dialog-rail__group" data-group={g.id} aria-current={g.id === current ? 'true' : undefined} aria-describedby={g.refused ? noteId(g.id) : undefined} onClick={() => choose(g.id)}>
                           <span className="dialog-rail__label">{g.label}</span>
                           {g.refused && dot}
                         </button>
@@ -467,22 +576,8 @@ export function GroupedDialog({
               <span className="dialog-rail__break" aria-hidden />
             </nav>
             <div className="dialog__body dialog__body--grouped" ref={bodyRef}>
-              {groups.map((g) => (
-                <section
-                  key={g.id}
-                  className="dialog-group"
-                  aria-label={g.label}
-                  hidden={g.id !== chosen}
-                  ref={(el) => {
-                    if (el) sections.current.set(g.id, el);
-                    else sections.current.delete(g.id);
-                  }}
-                >
-                  <h3 className="dialog-group__title" tabIndex={-1}>
-                    {g.label}
-                  </h3>
-                  {g.body}
-                </section>
+              {shown.map((g) => (
+                <DialogGroupPanel key={g.id} chosen={current} group={g} on={expertView} register={register} turnOn={() => setExpertView(true)} />
               ))}
             </div>
           </div>

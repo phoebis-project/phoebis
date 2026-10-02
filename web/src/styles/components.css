@@ -99,6 +99,10 @@
   padding: 3px 0;
 }
 
+.sidebar__expert {
+  cursor: pointer;
+}
+
 .status-dot {
   width: 7px;
   height: 7px;
@@ -1139,6 +1143,22 @@ textarea.input {
   padding: 0;
 }
 
+/* The discovery line reads in the hint's type and the readable ink, and its link keeps the side padding a sentence's
+   link gives up, so the words stand off the count. */
+.dialog-group__more {
+  color: var(--ink-2);
+}
+
+.dialog-group .dialog-group__more-link {
+  padding: 0 4px;
+}
+
+/* A wrapped field keeps its own place in the cell grid: the wrapper draws no box, and the grid's child rules reach
+   through it below. */
+.expert {
+  display: contents;
+}
+
 /* A scrolling wrapper clips on both axes, and the key table's row menu must extend below its last row. The members
    table draws nothing outside itself, so it keeps its sideways scroll for a frame too narrow for it. The child
    combinators leave a dialog opened from a group, such as the cost reference, scrolling its own table. */
@@ -1153,12 +1173,14 @@ textarea.input {
   gap: 14px 32px;
 }
 
-.cells > * {
+.cells > *,
+.cells > .expert > * {
   grid-column: 1 / -1;
   min-width: 0;
 }
 
-.cells > .cell--half {
+.cells > .cell--half,
+.cells > .expert > .cell--half {
   grid-column: span 1;
 }
 
@@ -1213,7 +1235,8 @@ textarea.input {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .cells > .cell--half {
+  .cells > .cell--half,
+  .cells > .expert > .cell--half {
     grid-column: 1 / -1;
   }
 }

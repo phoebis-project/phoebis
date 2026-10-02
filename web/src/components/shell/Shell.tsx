@@ -4,7 +4,7 @@ import { api } from '@/api';
 import { useSession } from '@/app/session';
 import { useAppSettings, type ThemeChoice } from '@/app/settings';
 import { useAsync } from '@/lib/hooks';
-import { Badge, Button, Segmented, Toast } from '@/components/ui/primitives';
+import { Badge, Button, Segmented, Toast, Toggle } from '@/components/ui/primitives';
 import { IconActivity, IconBell, IconChart, IconGauge, IconGrid, IconKey, IconLayers, IconList, IconMonitor, IconMoon, IconSessions, IconShield, IconSliders, IconSun, IconUser } from '@/components/ui/icons';
 import { Mark } from '@/components/ui/Mark';
 
@@ -40,7 +40,7 @@ export const PAGE_TITLES: Record<string, string> = {
 
 export function Shell() {
   const { pathname } = useLocation();
-  const { theme, setTheme } = useAppSettings();
+  const { expertView, setExpertView, setTheme, theme } = useAppSettings();
   const { clearToast, logout, role, toast } = useSession();
   const settings = useAsync(() => api.getSettings(), []);
   const [navOpen, setNavOpen] = useState(false);
@@ -70,6 +70,10 @@ export function Shell() {
           ))}
         </nav>
         <div className="sidebar__status">
+          <label className="sidebar__row sidebar__expert" title="Shows every field of the pool and key dialogs, the advanced ones included.">
+            <Toggle label="Expert view" checked={expertView} onChange={setExpertView} />
+            <span>Expert view</span>
+          </label>
           <div className="sidebar__row muted mono">v{settings.data?.about.version ?? '…'}</div>
         </div>
       </aside>

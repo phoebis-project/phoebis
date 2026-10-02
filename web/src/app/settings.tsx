@@ -4,15 +4,18 @@ import { setTimeFormat as applyTimeFormat, type TimeFormat } from '@/lib/format'
 import { useLocalStorage, useMediaQuery } from '@/lib/hooks';
 import { useSession } from './session';
 
+export type ExpertChoice = 'off' | 'on';
 export type ThemeChoice = 'dark' | 'light' | 'system';
 export type { Role };
 
 interface AppSettings {
   canMutate: boolean;
+  expertView: boolean;
   /** Bumped by every time-format change, so a component that only formats times has something to depend on. */
   formatVersion: number;
   resolvedTheme: 'dark' | 'light';
   role: Role;
+  setExpertView: (on: boolean) => void;
   setTheme: (t: ThemeChoice) => void;
   setTimeFormat: (f: TimeFormat) => void;
   theme: ThemeChoice;
@@ -25,6 +28,10 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
   const { role } = useSession();
   const [theme, setTheme] = useLocalStorage<ThemeChoice>('phoebis.theme', 'system');
   const [storedFormat, storeFormat] = useLocalStorage<TimeFormat>('phoebis.timeFormat', '24h');
+  const [storedExpert, storeExpert] = useLocalStorage<ExpertChoice>('phoebis.expertView', 'off');
+  // Read by equality: the hook hands back whatever string the browser holds under the key.
+  const expertView = storedExpert === 'on';
+  const setExpertView = (on: boolean) => storeExpert(on ? 'on' : 'off');
   // Applied while the first render is still being built, so the timestamps below are already in the stored format.
   const [formatVersion, setFormatVersion] = useState(() => {
     applyTimeFormat(storedFormat);
@@ -45,9 +52,8 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
   };
 
   const value = useMemo<AppSettings>(
-    () => ({ canMutate: role === 'admin', formatVersion, resolvedTheme, role, setTheme, setTimeFormat, theme, timeFormat: storedFormat }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [formatVersion, resolvedTheme, role, theme, storedFormat],
+    () => ({ canMutate: role === 'admin', expertView, formatVersion, resolvedTheme, role, setExpertView, setTheme, setTimeFormat, theme, timeFormat: storedFormat }),
+    [expertView, formatVersion, resolvedTheme, role, theme, storedFormat],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

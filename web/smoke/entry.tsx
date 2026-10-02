@@ -12,7 +12,7 @@ import { SETTINGS_SAMPLE } from '@/mock/samples';
 
 export { api, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION };
 export { default as React } from 'react';
-export { Field, GroupedDialog, GroupLink, Input, PageLink, SwitchedNumber, Toggle } from '@/components/ui/primitives';
+export { Expert, Field, GroupedDialog, GroupLink, Input, PageLink, SwitchedNumber, Toggle } from '@/components/ui/primitives';
 export const MOCK_VERSION = SETTINGS_SAMPLE.about.version;
 export const requestEvents = REQUEST_EVENTS;
 export const requests = REQUESTS;
@@ -173,12 +173,21 @@ export async function mount(path: string): Promise<Mounted> {
   );
 }
 
-/** Mounts one element under a memory router, for a check over a component the pages do not reach alone. */
+/**
+ * Mounts one element under a memory router, for a check over a component the pages do not reach alone. The providers
+ * a page has are there too, so a dialog reads the stored expert view as a page's does.
+ */
 export async function mountNode(node: ReactNode): Promise<Mounted> {
   const container = document.createElement('div');
   document.body.appendChild(container);
   const root = createRoot(container);
-  root.render(<MemoryRouter>{node}</MemoryRouter>);
+  root.render(
+    <SessionProvider>
+      <AppSettingsProvider>
+        <MemoryRouter>{node}</MemoryRouter>
+      </AppSettingsProvider>
+    </SessionProvider>,
+  );
   await wait(600);
   return mounted(
     container,

@@ -202,9 +202,10 @@ async function atRest() {
  * whatever the outcome, since the rail's fit rests on text widths the browser's font decides. With Identity chosen,
  * with and without the refusals, the rail's two levels are read: every group 10 px right of its parent's label, the
  * runs 14 px apart with a hairline of the split's colour between them, and a parent in --ink-2 at rest and under the
- * pointer alike. Then the rail outgrows its height twice, on a 700 px viewport and with six more entries at 800 px: it
- * scrolls, and once scrolled to its end the parent heading of the run passing its top holds there in the rail's own
- * colour, over the groups that pass under it.
+ * pointer alike. With expert fields and the mode off, a group's discovery line sits below its last field in the hint's
+ * size and a parent's ink, and the cell grid reaches a field through its wrapper. Then the rail outgrows its height
+ * twice, on a 700 px viewport and with six more entries at 800 px: it scrolls, and once scrolled to its end the parent
+ * heading of the run passing its top holds there in the rail's own colour, over the groups that pass under it.
  */
 async function groupedDialogFixture(theme) {
   const say = (what) => failures.push(`${theme} /fixtures/grouped-dialog: ${what}`);
@@ -336,6 +337,66 @@ async function groupedDialogFixture(theme) {
     if (read.heading.background !== read.rail.background) sayIn(`the ${read.heading.label} heading is drawn in ${read.heading.background}, not the rail's ${read.rail.background}`);
     if (read.heading.radius !== '0px') sayIn(`the ${read.heading.label} heading rounds its corners by ${read.heading.radius}, so the groups show past them`);
   };
+  // With the mode off a group that hides a field ends in the discovery line, below its last field, in the hint's
+  // size and the ink a rail parent reads in.
+  const discovery = async (state) => {
+    await page.mouse.move(0, 0);
+    await settle();
+    const read = await page.evaluate(() => {
+      const dialog = document.querySelector('dialog[open]');
+      const section = dialog.querySelector('section.dialog-group:not([hidden])');
+      const line = section?.querySelector('.dialog-group__more');
+      const fields = [...(section?.querySelectorAll('.field') ?? [])];
+      const field = fields[fields.length - 1];
+      const parent = dialog.querySelector('.dialog-rail__parent[data-parent="Routing"]');
+      if (!line || !field || !parent) return null;
+      const style = getComputedStyle(line);
+      return { color: style.color, field: field.getBoundingClientRect().bottom, fontSize: style.fontSize, parent: getComputedStyle(parent).color, top: line.getBoundingClientRect().top };
+    });
+    measurements.push(`${theme} /fixtures/grouped-dialog ${state} discovery line ${JSON.stringify(read)}`);
+    const sayIn = (what) => say(`${state}: ${what}`);
+    if (!read) return sayIn('the shown group draws no discovery line after a field');
+    if (read.top < read.field) sayIn(`the discovery line starts at ${read.top}, above the last field's bottom at ${read.field}`);
+    if (read.fontSize !== '12px') sayIn(`the discovery line reads ${read.fontSize}, not 12px`);
+    if (read.color !== read.parent) sayIn(`the discovery line draws in ${read.color}, not the ${read.parent} of a rail parent`);
+  };
+  // The wrapper of an expert field draws no box, so the cell grid's rules must reach the field through it: beside a
+  // plain half cell it takes the other half, alone it spans the grid, and either way it may shrink below its content.
+  const throughWrapper = async (state) => {
+    const cells = () =>
+      page.evaluate(() => {
+        const grid = document.querySelector('dialog[open] section.dialog-group:not([hidden]) .cells');
+        if (!grid) return null;
+        const style = getComputedStyle(grid);
+        const box = (el) => ({ top: el.getBoundingClientRect().top, width: el.getBoundingClientRect().width });
+        return {
+          gap: parseFloat(style.columnGap),
+          plain: [...grid.querySelectorAll(':scope > .field')].map(box),
+          width: grid.getBoundingClientRect().width - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight) - parseFloat(style.borderLeftWidth) - parseFloat(style.borderRightWidth),
+          wrapped: [...grid.querySelectorAll(':scope > .expert > .field')].map((el) => ({ ...box(el), minWidth: getComputedStyle(el).minWidth })),
+        };
+      });
+    const identity = await cells();
+    await choose('members');
+    const members = await cells();
+    measurements.push(`${theme} /fixtures/grouped-dialog ${state} cells ${JSON.stringify({ identity, members })}`);
+    const sayIn = (what) => say(`${state}: ${what}`);
+    if (identity?.plain.length !== 1 || identity.wrapped.length !== 1) sayIn(`Identity draws ${identity?.plain.length ?? 0} plain and ${identity?.wrapped.length ?? 0} wrapped fields, not one of each`);
+    else {
+      const half = (identity.width - identity.gap) / 2;
+      const [plain] = identity.plain;
+      const [wrapped] = identity.wrapped;
+      if (Math.abs(plain.top - wrapped.top) > 0.5) sayIn(`Identity's plain field starts at ${plain.top} and its wrapped one at ${wrapped.top}, not on one row`);
+      if (Math.abs(plain.width - half) > 0.5 || Math.abs(wrapped.width - half) > 0.5) sayIn(`Identity's half cells measure ${plain.width} and ${wrapped.width} px, not ${half}`);
+      if (wrapped.minWidth !== '0px') sayIn(`Identity's wrapped field reads a min-width of ${wrapped.minWidth}, not 0px`);
+    }
+    if (members?.plain.length !== 0 || members.wrapped.length !== 1) sayIn(`Members draws ${members?.plain.length ?? 0} plain and ${members?.wrapped.length ?? 0} wrapped fields, not one wrapped field`);
+    else {
+      const [wrapped] = members.wrapped;
+      if (Math.abs(wrapped.width - members.width) > 0.5) sayIn(`Members' wrapped field measures ${wrapped.width} px, not the grid's ${members.width}`);
+      if (wrapped.minWidth !== '0px') sayIn(`Members' wrapped field reads a min-width of ${wrapped.minWidth}, not 0px`);
+    }
+  };
   try {
     await load('');
     await check('Identity chosen');
@@ -351,6 +412,11 @@ async function groupedDialogFixture(theme) {
     await check('Overage and plan end chosen, both refused');
     await choose('utilization');
     await check('Utilization thresholds chosen, both refused');
+    await load('?expert=identity');
+    await discovery('Identity with an expert field, the mode off');
+    // Both wrapped fields show through their refusal with the mode off, so the grid is read without turning it on.
+    await load('?expert=identity&expertOnly=members&refused=identity,members');
+    await throughWrapper('expert fields refused');
     // min(800px, 100vh - 48px) at 700 px is 652 px.
     await page.setViewportSize({ height: 700, width: 1280 });
     await load('');
@@ -362,6 +428,21 @@ async function groupedDialogFixture(theme) {
     say(error instanceof Error ? error.message : String(error));
   }
   await page.setViewportSize({ height: 800, width: 1280 });
+}
+
+/** The sidebar's Expert view row stands above the version line in the status block, the two rows clear of each other. */
+async function expertRow(theme) {
+  const read = await page.evaluate(() => {
+    const status = document.querySelector('.sidebar__status');
+    const expert = status?.querySelector('button[role="switch"][aria-label="Expert view"]')?.closest('.sidebar__row') ?? null;
+    const version = status?.querySelector('.sidebar__row.mono') ?? null;
+    const edges = (row) => (row ? { bottom: row.getBoundingClientRect().bottom, top: row.getBoundingClientRect().top } : null);
+    const rows = [...(status?.children ?? [])].map((row) => (row === expert ? 'expert' : row === version ? 'version' : row.className));
+    return { expert: edges(expert), rows, version: edges(version) };
+  });
+  measurements.push(`${theme} /pools sidebar status ${JSON.stringify(read)}`);
+  if (JSON.stringify(read.rows) !== '["expert","version"]') failures.push(`${theme} /pools: the sidebar status holds ${read.rows.join(', ') || 'nothing'}, not the Expert view row then the version row`);
+  else if (read.expert.bottom > read.version.top) failures.push(`${theme} /pools: the Expert view row ends at ${read.expert.bottom}, past the version row's top at ${read.version.top}`);
 }
 
 async function poolChips(theme) {
@@ -2463,6 +2544,7 @@ try {
         await sessionForkMark(theme);
       }
       if (view.path === '/pools') {
+        await expertRow(theme);
         await poolChips(theme);
         await poolCachingControls(theme);
         await poolSelectBelow(theme);

@@ -58,7 +58,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { api, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, failCalls, failNextCall, Field, GroupedDialog, GroupLink, Input, MOCK_VERSION, mount, mountNode, PageLink, React, requestEvents, requests, rollups, stallLive, SwitchedNumber } = await import('./dist/entry.js');
+const { api, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, Expert, failCalls, failNextCall, Field, GroupedDialog, GroupLink, Input, MOCK_VERSION, mount, mountNode, PageLink, React, requestEvents, requests, rollups, stallLive, SwitchedNumber } = await import('./dist/entry.js');
 
 const results = [];
 function expect(name, text, needles) {
@@ -2165,6 +2165,91 @@ m.unmount();
   await q.settle(200);
   results.push({ name: '/keys?edit=nope opens nothing, toasts and clears the address', ok: dialogOf(q) === null && q.text().includes('Key nope not found') && q.location().search === '', missing: [titleOf(q), q.location().search] });
   q.unmount();
+}
+
+// The expert view: a browser preference switched from the sidebar, read by the dialogs alone.
+{
+  const sw = (page) => page.container.querySelector('.sidebar__status button[role="switch"][aria-label="Expert view"]');
+  localStorage.removeItem('phoebis.expertView');
+  let x = await mount('/pools');
+  const version = x.container.querySelector('.sidebar__status .sidebar__row.mono');
+  const row = sw(x)?.closest('.sidebar__row');
+  results.push({
+    name: 'the sidebar holds an Expert view switch above the version line, off on a fresh browser',
+    ok: !!row && !!version && row !== version && Boolean(row.compareDocumentPosition(version) & window.Node.DOCUMENT_POSITION_FOLLOWING) && sw(x)?.getAttribute('aria-checked') === 'false' && row.getAttribute('title') === 'Shows every field of the pool and key dialogs, the advanced ones included.',
+    missing: [row?.outerHTML.slice(0, 120) ?? 'no row', sw(x)?.getAttribute('aria-checked') ?? 'no switch'],
+  });
+  sw(x)?.click();
+  await x.settle(100);
+  const stored = localStorage.getItem('phoebis.expertView');
+  x.unmount();
+  x = await mount('/keys');
+  results.push({ name: 'the Expert view switch stores on and survives a remount', ok: stored === 'on' && sw(x)?.getAttribute('aria-checked') === 'true', missing: [stored, sw(x)?.getAttribute('aria-checked') ?? 'no switch'] });
+  x.unmount();
+  localStorage.setItem('phoebis.expertView', 'yes');
+  x = await mount('/pools');
+  results.push({ name: 'a stored value other than on reads as off', ok: sw(x)?.getAttribute('aria-checked') === 'false', missing: [sw(x)?.getAttribute('aria-checked') ?? 'no switch'] });
+  x.unmount();
+  localStorage.removeItem('phoebis.expertView');
+  const line = (section) => section?.querySelector('.dialog-group__more');
+  const dialogOf = (page) => page.container.querySelector('dialog[open]');
+  x = await mount('/fixtures/grouped-dialog?expert=identity,members');
+  let identity = group(dialogOf(x), 'Identity');
+  const members = group(dialogOf(x), 'Members');
+  const lineReads = (section) =>
+    (line(section)?.firstChild?.textContent ?? '') === '1 more setting in the' &&
+    line(section)?.querySelector('button.link-btn')?.textContent?.trim() === 'expert view' &&
+    line(section)?.querySelector('button.link-btn')?.getAttribute('aria-label') === 'Turn on the expert view';
+  results.push({
+    name: 'with the mode off each group with an expert field ends with the line and hides the field',
+    ok: lineReads(identity) && lineReads(members) && identity?.querySelector('input[aria-label="Identity expert"]') === null && members?.lastElementChild === line(members),
+    missing: [line(identity)?.textContent ?? 'no line', line(members)?.textContent ?? 'no line'],
+  });
+  line(identity)?.querySelector('button')?.click();
+  await x.settle(150);
+  identity = group(dialogOf(x), 'Identity');
+  const field = identity?.querySelector('input[aria-label="Identity expert"]');
+  // Read through Boolean, so a missing sibling fails rather than passing as `undefined !== null`.
+  results.push({
+    name: 'the line turns the mode on, shows the field in place, leaves, and focuses the field',
+    ok: localStorage.getItem('phoebis.expertView') === 'on' && !!field && Boolean(field.closest('.expert')?.previousElementSibling?.querySelector('input[aria-label="Identity"]')) && line(identity) === null && line(group(dialogOf(x), 'Members')) === null && document.activeElement === field,
+    missing: [localStorage.getItem('phoebis.expertView'), document.activeElement?.outerHTML.slice(0, 80) ?? 'nothing focused'],
+  });
+  x.unmount();
+  x = await mount('/fixtures/grouped-dialog?expert=identity');
+  results.push({ name: 'with the mode on no line draws', ok: line(group(dialogOf(x), 'Identity')) === null && group(dialogOf(x), 'Identity')?.querySelector('input[aria-label="Identity expert"]') !== null, missing: [] });
+  x.unmount();
+  localStorage.removeItem('phoebis.expertView');
+  x = await mount('/fixtures/grouped-dialog?expert=identity&refused=identity');
+  results.push({ name: 'a wrapped field marked refused shows with the mode off, and the line does not count it', ok: group(dialogOf(x), 'Identity')?.querySelector('input[aria-label="Identity expert"]') !== null && line(group(dialogOf(x), 'Identity')) === null, missing: [] });
+  x.unmount();
+  const labels = (page) => [...(dialogOf(page)?.querySelectorAll('.dialog-rail__group .dialog-rail__label') ?? [])].map((s) => s.textContent?.trim());
+  const parents = (page) => [...(dialogOf(page)?.querySelectorAll('.dialog-rail__parent .dialog-rail__label') ?? [])].map((s) => s.textContent?.trim());
+  x = await mount('/fixtures/grouped-dialog?expertOnly=autoMode');
+  results.push({ name: 'an expert-only group leaves the rail while the mode is off', ok: !labels(x).includes('Auto mode') && labels(x).length === 17 && parents(x).join() === 'Pool,Routing,Load,Caching,Visibility', missing: labels(x) });
+  [...(group(dialogOf(x), 'Identity')?.querySelectorAll('button.link-btn') ?? [])].find((b) => b.textContent?.trim() === 'Auto mode')?.click();
+  await x.settle(150);
+  results.push({
+    name: 'a group link to an expert-only group turns the mode on, then opens it',
+    ok: localStorage.getItem('phoebis.expertView') === 'on' && rail(dialogOf(x), 'autoMode')?.getAttribute('aria-current') === 'true' && group(dialogOf(x), 'Auto mode')?.hidden === false && document.activeElement === group(dialogOf(x), 'Auto mode')?.querySelector('h3'),
+    missing: [localStorage.getItem('phoebis.expertView'), ...labels(x)],
+  });
+  x.unmount();
+  localStorage.removeItem('phoebis.expertView');
+  x = await mount('/fixtures/grouped-dialog?expertOnly=identity,members,keys,models,autoMode');
+  await x.settle(100);
+  const panel = (page) => [...(dialogOf(page)?.querySelectorAll('section.dialog-group:not([hidden])') ?? [])].map((s) => s.getAttribute('aria-label')).join();
+  results.push({ name: 'an expert-only run leaves with its parent heading', ok: parents(x).join() === 'Routing,Load,Caching,Visibility' && labels(x).length === 13, missing: parents(x) });
+  results.push({
+    name: 'a chosen group the filter takes off gives way to the first shown group',
+    ok: panel(x) === 'Selection' && rail(dialogOf(x), 'selection')?.getAttribute('aria-current') === 'true' && localStorage.getItem('phoebis.expertView') === null,
+    missing: [panel(x) || 'no panel shown', rail(dialogOf(x), 'selection')?.getAttribute('aria-current') ?? 'not current'],
+  });
+  x.unmount();
+  x = await mount('/fixtures/grouped-dialog?expertOnly=autoMode&refused=autoMode');
+  results.push({ name: 'a refused expert-only group stays on the rail', ok: labels(x).includes('Auto mode') && rail(dialogOf(x), 'autoMode')?.querySelector('.dialog-rail__dot') !== null, missing: labels(x) });
+  x.unmount();
+  localStorage.removeItem('phoebis.expertView');
 }
 
 m = await mount('/keys');
@@ -5257,14 +5342,17 @@ m.unmount();
 // Fixtures mounted alone pin the grouped dialog's contract apart from any one page's form.
 {
   const { createElement: h, Fragment, useEffect, useState } = React;
-  function Fixture({ held, hold = null, refused = false, status = 'Every group saves together.' }) {
-    const [chosen, setChosen] = useState('one');
+  function Fixture({ expertOnly = false, held, hold = null, initialGroup = null, refused = false, start = 'one', status = 'Every group saves together.' }) {
+    const [chosen, setChosen] = useState(start);
+    // The page's reset, which React runs after the dialog's open effect.
+    useEffect(() => setChosen(initialGroup ?? start), []);
+    const b = h(Field, { label: 'B' }, h(Input, { 'aria-label': 'B', 'aria-invalid': refused ? true : undefined }));
     const groups = [
       { id: 'one', label: 'One', parent: 'First', body: h(Field, { label: 'A' }, h(Input, { 'aria-label': 'A' })) },
-      { id: 'two', label: 'Two', parent: 'First', refused, body: h(Field, { label: 'B' }, h(Input, { 'aria-label': 'B', 'aria-invalid': refused ? true : undefined })) },
+      { id: 'two', label: 'Two', parent: 'First', refused, expertOnly, body: expertOnly ? h(Expert, { refused }, b) : b },
       { id: 'three', label: 'Three', parent: 'Second', body: h('p', { className: 'field__hint' }, h(GroupLink, { id: 'one' }, 'One'), ' ', h(PageLink, { to: '/pools' }, 'Pools page')) },
     ];
-    return h(GroupedDialog, { chosen, footer: h('button', { type: 'button' }, 'Save'), groups, held, hold, onChoose: setChosen, onClose() {}, open: true, railLabel: 'Fixture settings', status, title: 'Fixture' });
+    return h(GroupedDialog, { chosen, footer: h('button', { type: 'button' }, 'Save'), groups, held, hold, initialGroup, onChoose: setChosen, onClose() {}, open: true, railLabel: 'Fixture settings', status, title: 'Fixture' });
   }
   const texts = (root, selector) => [...root.querySelectorAll(selector)].map((el) => el.textContent?.trim() ?? '');
   const attrs = (root, selector, name) => [...root.querySelectorAll(selector)].map((el) => el.getAttribute(name));
@@ -5333,6 +5421,36 @@ m.unmount();
     });
   }
   f.unmount();
+
+  // Two is expert only: while the mode is off it leaves the rail, and an address that names it turns the mode on first.
+  localStorage.removeItem('phoebis.expertView');
+  f = await mountNode(h(Fixture, { expertOnly: true }));
+  {
+    const c = f.container;
+    const read = [texts(c, '.dialog-rail__group .dialog-rail__label').join(), shown(c), String(localStorage.getItem('phoebis.expertView'))];
+    results.push({ name: 'grouped dialog: an expert-only group leaves the rail while the mode is off', ok: JSON.stringify(read) === JSON.stringify(['One,Three', 'One', 'null']), missing: read });
+  }
+  f.unmount();
+  // The reset names Two again after the dialog has handed the page One, which leaves the page's state as it was.
+  f = await mountNode(h(Fixture, { expertOnly: true, start: 'two' }));
+  {
+    const c = f.container;
+    const read = [texts(c, '.dialog-rail__group .dialog-rail__label').join(), shown(c), attrs(c, '[aria-current="true"]', 'data-group').join(), String(localStorage.getItem('phoebis.expertView'))];
+    results.push({ name: 'grouped dialog: a reset to an expert-only group while the mode is off shows the first shown group', ok: JSON.stringify(read) === JSON.stringify(['One,Three', 'One', 'one', 'null']), missing: read });
+  }
+  f.unmount();
+  f = await mountNode(h(Fixture, { expertOnly: true, initialGroup: 'two' }));
+  {
+    const c = f.container;
+    const read = [texts(c, '.dialog-rail__group .dialog-rail__label').join(), shown(c), String(localStorage.getItem('phoebis.expertView'))];
+    results.push({
+      name: 'grouped dialog: opening on an expert-only group turns the mode on, then shows the group with its wrapped field',
+      ok: JSON.stringify(read) === JSON.stringify(['One,Two,Three', 'Two', 'on']) && c.querySelector('section.dialog-group[aria-label="Two"] .expert input[aria-label="B"]') !== null && document.activeElement === heading(c, 'Two'),
+      missing: [...read, `focus ${focused()}`],
+    });
+  }
+  f.unmount();
+  localStorage.removeItem('phoebis.expertView');
 
   f = await mountNode(h(Fixture, { held: true, status: 'The server refused the save.' }));
   {
@@ -5462,6 +5580,18 @@ for (const [path, absent, present, heading] of [
   });
   // The sessions row keeps its menu for the two jumps that only read.
   results.push({ name: `viewer: ${path} has no row menu`, ok: path === '/sessions' || reachable('.menu__trigger').length === 0, missing: [] });
+}
+{
+  // A viewer's address is cleared before any dialog opens, and the expert view's turn-on lives in the dialog, so a
+  // dialog query leaves the switch off.
+  await m.navigate('/pools?edit=all&group=autoMode');
+  await m.settle(200);
+  const expert = m.container.querySelector('.sidebar__status button[role="switch"][aria-label="Expert view"]');
+  results.push({
+    name: 'viewer: a dialog query on /pools opens nothing and leaves the Expert view switch off',
+    ok: m.container.querySelector('dialog[open]') === null && !m.text().includes('not found') && m.location().search === '' && expert?.getAttribute('aria-checked') === 'false' && localStorage.getItem('phoebis.expertView') === null,
+    missing: [expert?.getAttribute('aria-checked') ?? 'no switch', m.location().search, String(localStorage.getItem('phoebis.expertView'))],
+  });
 }
 await m.navigate('/accounts/business');
 results.push({ name: 'viewer: /accounts has no Edit label button', ok: m.container.querySelector('button[aria-label="Edit label"]') === null, missing: [] });
