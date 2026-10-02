@@ -2,6 +2,7 @@
 //! across accounts, and the response the caller gets.
 
 use std::collections::BTreeSet;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -80,6 +81,22 @@ use crate::{
 /// How often the session memory's changes reach the store; a crash loses at most this much of it, and the
 /// shutdown flushes the rest.
 pub const MEMORY_FLUSH_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Taken off `head_timeout` for the one deadline the attempt loop runs under, so the exhaustion answer leaves
+/// before the native client's own ten minutes run out.
+const ATTEMPT_DEADLINE_MARGIN: Duration = Duration::from_secs(30);
+
+/// The slice a held request sleeps between reads of the clock while it waits out an account's backoff.
+const HOLD_TICK: Duration = Duration::from_millis(250);
+
+/// How a wait on an account's backoff ended.
+enum Waited {
+    /// The account left the router meanwhile.
+    Cancelled,
+    Cleared,
+    /// The request's deadline came before the backoff cleared.
+    Deadline,
+}
 
 /// Upstream response headers the relay keeps to itself: the connection and framing ones describe the upstream
 /// hop, and the framing no longer matches the body the caller is sent; the upstream's own identity and cookies
@@ -1258,9 +1275,14 @@ impl Relay {
             caller: &parts.headers,
             chains: facts.chains.as_ref(),
             client_version,
+            deadline: (self.limits.head_timeout > ATTEMPT_DEADLINE_MARGIN).then(|| {
+                received_at
+                    + (self.limits.head_timeout - ATTEMPT_DEADLINE_MARGIN).as_millis() as i64
+            }),
             diagnostics,
             fallback_ms,
             fast: facts.shape.speed.as_deref() == Some("fast"),
+            floor_held: AtomicBool::new(false),
             identity: &identity,
             key: &key,
             lane,
@@ -1296,6 +1318,20 @@ impl Relay {
 
         loop {
             let now = (self.clock)();
+            // One deadline for the whole request, the climb's waits included: past it the pool is answered as
+            // exhausted rather than selected again.
+            if admitted.deadline.is_some_and(|deadline| now >= deadline) {
+                return self
+                    .exhausted(
+                        &admitted,
+                        attempt,
+                        &Exhaustion::Untimed,
+                        now,
+                        false,
+                        auth_marked,
+                    )
+                    .await;
+            }
             let answer = match self
                 .router
                 .select(SelectRequest {
@@ -1570,6 +1606,12 @@ impl Relay {
     /// One account's leg of the request. `attempt` is the wire-submission index every bus event and attempt row
     /// carries. `key_permit` is the request's own, which a committed stream takes into its body; `selected` is the
     /// ticket the selection charged for the leg's first pass.
+    ///
+    /// An OAuth 401 runs the refresh ladder on this account: a refresh, and after one that failed without a
+    /// conclusive answer a second once the account's backoff clears, the key's permit and the ticket held through
+    /// the wait. The token endpoint's floor is waited out once per request, through `Admitted::floor_held`, since a
+    /// second account's bad minute is the same minute. Every wait ends at `Admitted::deadline`, past which the
+    /// attempt loop answers the exhaustion.
     async fn dispatch_to(
         &self,
         admitted: &Admitted<'_>,
@@ -1858,8 +1900,10 @@ impl Relay {
                 chains: admitted.chains,
                 client_version: admitted.client_version.clone(),
                 credential_generation: credential.generation,
+                deadline: admitted.deadline,
                 fallback_ms: admitted.fallback_ms,
                 fast: admitted.fast,
+                floor_held: &admitted.floor_held,
                 fresh_pin: selection.pin.is_some() && !selection.trace.renewed,
                 identity: admitted.identity,
                 injected: &injected,
@@ -2310,29 +2354,64 @@ impl Relay {
             // A rejected replay is conclusive: the refreshed token was refused too.
             Verdict::Refresh if ctx.replayed => (None, Some(AccountState::ReauthRequired), false),
             Verdict::Refresh => {
-                match self
-                    .manager
-                    .refresh_now(&ctx.account.id, ctx.credential_generation)
-                    .await
-                {
-                    Ok(token) => return Next::Replay(Credential::from(token)),
-                    // Nothing was replaced, so the account is finished for this request and nothing of the
-                    // upstream's 401 goes back: the request fails over, and a request with no account left, or
-                    // one bound to this account, is answered the router's own exhaustion. An account the refresh
-                    // found marked, by its own invalid_grant or by a disconnect meanwhile, keeps its pin for the
-                    // next selection to end under the account's state; any other failure moves the pin.
-                    Err(error) => {
-                        tracing::warn!(account = %ctx.account.id, %error, "the rejected token could not be refreshed");
-                        let marked = matches!(
-                            error,
-                            AcquireError::Disconnected
-                                | AcquireError::ReauthRequired
-                                | AcquireError::Unpaired
-                        );
-                        if matches!(error, AcquireError::ReauthRequired) {
-                            ctx.auth_marked = true;
+                let mut tries = 0u8;
+                loop {
+                    tries += 1;
+                    match self
+                        .manager
+                        .refresh_now(&ctx.account.id, ctx.credential_generation)
+                        .await
+                    {
+                        Ok(token) => return Next::Replay(Credential::from(token)),
+                        // Once the ladder ends nothing was replaced, so the account is finished for this request
+                        // and nothing of the upstream's 401 goes back: the request fails over, and a request with
+                        // no account left, or one bound to this account, is answered the router's own exhaustion.
+                        // An account the refresh found marked, by its own invalid_grant or by a disconnect
+                        // meanwhile, keeps its pin for the next selection to end under the account's state; any
+                        // other failure moves the pin.
+                        Err(error) => {
+                            tracing::warn!(account = %ctx.account.id, %error, "the rejected token could not be refreshed");
+                            let marked = matches!(
+                                error,
+                                AcquireError::Disconnected
+                                    | AcquireError::ReauthRequired
+                                    | AcquireError::Unpaired
+                            );
+                            if matches!(error, AcquireError::ReauthRequired) {
+                                ctx.auth_marked = true;
+                            }
+                            if marked || tries == 2 {
+                                break (None, None, !marked);
+                            }
+                            // One wait on the same account, bounded by the manager's own rule: a short refusal
+                            // clears in seconds and a token endpoint's bad minute in a minute, both cheaper than
+                            // moving a warm session; a backoff asked for past the floor is not waited out, and
+                            // the minute is waited out once per request, since a second account's bad minute is
+                            // the same minute. The armed length tells the two apart, not the time left, which a
+                            // clock that moved since the arming would misread.
+                            let Some(backoff) = self.manager.backoff(&ctx.account.id) else {
+                                break (None, None, true);
+                            };
+                            let floor = backoff.length_ms > phoebis_oauth::TRANSIENT_BACKOFF_MS;
+                            if backoff.length_ms > phoebis_oauth::SERVER_ERROR_BACKOFF_MS
+                                || (floor && ctx.floor_held.load(Ordering::Relaxed))
+                            {
+                                break (None, None, true);
+                            }
+                            if floor {
+                                ctx.floor_held.store(true, Ordering::Relaxed);
+                            }
+                            match self.wait_out(backoff.until, ctx.deadline, ctx.cancel).await {
+                                Waited::Cleared => {}
+                                // The loop head answers the exhaustion past the deadline; this account is done.
+                                Waited::Deadline => break (None, None, true),
+                                Waited::Cancelled => {
+                                    return Next::Respond(
+                                        self.cancelled(&ctx, &head, written_at).await,
+                                    )
+                                }
+                            }
                         }
-                        (None, None, !marked)
                     }
                 }
             }
@@ -2822,6 +2901,35 @@ impl Relay {
         with_outcome(response, outcome)
     }
 
+    /// Sleeps until the relay's clock reaches `until`, or `deadline` when that comes first. The clock is read again
+    /// after every `HOLD_TICK` rather than slept against once, so a clock a test steps is noticed within a tick and
+    /// production time passes as it does.
+    async fn wait_out(
+        &self,
+        until: i64,
+        deadline: Option<i64>,
+        cancel: &CancellationToken,
+    ) -> Waited {
+        let end = deadline.map_or(until, |deadline| deadline.min(until));
+        loop {
+            let now = (self.clock)();
+            if now >= end {
+                return if deadline.is_some_and(|deadline| deadline < until) {
+                    Waited::Deadline
+                } else {
+                    Waited::Cleared
+                };
+            }
+            let slice = HOLD_TICK.min(Duration::from_millis((end - now) as u64));
+            if until_cancelled(tokio::time::sleep(slice), cancel)
+                .await
+                .is_none()
+            {
+                return Waited::Cancelled;
+            }
+        }
+    }
+
     /// The answer to a response that arrived for an account that is no longer there.
     async fn cancelled(
         &self,
@@ -3239,9 +3347,13 @@ struct Responding<'a> {
     chains: Option<&'a Chains>,
     client_version: Option<String>,
     credential_generation: u64,
+    /// `Admitted::deadline`, which ends the refresh ladder's wait.
+    deadline: Option<i64>,
     fallback_ms: i64,
     /// The request carried `speed: "fast"`, which a throttle's classification reads.
     fast: bool,
+    /// `Admitted::floor_held`, which the refresh ladder reads and sets.
+    floor_held: &'a AtomicBool,
     /// Whether this selection created `pin` rather than renewing one that already served.
     fresh_pin: bool,
     identity: &'a RequestIdentity,
@@ -3332,6 +3444,10 @@ struct Admitted<'a> {
     /// chain.
     chains: Option<&'a Chains>,
     client_version: Option<String>,
+    /// The relay's clock past which the attempt loop answers the exhaustion rather than selecting again, and at
+    /// which a wait on an account's backoff ends: admission plus `head_timeout` less `ATTEMPT_DEADLINE_MARGIN`.
+    /// `None` when `head_timeout` is no longer than the margin.
+    deadline: Option<i64>,
     /// `compatibility.cache_diagnostics`, or the pool's own override, resolved at admission and never for a
     /// `count_tokens` request: the public schema refuses an unknown top-level member and the beta names nothing
     /// there, and a 400 on that path must never latch the account for its inference requests.
@@ -3340,6 +3456,10 @@ struct Admitted<'a> {
     /// The request carried `speed: "fast"`: fast eligibility applies to its selections and its throttles cool the
     /// fast lane.
     fast: bool,
+    /// Whether this request already waited out the token endpoint's floor on some account. Set through the shared
+    /// reference, so no leg needs a parameter for it; atomic because `Admitted` is borrowed across the handler's
+    /// awaits and that future has to be `Send`.
+    floor_held: AtomicBool,
     identity: &'a RequestIdentity,
     key: &'a ApiKeyRow,
     /// The cache lane the request writes to, composed once at admission since no failover changes the body.

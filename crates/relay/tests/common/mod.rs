@@ -174,6 +174,8 @@ pub struct Harness {
     /// with no address, so a shared pool would hand either fake the other's connection.
     pub catalog_up: FakeUpstream,
     pub clock: Arc<AtomicI64>,
+    /// The manager the relay was built with, so a test reads `backoff_until` before it steps the clock.
+    pub manager: Arc<phoebis_oauth::CredentialManager>,
     /// The relay behind `app`, for the suites that serve it on a real socket instead of calling it in process.
     pub relay: Arc<Relay>,
     pub router: RouterHandle,
@@ -819,7 +821,7 @@ async fn build(
     ));
     let relay = Relay::new(
         store.clone(),
-        manager,
+        manager.clone(),
         pool,
         router_handle.clone(),
         resolver,
@@ -851,12 +853,34 @@ async fn build(
         catalog: catalog.clone(),
         catalog_up,
         clock: clock_cell,
+        manager,
         relay,
         router: router_handle,
         _refresh: RefreshGuard(refresh),
         _stop: CatalogGuard(catalog),
         store,
     }
+}
+
+/// Moves the shared clock to the backoff the manager armed on `account` after a failed refresh, so a request held
+/// on the account through that backoff goes on. The fake records a token `POST` before it answers and the manager
+/// arms the backoff after the answer, so the step waits for the armed instant itself: a step taken as soon as the
+/// `POST` shows could land before the arming and leave the hold waiting on a clock nothing moves.
+pub async fn step_to_backoff(h: &Harness, up: &FakeUpstream, account: &str) {
+    wait_for(Duration::from_secs(5), || {
+        up.requests()
+            .iter()
+            .any(|r| r.line.starts_with("POST /v1/oauth/token"))
+            .then_some(())
+    })
+    .await;
+    let until = wait_for(Duration::from_secs(5), || {
+        h.manager
+            .backoff_until(account)
+            .filter(|until| *until > h.clock.load(Ordering::SeqCst))
+    })
+    .await;
+    h.clock.store(until, Ordering::SeqCst);
 }
 
 /// A fake serving plain HTTP has no certificate to trust, and `X509::from_pem` refuses the empty string.

@@ -1109,8 +1109,64 @@ async fn ledger_rows(
         .expect("the request lands a ledger row")
 }
 
+fn token_posts(up: &FakeUpstream) -> usize {
+    up.requests()
+        .iter()
+        .filter(|r| r.line.starts_with("POST /v1/oauth/token"))
+        .count()
+}
+
+/// The token endpoint's answer to a refresh that rotates: the profile's fixture, naming `ACCOUNT_UUID`.
+fn token_answer() -> Respond {
+    Respond::Json {
+        status: 200,
+        headers: vec![],
+        body: phoebis_profile::fixtures::control_response(
+            phoebis_profile::fixtures::ControlFixture::Token,
+        )
+        .to_vec(),
+    }
+}
+
+fn expired() -> Respond {
+    Respond::Json {
+        status: 401,
+        headers: vec![],
+        body: br#"{"type":"error","error":{"type":"authentication_error","message":"expired"}}"#
+            .to_vec(),
+    }
+}
+
+/// An OAuth account the token fixture's identity matches, so a refresh that reaches the endpoint commits.
+fn paired(id: &'static str, secret: &'static str) -> TestAccount {
+    TestAccount {
+        uuid: Some(ACCOUNT_UUID),
+        ..oauth(id, secret, 0)
+    }
+}
+
+/// The request in the background, so the test can move the clock while the relay holds it.
+fn spawned(
+    h: &Harness,
+    req: axum::http::Request<axum::body::Body>,
+) -> tokio::task::JoinHandle<axum::http::Response<axum::body::Body>> {
+    let app = h.app.clone();
+    tokio::spawn(async move { app.oneshot(req).await.unwrap() })
+}
+
+/// The held request's answer, which has to arrive within `wait_for`'s bound of real time.
+async fn answered(
+    inflight: tokio::task::JoinHandle<axum::http::Response<axum::body::Body>>,
+) -> axum::http::Response<axum::body::Body> {
+    wait_for(Duration::from_secs(5), || {
+        inflight.is_finished().then_some(())
+    })
+    .await;
+    inflight.await.unwrap()
+}
+
 #[tokio::test]
-async fn a_401_whose_refresh_rotates_nothing_answers_the_routers_503_and_keeps_the_account() {
+async fn a_refusal_that_rotated_nothing_is_retried_once_after_the_backoff_and_then_fails_over() {
     let up = an_expired_token_and_a_token_endpoint_down().await;
     let h = harness_with(
         &up,
@@ -1119,12 +1175,13 @@ async fn a_401_whose_refresh_rotates_nothing_answers_the_routers_503_and_keeps_t
         default_limits(),
     )
     .await;
-    let resp = h
-        .app
-        .clone()
-        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
-        .await
-        .unwrap();
+    let inflight = spawned(&h, request_for(KEY, "claude-sonnet-4-5", "s1"));
+    step_to_backoff(&h, &up, "a").await;
+    wait_for(Duration::from_secs(5), || {
+        (token_posts(&up) == 2).then_some(())
+    })
+    .await;
+    let resp = answered(inflight).await;
     assert_eq!(resp.status(), 503, "the router's own answer");
     assert_eq!(
         resp.headers()["x-phoebis-error-code"],
@@ -1154,12 +1211,9 @@ async fn a_401_whose_refresh_rotates_nothing_answers_the_routers_503_and_keeps_t
         "the token the upstream rejected is not sent a second time"
     );
     assert_eq!(
-        up.requests()
-            .iter()
-            .filter(|r| r.line.starts_with("POST /v1/oauth/token"))
-            .count(),
-        1,
-        "one refresh was tried and none followed it"
+        token_posts(&up),
+        2,
+        "the refresh and its one retry past the backoff"
     );
     // A mark's write is asynchronous, so this window bounds how long one would have to appear rather than
     // proving none is coming.
@@ -1181,12 +1235,9 @@ async fn an_authentication_failure_as_the_last_word_reads_exhausted_with_auth_fa
     let bus = Bus::new();
     let mut sub = bus.subscribe("test");
     let h = harness_with_bus(&up, &[oauth("a", A, 0)], PoolSpec::default(), bus).await;
-    let resp = h
-        .app
-        .clone()
-        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
-        .await
-        .unwrap();
+    let inflight = spawned(&h, request_for(KEY, "claude-sonnet-4-5", "s1"));
+    step_to_backoff(&h, &up, "a").await;
+    let resp = answered(inflight).await;
     assert_eq!(resp.status(), 503);
     resp.into_body().collect().await.unwrap();
     let (request, attempts) = ledger_rows(&mut sub).await;
@@ -1212,12 +1263,9 @@ async fn an_authentication_failure_as_the_last_word_reads_exhausted_with_auth_fa
 async fn a_non_portable_requests_401_answers_the_503_on_its_own_account() {
     let up = an_expired_token_and_a_token_endpoint_down().await;
     let h = harness(&up, &[oauth("a", A, 0)], PoolSpec::default()).await;
-    let resp = h
-        .app
-        .clone()
-        .oneshot(non_portable_request(KEY, "s1"))
-        .await
-        .unwrap();
+    let inflight = spawned(&h, non_portable_request(KEY, "s1"));
+    step_to_backoff(&h, &up, "a").await;
+    let resp = answered(inflight).await;
     assert_eq!(
         (
             resp.status().as_u16(),
@@ -1230,6 +1278,255 @@ async fn a_non_portable_requests_401_answers_the_503_on_its_own_account() {
         outcome(&resp).account_id,
         "a",
         "the answer is the leg's own, not a reselection's"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_hold_after_a_token_endpoint_5xx_keeps_the_pin_and_the_second_refresh_serves() {
+    let up = FakeUpstream::start(vec![
+        Rule {
+            path_prefix: "/v1/messages".into(),
+            respond: expired(),
+        },
+        Rule {
+            path_prefix: "/v1/oauth/token".into(),
+            respond: Respond::Json {
+                status: 503,
+                headers: vec![],
+                body: b"{}".to_vec(),
+            },
+        },
+    ])
+    .await;
+    up.set_rule_after(1, "/v1/messages", json_200());
+    up.set_rule_after(1, "/v1/oauth/token", token_answer());
+    let h = harness(&up, &[paired("a", A)], PoolSpec::default()).await;
+    let inflight = spawned(&h, request_for(KEY, "claude-sonnet-4-5", "s1"));
+    wait_for(Duration::from_secs(5), || h.manager.backoff_until("a")).await;
+    stays_for(Duration::from_millis(300), || {
+        credentials_seen(&up) == [A] && !inflight.is_finished()
+    })
+    .await;
+    step_to_backoff(&h, &up, "a").await;
+    let resp = answered(inflight).await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(outcome(&resp).account_id, "a");
+    resp.into_body().collect().await.unwrap();
+    assert_eq!(
+        credentials_seen(&up),
+        [A, "sk-ant-oat01-PLACEHOLDER"],
+        "the replay carries the refreshed token, on the same account"
+    );
+    wait_for_async(Duration::from_secs(2), || async {
+        h.router
+            .pins()
+            .await
+            .unwrap()
+            .iter()
+            .any(|p| p.session_id == "s1" && p.account_id == "a")
+            .then_some(())
+    })
+    .await;
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_short_refusal_is_retried_within_the_transient_backoff() {
+    let up = FakeUpstream::start(vec![
+        Rule {
+            path_prefix: "/v1/messages".into(),
+            respond: expired(),
+        },
+        Rule {
+            path_prefix: "/v1/oauth/token".into(),
+            respond: Respond::Json {
+                status: 429,
+                headers: vec![],
+                body: b"{}".to_vec(),
+            },
+        },
+    ])
+    .await;
+    up.set_rule_after(1, "/v1/messages", json_200());
+    up.set_rule_after(1, "/v1/oauth/token", token_answer());
+    let h = harness(&up, &[paired("a", A)], PoolSpec::default()).await;
+    let inflight = spawned(&h, request_for(KEY, "claude-sonnet-4-5", "s1"));
+    step_to_backoff(&h, &up, "a").await;
+    let resp = answered(inflight).await;
+    assert_eq!(
+        (resp.status().as_u16(), outcome(&resp).account_id.as_str()),
+        (200, "a")
+    );
+    assert_eq!(token_posts(&up), 2);
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_retry_after_past_the_floor_fails_over_at_once() {
+    let up = FakeUpstream::start(vec![
+        Rule {
+            path_prefix: "/v1/messages".into(),
+            respond: expired(),
+        },
+        Rule {
+            path_prefix: "/v1/oauth/token".into(),
+            respond: Respond::Json {
+                status: 503,
+                headers: vec![("retry-after".into(), "300".into())],
+                body: b"{}".to_vec(),
+            },
+        },
+    ])
+    .await;
+    let h = harness(&up, &[oauth("a", A, 0)], PoolSpec::default()).await;
+    let inflight = spawned(&h, request_for(KEY, "claude-sonnet-4-5", "s1"));
+    let resp = answered(inflight).await;
+    assert_eq!(
+        (
+            resp.status().as_u16(),
+            resp.headers()["x-phoebis-error-code"].to_str().unwrap()
+        ),
+        (503, "accounts_unavailable"),
+        "not held for the five minutes asked"
+    );
+    assert_eq!(token_posts(&up), 1);
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_lost_response_then_an_invalid_grant_marks_the_account_and_fails_over() {
+    let up = FakeUpstream::start(vec![
+        Rule {
+            path_prefix: "/v1/messages".into(),
+            respond: expired(),
+        },
+        Rule {
+            path_prefix: "/v1/oauth/token".into(),
+            respond: Respond::CloseAfterRequest,
+        },
+    ])
+    .await;
+    up.set_rule_after(
+        1,
+        "/v1/oauth/token",
+        Respond::Json {
+            status: 400,
+            headers: vec![],
+            body: br#"{"error":"invalid_grant","error_description":"revoked"}"#.to_vec(),
+        },
+    );
+    let h = harness(&up, &[oauth("a", A, 0)], PoolSpec::default()).await;
+    let inflight = spawned(&h, request_for(KEY, "claude-sonnet-4-5", "s1"));
+    step_to_backoff(&h, &up, "a").await;
+    wait_for(Duration::from_secs(5), || {
+        (h.store.account("a").unwrap().unwrap().state == AccountState::ReauthRequired).then_some(())
+    })
+    .await;
+    let resp = answered(inflight).await;
+    assert_eq!(resp.status(), 503, "the router's own answer");
+    assert_eq!(token_posts(&up), 2);
+    assert!(
+        h.router
+            .pins()
+            .await
+            .unwrap()
+            .iter()
+            .any(|p| p.session_id == "s1" && p.account_id == "a"),
+        "the mark ends the pin at the next selection, under its own reason"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn six_accounts_with_lost_refresh_answers_hold_once_and_answer_within_the_deadline() {
+    const D: &str = "sk-ant-oat01-DDDD";
+    const E: &str = "sk-ant-oat01-EEEE";
+    const F: &str = "sk-ant-oat01-FFFF";
+    let up = FakeUpstream::start(vec![
+        Rule {
+            path_prefix: "/v1/messages".into(),
+            respond: expired(),
+        },
+        Rule {
+            path_prefix: "/v1/oauth/token".into(),
+            respond: Respond::CloseAfterRequest,
+        },
+    ])
+    .await;
+    // The router's own `head_timeout`, so the request carries the deadline production gives it.
+    let h = harness_with_limits(
+        &up,
+        &[
+            oauth("a", A, 0),
+            oauth("b", B, 1),
+            oauth("c", C, 2),
+            oauth("d", D, 3),
+            oauth("e", E, 4),
+            oauth("f", F, 5),
+        ],
+        PoolSpec::default(),
+        phoebis_relay::Limits {
+            head_timeout: Duration::from_secs(600),
+            ..default_limits()
+        },
+    )
+    .await;
+    let inflight = spawned(&h, request_for(KEY, "claude-sonnet-4-5", "s1"));
+    step_to_backoff(&h, &up, "a").await;
+    let resp = answered(inflight).await;
+    assert_eq!(
+        (
+            resp.status().as_u16(),
+            resp.headers()["x-phoebis-error-code"].to_str().unwrap()
+        ),
+        (503, "accounts_unavailable")
+    );
+    assert_eq!(
+        token_posts(&up),
+        7,
+        "two on the held account, its first and its retry past the floor, and one on each of the five others"
+    );
+    assert_eq!(
+        credentials_seen(&up).len(),
+        6,
+        "one hold, then five failovers at once"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_wait_that_would_pass_the_request_deadline_ends_at_it_with_the_exhaustion_answer() {
+    let up = an_expired_token_and_a_token_endpoint_down().await;
+    // 40 s exceeds the margin, so the request's deadline is 10 s past its admission.
+    let h = harness_with_limits(
+        &up,
+        &[oauth("a", A, 0)],
+        PoolSpec::default(),
+        phoebis_relay::Limits {
+            head_timeout: Duration::from_secs(40),
+            ..default_limits()
+        },
+    )
+    .await;
+    let inflight = spawned(&h, request_for(KEY, "claude-sonnet-4-5", "s1"));
+    wait_for(Duration::from_secs(5), || h.manager.backoff_until("a")).await;
+    stays_for(Duration::from_millis(300), || !inflight.is_finished()).await;
+    // The deadline, short of the floor.
+    h.clock
+        .fetch_add(10_000, std::sync::atomic::Ordering::SeqCst);
+    let resp = answered(inflight).await;
+    assert_eq!(
+        (
+            resp.status().as_u16(),
+            resp.headers()["x-phoebis-error-code"].to_str().unwrap()
+        ),
+        (503, "accounts_unavailable")
+    );
+    assert_eq!(
+        token_posts(&up),
+        1,
+        "the floor was not waited out past the request's deadline"
     );
     up.shutdown().await;
 }

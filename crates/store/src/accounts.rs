@@ -337,8 +337,8 @@ impl Store {
             "DELETE FROM api_key_secrets WHERE account_id = ?1",
             params![id],
         )?;
-        // A disconnect must also clear the refresh gate: otherwise a pending or uncertain attempt from
-        // before the disconnect keeps blocking every refresh after re-pairing, until the process restarts.
+        // A disconnect settles every open attempt: one still in flight from before the disconnect would block
+        // every refresh after re-pairing, and an uncertain one would quarantine the re-paired account at start.
         tx.execute(
             &format!(
                 "UPDATE refresh_attempts SET resolved_at = ?2, outcome = 'failed', detail = 'disconnected' \

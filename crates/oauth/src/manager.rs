@@ -29,12 +29,14 @@ const LOCK_POISONED: &str = "credential manager mutex poisoned by a prior panic"
 const MAX_MARGIN_MS: i64 = 300_000;
 
 /// Backoff after a refusal that cannot have rotated anything. Short on purpose: the token it protects may
-/// be a minute from expiring, and a long wait would turn a brief refusal into an outage.
-const TRANSIENT_BACKOFF_MS: i64 = 5_000;
+/// be a minute from expiring, and a long wait would turn a brief refusal into an outage. Exported so the relay
+/// bounds its wait on the same account by the manager's own rule.
+pub const TRANSIENT_BACKOFF_MS: i64 = 5_000;
 
 /// Floor on the backoff after a 5xx from the token endpoint, which unlike a 4xx may be hiding a rotation the
-/// endpoint already committed.
-const SERVER_ERROR_BACKOFF_MS: i64 = 60_000;
+/// endpoint already committed, and after every attempt resolved uncertain. Exported so the relay bounds its
+/// wait on the same account by the manager's own rule.
+pub const SERVER_ERROR_BACKOFF_MS: i64 = 60_000;
 
 /// Ceiling on any backoff, including one the upstream asks for through `Retry-After`. A token's own margin
 /// bounds how long a refresh can sensibly wait, and an upstream that asks for an hour would otherwise park
@@ -112,11 +114,30 @@ impl From<RefreshFailure> for AcquireError {
 
 type RefreshFuture = Shared<BoxFuture<'static, Result<AccessToken, RefreshFailure>>>;
 
+/// A backoff the manager armed on an account, on the manager's clock.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Backoff {
+    /// The instant before which no refresh of the account runs.
+    pub until: i64,
+    /// How long the backoff was armed for. A caller tells a short refusal from the token endpoint's floor by
+    /// this rather than by `until` less the clock, which a clock that moved since the arming would misread.
+    pub length_ms: i64,
+}
+
+/// What armed an account's backoff, which decides what a caller inside it is told: a refusal or a 5xx is waited
+/// out as unavailable, and an uncertain attempt answers quarantined, since the refresh token it would spend may
+/// already be dead upstream.
+#[derive(Clone, Copy)]
+enum Armed {
+    Refused,
+    Uncertain,
+}
+
 struct Inner {
     clock: Clock,
     control: Arc<ControlClient>,
     inflight: Mutex<HashMap<String, RefreshFuture>>,
-    not_before: Mutex<HashMap<String, i64>>,
+    not_before: Mutex<HashMap<String, (Backoff, Armed)>>,
     #[cfg(any(test, feature = "debug-hooks"))]
     panic_next_refresh: AtomicBool,
     profile: &'static Profile,
@@ -308,6 +329,25 @@ impl CredentialManager {
         self.inner.panic_next_refresh.store(true, Ordering::SeqCst);
     }
 
+    /// The backoff the manager last armed on the account: a refusal's, a token-endpoint 5xx's or an uncertain
+    /// attempt's. `None` when nothing holds the account off; once elapsed it reads as an instant already past
+    /// until the next refresh drops it. The relay reads it to wait out a short backoff on the same account rather
+    /// than spend another account on a request whose own credential may work again in seconds.
+    pub fn backoff(&self, account_id: &str) -> Option<Backoff> {
+        self.inner
+            .not_before
+            .lock()
+            .expect(LOCK_POISONED)
+            .get(account_id)
+            .map(|(backoff, _)| *backoff)
+    }
+
+    /// The instant, on the manager's clock, before which no refresh of the account runs: the backoff a refusal,
+    /// a token-endpoint 5xx or an uncertain attempt armed, as `backoff` reads it.
+    pub fn backoff_until(&self, account_id: &str) -> Option<i64> {
+        self.backoff(account_id).map(|backoff| backoff.until)
+    }
+
     /// Exposes the store so services built on top of the manager, like the usage cache, can read lifecycle
     /// generations without opening a second handle to the same database.
     pub fn store(&self) -> &Arc<Store> {
@@ -433,12 +473,8 @@ impl Inner {
             return Ok(access_token(&account, &bundle));
         }
 
-        if self.holding_off(account_id) {
-            return self.stored_or(
-                &account,
-                &bundle,
-                RefreshFailure::Unavailable("refresh is waiting out a backoff".into()),
-            );
+        if let Some(failure) = self.holding_off(account_id) {
+            return self.stored_or(&account, &bundle, failure);
         }
 
         let attempt = match self.store.open_refresh_attempt(
@@ -448,9 +484,9 @@ impl Inner {
             bundle.generation,
         ) {
             Ok(attempt) => attempt,
-            // Either a refresh is still running elsewhere or an earlier one resolved uncertain. Both mean
-            // the upstream may already hold a rotated refresh token, and sending the stored one again
-            // would spend a credential that is possibly dead.
+            // A refresh is still running elsewhere, so the upstream may already hold a rotated refresh token
+            // and sending the stored one again would spend a credential that is possibly dead; one resolved
+            // uncertain is retried after the manager's floor instead.
             Err(StoreError::AttemptPending) => {
                 return self.stored_or(&account, &bundle, RefreshFailure::Quarantined)
             }
@@ -486,7 +522,7 @@ impl Inner {
                     account.incarnation,
                     AttemptOutcome::Failed(format!("transport: {error}")),
                 );
-                self.arm_backoff(account_id, TRANSIENT_BACKOFF_MS);
+                self.arm_backoff(account_id, TRANSIENT_BACKOFF_MS, Armed::Refused);
                 return self.stored_or(
                     &account,
                     &bundle,
@@ -499,6 +535,11 @@ impl Inner {
                     account.incarnation,
                     AttemptOutcome::Uncertain(format!("refresh response lost: {error}")),
                 );
+                // The write happened and the answer did not: the endpoint may hold a rotated token, the one
+                // fact every uncertain outcome shares. Waiting out the floor before one retry with the stored
+                // token keeps a valid token serving and lets the retry settle the attempt either way; a restart
+                // in between still quarantines it.
+                self.arm_backoff(account_id, SERVER_ERROR_BACKOFF_MS, Armed::Uncertain);
                 return self.stored_or(&account, &bundle, RefreshFailure::Quarantined);
             }
         };
@@ -537,6 +578,7 @@ impl Inner {
                     500..=599 => asked.unwrap_or(0).max(SERVER_ERROR_BACKOFF_MS),
                     _ => asked.unwrap_or(TRANSIENT_BACKOFF_MS),
                 },
+                Armed::Refused,
             );
             return self.stored_or(&account, &bundle, RefreshFailure::Unavailable(detail));
         }
@@ -551,6 +593,7 @@ impl Inner {
                     account.incarnation,
                     AttemptOutcome::Uncertain("refresh response could not be read".into()),
                 );
+                self.arm_backoff(account_id, SERVER_ERROR_BACKOFF_MS, Armed::Uncertain);
                 return self.stored_or(&account, &bundle, RefreshFailure::Quarantined);
             }
         };
@@ -606,9 +649,9 @@ impl Inner {
                 );
                 Err(RefreshFailure::Disconnected)
             }
-            // The rotation happened upstream and could not be stored, so the stored refresh token is dead
-            // even though nothing about the exchange was uncertain. Recording it as uncertain is what stops
-            // the next caller from spending that dead token.
+            // The rotation happened upstream and could not be stored, so the stored refresh token is likely
+            // dead even though nothing about the exchange was uncertain: it is recorded, spaced and answered as
+            // the lost response is, so a caller reads one class whichever uncertain arm it met.
             Err(error) => {
                 self.resolve(
                     attempt,
@@ -617,11 +660,8 @@ impl Inner {
                         "commit failed after a rotated response: {error}"
                     )),
                 );
-                self.stored_or(
-                    &account,
-                    &bundle,
-                    RefreshFailure::Unavailable(format!("store: {error}")),
-                )
+                self.arm_backoff(account_id, SERVER_ERROR_BACKOFF_MS, Armed::Uncertain);
+                self.stored_or(&account, &bundle, RefreshFailure::Quarantined)
             }
         }
     }
@@ -650,25 +690,29 @@ impl Inner {
         Ok(access_token(account, &stored))
     }
 
-    /// Whether a recorded backoff is still in force, dropping it once it has elapsed.
-    fn holding_off(&self, account_id: &str) -> bool {
+    /// The failure a caller inside a recorded backoff is told, or `None` once it has elapsed, which drops it.
+    fn holding_off(&self, account_id: &str) -> Option<RefreshFailure> {
         let mut not_before = self.not_before.lock().expect(LOCK_POISONED);
-        let Some(until) = not_before.get(account_id).copied() else {
-            return false;
-        };
-        if (self.clock)() < until {
-            return true;
+        let (backoff, armed) = not_before.get(account_id).copied()?;
+        if (self.clock)() < backoff.until {
+            return Some(match armed {
+                Armed::Refused => {
+                    RefreshFailure::Unavailable("refresh is waiting out a backoff".into())
+                }
+                Armed::Uncertain => RefreshFailure::Quarantined,
+            });
         }
         not_before.remove(account_id);
-        false
+        None
     }
 
-    fn arm_backoff(&self, account_id: &str, delay_ms: i64) {
-        let until = (self.clock)().saturating_add(delay_ms.clamp(0, MAX_NOT_BEFORE_MS));
-        self.not_before
-            .lock()
-            .expect(LOCK_POISONED)
-            .insert(account_id.to_string(), until);
+    fn arm_backoff(&self, account_id: &str, delay_ms: i64, armed: Armed) {
+        let length_ms = delay_ms.clamp(0, MAX_NOT_BEFORE_MS);
+        let until = (self.clock)().saturating_add(length_ms);
+        self.not_before.lock().expect(LOCK_POISONED).insert(
+            account_id.to_string(),
+            (Backoff { until, length_ms }, armed),
+        );
     }
 
     // A failed bookkeeping write must not mask why the refresh failed: the class is what the caller acts

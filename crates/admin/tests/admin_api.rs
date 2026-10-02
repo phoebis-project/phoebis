@@ -922,6 +922,26 @@ async fn an_uncertain_refresh_shows_as_quarantined_with_its_detail() {
 }
 
 #[tokio::test]
+async fn a_failed_retry_beside_an_uncertain_refresh_still_shows_as_quarantined() {
+    use common::{get, json, login};
+    let (app, _up, store, _manager) =
+        common::quarantined_parts("refresh response lost: connection closed").await;
+    // Past the manager's floor one retry opens beside the uncertain attempt, and a retry that fails settles
+    // nothing: the uncertain attempt is still the one a restart quarantines the account for.
+    let retry = store.open_refresh_attempt("business", 1, 1, 1).unwrap();
+    store
+        .resolve_refresh_attempt(
+            retry,
+            1,
+            phoebis_store::AttemptOutcome::Failed("refresh rejected with status 503".into()),
+        )
+        .unwrap();
+    let cookie = login(&app, "admin-secret").await;
+    let acct = json(get(&app, "/admin/accounts/business", Some(&cookie)).await).await;
+    assert_eq!(acct["credential"]["quarantined"], true);
+}
+
+#[tokio::test]
 async fn a_confirmed_pairing_supersedes_the_attempt_that_quarantined_the_slot() {
     use common::{get, json, login, post, NOW};
     // No disconnect anywhere in this test: the operator pairs the quarantined slot again, which is the one

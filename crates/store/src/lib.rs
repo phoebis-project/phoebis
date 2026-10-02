@@ -53,9 +53,11 @@ pub use routing::{
 // on-disk state may be half-written, so continuing past that point is not safe.
 const LOCK_POISONED: &str = "store connection mutex poisoned by a prior panic";
 
-// Shared by `open_refresh_attempt`'s gate and `pending_refresh_attempts`'s listing, so the two queries
-// cannot drift apart: an unresolved attempt, or one resolved `uncertain`, still blocks a new refresh,
-// because the upstream may already have rotated the refresh token.
+// An attempt still open: unresolved, or resolved `uncertain`, since the upstream may already have rotated the
+// refresh token. Shared by every reader that lists or settles open attempts, so they cannot drift apart: a
+// commit's supersede and its own resolution, the disconnect and delete sweeps, the listing and the startup
+// quarantine that reads it, and `resolve_refresh_attempt`. An `uncertain` row does not block a new refresh:
+// `open_refresh_attempt`'s gate reads an attempt in flight alone, and the refresh manager's floor spaces the retry.
 const PENDING_WHERE: &str = "resolved_at IS NULL OR outcome = 'uncertain'";
 
 #[derive(Debug, thiserror::Error)]
@@ -149,6 +151,8 @@ pub struct Store {
     key: StorageKey,
     _lock: Option<lock::ProcessLock>,
     #[cfg(any(test, feature = "debug-hooks"))]
+    fail_next_credential_commit: AtomicBool,
+    #[cfg(any(test, feature = "debug-hooks"))]
     fail_next_load: AtomicBool,
 }
 
@@ -193,6 +197,8 @@ impl Store {
             key: key.clone(),
             _lock: Some(process_lock),
             #[cfg(any(test, feature = "debug-hooks"))]
+            fail_next_credential_commit: AtomicBool::new(false),
+            #[cfg(any(test, feature = "debug-hooks"))]
             fail_next_load: AtomicBool::new(false),
         })
     }
@@ -205,6 +211,8 @@ impl Store {
             conn: Mutex::new(conn),
             key: key.clone(),
             _lock: None,
+            #[cfg(any(test, feature = "debug-hooks"))]
+            fail_next_credential_commit: AtomicBool::new(false),
             #[cfg(any(test, feature = "debug-hooks"))]
             fail_next_load: AtomicBool::new(false),
         })

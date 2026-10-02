@@ -5,6 +5,11 @@ use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use crate::{crypto, StorageKey, Store, StoreError, LOCK_POISONED, PENDING_WHERE};
 
+// The gate of `open_refresh_attempt` reads an attempt still in flight alone. An attempt resolved `uncertain` does
+// not block here: the refresh manager spaces the retry by its floor, and the startup quarantine still reads the
+// attempt through `PENDING_WHERE`.
+const IN_FLIGHT_WHERE: &str = "resolved_at IS NULL";
+
 /// A secret string that zeroizes its buffer on drop and never prints its value.
 #[derive(Zeroize, ZeroizeOnDrop)]
 pub struct Secret(String);
@@ -269,6 +274,15 @@ impl Store {
         attempt_id: Option<u64>,
         bundle: &NewBundle,
     ) -> Result<u64, StoreError> {
+        #[cfg(any(test, feature = "debug-hooks"))]
+        if self
+            .fail_next_credential_commit
+            .swap(false, std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(StoreError::Io(std::io::Error::other(
+                "injected credential commit failure",
+            )));
+        }
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
 
@@ -538,6 +552,15 @@ impl Store {
         Ok(())
     }
 
+    /// Fails the next `commit_credentials` before its transaction, so a test reaches the manager's failed-commit
+    /// arm without a broken disk.
+    #[cfg(any(test, feature = "debug-hooks"))]
+    #[doc(hidden)]
+    pub fn debug_fail_next_credential_commit(&self) {
+        self.fail_next_credential_commit
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
     pub fn open_refresh_attempt(
         &self,
         account_id: &str,
@@ -547,7 +570,7 @@ impl Store {
     ) -> Result<u64, StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
         let pending: bool = conn.query_row(
-            &format!("SELECT EXISTS(SELECT 1 FROM refresh_attempts WHERE account_id = ?1 AND ({PENDING_WHERE}))"),
+            &format!("SELECT EXISTS(SELECT 1 FROM refresh_attempts WHERE account_id = ?1 AND ({IN_FLIGHT_WHERE}))"),
             params![account_id],
             |row| row.get(0),
         )?;
@@ -563,10 +586,10 @@ impl Store {
         Ok(conn.last_insert_rowid() as u64)
     }
 
-    /// Settles an attempt, but only one that is still open: unresolved, or resolved uncertain, which is
-    /// what this crate treats as open everywhere else. A verdict that arrives after something else settled
-    /// the row for good, a disconnect racing a slow token request for instance, is dropped rather than
-    /// applied, and says so by returning `false`.
+    /// Settles an attempt, but only one that is still open: unresolved, or resolved uncertain, as `PENDING_WHERE`
+    /// reads it for the listing and the sweeps too. A verdict that arrives after something else settled the row
+    /// for good, a disconnect racing a slow token request for instance, is dropped rather than applied, and says
+    /// so by returning `false`.
     ///
     /// `incarnation` is the one the caller's work began under: a verdict from an incarnation the id has since
     /// moved past answers `Stale` rather than settling, or reopening as uncertain, a row under the id's new

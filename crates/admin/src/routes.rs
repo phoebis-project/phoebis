@@ -1076,11 +1076,18 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
         .last_refresh_attempt(&row.id, row.incarnation)
         .ok()
         .flatten();
-    // The store refuses to open a second attempt while one is unresolved or uncertain, so the newest
-    // attempt is the only one either state can be hiding in.
-    let quarantined = attempt.as_ref().is_some_and(|attempt| {
-        attempt.resolved_at.is_none() || attempt.outcome.as_deref() == Some("uncertain")
-    });
+    // Past the refresh manager's floor a retry opens beside an `uncertain` attempt, and a retry that fails leaves
+    // that attempt open, so the flag reads every open attempt of this holder rather than the newest alone: any
+    // one of them is what a restart quarantines the account for.
+    let quarantined = state
+        .store
+        .pending_refresh_attempts()
+        .ok()
+        .is_some_and(|pending| {
+            pending
+                .iter()
+                .any(|open| open.account_id == row.id && open.incarnation == row.incarnation)
+        });
     // A failure that opened no attempt (a backoff or a quarantine) still updates the credential row, so
     // whichever of the two landed last is the one that answers `credential.last_error`.
     let attempt_error = attempt

@@ -309,8 +309,36 @@ async fn a_repeated_backoff_failure_leaves_the_credentials_last_error_row_untouc
     up.shutdown().await;
 }
 
+fn token_answer() -> Respond {
+    Respond::Json {
+        status: 200,
+        headers: vec![],
+        body: control_response(ControlFixture::Token).to_vec(),
+    }
+}
+
+/// Issued at `800_000`, early enough that a refresh at `1_120_000` runs inside the margin of either expiry the
+/// floor tests use.
+fn old_bundle(expires_at: i64) -> NewBundle {
+    NewBundle {
+        access_token: Secret::new("old"),
+        refresh_token: Some(Secret::new("rt")),
+        issued_at: 800_000,
+        expires_at,
+        refresh_expires_at: None,
+        scopes: "user:profile user:inference".into(),
+    }
+}
+
+fn token_posts(up: &FakeUpstream) -> usize {
+    up.requests()
+        .iter()
+        .filter(|r| r.line.starts_with("POST /v1/oauth/token"))
+        .count()
+}
+
 #[tokio::test]
-async fn a_lost_response_keeps_the_old_token_until_it_expires_then_quarantines() {
+async fn a_lost_response_keeps_the_old_token_through_the_floor_and_retries_once_past_it() {
     let now = Arc::new(AtomicI64::new(1_000_000));
     let rule = Rule {
         path_prefix: "/v1/oauth/token".into(),
@@ -320,21 +348,7 @@ async fn a_lost_response_keeps_the_old_token_until_it_expires_then_quarantines()
     // 80 s left of a 400 s lifetime: inside the 100 s margin but still valid, so the refresh runs while the token is usable.
     now.store(1_120_000, Ordering::SeqCst);
     store
-        .commit_credentials(
-            "a",
-            1,
-            1,
-            None,
-            None,
-            &NewBundle {
-                access_token: Secret::new("old"),
-                refresh_token: Some(Secret::new("rt")),
-                issued_at: 800_000,
-                expires_at: 1_200_000,
-                refresh_expires_at: None,
-                scopes: "user:profile user:inference".into(),
-            },
-        )
+        .commit_credentials("a", 1, 1, None, None, &old_bundle(1_200_000))
         .unwrap();
     assert_eq!(
         mgr.acquire("a").await.unwrap().secret.expose(),
@@ -348,22 +362,142 @@ async fn a_lost_response_keeps_the_old_token_until_it_expires_then_quarantines()
         attempt.detail.is_some_and(|detail| !detail.is_empty()),
         "an uncertain attempt says what went uncertain, or the operator has nothing to act on"
     );
-    now.store(1_300_000, Ordering::SeqCst);
+    now.store(1_150_000, Ordering::SeqCst);
+    assert_eq!(mgr.acquire("a").await.unwrap().secret.expose(), "old");
+    assert_eq!(up.requests().len(), 1, "the floor spaces the retry");
+    up.set_rule_after(1, "/v1/oauth/token", token_answer());
+    now.store(1_185_000, Ordering::SeqCst);
+    assert_eq!(
+        mgr.acquire("a").await.unwrap().secret.expose(),
+        "sk-ant-oat01-PLACEHOLDER",
+        "past the floor one retry runs with the stored refresh token"
+    );
+    assert_eq!(up.requests().len(), 2);
+    assert!(
+        store.pending_refresh_attempts().unwrap().is_empty(),
+        "the commit settled the uncertain attempt"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_second_lost_response_leaves_the_attempt_pending_and_a_restart_quarantines_it() {
+    let now = Arc::new(AtomicI64::new(1_120_000));
+    let rule = Rule {
+        path_prefix: "/v1/oauth/token".into(),
+        respond: Respond::CloseAfterRequest,
+    };
+    let (mgr, store, up) = manager_with(vec![rule], now.clone()).await;
+    store
+        .commit_credentials("a", 1, 1, None, None, &old_bundle(1_200_000))
+        .unwrap();
+    assert_eq!(mgr.acquire("a").await.unwrap().secret.expose(), "old");
+    now.store(1_185_000, Ordering::SeqCst);
+    assert_eq!(mgr.acquire("a").await.unwrap().secret.expose(), "old");
+    assert_eq!(up.requests().len(), 2, "the retry past the floor ran");
+    assert_eq!(
+        store.pending_refresh_attempts().unwrap().len(),
+        2,
+        "the retry's own uncertain outcome sits beside the first"
+    );
+    // Past the token's expiry and inside the floor the second lost answer armed.
+    now.store(1_220_000, Ordering::SeqCst);
     assert!(matches!(
         mgr.acquire("a").await,
         Err(AcquireError::Quarantined)
     ));
-    assert_eq!(
-        up.requests().len(),
-        1,
-        "an uncertain attempt blocks further refreshes"
-    );
-    let quarantined = mgr.recover_on_start().unwrap();
-    assert_eq!(quarantined, vec!["a".to_string()]);
+    assert_eq!(up.requests().len(), 2);
+    assert_eq!(mgr.recover_on_start().unwrap(), vec!["a".to_string()]);
     assert!(matches!(
         mgr.acquire("a").await,
         Err(AcquireError::ReauthRequired)
     ));
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn an_unreadable_200_quarantines_inside_the_floor_and_retries_once_past_it() {
+    let now = Arc::new(AtomicI64::new(1_120_000));
+    // `access_token` and `expires_in` are required, so this 200 cannot be read.
+    let rule = Rule {
+        path_prefix: "/v1/oauth/token".into(),
+        respond: Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: b"{}".to_vec(),
+        },
+    };
+    let (mgr, store, up) = manager_with(vec![rule], now.clone()).await;
+    store
+        .commit_credentials("a", 1, 1, None, None, &old_bundle(1_150_000))
+        .unwrap();
+    assert_eq!(mgr.acquire("a").await.unwrap().secret.expose(), "old");
+    let attempt = store.last_refresh_attempt("a", 1).unwrap().unwrap();
+    assert_eq!(
+        (attempt.outcome.as_deref(), attempt.detail.as_deref()),
+        (
+            Some("uncertain"),
+            Some("refresh response could not be read")
+        )
+    );
+    now.store(1_160_000, Ordering::SeqCst);
+    assert!(matches!(
+        mgr.acquire("a").await,
+        Err(AcquireError::Quarantined)
+    ));
+    assert_eq!(up.requests().len(), 1, "the floor spaces the retry");
+    up.set_rule_after(1, "/v1/oauth/token", token_answer());
+    now.store(1_185_000, Ordering::SeqCst);
+    assert_eq!(
+        mgr.acquire("a").await.unwrap().secret.expose(),
+        "sk-ant-oat01-PLACEHOLDER"
+    );
+    assert_eq!(up.requests().len(), 2);
+    assert!(store.pending_refresh_attempts().unwrap().is_empty());
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_failed_credential_commit_quarantines_inside_the_floor_and_retries_once_past_it() {
+    let now = Arc::new(AtomicI64::new(1_120_000));
+    let rule = Rule {
+        path_prefix: "/v1/oauth/token".into(),
+        respond: token_answer(),
+    };
+    let (mgr, store, up) = manager_with(vec![rule], now.clone()).await;
+    store
+        .commit_credentials("a", 1, 1, None, None, &old_bundle(1_150_000))
+        .unwrap();
+    store.debug_fail_next_credential_commit();
+    assert_eq!(mgr.acquire("a").await.unwrap().secret.expose(), "old");
+    let attempt = store.last_refresh_attempt("a", 1).unwrap().unwrap();
+    assert_eq!(attempt.outcome.as_deref(), Some("uncertain"));
+    assert!(attempt
+        .detail
+        .as_deref()
+        .is_some_and(|detail| detail.starts_with("commit failed after a rotated response")));
+    now.store(1_160_000, Ordering::SeqCst);
+    assert!(matches!(
+        mgr.acquire("a").await,
+        Err(AcquireError::Quarantined)
+    ));
+    assert_eq!(token_posts(&up), 1, "the floor spaces the retry");
+    now.store(1_185_000, Ordering::SeqCst);
+    assert_eq!(
+        mgr.acquire("a").await.unwrap().secret.expose(),
+        "sk-ant-oat01-PLACEHOLDER"
+    );
+    assert_eq!(token_posts(&up), 2);
+    assert!(store.pending_refresh_attempts().unwrap().is_empty());
+    let settled = store.refresh_attempts_resolved_after(0, 0, 10).unwrap();
+    assert_eq!(
+        settled
+            .iter()
+            .map(|a| (a.outcome.as_str(), a.detail.as_deref()))
+            .collect::<Vec<_>>(),
+        [("failed", Some("superseded")), ("committed", None)],
+        "the retry's commit settled the uncertain attempt"
+    );
     up.shutdown().await;
 }
 

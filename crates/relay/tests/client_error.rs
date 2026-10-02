@@ -138,11 +138,14 @@ enum Released {
     Failover,
 }
 
+/// `held` is whether the token endpoint's `503` holds the request on the account for the floor, which the test
+/// steps past.
 async fn a_fresh_pins_client_error_ends_as_the_variant_says(
     status: u16,
     respond: Respond,
     answer: u16,
     released_by: Released,
+    held: bool,
 ) {
     let up = FakeUpstream::start(vec![
         Rule {
@@ -158,12 +161,13 @@ async fn a_fresh_pins_client_error_ends_as_the_variant_says(
     .await;
     let h = harness(&up, &[oauth("a", A, 0)], PoolSpec::default()).await;
     let mut events = h.router.subscribe_events();
-    let resp = h
-        .app
-        .clone()
-        .oneshot(request_for(KEY, MODEL, "s1"))
-        .await
-        .unwrap();
+    let app = h.app.clone();
+    let inflight =
+        tokio::spawn(async move { app.oneshot(request_for(KEY, MODEL, "s1")).await.unwrap() });
+    if held {
+        step_to_backoff(&h, &up, "a").await;
+    }
+    let resp = inflight.await.unwrap();
     assert_eq!(
         resp.status().as_u16(),
         answer,
@@ -211,6 +215,7 @@ async fn a_fresh_pins_400_releases_it_and_the_sessions_next_request_is_a_fresh_p
         json(400, INVALID_REQUEST),
         400,
         Released::ClientError,
+        false,
     )
     .await;
 }
@@ -225,6 +230,7 @@ async fn a_fresh_pins_401_fails_over_and_the_sessions_next_placement_moves_off_i
         ),
         503,
         Released::Failover,
+        true,
     )
     .await;
 }
@@ -242,6 +248,7 @@ async fn a_fresh_pins_403_releases_it_and_the_sessions_next_request_is_a_fresh_p
         },
         403,
         Released::ClientError,
+        false,
     )
     .await;
 }
@@ -253,6 +260,7 @@ async fn a_fresh_pins_404_releases_it_and_the_sessions_next_request_is_a_fresh_p
         json_404_plain(),
         404,
         Released::ClientError,
+        false,
     )
     .await;
 }
@@ -666,12 +674,11 @@ async fn a_non_portable_fresh_pins_401_that_marked_nothing_releases_it() {
     .await;
     let h = harness(&up, &[oauth("a", A, 0)], PoolSpec::default()).await;
     let mut events = h.router.subscribe_events();
-    let resp = h
-        .app
-        .clone()
-        .oneshot(non_portable_request(KEY, "s1"))
-        .await
-        .unwrap();
+    let app = h.app.clone();
+    let inflight =
+        tokio::spawn(async move { app.oneshot(non_portable_request(KEY, "s1")).await.unwrap() });
+    step_to_backoff(&h, &up, "a").await;
+    let resp = inflight.await.unwrap();
     assert_eq!(resp.status().as_u16(), 503, "the router's own answer");
     drain(resp).await;
     assert_eq!(
