@@ -33,8 +33,6 @@ const AFFINITY_SOURCES: { label: string; value: AffinitySource }[] = [
 ];
 
 export function KeysPage() {
-  const keys = useAsync(() => api.listKeys(), []);
-  const pools = useAsync(() => api.listPools(), []);
   const now = useNow();
   const ink = useChartInk();
   const { canMutate } = useAppSettings();
@@ -45,6 +43,12 @@ export function KeysPage() {
   const [created, setCreated] = useState<{ key: CreatedApiKey; title: string } | null>(null);
   const [confirm, setConfirm] = useState<{ body: string; danger?: boolean; label: string; onConfirm: () => void; title: string } | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  // The rows whose menu is open, by key id: an answer landing under an open menu would re-sort the rows beneath it.
+  const [openMenus, setOpenMenus] = useState<ReadonlySet<string>>(() => new Set());
+  // The key dialog resets its fields whenever the pool list changes, so a refresh landing under it would wipe them.
+  const paused = dialog !== null || created !== null || confirm !== null || openMenus.size > 0;
+  const keys = useAsync(() => api.listKeys(), [], { paused, refreshMs: 30_000 });
+  const pools = useAsync(() => api.listPools(), [], { paused, refreshMs: 30_000 });
 
   const poolList = useMemo(() => pools.data ?? [], [pools.data]);
   const poolById = useMemo(() => new Map(poolList.map((p) => [p.id, p])), [poolList]);
@@ -205,6 +209,14 @@ export function KeysPage() {
                         {canMutate && (
                           <td className="right">
                             <Menu
+                              onOpenChange={(open) =>
+                                setOpenMenus((s) => {
+                                  const next = new Set(s);
+                                  if (open) next.add(k.id);
+                                  else next.delete(k.id);
+                                  return next;
+                                })
+                              }
                               items={[
                                 { label: 'Edit', onClick: () => setDialog({ key: k }) },
                                 {

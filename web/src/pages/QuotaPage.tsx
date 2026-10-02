@@ -14,9 +14,9 @@ type Tab = 'all' | 'api_key' | 'oauth';
 type Sort = 'default' | 'soonest';
 
 export function QuotaPage() {
-  const accounts = useAsync(() => api.listAccounts(), []);
-  const snapshots = useAsync(() => api.listQuotaSnapshots(), []);
-  const settings = useAsync(() => api.getSettings(), []);
+  const accounts = useAsync(() => api.listAccounts(), [], { refreshMs: 30_000 });
+  const snapshots = useAsync(() => api.listQuotaSnapshots(), [], { refreshMs: 30_000 });
+  const settings = useAsync(() => api.getSettings(), [], { refreshMs: 30_000 });
   const now = useNow();
   const [tab, setTab] = useState<Tab>('all');
   const [sort, setSort] = useState<Sort>('default');

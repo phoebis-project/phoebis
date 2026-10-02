@@ -13,10 +13,10 @@ import { useAsync, useNow } from '@/lib/hooks';
 import { STATUS_LABEL, STATUS_TONE, isFastScope, isSubscription, remainingOf, windowOf } from '@/lib/quota';
 
 export function DashboardPage() {
-  const overview = useAsync(() => api.getOverview(), []);
-  const accounts = useAsync(() => api.listAccounts(), []);
-  const requests = useAsync(() => api.listRequests({ limit: 10 }), []);
-  const sessions = useAsync(() => api.listSessions(), []);
+  const overview = useAsync(() => api.getOverview(), [], { refreshMs: 30_000 });
+  const accounts = useAsync(() => api.listAccounts(), [], { refreshMs: 30_000 });
+  const requests = useAsync(() => api.listRequests({ limit: 10 }), [], { refreshMs: 30_000 });
+  const sessions = useAsync(() => api.listSessions(), [], { refreshMs: 30_000 });
   const now = useNow();
   const ink = useChartInk();
 
@@ -37,6 +37,11 @@ export function DashboardPage() {
           color={ink.series[7]}
         />
       </div>
+      {overview.data !== null && (
+        <p className="muted dash__asof" title={fmtAbsolute(overview.fetchedAt)}>
+          {overview.error === null ? `As of ${fmtRelative(overview.fetchedAt, now)}` : `Last refresh failed: ${overview.error}; showing data as of ${fmtRelative(overview.fetchedAt, now)}`}
+        </p>
+      )}
 
       <div className="grid-2">
         <RemainingCard title="5h remaining" subtitle="Subscription accounts, 5-hour window" windowId="5h" accounts={accounts.data} />

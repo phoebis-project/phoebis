@@ -23,14 +23,15 @@ const END_HINT = "Prefilled from the plan's start and its monthly renewal; corre
 export function AccountsPage() {
   const { accountId } = useParams();
   const navigate = useNavigate();
-  const accounts = useAsync(() => api.listAccounts(), []);
+  const [addOpen, setAddOpen] = useState(false);
+  const [pairing, setPairing] = useState<{ accountId: string; label: string; repair: boolean } | null>(null);
+  const [detailBusy, setDetailBusy] = useState(false);
+  const accounts = useAsync(() => api.listAccounts(), [], { paused: addOpen || pairing !== null || detailBusy, refreshMs: 30_000 });
   const now = useNow();
   const { canMutate } = useAppSettings();
   const [query, setQuery] = useState('');
   const [status, setStatus] = useState<'all' | AccountStatus>('all');
   const [sort, setSort] = useState<SortKey>('name');
-  const [addOpen, setAddOpen] = useState(false);
-  const [pairing, setPairing] = useState<{ accountId: string; label: string; repair: boolean } | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
   const list = useMemo(() => {
@@ -105,7 +106,7 @@ export function AccountsPage() {
       </aside>
       <section className="accounts__detail">
         {selected ? (
-          <AccountDetail account={selected} now={now} onToast={setToast} onPair={(repair) => setPairing({ accountId: selected.id, label: selected.label, repair })} onChanged={accounts.reload} />
+          <AccountDetail account={selected} now={now} onBusyChange={setDetailBusy} onToast={setToast} onPair={(repair) => setPairing({ accountId: selected.id, label: selected.label, repair })} onChanged={accounts.reload} />
         ) : (
           <Skeleton height={400} />
         )}
@@ -162,7 +163,7 @@ function AccountRow({ account, active, now }: { account: Account; active: boolea
   );
 }
 
-function AccountDetail({ account, now, onToast, onPair, onChanged }: { account: Account; now: number; onChanged: () => void; onPair: (repair: boolean) => void; onToast: (m: string) => void }) {
+function AccountDetail({ account, now, onBusyChange, onToast, onPair, onChanged }: { account: Account; now: number; onBusyChange: (busy: boolean) => void; onChanged: () => void; onPair: (repair: boolean) => void; onToast: (m: string) => void }) {
   const { canMutate } = useAppSettings();
   const navigate = useNavigate();
   const history = useAsync(() => api.getQuotaHistory(account.id), [account.id]);
@@ -178,6 +179,13 @@ function AccountDetail({ account, now, onToast, onPair, onChanged }: { account: 
     setEditing(false);
   }, [account.id, account.label]);
   useEffect(() => setEndForm(null), [account.id]);
+  // The list holds its refresh while anything here is open or running. The cleanup reports false too: Delete account
+  // navigates away inside its action, so the detail can unmount before `busy` clears.
+  const held = busy || catalogOpen || confirm !== null || editing || endForm !== null;
+  useEffect(() => {
+    onBusyChange(held);
+    return () => onBusyChange(false);
+  }, [held, onBusyChange]);
   const endRefusal = endForm ? subscriptionEndRefusal(endForm) : null;
   const endsAt = account.cancelled ? (account.subscription?.endsAt ?? null) : null;
   const trialEndsAt = account.subscription?.trialEndsAt ?? null;

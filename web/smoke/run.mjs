@@ -58,9 +58,25 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { api, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, failCalls, failNextCall, Field, GroupedDialog, GroupLink, Input, MOCK_VERSION, mount, mountNode, PageLink, React, requestEvents, requests, rollups, stallLive, SwitchedNumber } = await import('./dist/entry.js');
+const { api, countCalls, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, failCalls, failNextCall, Field, GroupedDialog, GroupLink, Input, MOCK_VERSION, mount, mountNode, PageLink, React, requestEvents, requests, rollups, stallLive, SwitchedNumber, tick } = await import('./dist/entry.js');
 
 const results = [];
+/**
+ * Mounts `path` on the frozen clock and counts `method`'s calls across two 30-second ticks: one read per period, and
+ * none from a real wait, which the frozen clock never lets fire a timer.
+ */
+async function readsAgain(path, method) {
+  const page = await mount(path, { now: CLOCK_ORIGIN });
+  const spy = countCalls(method);
+  tick(30_000);
+  await page.settle();
+  const once = spy.calls.length;
+  tick(30_000);
+  await page.settle();
+  results.push({ name: `${path} reads again every 30 seconds`, ok: once === 1 && spy.calls.length === 2, missing: [`${method}: ${once} after one period, ${spy.calls.length} after two`] });
+  spy.restore();
+  page.unmount();
+}
 function expect(name, text, needles) {
   const missing = needles.filter((n) => !text.includes(n));
   results.push({ name, ok: missing.length === 0, missing, length: text.length });
@@ -498,6 +514,52 @@ m.unmount();
     missing: [t.slice(0, 200)],
   });
   failed.unmount();
+}
+await readsAgain('/quota', 'listAccounts');
+await readsAgain('/', 'getOverview');
+{
+  const page = await mount('/', { now: CLOCK_ORIGIN });
+  const line = () => page.container.querySelector('.dash__asof');
+  const tiles = () => [...page.container.querySelectorAll('.stat-grid > .stat .stat__value')].map((v) => v.textContent);
+  const before = line()?.getAttribute('title') ?? null;
+  tick(30_000);
+  await page.settle();
+  const after = line()?.getAttribute('title') ?? null;
+  const drawn = tiles();
+  failNextCall('getOverview', '/admin/dashboard', 'ledger locked');
+  tick(30_000);
+  await page.settle();
+  const failed = line()?.textContent ?? '';
+  results.push({
+    name: '/ the as-of line moves after a refresh and names a failed one',
+    ok: before !== null && after !== null && before !== after && failed.startsWith('Last refresh failed: ledger locked') && drawn.length === 4 && JSON.stringify(tiles()) === JSON.stringify(drawn),
+    missing: [`title ${before} then ${after}`, failed || 'no line', JSON.stringify(drawn), JSON.stringify(tiles())],
+  });
+  page.unmount();
+}
+{
+  // The refresh that opens the streak reports it; the toast's dwell ends inside the next period, and the refreshes
+  // that continue the streak run quiet, so no toast comes back until the streak ends.
+  const page = await mount('/', { now: CLOCK_ORIGIN });
+  const outage = failCalls({ getOverview: '/admin/dashboard' }, 'ledger locked');
+  const toasts = () => [...page.container.querySelectorAll('.toast')].map((t) => t.textContent);
+  const seen = [];
+  for (let i = 0; i < 3; i += 1) {
+    tick(30_000);
+    await page.settle();
+    seen.push(toasts());
+  }
+  outage.recover();
+  tick(30_000);
+  await page.settle();
+  const line = page.container.querySelector('.dash__asof')?.textContent ?? '';
+  outage.restore();
+  results.push({
+    name: '/ a failing streak toasts once',
+    ok: JSON.stringify(seen) === JSON.stringify([['/admin/dashboard failed: ledger locked'], [], []]) && line.startsWith('As of'),
+    missing: [JSON.stringify(seen), line || 'no line'],
+  });
+  page.unmount();
 }
 
 // The memory router exposes no location, so the page in place is read off what the route drew: the heading, the
@@ -955,6 +1017,7 @@ await m.navigate('/accounts/spare');
   });
 }
 m.unmount();
+await readsAgain('/accounts', 'listAccounts');
 
 {
   // Read while the story stands: the pool checks below write both budgeted pools, and a write answers no spend until
@@ -2608,6 +2671,63 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
   });
 }
 m.unmount();
+
+await readsAgain('/keys', 'listKeys');
+{
+  // The key dialog resets its fields whenever the pool list changes, so a read landing under it would wipe the name.
+  const typeName = async (page, value) => {
+    [...page.container.querySelectorAll('button')].find((b) => b.textContent?.includes('Create key'))?.click();
+    await page.settle(200);
+    const input = page.container.querySelector('dialog[open] input[placeholder="workstation"]');
+    if (input) {
+      Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(input, value);
+      input.dispatchEvent(new window.Event('input', { bubbles: true }));
+    }
+    await page.settle(100);
+  };
+  const typed = (page) => page.container.querySelector('dialog[open] input[placeholder="workstation"]')?.value ?? null;
+
+  const open = await mount('/keys', { now: CLOCK_ORIGIN });
+  await typeName(open, 'Laptop 2');
+  const spy = countCalls('listKeys');
+  tick(60_000);
+  await open.settle();
+  results.push({ name: '/keys an open key dialog keeps its typed name across 60 seconds', ok: typed(open) === 'Laptop 2' && spy.calls.length === 0, missing: [String(typed(open)), `listKeys ${spy.calls.length}`] });
+  spy.restore();
+  open.unmount();
+
+  const late = await mount('/keys', { now: CLOCK_ORIGIN });
+  const held = deferNextCall('listPools');
+  tick(30_000);
+  await typeName(late, 'Laptop 2');
+  held.release();
+  await late.settle();
+  results.push({ name: '/keys a refresh answering after the key dialog opened keeps the typed name', ok: held.calls.length === 1 && typed(late) === 'Laptop 2', missing: [String(typed(late)), `listPools ${held.calls.length}`] });
+  held.restore();
+  late.unmount();
+}
+{
+  const page = await mount('/keys', { now: CLOCK_ORIGIN });
+  const spy = countCalls('listKeys');
+  const trigger = page.container.querySelector('tbody .menu__trigger');
+  const period = async () => {
+    const from = spy.calls.length;
+    tick(30_000);
+    await page.settle();
+    return spy.calls.length - from;
+  };
+  const closed = await period();
+  trigger?.click();
+  await page.settle(100);
+  const listed = page.container.querySelectorAll('.menu__list').length;
+  const whileOpen = await period();
+  trigger?.click();
+  await page.settle(100);
+  const reopened = await period();
+  results.push({ name: '/keys a row menu holds the refresh only while open', ok: listed === 1 && closed === 1 && whileOpen === 0 && reopened === 1, missing: [`list ${listed}`, `closed ${closed}, open ${whileOpen}, closed again ${reopened}`] });
+  spy.restore();
+  page.unmount();
+}
 
 // A helper that cannot find the control a check needs fails that check by name, so a control that disappears
 // fails the run rather than leaving the check to read a page nothing narrowed.
