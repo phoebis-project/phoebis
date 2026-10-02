@@ -3557,10 +3557,6 @@ async fn the_ui_passes_the_browser_pass_over_every_view_in_both_themes() {
         .await
         .unwrap();
     let secret = key["secret"].as_str().unwrap().to_string();
-    // Written before the first request: a session rule posts its start as the request arrives, and the
-    // lifecycle log the alerts view draws has nothing to list without one. The destination resolves to
-    // nothing, as the pool rule's below does, so the attempts land as rows without reaching a network.
-    assert_eq!(client.post(admin("/alerts/rules")).json(&serde_json::json!({ "kind": "session_active", "scope": { "type": "all" }, "webhook_url": "http://hook.invalid/life" })).send().await.unwrap().status(), 201);
     // The fixture body asks for fixed-budget thinking, which no probe may replay; an adaptive block is the
     // probe-capable shape.
     let adaptive = String::from_utf8(body(BodyFixture::ApiKey).to_vec())
@@ -3640,12 +3636,9 @@ async fn the_ui_passes_the_browser_pass_over_every_view_in_both_themes() {
         },
     )
     .await;
-    // The destination resolves to nothing (RFC 6761 reserves .invalid), so the delivery fails without reaching
-    // a network; the event opens either way, which is what the alerts view shows.
-    assert_eq!(client.post(admin("/alerts/rules")).json(&serde_json::json!({ "kind": "pool_exhausted", "scope": { "type": "all" }, "webhook_url": "http://hook.invalid/hook" })).send().await.unwrap().status(), 201);
     // The pool's only member answers a unified 429 once: the router cools it, finds no sibling, answers the
-    // exhaustion 429, and the alert engine opens the pool_exhausted event the alerts view shows. The standing
-    // answer under this credential stays the 200, so a keepalive probe after the 429 is still served.
+    // exhaustion 429, and the attention reader holds the pool's pool_exhausted condition. The standing answer
+    // under this credential stays the 200, so a keepalive probe after the 429 is still served.
     up.add_credential_rule("sk-ant-api03-PLACEHOLDER", "/v1/messages", warm_answer());
     up.push_credential_rule("sk-ant-api03-PLACEHOLDER", "/v1/messages", exhausted_429());
     let exhausted = fixture_request(&client, proxy_port, &secret, "e2e-exhausted")
@@ -3657,20 +3650,16 @@ async fn the_ui_passes_the_browser_pass_over_every_view_in_both_themes() {
         exhausted.headers()["x-phoebis-error-code"],
         "accounts_exhausted"
     );
-    let _ = wait_json(&client, &admin("/alerts/events"), |v| {
-        v["events"]
+    let _ = wait_json(&client, &admin("/attention"), |v| {
+        v["items"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|e| e["kind"] == "pool_exhausted" && e["state"] == "open")
+            .any(|i| i["kind"] == "pool_exhausted" && i["subject"]["id"] == "main")
     })
     .await;
     let _ = wait_json(&client, &admin("/requests"), |v| {
         !v["requests"].as_array().unwrap().is_empty()
-    })
-    .await;
-    let _ = wait_json(&client, &admin("/alerts/deliveries"), |v| {
-        !v["deliveries"].as_array().unwrap().is_empty()
     })
     .await;
     let shots = std::env::var("PHOEBIS_SCREENSHOT_DIR")
@@ -3698,8 +3687,8 @@ async fn the_ui_passes_the_browser_pass_over_every_view_in_both_themes() {
         .count();
     assert_eq!(
         pngs,
-        24,
-        "twelve views in two themes under {}",
+        22,
+        "eleven views in two themes under {}",
         shots.display()
     );
     println!("screenshots: {}", shots.display());

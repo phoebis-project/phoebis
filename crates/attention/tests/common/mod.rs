@@ -1,123 +1,61 @@
-//! A store with two accounts and a pool, a fake webhook that records every post and answers what the test
-//! scripted, a ledger over an in-memory database, and a clock the test moves.
+//! A store with an OAuth account, an Anthropic-key account, a pool holding both and a key on it, the router over
+//! them, and a clock the test moves; the reader spawns on the rig's bus.
 #![allow(dead_code)]
-use std::collections::{BTreeMap, VecDeque};
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::atomic::{AtomicI64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
-use phoebis_alerts::{AlertInputs, AlertParts, Alerts, Kind, ScopeType, Signal, Webhook};
-// The bus has a `Kind` of its own, and this file already speaks the alert one.
 use fake_upstream::FakeUpstream;
+use phoebis_attention::{Attention, AttentionHandles, AttentionParts};
 use phoebis_bus::{
     Bus, Event, Kind as RequestKind, Origin, Outcome, RequestComplete, RequestObserved,
     RequestShape, ResponseFacts,
-};
-use phoebis_ledger::{
-    spawn as spawn_ledger, Ledger, LedgerConfig, LedgerDb, Metrics, PriceTable, Pricing,
 };
 use phoebis_oauth::{Clock, CredentialManager, UsageService};
 use phoebis_profile::claude_code_2_1_269_linux_x64;
 use phoebis_routing::{spawn as spawn_router, RouterConfig, RouterHandle};
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, Affinity, AlertRuleRow, ApiKeyRow,
-    Failover, Identity, MemberWrite, NewBundle, OveragePolicy, PoolRow, RulesMode, Secret,
-    Shedding, StorageKey, Store, Strategy,
+    AccountKind, AccountRow, AccountState, Affinity, ApiKeyRow, Failover, Identity,
+    MemberWrite, NewBundle, OveragePolicy, PoolRow, RulesMode, Secret, Shedding, StorageKey, Store,
+    Strategy,
 };
 use phoebis_transport::control::{ControlClient, ResolveFuture, Resolver};
 use phoebis_transport::{connector_builder, trust_extra_ca, Plane};
 
 pub const NOW: i64 = 1_700_000_000_000;
 
-#[derive(Clone, Debug)]
-pub struct Posted {
-    pub body: serde_json::Value,
-    /// The bytes as they were handed to the webhook, which are the bytes the signature covers.
-    pub raw: Vec<u8>,
-    pub signature: Option<String>,
-    pub url: String,
-}
-
-pub struct FakeWebhook {
-    pub answers: Mutex<VecDeque<Result<u16, String>>>,
-    /// While set, every post waits on it before answering, so a test can hold an open delivery and watch what
-    /// queues behind it.
-    pub hold: Mutex<Option<Arc<tokio::sync::Notify>>>,
-    pub posts: Mutex<Vec<Posted>>,
-}
-
-impl FakeWebhook {
-    pub fn new() -> Arc<FakeWebhook> {
-        Arc::new(FakeWebhook {
-            answers: Mutex::new(VecDeque::new()),
-            hold: Mutex::new(None),
-            posts: Mutex::new(Vec::new()),
-        })
-    }
-
-    pub fn answer(&self, a: Result<u16, String>) {
-        self.answers.lock().unwrap().push_back(a);
-    }
-
-    pub fn posts(&self) -> Vec<Posted> {
-        self.posts.lock().unwrap().clone()
-    }
-
-    /// Holds every later post until the returned notify is signalled and the hold is cleared.
-    pub fn hold_posts(&self) -> Arc<tokio::sync::Notify> {
-        let n = Arc::new(tokio::sync::Notify::new());
-        *self.hold.lock().unwrap() = Some(n.clone());
-        n
-    }
-
-    pub fn release_posts(&self, n: &Arc<tokio::sync::Notify>) {
-        *self.hold.lock().unwrap() = None;
-        n.notify_waiters();
-    }
-}
-
-impl Webhook for FakeWebhook {
-    fn post(
-        &self,
-        url: String,
-        body: Vec<u8>,
-        signature: Option<String>,
-    ) -> Pin<Box<dyn Future<Output = Result<u16, String>> + Send>> {
-        let hold = self.hold.lock().unwrap().clone();
-        self.posts.lock().unwrap().push(Posted {
-            body: serde_json::from_slice(&body).unwrap(),
-            raw: body,
-            signature,
-            url,
-        });
-        let answer = self.answers.lock().unwrap().pop_front().unwrap_or(Ok(200));
-        Box::pin(async move {
-            if let Some(hold) = hold {
-                hold.notified().await;
-            }
-            answer
-        })
-    }
-}
-
 pub struct Rig {
-    pub alerts: Arc<Alerts>,
     pub bus: Bus,
     pub clock: Arc<AtomicI64>,
-    pub db: Arc<LedgerDb>,
-    pub ledger: Ledger,
-    pub metrics: Arc<Metrics>,
     pub router: RouterHandle,
     pub store: Arc<Store>,
-    pub webhook: Arc<FakeWebhook>,
 }
 
-/// Runs on every clock read, for the two tests that must act at a point inside the engine that has no seam
-/// of its own; the hook itself decides which read is the one it wants.
-pub type ClockHook = Arc<dyn Fn() + Send + Sync>;
+impl Rig {
+    pub fn clock(&self) -> Clock {
+        let c = self.clock.clone();
+        Arc::new(move || c.load(Ordering::SeqCst))
+    }
+
+    /// The reader over the rig's store, router and clock, its arm on the rig's bus.
+    pub fn attention(
+        &self,
+        usage: Option<Arc<UsageService>>,
+    ) -> (Arc<Attention>, AttentionHandles) {
+        phoebis_attention::spawn(AttentionParts {
+            bus: self.bus.clone(),
+            clock: self.clock(),
+            router: self.router.clone(),
+            store: self.store.clone(),
+            usage,
+        })
+    }
+
+    pub fn at(&self, ms: i64) {
+        self.clock.store(ms, Ordering::SeqCst);
+    }
+}
 
 pub async fn rig() -> Rig {
     rig_with_store(Arc::new(
@@ -126,38 +64,26 @@ pub async fn rig() -> Rig {
     .await
 }
 
-/// The rig over a store the test opened itself and a clock that calls the test back on every read.
-pub async fn rig_with_hook(store: Arc<Store>, hook: ClockHook) -> Rig {
-    let webhook = FakeWebhook::new();
-    Rig {
-        webhook: webhook.clone(),
-        ..rig_over(store, webhook, Some(hook)).await
-    }
-}
-
-/// The rig over a store the test opened itself, for the case that needs the registry in a file a second
-/// connection can reach.
+/// The rig over a store the test opened itself, for the case that reads the store again after a restart.
 pub async fn rig_with_store(store: Arc<Store>) -> Rig {
-    let webhook = FakeWebhook::new();
+    if store.accounts().unwrap().is_empty() {
+        seed(&store);
+    }
+    let clock_cell = Arc::new(AtomicI64::new(NOW));
+    let clock: Clock = {
+        let c = clock_cell.clone();
+        Arc::new(move || c.load(Ordering::SeqCst))
+    };
+    let router = spawn_router(store.clone(), clock, RouterConfig::default()).unwrap();
     Rig {
-        webhook: webhook.clone(),
-        ..rig_over(store, webhook, None).await
+        bus: Bus::new(),
+        clock: clock_cell,
+        router,
+        store,
     }
 }
 
-/// The rig over any deliverer: the acceptance row hands in the real `ReqwestWebhook`, every other test the
-/// fake that `rig` keeps on `Rig.webhook`; the fake left on the rig this answers is a fresh one nothing posts
-/// to.
-pub async fn rig_with(webhook: Arc<dyn Webhook>) -> Rig {
-    rig_over(
-        Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap()),
-        webhook,
-        None,
-    )
-    .await
-}
-
-async fn rig_over(store: Arc<Store>, webhook: Arc<dyn Webhook>, hook: Option<ClockHook>) -> Rig {
+fn seed(store: &Store) {
     for (id, kind) in [
         ("business", AccountKind::Oauth),
         ("direct", AccountKind::ApiKey),
@@ -191,7 +117,7 @@ async fn rig_over(store: Arc<Store>, webhook: Arc<dyn Webhook>, hook: Option<Clo
                 migrate_above_utilization: None,
                 select_below_utilization: None,
                 model_rules: Vec::new(),
-                keepalive_json: r#"{"enabled":true,"probe_cost_cap_usd_per_day":1.0}"#.into(),
+                keepalive_json: "{}".into(),
                 body_capture_hours: 0,
                 prefer_subscription: false,
                 shedding: Shedding::default(),
@@ -240,7 +166,7 @@ async fn rig_over(store: Arc<Store>, webhook: Arc<dyn Webhook>, hook: Option<Clo
                 model_rules_mode: RulesMode::Extend,
                 long_context_twins: true,
                 keepalive_opt_out: false,
-                body_capture_hours: Some(24),
+                body_capture_hours: None,
                 secret_digest: store.api_key_digest("phoebis-desktop").to_vec(),
                 prefix: "phoebis-desk".into(),
                 created_at: NOW,
@@ -252,70 +178,6 @@ async fn rig_over(store: Arc<Store>, webhook: Arc<dyn Webhook>, hook: Option<Clo
             "test",
         )
         .unwrap();
-    let clock_cell = Arc::new(AtomicI64::new(NOW));
-    let clock: Clock = {
-        let c = clock_cell.clone();
-        Arc::new(move || {
-            if let Some(hook) = &hook {
-                hook();
-            }
-            c.load(Ordering::SeqCst)
-        })
-    };
-    let router = spawn_router(store.clone(), clock.clone(), RouterConfig::default()).unwrap();
-    let bus = Bus::new();
-    let db = Arc::new(LedgerDb::open_in_memory().unwrap());
-    let pricing = Arc::new(Pricing::new(PriceTable::shipped()));
-    let metrics = Arc::new(Metrics::new());
-    let ledger = spawn_ledger(
-        db.clone(),
-        pricing,
-        store.clone(),
-        &bus,
-        router.clone(),
-        clock.clone(),
-        metrics.clone(),
-        LedgerConfig {
-            event_poll: Duration::from_millis(50),
-            ..LedgerConfig::default()
-        },
-    );
-    // The instant sleeper: a retry test walks the three attempts in milliseconds rather than the real backoff.
-    let alerts = Alerts::with_sleeper(
-        AlertParts {
-            clock,
-            ledger: ledger.clone(),
-            metrics: metrics.clone(),
-            router_name: "phoebis-test".into(),
-            store: store.clone(),
-            webhook,
-        },
-        Box::new(|_| Box::pin(async {})),
-    );
-    Rig {
-        alerts,
-        bus,
-        clock: clock_cell,
-        db,
-        ledger,
-        metrics,
-        router,
-        store,
-        webhook: FakeWebhook::new(),
-    }
-}
-
-pub fn inputs(rig: &Rig, spent: BTreeMap<String, f64>) -> AlertInputs {
-    AlertInputs {
-        body_capture_max_hours: 168,
-        bus: rig.bus.clone(),
-        lifecycle: None,
-        router: rig.router.clone(),
-        session_expiry: Duration::from_secs(3_600),
-        spent_today: Arc::new(move || spent.clone()),
-        tick: Duration::from_secs(1),
-        usage: None,
-    }
 }
 
 /// A usage service reading `up` on the rig's clock, with `business` given an identity and a token far from
@@ -375,15 +237,17 @@ pub fn usage_over(rig: &Rig, up: &FakeUpstream) -> Arc<UsageService> {
     ))
 }
 
-pub fn observed(id: &str, key: &str, pool: &str, session: &str, capture: u32) -> Event {
+/// A request's observation, which carries the key and pool its completion does not; `None` for a refusal published
+/// before the key was read.
+pub fn observed(id: &str, key: Option<&str>, pool: &str) -> Event {
     Event::RequestObserved(RequestObserved {
         request_id: id.into(),
         origin: Origin::Client,
         kind: RequestKind::Inference,
-        key_id: Some(key.into()),
+        key_id: key.map(String::from),
         key_generation: 0,
         pool_id: Some(pool.into()),
-        session_id: Some(session.into()),
+        session_id: Some("s1".into()),
         agent_id: Some("main".into()),
         parent_agent_id: None,
         owner_id: None,
@@ -393,7 +257,7 @@ pub fn observed(id: &str, key: &str, pool: &str, session: &str, capture: u32) ->
         stream: true,
         headers: vec![],
         body: Bytes::from_static(b"{}"),
-        body_capture_hours: capture,
+        body_capture_hours: 0,
         shape: RequestShape::default(),
         static_hash: None,
         boundaries: Vec::new(),
@@ -406,19 +270,20 @@ pub fn observed(id: &str, key: &str, pool: &str, session: &str, capture: u32) ->
     })
 }
 
+/// A completion at `at`, refused for drift with that trigger when `drift` names one.
 pub fn complete(
     id: &str,
     outcome: Outcome,
-    status: u16,
     drift: Option<&str>,
     version: Option<&str>,
+    at: i64,
 ) -> Event {
     Event::RequestComplete(RequestComplete {
         request_id: id.into(),
         attempt: 1,
         account_id: Some("business".into()),
         outcome,
-        status,
+        status: 200,
         usage: None,
         response: ResponseFacts::default(),
         ttfb_ms: None,
@@ -429,59 +294,6 @@ pub fn complete(
         response_bytes: None,
         response_chunks: None,
         held: None,
-        finished_at: NOW,
+        finished_at: at,
     })
-}
-
-pub fn rule(id: &str, kind: Kind, scope: ScopeType, scope_id: Option<&str>) -> AlertRuleRow {
-    AlertRuleRow {
-        id: id.into(),
-        kind: kind.as_str().into(),
-        scope_type: serde_json::to_value(scope)
-            .unwrap()
-            .as_str()
-            .unwrap()
-            .into(),
-        scope_id: scope_id.map(String::from),
-        threshold: None,
-        window: None,
-        webhook_url: format!("http://127.0.0.1:1/{id}"),
-        has_secret: false,
-        enabled: true,
-        created_at: NOW,
-        updated_at: NOW,
-    }
-}
-
-/// `enabled` is not a parameter of `rule` because one test in the crate turns a rule off.
-pub trait RowExt {
-    fn with_enabled(self, enabled: bool) -> AlertRuleRow;
-}
-
-impl RowExt for AlertRuleRow {
-    fn with_enabled(self, enabled: bool) -> AlertRuleRow {
-        AlertRuleRow { enabled, ..self }
-    }
-}
-
-pub fn signal(
-    kind: Kind,
-    account: Option<&str>,
-    key: Option<&str>,
-    pool: Option<&str>,
-    subject: &str,
-) -> Signal {
-    Signal {
-        kind,
-        account_id: account.map(String::from),
-        key_id: key.map(String::from),
-        pool_id: pool.map(String::from),
-        subject: subject.into(),
-        detail: serde_json::json!({}),
-    }
-}
-
-/// Every delivery task the engine spawned has landed its rows.
-pub async fn settled(rig: &Rig) {
-    rig.alerts.wait_idle().await;
 }

@@ -7,7 +7,7 @@
     "storage_ok": true,
     "ledger": {
       "schema_version": 25,
-      "written": 15,
+      "written": 13,
       "dropped": 0,
       "write_failures": 0,
       "gaps": 0,
@@ -24,13 +24,18 @@
         "subscriber": "live",
         "dropped": 0,
         "panics": 0
+      },
+      {
+        "subscriber": "attention",
+        "dropped": 0,
+        "panics": 0
       }
     ],
     "live": {
       "clients": 0,
       "in_flight": 0
     },
-    "pricing_unknown_models": 4,
+    "pricing_unknown_models": 0,
     "gaps": [],
     "keepalive": {
       "agents": 1,
@@ -38,12 +43,6 @@
       "retained_bytes": 116,
       "running_probes": 0,
       "sessions": 1
-    },
-    "alerts": {
-      "deliveries_failed": 0,
-      "deliveries_ok": 2,
-      "open": 1,
-      "rules": 3
     }
   }
 }
