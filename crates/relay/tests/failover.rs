@@ -331,14 +331,12 @@ async fn the_wire_submission_index_ends_the_request_at_255_with_the_exhaustion_a
     let bus = Bus::new();
     let mut sub = bus.subscribe("test");
     let h = harness_with_bus(&up, &accounts, PoolSpec::default(), bus).await;
-    let started = std::time::Instant::now();
     let resp = h
         .app
         .clone()
         .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
         .await
         .unwrap();
-    eprintln!("256 accounts answered in {:?}", started.elapsed());
     assert_eq!(
         (
             resp.status().as_u16(),

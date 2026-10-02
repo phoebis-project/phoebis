@@ -371,8 +371,8 @@ its subtitle says so.
 Settings covers appearance, access (the admin and viewer secrets and what each may do), pricing, sessions, retention,
 keepalive, listeners, the downstream client block, compatibility, and an about panel. Four more cards show the
 bootstrap file's quota, routing, storage, and usage blocks: the sample retention, the catalog cache window, the
-cooldown fallback, the model rejection window, and the attempt limit, the ledger, pricing, and storage paths, and the
-usage cache TTL and refresh concurrency.
+cooldown fallback and the model rejection window, the ledger, pricing, and storage paths, and the usage cache TTL and
+refresh concurrency.
 
 ## Alerts
 

@@ -490,6 +490,27 @@ async fn a_request_whose_every_hold_ran_out_answers_at_cap_naming_both_waits_on_
         Some(serde_json::to_value(&held).unwrap()),
         "the completion carries both waits"
     );
+    assert_eq!(
+        (
+            complete.outcome,
+            complete.status,
+            complete.error_code.as_deref()
+        ),
+        (
+            phoebis_bus::Outcome::Exhausted,
+            429,
+            Some("accounts_at_cap")
+        ),
+        "a pool at its cap is an exhausted pool to the ledger and the alerts"
+    );
+    let body: serde_json::Value = serde_json::from_slice(&drain(resp).await).unwrap();
+    assert_eq!(
+        (&body["error"]["type"], &body["error"]["message"]),
+        (
+            &serde_json::json!("rate_limit_error"),
+            &serde_json::json!("every account in this pool is at its in-flight cap")
+        )
+    );
     drop((on_a, on_b));
     up.release();
     up.shutdown().await;

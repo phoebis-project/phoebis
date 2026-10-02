@@ -276,8 +276,12 @@ async fn mixed_429_and_sse_rate_limit_errors_across_three_accounts_produce_at_mo
         .unwrap();
     assert_eq!(outcome(&resp).attempt, 3);
     assert_eq!(credentials_seen(&up).len(), 3);
-    assert!(
-        matches!(resp.status().as_u16(), 200 | 429),
+    assert_eq!(
+        (
+            resp.status().as_u16(),
+            resp.headers()["x-phoebis-error-code"].to_str().unwrap()
+        ),
+        (429, "accounts_exhausted"),
         "every account failed over, so the pool's own answer is committed after the last one"
     );
     assert_eq!(h.router.cooldowns().await.unwrap().len(), 3);

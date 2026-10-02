@@ -1525,7 +1525,6 @@ impl Relay {
     /// One account's leg of the request. `attempt` is the wire-submission index every bus event and attempt row
     /// carries. `key_permit` is the request's own, which a committed stream takes into its body; `selected` is the
     /// ticket the selection charged for the leg's first pass.
-    #[allow(clippy::too_many_arguments)]
     async fn dispatch_to(
         &self,
         admitted: &Admitted<'_>,

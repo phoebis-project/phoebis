@@ -573,12 +573,12 @@ their own bounds, as the paragraph after the steps says. Each attempt goes throu
 
 A stream commits at its `message_start` event or its first `error` event, whichever comes first; earlier events
 are buffered, up to 64 KiB, and relayed after commit in order; a stream that exceeds the buffer or sends no
-committing event within 30 seconds commits as received. The failover visits every eligible account once per
-request, since every failover row (a 401, a 403, a model 404, a 429) refuses before any inference and a visit costs
-no tokens; the same-account retries keep their bounds: one transport retry after a failure that happened before the
-request was fully written, one refresh replay, one strip retry when an upstream answers 400 naming a beta or field
-the router itself added (the router strips it and retries once on the same account, correcting its own edit), and one
-retry in place for a short throttle.
+committing event within 30 seconds commits as received. The failover visits every eligible account once per request,
+since every failover row (a credit-balance 400, a 401, a 403, a model 404, a 429) refuses before any inference and a
+visit costs no tokens; the same-account retries keep their bounds: one transport retry after a failure that happened
+before the request was fully written, one refresh replay, one strip retry when an upstream answers 400 naming a beta or
+field the router itself added (the router strips it and retries once on the same account, correcting its own edit), and
+one retry in place for a short throttle.
 
 The Accounts view shows what an account is cooling under in a cooling-down block: one line per scope, the whole
 account or one model, with the reason, the deadline, and a clear button; the Models view lists the same rows grouped
