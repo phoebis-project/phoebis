@@ -186,13 +186,14 @@ proxy accepts](#what-the-proxy-accepts) says.
 The query string of a request to either Messages route travels as the client sent it, `?beta=true` included; the router
 routes on the path alone.
 
-The client probes `/api/hello` before it sends anything, and ignores the answer. `/api/ready` is the readiness answer
-behind `phoebis health` and the image's health check: the two differ when the router loop, the ledger consumer or the
-store died and the listener is still up, and `dead` names each one that died as `ledger`, `router` or `store`. The two
+The client probes `/api/hello` before it sends anything, and ignores the answer. `phoebis health` and the image's health
+check read `/api/ready` instead: `/api/hello` and `/api/ready` differ when the router loop, the ledger consumer or the
+store died while the listener stays up, and `dead` names each one that died as `ledger`, `router` or `store`. The two
 `/v1/models` routes answer the [models listing](#the-models-listing) below. Every refusal above, including the
-wrong-method and unknown-path answers, carries an Anthropic-shaped error body. The two keepalive companion routes are
-covered on the [Keepalive](keepalive.md) page; each session they report belongs to the key generation that registered
-it, so a key id created again reaches none of the sessions its previous holder left behind.
+wrong-method and unknown-path answers, carries an Anthropic-shaped error body; the not-ready `503` of `/api/ready`
+reports the router's state and carries the readiness body instead. The two keepalive companion routes are covered on the
+[Keepalive](keepalive.md) page; each session they report belongs to the key generation that registered it, so a key id
+created again reaches none of the sessions its previous holder left behind.
 
 pool's members are unusable for the moment, and the answer when an account's authentication failure is the request's
 last word: the router never forwards an upstream `401`, and the answer names no account and no reason.

@@ -104,7 +104,7 @@ mounts a file secret with the host file's owner and mode, and that uid is the on
 
 ```sh title="Start, watch, and stop"
 docker compose up -d
-docker compose ps            # "healthy" once phoebis health has answered
+docker compose ps            # "healthy" once phoebis health reads the router as ready
 docker compose logs -f phoebis
 docker compose down          # SIGTERM, then up to 40 seconds for the 30-second drain
 ```

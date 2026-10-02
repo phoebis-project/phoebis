@@ -31,7 +31,9 @@ impl Readiness {
         dead_of(
             consumer && self.ledger.is_alive(),
             self.router.is_alive(),
-            self.store.accounts().is_ok(),
+            // Two point reads under the store's mutex: the route answers anyone who reaches the listener, so a
+            // probe must not cost a scan of every account row.
+            self.store.schema_version().is_ok(),
         )
     }
 }

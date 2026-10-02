@@ -164,6 +164,43 @@ async fn a_stopped_ledger_reads_not_ready_on_the_system_document() {
 }
 
 #[tokio::test]
+async fn readiness_reads_the_ledger_dead_when_its_bus_subscriber_is_absent_or_panicked() {
+    let parts = common::admin_parts_full().await;
+    let readiness = |bus: phoebis_bus::Bus| phoebis_admin::Readiness {
+        bus,
+        ledger: parts.ledger.clone(),
+        router: parts.router.clone(),
+        store: parts.store.clone(),
+    };
+    assert_eq!(
+        readiness(parts.bus.clone()).dead(),
+        Vec::<&str>::new(),
+        "the harness's own bus carries the ledger's live subscriber"
+    );
+    let bus = phoebis_bus::Bus::new();
+    let _live = bus.subscribe("live");
+    assert_eq!(
+        readiness(bus.clone()).dead(),
+        vec!["ledger"],
+        "a bus the ledger never subscribed to"
+    );
+    let assembler = bus.subscribe("ledger");
+    assert_eq!(
+        readiness(bus.clone()).dead(),
+        Vec::<&str>::new(),
+        "a `ledger` subscriber with no panic counted"
+    );
+    phoebis_bus::spawn_subscriber(assembler, |_| async { panic!("the assembler died") })
+        .await
+        .unwrap();
+    assert_eq!(
+        readiness(bus).dead(),
+        vec!["ledger"],
+        "a `ledger` subscriber whose task panicked, while the writer's channel stays open"
+    );
+}
+
+#[tokio::test]
 async fn the_price_routes_answer_the_fast_cells_beside_the_standard_ones() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;

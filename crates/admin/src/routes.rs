@@ -861,7 +861,8 @@ async fn system(State(state): State<Arc<AdminState>>) -> Response {
         "version": env!("CARGO_PKG_VERSION"),
         "profile": state.profile.name,
         "uptime_seconds": uptime,
-        "storage_ok": state.store.accounts().is_ok(),
+        // From the one store read `dead` made, so a transient failure cannot show both a working and a dead store.
+        "storage_ok": !dead.contains(&"store"),
         "ready": dead.is_empty(),
         "dead": dead,
         "ledger": {
