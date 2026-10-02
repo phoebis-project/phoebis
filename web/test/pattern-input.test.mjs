@@ -47,14 +47,17 @@ const frozen = () => {
   return { armed, tick: (ms) => act(() => clock.tick(ms)) };
 };
 
-/** One field under a page that hands it `value` and records every commit; `render` is the page passing a new value. */
+/**
+ * One field under a page that hands it `value` and records every commit; `render` is the page rendering again with a
+ * value, and with another handler where it passes one.
+ */
 function field(value = '') {
   const container = document.createElement('div');
   document.body.append(container);
   const root = createRoot(container);
   roots.push(root);
   const commits = [];
-  const render = (next) => act(() => root.render(h(PatternInput, { label: 'Client pattern', onCommit: (v) => commits.push(v), value: next })));
+  const render = (next, onCommit = (v) => commits.push(v)) => act(() => root.render(h(PatternInput, { label: 'Client pattern', onCommit, value: next })));
   render(value);
   return { commits, input: container.querySelector('input'), render };
 }
@@ -158,4 +161,16 @@ test('a page echoing a commit back keeps the draft, even one typed past it', () 
   assert.equal(input.value, 'abc', 'an echo equal to the text in the field changes nothing');
   clock.tick(400);
   assert.deepEqual(commits, ['ab', 'abc']);
+});
+
+test('a pending commit reaches the handler the page passed last, not the one it held at the keystroke', () => {
+  const clock = frozen();
+  const { commits, input, render } = field();
+  type(input, 'sdk/*');
+  // A page re-renders between the keystroke and the commit with a handler over its newer state.
+  const later = [];
+  render('', (v) => later.push(v));
+  clock.tick(400);
+  assert.deepEqual(commits, [], 'the handler the keystroke saw is never called');
+  assert.deepEqual(later, ['sdk/*'], 'the commit goes to the handler of the last render');
 });
