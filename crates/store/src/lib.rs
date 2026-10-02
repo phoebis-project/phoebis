@@ -90,7 +90,8 @@ pub enum StoreError {
     Io(#[from] std::io::Error),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
-    /// The registry's sealed canary, or its first sealed row, did not open under the key the file names.
+    /// The registry's sealed canary did not open under the key the file names, or, with no canary, none of its
+    /// sealed rows did.
     #[error("the storage key does not match the registry at {path}")]
     KeyMismatch { path: PathBuf },
     #[error("api key {0} not found")]
@@ -122,8 +123,8 @@ pub enum CanaryRead {
     /// The registry has no canary (a `meta` table without the row, or no `meta` table) and nothing sealed to
     /// prove the key against; the next start seals one.
     Absent,
-    /// The registry has no canary yet and its first sealed row opened under the key, which is what the next
-    /// start proves before it seals one.
+    /// The registry has no canary yet and a sealed row opened under the key, which is what the next start proves
+    /// before it seals one.
     SealedRowMatches,
     /// The canary opened under the key.
     Matches,
@@ -279,9 +280,9 @@ impl Store {
     }
 
     /// Reads the canary through a read-only connection: no process lock, no `prepare`, no migration, no write,
-    /// so it is safe beside a running router. With no canary it tries the key on the first sealed row, as the
-    /// one-time path at the next start does, so a registry from before the canary fails the check under a key the
-    /// start would refuse. `KeyMismatch` names `db_path`. Beside a stopped router SQLite leaves the `-wal` and `-shm`
+    /// so it is safe beside a running router. With no canary it tries the key on the sealed rows, as the one-time
+    /// path at the next start does, so a registry from before the canary fails the check under a key the start
+    /// would refuse. `KeyMismatch` names `db_path`. Beside a stopped router SQLite leaves the `-wal` and `-shm`
     /// files a reader of a WAL database needs; the database file itself is never written.
     pub fn read_canary(db_path: &Path, key: &StorageKey) -> Result<CanaryRead, StoreError> {
         if !db_path.try_exists()? {
@@ -306,10 +307,10 @@ impl Store {
                 Err(mismatch())
             };
         }
-        match first_sealed_row(&conn)? {
+        match sealed_rows_open_under(&conn, key)? {
             None => Ok(CanaryRead::Absent),
-            Some(row) if row.opens_under(key) => Ok(CanaryRead::SealedRowMatches),
-            Some(_) => Err(mismatch()),
+            Some(true) => Ok(CanaryRead::SealedRowMatches),
+            Some(false) => Err(mismatch()),
         }
     }
 
@@ -327,7 +328,7 @@ impl Store {
 
 /// Proves the key against the registry before any sealed row is read, so a wrong key refuses the open
 /// instead of serving a registry it cannot read; a registry sealed before the canary existed is proved
-/// against its first sealed row, so a wrong key never seals a canary over a registry it does not match.
+/// against its sealed rows, so a wrong key never seals a canary over a registry it does not match.
 ///
 /// The canary takes its own transaction after `prepare` rather than a migration's: it is no schema change, and a
 /// crash between the two leaves a registry the next open seals through the sealed-row proof.
@@ -346,10 +347,8 @@ fn check_or_seal_canary(
             Err(mismatch())
         };
     }
-    if let Some(row) = first_sealed_row(conn)? {
-        if !row.opens_under(key) {
-            return Err(mismatch());
-        }
+    if sealed_rows_open_under(conn, key)? == Some(false) {
+        return Err(mismatch());
     }
     let (nonce, sealed) = crypto::seal(key, CANARY_AAD, CANARY_PLAINTEXT)?;
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -391,13 +390,25 @@ impl SealedRow {
     }
 }
 
-/// The first sealed row of the registry: a credential bundle, then an Anthropic-key secret, then an alert secret.
+/// Whether the key opens any of the registry's first sealed rows, or `None` when it holds nothing sealed. A row
+/// that does not open is no proof of a wrong key, since the runtime survives a corrupt row too; a wrong key opens
+/// none of them.
+fn sealed_rows_open_under(conn: &Connection, key: &StorageKey) -> Result<Option<bool>, StoreError> {
+    let rows = first_sealed_rows(conn)?;
+    if rows.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(rows.iter().any(|row| row.opens_under(key))))
+}
+
+/// The first sealed row of each kind: a credential bundle, an Anthropic-key secret, an alert secret.
 /// `read_canary` meets the file as it is, without `prepare`, so a table the registry does not have yet holds
 /// nothing sealed rather than failing the read.
-fn first_sealed_row(conn: &Connection) -> Result<Option<SealedRow>, StoreError> {
+fn first_sealed_rows(conn: &Connection) -> Result<Vec<SealedRow>, StoreError> {
+    let mut rows = Vec::new();
     if has_table(conn, "credentials")? {
-        let row = conn
-            .query_row(
+        rows.extend(
+            conn.query_row(
                 "SELECT account_id, generation, nonce, sealed FROM credentials LIMIT 1",
                 [],
                 |row| {
@@ -408,14 +419,12 @@ fn first_sealed_row(conn: &Connection) -> Result<Option<SealedRow>, StoreError> 
                     })
                 },
             )
-            .optional()?;
-        if row.is_some() {
-            return Ok(row);
-        }
+            .optional()?,
+        );
     }
     if has_table(conn, "api_key_secrets")? {
-        let row = conn
-            .query_row(
+        rows.extend(
+            conn.query_row(
                 "SELECT account_id, nonce, sealed FROM api_key_secrets LIMIT 1",
                 [],
                 |row| {
@@ -426,14 +435,12 @@ fn first_sealed_row(conn: &Connection) -> Result<Option<SealedRow>, StoreError> 
                     })
                 },
             )
-            .optional()?;
-        if row.is_some() {
-            return Ok(row);
-        }
+            .optional()?,
+        );
     }
     if has_table(conn, "alert_rules")? {
-        let row = conn
-            .query_row(
+        rows.extend(
+            conn.query_row(
                 "SELECT id, secret_nonce, secret_sealed FROM alert_rules \
                  WHERE secret_sealed IS NOT NULL AND secret_nonce IS NOT NULL LIMIT 1",
                 [],
@@ -445,12 +452,10 @@ fn first_sealed_row(conn: &Connection) -> Result<Option<SealedRow>, StoreError> 
                     })
                 },
             )
-            .optional()?;
-        if row.is_some() {
-            return Ok(row);
-        }
+            .optional()?,
+        );
     }
-    Ok(None)
+    Ok(rows)
 }
 
 fn has_table(conn: &Connection, name: &str) -> Result<bool, StoreError> {
@@ -663,6 +668,156 @@ mod tests {
                 .expose(),
             "at-1"
         );
+    }
+
+    fn account(id: &str, kind: AccountKind) -> AccountRow {
+        AccountRow {
+            id: id.into(),
+            kind,
+            label: id.into(),
+            enabled: true,
+            identity: None,
+            lifecycle_generation: 1,
+            incarnation: 1,
+            revision: 1,
+            state: AccountState::Unpaired,
+        }
+    }
+
+    /// A registry with no canary: another key is refused by path, at the read and at the open, and seals nothing;
+    /// the key that sealed the rows reads `SealedRowMatches`, opens, and seals the canary.
+    fn assert_the_sealed_rows_prove_the_key(db: &Path, key: &StorageKey) {
+        let other = StorageKey::generate();
+        match Store::read_canary(db, &other) {
+            Err(StoreError::KeyMismatch { path }) => assert_eq!(path, db),
+            answer => panic!("read under another key: {answer:?}"),
+        }
+        match Store::open(db, &other) {
+            Err(StoreError::KeyMismatch { path }) => assert_eq!(path, db),
+            Err(other) => panic!("refused for another reason: {other}"),
+            Ok(_) => panic!("opened under another key"),
+        }
+        assert_eq!(
+            Store::read_canary(db, key).unwrap(),
+            CanaryRead::SealedRowMatches
+        );
+        let store = Store::open(db, key).unwrap();
+        let value = canary_of(&store).expect("the start under the right key sealed the canary");
+        assert_eq!(open_canary(key, &value).unwrap(), CANARY_PLAINTEXT);
+    }
+
+    #[test]
+    fn a_registry_whose_only_sealed_row_is_an_anthropic_key_secret_proves_the_key_against_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("router.sqlite");
+        let key = StorageKey::generate();
+        let store = Store::open(&db, &key).unwrap();
+        store
+            .insert_account(&account("vendor", AccountKind::ApiKey))
+            .unwrap();
+        store
+            .set_api_key_secret("vendor", &Secret::new("sk-ant-test-not-a-key"))
+            .unwrap();
+        store.debug_drop_canary().unwrap();
+        drop(store);
+        assert_the_sealed_rows_prove_the_key(&db, &key);
+    }
+
+    #[test]
+    fn a_registry_whose_only_sealed_row_is_an_alert_secret_proves_the_key_against_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("router.sqlite");
+        let key = StorageKey::generate();
+        let store = Store::open(&db, &key).unwrap();
+        let rule = AlertRuleRow {
+            id: "r1".into(),
+            kind: "reauth_required".into(),
+            scope_type: "any_account".into(),
+            scope_id: None,
+            threshold: None,
+            window: None,
+            webhook_url: "http://127.0.0.1:1/hook".into(),
+            has_secret: false,
+            enabled: true,
+            created_at: 1_000,
+            updated_at: 1_000,
+        };
+        store
+            .upsert_alert_rule(
+                &rule,
+                Some(Some(&Secret::new("webhook-test-not-a-secret"))),
+                "test",
+            )
+            .unwrap();
+        store.debug_drop_canary().unwrap();
+        drop(store);
+        assert_the_sealed_rows_prove_the_key(&db, &key);
+    }
+
+    #[test]
+    fn a_sealed_row_that_does_not_open_refuses_no_key_another_sealed_row_proves() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = StorageKey::generate();
+
+        let db = dir.path().join("router.sqlite");
+        let store = Store::open(&db, &key).unwrap();
+        with_a_credential(&store);
+        store.debug_corrupt_credentials("a").unwrap();
+        store
+            .insert_account(&account("vendor", AccountKind::ApiKey))
+            .unwrap();
+        store
+            .set_api_key_secret("vendor", &Secret::new("sk-ant-test-not-a-key"))
+            .unwrap();
+        store.debug_drop_canary().unwrap();
+        drop(store);
+        assert_the_sealed_rows_prove_the_key(&db, &key);
+
+        // With no row that opens there is nothing to prove the key by, so even the key that sealed them is refused.
+        let only_corrupt = dir.path().join("only-corrupt.sqlite");
+        let store = Store::open(&only_corrupt, &key).unwrap();
+        with_a_credential(&store);
+        store.debug_corrupt_credentials("a").unwrap();
+        store.debug_drop_canary().unwrap();
+        drop(store);
+        match Store::read_canary(&only_corrupt, &key) {
+            Err(StoreError::KeyMismatch { path }) => assert_eq!(path, only_corrupt),
+            answer => panic!("{answer:?}"),
+        }
+        assert!(matches!(
+            Store::open(&only_corrupt, &key),
+            Err(StoreError::KeyMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn a_canary_that_is_not_base64_or_too_short_for_a_nonce_is_a_mismatch() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = StorageKey::generate();
+        for (name, value) in [
+            ("empty", ""),
+            ("not-base64", "not base64!"),
+            ("short", "AAAA"),
+        ] {
+            let db = dir.path().join(format!("{name}.sqlite"));
+            drop(Store::open(&db, &key).unwrap());
+            Connection::open(&db)
+                .unwrap()
+                .execute(
+                    "UPDATE meta SET value = ?1 WHERE key = 'storage_key_canary'",
+                    params![value],
+                )
+                .unwrap();
+            match Store::read_canary(&db, &key) {
+                Err(StoreError::KeyMismatch { path }) => assert_eq!(path, db, "{name}"),
+                answer => panic!("{name}: {answer:?}"),
+            }
+            match Store::open(&db, &key) {
+                Err(StoreError::KeyMismatch { path }) => assert_eq!(path, db, "{name}"),
+                Err(other) => panic!("{name}: refused for another reason: {other}"),
+                Ok(_) => panic!("{name}: opened"),
+            }
+        }
     }
 
     #[test]

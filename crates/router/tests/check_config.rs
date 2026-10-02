@@ -1,7 +1,7 @@
 //! `phoebis check-config` warns about a wide key file mode, refuses a file that sets an unknown key, names the routing
 //! keys in its summary, and passes every shipped deploy config. It reads the key file as the start does and proves the
-//! key against the registry's canary, or against the first sealed row of a registry from before the canary, and
-//! warns about an unset secret variable while refusing a set one the start refuses.
+//! key against the registry's canary, or against the sealed rows of a registry from before the canary, and warns
+//! about an unset secret variable while refusing a set one the start refuses.
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -76,6 +76,17 @@ fn mismatch_line(registry: &Path) -> String {
         "the storage key does not match the registry at {}",
         registry.display()
     )
+}
+
+/// The mismatch is the whole finding, so it stands on the `Error:` line itself rather than under a context line.
+fn assert_refused_as_a_mismatch(out: &Output, registry: &Path) {
+    assert_eq!(out.status.code(), Some(1), "{}", printed(out));
+    assert_eq!(
+        String::from_utf8_lossy(&out.stderr).lines().next(),
+        Some(format!("Error: {}", mismatch_line(registry)).as_str()),
+        "{}",
+        printed(out)
+    );
 }
 
 /// A registry holding one committed credential bundle and no canary, the shape a registry sealed before the canary
@@ -243,12 +254,7 @@ fn a_registry_sealed_under_another_key_fails_check_config_naming_the_path() {
     let registry = dir.path().join("router.sqlite");
     drop(Store::open(&registry, &StorageKey::generate()).unwrap());
     let out = check_config(&mut phoebis(), &config);
-    assert_eq!(out.status.code(), Some(1), "{}", printed(&out));
-    assert!(
-        String::from_utf8_lossy(&out.stderr).contains(&mismatch_line(&registry)),
-        "{}",
-        printed(&out)
-    );
+    assert_refused_as_a_mismatch(&out, &registry);
 }
 
 #[test]
@@ -262,8 +268,8 @@ fn a_registry_from_before_the_canary_passes_under_its_key_and_names_the_sealing_
     assert!(out.status.success(), "{}", printed(&out));
     assert!(
         String::from_utf8_lossy(&out.stdout).contains(&format!(
-            "registry at {} has no key canary yet; its first sealed row opens under the key, and the next \
-             start seals one",
+            "registry at {} has no key canary yet; a sealed row opens under the key, and the next start \
+             seals one",
             registry.display()
         )),
         "{}",
@@ -278,12 +284,25 @@ fn a_registry_from_before_the_canary_fails_check_config_under_another_key() {
     let registry = dir.path().join("router.sqlite");
     registry_from_before_the_canary(&registry, &StorageKey::generate());
     let out = check_config(&mut phoebis(), &config);
+    assert_refused_as_a_mismatch(&out, &registry);
+}
+
+#[test]
+fn a_registry_that_cannot_be_read_fails_check_config_naming_the_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_file(dir.path(), "not-a-database", "");
+    let registry = dir.path().join("router.sqlite");
+    std::fs::write(&registry, "this text is not a SQLite database\n".repeat(8)).unwrap();
+    let out = check_config(&mut phoebis(), &config);
     assert_eq!(out.status.code(), Some(1), "{}", printed(&out));
-    assert!(
-        String::from_utf8_lossy(&out.stderr).contains(&mismatch_line(&registry)),
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        stderr.lines().next(),
+        Some(format!("Error: reading the registry at {}", registry.display()).as_str()),
         "{}",
         printed(&out)
     );
+    assert!(stderr.contains("not a database"), "{}", printed(&out));
 }
 
 #[test]

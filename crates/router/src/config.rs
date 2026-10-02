@@ -468,6 +468,12 @@ pub fn resolve_secrets(config: &mut Config) -> Result<(), ConfigError> {
     }
 }
 
+/// Whether `name` is a variable `resolve_secrets` would refuse as unset, so `check-config` warns about exactly the
+/// variables the start would find missing.
+pub fn secret_is_unset(name: &str) -> bool {
+    matches!(from_env(name), Err(ConfigError::MissingSecret { .. }))
+}
+
 /// The other step `load` runs after `load_unresolved`. A viewer secret equal to the administration one silently
 /// turns the read-only login into a full one, which is a configuration mistake that only shows up as a surprise in
 /// production.

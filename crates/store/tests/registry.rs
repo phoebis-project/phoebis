@@ -1,8 +1,8 @@
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, AccountUpdate, Affinity, AffinitySource, ApiKeyRow,
-    Failover, Identity, MemberWrite, MemoryKey, MemoryRecord, MemoryStore, ModelRule,
-    OveragePolicy, PinBurn, PoolRow, QuotaHeaders, RulesMode, Secret, Shedding, StorageKey, Store,
-    StoreError, Strategy, SubscriptionRow,
+    AccountKind, AccountRow, AccountState, AccountUpdate, Affinity, AffinitySource, AlertRuleRow,
+    ApiKeyRow, CanaryRead, Failover, Identity, MemberWrite, MemoryKey, MemoryRecord,
+    MemoryStore, ModelRule, NewBundle, OveragePolicy, PinBurn, PoolRow, QuotaHeaders, RulesMode,
+    Secret, Shedding, StorageKey, Store, StoreError, Strategy, SubscriptionRow,
 };
 
 // Read by both the roll-back chains below and the standalone direct-open test further down.
@@ -1816,4 +1816,138 @@ fn an_account_update_is_fenced_on_the_revision_it_was_built_from() {
         store.update_account("nobody", 1, "x", "admin"),
         Err(StoreError::AccountNotFound(_))
     ));
+}
+
+/// Runs the key-loss recovery as `docs/site/operations.md` prints it, read from the page so the two cannot drift.
+#[test]
+fn the_key_loss_recovery_opens_the_registry_under_a_new_key_with_its_accounts_and_pools_intact() {
+    let page = include_str!("../../../docs/site/operations.md");
+    let mut sequences = page.split("<<'SQL'\n").skip(1);
+    let sequence = sequences
+        .next()
+        .and_then(|rest| rest.split("\nSQL\n").next())
+        .expect("the page prints the recovery sequence as a heredoc");
+    assert!(
+        sequences.next().is_none(),
+        "the page prints one recovery sequence"
+    );
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("router.sqlite");
+    let lost = StorageKey::generate();
+    let store = Store::open(&path, &lost).unwrap();
+    store
+        .insert_account(&account("claude", AccountKind::Oauth))
+        .unwrap();
+    store
+        .commit_credentials(
+            "claude",
+            1,
+            1,
+            None,
+            None,
+            &NewBundle {
+                access_token: Secret::new("at-test-not-a-token"),
+                refresh_token: Some(Secret::new("rt-test-not-a-token")),
+                issued_at: 1_799_996_400_000,
+                expires_at: 1_800_000_000_000,
+                refresh_expires_at: None,
+                scopes: "user:profile user:inference".into(),
+            },
+        )
+        .unwrap();
+    store.open_refresh_attempt("claude", 1, 1, 1).unwrap();
+    store
+        .create_account(
+            &account("vendor", AccountKind::ApiKey),
+            Some(&Secret::new("sk-ant-test-not-a-key")),
+            1,
+            "admin",
+        )
+        .unwrap();
+    store.insert_pool(&pool("main"), "test").unwrap();
+    store
+        .set_pool_members("main", &[member("claude", 1), member("vendor", 2)], "test")
+        .unwrap();
+    let desktop = key(&store, "desktop", "main", "phoebis-0123456789abcdef");
+    store.insert_api_key(&desktop, "test").unwrap();
+    let rule = AlertRuleRow {
+        id: "r1".into(),
+        kind: "reauth_required".into(),
+        scope_type: "any_account".into(),
+        scope_id: None,
+        threshold: None,
+        window: None,
+        webhook_url: "http://127.0.0.1:1/hook".into(),
+        has_secret: false,
+        enabled: true,
+        created_at: 1_000,
+        updated_at: 1_000,
+    };
+    store
+        .upsert_alert_rule(
+            &rule,
+            Some(Some(&Secret::new("webhook-test-not-a-secret"))),
+            "test",
+        )
+        .unwrap();
+    drop(store);
+
+    let new = StorageKey::generate();
+    assert!(matches!(
+        Store::open(&path, &new),
+        Err(StoreError::KeyMismatch { .. })
+    ));
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute_batch(sequence)
+        .unwrap();
+    assert_eq!(
+        Store::read_canary(&path, &new).unwrap(),
+        CanaryRead::Absent,
+        "nothing sealed is left to prove a key against"
+    );
+
+    let store = Store::open(&path, &new).unwrap();
+    assert_eq!(
+        Store::read_canary(&path, &new).unwrap(),
+        CanaryRead::Matches,
+        "the start under the new key sealed a new canary"
+    );
+    assert!(matches!(
+        Store::read_canary(&path, &lost),
+        Err(StoreError::KeyMismatch { .. })
+    ));
+    let states: Vec<(String, AccountState)> = store
+        .accounts()
+        .unwrap()
+        .into_iter()
+        .map(|row| (row.id, row.state))
+        .collect();
+    assert_eq!(
+        states,
+        vec![
+            ("claude".to_string(), AccountState::Disconnected),
+            ("vendor".to_string(), AccountState::Unpaired),
+        ],
+        "each account rests where the Disconnect action leaves it"
+    );
+    assert!(store.credentials("claude").unwrap().is_none());
+    assert!(store.api_key_secret("vendor").unwrap().is_none());
+    assert!(store.pending_refresh_attempts().unwrap().is_empty());
+    assert!(store.pool("main").unwrap().is_some());
+    let members: Vec<String> = store
+        .pool_members("main")
+        .unwrap()
+        .into_iter()
+        .map(|member| member.account_id)
+        .collect();
+    assert_eq!(members, vec!["claude".to_string(), "vendor".to_string()]);
+    assert_eq!(store.api_key("desktop").unwrap().unwrap().pool_id, "main");
+    assert_eq!(
+        store.alert_rule("r1").unwrap(),
+        Some(rule),
+        "the rule stays, its secret cleared"
+    );
+    assert!(store.alert_rule_secret("r1").unwrap().is_none());
 }

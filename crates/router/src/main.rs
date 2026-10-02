@@ -78,22 +78,35 @@ fn main() -> anyhow::Result<()> {
                 }
             );
             let key_file = &config.storage.encryption_key_file;
-            let key = phoebis_store::StorageKey::from_file(key_file)
-                .with_context(|| format!("reading storage.encryption_key_file {}", key_file.display()))?;
-            match phoebis_store::Store::read_canary(&config.storage.path, &key)? {
+            let key = phoebis_store::StorageKey::from_file(key_file).with_context(|| {
+                format!("reading storage.encryption_key_file {}", key_file.display())
+            })?;
+            let registry = &config.storage.path;
+            // The mismatch names the registry itself and is the whole finding; any other failure (an unreadable
+            // directory, a file that is not a database) says nothing of which file it met.
+            let canary = phoebis_store::Store::read_canary(registry, &key).map_err(|error| match error {
+                phoebis_store::StoreError::KeyMismatch { .. } => anyhow::Error::new(error),
+                error => anyhow::Error::new(error)
+                    .context(format!("reading the registry at {}", registry.display())),
+            })?;
+            match canary {
                 phoebis_store::CanaryRead::NoRegistry => println!(
                     "registry at {} does not exist yet; the first start creates it",
-                    config.storage.path.display()
+                    registry.display()
                 ),
                 phoebis_store::CanaryRead::SealedRowMatches => println!(
-                    "registry at {} has no key canary yet; its first sealed row opens under the key, and the \
-                     next start seals one",
-                    config.storage.path.display()
+                    "registry at {} has no key canary yet; a sealed row opens under the key, and the next \
+                     start seals one",
+                    registry.display()
                 ),
                 phoebis_store::CanaryRead::Absent | phoebis_store::CanaryRead::Matches => {}
             }
-            for name in [Some(&config.admin.secret_env), config.admin.viewer_secret_env.as_ref()].into_iter().flatten() {
-                if std::env::var(name).map_or(true, |v| v.is_empty()) {
+            let secret_envs = [
+                Some(&config.admin.secret_env),
+                config.admin.viewer_secret_env.as_ref(),
+            ];
+            for name in secret_envs.into_iter().flatten() {
+                if phoebis_router::config::secret_is_unset(name) {
                     println!("warning: environment variable {name} is unset or empty");
                 }
             }

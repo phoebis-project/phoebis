@@ -60,26 +60,52 @@ that same empty file.
 
 The registry carries a canary sealed under the key at its first open, and every open proves the key against it before
 any credential is read: a restore onto a host whose key file differs, or a key regenerated after the file was moved,
-is refused at start and by `check-config` with `the storage key does not match the registry at {path}`; a registry
-from before the canary existed is proved against its first sealed credential instead, by `check-config` and at start,
-and sealed at that start.
+is refused at start and by `check-config` with `the storage key does not match the registry at {path}`. A registry
+from before the canary existed is proved against its first sealed row of each kind instead (a credential, an
+Anthropic-key secret and an alert secret), passing when any of them opens, by `check-config` and at start, and is
+sealed at that start.
 
 The key seals OAuth credential bundles, Anthropic-key secrets, and alert secrets. `Store::digest_key` also derives, from
 this same key, the digest every downstream key authenticates against: the secrets the admin API mints and hands to
 clients and the companion.
 
-There is no re-key command, so recovering from a lost or replaced key means:
+There is no re-key command. Under a lost or replaced key no sealed row opens again and the canary refuses the start,
+so recovering means discarding the registry's secrets while keeping everything else. Stop the service
+(`sudo systemctl stop phoebis`), take the [backup](#backup) above, and run this sequence against the registry as the
+`phoebis` user:
 
-- Re-pairing every `oauth` account, after disconnecting it first. Confirming a pairing reads the account's
-  existing credential to check its generation before committing the replacement; sealed under the key that was
-  just replaced, that read fails, and the pairing dialog answers `500 storage failure`. Disconnect the account
-  first, from the Accounts view's Disconnect or `DELETE /admin/accounts/{id}/credentials`, which deletes the
-  credential without reading it and leaves the account's identity bound to the same slot, then re-pair.
-- Re-entering every `api_key` secret and alert secret under the new key.
-- Rotating every downstream key. Replacing the storage key changes what `digest_key` derives, so every digest
-  already stored against the old key stops matching a client's presented secret, and every existing downstream key
-  starts answering `401`. Rotate each one (`POST /admin/keys/{id}/rotate`) or recreate it, then distribute the new
-  secrets to the clients and the companion.
+```sh
+sudo -u phoebis sqlite3 -bail /var/lib/phoebis/router.sqlite <<'SQL'
+BEGIN IMMEDIATE;
+DELETE FROM meta WHERE key = 'storage_key_canary';
+DELETE FROM credentials;
+DELETE FROM api_key_secrets;
+UPDATE alert_rules SET secret_sealed = NULL, secret_nonce = NULL;
+UPDATE accounts SET state = CASE kind WHEN 'oauth' THEN 'disconnected' ELSE 'unpaired' END,
+  lifecycle_generation = lifecycle_generation + 1, revision = revision + 1;
+UPDATE refresh_attempts SET resolved_at = CAST(strftime('%s', 'now') AS INTEGER) * 1000, outcome = 'failed',
+  detail = 'disconnected' WHERE resolved_at IS NULL OR outcome = 'uncertain';
+COMMIT;
+SQL
+```
+
+The sequence discards every secret the registry holds, and nothing else: the alert secrets, the Anthropic-key
+secrets, the canary and the OAuth credential bundles go, and each account rests where the Accounts view's Disconnect
+leaves it, with its open refresh attempts settled. The accounts, alert rules, downstream keys, pins, pools and session
+memory stay. `-bail` stops at the first statement that fails, and the transaction it leaves open rolls back, so the
+file is either wholly changed or untouched. The next start under the new key finds nothing sealed and seals a new
+canary; then:
+
+- Re-enter every `api_key` secret and alert secret.
+- Re-pair every `oauth` account.
+- Rotate every downstream key. Replacing the storage key changes what `digest_key` derives, so every digest already
+  stored against the old key stops matching a client's presented secret, and every existing downstream key starts
+  answering `401`. Rotate each one (`POST /admin/keys/{id}/rotate`) or recreate it, then distribute the new secrets
+  to the clients and the companion.
+
+An operator who would rather start over moves the registry file aside instead, with its `-wal` and `-shm` files if
+present, and lets the next start create an empty registry, in which every account, pool, key and rule is created
+again.
 
 ## Upgrades
 

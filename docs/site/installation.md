@@ -159,8 +159,8 @@ while the router is up. It prints, in order:
 9. `keepalive: lease {n}s, {n} sessions, {n} agents, {n} workers, {n} MiB retained, oauth prewarm
    {verified|unverified}`
 10. the registry line, `registry at {config.storage.path} does not exist yet; the first start creates it` when the
-    registry is not there yet, or `registry at {config.storage.path} has no key canary yet; its first sealed row opens
-    under the key, and the next start seals one` for a registry from before the canary
+    registry is not there yet, or `registry at {config.storage.path} has no key canary yet; a sealed row opens under
+    the key, and the next start seals one` for a registry from before the canary
 11. `warning: environment variable {name} is unset or empty`, once per unset secret variable
 
 Further warning lines name a storage key file, data directory or database whose mode or owner is wider than the router
