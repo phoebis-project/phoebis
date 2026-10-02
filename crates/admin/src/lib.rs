@@ -14,6 +14,7 @@ mod live;
 mod models;
 mod pools;
 mod pricing;
+mod readiness;
 mod requests;
 mod routes;
 mod rules;
@@ -39,6 +40,7 @@ use phoebis_routing::RouterHandle;
 use phoebis_store::{NewBundle, Store};
 use phoebis_transport::control::ControlClient;
 
+pub use readiness::{Readiness, ReadinessSource};
 pub use routes::router;
 pub use session::{AdminSecrets, LoginError, Role, Sessions};
 
@@ -81,6 +83,8 @@ pub struct AdminState {
     pub settings: Arc<SettingsView>,
     pub keepalive: Arc<Engine>,
     pub alerts: Arc<Alerts>,
+    /// The same reads `/api/ready` answers from, so `GET /admin/system` and the proxy listener agree.
+    pub readiness: Arc<Readiness>,
     /// Whether a rule may aim its webhook at loopback, a link-local address, or the unspecified address. Off
     /// everywhere but the test harness, whose receiver is on loopback: the deliverer posts wherever a rule
     /// points and follows no redirect, so the alert routes are the only place a destination is checked.

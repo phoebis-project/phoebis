@@ -268,6 +268,63 @@ async fn local_rejections_are_anthropic_shaped() {
     up.shutdown().await;
 }
 
+async fn ask_ready(app: &axum::Router, method: &str) -> (StatusCode, Vec<u8>) {
+    let request = Request::builder()
+        .method(method)
+        .uri("/api/ready")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(request).await.unwrap();
+    let status = resp.status();
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    (status, body.to_vec())
+}
+
+#[tokio::test]
+async fn ready_answers_503_naming_what_the_readiness_source_reads_dead() {
+    let up = FakeUpstream::start(vec![]).await;
+    let h = harness(
+        &up,
+        &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
+        PoolSpec::default(),
+    )
+    .await;
+    let (status, body) = ask_ready(&h.app, "GET").await;
+    assert_eq!(
+        (
+            status,
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap()
+        ),
+        (StatusCode::OK, serde_json::json!({ "ready": true })),
+        "a relay built without a readiness source answers ready"
+    );
+    let Harness { app, relay, .. } = h;
+    drop(app);
+    let relay = std::sync::Arc::try_unwrap(relay)
+        .ok()
+        .expect("the dropped app held the relay's only other handle");
+    let app = phoebis_relay::router(std::sync::Arc::new(
+        relay.with_readiness(std::sync::Arc::new(|| vec!["router"])),
+    ));
+    let (status, body) = ask_ready(&app, "GET").await;
+    assert_eq!(
+        (
+            status,
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap()
+        ),
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            serde_json::json!({ "ready": false, "dead": ["router"] })
+        )
+    );
+    assert_eq!(
+        ask_ready(&app, "HEAD").await,
+        (StatusCode::SERVICE_UNAVAILABLE, Vec::new()),
+        "HEAD carries the status alone"
+    );
+    up.shutdown().await;
+}
+
 #[tokio::test]
 async fn a_client_with_a_drifted_hash_is_refused() {
     let drifted = String::from_utf8(body(BodyFixture::FirstParty9b244).to_vec())

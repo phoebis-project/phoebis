@@ -110,14 +110,14 @@ docker compose down          # SIGTERM, then up to 40 seconds for the 30-second 
 ```
 
 The health check runs `phoebis health`, which loads and validates the configuration, secrets included, from the
-container's own environment before it probes the proxy listener. A file it cannot read, a value it refuses, or an
-unset secret variable therefore reads as `unhealthy` rather than as a passing check, with the reason in `docker
-inspect`.
+container's own environment and then asks the proxy listener whether the router is ready: a file it cannot read, a value
+it refuses, an unset secret variable, or a router loop, ledger consumer or store that died therefore reads as
+`unhealthy` rather than as a passing check, with the reason in `docker inspect`.
 
 A ledger writer that stops draining leaves every request that publishes a fact waiting for room in its queue,
 which over time fills the proxy listener's connection slots with requests that never finish. `phoebis health`
-connects to that same listener, so it queues behind them too, and the container reads `unhealthy` for a cause
-the probe itself never touches.
+connects to that same listener, so it queues behind them too, and the container reads `unhealthy`; a ledger consumer
+that stopped outright reads `unhealthy` through the readiness answer itself.
 
 The console answers at `http://localhost:8081`: the example publishes the admin port on the host's loopback alone,
 so it is reached from the host's own browser or through an SSH tunnel whose local end is loopback, and nobody else.
@@ -140,7 +140,7 @@ needs `docker login ghcr.io` with a token carrying `read:packages` while the rep
 | --- | --- |
 | `phoebis --config ./config.yaml` | Serves the three listeners until Ctrl-C or SIGTERM, then drains up to 30 seconds. |
 | `phoebis check-config --config ./config.yaml` | Validates the file, the key file and the registry's key canary. |
-| `phoebis health --config ./config.yaml` | Probes the proxy listener and exits 0 when it answers, 1 otherwise. |
+| `phoebis health --config ./config.yaml` | Probes the proxy listener's readiness: exit 0 when ready, 1 otherwise. |
 | `phoebis --version` | Prints the version. |
 
 `--config` defaults to `./config.yaml`; when the flag is absent and `PHOEBIS_CONFIG` is set, every subcommand reads
@@ -171,11 +171,12 @@ is still running. That 30 seconds also covers the keepalive shutdown and the ale
 it, so a slow keepalive shutdown leaves the listeners whatever is left of the one budget rather than a fresh
 30 seconds of their own.
 
-`health` loads the file the way `check-config` does, so it needs the same environment. It connects to
-`proxy.listen`, or to the loopback address of the same family when the listener is bound on every interface,
-sends `HEAD /api/hello`, and prints `proxy answers on {addr}` on a `200` or one line saying why not; the whole
-probe, connect included, is bounded by three seconds. The container image runs it as its health check every 30
-seconds ([the container](#run-the-container)).
+`health` loads the file the way the service does, so it needs the same environment. It connects to `proxy.listen`, or to
+the loopback address of the same family when the listener is bound on every interface, sends `HEAD /api/ready`, and
+prints `proxy answers on {addr}` on a `200` or one line saying why not (`proxy on {addr} answered 503, not 200` when the
+router loop, the ledger consumer or the store is dead); the whole probe, connect included, is bounded by three seconds.
+`/api/hello` stays the liveness answer the client itself probes. The container image runs `health` as its health check
+every 30 seconds ([the container](#run-the-container)).
 
 ## Environment variables
 

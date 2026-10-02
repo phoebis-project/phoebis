@@ -462,6 +462,20 @@ async fn shutdown_lands_every_acknowledged_write_before_it_returns() {
 }
 
 #[tokio::test]
+async fn a_router_handle_reads_alive_until_its_task_has_shut_down() {
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(seeded(&["a"]), clock(&now), RouterConfig::default()).unwrap();
+    // The readiness answer reads a clone, so the clone must see the end the shutting handle caused.
+    let held = handle.clone();
+    assert!(held.is_alive(), "a running task takes commands");
+    handle.shutdown().await.unwrap();
+    assert!(
+        !held.is_alive(),
+        "a task that shut down takes none, the condition every ask reports as RouterGone"
+    );
+}
+
+#[tokio::test]
 async fn a_state_verdict_about_a_replaced_credential_changes_nothing() {
     let store = seeded(&["a"]);
     let now = Arc::new(AtomicI64::new(1_000));

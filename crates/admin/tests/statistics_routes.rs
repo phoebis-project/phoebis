@@ -139,6 +139,28 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
     );
     assert_eq!(system["live"]["clients"].as_u64(), Some(0));
     assert_eq!(system["storage_ok"], true);
+    assert_eq!(
+        (&system["ready"], &system["dead"]),
+        (&serde_json::json!(true), &serde_json::json!([])),
+        "the harness's router task, ledger consumer and store are all alive"
+    );
+}
+
+#[tokio::test]
+async fn a_stopped_ledger_reads_not_ready_on_the_system_document() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    parts.ledger.clone().shutdown().await.unwrap();
+    let system = json(get(&parts.app, "/admin/system", Some(&cookie)).await).await;
+    assert_eq!(
+        (&system["ready"], &system["dead"], &system["storage_ok"]),
+        (
+            &serde_json::json!(false),
+            &serde_json::json!(["ledger"]),
+            &serde_json::json!(true)
+        ),
+        "the writer closed its channel while the router task and the store still answer: {system}"
+    );
 }
 
 #[tokio::test]

@@ -97,6 +97,11 @@ impl Ledger {
         self.stats.dropped.load(Ordering::Relaxed)
     }
 
+    /// Whether the writer still takes records; false once it closed its receiver, at a shutdown or a panic.
+    pub fn is_alive(&self) -> bool {
+        !self.tx.is_closed()
+    }
+
     /// Registers a task the ledger owns beyond the writer, so `shutdown` aborts it before the channel closes:
     /// a fetch still running when the process stops must not keep a strong reference (the store, for
     /// instance) alive past that, and the quota poll must not record into a channel that is closing.

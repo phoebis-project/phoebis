@@ -10,9 +10,9 @@ use axum::body::Body;
 use axum::extract::{Request, State};
 use axum::http::response::Builder;
 use axum::http::{header, HeaderMap, HeaderName, HeaderValue, StatusCode};
-use axum::response::Response;
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, head, post};
-use axum::Router;
+use axum::{Json, Router};
 use bytes::Bytes;
 use futures::future::BoxFuture;
 use phoebis_bus::{
@@ -37,6 +37,7 @@ use phoebis_transport::pool::{Pool, PoolKey};
 use phoebis_transport::request::RawRequest;
 use phoebis_transport::response::{framing, keep_alive, BodyReader, ResponseHead};
 use phoebis_transport::TransportError;
+use serde_json::json;
 use tokio::io::AsyncRead;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
@@ -220,10 +221,15 @@ pub struct Relay {
     /// climb waits on.
     pending_reports: Arc<PendingReports>,
     pub(crate) pool: Arc<Pool>,
+    readiness: Option<ReadinessSource>,
     resolver: Resolver,
     router: RouterHandle,
     store: Arc<Store>,
 }
+
+/// The components `/api/ready` names dead, read on every ask. A closure rather than the handles themselves, so
+/// the relay needs no dependency on the crate that composes them.
+pub type ReadinessSource = Arc<dyn Fn() -> Vec<&'static str> + Send + Sync>;
 
 impl Relay {
     #[allow(clippy::too_many_arguments)]
@@ -249,6 +255,7 @@ impl Relay {
             memory: Arc::new(SessionMemory::new(MEMORY_CAP, MEMORY_IDLE_MS)),
             pending_reports: Arc::new(PendingReports::default()),
             pool,
+            readiness: None,
             resolver,
             router,
             store,
@@ -267,6 +274,14 @@ impl Relay {
     pub fn with_bus(self, bus: Bus) -> Relay {
         Relay {
             bus: Some(bus),
+            ..self
+        }
+    }
+
+    /// What `/api/ready` reads; without it the route answers ready, which the relay's own tests rely on.
+    pub fn with_readiness(self, source: ReadinessSource) -> Relay {
+        Relay {
+            readiness: Some(source),
             ..self
         }
     }
@@ -706,6 +721,7 @@ fn cooldown_set(cooldown: Option<&Cooldown>, canonical_model: &str) -> Option<Co
 pub fn router(relay: Arc<Relay>) -> Router {
     Router::new()
         .route("/api/hello", head(hello))
+        .route("/api/ready", get(ready).head(ready))
         .route("/v1/messages", post(messages))
         .route("/v1/messages/count_tokens", post(messages))
         // The listing answers the caller's key with what its pool may route to, so a client that sizes its
@@ -720,6 +736,23 @@ pub fn router(relay: Arc<Relay>) -> Router {
 /// The native client probes this before it sends anything and ignores the answer.
 async fn hello() -> StatusCode {
     StatusCode::OK
+}
+
+/// Readiness, as the image's health check and an orchestrator read it: 200 while the router task, the ledger
+/// consumer and the store are alive, 503 naming what died. `/api/hello` stays the liveness answer.
+async fn ready(State(relay): State<Arc<Relay>>) -> Response {
+    let dead = relay
+        .readiness
+        .as_ref()
+        .map_or_else(Vec::new, |source| source());
+    if dead.is_empty() {
+        return (StatusCode::OK, Json(json!({ "ready": true }))).into_response();
+    }
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(json!({ "ready": false, "dead": dead })),
+    )
+        .into_response()
 }
 
 async fn unknown_route() -> Response {

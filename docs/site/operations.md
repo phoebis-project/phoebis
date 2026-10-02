@@ -120,7 +120,7 @@ again.
 5. Install the new binary: `sudo install -m 0755 target/release/phoebis /usr/local/bin/phoebis`.
 6. Restart the service: `sudo systemctl restart phoebis`. The service drains in-flight requests for up to 30 seconds;
    the unit's `TimeoutStopSec=40` covers that drain.
-7. Confirm the upgrade with `phoebis --version`, then `GET /admin/system` for `version`, `storage_ok`, and
+7. Confirm the upgrade with `phoebis --version`, then `GET /admin/system` for `version`, `storage_ok`, `ready` and
    `ledger.write_failures` reading `0`.
 
 Under the container, the same sequence is: read the changelog, take the backup, set `image:` in `compose.yaml` to
@@ -128,7 +128,7 @@ the new version, validate the mounted configuration with the new image (`docker 
 check-config`, which reads the service's environment file and mounts), then `docker compose up -d`. Compose
 replaces the container, stopping the old one with the 40-second grace period that covers the drain, and the new
 binary migrates both databases on the volume as it opens them. `docker compose ps` reads `healthy` once
-`phoebis health` has answered, and `GET /admin/system` confirms the version.
+`phoebis health` has read the router as ready, and `GET /admin/system` confirms the version.
 
 Schema migrations run when the new binary opens each database, in order above the stored version, each inside its
 own transaction. The registry's migrations may drop or rebuild a table, and the registry refuses to open when its

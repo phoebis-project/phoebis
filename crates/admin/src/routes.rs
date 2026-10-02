@@ -856,11 +856,14 @@ async fn system(State(state): State<Arc<AdminState>>) -> Response {
         }
     };
     let keepalive_stats = state.keepalive.stats();
+    let dead = state.readiness.dead();
     Json(json!({
         "version": env!("CARGO_PKG_VERSION"),
         "profile": state.profile.name,
         "uptime_seconds": uptime,
         "storage_ok": state.store.accounts().is_ok(),
+        "ready": dead.is_empty(),
+        "dead": dead,
         "ledger": {
             "schema_version": state.ledger.db().schema_version().await.ok(),
             "written": load(&stats.written), "dropped": load(&stats.dropped), "write_failures": load(&stats.write_failures),

@@ -516,6 +516,11 @@ impl RouterHandle {
     pub async fn shutdown(&self) -> Result<(), RouterGone> {
         self.ask(|reply| Command::Shutdown { reply }).await
     }
+    /// Whether the router loop still receives commands; false once the task ended, which is the condition every
+    /// `ask` reports as `RouterGone`.
+    pub fn is_alive(&self) -> bool {
+        !self.tx.is_closed()
+    }
     pub async fn release_session(
         &self,
         key_id: &str,

@@ -30,7 +30,7 @@ struct Cli {
 enum Command {
     /// Validate the configuration, the key file and the registry's key canary, taking no lock and opening no socket.
     CheckConfig,
-    /// Probe the proxy listener's `/api/hello`: exit 0 when it answers 200, 1 otherwise.
+    /// Probe the proxy listener's `/api/ready`: exit 0 when it answers 200, 1 otherwise.
     Health,
 }
 

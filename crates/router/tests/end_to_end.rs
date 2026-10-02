@@ -418,6 +418,23 @@ usage:
         .await
         .unwrap();
     assert_eq!(hello.status(), 200);
+    let ready = client
+        .head(format!("http://127.0.0.1:{proxy_port}/api/ready"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(ready.status(), 200);
+    let ready = client
+        .get(format!("http://127.0.0.1:{proxy_port}/api/ready"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(ready.status(), 200);
+    assert_eq!(
+        ready.json::<serde_json::Value>().await.unwrap(),
+        serde_json::json!({ "ready": true }),
+        "the binary's router task, ledger consumer and store are alive"
+    );
     // Asked without the session cookie, so the gate refuses before the route is reached and an anonymous
     // caller learns nothing about which admin paths exist.
     let anonymous = reqwest::Client::new();

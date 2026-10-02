@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Context};
 use axum::Router;
-use phoebis_admin::{AdminSecrets, AdminState, PairingVault, Sessions, SettingsView};
+use phoebis_admin::{AdminSecrets, AdminState, PairingVault, Readiness, Sessions, SettingsView};
 use phoebis_bus::Bus;
 use phoebis_keepalive::{companion_router, spawn_observer, Engine, EngineParts};
 use phoebis_ledger::{
@@ -223,6 +223,14 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             expire_interval: Duration::from_secs(60),
         },
     );
+    // Moved into the admin state below rather than kept here: a local holding its `Bus` clone to the end of
+    // `run` would keep the subscribers' queues open past the shutdown's `drop(bus)`.
+    let readiness = Arc::new(Readiness {
+        bus: bus.clone(),
+        ledger: ledger.clone(),
+        router: router_task.clone(),
+        store: store.clone(),
+    });
     let live = LiveFeed::spawn(&bus, pricing.clone(), clock.clone(), LiveConfig::default());
     let catalog = Arc::new(CatalogService::new(
         store.clone(),
@@ -255,6 +263,10 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             catalog.clone(),
         )
         .with_bus(bus.clone())
+        .with_readiness({
+            let readiness = readiness.clone();
+            Arc::new(move || readiness.dead())
+        })
         .with_cache_diagnostics(config.compatibility.cache_diagnostics)
         .with_session_memory(
             config.sessions.memory_cap,
@@ -387,6 +399,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         // sequence below.
         keepalive: keepalive.clone(),
         alerts: alerts.clone(),
+        readiness,
         allow_local_webhooks: ALLOW_LOCAL_WEBHOOKS,
     });
 

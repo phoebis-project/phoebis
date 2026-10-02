@@ -10,7 +10,9 @@ use axum::Router;
 use fake_upstream::{FakeUpstream, Respond, Rule};
 use futures::StreamExt;
 use http_body_util::BodyExt;
-use phoebis_admin::{router, AdminSecrets, AdminState, PairingVault, Sessions, SettingsView};
+use phoebis_admin::{
+    router, AdminSecrets, AdminState, PairingVault, Readiness, Sessions, SettingsView,
+};
 use phoebis_alerts::{AlertParts, Alerts, Webhook};
 use phoebis_bus::Bus;
 use phoebis_keepalive::{Engine, EngineParts, KeepaliveLimits};
@@ -982,6 +984,12 @@ async fn app_with_webhook_policy(
         settings,
         keepalive: keepalive.clone(),
         alerts: alerts.clone(),
+        readiness: Arc::new(Readiness {
+            bus: bus.clone(),
+            ledger: ledger.clone(),
+            router: router_handle.clone(),
+            store: store.clone(),
+        }),
         allow_local_webhooks,
     });
     Parts {

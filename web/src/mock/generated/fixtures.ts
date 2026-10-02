@@ -7662,6 +7662,8 @@ export const FIXTURES: Record<string, Fixture> = {
       "profile": "claude-code-2.1.269-linux-x64",
       "uptime_seconds": 0,
       "storage_ok": true,
+      "ready": true,
+      "dead": [],
       "ledger": {
         "schema_version": 25,
         "written": 15,

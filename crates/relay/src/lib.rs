@@ -54,7 +54,8 @@ pub use hold::{hold, Commit, Held, Inspect, INSPECT_BUFFER};
 pub use identity::{identify, RequestIdentity};
 pub use memory::{MemoryKey, Previous};
 pub use messages::{
-    new_request_id, router, Limits, Probe, Relay, RelayOutcome, ServedUnder, MEMORY_FLUSH_INTERVAL,
+    new_request_id, router, Limits, Probe, ReadinessSource, Relay, RelayOutcome, ServedUnder,
+    MEMORY_FLUSH_INTERVAL,
 };
 pub use portability::is_portable;
 pub use ratelimit::{

@@ -171,6 +171,8 @@ proxy accepts](#what-the-proxy-accepts) says.
 | Method | Path | Credential | Answer |
 | --- | --- | --- | --- |
 | HEAD | `/api/hello` | none | `200 OK` |
+| HEAD | `/api/ready` | none | `200` while the router loop, the ledger consumer and the store are alive, else `503` |
+| GET | `/api/ready` | none | the same status, with `{"ready": true}` or `{"ready": false, "dead": [...]}` |
 | POST | `/v1/messages` | router key | relayed to the selected account |
 | POST | `/v1/messages/count_tokens` | router key | relayed, same failover loop; travels as sent |
 | GET | `/v1/usage` | router key | that key's own usage for the last 24 hours and 7 days, JSON or HTML by `Accept` |
@@ -184,11 +186,13 @@ proxy accepts](#what-the-proxy-accepts) says.
 The query string of a request to either Messages route travels as the client sent it, `?beta=true` included; the router
 routes on the path alone.
 
-The client probes `/api/hello` before it sends anything, and ignores the answer. The two `/v1/models` routes
-answer the [models listing](#the-models-listing) below. Every refusal above, including the wrong-method and
-unknown-path answers, carries an Anthropic-shaped error body. The two keepalive companion routes are covered on
-the [Keepalive](keepalive.md) page; each session they report belongs to the key generation that registered it,
-so a key id created again reaches none of the sessions its previous holder left behind.
+The client probes `/api/hello` before it sends anything, and ignores the answer. `/api/ready` is the readiness answer
+behind `phoebis health` and the image's health check: the two differ when the router loop, the ledger consumer or the
+store died and the listener is still up, and `dead` names each one that died as `ledger`, `router` or `store`. The two
+`/v1/models` routes answer the [models listing](#the-models-listing) below. Every refusal above, including the
+wrong-method and unknown-path answers, carries an Anthropic-shaped error body. The two keepalive companion routes are
+covered on the [Keepalive](keepalive.md) page; each session they report belongs to the key generation that registered
+it, so a key id created again reaches none of the sessions its previous holder left behind.
 
 pool's members are unusable for the moment, and the answer when an account's authentication failure is the request's
 last word: the router never forwards an upstream `401`, and the answer names no account and no reason.

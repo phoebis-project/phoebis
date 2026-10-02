@@ -46,7 +46,8 @@ of the file, is on the [installation page](docs/site/installation.md).
 
 The same binary is published as a container image, `ghcr.io/daystrom-labs/phoebis`, for amd64 and arm64
 with every release; `deploy/compose.yaml` and `deploy/config.container.yaml` run it under bridge networking, and
-the image's `HEALTHCHECK` runs `phoebis health` ([how](docs/site/installation.md#run-the-container)).
+the image's `HEALTHCHECK` runs `phoebis health`, which reads not-ready when the router loop, the ledger consumer or the
+store is dead ([how](docs/site/installation.md#run-the-container)).
 
 ## Where things are
 
