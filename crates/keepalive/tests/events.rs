@@ -122,7 +122,7 @@ async fn query_events_match_the_contract() {
             && jiff::Timestamp::from_str(&ack.lease_expires)
                 .unwrap()
                 .as_millisecond()
-                == r.now() + 3_600_000,
+                == r.now() + r.lease_ms(),
         "{}",
         ack.lease_expires
     );
@@ -333,7 +333,7 @@ async fn registration_sequences_and_generations_follow_the_protocol() {
         jiff::Timestamp::from_str(&renewed.lease_expires)
             .unwrap()
             .as_millisecond(),
-        r.now() + 3_600_000
+        r.now() + r.lease_ms()
     );
     assert_eq!(r.agent("worker").state, AgentState::Parked);
     // The lease renews on a heartbeat or a same-instance session_start only; an event about an agent
@@ -358,7 +358,7 @@ async fn registration_sequences_and_generations_follow_the_protocol() {
         jiff::Timestamp::from_str(&reheartbeat.lease_expires)
             .unwrap()
             .as_millisecond(),
-        r.now() + 3_600_000
+        r.now() + r.lease_ms()
     );
     // Agents: a restart needs the released generation; activity and state need the current one.
     assert_eq!(
@@ -509,7 +509,6 @@ async fn sessions_are_scoped_to_the_key_and_bounded_process_wide() {
         limits: KeepaliveLimits {
             max_sessions: 2,
             max_agents: 3,
-            lease_seconds: 3_600,
             ..KeepaliveLimits::default()
         },
         ..RigSpec::default()
@@ -615,14 +614,7 @@ async fn a_request_of_a_later_generation_arms_nothing_on_the_previous_holders_se
 
 #[tokio::test]
 async fn a_lapsed_lease_marks_the_session_unattended_and_a_same_instance_start_re_adopts_it() {
-    let mut r = rig(RigSpec {
-        limits: KeepaliveLimits {
-            lease_seconds: 90,
-            ..KeepaliveLimits::default()
-        },
-        ..RigSpec::default()
-    })
-    .await;
+    let mut r = rig(RigSpec::default()).await;
     r.observe("main").await;
     let armed = r.engine.recipes();
     let reason = r.status("main").reason;

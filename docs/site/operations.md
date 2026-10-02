@@ -109,17 +109,17 @@ Every configuration block denies unknown keys, so a key the new build does not r
 
 ## Re-pinning the client build
 
-A "pinned" build is the one Claude Code release the router is measured against: `claude-code-2.1.269-linux-x64`, named by
-`compatibility.profile`. A profile is a fixed set of constants, the version and build tag, the two user agents, the
-Stainless headers, the three beta lists, the control-plane URLs and client id, and the TLS curves and cipher list,
-checked against the fixtures under `crates/profile/fixtures/`.
+A "pinned" build is the one Claude Code release the router is measured against: `claude-code-2.1.269-linux-x64`, the one profile
+this build carries, named by no key. A profile is a fixed set of constants, the version and build tag, the two user
+agents, the Stainless headers, the three beta lists, the control-plane URLs and client id, and the TLS curves and cipher
+list, checked against the fixtures under `crates/profile/fixtures/`.
 A newer client build is not relayed in its own shape automatically: headers travel as the
 client sends them, with the `anthropic-beta` line copied as sent and edited for three betas only: the OAuth beta,
 claimed for a subscription credential and stripped for an Anthropic key on every request that carries the line; the
 cache-diagnosis beta under `cache_diagnostics` (the compatibility option or the pool's own); and the extended-TTL beta
 the cache TTL rewrite adds or drops. The profile's beta lists record what the measured client sends, as the fixtures
-show, and the fields the router restores for a Claude Code request are the ones on the [client
-page](client.md#the-environment-block), not what a newer client might add.
+show, and the fields the router restores for a Claude Code request are the ones on the
+[client page](client.md#the-environment-block), not what a newer client might add.
 
 To re-pin the profile against a new build:
 
@@ -139,8 +139,8 @@ To re-pin the profile against a new build:
 4. Land the re-pin as a change to the repository: `python3 scripts/build-fixtures.py <output-dir>` writes the new
    fixtures; a new `Profile` value in `crates/profile/src/lib.rs` carries the new constants, and `by_name` learns
    its name; the tests in
-   the profile, relay, and router crates grade the relay against the new fixtures. Until that change lands,
-   `compatibility.profile` keeps naming the one profile this build carries.
+   the profile, relay, and router crates grade the relay against the new fixtures. Until that change lands, the router
+   is measured against the one profile this build carries.
 5. `scripts/capture-through-router.sh` captures what the router hands its own upstream from a real paired account
    and grades it with `--through-router`. Its header names the two router keys it needs, that the service must be
    stopped while it runs since it opens the same store the running service does, and that it shares its client

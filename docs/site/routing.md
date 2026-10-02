@@ -7,26 +7,27 @@ itself, and the answers a client gets when nothing can serve it.
 
 ## Catalogs
 
-An account's model list is read live from `GET /v1/models` on `api.anthropic.com` with the account's own credential,
-at startup, on the refresh interval, and on demand, and held for `routing.catalog_cache_seconds` (sixty by default)
-from the moment the answer arrives; the Accounts view's catalog popup, the rule editors' suggestions, and the
-proxy's [models listing](client.md#the-models-listing) all read that cache, and `GET /admin/accounts/{id}/catalog`
-answers it with `?refresh=1` to read again. Nothing about routing depends on it: every enabled member of a pool is a
-candidate for any model the rules allow, and an upstream that does not serve a model to an account says so with a `404`
-the router records as a rejection ([cooldowns](#cooldowns-and-failover)). An account whose fetch failed contributes
-nothing to a listing until the next fetch, and the popup shows the error.
+An account's model list is read live from `GET /v1/models` on `api.anthropic.com` with the account's own credential, at
+startup, on the refresh interval, and on demand. The listing is held until the scheduled refresh
+(`routing.catalog_refresh_seconds`) or an eviction replaces it, and a failed fetch for sixty seconds from the moment its
+answer arrives; the Accounts view's catalog popup, the rule editors' suggestions, and the proxy's
+[models listing](client.md#the-models-listing) all read that cache, and `GET /admin/accounts/{id}/catalog` answers it
+with `?refresh=1` to read again. Nothing about routing depends on it: every enabled member of a pool is a candidate for
+any model the rules allow, and an upstream that does not serve a model to an account says so with a `404` the router
+records as a rejection ([cooldowns](#cooldowns-and-failover)). An account whose fetch failed contributes nothing to a
+listing until the next fetch, and the popup shows the error.
 
 The catalog lists some models under a dated id (`claude-sonnet-4-5-20250929`) while Claude Code asks for the undated one
 (`claude-sonnet-4-5`). An undated spelling is an alias for the newest dated snapshot the listing holds, so the router
 derives the dated id from the listings it caches: the newest `<spelling>-YYYYMMDD` entry across every enabled account,
 else the spelling itself (a dateless id such as `claude-sonnet-4-6` is its own snapshot). The listings are fetched at
 startup for every enabled account before the proxy listener accepts requests (waiting `routing.startup_fetch_seconds`,
-five by default, at most; an account still fetching then finishes in the background), and a request's model is resolved
-by a lookup in that cache, never by a request of its own. The dated id is the canonical name the rules, the ledger, the
-pricing, the pins, and the cooldowns use for that spelling from the session's first request; the body toward the
-upstream keeps the client's spelling. A resolution is kept across restarts: the first request after a restart carries
-the dated id from the stored mapping even before the listings arrive, and only a fresh installation that reaches no
-listing at startup runs requests under the spelling, until the listing arrives. A listing that later lacks the dated
+thirty by default, at most; an account still fetching then finishes in the background), and a request's model is
+resolved by a lookup in that cache, never by a request of its own. The dated id is the canonical name the rules, the
+ledger, the pricing, the pins, and the cooldowns use for that spelling from the session's first request; the body toward
+the upstream keeps the client's spelling. A resolution is kept across restarts: the first request after a restart
+carries the dated id from the stored mapping even before the listings arrive, and only a fresh installation that reaches
+no listing at startup runs requests under the spelling, until the listing arrives. A listing that later lacks the dated
 entry never takes a resolution back.
 
 The listings are refreshed every `routing.catalog_refresh_seconds` (six hours by default), once more within a minute of
@@ -82,9 +83,8 @@ Every field, in the order the request body takes them:
 | `wind_down_minutes` | `30` | 0 to 10,080 (a week) |
 | `members` | none | create only; replaced wholesale by `PUT /admin/pools/{id}/members` |
 
-`cache_diagnostics` forces the cache-diagnosis beta and the `previous_message_id` member toward
-`api.anthropic.com` for this pool's requests, whatever the [bootstrap option](installation.md#compatibility)
-says; `null` inherits it.
+`cache_diagnostics`, the pool dialog's Cache diagnostics switch, forces the cache-diagnosis beta and the
+`previous_message_id` member toward `api.anthropic.com` for this pool's requests; `null` reads off.
 
 `auto_mode_server` is whether the client's server-side auto mode checks travel to the upstream. On, the default,
 the router passes the request for a check and its verdict through unchanged; off, it drops the request so the

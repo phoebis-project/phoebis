@@ -14,7 +14,7 @@ fn config_file(dir: &Path, name: &str, proxy: SocketAddr) -> PathBuf {
     )
     .unwrap();
     let yaml = format!(
-        "admin:\n  listen: 127.0.0.1:0\n  plain_http: true\n  secret_env: TEST_HEALTH_ADMIN\ncompatibility:\n  profile: claude-code-2.1.269-linux-x64\nproxy:\n  listen: {proxy}\nstorage:\n  encryption_key_file: {}\n  path: {}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
+        "admin:\n  listen: 127.0.0.1:0\n  plain_http: true\n  secret_env: TEST_HEALTH_ADMIN\nproxy:\n  listen: {proxy}\nstorage:\n  encryption_key_file: {}\n  path: {}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
         key.display(),
         dir.join("router.sqlite").display()
     );

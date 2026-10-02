@@ -840,7 +840,6 @@ async fn app_with_webhook_policy(
         router_handle.clone(),
         clock.clone(),
         DISCOVERY_TIMEOUT,
-        Duration::from_secs(60),
         Duration::from_secs(5),
     ));
     let bus = Bus::new();
@@ -891,6 +890,7 @@ async fn app_with_webhook_policy(
         ledger: ledger.clone(),
         lifecycle: None,
         limits: KeepaliveLimits::default(),
+        max_request_bytes: 32 << 20,
         metrics: metrics.clone(),
         pricing: pricing.clone(),
         relay: relay.clone(),
@@ -928,8 +928,6 @@ async fn app_with_webhook_policy(
         admin_listen: "test".into(),
         admin_origin: origin.clone(),
         body_capture_max_hours: BODY_CAPTURE_MAX_HOURS,
-        cache_diagnostics: false,
-        catalog_cache_seconds: 60,
         catalog_refresh_seconds: 21_600,
         cooldown_fallback_seconds: 60,
         keepalive: KeepaliveLimits::default(),
@@ -940,7 +938,6 @@ async fn app_with_webhook_policy(
         pricing_path: None,
         profile: p.name.into(),
         proxy_listen: "test".into(),
-        quota_sample_retention_days: 30,
         retention_days: 90,
         rollup_retention_days: 400,
         session_expire_after_seconds: 86_400,

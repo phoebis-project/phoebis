@@ -170,17 +170,13 @@ pub struct ServedUnder {
 
 /// Marks a request the keepalive engine sent on a session's behalf, and names the key it runs under. The
 /// engine never holds a key's secret (the store keeps a digest), so a probe authenticates by id; the extension
-/// can only be set in process, so the by-id path is not reachable from the socket. `allow_oauth` is the
-/// operator's statement that the expiry-crossing experiment passed; without it an `oauth` account serves no
-/// probe on any attempt, even one a registry write re-routed mid-request (`probe_eligible` holds the rule
-/// against the account actually selected, not just the list admission started with).
+/// can only be set in process, so the by-id path is not reachable from the socket.
 #[derive(Clone, Debug)]
 pub struct Probe {
     pub key_id: String,
     /// The generation of the key the recipe was retained under; the relay refuses a probe whose key now carries
     /// another one, so no probe crosses into a replacement key's pool.
     pub key_generation: i64,
-    pub allow_oauth: bool,
 }
 
 pub struct Relay {
@@ -733,14 +729,6 @@ impl From<AccessToken> for Credential {
     }
 }
 
-/// Whether an account may serve a probe: `api_key` always, and `oauth` only when the operator's `allow_oauth`
-/// cleared it. Checked before the failover loop against admission's candidate list, and again after every
-/// selection, because a registry write landing between admission and a select bumps the revision and the
-/// router recomputes candidates from its own snapshot, which does not carry this restriction.
-fn probe_eligible(account: &AccountRow, allow_oauth: bool) -> bool {
-    account.kind == AccountKind::ApiKey || allow_oauth
-}
-
 impl Relay {
     async fn handle(&self, request: Request) -> Response {
         let received_at = (self.clock)();
@@ -1141,20 +1129,6 @@ impl Relay {
                     .await
             }
         };
-        // Narrows what a probe starts the loop with; a registry write can move the revision before any
-        // attempt, and then the router recomputes candidates from its own snapshot without this filter, so
-        // `probe_eligible` runs again on every selection below to hold the same rule against the chosen row.
-        let candidates = match &probe {
-            None => candidates,
-            Some(probe) => candidates
-                .into_iter()
-                .filter(|c| {
-                    snapshot
-                        .account(&c.account_id)
-                        .is_some_and(|account| probe_eligible(account, probe.allow_oauth))
-                })
-                .collect(),
-        };
         // A separate field from `restore`: every client inference request of a conversation gets one,
         // because the diagnostics member the option forces names the previous answer in
         // that conversation whoever sent it. A probe reads under the same key, since it replays the session's own
@@ -1426,14 +1400,6 @@ impl Relay {
                 }
             };
             attempted.push(selection.account.id.clone());
-            // A reload between admission and this select recomputes candidates from the current registry, past
-            // the filter above: re-checked here against the row the router actually chose, so a probe still
-            // never dispatches to an account the operator has not cleared for it.
-            if let Some(probe) = &probe {
-                if !probe_eligible(&selection.account, probe.allow_oauth) {
-                    continue;
-                }
-            }
             dialed = true;
             match self
                 .dispatch_to(

@@ -548,7 +548,6 @@ async fn nothing_is_restored_for_a_probe_turn() {
     let probe = phoebis_relay::Probe {
         key_id: "desktop".into(),
         key_generation: h.store.api_key("desktop").unwrap().unwrap().created_at,
-        allow_oauth: true,
     };
     let resp = h.relay.probe(probe, cli_request("s-p", None, None)).await;
     assert_eq!(resp.status(), 200);

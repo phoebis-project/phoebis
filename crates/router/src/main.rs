@@ -42,37 +42,31 @@ fn main() -> anyhow::Result<()> {
             println!("proxy listens on {}", config.proxy.listen);
             println!("admin listens on {}", config.admin.listen);
             println!("metrics listens on {}", config.stats.metrics_listen);
-            println!("profile {}", config.compatibility.profile);
             println!(
-                "routing: max_attempts {}, cooldown_fallback {}s, model_rejection {}s, catalog cache {}s, \
-                 catalog refresh {}s, startup fetch {}s",
+                "profile {}",
+                phoebis_profile::claude_code_2_1_269_linux_x64().name
+            );
+            println!(
+                "routing: max_attempts {}, cooldown_fallback {}s, model_rejection {}s, catalog refresh {}s, \
+                 startup fetch {}s",
                 config.routing.max_attempts,
                 config.routing.cooldown_fallback_seconds,
                 config.routing.model_rejection_seconds,
-                config.routing.catalog_cache_seconds,
                 config.routing.catalog_refresh_seconds,
                 config.routing.startup_fetch_seconds
             );
             println!("ledger at {}", config.stats.ledger_path.display());
             let days = |n: u32| if n == 0 { "forever".to_string() } else { format!("{n} days") };
             println!(
-                "retention {}, rollups {}, samples {} days",
+                "retention {}, rollups {}",
                 days(config.stats.retention_days),
-                days(config.stats.rollup_retention_days),
-                config.quota.sample_retention_days
+                days(config.stats.rollup_retention_days)
             );
             println!(
-                "keepalive: lease {}s, {} sessions, {} agents, {} workers, {} MiB retained, oauth prewarm {}",
-                config.keepalive.lease_seconds,
+                "keepalive: {} sessions, {} agents, {} MiB retained",
                 config.keepalive.max_sessions,
                 config.keepalive.max_agents,
-                config.keepalive.max_workers,
-                config.keepalive.max_retained_bytes >> 20,
-                if config.keepalive.oauth_prewarm_verified {
-                    "verified"
-                } else {
-                    "unverified"
-                }
+                config.keepalive.max_retained_bytes >> 20
             );
             for warning in phoebis_store::permissions::check_private_file(&config.storage.encryption_key_file, 0o600) {
                 println!("warning: {warning}");

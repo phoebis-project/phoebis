@@ -151,12 +151,11 @@ so it is safe to run against a production file while the router is up. It prints
 2. `proxy listens on {config.proxy.listen}`
 3. `admin listens on {config.admin.listen}`
 4. `metrics listens on {config.stats.metrics_listen}`
-5. `profile {config.compatibility.profile}`
-6. `routing: max_attempts {n}, cooldown_fallback {n}s, model_rejection {n}s, catalog cache {n}s`
+5. `profile {the build's profile}`
+6. `routing: max_attempts {n}, cooldown_fallback {n}s, model_rejection {n}s, catalog refresh {n}s, startup fetch {n}s`
 7. `ledger at {config.stats.ledger_path}`
-8. `retention {n days|forever}, rollups {n days|forever}, samples {n} days`
-9. `keepalive: lease {n}s, {n} sessions, {n} agents, {n} workers, {n} MiB retained, oauth prewarm
-   {verified|unverified}`
+8. `retention {n days|forever}, rollups {n days|forever}`
+9. `keepalive: {n} sessions, {n} agents, {n} MiB retained`
 
 Further warning lines name a storage key file, data directory or database whose mode or owner is wider than the router
 expects; the router starts either way and logs the same warnings.
@@ -207,38 +206,25 @@ admin:
   plain_http: false
   secret_env: PHOEBIS_ADMIN_SECRET
   viewer_secret_env: PHOEBIS_VIEWER_SECRET
-compatibility:
-  # Opt-in: forces the cache-diagnosis beta and a previous_message_id toward api.anthropic.com for every client.
-  cache_diagnostics: false
-  profile: claude-code-2.1.269-linux-x64
 keepalive:
   # Process-wide limits only. Whether a pool's sessions are probed, and the probe tuning, are pool settings in
-  # the registry; probes on oauth accounts stay off until the expiry-crossing experiment has passed for the
-  # combinations in use and oauth_prewarm_verified is set.
-  lease_seconds: 90
+  # the registry. The largest retained recipe follows the relay's 32 MiB request body bound.
   max_agents: 1024
-  max_request_bytes: 8388608
   max_retained_bytes: 268435456
   max_sessions: 128
-  max_workers: 4
-  oauth_prewarm_verified: false
 proxy:
   listen: 127.0.0.1:8317
-quota:
-  # How long quota and extra-usage samples are kept.
-  sample_retention_days: 30
 routing:
-  # How long an account's model list is held before it is read again for the console and the models listing.
-  catalog_cache_seconds: 60
   # How often every enabled account's model listing is read again.
   catalog_refresh_seconds: 21600
+  # How long an account is cooled when the upstream rejected it without saying for how long, 1 to 3600.
   cooldown_fallback_seconds: 60
   # Upstream attempts per client request across distinct accounts, 1 to 8.
   max_attempts: 3
   # How long an account whose upstream answered 404 for a model is skipped for that model.
   model_rejection_seconds: 3600
   # How long the proxy listener waits at startup for the model listings and the usage snapshots.
-  startup_fetch_seconds: 5
+  startup_fetch_seconds: 30
 sessions:
   expire_after_seconds: 86400
   # The relay's memory of a session's previous request id and prompt id: entries held in process, how long one
@@ -261,7 +247,13 @@ stats:
 storage:
   encryption_key_file: /run/secrets/router-storage-key
   path: ./data/router.sqlite
+upstream:
+  # Both unset by default: an extra trust anchor for a lab upstream, and one address every host resolves to.
+  # extra_ca_pem: ./lab-ca.pem
+  # resolve_override: 127.0.0.1:8443
 usage:
+  # Both keys are optional: how long a cached usage snapshot answers a manual refresh, and how many accounts'
+  # usage and profile fetches run at once.
   cache_ttl_seconds: 60
   refresh_concurrency: 2
 ```
@@ -299,26 +291,6 @@ Refused with:
 - `viewer_secret_env`: the same message, plus `{first} and {second} resolve to the same secret` when it equals
   the admin secret
 
-### compatibility
-
-Required; `profile` is required and `cache_diagnostics` defaults to `false`. A key this build does not carry under
-`compatibility` is refused at load, as under every other block.
-
-| Key | Accepts |
-| --- | --- |
-| `cache_diagnostics` | `true` or `false` (default) |
-| `profile` | `claude-code-2.1.269-linux-x64`, the one profile this build carries |
-
-Refused with:
-
-- `profile`: `compatibility.profile {name} is not a profile this build carries`
-
-With `cache_diagnostics` on, every request toward `api.anthropic.com` carries the `cache-diagnosis-2026-04-07` beta and
-a `diagnostics.previous_message_id` naming the previous answer on the same key, conversation, agent, model, and
-account, so the response's cache-miss reason lands in the request log. A pool overrides it with its own
-`cache_diagnostics`. The id follows the session memory: it survives a restart through the registry copy and starts at
-`null` on an account the conversation moved to.
-
 ### keepalive
 
 Defaults whole. These are process-wide limits read once at start, so a change takes a restart; the per-pool
@@ -327,34 +299,16 @@ between {min} and {max}, not {value}`.
 
 | Key | Default | Accepts |
 | --- | --- | --- |
-| `lease_seconds` | `90` | 10 to 3600 |
 | `max_agents` | `1024` | 1 to 16384 |
-| `max_request_bytes` | `8388608` | 1024 to 8388608 |
-| `max_retained_bytes` | `268435456` | 1024 to 536870912, and at least `max_request_bytes` |
+| `max_retained_bytes` | `268435456` | 33554432 (the relay's request body bound, which a recipe follows) to 536870912 |
 | `max_sessions` | `128` | 1 to 4096 |
-| `max_workers` | `4` | 1 to 64 |
-| `oauth_prewarm_verified` | `false` | `true` once the expiry-crossing experiment has passed for combinations in use |
 
-`max_retained_bytes` below `max_request_bytes` refuses with `keepalive.max_retained_bytes must be at least
-keepalive.max_request_bytes` instead of the range message. `max_sessions` counts live sessions only: an ended
-session frees its slot at once, though its tombstone stays until the session expiry sweeps it. Until
-`oauth_prewarm_verified` is set, no probe runs on an `oauth` account.
+`max_sessions` counts live sessions only: an ended session frees its slot at once, though its tombstone stays until
+the session expiry sweeps it. The companion's lease is 90 seconds and four probes run at once; neither is a key.
 
 ### proxy
 
 Required: `listen`, a socket address, refused with a YAML error.
-
-### quota
-
-Defaults whole. A key this build does not carry under `quota` is refused at load, as under every other block.
-
-| Key | Default | Accepts |
-| --- | --- | --- |
-| `sample_retention_days` | `30` | at least 1 |
-
-Refused with:
-
-- `sample_retention_days`: `quota.sample_retention_days must be at least 1`
 
 ### routing
 
@@ -362,18 +316,16 @@ Defaults whole.
 
 | Key | Default | Accepts |
 | --- | --- | --- |
-| `catalog_cache_seconds` | `60` | 1 to 86400 |
 | `catalog_refresh_seconds` | `21600` | 60 to 604800 |
-| `cooldown_fallback_seconds` | `60` | any number of seconds |
+| `cooldown_fallback_seconds` | `60` | 1 to 3600 |
 | `max_attempts` | `3` | 1 to 8 |
 | `model_rejection_seconds` | `3600` | 1 to 604800 |
-| `startup_fetch_seconds` | `5` | 1 to 60 |
+| `startup_fetch_seconds` | `30` | 1 to 60 |
 
 Refused with:
 
-- `catalog_cache_seconds`: `routing.catalog_cache_seconds must be between 1 and 86400, not {value}`
 - `catalog_refresh_seconds`: `routing.catalog_refresh_seconds must be between 60 and 604800, not {value}`
-- `cooldown_fallback_seconds`: nothing
+- `cooldown_fallback_seconds`: `routing.cooldown_fallback_seconds must be between 1 and 3600, not {value}`
 - `max_attempts`: `routing.max_attempts must be between 1 and 8, not {value}`
 - `model_rejection_seconds`: `routing.model_rejection_seconds must be between 1 and 604800, not {value}`
 - `startup_fetch_seconds`: `routing.startup_fetch_seconds must be between 1 and 60, not {value}`
@@ -409,7 +361,7 @@ Defaults whole.
 | `ledger_path` | `./data/ledger.sqlite` | a file path with a parent directory, not the same file as `storage.path` |
 | `metrics_listen` | `127.0.0.1:9464` | a socket address |
 | `pricing_path` | `./pricing.yaml` | a path; a missing file is fine |
-| `retention_days` | `90` | 0 for forever, otherwise any number of days |
+| `retention_days` | `90` | 0 for forever, otherwise any number of days; also covers the quota and extra-usage samples |
 | `rollup_retention_days` | `400` | 0 for forever, otherwise at least `retention_days` |
 
 Refused with:
@@ -448,18 +400,27 @@ Defaults whole and is rarely set.
 
 ### usage
 
-Required: `cache_ttl_seconds` is how long a cached usage snapshot is served before a manual refresh reads the
-endpoint again; the poll reads every five minutes whatever the cache holds; `refresh_concurrency` is how many
-accounts' usage and profile fetches may run at once, at least 1, refused with
-`usage.refresh_concurrency must be at least 1`.
+Defaults whole. `cache_ttl_seconds` is how long a cached usage snapshot answers a manual refresh before the endpoint is
+read again; the poll reads every five minutes whatever the cache holds. `refresh_concurrency` is how many accounts'
+usage and profile fetches may run at once.
 
-The checks above run in a fixed order at load, not block by block: `compatibility.profile`, then
-`admin`'s loopback-or-origin rule, then `usage.refresh_concurrency`, `storage.path`, `routing.max_attempts`, the
-`keepalive` bounds, `routing.catalog_cache_seconds`, `routing.startup_fetch_seconds`,
-`routing.catalog_refresh_seconds`, the four `sessions` keys,
-`stats.body_capture_max_hours`, `stats.rollup_retention_days`, `quota.sample_retention_days`, `stats.ledger_path`,
-and last whether `stats.ledger_path` and `storage.path` name the same file. The first failure is the one reported,
-so fix the file top to bottom to find the next one.
+| Key | Default | Accepts |
+| --- | --- | --- |
+| `cache_ttl_seconds` | `60` | 1 to 3600 |
+| `refresh_concurrency` | `2` | 1 to 16 |
+
+Refused with:
+
+- `cache_ttl_seconds`: `usage.cache_ttl_seconds must be between 1 and 3600, not {value}`
+- `refresh_concurrency`: `usage.refresh_concurrency must be between 1 and 16, not {value}`
+
+The checks above run in a fixed order at load, not block by block: `admin`'s loopback-or-origin rule, then
+`usage.cache_ttl_seconds`, `usage.refresh_concurrency`, `storage.path`, `routing.max_attempts`,
+`routing.model_rejection_seconds`, `routing.cooldown_fallback_seconds`, the `keepalive` bounds,
+`routing.startup_fetch_seconds`, `routing.catalog_refresh_seconds`, the four `sessions` keys,
+`stats.body_capture_max_hours`, `stats.rollup_retention_days`, `stats.ledger_path`, and last whether
+`stats.ledger_path` and `storage.path` name the same file. The first failure is the one reported, so fix the file top
+to bottom to find the next one.
 
 `stats.ledger_path` and `storage.path` cannot name the same file because two schemas in one file open quietly
 and lose the ledger's columns: the ledger's tables would open inside the registry file, read its schema

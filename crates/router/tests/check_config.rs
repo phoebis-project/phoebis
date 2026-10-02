@@ -1,5 +1,5 @@
-//! `phoebis check-config` warns about a wide key file mode, refuses a file that sets an unknown key, names the routing
-//! keys in its summary, and passes every shipped deploy config.
+//! `phoebis check-config` warns about a wide key file mode, refuses a file that sets an unknown or removed key,
+//! names the routing keys in its summary, and passes every shipped deploy config.
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -14,9 +14,8 @@ fn config_file(dir: &Path, name: &str, extra: &str) -> PathBuf {
     .unwrap();
     let yaml = format!(
         "admin:\n  listen: 127.0.0.1:0\n  plain_http: true\n  secret_env: TEST_CHECK_CONFIG_ADMIN\n\
-         compatibility:\n  profile: claude-code-2.1.269-linux-x64\nproxy:\n  listen: 127.0.0.1:0\n\
-         storage:\n  encryption_key_file: {}\n  path: {}\nusage:\n  cache_ttl_seconds: 60\n  \
-         refresh_concurrency: 2\n{extra}",
+         proxy:\n  listen: 127.0.0.1:0\n\
+         storage:\n  encryption_key_file: {}\n  path: {}\n{extra}",
         key.display(),
         dir.join("router.sqlite").display()
     );
@@ -75,9 +74,39 @@ fn the_summary_names_the_routing_keys() {
         String::from_utf8_lossy(&out.stderr)
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(
-        stdout.contains("catalog refresh 21600s, startup fetch 5s"),
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        lines.get(4..9),
+        Some(
+            &[
+                "profile claude-code-2.1.269-linux-x64",
+                "routing: max_attempts 3, cooldown_fallback 60s, model_rejection 3600s, catalog refresh 21600s, \
+                 startup fetch 30s",
+                "ledger at ./data/ledger.sqlite",
+                "retention 90 days, rollups 400 days",
+                "keepalive: 128 sessions, 1024 agents, 256 MiB retained",
+            ][..]
+        ),
         "{stdout}"
+    );
+}
+
+const REMOVED_KEY: &str = "routing:\n  catalog_cache_seconds: 60\n"; // removed name
+
+#[test]
+fn a_removed_key_fails_check_config_as_invalid_yaml() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_file(dir.path(), "removed-key", REMOVED_KEY);
+    let out = phoebis()
+        .args(["check-config", "--config"])
+        .arg(&config)
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("the configuration is not valid YAML") && stderr.contains("unknown field"),
+        "{stderr}"
     );
 }
 

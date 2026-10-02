@@ -57,19 +57,28 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
     assert_eq!(
         (
             settings["retention"]["ledger_days"].as_u64(),
-            settings["retention"]["quota_samples_days"].as_u64(),
-            settings["retention"]["body_capture_max_hours"].as_u64()
+            settings["retention"]["body_capture_max_hours"].as_u64(),
+            settings["retention"]
+                .as_object()
+                .map(|retention| retention.len())
         ),
-        (Some(90), Some(30), Some(72))
+        (Some(90), Some(72), Some(3)),
+        "the samples follow the ledger's own window, so retention has three members"
+    );
+    assert!(
+        settings["compatibility"].is_null() && settings["quota"].is_null(),
+        "neither removed block is answered: {settings}"
     );
     assert_eq!(
         (
-            settings["quota"]["sample_retention_days"].as_u64(),
-            settings["quota"].as_object().map(|quota| quota.len()),
+            settings["routing"].as_object().map(|routing| routing.len()),
+            settings["keepalive"]
+                .as_object()
+                .map(|keepalive| keepalive.len()),
             settings["sessions"]["expire_after_seconds"].as_u64(),
             settings["listeners"]["metrics"].as_str()
         ),
-        (Some(30), Some(1), Some(86_400), Some("127.0.0.1:9464"))
+        (Some(5), Some(3), Some(86_400), Some("127.0.0.1:9464"))
     );
     assert_eq!(settings["pricing"]["version"], "2026-10-01");
     assert_eq!(settings["pricing"]["source"], "shipped");

@@ -3,7 +3,7 @@
 //! time and the idle limits come from the pool's tuning.
 mod common;
 use common::*;
-use phoebis_keepalive::{Event, KeepaliveLimits, KeepalivePolicy, Reason};
+use phoebis_keepalive::{Event, KeepalivePolicy, Reason, LEASE_MS};
 use phoebis_ledger::{
     hour_of, member_spends, read_rollups, AttemptRecord, BudgetedMember, PriceTable, Record,
     RequestRecord,
@@ -1250,14 +1250,14 @@ async fn the_retention_rules_reach_a_paused_recipe() {
     // The idle limit settles one too, once the companion has gone silent for longer than the limit.
     let mut r = armed(RigSpec {
         accounts: vec![api_key("a", A, 0)],
-        limits: KeepaliveLimits {
-            lease_seconds: 10,
-            ..KeepaliveLimits::default()
-        },
         ..RigSpec::default()
     })
     .await;
     r.advance(270_000);
+    assert!(
+        r.now() - NOW > LEASE_MS,
+        "the first step outlasts the session's lease"
+    );
     r.step().await;
     assert_eq!(r.status("main").probes, 1, "one probe to settle as wasted");
     r.up.push_credential_rule(

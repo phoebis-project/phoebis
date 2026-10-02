@@ -530,13 +530,7 @@ async fn the_sessions_view_carries_the_companion_and_the_recipes_and_release_dis
         403
     );
     let settings = json(get(&parts.app, "/admin/settings", Some(&viewer)).await).await;
-    assert_eq!(
-        (
-            settings["keepalive"]["lease_seconds"].as_u64(),
-            settings["keepalive"]["oauth_prewarm_verified"].as_bool()
-        ),
-        (Some(90), Some(false))
-    );
+    assert_eq!(settings["keepalive"]["max_sessions"].as_u64(), Some(128));
     let system = json(get(&parts.app, "/admin/system", Some(&viewer)).await).await;
     assert_eq!(
         (

@@ -58,7 +58,7 @@ const ADMIN_MAX_CONNECTIONS: usize = 256;
 const METRICS_MAX_CONNECTIONS: usize = 64;
 
 /// Well past the largest measured request; a body beyond it is refused rather than buffered.
-const MAX_REQUEST_BYTES: usize = 32 << 20;
+pub(crate) const MAX_REQUEST_BYTES: usize = 32 << 20;
 
 /// An upstream connection idle for longer than this is likely to have been closed at the other end already,
 /// and reusing it costs a failed write and a retry.
@@ -85,12 +85,7 @@ const SESSION_IDLE: Duration = Duration::from_secs(900);
 /// until `shutdown` resolves, then drains.
 pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::Result<()> {
     init_tracing();
-    let profile = phoebis_profile::by_name(&config.compatibility.profile).ok_or_else(|| {
-        anyhow!(
-            "compatibility.profile {} is not a profile this build carries",
-            config.compatibility.profile
-        )
-    })?;
+    let profile = phoebis_profile::claude_code_2_1_269_linux_x64();
 
     let key = StorageKey::from_file(&config.storage.encryption_key_file).with_context(|| {
         format!(
@@ -217,7 +212,6 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         LedgerConfig {
             retention_days: config.stats.retention_days,
             rollup_retention_days: config.stats.rollup_retention_days,
-            sample_retention_days: config.quota.sample_retention_days,
             purge_interval: Duration::from_secs(3_600),
             event_poll: Duration::from_secs(5),
             expire_interval: Duration::from_secs(60),
@@ -232,7 +226,6 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         router_task.clone(),
         clock.clone(),
         DISCOVERY_TIMEOUT,
-        Duration::from_secs(config.routing.catalog_cache_seconds),
         Duration::from_secs(config.routing.startup_fetch_seconds),
     ));
     let relay = Arc::new(
@@ -256,7 +249,6 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             catalog.clone(),
         )
         .with_bus(bus.clone())
-        .with_cache_diagnostics(config.compatibility.cache_diagnostics)
         .with_session_memory(
             config.sessions.memory_cap,
             Duration::from_secs(config.sessions.memory_idle_seconds),
@@ -279,6 +271,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         ledger: ledger.clone(),
         lifecycle: Some(lifecycle_tx),
         limits: config.keepalive.clone(),
+        max_request_bytes: MAX_REQUEST_BYTES,
         metrics: metrics.clone(),
         pricing: pricing.clone(),
         relay: relay.clone(),
@@ -359,8 +352,6 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             admin_listen: config.admin.listen.to_string(),
             admin_origin: config.admin.origin.clone(),
             body_capture_max_hours: config.stats.body_capture_max_hours,
-            cache_diagnostics: config.compatibility.cache_diagnostics,
-            catalog_cache_seconds: config.routing.catalog_cache_seconds,
             catalog_refresh_seconds: config.routing.catalog_refresh_seconds,
             cooldown_fallback_seconds: config.routing.cooldown_fallback_seconds,
             keepalive: config.keepalive.clone(),
@@ -373,9 +364,8 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
                 .pricing_path
                 .as_ref()
                 .map(|p| p.display().to_string()),
-            profile: config.compatibility.profile.clone(),
+            profile: profile.name.to_string(),
             proxy_listen: config.proxy.listen.to_string(),
-            quota_sample_retention_days: config.quota.sample_retention_days,
             retention_days: config.stats.retention_days,
             rollup_retention_days: config.stats.rollup_retention_days,
             session_expire_after_seconds: config.sessions.expire_after_seconds,

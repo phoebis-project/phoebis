@@ -1,4 +1,4 @@
-//! The live model catalog: a per-account cache fetched on demand and held for a short window, and the
+//! The live model catalog: a per-account listing fetched on demand and held until the next read, and the
 //! published map that folds an undated spelling to the newest dated id the enabled accounts' listings carry.
 
 use std::collections::{HashMap, HashSet};
@@ -34,8 +34,11 @@ pub const MAX_BODY: usize = 4 * 1024 * 1024;
 pub const REFRESH_TICK: Duration = Duration::from_secs(60);
 /// The least time between two served-model refreshes of one account.
 pub const SERVED_REFRESH_INTERVAL_MS: i64 = 60_000;
-/// The retry backoff's ceiling, and the clamp on its first sleep.
+/// The retry backoff's ceiling.
 const ONE_HOUR: Duration = Duration::from_secs(3_600);
+/// How long a slot that holds a failed read answers before the account is read again on demand; also the
+/// retry's first sleep. A listing is held until the scheduled refresh or an eviction replaces it.
+pub const ERROR_HOLD: Duration = Duration::from_secs(60);
 
 /// The dated id `spelling` resolves to under `listing`: the newest `<spelling>-YYYYMMDD` entry, or `None` when
 /// the listing holds no dated entry for it (a dateless id of the 4.6 generation and later is its own snapshot).
@@ -149,7 +152,6 @@ pub struct CatalogService {
     fills: tokio::sync::Mutex<HashMap<SlotKey, Arc<tokio::sync::Mutex<()>>>>,
     store: Arc<Store>,
     timeout: Duration,
-    window: Duration,
     /// Spelling to the dated id the router has acknowledged; only ever grown or moved to a strictly newer
     /// snapshot, never shrunk.
     published: Mutex<HashMap<String, String>>,
@@ -196,7 +198,6 @@ impl CatalogService {
         router: RouterHandle,
         clock: Clock,
         timeout: Duration,
-        window: Duration,
         startup_bound: Duration,
     ) -> CatalogService {
         // A read failure here leaves `published` empty rather than failing construction: the router's own
@@ -222,7 +223,6 @@ impl CatalogService {
             fills: tokio::sync::Mutex::new(HashMap::new()),
             store,
             timeout,
-            window,
             published: Mutex::new(published),
             listed: Mutex::new(HashSet::new()),
             publishing: tokio::sync::Mutex::new(()),
@@ -263,12 +263,12 @@ impl CatalogService {
         }
     }
 
-    /// The account's entry when younger than the window, else one fill (coalesced per account, and dropped
-    /// unstored when `evict` ran under it) whose answer, rows or an error, is stored and returned; a fill that
-    /// lands rows also derives and publishes the union's resolutions before the fetch is counted done. The
-    /// publication itself runs on a tracked task: a caller whose own future is dropped mid-wait (the three
-    /// HTTP handlers below, on a client disconnect) leaves the publication to finish rather than abandoning it
-    /// mid-way.
+    /// The account's stored listing, or its failed read while younger than `ERROR_HOLD`, else one fill
+    /// (coalesced per account, and dropped unstored when `evict` ran under it) whose answer, rows or an error,
+    /// is stored and returned; a fill that lands rows also derives and publishes the union's resolutions before
+    /// the fetch is counted done. The publication itself runs on a tracked task: a caller whose own future is
+    /// dropped mid-wait (the three HTTP handlers below, on a client disconnect) leaves the publication to
+    /// finish rather than abandoning it mid-way.
     pub async fn fetch(self: &Arc<Self>, account: &AccountRow) -> Catalog {
         let key = SlotKey {
             account_id: account.id.clone(),
@@ -302,8 +302,8 @@ impl CatalogService {
         // leaving mid-fill never strands a later miss on the full wait.
         let _lower_on_drop = InFlightGuard(self);
         let discovered = self.discover(account).await;
-        // The window opens when the answer is in hand: dated from before a discovery slower than the window,
-        // the slot would be stale on commit and every caller waiting on the fill lock would discover again.
+        // The hold opens when the answer is in hand: dated from before a discovery slower than `ERROR_HOLD`, a
+        // failed slot would be stale on commit and every caller waiting on the fill lock would discover again.
         let fetched_at = (self.clock)();
         let catalog = match discovered {
             Ok(discovered) => Catalog {
@@ -370,10 +370,9 @@ impl CatalogService {
     /// service's clock; the handle ends with the service. Accounts refresh one after another, a known bound: a
     /// slow upstream stretches the sweep by its own round trips, and nothing shrinks it meanwhile, since a
     /// published spelling never moves back to an older snapshot. A due account with nothing already filling it
-    /// is read through `refresh` (the listing invalidated, then fetched), since the cache window (`routing.catalog_cache_seconds`,
-    /// up to a day) can outlast `every` and a plain fetch would answer from the cache without a request; a due
-    /// account with a fill already in flight is skipped, since that fill's own landing is a fresher read than
-    /// this tick could force.
+    /// is read through `refresh` (the listing invalidated, then fetched), since a plain fetch would answer from
+    /// the held listing without a request; a due account with a fill already in flight is skipped, since that
+    /// fill's own landing is a fresher read than this tick could force.
     pub fn spawn_refresh(self: &Arc<Self>, every: Duration, tick: Duration) -> JoinHandle<()> {
         let service = Arc::clone(self);
         tokio::spawn(async move {
@@ -595,9 +594,8 @@ impl CatalogService {
 
     /// One `fetch` per enabled `Ready` account, concurrently, awaited up to the startup bound; a fetch still
     /// running at the bound is tracked further and, once it lands, retried the same way if it failed. An
-    /// account whose fetch failed inside the bound is retried at once, on a doubling backoff from the cache
-    /// window, clamped to one hour from the first sleep, until it lands, the row leaves `Ready`, or `shutdown`
-    /// cancels it.
+    /// account whose fetch failed inside the bound is retried at once, on a doubling backoff from
+    /// `ERROR_HOLD` up to one hour, until it lands, the row leaves `Ready`, or `shutdown` cancels it.
     pub async fn prefetch(self: &Arc<Self>) -> Prefetched {
         let deadline = tokio::time::Instant::now() + self.startup_bound;
         let accounts: Vec<AccountRow> = self
@@ -668,13 +666,12 @@ impl CatalogService {
         self.tasks.wait().await;
     }
 
-    /// One fetch failed: retried here on a doubling backoff from the cache window, clamped to one hour from
-    /// the first sleep, until rows land, the account leaves `Ready`, or `cancel` ends it with everything else
-    /// the tracker holds.
+    /// One fetch failed: retried here on a doubling backoff from `ERROR_HOLD` up to one hour, until rows land,
+    /// the account leaves `Ready`, or `cancel` ends it with everything else the tracker holds.
     fn spawn_retry(self: &Arc<Self>, account: AccountRow) {
         let service = Arc::clone(self);
         self.tasks.spawn(async move {
-            let mut backoff = service.window.min(ONE_HOUR);
+            let mut backoff = ERROR_HOLD;
             loop {
                 tokio::select! {
                     _ = service.stop.cancelled() => return,
@@ -874,7 +871,9 @@ impl CatalogService {
     fn fresh_slot(&self, key: &SlotKey, now: i64) -> Option<Catalog> {
         let slots = self.slots.lock().expect(SLOTS_POISONED);
         let catalog = slots.get(key)?.cached.as_ref()?;
-        (catalog.fetched_at + self.window.as_millis() as i64 > now).then(|| catalog.clone())
+        let held =
+            catalog.error.is_none() || catalog.fetched_at + ERROR_HOLD.as_millis() as i64 > now;
+        held.then(|| catalog.clone())
     }
 }
 

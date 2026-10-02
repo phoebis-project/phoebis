@@ -20,7 +20,7 @@ use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
-use crate::config::{KeepaliveLimits, KeepalivePolicy, MIN_AFFINITY_SECONDS};
+use crate::config::{KeepaliveLimits, KeepalivePolicy, MAX_WORKERS, MIN_AFFINITY_SECONDS};
 use crate::probe::{run_job, wasted_label, ProbeJob};
 use crate::recipe::{make_recipe, Recipe};
 use crate::savings::{dispatched_types, gross_saving, settlement_unit};
@@ -129,7 +129,6 @@ reasons! {
     NetNegative => "net_negative",
     NoCacheEvidence => "no_cache_evidence",
     NoProbeCacheEvidence => "no_probe_cache_evidence",
-    OauthUnverified => "oauth_unverified",
     OptedOut => "opted_out",
     Overage => "overage",
     OwnerMismatch => "owner_mismatch",
@@ -270,6 +269,9 @@ pub struct EngineParts {
     /// Where the companion's reports reach the alert inputs; `None` when nothing is listening.
     pub lifecycle: Option<LifecycleSender>,
     pub limits: KeepaliveLimits,
+    /// The relay's per-body bound: the largest body a recipe may retain, so every request the relay accepts is
+    /// retainable.
+    pub max_request_bytes: usize,
     pub metrics: Arc<Metrics>,
     pub pricing: Arc<Pricing>,
     pub relay: Arc<Relay>,
@@ -1182,7 +1184,7 @@ impl Engine {
             &observed.headers,
             &observed.body,
             &observed.model,
-            limits.max_request_bytes,
+            self.parts.max_request_bytes,
         ) {
             Ok(recipe) => recipe,
             Err(reason) => {
@@ -1223,7 +1225,6 @@ impl Engine {
 
     fn on_selected(&self, selected: AccountSelected) {
         let snapshot = self.parts.router.snapshot();
-        let verified = self.parts.limits.oauth_prewarm_verified;
         let mut inner = self.lock();
         let Some((key, agent_id)) = inner.pending.get(&selected.request_id).cloned() else {
             return;
@@ -1267,13 +1268,10 @@ impl Engine {
             Some(Reason::KeepaliveOff)
         } else if opted_out {
             Some(Reason::OptedOut)
+        } else if snapshot.account(&selected.account_id).is_none() {
+            Some(Reason::IneligibleCredential)
         } else {
-            match snapshot.account(&selected.account_id).map(|a| a.kind) {
-                Some(AccountKind::ApiKey) => None,
-                Some(AccountKind::Oauth) if verified => None,
-                Some(AccountKind::Oauth) => Some(Reason::OauthUnverified),
-                None => Some(Reason::IneligibleCredential),
-            }
+            None
         };
         if let Some(reason) = refusal {
             inner.set_reason(&key, &agent_id, reason);
@@ -1511,15 +1509,11 @@ impl Engine {
                 // The gap that poisoned it is what this request proved nothing under.
                 inner.discard(&key, &agent_id, Reason::BusGap, None);
             } else {
-                // The four gates are pool, key, or credential-kind properties that do not vary between
-                // attempts of one request, so ending the observation must not recount a reason the request
-                // already carries.
+                // The three gates are pool, key, or credential properties that do not vary between attempts of
+                // one request, so ending the observation must not recount a reason the request already carries.
                 match current {
                     Some(
-                        Reason::KeepaliveOff
-                        | Reason::OptedOut
-                        | Reason::OauthUnverified
-                        | Reason::IneligibleCredential,
+                        Reason::KeepaliveOff | Reason::OptedOut | Reason::IneligibleCredential,
                     ) if !ready => {
                         inner.end_observation(&key, &agent_id, None);
                     }
@@ -1606,7 +1600,6 @@ impl Engine {
     pub async fn step(self: &Arc<Self>) {
         let now = self.now();
         let expiry = self.parts.session_expiry.as_millis() as i64;
-        let max_workers = self.parts.limits.max_workers;
         // The four asks behind `router_view` are a round trip apiece; a tick with nothing due pays none of
         // them. `drop_sessions_of_dead_keys` reads the snapshot alone, which `RouterHandle::snapshot` answers
         // without a command.
@@ -1730,7 +1723,7 @@ impl Engine {
             due.sort_by(|a, b| (a.0, &a.1, &a.2).cmp(&(b.0, &b.1, &b.2)));
             let mut jobs = Vec::new();
             for (_, key, agent_id, types) in due {
-                if inner.running >= max_workers {
+                if inner.running >= MAX_WORKERS {
                     break;
                 }
                 let idle = agent_id == MAIN_AGENT

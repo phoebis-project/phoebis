@@ -35,7 +35,6 @@ const TASKS_POISONED: &str = "ledger background-task list poisoned by a prior pa
 pub struct LedgerConfig {
     pub retention_days: u32,
     pub rollup_retention_days: u32,
-    pub sample_retention_days: u32,
     pub purge_interval: Duration,
     pub event_poll: Duration,
     /// How often the assembler ages out entries whose completion never arrived.
@@ -47,7 +46,6 @@ impl Default for LedgerConfig {
         LedgerConfig {
             retention_days: 90,
             rollup_retention_days: 400,
-            sample_retention_days: 30,
             purge_interval: Duration::from_secs(3_600),
             event_poll: Duration::from_secs(5),
             expire_interval: EXPIRE_INTERVAL,

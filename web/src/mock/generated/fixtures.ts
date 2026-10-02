@@ -7393,18 +7393,10 @@ export const FIXTURES: Record<string, Fixture> = {
         "admin_configured": true,
         "viewer_configured": true
       },
-      "compatibility": {
-        "cache_diagnostics": false,
-        "profile": "claude-code-2.1.269-linux-x64"
-      },
       "keepalive": {
-        "lease_seconds": 90,
         "max_agents": 1024,
-        "max_request_bytes": 8388608,
         "max_retained_bytes": 268435456,
-        "max_sessions": 128,
-        "max_workers": 4,
-        "oauth_prewarm_verified": false
+        "max_sessions": 128
       },
       "listeners": {
         "admin": "test",
@@ -7547,10 +7539,19 @@ export const FIXTURES: Record<string, Fixture> = {
         }
       },
       "pricing": {
-        "version": "2026-09-30",
-        "effective": "2026-09-30",
+        "version": "2026-10-01",
+        "effective": "2026-10-01",
         "source": "shipped",
         "models": [
+          {
+            "model": "claude-fable-5",
+            "input_per_m": 10,
+            "cache_write_5m_per_m": 12.5,
+            "cache_write_1h_per_m": 20,
+            "cache_read_per_m": 0.25,
+            "output_per_m": 50,
+            "fast": null
+          },
           {
             "model": "claude-fable-5-1",
             "input_per_m": 10,
@@ -7561,7 +7562,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "fast": null
           },
           {
-            "model": "claude-haiku-4-5-20251001",
+            "model": "claude-haiku-4-5",
             "input_per_m": 1,
             "cache_write_5m_per_m": 1.25,
             "cache_write_1h_per_m": 2,
@@ -7622,20 +7623,24 @@ export const FIXTURES: Record<string, Fixture> = {
             "cache_read_per_m": 0.2,
             "output_per_m": 10,
             "fast": null
+          },
+          {
+            "model": "claude-sonnet-5-5",
+            "input_per_m": 2,
+            "cache_write_5m_per_m": 2.5,
+            "cache_write_1h_per_m": 4,
+            "cache_read_per_m": 0.2,
+            "output_per_m": 10,
+            "fast": null
           }
         ]
-      },
-      "quota": {
-        "sample_retention_days": 30
       },
       "retention": {
         "body_capture_max_hours": 72,
         "ledger_days": 90,
-        "quota_samples_days": 30,
         "rollup_days": 400
       },
       "routing": {
-        "catalog_cache_seconds": 60,
         "catalog_refresh_seconds": 21600,
         "cooldown_fallback_seconds": 60,
         "max_attempts": 3,

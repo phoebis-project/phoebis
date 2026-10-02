@@ -299,7 +299,6 @@ pub async fn harness_on(
         router_handle.clone(),
         clock.clone(),
         Duration::from_secs(10),
-        Duration::from_secs(60),
         Duration::from_secs(5),
     ));
     let bus = Bus::new();

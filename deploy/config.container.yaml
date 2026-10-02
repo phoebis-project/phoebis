@@ -9,28 +9,15 @@ admin:
   plain_http: true
   secret_env: PHOEBIS_ADMIN_SECRET
   viewer_secret_env: PHOEBIS_VIEWER_SECRET
-compatibility:
-  # Opt-in: forces the cache-diagnosis beta and a previous_message_id toward api.anthropic.com for every client.
-  cache_diagnostics: false
-  profile: claude-code-2.1.269-linux-x64
 keepalive:
   # Process-wide limits only. Whether a pool's sessions are probed, and the probe tuning, are pool settings in
-  # the registry; probes on oauth accounts stay off until the expiry-crossing experiment has passed for the
-  # combinations in use and oauth_prewarm_verified is set.
-  lease_seconds: 90
+  # the registry.
   max_agents: 1024
-  max_request_bytes: 8388608
   max_retained_bytes: 268435456
   max_sessions: 128
-  max_workers: 4
-  oauth_prewarm_verified: false
 proxy:
   listen: 0.0.0.0:8317
-quota:
-  sample_retention_days: 30
 routing:
-  # How long an account's model list is held before it is read again for the console and the models listing.
-  catalog_cache_seconds: 60
   cooldown_fallback_seconds: 60
   # Upstream attempts per client request across distinct accounts, 1 to 8.
   max_attempts: 3

@@ -37,8 +37,6 @@ pub const KEY: &str = "phoebis-testkey";
 pub const SDK_USER_AGENT: &str = "anthropic-sdk-python/0.40.0";
 
 pub const NOW: i64 = 1_000_000;
-/// The catalog cache's window in every harness but `harness_with_catalog_window`'s: the bootstrap default.
-pub const CATALOG_WINDOW: Duration = Duration::from_secs(60);
 /// The startup bound every harness passes to `CatalogService::new`, short enough for a test to wait past it.
 pub const STARTUP_BOUND: Duration = Duration::from_millis(500);
 
@@ -321,7 +319,6 @@ pub async fn harness_with_router_config(
         false,
         None,
         None,
-        CATALOG_WINDOW,
         config,
     )
     .await
@@ -386,7 +383,6 @@ pub async fn harness_on(
         false,
         None,
         None,
-        CATALOG_WINDOW,
         RouterConfig::default(),
     )
     .await
@@ -410,7 +406,6 @@ pub async fn harness_on_with_bus(
         false,
         None,
         None,
-        CATALOG_WINDOW,
         RouterConfig::default(),
     )
     .await
@@ -435,7 +430,6 @@ pub async fn harness_with_memory_cap(
         false,
         Some(cap),
         None,
-        CATALOG_WINDOW,
         RouterConfig::default(),
     )
     .await
@@ -460,7 +454,6 @@ pub async fn harness_with_cache_diagnostics_default(
         cache_diagnostics,
         None,
         None,
-        CATALOG_WINDOW,
         RouterConfig::default(),
     )
     .await
@@ -495,7 +488,6 @@ pub async fn harness_with_bus_limits(
         false,
         None,
         None,
-        CATALOG_WINDOW,
         RouterConfig::default(),
     )
     .await
@@ -520,33 +512,6 @@ pub async fn harness_with_catalog(
         false,
         None,
         Some(catalog_up),
-        CATALOG_WINDOW,
-        RouterConfig::default(),
-    )
-    .await
-}
-
-/// `harness_with_catalog` with the cache held for `window` rather than `CATALOG_WINDOW`, for the tests that need a
-/// window shorter than a discovery.
-pub async fn harness_with_catalog_window(
-    up: &FakeUpstream,
-    catalog_up: FakeUpstream,
-    accounts: &[TestAccount],
-    pool: PoolSpec,
-    window: Duration,
-) -> Harness {
-    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
-    build(
-        store,
-        up,
-        accounts,
-        pool,
-        default_limits(),
-        None,
-        false,
-        None,
-        Some(catalog_up),
-        window,
         RouterConfig::default(),
     )
     .await
@@ -573,7 +538,6 @@ pub async fn harness_with_bus_and_catalog(
         false,
         None,
         Some(catalog_up),
-        CATALOG_WINDOW,
         RouterConfig::default(),
     )
     .await
@@ -587,7 +551,6 @@ pub async fn harness_with_store_and_catalog(
     catalog_up: FakeUpstream,
     accounts: &[TestAccount],
     pool: PoolSpec,
-    window: Duration,
 ) -> Harness {
     build(
         store,
@@ -599,7 +562,6 @@ pub async fn harness_with_store_and_catalog(
         false,
         None,
         Some(catalog_up),
-        window,
         RouterConfig::default(),
     )
     .await
@@ -616,7 +578,6 @@ async fn build(
     cache_diagnostics: bool,
     memory_cap: Option<usize>,
     catalog_up: Option<FakeUpstream>,
-    catalog_window: Duration,
     router_config: RouterConfig,
 ) -> Harness {
     let p = claude_code_2_1_269_linux_x64();
@@ -814,7 +775,6 @@ async fn build(
         router_handle.clone(),
         clock.clone(),
         limits.head_timeout,
-        catalog_window,
         STARTUP_BOUND,
     ));
     let relay = Relay::new(

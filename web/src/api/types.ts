@@ -917,7 +917,6 @@ export type RecipeReason =
   | 'cooled'
   | 'idle_limit'
   | 'net_negative'
-  | 'oauth_unverified'
   | 'overage'
   | 'paused'
   | 'pool_exhausted'

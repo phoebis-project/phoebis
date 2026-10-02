@@ -904,7 +904,6 @@ async fn a_probe_and_a_count_on_a_key_at_its_cap_are_served_without_a_permit() {
             phoebis_relay::Probe {
                 key_id: "desktop".into(),
                 key_generation: h.store.api_key("desktop").unwrap().unwrap().created_at,
-                allow_oauth: true,
             },
             probe,
         )

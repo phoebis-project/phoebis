@@ -1386,7 +1386,6 @@ async fn the_renewal_report_carries_the_usage_the_origin_and_the_ttl_and_a_probe
             phoebis_relay::Probe {
                 key_id: "desktop".into(),
                 key_generation: h.store.api_key("desktop").unwrap().unwrap().created_at,
-                allow_oauth: false,
             },
             request_for(KEY, "claude-sonnet-4-5", "s1"),
         )

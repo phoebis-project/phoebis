@@ -9,7 +9,7 @@ use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
 use http_body_util::BodyExt;
 use phoebis_bus::{Bus, Event};
-use phoebis_relay::{Warmth, MAX_BODY};
+use phoebis_relay::{Warmth, ERROR_HOLD, MAX_BODY};
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, AffinitySource, ApiKeyRow, NewBundle,
     RekeyWrite, ResolutionRow, RulesMode, Secret, StorageKey, Store,
@@ -39,6 +39,17 @@ fn json_list(ids: &[&str]) -> Respond {
     }
 }
 
+/// Steps the runtime's clock past the error hold, so a retry sleeping it wakes at once: the retry's task registers
+/// its sleep against the paused clock on its next poll, which the yields give it before the jump.
+async fn past_the_error_hold() {
+    tokio::time::pause();
+    for _ in 0..8 {
+        tokio::task::yield_now().await;
+    }
+    tokio::time::advance(ERROR_HOLD + Duration::from_secs(1)).await;
+    tokio::time::resume();
+}
+
 fn error_code(resp: &axum::http::Response<axum::body::Body>) -> String {
     resp.headers()
         .get("x-phoebis-error-code")
@@ -49,7 +60,7 @@ fn error_code(resp: &axum::http::Response<axum::body::Body>) -> String {
 }
 
 #[tokio::test]
-async fn a_fetch_is_answered_from_the_cache_inside_the_window_and_refetched_after_it() {
+async fn an_old_slot_answers_fetch_and_the_models_listing_until_a_refresh_reads_live() {
     let up = FakeUpstream::start(vec![]).await;
     let h = harness(
         &up,
@@ -61,24 +72,37 @@ async fn a_fetch_is_answered_from_the_cache_inside_the_window_and_refetched_afte
     let first = h.catalog.fetch(&a).await;
     assert_eq!(first.models.len(), 2);
     assert!(first.error.is_none());
-    let second = h.catalog.fetch(&a).await;
-    assert_eq!(second, first, "the cache answers inside the window");
-    assert_eq!(listings_for(&h.catalog_up), 1, "one fetch for both calls");
-    h.clock.store(NOW + 61_000, Ordering::SeqCst);
-    let third = h.catalog.fetch(&a).await;
-    assert_eq!(third.models.len(), 2);
     assert_eq!(
         listings_for(&h.catalog_up),
-        2,
-        "past the window, a third call fetches again"
+        1,
+        "the startup fetch filled the slot"
+    );
+    // A day past the read, far longer than a failed read is held.
+    h.clock.store(NOW + 86_400_000, Ordering::SeqCst);
+    let later = h.catalog.fetch(&a).await;
+    assert_eq!(later, first, "the slot answers whatever its age");
+    let resp = h
+        .app
+        .clone()
+        .oneshot(models_request(KEY, "/v1/models"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        listings_for(&h.catalog_up),
+        1,
+        "neither the fetch nor the models listing read the upstream"
     );
     let refreshed = h.catalog.refresh(&a).await;
-    assert_eq!(refreshed.models.len(), 2);
-    assert_eq!(listings_for(&h.catalog_up), 3, "refresh fetches at once");
+    assert_eq!(
+        (refreshed.models.len(), refreshed.fetched_at),
+        (2, NOW + 86_400_000)
+    );
+    assert_eq!(listings_for(&h.catalog_up), 2, "refresh reads live");
 }
 
 #[tokio::test]
-async fn a_failed_fetch_stores_the_error_and_no_rows_for_the_window() {
+async fn a_failed_fetch_holds_its_error_for_the_error_hold_and_reads_again_after_it() {
     let up = FakeUpstream::start(vec![]).await;
     let catalog_up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/models?limit=1000".into(),
@@ -103,12 +127,22 @@ async fn a_failed_fetch_stores_the_error_and_no_rows_for_the_window() {
         first.error.as_deref(),
         Some("the models endpoint answered 503")
     );
+    let hold = ERROR_HOLD.as_millis() as i64;
+    h.clock.store(NOW + hold - 1, Ordering::SeqCst);
     let second = h.catalog.fetch(&a).await;
     assert_eq!(second, first);
     assert_eq!(
         h.catalog_up.requests().len(),
         1,
-        "a second call inside the window fetches nothing"
+        "inside the hold the error answers with no request"
+    );
+    h.clock.store(NOW + hold, Ordering::SeqCst);
+    let third = h.catalog.fetch(&a).await;
+    assert_eq!(third.fetched_at, NOW + hold);
+    assert_eq!(
+        h.catalog_up.requests().len(),
+        2,
+        "at the hold's end the slot is a miss and the account is read again"
     );
 }
 
@@ -425,7 +459,6 @@ async fn the_first_request_after_a_restart_carries_the_dated_id_from_the_persist
         catalog_up,
         &[oauth("a", A, 0)],
         PoolSpec::default(),
-        CATALOG_WINDOW,
     )
     .await;
     assert_eq!(h.catalog.warmth(), Warmth::Cold);
@@ -531,14 +564,7 @@ async fn a_failed_startup_fetch_answers_at_once_and_is_retried_in_the_background
         "/v1/models?limit=1000",
         json_list(&["claude-sonnet-4-5-20250929"]),
     );
-    let h = harness_with_catalog_window(
-        &up,
-        catalog_up,
-        &[oauth("a", A, 0)],
-        PoolSpec::default(),
-        Duration::from_millis(50),
-    )
-    .await;
+    let h = harness_with_catalog(&up, catalog_up, &[oauth("a", A, 0)], PoolSpec::default()).await;
     let start = std::time::Instant::now();
     let resp = h
         .app
@@ -548,6 +574,7 @@ async fn a_failed_startup_fetch_answers_at_once_and_is_retried_in_the_background
         .unwrap();
     assert_eq!(resp.status(), 200);
     assert!(start.elapsed() < Duration::from_millis(200));
+    past_the_error_hold().await;
     wait_for(Duration::from_secs(2), || {
         (h.catalog.warmth() == Warmth::Warm).then_some(())
     })
@@ -590,20 +617,19 @@ async fn a_startup_fetch_still_pending_at_the_bound_is_retried_once_it_lands_an_
         "/v1/models?limit=1000",
         json_list(&["claude-sonnet-4-5-20250929"]),
     );
-    let h = harness_with_catalog_window(
-        &up,
-        catalog_up,
-        &[oauth("a", A, 0)],
-        PoolSpec::default(),
-        Duration::from_millis(50),
-    )
-    .await;
+    let h = harness_with_catalog(&up, catalog_up, &[oauth("a", A, 0)], PoolSpec::default()).await;
     assert_eq!(
         h.catalog.warmth(),
         Warmth::Filling,
         "still gated past the startup bound"
     );
     h.catalog_up.release();
+    // The gated answer's error lands first; the retry it starts then sleeps the hold.
+    wait_for(Duration::from_secs(2), || {
+        (h.catalog.warmth() == Warmth::Cold).then_some(())
+    })
+    .await;
+    past_the_error_hold().await;
     wait_for(Duration::from_secs(2), || {
         (h.catalog.warmth() == Warmth::Warm).then_some(())
     })
@@ -921,7 +947,6 @@ async fn a_persisted_newer_mapping_is_not_moved_back_by_an_older_startup_listing
         catalog_up,
         &[oauth("a", A, 0)],
         PoolSpec::default(),
-        CATALOG_WINDOW,
     )
     .await;
     assert_eq!(h.catalog.warmth(), Warmth::Warm);
@@ -1099,7 +1124,7 @@ async fn a_retry_sleeping_its_backoff_ends_at_shutdown() {
 }
 
 #[tokio::test]
-async fn the_first_retry_is_clamped_to_one_hour_even_with_a_window_above_it() {
+async fn a_failed_fetch_is_retried_first_after_the_error_hold() {
     let up = FakeUpstream::start(vec![]).await;
     let catalog_up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/models?limit=1000".into(),
@@ -1115,14 +1140,7 @@ async fn the_first_retry_is_clamped_to_one_hour_even_with_a_window_above_it() {
         "/v1/models?limit=1000",
         json_list(&["claude-sonnet-4-5-20250929"]),
     );
-    let h = harness_with_catalog_window(
-        &up,
-        catalog_up,
-        &[oauth("a", A, 0)],
-        PoolSpec::default(),
-        Duration::from_secs(7_200),
-    )
-    .await;
+    let h = harness_with_catalog(&up, catalog_up, &[oauth("a", A, 0)], PoolSpec::default()).await;
     assert_eq!(
         h.catalog.lookup("claude-sonnet-4-5"),
         None,
@@ -1134,7 +1152,14 @@ async fn the_first_retry_is_clamped_to_one_hour_even_with_a_window_above_it() {
     for _ in 0..8 {
         tokio::task::yield_now().await;
     }
-    tokio::time::advance(Duration::from_secs(3_600) + Duration::from_secs(1)).await;
+    tokio::time::advance(ERROR_HOLD - Duration::from_secs(1)).await;
+    tokio::time::resume();
+    stays_for(Duration::from_millis(300), || {
+        listings_for(&h.catalog_up) == 1
+    })
+    .await;
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(2)).await;
     tokio::time::resume();
     wait_for(Duration::from_secs(2), || {
         (h.catalog.warmth() == Warmth::Warm).then_some(())
@@ -1143,8 +1168,9 @@ async fn the_first_retry_is_clamped_to_one_hour_even_with_a_window_above_it() {
     assert_eq!(
         h.catalog.lookup("claude-sonnet-4-5").as_deref(),
         Some("claude-sonnet-4-5-20250929"),
-        "the retry landed within the one-hour clamp, not the two-hour window"
+        "the retry landed once the hold had passed"
     );
+    assert_eq!(listings_for(&h.catalog_up), 2);
 }
 
 #[tokio::test]
@@ -1306,19 +1332,22 @@ async fn a_gated_fill_whose_account_was_replaced_commits_nothing() {
 }
 
 #[tokio::test]
-async fn a_fill_slower_than_its_window_is_shared_by_every_caller_waiting_on_it() {
+async fn a_failed_fill_slower_than_the_error_hold_is_shared_by_every_caller_waiting_on_it() {
     let up = FakeUpstream::start(vec![]).await;
     let catalog_up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/models?limit=1000".into(),
-        respond: Respond::Gated(Box::new(json_list(&["claude-opus-5"]))),
+        respond: Respond::Gated(Box::new(Respond::Json {
+            status: 503,
+            headers: vec![],
+            body: b"{}".to_vec(),
+        })),
     }])
     .await;
-    let h = harness_with_catalog_window(
+    let h = harness_with_catalog(
         &up,
         catalog_up,
         &[api_key("a", "sk-ant-api03-A", 0)],
         PoolSpec::default(),
-        Duration::from_secs(1),
     )
     .await;
     let a = h.store.account("a").unwrap().unwrap();
@@ -1332,8 +1361,9 @@ async fn a_fill_slower_than_its_window_is_shared_by_every_caller_waiting_on_it()
         (h.catalog_up.requests().len() == 1).then_some(())
     })
     .await;
-    // The discovery answers two seconds after it left, twice the window.
-    h.clock.fetch_add(2_000, Ordering::SeqCst);
+    // The discovery answers a second past the hold after it left.
+    h.clock
+        .fetch_add(ERROR_HOLD.as_millis() as i64 + 1_000, Ordering::SeqCst);
     h.catalog_up.release();
     let mut answers = Vec::new();
     for caller in callers {
@@ -1347,7 +1377,7 @@ async fn a_fill_slower_than_its_window_is_shared_by_every_caller_waiting_on_it()
     assert!(
         answers
             .iter()
-            .all(|answer| answer == &answers[0] && answer.models.len() == 1),
+            .all(|answer| answer == &answers[0] && answer.error.is_some()),
         "all three share the one answer: {answers:?}"
     );
 }
@@ -1373,25 +1403,29 @@ async fn the_periodic_refresh_fires_on_the_stepped_clock() {
 }
 
 #[tokio::test]
-async fn the_periodic_refresh_forces_a_request_past_a_cache_window_longer_than_the_interval() {
+async fn the_scheduled_refresh_replaces_the_slot_and_fetch_answers_the_replacement() {
     let up = FakeUpstream::start(vec![]).await;
-    let catalog_up = FakeUpstream::start(catalog_rules()).await;
-    // The window outlasts the 21,600 s interval the harness spawns the sweep with, so a plain fetch would answer
-    // from the cache; the sweep still has to force a real request once the account is due.
-    let h = harness_with_catalog_window(
-        &up,
-        catalog_up,
-        &[oauth("a", A, 0)],
-        PoolSpec::default(),
-        Duration::from_secs(30_000),
-    )
-    .await;
+    let h = harness(&up, &[oauth("a", A, 0)], PoolSpec::default()).await;
     assert_eq!(listings_for(&h.catalog_up), 1, "the startup fetch alone");
     h.clock.store(NOW + 21_601_000, Ordering::SeqCst);
     wait_for(Duration::from_secs(2), || {
         (listings_for(&h.catalog_up) == 2).then_some(())
     })
     .await;
+    // A minute and more past the scheduled read, and far short of the next one.
+    h.clock.store(NOW + 21_662_000, Ordering::SeqCst);
+    let a = h.store.account("a").unwrap().unwrap();
+    let held = h.catalog.fetch(&a).await;
+    assert_eq!(
+        held.fetched_at,
+        NOW + 21_601_000,
+        "the slot the scheduled refresh left answers"
+    );
+    assert_eq!(
+        listings_for(&h.catalog_up),
+        2,
+        "no read past the scheduled one"
+    );
 }
 
 #[tokio::test]

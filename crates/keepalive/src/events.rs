@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 
 use phoebis_bus::SessionLifecycle;
 
+use crate::config::LEASE_MS;
 use crate::engine::{
     Agent, AgentState, Engine, Inner, Reason, Session, SessionKey, Wasted, MAIN_AGENT,
 };
@@ -165,7 +166,7 @@ impl Engine {
     ) -> Result<Ack, EventError> {
         let now = self.now();
         let expiry = self.parts.session_expiry.as_millis() as i64;
-        let lease = self.parts.limits.lease_ms();
+        let lease = LEASE_MS;
         let limits = self.parts.limits.clone();
         let acked = {
             let mut inner = self.lock();

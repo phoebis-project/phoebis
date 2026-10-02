@@ -9,7 +9,6 @@ export const REASON_LABEL: Record<RecipeReason, string> = {
   cooled: 'cooled down',
   idle_limit: 'idle limit',
   net_negative: 'net negative',
-  oauth_unverified: 'subscription probes off',
   overage: 'overage',
   paused: 'paused',
   pool_exhausted: 'pool exhausted',
@@ -30,7 +29,6 @@ export const REASON_HINT: Record<RecipeReason, string> = {
   cooled: 'The account the session is pinned to is under a cooldown; the probe waits for it to end.',
   idle_limit: "The pool's max idle time or idle probe budget ran out since the last real request, so the retained prompt was discarded. The next real request starts a new recipe.",
   net_negative: "Probes on this session have cost more than the cache reads they bought. The recipe gets the pool's grace probes after each real request and then holds until a request lands warm again.",
-  oauth_unverified: 'Probes on subscription accounts stay off until the expiry-crossing experiment has passed and oauth_prewarm_verified is set in the bootstrap file.',
   overage: 'The account is on extra usage and the pool policy skips probes there.',
   paused: 'The account is paused, the pool is disabled, or the key opted out, so nothing probes this session.',
   pool_exhausted: 'Every account of the pool was exhausted or cooled when the probe was selected; the recipe resumes with the next real request.',
@@ -42,4 +40,4 @@ export const REASON_HINT: Record<RecipeReason, string> = {
   unsupported_shape: 'The last request had no cacheable prefix the probe could replay.',
 };
 
-export const WARNING_REASONS: RecipeReason[] = ['affinity_too_short', 'budget', 'cap_reached', 'idle_limit', 'net_negative', 'oauth_unverified', 'storage_limit', 'unsupported_shape'];
+export const WARNING_REASONS: RecipeReason[] = ['affinity_too_short', 'budget', 'cap_reached', 'idle_limit', 'net_negative', 'storage_limit', 'unsupported_shape'];

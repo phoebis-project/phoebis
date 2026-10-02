@@ -1163,10 +1163,10 @@ async fn the_session_route_answers_the_role_and_settings_say_which_secrets_are_c
         (Some(true), Some(true))
     );
     assert_eq!(
-        settings["compatibility"]["cache_diagnostics"].as_bool(),
-        Some(false)
+        settings["about"]["profile"].as_str(),
+        Some("claude-code-2.1.269-linux-x64")
     );
-    assert!(settings["compatibility"]["profile"].as_str().is_some());
+    assert!(settings["compatibility"].is_null());
     assert!(
         !settings.to_string().contains("secret"),
         "no secret and no variable name in the settings answer"

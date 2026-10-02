@@ -168,12 +168,12 @@ included, whether or not the router dropped it on the way upstream.
 | Data | Kept for |
 | --- | --- |
 | Requests, attempts, events, kept-warm marks | `stats.retention_days` (90 days by default; 0 forever) |
-| Quota and extra-usage samples | `quota.sample_retention_days` (30 days by default) |
+| Quota and extra-usage samples | `stats.retention_days` (90 days by default; 0 forever) |
 | Captured bodies | The hours the capture named |
 | Hourly rollups | `stats.rollup_retention_days` (400 days; 0 forever, otherwise at least `stats.retention_days`) |
 
 The purge that enforces these runs once an hour. Every five-minute poll's reading is kept for
-`quota.sample_retention_days`, so an idle account adds 288 quota rows per window per day.
+`stats.retention_days`, so an idle account adds 288 quota rows per window per day.
 
 ## Metrics
 

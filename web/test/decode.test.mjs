@@ -1016,8 +1016,8 @@ test('a placement row and a member budget keep the figures the routes leave null
 });
 
 test('a settings answer with no compatibility block reads the defaults the router ships with', () => {
-  const bare = { ...fixture('settings') };
-  delete bare.compatibility;
+  const bare = fixture('settings');
+  assert.equal(bare.compatibility, undefined, 'the route answers no compatibility block');
   assert.deepEqual(d.decodeSettings(bare).compatibility, { cacheDiagnostics: false, profile: 'claude-code-2.1.269-linux-x64' }, 'the profile falls back to the one the about block carries, and the rest to what the router does without the block');
   assert.deepEqual(d.decodeSettings({ ...bare, about: { ...bare.about, profile: 'claude-code-9.9.9-linux-x64' } }).compatibility.profile, 'claude-code-9.9.9-linux-x64');
 });
@@ -1025,8 +1025,9 @@ test('a settings answer with no compatibility block reads the defaults the route
 test('settings decode the quota, routing, storage, and usage blocks the route answers', () => {
   const wire = fixture('settings');
   const s = d.decodeSettings(wire);
-  assert.deepEqual(s.quota, { sampleRetentionDays: wire.quota.sample_retention_days });
-  assert.deepEqual(s.routing, { catalogCacheSeconds: wire.routing.catalog_cache_seconds, catalogRefreshSeconds: wire.routing.catalog_refresh_seconds, cooldownFallbackSeconds: wire.routing.cooldown_fallback_seconds, maxAttempts: wire.routing.max_attempts, modelRejectionSeconds: wire.routing.model_rejection_seconds, startupFetchSeconds: wire.routing.startup_fetch_seconds });
+  assert.deepEqual(s.quota, { sampleRetentionDays: 0 }, 'the route answers no quota block, which reads as zero');
+  assert.equal(s.retention.quotaSamplesDays, 0, 'the samples follow the ledger window, so the route answers no member of their own');
+  assert.deepEqual(s.routing, { catalogCacheSeconds: 0, catalogRefreshSeconds: wire.routing.catalog_refresh_seconds, cooldownFallbackSeconds: wire.routing.cooldown_fallback_seconds, maxAttempts: wire.routing.max_attempts, modelRejectionSeconds: wire.routing.model_rejection_seconds, startupFetchSeconds: wire.routing.startup_fetch_seconds });
   assert.deepEqual(s.storage, { ledgerPath: wire.storage.ledger_path, path: wire.storage.path, pricingPath: null }, 'no override file is a null path, never an empty one');
   assert.deepEqual(s.usage, { cacheTtlSeconds: wire.usage.cache_ttl_seconds, refreshConcurrency: wire.usage.refresh_concurrency });
   assert.equal(d.decodeSettings({ ...wire, storage: { ...wire.storage, pricing_path: './pricing.yaml' } }).storage.pricingPath, './pricing.yaml');
@@ -1062,7 +1063,11 @@ test('settings, pricing, pairing, quota, and usage decode', () => {
   assert.equal(s.access.viewerConfigured, true);
   assert.equal(s.about.publicUrl, null);
   assert.equal(s.sessions.expireAfterSeconds, 86400);
-  assert.equal(s.keepalive.maxWorkers, 4);
+  assert.deepEqual(
+    [s.keepalive.maxSessions, s.keepalive.leaseSeconds, s.keepalive.maxRequestBytes, s.keepalive.maxWorkers, s.keepalive.oauthPrewarmVerified],
+    [128, 0, 0, 0, false],
+    'the route answers the three keepalive limits the file keeps; the rest read as their absent defaults',
+  );
   assert.equal(s.listeners.metrics, '127.0.0.1:9464');
   assert.deepEqual(s.compatibility, { cacheDiagnostics: false, profile: 'claude-code-2.1.269-linux-x64' });
   assert.equal(s.pricing.models.find((m) => m.model === 'claude-sonnet-5').inputPerM, 2);

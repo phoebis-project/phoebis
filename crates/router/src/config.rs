@@ -17,14 +17,11 @@ use serde::Deserialize;
 #[serde(deny_unknown_fields)]
 pub struct Config {
     pub admin: AdminConfig,
-    pub compatibility: CompatConfig,
     /// Process-wide keepalive limits, read once at start; whether probes run, and their tuning, are per-pool
     /// registry settings.
     #[serde(default)]
     pub keepalive: KeepaliveLimits,
     pub proxy: ProxyConfig,
-    #[serde(default)]
-    pub quota: QuotaConfig,
     #[serde(default)]
     pub routing: RoutingConfig,
     #[serde(default)]
@@ -34,6 +31,7 @@ pub struct Config {
     pub storage: StorageConfig,
     #[serde(default)]
     pub upstream: UpstreamConfig,
+    #[serde(default)]
     pub usage: UsageConfig,
 }
 
@@ -58,16 +56,6 @@ pub struct AdminConfig {
     pub viewer_secret_env: Option<String>,
 }
 
-/// `profile` names the Claude Code release the relay is measured against. `cache_diagnostics` is the one opt-in: it changes the
-/// wire shape toward Anthropic for every client behind the router.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CompatConfig {
-    #[serde(default)]
-    pub cache_diagnostics: bool,
-    pub profile: String,
-}
-
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProxyConfig {
@@ -85,25 +73,17 @@ pub struct StorageConfig {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct UsageConfig {
+    /// How long a cached usage snapshot answers a manual refresh before the endpoint is read again.
+    #[serde(default = "default_usage_cache_ttl")]
     pub cache_ttl_seconds: u64,
+    /// How many accounts' usage and profile fetches run at once.
+    #[serde(default = "default_refresh_concurrency")]
     pub refresh_concurrency: usize,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct QuotaConfig {
-    /// How long quota and extra-usage samples are kept, in days.
-    #[serde(default = "default_sample_retention")]
-    pub sample_retention_days: u32,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct RoutingConfig {
-    /// How long an account's catalog is held before it is read again, for the console and the models
-    /// listing.
-    #[serde(default = "default_catalog_cache")]
-    pub catalog_cache_seconds: u64,
     /// How often every enabled upstream's model listing is read again, 60 to 604800.
     #[serde(default = "default_catalog_refresh")]
     pub catalog_refresh_seconds: u64,
@@ -149,7 +129,8 @@ pub struct StatsConfig {
     /// stay in a fresh configuration.
     #[serde(default = "default_pricing_path")]
     pub pricing_path: Option<PathBuf>,
-    /// Days the raw request, attempt, and event rows are kept; 0 keeps them forever.
+    /// Days the raw request, attempt, and event rows, and the quota and extra-usage samples, are kept; 0 keeps
+    /// them forever.
     #[serde(default = "default_retention_days")]
     pub retention_days: u32,
     /// Days the hourly rollups are kept; 0 keeps them forever, and otherwise at least `retention_days`.
@@ -174,10 +155,10 @@ pub struct UpstreamConfig {
 pub enum ConfigError {
     #[error("stats.body_capture_max_hours must be between 1 and 168, not {value}")]
     BodyCaptureMaxOutOfRange { value: u32 },
-    #[error("routing.catalog_cache_seconds must be between 1 and 86400, not {value}")]
-    CatalogCacheOutOfRange { value: u64 },
     #[error("routing.catalog_refresh_seconds must be between 60 and 604800, not {value}")]
     CatalogRefreshOutOfRange { value: u64 },
+    #[error("routing.cooldown_fallback_seconds must be between 1 and 3600, not {value}")]
+    CooldownFallbackOutOfRange { value: u64 },
     #[error("{first} and {second} resolve to the same secret")]
     DuplicateSecret { first: String, second: String },
     #[error("{0}")]
@@ -205,8 +186,8 @@ pub enum ConfigError {
         path: PathBuf,
         source: std::io::Error,
     },
-    #[error("{field} must be at least 1")]
-    RetentionTooShort { field: &'static str },
+    #[error("usage.refresh_concurrency must be between 1 and 16, not {value}")]
+    RefreshConcurrencyOutOfRange { value: usize },
     #[error("stats.rollup_retention_days must be 0 or at least stats.retention_days ({retention_days}), not {value}")]
     RollupRetentionTooShort { retention_days: u32, value: u32 },
     #[error("environment variable {name} holds a secret shorter than 16 characters")]
@@ -221,10 +202,8 @@ pub enum ConfigError {
     StoragePath { path: PathBuf },
     #[error("the configuration is not valid YAML")]
     Syntax(#[from] serde_norway::Error),
-    #[error("compatibility.profile {name} is not a profile this build carries")]
-    UnknownProfile { name: String },
-    #[error("usage.refresh_concurrency must be at least 1")]
-    ZeroRefreshConcurrency,
+    #[error("usage.cache_ttl_seconds must be between 1 and 3600, not {value}")]
+    UsageCacheTtlOutOfRange { value: u64 },
 }
 
 /// Reads, parses, and validates the bootstrap file, resolving every secret from the environment.
@@ -254,18 +233,9 @@ impl fmt::Debug for AdminConfig {
     }
 }
 
-impl Default for QuotaConfig {
-    fn default() -> Self {
-        QuotaConfig {
-            sample_retention_days: default_sample_retention(),
-        }
-    }
-}
-
 impl Default for RoutingConfig {
     fn default() -> Self {
         RoutingConfig {
-            catalog_cache_seconds: default_catalog_cache(),
             catalog_refresh_seconds: default_catalog_refresh(),
             cooldown_fallback_seconds: default_cooldown_fallback(),
             max_attempts: default_max_attempts(),
@@ -299,19 +269,30 @@ impl Default for StatsConfig {
     }
 }
 
-fn check_shape(config: &Config) -> Result<(), ConfigError> {
-    if phoebis_profile::by_name(&config.compatibility.profile).is_none() {
-        return Err(ConfigError::UnknownProfile {
-            name: config.compatibility.profile.clone(),
-        });
+impl Default for UsageConfig {
+    fn default() -> UsageConfig {
+        UsageConfig {
+            cache_ttl_seconds: default_usage_cache_ttl(),
+            refresh_concurrency: default_refresh_concurrency(),
+        }
     }
+}
+
+fn check_shape(config: &Config) -> Result<(), ConfigError> {
     if !config.admin.plain_http && config.admin.origin.is_none() {
         // Without an origin to compare against, the admin API has nothing to tell a browser's cross-site
         // write from an operator's own.
         return Err(ConfigError::MissingOrigin);
     }
-    if config.usage.refresh_concurrency == 0 {
-        return Err(ConfigError::ZeroRefreshConcurrency);
+    if !(1..=3600).contains(&config.usage.cache_ttl_seconds) {
+        return Err(ConfigError::UsageCacheTtlOutOfRange {
+            value: config.usage.cache_ttl_seconds,
+        });
+    }
+    if !(1..=16).contains(&config.usage.refresh_concurrency) {
+        return Err(ConfigError::RefreshConcurrencyOutOfRange {
+            value: config.usage.refresh_concurrency,
+        });
     }
     // The store creates the database under exactly this name, in the directory that holds it, so a path
     // that names one of the two and not the other is not a path it can honor.
@@ -331,12 +312,12 @@ fn check_shape(config: &Config) -> Result<(), ConfigError> {
             value: config.routing.model_rejection_seconds,
         });
     }
-    config.keepalive.validate()?;
-    if !(1..=86_400).contains(&config.routing.catalog_cache_seconds) {
-        return Err(ConfigError::CatalogCacheOutOfRange {
-            value: config.routing.catalog_cache_seconds,
+    if !(1..=3600).contains(&config.routing.cooldown_fallback_seconds) {
+        return Err(ConfigError::CooldownFallbackOutOfRange {
+            value: config.routing.cooldown_fallback_seconds,
         });
     }
+    config.keepalive.validate(crate::app::MAX_REQUEST_BYTES)?;
     if !(1..=60).contains(&config.routing.startup_fetch_seconds) {
         return Err(ConfigError::StartupFetchOutOfRange {
             value: config.routing.startup_fetch_seconds,
@@ -383,11 +364,6 @@ fn check_shape(config: &Config) -> Result<(), ConfigError> {
         return Err(ConfigError::RollupRetentionTooShort {
             retention_days: raw,
             value: rollup,
-        });
-    }
-    if config.quota.sample_retention_days == 0 {
-        return Err(ConfigError::RetentionTooShort {
-            field: "quota.sample_retention_days",
         });
     }
     if config.stats.ledger_path.parent().is_none() || config.stats.ledger_path.file_name().is_none()
@@ -504,10 +480,6 @@ fn default_body_capture_max() -> u32 {
     72
 }
 
-fn default_catalog_cache() -> u64 {
-    60
-}
-
 fn default_catalog_refresh() -> u64 {
     21_600
 }
@@ -536,6 +508,10 @@ fn default_pricing_path() -> Option<PathBuf> {
     Some("./pricing.yaml".into())
 }
 
+fn default_refresh_concurrency() -> usize {
+    2
+}
+
 fn default_retention_days() -> u32 {
     90
 }
@@ -544,16 +520,16 @@ fn default_rollup_retention_days() -> u32 {
     400
 }
 
-fn default_sample_retention() -> u32 {
-    30
-}
-
 fn default_session_expiry() -> u64 {
     86_400
 }
 
 fn default_startup_fetch() -> u64 {
-    5
+    30
+}
+
+fn default_usage_cache_ttl() -> u64 {
+    60
 }
 
 fn default_memory_cap() -> usize {
@@ -585,55 +561,10 @@ mod tests {
             "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
         )
         .unwrap();
-        let yaml = format!("admin:\n  listen: 127.0.0.1:0\n  secret_env: TEST_CFG_ADMIN\n  plain_http: true\ncompatibility:\n  profile: claude-code-2.1.269-linux-x64\nproxy:\n  listen: 127.0.0.1:0\nstorage:\n  encryption_key_file: {}\n  path: {}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n{body}", key.display(), dir.join("router.sqlite").display());
+        let yaml = format!("admin:\n  listen: 127.0.0.1:0\n  secret_env: TEST_CFG_ADMIN\n  plain_http: true\nproxy:\n  listen: 127.0.0.1:0\nstorage:\n  encryption_key_file: {}\n  path: {}\n{body}", key.display(), dir.join("router.sqlite").display());
         let path = dir.join(format!("{name}.yaml"));
         std::fs::write(&path, yaml).unwrap();
         path
-    }
-
-    /// `file`'s own template fixes the `compatibility` block, so this builds a whole document with a
-    /// caller-chosen one instead of appending a second, ambiguous top-level key.
-    fn file_with_compat(
-        dir: &std::path::Path,
-        name: &str,
-        compatibility: &str,
-    ) -> std::path::PathBuf {
-        let key = dir.join("storage.key");
-        std::fs::write(
-            &key,
-            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-        )
-        .unwrap();
-        let yaml = format!(
-            "admin:\n  listen: 127.0.0.1:0\n  secret_env: TEST_CFG_ADMIN\n  plain_http: true\n\
-             compatibility:\n{compatibility}\nproxy:\n  listen: 127.0.0.1:0\nstorage:\n  \
-             encryption_key_file: {}\n  path: {}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
-            key.display(),
-            dir.join("router.sqlite").display()
-        );
-        let path = dir.join(format!("{name}.yaml"));
-        std::fs::write(&path, yaml).unwrap();
-        path
-    }
-
-    #[test]
-    fn cache_diagnostics_parses_when_set_and_defaults_to_false() {
-        let dir = tempfile::tempdir().unwrap();
-        std::env::set_var("TEST_CFG_ADMIN", "admin-secret-001");
-        let without = "  profile: claude-code-2.1.269-linux-x64";
-        assert!(
-            !load(&file_with_compat(dir.path(), "absent", without))
-                .unwrap()
-                .compatibility
-                .cache_diagnostics
-        );
-        let with = "  cache_diagnostics: true\n  profile: claude-code-2.1.269-linux-x64";
-        assert!(
-            load(&file_with_compat(dir.path(), "set", with))
-                .unwrap()
-                .compatibility
-                .cache_diagnostics
-        );
     }
 
     #[test]
@@ -645,12 +576,11 @@ mod tests {
             (
                 config.routing.max_attempts,
                 config.routing.cooldown_fallback_seconds,
-                config.routing.catalog_cache_seconds,
                 config.routing.model_rejection_seconds,
                 config.routing.catalog_refresh_seconds,
                 config.routing.startup_fetch_seconds
             ),
-            (3, 60, 60, 3_600, 21_600, 5)
+            (3, 60, 3_600, 21_600, 30)
         );
         assert_eq!(
             (
@@ -659,35 +589,18 @@ mod tests {
             ),
             (86_400, 72)
         );
-        let config = load(&file(dir.path(), "explicit", "routing:\n  catalog_cache_seconds: 30\n  catalog_refresh_seconds: 3600\n  cooldown_fallback_seconds: 30\n  max_attempts: 5\n  model_rejection_seconds: 1800\n  startup_fetch_seconds: 2\nsessions:\n  expire_after_seconds: 7200\nstats:\n  body_capture_max_hours: 24\n")).unwrap();
+        let config = load(&file(dir.path(), "explicit", "routing:\n  catalog_refresh_seconds: 3600\n  cooldown_fallback_seconds: 30\n  max_attempts: 5\n  model_rejection_seconds: 1800\n  startup_fetch_seconds: 2\nsessions:\n  expire_after_seconds: 7200\nstats:\n  body_capture_max_hours: 24\n")).unwrap();
         assert_eq!(
             (
                 config.routing.max_attempts,
-                config.routing.catalog_cache_seconds,
                 config.routing.model_rejection_seconds,
                 config.routing.catalog_refresh_seconds,
                 config.routing.startup_fetch_seconds,
                 config.sessions.expire_after_seconds,
                 config.stats.body_capture_max_hours
             ),
-            (5, 30, 1_800, 3_600, 2, 7_200, 24)
+            (5, 1_800, 3_600, 2, 7_200, 24)
         );
-        assert!(matches!(
-            load(&file(
-                dir.path(),
-                "catalog-zero",
-                "routing:\n  catalog_cache_seconds: 0\n"
-            )),
-            Err(ConfigError::CatalogCacheOutOfRange { value: 0 })
-        ));
-        assert!(matches!(
-            load(&file(
-                dir.path(),
-                "catalog-too-long",
-                "routing:\n  catalog_cache_seconds: 86401\n"
-            )),
-            Err(ConfigError::CatalogCacheOutOfRange { value: 86_401 })
-        ));
         assert!(matches!(
             load(&file(
                 dir.path(),
@@ -787,42 +700,123 @@ mod tests {
         assert_eq!(
             load(&file(
                 dir.path(),
-                "quota",
-                "quota:\n  sample_retention_days: 7\n"
+                "sessions",
+                "sessions:\n  expire_after_seconds: 7200\n"
             ))
             .unwrap()
-            .quota
-            .sample_retention_days,
-            7
+            .sessions
+            .expire_after_seconds,
+            7_200
         );
         assert!(
             matches!(
                 load(&file(
                     dir.path(),
-                    "quota-unknown",
-                    "quota:\n  sample_retention_days: 7\n  refresh_minutes: 5\n"
+                    "sessions-unknown",
+                    "sessions:\n  expire_after_seconds: 7200\n  refresh_minutes: 5\n"
                 )),
                 Err(ConfigError::Syntax(_))
             ),
-            "refresh_minutes is a key no build has ever carried under quota, so it is refused"
+            "refresh_minutes is a key no build has ever carried under sessions, so it is refused"
         );
     }
 
     #[test]
-    fn compatibility_refuses_a_key_the_block_does_not_carry() {
+    fn a_file_without_the_compatibility_quota_or_usage_block_loads_and_usage_takes_its_defaults() {
         let dir = tempfile::tempdir().unwrap();
         std::env::set_var("TEST_CFG_ADMIN", "admin-secret-001");
-        assert!(
-            matches!(
-                load(&file_with_compat(
-                    dir.path(),
-                    "retired-gate",
-                    "  profile: claude-code-2.1.269-linux-x64\n  retired_gate: false\n"
-                )),
-                Err(ConfigError::Syntax(message)) if message.to_string().contains("retired_gate")
+        let config = load(&file(dir.path(), "bare", "")).unwrap();
+        assert_eq!(
+            (
+                config.usage.cache_ttl_seconds,
+                config.usage.refresh_concurrency
             ),
-            "retired_gate is a key no build has ever carried, so it is refused like any other unknown key"
+            (60, 2)
         );
+    }
+
+    const REMOVED_COMPATIBILITY: &str =
+        "compatibility:\n  profile: claude-code-2.1.269-linux-x64\n"; // removed name
+    const REMOVED_QUOTA: &str = "quota:\n  sample_retention_days: 30\n"; // removed name
+    const REMOVED_CATALOG_CACHE: &str = "routing:\n  catalog_cache_seconds: 60\n"; // removed name
+
+    #[test]
+    fn a_file_naming_a_removed_key_is_refused_as_invalid_yaml_with_the_unknown_field_underneath() {
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("TEST_CFG_ADMIN", "admin-secret-001");
+        for (name, body) in [
+            ("compatibility", REMOVED_COMPATIBILITY),
+            ("quota", REMOVED_QUOTA),
+            ("catalog-cache", REMOVED_CATALOG_CACHE),
+        ] {
+            let error = load(&file(dir.path(), name, body)).unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                "the configuration is not valid YAML",
+                "{name}"
+            );
+            let ConfigError::Syntax(cause) = &error else {
+                panic!("{name}: {error:?}");
+            };
+            assert!(
+                cause.to_string().contains("unknown field"),
+                "{name}: {cause}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_cooldown_and_usage_bounds_refuse_outside_their_ranges_and_load_at_their_edges() {
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("TEST_CFG_ADMIN", "admin-secret-001");
+        for (name, body, expected) in [
+            (
+                "cooldown-low",
+                "routing:\n  cooldown_fallback_seconds: 0\n",
+                "routing.cooldown_fallback_seconds must be between 1 and 3600, not 0",
+            ),
+            (
+                "cooldown-high",
+                "routing:\n  cooldown_fallback_seconds: 3601\n",
+                "routing.cooldown_fallback_seconds must be between 1 and 3600, not 3601",
+            ),
+            (
+                "ttl-low",
+                "usage:\n  cache_ttl_seconds: 0\n",
+                "usage.cache_ttl_seconds must be between 1 and 3600, not 0",
+            ),
+            (
+                "ttl-high",
+                "usage:\n  cache_ttl_seconds: 3601\n",
+                "usage.cache_ttl_seconds must be between 1 and 3600, not 3601",
+            ),
+            (
+                "concurrency-low",
+                "usage:\n  refresh_concurrency: 0\n",
+                "usage.refresh_concurrency must be between 1 and 16, not 0",
+            ),
+            (
+                "concurrency-high",
+                "usage:\n  refresh_concurrency: 17\n",
+                "usage.refresh_concurrency must be between 1 and 16, not 17",
+            ),
+        ] {
+            let error = load(&file(dir.path(), name, body)).unwrap_err();
+            assert_eq!(error.to_string(), expected, "{name}");
+        }
+        for (name, body) in [
+            ("cooldown-one", "routing:\n  cooldown_fallback_seconds: 1\n"),
+            (
+                "cooldown-hour",
+                "routing:\n  cooldown_fallback_seconds: 3600\n",
+            ),
+            ("ttl-one", "usage:\n  cache_ttl_seconds: 1\n"),
+            ("ttl-hour", "usage:\n  cache_ttl_seconds: 3600\n"),
+            ("concurrency-one", "usage:\n  refresh_concurrency: 1\n"),
+            ("concurrency-sixteen", "usage:\n  refresh_concurrency: 16\n"),
+        ] {
+            assert!(load(&file(dir.path(), name, body)).is_ok(), "{name}");
+        }
     }
 
     #[test]
@@ -903,7 +897,7 @@ mod tests {
         .unwrap();
         let yaml = format!(
             "admin:\n  listen: 127.0.0.1:0\n  secret_env: {secret_env}\n  plain_http: true\n\
-             compatibility:\n  profile: claude-code-2.1.269-linux-x64\nproxy:\n  listen: 127.0.0.1:0\n\
+             proxy:\n  listen: 127.0.0.1:0\n\
              storage:\n  encryption_key_file: {}\n  path: {}\nusage:\n  cache_ttl_seconds: 60\n  \
              refresh_concurrency: 2\n",
             key.display(),
