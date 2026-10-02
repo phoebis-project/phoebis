@@ -7638,7 +7638,6 @@ export const FIXTURES: Record<string, Fixture> = {
         "catalog_cache_seconds": 60,
         "catalog_refresh_seconds": 21600,
         "cooldown_fallback_seconds": 60,
-        "max_attempts": 3,
         "model_rejection_seconds": 3600,
         "startup_fetch_seconds": 5
       },

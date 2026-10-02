@@ -6,7 +6,7 @@ use axum::http::{Request, StatusCode};
 use fake_upstream::{FakeUpstream, Respond, Rule};
 use http_body_util::BodyExt;
 use phoebis_profile::fixtures::{body, inference_head, BodyFixture, FixtureKind};
-use phoebis_relay::{Limits, MemoryKey, CACHE_DIAGNOSIS_BETA};
+use phoebis_relay::{MemoryKey, CACHE_DIAGNOSIS_BETA};
 use phoebis_store::MemoryStore;
 use tower::ServiceExt;
 
@@ -636,22 +636,17 @@ async fn a_400_naming_the_diagnostics_member_strips_the_member_and_a_second_400_
 }
 
 #[tokio::test]
-async fn a_strip_retry_spends_no_slot_of_the_budget_so_a_one_attempt_pool_still_strips() {
+async fn a_strip_retry_runs_on_the_same_account_before_any_failover() {
     let up = FakeUpstream::start(vec![]).await;
     up.push_credential_rule(ACCT_SECRET, "/v1/messages", json_400(REFUSED_BETA));
     up.push_credential_rule(ACCT_SECRET, "/v1/messages", json_200());
-    let limits = Limits {
-        max_attempts: 1,
-        ..default_limits()
-    };
-    let h = harness_with(
+    let h = harness(
         &up,
         &[api_key("acct", ACCT_SECRET, 0)],
         PoolSpec {
             cache_diagnostics: Some(true),
             ..Default::default()
         },
-        limits,
     )
     .await;
     let resp = h
@@ -663,7 +658,7 @@ async fn a_strip_retry_spends_no_slot_of_the_budget_so_a_one_attempt_pool_still_
     assert_eq!(
         resp.status(),
         200,
-        "the one budget slot went to the 400; the strip retry cost none"
+        "the 400 named the router's own beta, so the corrected body went to the same account"
     );
     assert_eq!(up.requests().len(), 2);
     assert!(!beta_header(&up.requests()[1])
@@ -688,23 +683,18 @@ async fn a_strip_retry_spends_no_slot_of_the_budget_so_a_one_attempt_pool_still_
         .is_some_and(|b| b.split(',').any(|t| t == CACHE_DIAGNOSIS_BETA)));
     up.shutdown().await;
 
-    // Two accounts, two slots: a's 429 spends the first and b's 400 the second, and the strip on b still runs.
+    // Two accounts: a's 429 fails over and the strip on b still runs on b.
     let up2 = FakeUpstream::start(vec![]).await;
     up2.add_credential_rule(A, "/v1/messages", json_429_unified(RESET, "five_hour"));
     up2.push_credential_rule(B, "/v1/messages", json_400(REFUSED_BETA));
     up2.push_credential_rule(B, "/v1/messages", json_200());
-    let limits2 = Limits {
-        max_attempts: 2,
-        ..default_limits()
-    };
-    let h2 = harness_with(
+    let h2 = harness(
         &up2,
         &[oauth("a", A, 0), oauth("b", B, 1)],
         PoolSpec {
             cache_diagnostics: Some(true),
             ..Default::default()
         },
-        limits2,
     )
     .await;
     let resp3 = h2
@@ -717,7 +707,7 @@ async fn a_strip_retry_spends_no_slot_of_the_budget_so_a_one_attempt_pool_still_
     assert_eq!(
         up2.requests().len(),
         3,
-        "a's 429, b's 400, and b's corrected retry: two slots, three submissions"
+        "a's 429, b's 400, and b's corrected retry: three submissions"
     );
     assert_eq!(outcome(&resp3).account_id, "b");
     assert!(!beta_header(&up2.requests()[2])

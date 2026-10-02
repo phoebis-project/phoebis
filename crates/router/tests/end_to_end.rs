@@ -254,8 +254,6 @@ compatibility:
   profile: claude-code-2.1.269-linux-x64
 proxy:
   listen: 127.0.0.1:{proxy_port}
-routing:
-  max_attempts: 2
 stats:
   ledger_path: {ledger}
   metrics_listen: 127.0.0.1:{metrics_port}
@@ -784,7 +782,6 @@ proxy:
   listen: 127.0.0.1:{proxy_port}
 routing:
   cooldown_fallback_seconds: 3600
-  max_attempts: 2
 stats:
   ledger_path: {ledger}
   metrics_listen: 127.0.0.1:{metrics_port}
@@ -1001,7 +998,7 @@ async fn a_fast_session_is_served_fast_walked_on_a_fast_429_and_refused_locally_
     .unwrap();
     let (proxy_port, admin_port, metrics_port) = (free_port(), free_port(), free_port());
     let yaml = format!(
-        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_FAST_ADMIN_SECRET\n  plain_http: true\ncompatibility:\n  profile: claude-code-2.1.269-linux-x64\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nrouting:\n  cooldown_fallback_seconds: 3600\n  max_attempts: 2\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
+        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_FAST_ADMIN_SECRET\n  plain_http: true\ncompatibility:\n  profile: claude-code-2.1.269-linux-x64\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nrouting:\n  cooldown_fallback_seconds: 3600\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
         key = dir.path().join("storage.key").display(),
         db = dir.path().join("phoebis.sqlite").display(),
         ledger = dir.path().join("ledger.sqlite").display(),
@@ -3811,8 +3808,6 @@ compatibility:
   profile: claude-code-2.1.269-linux-x64
 proxy:
   listen: 127.0.0.1:{proxy_port}
-routing:
-  max_attempts: 2
 stats:
   ledger_path: {ledger}
   metrics_listen: 127.0.0.1:{metrics_port}

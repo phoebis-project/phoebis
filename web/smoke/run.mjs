@@ -5044,7 +5044,7 @@ results.push({ name: '/settings has no statusline mention', ok: !/statusline/i.t
   const want = {
     Compatibility: [['Cache diagnostics=off', 'compatibility.cache_diagnostics'], ['Profile=claude-code-2.1.269-linux-x64', '']],
     Quota: [['Sample retention (days)=30', 'quota.sample_retention_days']],
-    Routing: [['Catalog cache (seconds)=60', 'routing.catalog_cache_seconds'], ['Catalog refresh (seconds)=21,600', 'routing.catalog_refresh_seconds'], ['Cooldown fallback (seconds)=60', 'routing.cooldown_fallback_seconds'], ['Model rejection (seconds)=3,600', 'routing.model_rejection_seconds'], ['Max attempts=3', 'routing.max_attempts'], ['Startup fetch (seconds)=5', 'routing.startup_fetch_seconds']],
+    Routing: [['Catalog cache (seconds)=60', 'routing.catalog_cache_seconds'], ['Catalog refresh (seconds)=21,600', 'routing.catalog_refresh_seconds'], ['Cooldown fallback (seconds)=60', 'routing.cooldown_fallback_seconds'], ['Model rejection (seconds)=3,600', 'routing.model_rejection_seconds'], ['Startup fetch (seconds)=5', 'routing.startup_fetch_seconds']],
     Storage: [['Ledger path=./data/ledger.sqlite', 'stats.ledger_path'], ['Pricing path=./pricing.yaml', 'stats.pricing_path'], ['Storage path=./data/router.sqlite', 'storage.path']],
     Usage: [['Cache TTL (seconds)=60', 'usage.cache_ttl_seconds'], ['Refresh concurrency=2', 'usage.refresh_concurrency']],
   };

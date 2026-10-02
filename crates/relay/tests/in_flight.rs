@@ -338,98 +338,6 @@ async fn past_the_bound_a_held_request_re_selects_with_the_account_attempted() {
     up.shutdown().await;
 }
 
-#[tokio::test]
-async fn a_hold_that_would_leave_no_attempt_for_a_dial_answers_the_exhaustion_at_once() {
-    let up = FakeUpstream::start(messages(held_stream())).await;
-    let bus = Bus::new();
-    let mut sub = bus.subscribe("test");
-    let h = harness_with_bus_limits(
-        &up,
-        &[oauth("a", A, 0)],
-        PoolSpec {
-            failover: account_cap(1, 2),
-            ..PoolSpec::default()
-        },
-        bus,
-        phoebis_relay::Limits {
-            max_attempts: 1,
-            ..default_limits()
-        },
-    )
-    .await;
-    let first = h
-        .app
-        .clone()
-        .oneshot(request_for(KEY, MODEL, "s1"))
-        .await
-        .unwrap();
-    assert_eq!(h.router.in_flight().account("a"), 1, "a is at its cap");
-    let app = h.app.clone();
-    let held = tokio::spawn(async move {
-        let started = Instant::now();
-        let resp = app.oneshot(request_for(KEY, MODEL, "s2")).await.unwrap();
-        (resp, started.elapsed())
-    });
-    // A slot frees inside the bound: a request that waited would find it and still have no attempt to dial.
-    tokio::time::sleep(HELD_FOR).await;
-    up.release_one().await;
-    let (resp, waited) = tokio::time::timeout(Duration::from_secs(5), held)
-        .await
-        .expect("answered")
-        .unwrap();
-    assert_eq!(
-        (
-            resp.status().as_u16(),
-            resp.headers()["x-phoebis-error-code"].to_str().unwrap(),
-            resp.headers()["retry-after"].to_str().unwrap()
-        ),
-        (429, "accounts_at_cap", "2"),
-        "the pool at its cap answers with the hold's bound, not the budget's refusal"
-    );
-    assert_eq!(
-        outcome(&resp).error_code.as_deref(),
-        Some("accounts_at_cap"),
-        "the row names the code"
-    );
-    let at_cap_id = outcome(&resp).request_id;
-    let body: serde_json::Value = serde_json::from_slice(&drain(resp).await).unwrap();
-    assert_eq!(
-        (&body["error"]["type"], &body["error"]["message"]),
-        (
-            &serde_json::json!("rate_limit_error"),
-            &serde_json::json!("every account in this pool is at its in-flight cap")
-        )
-    );
-    let mut events = Vec::new();
-    let complete = wait_for(Duration::from_secs(5), || {
-        while let Ok(e) = sub.events.try_recv() {
-            events.push(e);
-        }
-        events.iter().find_map(|e| match e {
-            Event::RequestComplete(c) if c.request_id == at_cap_id => Some(c.clone()),
-            _ => None,
-        })
-    })
-    .await;
-    assert_eq!(
-        (
-            complete.outcome,
-            complete.status,
-            complete.error_code.as_deref()
-        ),
-        (
-            phoebis_bus::Outcome::Exhausted,
-            429,
-            Some("accounts_at_cap")
-        ),
-        "a pool at its cap is an exhausted pool to the ledger and the alerts"
-    );
-    assert!(waited < HELD_FOR, "answered without waiting: {waited:?}");
-    assert_eq!(posts(&up), 1, "nothing was dialled for the held request");
-    drain(first).await;
-    up.shutdown().await;
-}
-
 /// The completion the bus carried for `request_id`, read off `sub` as it arrives.
 async fn completion_of(
     sub: &mut phoebis_bus::Subscriber,
@@ -513,11 +421,11 @@ async fn a_hold_that_times_out_with_no_dispatch_names_its_wait_on_the_completion
 }
 
 #[tokio::test]
-async fn a_hold_whose_next_selection_finds_no_attempt_left_names_its_wait_on_the_completion() {
+async fn a_request_whose_every_hold_ran_out_answers_at_cap_naming_both_waits_on_the_completion() {
     let up = FakeUpstream::start(messages(held_stream())).await;
     let bus = Bus::new();
     let mut sub = bus.subscribe("test");
-    let h = harness_with_bus_limits(
+    let h = harness_with_bus(
         &up,
         &[oauth("a", A, 0), oauth("b", B, 1)],
         PoolSpec {
@@ -525,10 +433,6 @@ async fn a_hold_whose_next_selection_finds_no_attempt_left_names_its_wait_on_the
             ..PoolSpec::default()
         },
         bus,
-        phoebis_relay::Limits {
-            max_attempts: 2,
-            ..default_limits()
-        },
     )
     .await;
     let on_a = h
@@ -565,20 +469,16 @@ async fn a_hold_whose_next_selection_finds_no_attempt_left_names_its_wait_on_the
             resp.headers()["x-phoebis-error-code"].to_str().unwrap()
         ),
         (429, "accounts_at_cap"),
-        "the hold on b would leave no slot of the budget for a dial"
+        "every account was held for and ran out"
     );
     assert_eq!(posts(&up), 2, "nothing was dialled for the held request");
     let held = outcome(&resp)
         .held
-        .expect("the outcome names the hold it waited through");
-    assert_eq!(
-        held.waited_on,
-        ["a"],
-        "the hold on b answered at once and was never waited through"
-    );
+        .expect("the outcome names the holds it waited through");
+    assert_eq!(held.waited_on, ["a", "b"]);
     assert!(
-        (900..=2_000).contains(&held.held_ms),
-        "the first wait ran the one-second bound out: {}",
+        (1_900..=4_000).contains(&held.held_ms),
+        "both waits ran the one-second bound out: {}",
         held.held_ms
     );
     let complete = completion_of(&mut sub, &outcome(&resp).request_id).await;
@@ -588,7 +488,7 @@ async fn a_hold_whose_next_selection_finds_no_attempt_left_names_its_wait_on_the
             .as_deref()
             .map(|h| serde_json::from_str::<serde_json::Value>(h).unwrap()),
         Some(serde_json::to_value(&held).unwrap()),
-        "the completion carries the first wait"
+        "the completion carries both waits"
     );
     drop((on_a, on_b));
     up.release();
@@ -691,7 +591,7 @@ async fn two_placements_woken_by_one_freed_slot_never_pass_the_accounts_cap() {
     assert_eq!(
         statuses,
         [200, 429],
-        "one takes the freed slot; the other, held again past the bound, is answered at the cap"
+        "one takes the freed slot; the other, already held for on a, passes it over and is answered at the cap"
     );
     let at_cap = if two.status() == 429 { &two } else { &three };
     assert_eq!(
@@ -705,6 +605,80 @@ async fn two_placements_woken_by_one_freed_slot_never_pass_the_accounts_cap() {
         (posts(&up), h.router.in_flight().account("a")),
         (2, 1),
         "the cap held: one stream open on a"
+    );
+    drop((first, two, three));
+    up.release();
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_freed_slot_another_request_takes_passes_the_account_over_instead_of_a_second_hold() {
+    let up = FakeUpstream::start(messages(held_stream())).await;
+    let h = harness(
+        &up,
+        &[oauth("a", A, 0)],
+        PoolSpec {
+            failover: account_cap(1, 2),
+            ..PoolSpec::default()
+        },
+    )
+    .await;
+    let first = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, MODEL, "s1"))
+        .await
+        .unwrap();
+    assert_eq!(h.router.in_flight().account("a"), 1, "a is at its cap");
+    // Both placements wait on a. Ending the one stream wakes both in the same turn; a freed slot is read, not
+    // reserved, so the placement whose selection runs second finds it taken by the first.
+    let (two, three, ()) = tokio::join!(
+        h.app.clone().oneshot(request_for(KEY, MODEL, "s2")),
+        h.app.clone().oneshot(request_for(KEY, MODEL, "s3")),
+        async {
+            tokio::time::sleep(HELD_FOR).await;
+            assert_eq!(posts(&up), 1, "both placements are held");
+            up.release_one().await;
+        },
+    );
+    let (two, three) = (two.unwrap(), three.unwrap());
+    let (landed, passed_over) = if two.status() == 200 {
+        (&two, &three)
+    } else {
+        (&three, &two)
+    };
+    assert_eq!(
+        (
+            landed.status().as_u16(),
+            outcome(landed).account_id.as_str()
+        ),
+        (200, "a"),
+        "one placement takes the freed slot"
+    );
+    assert_eq!(
+        (
+            passed_over.status().as_u16(),
+            passed_over.headers()["x-phoebis-error-code"]
+                .to_str()
+                .unwrap(),
+            passed_over.headers()["retry-after"].to_str().unwrap()
+        ),
+        (429, "accounts_at_cap", "2"),
+        "a was held for once, so the other passes it over, and with every leg a hold the pool is at its cap"
+    );
+    let held = outcome(passed_over)
+        .held
+        .expect("the outcome names the hold it waited through");
+    assert_eq!(held.waited_on, ["a"], "one hold per account per request");
+    assert!(
+        held.held_ms < 2_000,
+        "the one wait ended at the release, and no second wait ran the bound out: {}",
+        held.held_ms
+    );
+    assert_eq!(
+        posts(&up),
+        2,
+        "nothing was dialled for the placement passed over"
     );
     drop((first, two, three));
     up.release();

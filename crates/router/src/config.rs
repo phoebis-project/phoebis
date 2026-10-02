@@ -109,8 +109,6 @@ pub struct RoutingConfig {
     pub catalog_refresh_seconds: u64,
     #[serde(default = "default_cooldown_fallback")]
     pub cooldown_fallback_seconds: u64,
-    #[serde(default = "default_max_attempts")]
-    pub max_attempts: u8,
     /// How long an account is skipped for a model it answered 404 for.
     #[serde(default = "default_model_rejection")]
     pub model_rejection_seconds: u64,
@@ -184,8 +182,6 @@ pub enum ConfigError {
     Keepalive(#[from] LimitsError),
     #[error("stats.ledger_path {path} must name a database file inside a directory")]
     LedgerPath { path: PathBuf },
-    #[error("routing.max_attempts must be between 1 and 8, not {value}")]
-    MaxAttemptsOutOfRange { value: u8 },
     #[error("sessions.memory_cap must be between 1 and 1048576, not {value}")]
     MemoryCapOutOfRange { value: usize },
     #[error("sessions.memory_idle_seconds must be between 60 and 31536000, not {value}")]
@@ -268,7 +264,6 @@ impl Default for RoutingConfig {
             catalog_cache_seconds: default_catalog_cache(),
             catalog_refresh_seconds: default_catalog_refresh(),
             cooldown_fallback_seconds: default_cooldown_fallback(),
-            max_attempts: default_max_attempts(),
             model_rejection_seconds: default_model_rejection(),
             startup_fetch_seconds: default_startup_fetch(),
         }
@@ -321,11 +316,6 @@ fn check_shape(config: &Config) -> Result<(), ConfigError> {
         });
     }
 
-    if !(1..=8).contains(&config.routing.max_attempts) {
-        return Err(ConfigError::MaxAttemptsOutOfRange {
-            value: config.routing.max_attempts,
-        });
-    }
     if !(1..=604_800).contains(&config.routing.model_rejection_seconds) {
         return Err(ConfigError::ModelRejectionOutOfRange {
             value: config.routing.model_rejection_seconds,
@@ -520,10 +510,6 @@ fn default_ledger_path() -> PathBuf {
     "./data/ledger.sqlite".into()
 }
 
-fn default_max_attempts() -> u8 {
-    3
-}
-
 fn default_metrics_listen() -> SocketAddr {
     ([127, 0, 0, 1], 9464).into()
 }
@@ -643,14 +629,13 @@ mod tests {
         let config = load(&file(dir.path(), "defaults", "")).unwrap();
         assert_eq!(
             (
-                config.routing.max_attempts,
                 config.routing.cooldown_fallback_seconds,
                 config.routing.catalog_cache_seconds,
                 config.routing.model_rejection_seconds,
                 config.routing.catalog_refresh_seconds,
                 config.routing.startup_fetch_seconds
             ),
-            (3, 60, 60, 3_600, 21_600, 5)
+            (60, 60, 3_600, 21_600, 5)
         );
         assert_eq!(
             (
@@ -659,10 +644,9 @@ mod tests {
             ),
             (86_400, 72)
         );
-        let config = load(&file(dir.path(), "explicit", "routing:\n  catalog_cache_seconds: 30\n  catalog_refresh_seconds: 3600\n  cooldown_fallback_seconds: 30\n  max_attempts: 5\n  model_rejection_seconds: 1800\n  startup_fetch_seconds: 2\nsessions:\n  expire_after_seconds: 7200\nstats:\n  body_capture_max_hours: 24\n")).unwrap();
+        let config = load(&file(dir.path(), "explicit", "routing:\n  catalog_cache_seconds: 30\n  catalog_refresh_seconds: 3600\n  cooldown_fallback_seconds: 30\n  model_rejection_seconds: 1800\n  startup_fetch_seconds: 2\nsessions:\n  expire_after_seconds: 7200\nstats:\n  body_capture_max_hours: 24\n")).unwrap();
         assert_eq!(
             (
-                config.routing.max_attempts,
                 config.routing.catalog_cache_seconds,
                 config.routing.model_rejection_seconds,
                 config.routing.catalog_refresh_seconds,
@@ -670,7 +654,7 @@ mod tests {
                 config.sessions.expire_after_seconds,
                 config.stats.body_capture_max_hours
             ),
-            (5, 30, 1_800, 3_600, 2, 7_200, 24)
+            (30, 1_800, 3_600, 2, 7_200, 24)
         );
         assert!(matches!(
             load(&file(
@@ -721,14 +705,6 @@ mod tests {
             Err(ConfigError::CatalogRefreshOutOfRange { value: 604_801 })
         ));
         assert!(matches!(
-            load(&file(dir.path(), "zero", "routing:\n  max_attempts: 0\n")),
-            Err(ConfigError::MaxAttemptsOutOfRange { value: 0 })
-        ));
-        assert!(matches!(
-            load(&file(dir.path(), "nine", "routing:\n  max_attempts: 9\n")),
-            Err(ConfigError::MaxAttemptsOutOfRange { value: 9 })
-        ));
-        assert!(matches!(
             load(&file(
                 dir.path(),
                 "rejection-zero",
@@ -753,11 +729,7 @@ mod tests {
             Err(ConfigError::BodyCaptureMaxOutOfRange { .. })
         ));
         assert!(matches!(
-            load(&file(
-                dir.path(),
-                "unknown",
-                "routing:\n  max_attempts: 3\n  strategy: x\n"
-            )),
+            load(&file(dir.path(), "unknown", "routing:\n  strategy: x\n")),
             Err(ConfigError::Syntax(_))
         ));
         assert!(
@@ -777,6 +749,25 @@ mod tests {
                 Err(ConfigError::Syntax(_))
             ),
             "an unknown upstream key is refused"
+        );
+    }
+
+    #[test]
+    fn a_file_carrying_routing_max_attempts_is_refused_as_an_unknown_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let error = load(&file(dir.path(), "budget", "routing:\n  max_attempts: 3\n")).unwrap_err();
+        // `Syntax` displays a fixed text; the key is named by the serde error underneath it, which is what the
+        // binary prints through anyhow's chain.
+        let mut chain = error.to_string();
+        let mut source = std::error::Error::source(&error);
+        while let Some(cause) = source {
+            chain.push_str(": ");
+            chain.push_str(&cause.to_string());
+            source = cause.source();
+        }
+        assert!(
+            matches!(error, ConfigError::Syntax(_)) && chain.contains("max_attempts"),
+            "the pool's size is the attempt budget; the key is refused by name: {chain}"
         );
     }
 

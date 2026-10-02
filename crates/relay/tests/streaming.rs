@@ -118,19 +118,11 @@ async fn upstream_429_and_529_are_forwarded_with_their_headers_and_body() {
         },
     }])
     .await;
-    // One attempt in the budget, so the rejection is committed to the caller rather than failed over: with a
-    // budget left, a rate-limited pool with nothing else to select answers its own exhaustion instead.
-    let app = common::relay_with_limits(
-        phoebis_store::AccountKind::Oauth,
-        &up,
-        phoebis_relay::Limits {
-            max_attempts: 1,
-            ..common::default_limits()
-        },
-    )
-    .await;
+    // A request bound to its account commits the rejection to the caller as it came; a portable one would fail
+    // over to the pool's own exhaustion answer.
+    let app = common::relay_with(phoebis_store::AccountKind::Oauth, &up).await;
     let resp = app
-        .oneshot(common::stream_request("phoebis-testkey"))
+        .oneshot(common::non_portable_request(common::KEY, "s1"))
         .await
         .unwrap();
     assert_eq!(resp.status(), 429);

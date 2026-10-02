@@ -24,7 +24,7 @@ use phoebis_routing::{
     cohort_hold, resolve, AccountTicket, ClientClass, CohortHold, EvidenceSource, Exhaustion,
     HoldFacts, KeyPermit, KeyRefusal, OverageEvidence, PinRef, Presented,
     Refusal, Report, ResolveError, RouterHandle, SelectRequest, SelectResult, Selection,
-    SelectionTrace, BUDGET_WINDOW, MODEL_REJECTED_REASON,
+    SelectionTrace, BUDGET_WINDOW,
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, MemoryStore,
@@ -113,8 +113,6 @@ pub struct Limits {
     /// The longest an upstream may go silent mid-stream before the relay gives up, and the longest a request
     /// body may take to arrive after authentication.
     pub idle_timeout: Duration,
-    /// Upstream submissions one caller request may cost across every account it tries.
-    pub max_attempts: u8,
     pub max_request_bytes: usize,
     /// How long an account is skipped for a model it answered 404 for.
     pub model_rejection: Duration,
@@ -580,8 +578,9 @@ fn outcome_of(outcome: &RelayOutcome) -> Outcome {
             Outcome::Exhausted
         }
         // A model rejection is a refusal whether it is caught before any attempt (an obstacle at
-        // selection) or after the last one (the budget's end): the account that answered it is
-        // conclusive either way, not a transport or upstream failure.
+        // selection) or after one, where a portable rejection fails over and ends at the selector's
+        // exhaustion: the account that answered it is conclusive either way, not a transport or upstream
+        // failure.
         Some("model_rejected") => Outcome::Rejected,
         // A key or policy refusal is conclusive whether it is caught at admission or at the reselect after an
         // attempt, so the ledger row reads rejected rather than failed.
@@ -1274,27 +1273,16 @@ impl Relay {
         // attempt that follows names the wait on its trace.
         let mut holds: Vec<HoldFacts> = Vec::new();
         let mut attempt: u8 = 0;
-        let mut spent: u8 = 0;
+        // The accounts this request was held for once already. A freed slot is read, not reserved, so another
+        // request can take it before the next selection; without this the same account could hold the request
+        // again on every pass.
+        let mut held_for: Vec<String> = Vec::new();
         // Whether a hold ran out, and whether any leg dialled: an untimed exhaustion reached through holds alone
         // is a pool at its cap, which frees on its own, not one only an operator can clear.
         let mut held_out = false;
         let mut dialed = false;
 
         loop {
-            // A backstop: every failover point already checks the budget before it comes back here, and
-            // `attempted` grows each pass, so the loop is bounded by the pool even without this.
-            if spent >= self.limits.max_attempts {
-                return self
-                    .refused(
-                        &trace,
-                        attempt,
-                        UPSTREAM_UNREACHABLE,
-                        Some(&key),
-                        Some(&identity),
-                        admitted.client_version.as_deref(),
-                    )
-                    .await;
-            }
             let now = (self.clock)();
             let answer = match self
                 .router
@@ -1392,20 +1380,19 @@ impl Relay {
                         .exhausted(&admitted, attempt, &exhaustion, now, held_out && !dialed)
                         .await;
                 }
-                // A hold spends a slot of the budget like an attempt. A slot freed within the bound lets the next
-                // selection place there; past it the account is attempted and the next selection looks elsewhere.
+                // A slot freed within the bound lets the next selection place there; past it the account is
+                // attempted and the next selection looks elsewhere.
                 SelectResult::Held {
                     account_id,
                     mut hold,
                 } => {
-                    // With no slot left for a dial after this one, the wait could only end in the budget's refusal,
-                    // so the pool answers as the exhausted one it is, at once: at its cap, unless a leg dialled.
-                    if spent + 1 >= self.limits.max_attempts {
-                        return self
-                            .exhausted(&admitted, attempt, &Exhaustion::Untimed, now, !dialed)
-                            .await;
+                    // The account had its one hold of this request, so at its cap it is passed over as one whose
+                    // wait ran out.
+                    if held_for.contains(&account_id) {
+                        held_out = true;
+                        attempted.push(account_id);
+                        continue;
                     }
-                    spent += 1;
                     let started = tokio::time::Instant::now();
                     let deadline = started + admitted.retry_in_place;
                     let freed = self
@@ -1418,6 +1405,7 @@ impl Relay {
                     hold.held_ms = started.elapsed().as_millis() as u64;
                     holds.push(hold);
                     trace.waited(&holds);
+                    held_for.push(account_id.clone());
                     if !freed {
                         held_out = true;
                         attempted.push(account_id);
@@ -1442,11 +1430,15 @@ impl Relay {
                     &answer.cancel,
                     answer.ticket,
                     &mut attempt,
-                    &mut spent,
                     &mut key_permit,
                 )
                 .await
             {
+                Leg::AtCap => {
+                    return self
+                        .exhausted(&admitted, attempt, &Exhaustion::Untimed, now, false)
+                        .await;
+                }
                 Leg::FailOver => continue,
                 Leg::Respond(mut response) => {
                     // Every kind rides this, not the probe path alone: the keepalive's is the only reader
@@ -1531,9 +1523,8 @@ impl Relay {
     }
 
     /// One account's leg of the request. `attempt` is the wire-submission index every bus event and attempt row
-    /// carries; `spent` is the budget under `max_attempts`, which a strip retry leaves alone. `key_permit` is the
-    /// request's own, which a committed stream takes into its body; `selected` is the ticket the selection charged
-    /// for the leg's first pass.
+    /// carries. `key_permit` is the request's own, which a committed stream takes into its body; `selected` is the
+    /// ticket the selection charged for the leg's first pass.
     #[allow(clippy::too_many_arguments)]
     async fn dispatch_to(
         &self,
@@ -1542,14 +1533,13 @@ impl Relay {
         cancel: &CancellationToken,
         mut selected: Option<AccountTicket>,
         attempt: &mut u8,
-        spent: &mut u8,
         key_permit: &mut Option<KeyPermit>,
     ) -> Leg {
         // The row the router selected, not one looked up again in the admission snapshot: the endpoint a
         // request goes out to and the credential it carries have to be the pair one snapshot held.
         let account = &selection.account;
         let pin_epoch = selection.pin.as_ref().map(|pin| pin.epoch);
-        // No wire submission, so no attempt is spent: the account is already in `attempted`, and the next
+        // No wire submission, so the index does not move: the account is already in `attempted`, and the next
         // selection skips it. The outer loop is bounded by the pool size, because each account is selected
         // at most once per request.
         let mut credential = match self.credential(account).await {
@@ -1743,16 +1733,14 @@ impl Relay {
         let mut retried_in_place = false;
         let mut replayed = false;
         let mut stripped_once = false;
-        let mut stripping = false;
 
         loop {
-            *attempt += 1;
-            // The strip retry is the router correcting its own edit on the account that refused it, not a
-            // failover and not a transport retry: it spends no slot of the budget. Every other pass does.
-            if !stripping {
-                *spent += 1;
+            // The wire-submission index is a u8 on the bus and the attempt row, so 255 submissions per request
+            // is the technical bound; the pool's size is the practical one, and no pool approaches it.
+            if *attempt == u8::MAX {
+                return Leg::AtCap;
             }
-            stripping = false;
+            *attempt += 1;
             // One per wire attempt. The first pass's was charged by its selection, so the count the selector read
             // is the one it charged; a later pass takes its own before the dial. A pass that ends without
             // committing a stream drops it with its response half, before the next pass or leg takes one. A
@@ -1847,7 +1835,6 @@ impl Relay {
                 replayed,
                 request_id: admitted.request_id,
                 retry_in_place: admitted.retry_in_place,
-                spent: *spent,
                 ticket,
                 tier_ttls: tier_ttls(&edited),
                 trace: admitted.trace,
@@ -1877,9 +1864,7 @@ impl Relay {
                 };
             let next = match dispatched {
                 Ok(next) => next,
-                Err(AttemptFailure::Unsent(detail))
-                    if !retried && *spent < self.limits.max_attempts =>
-                {
+                Err(AttemptFailure::Unsent(detail)) if !retried => {
                     tracing::debug!(account = %account.id, %detail, "retrying a request that never reached the upstream");
                     fresh = true;
                     retried = true;
@@ -1952,8 +1937,7 @@ impl Relay {
                 }
                 Next::FailOver => return Leg::FailOver,
                 Next::Respond(response) => return Leg::Respond(response),
-                // The same account and the same credential once the throttle has passed; the loop top spends the
-                // slot for the next pass as it does for every pass that is not a strip.
+                // The same account and the same credential once the throttle has passed.
                 Next::RetryInPlace(delay) => {
                     if until_cancelled(tokio::time::sleep(delay), cancel)
                         .await
@@ -2017,10 +2001,9 @@ impl Relay {
                             );
                         }
                     }
-                    // The next pass submits the corrected body on this account; the loop top spends no slot
-                    // for it, and `stripped_once` keeps the strip to one round per leg.
+                    // The next pass submits the corrected body on this account, and `stripped_once` keeps the
+                    // strip to one round per leg.
                     stripped_once = true;
-                    stripping = true;
                     fresh = false;
                     continue;
                 }
@@ -2231,7 +2214,7 @@ impl Relay {
         let (cooldown, mark) = match verdict {
             // A rejected replay is conclusive: the refreshed token was refused too.
             Verdict::Refresh if ctx.replayed => (None, Some(AccountState::ReauthRequired)),
-            Verdict::Refresh if ctx.spent < self.limits.max_attempts => {
+            Verdict::Refresh => {
                 match self
                     .manager
                     .refresh_now(&ctx.account.id, ctx.credential_generation)
@@ -2272,25 +2255,6 @@ impl Relay {
                         );
                     }
                 }
-            }
-            // The budget does not allow a refresh and a replay, so nothing conclusive can happen: the 401
-            // is forwarded as it came and the account keeps its state and a pin that already served.
-            Verdict::Refresh => {
-                let release = self.release_on(&ctx, head.status);
-                let hide_quota = ctx.hides_quota(head.status);
-                return Next::Respond(
-                    self.forward_buffered(
-                        ctx.trace,
-                        &head,
-                        buffered.unwrap_or_default(),
-                        ctx.caller,
-                        outcome,
-                        release,
-                        None,
-                        hide_quota,
-                    )
-                    .await,
-                );
             }
             // `classify` only returns this under `can_strip`, so the one-round rule is already applied; without
             // it the same 400 classifies as `Commit` and is forwarded as any other.
@@ -2454,10 +2418,6 @@ impl Relay {
                 return Next::Respond(responded);
             }
         };
-        // Read before `report_failover` moves `cooldown` below.
-        let rejected = cooldown
-            .as_ref()
-            .is_some_and(|c| c.reason == MODEL_REJECTED_REASON);
         let retry_in_place = self.retry_in_place(&ctx, &head, cooldown.as_ref(), mark, arrived);
         // A non-portable request keeps its pin: the failed response goes back to the client on the
         // account that holds its state, and only the cooldown is recorded. So does one about to retry in place:
@@ -2480,10 +2440,10 @@ impl Relay {
             drop(reader);
             return Next::RetryInPlace(delay);
         }
-        // A held stream cannot be rewound onto another connection, so the only way not to commit it is
-        // to drop it unread; once the budget is spent it goes to the caller as it came.
+        // A held stream cannot be rewound onto another connection, so the only way not to commit it is to drop
+        // it unread; a request bound to its account takes it as it came.
         if let Some(held) = held {
-            if ctx.portable && ctx.spent < self.limits.max_attempts {
+            if ctx.portable {
                 drop(reader);
                 return Next::FailOver;
             }
@@ -2514,25 +2474,8 @@ impl Relay {
         // drained above, so the default here is the empty body of a head that carried none. A row
         // added for a status outside that set would forward nothing instead of its own body.
         let buffered = buffered.unwrap_or_default();
-        if ctx.portable && ctx.spent < self.limits.max_attempts {
+        if ctx.portable {
             return Next::FailOver;
-        }
-        // The budget is spent and this account's rejection was the last word: the caller gets the router's
-        // own refusal rather than a 404 that names an account it can never retry.
-        if ctx.portable && rejected {
-            let mut outcome = outcome;
-            outcome.error_code = Some(MODEL_REJECTED.code.to_string());
-            return Next::Respond(
-                self.answer(
-                    ctx.trace,
-                    MODEL_REJECTED.response(ctx.request_id),
-                    outcome,
-                    None,
-                    ResponseFacts::default(),
-                    None,
-                )
-                .await,
-            );
         }
         Next::Respond(
             self.forward_buffered(
@@ -2619,8 +2562,7 @@ impl Relay {
 
     /// How long to wait before trying the same account again, for a fail-over this leg can wait out instead: a
     /// portable request, a throttle the upstream timed with a `Retry-After` at or under the pool's bound, no
-    /// mark on the account, no retry in place on this leg yet, and a slot of the budget for the retry. Anything
-    /// else fails over.
+    /// mark on the account, and no retry in place on this leg yet. Anything else fails over.
     fn retry_in_place(
         &self,
         ctx: &Responding<'_>,
@@ -2633,7 +2575,6 @@ impl Relay {
         if !ctx.portable
             || mark.is_some()
             || !ctx.can_retry_in_place
-            || ctx.spent >= self.limits.max_attempts
             || cooldown.window != "retry_after"
             || retry_after(head, now).is_none()
         {
@@ -3140,7 +3081,7 @@ struct Forward<'a, C> {
 }
 
 /// Why a selected account produced nothing to dispatch with. Neither answer reaches the caller: the account
-/// is already in `attempted`, so both send the loop back to select without spending an attempt.
+/// is already in `attempted`, so both send the loop back to select without a wire submission.
 enum NoCredential {
     /// The account row moved between the selection and the acquisition.
     Stale,
@@ -3157,8 +3098,8 @@ struct Responding<'a> {
     caller: &'a HeaderMap,
     /// Whether this leg has not retried in place yet: one retry per leg.
     can_retry_in_place: bool,
-    /// Whether this leg has not stripped yet. A strip retry spends no slot of `max_attempts`, so the budget is
-    /// not read here; the one-round rule is the only gate.
+    /// Whether this leg has not stripped yet. A strip retry is the router correcting its own edit on the same
+    /// account, never a failover; the one-round rule is the only gate.
     can_strip: bool,
     cancel: &'a CancellationToken,
     /// The two boundary chains the client's body hashed, for the affinity report; `None` for a body with no
@@ -3189,8 +3130,6 @@ struct Responding<'a> {
     replayed: bool,
     request_id: &'a str,
     retry_in_place: Duration,
-    /// The budget slots spent so far, which the failover and the refresh replay read; a strip retry spends none.
-    spent: u8,
     /// This pass's account ticket, which a committed stream takes into its body.
     ticket: Option<AccountTicket>,
     /// `tier_ttls` of the body as this pass sends it upstream, after the TTL rewrite.
@@ -3293,9 +3232,11 @@ struct Admitted<'a> {
     trace: &'a Trace,
 }
 
-/// What one selected account produced: an answer for the caller, or nothing, in which case the loop selects
-/// the next account. The account is already in `attempted` either way.
+/// What one selected account produced: an answer for the caller; nothing, in which case the loop selects the
+/// next account; or the end of the wire-submission index, which the loop answers as the pool's untimed
+/// exhaustion. The account is already in `attempted` in every case.
 enum Leg {
+    AtCap,
     FailOver,
     Respond(Response),
 }

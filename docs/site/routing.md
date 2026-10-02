@@ -553,9 +553,9 @@ the account is skipped for that model for `routing.model_rejection_seconds` (an 
 to the next member, and the ledger records `model_rejected` for the refusing account and `model_permitted` for the
 one that served it. A 404 naming no model, and every 400 and 422, reach the client as they came.
 
-Each client request runs at most `routing.max_attempts` wire submissions; a same-account retry after a transport
-failure before the request was written counts, and the strip-and-retry does not, as the paragraph after the steps
-says. Each attempt goes through these steps:
+Each client request visits every eligible account of the pool at most once; a same-account retry after a transport
+failure before the request was written, the one refresh replay, the one strip retry and the one retry in place keep
+their own bounds, as the paragraph after the steps says. Each attempt goes through these steps:
 
 1. Ask the router. `timed` answers `429` with `Retry-After: ceil(deadline - now)` and the three unified rate-limit
    headers the client's automatic continue reads; `untimed` answers `503` with error code `accounts_unavailable` and no
@@ -573,11 +573,12 @@ says. Each attempt goes through these steps:
 
 A stream commits at its `message_start` event or its first `error` event, whichever comes first; earlier events
 are buffered, up to 64 KiB, and relayed after commit in order; a stream that exceeds the buffer or sends no
-committing event within 30 seconds commits as received. Every wire submission counts against
-`routing.max_attempts`, including the one same-account retry after a transport failure that happened before the
-request was fully written, with one exception: when an upstream answers 400 naming a beta or field the router
-itself added, the router strips it and retries once on the same account, and that retry costs no attempt, since
-it corrects the router's own edit rather than trying another account.
+committing event within 30 seconds commits as received. The failover visits every eligible account once per
+request, since every failover row (a 401, a 403, a model 404, a 429) refuses before any inference and a visit costs
+no tokens; the same-account retries keep their bounds: one transport retry after a failure that happened before the
+request was fully written, one refresh replay, one strip retry when an upstream answers 400 naming a beta or field
+the router itself added (the router strips it and retries once on the same account, correcting its own edit), and one
+retry in place for a short throttle.
 
 The Accounts view shows what an account is cooling under in a cooling-down block: one line per scope, the whole
 account or one model, with the reason, the deadline, and a clear button; the Models view lists the same rows grouped
@@ -592,9 +593,8 @@ presets beside custom: balanced (16, 10 s, 5 %, the default), fast (8, 5 s, 10 %
 A throttle on a portable request whose `Retry-After` is at or under the pool's `retry_in_place_seconds` (default 10) is
 waited out on the same account and retried there once, with the same credential. The cooldown row is still recorded, so
 a sibling request selecting meanwhile skips the account, and the session's pin stays where it is. The retry is a wire
-submission like any other and costs one attempt of `routing.max_attempts`, so it runs only while the budget has one
-left; without one, the throttle is the client's answer. A second throttle on the retry, a `Retry-After` past the bound,
-a throttle that names no `Retry-After`, and a request bound to its account all take the failover path above.
+submission like any other and runs once per leg. A second throttle on the retry, a `Retry-After` past the bound, a
+throttle that names no `Retry-After`, and a request bound to its account all take the failover path above.
 
 ### In-flight caps
 
@@ -610,11 +610,12 @@ lands there when one frees; past the bound it is selected again with that accoun
 passed over it is answered `429` with the error type `rate_limit_error`, the error code `accounts_at_cap`, the message
 `every account in this pool is at its in-flight cap`, and a `Retry-After` of the pool's `retry_in_place_seconds` held
 between 1 and 19 seconds: the client waits out a `Retry-After` under 20 seconds and treats a longer one as a block it
-does not retry. A hold costs one attempt of `routing.max_attempts`, and a hold that would leave none for the dial is
-answered the same `429` at once. A request that dialled an account before its holds ran out, and a pool with no account
-to hold for, keep the `503 accounts_unavailable` below. A request whose session already holds a pin under any agent is
-never held, and a move whose every destination is at its cap is not made: the pin renews in place and the next request
-judges the move again; a held subagent waits where its cohort is.
+does not retry. A request is held at most once per account: a hold that runs out, or whose freed slot another request
+takes first, adds the account to the request's attempted set and the selection runs again; with every account held for
+and passed over, the answer is the `429` above. A request that dialled an account before its holds ran out, and a pool
+with no account to hold for, keep the `503 accounts_unavailable` below. A request whose session already holds a pin
+under any agent is never held, and a move whose every destination is at its cap is not made: the pin renews in place and
+the next request judges the move again; a held subagent waits where its cohort is.
 
 **Per key.** A key's own `in_flight_cap`, unset by default, counts each Messages request once, from its admission,
 before anything is selected, until its response ends. A keepalive probe and a `count_tokens` request take no slot and

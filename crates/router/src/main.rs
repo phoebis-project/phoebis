@@ -44,9 +44,8 @@ fn main() -> anyhow::Result<()> {
             println!("metrics listens on {}", config.stats.metrics_listen);
             println!("profile {}", config.compatibility.profile);
             println!(
-                "routing: max_attempts {}, cooldown_fallback {}s, model_rejection {}s, catalog cache {}s, \
+                "routing: cooldown_fallback {}s, model_rejection {}s, catalog cache {}s, \
                  catalog refresh {}s, startup fetch {}s",
-                config.routing.max_attempts,
                 config.routing.cooldown_fallback_seconds,
                 config.routing.model_rejection_seconds,
                 config.routing.catalog_cache_seconds,

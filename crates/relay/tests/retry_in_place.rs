@@ -1,6 +1,5 @@
-//! A short throttle on a portable request is waited out on the same account once, within the attempt budget,
-//! with the cooldown row still recorded for the siblings; anything longer, or a request bound to its account,
-//! takes the fail-over path.
+//! A short throttle on a portable request is waited out on the same account once, with the cooldown row still
+//! recorded for the siblings; anything longer, or a request bound to its account, takes the fail-over path.
 
 mod common;
 
@@ -9,7 +8,6 @@ use std::time::{Duration, Instant};
 use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule};
 use http_body_util::BodyExt;
-use phoebis_relay::Limits;
 use phoebis_routing::RouterEvent;
 use tower::ServiceExt;
 
@@ -43,13 +41,6 @@ fn json_200_with_usage() -> Respond {
     }
 }
 
-fn limits(max_attempts: u8) -> Limits {
-    Limits {
-        max_attempts,
-        ..default_limits()
-    }
-}
-
 async fn drain(resp: axum::http::Response<axum::body::Body>) {
     tokio::time::timeout(Duration::from_secs(5), resp.into_body().collect())
         .await
@@ -62,7 +53,7 @@ async fn a_short_retry_after_is_waited_out_on_the_same_account_once() {
     let up = FakeUpstream::start(messages(json_200())).await;
     up.push_credential_rule(A, "/v1/messages", json_429_retry_after("1"));
     up.push_credential_rule(A, "/v1/messages", json_200());
-    let h = harness_with_limits(&up, &[oauth("a", A, 0)], PoolSpec::default(), limits(2)).await;
+    let h = harness(&up, &[oauth("a", A, 0)], PoolSpec::default()).await;
     let started = Instant::now();
     let resp = h
         .app
@@ -76,7 +67,7 @@ async fn a_short_retry_after_is_waited_out_on_the_same_account_once() {
     assert_eq!(
         (o.account_id.as_str(), o.attempt, o.error_code),
         ("a", 2, None),
-        "two wire attempts, both on a, two slots of the budget"
+        "two wire attempts, both on a"
     );
     assert_eq!(credentials_seen(&up), [A, A]);
     assert!(
@@ -96,31 +87,14 @@ async fn a_short_retry_after_is_waited_out_on_the_same_account_once() {
 }
 
 #[tokio::test]
-async fn a_retry_in_place_needs_budget_and_a_second_failure_takes_the_budget_path() {
-    // One attempt in the budget: nothing is left to retry with, so the throttle is the client's answer.
-    let up = FakeUpstream::start(messages(json_200())).await;
-    up.push_credential_rule(A, "/v1/messages", json_429_retry_after("1"));
-    up.push_credential_rule(A, "/v1/messages", json_200());
-    let h = harness_with_limits(&up, &[oauth("a", A, 0)], PoolSpec::default(), limits(1)).await;
-    let started = Instant::now();
-    let resp = h
-        .app
-        .clone()
-        .oneshot(request_for(KEY, MODEL, "s1"))
-        .await
-        .unwrap();
-    assert!(started.elapsed() < Duration::from_millis(900), "no wait");
-    assert_eq!((resp.status().as_u16(), outcome(&resp).attempt), (429, 1));
-    assert_eq!(resp.headers()["retry-after"], "1");
-    assert_eq!(credentials_seen(&up), [A]);
-    up.shutdown().await;
-
-    // Two in the budget and two throttles: one retry, then the second 429 is answered as it came.
+async fn a_second_throttle_on_the_retry_fails_over_or_ends_at_the_pools_exhaustion() {
+    // One account and two throttles: one retry in place, then the second throttle fails over, nothing is left,
+    // and the pool answers with the cooldown's deadline.
     let up = FakeUpstream::start(messages(json_200())).await;
     up.push_credential_rule(A, "/v1/messages", json_429_retry_after("1"));
     up.push_credential_rule(A, "/v1/messages", json_429_retry_after("1"));
     up.push_credential_rule(A, "/v1/messages", json_200());
-    let h = harness_with_limits(&up, &[oauth("a", A, 0)], PoolSpec::default(), limits(2)).await;
+    let h = harness(&up, &[oauth("a", A, 0)], PoolSpec::default()).await;
     let resp = h
         .app
         .clone()
@@ -130,24 +104,24 @@ async fn a_retry_in_place_needs_budget_and_a_second_failure_takes_the_budget_pat
     assert_eq!(
         (
             resp.status().as_u16(),
-            outcome(&resp).account_id.as_str(),
+            resp.headers()["x-phoebis-error-code"].to_str().unwrap(),
+            resp.headers()["retry-after"].to_str().unwrap(),
             outcome(&resp).attempt
         ),
-        (429, "a", 2)
+        (429, "accounts_exhausted", "2", 2)
     );
     assert_eq!(credentials_seen(&up), [A, A], "one retry in place, no more");
     up.shutdown().await;
 
-    // Three in the budget and a sibling: the second throttle fails over.
+    // A sibling: the second throttle fails over.
     let up = FakeUpstream::start(messages(json_200())).await;
     up.push_credential_rule(A, "/v1/messages", json_429_retry_after("1"));
     up.push_credential_rule(A, "/v1/messages", json_429_retry_after("1"));
     up.add_credential_rule(B, "/v1/messages", json_200());
-    let h = harness_with_limits(
+    let h = harness(
         &up,
         &[oauth("a", A, 0), oauth("b", B, 1)],
         PoolSpec::default(),
-        limits(3),
     )
     .await;
     let resp = h

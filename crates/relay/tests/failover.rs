@@ -6,7 +6,6 @@ use fake_upstream::{FakeUpstream, Respond, Rule};
 use http_body_util::BodyExt;
 use phoebis_bus::Bus;
 use phoebis_ledger::{Assembler, Record};
-use phoebis_relay::Limits;
 use phoebis_store::AccountState;
 use tower::ServiceExt;
 
@@ -156,7 +155,7 @@ async fn a_non_portable_request_gets_the_upstream_429_and_keeps_its_pin() {
 }
 
 #[tokio::test]
-async fn at_most_max_attempts_upstream_requests_and_then_the_exhaustion_responses() {
+async fn every_eligible_account_is_tried_once_and_then_the_exhaustion_answers() {
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
         respond: json_429_unified(RESET, "five_hour"),
@@ -179,18 +178,22 @@ async fn at_most_max_attempts_upstream_requests_and_then_the_exhaustion_response
         .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
         .await
         .unwrap();
-    assert_eq!(
-        resp.status(),
-        429,
-        "the budget ran out, the client gets the last upstream answer"
-    );
-    assert_eq!(outcome(&resp).attempt, 3);
+    assert_eq!(resp.status(), 429);
+    assert_eq!(outcome(&resp).attempt, 4);
     assert_eq!(
         credentials_seen(&up).len(),
-        3,
-        "four accounts, three attempts"
+        4,
+        "four accounts, each dialled once"
     );
-    // The fourth account is still eligible, so the next request tries it and only it.
+    assert_eq!(
+        (
+            resp.headers()["x-phoebis-error-code"].to_str().unwrap(),
+            resp.headers()["retry-after"].to_str().unwrap()
+        ),
+        ("accounts_exhausted", "3601"),
+        "every account cooled, so the router answers with the earliest deadline"
+    );
+    // The whole pool is cooling, so the next request dials nothing.
     let resp = h
         .app
         .clone()
@@ -310,6 +313,64 @@ async fn at_most_max_attempts_upstream_requests_and_then_the_exhaustion_response
 }
 
 #[tokio::test]
+async fn the_wire_submission_index_ends_the_request_at_255_with_the_exhaustion_answer() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_429_unified(RESET, "five_hour"),
+    }])
+    .await;
+    // `api_key` takes `'static` names, so the generated ones are leaked for the test's lifetime.
+    let accounts: Vec<TestAccount> = (0..256)
+        .map(|n| {
+            let id: &'static str = Box::leak(format!("k{n:03}").into_boxed_str());
+            let secret: &'static str =
+                Box::leak(format!("sk-ant-api03-FAKE{n:03}").into_boxed_str());
+            api_key(id, secret, 0)
+        })
+        .collect();
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test");
+    let h = harness_with_bus(&up, &accounts, PoolSpec::default(), bus).await;
+    let started = std::time::Instant::now();
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    eprintln!("256 accounts answered in {:?}", started.elapsed());
+    assert_eq!(
+        (
+            resp.status().as_u16(),
+            resp.headers()["x-phoebis-error-code"].to_str().unwrap()
+        ),
+        (503, "accounts_unavailable"),
+        "the index's own bound is answered as the pool's untimed exhaustion"
+    );
+    assert_eq!(outcome(&resp).attempt, 255);
+    assert_eq!(
+        credentials_seen(&up).len(),
+        255,
+        "the 256th account is never dialled"
+    );
+    let events = drain_until_complete(&mut sub).await;
+    let mut assembler = Assembler::new(std::sync::Arc::new(|| 0));
+    let records: Vec<Record> = events
+        .into_iter()
+        .flat_map(|e| assembler.observe(e))
+        .collect();
+    let request = records
+        .iter()
+        .find_map(|r| match r {
+            Record::Request { request, .. } => Some(request),
+            _ => None,
+        })
+        .expect("the request lands a ledger row");
+    assert_eq!(request.outcome, "exhausted");
+    up.shutdown().await;
+}
+
+#[tokio::test]
 async fn a_model_outside_the_rules_is_refused_and_any_other_reaches_the_upstream() {
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
@@ -420,7 +481,7 @@ async fn every_member_cooled_for_a_rejection_answers_404_model_rejected_without_
 }
 
 #[tokio::test]
-async fn a_rejection_at_the_budgets_end_records_a_rejected_request_and_an_upstream_error_attempt() {
+async fn a_rejection_at_the_pools_end_records_a_rejected_request_and_an_upstream_error_attempt() {
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
         respond: json_200(),
@@ -429,17 +490,7 @@ async fn a_rejection_at_the_budgets_end_records_a_rejected_request_and_an_upstre
     up.add_credential_rule(A, "/v1/messages", json_404_model("claude-sonnet-4-5"));
     let bus = Bus::new();
     let mut sub = bus.subscribe("test");
-    let h = harness_with_bus_limits(
-        &up,
-        &[oauth("a", A, 0)],
-        PoolSpec::default(),
-        bus,
-        Limits {
-            max_attempts: 1,
-            ..default_limits()
-        },
-    )
-    .await;
+    let h = harness_with_bus(&up, &[oauth("a", A, 0)], PoolSpec::default(), bus).await;
     let resp = h
         .app
         .clone()
@@ -449,7 +500,7 @@ async fn a_rejection_at_the_budgets_end_records_a_rejected_request_and_an_upstre
     assert_eq!(
         resp.headers().get("x-phoebis-error-code").unwrap(),
         "model_rejected",
-        "the budget is spent after the one rejected attempt"
+        "every account rejected the model, so the router answers its own 404"
     );
     let events = drain_until_complete(&mut sub).await;
     let mut assembler = Assembler::new(std::sync::Arc::new(|| 0));
@@ -915,50 +966,6 @@ async fn deleting_the_account_holding_an_in_flight_request_answers_account_cance
         (up.open_connections() == 0).then_some(())
     })
     .await;
-    up.shutdown().await;
-}
-
-#[tokio::test]
-async fn a_401_the_budget_cannot_refresh_is_forwarded_without_a_terminal_mark() {
-    let up = FakeUpstream::start(vec![Rule {
-        path_prefix: "/v1/messages".into(),
-        respond: Respond::Json {
-            status: 401,
-            headers: vec![],
-            body:
-                br#"{"type":"error","error":{"type":"authentication_error","message":"expired"}}"#
-                    .to_vec(),
-        },
-    }])
-    .await;
-    let one = phoebis_relay::Limits {
-        max_attempts: 1,
-        ..default_limits()
-    };
-    let h = harness_with(&up, &[oauth("a", A, 0)], PoolSpec::default(), one).await;
-    let resp = h
-        .app
-        .clone()
-        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), 401, "the upstream's own answer");
-    assert_eq!(credentials_seen(&up).len(), 1, "no refresh, no replay");
-    assert!(up
-        .requests()
-        .iter()
-        .all(|r| !r.line.starts_with("POST /v1/oauth/token")));
-    // A mark's write is asynchronous, so this window bounds how long one would have to appear rather than
-    // proving none is coming. What guarantees the absence is the path itself: a 401 the budget cannot refresh
-    // builds no mark at all, because nothing conclusive happened.
-    stays_for(Duration::from_millis(200), || {
-        h.store.account("a").unwrap().unwrap().state == AccountState::Ready
-    })
-    .await;
-    assert!(
-        h.router.pins().await.unwrap().is_empty(),
-        "the pin this request created never served, so the forwarded 401 released it"
-    );
     up.shutdown().await;
 }
 

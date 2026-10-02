@@ -317,7 +317,6 @@ export function SettingsPage() {
               { label: 'Catalog refresh (seconds)', value: fmtInt(s.routing.catalogRefreshSeconds), mono: true, title: bootstrapNote('routing.catalog_refresh_seconds') },
               { label: 'Cooldown fallback (seconds)', value: fmtInt(s.routing.cooldownFallbackSeconds), mono: true, title: bootstrapNote('routing.cooldown_fallback_seconds') },
               { label: 'Model rejection (seconds)', value: fmtInt(s.routing.modelRejectionSeconds), mono: true, title: bootstrapNote('routing.model_rejection_seconds') },
-              { label: 'Max attempts', value: fmtInt(s.routing.maxAttempts), mono: true, title: bootstrapNote('routing.max_attempts') },
               { label: 'Startup fetch (seconds)', value: fmtInt(s.routing.startupFetchSeconds), mono: true, title: bootstrapNote('routing.startup_fetch_seconds') },
             ]}
           />

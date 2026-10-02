@@ -152,7 +152,7 @@ so it is safe to run against a production file while the router is up. It prints
 3. `admin listens on {config.admin.listen}`
 4. `metrics listens on {config.stats.metrics_listen}`
 5. `profile {config.compatibility.profile}`
-6. `routing: max_attempts {n}, cooldown_fallback {n}s, model_rejection {n}s, catalog cache {n}s`
+6. `routing: cooldown_fallback {n}s, model_rejection {n}s, catalog cache {n}s, catalog refresh {n}s, startup fetch {n}s`
 7. `ledger at {config.stats.ledger_path}`
 8. `retention {n days|forever}, rollups {n days|forever}, samples {n} days`
 9. `keepalive: lease {n}s, {n} sessions, {n} agents, {n} workers, {n} MiB retained, oauth prewarm
@@ -233,8 +233,6 @@ routing:
   # How often every enabled account's model listing is read again.
   catalog_refresh_seconds: 21600
   cooldown_fallback_seconds: 60
-  # Upstream attempts per client request across distinct accounts, 1 to 8.
-  max_attempts: 3
   # How long an account whose upstream answered 404 for a model is skipped for that model.
   model_rejection_seconds: 3600
   # How long the proxy listener waits at startup for the model listings and the usage snapshots.
@@ -365,7 +363,6 @@ Defaults whole.
 | `catalog_cache_seconds` | `60` | 1 to 86400 |
 | `catalog_refresh_seconds` | `21600` | 60 to 604800 |
 | `cooldown_fallback_seconds` | `60` | any number of seconds |
-| `max_attempts` | `3` | 1 to 8 |
 | `model_rejection_seconds` | `3600` | 1 to 604800 |
 | `startup_fetch_seconds` | `5` | 1 to 60 |
 
@@ -374,9 +371,12 @@ Refused with:
 - `catalog_cache_seconds`: `routing.catalog_cache_seconds must be between 1 and 86400, not {value}`
 - `catalog_refresh_seconds`: `routing.catalog_refresh_seconds must be between 60 and 604800, not {value}`
 - `cooldown_fallback_seconds`: nothing
-- `max_attempts`: `routing.max_attempts must be between 1 and 8, not {value}`
 - `model_rejection_seconds`: `routing.model_rejection_seconds must be between 1 and 604800, not {value}`
 - `startup_fetch_seconds`: `routing.startup_fetch_seconds must be between 1 and 60, not {value}`
+
+The failover visits every eligible account of the pool once per request, so the pool's size bounds a request's
+attempts and no key sets a limit; a key the block does not list is refused at start and by `check-config` as an
+unknown field, named in the error.
 
 ### sessions
 
@@ -454,8 +454,8 @@ accounts' usage and profile fetches may run at once, at least 1, refused with
 `usage.refresh_concurrency must be at least 1`.
 
 The checks above run in a fixed order at load, not block by block: `compatibility.profile`, then
-`admin`'s loopback-or-origin rule, then `usage.refresh_concurrency`, `storage.path`, `routing.max_attempts`, the
-`keepalive` bounds, `routing.catalog_cache_seconds`, `routing.startup_fetch_seconds`,
+`admin`'s loopback-or-origin rule, then `usage.refresh_concurrency`, `storage.path`, the `keepalive` bounds,
+`routing.catalog_cache_seconds`, `routing.startup_fetch_seconds`,
 `routing.catalog_refresh_seconds`, the four `sessions` keys,
 `stats.body_capture_max_hours`, `stats.rollup_retention_days`, `quota.sample_retention_days`, `stats.ledger_path`,
 and last whether `stats.ledger_path` and `storage.path` name the same file. The first failure is the one reported,

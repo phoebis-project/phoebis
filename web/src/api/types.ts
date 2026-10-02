@@ -1145,7 +1145,7 @@ export interface Settings {
   pricing: { effectiveDate: string; models: ModelPrice[]; source: string };
   quota: { sampleRetentionDays: number };
   retention: { bodyCaptureMaxHours: number; ledgerDays: number; quotaSamplesDays: number; rollupDays: number };
-  routing: { catalogCacheSeconds: number; catalogRefreshSeconds: number; cooldownFallbackSeconds: number; maxAttempts: number; modelRejectionSeconds: number; startupFetchSeconds: number };
+  routing: { catalogCacheSeconds: number; catalogRefreshSeconds: number; cooldownFallbackSeconds: number; modelRejectionSeconds: number; startupFetchSeconds: number };
   /** How long a session stays listed after its last activity. */
   sessions: { expireAfterSeconds: number };
   /** `pricingPath` is null when no override file is configured. */
