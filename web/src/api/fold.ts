@@ -152,16 +152,17 @@ export function foldGroups(rows: RequestLog[], by: AnalyticsGroupBy, options: Fo
 export function foldRequests(rows: RequestLog[], bucketMs: number, from: string, to: string, by: AnalyticsGroupBy = 'all', options: FoldOptions = {}): AnalyticsPoint[] {
   const end = Date.parse(to);
   const latest = latestGenerations(rows);
-  const points: AnalyticsPoint[] = [];
-  // A range ending on a bucket start owns no part of that bucket, which is where the series route stops too.
-  for (let at = Math.floor(Date.parse(from) / bucketMs) * bucketMs; at < end; at += bucketMs) {
-    const inBucket = rows.filter((r) => {
-      const t = Date.parse(r.at);
-      return t >= at && t < at + bucketMs;
-    });
-    points.push({ at: new Date(at).toISOString(), groups: foldGroups(inBucket, by, options, latest) });
+  const start = Math.floor(Date.parse(from) / bucketMs) * bucketMs;
+  // A range ending on a bucket start owns no part of that bucket, which is where the series route stops too. The last
+  // bucket runs to its own end, past `to`.
+  const count = Math.max(0, Math.ceil((end - start) / bucketMs));
+  const buckets: RequestLog[][] = Array.from({ length: count }, () => []);
+  // Each row is parsed once and placed by index: a filter per bucket parses every row once per bucket.
+  for (const r of rows) {
+    const i = Math.floor((Date.parse(r.at) - start) / bucketMs);
+    if (i >= 0 && i < count) buckets[i].push(r);
   }
-  return points;
+  return buckets.map((inBucket, i) => ({ at: new Date(start + i * bucketMs).toISOString(), groups: foldGroups(inBucket, by, options, latest) }));
 }
 
 /** Every page of a session's requests, following the cursor to its end or to `maxPages`, which marks the result partial. */

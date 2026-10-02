@@ -914,6 +914,33 @@ test('a folded bucket carries one group per key the page groups on', () => {
   assert.equal(d.foldRequests(rows, 3_600_000, '1970-01-01T00:00:00.000Z', '1970-01-01T01:00:00.000Z').length, 1, 'a range ending on a bucket start adds no empty trailing bucket');
 });
 
+test('a fold assigns rows on bucket edges and outside the range by index', () => {
+  const [row] = d.decodeRequestPage(fixture('requests')).requests;
+  const hour = 3_600_000;
+  const iso = (ms) => new Date(ms).toISOString();
+  // Each row carries its own key, so a bucket's groups name the rows it holds.
+  const at = (ms, keyId) => ({ ...row, at: iso(ms), keyGeneration: 1, keyId });
+  const rows = [
+    at(-1, 'before-first-bucket'),
+    at(10 * 60_000, 'before-from'),
+    at(hour, 'bucket-start'),
+    at(2 * hour - 1, 'before-next-bucket'),
+    at(2.5 * hour, 'at-to'),
+    at(2.75 * hour, 'past-to'),
+    at(3 * hour, 'after-last-bucket'),
+  ];
+  const points = d.foldRequests(rows, hour, iso(30 * 60_000), iso(2.5 * hour), 'key');
+  assert.deepEqual(
+    points.map((p) => [p.at, p.groups.map((g) => g.label).sort()]),
+    [
+      [iso(0), ['before-from']],
+      [iso(hour), ['before-next-bucket', 'bucket-start']],
+      [iso(2 * hour), ['at-to', 'past-to']],
+    ],
+    'the first bucket starts on the boundary below from and the last runs to its own end, as the series route buckets them',
+  );
+});
+
 test('a session fold keeps two holders of one key id apart and labels the earlier one deleted', () => {
   const rows = d.decodeRequestPage(fixture('requests')).requests;
   const live = rows.find((r) => r.id === 'r-captured');
