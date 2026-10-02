@@ -127,12 +127,12 @@
               "web_search": 0
             },
             "cost": {
-              "cache_read": 0.0,
-              "cache_write": 0.0,
-              "input": 0.0,
-              "output": 0.0
+              "cache_read": 0.0002,
+              "cache_write": 0.001,
+              "input": 0.004,
+              "output": 0.002
             },
-            "cost_usd": 0.0,
+            "cost_usd": 0.0072,
             "errors": {},
             "cache_miss_reasons": {
               "none": 1
@@ -473,12 +473,12 @@
               "web_search": 0
             },
             "cost": {
-              "cache_read": 0.0,
-              "cache_write": 0.0,
-              "input": 0.0,
-              "output": 0.0
+              "cache_read": 0.0001,
+              "cache_write": 0.0005,
+              "input": 0.002,
+              "output": 0.001
             },
-            "cost_usd": 0.0,
+            "cost_usd": 0.0036,
             "errors": {},
             "cache_miss_reasons": {
               "none": 1
@@ -824,12 +824,12 @@
               "web_search": 0
             },
             "cost": {
-              "cache_read": 0.0001,
-              "cache_write": 0.0005,
-              "input": 0.002,
-              "output": 0.001
+              "cache_read": 0.00030000000000000003,
+              "cache_write": 0.0015,
+              "input": 0.006,
+              "output": 0.003
             },
-            "cost_usd": 0.0036,
+            "cost_usd": 0.0108,
             "errors": {
               "upstream_error": 1
             },

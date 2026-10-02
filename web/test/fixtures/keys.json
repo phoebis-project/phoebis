@@ -25,19 +25,19 @@
         "affinity_source": "auto",
         "auto_mode_server": null,
         "effective_auto_mode_server": true,
-        "prefix": "T5R8yG7v",
-        "created_at": 1790825302587,
+        "prefix": "gSnfDq_2",
+        "created_at": 1790980572293,
         "rotated_at": null,
         "last_used_at": null,
         "retired_secret_last_used_at": null,
         "sessions_on_retired_secret": 0,
         "usage_7d": {
-          "cost_usd": 0.0036,
+          "cost_usd": 0.018,
           "requests": 4,
           "tokens": 7200
         },
         "lifetime": {
-          "cost_usd": 0.0036,
+          "cost_usd": 0.018,
           "requests": 4
         }
       }

@@ -32,7 +32,7 @@
       "clients": 0,
       "in_flight": 0
     },
-    "pricing_unknown_models": 4,
+    "pricing_unknown_models": 0,
     "gaps": [],
     "keepalive": {
       "agents": 1,

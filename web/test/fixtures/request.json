@@ -6,7 +6,7 @@
       "at": -2600000,
       "finished_at": -2599100,
       "key_id": "desktop",
-      "key_generation": 1790825302587,
+      "key_generation": 1790980572293,
       "pool_id": "main",
       "account_id": "business",
       "session_id": "s1",
@@ -66,7 +66,7 @@
         "web_fetch": 0,
         "web_search": 0
       },
-      "cost_usd": 0.0,
+      "cost_usd": 0.0072,
       "attempts": [
         {
           "index": 1,
@@ -94,8 +94,8 @@
             }
           ],
           "overage_in_use": null,
-          "estimated_usd": null,
-          "pricing_version": null,
+          "estimated_usd": 0.0036,
+          "pricing_version": "2026-10-01",
           "selection": {
             "strategy": "pace",
             "tier": null,
@@ -149,8 +149,8 @@
             }
           ],
           "overage_in_use": null,
-          "estimated_usd": null,
-          "pricing_version": null,
+          "estimated_usd": 0.0036,
+          "pricing_version": "2026-10-01",
           "selection": {
             "strategy": "pace",
             "tier": [
