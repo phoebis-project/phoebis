@@ -88,8 +88,10 @@ const POOL_ROUTE: &str = "PATCH /admin/pools/{id}";
 const KEY_ROUTE: &str = "PATCH /admin/keys/{id}";
 
 /// The route's answer to every bound the console holds and to one past it: the keepalive policy's, the pool
-/// engine's, the model rule count's and both caps'. An admitted probe is written back at once from the list read
-/// taken before the probes, so each probe meets the seeded pool and key, as the captures after these do.
+/// engine's, the model rule count's and both caps'. The burn window and the source dwell have no ceiling at the
+/// route, so the form's open maximum on each has no answer to mirror and only their floors are probed. An admitted
+/// probe is written back at once from the list read taken before the probes, so each probe meets the seeded pool
+/// and key, as the captures after these do.
 async fn bound_probes(app: &axum::Router, cookie: &str) -> Value {
     let pools = json(get(app, "/admin/pools", Some(cookie)).await).await;
     let pool = pools["pools"]

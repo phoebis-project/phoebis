@@ -2,6 +2,7 @@ import { lazy, Suspense, type ReactNode } from 'react';
 import { createBrowserRouter, Navigate, RouterProvider } from 'react-router-dom';
 import { Shell } from '@/components/shell/Shell';
 import { Skeleton } from '@/components/ui/primitives';
+import { reloadOnChunkFailure } from '@/lib/chunks';
 import { AlertsPage } from '@/pages/AlertsPage';
 import { DashboardPage } from '@/pages/DashboardPage';
 import { KeysPage } from '@/pages/KeysPage';
@@ -19,9 +20,9 @@ import { AppSettingsProvider } from './settings';
 const GroupedDialogFixtureRoute = import.meta.env.VITE_PHOEBIS_MOCK === '1' ? lazy(() => import('@/mock/fixtures/GroupedDialogFixture')) : null;
 
 // The three pages that draw Recharts charts load as their own chunks, keeping the chart library out of the entry.
-const AccountsPage = lazy(() => import('@/pages/AccountsPage').then((m) => ({ default: m.AccountsPage })));
-const AnalyticsPage = lazy(() => import('@/pages/AnalyticsPage').then((m) => ({ default: m.AnalyticsPage })));
-const PoolsPage = lazy(() => import('@/pages/PoolsPage').then((m) => ({ default: m.PoolsPage })));
+const AccountsPage = lazy(reloadOnChunkFailure(() => import('@/pages/AccountsPage').then((m) => ({ default: m.AccountsPage }))));
+const AnalyticsPage = lazy(reloadOnChunkFailure(() => import('@/pages/AnalyticsPage').then((m) => ({ default: m.AnalyticsPage }))));
+const PoolsPage = lazy(reloadOnChunkFailure(() => import('@/pages/PoolsPage').then((m) => ({ default: m.PoolsPage }))));
 const PageFallback = () => (<div className="stack"><Skeleton height={36} /><Skeleton height={120} /><Skeleton height={120} /></div>);
 const lazily = (page: ReactNode) => <Suspense fallback={<PageFallback />}>{page}</Suspense>;
 

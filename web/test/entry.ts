@@ -6,6 +6,7 @@ export * from '@/lib/analytics';
 export * from '@/lib/autoMode';
 export * from '@/lib/buckets';
 export * from '@/lib/cache';
+export * from '@/lib/chunks';
 export * from '@/lib/format';
 export * from '@/lib/forms';
 export * from '@/lib/menu';
