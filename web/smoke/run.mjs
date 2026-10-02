@@ -2113,6 +2113,60 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace',
 }
 m.unmount();
 
+// The address opens a dialog on a named group: a link, a reload or a typed address lands on the group, and the
+// entry is replaced by the bare route.
+{
+  const dialogOf = (page) => page.container.querySelector('dialog[open]');
+  const titleOf = (page) => dialogOf(page)?.querySelector('.dialog__title')?.textContent?.trim() ?? 'no dialog';
+  const shown = (page) => [...(dialogOf(page)?.querySelectorAll('section.dialog-group:not([hidden])') ?? [])].map((s) => s.getAttribute('aria-label')).join();
+  const focused = () => document.activeElement?.outerHTML.slice(0, 80) ?? 'nothing focused';
+  let q = await mount('/pools?edit=all&group=cacheTtl');
+  await q.settle(200);
+  const cacheTtl = group(dialogOf(q), 'Cache TTL');
+  results.push({
+    name: '/pools?edit=all&group=cacheTtl opens Edit pool all on Cache TTL, focuses its heading and leaves the address at /pools',
+    ok: titleOf(q) === 'Edit pool all' && shown(q) === 'Cache TTL' && rail(dialogOf(q), 'cacheTtl')?.getAttribute('aria-current') === 'true' && !!cacheTtl && document.activeElement === cacheTtl.querySelector('h3') && q.location().pathname === '/pools' && q.location().search === '',
+    missing: [titleOf(q), shown(q), focused(), JSON.stringify(q.location())],
+  });
+  dialogOf(q)?.querySelector('button[aria-label="Close"]')?.click();
+  await q.settle(200);
+  await q.navigate('/pools?edit=codex&group=shedding');
+  await q.settle(200);
+  results.push({ name: '/pools a search change on the mounted page opens the dialog on its group', ok: titleOf(q) === 'Edit pool codex' && shown(q) === 'Load shedding' && q.location().search === '', missing: [titleOf(q), shown(q), q.location().search] });
+  q.unmount();
+  q = await mount('/pools?edit=nope');
+  await q.settle(200);
+  results.push({ name: '/pools?edit=nope opens nothing, toasts and clears the address', ok: dialogOf(q) === null && q.text().includes('Pool nope not found') && q.location().search === '', missing: [titleOf(q), q.location().search] });
+  q.unmount();
+  q = await mount('/pools?edit=all&group=nope');
+  await q.settle(200);
+  results.push({ name: '/pools?edit=all&group=nope opens on Identity', ok: titleOf(q) === 'Edit pool all' && shown(q) === 'Identity', missing: [titleOf(q), shown(q)] });
+  q.unmount();
+  // The viewer check restores phoebis.role: the preview outlives a mount, and the checks after this block run as admin.
+  const role = localStorage.getItem('phoebis.role');
+  localStorage.setItem('phoebis.role', 'viewer');
+  q = await mount('/pools?edit=all');
+  await q.settle(200);
+  results.push({ name: '/pools?edit=all under the viewer preview opens nothing, toasts nothing and clears the address', ok: dialogOf(q) === null && !q.text().includes('not found') && q.location().search === '', missing: [titleOf(q), q.location().search] });
+  q.unmount();
+  if (role === null) localStorage.removeItem('phoebis.role');
+  else localStorage.setItem('phoebis.role', role);
+  const desktop = (await api.listKeys()).find((k) => k.id === 'desktop')?.name ?? 'desktop';
+  q = await mount('/keys?edit=desktop&group=models');
+  await q.settle(200);
+  const models = group(dialogOf(q), 'Models');
+  results.push({
+    name: '/keys?edit=desktop&group=models opens the key dialog on Models, focuses its heading and leaves the address at /keys',
+    ok: titleOf(q) === `Edit ${desktop}` && shown(q) === 'Models' && !!models && document.activeElement === models.querySelector('h3') && q.location().pathname === '/keys' && q.location().search === '',
+    missing: [titleOf(q), shown(q), focused(), JSON.stringify(q.location())],
+  });
+  q.unmount();
+  q = await mount('/keys?edit=nope');
+  await q.settle(200);
+  results.push({ name: '/keys?edit=nope opens nothing, toasts and clears the address', ok: dialogOf(q) === null && q.text().includes('Key nope not found') && q.location().search === '', missing: [titleOf(q), q.location().search] });
+  q.unmount();
+}
+
 m = await mount('/keys');
 expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost', 'Lifetime cost by key', 'phoebis-8f2a', 'phoebis-c41d', 'phoebis-19e7', 'Pool rules', 'revoked', 'Create key', 'Never', 'still on the previous secret']);
 {

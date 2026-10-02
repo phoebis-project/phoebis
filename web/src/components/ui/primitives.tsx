@@ -326,6 +326,7 @@ export function GroupedDialog({
   status,
   hold = null,
   held = hold !== null,
+  initialGroup = null,
   footer,
   width = 1040,
 }: {
@@ -338,6 +339,11 @@ export function GroupedDialog({
   held?: boolean;
   /** The group of the first refusal: draws "Go to <label>", which opens it and focuses its `[aria-invalid]` control. */
   hold?: string | null;
+  /**
+   * The group the page opens the dialog on from its address; focus moves to that group's heading once the page's
+   * reset has chosen it. Null (Edit, Create) leaves focus where the browser put it, so a field's autoFocus still wins.
+   */
+  initialGroup?: string | null;
   /** The rail, a hint link and Go to call it; the page stores the id. */
   onChoose: (id: string) => void;
   onClose: () => void;
@@ -353,8 +359,9 @@ export function GroupedDialog({
   const titleId = useId();
   const bodyRef = useRef<HTMLDivElement>(null);
   const sections = useRef(new Map<string, HTMLElement>());
-  // A choice made through the rail, a hint link or Go to, waiting for the page to show its group.
+  // A choice made through the rail, a hint link, Go to or the address, waiting for the page to show its group.
   const pending = useRef<{ focus: 'heading' | 'refused'; id: string } | null>(null);
+  const wasOpen = useRef(false);
   const focusIn = (id: string, focus: 'heading' | 'refused') => {
     const section = sections.current.get(id);
     const control = focus === 'refused' ? section?.querySelector<HTMLElement>('[aria-invalid="true"]') : null;
@@ -368,16 +375,26 @@ export function GroupedDialog({
     pending.current = { focus, id };
     onChoose(id);
   };
-  // Every group shown starts the body at its top. Only a choice moves focus, to the group's heading or, for Go to,
-  // its refused control; a group the page sets itself, such as its reset when the dialog opens, leaves focus where
-  // the browser put it, so a field's autoFocus still wins.
+  // Every group shown starts the body at its top. Focus moves only for a choice, to the group's heading or, for Go
+  // to, its refused control, and for the group the address named: the page's reset chooses that group after this
+  // effect has run, so the choice waits here until `chosen` matches it. A group the page sets itself on open leaves
+  // focus where the browser put it, so a field's autoFocus still wins.
   useEffect(() => {
+    if (!open) {
+      wasOpen.current = false;
+      pending.current = null;
+      return;
+    }
+    if (!wasOpen.current) {
+      wasOpen.current = true;
+      if (initialGroup !== null) pending.current = { focus: 'heading', id: initialGroup };
+    }
     bodyRef.current?.scrollTo?.({ top: 0 });
     const choice = pending.current;
+    if (choice === null || choice.id !== chosen) return;
     pending.current = null;
-    if (open && choice?.id === chosen) focusIn(chosen, choice.focus);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, chosen]);
+    focusIn(chosen, choice.focus);
+  }, [open, chosen, initialGroup]);
   const runs: { groups: DialogGroup[]; parent?: string }[] = [];
   for (const g of groups) {
     const last = runs[runs.length - 1];

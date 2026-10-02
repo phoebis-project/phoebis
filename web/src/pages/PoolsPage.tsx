@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { Bar, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { api, ApiError, CACHE_TTL_DEFAULTS, KEEPALIVE_TUNING_DEFAULTS, type PoolInput } from '@/api';
 import { POOL_AFFINITY_DEFAULTS, POOL_ENGINE_DEFAULTS, type PoolEngineFields } from '@/api/client';
@@ -29,6 +29,7 @@ import { KeyDialog } from './KeysPage';
 export const OVERAGE_LABEL: Record<OveragePolicy, string> = { allow: 'Allow overage', never: 'Never use overage', prefer_plan: 'Prefer plan quota' };
 const KEY_STATUS_TONE: Record<KeyStatus, 'critical' | 'good' | 'neutral' | 'warning'> = { active: 'good', disabled: 'warning', expired: 'neutral', revoked: 'critical' };
 const POOL_STATUS_TONE = { active: 'good', degraded: 'warning', disabled: 'neutral', exhausted: 'critical' } as const;
+const isPoolGroup = (value: string | null): value is PoolGroup => value !== null && (POOL_GROUPS as readonly string[]).includes(value);
 const fmtAffinity = (seconds: number) => (seconds === 0 ? 'off' : seconds % 3_600 === 0 ? `${seconds / 3_600}h` : seconds % 60 === 0 ? `${seconds / 60}m` : `${seconds}s`);
 // A scale rather than an alphabetical list.
 const AFFINITY_PICKS = [
@@ -144,9 +145,32 @@ export function PoolsPage() {
   const sessions = useAsync(() => api.listSessions(), []);
   const now = useNow();
   const { canMutate } = useAppSettings();
-  const [dialog, setDialog] = useState<{ pool: Pool | null } | null>(null);
+  const location = useLocation();
+  const navigate = useNavigate();
+  const [dialog, setDialog] = useState<{ initialGroup: PoolGroup | null; pool: Pool | null } | null>(null);
   const [deleting, setDeleting] = useState<Pool | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+
+  // The address opens the dialog on a named group once both lists the dialog reads have loaded; the entry is then
+  // replaced by the bare route, so closing the dialog, a reload or Back does not open it again. A viewer's address is
+  // cleared without a dialog or a toast, since the Edit action it stands in for is admin-only.
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const edit = params.get('edit');
+    if (edit === null || !pools.data || !accounts.data) return;
+    const group = params.get('group');
+    params.delete('edit');
+    params.delete('group');
+    const search = params.toString();
+    navigate({ hash: location.hash, pathname: location.pathname, search: search ? `?${search}` : '' }, { replace: true });
+    if (!canMutate) return;
+    const pool = pools.data.find((p) => p.id === edit);
+    if (!pool) {
+      setToast(`Pool ${edit} not found`);
+      return;
+    }
+    setDialog({ initialGroup: isPoolGroup(group) ? group : 'identity', pool });
+  }, [accounts.data, canMutate, location, navigate, pools.data]);
 
   const accountById = useMemo(() => new Map((accounts.data ?? []).map((a) => [a.id, a])), [accounts.data]);
   const keysByPool = useMemo(() => {
@@ -190,7 +214,7 @@ export function PoolsPage() {
       <div className="page-head">
         <p className="page-head__meta">A pool groups accounts behind a set of keys. Requests pick a member by priority, stick to it per session, and fail over when a member hits a rate limit.</p>
         {canMutate && (
-          <Button variant="primary" icon={<IconPlus size={14} />} onClick={() => setDialog({ pool: null })}>
+          <Button variant="primary" icon={<IconPlus size={14} />} onClick={() => setDialog({ initialGroup: null, pool: null })}>
             Create pool
           </Button>
         )}
@@ -214,7 +238,7 @@ export function PoolsPage() {
                 sessions={sessionsByPool.get(p.id) ?? []}
                 now={now}
                 canMutate={canMutate}
-                onEdit={() => setDialog({ pool: p })}
+                onEdit={() => setDialog({ initialGroup: null, pool: p })}
                 onDelete={() => setDeleting(p)}
               />
             ))
@@ -225,6 +249,7 @@ export function PoolsPage() {
       <PoolDialog
         open={dialog !== null}
         pool={dialog?.pool ?? null}
+        initialGroup={dialog?.initialGroup ?? null}
         onClose={() => setDialog(null)}
         accounts={accounts.data ?? []}
         keys={keys.data ?? []}
@@ -865,6 +890,7 @@ const formFrom = (pool: Pool): PoolForm => ({
 export function PoolDialog({
   open,
   pool,
+  initialGroup = null,
   onClose,
   onSaved,
   onKeyCreated,
@@ -876,6 +902,8 @@ export function PoolDialog({
   sessions,
 }: {
   accounts: Account[];
+  /** The group the address named; the reset opens on it, Identity otherwise. */
+  initialGroup?: PoolGroup | null;
   keys: ApiKey[];
   models: { label: string; value: string }[];
   onClose: () => void;
@@ -916,11 +944,10 @@ export function PoolDialog({
     setRevoked(new Set());
     setBusy(false);
     setError(null);
-    setChosen('identity');
-    // `accounts` is read but not tracked: the parent hands down a fresh array on
-    // every render, and reacting to that would wipe the form mid-edit.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, pool]);
+    setChosen(initialGroup ?? 'identity');
+    // `accounts` is read but not tracked: the parent hands down a fresh array on every render, and reacting to
+    // that would wipe the form mid-edit.
+  }, [open, pool, initialGroup]);
   // The server's refusal describes the form it was sent; every control writes through `setForm`, so the next edit
   // takes it away, while a failed save changes no field and leaves it standing.
   useEffect(() => setError(null), [form]);
@@ -1859,6 +1886,7 @@ export function PoolDialog({
         railLabel="Pool settings"
         groups={groups}
         chosen={chosen}
+        initialGroup={initialGroup}
         onChoose={(id) => setChosen(id as PoolGroup)}
         // The line always explains the current hold: a refusal of the form's own beats a server message left from
         // before the edit.

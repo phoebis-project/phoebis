@@ -117,6 +117,8 @@ localStorage.setItem('phoebis.mockSession', 'admin');
 
 export interface Mounted {
   container: HTMLElement;
+  /** The memory router's address, so a check reads what a page wrote without a window location. */
+  location: () => { hash: string; pathname: string; search: string };
   navigate: (path: string) => Promise<void>;
   settle: (ms?: number) => Promise<void>;
   text: () => string;
@@ -125,9 +127,10 @@ export interface Mounted {
 
 const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-function mounted(container: HTMLElement, root: Root, navigate: Mounted['navigate']): Mounted {
+function mounted(container: HTMLElement, root: Root, navigate: Mounted['navigate'], location: Mounted['location']): Mounted {
   return {
     container,
+    location,
     navigate,
     settle: (ms = 400) => wait(ms),
     text: () => {
@@ -156,10 +159,18 @@ export async function mount(path: string): Promise<Mounted> {
     </SessionProvider>,
   );
   await wait(600);
-  return mounted(container, root, async (p) => {
-    await router.navigate(p);
-    await wait(600);
-  });
+  return mounted(
+    container,
+    root,
+    async (p) => {
+      await router.navigate(p);
+      await wait(600);
+    },
+    () => {
+      const { hash, pathname, search } = router.state.location;
+      return { hash, pathname, search };
+    },
+  );
 }
 
 /** Mounts one element under a memory router, for a check over a component the pages do not reach alone. */
@@ -169,7 +180,14 @@ export async function mountNode(node: ReactNode): Promise<Mounted> {
   const root = createRoot(container);
   root.render(<MemoryRouter>{node}</MemoryRouter>);
   await wait(600);
-  return mounted(container, root, () => {
-    throw new Error('a mounted node has no routes to navigate');
-  });
+  return mounted(
+    container,
+    root,
+    () => {
+      throw new Error('a mounted node has no routes to navigate');
+    },
+    () => {
+      throw new Error('a mounted node has no address');
+    },
+  );
 }
