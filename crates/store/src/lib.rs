@@ -616,8 +616,10 @@ fn prepare(conn: &mut Connection, on_disk: bool) -> Result<(), StoreError> {
         // WAL lets the router task's reads run beside an admin write; an in-memory database has no journal.
         // Unlike `foreign_keys` this rewrites the database header, so it waits behind the version check too.
         conn.pragma_update(None, "journal_mode", "WAL")?;
-        // Every change an operator or the pairing flow is told has landed is on disk before its commit returns;
-        // `routing_commit` alone relaxes, since the next requests re-derive the routing state a power loss takes.
+        // Every change to the registry's own rows (accounts, credentials, keys, members, pools, refresh attempts,
+        // rules, secrets) is on disk before its commit returns; `routing_commit` alone relaxes, for routing state
+        // whose last moments a power loss may take: the next requests rebuild it, and an operator makes a lost
+        // cooldown clear or session release again.
         conn.pragma_update(None, "synchronous", "FULL")?;
     }
     conn.execute_batch(schema::SCHEMA)?;

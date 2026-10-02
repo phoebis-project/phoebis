@@ -18,9 +18,11 @@ SQLite's own `.backup` avoids that by copying a consistent snapshot instead.
 
 A process crash loses nothing that committed, since the WAL is written before a commit returns. The ledger runs with
 `synchronous = NORMAL`, so a power loss or an operating-system crash may lose its last transactions. The registry runs
-with `synchronous = FULL`, so every change an operator, a pairing or a token refresh makes is on disk before it is
-acknowledged, and only the routing state the router records from traffic, such as pins and cooldowns, commits at
-`NORMAL`: a power loss may take its last moments, which the next requests re-derive.
+with `synchronous = FULL`, so every change to its own rows (accounts, credentials, keys, members, pools, refresh
+attempts, rules and secrets) is on disk before it is acknowledged, while the routing state (affinity, cooldowns, pins,
+usage windows, the marks a failing account earns, and an operator's cooldown clear or session release) commits at
+`NORMAL` in one transaction per writer wake, so a power loss can lose the last of it: the router rebuilds it from the
+next requests, and an operator redoes a clear or a release it undid.
 
 Create the destination directory before either backup, and make it private first: `.backup` does not carry the
 source file's `0600` mode onto the copy it creates, and the ledger backup holds the prompts and tool results its

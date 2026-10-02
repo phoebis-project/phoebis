@@ -847,10 +847,11 @@ pub fn spawn(
     Ok(handle)
 }
 
-/// What one wake landed, all of it routing state the store commits at `NORMAL`, which the next requests re-derive
-/// when a power loss takes the last of it. `refused` is the first write the store refused on its own and `skipped`
-/// how many it refused; `stopped` is a database-wide failure that gave up the rest of the wake and `left` how many
-/// writes it left unapplied, counting the one it met; `rekey` is the refused rekey the writer tries once more.
+/// What one wake landed, all of it routing state the store commits at `NORMAL`: a power loss may take the last of
+/// it, which the next requests rebuild, and an operator's cooldown clear or session release among it is made again.
+/// `refused` is the first refusal's error and `skipped` how many writes the store refused on their own; `stopped` is
+/// the database-wide failure that gave up the rest of the wake and `left` how many writes it left unapplied,
+/// counting the one it met; `rekey` is the refused rekey the writer tries once more.
 struct Landed {
     moved: bool,
     refused: Option<StoreError>,
