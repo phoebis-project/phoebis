@@ -10,8 +10,8 @@ use phoebis_routing::{
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, Affinity, AffinityMode, AffinitySource, ApiKeyRow,
     BudgetPeriod, CooldownRow, Failover, OveragePolicy, PinBurn, PinKey, PinRow,
-    PoolMember, PoolRow, QuotaHeaders, RegistryLoad, RoutingLoad, RulesMode, SessionPlacement,
-    Shedding, Strategy, SubagentPlacement, SubscriptionTerm, WarmSessions,
+    PoolMember, PoolRow, RegistryLoad, RoutingLoad, RulesMode, SessionPlacement, Shedding,
+    Strategy, SubagentPlacement, SubscriptionTerm, WarmSessions,
 };
 use rand::rngs::StdRng;
 use rand::SeedableRng;
@@ -161,7 +161,6 @@ fn load_of(pool: Pool, unavailable: &[(&str, bool, AccountState)]) -> RegistryLo
                 session_placement: pool.session_placement,
                 min_shared_prefix_tokens: pool.min_shared_prefix_tokens,
             },
-            quota_headers: QuotaHeaders::Pass,
             created_at: 0,
             updated_at: 0,
         }],
@@ -3883,7 +3882,6 @@ fn two_pools_sharing_an_account_share_its_entries() {
         cache_diagnostics: None,
         auto_mode_server: true,
         affinity: Affinity::default(),
-        quota_headers: QuotaHeaders::Pass,
         created_at: 0,
         updated_at: 0,
     };

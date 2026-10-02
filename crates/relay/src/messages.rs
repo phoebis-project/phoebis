@@ -28,7 +28,7 @@ use phoebis_routing::{
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, MemoryStore,
-    QuotaHeaders, Store,
+    Store,
 };
 use phoebis_transport::control::Resolver;
 use phoebis_transport::decode::{decoder, encoding, Decoder, Encoding};
@@ -98,8 +98,11 @@ const NOT_FORWARDED: &[&str] = &[
     "upgrade",
 ];
 
-/// The family `quota_headers = hide` drops from a committed answer.
-const QUOTA_FAMILY_PREFIX: &str = "anthropic-ratelimit-unified-";
+/// The upstream's rate-limit header families, hidden from every committed answer so an organization's standing
+/// never reads as the key holder's own: the unified family and the Anthropic-key bucket family under the first
+/// prefix, the fast-token family under the second. A rate limit keeps them, a 429 or a 200 whose first event is a
+/// `rate_limit_error`, so the client's continue arms on the reset the upstream named.
+const RATE_LIMIT_FAMILY_PREFIXES: [&str; 2] = ["anthropic-ratelimit-", "anthropic-fast-"];
 
 #[derive(Clone, Copy, Debug)]
 pub struct Limits {
@@ -1196,10 +1199,6 @@ impl Relay {
             .pool(&key.pool_id)
             .map(|p| CacheTtlPolicy::from_json(&p.cache_ttl_json))
             .unwrap_or_default();
-        let quota_headers = snapshot
-            .pool(&key.pool_id)
-            .map(|p| p.quota_headers)
-            .unwrap_or_default();
         let portable = is_portable(&raw);
         let target = parts
             .uri
@@ -1235,7 +1234,6 @@ impl Relay {
             memory_key,
             original,
             portable,
-            quota_headers,
             raw: &raw,
             request_id: &trace.request_id,
             restore,
@@ -1809,7 +1807,6 @@ impl Relay {
                 pin: selection.pin.as_ref(),
                 pin_epoch,
                 portable: admitted.portable,
-                quota_headers: admitted.quota_headers,
                 replayed,
                 request_id: admitted.request_id,
                 retry_in_place: admitted.retry_in_place,
@@ -2063,12 +2060,12 @@ impl Relay {
                             checkin,
                             guards: ctx.guards(),
                             head: &head,
-                            hide_quota: ctx.hides_quota(head.status),
                             keep_alive: reusable,
                             observer: None,
                             on_message_id: None,
                             outcome,
                             prefix,
+                            rate_limit_event: false,
                             reader,
                             renewal: release,
                             trace: ctx.trace,
@@ -2222,7 +2219,6 @@ impl Relay {
                         let release = (!marked)
                             .then(|| self.release_on(&ctx, head.status))
                             .flatten();
-                        let hide_quota = ctx.hides_quota(head.status);
                         return Next::Respond(
                             self.forward_buffered(
                                 ctx.trace,
@@ -2232,7 +2228,6 @@ impl Relay {
                                 outcome,
                                 release,
                                 None,
-                                hide_quota,
                             )
                             .await,
                         );
@@ -2243,7 +2238,6 @@ impl Relay {
             // is forwarded as it came and the account keeps its state and a pin that already served.
             Verdict::Refresh => {
                 let release = self.release_on(&ctx, head.status);
-                let hide_quota = ctx.hides_quota(head.status);
                 return Next::Respond(
                     self.forward_buffered(
                         ctx.trace,
@@ -2253,7 +2247,6 @@ impl Relay {
                         outcome,
                         release,
                         None,
-                        hide_quota,
                     )
                     .await,
                 );
@@ -2384,12 +2377,10 @@ impl Relay {
                         (bytes, Some(PostCommit { inspect, on_error }))
                     }
                 };
-                let hide_quota = ctx.hides_quota(head.status);
                 let responded = match buffered {
                     Some(buffered) => {
                         self.forward_buffered(
                             ctx.trace, &head, buffered, ctx.caller, outcome, renewal, affinity,
-                            hide_quota,
                         )
                         .await
                     }
@@ -2402,12 +2393,12 @@ impl Relay {
                             checkin,
                             guards,
                             head: &head,
-                            hide_quota,
                             keep_alive: reusable,
                             observer,
                             on_message_id,
                             outcome,
                             prefix,
+                            rate_limit_event: false,
                             reader: reader.expect(
                                 "a head the table reads no body for still holds its reader",
                             ),
@@ -2462,12 +2453,14 @@ impl Relay {
                     checkin,
                     guards,
                     head: &head,
-                    hide_quota: ctx.hides_quota(head.status),
                     keep_alive: false,
                     observer: None,
                     on_message_id: None,
                     outcome,
                     prefix: held.bytes,
+                    rate_limit_event: first_event
+                        .as_deref()
+                        .is_some_and(|e| error_type(e).as_deref() == Some("rate_limit_error")),
                     reader: reader
                         .expect("a streaming head still holds the reader the hold read from"),
                     renewal: None,
@@ -2501,17 +2494,8 @@ impl Relay {
             );
         }
         Next::Respond(
-            self.forward_buffered(
-                ctx.trace,
-                &head,
-                buffered,
-                ctx.caller,
-                outcome,
-                None,
-                None,
-                ctx.hides_quota(head.status),
-            )
-            .await,
+            self.forward_buffered(ctx.trace, &head, buffered, ctx.caller, outcome, None, None)
+                .await,
         )
     }
 
@@ -2875,17 +2859,17 @@ impl Relay {
             checkin,
             guards,
             head,
-            hide_quota,
             keep_alive,
             observer,
             on_message_id,
             outcome,
             prefix,
+            rate_limit_event,
             reader,
             renewal,
             trace,
         } = forward;
-        let (builder, decoder) = match forward_head(head, caller, hide_quota) {
+        let (builder, decoder) = match forward_head(head, caller, rate_limit_event) {
             Ok(parts) => parts,
             Err(error) => {
                 tracing::warn!(%error, "the upstream response cannot be forwarded");
@@ -2975,9 +2959,9 @@ impl Relay {
         outcome: RelayOutcome,
         renewal: Option<Renewal>,
         affinity: Option<AffinityFacts>,
-        hide_quota: bool,
     ) -> Response {
-        let (builder, decoder) = match forward_head(head, caller, hide_quota) {
+        // A buffered answer is never an event stream, so its status alone says whether it is a rate limit.
+        let (builder, decoder) = match forward_head(head, caller, false) {
             Ok(parts) => parts,
             Err(error) => {
                 tracing::warn!(%error, "the upstream response cannot be forwarded");
@@ -3090,14 +3074,15 @@ struct Forward<'a, C> {
     /// The response's in-flight counts, which ride the body to its end.
     guards: Guards,
     head: &'a ResponseHead,
-    /// Whether the quota family is dropped from this answer: `quota_headers = hide` and a status other than 429.
-    hide_quota: bool,
     keep_alive: bool,
     /// Set for a committed stream, which is watched for a rate-limit error arriving after the commit.
     observer: Option<PostCommit>,
     on_message_id: Option<Box<dyn FnOnce(String) -> BoxFuture<'static, ()> + Send>>,
     outcome: RelayOutcome,
     prefix: Bytes,
+    /// Set where a held 200's first event is a `rate_limit_error`: that answer is the upstream's rate limit as a
+    /// 429 is, so it keeps the rate-limit families.
+    rate_limit_event: bool,
     reader: BodyReader<C>,
     /// A pinned request's report, sent when the body ends: a committed answer's renewal, or the release of a
     /// pin its own rejection ends.
@@ -3150,8 +3135,6 @@ struct Responding<'a> {
     pin: Option<&'a PinRef>,
     pin_epoch: Option<u64>,
     portable: bool,
-    /// Whether the quota family reaches the caller on this pool's answers other than a 429.
-    quota_headers: QuotaHeaders,
     replayed: bool,
     request_id: &'a str,
     retry_in_place: Duration,
@@ -3173,12 +3156,6 @@ impl Responding<'_> {
             _key: self.key_permit.take(),
             _account: self.ticket.take(),
         }
-    }
-
-    /// Whether this pool's answer to `status` drops the quota family: never on a 429, so the client's continue
-    /// still arms.
-    fn hides_quota(&self, status: u16) -> bool {
-        self.quota_headers == QuotaHeaders::Hide && status != 429
     }
 }
 
@@ -3245,9 +3222,6 @@ struct Admitted<'a> {
     /// gave up on.
     original: Option<&'a OriginalHead>,
     portable: bool,
-    /// Whether the quota family reaches the caller on this pool's answers other than a 429, read once at
-    /// admission alongside `cache_ttl_policy`.
-    quota_headers: QuotaHeaders,
     raw: &'a Bytes,
     request_id: &'a str,
     /// The first-party fields to restore, absent for anything but a `claude-cli/` inference request.
@@ -3355,24 +3329,31 @@ fn decode_all(decoder: &mut dyn Decoder, raw: &[u8]) -> Result<Bytes, TransportE
 }
 
 /// Builds the caller's response head from the upstream's and decides whether the payload can be passed through
-/// as it came. Returns the decoder to run over the body when it cannot.
+/// as it came. Returns the decoder to run over the body when it cannot. `rate_limit_event` marks a 200 whose
+/// first event is a `rate_limit_error`, which keeps the rate-limit families as a 429 does.
 fn forward_head(
     head: &ResponseHead,
     caller: &HeaderMap,
-    hide_quota: bool,
+    rate_limit_event: bool,
 ) -> Result<(Builder, Option<Box<dyn Decoder>>), TransportError> {
     let upstream = encoding(head)?;
     let coding = head.get("content-encoding").unwrap_or("identity");
     let passthrough = matches!(upstream, Encoding::Identity) || caller_accepts(caller, coding);
     let mut builder = Response::builder()
         .status(StatusCode::from_u16(head.status).unwrap_or(StatusCode::BAD_GATEWAY));
+    // The relay's own read of the families (`ratelimit.rs`) already ran on the upstream head; hiding them
+    // from the caller changes nothing it saw.
+    let hide_rate_limits = head.status != 429 && !rate_limit_event;
     for (name, value) in &head.headers {
         if NOT_FORWARDED.iter().any(|n| name.eq_ignore_ascii_case(n)) {
             continue;
         }
-        // The relay's own read of this family (`ratelimit.rs`) already ran on the upstream head; hiding it
-        // from the caller changes nothing it saw.
-        if hide_quota && name.to_ascii_lowercase().starts_with(QUOTA_FAMILY_PREFIX) {
+        let lower = name.to_ascii_lowercase();
+        if hide_rate_limits
+            && RATE_LIMIT_FAMILY_PREFIXES
+                .iter()
+                .any(|p| lower.starts_with(p))
+        {
             continue;
         }
         if !passthrough && name.eq_ignore_ascii_case("content-encoding") {

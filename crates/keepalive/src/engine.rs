@@ -2264,7 +2264,6 @@ mod tests {
                 cache_diagnostics: None,
                 auto_mode_server: true,
                 affinity: phoebis_store::Affinity::default(),
-                quota_headers: phoebis_store::QuotaHeaders::default(),
                 created_at: 0,
                 updated_at: 0,
             }],

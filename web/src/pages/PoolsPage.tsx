@@ -4,7 +4,7 @@ import { Bar, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } 
 import { api, ApiError, CACHE_TTL_DEFAULTS, KEEPALIVE_TUNING_DEFAULTS, type PoolInput } from '@/api';
 import { POOL_AFFINITY_DEFAULTS, POOL_ENGINE_DEFAULTS, type PoolEngineFields } from '@/api/client';
 import type {
-  Account, AffinityMode, ApiKey, CacheTtl, CreatedApiKey, KeyStatus, MemberEligibility, ModelRule, OveragePolicy, Pool, PoolCacheTtl, PoolKeepalive, PoolMember, PoolStrategy, QuotaHeaders, Session, SessionPlacement,
+  Account, AffinityMode, ApiKey, CacheTtl, CreatedApiKey, KeyStatus, MemberEligibility, ModelRule, OveragePolicy, Pool, PoolCacheTtl, PoolKeepalive, PoolMember, PoolStrategy, Session, SessionPlacement,
   SubagentPlacement, TtlRules, WarmSessions,
 } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
@@ -483,12 +483,6 @@ function PoolCard({
             <dt>Failover</dt>
             <dd title={`In flight ${pool.inFlightCap}, retry in place ${pool.retryInPlaceSeconds} s, Pace floor ${fmtPct(pool.paceFloor)}`}>{failoverPresetOf(pool)}</dd>
           </div>
-          {pool.quotaHeaders === 'hide' && (
-            <div>
-              <dt>Quota headers</dt>
-              <dd title={QUOTA_HEADERS_HINT}>hidden</dd>
-            </div>
-          )}
           {/* The badge is wider than any column's value, so on a column of its own it would push the grid past a
               narrow card. */}
           {!pool.autoModeServer && (
@@ -720,6 +714,8 @@ function Eligibility({ verdict, account, now, periodEnd }: { account: Account | 
 
 type ProbeTuning = Omit<PoolKeepalive, 'costCapUsdPerDay' | 'enabled' | 'warmSubagents'>;
 type NumericTuningKey = { [K in keyof ProbeTuning]-?: ProbeTuning[K] extends number ? K : never }[keyof ProbeTuning];
+/** The Quota headers control's own state: the pool routes carry no such member, so the dialog never sends it. */
+type QuotaHeadersChoice = 'hide' | 'pass';
 
 interface PoolForm {
   affinity: number;
@@ -747,7 +743,7 @@ interface PoolForm {
   preferSubscription: boolean;
   /** The threshold field as typed. */
   prefixTokens: string;
-  quotaHeaders: QuotaHeaders;
+  quotaHeaders: QuotaHeadersChoice;
   selectBelow: number;
   selectBelowOn: boolean;
   sessionPlacement: SessionPlacement;
@@ -784,7 +780,7 @@ const blankForm = (): PoolForm => ({
   overage: 'prefer_plan',
   preferSubscription: true,
   prefixTokens: String(POOL_AFFINITY_DEFAULTS.minSharedPrefixTokens),
-  quotaHeaders: POOL_AFFINITY_DEFAULTS.quotaHeaders,
+  quotaHeaders: 'pass',
   selectBelow: 80,
   selectBelowOn: false,
   sessionPlacement: POOL_AFFINITY_DEFAULTS.sessionPlacement,
@@ -835,7 +831,7 @@ const formFrom = (pool: Pool): PoolForm => ({
   // The stored answer, never the effective one, so reopening a pool shows what the operator chose.
   preferSubscription: pool.preferSubscription,
   prefixTokens: String(pool.minSharedPrefixTokens),
-  quotaHeaders: pool.quotaHeaders,
+  quotaHeaders: 'pass',
   // Two decimals, so a threshold the API set finer than a percent survives an unrelated edit.
   selectBelow: pool.selectBelowUtilization === null ? 80 : Math.round(pool.selectBelowUtilization * 10_000) / 100,
   selectBelowOn: pool.selectBelowUtilization !== null,
@@ -976,7 +972,6 @@ export function PoolDialog({
     name: form.name.trim(),
     overagePolicy: form.overage,
     preferSubscription: form.preferSubscription,
-    quotaHeaders: form.quotaHeaders,
     selectBelowUtilization: form.selectBelowOn ? form.selectBelow / 100 : null,
     sessionPlacement: form.sessionPlacement,
     status: form.status,
@@ -1796,7 +1791,7 @@ export function PoolDialog({
     responseHeaders: (
       <div className="cells">
         <Field label="Quota headers" hint={QUOTA_HEADERS_HINT}>
-          <Select value={form.quotaHeaders} onChange={(e) => set('quotaHeaders', e.target.value as QuotaHeaders)} aria-label="Quota headers" aria-invalid={invalid('Quota headers')}>
+          <Select value={form.quotaHeaders} onChange={(e) => set('quotaHeaders', e.target.value as QuotaHeadersChoice)} aria-label="Quota headers" aria-invalid={invalid('Quota headers')}>
             <option value="pass">Pass through</option>
             <option value="hide">Hide on committed answers</option>
           </Select>

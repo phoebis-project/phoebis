@@ -164,7 +164,7 @@ test('a new pool reads each member the way the pool route does', async () => {
   assert.equal((await verdicts('third', 'prefer_plan')).personal, 'eligible');
 });
 
-test('a pool write round-trips the pin, placement and quota fields and the members\' budgets', async () => {
+test('a pool write round-trips the pin and placement fields and the members\' budgets', async () => {
   const api = await as('admin');
   const all = await storyPool(api);
   const console_ = all.members.find((m) => m.accountId === 'console');
@@ -174,14 +174,13 @@ test('a pool write round-trips the pin, placement and quota fields and the membe
     affinityMode: 'always',
     members: all.members.map((m) => (m.accountId === 'console' ? { ...m, budgetDailyUsd: 7.5, budgetMonthlyUsd: null } : m)),
     minSharedPrefixTokens: 30_000,
-    quotaHeaders: 'pass',
     sessionPlacement: 'by_strategy',
     subagentPlacement: 'with_main',
   };
   const saved = await api.updatePool('all', edit);
   const stored = (await api.listPools()).find((p) => p.id === 'all');
   for (const pool of [saved, stored]) {
-    assert.deepEqual([pool.affinityMode, pool.minSharedPrefixTokens, pool.quotaHeaders, pool.sessionPlacement, pool.subagentPlacement], ['always', 30_000, 'pass', 'by_strategy', 'with_main']);
+    assert.deepEqual([pool.affinityMode, pool.minSharedPrefixTokens, pool.sessionPlacement, pool.subagentPlacement], ['always', 30_000, 'by_strategy', 'with_main']);
     const member = pool.members.find((m) => m.accountId === 'console');
     assert.deepEqual([member.budgetDailyUsd, member.budgetMonthlyUsd, member.kind, member.spends, member.budgetUntil], [7.5, null, 'api_key', [], null], 'the mock keeps no ledger, so a write answers no spend');
   }
@@ -276,7 +275,6 @@ test('a pool write with an unknown spelling or a budget the route refuses is ref
     [{ affinityMode: 'sometimes' }, 'affinity_mode must be always or when_cached'],
     [{ subagentPlacement: 'alone' }, 'subagent_placement must be by_cohort, by_strategy, or with_main'],
     [{ sessionPlacement: 'by_luck' }, 'session_placement must be by_strategy or by_warm_prefix'],
-    [{ quotaHeaders: 'strip' }, 'quota_headers must be hide or pass'],
     // The route reads the threshold as an unsigned whole number, so any other value fails the body's parse.
     [{ minSharedPrefixTokens: -1 }, 'body must be a JSON object'],
     [{ minSharedPrefixTokens: 1.5 }, 'body must be a JSON object'],

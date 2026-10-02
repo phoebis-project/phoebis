@@ -296,8 +296,6 @@ export type AffinityMode = 'always' | 'when_cached';
 /** What a key identifies a conversation by: the climb's first source that answers, or one source alone. */
 export type AffinitySource = 'auto' | 'content' | 'session' | 'user_id' | 'whole_key';
 export type BudgetPeriod = 'day' | 'month';
-/** Whether the upstream's quota headers reach the client on a committed answer. */
-export type QuotaHeaders = 'hide' | 'pass';
 /** Where a fresh session with no pin lands: by the strategy, or where its static prefix is warm. */
 export type SessionPlacement = 'by_strategy' | 'by_warm_prefix';
 /** Where a subagent with no pin of its own lands. */
@@ -367,7 +365,6 @@ export interface Pool {
   paceFloor: number;
   /** Order the selection set by account kind before priority; the operator's answer alone. */
   preferSubscription: boolean;
-  quotaHeaders: QuotaHeaders;
   requests24h: number;
   /** The longest throttle a request waits out on its own member before it fails over. */
   retryInPlaceSeconds: number;

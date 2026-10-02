@@ -21,8 +21,8 @@ use phoebis_relay::{router, CatalogService, Limits, OriginalHead, Relay, RelayOu
 use phoebis_routing::{spawn, RouterConfig, RouterHandle};
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, Affinity, AffinitySource, ApiKeyRow,
-    Failover, Identity, MemberWrite, ModelRule, NewBundle, OveragePolicy, PoolRow, QuotaHeaders,
-    RulesMode, Secret, Shedding, StorageKey, Store, Strategy,
+    Failover, Identity, MemberWrite, ModelRule, NewBundle, OveragePolicy, PoolRow, RulesMode,
+    Secret, Shedding, StorageKey, Store, Strategy,
 };
 use phoebis_transport::request::parse_head;
 // The polls live with the fake so every integration suite has them; the call sites here name them as before.
@@ -114,7 +114,6 @@ pub struct PoolSpec {
     pub migrate_above_utilization: Option<f64>,
     pub model_rules: Vec<ModelRule>,
     pub overage_policy: OveragePolicy,
-    pub quota_headers: QuotaHeaders,
     pub strategy: Strategy,
 }
 
@@ -131,7 +130,6 @@ impl Default for PoolSpec {
             migrate_above_utilization: None,
             model_rules: Vec::new(),
             overage_policy: OveragePolicy::PreferPlan,
-            quota_headers: QuotaHeaders::Pass,
             strategy: Strategy::Priority,
         }
     }
@@ -658,7 +656,6 @@ async fn build(
                     cache_diagnostics: pool.cache_diagnostics,
                     auto_mode_server: pool.auto_mode_server,
                     affinity: Affinity::default(),
-                    quota_headers: pool.quota_headers,
                     created_at: NOW,
                     updated_at: NOW,
                 },

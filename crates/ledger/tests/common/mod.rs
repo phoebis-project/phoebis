@@ -19,8 +19,8 @@ use phoebis_relay::{router, CatalogService, Limits, Relay};
 use phoebis_routing::{spawn as spawn_router, RouterConfig, RouterHandle};
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, Affinity, AffinitySource, ApiKeyRow,
-    Failover, Identity, MemberWrite, NewBundle, OveragePolicy, PoolRow, QuotaHeaders, RulesMode,
-    Secret, Shedding, StorageKey, Store, Strategy,
+    Failover, Identity, MemberWrite, NewBundle, OveragePolicy, PoolRow, RulesMode, Secret,
+    Shedding, StorageKey, Store, Strategy,
 };
 use phoebis_transport::request::parse_head;
 // The polls live with the fake so every integration suite has them; only some of them are used here.
@@ -186,7 +186,6 @@ pub async fn harness_on(
                     cache_diagnostics: None,
                     auto_mode_server: true,
                     affinity: Affinity::default(),
-                    quota_headers: QuotaHeaders::Pass,
                     created_at: NOW,
                     updated_at: NOW,
                 },

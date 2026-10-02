@@ -1,5 +1,5 @@
 import type { AccountPatch, Api, CreateKeyInput, KeyInput, PoolInput } from '@/api/client';
-import { AFFINITY_MODE_VALUES, AFFINITY_SOURCE_VALUES, QUOTA_HEADERS_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES, decodeLiveDelta, decodeLiveSnapshot } from '@/api/decode';
+import { AFFINITY_MODE_VALUES, AFFINITY_SOURCE_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES, decodeLiveDelta, decodeLiveSnapshot } from '@/api/decode';
 import { ApiError, catalogUnion, slug } from '@/api/http';
 import type {
   Account, AccountCatalog, AccountInput, AlertDeliveryTest, AlertEvent, AlertKind, AlertRule, AlertRuleInput, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, Delivery, KeyModels, LifecycleDelivery, LifecyclePage, LiveEvent, MemberEligibility, ModelEvent,
@@ -95,12 +95,11 @@ const engineRefusal = (input: PoolInput): string | null => {
   return null;
 };
 
-/** The pin, placement and quota header spellings, in the order and words of the pool routes; an absent field is kept. */
+/** The pin and placement spellings, in the order and words of the pool routes; an absent field is kept. */
 const affinityRefusal = (input: Partial<PoolInput>): string | null => {
   if (input.affinityMode !== undefined && !AFFINITY_MODE_VALUES.some((mode) => mode === input.affinityMode)) return 'affinity_mode must be always or when_cached';
   if (input.subagentPlacement !== undefined && !SUBAGENT_PLACEMENT_VALUES.some((p) => p === input.subagentPlacement)) return 'subagent_placement must be by_cohort, by_strategy, or with_main';
   if (input.sessionPlacement !== undefined && !SESSION_PLACEMENT_VALUES.some((p) => p === input.sessionPlacement)) return 'session_placement must be by_strategy or by_warm_prefix';
-  if (input.quotaHeaders !== undefined && !QUOTA_HEADERS_VALUES.some((h) => h === input.quotaHeaders)) return 'quota_headers must be hide or pass';
   return null;
 };
 

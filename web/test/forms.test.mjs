@@ -27,7 +27,6 @@ const input = {
   overagePolicy: pool.overagePolicy,
   paceFloor: pool.paceFloor,
   preferSubscription: pool.preferSubscription,
-  quotaHeaders: pool.quotaHeaders,
   retryInPlaceSeconds: pool.retryInPlaceSeconds,
   selectBelowUtilization: pool.selectBelowUtilization,
   sessionPlacement: pool.sessionPlacement,
@@ -139,14 +138,13 @@ test('a pool input with select-below inside the band is refused and every engine
   assert.equal(d.validatePoolInput({ ...input, migrateWhenSpent: false }, accounts), true);
 });
 
-test('a pool input carries the store defaults for the pin, placement and quota fields, and each unknown spelling is refused', () => {
+test('a pool input carries the store defaults for the pin and placement fields, and each unknown spelling is refused', () => {
   assert.deepEqual(
-    [input.affinityMode, input.subagentPlacement, input.sessionPlacement, input.minSharedPrefixTokens, input.quotaHeaders],
-    ['always', 'by_cohort', 'by_strategy', 20_000, 'pass'],
+    [input.affinityMode, input.subagentPlacement, input.sessionPlacement, input.minSharedPrefixTokens],
+    ['always', 'by_cohort', 'by_strategy', 20_000],
   );
   const spellings = {
     affinityMode: [['always', 'when_cached'], 'sometimes'],
-    quotaHeaders: [['hide', 'pass'], 'strip'],
     sessionPlacement: [['by_strategy', 'by_warm_prefix'], 'by_luck'],
     subagentPlacement: [['by_cohort', 'by_strategy', 'with_main'], 'alone'],
   };
@@ -341,7 +339,6 @@ test('a pool refusal names the group its control sits in', () => {
       { keepalive: { ...input.keepalive, retryMaxSeconds: 20, retrySeconds: 30 } },
       refused('Retry backoff max (s)', 'probeTuning', 'Retry backoff max (s) is at or above Retry backoff base (s).'),
     ],
-    [{ quotaHeaders: 'strip' }, refused('Quota headers', 'responseHeaders', 'Quota headers is one of its listed choices.')],
   ];
   for (const [patch, expected] of cases) assert.deepEqual(d.poolRefusals({ ...input, ...patch }, accounts), expected, JSON.stringify(patch));
 });
@@ -354,10 +351,10 @@ test('the Probe tuning rows lay out every numeric keepalive bound but the grace 
 });
 
 test("refusals come in rail order, a new pool's first two the name and the member", () => {
-  const refusals = d.poolRefusals({ ...input, name: '', members: [], modelRules: rules('a***'), quotaHeaders: 'strip' }, accounts);
+  const refusals = d.poolRefusals({ ...input, name: '', members: [], modelRules: rules('a***') }, accounts);
   assert.deepEqual(
     refusals.map((r) => r.group),
-    ['identity', 'members', 'models', 'responseHeaders'],
+    ['identity', 'members', 'models'],
   );
   assert.deepEqual(
     refusals.slice(0, 2).map((r) => r.text),

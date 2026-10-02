@@ -49,7 +49,6 @@ const POOL_ROWS: PoolSeed[] = [
     // Pins only for a request that caches, and a fresh session placed where its static prefix is warm.
     affinityMode: 'when_cached',
     minSharedPrefixTokens: POOL_AFFINITY_DEFAULTS.minSharedPrefixTokens,
-    quotaHeaders: 'hide',
     sessionPlacement: 'by_warm_prefix',
     subagentPlacement: 'by_cohort',
     keepalive: { ...KEEPALIVE_TUNING_DEFAULTS, enabled: true, costCapUsdPerDay: 4, warmSubagents: true },

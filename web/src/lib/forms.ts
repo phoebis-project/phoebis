@@ -1,5 +1,5 @@
 import type { AccountPatch, KeyInput, PoolEngineFields, PoolInput } from '@/api/client';
-import { AFFINITY_MODE_VALUES, QUOTA_HEADERS_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES } from '@/api/decode';
+import { AFFINITY_MODE_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES } from '@/api/decode';
 import type { Account, AffinitySource, ApiKey, ModelRule, ModelRulesMode, PoolKeepalive } from '@/api/types';
 import { fmtInt, toLocalInput } from './format';
 import { checkPattern } from './patterns';
@@ -182,8 +182,6 @@ export function poolRefusals(input: PoolInput, accountIds: ReadonlySet<string>):
 
   for (const key of PROBE_TUNING_KEYS) keepalive('probeTuning', key);
   refuse('probeTuning', KEEPALIVE_FIELD_LABELS.retryMaxSeconds, k.retryMaxSeconds >= k.retrySeconds ? null : 'Retry backoff max (s) is at or above Retry backoff base (s).');
-
-  refuse('responseHeaders', 'Quota headers', QUOTA_HEADERS_VALUES.some((headers) => headers === input.quotaHeaders) ? null : listed('Quota headers'));
   return out;
 }
 

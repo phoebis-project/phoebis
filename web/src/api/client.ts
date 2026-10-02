@@ -119,13 +119,12 @@ export const POOL_ENGINE_DEFAULTS: PoolEngineFields = {
   windDownMinutes: 30,
 };
 
-export type PoolAffinityFields = Pick<Pool, 'affinityMode' | 'minSharedPrefixTokens' | 'quotaHeaders' | 'sessionPlacement' | 'subagentPlacement'>;
+export type PoolAffinityFields = Pick<Pool, 'affinityMode' | 'minSharedPrefixTokens' | 'sessionPlacement' | 'subagentPlacement'>;
 
-/** The store's pin, placement and quota header defaults, which a new pool starts with. */
+/** The store's pin and placement defaults, which a new pool starts with. */
 export const POOL_AFFINITY_DEFAULTS: PoolAffinityFields = {
   affinityMode: 'always',
   minSharedPrefixTokens: 20_000,
-  quotaHeaders: 'pass',
   sessionPlacement: 'by_strategy',
   subagentPlacement: 'by_cohort',
 };

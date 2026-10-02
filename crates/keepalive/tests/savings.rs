@@ -1586,7 +1586,6 @@ async fn a_key_moved_to_another_pool_is_capped_and_charged_there() {
                 cache_diagnostics: None,
                 auto_mode_server: true,
                 affinity: phoebis_store::Affinity::default(),
-                quota_headers: phoebis_store::QuotaHeaders::Pass,
                 created_at: NOW,
                 updated_at: NOW,
             },

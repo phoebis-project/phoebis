@@ -24,8 +24,8 @@ use phoebis_profile::claude_code_2_1_269_linux_x64;
 use phoebis_routing::{spawn as spawn_router, RouterConfig, RouterHandle};
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, Affinity, AffinitySource, AlertRuleRow, ApiKeyRow,
-    Failover, Identity, MemberWrite, NewBundle, OveragePolicy, PoolRow, QuotaHeaders,
-    RulesMode, Secret, Shedding, StorageKey, Store, Strategy,
+    Failover, Identity, MemberWrite, NewBundle, OveragePolicy, PoolRow, RulesMode,
+    Secret, Shedding, StorageKey, Store, Strategy,
 };
 use phoebis_transport::control::{ControlClient, ResolveFuture, Resolver};
 use phoebis_transport::{connector_builder, trust_extra_ca, Plane};
@@ -200,7 +200,6 @@ async fn rig_over(store: Arc<Store>, webhook: Arc<dyn Webhook>, hook: Option<Clo
                 cache_diagnostics: None,
                 auto_mode_server: true,
                 affinity: Affinity::default(),
-                quota_headers: QuotaHeaders::Pass,
                 created_at: NOW,
                 updated_at: NOW,
             },

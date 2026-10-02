@@ -12,8 +12,7 @@ use phoebis_keepalive::KeepalivePolicy;
 use phoebis_relay::CacheTtlPolicy;
 use phoebis_store::{
     Affinity, AffinityMode, Failover, MemberWrite, OveragePolicy, PoolMember, PoolRow,
-    QuotaHeaders, SessionPlacement, Shedding, StoreError, Strategy, SubagentPlacement,
-    WarmSessions,
+    SessionPlacement, Shedding, StoreError, Strategy, SubagentPlacement, WarmSessions,
 };
 use serde_json::{json, Value};
 
@@ -130,8 +129,6 @@ struct PoolInput {
     session_placement: Option<String>,
     #[serde(default)]
     min_shared_prefix_tokens: Option<u64>,
-    #[serde(default)]
-    quota_headers: Option<String>,
 }
 
 /// A PATCH's `keepalive` names only the fields the operator touched, and the struct fills the rest with
@@ -437,17 +434,6 @@ fn apply(state: &AdminState, row: &mut PoolRow, input: &PoolInput) -> Result<(),
     if let Some(tokens) = input.min_shared_prefix_tokens {
         row.affinity.min_shared_prefix_tokens = tokens;
     }
-    if let Some(headers) = &input.quota_headers {
-        row.quota_headers = match QuotaHeaders::parse(headers) {
-            Some(headers) => headers,
-            None => {
-                return Err(failure(
-                    StatusCode::BAD_REQUEST,
-                    "quota_headers must be hide or pass",
-                ))
-            }
-        };
-    }
     // Checked over the whole row rather than over the edited field alone, so lowering affinity under an
     // enabled policy is refused exactly as enabling under a short affinity is.
     if let Err(error) =
@@ -510,7 +496,6 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
         cache_diagnostics: None,
         auto_mode_server: true,
         affinity: Affinity::default(),
-        quota_headers: QuotaHeaders::Pass,
         created_at: now,
         updated_at: now,
     };
@@ -807,7 +792,6 @@ pub(crate) async fn pool_json(state: &AdminState, row: &PoolRow) -> Result<Value
         "affinity_ttl_seconds": row.affinity_ttl_seconds, "overage_policy": row.overage_policy.as_str(),
         "affinity_mode": row.affinity.mode.as_str(), "subagent_placement": row.affinity.subagent_placement.as_str(),
         "session_placement": row.affinity.session_placement.as_str(), "min_shared_prefix_tokens": row.affinity.min_shared_prefix_tokens,
-        "quota_headers": row.quota_headers.as_str(),
         "migrate_above_utilization": row.migrate_above_utilization, "select_below_utilization": row.select_below_utilization,
         "model_rules": row.model_rules,
         "shed_share": row.shedding.shed_share, "burn_window_seconds": row.shedding.burn_window_seconds,

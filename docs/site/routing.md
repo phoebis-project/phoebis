@@ -78,7 +78,6 @@ Every field, in the order the request body takes them:
 | `cache_ttl` | off | a policy object, `inject_when_absent` off by default; see below |
 | `cache_diagnostics` | unset (inherits) | `true`, `false`, or `null` |
 | `auto_mode_server` | `true` | `true` or `false`: `auto_mode_server must be true or false` |
-| `quota_headers` | `pass` | `hide` or `pass`; see below |
 | `body_capture_hours` | `0` (off) | `body_capture_hours exceeds stats.body_capture_max_hours` |
 | `wind_down_minutes` | `30` | 0 to 10,080 (a week) |
 | `members` | none | create only; replaced wholesale by `PUT /admin/pools/{id}/members` |
@@ -91,11 +90,6 @@ the router passes the request for a check and its verdict through unchanged; off
 client reviews each tool use with a classifier request of its own. The [client
 page](client.md#auto-mode-behind-the-router) says what the client does in each case, and a key can override the pool
 (below).
-
-On `hide` every answer but a 429 loses the `anthropic-ratelimit-unified-*` family, so an organization-wide quota
-never reaches a key holder as its own; a 429 keeps the family so the client's continue-when-reset arms;
-`request-id` passes either way, and the client shows no notice for the hidden family. The upstream's own
-`anthropic-organization-id` and `set-cookie` are never forwarded to a key holder.
 
 Under `when_cached` a request that carries no `cache_control` marker, and receives none from the cache TTL
 policy, creates no pin and lands by the strategy instead of pinning; a non-portable request keeps its pin
@@ -644,6 +638,13 @@ whatever its siblings hold. A probe whose pinned account is disabled or past its
 could take it, where moving would otherwise land the pin on that sibling; such a probe never moves the pin, and its
 request row reads rejected rather than exhausted, so the pool exhaustion alert does not count it. A probe that already
 tried its pinned account with no sibling to take it gets the pool's own answer above.
+
+Every answer the router commits loses the upstream's rate-limit headers, the `anthropic-ratelimit-*` families and the
+`anthropic-fast-*` token family, so an organization's standing never reads as the key holder's own and a client sees
+one quota, the router's. A rate limit keeps them: the upstream's own when the relay forwards a 429 or a stream whose
+first event is a `rate_limit_error`, and the three unified headers above when the router composes the exhaustion
+answer, so the client's continue arms on the reset. The upstream's `anthropic-organization-id` and `set-cookie` are
+never forwarded; `request-id` passes either way.
 
 A request sent fast that no account's fast lane can take is answered locally, before any dial, with `429` and the error
 type `rate_limit_error`. While any account holds only a fast rate limit, the error code is `fast_lane_exhausted`, the

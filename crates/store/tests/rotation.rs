@@ -1,7 +1,6 @@
 use phoebis_store::{
     Affinity, AffinitySource, ApiKeyRow, Failover, OveragePolicy, PoolRow,
-    QuotaHeaders, RetiredSecret, RulesMode, Shedding, StorageKey, Store, Strategy,
-    ROTATION_GRACE_MS,
+    RetiredSecret, RulesMode, Shedding, StorageKey, Store, Strategy, ROTATION_GRACE_MS,
 };
 
 fn pool(id: &str) -> PoolRow {
@@ -24,7 +23,6 @@ fn pool(id: &str) -> PoolRow {
         cache_diagnostics: None,
         auto_mode_server: true,
         affinity: Affinity::default(),
-        quota_headers: QuotaHeaders::Pass,
         created_at: 1,
         updated_at: 1,
     }

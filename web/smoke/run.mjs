@@ -1028,15 +1028,15 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace',
   expect('/pools the card states the strategy rule', order?.textContent ?? '', ['Within the first priority tier that has an eligible account, the one with the most weekly allowance left per hour until its window resets or its subscription ends; an unsampled account counts as untouched, and ties are random.']);
 }
 {
-  // The card reads the pin mode beside the affinity, both placements, the quota header setting when it hides, and
-  // the marker toggle; a pool with affinity off has no pin mode to read.
+  // The card reads the pin mode beside the affinity, both placements and the marker toggle; a pool with affinity off
+  // has no pin mode to read.
   const cards = new Map([...m.container.querySelectorAll('.pool')].map((c) => [c.querySelector('.card__title')?.textContent?.trim(), c]));
   const dd = (pool, label) => [...(cards.get(pool)?.querySelectorAll('.pool__policy > div') ?? [])].find((d) => d.querySelector('dt')?.textContent?.trim() === label)?.querySelector('dd');
   const row = (pool, label) => dd(pool, label)?.textContent?.replace(/\s+/g, ' ').trim() ?? null;
-  const rows = [row('all', 'Sessions'), row('all', 'Placement'), row('all', 'Quota headers'), row('codex', 'Sessions'), row('codex', 'Placement'), row('codex', 'Quota headers')];
+  const rows = [row('all', 'Sessions'), row('all', 'Placement'), row('codex', 'Sessions'), row('codex', 'Placement')];
   results.push({
-    name: '/pools the card reads the pin mode, both placements and a hidden quota header family',
-    ok: JSON.stringify(rows) === JSON.stringify(['Affinity 10m, when cached', 'subagents by cohort, sessions by warm prefix from 20k tokens', 'hidden', 'Affinity off', 'subagents by cohort, sessions by strategy', null]),
+    name: '/pools the card reads the pin mode and both placements',
+    ok: JSON.stringify(rows) === JSON.stringify(['Affinity 10m, when cached', 'subagents by cohort, sessions by warm prefix from 20k tokens', 'Affinity off', 'subagents by cohort, sessions by strategy']),
     missing: rows.map(String),
   });
   const ttl = dd('all', 'Cache TTL');
@@ -1085,7 +1085,6 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace',
   const lines = [
     cards.get('all')?.querySelector('.selection-order__rule')?.textContent ?? '',
     dd('all', 'Sessions')?.getAttribute('title') ?? null,
-    dd('all', 'Quota headers')?.getAttribute('title') ?? null,
     dd('all', 'Keep prompt caches warm')?.querySelector('.chips')?.getAttribute('title') ?? null,
   ];
   results.push({
@@ -1093,8 +1092,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace',
     ok:
       lines[0] === 'Within the first priority tier that has an eligible account, the one with the most weekly allowance left per hour until its window resets or its subscription ends; an unsampled account counts as untouched, and ties are random.' &&
       lines[1] === 'How long a session stays on its account after its last request; off keeps no pins, and a custom value is at least 60 seconds.' &&
-      lines[2] === "Hide drops the anthropic-ratelimit-unified-* headers from every answer but a 429, so an organization's quota never reads as the key holder's own; a 429 keeps them so the client can resume after the reset. request-id passes either way." &&
-      lines[3] === "Cold limit: probes in a row that find the cache already gone, after which the session's probes pause until its next real request. Idle: how long, or how many probes, without a real request before probing stops. Net-negative stop: probes a session still gets after its probes have cost more than the cache reads they saved.",
+      lines[2] === "Cold limit: probes in a row that find the cache already gone, after which the session's probes pause until its next real request. Idle: how long, or how many probes, without a real request before probing stops. Net-negative stop: probes a session still gets after its probes have cost more than the cache reads they saved.",
     missing: lines.map(String),
   });
 }
@@ -1767,17 +1765,6 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace',
       name: '/pools a threshold that is not a whole number holds the save while either placement reads it, and with neither it is disabled and frees the save',
       ok: stored === '20000' && refused[0] === true && refused[1] === 'The minimum shared prefix is a whole number of tokens, 0 or more.' && JSON.stringify(cohortOnly) === '[false,true]' && JSON.stringify(neither) === '[true,true,false]' && save()?.disabled === false,
       missing: [String(stored), ...refused.map(String), JSON.stringify(cohortOnly), JSON.stringify(neither)],
-    });
-    const quota = select('Quota headers');
-    results.push({
-      name: '/pools the Response headers group offers the quota headers, at the stored setting',
-      ok:
-        JSON.stringify(options(quota)) === '["Pass through","Hide on committed answers"]' &&
-        quota?.value === 'hide' &&
-        (group(dlg, 'Response headers')?.textContent ?? '').includes(
-          "Hide drops the anthropic-ratelimit-unified-* headers from every answer but a 429, so an organization's quota never reads as the key holder's own; a 429 keeps them so the client can resume after the reset. request-id passes either way.",
-        ),
-      missing: [JSON.stringify(options(quota)), String(quota?.value)],
     });
     // Every member row carries a daily and a monthly budget, a subscription member's as an Anthropic-key member's; a
     // budget the member write refuses holds the save.

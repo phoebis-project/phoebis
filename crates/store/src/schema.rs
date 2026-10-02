@@ -72,11 +72,12 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
     (40, V40),
     (41, V41),
     (42, V42),
+    (43, V43),
 ];
 
 /// The newest schema version this build knows how to read. `prepare` refuses a registry stamped past it
 /// rather than skip migrations it does not carry and misread the tables that follow.
-pub const SCHEMA_VERSION: u32 = 42;
+pub const SCHEMA_VERSION: u32 = 43;
 
 const V2: &str = r#"
 CREATE TABLE IF NOT EXISTS account_models (
@@ -615,4 +616,10 @@ ALTER TABLE pool_members DROP COLUMN budget_period;
 const V42: &str = r#"
 DROP INDEX IF EXISTS alert_deliveries_event;
 CREATE INDEX alert_deliveries_event ON alert_deliveries (event_id, id) WHERE event_id IS NOT NULL;
+"#;
+
+// The relay hides the rate-limit header families on every committed answer and keeps them on a rate limit, so no
+// pool chooses; the switch's column goes with the choice.
+const V43: &str = r#"
+ALTER TABLE pools DROP COLUMN quota_headers;
 "#;

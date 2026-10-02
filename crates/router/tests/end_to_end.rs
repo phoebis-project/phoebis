@@ -2764,7 +2764,6 @@ async fn a_startup_poll_the_endpoint_refuses_routes_the_first_request_from_the_p
                     cache_diagnostics: None,
                     auto_mode_server: true,
                     affinity: phoebis_store::Affinity::default(),
-                    quota_headers: phoebis_store::QuotaHeaders::Pass,
                     created_at: 0,
                     updated_at: 0,
                 },

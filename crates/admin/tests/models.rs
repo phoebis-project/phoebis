@@ -6,7 +6,7 @@ use phoebis_ledger::EventRecord;
 use phoebis_routing::{Report, MODEL_REJECTED_REASON};
 use phoebis_store::{
     Affinity, AffinitySource, ApiKeyRow, CooldownRow, Failover, MemberWrite,
-    ModelRule, OveragePolicy, PoolRow, QuotaHeaders, RulesMode, Shedding, Strategy,
+    ModelRule, OveragePolicy, PoolRow, RulesMode, Shedding, Strategy,
 };
 use serde_json::json as j;
 
@@ -68,7 +68,6 @@ async fn the_key_models_route_answers_the_processed_list_with_the_matching_coold
                 cache_diagnostics: None,
                 auto_mode_server: true,
                 affinity: Affinity::default(),
-                quota_headers: QuotaHeaders::Pass,
                 created_at: NOW,
                 updated_at: NOW,
             },

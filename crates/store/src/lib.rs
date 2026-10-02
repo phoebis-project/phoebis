@@ -40,9 +40,8 @@ pub use memory::{MemoryKey, MemoryRecord, MemoryStore};
 pub use registry::{
     canonical_id, key_prefix, AccountUpdate, Affinity, AffinityMode, AffinitySource, ApiKeyRow,
     BudgetPeriod, Failover, MemberWrite, ModelRule, OveragePolicy, PoolMember,
-    PoolRow, QuotaHeaders, RegistryChange, RegistryLoad, RetiredSecret, RulesMode,
-    SessionPlacement, Shedding, Strategy, SubagentPlacement, SubscriptionTerm, WarmSessions,
-    ROTATION_GRACE_MS,
+    PoolRow, RegistryChange, RegistryLoad, RetiredSecret, RulesMode, SessionPlacement, Shedding,
+    Strategy, SubagentPlacement, SubscriptionTerm, WarmSessions, ROTATION_GRACE_MS,
 };
 pub use routing::{
     AffinityChain, AffinityRow, CooldownRow, CreditsRow, OverageRow, PinBurn, PinKey, PinRow,

@@ -15,8 +15,7 @@ use phoebis_routing::{
 use phoebis_store::{
     key_prefix, AccountKind, AccountRow, AccountState, Affinity, AffinitySource, ApiKeyRow,
     CooldownRow, Failover, MemberWrite, ModelRule, OveragePolicy, PinBurn, PoolRow,
-    QuotaHeaders, RoutingLoad, RulesMode, Shedding, StorageKey, Store, Strategy, SubscriptionRow,
-    WindowRow,
+    RoutingLoad, RulesMode, Shedding, StorageKey, Store, Strategy, SubscriptionRow, WindowRow,
 };
 
 const HOUR: i64 = 3_600_000;
@@ -68,7 +67,6 @@ fn seeded_kind(kind: AccountKind, ids: &[&str]) -> Arc<Store> {
                 cache_diagnostics: None,
                 auto_mode_server: true,
                 affinity: Affinity::default(),
-                quota_headers: QuotaHeaders::Pass,
                 created_at: 0,
                 updated_at: 0,
             },

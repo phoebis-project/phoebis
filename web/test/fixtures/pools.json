@@ -14,7 +14,6 @@
         "subagent_placement": "by_cohort",
         "session_placement": "by_strategy",
         "min_shared_prefix_tokens": 20000,
-        "quota_headers": "pass",
         "migrate_above_utilization": null,
         "select_below_utilization": null,
         "model_rules": [
@@ -70,8 +69,8 @@
         "cache_diagnostics": null,
         "auto_mode_server": true,
         "body_capture_hours": 24,
-        "created_at": 1790825302585,
-        "updated_at": 1790825302585,
+        "created_at": 1790967513836,
+        "updated_at": 1790967513836,
         "members": [
           {
             "account_id": "business",
@@ -110,13 +109,13 @@
           {
             "id": "desktop",
             "label": "Desktop",
-            "prefix": "T5R8yG7v",
+            "prefix": "C7-7xk7N",
             "enabled": true
           }
         ],
         "status": "active",
         "requests_24h": 5,
-        "cost_24h": 0.0036,
+        "cost_24h": 0.0216,
         "active_pins": 1,
         "traffic_24h": [
           {
@@ -278,14 +277,14 @@
             "requests": 2,
             "failed": 0,
             "tokens": 3600,
-            "cost_usd": 0.0
+            "cost_usd": 0.0108
           },
           {
             "at": 0,
             "requests": 3,
             "failed": 1,
             "tokens": 5400,
-            "cost_usd": 0.0036
+            "cost_usd": 0.0108
           }
         ]
       }

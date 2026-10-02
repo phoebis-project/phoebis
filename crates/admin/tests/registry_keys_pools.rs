@@ -1,6 +1,6 @@
 mod common;
 use common::{delete, get, json, login, patch, post, put};
-use phoebis_store::{Affinity, AffinitySource, QuotaHeaders};
+use phoebis_store::{Affinity, AffinitySource};
 
 #[tokio::test]
 async fn pools_are_created_edited_and_deleted_with_their_members_and_validation() {
@@ -930,7 +930,6 @@ async fn sessions_list_live_pins_and_a_release_expires_them() {
                 cache_diagnostics: None,
                 auto_mode_server: true,
                 affinity: Affinity::default(),
-                quota_headers: QuotaHeaders::Pass,
                 created_at: common::NOW,
                 updated_at: common::NOW,
             },
@@ -1474,6 +1473,49 @@ async fn a_pool_defaults_to_pace_with_the_kind_order_on_and_the_flag_is_the_oper
     );
 }
 
+const CREATE_WITH_HEADER_SWITCH: &str = r#"{"id":"main2","label":"Main","quota_headers":"hide"}"#; // removed name
+const PATCH_WITH_HEADER_SWITCH: &str = r#"{"quota_headers":"pass"}"#; // removed name
+
+#[tokio::test]
+async fn a_pool_body_naming_the_header_switch_is_refused_as_an_unknown_field() {
+    let (app, _up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    let refused = post(
+        &app,
+        "/admin/pools",
+        CREATE_WITH_HEADER_SWITCH,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(refused.status(), 400);
+    assert_eq!(
+        json(refused).await["error"].as_str(),
+        Some("body must be a JSON object")
+    );
+    let created = post(
+        &app,
+        "/admin/pools",
+        r#"{"id":"main2","label":"Main"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(created.status(), 201, "the refused create wrote nothing");
+    let created = json(created).await;
+    assert!(created.get("quota_headers").is_none(), "{created}"); // removed name
+    let refused = patch(
+        &app,
+        "/admin/pools/main2",
+        PATCH_WITH_HEADER_SWITCH,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(refused.status(), 400);
+    assert_eq!(
+        json(refused).await["error"].as_str(),
+        Some("body must be a JSON object")
+    );
+}
+
 #[tokio::test]
 async fn a_pool_refuses_an_unknown_strategy_name_and_an_unknown_field() {
     let (app, _up) = common::admin_app().await;
@@ -1992,7 +2034,7 @@ async fn a_pool_accepts_the_shedding_and_failover_fields_and_refuses_each_out_of
 }
 
 #[tokio::test]
-async fn a_pool_accepts_its_affinity_and_quota_fields_and_a_members_budget() {
+async fn a_pool_accepts_its_affinity_fields_and_a_members_budget() {
     use common::{generation, wait_json};
     use phoebis_ledger::{AttemptRecord, Record, RequestRecord};
 
@@ -2016,7 +2058,6 @@ async fn a_pool_accepts_its_affinity_and_quota_fields_and_a_members_budget() {
             created["subagent_placement"].as_str(),
             created["session_placement"].as_str(),
             created["min_shared_prefix_tokens"].as_u64(),
-            created["quota_headers"].as_str(),
             created["cache_ttl"]["inject_when_absent"].as_bool(),
         ),
         (
@@ -2024,10 +2065,9 @@ async fn a_pool_accepts_its_affinity_and_quota_fields_and_a_members_budget() {
             Some("by_cohort"),
             Some("by_strategy"),
             Some(20_000),
-            Some("pass"),
             Some(false)
         ),
-        "the five fields and the toggle default to the shipped preset"
+        "the four fields and the toggle default to the shipped preset"
     );
     assert_eq!(
         (
@@ -2097,7 +2137,7 @@ async fn a_pool_accepts_its_affinity_and_quota_fields_and_a_members_budget() {
             app,
             "/admin/pools/main",
             r#"{"affinity_mode":"when_cached","subagent_placement":"with_main","session_placement":"by_warm_prefix",
-                "min_shared_prefix_tokens":5000,"quota_headers":"hide",
+                "min_shared_prefix_tokens":5000,
                 "members":[{"account_id":"direct","priority":0,"budget_daily_usd":10.0}]}"#,
             Some(&cookie),
         )
@@ -2110,7 +2150,6 @@ async fn a_pool_accepts_its_affinity_and_quota_fields_and_a_members_budget() {
             patched["subagent_placement"].as_str(),
             patched["session_placement"].as_str(),
             patched["min_shared_prefix_tokens"].as_u64(),
-            patched["quota_headers"].as_str(),
             patched["members"][0]["budget_daily_usd"].as_f64(),
             patched["members"][0]["budget_monthly_usd"].as_f64(),
         ),
@@ -2119,11 +2158,10 @@ async fn a_pool_accepts_its_affinity_and_quota_fields_and_a_members_budget() {
             Some("with_main"),
             Some("by_warm_prefix"),
             Some(5_000),
-            Some("hide"),
             Some(10.0),
             None
         ),
-        "a patch round-trips the five fields and a member's budget"
+        "a patch round-trips the four fields and a member's budget"
     );
     for (body, message) in [
         (
@@ -2137,10 +2175,6 @@ async fn a_pool_accepts_its_affinity_and_quota_fields_and_a_members_budget() {
         (
             r#"{"session_placement":"nowhere"}"#,
             "session_placement must be by_strategy or by_warm_prefix",
-        ),
-        (
-            r#"{"quota_headers":"maybe"}"#,
-            "quota_headers must be hide or pass",
         ),
         (
             r#"{"members":[{"account_id":"direct","priority":0,"budget_daily_usd":0}]}"#,

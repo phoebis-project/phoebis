@@ -1,8 +1,8 @@
 use phoebis_routing::{resolve, Candidate, KeyRefusal, RegistrySnapshot, ResolveError};
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, Affinity, AffinitySource, ApiKeyRow,
-    Failover, ModelRule, OveragePolicy, PoolMember, PoolRow, QuotaHeaders, RegistryLoad, RulesMode,
-    Shedding, Strategy,
+    Failover, ModelRule, OveragePolicy, PoolMember, PoolRow, RegistryLoad, RulesMode, Shedding,
+    Strategy,
 };
 
 const DIGEST_KEY: [u8; 32] = [7; 32];
@@ -45,7 +45,6 @@ fn pool(id: &str, enabled: bool, rules: Vec<ModelRule>, body_capture_hours: u32)
         cache_diagnostics: None,
         auto_mode_server: true,
         affinity: Affinity::default(),
-        quota_headers: QuotaHeaders::Pass,
         created_at: 0,
         updated_at: 0,
     }

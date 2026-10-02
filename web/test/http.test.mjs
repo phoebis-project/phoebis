@@ -304,7 +304,6 @@ test('a pool save is one PATCH that carries the members with the settings', asyn
     name: row.label,
     overagePolicy: 'prefer_plan',
     preferSubscription: false,
-    quotaHeaders: 'hide',
     selectBelowUtilization: 0.4,
     sessionPlacement: 'by_warm_prefix',
     status: 'active',
@@ -319,8 +318,8 @@ test('a pool save is one PATCH that carries the members with the settings', asyn
   ], 'a member without a budget sends null, which clears a stored one');
   assert.equal(body.select_below_utilization, 0.4);
   assert.deepEqual(
-    [body.affinity_mode, body.subagent_placement, body.session_placement, body.min_shared_prefix_tokens, body.quota_headers],
-    ['when_cached', 'with_main', 'by_warm_prefix', 30_000, 'hide'],
+    [body.affinity_mode, body.subagent_placement, body.session_placement, body.min_shared_prefix_tokens],
+    ['when_cached', 'with_main', 'by_warm_prefix', 30_000],
   );
 });
 
