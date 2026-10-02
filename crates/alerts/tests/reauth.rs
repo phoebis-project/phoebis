@@ -66,7 +66,7 @@ async fn a_forced_reauth_posts_one_signed_webhook_and_a_resolve_and_a_dead_endpo
     let signed = opened
         .headers
         .iter()
-        .find(|(n, _)| n.eq_ignore_ascii_case("x-router-signature"))
+        .find(|(n, _)| n.eq_ignore_ascii_case("x-phoebis-signature"))
         .map(|(_, v)| v.clone())
         .unwrap();
     assert_eq!(signed, signature(&Secret::new("s3cret"), &opened.body));

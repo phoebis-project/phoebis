@@ -262,7 +262,8 @@ impl Metrics {
                     }
                 }
                 "phoebis_account_ratelimit_utilization" => {
-                    if let Some(series) = inner.gauges.get("phoebis_account_ratelimit_utilization") {
+                    if let Some(series) = inner.gauges.get("phoebis_account_ratelimit_utilization")
+                    {
                         for (labels, value) in series {
                             // A deleted account's last reading would otherwise scrape forever; the registry is
                             // the list of accounts that exist.

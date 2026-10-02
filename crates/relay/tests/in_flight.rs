@@ -814,7 +814,10 @@ async fn a_key_past_its_cap_is_refused_before_selection_with_a_retry_after_and_t
         .unwrap();
     assert_eq!(refused.status().as_u16(), 429);
     assert_eq!(refused.headers()["retry-after"], "10");
-    assert_eq!(refused.headers()["x-phoebis-error-code"], "key_in_flight_cap");
+    assert_eq!(
+        refused.headers()["x-phoebis-error-code"],
+        "key_in_flight_cap"
+    );
     assert!(
         refused.headers().get("x-should-retry").is_none(),
         "the client's own retry policy decides"
@@ -1080,7 +1083,10 @@ async fn two_admissions_released_together_against_a_key_capped_at_one_admit_exac
     } else {
         (two, one)
     };
-    assert_eq!(refused.headers()["x-phoebis-error-code"], "key_in_flight_cap");
+    assert_eq!(
+        refused.headers()["x-phoebis-error-code"],
+        "key_in_flight_cap"
+    );
     up.release();
     drain(admitted).await;
     let third = h

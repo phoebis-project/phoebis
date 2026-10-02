@@ -756,7 +756,7 @@ function RuleDialog({
       </Field>
       <Field
         label="Signing secret"
-        hint={`Optional. Sent as X-Router-Signature, an HMAC-SHA256 of the body.${secretHint}`}
+        hint={`Optional. Sent as X-Phoebis-Signature, an HMAC-SHA256 of the body.${secretHint}`}
       >
         <Input type="password" autoComplete="off" value={secret} onChange={(e) => setSecret(e.target.value)} disabled={clearSecret} />
       </Field>

@@ -376,7 +376,10 @@ async fn the_usage_route_answers_the_callers_own_key_and_refuses_the_rest() {
     let (status, headers, body) = get_with_header(&app, "authorization", "Basic x").await;
     assert_eq!(status, 401);
     assert_eq!(body["error"]["type"], "authentication_error");
-    assert_eq!(header(&headers, "x-phoebis-error-code"), Some("auth_malformed"));
+    assert_eq!(
+        header(&headers, "x-phoebis-error-code"),
+        Some("auth_malformed")
+    );
     assert_eq!(header(&headers, "cache-control"), Some("no-store"));
 
     let (status, headers, body) = get(&app, Some(KEY)).await;

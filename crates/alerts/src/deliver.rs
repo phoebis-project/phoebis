@@ -61,7 +61,7 @@ impl Webhook for ReqwestWebhook {
                 .header("content-type", "application/json")
                 .body(body);
             if let Some(signature) = signature {
-                request = request.header("x-router-signature", signature);
+                request = request.header("x-phoebis-signature", signature);
             }
             // The error's Display names the URL, which may carry a token in its path; only the kind is kept,
             // and the refusal of a destination the policy rules out, which says nothing about the URL.

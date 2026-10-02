@@ -522,7 +522,7 @@ async fn the_reqwest_webhook_posts_the_signed_bytes_and_reports_a_redirect_rathe
         .cloned()
         .expect("the receiver saw the post");
     // Header names travel case-insensitively; the receiver lowercased what it read off the wire.
-    assert_eq!(got.header("x-router-signature"), Some(signed.as_str()));
+    assert_eq!(got.header("x-phoebis-signature"), Some(signed.as_str()));
     assert_eq!(got.header("content-type"), Some("application/json"));
     assert_eq!(
         got.body, raw,

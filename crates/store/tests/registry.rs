@@ -1235,7 +1235,10 @@ fn an_id_created_again_in_the_millisecond_it_was_deleted_in_is_a_reused_one() {
         .unwrap();
     store.delete_api_key("back", "test").unwrap();
     store
-        .insert_api_key(&key(&store, "back", "main", "phoebis-back-reissued"), "test")
+        .insert_api_key(
+            &key(&store, "back", "main", "phoebis-back-reissued"),
+            "test",
+        )
         .unwrap();
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute(
@@ -1260,7 +1263,10 @@ fn a_deleted_keys_id_is_created_again_at_once_on_a_fresh_store_and_on_an_upgrade
         .unwrap();
     store.delete_api_key("back", "test").unwrap();
     store
-        .insert_api_key(&key(&store, "back", "main", "phoebis-back-reissued"), "test")
+        .insert_api_key(
+            &key(&store, "back", "main", "phoebis-back-reissued"),
+            "test",
+        )
         .unwrap();
     assert_eq!(
         store.api_key("back").unwrap().unwrap().prefix,
@@ -1311,7 +1317,10 @@ fn a_deleted_keys_id_is_created_again_at_once_on_a_fresh_store_and_on_an_upgrade
     let migrated = Store::open(&path, &storage_key).unwrap();
     assert_eq!(migrated.schema_version().unwrap(), 42);
     migrated
-        .insert_api_key(&key(&migrated, "old", "main", "phoebis-old-reissued"), "test")
+        .insert_api_key(
+            &key(&migrated, "old", "main", "phoebis-old-reissued"),
+            "test",
+        )
         .unwrap();
     let conn = rusqlite::Connection::open(&path).unwrap();
     let tables: i64 = conn
@@ -1385,7 +1394,10 @@ fn a_key_created_in_its_previous_holders_millisecond_takes_the_next_generation()
         .unwrap();
     drop(conn);
     store
-        .insert_api_key(&key(&store, "back", "main", "phoebis-back-reissued"), "test")
+        .insert_api_key(
+            &key(&store, "back", "main", "phoebis-back-reissued"),
+            "test",
+        )
         .unwrap();
     let second = store.api_key("back").unwrap().unwrap().created_at;
     assert_eq!(second, first + 1, "one millisecond, two generations");

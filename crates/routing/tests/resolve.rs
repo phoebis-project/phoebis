@@ -250,7 +250,10 @@ fn snapshot() -> RegistrySnapshot {
 fn keys_authenticate_by_digest_and_every_dead_key_is_refused() {
     let s = snapshot();
     assert_eq!(
-        s.authenticate("phoebis-desktopsecret0000", 1_000).unwrap().0.id,
+        s.authenticate("phoebis-desktopsecret0000", 1_000)
+            .unwrap()
+            .0
+            .id,
         "desktop"
     );
     assert!(matches!(
@@ -266,7 +269,10 @@ fn keys_authenticate_by_digest_and_every_dead_key_is_refused() {
         Err(KeyRefusal::Expired)
     ));
     assert_eq!(
-        s.authenticate("phoebis-oldsecret00000000", 400).unwrap().0.id,
+        s.authenticate("phoebis-oldsecret00000000", 400)
+            .unwrap()
+            .0
+            .id,
         "old"
     );
     assert!(matches!(

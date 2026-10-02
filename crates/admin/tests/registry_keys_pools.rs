@@ -405,7 +405,7 @@ async fn keys_are_issued_once_rotated_revoked_and_never_shown_again() {
     let body = json(created).await;
     let secret = body["secret"].as_str().unwrap().to_string();
     assert!(
-        secret.starts_with("phoebis-") && secret.len() == 4 + 43,
+        secret.starts_with("phoebis-") && secret.len() == 8 + 43,
         "phoebis- plus 32 bytes of base64url without padding"
     );
     assert_eq!(

@@ -504,7 +504,7 @@ export class MockApi implements Api {
       ...KEY_SAMPLE,
       id,
       name: input.name,
-      prefix: secret.slice(0, 8),
+      prefix: secret.slice(0, 12),
       poolId: input.poolId,
       // The route's defaults for a body that leaves these fields out, which a caller outside the console may.
       affinitySource: input.affinitySource ?? 'auto',
@@ -870,7 +870,7 @@ export class MockApi implements Api {
     const key = this.keys.find((k) => k.id === id);
     if (!key) return Promise.reject(new ApiError(404, 'key not found', null));
     const secret = `phoebis-${this.token(40)}`;
-    const next: ApiKey = { ...key, prefix: secret.slice(0, 8), retiredSecretLastUsedAt: null, sessionsOnRetiredSecret: 2 };
+    const next: ApiKey = { ...key, prefix: secret.slice(0, 12), retiredSecretLastUsedAt: null, sessionsOnRetiredSecret: 2 };
     this.keys = this.keys.map((k) => (k.id === id ? next : k));
     return latency({ key: next, secret }, 300);
   }

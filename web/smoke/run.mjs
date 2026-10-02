@@ -4881,7 +4881,7 @@ expect('/alerts', m.text(), ['Rules', 'Create rule', 'Re-auth required', 'Utiliz
   [...m.container.querySelectorAll('.menu__list button')].find((b) => b.textContent?.trim() === 'Edit')?.click();
   await m.settle(300);
   const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
-  expect('/alerts edit dialog is prefilled', dlg?.textContent ?? '', ['Edit alert rule', 'Leave empty to keep the stored secret', 'X-Router-Signature', 'Enabled', 'Save rule']);
+  expect('/alerts edit dialog is prefilled', dlg?.textContent ?? '', ['Edit alert rule', 'Leave empty to keep the stored secret', 'X-Phoebis-Signature', 'Enabled', 'Save rule']);
   const titles = [...(dlg?.querySelectorAll('.dialog-group__title') ?? [])];
   const first = dlg?.querySelector('.field__label')?.textContent?.trim() ?? null;
   const delivery = titles.find((t) => t.textContent?.trim() === 'Delivery');

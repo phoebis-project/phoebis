@@ -470,7 +470,7 @@ since a name can resolve differently over time.
 A delivery posts a JSON body with the keys `detail`, `kind`, `opened_at`, `resolved_at`, `router`, `rule`,
 `state` (`opened` or `resolved` for an event's two transitions, `event` for a session event, whose `opened_at`
 is the event's time and whose `resolved_at` is null), and `subject`, in that order. When the rule has a secret,
-the body carries an `x-router-signature: sha256=<hex>` header, an HMAC-SHA256 of the raw bytes keyed by the
+the body carries an `x-phoebis-signature: sha256=<hex>` header, an HMAC-SHA256 of the raw bytes keyed by the
 secret; a rule with a secret never posts unsigned. Delivery makes three attempts, the first immediate and the
 next two after waits of 1 and 4 seconds; each request has a 10-second timeout and follows no redirect, since a
 redirect would carry the signature to a URL it was never computed for. A 2xx response counts as delivered, and

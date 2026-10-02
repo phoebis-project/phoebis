@@ -270,7 +270,10 @@ async fn a_selection_is_written_through_and_a_registry_write_shows_up_after_relo
     store.revoke_api_key("k", 2, "test").unwrap();
     handle.reload().await.unwrap();
     assert!(
-        handle.snapshot().authenticate("phoebis-secret", 1_002).is_err(),
+        handle
+            .snapshot()
+            .authenticate("phoebis-secret", 1_002)
+            .is_err(),
         "a revoked key answers 401 at once"
     );
 }
@@ -385,12 +388,18 @@ async fn a_failed_reload_keeps_the_old_snapshot_and_says_so() {
     store.debug_fail_next_load();
     assert!(matches!(handle.reload().await, Err(ReloadError::Load(_))));
     assert!(
-        handle.snapshot().authenticate("phoebis-secret", 1_003).is_ok(),
+        handle
+            .snapshot()
+            .authenticate("phoebis-secret", 1_003)
+            .is_ok(),
         "the old snapshot still authenticates the revoked key"
     );
     handle.reload().await.unwrap();
     assert!(
-        handle.snapshot().authenticate("phoebis-secret", 1_004).is_err(),
+        handle
+            .snapshot()
+            .authenticate("phoebis-secret", 1_004)
+            .is_err(),
         "the next successful reload publishes the revocation"
     );
 }

@@ -99,8 +99,9 @@ fn ten_thousand_sessions_and_models_leave_the_label_set_bounded() {
         !text.contains("vendor/model"),
         "no caller-supplied model string in any label"
     );
-    assert!(text
-        .contains(r#"phoebis_attempts_total{account="a0",model="other",outcome="succeeded"} 5000"#));
+    assert!(text.contains(
+        r#"phoebis_attempts_total{account="a0",model="other",outcome="succeeded"} 5000"#
+    ));
     assert!(text.contains(
         r#"phoebis_attempts_total{account="a0",model="claude-sonnet-5",outcome="succeeded"} 1"#
     ));
@@ -109,6 +110,7 @@ fn ten_thousand_sessions_and_models_leave_the_label_set_bounded() {
     assert!(text.contains(r#"phoebis_tokens_total{account="a1",kind="input",model="other"} 50000"#));
     assert!(text.contains("# TYPE phoebis_upstream_ttfb_seconds histogram"));
     assert!(text.contains(r#"phoebis_upstream_ttfb_seconds_bucket{model="other",le="+Inf"} 10000"#));
+    assert!(text.contains(r#"phoebis_upstream_ttfb_seconds_sum{model="claude-sonnet-5"} "#));
     assert!(text.contains(r#"phoebis_upstream_ttfb_seconds_count{model="claude-sonnet-5"} 1"#));
     assert!(text.contains("phoebis_pricing_unknown_model_total 3"));
     assert!(text.contains(r#"phoebis_bus_dropped_total{subscriber="ledger"} 0"#));
@@ -456,7 +458,9 @@ fn alert_deliveries_are_counted_per_rule_and_outcome() {
     let text = metrics.render(&RoutingGauges::default(), &[], 0);
     assert!(text.contains("# TYPE phoebis_alert_deliveries_total counter"));
     assert!(
-        text.contains(r#"phoebis_alert_deliveries_total{outcome="delivered",rule="rule_reauth"} 1"#),
+        text.contains(
+            r#"phoebis_alert_deliveries_total{outcome="delivered",rule="rule_reauth"} 1"#
+        ),
         "{text}"
     );
     assert!(
