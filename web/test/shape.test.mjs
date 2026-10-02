@@ -24,10 +24,10 @@ test('a populated list answered empty is a finding, and an empty list in the fix
 });
 
 test('an opaque detail with different keys is no finding, and a detail that is not an object is one', () => {
-  const want = shapeOf({ detail: { client_version: '2.1.0', key: 'desktop', trigger: 'drift' }, kind: 'client_drift' });
-  const got = { detail: { agent: null, key: 'desktop', question: 'Continue?', session: 's1' }, kind: 'ask_user_question' };
+  const want = shapeOf({ detail: { agent_id: 'main', epoch: 2, from_account: 'business', reason: 'cooldown' }, kind: 'pin_migrated' });
+  const got = { detail: { agent_id: 'sub-1' }, kind: 'pin_released' };
   assert.deepEqual(same(want, got), []);
-  assert.deepEqual(same(want, { detail: 'text', kind: 'ask_user_question' }), ['.detail: string where an object or null is expected']);
+  assert.deepEqual(same(want, { detail: 'text', kind: 'pin_released' }), ['.detail: string where an object or null is expected']);
 });
 
 test('an open map only asks about entry types, but a sibling object with a different key set is a finding', () => {

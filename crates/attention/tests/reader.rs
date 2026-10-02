@@ -50,10 +50,11 @@ async fn every_subject_a_kind_applies_to_has_a_series_at_zero_while_nothing_hold
             ("poll_backoff", "business".to_string(), false),
             ("pool_exhausted", "main".to_string(), false),
             ("reauth_required", "business".to_string(), false),
+            ("reauth_required", "direct".to_string(), false),
             ("refresh_failed", "business".to_string(), false),
         ],
-        "an Anthropic key carries funding alone, an OAuth account its state, its refresh run and, before any poll \
-         status exists, its backoff"
+        "every account carries its re-auth state, an Anthropic key its funding, and an OAuth account its refresh run \
+         and, before any poll status exists, its backoff"
     );
 }
 
@@ -231,6 +232,24 @@ async fn a_keyless_drift_refusal_names_no_key_and_carries_no_link() {
 }
 
 #[tokio::test]
+async fn a_drift_refusal_without_a_version_clears_on_a_relayed_request_without_one() {
+    let rig = rig().await;
+    let (attention, _arm) = rig.attention(None);
+    attention.observe(&observed("d1", Some("desktop"), "main"));
+    attention.observe(&complete("d1", Outcome::Rejected, Some("hash"), None, NOW));
+    assert!(
+        find(&read(&attention, NOW), Kind::ClientDrift, "unknown")
+            .unwrap()
+            .holds
+    );
+    attention.observe(&observed("d2", Some("desktop"), "main"));
+    attention.observe(&complete("d2", Outcome::Succeeded, None, None, NOW + 1_000));
+    let conditions = read(&attention, NOW + 1_000);
+    let cleared = find(&conditions, Kind::ClientDrift, "unknown").unwrap();
+    assert_eq!((cleared.holds, cleared.since), (false, None));
+}
+
+#[tokio::test]
 async fn the_account_states_hold_by_kind_and_date_from_the_first_read_that_saw_them() {
     let rig = rig().await;
     let (attention, _arm) = rig.attention(None);
@@ -288,6 +307,29 @@ async fn the_account_states_hold_by_kind_and_date_from_the_first_read_that_saw_t
         Some(NOW + 9_000),
         "a state that cleared and came back dates from the read that saw it again"
     );
+    // The relay marks an Anthropic key the upstream refuses as it marks an OAuth login whose refresh is gone.
+    rig.store
+        .set_state("direct", AccountState::ReauthRequired)
+        .unwrap();
+    let conditions = read(&attention, NOW + 12_000);
+    let refused = find(&conditions, Kind::ReauthRequired, "direct").unwrap();
+    assert_eq!(
+        (refused.holds, refused.since, &refused.pools, &refused.link),
+        (
+            true,
+            Some(NOW + 12_000),
+            &vec!["main".to_string()],
+            &Some(Link {
+                page: "accounts",
+                id: "direct".into()
+            })
+        )
+    );
+    assert!(
+        !find(&conditions, Kind::FundingRequired, "direct")
+            .unwrap()
+            .holds
+    );
 }
 
 fn resolve(rig: &Rig, outcome: AttemptOutcome) -> u64 {
@@ -308,6 +350,8 @@ async fn two_failed_refreshes_in_a_row_hold_until_one_commits_and_date_from_the_
         (false, &json!(1)),
         "one failure is a token endpoint having a bad moment"
     );
+    // Apart by more than a millisecond, so the run's start can only be read off the older attempt.
+    tokio::time::sleep(Duration::from_millis(2)).await;
     let lost = rig.store.open_refresh_attempt("business", 1, 1, 1).unwrap();
     rig.store
         .resolve_refresh_attempt(lost, 1, AttemptOutcome::Uncertain("lost".into()))
@@ -316,6 +360,7 @@ async fn two_failed_refreshes_in_a_row_hold_until_one_commits_and_date_from_the_
         .store
         .newest_resolved_refresh_attempts("business", 1, 16)
         .unwrap();
+    assert!(attempts[1].started_at < attempts[0].started_at);
     let conditions = read(&attention, NOW);
     let held = find(&conditions, Kind::RefreshFailed, "business").unwrap();
     assert_eq!(
@@ -456,6 +501,7 @@ async fn a_deleted_account_and_pool_lose_their_series_at_the_next_read() {
     let conditions = read(&attention, NOW);
     assert!(find(&conditions, Kind::PoolExhausted, "main").is_none());
     assert!(find(&conditions, Kind::FundingRequired, "direct").is_none());
+    assert!(find(&conditions, Kind::ReauthRequired, "direct").is_none());
     assert!(
         find(&conditions, Kind::ReauthRequired, "business").is_some_and(|c| c.pools.is_empty()),
         "an account left in no pool keeps its series and lists none"

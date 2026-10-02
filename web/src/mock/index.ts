@@ -441,7 +441,6 @@ export class MockApi implements Api {
     return latency(account, 300);
   }
 
-
   async createKey(input: CreateKeyInput): Promise<CreatedApiKey> {
     this.mutation();
     // The client sends the id it derives from the name, so a name already taken is an id already taken.
@@ -510,7 +509,6 @@ export class MockApi implements Api {
     this.pools = this.pools.map((p) => ({ ...p, members: p.members.filter((m) => m.accountId !== accountId) }));
     return latency(undefined, 250);
   }
-
 
   async deleteKey(id: string) {
     this.mutation();
@@ -675,9 +673,6 @@ export class MockApi implements Api {
     return latency(this.accounts);
   }
 
-
-
-
   listCatalog() {
     return latency(CATALOG);
   }
@@ -702,7 +697,6 @@ export class MockApi implements Api {
   listKeys() {
     return latency(this.keys);
   }
-
 
   listPools() {
     return latency(this.pools.map((p) => this.poolView(p)));
@@ -762,7 +756,6 @@ export class MockApi implements Api {
     return latency(this.putAccount({ ...this.account(accountId), label }), 250);
   }
 
-
   async resumeAccount(accountId: string) {
     this.mutation();
     const a = this.account(accountId);
@@ -814,7 +807,6 @@ export class MockApi implements Api {
     });
   }
 
-
   /** The account route's refusals in its order and words; the end is kept only while the flag stands. */
   async updateAccount(accountId: string, patch: AccountPatch): Promise<Account> {
     this.mutation();
@@ -828,7 +820,6 @@ export class MockApi implements Api {
     const subscription = base ? { ...base, endsAt: patch.cancelled ? patch.subscriptionEndsAt : null } : null;
     return latency(this.putAccount({ ...a, cancelled: patch.cancelled, subscription }), 250);
   }
-
 
   async updateKey(id: string, input: KeyInput): Promise<ApiKey> {
     this.mutation();

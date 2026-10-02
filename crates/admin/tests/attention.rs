@@ -84,11 +84,14 @@ async fn the_held_conditions_come_worst_first_then_oldest_first_in_their_shape()
             .store
             .resolve_refresh_attempt(attempt, 1, AttemptOutcome::Failed(detail.into()))
             .unwrap();
+        // Apart by more than a millisecond, so the run's start can only be read off the older attempt.
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
     }
     let run = parts
         .store
         .newest_resolved_refresh_attempts("business", 1, 16)
         .unwrap();
+    assert!(run[1].started_at < run[0].started_at);
     let run_started = run.last().unwrap().started_at;
     parts
         .store
@@ -186,6 +189,30 @@ async fn the_held_conditions_come_worst_first_then_oldest_first_in_their_shape()
 }
 
 #[tokio::test]
+async fn an_anthropic_key_the_upstream_refused_reads_as_an_account_to_reauthorize() {
+    let parts = common::admin_parts_full().await;
+    let app = &parts.app;
+    let cookie = login(app, "admin-secret").await;
+    post(app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"business","priority":0},{"account_id":"direct","priority":1}]}"#, Some(&cookie)).await;
+    parts
+        .store
+        .set_state("direct", AccountState::ReauthRequired)
+        .unwrap();
+    let body = json(get(app, "/admin/attention", Some(&cookie)).await).await;
+    assert_eq!(
+        body,
+        j!({ "items": [{
+            "kind": "reauth_required",
+            "subject": { "type": "account", "id": "direct", "label": "Direct" },
+            "link": { "page": "accounts", "id": "direct" },
+            "pools": ["main"],
+            "since": common::NOW,
+            "detail": { "account": "direct", "label": "Direct" },
+        }] })
+    );
+}
+
+#[tokio::test]
 async fn nothing_held_answers_an_empty_list() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
@@ -224,7 +251,7 @@ async fn the_route_sits_behind_the_admin_session() {
 }
 
 #[tokio::test]
-async fn the_system_route_answers_without_an_alerts_member() {
+async fn the_system_route_answers_without_an_engine_stats_member() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
     let system = json(get(&parts.app, "/admin/system", Some(&cookie)).await).await;

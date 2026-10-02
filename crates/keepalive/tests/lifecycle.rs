@@ -58,7 +58,7 @@ fn agent(id: &str, started: bool) -> SessionLifecycle {
 }
 
 #[tokio::test]
-async fn the_companions_reports_become_the_lifecycle_events_the_attention_read() {
+async fn the_companions_reports_become_lifecycle_events_on_the_channel() {
     let (tx, mut rx) = lifecycle_channel();
     let mut r = rig(RigSpec {
         lifecycle: Some(tx),

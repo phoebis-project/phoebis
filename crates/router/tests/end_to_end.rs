@@ -2036,6 +2036,10 @@ async fn the_binary_ledgers_serves_statistics_and_metrics_and_lands_the_ledger_o
         "three sessions, three pins: {text}"
     );
     assert!(
+        text.contains(r#"phoebis_attention{kind="pool_exhausted",subject="main"} 0"#),
+        "the binary hands the attention reader to the metrics listener: {text}"
+    );
+    assert!(
         client
             .get(format!("http://127.0.0.1:{metrics_port}/nope"))
             .send()

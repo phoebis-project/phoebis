@@ -23,6 +23,9 @@ pub const REFRESH_RUN_READ: usize = 16;
 /// How long an in-flight entry may wait for its completion before the arm forgets it.
 const IN_FLIGHT_TTL_MS: i64 = 15 * 60 * 1_000;
 
+/// The subject of a drift refusal whose completion names no client version.
+const UNKNOWN_VERSION: &str = "unknown";
+
 /// Declared worst first, so the derived order is the ranking: a pool that serves nothing, a client build refused in
 /// every pool, an account that serves nothing until the operator acts, a credential about to lapse, windows that read
 /// stale.
@@ -197,8 +200,13 @@ pub(crate) fn observe(state: &mut ReaderState, event: &Event, now: i64) {
                     _ => {}
                 }
             }
+            // A completion that names no version is filed under one name on both paths, so a refusal without a
+            // version clears on a relayed request without one.
+            let version = c
+                .client_version
+                .clone()
+                .unwrap_or_else(|| UNKNOWN_VERSION.into());
             if let Some(trigger) = &c.client_drift {
-                let version = c.client_version.clone().unwrap_or_else(|| "unknown".into());
                 let drift = state.drift.entry(version).or_insert_with(|| Drift {
                     active: false,
                     key: None,
@@ -214,11 +222,7 @@ pub(crate) fn observe(state: &mut ReaderState, event: &Event, now: i64) {
             } else if c.outcome == Outcome::Succeeded {
                 // Only a relayed answer says the build is accepted again; a request refused for any other reason
                 // says nothing about its version.
-                if let Some(drift) = c
-                    .client_version
-                    .as_deref()
-                    .and_then(|v| state.drift.get_mut(v))
-                {
+                if let Some(drift) = state.drift.get_mut(&version) {
                     drift.active = false;
                 }
             }
@@ -303,24 +307,27 @@ pub(crate) fn conditions(
                 }),
                 detail,
             };
-        // One state series per account: the OAuth state for an OAuth account, funding for an Anthropic key. The
-        // registry records no time for a state change, so the first read that sees the state dates it.
-        let (kind, held_state) = match account.kind {
-            AccountKind::Oauth => (Kind::ReauthRequired, AccountState::ReauthRequired),
-            AccountKind::ApiKey => (Kind::FundingRequired, AccountState::FundingRequired),
-        };
-        let holds = account.state == held_state;
-        let since = holds.then(|| {
-            let entry = (kind, account.id.clone());
-            seen.insert(entry.clone());
-            *state.state_since.entry(entry).or_insert(now)
-        });
-        out.push(condition(
-            kind,
-            holds,
-            since,
-            json!({ "account": account.id, "label": account.label }),
-        ));
+        // Every account carries the re-auth series, since the relay marks an Anthropic key the upstream refuses the
+        // same way as an OAuth login; only an Anthropic key runs out of funding. The registry records no time for a
+        // state change, so the first read that sees the state dates it.
+        let mut states = vec![(Kind::ReauthRequired, AccountState::ReauthRequired)];
+        if account.kind == AccountKind::ApiKey {
+            states.push((Kind::FundingRequired, AccountState::FundingRequired));
+        }
+        for (kind, held_state) in states {
+            let holds = account.state == held_state;
+            let since = holds.then(|| {
+                let entry = (kind, account.id.clone());
+                seen.insert(entry.clone());
+                *state.state_since.entry(entry).or_insert(now)
+            });
+            out.push(condition(
+                kind,
+                holds,
+                since,
+                json!({ "account": account.id, "label": account.label }),
+            ));
+        }
         if account.kind == AccountKind::Oauth {
             // Read from the store rather than kept here, so a run of failures survives a restart.
             let attempts = store.newest_resolved_refresh_attempts(

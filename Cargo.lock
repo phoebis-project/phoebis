@@ -1590,11 +1590,9 @@ dependencies = [
  "phoebis-store",
  "phoebis-transport",
  "serde_json",
- "tempfile",
  "tokio",
  "tokio-util",
  "tower",
- "tracing",
 ]
 
 [[package]]

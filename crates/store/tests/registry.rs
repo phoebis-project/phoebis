@@ -818,7 +818,7 @@ const SCHEMA_OBJECTS: &str =
     "SELECT name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY name";
 
 #[test]
-fn a_store_left_at_42_is_carried_to_43_without_the_alert_tables() {
+fn a_store_left_at_42_is_carried_to_43_without_the_rule_event_and_delivery_tables() {
     let dir = tempfile::tempdir().unwrap();
     let key = StorageKey::generate();
     let path = dir.path().join("router.sqlite");
@@ -846,7 +846,7 @@ fn a_store_left_at_42_is_carried_to_43_without_the_alert_tables() {
         "the three tables are gone: {objects:?}"
     );
     assert!(
-        !objects.iter().any(|n| n.starts_with("alert_")),
+        !objects.iter().any(|n| n.starts_with("alert_")), // removed name
         "and their indexes with them: {objects:?}"
     );
     assert!(

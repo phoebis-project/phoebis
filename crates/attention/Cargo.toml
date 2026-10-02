@@ -14,7 +14,6 @@ phoebis-store = { path = "../store" }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
-tracing = { workspace = true }
 
 [dev-dependencies]
 # The scrape tests drive the metrics listener's router in process.
@@ -28,5 +27,4 @@ phoebis-profile = { path = "../profile" }
 phoebis-store = { path = "../store", features = ["debug-hooks"] }
 # The backoff test's control client.
 phoebis-transport = { path = "../transport" }
-tempfile = { workspace = true }
 tower = { workspace = true }
