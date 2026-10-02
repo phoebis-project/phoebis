@@ -1,0 +1,6 @@
+{#- The theme draws one logo <img> and never recolours it, and its header is white under the default scheme and
+    near-black under slate, so each scheme gets the mark in its own palette; the fragments are the ones the pages'
+    screenshot pairs use. The theme's own display rules for the logo win over its per-scheme hiding of #only-* images,
+    so assets/logo.css hides the other scheme's mark here. -#}
+<img src="{{ 'assets/phoebis-router-light.svg' | url }}#only-light" alt="{{ config.site_name }}">
+<img src="{{ 'assets/phoebis-router.svg' | url }}#only-dark" alt="{{ config.site_name }}">

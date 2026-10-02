@@ -1,6 +1,14 @@
-# phoebis
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/site/assets/phoebis-router.svg">
+  <img src="docs/site/assets/phoebis-router-light.svg" alt="" width="64" height="64">
+</picture>
 
-A local relay for Claude Code. A downstream client points at `phoebis` with a key the router issued; `phoebis` puts the
+# Phoebis Router
+
+A router for Claude Code.
+
+Every request lands on the right account. Phoebis is a genus of sulphur butterflies, migrants of the Americas that
+land on the right flower. A downstream client points at `phoebis` with a key the router issued; `phoebis` puts the
 request on the wire to Anthropic, under credentials it holds itself, and picks
 those credentials from a pool of accounts with sticky sessions, quota-driven failover, prompt-cache keepalive,
 per-request statistics down to the request's shape and the answer's own facts, and a web console. Failover reads each

@@ -1,0 +1,8 @@
+/* The theme's display rules for the logo image win over its per-scheme hiding of #only-* images, in the header and
+   in the drawer; these selectors outrank the display rules, so one mark shows per scheme in both places. */
+[data-md-color-scheme="default"] .md-logo img[src$="#only-dark"],
+[data-md-color-scheme="default"] .md-nav__title[for="__drawer"] .md-logo img[src$="#only-dark"],
+[data-md-color-scheme="slate"] .md-logo img[src$="#only-light"],
+[data-md-color-scheme="slate"] .md-nav__title[for="__drawer"] .md-logo img[src$="#only-light"] {
+  display: none;
+}

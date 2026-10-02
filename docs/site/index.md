@@ -1,9 +1,12 @@
 # Phoebis Router
 
-`phoebis` is a local relay for Claude Code. A client points at it with a key the router issued; the router puts each
-request on the wire to Anthropic, under the credentials of an account it holds
-itself, and picks that account from a pool. Three listeners make up one process: the proxy that relays
-`/v1/messages`, the admin API with the embedded console, and a metrics endpoint in Prometheus text format.
+A router for Claude Code.
+
+Every request lands on the right account. Phoebis is a genus of sulphur butterflies, migrants of the Americas that
+land on the right flower. A client points at `phoebis` with a key the router issued; the router puts each request
+on the wire to Anthropic, under the credentials of an account it holds itself, and
+picks that account from a pool. Three listeners make up one process: the proxy that relays `/v1/messages`, the admin
+API with the embedded console, and a metrics endpoint in Prometheus text format.
 
 | Page | What it covers |
 | --- | --- |
