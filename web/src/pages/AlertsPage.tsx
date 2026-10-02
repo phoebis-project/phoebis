@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { api } from '@/api';
 import type { Account, AlertEvent, AlertEventDetail, AlertKind, AlertRule, AlertRuleInput, ApiKey, AskUserQuestionDetail, ClientDriftDetail, LifecycleDelivery, LifecycleEventName, PollBackoffDetail, Pool, RefreshFailedDetail, WindowId } from '@/api/types';
+import { useSession } from '@/app/session';
 import { useAppSettings } from '@/app/settings';
-import { Badge, Button, Card, ConfirmDialog, Dialog, ErrorState, Field, Input, Menu, Select, Skeleton, Toast, Toggle } from '@/components/ui/primitives';
+import { Badge, Button, Card, ConfirmDialog, Dialog, ErrorState, Field, Input, Menu, Select, Skeleton, Toggle } from '@/components/ui/primitives';
 import { IconPlus } from '@/components/ui/icons';
 import { questionLine } from '@/lib/alerts';
 import { fmtAbsolute, fmtPct, fmtRelative, shortId, urlHost } from '@/lib/format';
@@ -133,7 +134,7 @@ export function AlertsPage() {
     setMore({ generation: moreGeneration.current, loading: false, nextCursor: undefined, rows: [] });
   }, [lifecycleKind]);
   const lifecycleCursor = more.nextCursor !== undefined ? more.nextCursor : (lifecycle.data?.nextCursor ?? null);
-  const [toast, setToast] = useState<string | null>(null);
+  const { notify } = useSession();
   const now = useNow();
   const named: Named = { accounts: accounts.data ?? [], keys: keys.data ?? [], pools: pools.data ?? [] };
   const shown = events.data ? events.data.filter((e) => !LIFECYCLE_KINDS.includes(e.kind) && (kindFilter === 'all' || e.kind === kindFilter)) : null;
@@ -142,10 +143,10 @@ export function AlertsPage() {
   const run = async (action: () => Promise<unknown>, message: string, reload: () => void) => {
     try {
       await action();
-      setToast(message);
+      notify(message);
       reload();
     } catch (e) {
-      setToast(e instanceof Error ? e.message : String(e));
+      notify(e instanceof Error ? e.message : String(e));
     }
   };
 
@@ -160,16 +161,16 @@ export function AlertsPage() {
       setMore((m) => (m.generation === generation ? { generation, loading: false, nextCursor: page.nextCursor, rows: [...m.rows, ...page.deliveries] } : m));
     } catch (e) {
       setMore((m) => (m.generation === generation ? { ...m, loading: false } : m));
-      setToast(e instanceof Error ? e.message : String(e));
+      notify(e instanceof Error ? e.message : String(e));
     }
   };
 
   const test = async (rule: AlertRule) => {
     try {
       const result = await api.testAlertRule(rule.id);
-      setToast(result.status === null ? `Test delivery failed: ${result.error ?? 'no answer'}` : `Test delivery answered ${result.status}`);
+      notify(result.status === null ? `Test delivery failed: ${result.error ?? 'no answer'}` : `Test delivery answered ${result.status}`);
     } catch (e) {
-      setToast(e instanceof Error ? e.message : String(e));
+      notify(e instanceof Error ? e.message : String(e));
     }
   };
 
@@ -420,10 +421,10 @@ export function AlertsPage() {
         onClose={() => setDialog(null)}
         onSaved={(message) => {
           setDialog(null);
-          setToast(message);
+          notify(message);
           rules.reload();
         }}
-        onError={setToast}
+        onError={notify}
       />
       <ConfirmDialog
         open={confirm !== null}
@@ -434,7 +435,6 @@ export function AlertsPage() {
         danger={confirm?.danger}
         onConfirm={() => confirm?.onConfirm()}
       />
-      <Toast message={toast} onDone={() => setToast(null)} />
     </div>
   );
 }

@@ -4,7 +4,7 @@ import type { FastPrice, ModelPrice, Settings } from '@/api/types';
 import { useSession } from '@/app/session';
 import { useAppSettings, type ThemeChoice } from '@/app/settings';
 import { IconMonitor, IconMoon, IconSun, IconX } from '@/components/ui/icons';
-import { Badge, Button, Card, ConfirmDialog, CopyButton, ErrorState, Input, KeyValue, Segmented, Skeleton, Toast, Toggle } from '@/components/ui/primitives';
+import { Badge, Button, Card, ConfirmDialog, CopyButton, ErrorState, Input, KeyValue, Segmented, Skeleton, Toggle } from '@/components/ui/primitives';
 import { fmtDate, fmtInt } from '@/lib/format';
 import type { TimeFormat } from '@/lib/format';
 import { useAsync } from '@/lib/hooks';
@@ -104,8 +104,7 @@ function SecretBadge({ configured }: { configured: boolean }) {
 export function SettingsPage() {
   const settings = useAsync(() => api.getSettings(), []);
   const { theme, setTheme, timeFormat, setTimeFormat, role, canMutate } = useAppSettings();
-  const { setPreviewRole } = useSession();
-  const [toast, setToast] = useState<string | null>(null);
+  const { notify, setPreviewRole } = useSession();
   const s = settings.data;
   const snippet = snippetFor(s?.listeners.proxy ?? null);
 
@@ -178,7 +177,7 @@ export function SettingsPage() {
         )}
       </Card>
 
-      <PricingCard canMutate={canMutate} error={settings.error} pricing={s ? s.pricing : null} onToast={setToast} />
+      <PricingCard canMutate={canMutate} error={settings.error} pricing={s ? s.pricing : null} onToast={notify} />
 
       <Card title="Sessions" subtitle="A session leaves the Sessions view once it has gone this long without a request. Its pin and any cache-warming recipe expire with it, so the next request picks an account afresh.">
         {s ? (
@@ -366,7 +365,6 @@ export function SettingsPage() {
           <Skeleton height={60} />
         )}
       </Card>
-      <Toast message={toast} onDone={() => setToast(null)} />
     </div>
   );
 }

@@ -41,7 +41,7 @@ export const PAGE_TITLES: Record<string, string> = {
 export function Shell() {
   const { pathname } = useLocation();
   const { theme, setTheme } = useAppSettings();
-  const { clearToast, logout, role, toast } = useSession();
+  const { done, logout, queue, role } = useSession();
   const settings = useAsync(() => api.getSettings(), []);
   const [navOpen, setNavOpen] = useState(false);
   const base = `/${pathname.split('/')[1] ?? ''}`;
@@ -103,7 +103,7 @@ export function Shell() {
         </main>
       </div>
       {navOpen && <button type="button" className="scrim" aria-label="Close navigation" onClick={() => setNavOpen(false)} />}
-      <Toast message={toast} onDone={clearToast} />
+      <Toast queue={queue} onDone={done} />
     </div>
   );
 }

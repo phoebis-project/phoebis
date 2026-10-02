@@ -7,6 +7,7 @@ import type {
   Account, AffinityMode, ApiKey, CacheTtl, CreatedApiKey, KeyStatus, MemberEligibility, ModelRule, OveragePolicy, Pool, PoolCacheTtl, PoolKeepalive, PoolMember, PoolStrategy, QuotaHeaders, Session, SessionPlacement,
   SubagentPlacement, TtlRules, WarmSessions,
 } from '@/api/types';
+import { useSession } from '@/app/session';
 import { useAppSettings } from '@/app/settings';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { ChartTooltip, Legend } from '@/components/charts/Tooltip';
@@ -16,7 +17,7 @@ import { SelectionOrder } from '@/components/ui/SelectionOrder';
 import { Tile } from '@/components/ui/Tile';
 import { UtilizationBar } from '@/components/UtilizationBar';
 import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
-import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, ErrorState, Field, GroupedDialog, GroupLink, Input, Menu, PageLink, Select, Skeleton, SwitchedNumber, Toast, Toggle, type DialogGroup } from '@/components/ui/primitives';
+import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, ErrorState, Field, GroupedDialog, GroupLink, Input, Menu, PageLink, Select, Skeleton, SwitchedNumber, Toggle, type DialogGroup } from '@/components/ui/primitives';
 import { sizedAccounts } from '@/lib/analytics';
 import { fmtAbsolute, fmtCompact, fmtHourTick, fmtInt, fmtPct, fmtPeriodEnd, fmtRelative, fmtUsd } from '@/lib/format';
 import { ENGINE_BOUNDS, ENGINE_FIELD_LABELS, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_LABELS, POOL_GROUPS, PROBE_TUNING_ROWS, bandRefusal, poolRefusals, type PoolGroup } from '@/lib/forms';
@@ -147,7 +148,7 @@ export function PoolsPage() {
   const { canMutate } = useAppSettings();
   const [dialog, setDialog] = useState<{ pool: Pool | null } | null>(null);
   const [deleting, setDeleting] = useState<Pool | null>(null);
-  const [toast, setToast] = useState<string | null>(null);
+  const { notify } = useSession();
 
   const accountById = useMemo(() => new Map((accounts.data ?? []).map((a) => [a.id, a])), [accounts.data]);
   const keysByPool = useMemo(() => {
@@ -169,9 +170,9 @@ export function PoolsPage() {
   const removePool = async (p: Pool) => {
     try {
       await api.deletePool(p.id);
-      setToast('Pool deleted');
+      notify('Pool deleted');
     } catch (e) {
-      setToast(e instanceof ApiError && e.status === 409 ? 'Move or revoke its keys first' : e instanceof Error ? e.message : String(e));
+      notify(e instanceof ApiError && e.status === 409 ? 'Move or revoke its keys first' : e instanceof Error ? e.message : String(e));
     }
     pools.reload();
     keys.reload();
@@ -234,7 +235,7 @@ export function PoolsPage() {
         models={(catalog.data ?? []).map((m) => ({ label: m.id, value: m.id }))}
         onSaved={(created) => {
           setDialog(null);
-          setToast(created ? 'Pool created' : 'Pool saved');
+          notify(created ? 'Pool created' : 'Pool saved');
           pools.reload();
           keys.reload();
         }}
@@ -260,7 +261,6 @@ export function PoolsPage() {
           if (deleting) void removePool(deleting);
         }}
       />
-      <Toast message={toast} onDone={() => setToast(null)} />
     </div>
   );
 }

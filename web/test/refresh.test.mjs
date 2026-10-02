@@ -11,7 +11,7 @@ for (const key of ['document', 'navigator', 'HTMLElement', 'Element', 'Node', 'g
 globalThis.window = window;
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 after(() => window.close());
-const { act, createElement: h, createRoot, fakeClock, installClock, Menu, useAsync } = await import('./dist/ui.js');
+const { act, ApiError, createElement: h, createRoot, fakeClock, installClock, Menu, queueToast, setHooks, useAsync } = await import('./dist/ui.js');
 
 const ORIGIN = Date.UTC(2026, 8, 16, 14, 30);
 const at = (ms) => new Date(ORIGIN + ms).toISOString();
@@ -137,6 +137,46 @@ test('a refresh in flight when the pause starts is dropped', async () => {
   assert.equal(load.calls, 3, 'the period armed as the pause ends reads again');
   await settled();
   assert.deepEqual([p.last().data, p.last().fetchedAt], [3, at(60_000)]);
+});
+
+test('a read that succeeds after a failing streak reports its routes recovered once', async () => {
+  const recovered = [];
+  setHooks({ onFailure: () => undefined, onForbidden: () => undefined, onRecovered: (path) => recovered.push(path), onUnauthorized: () => undefined });
+  const clock = frozen();
+  const load = counting((n) => (n === 2 || n === 3 ? Promise.reject(new ApiError(503, 'ledger locked', null, '/admin/dashboard')) : Promise.resolve(n)));
+  await probe(load);
+  for (let i = 0; i < 2; i += 1) {
+    act(() => clock.tick(30_000));
+    await settled();
+  }
+  assert.deepEqual([load.calls, recovered], [3, []], 'nothing recovers while the streak runs');
+  act(() => clock.tick(30_000));
+  await settled();
+  assert.deepEqual(recovered, ['/admin/dashboard'], 'two failures of one route report it once');
+  act(() => clock.tick(30_000));
+  await settled();
+  assert.deepEqual([load.calls, recovered], [5, ['/admin/dashboard']], 'a later success reports nothing');
+});
+
+const toast = (id, message, dwellMs, path = null) => ({ dwellMs, id, message, path });
+
+test('a confirmation replaces a showing one, and a failure on screen keeps its turn', () => {
+  const saved = queueToast([], toast(1, 'Key saved', 2_400));
+  assert.deepEqual(queueToast(saved, toast(2, 'Key revoked', 2_400)), [toast(2, 'Key revoked', 2_400)], 'the newer confirmation takes the screen with its own dwell');
+  const failing = queueToast([], toast(3, '/admin/keys failed: ledger locked', 6_000, '/admin/keys'));
+  const behind = queueToast(failing, toast(4, 'Key saved', 2_400));
+  assert.deepEqual(behind.map((t) => t.id), [3, 4], 'a confirmation waits behind a failure');
+  assert.deepEqual(queueToast(behind, toast(5, 'Key revoked', 2_400)).map((t) => t.id), [3, 5], 'and is replaced where it waits');
+  assert.deepEqual(queueToast(failing, toast(6, '/admin/pools failed: ledger locked', 6_000, '/admin/pools')).map((t) => t.id), [3, 6], 'a failure of another route queues behind');
+});
+
+test('an identical text is dropped, and so is a failure of a route already queued', () => {
+  const showing = queueToast([], toast(1, 'Key saved', 2_400));
+  assert.equal(queueToast(showing, toast(2, 'Key saved', 2_400)), showing, 'the same confirmation again keeps the one showing and its dwell');
+  const failing = queueToast([], toast(3, '/admin/settings failed: ledger locked', 6_000, '/admin/settings'));
+  assert.equal(queueToast(failing, toast(4, '/admin/settings failed: the router answered 500', 6_000, '/admin/settings')), failing, 'a second failure of the route adds none');
+  const refused = queueToast(failing, toast(5, 'the viewer role cannot change anything', 6_000));
+  assert.equal(queueToast(refused, toast(6, 'the viewer role cannot change anything', 6_000)), refused, 'a refusal already queued adds none');
 });
 
 test('a menu reports open and closed and nothing at mount', () => {

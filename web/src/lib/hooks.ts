@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { quietly } from '@/api/http';
+import { ApiError, quietly, reportRecovery } from '@/api/http';
 import { clock } from './clock';
 
 export interface Loaded<T> {
@@ -47,9 +47,14 @@ export function useAsync<T>(load: () => Promise<T>, deps: readonly unknown[] = [
   const run = useRef({ alive: false });
   // Whether the last read, the load or a refresh, failed: the next refresh runs quiet, so a failing streak toasts once.
   const failing = useRef(false);
+  // The routes the streak failed on, each reported recovered once by the read that ends it, which takes down the
+  // failure notice the streak raised.
+  const failedPaths = useRef(new Set<string>());
 
   const landed = (value: T, answered: readonly unknown[]) => {
     const at = stamp();
+    for (const path of failedPaths.current) reportRecovery(path);
+    failedPaths.current.clear();
     failing.current = false;
     fetched.current = at;
     setData(value);
@@ -59,6 +64,7 @@ export function useAsync<T>(load: () => Promise<T>, deps: readonly unknown[] = [
   };
   const failed = (err: unknown) => {
     failing.current = true;
+    if (err instanceof ApiError && err.path !== null) failedPaths.current.add(err.path);
     setError(messageOf(err));
   };
 

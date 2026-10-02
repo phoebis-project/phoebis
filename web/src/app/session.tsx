@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { api, MOCK, type Role, type SessionInfo } from '@/api';
 import { ApiError, SessionNotKept, setHooks } from '@/api/http';
 import { Button, Input } from '@/components/ui/primitives';
@@ -16,19 +16,46 @@ const storedPreview = (): Role | null => {
   }
 };
 
-interface SessionState {
-  clearToast: () => void;
+export interface SessionState {
+  /** Ends the dwell of the toast with this id, so the next one in the queue shows. */
+  done: (id: number) => void;
   logout: () => Promise<void>;
+  /** Puts a page's confirmation or refusal on the shell's queue. */
+  notify: (message: string) => void;
   /** Mock builds may preview the viewer role; the served app reads the role from the session alone. */
   previewRole: Role | null;
+  /** The toasts waiting, the first one on screen: the transport's failures and refusals and the pages' messages. */
+  queue: ToastItem[];
   role: Role;
   sessionId: string;
   setPreviewRole: (role: Role | null) => void;
-  /** What the transport reported last: a refusal, or a call that failed. The shell shows it once. */
-  toast: string | null;
 }
 
 const Ctx = createContext<SessionState | null>(null);
+
+export interface ToastItem {
+  dwellMs: number;
+  id: number;
+  message: string;
+  /** The route a failure names, so the read's recovery can take it down; null for anything else. */
+  path: string | null;
+}
+
+/** Long enough to read the route a failure names; a confirmation keeps the dwell the pages always gave it. */
+const FAILURE_MS = 6_000;
+const CONFIRMATION_MS = 2_400;
+const isConfirmation = (t: ToastItem) => t.dwellMs === CONFIRMATION_MS;
+
+/**
+ * A message already queued adds nothing, and neither does a failure of a route already queued. A confirmation takes
+ * the place of the one queued, on screen or waiting, since the newest action's result is the one the operator wants
+ * to read; it never displaces a failure. Anything else waits its turn.
+ */
+export function queueToast(queue: ToastItem[], item: ToastItem): ToastItem[] {
+  if (queue.some((t) => t.message === item.message || (item.path !== null && t.path === item.path))) return queue;
+  const replaced = isConfirmation(item) ? queue.findIndex(isConfirmation) : -1;
+  return replaced < 0 ? [...queue, item] : queue.map((t, i) => (i === replaced ? item : t));
+}
 
 /** What the session read found: still asking, no session, no answer (its status, 0 when none came), or the session. */
 type Probe = 'pending' | 'none' | { noAnswer: number } | SessionInfo;
@@ -37,8 +64,18 @@ const sessionOf = (probe: Probe): SessionInfo | null => (typeof probe === 'objec
 export function SessionProvider({ children }: { children: ReactNode }) {
   const [probe, setProbe] = useState<Probe>('pending');
   const [notice, setNotice] = useState<string | null>(null);
-  const [toast, setToast] = useState<string | null>(null);
+  const [queue, setQueue] = useState<ToastItem[]>([]);
+  const lastId = useRef(0);
   const [previewRole, setStoredPreviewRole] = useState<Role | null>(storedPreview);
+
+  const push = useCallback((message: string, dwellMs: number, path: string | null) => {
+    lastId.current += 1;
+    const item = { dwellMs, id: lastId.current, message, path };
+    setQueue((q) => queueToast(q, item));
+  }, []);
+  const notify = useCallback((message: string) => push(message, CONFIRMATION_MS, null), [push]);
+  const done = useCallback((id: number) => setQueue((q) => q.filter((t) => t.id !== id)), []);
+  const dismiss = useCallback((path: string) => setQueue((q) => q.filter((t) => t.path !== path)), []);
 
   // The card stays drawn while a Retry runs, and an answer that lands after a login went through leaves the session be.
   const probeSession = useCallback(() => {
@@ -52,17 +89,18 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     setHooks({
       // The route is named because a page draws several lists, and the operator has to know which one is gone.
-      onFailure: ({ message, path, status }) => setToast(`${path} failed: ${message ?? (status === 0 ? 'the router did not answer' : `the router answered ${status}`)}`),
+      onFailure: ({ message, path, status }) => push(`${path} failed: ${message ?? (status === 0 ? 'the router did not answer' : `the router answered ${status}`)}`, FAILURE_MS, path),
       // The server's own wording: the gate refuses a viewer's write and a request from an unconfigured
       // origin with the same status, and only it knows which one this was.
-      onForbidden: (message) => setToast(message),
+      onForbidden: (message) => push(message, FAILURE_MS, null),
+      onRecovered: dismiss,
       onUnauthorized: () => {
         setNotice('Your session ended; log in again.');
         setProbe('none');
       },
     });
     probeSession();
-  }, [probeSession]);
+  }, [dismiss, probeSession, push]);
 
   const logout = useCallback(async () => {
     try {
@@ -86,8 +124,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
   const session = sessionOf(probe);
   const value = useMemo<SessionState | null>(
-    () => (session ? { clearToast: () => setToast(null), logout, previewRole, role: (MOCK && previewRole) || session.role, sessionId: session.sessionId, setPreviewRole, toast } : null),
-    [session, toast, logout, previewRole, setPreviewRole],
+    () => (session ? { done, logout, notify, previewRole, queue, role: (MOCK && previewRole) || session.role, sessionId: session.sessionId, setPreviewRole } : null),
+    [done, logout, notify, previewRole, queue, session, setPreviewRole],
   );
 
   if (probe === 'pending')

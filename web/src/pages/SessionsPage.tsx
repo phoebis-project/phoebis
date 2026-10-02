@@ -2,11 +2,12 @@ import { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { api } from '@/api';
 import type { Account, ApiKey, CompanionState, KeepaliveOverview, KeepaliveRecipe, KeepaliveState, Pool, RecipeState, Session } from '@/api/types';
+import { useSession } from '@/app/session';
 import { useAppSettings } from '@/app/settings';
 import { CostReferenceLink } from '@/components/ui/CostReference';
 import { Tile } from '@/components/ui/Tile';
 import { IconChevron } from '@/components/ui/icons';
-import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Menu, Meter, Skeleton, Toast } from '@/components/ui/primitives';
+import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Menu, Meter, Skeleton } from '@/components/ui/primitives';
 import { fmtAbsolute, fmtDuration, fmtInt, fmtPct, fmtRelative, fmtShare, fmtUsd, shortId } from '@/lib/format';
 import { REASON_HINT, REASON_LABEL, WARNING_REASONS } from '@/lib/keepalive';
 import { useAsync, useNow } from '@/lib/hooks';
@@ -143,7 +144,7 @@ export function SessionsPage() {
   const { canMutate } = useAppSettings();
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [pending, setPending] = useState<Row | null>(null);
-  const [toast, setToast] = useState<string | null>(null);
+  const { notify } = useSession();
   // The base row the last fork link led to, marked until another fork link is followed.
   const [current, setCurrent] = useState<string | null>(null);
 
@@ -169,11 +170,11 @@ export function SessionsPage() {
     if (!pending) return;
     void api.releaseSession(pending.session.keyId, pending.session.sessionId).then(
       () => {
-        setToast('Session released');
+        notify('Session released');
         sessions.reload();
         recipes.reload();
       },
-      (e: unknown) => setToast(e instanceof Error ? e.message : String(e)),
+      (e: unknown) => notify(e instanceof Error ? e.message : String(e)),
     );
   };
   const listedIds = useMemo(() => new Set((rows ?? []).map((r) => rowDomId(r.session))), [rows]);
@@ -315,7 +316,6 @@ export function SessionsPage() {
         }
         onConfirm={onConfirmRelease}
       />
-      <Toast message={toast} onDone={() => setToast(null)} />
     </div>
   );
 }

@@ -2,10 +2,11 @@ import { useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '@/api';
 import type { KeyModels, ModelEvent, ProcessedRule } from '@/api/types';
+import { useSession } from '@/app/session';
 import { useAppSettings } from '@/app/settings';
 import { CoolingDown, scopeLabel, type CoolingRow } from '@/components/CoolingDown';
 import { IconInfo } from '@/components/ui/icons';
-import { Badge, Button, Card, ConfirmDialog, ErrorState, Select, Skeleton, Toast } from '@/components/ui/primitives';
+import { Badge, Button, Card, ConfirmDialog, ErrorState, Select, Skeleton } from '@/components/ui/primitives';
 import { fmtAbsolute, fmtRelative } from '@/lib/format';
 import { useAsync, useNow } from '@/lib/hooks';
 import { UNDATED_MODEL_NOTE } from '@/lib/patterns';
@@ -49,7 +50,7 @@ export function ModelsPage() {
   const state = useAsync(() => api.getModelsState(), [tick]);
   const [pending, setPending] = useState<CoolingRow | null>(null);
   const [busy, setBusy] = useState(false);
-  const [toast, setToast] = useState<string | null>(null);
+  const { notify } = useSession();
   // A switch leaves the previous key's answer in hand while the next one loads, and that list is never drawn under
   // this key's name.
   const processed = models.data !== null && models.data.keyId === keyId ? models.data : null;
@@ -61,11 +62,11 @@ export function ModelsPage() {
       .clearCooldown(pending.accountId, pending.scope)
       .then(
         () => {
-          setToast('Cooldown cleared');
+          notify('Cooldown cleared');
           state.reload();
           models.reload();
         },
-        (e: unknown) => setToast(e instanceof Error ? e.message : String(e)),
+        (e: unknown) => notify(e instanceof Error ? e.message : String(e)),
       )
       .finally(() => setBusy(false));
   };
@@ -168,7 +169,6 @@ export function ModelsPage() {
         body="The account becomes eligible immediately. If the account is still rate limited, the next request re-enters cooldown."
         onConfirm={onConfirmClear}
       />
-      <Toast message={toast} onDone={() => setToast(null)} />
     </div>
   );
 }

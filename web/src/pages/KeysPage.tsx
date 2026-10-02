@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { api } from '@/api';
 import type { AffinitySource, ApiKey, CreatedApiKey, KeyModels, KeyStatus, ModelRule, ModelRulesMode, Pool } from '@/api/types';
+import { useSession } from '@/app/session';
 import { useAppSettings } from '@/app/settings';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { PatternEditor, useCatalogSuggestions } from '@/components/PatternEditor';
 import { Tile } from '@/components/ui/Tile';
 import { IconInfo, IconPlus, IconWarning } from '@/components/ui/icons';
-import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, EmptyState, ErrorState, Field, GroupedDialog, Input, Menu, PageLink, SearchInput, Segmented, Select, Skeleton, Toast, Toggle, type DialogGroup } from '@/components/ui/primitives';
+import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, EmptyState, ErrorState, Field, GroupedDialog, Input, Menu, PageLink, SearchInput, Segmented, Select, Skeleton, Toggle, type DialogGroup } from '@/components/ui/primitives';
 import { clock } from '@/lib/clock';
 import { fmtAbsolute, fmtCompact, fmtDate, fmtInt, fmtRelative, fmtUsd } from '@/lib/format';
 import { KEY_GROUPS, keyFormOf, keyInputOf, keyRefusals, type AutoModeOverride, type CaptureMode, type KeyGroup } from '@/lib/forms';
@@ -43,7 +44,7 @@ export function KeysPage() {
   // Held only while the dialog that shows it is open, because the router keeps no copy of a secret.
   const [created, setCreated] = useState<{ key: CreatedApiKey; title: string } | null>(null);
   const [confirm, setConfirm] = useState<{ body: string; danger?: boolean; label: string; onConfirm: () => void; title: string } | null>(null);
-  const [toast, setToast] = useState<string | null>(null);
+  const { notify } = useSession();
   // The rows whose menu is open, by key id: an answer landing under an open menu would re-sort the rows beneath it.
   const [openMenus, setOpenMenus] = useState<ReadonlySet<string>>(() => new Set());
   // The key dialog resets its fields whenever the pool list changes, so a refresh landing under it would wipe them.
@@ -78,7 +79,7 @@ export function KeysPage() {
     try {
       await action();
     } catch (e) {
-      setToast(e instanceof Error ? e.message : String(e));
+      notify(e instanceof Error ? e.message : String(e));
       return;
     }
     keys.reload();
@@ -245,7 +246,7 @@ export function KeysPage() {
                                       onConfirm: () =>
                                         void run(async () => {
                                           await api.revokeKey(k.id);
-                                          setToast('Key revoked');
+                                          notify('Key revoked');
                                         }),
                                     }),
                                 },
@@ -261,7 +262,7 @@ export function KeysPage() {
                                       onConfirm: () =>
                                         void run(async () => {
                                           await api.deleteKey(k.id);
-                                          setToast('Key deleted');
+                                          notify('Key deleted');
                                         }),
                                     }),
                                 },
@@ -306,7 +307,7 @@ export function KeysPage() {
         }}
         onUpdated={() => {
           setDialog(null);
-          setToast('Key saved');
+          notify('Key saved');
           keys.reload();
         }}
       />
@@ -334,7 +335,6 @@ export function KeysPage() {
         )}
       </Dialog>
       <ConfirmDialog open={confirm !== null} onClose={() => setConfirm(null)} title={confirm?.title ?? ''} body={confirm?.body ?? ''} confirmLabel={confirm?.label} danger={confirm?.danger} onConfirm={() => confirm?.onConfirm()} />
-      <Toast message={toast} onDone={() => setToast(null)} />
     </div>
   );
 }

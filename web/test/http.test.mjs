@@ -212,6 +212,15 @@ test('a login the router accepted with no cookie kept raises SessionNotKept', as
   assert.deepEqual(calls.map((c) => c.init.method ?? 'GET'), ['POST', 'GET'], 'the session read follows the accepted login');
 });
 
+test('a failed call names its route on the error, whether the router answered or not', async () => {
+  setHooks({ onFailure: () => undefined, onForbidden: () => undefined, onRecovered: () => undefined, onUnauthorized: () => undefined });
+  stub(() => answer(503, { error: 'ledger locked' }));
+  await assert.rejects(call('GET', '/admin/dashboard'), (e) => e instanceof ApiError && e.path === '/admin/dashboard');
+  stub(() => Promise.reject(new TypeError('fetch failed')));
+  await assert.rejects(call('GET', '/admin/sessions'), (e) => e instanceof ApiError && e.status === 0 && e.path === '/admin/sessions');
+  assert.equal(new ApiError(409, 'taken', null).path, null, 'an error raised outside the transport names no route');
+});
+
 test('the live feed reconnects behind a live session and stops once it is gone', async () => {
   const sockets = [];
   globalThis.WebSocket = class {

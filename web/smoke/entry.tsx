@@ -64,7 +64,7 @@ export const failNextCall = (name: string, path: string, message: string, option
     // The transport reads the session straight through and keeps the login's refusals to the login screen, so
     // neither one reaches the shell.
     if (name !== 'getSession' && name !== 'login') reportFailure({ message, path, status });
-    return Promise.reject(new ApiError(status, message, null));
+    return Promise.reject(new ApiError(status, message, null, path));
   };
 };
 
@@ -85,7 +85,7 @@ export const failCalls = (routes: Record<string, string>, message: string) => {
         return originals[name].apply(api, args);
       }
       reportFailure({ message, path, status: 503 });
-      return Promise.reject(new ApiError(503, message, null));
+      return Promise.reject(new ApiError(503, message, null, path));
     };
   }
   return {

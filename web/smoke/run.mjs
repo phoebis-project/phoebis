@@ -5677,6 +5677,76 @@ if (roleBeforePreview === null) localStorage.removeItem('phoebis.role');
 else localStorage.setItem('phoebis.role', roleBeforePreview);
 
 {
+  // The shell's toast queue, each check on the frozen clock with its failures set before the mount unless it says
+  // otherwise. Like the login checks after them, these run late, so the real time their mounts take moves none of the
+  // story's relative times the earlier checks read.
+  const toasts = (page) => [...page.container.querySelectorAll('.toast')].map((t) => t.textContent ?? '');
+
+  let outage = failCalls({ getOverview: '/admin/dashboard', listSessions: '/admin/sessions' }, 'ledger locked');
+  let page = await mount('/', { now: CLOCK_ORIGIN });
+  const first = toasts(page);
+  tick(6_000);
+  await page.settle();
+  const next = toasts(page);
+  outage.restore();
+  page.unmount();
+  results.push({
+    name: '/ two failures of different routes show in turn',
+    ok: first.length === 1 && first[0].startsWith('/admin/dashboard failed') && next.length === 1 && next[0].startsWith('/admin/sessions failed'),
+    missing: [JSON.stringify(first), JSON.stringify(next)],
+  });
+
+  outage = failCalls({ getOverview: '/admin/dashboard' }, 'ledger locked');
+  page = await mount('/', { now: CLOCK_ORIGIN });
+  tick(3_000);
+  await page.settle();
+  const atThree = toasts(page);
+  tick(3_000);
+  await page.settle();
+  const atSix = toasts(page);
+  outage.restore();
+  page.unmount();
+  results.push({
+    name: '/ a failure is still shown at 3 seconds and gone after 6',
+    ok: JSON.stringify(atThree) === JSON.stringify(['/admin/dashboard failed: ledger locked']) && atSix.length === 0,
+    missing: [JSON.stringify(atThree), JSON.stringify(atSix)],
+  });
+
+  // The sidebar's version read and the page's own read the same route at mount, both first reads, so neither runs quiet.
+  outage = failCalls({ getSettings: '/admin/settings' }, 'ledger locked');
+  page = await mount('/quota', { now: CLOCK_ORIGIN });
+  const once = toasts(page);
+  tick(6_000);
+  await page.settle();
+  const after = toasts(page);
+  outage.restore();
+  page.unmount();
+  results.push({
+    name: "/quota a repeat of one route's failure does not queue twice",
+    ok: once.length === 1 && once[0].startsWith('/admin/settings failed') && after.length === 0,
+    missing: [JSON.stringify(once), JSON.stringify(after)],
+  });
+
+  // Failed after the mount, so the load stamps its answer at the origin and the visibility rule finds it a period old.
+  page = await mount('/', { now: CLOCK_ORIGIN });
+  outage = failCalls({ getOverview: '/admin/dashboard' }, 'ledger locked');
+  tick(30_000);
+  await page.settle();
+  const raised = toasts(page);
+  outage.recover();
+  document.dispatchEvent(new window.Event('visibilitychange'));
+  await page.settle();
+  const recovered = toasts(page);
+  outage.restore();
+  page.unmount();
+  results.push({
+    name: "/ a read that recovers dismisses its streak's failure notice",
+    ok: raised.some((t) => t.startsWith('/admin/dashboard failed')) && !recovered.some((t) => t.includes('/admin/dashboard')),
+    missing: [JSON.stringify(raised), JSON.stringify(recovered)],
+  });
+}
+
+{
   // The login checks below start signed out, each on a fresh mount, and put the stored session back at the end. They
   // run last, so the real time their mounts take does not move the story's relative times the checks above read.
   localStorage.removeItem('phoebis.mockSession');

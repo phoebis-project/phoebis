@@ -1,6 +1,7 @@
 import { createContext, Fragment, useContext, useEffect, useId, useLayoutEffect, useRef, useState, type ButtonHTMLAttributes, type CSSProperties, type HTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes } from 'react';
 import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
+import type { ToastItem } from '@/app/session';
 import { clock } from '@/lib/clock';
 import { floatAt, menuPlacement, type MenuPlacement } from '@/lib/menu';
 import type { BadgeTone } from '@/lib/quota';
@@ -662,19 +663,23 @@ export function KeyValue({ rows, className = '' }: { className?: string; rows: {
   );
 }
 
-export function Toast({ message, onDone }: { message: string | null; onDone: () => void }) {
-  // Callers pass a fresh callback on every render; keying the dwell on it would restart the timer with each one.
+/** Draws the first toast of the queue for its dwell, then hands its id to `onDone` so the next one shows. */
+export function Toast({ onDone, queue }: { onDone: (id: number) => void; queue: ToastItem[] }) {
+  // Keyed on the item rather than the callback, so a fresh callback on a re-render does not restart the dwell.
   const done = useRef(onDone);
   done.current = onDone;
+  const showing = queue[0];
+  const id = showing?.id;
+  const dwellMs = showing?.dwellMs;
   useEffect(() => {
-    if (!message) return;
-    const id = clock.setTimeout(() => done.current(), 2400);
-    return () => clock.clearTimeout(id);
-  }, [message]);
-  if (!message) return null;
+    if (id === undefined || dwellMs === undefined) return;
+    const timer = clock.setTimeout(() => done.current(id), dwellMs);
+    return () => clock.clearTimeout(timer);
+  }, [id, dwellMs]);
+  if (!showing) return null;
   return (
     <div className="toast" role="status">
-      {message}
+      {showing.message}
     </div>
   );
 }

@@ -4,10 +4,13 @@ import type { Account, AccountCatalog, AccountInput, AlertDeliveryTest, AlertEve
 
 export class ApiError extends Error {
   code: string | null;
+  /** The route the failed call read, so a read of it that later succeeds can clear the failure notice it raised. */
+  path: string | null;
   status: number;
-  constructor(status: number, message: string, code: string | null) {
+  constructor(status: number, message: string, code: string | null, path: string | null = null) {
     super(message);
     this.code = code;
+    this.path = path;
     this.status = status;
   }
 }
@@ -30,9 +33,10 @@ export interface Failure {
 interface Hooks {
   onFailure: (failure: Failure) => void;
   onForbidden: (message: string) => void;
+  onRecovered: (path: string) => void;
   onUnauthorized: () => void;
 }
-let hooks: Hooks = { onFailure: () => undefined, onForbidden: () => undefined, onUnauthorized: () => undefined };
+let hooks: Hooks = { onFailure: () => undefined, onForbidden: () => undefined, onRecovered: () => undefined, onUnauthorized: () => undefined };
 /**
  * The session provider installs these once; a 401 anywhere returns the app to the login, a 403 names the
  * refusal, and everything else reaches the shell's toast from here rather than from each page.
@@ -63,6 +67,11 @@ export const reportFailure = (failure: Failure) => {
   if (!quiet) hooks.onFailure(failure);
 };
 
+/** A read of `path` answered after its failing streak, so the failure notice the streak raised is out of date. */
+export const reportRecovery = (path: string) => {
+  hooks.onRecovered(path);
+};
+
 export async function call<T = unknown>(method: string, path: string, body?: unknown, raw = false): Promise<T> {
   // Read before the first await: the quiet window is synchronous, and the report comes after the answer.
   const silent = quiet;
@@ -76,7 +85,7 @@ export async function call<T = unknown>(method: string, path: string, body?: unk
     // A router that never answered: the page below draws its error state, and the hook says which route.
     const message = e instanceof Error ? e.message : String(e);
     if (!login && !silent) reportFailure({ message, path, status: 0 });
-    throw new ApiError(0, message, null);
+    throw new ApiError(0, message, null, path);
   }
   if (response.status === 204) return undefined as T;
   const text = await response.text();
@@ -96,7 +105,7 @@ export async function call<T = unknown>(method: string, path: string, body?: unk
       // it draws as a state of its own; everything else is a failure the operator has to be told about.
       else if (response.status !== 404 && !silent) reportFailure({ message: answered, path, status: response.status });
     }
-    throw new ApiError(response.status, message, response.headers.get('x-phoebis-error-code'));
+    throw new ApiError(response.status, message, response.headers.get('x-phoebis-error-code'), path);
   }
   return (raw ? text : parsed) as T;
 }

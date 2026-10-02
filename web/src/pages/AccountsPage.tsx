@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { api } from '@/api';
 import type { Account, AccountStatus, PairingPreview, PairingSession, QuotaHistory } from '@/api/types';
+import { useSession } from '@/app/session';
 import { useAppSettings } from '@/app/settings';
 import { CatalogDialog } from '@/components/CatalogDialog';
 import { useChartInk } from '@/components/charts/useChartInk';
@@ -10,7 +11,7 @@ import { ChartTooltip, Legend } from '@/components/charts/Tooltip';
 import { CoolingDown } from '@/components/CoolingDown';
 import { FastLane } from '@/components/FastLane';
 import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
-import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, EmptyState, ErrorState, Field, Input, KeyValue, Meter, SearchInput, Segmented, Select, Skeleton, Toast } from '@/components/ui/primitives';
+import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, EmptyState, ErrorState, Field, Input, KeyValue, Meter, SearchInput, Segmented, Select, Skeleton } from '@/components/ui/primitives';
 import { WindowTriple } from '@/components/ui/QuotaBars';
 import { fmtAbsolute, fmtCredits, fmtDate, fmtDayShort, fmtDuration, fmtEndsIn, fmtInt, fmtRelative } from '@/lib/format';
 import { accountPatchOf, subscriptionEndFormOf, subscriptionEndRefusal, tickCancelled, type SubscriptionEndForm } from '@/lib/forms';
@@ -32,7 +33,7 @@ export function AccountsPage() {
   const [query, setQuery] = useState('');
   const [status, setStatus] = useState<'all' | AccountStatus>('all');
   const [sort, setSort] = useState<SortKey>('name');
-  const [toast, setToast] = useState<string | null>(null);
+  const { notify } = useSession();
 
   const list = useMemo(() => {
     const rows = (accounts.data ?? []).filter((a) => {
@@ -106,7 +107,7 @@ export function AccountsPage() {
       </aside>
       <section className="accounts__detail">
         {selected ? (
-          <AccountDetail account={selected} now={now} onBusyChange={setDetailBusy} onToast={setToast} onPair={(repair) => setPairing({ accountId: selected.id, label: selected.label, repair })} onChanged={accounts.reload} />
+          <AccountDetail account={selected} now={now} onBusyChange={setDetailBusy} onToast={notify} onPair={(repair) => setPairing({ accountId: selected.id, label: selected.label, repair })} onChanged={accounts.reload} />
         ) : (
           <Skeleton height={400} />
         )}
@@ -118,7 +119,7 @@ export function AccountsPage() {
           setAddOpen(false);
           accounts.reload();
           if (kind === 'oauth') setPairing({ accountId: created.id, label: created.label, repair: false });
-          else setToast('Anthropic key added');
+          else notify('Anthropic key added');
         }}
       />
       <PairingDialog
@@ -130,10 +131,9 @@ export function AccountsPage() {
         onPaired={(preview) => {
           setPairing(null);
           accounts.reload();
-          setToast(`Paired ${preview.email}`);
+          notify(`Paired ${preview.email}`);
         }}
       />
-      <Toast message={toast} onDone={() => setToast(null)} />
     </div>
   );
 }
