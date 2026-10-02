@@ -96,9 +96,9 @@
       }
     ],
     "requests": {
-      "last_24h": 4,
-      "last_7d": 4,
-      "lifetime": 4
+      "last_24h": 5,
+      "last_7d": 5,
+      "lifetime": 5
     }
   }
 }

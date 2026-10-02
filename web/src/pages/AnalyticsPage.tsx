@@ -438,12 +438,12 @@ export function AnalyticsPage() {
           title={`Traffic by ${groupLabel.toLowerCase()}`}
           loading={loading}
           groupLabel={groupLabel}
-          columns={['Requests', 'OK', 'Rate limited', 'Failed', 'Exhausted', 'Rejected', 'Error rate', 'Failovers', 'Search', 'Fetch']}
+          columns={['Requests', 'OK', 'Rate limited', 'Failed', 'Incomplete', 'Exhausted', 'Rejected', 'Error rate', 'Failovers', 'Search', 'Fetch']}
           rows={groups.map((g) => ({
             key: g.key,
             label: g.label,
             // Search and Fetch count the server-tool calls the group's answers made, not tokens.
-            cells: [fmtInt(g.requests), fmtInt(g.succeeded), fmtInt(g.rateLimited), fmtInt(g.failed), fmtInt(g.exhausted), fmtInt(g.rejected), fmtPct(errorRateOf(g), 1), fmtInt(g.failovers), fmtInt(g.tokens.webSearch), fmtInt(g.tokens.webFetch)],
+            cells: [fmtInt(g.requests), fmtInt(g.succeeded), fmtInt(g.rateLimited), fmtInt(g.failed), fmtInt(g.incomplete), fmtInt(g.exhausted), fmtInt(g.rejected), fmtPct(errorRateOf(g), 1), fmtInt(g.failovers), fmtInt(g.tokens.webSearch), fmtInt(g.tokens.webFetch)],
           }))}
         />
       </Section>

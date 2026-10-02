@@ -212,6 +212,15 @@ m = await mount('/observe');
   await m.settle(300);
   const detailText = m.container.querySelector('.observe__detail')?.textContent ?? '';
   results.push({ name: '/observe the detail pane names the error of a stream that failed after its head', ok: failedAfterHead !== undefined && detailText.includes('Erroroverloaded_error'), missing: [detailText.slice(0, 160)] });
+  const badFinished = [...m.container.querySelectorAll('.live-table tbody tr')].filter((tr) => tr.children[9]?.textContent === '200' && tr.querySelector('.ldot--bad') !== null);
+  let cutDetail = '';
+  for (const tr of badFinished) {
+    tr.click();
+    await m.settle(300);
+    cutDetail = m.container.querySelector('.observe__detail')?.textContent ?? '';
+    if (cutDetail.includes('Errorstream_incomplete')) break;
+  }
+  results.push({ name: '/observe a finished 200 that ended before its end draws the failure dot', ok: cutDetail.includes('Errorstream_incomplete'), missing: [`${badFinished.length} 200 rows with ldot--bad`, cutDetail.slice(0, 160)] });
   const streamsBtn = [...m.container.querySelectorAll('.segmented button')].find((b) => b.textContent?.trim() === 'Streams');
   streamsBtn?.click();
   await m.settle(300);
@@ -2890,6 +2899,18 @@ expect('/requests', m.text(), ['Columns (13)', 'Rows', 'SSE', 'Details', 'Client
   await m.navigate('/requests');
 }
 {
+  const cut = requests.find((r) => r.outcome === 'incomplete');
+  await m.navigate(`/requests/${cut?.id}`);
+  await m.settle(300);
+  const error = [...(m.container.querySelectorAll('.drawer .kv__row') ?? [])].find((r) => r.querySelector('dt')?.textContent?.trim() === 'Error')?.querySelector('dd');
+  results.push({
+    name: '/requests the drawer of a stream that ended short names stream_incomplete',
+    ok: cut !== undefined && error?.textContent?.trim() === 'stream_incomplete',
+    missing: [cut?.id ?? 'no incomplete row in the mock', error?.textContent ?? 'no Error row'],
+  });
+  await m.navigate('/requests');
+}
+{
   const rowsBefore = m.container.querySelectorAll('tbody tr').length;
   results.push({ name: '/requests has rows', ok: rowsBefore >= 10, missing: [String(rowsBefore)] });
   const trails = [...m.container.querySelectorAll('tbody .trail')];
@@ -3691,7 +3712,7 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
     const fable = trafficRows('model').find((row) => row[0] === 'claude-fable-5-1') ?? [];
     results.push({
       name: '/analytics a model whose answers reach server tools counts both calls',
-      ok: fable.length > 10 && Number(fable[9].replace(/,/g, '')) > 0 && Number(fable[10].replace(/,/g, '')) > 0,
+      ok: fable.length > 11 && Number(fable[10].replace(/,/g, '')) > 0 && Number(fable[11].replace(/,/g, '')) > 0,
       missing: fable,
     });
 
@@ -4020,11 +4041,11 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
       const sums = want.get(r.model) ?? [0, 0];
       want.set(r.model, [sums[0] + r.usage.webSearch, sums[1] + r.usage.webFetch]);
     }
-    const wrong = perModel.filter((row) => { const sums = want.get(row[0]) ?? [0, 0]; return num(row[9]) !== sums[0] || num(row[10]) !== sums[1]; });
+    const wrong = perModel.filter((row) => { const sums = want.get(row[0]) ?? [0, 0]; return num(row[10]) !== sums[0] || num(row[11]) !== sums[1]; });
     results.push({
       name: '/analytics a session sums the server-tool calls per model the way the routes sum them',
       ok: perModel.length > 0 && wrong.length === 0,
-      missing: wrong.map((row) => `${row[0]} ${row[9]}/${row[10]} against ${(want.get(row[0]) ?? []).join('/')}`),
+      missing: wrong.map((row) => `${row[0]} ${row[10]}/${row[11]} against ${(want.get(row[0]) ?? []).join('/')}`),
     });
 
     const agentFold = '/analytics a user agent pattern nothing matches empties the session fold';

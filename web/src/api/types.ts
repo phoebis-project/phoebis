@@ -585,7 +585,7 @@ export interface RequestLog {
   kind: RequestKind;
   model: string;
   /** How the request ended, once every attempt is in. */
-  outcome: 'canceled' | 'exhausted' | 'failed' | 'rejected' | 'succeeded';
+  outcome: 'canceled' | 'exhausted' | 'failed' | 'incomplete' | 'rejected' | 'succeeded';
   poolId: string | null;
   /** The sum of the client's `x-claude-code-prev-tool-durations`, in milliseconds. */
   prevToolMs: number | null;
@@ -761,6 +761,7 @@ export interface AnalyticsGroup {
    */
   fromRequests?: true;
   histograms: LatencyHistograms;
+  incomplete: number;
   keptWarm: { requests: number; tokens: number } | null;
   key: string;
   label: string;

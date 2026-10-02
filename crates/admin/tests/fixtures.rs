@@ -593,6 +593,31 @@ async fn every_route_is_captured_and_holds_its_shape() {
         )],
         bodies: None,
     });
+    // A committed stream whose body ended before its `message_stop`, so the requests route answers the sixth
+    // outcome and the analytics groups count it in their own column.
+    parts.ledger.record(Record::Request {
+        request: RequestRecord {
+            error_code: Some("stream_incomplete".into()),
+            ..request(
+                key_generation,
+                "r-incomplete",
+                hour_ago + 600,
+                "desktop",
+                "s1",
+                200,
+                "incomplete",
+            )
+        },
+        attempts: vec![attempt(
+            "r-incomplete",
+            1,
+            "business",
+            200,
+            "upstream_error",
+            hour_ago + 600,
+        )],
+        bodies: None,
+    });
     // A row whose serving attempt carries a placement, so the placements route has a rung to answer rather
     // than an empty list. It stays on a model the price table lists, since its API-key upstream spends dollars the
     // spend fixtures read.
@@ -692,7 +717,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             finished_at: now,
         }));
     let ready = wait_json(app, "/admin/requests", &cookie, |v| {
-        v["requests"].as_array().unwrap().len() == 5
+        v["requests"].as_array().unwrap().len() == 6
     })
     .await;
     hold(&planted, "requests", "GET /admin/requests", ready);

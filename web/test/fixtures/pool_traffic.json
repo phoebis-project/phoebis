@@ -169,10 +169,10 @@
       },
       {
         "at": -3600000,
-        "requests": 2,
-        "failed": 0,
-        "tokens": 3600,
-        "cost_usd": 0.0108
+        "requests": 3,
+        "failed": 1,
+        "tokens": 5400,
+        "cost_usd": 0.0144
       },
       {
         "at": 0,

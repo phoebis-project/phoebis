@@ -328,28 +328,29 @@ key grouping, since its figures stay with the key that spent them. The earlier h
 as the request log's, and under the user agent grouping a pattern list names the groups: `claude-cli/2.1.*` and
 `claude-cli/2.0.*` as two groups, every other agent under `other`.
 
-Traffic reports request volume by outcome and the error rate, with a Failovers chart and a Migration rewrites card
-beside it: the cache-write tokens the first request after a move paid to warm its new account, and the moves the range
-counted, by reason; then a Requests by speed chart, standard and fast per bucket, and an Effort levels card with a bar
-per level the requests asked for. Burn reports a subscription account's spend as the share of its own 5-hour and 7-day
-window and an Anthropic-key account's in dollars, side by side and each split into cached and uncached tokens, grouped
-by account, key, request class, or session; the 5-hour share carries the peak band's weight, the 7-day share none. The
-shares read under the account grouping alone, since shares of different accounts' windows do not add, and the Spend
-per minute chart draws dollars alone, a subscription account's among them only for its fast-mode answers; past the
-seven lines a chart draws, the subscription accounts folded into the rest draw their fast-mode dollars as Other (fast
-mode), or Other (fast mode, tier unknown) for those whose tier the cost table does not size. The account, key and
-request class groupings read the hourly rollups, which fold a request under the hour it arrived in and weigh it by that
-hour's band rather than at its completion, where the meter charges it. Grouped by account, it adds a Plan per hour
-chart: the share of each subscription account's 5-hour window, solid, and of its 7-day window, dashed, that its traffic
-used per hour, a bucket the table cannot price (a model it has no row for, or a cell it leaves unmeasured) listed under
-one model unlisted legend entry and drawn as a gap, a priced hour with a gap or the range's edge on both sides marked
-with a dot, an hour with no traffic counted as zero on a window the account priced in the range, a window with no
-priced bucket shown as a dash, and an account whose tier the table does not size listed as tier unknown. Latency
-reports percentiles read from the merged per-hour histograms; Cache reports the hit ratio, tokens that expired between
-turns, the share of input served from cache, and the output split into thinking and plain output; Cost reports the
-estimated spend for the range and a Fast mode spend tile, the dollars fast-mode answers drew from usage credits; Cache
-warming reports what probes cost against what they saved, where a fast-mode session's probes and credits read as dollars
-and file under speed `fast`; and Accounts reports peak utilization, ineligible time, and pin churn per account.
+Traffic reports request volume by outcome (the chart's OK, Rate limited, Failed, Incomplete and Exhausted, and the
+per-group table's Rejected beside them) and the error rate, with a Failovers chart and a Migration rewrites card beside
+it: the cache-write tokens the first request after a move paid to warm its new account, and the moves the range counted,
+by reason; then a Requests by speed chart, standard and fast per bucket, and an Effort levels card with a bar per level
+the requests asked for. Burn reports a subscription account's spend as the share of its own 5-hour and 7-day window and
+an Anthropic-key account's in dollars, side by side and each split into cached and uncached tokens, grouped by account,
+key, request class, or session; the 5-hour share carries the peak band's weight, the 7-day share none. The shares read
+under the account grouping alone, since shares of different accounts' windows do not add, and the Spend per minute chart
+draws dollars alone, a subscription account's among them only for its fast-mode answers; past the seven lines a chart
+draws, the subscription accounts folded into the rest draw their fast-mode dollars as Other (fast mode), or Other (fast
+mode, tier unknown) for those whose tier the cost table does not size. The account, key and request class groupings read
+the hourly rollups, which fold a request under the hour it arrived in and weigh it by that hour's band rather than at
+its completion, where the meter charges it. Grouped by account, it adds a Plan per hour chart: the share of each
+subscription account's 5-hour window, solid, and of its 7-day window, dashed, that its traffic used per hour, a bucket
+the table cannot price (a model it has no row for, or a cell it leaves unmeasured) listed under one model unlisted
+legend entry and drawn as a gap, a priced hour with a gap or the range's edge on both sides marked with a dot, an hour
+with no traffic counted as zero on a window the account priced in the range, a window with no priced bucket shown as a
+dash, and an account whose tier the table does not size listed as tier unknown. Latency reports percentiles read from
+the merged per-hour histograms; Cache reports the hit ratio, tokens that expired between turns, the share of input
+served from cache, and the output split into thinking and plain output; Cost reports the estimated spend for the range
+and a Fast mode spend tile, the dollars fast-mode answers drew from usage credits; Cache warming reports what probes
+cost against what they saved, where a fast-mode session's probes and credits read as dollars and file under speed
+`fast`; and Accounts reports peak utilization, ineligible time, and pin churn per account.
 
 The Cache section closes with Placements by rung: the attempts in the range the router placed by a warm prefix or beside
 the main conversation rather than by its strategy, counted by rung (by the conversation's own messages, by its static

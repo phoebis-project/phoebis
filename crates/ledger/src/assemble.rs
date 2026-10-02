@@ -401,8 +401,9 @@ fn fill_head(
     Some((unified, wire))
 }
 
-/// The attempt outcome a request's terminal cause implies for the attempt that served it, once the head's own
-/// classification is known to have been overtaken.
+/// The attempt outcome a request's terminal cause implies for the attempt that served it, once the head's
+/// own classification is known to have been overtaken; an `incomplete` body is the attempt's failure as a failed
+/// body is.
 fn terminal_outcome(complete: &RequestComplete) -> Option<&'static str> {
     match complete.outcome {
         Outcome::Canceled => Some("canceled"),
@@ -410,6 +411,7 @@ fn terminal_outcome(complete: &RequestComplete) -> Option<&'static str> {
             Some("rate_limited")
         }
         Outcome::Failed => Some("upstream_error"),
+        Outcome::Incomplete => Some("upstream_error"),
         _ => None,
     }
 }
@@ -1221,6 +1223,49 @@ mod tests {
             attempts[0].outcome.as_str(),
             "canceled",
             "cancelled after the head"
+        );
+    }
+
+    #[test]
+    fn an_incomplete_completion_turns_the_serving_attempt_to_upstream_error_and_leaves_an_earlier_attempt(
+    ) {
+        let mut a = Assembler::new(clock());
+        a.observe(observed("r9", Some("k")));
+        a.observe(selected("r9", 1, "a", 1_010));
+        a.observe(head("r9", 1, 429, AttemptOutcome::RateLimited, 1_060));
+        a.observe(selected("r9", 2, "b", 1_100));
+        a.observe(head("r9", 2, 200, AttemptOutcome::Succeeded, 1_250));
+        let Some(Record::Request {
+            request, attempts, ..
+        }) = a
+            .observe(complete(
+                "r9",
+                2,
+                Some("b"),
+                Outcome::Incomplete,
+                200,
+                Some("stream_cut"),
+            ))
+            .pop()
+        else {
+            panic!()
+        };
+        assert_eq!(
+            (
+                request.outcome.as_str(),
+                request.status,
+                request.error_code.as_deref()
+            ),
+            ("incomplete", Some(200), Some("stream_cut"))
+        );
+        assert_eq!(
+            (
+                attempts[0].outcome.as_str(),
+                attempts[1].outcome.as_str(),
+                attempts[1].upstream_status
+            ),
+            ("rate_limited", "upstream_error", Some(200)),
+            "the body the head promised never ended, so the serving attempt failed; the failover keeps its own"
         );
     }
 

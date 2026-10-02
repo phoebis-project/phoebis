@@ -279,6 +279,10 @@ CREATE INDEX IF NOT EXISTS events_at ON events (at);
 ///
 /// Version 25: the holds a request waited through, kept on the request itself: a hold that ends in an exhaustion
 /// dispatches nothing, so no attempt row could carry it. A row from before reads NULL.
+///
+/// Version 26: a committed answer whose body ended before its end counts in its own rollup column, so a cut is
+/// neither a success nor a failure in the charts; and the attempt row carries the `id` of the message the answer
+/// named, the join to a client transcript. A row from before reads 0 and NULL.
 pub const MIGRATIONS: &[(u32, &str)] = &[
     (
         2,
@@ -805,4 +809,9 @@ CREATE INDEX IF NOT EXISTS rollups_hourly_key ON rollups_hourly (key_id, key_gen
 CREATE INDEX IF NOT EXISTS rollups_hourly_member ON rollups_hourly (pool_id, account_id, hour);",
     ),
     (25, "ALTER TABLE requests ADD COLUMN held TEXT;"),
+    (
+        26,
+        "ALTER TABLE rollups_hourly ADD COLUMN incomplete INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE attempts ADD COLUMN upstream_message_id TEXT;",
+    ),
 ];

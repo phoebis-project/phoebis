@@ -22,6 +22,7 @@ const empty = (key: string, label = key): AnalyticsGroup => ({
   failed: 0,
   failovers: 0,
   histograms: { durationMs: emptyHistogram(), outputTps: emptyHistogram(), ttfbMs: emptyHistogram(), ttftMs: emptyHistogram() },
+  incomplete: 0,
   keptWarm: { requests: 0, tokens: 0 },
   key,
   label,
@@ -115,6 +116,7 @@ export function foldGroups(rows: RequestLog[], by: AnalyticsGroupBy, options: Fo
     if (r.outcome === 'succeeded') g.succeeded += 1;
     else if (r.outcome === 'exhausted') g.exhausted += 1;
     else if (r.outcome === 'rejected') g.rejected += 1;
+    else if (r.outcome === 'incomplete') g.incomplete += 1;
     else if (r.status === 429) g.rateLimited += 1;
     else g.failed += 1;
     if (r.errorCode) g.errors[r.errorCode] = countOf(g.errors, r.errorCode) + 1;
@@ -186,7 +188,7 @@ const plus = (a: number | null, b: number | null): number | null => (a === null 
 export function sumGroups(groups: AnalyticsGroup[]): AnalyticsGroup {
   const out = empty('all');
   for (const g of groups) {
-    for (const k of ['attempts', 'cacheHits', 'cacheMisses', 'costUsd', 'exhausted', 'expiredBetweenTurns', 'failed', 'failovers', 'rateLimited', 'rejected', 'requests', 'succeeded', 'uncached'] as const) out[k] += g[k];
+    for (const k of ['attempts', 'cacheHits', 'cacheMisses', 'costUsd', 'exhausted', 'expiredBetweenTurns', 'failed', 'failovers', 'incomplete', 'rateLimited', 'rejected', 'requests', 'succeeded', 'uncached'] as const) out[k] += g[k];
     out.cost = { cacheRead: plus(out.cost.cacheRead, g.cost.cacheRead), cacheWrite: plus(out.cost.cacheWrite, g.cost.cacheWrite), input: out.cost.input + g.cost.input, output: out.cost.output + g.cost.output };
     for (const k of ['cacheRead', 'cacheWrite1h', 'cacheWrite5m', 'output', 'thinking', 'uncachedInput', 'webFetch', 'webSearch'] as const) out.tokens[k] += g.tokens[k];
     for (const [code, n] of Object.entries(g.errors)) out.errors[code] = countOf(out.errors, code) + n;

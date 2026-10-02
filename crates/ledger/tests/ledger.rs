@@ -1597,9 +1597,9 @@ async fn a_rollup_row_from_before_the_class_dimension_reads_under_the_reserved_c
     {
         let db = phoebis_ledger::LedgerDb::open(&path).unwrap();
         // The four columns migration 18 adds, the five migration 19 adds, migration 20's column and table and
-        // the columns migrations 21 and 25 add, each dropped back out so the replay below has to add them again;
-        // `rollups_hourly` keeps the shape the class dimension joins, since a primary-key column cannot be
-        // dropped in place and the rebuild names its own columns regardless of what the source table still
+        // the columns migrations 21, 25 and 26 add, each dropped back out so the replay below has to add them
+        // again; `rollups_hourly` keeps the shape the class dimension joins, since a primary-key column cannot
+        // be dropped in place and the rebuild names its own columns regardless of what the source table still
         // carries.
         db.write(|c| {
             c.execute_batch(
@@ -1614,7 +1614,8 @@ async fn a_rollup_row_from_before_the_class_dimension_reads_under_the_reserved_c
                  ALTER TABLE attempts DROP COLUMN selection; \
                  ALTER TABLE quota_samples DROP COLUMN observed_at; \
                  ALTER TABLE requests DROP COLUMN auto_mode; \
-                 ALTER TABLE requests DROP COLUMN held;",
+                 ALTER TABLE requests DROP COLUMN held; \
+                 ALTER TABLE attempts DROP COLUMN upstream_message_id;",
             )?;
             Ok(())
         })
@@ -1639,7 +1640,7 @@ async fn a_rollup_row_from_before_the_class_dimension_reads_under_the_reserved_c
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 25);
+    assert_eq!(db.schema_version().await.unwrap(), 26);
     let rows = db
         .read_blocking(|c| phoebis_ledger::read_rollups(c, 0, i64::MAX))
         .unwrap();
@@ -1729,6 +1730,7 @@ async fn migration_nineteen_adds_the_identity_columns_to_a_version_eighteen_file
                  ALTER TABLE quota_samples DROP COLUMN observed_at; \
                  ALTER TABLE requests DROP COLUMN auto_mode; \
                  ALTER TABLE requests DROP COLUMN held; \
+                 ALTER TABLE attempts DROP COLUMN upstream_message_id; \
                  UPDATE meta SET value = '18' WHERE key = 'schema_version';",
             )?;
             Ok(())
@@ -1736,7 +1738,7 @@ async fn migration_nineteen_adds_the_identity_columns_to_a_version_eighteen_file
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 25);
+    assert_eq!(db.schema_version().await.unwrap(), 26);
     let (row, _) = db.request("r0").await.unwrap().unwrap();
     assert_eq!(
         (
@@ -1780,6 +1782,7 @@ async fn a_ledger_from_before_the_auto_mode_column_gains_it() {
         db.write(|c| {
             c.execute_batch(&format!(
                 "ALTER TABLE requests DROP COLUMN auto_mode; ALTER TABLE requests DROP COLUMN held; \
+                 ALTER TABLE attempts DROP COLUMN upstream_message_id; \
                  {RECREATE_DROPPED_TABLE}\n\
                  UPDATE meta SET value = '20' WHERE key = 'schema_version';"
             ))?;
@@ -1788,7 +1791,7 @@ async fn a_ledger_from_before_the_auto_mode_column_gains_it() {
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 25);
+    assert_eq!(db.schema_version().await.unwrap(), 26);
     let columns = db
         .read_blocking(|c| {
             let mut stmt = c.prepare("SELECT name FROM pragma_table_info('requests')")?;
@@ -1857,7 +1860,8 @@ async fn migration_twenty_two_files_every_rollup_row_under_standard_speed_and_ke
                 "CREATE TABLE rollups_hourly_prev AS SELECT {columns} FROM rollups_hourly; \
                  DROP TABLE rollups_hourly; \
                  ALTER TABLE rollups_hourly_prev RENAME TO rollups_hourly; \
-                 ALTER TABLE requests DROP COLUMN held; {RECREATE_DROPPED_TABLE}\n\
+                 ALTER TABLE requests DROP COLUMN held; \
+                 ALTER TABLE attempts DROP COLUMN upstream_message_id; {RECREATE_DROPPED_TABLE}\n\
                  UPDATE meta SET value = '21' WHERE key = 'schema_version';"
             ))?;
             Ok(())
@@ -1865,7 +1869,7 @@ async fn migration_twenty_two_files_every_rollup_row_under_standard_speed_and_ke
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 25);
+    assert_eq!(db.schema_version().await.unwrap(), 26);
     let speeds = |ledger: &phoebis_ledger::LedgerDb| {
         ledger
             .read_blocking(|c| {
@@ -1929,6 +1933,7 @@ async fn migration_twenty_four_files_a_rollup_row_under_fast_funding_by_its_spee
                  DROP TABLE rollups_hourly; \
                  ALTER TABLE rollups_hourly_prev RENAME TO rollups_hourly; \
                  ALTER TABLE requests DROP COLUMN held; \
+                 ALTER TABLE attempts DROP COLUMN upstream_message_id; \
                  UPDATE meta SET value = '23' WHERE key = 'schema_version';"
             ))?;
             Ok(())
@@ -1936,7 +1941,7 @@ async fn migration_twenty_four_files_a_rollup_row_under_fast_funding_by_its_spee
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 25);
+    assert_eq!(db.schema_version().await.unwrap(), 26);
     let mut rows = db
         .read_blocking(|c| phoebis_ledger::read_rollups(c, 0, i64::MAX))
         .unwrap()
@@ -1991,6 +1996,8 @@ async fn migration_twenty_five_gives_a_request_row_from_before_no_hold() {
         db.write(|c| {
             c.execute_batch(
                 "ALTER TABLE requests DROP COLUMN held; \
+                 ALTER TABLE attempts DROP COLUMN upstream_message_id; \
+                 ALTER TABLE rollups_hourly DROP COLUMN incomplete; \
                  UPDATE meta SET value = '24' WHERE key = 'schema_version';",
             )?;
             Ok(())
@@ -1998,12 +2005,152 @@ async fn migration_twenty_five_gives_a_request_row_from_before_no_hold() {
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 25);
+    assert_eq!(db.schema_version().await.unwrap(), 26);
     let (row, _) = db.request("r0").await.unwrap().unwrap();
     assert_eq!(
         row.held, None,
         "a request from before the column waited on nothing it recorded"
     );
+}
+
+#[tokio::test]
+async fn migration_twenty_six_adds_the_incomplete_counter_and_the_message_id_column_to_a_version_twenty_five_file(
+) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ledger.sqlite");
+    {
+        let db = phoebis_ledger::LedgerDb::open(&path).unwrap();
+        db.insert_request(
+            &RequestRecord {
+                id: "r0".into(),
+                received_at: 3_600_000,
+                key_id: Some("desktop".into()),
+                pool_id: Some("main".into()),
+                canonical_model: "claude-sonnet-5".into(),
+                model: "claude-sonnet-5".into(),
+                kind: "inference".into(),
+                origin: "client".into(),
+                outcome: "succeeded".into(),
+                attempts: 1,
+                ..Default::default()
+            },
+            &[AttemptRecord {
+                request_id: "r0".into(),
+                attempt: 1,
+                account_id: "a".into(),
+                account_kind: "oauth".into(),
+                outcome: "succeeded".into(),
+                output_tokens: Some(5),
+                ..Default::default()
+            }],
+            None,
+        )
+        .unwrap();
+        db.write(|c| {
+            c.execute_batch(
+                "ALTER TABLE rollups_hourly DROP COLUMN incomplete; \
+                 ALTER TABLE attempts DROP COLUMN upstream_message_id; \
+                 UPDATE meta SET value = '25' WHERE key = 'schema_version';",
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    }
+    let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
+    assert_eq!(db.schema_version().await.unwrap(), 26);
+    let rows = db
+        .read_blocking(|c| phoebis_ledger::read_rollups(c, 0, i64::MAX))
+        .unwrap();
+    assert_eq!(
+        rows.iter()
+            .map(|r| (r.requests, r.succeeded, r.incomplete))
+            .collect::<Vec<_>>(),
+        vec![(1, 1, 0)],
+        "a rollup row from before the column keeps its counts and counts no incomplete answer"
+    );
+    let message_ids = db
+        .read_blocking(|c| {
+            let mut stmt = c.prepare("SELECT upstream_message_id FROM attempts")?;
+            let ids = stmt
+                .query_map([], |r| r.get::<_, Option<String>>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(ids)
+        })
+        .unwrap();
+    assert_eq!(
+        message_ids,
+        vec![None],
+        "an attempt from before the column names no message"
+    );
+}
+
+#[test]
+fn an_incomplete_request_counts_in_the_rollups_incomplete_column_and_nowhere_else() {
+    let db = phoebis_ledger::LedgerDb::open_in_memory().unwrap();
+    db.insert_request(
+        &RequestRecord {
+            id: "r0".into(),
+            received_at: 3_600_000,
+            key_id: Some("desktop".into()),
+            key_generation: 1,
+            pool_id: Some("main".into()),
+            canonical_model: "claude-sonnet-5".into(),
+            model: "claude-sonnet-5".into(),
+            stream: true,
+            kind: "inference".into(),
+            origin: "client".into(),
+            status: Some(200),
+            outcome: "incomplete".into(),
+            attempts: 1,
+            error_code: Some("stream_incomplete".into()),
+            ..Default::default()
+        },
+        &[AttemptRecord {
+            request_id: "r0".into(),
+            attempt: 1,
+            account_id: "a".into(),
+            account_kind: "oauth".into(),
+            outcome: "upstream_error".into(),
+            upstream_status: Some(200),
+            output_tokens: Some(5),
+            ..Default::default()
+        }],
+        None,
+    )
+    .unwrap();
+    let rows = db
+        .read_blocking(|c| phoebis_ledger::read_rollups(c, 0, i64::MAX))
+        .unwrap();
+    assert_eq!(
+        rows.iter()
+            .map(|r| (
+                r.requests,
+                r.incomplete,
+                r.succeeded,
+                r.failed,
+                r.rate_limited,
+                r.exhausted,
+                r.rejected
+            ))
+            .collect::<Vec<_>>(),
+        vec![(1, 1, 0, 0, 0, 0, 0)],
+        "the answer that ended early is counted once, in its own column"
+    );
+    let (day, week) = db
+        .read_blocking(|c| phoebis_ledger::key_usage_windows(c, "desktop", 1, 7_200_000))
+        .unwrap();
+    for window in [day, week] {
+        assert_eq!(
+            (
+                window.requests,
+                window.succeeded,
+                window.failed,
+                window.incomplete
+            ),
+            (1, 0, 0, 1),
+            "the key's own usage reports it in its own count beside failed"
+        );
+    }
 }
 
 #[test]

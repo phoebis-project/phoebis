@@ -581,6 +581,7 @@ pub struct GroupRow {
     pub rejected: u64,
     pub attempts: u64,
     pub failovers: u64,
+    pub incomplete: u64,
     pub cache_hits: u64,
     pub cache_misses: u64,
     pub uncached: u64,
@@ -810,6 +811,7 @@ fn group_row(key: &str, sum: &RollupRow, probes: &RollupRow, label: String) -> G
         rejected: sum.rejected,
         attempts: sum.attempts,
         failovers: sum.failovers,
+        incomplete: sum.incomplete,
         cache_hits: sum.cache_hits,
         cache_misses: sum.cache_misses,
         uncached: sum.uncached_requests,
@@ -852,7 +854,11 @@ fn group_row(key: &str, sum: &RollupRow, probes: &RollupRow, label: String) -> G
         // Derived from the group's probe rows alone: a probe's own request row carries its outcome, and the
         // engine's deltas carry what never ran.
         probes: ProbeCounts {
-            failed: probes.failed + probes.rate_limited + probes.exhausted + probes.rejected,
+            failed: probes.failed
+                + probes.rate_limited
+                + probes.exhausted
+                + probes.rejected
+                + probes.incomplete,
             migrated: probes.probe_migrated,
             ok: probes.succeeded,
             skipped: probes.probes_skipped,
