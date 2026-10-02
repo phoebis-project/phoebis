@@ -446,7 +446,7 @@ async fn a_gzipped_json_200_the_caller_accepts_as_is_yields_usage_and_so_does_on
     // sits above the 112 KiB fixture request, which a lower one would refuse before any answer.
     let bus = Bus::new();
     let mut sub = bus.subscribe("test");
-    let small = harness_with_bus_limits(
+    let bounded = harness_with_bus_limits(
         &up,
         &[oauth("a", A, 0)],
         PoolSpec::default(),
@@ -457,7 +457,7 @@ async fn a_gzipped_json_200_the_caller_accepts_as_is_yields_usage_and_so_does_on
         },
     )
     .await;
-    let resp = small
+    let resp = bounded
         .app
         .clone()
         .oneshot(request_for(KEY, "claude-sonnet-4-5", "s3"))
@@ -477,8 +477,8 @@ async fn a_gzipped_json_200_the_caller_accepts_as_is_yields_usage_and_so_does_on
 }
 
 #[tokio::test]
-async fn an_sse_error_after_the_head_a_lost_upstream_and_a_cancelled_account_each_end_as_a_failure()
-{
+async fn after_the_head_an_sse_error_fails_a_lost_upstream_reads_incomplete_and_a_deleted_account_cancels(
+) {
     let after_head = vec![
         ev(
             "message_start",

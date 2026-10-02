@@ -207,7 +207,7 @@ pub enum Outcome {
     Canceled,
     Exhausted,
     Failed,
-    /// A committed answer whose body ended before its end; the error code says how.
+    /// A 200 answer whose body ended before its end; the error code says how.
     Incomplete,
     Rejected,
     Succeeded,

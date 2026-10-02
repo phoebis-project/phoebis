@@ -531,11 +531,12 @@ auxiliary class, or a request foreign to the conversation) moves that pin too.
 | Other 5xx | None | No; forwarded |
 | Transport failure before fully written | None | Yes, once, same account |
 | Transport failure after fully written, no head | None | No; 502 `upstream_unreachable`, client retries |
-| Committed head, body ends before its end | None | No; the request reads `incomplete` |
+| 200 head, body ends before its end | None | No; the request reads `incomplete` |
 
 An `incomplete` request's error code says how its body ended: `stream_cut` when the connection or the decoder failed
 mid-body, `stream_incomplete` when an event stream closed without its `message_stop`, and `stream_stalled` when the
-upstream went silent past the idle bound.
+upstream went silent past the idle bound. A forwarded answer with any other status stays `failed`, and its error code
+reads `stream_cut` or `stream_stalled` when its body was cut or went silent.
 
 `Retry-After` parsing is case-insensitive and accepts integer seconds or an HTTP date, rounding fractional
 seconds up; anything non-finite, negative, malformed, or absent is invalid, and an api_key row then takes the

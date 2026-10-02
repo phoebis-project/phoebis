@@ -432,6 +432,7 @@ async fn a_stream_arms_before_completion_and_a_cancel_discards() {
         (Outcome::Failed, Reason::RequestFailed),
         (Outcome::Rejected, Reason::RequestRejected),
         (Outcome::Incomplete, Reason::RequestFailed),
+        (Outcome::Canceled, Reason::RequestCanceled),
         (Outcome::Exhausted, Reason::RequestFailed),
     ] {
         r.engine.observe(r.observed("again", "main", BODY));

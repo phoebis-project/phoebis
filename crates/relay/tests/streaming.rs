@@ -927,32 +927,113 @@ async fn a_stream_closed_cleanly_after_message_start_without_message_stop_reads_
     up.shutdown().await;
 }
 
-#[tokio::test]
-async fn a_stream_cut_by_the_reader_mid_body_reads_stream_cut() {
+/// One streamed request answered by `respond`: the status the client got, whether its body ended in an error, and
+/// the completion the bus carried.
+async fn one_stream(
+    respond: Respond,
+    limits: phoebis_relay::Limits,
+) -> (u16, bool, phoebis_bus::RequestComplete) {
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
-        respond: Respond::DropAfterHead,
+        respond,
     }])
     .await;
-    let (h, mut sub) = bus_harness(&up, common::default_limits()).await;
+    let (h, mut sub) = bus_harness(&up, limits).await;
     let resp = h
         .app
         .clone()
         .oneshot(common::stream_request(common::KEY))
         .await
         .unwrap();
-    assert_eq!(resp.status(), 200);
-    assert!(
-        resp.into_body().collect().await.is_err(),
-        "the body ends in an error"
-    );
+    let status = resp.status().as_u16();
+    let cut = resp.into_body().collect().await.is_err();
     let complete = completion(&mut sub).await;
+    up.release();
+    up.shutdown().await;
+    (status, cut, complete)
+}
+
+#[tokio::test]
+async fn a_stream_cut_by_the_reader_mid_body_reads_stream_cut() {
+    let (status, cut, complete) = one_stream(
+        Respond::SseCut {
+            status: 200,
+            headers: vec![],
+            events: vec![message_start_event(), text_delta_event("hi")],
+        },
+        common::default_limits(),
+    )
+    .await;
+    assert_eq!(
+        (status, cut),
+        (200, true),
+        "the head committed and the body ends in an error"
+    );
     assert_eq!(
         (complete.outcome, complete.error_code.as_deref()),
         (phoebis_bus::Outcome::Incomplete, Some("stream_cut")),
         "the head committed, so the cut is no unreachable upstream"
     );
-    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_forwarded_error_stream_cut_mid_body_stays_failed_with_stream_cut() {
+    let (status, cut, complete) = one_stream(
+        Respond::SseCut {
+            status: 529,
+            headers: vec![],
+            events: vec![message_start_event()],
+        },
+        common::default_limits(),
+    )
+    .await;
+    assert_eq!((status, cut), (529, true));
+    assert_eq!(
+        (complete.outcome, complete.error_code.as_deref()),
+        (phoebis_bus::Outcome::Failed, Some("stream_cut")),
+        "an error answer never committed to a message, so its cut names the cause under failed"
+    );
+}
+
+#[tokio::test]
+async fn a_forwarded_error_stream_silent_past_the_idle_bound_stays_failed_with_stream_stalled() {
+    let (status, cut, complete) = one_stream(
+        Respond::Stall {
+            status: 529,
+            headers: vec![],
+            events: vec![],
+        },
+        phoebis_relay::Limits {
+            idle_timeout: Duration::from_millis(300),
+            ..common::default_limits()
+        },
+    )
+    .await;
+    assert_eq!((status, cut), (529, true));
+    assert_eq!(
+        (complete.outcome, complete.error_code.as_deref()),
+        (phoebis_bus::Outcome::Failed, Some("stream_stalled"))
+    );
+}
+
+#[tokio::test]
+async fn a_forwarded_error_stream_closed_without_its_stop_keeps_the_heads_failure() {
+    let (status, cut, complete) = one_stream(
+        Respond::Sse {
+            status: 500,
+            headers: vec![],
+            events: vec![message_start_event()],
+            delay_between: Duration::from_millis(2),
+        },
+        common::default_limits(),
+    )
+    .await;
+    assert_eq!((status, cut), (500, false));
+    assert_eq!(
+        (complete.outcome, complete.error_code.as_deref()),
+        (phoebis_bus::Outcome::Failed, None),
+        "a missing stop on an error answer is no incomplete message"
+    );
 }
 
 #[tokio::test]

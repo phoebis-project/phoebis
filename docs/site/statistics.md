@@ -24,20 +24,21 @@ A `ledger_gap` event names one of these reasons:
 | `chunk_skipped` | An interior chunk of a capture was dropped at the bus; the capture is truncated from there on. |
 | `in_flight_cap` | The 16,384 requests in flight was reached; the oldest entry was evicted to make room. |
 
-The request row names the key, the pool, the session, the agent, and the model; the kind and transport of the
-call; the status and outcome (`canceled`, `exhausted`, `failed`, `incomplete` for a committed answer whose body ended
-before its end, `rejected`, `succeeded`); the error code (`stream_cut`, `stream_incomplete` or `stream_stalled` under
-`incomplete`); the time to first byte and to first token; the duration; the bytes
-sent and received; whether the response was served kept warm; whether its body was captured; and the client's
-user agent and class (`claude-code/<entrypoint>` or `other`), the gateway hints it sent (the agent
-type, the compaction and context-compacted markers, and the summed tool durations of the turn before), the turn origin
-off its attribution line, its auto-mode standing (as admission read it, a server-side check asked for under an on
-setting or the `safeguards` member carried under an off setting, which the dispatch drops; or a refusal for the body's
-shape before any upstream saw it), and the request's shape: the effort, the thinking mode and budget, the output limit,
-the tool, system-block, and message counts, the context edits, the temperature, and the requested speed and service
-tier.
-A session that branched from another conversation carries that conversation's root and
-the matched depth as well. The session it names is the client's own,
+The request row names the key, the pool, the session, the agent, and the model; the kind and transport of the call; the
+status and outcome (`canceled`, `exhausted`, `failed`, `incomplete` for a 200 answer whose body ended before its end,
+`rejected`, `succeeded`); the error code (`stream_cut`, `stream_incomplete` or `stream_stalled` under `incomplete`, and
+`stream_cut` or `stream_stalled` under `failed` for a forwarded answer of another status whose body was cut or went
+silent); the time to first byte and to first token; the duration; the bytes sent and received; whether the response was
+served kept warm; whether its body was captured; and the client's user agent and class (`claude-code/<entrypoint>`
+or `other`), the gateway hints it sent (the agent type, the compaction and context-compacted markers, and
+the summed tool durations of the turn before), the turn origin off its attribution line, its auto-mode standing (as
+admission read it, a server-side check asked for under an on setting or the `safeguards` member carried under an off
+setting, which the dispatch drops; or a refusal for the body's shape before any upstream saw it), and the request's
+shape: the effort, the thinking mode and budget, the output limit, the tool, system-block, and message counts, the
+context edits, the temperature, and the requested speed and service tier.
+A session that
+branched from another conversation carries that conversation's root and the matched depth as well. The session it names
+is the client's own,
 and the Sessions view groups a row by it.
 The attempt row names the account and its kind; the upstream status and request id; the outcome; the
 cooldown the attempt set; the stop reason, the model the answer names when it differs from the one the router
@@ -271,44 +272,44 @@ model-scoped cooldown grouped by model with a clear button per row, and the newe
 ### Requests
 
 The table lists thirteen columns: time, key, pool, account, model, client, kind, transport, status,
-attempts, TTFB, tokens, and cost. A request whose answer committed and then ended short reads `incomplete` with the code
-that says how: `stream_cut` when the connection or the decoder failed mid-body, `stream_incomplete` when the stream
-closed without its `message_stop`, `stream_stalled` when the upstream went silent past the idle bound. The client column
-shows the class the router derived from the user agent
-(`claude-code/<entrypoint>` or `other`), with the agent type beneath it on a subagent's turn.
-One row is one client request however many attempts it took, and
-the attempt trail reads as "mail 429, business 200" when a 429 on the first account failed over to a 200 on the second.
-A request that waited for a slot while every account was at its cap carries a held marker beside its attempts with the
-time it waited. Filters narrow the table: the user agent filter takes a pattern (`claude-cli/2.1.*`, `*sdk-cli*`; `*`
-for any run of characters, `?` for one, a backslash quoting either, and a value with no wildcard matching in full), the
-client filter takes a pattern over the class (`claude-code/*`), the agent type and turn origin filters pick from the
-values the client's hint headers and attribution line carry, the speed filter picks `fast` or `standard` by the speed
-the answer reported, and the held toggle keeps the requests that waited for a slot. Selecting a row opens a drawer with
-the request's detail, which shows the user agent, the model as the
-client spelled it and, when it differs, the canonical id the router recorded, its auto-mode standing (asked for a
-server-side check under an on setting; carried the safeguards member under an off setting, which the dispatch drops;
-refused for its body shape; or not requested), and the client hints: the agent type, the compaction and
-context-compacted markers, the turn origin, and the tool time before the turn; the trail names an account the model was
-rejected on and the one that served it. The drawer's effort is the level the upstream applies: when the client sends a
-per-turn control entry, the last entry's level, else the request's top-level `output_config.effort`; a turn that ends
-with such an entry still counts as the user's turn, so it starts its own prompt. The table holds the requests up to the
-moment you opened it, so paging does not shift as new ones arrive; Refresh brings it up to now. When the session moved
-during the request, the drawer says from which account to which and why: rate limited, wound down, account marked,
-over its plan, back to plan, load shed, or window spent. When its pin was released without a move, the drawer says from
-which account and every reason the router found, among: already tried this request, the account at its spend budget,
-the creating request's own client error, an account cooldown, the account deleted, disconnected, idle past the affinity
-window, funding required, in overage, paused, needing reauthorization, released outright, window spent, the subscription
-ended, never paired, or no longer serving the model. The drawer also shows the strategy the selection used, the tier it
-drew from, whether the pin continued and was renewed, moved (naming the rule), or was placed afresh, whether the cache
-answered the request and by how many of its input tokens, and every candidate the selection passed over with the
-obstacle in its way: already tried, above the ceiling, at its in-flight cap, at its spend budget, an account cooldown,
-at the pace floor, an operator hold, in overage, ranked behind another candidate, its subscription ended, its window
-spent, or winding down. A placement names where it landed: by its messages or by its static prefix at the depth that
-matched, or with the main conversation. A request held while every account was at its cap names the account it was
-held on: its cohort's, or else the last one it waited on, and how long it waited. The cache line reads a placement as a
-hit or a miss against the prefix it was promised: a placement by its messages is a hit when the response read at least
-that prefix, one by its static prefix when it read anything, and one with the main conversation keeps the plain cache
-line.
+attempts, TTFB, tokens, and cost. A request whose 200 answer ended short reads `incomplete` with the code that says how:
+`stream_cut` when the connection or the decoder failed mid-body, `stream_incomplete` when the stream closed without its
+`message_stop`, `stream_stalled` when the upstream went silent past the idle bound. The client column shows the class
+the router derived from the user agent (`claude-code/<entrypoint>` or `other`), with the agent type
+beneath it on a subagent's turn.
+One row is one
+client request however many attempts it took, and the attempt trail reads as "mail 429, business 200" when a 429 on the
+first account failed over to a 200 on the second. A request that waited for a slot while every account was at its cap
+carries a held marker beside its attempts with the time it waited. Filters narrow the table: the user agent filter takes
+a pattern (`claude-cli/2.1.*`, `*sdk-cli*`; `*` for any run of characters, `?` for one, a backslash quoting either, and
+a value with no wildcard matching in full), the client filter takes a pattern over the class (`claude-code/*`), the
+agent type and turn origin filters pick from the values the client's hint headers and attribution line carry, the speed
+filter picks `fast` or `standard` by the speed the answer reported, and the held toggle keeps the requests that waited
+for a slot. Selecting a row opens a drawer with the request's detail, which shows
+the user agent, the model as the client spelled it and, when it differs, the canonical id the router
+recorded, its auto-mode standing (asked for a server-side check under an on setting; carried the safeguards member under
+an off setting, which the dispatch drops; refused for its body shape; or not requested), and the client hints: the agent
+type, the compaction and context-compacted markers, the turn origin, and the tool time before the turn; the trail names
+an account the model was rejected on and the one that served it. The drawer's effort is the level the upstream applies:
+when the client sends a per-turn control entry, the last entry's level, else the request's top-level
+`output_config.effort`; a turn that ends with such an entry still counts as the user's turn, so it starts its own
+prompt. The table holds the requests up to the moment you opened it, so paging does not shift as new ones arrive;
+Refresh brings it up to now. When the session moved during the request, the drawer says from which account to which and
+why: rate limited, wound down, account marked, over its plan, back to plan, load shed, or window spent. When its pin was
+released without a move, the drawer says from which account and every reason the router found, among: already tried this
+request, the account at its spend budget, the creating request's own client error, an account cooldown, the account
+deleted, disconnected, idle past the affinity window, funding required, in overage, paused, needing reauthorization,
+released outright, window spent, the subscription ended, never paired, or no longer serving the model. The drawer also
+shows the strategy the selection used, the tier it drew from, whether the pin continued and was renewed, moved (naming
+the rule), or was placed afresh, whether the cache answered the request and by how many of its input tokens, and every
+candidate the selection passed over with the obstacle in its way: already tried, above the ceiling, at its in-flight
+cap, at its spend budget, an account cooldown, at the pace floor, an operator hold, in overage, ranked behind another
+candidate, its subscription ended, its window spent, or winding down. A placement names where it landed: by its messages
+or by its static prefix at the depth that matched, or with the main conversation. A request held while every account was
+at its cap names the account it was held on: its cohort's, or else the last one it waited on, and how long it waited.
+The cache line reads a placement as a hit or a miss against the prefix it was promised: a placement by its messages is a
+hit when the response read at least that prefix, one by its static prefix when it read anything, and one with the main
+conversation keeps the plain cache line.
 
 ![The Requests view: the filterable table with its client column](assets/requests-light.png#only-light)
 ![The Requests view: the filterable table with its client column](assets/requests-dark.png#only-dark)
