@@ -17,8 +17,8 @@ const mailPoll = QUOTA_SNAPSHOTS.find((s) => s.accountId === 'mail')?.poll ?? nu
 
 /**
  * One item per kind on the story's accounts, pools and keys, in the route's order: codex exhausted since the runner's
- * key last asked it, a client build refused on the laptop key, team's lapsed credential, personal out of funding as
- * its account reads, team's refreshes failing, and the backoff mail's poll is in.
+ * key last asked it, a client build refused on the laptop key, team's lapsed credential, the Console workspace out of
+ * funding as its account reads, team's refreshes failing, and the backoff mail's poll is in.
  */
 export const ATTENTION: AttentionItem[] = [
   {
@@ -48,8 +48,8 @@ export const ATTENTION: AttentionItem[] = [
   },
   {
     ...ATTENTION_ITEM_SAMPLE,
-    ...ofAccount('personal'),
-    detail: { account: 'personal', label: 'personal' },
+    ...ofAccount('console'),
+    detail: { account: 'console', label: 'Console workspace' },
     kind: 'funding_required',
     since: ago(3 * HOUR),
   },

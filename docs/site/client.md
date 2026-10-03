@@ -131,8 +131,9 @@ member unchanged, as the router does with the setting on; an Anthropic-key accou
 that asks takes two to four seconds against one to two for one that does not, and the client's own classifier request
 about 1.3 seconds.
 
-What the router does with that request is the pool's **Support server-side auto mode** setting, on by default,
-which a key can override ([routing](routing.md#pools)):
+What the router does with that request is the pool's **Support server-side auto mode** setting, on by default, which a
+key can override; both sit in the expert view, the pool's in its dialog's Auto mode group and the key's in its dialog's
+Access group ([routing](routing.md#pools)):
 
 - On, the router passes the member, the beta and the verdict through unchanged, and the request log and the drawer
   record the request as a server-side check ([statistics](statistics.md#requests)).

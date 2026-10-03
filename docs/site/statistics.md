@@ -1,9 +1,8 @@
-# Statistics and alerts
+# Statistics
 
 Every request that finished lands in the ledger, a second SQLite file beside the registry, and the console, the
-analytics routes, the metrics listener, and the alert engine read from it or from the same events. This page
-describes what is recorded, how long it is kept, what each view shows, and how an alert rule is written and
-delivered.
+analytics routes and the metrics listener read from it or from the same events. This page describes what is recorded,
+how long it is kept, what each view shows, and which conditions the router exports as gauges.
 
 ## The ledger
 
@@ -386,3 +385,58 @@ the address the listener binds shows beside the block. Then come the price table
 choices, and an About card with the version, the profile, the metrics listener, the three storage paths, the three
 keepalive limits the file sets and the admin secret's standing. About closes on a pointer: the values the configuration
 file sets are on the [installation page](installation.md), and `phoebis check-config` prints them.
+
+## Conditions and gauges
+
+The router exports what needs an operator as Prometheus gauges and shows the same conditions on the dashboard's
+attention line and the pool cards, which read `GET /admin/attention` ([API](api.md#get-adminattention)), worst first
+and the oldest first within a kind. `phoebis_attention` carries the labels `kind` and `subject`, reads 1 while the cause
+holds and 0 once it clears, and has a series for every subject the kind applies to, so a cleared condition reads 0
+rather than vanishing; a deleted account or pool loses its series at the next read. A restart starts the conditions fed
+by the request bus over, and the usage poll keeps its backoff in memory as well, so `poll_backoff` reads 0 until a new
+backoff run is thirty minutes old; only the conditions read from the registry hold again at the first read.
+
+| Kind | Subject | Clears when |
+| --- | --- | --- |
+| `pool_exhausted` | the pool | a request of the pool succeeds |
+| `client_drift` | the client version | a request from that version is relayed, or a re-pinned build starts |
+| `reauth_required` | the account | the account is paired again, or an Anthropic-key account gets a new secret |
+| `funding_required` | the Anthropic-key account | the operator clears funding |
+| `refresh_failed` | the OAuth account | a refresh commits |
+| `poll_backoff` | the polled account | a poll answers clean |
+
+**`pool_exhausted`** holds while a request of the pool has ended exhausted and none of the pool's requests has
+succeeded since; it is fed by the request bus. An `incomplete` answer neither raises nor clears it. The detail names the
+pool and the key of the request that raised it.
+
+**`client_drift`** holds while a request from that client version has been refused for drift since the process started
+([re-pinning](operations.md#re-pinning-the-client-build)); it is fed by the request bus. The detail names the version,
+what drifted (`hash` or `version_suffix`) and the key of the newest refusal, which the item opens; a refusal that named
+no key opens nothing.
+
+**`reauth_required`** holds while the account's state is `reauth_required`, read from the registry
+([account states](pairing.md#account-states)). The registry records no time for a state change, so the item dates from
+the first read of this process that saw the state. The detail names the account and its label.
+
+**`funding_required`** holds while the account's state is `funding_required`, set when the upstream refuses a request
+over the account's credit balance; it is read from the registry and dated and detailed as `reauth_required` is.
+
+**`refresh_failed`** holds while the account's newest two resolved credential refreshes both failed or went uncertain,
+a run read from the registry. The detail counts the run's failures and gives the newest attempt's outcome and error.
+
+**`poll_backoff`** holds once the usage poll has been backing off from the endpoint's 429 answers on the account for
+thirty minutes, counted from the run's first 429. The detail gives when the run started, when the next attempt comes,
+and how many 429s the endpoint answered in a row.
+
+A threshold is a Prometheus rule over the gauge:
+
+```yaml title="prometheus rules"
+groups:
+  - name: phoebis
+    rules:
+      - alert: PhoebisNeedsAttention
+        expr: phoebis_attention == 1
+        for: 10m
+        labels: { severity: page }
+        annotations: { summary: "{{ $labels.kind }} on {{ $labels.subject }}" }
+```

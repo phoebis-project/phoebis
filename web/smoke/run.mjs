@@ -166,7 +166,7 @@ const failoverRow = requests.find((r) => r.attempts.length > 1 && r.attempts.som
     ['Pool exhausted: codex', 'badge--critical', '/pools#codex', ['key: ci', 'pool: codex']],
     ['Client drift: 2.1.271', 'badge--serious', '/keys#laptop', ['client_version: 2.1.271', 'key: laptop', 'trigger: hash']],
     ['Re-auth required: team', 'badge--critical', '/accounts/team', ['account: team', 'label: team']],
-    ['Funding required: personal', 'badge--serious', '/accounts/personal', ['account: personal', 'label: personal']],
+    ['Funding required: Console workspace', 'badge--serious', '/accounts/console', ['account: console', 'label: Console workspace']],
     ['Credential refresh failed: team', 'badge--critical', '/accounts/team', ['account: team', 'failures: 5', 'last_error: refresh_token rejected: invalid_grant', 'outcome: failed']],
     ['Usage poll backing off: mail', 'badge--warning', '/accounts/mail', ['account: mail', 'backoff_since: <instant>', 'next_attempt_at: <instant>', 'rate_limited_in_a_row: 6']],
   ];
@@ -952,7 +952,13 @@ expect('/accounts/mail', m.text(), [
   });
 }
 await m.navigate('/accounts/personal');
-expect('/accounts/personal', m.text(), ['in use', 'Clear funding flag', 'Payment method declined', 'Overage since 3h']);
+expect('/accounts/personal', m.text(), ['in use', 'Payment method declined', 'Overage since 3h']);
+{
+  // The funding flag is an Anthropic key's state, so this OAuth account in overage reads ready and offers no clear.
+  const badges = [...m.container.querySelectorAll('.detail__badges .badge')].map((b) => b.textContent?.trim() ?? '');
+  const head = [...(m.container.querySelector('.detail__head')?.querySelectorAll('button') ?? [])].map((b) => b.textContent?.trim() ?? '');
+  results.push({ name: '/accounts/personal an OAuth account in overage reads ready and offers no funding clear', ok: badges[0] === 'Ready' && !head.includes('Clear funding flag'), missing: [...badges, ...head] });
+}
 {
   const openCatalog = async () => {
     [...(m.container.querySelector('.detail__head')?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Catalog')?.click();
@@ -1021,6 +1027,8 @@ expect('/accounts/personal', m.text(), ['in use', 'Clear funding flag', 'Payment
     missing: [coolingSubtitle],
   });
 }
+await m.navigate('/accounts/console');
+expect('/accounts/console', m.text(), ['Verify', 'does not report quota windows', 'Clear funding flag']);
 {
   // A funding-flagged account never reads 'paused', so the header has to take the pause state off routing instead.
   const headButton = (name) => [...(m.container.querySelector('.detail__head')?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === name);
@@ -1031,7 +1039,7 @@ expect('/accounts/personal', m.text(), ['in use', 'Clear funding flag', 'Payment
     await m.settle(600);
   };
   await confirmAction('Pause');
-  const offersResume = headButton('Resume') !== undefined && m.text().includes('Needs funding');
+  const offersResume = headButton('Resume') !== undefined && [...m.container.querySelectorAll('.detail__badges .badge')].some((b) => b.textContent?.trim() === 'Needs funding');
   // Back to routing, since the pools and the later account checks read this account as the fixture left it.
   await confirmAction('Resume');
   results.push({
@@ -1040,8 +1048,6 @@ expect('/accounts/personal', m.text(), ['in use', 'Clear funding flag', 'Payment
     missing: [offersResume ? 'resume offered' : 'no Resume while paused', ...[...(m.container.querySelector('.detail__head')?.querySelectorAll('button') ?? [])].map((b) => b.textContent?.trim() ?? '')],
   });
 }
-await m.navigate('/accounts/console');
-expect('/accounts/console', m.text(), ['Verify', 'does not report quota windows']);
 await emailLines('/accounts/console the head draws no line under the name of an account without an email', [['console', m.container.querySelector('.detail__ident > .detail__sub.mono')?.textContent ?? null]]);
 {
   const identity = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Identity');
@@ -1174,13 +1180,13 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   }
   const attentionRows = (name) =>
     [...(card(name)?.querySelectorAll('ul.attention > li.attention__row') ?? [])].map((li) => [li.querySelector('.badge')?.textContent?.trim(), li.children[1]?.textContent?.trim(), li.children[1]?.getAttribute('href') ?? null]);
-  // The story's items: codex exhausted; the laptop key's client drift, personal out of funding and mail's poll
-  // backoff in all; and nothing on studio, whose one member and one key carry no item.
+  // The story's items: codex exhausted; the laptop key's client drift, the Console workspace out of funding and
+  // mail's poll backoff in all; and nothing on studio, whose one member and one key carry no item.
   results.push({
     name: "/pools each card draws the dashboard's items that belong to it, the pool's own row unlinked, and a card with none draws no list",
     ok:
       JSON.stringify(attentionRows('codex')) === JSON.stringify([['Pool exhausted', 'codex', null]]) &&
-      JSON.stringify(attentionRows('all')) === JSON.stringify([['Client drift', '2.1.271', '/keys#laptop'], ['Funding required', 'personal', '/accounts/personal'], ['Usage poll backing off', 'mail', '/accounts/mail']]) &&
+      JSON.stringify(attentionRows('all')) === JSON.stringify([['Client drift', '2.1.271', '/keys#laptop'], ['Funding required', 'Console workspace', '/accounts/console'], ['Usage poll backing off', 'mail', '/accounts/mail']]) &&
       card('studio')?.querySelector('.attention') === null,
     missing: ['codex', 'all', 'studio'].map((name) => `${name}: ${JSON.stringify(attentionRows(name))}`),
   });
@@ -1216,8 +1222,8 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       verdicts[0].why === 'business: where the next fresh session lands' &&
       verdicts[1].badges[0]?.[0]?.startsWith('cooldown ends') &&
       verdicts[1].badges[0]?.[1] === 'badge--warning' &&
-      JSON.stringify(verdicts[2].badges) === JSON.stringify([['unavailable', 'badge--critical', 'funding required']]) &&
-      verdicts[3].badges[0]?.[0] === 'eligible' &&
+      verdicts[2].badges[0]?.[0] === 'eligible' &&
+      JSON.stringify(verdicts[3].badges) === JSON.stringify([['unavailable', 'badge--critical', 'funding required']]) &&
       verdicts.slice(1).every((v) => !v.next),
     missing: verdicts.map((v) => JSON.stringify(v)),
   });

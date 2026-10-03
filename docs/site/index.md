@@ -15,7 +15,7 @@ API with the embedded console, and a metrics endpoint in Prometheus text format.
 | [Pairing an account](pairing.md) | Pairing an OAuth account through the console or with `curl`. |
 | [Pools, keys, and routing](routing.md) | Pace, load shedding, cooldowns, failover, and overage. |
 | [Keepalive](keepalive.md) | Keeping prompt caches warm: the companion, the gates, the tuning fields, the cost. |
-| [Statistics and alerts](statistics.md) | The ledger, the plan meter, the views, metrics, the live feed, and alerts. |
+| [Statistics](statistics.md) | The ledger, the plan meter, the views, metrics, the live feed, and the gauges. |
 | [Operations](operations.md) | Backup, the storage key, upgrades, re-pinning a client build, publishing. |
 | [Changelog](changelog.md) | What changed for an operator, by date. |
 
@@ -44,7 +44,7 @@ The proxy listener answers `HEAD /api/hello`, `HEAD` and `GET /api/ready`, `POST
 ## The console
 
 The admin listener serves a React console over the same routes as the admin API. The top bar carries the theme
-toggle, and the sidebar carries twelve views.
+toggle, and the sidebar carries eleven views.
 
 ![The dashboard: four tiles, the remaining-quota cards, recent requests](assets/dashboard-light.png#only-light)
 ![The dashboard: four tiles, the remaining-quota cards, recent requests](assets/dashboard-dark.png#only-dark)
@@ -54,14 +54,14 @@ The sidebar shows the views in this order:
 | View | Describes |
 | --- | --- |
 | Dashboard | Shown above: 24-hour tiles, remaining subscription quota, and recent requests and sessions. |
-| Observe | The live feed (see [Statistics and alerts](statistics.md)). |
-| Quota | Each account's usage windows and reset timing (see [Statistics and alerts](statistics.md)). |
+| Observe | The live feed (see [Statistics](statistics.md)). |
+| Quota | Each account's usage windows and reset timing (see [Statistics](statistics.md)). |
 | Accounts | Accounts and their credentials (see [Pairing an account](pairing.md)). |
 | Pools | Pools and their members (see [Pools, keys, and routing](routing.md)). |
 | Keys | Downstream keys and the pool each routes into (see [Pools, keys, and routing](routing.md)). |
 | Models | A key's model rules, cooldowns, and rejections (see [Pools, keys, and routing](routing.md)). |
-| Requests | Individual relayed requests (see [Statistics and alerts](statistics.md)). |
-| Analytics | Hourly rollups and cost (see [Statistics and alerts](statistics.md)). |
+| Requests | Individual relayed requests (see [Statistics](statistics.md)). |
+| Analytics | Hourly rollups and cost (see [Statistics](statistics.md)). |
 | Sessions | Session pins and keepalive recipes (see [Keepalive](keepalive.md)). |
 | Settings | Client setup, the price table, and the router's version and paths (see [Installation](installation.md)). |
 

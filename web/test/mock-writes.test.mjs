@@ -49,18 +49,19 @@ test('a new pool reads each member the way the pool route does', async () => {
   const verdicts = async (name, overagePolicy) => Object.fromEntries((await api.createPool({ ...(await storyPool(api)), members, name, overagePolicy })).members.map((m) => [m.accountId, m.eligible]));
   assert.deepEqual(await verdicts('first', 'never'), {
     business: 'eligible',
-    console: 'eligible',
+    console: 'unavailable',
     evals: 'eligible',
     mail: 'cooldown',
-    personal: 'unavailable',
+    personal: 'overage',
     spare: 'unavailable',
     team: 'unavailable',
   });
-  // Funded again, the account the router reads in overage is an obstacle only under a policy that admits none.
-  await api.clearFunding('personal');
+  // Funded again, the flagged account serves; the account the router reads in overage is an obstacle only under a
+  // policy that admits none.
+  await api.clearFunding('console');
   await api.pauseAccount('business');
   const second = await verdicts('second', 'never');
-  assert.deepEqual([second.personal, second.business], ['overage', 'unavailable'], 'a paused account is unavailable like a flagged one');
+  assert.deepEqual([second.console, second.personal, second.business], ['eligible', 'overage', 'unavailable'], 'a paused account is unavailable like a flagged one');
   assert.equal((await verdicts('third', 'prefer_plan')).personal, 'eligible');
 });
 
@@ -95,14 +96,16 @@ test('a pool write round-trips the pin and placement fields and the members\' bu
   assert.deepEqual([bare.members[0].budgetDailyUsd, bare.members[0].budgetMonthlyUsd], [null, null], 'a member written without a budget field has no budget over that period');
 });
 
-test('the story reads a member at its budget as the route does, and a member half way as eligible', async () => {
+test('the story reads a member at its budget as the route does, and a member half way as under it', async () => {
   const api = await signedIn();
   const pools = await api.listPools();
   const member = (poolId, accountId) => pools.find((p) => p.id === poolId).members.find((m) => m.accountId === accountId);
   const half = member('all', 'console');
+  // The story flags this member's funding, which the route reads before any budget, so the verdict is the flag's and
+  // the empty budgetUntil is the half-way reading.
   assert.deepEqual(
     [half.spends.map((s) => [s.period, s.spentUsd]), half.budgetDailyUsd, half.budgetMonthlyUsd, half.budgetUntil, half.eligible],
-    [[['day', 1.1], ['month', 25]], 5, 50, null, 'eligible'],
+    [[['day', 1.1], ['month', 25]], 5, 50, null, 'unavailable'],
   );
   const spent = member('codex', 'evals');
   const [day] = spent.spends;

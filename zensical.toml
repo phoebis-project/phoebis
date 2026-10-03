@@ -16,7 +16,7 @@ nav = [
   { "Pairing an account" = "pairing.md" },
   { "Pools, keys, and routing" = "routing.md" },
   { "Keepalive" = "keepalive.md" },
-  { "Statistics and alerts" = "statistics.md" },
+  { "Statistics" = "statistics.md" },
   { "Operations" = "operations.md" },
   { "Changelog" = "changelog.md" },
 ]

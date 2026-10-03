@@ -149,6 +149,11 @@ The TTL is priced per attempt, so a request that fails over reads its destinatio
 requests are fine: the cache is keyed on the prefix, and the TTL sets an entry's lifetime and price alone. The cost of
 each choice is on the [keepalive page](keepalive.md#the-cost-reference).
 
+Each card on the Pools view carries attention rows under its status sentence: the conditions of the dashboard's
+attention line that belong to the pool ([conditions](statistics.md#conditions-and-gauges)), the same list filtered by
+the pools each item names, one row per condition with its badge, its subject linked where it is fixed (the pool's own
+row stays unlinked) and its detail, the age in the row's title.
+
 ![The Pools view: one card per pool with its status badge and key count, the features it has on, one sentence on what
 the status means, what needs attention and a table of who serves next; the codex pool reads exhausted because its one
 member is at its daily budget][pl]
