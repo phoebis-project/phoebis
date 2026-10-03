@@ -179,3 +179,11 @@ test('with no member under the band the preview marks sessions it cannot move', 
   assert.equal(d.shedPreviewLine(open, false), 'No round runs while migrate above utilization is off.');
   assert.equal(d.shedPreviewLine(replay([cool], []), true), 'No member is above the threshold.');
 });
+
+test('while the cost table is loading or did not load the preview names the table and counts nothing', () => {
+  const round = replay([hot, cool], four);
+  assert.equal(d.shedPreviewLine(round, true, 'loading'), 'The cost table is loading; window-share pins are counted once it is read.');
+  assert.equal(d.shedPreviewLine(round, true, 'missing'), 'The cost table did not load, so window-share pins cannot be counted.');
+  assert.equal(d.shedPreviewLine(round, true, 'ready'), 'Would move 2 sessions, 1 warm, 70% of the burn in window share.', 'a read table counts as before');
+  assert.equal(d.shedPreviewLine(round, false, 'loading'), 'No round runs while migrate above utilization is off.', 'with migrate off no round runs, table or not');
+});

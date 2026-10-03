@@ -185,9 +185,14 @@ export function shedPreview(
   };
 }
 
-/** The shedding card's dry run in one sentence, naming the unit its share was taken in. */
-export function shedPreviewLine(preview: ShedPreview, migrateOn: boolean): string {
+/**
+ * The shedding card's dry run in one sentence, naming the unit its share was taken in. Until the cost table is read no
+ * window-share pin enters the round, so a count then would read short; `table` says whether it has been read.
+ */
+export function shedPreviewLine(preview: ShedPreview, migrateOn: boolean, table: 'loading' | 'missing' | 'ready' = 'ready'): string {
   if (!migrateOn) return 'No round runs while migrate above utilization is off.';
+  if (table === 'loading') return 'The cost table is loading; window-share pins are counted once it is read.';
+  if (table === 'missing') return 'The cost table did not load, so window-share pins cannot be counted.';
   if (preview.members === 0) return 'No member is above the threshold.';
   const of = preview.averaged
     ? "of each account's burn on average"

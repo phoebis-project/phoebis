@@ -1628,7 +1628,7 @@ export function PoolDialog({
           <Field label="Preview" plain>
             <p className="shed-preview num" role="status">
               {form.migrateOn ? (
-                shedPreviewLine(preview, true)
+                shedPreviewLine(preview, true, settings.data ? 'ready' : settings.error ? 'missing' : 'loading')
               ) : (
                 <>
                   No round runs while <GroupLink id="utilization">migrate above utilization</GroupLink> is off.

@@ -2762,6 +2762,64 @@ m.unmount();
   await api.updatePool('all', written);
 }
 m.unmount();
+{
+  // The dialog's settings read starts when the page mounts, so the hold goes in before the mount, and the preview
+  // calls its line builder only with migrate on, which `all` stores off.
+  const { getSettings } = api;
+  let release = () => {};
+  const held = new Promise((resolve) => {
+    release = resolve;
+  });
+  api.getSettings = async (...args) => {
+    await held;
+    return getSettings.apply(api, args);
+  };
+  m = await mount('/pools');
+  [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool all')?.click();
+  await m.settle(300);
+  const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
+  dlg?.querySelector('button[role="switch"][aria-label="Migrate above utilization"]')?.click();
+  await m.settle(120);
+  rail(dlg, 'shedding')?.click();
+  await m.settle(120);
+  const line = () => group(dlg, 'Load shedding')?.querySelector('.shed-preview')?.textContent ?? '';
+  const loading = line();
+  release();
+  await m.settle(300);
+  const landed = line();
+  api.getSettings = getSettings;
+  results.push({
+    name: '/pools the preview says the cost table is loading while the settings read is held',
+    ok: loading === 'The cost table is loading; window-share pins are counted once it is read.' && !loading.includes('Would move') && /^(Would (move|mark)|No member is above the threshold)/.test(landed),
+    missing: [loading, landed],
+  });
+  [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
+  await m.settle(200);
+}
+m.unmount();
+{
+  // The shell's read fails beside the dialog's and raises its toast, which this mount leaves to its dwell.
+  const outage = failCalls({ getSettings: '/admin/settings' }, 'the settings are unavailable');
+  m = await mount('/pools');
+  [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool all')?.click();
+  await m.settle(300);
+  const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
+  dlg?.querySelector('button[role="switch"][aria-label="Migrate above utilization"]')?.click();
+  await m.settle(120);
+  rail(dlg, 'shedding')?.click();
+  await m.settle(120);
+  const line = group(dlg, 'Load shedding')?.querySelector('.shed-preview')?.textContent ?? '';
+  outage.recover();
+  outage.restore();
+  results.push({
+    name: '/pools the preview says the cost table did not load after a failed settings read',
+    ok: line === 'The cost table did not load, so window-share pins cannot be counted.' && !line.includes('Would move'),
+    missing: [line],
+  });
+  [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
+  await m.settle(200);
+}
+m.unmount();
 
 m = await mount('/keys');
 expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost', 'Lifetime cost by key', 'phoebis-8f2a', 'phoebis-c41d', 'phoebis-19e7', 'Pool rules', 'revoked', 'Create key', 'Never', 'still on the previous secret']);
