@@ -13,7 +13,7 @@ use phoebis_attention::{Attention, Condition, Kind, Link, BACKOFF_ATTENTION_AFTE
 use phoebis_bus::Outcome;
 use phoebis_ledger::{Metrics, PriceTable, Pricing};
 use phoebis_oauth::PollOutcome;
-use phoebis_store::{AccountState, AttemptOutcome};
+use phoebis_store::{AccountState, AttemptOutcome, NewBundle, Secret};
 use serde_json::json;
 use tower::ServiceExt;
 
@@ -378,6 +378,72 @@ async fn two_failed_refreshes_in_a_row_hold_until_one_commits_and_date_from_the_
     let conditions = read(&attention, NOW);
     let cleared = find(&conditions, Kind::RefreshFailed, "business").unwrap();
     assert_eq!((cleared.holds, cleared.since), (false, None));
+}
+
+/// A committed retry closes the lost attempt beside it `superseded` under the commit's own time, so the two rows tie on
+/// `resolved_at`: the retry's higher id reads first and ends the run, so the lost row counts no failure.
+#[tokio::test]
+async fn a_lost_refresh_a_committed_retry_supersedes_counts_no_second_failure() {
+    let rig = rig().await;
+    let (attention, _arm) = rig.attention(None);
+    let lost = resolve(
+        &rig,
+        AttemptOutcome::Uncertain("refresh response lost".into()),
+    );
+    // Apart by more than a millisecond, so the commit settles the lost row again under a later time than its own.
+    tokio::time::sleep(Duration::from_millis(2)).await;
+    let retry = rig.store.open_refresh_attempt("business", 1, 1, 1).unwrap();
+    rig.store
+        .commit_credentials(
+            "business",
+            1,
+            1,
+            None,
+            Some(retry),
+            &NewBundle {
+                access_token: Secret::new("sk-ant-oat01-PLACEHOLDER"),
+                refresh_token: Some(Secret::new("sk-ant-ort01-PLACEHOLDER")),
+                issued_at: NOW,
+                expires_at: i64::MAX / 2,
+                refresh_expires_at: None,
+                scopes: "user:profile user:inference".into(),
+            },
+        )
+        .unwrap();
+    let attempts = rig
+        .store
+        .newest_resolved_refresh_attempts("business", 1, 16)
+        .unwrap();
+    let rows: Vec<_> = attempts
+        .iter()
+        .map(|a| (a.id, a.outcome.as_str(), a.detail.as_deref()))
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            (retry, "committed", None),
+            (lost, "failed", Some("superseded"))
+        ],
+        "the commit settles both rows, the retry first"
+    );
+    assert_eq!(attempts[0].resolved_at, attempts[1].resolved_at);
+    let cleared = read(&attention, NOW);
+    let cleared = find(&cleared, Kind::RefreshFailed, "business").unwrap();
+    assert_eq!(
+        (cleared.holds, &cleared.detail["failures"]),
+        (false, &json!(0)),
+        "the superseded row is no failure"
+    );
+
+    // A refresh that fails after the commit still counts, once: one failure holds nothing, the second holds.
+    resolve(&rig, AttemptOutcome::Failed("invalid_grant".into()));
+    let one = read(&attention, NOW);
+    let one = find(&one, Kind::RefreshFailed, "business").unwrap();
+    assert_eq!((one.holds, &one.detail["failures"]), (false, &json!(1)));
+    resolve(&rig, AttemptOutcome::Failed("invalid_grant".into()));
+    let held = read(&attention, NOW);
+    let held = find(&held, Kind::RefreshFailed, "business").unwrap();
+    assert_eq!((held.holds, &held.detail["failures"]), (true, &json!(2)));
 }
 
 #[tokio::test]

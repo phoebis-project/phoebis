@@ -567,7 +567,7 @@ async fn a_request_whose_every_hold_ran_out_answers_at_cap_naming_both_waits_on_
             429,
             Some("accounts_at_cap")
         ),
-        "a pool at its cap is an exhausted pool to the ledger and the alerts"
+        "a pool at its cap is an exhausted pool to the ledger and the attention gauge"
     );
     let body: serde_json::Value = serde_json::from_slice(&drain(resp).await).unwrap();
     assert_eq!(

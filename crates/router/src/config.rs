@@ -583,12 +583,12 @@ fn default_startup_fetch() -> u64 {
     30
 }
 
-fn default_usage_cache_ttl() -> u64 {
-    60
-}
-
 fn default_upstream_gzip() -> String {
     "auto".into()
+}
+
+fn default_usage_cache_ttl() -> u64 {
+    60
 }
 
 fn default_memory_cap() -> usize {
