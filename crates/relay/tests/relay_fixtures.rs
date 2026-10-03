@@ -325,13 +325,36 @@ async fn ready_answers_503_naming_what_the_readiness_source_reads_dead() {
     up.shutdown().await;
 }
 
+/// The placeholder is what the client sends wherever its native patch does not run: no hash to check, so it
+/// is relayed as the placeholder rather than refused as drift.
 #[tokio::test]
-async fn a_client_with_a_drifted_hash_is_refused() {
-    let drifted = String::from_utf8(body(BodyFixture::FirstParty9b244).to_vec())
+async fn a_client_sent_placeholder_is_relayed_as_the_placeholder() {
+    let placeholder = String::from_utf8(body(BodyFixture::FirstParty9b244).to_vec())
         .unwrap()
         .replacen("cch=9b244", "cch=00000", 1)
         .into_bytes();
-    a_drifted_stamp_is_refused(drifted, "hash").await;
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let app = relay_with(AccountKind::Oauth, &up).await;
+    let resp = app
+        .oneshot(request_from_fixture(
+            inference_head(FixtureKind::OauthFirstParty),
+            &placeholder,
+            "phoebis-testkey",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(outcome(&resp).client_drift, None);
+    let sent = &up.requests()[0].body;
+    assert_eq!(
+        phoebis_cch::find_cch(sent).map(|l| &sent[l.digits_start..l.digits_start + 5]),
+        Some(&b"00000"[..])
+    );
+    up.shutdown().await;
 }
 
 #[tokio::test]

@@ -239,7 +239,8 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
             retry_after: None,
         },
         // Fail closed: a hash or a version suffix the pinned rules cannot reproduce means the client moved past
-        // the profile, and the operator re-pins rather than the relay guessing what the upstream now expects.
+        // the profile. A stamp the router cannot verify never travels under an account's credential, so the
+        // operator re-pins rather than the relay guessing what the upstream now expects.
         RelayError::ClientDrift { kind: "version_suffix" } => Failure {
             status: StatusCode::BAD_REQUEST,
             error_type: "invalid_request_error",

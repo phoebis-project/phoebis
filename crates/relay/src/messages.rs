@@ -229,9 +229,13 @@ pub struct Relay {
     /// climb waits on.
     pending_reports: Arc<PendingReports>,
     pub(crate) pool: Arc<Pool>,
+    /// The pinned profile's name, for the drift warn the operator reads; empty where nothing names one.
+    profile_name: String,
     readiness: Option<ReadinessSource>,
     resolver: Resolver,
     router: RouterHandle,
+    /// `proxy.sign_cch_placeholder`: whether a restored `cch=00000` is signed rather than sent as the placeholder.
+    sign_cch_placeholder: bool,
     store: Arc<Store>,
 }
 
@@ -265,9 +269,11 @@ impl Relay {
             memory: Arc::new(SessionMemory::new(MEMORY_CAP, MEMORY_IDLE_MS)),
             pending_reports: Arc::new(PendingReports::default()),
             pool,
+            profile_name: String::new(),
             readiness: None,
             resolver,
             router,
+            sign_cch_placeholder: false,
             store,
         }
     }
@@ -301,6 +307,22 @@ impl Relay {
     pub fn with_cache_diagnostics(self, enabled: bool) -> Relay {
         Relay {
             cache_diagnostics: enabled,
+            ..self
+        }
+    }
+
+    /// `proxy.sign_cch_placeholder`.
+    pub fn with_signed_placeholder(self, on: bool) -> Relay {
+        Relay {
+            sign_cch_placeholder: on,
+            ..self
+        }
+    }
+
+    /// The pinned profile's name, for the drift warn the operator reads.
+    pub fn with_profile_name(self, name: &str) -> Relay {
+        Relay {
+            profile_name: name.to_string(),
             ..self
         }
     }
@@ -1820,6 +1842,7 @@ impl Relay {
                     } else {
                         SafeguardsEdit::Drop
                     },
+                    sign_placeholder: self.sign_cch_placeholder,
                 },
             )?;
             if !claims_its_ttl(&edits) {
@@ -1846,10 +1869,13 @@ impl Relay {
                 if let RelayError::ClientDrift { kind } = &error {
                     // Drift depends on the body alone, so it is found on the first account before any wire
                     // submission: nothing is sent until the router is re-pinned, and the outcome carries the tag.
+                    // A stamp the router cannot verify never travels under an account's credential, since a
+                    // wrong hash is indistinguishable from tampering and the cost falls on the account.
                     tracing::warn!(
                         account = %account.id,
                         drift = %kind,
                         user_agent = %user_agent(admitted.caller),
+                        profile = %self.profile_name,
                         "a caller stamped a billing line this build cannot reproduce; re-pin the router to that client",
                     );
                     let outcome = self.outcome(

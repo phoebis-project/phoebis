@@ -152,6 +152,10 @@ Every configuration block denies unknown keys, so a key the new build does not r
 
 ## Re-pinning the client build
 
+A drift refusal lasts until the router is re-pinned: every stamped request from that client build is refused with
+`client_drift` meanwhile, the `client_drift` alert kind names the first refusal, and the re-pin is the procedure below,
+a source change and a release.
+
 A "pinned" build is the one Claude Code release the router is measured against: `claude-code-2.1.269-linux-x64`, named by
 `compatibility.profile`. A profile is a fixed set of constants, the version and build tag, the two user agents, the
 Stainless headers, the three beta lists, the control-plane URLs and client id, and the TLS curves and cipher list,

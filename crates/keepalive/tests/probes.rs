@@ -207,6 +207,101 @@ async fn a_probe_preserves_routing_and_constraints() {
     );
 }
 
+/// The rig's request with a reduced-shape billing line ahead of the system prompt, carrying the placeholder the
+/// client sends wherever its native patch does not run. `2.1.269.2b2` is the suffix the client computes for
+/// `hello` under 2.1.269 (units 4, 7 and 20: `o` and two padding zeros), so the version check passes.
+fn placeholder_body() -> String {
+    BODY.replacen(
+        r#""system":[{"type":"text","text":"private prompt""#,
+        r#""system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.269.2b2; cc_entrypoint=sdk-cli; cch=00000;"},{"type":"text","text":"private prompt""#,
+        1,
+    )
+}
+
+/// Observes `placeholder_body()` on the main agent, runs the probe its recipe schedules, and returns the probe's
+/// body as the fake upstream received it.
+async fn probe_of_a_placeholder_request(r: &mut Rig) -> Vec<u8> {
+    r.observe_with("main", &placeholder_body()).await;
+    r.state("main", "idle");
+    r.advance(270_000);
+    r.step().await;
+    let sent = r.up.requests();
+    assert_eq!(sent.len(), 2, "the real request and one probe");
+    sent.last().unwrap().body.clone()
+}
+
+fn cch_digits(body: &[u8]) -> Option<&[u8]> {
+    phoebis_cch::find_cch(body).map(|l| &body[l.digits_start..l.digits_start + 5])
+}
+
+/// The recipe keeps the client's placeholder rather than signing it, so the probe reaches the relay as the
+/// request did and the relay relays it unsigned, never reading a recipe's hash as the client's.
+#[tokio::test]
+async fn a_probe_built_from_a_placeholder_request_carries_the_placeholder_and_the_relay_relays_it()
+{
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    let probe = probe_of_a_placeholder_request(&mut r).await;
+    assert_eq!(
+        cch_digits(&probe),
+        Some(&b"00000"[..]),
+        "the probe carries the placeholder: {}",
+        String::from_utf8_lossy(&probe)
+    );
+    let status = r.status("main");
+    assert_eq!((status.probes, status.reason), (1, Reason::Scheduled));
+    let rows = wait_for(std::time::Duration::from_secs(5), || {
+        let (rows, _) =
+            r.db.read_blocking(|c| {
+                phoebis_ledger::list_requests(
+                    c,
+                    &phoebis_ledger::RequestFilter {
+                        include_probes: true,
+                        ..Default::default()
+                    },
+                    &phoebis_ledger::LiveKeys::default(),
+                    None,
+                    10,
+                )
+            })
+            .unwrap();
+        (rows.len() == 2).then_some(rows)
+    })
+    .await;
+    let (probe_row, _) = rows.iter().find(|(row, _)| row.kind == "probe").unwrap();
+    assert_eq!(
+        (probe_row.status, probe_row.client_drift.as_deref()),
+        (Some(200), None)
+    );
+}
+
+/// Under `proxy.sign_cch_placeholder` the recipe signs the placeholder over its edited bytes, and the relay
+/// re-signs that hash as a client's.
+#[tokio::test]
+async fn with_the_switch_on_a_probe_built_from_a_placeholder_request_carries_a_signed_hash() {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        sign_cch_placeholder: true,
+        ..RigSpec::default()
+    })
+    .await;
+    let probe = probe_of_a_placeholder_request(&mut r).await;
+    assert_eq!(
+        phoebis_cch::sign(&probe).unwrap(),
+        probe,
+        "the stamp verifies"
+    );
+    assert!(
+        cch_digits(&probe).is_some_and(|digits| digits != b"00000"),
+        "{}",
+        String::from_utf8_lossy(&probe)
+    );
+    assert_eq!(r.status("main").probes, 1);
+}
+
 #[tokio::test]
 async fn a_heartbeat_does_not_reset_idle_or_refresh() {
     let mut r = rig(RigSpec {

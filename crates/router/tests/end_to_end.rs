@@ -3961,16 +3961,27 @@ usage:
         .filter(|r| r.line.starts_with("POST /v1/messages"))
         .collect();
     assert_eq!(posts.len(), 4);
-    // Every stamped body the relay re-signed verifies under this build's rules; --skip-hash-check leaves it here.
+    // Every stamped body carries either the placeholder the relay restored on a reduced line, or a client hash
+    // the relay re-signed, which verifies under this build's rules; --skip-hash-check leaves it here.
+    let (mut placeholders, mut signed) = (0, 0);
     for r in &posts {
-        if phoebis_cch::find_cch(&r.body).is_some() {
-            assert_eq!(
-                phoebis_cch::sign(&r.body).unwrap(),
-                r.body,
-                "the restamp is valid over the edited bytes"
-            );
+        if let Some(l) = phoebis_cch::find_cch(&r.body) {
+            if r.body[l.digits_start..l.digits_start + 5] == *b"00000" {
+                placeholders += 1;
+            } else {
+                assert_eq!(
+                    phoebis_cch::sign(&r.body).unwrap(),
+                    r.body,
+                    "the restamp is valid over the edited bytes"
+                );
+                signed += 1;
+            }
         }
     }
+    assert!(
+        placeholders > 0 && signed > 0,
+        "both shapes reached the upstream: {placeholders} placeholders, {signed} signed"
+    );
     // The fixture comparison below masks the credential, which proves nothing unless the relay actually
     // swapped it: check the bytes the fake upstream received directly instead. Run 2 (index 2) is the
     // api_key account; the other three are the paired oauth account, whose stored access token is this

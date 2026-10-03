@@ -268,6 +268,8 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             Arc::new(move || readiness.dead())
         })
         .with_cache_diagnostics(config.compatibility.cache_diagnostics)
+        .with_signed_placeholder(config.proxy.sign_cch_placeholder)
+        .with_profile_name(profile.name)
         .with_session_memory(
             config.sessions.memory_cap,
             Duration::from_secs(config.sessions.memory_idle_seconds),
@@ -295,6 +297,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         relay: relay.clone(),
         router: router_task.clone(),
         session_expiry: Duration::from_secs(config.sessions.expire_after_seconds),
+        sign_cch_placeholder: config.proxy.sign_cch_placeholder,
         store: store.clone(),
         tables: tables.clone(),
     });

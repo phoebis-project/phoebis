@@ -43,6 +43,9 @@ pub struct NativeEdit<'a> {
     /// version-suffix check; `None` for a caller the check does not apply to.
     pub version_check: Option<VersionCheck<'a>>,
     pub safeguards: SafeguardsEdit,
+    /// Whether a restored `cch=00000` is signed with this build's formula; off, the placeholder travels as the
+    /// client's own unpatched paths send it.
+    pub sign_placeholder: bool,
 }
 
 /// What the edit does to the client's `safeguards` member under the pool's or key's auto-mode setting.
@@ -144,16 +147,25 @@ pub(crate) const BILLING_BLOCK: &[u8] = br#""x-anthropic-billing-header:"#;
 /// Length of the hash after `cch=`, the only bytes `phoebis_cch::sign` rewrites.
 const CCH_DIGITS: usize = 5;
 
+/// The digits the client writes after `cch=` wherever its native patch does not run, and the ones a restored
+/// `cch` carries.
+const PLACEHOLDER: &[u8; CCH_DIGITS] = b"00000";
+
 pub fn edit_body(body: &mut Vec<u8>, edit: &NativeEdit<'_>) -> Result<BodyEdits, RelayError> {
     // A full parse would walk a body of up to the request limit a second time to learn what the upstream
     // validates anyway; the edits below fail closed on a body their scanner cannot walk.
     if !starts_with_object(body) {
         return Err(RelayError::NotAnObject);
     }
+    // Read before any edit moves the line: a client hash is checked and re-signed, the client's own placeholder
+    // (its unpatched paths send `00000`, which the server accepts) is neither.
+    let client_hash = carries_a_stamp(body) && !placeholder_stamped(body);
     if let Some(client_drift) = drift(body)? {
-        // The client hashes by rules this build no longer shares. Neither a restamp by the old rules nor the
-        // client's own hash over an edited body is known to satisfy the upstream, so nothing is sent until the
-        // router is re-pinned; the caller still learns which kind of drift it was.
+        // The client hashes by rules this build no longer shares. A stamp the router cannot verify never travels
+        // under an account's credential, edited or not: a wrong hash is indistinguishable from tampering and the
+        // cost falls on the account, not on the request; relaying the body unedited under the client's stamp, or
+        // stripping the stamp, would both put that cost on the account, so nothing is sent until the router is
+        // re-pinned, and the caller learns which kind of drift it was.
         return Err(RelayError::ClientDrift { kind: client_drift });
     }
     if let Some(check) = edit.version_check {
@@ -230,7 +242,15 @@ pub fn edit_body(body: &mut Vec<u8>, edit: &NativeEdit<'_>) -> Result<BodyEdits,
     if unreachable_stamp.is_some_and(|sent| *body != sent) {
         return Err(RelayError::BodyShape(BodyMember::BillingStamp));
     }
-    let cch_restamped = phoebis_cch::restamp_if_present(body)?;
+    // A client hash is re-signed over the edited bytes it no longer covers. The placeholder, restored or sent by
+    // the client, travels unsigned, as the client's unpatched paths send it and the server accepts it; the switch
+    // signs a restored one with this build's formula, for a server that rejects the placeholder.
+    let cch_restamped =
+        if client_hash || (edit.sign_placeholder && restored.contains(&Injected::Cch)) {
+            phoebis_cch::restamp_if_present(body)?
+        } else {
+            false
+        };
     Ok(BodyEdits {
         account_uuid_replaced,
         attribution_stripped: false,
@@ -494,7 +514,10 @@ fn insert_diagnostics(body: &mut Vec<u8>, previous: Option<&str>) -> bool {
 }
 
 /// Whether the hash the client stamped differs from the one this build computes over the body as received.
-/// A body that stamped no hash has nothing to protect and never drifts.
+/// A body that stamped no hash has nothing to protect and never drifts, and the client's placeholder is no hash
+/// to check. A stamp the router cannot verify never travels under an account's credential, edited or not: a wrong
+/// hash is indistinguishable from tampering and the cost falls on the account rather than on the request, so a
+/// drifted one is refused rather than relayed under the client's stamp or stripped.
 ///
 /// `find_cch` reads lowercase hex only, so a client stamping uppercase digits leaves a stamp that scanner
 /// cannot read at all; that counts as drift rather than as a body carrying no hash.
@@ -506,6 +529,9 @@ fn drift(body: &[u8]) -> Result<Option<&'static str>, RelayError> {
         return Ok(Some("hash"));
     };
     let digits = location.digits_start..location.digits_start + CCH_DIGITS;
+    if body[digits.clone()] == *PLACEHOLDER {
+        return Ok(None);
+    }
     let signed = phoebis_cch::sign(body)?;
     Ok((signed[digits.clone()] != body[digits]).then_some("hash"))
 }
@@ -533,6 +559,12 @@ fn carries_a_stamp(body: &[u8]) -> bool {
         let text = &body[start..end];
         text.starts_with(BILLING_BLOCK) && find(text, b"cch=").is_some()
     })
+}
+
+/// Whether the stamp `find_cch` reads is the client's placeholder rather than a hash.
+fn placeholder_stamped(body: &[u8]) -> bool {
+    phoebis_cch::find_cch(body)
+        .is_some_and(|l| body[l.digits_start..l.digits_start + CCH_DIGITS] == *PLACEHOLDER)
 }
 
 fn starts_with_object(body: &[u8]) -> bool {
@@ -611,6 +643,7 @@ mod tests {
                 markerless: Markerless::TakesTheMember,
                 version_check: None,
                 safeguards: SafeguardsEdit::Keep,
+                sign_placeholder: false,
             },
         )
         .expect("a JSON object is editable");
@@ -635,6 +668,7 @@ mod tests {
                     markerless: Markerless::TakesTheMember,
                     version_check: None,
                     safeguards: SafeguardsEdit::Keep,
+                    sign_placeholder: false,
                 },
             ),
             Err(RelayError::BodyShape(BodyMember::MetadataUserId))
@@ -656,6 +690,7 @@ mod tests {
                     markerless: Markerless::TakesTheMember,
                     version_check: None,
                     safeguards: SafeguardsEdit::Keep,
+                    sign_placeholder: false,
                 },
             ),
             Err(RelayError::BodyShape(BodyMember::Model))
@@ -676,6 +711,7 @@ mod tests {
                     markerless: Markerless::TakesTheMember,
                     version_check: None,
                     safeguards: SafeguardsEdit::Keep,
+                    sign_placeholder: false,
                 },
             ),
             Err(RelayError::BodyShape(BodyMember::Model))
@@ -696,6 +732,7 @@ mod tests {
                 markerless: Markerless::TakesTheMember,
                 version_check: None,
                 safeguards: SafeguardsEdit::Keep,
+                sign_placeholder: false,
             },
         )
         .expect("an api-key account never carried an identity");
@@ -716,6 +753,7 @@ mod tests {
                 markerless: Markerless::TakesTheMember,
                 version_check: None,
                 safeguards: SafeguardsEdit::Keep,
+                sign_placeholder: false,
             },
         )
         .expect("a JSON object is editable");
@@ -741,6 +779,7 @@ mod tests {
                     markerless: Markerless::TakesTheMember,
                     version_check: None,
                     safeguards: SafeguardsEdit::Keep,
+                    sign_placeholder: false,
                 },
             ),
             Err(RelayError::NotAnObject)
@@ -1032,6 +1071,7 @@ mod tests {
             markerless: Markerless::TakesTheMember,
             version_check: None,
             safeguards,
+            sign_placeholder: false,
         }
     }
 

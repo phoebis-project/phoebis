@@ -104,6 +104,7 @@ pub fn make_recipe(
     body: &[u8],
     model: &str,
     limit: usize,
+    sign_placeholder: bool,
 ) -> Result<Recipe, &'static str> {
     if body.len() > limit {
         return Err("request_too_large");
@@ -164,6 +165,9 @@ pub fn make_recipe(
     if !valid_opaque(model) {
         return Err("invalid_model");
     }
+    // The placeholder digits are the client's own unsigned `cch=00000`, not a hash.
+    let client_hash = phoebis_cch::find_cch(body)
+        .is_some_and(|l| &body[l.digits_start..l.digits_start + 5] != b"00000");
     let mut edited = body.to_vec();
     let (start, end) =
         phoebis_cch::number_member_span(&edited, &["max_tokens"]).ok_or("invalid_request")?;
@@ -192,9 +196,13 @@ pub fn make_recipe(
     if spellings > 1 || (spellings == 1 && !cut) {
         return Err("invalid_request");
     }
-    // `stream` is inside the billing hash view and `max_tokens` outside it: the client's stamp no longer
-    // matches the edited body, and the relay would refuse it as drift. A body without a stamp is left alone.
-    phoebis_cch::restamp_if_present(&mut edited).map_err(|_| "invalid_request")?;
+    // `stream` is inside the billing hash view and `max_tokens` outside it: a client-stamped body is re-signed
+    // over the edited bytes, since the relay would refuse the client's hash as drift; the client's own
+    // placeholder is kept, since the relay relays it unsigned, unless the switch says the server rejects it; and
+    // a body without a stamp is left alone.
+    if client_hash || sign_placeholder {
+        phoebis_cch::restamp_if_present(&mut edited).map_err(|_| "invalid_request")?;
+    }
     // Everything the bus published, in the order it published it: the denylist there is the one gate, so a
     // header the client starts sending reaches the upstream on a probe as it does on the request. The relay's
     // outbound builder places the account credential after `anthropic-version`, so this order is the wire's.

@@ -83,6 +83,10 @@ pub enum RelayError {
     BodyTooLarge,
     #[error("billing header: {0}")]
     Cch(#[from] phoebis_cch::CchError),
+    /// The client stamped a billing hash or a version suffix this build's rules do not reproduce. A stamp the
+    /// router cannot verify never travels under an account's credential, edited or not: a wrong hash is
+    /// indistinguishable from tampering and the cost falls on the account, not on the request. Relaying the
+    /// body unedited under the client's stamp and stripping the stamp are the two alternatives this rejects.
     #[error("request body carries a billing hash this build's rules do not reproduce ({kind})")]
     ClientDrift { kind: &'static str },
     #[error("request body names a model the relay will not repeat")]

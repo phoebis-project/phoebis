@@ -64,8 +64,25 @@ fn diagnostics_previous(body: &[u8]) -> Option<String> {
         .map(String::from)
 }
 
+/// The five digits after `cch=` on the billing line `find_cch` reads, `None` for a body that carries none.
+fn cch_digits(body: &[u8]) -> Option<&[u8]> {
+    phoebis_cch::find_cch(body).map(|l| &body[l.digits_start..l.digits_start + 5])
+}
+
+/// `assert_diagnosed_turn` on a Claude Code inference turn, whose reduced line the relay restores: the restored
+/// `cch` is the client's placeholder.
+fn assert_diagnosed_inference_turn(r: &fake_upstream::RecordedRequest, previous: Option<&str>) {
+    assert_diagnosed_turn(r, previous);
+    assert_eq!(
+        cch_digits(&r.body),
+        Some(&b"00000"[..]),
+        "the rewrite leaves the placeholder unsigned"
+    );
+}
+
 /// Asserts the shape `cache_diagnostics` forces on a native wire body: the beta ends the caller's list exactly
-/// once, `diagnostics` precedes `stream`, `previous_message_id` matches `previous`, and the restamp is valid.
+/// once, `diagnostics` precedes `stream`, `previous_message_id` matches `previous`, and the member leaves no
+/// signed hash behind: a probe's line carries no `cch`, and an inference turn's carries the placeholder.
 fn assert_diagnosed_turn(r: &fake_upstream::RecordedRequest, previous: Option<&str>) {
     let beta = beta_header(r).expect("the beta line is present");
     let tokens: Vec<&str> = beta.split(',').map(str::trim).collect();
@@ -88,10 +105,10 @@ fn assert_diagnosed_turn(r: &fake_upstream::RecordedRequest, previous: Option<&s
     let d_at = text.find("\"diagnostics\"").expect("the member is present");
     let s_at = text.find("\"stream\"").expect("the fixture body streams");
     assert!(d_at < s_at, "diagnostics precedes stream: {text}");
-    assert_eq!(
-        phoebis_cch::sign(&r.body).unwrap(),
-        r.body,
-        "the restamp covers the inserted member"
+    assert!(
+        matches!(cch_digits(&r.body), None | Some(b"00000")),
+        "the rewrite leaves the placeholder unsigned: {}",
+        String::from_utf8_lossy(&r.body)
     );
 }
 
@@ -141,7 +158,7 @@ async fn the_beta_and_the_member_are_added_when_absent_with_the_previous_id_acro
         .await
         .unwrap();
     assert_eq!(r1.status(), 200);
-    assert_diagnosed_turn(&up.requests()[0], None);
+    assert_diagnosed_inference_turn(&up.requests()[0], None);
 
     // Turn 2 on a: previous is turn 1's message_start id.
     let r2 = h
@@ -151,7 +168,7 @@ async fn the_beta_and_the_member_are_added_when_absent_with_the_previous_id_acro
         .await
         .unwrap();
     assert_eq!(r2.status(), 200);
-    assert_diagnosed_turn(&up.requests()[1], Some("msg_a01"));
+    assert_diagnosed_inference_turn(&up.requests()[1], Some("msg_a01"));
 
     // Turn 3: a 429 fails the session over to b, which has never answered it, so its previous id is null.
     up.set_credential_rule_after(A, 2, "/v1/messages", json_429_unified(RESET, "five_hour"));
@@ -165,7 +182,7 @@ async fn the_beta_and_the_member_are_added_when_absent_with_the_previous_id_acro
     assert_eq!(r3.status(), 200);
     assert_eq!(outcome(&r3).account_id, "b");
     assert_eq!(up.requests().len(), 4, "a's 429 and b's 200 both count");
-    assert_diagnosed_turn(&up.requests()[3], None);
+    assert_diagnosed_inference_turn(&up.requests()[3], None);
 
     // Turn 4 on b: previous is b's own turn-3 id.
     let r4 = h
@@ -175,7 +192,7 @@ async fn the_beta_and_the_member_are_added_when_absent_with_the_previous_id_acro
         .await
         .unwrap();
     assert_eq!(r4.status(), 200);
-    assert_diagnosed_turn(&up.requests()[4], Some("msg_b01"));
+    assert_diagnosed_inference_turn(&up.requests()[4], Some("msg_b01"));
 
     up.shutdown().await;
 }
@@ -293,7 +310,7 @@ async fn an_unsent_retry_still_lands_a_well_formed_edit_and_a_present_member_or_
         .unwrap();
     assert_eq!(resp.status(), 200);
     assert_eq!(up.requests().len(), 1);
-    assert_diagnosed_turn(&up.requests()[0], None);
+    assert_diagnosed_inference_turn(&up.requests()[0], None);
 
     // A body that already names both the member and the beta reaches the upstream with neither touched.
     let mut value: serde_json::Value =
@@ -801,7 +818,7 @@ async fn a_probe_names_the_sessions_previous_message_id_and_its_own_answer_is_ne
         .await
         .unwrap();
     assert_eq!(resp.status(), 200);
-    assert_diagnosed_turn(&up.requests()[0], None);
+    assert_diagnosed_inference_turn(&up.requests()[0], None);
 
     // The probe replays the turn's own headers, session id among them.
     let probe = || phoebis_relay::Probe {
@@ -845,6 +862,6 @@ async fn a_probe_names_the_sessions_previous_message_id_and_its_own_answer_is_ne
         .await
         .unwrap();
     assert_eq!(resp.status(), 200);
-    assert_diagnosed_turn(&up.requests()[3], Some("msg_turn"));
+    assert_diagnosed_inference_turn(&up.requests()[3], Some("msg_turn"));
     up.shutdown().await;
 }

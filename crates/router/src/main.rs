@@ -47,11 +47,13 @@ fn main() -> anyhow::Result<()> {
             println!("admin listens on {}", config.admin.listen);
             println!("metrics listens on {}", config.stats.metrics_listen);
             println!(
-                "proxy: body budget {} bytes, body read {}s, key body reads {}, max request {} bytes",
+                "proxy: body budget {} bytes, body read {}s, key body reads {}, max request {} bytes, \
+                 sign cch placeholder {}",
                 config.proxy.body_budget_bytes,
                 config.proxy.body_read_seconds,
                 config.proxy.key_body_reads,
-                config.proxy.max_request_bytes
+                config.proxy.max_request_bytes,
+                if config.proxy.sign_cch_placeholder { "on" } else { "off" }
             );
             println!("profile {}", config.compatibility.profile);
             println!(

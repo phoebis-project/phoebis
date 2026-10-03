@@ -70,6 +70,8 @@ pub struct Rig {
     pub limits: KeepaliveLimits,
     pub metrics: Arc<Metrics>,
     pub sequence: u64,
+    /// The spec's switch, kept so `restart` builds its engine with what this one was built with.
+    pub sign_cch_placeholder: bool,
     pub sub: Subscriber,
     /// The spec's tables, kept so `restart` builds its engine with what this one was built with.
     pub tables: Arc<PlanTables>,
@@ -85,6 +87,8 @@ pub struct RigSpec {
     pub policy: KeepalivePolicy,
     pub pool: PoolSpec,
     pub session_expiry: Duration,
+    /// `proxy.sign_cch_placeholder` as the engine reads it, off by default.
+    pub sign_cch_placeholder: bool,
     /// The shipped tables by default; a test naming a model the cost table lacks (though the price table
     /// prices it) overrides this so the gap is deliberate rather than a coincidence of the shipped tables.
     pub tables: PlanTables,
@@ -115,6 +119,7 @@ impl Default for RigSpec {
             },
             pool: PoolSpec::default(),
             session_expiry: Duration::from_secs(86_400),
+            sign_cch_placeholder: false,
             tables: PlanTables::shipped(),
             tier: None,
         }
@@ -189,6 +194,7 @@ pub async fn rig(spec: RigSpec) -> Rig {
         relay: h.relay.clone(),
         router: h.router.clone(),
         session_expiry: spec.session_expiry,
+        sign_cch_placeholder: spec.sign_cch_placeholder,
         store: h.store.clone(),
         tables: tables.clone(),
     });
@@ -202,6 +208,7 @@ pub async fn rig(spec: RigSpec) -> Rig {
         limits: spec.limits,
         metrics,
         sequence: 0,
+        sign_cch_placeholder: spec.sign_cch_placeholder,
         sub,
         tables,
         up,
@@ -285,6 +292,7 @@ impl Rig {
             relay: self.h.relay.clone(),
             router: self.h.router.clone(),
             session_expiry: Duration::from_secs(86_400),
+            sign_cch_placeholder: self.sign_cch_placeholder,
             store: self.h.store.clone(),
             tables: self.tables.clone(),
         })

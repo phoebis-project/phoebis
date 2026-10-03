@@ -152,7 +152,8 @@ while the router is up. It prints, in order:
 2. `proxy listens on {config.proxy.listen}`
 3. `admin listens on {config.admin.listen}`
 4. `metrics listens on {config.stats.metrics_listen}`
-5. `proxy: body budget {n} bytes, body read {n}s, key body reads {n}, max request {n} bytes`
+5. `proxy: body budget {n} bytes, body read {n}s, key body reads {n}, max request {n} bytes, sign cch placeholder
+   {on|off}`
 6. `profile {config.compatibility.profile}`
 7. `routing: cooldown_fallback {n}s, model_rejection {n}s, catalog cache {n}s, catalog refresh {n}s, startup fetch {n}s`
 8. `ledger at {config.stats.ledger_path}`
@@ -236,6 +237,8 @@ proxy:
   # body_read_seconds: 60
   # key_body_reads: 128
   # max_request_bytes: 33554432
+  # Signs a restored cch=00000 with this build's formula; off until a server rejects the placeholder.
+  # sign_cch_placeholder: false
 quota:
   # How long quota and extra-usage samples are kept.
   sample_retention_days: 30
@@ -352,8 +355,9 @@ session frees its slot at once, though its tombstone stays until the session exp
 
 ### proxy
 
-Required: `listen`, a socket address, refused with a YAML error. Four keys bound the request bodies the proxy holds;
-they are tunable in the file for power users and have no console control.
+Required: `listen`, a socket address, refused with a YAML error. Four keys bound the request bodies the proxy holds, and
+a fifth, `sign_cch_placeholder`, bounds nothing: it decides whether a restored billing placeholder is signed. All five
+are tunable in the file for power users and have no console control.
 
 | Key | Default | Accepts |
 | --- | --- | --- |
@@ -361,6 +365,7 @@ they are tunable in the file for power users and have no console control.
 | `body_read_seconds` | `60` | 1 to 599 |
 | `key_body_reads` | `128` | 1 to 4096 |
 | `max_request_bytes` | `33554432` | 1024 to 33554432 |
+| `sign_cch_placeholder` | `false` | `true` or `false` |
 
 Refused with:
 
@@ -369,6 +374,7 @@ Refused with:
 - `body_read_seconds`: `proxy.body_read_seconds must be between 1 and 599, not {value}`
 - `key_body_reads`: `proxy.key_body_reads must be between 1 and 4096, not {value}`
 - `max_request_bytes`: `proxy.max_request_bytes must be between 1024 and 33554432, not {value}`
+- `sign_cch_placeholder`: a YAML error for anything but a boolean
 
 `max_request_bytes` is the per-body bound, the Messages API's own request limit, so the router never refuses what the
 upstream accepts, and a value above it is refused as pointless. `body_budget_bytes` is the bytes of bodies the whole
@@ -378,6 +384,9 @@ at the per-body bound); a request that would pass it is refused with the router'
 request past it is refused `429 key_body_reads` with `Retry-After: 1`. `body_read_seconds` is how long a body may take
 to arrive after authentication, under the stream's idle bound of 600 seconds; a body that takes longer is answered
 `408 request_timeout`.
+
+`sign_cch_placeholder` signs a restored `cch=00000` with this build's formula instead of sending the placeholder; off
+until a server rejection of the placeholder proves it necessary.
 
 ### quota
 

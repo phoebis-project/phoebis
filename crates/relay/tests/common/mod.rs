@@ -321,6 +321,7 @@ pub async fn harness_with_router_config(
         default_limits(),
         None,
         false,
+        false,
         None,
         None,
         CATALOG_WINDOW,
@@ -386,6 +387,7 @@ pub async fn harness_on(
         limits,
         None,
         false,
+        false,
         None,
         None,
         CATALOG_WINDOW,
@@ -409,6 +411,7 @@ pub async fn harness_on_with_bus(
         pool,
         default_limits(),
         Some(bus),
+        false,
         false,
         None,
         None,
@@ -435,6 +438,7 @@ pub async fn harness_with_memory_cap(
         default_limits(),
         None,
         false,
+        false,
         Some(cap),
         None,
         CATALOG_WINDOW,
@@ -460,6 +464,32 @@ pub async fn harness_with_cache_diagnostics_default(
         default_limits(),
         None,
         cache_diagnostics,
+        false,
+        None,
+        None,
+        CATALOG_WINDOW,
+        RouterConfig::default(),
+    )
+    .await
+}
+
+/// The default harness with `proxy.sign_cch_placeholder` on, for the cases about the restored placeholder's
+/// signature.
+pub async fn harness_with_signed_placeholder(
+    up: &FakeUpstream,
+    accounts: &[TestAccount],
+    pool: PoolSpec,
+) -> Harness {
+    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+    build(
+        store,
+        up,
+        accounts,
+        pool,
+        default_limits(),
+        None,
+        false,
+        true,
         None,
         None,
         CATALOG_WINDOW,
@@ -495,6 +525,7 @@ pub async fn harness_with_bus_limits(
         limits,
         Some(bus),
         false,
+        false,
         None,
         None,
         CATALOG_WINDOW,
@@ -519,6 +550,7 @@ pub async fn harness_with_catalog(
         pool,
         default_limits(),
         None,
+        false,
         false,
         None,
         Some(catalog_up),
@@ -545,6 +577,7 @@ pub async fn harness_with_catalog_window(
         pool,
         default_limits(),
         None,
+        false,
         false,
         None,
         Some(catalog_up),
@@ -573,6 +606,7 @@ pub async fn harness_with_bus_and_catalog(
         default_limits(),
         Some(bus),
         false,
+        false,
         None,
         Some(catalog_up),
         CATALOG_WINDOW,
@@ -599,6 +633,7 @@ pub async fn harness_with_store_and_catalog(
         default_limits(),
         None,
         false,
+        false,
         None,
         Some(catalog_up),
         window,
@@ -616,6 +651,7 @@ async fn build(
     limits: Limits,
     bus: Option<Bus>,
     cache_diagnostics: bool,
+    sign_placeholder: bool,
     memory_cap: Option<usize>,
     catalog_up: Option<FakeUpstream>,
     catalog_window: Duration,
@@ -835,7 +871,9 @@ async fn build(
     // A tick fast enough for a test to step the clock and wait on it in real time, rather than the production
     // default's six-hour interval.
     let refresh = catalog.spawn_refresh(Duration::from_secs(21_600), Duration::from_millis(20));
-    let relay = relay.with_cache_diagnostics(cache_diagnostics);
+    let relay = relay
+        .with_cache_diagnostics(cache_diagnostics)
+        .with_signed_placeholder(sign_placeholder);
     // Before the store is attached, which rebuilds the memory around whatever cap it finds.
     let relay = match memory_cap {
         // The idle bound the relay's own default carries, so the cap is the only thing that differs.
