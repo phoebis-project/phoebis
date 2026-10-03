@@ -147,10 +147,6 @@ pub(crate) const BILLING_BLOCK: &[u8] = br#""x-anthropic-billing-header:"#;
 /// Length of the hash after `cch=`, the only bytes `phoebis_cch::sign` rewrites.
 const CCH_DIGITS: usize = 5;
 
-/// The digits the client writes after `cch=` wherever its native patch does not run, and the ones a restored
-/// `cch` carries.
-const PLACEHOLDER: &[u8; CCH_DIGITS] = b"00000";
-
 pub fn edit_body(body: &mut Vec<u8>, edit: &NativeEdit<'_>) -> Result<BodyEdits, RelayError> {
     // A full parse would walk a body of up to the request limit a second time to learn what the upstream
     // validates anyway; the edits below fail closed on a body their scanner cannot walk.
@@ -159,7 +155,7 @@ pub fn edit_body(body: &mut Vec<u8>, edit: &NativeEdit<'_>) -> Result<BodyEdits,
     }
     // Read before any edit moves the line: a client hash is checked and re-signed, the client's own placeholder
     // (its unpatched paths send `00000`, which the server accepts) is neither.
-    let client_hash = carries_a_stamp(body) && !placeholder_stamped(body);
+    let client_hash = carries_a_stamp(body) && !phoebis_cch::carries_only_the_placeholder(body);
     if let Some(client_drift) = drift(body)? {
         // The client hashes by rules this build no longer shares. A stamp the router cannot verify never travels
         // under an account's credential, edited or not: a wrong hash is indistinguishable from tampering and the
@@ -515,9 +511,10 @@ fn insert_diagnostics(body: &mut Vec<u8>, previous: Option<&str>) -> bool {
 
 /// Whether the hash the client stamped differs from the one this build computes over the body as received.
 /// A body that stamped no hash has nothing to protect and never drifts, and the client's placeholder is no hash
-/// to check. A stamp the router cannot verify never travels under an account's credential, edited or not: a wrong
-/// hash is indistinguishable from tampering and the cost falls on the account rather than on the request, so a
-/// drifted one is refused rather than relayed under the client's stamp or stripped.
+/// to check while it is the line's only `cch=`. A stamp the router cannot verify never travels under an account's
+/// credential, edited or not: a wrong hash is indistinguishable from tampering and the cost falls on the account
+/// rather than on the request, so a drifted one is refused rather than relayed under the client's stamp or
+/// stripped.
 ///
 /// `find_cch` reads lowercase hex only, so a client stamping uppercase digits leaves a stamp that scanner
 /// cannot read at all; that counts as drift rather than as a body carrying no hash.
@@ -528,10 +525,10 @@ fn drift(body: &[u8]) -> Result<Option<&'static str>, RelayError> {
     let Some(location) = phoebis_cch::find_cch(body) else {
         return Ok(Some("hash"));
     };
-    let digits = location.digits_start..location.digits_start + CCH_DIGITS;
-    if body[digits.clone()] == *PLACEHOLDER {
+    if phoebis_cch::carries_only_the_placeholder(body) {
         return Ok(None);
     }
+    let digits = location.digits_start..location.digits_start + CCH_DIGITS;
     let signed = phoebis_cch::sign(body)?;
     Ok((signed[digits.clone()] != body[digits]).then_some("hash"))
 }
@@ -559,12 +556,6 @@ fn carries_a_stamp(body: &[u8]) -> bool {
         let text = &body[start..end];
         text.starts_with(BILLING_BLOCK) && find(text, b"cch=").is_some()
     })
-}
-
-/// Whether the stamp `find_cch` reads is the client's placeholder rather than a hash.
-fn placeholder_stamped(body: &[u8]) -> bool {
-    phoebis_cch::find_cch(body)
-        .is_some_and(|l| body[l.digits_start..l.digits_start + CCH_DIGITS] == *PLACEHOLDER)
 }
 
 fn starts_with_object(body: &[u8]) -> bool {
@@ -1264,6 +1255,35 @@ mod tests {
             ),
             "any edit needs the restamp, the member kept or not"
         );
+    }
+
+    /// The recorded first-party body with `stamps` in place of its one `cch=9b244;` field.
+    fn a_line_stamped(stamps: &str) -> Vec<u8> {
+        String::from_utf8(fixture_body(BodyFixture::FirstParty9b244).to_vec())
+            .unwrap()
+            .replacen("cch=9b244;", stamps, 1)
+            .into_bytes()
+    }
+
+    /// `find_cch` skips the uppercase stamp and reads the placeholder behind it, which vouches for nothing the
+    /// first one claims.
+    #[test]
+    fn a_placeholder_behind_a_stamp_find_cch_cannot_read_is_drift() {
+        let mut body = a_line_stamped("cch=9B244; cch=00000;");
+        assert!(matches!(
+            edit_body(&mut body, &drop_edit(SafeguardsEdit::Keep)),
+            Err(RelayError::ClientDrift { kind: "hash" })
+        ));
+    }
+
+    /// The second stamp would travel unverified behind a placeholder honoured as the line's only one.
+    #[test]
+    fn a_placeholder_ahead_of_a_second_stamp_is_drift() {
+        let mut body = a_line_stamped("cch=00000; cch=abcde;");
+        assert!(matches!(
+            edit_body(&mut body, &drop_edit(SafeguardsEdit::Keep)),
+            Err(RelayError::ClientDrift { kind: "hash" })
+        ));
     }
 
     #[test]

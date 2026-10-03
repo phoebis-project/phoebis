@@ -366,6 +366,17 @@ async fn an_uppercase_cch_counts_as_drift() {
     a_drifted_stamp_is_refused(drifted, "hash").await;
 }
 
+/// A readable hash with digits this build does not compute over the body is what a client hashing by newer
+/// rules sends; the uppercase case never reaches the comparison, so this is the one that drives it.
+#[tokio::test]
+async fn a_lowercase_hash_this_build_does_not_compute_counts_as_drift() {
+    let drifted = String::from_utf8(body(BodyFixture::FirstParty9b244).to_vec())
+        .unwrap()
+        .replacen("cch=9b244", "cch=9b245", 1)
+        .into_bytes();
+    a_drifted_stamp_is_refused(drifted, "hash").await;
+}
+
 /// The edited fixture, re-signed so the hash check passes and the suffix check is what decides.
 fn resigned(from: &str, to: &str) -> Vec<u8> {
     let edited = String::from_utf8(body(BodyFixture::FirstParty9b244).to_vec())

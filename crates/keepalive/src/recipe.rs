@@ -104,7 +104,6 @@ pub fn make_recipe(
     body: &[u8],
     model: &str,
     limit: usize,
-    sign_placeholder: bool,
 ) -> Result<Recipe, &'static str> {
     if body.len() > limit {
         return Err("request_too_large");
@@ -165,9 +164,9 @@ pub fn make_recipe(
     if !valid_opaque(model) {
         return Err("invalid_model");
     }
-    // The placeholder digits are the client's own unsigned `cch=00000`, not a hash.
-    let client_hash = phoebis_cch::find_cch(body)
-        .is_some_and(|l| &body[l.digits_start..l.digits_start + 5] != b"00000");
+    // The relay's own rule for what counts as a client hash, so a probe is re-signed exactly where its request was.
+    let client_hash =
+        phoebis_cch::find_cch(body).is_some() && !phoebis_cch::carries_only_the_placeholder(body);
     let mut edited = body.to_vec();
     let (start, end) =
         phoebis_cch::number_member_span(&edited, &["max_tokens"]).ok_or("invalid_request")?;
@@ -197,10 +196,13 @@ pub fn make_recipe(
         return Err("invalid_request");
     }
     // `stream` is inside the billing hash view and `max_tokens` outside it: a client-stamped body is re-signed
-    // over the edited bytes, since the relay would refuse the client's hash as drift; the client's own
-    // placeholder is kept, since the relay relays it unsigned, unless the switch says the server rejects it; and
-    // a body without a stamp is left alone.
-    if client_hash || sign_placeholder {
+    // over the edited bytes, since the relay would refuse the client's hash as drift. The body is the one the bus
+    // published, the client's bytes before any edit, so a placeholder here is one the client sent, and it stays:
+    // the relay relays a client-sent placeholder unsigned whatever `proxy.sign_cch_placeholder` says, and a probe
+    // signed here would travel signed where the request it replays went out unsigned. A reduced-shape line
+    // carries no stamp to touch, since the relay restores its fields on the request's way out, after the bus
+    // published the body, and never on a probe's; a body without a stamp is left alone.
+    if client_hash {
         phoebis_cch::restamp_if_present(&mut edited).map_err(|_| "invalid_request")?;
     }
     // Everything the bus published, in the order it published it: the denylist there is the one gate, so a

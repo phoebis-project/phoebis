@@ -54,6 +54,26 @@ pub fn find_cch(body: &[u8]) -> Option<CchLocation> {
     None
 }
 
+/// The digits the client writes after `cch=` wherever its native patch does not run.
+const PLACEHOLDER: &[u8; LEN] = b"00000";
+
+/// Whether the billing line's one and only `cch=` field is the client's unsigned placeholder, which claims no
+/// hash to verify or re-sign.
+pub fn carries_only_the_placeholder(body: &[u8]) -> bool {
+    let Some(location) = find_cch(body) else {
+        return false;
+    };
+    if body[location.digits_start..location.digits_start + LEN] != *PLACEHOLDER {
+        return false;
+    }
+    // Beside a second `cch=`, which `find_cch` may have skipped or not reached, the placeholder vouches for
+    // nothing: the line claims a hash. Counted over the decoded line, so a field spelled with an escape counts as
+    // the server reads it, and a line that does not decode is not taken for the placeholder.
+    string_member_span(body, &["system", "0", "text"])
+        .and_then(|(start, end)| serde_json::from_slice::<String>(&body[start..end]).ok())
+        .is_some_and(|line| line.matches("cch=").count() == 1)
+}
+
 /// The array and object walk every span helper needs before reading its own terminal value; kept in one place
 /// so a fix to array indexing or member matching (an escaped key, say) lands once instead of once per helper.
 /// `Some(true)` once `s` sits at the last segment's value, `Some(false)` for an empty path, `None` on mismatch.

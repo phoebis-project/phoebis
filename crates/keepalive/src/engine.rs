@@ -275,9 +275,6 @@ pub struct EngineParts {
     pub relay: Arc<Relay>,
     pub router: RouterHandle,
     pub session_expiry: Duration,
-    /// `proxy.sign_cch_placeholder`: whether a recipe signs the client's `cch=00000` placeholder, which the relay
-    /// otherwise relays unsigned.
-    pub sign_cch_placeholder: bool,
     /// The registry's own store, read for a subscription account's tier: the window a plan-funded probe or
     /// saving is a share of, and the budgets a restart resumes.
     pub store: Arc<Store>,
@@ -1186,7 +1183,6 @@ impl Engine {
             &observed.body,
             &observed.model,
             limits.max_request_bytes,
-            self.parts.sign_cch_placeholder,
         ) {
             Ok(recipe) => recipe,
             Err(reason) => {
@@ -2447,7 +2443,7 @@ mod tests {
         let body = format!(
             r#"{{"model":"claude-opus-5-5",{speed}"max_tokens":1024,"messages":[{{"role":"user","content":"hi"}}]}}"#
         );
-        let recipe = make_recipe(&[], body.as_bytes(), "claude-opus-5-5", 1 << 20, false).unwrap();
+        let recipe = make_recipe(&[], body.as_bytes(), "claude-opus-5-5", 1 << 20).unwrap();
         assert_eq!(recipe.fast, fast, "{body}");
         Observation {
             id: "r".into(),

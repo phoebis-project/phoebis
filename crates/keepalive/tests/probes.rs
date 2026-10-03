@@ -278,28 +278,37 @@ async fn a_probe_built_from_a_placeholder_request_carries_the_placeholder_and_th
     );
 }
 
-/// Under `proxy.sign_cch_placeholder` the recipe signs the placeholder over its edited bytes, and the relay
-/// re-signs that hash as a client's.
+/// The decoded `system[0].text` of `body`, its billing line.
+fn billing_line(body: &[u8]) -> String {
+    let root: serde_json::Value = serde_json::from_slice(body).unwrap();
+    root["system"][0]["text"].as_str().unwrap().to_string()
+}
+
+/// A client-sent placeholder is kept whatever the switch: `proxy.sign_cch_placeholder` governs the relay's
+/// restored placeholder alone and never reaches the keepalive, so the recipe keeps the client's line and the
+/// probe reaches the upstream with it. The relay's side over both switch positions is
+/// `a_client_sent_placeholder_on_a_full_shape_line_is_relayed_intact` in the relay's restoration suite.
 #[tokio::test]
-async fn with_the_switch_on_a_probe_built_from_a_placeholder_request_carries_a_signed_hash() {
+async fn a_client_sent_placeholder_is_kept_whatever_the_switch() {
+    let body = placeholder_body();
+    let recipe =
+        phoebis_keepalive::make_recipe(&[], body.as_bytes(), "claude-sonnet-4-5", 1 << 20).unwrap();
+    assert_eq!(
+        billing_line(&recipe.body),
+        billing_line(body.as_bytes()),
+        "the recipe keeps the client's line"
+    );
     let mut r = rig(RigSpec {
         accounts: vec![api_key("a", A, 0)],
-        sign_cch_placeholder: true,
         ..RigSpec::default()
     })
     .await;
     let probe = probe_of_a_placeholder_request(&mut r).await;
     assert_eq!(
-        phoebis_cch::sign(&probe).unwrap(),
-        probe,
-        "the stamp verifies"
+        billing_line(&probe),
+        billing_line(body.as_bytes()),
+        "the probe reaches the upstream with the client's line"
     );
-    assert!(
-        cch_digits(&probe).is_some_and(|digits| digits != b"00000"),
-        "{}",
-        String::from_utf8_lossy(&probe)
-    );
-    assert_eq!(r.status("main").probes, 1);
 }
 
 #[tokio::test]

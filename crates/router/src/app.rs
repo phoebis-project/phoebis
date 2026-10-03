@@ -297,7 +297,6 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         relay: relay.clone(),
         router: router_task.clone(),
         session_expiry: Duration::from_secs(config.sessions.expire_after_seconds),
-        sign_cch_placeholder: config.proxy.sign_cch_placeholder,
         store: store.clone(),
         tables: tables.clone(),
     });

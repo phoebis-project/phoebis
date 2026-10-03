@@ -1869,8 +1869,10 @@ impl Relay {
                 if let RelayError::ClientDrift { kind } = &error {
                     // Drift depends on the body alone, so it is found on the first account before any wire
                     // submission: nothing is sent until the router is re-pinned, and the outcome carries the tag.
-                    // A stamp the router cannot verify never travels under an account's credential, since a
-                    // wrong hash is indistinguishable from tampering and the cost falls on the account.
+                    // A stamp the router cannot verify never travels under an account's credential, edited or
+                    // not: a wrong hash is indistinguishable from tampering and the cost falls on the account
+                    // rather than on the request, so a drifted one is refused rather than relayed unedited under
+                    // the client's stamp or stripped.
                     tracing::warn!(
                         account = %account.id,
                         drift = %kind,
