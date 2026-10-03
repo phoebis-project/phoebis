@@ -48,12 +48,13 @@ fn main() -> anyhow::Result<()> {
             println!("metrics listens on {}", config.stats.metrics_listen);
             println!(
                 "proxy: body budget {} bytes, body read {}s, key body reads {}, max request {} bytes, \
-                 sign cch placeholder {}",
+                 sign cch placeholder {}, upstream gzip {}",
                 config.proxy.body_budget_bytes,
                 config.proxy.body_read_seconds,
                 config.proxy.key_body_reads,
                 config.proxy.max_request_bytes,
-                if config.proxy.sign_cch_placeholder { "on" } else { "off" }
+                if config.proxy.sign_cch_placeholder { "on" } else { "off" },
+                config.proxy.upstream_gzip
             );
             println!("profile {}", config.compatibility.profile);
             println!(

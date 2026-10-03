@@ -21,8 +21,8 @@ const OAUTH_BETA: &str = "oauth-2025-04-20";
 /// Caller headers the relay never repeats upstream: the hop-by-hop ones describe the caller's connection
 /// rather than the payload, cookies and proxy credentials are the caller's own secrets, forwarding headers
 /// would disclose the caller's network, and `x-keepalive-owner-id` is the router's internal ownership marker.
-/// The credential, `content-length`, and `host` are not here because the relay owns their values rather than
-/// dropping them; see the match below.
+/// The credential, `content-encoding`, `content-length`, and `host` are not here because the relay owns their
+/// values rather than dropping them; see the match below.
 const NEVER_COPIED: &[&str] = &[
     "cookie",
     "forwarded",
@@ -45,8 +45,12 @@ const NEVER_COPIED: &[&str] = &[
 ];
 
 /// The head the relay writes upstream. Every caller header travels as it was sent, in the order it was sent,
-/// except the never-copied set, the credential slot, the beta list, and the three headers whose values
-/// describe the relay's own hop rather than the caller's.
+/// except the never-copied set, the credential slot, the beta list, and the headers whose values describe the
+/// relay's own hop and the bytes it sends rather than the caller's.
+///
+/// `content_encoding` is the coding of the bytes the relay sends: `Some` takes the caller's `content-encoding`
+/// slot, once, or is appended when the caller sent none; `None` drops the caller's line, since the body then
+/// leaves as identity whatever the caller sent.
 ///
 /// `client_request_id` is emitted only when the caller sent no `x-client-request-id`: after the caller's `x-app`
 /// line, else immediately before the credential slot.
@@ -72,6 +76,7 @@ pub fn outbound_headers(
     kind: &CredentialKind,
     host: &str,
     content_length: usize,
+    content_encoding: Option<&'static str>,
     client_request_id: Option<&str>,
     inject_betas: &[Injected],
     drop_betas: &[&str],
@@ -131,6 +136,7 @@ pub fn outbound_headers(
     // both lines, and a slot whose value the relay owns would then be written twice upstream.
     let (mut saw_app, mut saw_beta, mut saw_credential, mut saw_host, mut saw_length) =
         (false, false, false, false, false);
+    let mut saw_encoding = false;
     for (name, value) in sent {
         let lower = name.to_ascii_lowercase();
         match lower.as_str() {
@@ -162,6 +168,14 @@ pub fn outbound_headers(
             // own hop rather than repeating what the caller said about a connection that ends here.
             "connection" => {
                 out.push((name.into(), "keep-alive".into()));
+            }
+            "content-encoding" => {
+                if !saw_encoding {
+                    saw_encoding = true;
+                    if let Some(coding) = content_encoding {
+                        out.push((name.into(), coding.into()));
+                    }
+                }
             }
             "content-length" => {
                 if !saw_length {
@@ -235,6 +249,9 @@ pub fn outbound_headers(
     }
     if !saw_length {
         out.push(("Content-Length".into(), content_length.to_string()));
+    }
+    if let (false, Some(coding)) = (saw_encoding, content_encoding) {
+        out.push(("Content-Encoding".into(), coding.into()));
     }
     OutboundHead {
         headers: out,
@@ -329,6 +346,7 @@ mod tests {
             kind,
             "api.anthropic.com",
             7,
+            None,
             None,
             &[],
             &[],
@@ -439,6 +457,7 @@ mod tests {
             "api.anthropic.com",
             7,
             None,
+            None,
             &[],
             &[],
         )
@@ -465,6 +484,7 @@ mod tests {
             &oauth(),
             "api.anthropic.com",
             7,
+            None,
             Some("generated-id"),
             &[],
             &[],
@@ -488,6 +508,7 @@ mod tests {
             &oauth(),
             "api.anthropic.com",
             7,
+            None,
             Some("generated-id"),
             &[],
             &[],
@@ -513,6 +534,7 @@ mod tests {
             &oauth(),
             "api.anthropic.com",
             7,
+            None,
             Some("generated-id"),
             &[],
             &[],
@@ -543,6 +565,7 @@ mod tests {
                 &oauth(),
                 "api.anthropic.com",
                 7,
+                None,
                 Some("generated-id"),
                 &[],
                 &[],
@@ -575,6 +598,7 @@ mod tests {
             &api_key(),
             "api.anthropic.com",
             7,
+            None,
             None,
             inject,
             &[],
@@ -666,6 +690,7 @@ mod tests {
             &oauth(),
             "api.anthropic.com",
             7,
+            None,
             Some("generated-id"),
             &[],
             &[],
@@ -714,6 +739,7 @@ mod tests {
             "api.anthropic.com",
             7,
             None,
+            None,
             &[],
             &["extended-cache-ttl-2025-04-11"],
         );
@@ -738,6 +764,7 @@ mod tests {
             "api.anthropic.com",
             7,
             None,
+            None,
             &[],
             &["extended-cache-ttl-2025-04-11"],
         );
@@ -748,5 +775,93 @@ mod tests {
                 .any(|(n, _)| n.eq_ignore_ascii_case("anthropic-beta")),
             "the drop left nothing for the caller's line to say"
         );
+    }
+
+    #[test]
+    fn a_gzip_send_writes_content_encoding_once_whatever_the_caller_sent() {
+        let caller = head(&[
+            ("Content-Type", "application/json"),
+            ("Content-Encoding", "identity"),
+            ("Content-Length", "99"),
+            ("content-encoding", "identity"),
+        ]);
+        let emitted = outbound_headers(
+            &HeaderMap::new(),
+            Some(&caller),
+            &api_key(),
+            "api.anthropic.com",
+            7,
+            Some("gzip"),
+            None,
+            &[],
+            &[],
+        )
+        .headers;
+        let codings: Vec<(&str, &str)> = emitted
+            .iter()
+            .filter(|(n, _)| n.eq_ignore_ascii_case("content-encoding"))
+            .map(|(n, v)| (n.as_str(), v.as_str()))
+            .collect();
+        assert_eq!(
+            codings,
+            [("Content-Encoding", "gzip")],
+            "the caller's line carries the relay's coding, once"
+        );
+        let names: Vec<&str> = emitted.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(
+            &names[..3],
+            ["Content-Type", "Content-Encoding", "Content-Length"],
+            "in the caller's slot"
+        );
+
+        let appended = outbound_headers(
+            &HeaderMap::new(),
+            Some(&head(&[("Content-Type", "application/json")])),
+            &api_key(),
+            "api.anthropic.com",
+            7,
+            Some("gzip"),
+            None,
+            &[],
+            &[],
+        )
+        .headers;
+        assert_eq!(
+            appended
+                .iter()
+                .filter(|(n, _)| n.eq_ignore_ascii_case("content-encoding"))
+                .map(|(_, v)| v.as_str())
+                .collect::<Vec<_>>(),
+            ["gzip"],
+            "a caller that sent none gets the line appended"
+        );
+    }
+
+    #[test]
+    fn an_identity_send_drops_the_callers_content_encoding() {
+        let caller = head(&[
+            ("Content-Type", "application/json"),
+            ("Content-Encoding", "gzip"),
+            ("Content-Length", "99"),
+        ]);
+        let emitted = outbound_headers(
+            &HeaderMap::new(),
+            Some(&caller),
+            &api_key(),
+            "api.anthropic.com",
+            7,
+            None,
+            None,
+            &[],
+            &[],
+        )
+        .headers;
+        assert!(
+            !emitted
+                .iter()
+                .any(|(n, _)| n.eq_ignore_ascii_case("content-encoding")),
+            "{emitted:?}"
+        );
+        assert!(emitted.contains(&("Content-Length".into(), "7".into())));
     }
 }

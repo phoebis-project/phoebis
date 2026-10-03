@@ -25,7 +25,7 @@ use phoebis_profile::{
     claude_code_2_1_269_linux_x64,
     fixtures::{control_response, ControlFixture},
 };
-use phoebis_relay::{CatalogService, Limits, Relay};
+use phoebis_relay::{CatalogService, Limits, Relay, UpstreamGzip};
 use phoebis_routing::{spawn, RouterConfig, RouterHandle};
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, AttemptOutcome, Identity, NewBundle, Secret, StorageKey,
@@ -873,6 +873,7 @@ async fn app_with_webhook_policy(
         key_body_reads: 128,
         max_request_bytes: 32 << 20,
         model_rejection: Duration::from_secs(3_600),
+        upstream_gzip: UpstreamGzip::Auto,
     };
     let relay = Arc::new(
         Relay::new(

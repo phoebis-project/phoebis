@@ -17,7 +17,9 @@ use phoebis_profile::{
     claude_code_2_1_269_linux_x64,
     fixtures::{body, inference_head, BodyFixture, FixtureKind},
 };
-use phoebis_relay::{router, CatalogService, Limits, OriginalHead, Relay, RelayOutcome};
+use phoebis_relay::{
+    router, CatalogService, Limits, OriginalHead, Relay, RelayOutcome, UpstreamGzip,
+};
 use phoebis_routing::{spawn, RouterConfig, RouterHandle};
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, Affinity, AffinitySource, ApiKeyRow,
@@ -942,6 +944,7 @@ pub fn default_limits() -> Limits {
         key_body_reads: 128,
         max_request_bytes: 32 << 20,
         model_rejection: Duration::from_secs(3_600),
+        upstream_gzip: UpstreamGzip::Auto,
     }
 }
 

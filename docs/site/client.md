@@ -257,6 +257,13 @@ many request bytes as it allows`, with no `Retry-After`; a request past the key'
 with `Retry-After: 1`. Each of these, the key cap's `429` included, is refused before its body is read and observed
 without one.
 
+A request body sent with `content-encoding: gzip` is inflated within the body bound before it is read, so a body that
+inflates past `proxy.max_request_bytes` is the same `413`, and a body that is not valid gzip is refused `400` with the
+error code `invalid_body` and the message `the request body is not valid gzip`. Any other request encoding (`br`,
+`deflate`, `zstd` or an unknown token), and a head carrying more than one `content-encoding` line, is refused before
+its body is read with `415` `invalid_request_error`, the error code `unsupported_content_encoding` and the message
+`the request body's content-encoding is not supported; send gzip or identity`.
+
 ### How a request is identified
 
 A conversation is identified by the `x-claude-code-session-id` header.

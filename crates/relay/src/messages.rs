@@ -9,7 +9,9 @@ use std::time::Duration;
 use axum::body::Body;
 use axum::extract::{Request, State};
 use axum::http::response::Builder;
-use axum::http::{header, HeaderMap, HeaderName, HeaderValue, StatusCode};
+use axum::http::{
+    header, header::CONTENT_ENCODING, HeaderMap, HeaderName, HeaderValue, StatusCode,
+};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, head, post};
 use axum::{Json, Router};
@@ -32,7 +34,7 @@ use phoebis_store::{
     QuotaHeaders, Store,
 };
 use phoebis_transport::control::Resolver;
-use phoebis_transport::decode::{decoder, encoding, Decoder, Encoding};
+use phoebis_transport::decode::{decoder, encoding, request_encoding, Decoder, Encoding};
 use phoebis_transport::pool::{Pool, PoolKey};
 use phoebis_transport::request::RawRequest;
 use phoebis_transport::response::{framing, keep_alive, BodyReader, ResponseHead};
@@ -76,8 +78,8 @@ use crate::stream::{
 };
 use crate::{
     edit_body, is_portable, presented_key, BodyEdits, BodyMember, CacheTtl, CacheTtlPolicy,
-    DriftGuard, Markerless, NativeEdit, RelayError, SafeguardsEdit, TtlBranch, VersionCheck,
-    DANGEROUS_TOOL_USE_BETA, EXTENDED_TTL_BETA,
+    DriftGuard, Markerless, NativeEdit, RelayError, SafeguardsEdit, TtlBranch, UpstreamGzip,
+    VersionCheck, DANGEROUS_TOOL_USE_BETA, EXTENDED_TTL_BETA,
 };
 
 /// How often the session memory's changes reach the store; a crash loses at most this much of it, and the
@@ -140,6 +142,7 @@ pub struct Limits {
     pub max_request_bytes: usize,
     /// How long an account is skipped for a model it answered 404 for.
     pub model_rejection: Duration,
+    pub upstream_gzip: UpstreamGzip,
 }
 
 /// What one relayed request cost and how it ended, attached to the response for the accounting layer that
@@ -453,13 +456,16 @@ impl Trace {
     }
 
     /// Published exactly once per request by the handler, as soon as it knows as much of the identity as the
-    /// request will ever yield. A refusal before the key was read publishes with nothing but the id.
+    /// request will ever yield. A refusal before the key was read publishes with nothing but the id. `inflated`
+    /// marks a body past the read, which is plaintext whatever coding the caller's `content-encoding` named, so
+    /// that line is not published beside it.
     #[allow(clippy::too_many_arguments)]
     async fn observed(
         &self,
         key: Option<&ApiKeyRow>,
         identity: Option<&RequestIdentity>,
         headers: &HeaderMap,
+        inflated: bool,
         body: Bytes,
         stream: bool,
         body_capture_hours: u32,
@@ -495,7 +501,7 @@ impl Trace {
                 .unwrap_or_default(),
             wire_model: identity.map(|i| i.folded_model.clone()).unwrap_or_default(),
             stream,
-            headers: published_headers(headers),
+            headers: published_headers(headers, inflated),
             body,
             body_capture_hours,
             shape,
@@ -644,6 +650,34 @@ fn content_length(headers: &HeaderMap) -> Option<usize> {
         .trim()
         .parse()
         .ok()
+}
+
+/// The coding of the caller's body, `None` for one the relay refuses: a token other than `gzip` or `identity`, a
+/// value that is not visible ASCII, or more than one line, which leaves the coding ambiguous.
+fn request_coding(headers: &HeaderMap) -> Option<Encoding> {
+    let mut lines = headers.get_all(CONTENT_ENCODING).iter();
+    match (lines.next(), lines.next()) {
+        (None, _) => Some(Encoding::Identity),
+        (Some(line), None) => request_encoding(Some(line.to_str().ok()?)).ok(),
+        (Some(_), Some(_)) => None,
+    }
+}
+
+/// A gzip request body inflated within `bound`, the per-body bound the read held the compressed bytes to: past
+/// it is the 413 an oversize body is, and anything else the decoder refuses is a body that is not gzip.
+fn inflate_request(raw: &[u8], bound: usize) -> Result<Vec<u8>, RelayError> {
+    let refused = |error: TransportError| match error {
+        TransportError::TooLarge(_) => RelayError::BodyTooLarge,
+        _ => RelayError::BodyNotGzip,
+    };
+    let mut decoder = decoder(Encoding::Gzip);
+    let mut plain = decoder.feed_bounded(raw, bound).map_err(refused)?;
+    plain.extend(
+        decoder
+            .finish_bounded(bound - plain.len())
+            .map_err(refused)?,
+    );
+    Ok(plain)
 }
 
 /// The request outcome a local answer implies; a body that ends badly overrides it at the end of the body.
@@ -885,6 +919,7 @@ impl Relay {
                             None,
                             None,
                             &parts.headers,
+                            false,
                             Bytes::new(),
                             false,
                             0,
@@ -910,6 +945,7 @@ impl Relay {
                             None,
                             None,
                             &parts.headers,
+                            false,
                             Bytes::new(),
                             false,
                             0,
@@ -936,6 +972,7 @@ impl Relay {
                                 None,
                                 None,
                                 &parts.headers,
+                                false,
                                 Bytes::new(),
                                 false,
                                 0,
@@ -962,6 +999,7 @@ impl Relay {
                                 None,
                                 None,
                                 &parts.headers,
+                                false,
                                 Bytes::new(),
                                 false,
                                 0,
@@ -1022,6 +1060,20 @@ impl Relay {
                     .await;
             }
         };
+        let Some(coding) = request_coding(&parts.headers) else {
+            return self
+                .refused_before_body(
+                    &trace,
+                    &key,
+                    &parts.headers,
+                    capture_hours,
+                    retired,
+                    relay_failure(&RelayError::UnsupportedEncoding),
+                    client_version.as_deref(),
+                )
+                .await;
+        };
+        let client_gzip = coding == Encoding::Gzip;
         // The bodies arriving on a key and the bytes of them the process holds are bounded before the read, so a
         // flood of slow or large bodies is refused rather than buffered. A probe's body is the router's own and
         // already in memory, so it takes neither and has no deadline to keep.
@@ -1124,6 +1176,51 @@ impl Relay {
             // holds more than was reserved: this only shrinks, and a shrink never fails.
             let _ = reservation.resize(raw.len() as u64);
         }
+        // Every read below, the edits and the stamp included, sees the plaintext with the client's tail after the
+        // JSON in place, as an identity body is seen.
+        let raw = if client_gzip {
+            let bound = self.limits.max_request_bytes;
+            if let Some(reservation) = &mut reservation {
+                // The inflated worst case is reserved before a byte is inflated: a budget that cannot grant it
+                // refuses here, never after the decoder has already allocated it.
+                if reservation.resize(bound as u64).is_err() {
+                    return self
+                        .refused_before_body(
+                            &trace,
+                            &key,
+                            &parts.headers,
+                            capture_hours,
+                            retired,
+                            body_budget_exhausted(),
+                            client_version.as_deref(),
+                        )
+                        .await;
+                }
+            }
+            let plain = match inflate_request(&raw, bound) {
+                Ok(plain) => plain,
+                Err(error) => {
+                    return self
+                        .refused_before_body(
+                            &trace,
+                            &key,
+                            &parts.headers,
+                            capture_hours,
+                            retired,
+                            relay_failure(&error),
+                            client_version.as_deref(),
+                        )
+                        .await;
+                }
+            };
+            if let Some(reservation) = &mut reservation {
+                // The inflated bytes are what the bound and the budget measure from here; a shrink never fails.
+                let _ = reservation.resize(plain.len() as u64);
+            }
+            Bytes::from(plain)
+        } else {
+            raw
+        };
         let facts = BodyFacts::read(&raw);
         let auto_mode_server = snapshot.auto_mode_server(&key);
         let auto_mode = facts.shape.safeguards.then_some(if auto_mode_server {
@@ -1150,6 +1247,7 @@ impl Relay {
                     Some(&key),
                     None,
                     &parts.headers,
+                    true,
                     raw.clone(),
                     stream,
                     capture_hours,
@@ -1181,6 +1279,7 @@ impl Relay {
                         Some(&key),
                         None,
                         &parts.headers,
+                        true,
                         raw.clone(),
                         stream,
                         capture_hours,
@@ -1233,6 +1332,7 @@ impl Relay {
                 Some(&key),
                 Some(&identity),
                 &parts.headers,
+                true,
                 raw.clone(),
                 stream,
                 capture_hours,
@@ -1383,6 +1483,7 @@ impl Relay {
             cache_ttl_policy,
             caller: &parts.headers,
             chains: facts.chains.as_ref(),
+            client_gzip,
             client_version,
             deadline: (self.limits.head_timeout > ATTEMPT_DEADLINE_MARGIN).then(|| {
                 received_at
@@ -1988,12 +2089,23 @@ impl Relay {
                 .as_ref()
                 .filter(|_| !skip.contains(&Injected::ClientRequestId))
                 .map(|_| uuid_v4());
+            let gzip_out = match self.limits.upstream_gzip {
+                UpstreamGzip::On => true,
+                UpstreamGzip::Off => false,
+                UpstreamGzip::Auto => admitted.client_gzip,
+            };
+            let wire_body = if gzip_out {
+                phoebis_transport::encode::gzip(&edited)
+            } else {
+                edited.clone()
+            };
             let head = outbound_headers(
                 admitted.caller,
                 admitted.original,
                 &credential.kind,
                 authority,
-                edited.len(),
+                wire_body.len(),
+                gzip_out.then_some("gzip"),
                 client_request_id.as_deref(),
                 &inject_betas,
                 &drop_betas,
@@ -2048,7 +2160,7 @@ impl Relay {
                 method: "POST",
                 target: admitted.target.to_string(),
                 headers: head.headers,
-                body: Bytes::from(edited.clone()),
+                body: Bytes::from(wire_body),
             };
             let dispatched =
                 match dispatch::attempt(self, &request, &pool_key, authority, addr, fresh, cancel)
@@ -2972,6 +3084,7 @@ impl Relay {
                 Some(key),
                 None,
                 headers,
+                false,
                 Bytes::new(),
                 false,
                 capture_hours,
@@ -3605,6 +3718,8 @@ struct Admitted<'a> {
     /// The two boundary chains the client's body hashed, for the affinity report; `None` for a body with no
     /// chain.
     chains: Option<&'a Chains>,
+    /// The client sent its body gzip, which `upstream_gzip: auto` mirrors toward the upstream.
+    client_gzip: bool,
     client_version: Option<String>,
     /// The relay's clock past which the attempt loop answers the exhaustion rather than selecting again, and at
     /// which a wait on an account's backoff ends: admission plus `head_timeout` less `ATTEMPT_DEADLINE_MARGIN`.
@@ -3878,5 +3993,24 @@ mod tests {
         assert!(!caller_accepts(&caller, "gzip"));
         assert!(caller_accepts(&caller, "br"));
         assert!(!caller_accepts(&HeaderMap::new(), "gzip"));
+    }
+
+    #[test]
+    fn a_plain_body_labelled_gzip_is_not_gzip() {
+        assert!(matches!(
+            inflate_request(br#"{"model":"claude-sonnet-4-5"}"#, 1 << 20),
+            Err(RelayError::BodyNotGzip)
+        ));
+    }
+
+    #[test]
+    fn a_truncated_gzip_stream_is_not_gzip() {
+        let plain = vec![b'x'; 8 << 10];
+        let whole = phoebis_transport::encode::gzip(&plain);
+        assert_eq!(inflate_request(&whole, 1 << 20).unwrap(), plain);
+        assert!(matches!(
+            inflate_request(&whole[..whole.len() - 4], 1 << 20),
+            Err(RelayError::BodyNotGzip)
+        ));
     }
 }

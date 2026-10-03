@@ -176,6 +176,13 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
             message: "the request body ended before it was complete",
             retry_after: None,
         },
+        RelayError::BodyNotGzip => Failure {
+            status: StatusCode::BAD_REQUEST,
+            error_type: "invalid_request_error",
+            code: "invalid_body",
+            message: "the request body is not valid gzip",
+            retry_after: None,
+        },
         // Naming the member is what lets a client author see which part of its body the relay has to find;
         // no value of the body is echoed back.
         RelayError::BodyShape(member) => Failure {
@@ -267,6 +274,15 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
             error_type: "invalid_request_error",
             code: "missing_model",
             message: "the request body has no model",
+            retry_after: None,
+        },
+        // Relaying a body the relay cannot inflate would carry bytes it can neither read nor edit under an
+        // account's credential, so it is refused from the head instead.
+        RelayError::UnsupportedEncoding => Failure {
+            status: StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            error_type: "invalid_request_error",
+            code: "unsupported_content_encoding",
+            message: "the request body's content-encoding is not supported; send gzip or identity",
             retry_after: None,
         },
     }

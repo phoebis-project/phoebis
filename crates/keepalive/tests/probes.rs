@@ -95,6 +95,57 @@ async fn a_probe_replays_every_published_header_and_none_of_the_denied_ones() {
     );
 }
 
+/// The relay inflated the request before the bus saw it, so the recipe holds the plain body with no
+/// `content-encoding` line and the probe replays it plain.
+#[tokio::test]
+async fn a_gzip_request_observed_is_replayed_plain_by_its_probe() {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    let compressed = phoebis_transport::encode::gzip(BODY.as_bytes());
+    let (parts, _) = r.request("main").into_parts();
+    let mut req =
+        axum::http::Request::from_parts(parts, axum::body::Body::from(compressed.clone()));
+    relay_common::set_header(&mut req, "content-encoding", "gzip");
+    relay_common::set_header(&mut req, "content-length", &compressed.len().to_string());
+    let resp = r.h.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), 200, "the gzip request is admitted");
+    let id = relay_common::outcome(&resp).request_id;
+    let _ = resp.into_body().collect().await.unwrap();
+    r.pump(Some(&id)).await;
+    r.advance(270_000);
+    r.step().await;
+    let sent = r.up.requests();
+    assert_eq!(sent.len(), 2, "the real request and one probe");
+    let probe = &sent[1];
+    assert!(
+        !probe
+            .headers
+            .iter()
+            .any(|(n, _)| n.eq_ignore_ascii_case("content-encoding")),
+        "{:?}",
+        probe.headers
+    );
+    let replayed: serde_json::Value =
+        serde_json::from_slice(&probe.body).expect("the probe carries the plain body");
+    assert_eq!(
+        (
+            replayed["messages"][0]["content"].as_str(),
+            replayed["max_tokens"].as_u64()
+        ),
+        (Some("hello"), Some(0)),
+        "the recipe's own body, edited for a probe"
+    );
+    let status = r.status("main");
+    assert_eq!(
+        (status.probes, status.failures, status.probe_usage.read),
+        (1, 0, 2_000),
+        "the probe was answered 200 and its usage read"
+    );
+}
+
 #[tokio::test]
 async fn a_probe_preserves_routing_and_constraints() {
     let mut r = rig(RigSpec::default()).await;

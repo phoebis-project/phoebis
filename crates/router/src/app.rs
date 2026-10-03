@@ -15,7 +15,7 @@ use phoebis_ledger::{
 };
 use phoebis_live::{LiveConfig, LiveFeed};
 use phoebis_oauth::{Clock, CredentialManager, PairingSessions, UsageService};
-use phoebis_relay::{CatalogService, Limits, ListenLimits, Relay, REFRESH_TICK};
+use phoebis_relay::{CatalogService, Limits, ListenLimits, Relay, UpstreamGzip, REFRESH_TICK};
 use phoebis_store::{Secret, StorageKey, Store};
 use phoebis_transport::control::{ControlClient, ResolveFuture, Resolver};
 use phoebis_transport::pool::Pool;
@@ -259,6 +259,12 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
                 key_body_reads: config.proxy.key_body_reads,
                 max_request_bytes: config.proxy.max_request_bytes,
                 model_rejection: Duration::from_secs(config.routing.model_rejection_seconds),
+                // The load refused every other spelling, so anything past the two named is `auto`.
+                upstream_gzip: match config.proxy.upstream_gzip.as_str() {
+                    "off" => UpstreamGzip::Off,
+                    "on" => UpstreamGzip::On,
+                    _ => UpstreamGzip::Auto,
+                },
             },
             catalog.clone(),
         )

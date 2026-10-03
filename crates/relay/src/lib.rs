@@ -73,6 +73,8 @@ pub enum RelayError {
     AccountUuid,
     #[error("the request body ended before it was complete")]
     BodyIncomplete,
+    #[error("the request body is not valid gzip")]
+    BodyNotGzip,
     #[error("{}", .0.shape_message())]
     BodyShape(BodyMember),
     #[error("the request body did not arrive in time")]
@@ -95,4 +97,15 @@ pub enum RelayError {
     NoModel,
     #[error("request body is not a JSON object")]
     NotAnObject,
+    #[error("the request body's content-encoding is not supported; send gzip or identity")]
+    UnsupportedEncoding,
+}
+
+/// How the edited body leaves toward the upstream, `proxy.upstream_gzip`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UpstreamGzip {
+    /// Gzip when the client sent gzip, identity otherwise.
+    Auto,
+    Off,
+    On,
 }

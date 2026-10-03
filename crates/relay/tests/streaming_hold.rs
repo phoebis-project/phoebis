@@ -230,6 +230,7 @@ async fn a_stream_that_never_commits_is_relayed_as_received_after_the_hold_timeo
         key_body_reads: 128,
         max_request_bytes: 32 << 20,
         model_rejection: Duration::from_secs(3_600),
+        upstream_gzip: phoebis_relay::UpstreamGzip::Auto,
     };
     let h = harness_with(&up, &[oauth("a", A, 0)], PoolSpec::default(), limits).await;
     let started = std::time::Instant::now();

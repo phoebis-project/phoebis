@@ -153,7 +153,7 @@ while the router is up. It prints, in order:
 3. `admin listens on {config.admin.listen}`
 4. `metrics listens on {config.stats.metrics_listen}`
 5. `proxy: body budget {n} bytes, body read {n}s, key body reads {n}, max request {n} bytes, sign cch placeholder
-   {on|off}`
+   {on|off}, upstream gzip {auto|on|off}`
 6. `profile {config.compatibility.profile}`
 7. `routing: cooldown_fallback {n}s, model_rejection {n}s, catalog cache {n}s, catalog refresh {n}s, startup fetch {n}s`
 8. `ledger at {config.stats.ledger_path}`
@@ -239,6 +239,8 @@ proxy:
   # max_request_bytes: 33554432
   # Signs a restored cch=00000 with this build's formula; off until a server rejects the placeholder.
   # sign_cch_placeholder: false
+  # How the edited body leaves: auto mirrors the client, on always gzip, off always identity.
+  # upstream_gzip: auto
 quota:
   # How long quota and extra-usage samples are kept.
   sample_retention_days: 30
@@ -355,9 +357,9 @@ session frees its slot at once, though its tombstone stays until the session exp
 
 ### proxy
 
-Required: `listen`, a socket address, refused with a YAML error. Four keys bound the request bodies the proxy holds, and
-a fifth, `sign_cch_placeholder`, bounds nothing: it decides whether a restored billing placeholder is signed. All five
-are tunable in the file for power users and have no console control.
+Required: `listen`, a socket address, refused with a YAML error. Four keys bound the request bodies the proxy holds;
+`sign_cch_placeholder` decides whether a restored billing placeholder is signed, and `upstream_gzip` how the edited body
+leaves toward the upstream. All six are tunable in the file for power users and have no console control.
 
 | Key | Default | Accepts |
 | --- | --- | --- |
@@ -366,6 +368,7 @@ are tunable in the file for power users and have no console control.
 | `key_body_reads` | `128` | 1 to 4096 |
 | `max_request_bytes` | `33554432` | 1024 to 33554432 |
 | `sign_cch_placeholder` | `false` | `true` or `false` |
+| `upstream_gzip` | `auto` | `auto`, `on` or `off` |
 
 Refused with:
 
@@ -375,6 +378,7 @@ Refused with:
 - `key_body_reads`: `proxy.key_body_reads must be between 1 and 4096, not {value}`
 - `max_request_bytes`: `proxy.max_request_bytes must be between 1024 and 33554432, not {value}`
 - `sign_cch_placeholder`: a YAML error for anything but a boolean
+- `upstream_gzip`: `proxy.upstream_gzip must be auto, on or off, not {value}`
 
 `max_request_bytes` is the per-body bound, the Messages API's own request limit, so the router never refuses what the
 upstream accepts, and a value above it is refused as pointless. `body_budget_bytes` is the bytes of bodies the whole
@@ -387,6 +391,13 @@ to arrive after authentication, under the stream's idle bound of 600 seconds; a 
 
 `sign_cch_placeholder` signs a restored `cch=00000` with this build's formula instead of sending the placeholder; off
 until a server rejection of the placeholder proves it necessary.
+
+The router accepts a request body sent with `content-encoding: gzip`: it inflates the body before reading it, within
+`max_request_bytes`, so the inflated size is what the per-body bound and `body_budget_bytes` measure (the inflated
+worst case is reserved against `body_budget_bytes` before the body is inflated); every other request encoding is
+refused. `upstream_gzip` says how the edited body leaves toward the upstream: `auto` sends gzip when the client sent
+gzip and identity otherwise, `on` always gzip, `off` always identity; the `content-encoding` and `content-length` toward
+the upstream follow the bytes actually sent.
 
 ### quota
 
