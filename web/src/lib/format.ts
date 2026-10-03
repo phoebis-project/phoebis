@@ -136,8 +136,9 @@ export function fmtDate(isoTime: string): string {
   return new Date(isoTime).toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
-export function fmtDayShort(ms: number): string {
-  return new Date(ms).toLocaleDateString('en-US', { day: '2-digit', month: 'short' });
+/** The day in `timeZone`, or in the browser's zone when none is named. */
+export function fmtDayShort(ms: number, timeZone?: string): string {
+  return new Date(ms).toLocaleDateString('en-US', { day: '2-digit', month: 'short', timeZone });
 }
 
 export function fmtHourTick(ms: number): string {

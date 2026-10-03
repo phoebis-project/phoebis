@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { earlierHolderLabel, fmtAbsolute, fmtEndsIn, fmtHourTick, fmtShare, fmtShortTime, fmtTime, fmtUsd, fmtUsdTick, placementHit, setTimeFormat, shortModel, undatedModel, usdTickDigits } from './dist/api.js';
+import { earlierHolderLabel, fmtAbsolute, fmtDayShort, fmtEndsIn, fmtHourTick, fmtShare, fmtShortTime, fmtTime, fmtUsd, fmtUsdTick, placementHit, setTimeFormat, shortModel, undatedModel, usdTickDigits } from './dist/api.js';
 
 test('a placement is a hit when the cache read what it promised: a content one its prefix, any other one anything', () => {
   const content = { depth: 3, prefixTokens: 130_000, rung: 'content' };
@@ -15,6 +15,14 @@ test('a placement is a hit when the cache read what it promised: a content one i
   const main = { depth: 0, prefixTokens: 0, rung: 'with_main' };
   assert.equal(placementHit(main, 5), true);
   assert.equal(placementHit(main, 0), false);
+});
+
+test('a UTC day tick prints the UTC date whatever the zone', () => {
+  // The day buckets are UTC multiples, so a tick two hours into the UTC day names that day even where it is still the
+  // evening before.
+  const at = Date.parse('2026-09-16T02:00Z');
+  assert.equal(fmtDayShort(at, 'UTC'), 'Sep 16');
+  assert.equal(fmtDayShort(at, 'America/Los_Angeles'), 'Sep 15', 'the zone passed is the zone printed');
 });
 
 test('an instant in the first hour of a day reads 00 on the 24-hour clock and 12 AM on the 12-hour one, never 24', () => {
