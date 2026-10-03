@@ -1508,15 +1508,32 @@ async function recentRowsOneLine(theme) {
       least = Math.ceil(table.getBoundingClientRect().width);
       table.style.width = '';
     }
-    return { cells, client: wrap?.clientWidth ?? null, least, scroll: wrap?.scrollWidth ?? null };
+    // Where the outer columns' text starts and ends against the card head's title and action.
+    const card = wrap?.closest('.card');
+    const heads = [...(table?.querySelectorAll('thead th') ?? [])];
+    const title = card?.querySelector('.card__title');
+    const action = card?.querySelector('.card__head a');
+    let edges = null;
+    if (heads.length && title && action) {
+      const first = heads[0];
+      const last = heads[heads.length - 1];
+      edges = {
+        action: Math.round(action.getBoundingClientRect().right),
+        first: Math.round(first.getBoundingClientRect().left + parseFloat(getComputedStyle(first).paddingLeft)),
+        last: Math.round(last.getBoundingClientRect().right - parseFloat(getComputedStyle(last).paddingRight)),
+        title: Math.round(title.getBoundingClientRect().left),
+      };
+    }
+    return { cells, client: wrap?.clientWidth ?? null, edges, least, scroll: wrap?.scrollWidth ?? null };
   });
-  measurements.push(`${theme} / recent table ${read.scroll} of ${read.client}px, at least ${read.least}px (slack ${read.client === null || read.least === null ? 'n/a' : read.client - read.least}px), model cells ${JSON.stringify(read.cells)}`);
+  measurements.push(`${theme} / recent table ${read.scroll} of ${read.client}px, at least ${read.least}px (slack ${read.client === null || read.least === null ? 'n/a' : read.client - read.least}px), edges ${JSON.stringify(read.edges)}, model cells ${JSON.stringify(read.cells)}`);
   if (mock && read.cells.length === 0) failures.push(`${theme} /: the story has recent requests, yet no Model cell is drawn`);
   if (read.client === null) failures.push(`${theme} /: no Recent requests table to measure`);
   else if (read.scroll > read.client) failures.push(`${theme} /: the Recent requests table needs ${read.scroll}px of its card's ${read.client}px`);
   for (const cell of read.cells) {
     if (cell.lines > 1) failures.push(`${theme} /: the Model cell "${cell.text}" wraps onto ${cell.lines} lines`);
-    if (cell.cut && !cell.title.startsWith(cell.text)) failures.push(`${theme} /: the cut Model cell "${cell.text}" does not carry its whole id on the title (${JSON.stringify(cell.title)})`);
+    // The cell drops the id's prefix and date, so the title holds the shown text inside the whole id.
+    if (cell.cut && !cell.title.includes(cell.text)) failures.push(`${theme} /: the cut Model cell "${cell.text}" does not carry its whole id on the title (${JSON.stringify(cell.title)})`);
   }
 }
 

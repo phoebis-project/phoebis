@@ -280,6 +280,17 @@
   padding-right: 8px;
 }
 
+/* The outer cells keep the table's usual inset, so the columns line up with the card's head. */
+.dash__recent th:first-child,
+.dash__recent td:first-child {
+  padding-left: 12px;
+}
+
+.dash__recent th:last-child,
+.dash__recent td:last-child {
+  padding-right: 12px;
+}
+
 /* The page caps the cell's width in characters, so the box leaves the padding out of that count. */
 .dash__model {
   box-sizing: content-box;
@@ -329,6 +340,11 @@
   padding: 0;
   list-style: none;
   font-size: 12.5px;
+}
+
+/* The ring layout's gap, for a card that draws the names without a ring above them. */
+.remaining__none {
+  margin: 0 0 20px;
 }
 
 .badge__extra {

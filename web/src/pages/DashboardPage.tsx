@@ -8,7 +8,7 @@ import { accountColor } from '@/components/charts/theme';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { Badge, Button, Card, EmptyState, ErrorState, Skeleton } from '@/components/ui/primitives';
 import { WindowTriple } from '@/components/ui/QuotaBars';
-import { fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortId, tokensTotal, undatedModel } from '@/lib/format';
+import { fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortId, shortModel, tokensTotal } from '@/lib/format';
 import { useAsync, useNow, type Loaded } from '@/lib/hooks';
 import { STATUS_LABEL, STATUS_TONE, isFastScope } from '@/lib/quota';
 import { fmtWindows, ringFigures, type RingFigures, type RingLeftOut, type RingRow } from '@/lib/rings';
@@ -134,7 +134,7 @@ function RemainingCard({ title, subtitle, windowId, accounts, tiers, now, failur
         <EmptyState title="No subscription accounts" body="A subscription account reports the window this card draws." />
       ) : figures.rows.length === 0 ? (
         <>
-          <p className="muted">No listed account's tier is sized for the {windowId === '5h' ? '5-hour' : '7-day'} window.</p>
+          <p className="muted remaining__none">No listed account's tier is sized for the {windowId === '5h' ? '5-hour' : '7-day'} window.</p>
           <LeftOut accounts={figures.leftOut} />
         </>
       ) : (
@@ -215,9 +215,8 @@ function AccountMini({ account, now }: { account: Account; now: number }) {
 }
 
 /**
- * The Model column's cap in characters of the monospace face: a family and version such as `sonnet-5-5` shows whole,
- * and a longer id is cut behind an ellipsis. Every Anthropic id starts `claude-`, so the cell drops that prefix and
- * the date, and its title carries the id as sent whenever the cell shows less of it.
+ * The Model column's cap in characters of the monospace face: a short id such as `sonnet-5-5` shows whole, and a longer
+ * one is cut behind an ellipsis. The cell's title carries the id as sent whenever the cell shows less of it.
  */
 const MODEL_CHARS = 12;
 
@@ -255,7 +254,7 @@ function RecentTable({ rows, error }: { error: string | null; rows: RequestLog[]
                   </tr>
                 ))
             : rows.map((r) => {
-                const shown = undatedModel(r.model).replace(/^claude-/, '');
+                const shown = shortModel(r.model);
                 return (
                   <tr key={r.id}>
                     <td className="num" title={fmtAbsolute(r.at)}>

@@ -18,8 +18,9 @@ export { api, decodeSettings, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, Ses
 export { default as React } from 'react';
 export { AttemptTrail } from '@/components/ui/AttemptTrail';
 export { Field, GroupedDialog, GroupLink, Input, PageLink, SwitchedNumber, Toggle } from '@/components/ui/primitives';
-// The figures a ring check computes its expectation from, so the check and the page read one derivation.
-export { fmtPct } from '@/lib/format';
+// The figures and the model form a Dashboard check computes its expectation from, so the check and the page read one
+// derivation.
+export { fmtPct, shortModel } from '@/lib/format';
 export { fmtWindows, ringFigures } from '@/lib/rings';
 export const MOCK_VERSION = SETTINGS_SAMPLE.about.version;
 export const requestEvents = REQUEST_EVENTS;

@@ -65,7 +65,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { api, AttemptTrail, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, failCalls, failNextCall, Field, fmtPct, fmtWindows, GroupedDialog, GroupLink, Input, MOCK_VERSION, mount, mountNode, PageLink, React, requestEvents, requests, ringFigures, rollups, SessionNotKept, SETTINGS_WIRE, stallLive, SwitchedNumber, tick } = await import('./dist/entry.js');
+const { api, AttemptTrail, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, failCalls, failNextCall, Field, fmtPct, fmtWindows, GroupedDialog, GroupLink, Input, MOCK_VERSION, mount, mountNode, PageLink, React, requestEvents, requests, ringFigures, rollups, SessionNotKept, SETTINGS_WIRE, shortModel, stallLive, SwitchedNumber, tick } = await import('./dist/entry.js');
 
 const results = [];
 /**
@@ -6079,7 +6079,6 @@ else localStorage.setItem('phoebis.role', roleBeforePreview);
   // the first undated row reads a short id with no prefix to drop, and the second one an id too long for the column.
   // Every drawn row is read against the row the list answered.
   const DATED = /-\d{8}$/;
-  const PREFIX = /^claude-/;
   const SHORT = 'opus-4-1';
   const LONG = 'claude-opus-4-1-research-preview';
   const datedRequest = requests.filter((r) => DATED.test(r.model)).sort((a, b) => Date.parse(b.at) - Date.parse(a.at))[0];
@@ -6105,7 +6104,7 @@ else localStorage.setItem('phoebis.role', roleBeforePreview);
     if (!request || !cell) return [];
     // The column counts characters of the monospace face, so a shown id longer than its cap is the one the ellipsis cuts.
     const cap = Number.parseFloat(cell.style.maxWidth);
-    const shown = request.model.replace(DATED, '').replace(PREFIX, '');
+    const shown = shortModel(request.model);
     return [{ cap, cell, cut: shown.length > cap, model: request.model, shown, title: shown !== request.model || shown.length > cap ? request.model : null }];
   });
   page.unmount();
@@ -6117,7 +6116,7 @@ else localStorage.setItem('phoebis.role', roleBeforePreview);
     ok: datedCells.length > 0 && datedCells.every((c) => !wrong(c)),
     missing: datedCells.length === 0 ? ['no dated row', ...modelCells.map((c) => c.model)] : datedCells.filter(wrong).map(said),
   });
-  const prefixed = modelCells.filter((c) => !DATED.test(c.model) && PREFIX.test(c.model) && !c.cut);
+  const prefixed = modelCells.filter((c) => !DATED.test(c.model) && c.shown !== c.model && !c.cut);
   results.push({
     name: '/ a model id reads without its claude- prefix, the whole id in its title',
     ok: prefixed.length > 0 && prefixed.every((c) => !wrong(c)),
@@ -6129,6 +6128,40 @@ else localStorage.setItem('phoebis.role', roleBeforePreview);
     name: '/ a model id the Model column cuts carries the whole id in its title, and one shown as sent carries none',
     ok: cut.length > 0 && whole.length > 0 && [...cut, ...whole].every((c) => !wrong(c)) && new Set(modelCells.map((c) => c.cell.style.maxWidth)).size === 1,
     missing: [`${cut.length} cut, ${whole.length} shown as sent`, ...[...cut, ...whole].filter(wrong).map(said)],
+  });
+}
+
+{
+  // Without the Max 20x row in the cost table no account of the story is sized for the 7-day window, so that ring weighs
+  // nobody; the 5-hour ring still weighs Pro and Max 5x and names business alone.
+  const { getSettings } = api;
+  api.getSettings = async () => {
+    const settings = await getSettings.call(api);
+    const { default_claude_max_20x: _dropped, ...tiers } = settings.planTables.cost.tiers;
+    return { ...settings, planTables: { ...settings.planTables, cost: { ...settings.planTables.cost, tiers } } };
+  };
+  const page = await mount('/', { now: CLOCK_ORIGIN });
+  api.getSettings = getSettings;
+  const ringCard = (title) => [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent === title);
+  const named = (card) => [...(card?.querySelectorAll('.remaining__left-out li') ?? [])].map((li) => li.textContent ?? '');
+  const week = ringCard('7d remaining');
+  const fiveHour = ringCard('5h remaining');
+  const sentence = week?.querySelector('p.muted');
+  const drawn = {
+    fiveHour: { names: named(fiveHour), ring: !!fiveHour?.querySelector('svg.donut') },
+    week: { listAfter: sentence?.nextElementSibling?.matches('.remaining__left-out') ?? false, names: named(week), ring: !!week?.querySelector('svg.donut'), sentence: sentence?.textContent ?? 'none' },
+  };
+  page.unmount();
+  results.push({
+    name: '/ a ring that weighs no account says so and names every account it left out',
+    ok:
+      !drawn.week.ring &&
+      drawn.week.sentence === "No listed account's tier is sized for the 7-day window." &&
+      drawn.week.listAfter &&
+      JSON.stringify(drawn.week.names) === JSON.stringify(['business: tier default_claude_max_20x is not in the cost table', 'mail: Pro 7-day capacity not measured', 'personal: Max 5x 7-day capacity not measured']) &&
+      drawn.fiveHour.ring &&
+      JSON.stringify(drawn.fiveHour.names) === JSON.stringify(['business: tier default_claude_max_20x is not in the cost table']),
+    missing: [JSON.stringify(drawn)],
   });
 }
 

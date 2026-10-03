@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { earlierHolderLabel, fmtAbsolute, fmtEndsIn, fmtHourTick, fmtShare, fmtShortTime, fmtTime, fmtUsd, fmtUsdTick, placementHit, setTimeFormat, undatedModel, usdTickDigits } from './dist/api.js';
+import { earlierHolderLabel, fmtAbsolute, fmtEndsIn, fmtHourTick, fmtShare, fmtShortTime, fmtTime, fmtUsd, fmtUsdTick, placementHit, setTimeFormat, shortModel, undatedModel, usdTickDigits } from './dist/api.js';
 
 test('a placement is a hit when the cache read what it promised: a content one its prefix, any other one anything', () => {
   const content = { depth: 3, prefixTokens: 130_000, rung: 'content' };
@@ -79,6 +79,13 @@ test('a dated model id reads undated, any other as sent', () => {
   assert.equal(undatedModel('claude-sonnet-4-5'), 'claude-sonnet-4-5');
   assert.equal(undatedModel('claude-sonnet-4-5-2025'), 'claude-sonnet-4-5-2025', 'a shorter number is no date');
   assert.equal(undatedModel('claude-sonnet-4-5-202510011'), 'claude-sonnet-4-5-202510011', 'nor is a longer one');
+});
+
+test('a short model id drops the claude- prefix and the date, and an id without the prefix keeps the rest', () => {
+  assert.equal(shortModel('claude-haiku-4-5-20251001'), 'haiku-4-5', 'both the prefix and the date drop');
+  assert.equal(shortModel('claude-sonnet-5-5'), 'sonnet-5-5');
+  assert.equal(shortModel('opus-4-1'), 'opus-4-1', 'an id without the prefix reads as sent');
+  assert.equal(shortModel('my-claude-model'), 'my-claude-model', 'the prefix drops only at the start');
 });
 
 test('dollar ticks step as fmtUsd does, with one precision for every tick of an axis', () => {
