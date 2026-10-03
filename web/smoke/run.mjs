@@ -2023,6 +2023,49 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace',
   const revokedBadge = keyRows()[rowNames.indexOf('desktop')]?.children[2]?.querySelector('.badge')?.textContent?.trim();
   results.push({ name: '/pools revoked key row shows a revoked badge', ok: revokedBadge === 'revoked', missing: [revokedBadge] });
 
+  // A refused move answers inside the Move dialog, which sits in the top layer over the pool dialog, so a toast behind
+  // it would go unseen. It runs before the move below, which takes laptop out of this pool.
+  {
+    const laptopRow = () => keyRows().find((tr) => tr.children[0]?.textContent?.trim() === 'laptop');
+    const openMove = async () => {
+      laptopRow()?.querySelector('.menu__trigger')?.click();
+      await m.settle(120);
+      [...(laptopRow()?.querySelectorAll('[role="menuitem"]') ?? [])].find((b) => b.textContent?.trim() === 'Move to…')?.click();
+      await m.settle(200);
+      return [...m.container.querySelectorAll('dialog[open]')].pop();
+    };
+    const footButton = (dialog, label) => [...(dialog?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === label);
+    const moveDlg = await openMove();
+    const before = problems.length;
+    failNextCall('updateKey', '/admin/keys/laptop', 'the pool is disabled');
+    // Held until read, so the button can be seen while the move is out.
+    const refuse = api.updateKey;
+    let release = () => {};
+    const gate = new Promise((resolve) => {
+      release = resolve;
+    });
+    api.updateKey = (...args) => gate.then(() => refuse(...args));
+    footButton(moveDlg, 'Move key')?.click();
+    await m.settle(100);
+    const inFlight = footButton(moveDlg, 'Move key')?.disabled;
+    release();
+    await m.settle(600);
+    const alert = moveDlg?.querySelector('[role="alert"]');
+    const rejections = problems.slice(before).filter((p) => p.startsWith('[unhandledRejection]'));
+    results.push({ name: '/pools Move key is disabled while the move is in flight', ok: inFlight === true, missing: [String(inFlight)] });
+    results.push({
+      name: '/pools a refused move keeps the Move dialog open with the refusal',
+      ok: moveDlg?.hasAttribute('open') === true && (moveDlg?.textContent ?? '').includes('Move key laptop') && alert?.textContent === 'the pool is disabled' && footButton(moveDlg, 'Move key')?.disabled === false && rejections.length === 0 && laptopRow() !== undefined,
+      missing: [moveDlg?.hasAttribute('open') ? 'open' : 'closed', alert?.textContent ?? 'no alert', ...rejections.map((p) => p.slice(0, 120))],
+    });
+    footButton(moveDlg, 'Cancel')?.click();
+    await m.settle(200);
+    const reopened = await openMove();
+    results.push({ name: '/pools reopening the Move dialog drops the last refusal', ok: !!reopened && reopened.querySelector('[role="alert"]') === null, missing: [reopened?.querySelector('[role="alert"]')?.textContent ?? (reopened ? '' : 'no dialog')] });
+    footButton(reopened, 'Cancel')?.click();
+    await m.settle(200);
+  }
+
   const laptopIdx = keyRows().map((tr) => tr.children[0]?.textContent?.trim()).indexOf('laptop');
   keyRows()[laptopIdx]?.querySelector('.menu__trigger')?.click();
   await m.settle(120);

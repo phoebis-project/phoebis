@@ -892,6 +892,8 @@ export function PoolDialog({
   // Keys created from inside the dialog appear in the list before the parent reloads.
   const [localKeys, setLocalKeys] = useState<ApiKey[]>([]);
   const [moved, setMoved] = useState<Set<string>>(new Set());
+  const [moveBusy, setMoveBusy] = useState(false);
+  const [moveError, setMoveError] = useState<string | null>(null);
   const [moveTo, setMoveTo] = useState('');
   const [moving, setMoving] = useState<ApiKey | null>(null);
   const [revoked, setRevoked] = useState<Set<string>>(new Set());
@@ -1015,27 +1017,36 @@ export function PoolDialog({
 
   const startMove = (k: ApiKey) => {
     setMoveTo(otherPools[0]?.id ?? '');
+    setMoveError(null);
     setMoving(k);
   };
 
   const moveKey = async () => {
     if (!moving || !moveTo) return;
-    await api.updateKey(moving.id, {
-      affinitySource: moving.affinitySource,
-      autoModeServer: moving.autoModeServer,
-      bodyCaptureHours: moving.bodyCaptureHours,
-      enabled: moving.enabled,
-      keepaliveOptOut: moving.keepaliveOptOut,
-      longContextTwins: moving.longContextTwins,
-      modelRules: moving.modelRules,
-      modelRulesMode: moving.modelRulesMode,
-      name: moving.name,
-      notes: moving.notes,
-      poolId: moveTo,
-    });
-    setMoved((prev) => new Set(prev).add(moving.id));
-    setMoving(null);
-    onKeysChanged();
+    setMoveBusy(true);
+    setMoveError(null);
+    try {
+      await api.updateKey(moving.id, {
+        affinitySource: moving.affinitySource,
+        autoModeServer: moving.autoModeServer,
+        bodyCaptureHours: moving.bodyCaptureHours,
+        enabled: moving.enabled,
+        keepaliveOptOut: moving.keepaliveOptOut,
+        longContextTwins: moving.longContextTwins,
+        modelRules: moving.modelRules,
+        modelRulesMode: moving.modelRulesMode,
+        name: moving.name,
+        notes: moving.notes,
+        poolId: moveTo,
+      });
+      setMoved((prev) => new Set(prev).add(moving.id));
+      setMoving(null);
+      onKeysChanged();
+    } catch (e) {
+      setMoveError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setMoveBusy(false);
+    }
   };
 
   const revokeKey = async (k: ApiKey) => {
@@ -1891,12 +1902,17 @@ export function PoolDialog({
             <Button variant="ghost" onClick={() => setMoving(null)}>
               Cancel
             </Button>
-            <Button variant="primary" disabled={!moveTo} onClick={moveKey}>
+            <Button variant="primary" disabled={!moveTo || moveBusy} onClick={moveKey}>
               Move key
             </Button>
           </>
         }
       >
+        {moveError && (
+          <p className="dialog__status is-held" role="alert">
+            {moveError}
+          </p>
+        )}
         <Field label="Pool">
           <Select value={moveTo} onChange={(e) => setMoveTo(e.target.value)} aria-label="Destination pool">
             {otherPools.map((p) => (
