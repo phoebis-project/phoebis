@@ -497,6 +497,21 @@
   color: var(--serious-ink);
 }
 
+/* A failed poll's line: the reason gives way to the line's width, so the line never wraps and never reaches the
+   Refresh pill; the gap stands in for the space the flex row drops after "failed:". */
+.qcard__poll {
+  display: flex;
+  gap: 0.25em;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.qcard__reason {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /*
  * One line per window: chip, meter, reset. Both outer columns are fixed rather
  * than content-sized, so the three meters start and end on one vertical line
@@ -1147,6 +1162,12 @@
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
   gap: 18px;
+}
+
+/* A link to a card or a key row lands it below the sticky top bar (52 px) rather than under it. */
+.pool,
+.key-row {
+  scroll-margin-top: 68px;
 }
 
 .pool__head {

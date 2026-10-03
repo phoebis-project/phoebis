@@ -1,10 +1,10 @@
 import type {
-  Account, AccountCatalog, AccountRollup, AffinityMode, AnalyticsGroup, AnalyticsPoint, ApiKey, AttemptOutcome, AttemptResponse, BudgetPeriod, BurnPoint, BurnUnit, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
+  Account, AccountCatalog, AccountRollup, AffinityMode, AnalyticsGroup, AnalyticsPoint, ApiKey, AttemptOutcome, AttemptResponse, AttentionItem, BudgetPeriod, BurnPoint, BurnUnit, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
   CohortHold, FastLaneReading, FastPrice, GuardVerdict, KeepaliveOverview, KeepaliveRecipe, KeyModels, LiveAttempt, LiveDelta, LiveMetric, LiveRequest, LiveSnapshot, LiveTick, MemberBudget, MemberEligibility, ModelEvent, ModelPrice, ModelRule, ModelRulesMode,
   ModelsState, Overview, PairingSession, PinMigrationReason, PinReleaseReason, Placement, PlacementRow, PlanBand, PlanModelCells, PlanTables, Pool, PoolCacheTtl, QuotaHistory, QuotaPoll, QuotaSnapshot, RateLimitWindow, RequestEvent, RequestLog, RequestPage, RequestShape, RewritePoint,
   RuleCooldown, SelectionTrace, Session, SessionPlacement, Settings, SubagentPlacement, Subscription, TtlRules, WarmSessions, WindowId,
 } from './types';
-import { ACCOUNT_KIND_VALUES, AUTO_MODE_VALUES } from './types';
+import { ACCOUNT_KIND_VALUES, ATTENTION_KIND_VALUES, AUTO_MODE_VALUES } from './types';
 import { CACHE_TTL_DEFAULTS, METERED_TTL_DEFAULTS, PLAN_TTL_DEFAULTS, POOL_AFFINITY_DEFAULTS, POOL_ENGINE_DEFAULTS, type AccountPatch, type KeyInput, type PoolInput } from './client';
 import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons } from '@/lib/cache';
 import { emptyCounts } from '@/lib/counts';
@@ -100,8 +100,9 @@ export function decodeModelsState(v: unknown): ModelsState {
   };
 }
 
-// The account kinds are defined beside the type they spell; exported here with the decoder's other closed sets.
-export { ACCOUNT_KIND_VALUES };
+// The account and attention kinds are defined beside the types they spell; exported here with the decoder's other
+// closed sets.
+export { ACCOUNT_KIND_VALUES, ATTENTION_KIND_VALUES };
 
 /** The typed subscription the route's `profile` and `subscription` records fold into; null when both are absent. */
 export function decodeSubscription(profile: Rec | null, sub: Rec | null): Subscription | null {
@@ -225,6 +226,24 @@ export function decodeSnapshot(accountId: string, v: unknown): QuotaSnapshot {
   const u = rec(v);
   const error = strOrNull(u.error);
   return { accountId, error, fetchedAt: isoOrNull(u.fetched_at), poll: decodePoll(u.poll), status: error ? 'error' : 'success' };
+}
+
+export const ATTENTION_PAGE_VALUES = ['accounts', 'keys', 'pools'] as const satisfies readonly NonNullable<AttentionItem['link']>['page'][];
+export const ATTENTION_SUBJECT_VALUES = ['account', 'client', 'pool'] as const satisfies readonly AttentionItem['subject']['type'][];
+
+export function decodeAttention(v: unknown): AttentionItem {
+  const a = rec(v);
+  const subject = rec(a.subject);
+  const link = a.link ? rec(a.link) : null;
+  return {
+    detail: rec(a.detail),
+    // A kind this build does not know reads as the worst one, so it is never drawn quieter than it may be.
+    kind: ATTENTION_KIND_VALUES.find((k) => k === str(a.kind)) ?? 'pool_exhausted',
+    link: link && { id: str(link.id), page: ATTENTION_PAGE_VALUES.find((p) => p === str(link.page)) ?? 'pools' },
+    pools: strings(a.pools),
+    since: isoOr(a.since, epoch),
+    subject: { id: str(subject.id), label: str(subject.label), type: ATTENTION_SUBJECT_VALUES.find((t) => t === str(subject.type)) ?? 'pool' },
+  };
 }
 
 export function decodeKey(v: unknown): ApiKey {

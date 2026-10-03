@@ -351,3 +351,25 @@ test('listCatalogOf reads each named catalog once and answers the union by id, a
   assert.deepEqual(await new HttpApi().listCatalogOf([]), []);
   assert.equal(none.length, 0, 'no account named, no read');
 });
+
+test('the attention read is one GET, and its failures reach no toast, since the line draws its own', async () => {
+  let failures = 0;
+  let unauthorized = 0;
+  setHooks({ onFailure: () => { failures += 1; }, onForbidden: () => undefined, onUnauthorized: () => { unauthorized += 1; } });
+  const body = JSON.parse(readFileSync(new URL('./fixtures/attention.json', import.meta.url), 'utf8')).body;
+  const calls = stub(() => answer(200, body));
+  const items = await new HttpApi().getAttention();
+  assert.deepEqual(calls.map((c) => [c.init.method, c.url]), [['GET', '/admin/attention']]);
+  assert.deepEqual(items.map((i) => [i.kind, i.subject.id, i.link]), [['pool_exhausted', 'main', { id: 'main', page: 'pools' }]]);
+  stub(() => answer(500, { error: 'the store is unavailable' }));
+  await assert.rejects(new HttpApi().getAttention(), (e) => e instanceof ApiError && e.status === 500 && e.message === 'the store is unavailable');
+  stub(() => Promise.reject(new TypeError('fetch failed')));
+  await assert.rejects(new HttpApi().getAttention(), (e) => e instanceof ApiError && e.status === 0);
+  assert.equal(failures, 0, 'a failed attention read is drawn by the line, not toasted on every poll');
+  stub(() => answer(401, { error: 'no admin session' }));
+  await assert.rejects(new HttpApi().getAttention());
+  assert.equal(unauthorized, 1, 'a lapsed session still returns the console to the login');
+  stub(() => answer(500, { error: 'the store is unavailable' }));
+  await assert.rejects(call('GET', '/admin/keys'));
+  assert.equal(failures, 1, 'the same failure on any other read still reaches the toast');
+});

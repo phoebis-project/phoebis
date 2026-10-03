@@ -1,28 +1,141 @@
-export type AttentionKind = 'client_drift' | 'funding_required' | 'poll_backoff' | 'pool_exhausted' | 'reauth_required' | 'refresh_failed';
-export interface AttentionItem {
-  detail: string;
-  kind: AttentionKind;
-  /** When the condition started, ISO. */
-  since: string;
-  subject: { id: string; kind: 'account' | 'client' | 'key' | 'pool'; label: string };
-}
+import type { AttentionItem, AttentionKind } from '@/api/types';
+import { fmtAbsolute, fmtRelative } from './format';
+
 export const ATTENTION_LABEL: Record<AttentionKind, string> = {
   client_drift: 'Client drift',
   funding_required: 'Funding required',
   poll_backoff: 'Usage poll backing off',
   pool_exhausted: 'Pool exhausted',
   reauth_required: 'Re-auth required',
-  refresh_failed: 'Refresh failed',
+  refresh_failed: 'Credential refresh failed',
 };
 export const ATTENTION_TONE: Record<AttentionKind, 'critical' | 'serious' | 'warning'> = {
-  client_drift: 'warning',
+  client_drift: 'serious',
   funding_required: 'serious',
   poll_backoff: 'warning',
   pool_exhausted: 'critical',
   reauth_required: 'critical',
   refresh_failed: 'critical',
 };
-// Worst first, so not alphabetical.
-const ORDER: AttentionKind[] = ['reauth_required', 'refresh_failed', 'pool_exhausted', 'funding_required', 'poll_backoff', 'client_drift'];
-/** Worst first (the three critical kinds, the serious one, the two warnings), the oldest first within a kind. */
-export const sortAttention = (items: AttentionItem[]): AttentionItem[] => [...items].sort((a, b) => ORDER.indexOf(a.kind) - ORDER.indexOf(b.kind) || Date.parse(a.since) - Date.parse(b.since));
+
+/** How often a page with a reader open asks the route again, so an exhaustion or a cleared failure shows unprompted. */
+export const ATTENTION_REFRESH_MS = 30_000;
+
+/** The account's entry on Accounts, the pool's card on Pools or the key's row on Keys; null when the item names none. */
+export function attentionHref({ link }: Pick<AttentionItem, 'link'>): string | null {
+  if (link === null) return null;
+  const id = encodeURIComponent(link.id);
+  return link.page === 'accounts' ? `/accounts/${id}` : `/${link.page}#${id}`;
+}
+
+/** The id an address's hash names, the way `attentionHref` wrote it; null for no hash or one that does not decode. */
+export function anchorOf(hash: string): string | null {
+  if (hash.length < 2) return null;
+  try {
+    return decodeURIComponent(hash.slice(1));
+  } catch {
+    return null;
+  }
+}
+
+const text = (v: unknown): string | null => (typeof v === 'string' && v !== '' ? v : null);
+const count = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+const instant = (v: unknown): string | null => (typeof v === 'number' && Number.isFinite(v) ? new Date(v).toISOString() : null);
+
+/** The item's detail as the one line a pool card's row draws. */
+export function attentionDetail(item: AttentionItem, now: number): string {
+  const d = item.detail;
+  switch (item.kind) {
+    case 'pool_exhausted': {
+      const key = text(d.key);
+      return key ? `no member could take a request from key ${key}` : 'no member could take a request';
+    }
+    case 'client_drift': {
+      const what = d.trigger === 'hash' ? 'its billing hash' : d.trigger === 'version_suffix' ? 'its version suffix' : 'its build';
+      const key = text(d.key);
+      return `${what} differs from the pinned build${key ? `, newest refusal from key ${key}` : ''}`;
+    }
+    case 'reauth_required':
+      return 'serves nothing until its credential is renewed';
+    case 'funding_required':
+      return 'serves nothing until its organization is funded again';
+    case 'refresh_failed': {
+      const error = text(d.last_error);
+      return `${count(d.failures)} refreshes failed in a row${error ? `: ${error}` : ''}`;
+    }
+    case 'poll_backoff': {
+      const n = count(d.rate_limited_in_a_row);
+      const next = instant(d.next_attempt_at);
+      return `${n} rate-limited ${n === 1 ? 'answer' : 'answers'} in a row${next ? `, next attempt ${fmtRelative(next, now)}` : ''}`;
+    }
+  }
+}
+
+/**
+ * The detail's members as `name: value` lines in name order, an instant the route sends in milliseconds read as one,
+ * then the age: the title of a badge on the dashboard's line. A member the route left null says nothing and is left
+ * out.
+ */
+export function attentionTitle(item: AttentionItem, now: number): string {
+  const members = Object.entries(item.detail)
+    .filter(([, v]) => v !== null && v !== undefined)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([name, v]) => {
+      const at = /_(at|since)$/.test(name) ? instant(v) : null;
+      return `${name}: ${at ? fmtAbsolute(at) : typeof v === 'object' ? JSON.stringify(v) : String(v)}`;
+    });
+  return [...members, `started ${fmtRelative(item.since, now)}`].join('\n');
+}
+
+export interface AttentionRead {
+  /** The last read's failure; null once a read answers. */
+  error: string | null;
+  /** The last list a read answered, kept through a failed read; null until the first answer. */
+  items: AttentionItem[] | null;
+  /** When `items` was read, in epoch milliseconds. */
+  loadedAt: number | null;
+}
+
+/**
+ * One schedule for every reader on the page: the first subscription reads at once and starts the interval, the window
+ * regaining focus reads again, and the last one leaving stops both. Nothing runs before a subscription, since the
+ * node test bundle loads this module with no window and no reader.
+ */
+export function createAttentionPoll(read: () => Promise<AttentionItem[]>) {
+  let state: AttentionRead = { error: null, items: null, loadedAt: null };
+  const listeners = new Set<() => void>();
+  let timer: ReturnType<typeof setInterval> | null = null;
+  let started = 0;
+  const publish = (next: AttentionRead) => {
+    state = next;
+    for (const listener of listeners) listener();
+  };
+  const refresh = async () => {
+    const mine = (started += 1);
+    try {
+      const items = await read();
+      // A slow read that lands after a newer one started would put an older list back.
+      if (mine === started) publish({ error: null, items, loadedAt: Date.now() });
+    } catch (e) {
+      if (mine === started) publish({ ...state, error: e instanceof Error ? e.message : String(e) });
+    }
+  };
+  const tick = () => void refresh();
+  return {
+    snapshot: (): AttentionRead => state,
+    subscribe: (listener: () => void): (() => void) => {
+      listeners.add(listener);
+      if (listeners.size === 1) {
+        void refresh();
+        timer = setInterval(tick, ATTENTION_REFRESH_MS);
+        if (typeof window !== 'undefined') window.addEventListener('focus', tick);
+      }
+      return () => {
+        if (!listeners.delete(listener) || listeners.size > 0) return;
+        if (timer !== null) clearInterval(timer);
+        timer = null;
+        if (typeof window !== 'undefined') window.removeEventListener('focus', tick);
+      };
+    },
+  };
+}

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { api } from '@/api';
 import type { ApiKey, CreatedApiKey, KeyModels, KeyStatus, ModelRule, ModelRulesMode, Pool } from '@/api/types';
@@ -6,9 +6,11 @@ import { useChartInk } from '@/components/charts/useChartInk';
 import { PatternEditor, useCatalogSuggestions } from '@/components/PatternEditor';
 import { IconInfo, IconPlus, IconWarning } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, ErrorState, Expert, Field, GroupedDialog, Input, Menu, PageLink, SearchInput, Segmented, Select, Skeleton, Toast, Toggle, type DialogGroup } from '@/components/ui/primitives';
+import { anchorOf } from '@/lib/attention';
 import { fmtAbsolute, fmtCompact, fmtDate, fmtInt, fmtRelative, fmtUsd } from '@/lib/format';
 import { KEY_GROUPS, keyFormOf, keyInputOf, keyRefusals, type AutoModeOverride, type CaptureMode, type KeyGroup } from '@/lib/forms';
 import { useAsync, useNow, type Loaded } from '@/lib/hooks';
+import { scrollToElement } from '@/lib/scroll';
 
 const STATUS_TONE: Record<KeyStatus, 'critical' | 'good' | 'neutral' | 'warning'> = { active: 'good', disabled: 'warning', expired: 'neutral', revoked: 'critical' };
 const isKeyGroup = (value: string | null): value is KeyGroup => value !== null && (KEY_GROUPS as readonly string[]).includes(value);
@@ -29,6 +31,8 @@ export function KeysPage() {
   const ink = useChartInk();
   const location = useLocation();
   const navigate = useNavigate();
+  const pageRef = useRef<HTMLDivElement>(null);
+  const landed = useRef<string | null>(null);
   const [query, setQuery] = useState('');
   const [status, setStatus] = useState<'all' | KeyStatus>('all');
   const [dialog, setDialog] = useState<{ initialGroup: KeyGroup | null; key: ApiKey | null } | null>(null);
@@ -92,6 +96,36 @@ export function KeysPage() {
     [keys.data, poolFilter, query, status],
   );
 
+  // `/keys#<key id>` lands on the row once the keys have drawn it, whenever the list arrives after the mount, and once
+  // per arrival, since the page's own address rewrites keep the hash. A filter that would hide the row is cleared
+  // first, and the next run finds the row drawn. The row is looked up inside this page, so an id such as `root` cannot
+  // name the app's container.
+  useEffect(() => {
+    if (location.hash === landed.current) return;
+    const id = anchorOf(location.hash);
+    if (id === null) {
+      landed.current = location.hash;
+      return;
+    }
+    if (!keys.data?.some((k) => k.id === id)) return;
+    if (!rows.some((k) => k.id === id)) {
+      setQuery('');
+      setStatus('all');
+      if (poolParam !== null) {
+        const params = new URLSearchParams(location.search);
+        params.delete('pool');
+        const search = params.toString();
+        navigate({ hash: location.hash, pathname: location.pathname, search: search ? `?${search}` : '' }, { replace: true });
+      }
+      return;
+    }
+    const row = [...(pageRef.current?.querySelectorAll<HTMLElement>('tbody tr') ?? [])].find((el) => el.id === id);
+    if (!row) return;
+    landed.current = location.hash;
+    scrollToElement(row);
+    row.focus({ preventScroll: true });
+  }, [keys.data, location.hash, location.pathname, location.search, navigate, poolParam, rows]);
+
   const totals = keys.data
     ? {
         keys: keys.data.length,
@@ -114,7 +148,7 @@ export function KeysPage() {
   };
 
   return (
-    <div className="stack">
+    <div className="stack" ref={pageRef}>
       <div className="stat-grid">
         <Tile label="Keys" value={totals ? fmtInt(totals.keys) : null} />
         <Tile label="Active" value={totals ? fmtInt(totals.active) : null} />
@@ -204,7 +238,7 @@ export function KeysPage() {
                         </tr>
                       ))
                   : rows.map((k) => (
-                      <tr key={k.id}>
+                      <tr key={k.id} id={k.id} tabIndex={-1} className="key-row">
                         <td>
                           <b>{k.name}</b>
                           <span className="sub">

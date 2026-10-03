@@ -37,7 +37,11 @@ export const setHooks = (next: Hooks) => {
 /** The one place a failed call is reported from, so the mock build can stand in for the transport too. */
 export const reportFailure = (failure: Failure) => hooks.onFailure(failure);
 
-export async function call<T = unknown>(method: string, path: string, body?: unknown, raw = false): Promise<T> {
+/**
+ * `quiet` keeps a failure from the shell's toast for a read that draws its own failed state and repeats on a schedule,
+ * which would otherwise toast once per tick; a 401 still returns the console to the login.
+ */
+export async function call<T = unknown>(method: string, path: string, body?: unknown, raw = false, { quiet = false }: { quiet?: boolean } = {}): Promise<T> {
   // The login screen draws every refusal of its own route, and the shell that would toast one mounts only after
   // the next login succeeds, where it would report a failure the operator has already read.
   const login = method === 'POST' && path === '/admin/session';
@@ -47,7 +51,7 @@ export async function call<T = unknown>(method: string, path: string, body?: unk
   } catch (e) {
     // A router that never answered: the page below draws its error state, and the hook says which route.
     const message = e instanceof Error ? e.message : String(e);
-    if (!login) reportFailure({ message, path, status: 0 });
+    if (!login && !quiet) reportFailure({ message, path, status: 0 });
     throw new ApiError(0, message, null);
   }
   if (response.status === 204) return undefined as T;
@@ -63,10 +67,10 @@ export async function call<T = unknown>(method: string, path: string, body?: unk
     const message = answered ?? `${method} ${path} answered ${response.status}`;
     if (!login) {
       if (response.status === 401) hooks.onUnauthorized();
-      else if (response.status === 403) hooks.onForbidden(message);
+      else if (response.status === 403 && !quiet) hooks.onForbidden(message);
       // A 404 is how the routes answer for a request or a body the router never kept, which the page reading
       // it draws as a state of its own; everything else is a failure the operator has to be told about.
-      else if (response.status !== 404) reportFailure({ message: answered, path, status: response.status });
+      else if (response.status !== 404 && !quiet) reportFailure({ message: answered, path, status: response.status });
     }
     throw new ApiError(response.status, message, response.headers.get('x-phoebis-error-code'));
   }
@@ -120,6 +124,7 @@ export class HttpApi implements Api {
   getAnalyticsBurn = async (r: Pick<AnalyticsQuery, 'from' | 'to'>, groupBy: BurnGroup) => d.decodeBurn(await call('GET', `/admin/analytics/burn${qs({ group_by: groupBy, range: range(r.from, r.to) })}`));
   getAnalyticsRewrites = async (r: Pick<AnalyticsQuery, 'from' | 'to'>) => d.decodeRewrites(await call('GET', `/admin/analytics/rewrites${qs({ range: range(r.from, r.to) })}`));
   getAnalyticsSeries = async (q: AnalyticsQuery): Promise<AnalyticsPoint[]> => (await call<{ points: unknown[] }>('GET', `/admin/analytics/series${analytics(q)}`)).points.map(d.decodeAnalyticsPoint);
+  getAttention = async () => (await call<{ items: unknown[] }>('GET', '/admin/attention', undefined, false, { quiet: true })).items.map(d.decodeAttention);
   getCapturedBodies = async (requestId: string) => {
     try {
       return d.decodeBodies(await call('GET', `/admin/requests/${enc(requestId)}/bodies`));

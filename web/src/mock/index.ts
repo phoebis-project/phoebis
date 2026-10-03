@@ -11,6 +11,7 @@ import { matchesPattern as matchesModelPattern, processRules } from '@/lib/patte
 import { isFastScope } from '@/lib/quota';
 import { ACCOUNTS, QUOTA_HISTORY, QUOTA_SNAPSHOTS } from './accounts';
 import { breakdownOf, burnOf, placementsOf, rewritesOf, seriesOf } from './analytics';
+import { ATTENTION } from './attention';
 import { CATALOG } from './catalog';
 import { liveFeed } from './live';
 import { KEEPALIVE_OVERVIEW, RECIPES, SESSIONS, SETTINGS } from './operations';
@@ -520,6 +521,11 @@ export class MockApi implements Api {
 
   getAnalyticsSeries(query: AnalyticsQuery) {
     return latency(seriesOf(ALL_ROLLUPS, query));
+  }
+
+  /** The story's conditions, or none for a fresh installation. */
+  getAttention() {
+    return latency(emptyStore() ? [] : ATTENTION);
   }
 
   async getCapturedBodies(requestId: string) {

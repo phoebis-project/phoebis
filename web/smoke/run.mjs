@@ -58,7 +58,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { api, AttentionRows, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, Expert, failCalls, failNextCall, Field, GroupedDialog, GroupLink, Input, MOCK_VERSION, mount, mountNode, PageLink, React, requestEvents, requests, rollups, stallLive, SwitchedNumber } = await import('./dist/entry.js');
+const { api, ATTENTION_REFRESH_MS, AttentionRows, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, Expert, failCalls, failNextCall, Field, GroupedDialog, GroupLink, Input, MOCK_VERSION, mount, mountNode, PageLink, React, requestEvents, requests, rollups, stallLive, SwitchedNumber } = await import('./dist/entry.js');
 
 const results = [];
 function expect(name, text, needles) {
@@ -137,6 +137,93 @@ const failoverRow = requests.find((r) => r.attempts.length > 1 && r.attempts.som
   [...reset.container.querySelectorAll('[aria-label="Time format"] button')].find((b) => b.textContent?.trim() === '24h')?.click();
   await reset.settle(100);
   reset.unmount();
+}
+
+{
+  // The line reads one shared poll whose schedule is the interval it registers at ATTENTION_REFRESH_MS. The check
+  // records that callback as the poll starts and fires it by hand, a refresh tick without the half-minute wait.
+  const ticks = [];
+  const realSetInterval = globalThis.setInterval;
+  globalThis.setInterval = (fn, ms, ...rest) => {
+    if (ms === ATTENTION_REFRESH_MS) ticks.push(fn);
+    return realSetInterval(fn, ms, ...rest);
+  };
+  const dash = await mount('/');
+  globalThis.setInterval = realSetInterval;
+  const line = () => dash.container.querySelector('.attention-line');
+  const lead = () => line()?.querySelector('.attention-line__lead')?.textContent?.trim() ?? null;
+  const badges = () =>
+    [...(line()?.querySelectorAll('.badge') ?? [])].map((b) => ({ href: b.getAttribute('href'), text: b.textContent?.trim() ?? '', title: b.getAttribute('title') ?? '', tone: [...b.classList].find((c) => c.startsWith('badge--')) ?? 'none' }));
+  const tick = async () => {
+    ticks[0]?.();
+    await dash.settle(300);
+  };
+  results.push({ name: '/ the attention line runs on one schedule, registered as the dashboard mounts', ok: ticks.length === 1, missing: [`intervals at ${ATTENTION_REFRESH_MS} ms: ${ticks.length}`] });
+  // An instant member reads as a date rather than the route's milliseconds, so the check accepts any value but digits.
+  const members = (title) => title.split('\n').slice(0, -1).map((l) => l.replace(/^(backoff_since|next_attempt_at): (?!\d+$).+$/, '$1: <instant>'));
+  const read = badges().map((b) => [b.text, b.tone, b.href, members(b.title)]);
+  const want = [
+    ['Pool exhausted: codex', 'badge--critical', '/pools#codex', ['key: ci', 'pool: codex']],
+    ['Client drift: 2.1.271', 'badge--serious', '/keys#laptop', ['client_version: 2.1.271', 'key: laptop', 'trigger: hash']],
+    ['Re-auth required: team', 'badge--critical', '/accounts/team', ['account: team', 'label: team']],
+    ['Funding required: Evals workspace', 'badge--serious', '/accounts/evals', ['account: evals', 'label: Evals workspace']],
+    ['Credential refresh failed: team', 'badge--critical', '/accounts/team', ['account: team', 'failures: 5', 'last_error: refresh_token rejected: invalid_grant', 'outcome: failed']],
+    ['Usage poll backing off: mail', 'badge--warning', '/accounts/mail', ['account: mail', 'backoff_since: <instant>', 'next_attempt_at: <instant>', 'rate_limited_in_a_row: 6']],
+  ];
+  const ages = badges().map((b) => b.title.split('\n').pop());
+  results.push({
+    name: '/ the attention line names what needs attention above the tiles, worst first, each badge in its tone opening where it is fixed and titled with its detail and age',
+    ok:
+      lead() === '6 need attention' &&
+      JSON.stringify(read) === JSON.stringify(want) &&
+      ages[0] === 'started 2d 0h ago' &&
+      /^started 4[23]m ago$/.test(ages[5] ?? '') &&
+      ages.every((a) => /^started (\d+[dhm] ?)+ ago$/.test(a ?? '')) &&
+      line()?.nextElementSibling?.classList.contains('stat-grid') === true,
+    missing: [lead() ?? 'no lead', ...read.map((r) => JSON.stringify(r)), ...ages],
+  });
+  localStorage.setItem('phoebis.mockEmpty', '1');
+  await tick();
+  const quiet = () => line()?.textContent?.trim() === 'Nothing needs attention' && line()?.querySelector('.badge--good') !== null && line()?.querySelector('a') === null;
+  results.push({ name: '/ with nothing held the attention line reads the quiet state in the good tone', ok: quiet(), missing: [line()?.outerHTML.slice(0, 200) ?? 'no line'] });
+  const { getAttention } = api;
+  const exhausted = { detail: { key: 'desktop', pool: 'all' }, kind: 'pool_exhausted', link: { id: 'all', page: 'pools' }, pools: ['all'], since: new Date(Date.now() - 5 * 60_000).toISOString(), subject: { id: 'all', label: 'all', type: 'pool' } };
+  api.getAttention = async () => [exhausted];
+  await tick();
+  const gained = [lead(), JSON.stringify(badges().map((b) => [b.text, b.tone, b.href]))];
+  api.getAttention = getAttention;
+  await tick();
+  const lost = quiet();
+  results.push({
+    name: '/ with the dashboard open, a refresh tick draws an item the route gains and the next one the quiet state once it clears',
+    ok: gained[0] === '1 needs attention' && gained[1] === JSON.stringify([['Pool exhausted: all', 'badge--critical', '/pools#all']]) && lost,
+    missing: [...gained.map(String), `quiet after the clear: ${lost}`],
+  });
+  api.getAttention = () => Promise.reject(new Error('the store is unavailable'));
+  await tick();
+  api.getAttention = getAttention;
+  const failedLine = line();
+  results.push({
+    name: '/ a failed attention read draws the unavailable line in the warning tone, never the quiet state, the last read in its title',
+    ok:
+      failedLine?.textContent?.trim() === 'Attention unavailable: the store is unavailable' &&
+      failedLine.querySelector('.badge--warning') !== null &&
+      /^the store is unavailable\nLast read: (now|\d+s ago)$/.test(failedLine.querySelector('.badge')?.getAttribute('title') ?? ''),
+    missing: [failedLine?.outerHTML.slice(0, 240) ?? 'no line'],
+  });
+  let reads = 0;
+  api.getAttention = (...args) => {
+    reads += 1;
+    return getAttention.apply(api, args);
+  };
+  window.dispatchEvent(new window.Event('focus'));
+  await dash.settle(300);
+  api.getAttention = getAttention;
+  results.push({ name: '/ the window regaining focus reads the attention list again, and an answer clears the failure', ok: reads === 1 && quiet(), missing: [`reads ${reads}`, line()?.textContent ?? 'no line'] });
+  localStorage.removeItem('phoebis.mockEmpty');
+  await tick();
+  results.push({ name: '/ the story back, the next tick draws its six items again', ok: lead() === '6 need attention', missing: [lead() ?? 'no lead'] });
+  dash.unmount();
 }
 
 let m = await mount('/');
@@ -402,13 +489,28 @@ expect('/quota', m.text(), ['7 credentials', '7 loaded', '3 need attention', 'Re
   results.push({
     name: '/quota each subscription card says when the poll last asked and how it answered, then when its snapshot was read',
     ok:
-      /^polled (now|\d+s ago): clean$/.test(drawn.business[0] ?? '') &&
-      /^checked (now|\d+s ago)$/.test(drawn.business[1] ?? '') &&
+      /^polled (now|\d+s ago|1m ago): clean$/.test(drawn.business[0] ?? '') &&
+      /^checked (now|\d+s ago|1m ago)$/.test(drawn.business[1] ?? '') &&
       /^polled 1[12]m ago: rate limited$/.test(drawn.mail[0] ?? '') &&
-      /^polled [34]m ago: failed$/.test(drawn.team[0] ?? '') &&
+      /^polled [34]m ago: failed: usage request rejected with status 503$/.test(drawn.team[0] ?? '') &&
       drawn.team[1] === 'checked 2d 3h ago' &&
       JSON.stringify(drawn.spare) === JSON.stringify(['not yet polled']),
     missing: [JSON.stringify(drawn)],
+  });
+  // The reason is cut to the line's width on screen, so the line's title carries it whole, under the poll's time.
+  const failedLine = cardOf('team')?.querySelector('.qcard__status > span');
+  const title = (failedLine?.getAttribute('title') ?? '').split('\n');
+  const cleanTitle = cardOf('business')?.querySelector('.qcard__status > span')?.getAttribute('title') ?? '';
+  results.push({
+    name: "/quota a failed poll's line names its reason in a span of its own, the whole message under the poll's time in the title",
+    ok:
+      failedLine?.querySelector('.qcard__reason')?.textContent === 'usage request rejected with status 503' &&
+      title.length === 2 &&
+      /\d{4}/.test(title[0]) &&
+      title[1] === 'usage request rejected with status 503' &&
+      !cleanTitle.includes('\n') &&
+      cardOf('mail')?.querySelector('.qcard__reason') === null,
+    missing: [failedLine?.outerHTML.slice(0, 200) ?? 'no line on team', cleanTitle],
   });
   const backoff = [...m.container.querySelectorAll('.qcard__backoff')];
   results.push({
@@ -1070,11 +1172,17 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       missing: [`held ${held.calls.length}`, ...waiting, ...landed].map((x) => JSON.stringify(x)),
     });
   }
+  const attentionRows = (name) =>
+    [...(card(name)?.querySelectorAll('ul.attention > li.attention__row') ?? [])].map((li) => [li.querySelector('.badge')?.textContent?.trim(), li.children[1]?.textContent?.trim(), li.children[1]?.getAttribute('href') ?? null]);
+  // The story's items: codex exhausted and its one member out of funding, the laptop key's client drift and mail's
+  // poll backoff in all, and nothing on studio, whose one member and one key carry no item.
   results.push({
-    name: '/pools no card draws an attention row',
+    name: "/pools each card draws the dashboard's items that belong to it, the pool's own row unlinked, and a card with none draws no list",
     ok:
-      m.container.querySelector('.pool .attention') === null,
-    missing: [],
+      JSON.stringify(attentionRows('codex')) === JSON.stringify([['Pool exhausted', 'codex', null], ['Funding required', 'Evals workspace', '/accounts/evals']]) &&
+      JSON.stringify(attentionRows('all')) === JSON.stringify([['Client drift', '2.1.271', '/keys#laptop'], ['Usage poll backing off', 'mail', '/accounts/mail']]) &&
+      card('studio')?.querySelector('.attention') === null,
+    missing: ['codex', 'all', 'studio'].map((name) => `${name}: ${JSON.stringify(attentionRows(name))}`),
   });
   const caption = (name) => card(name)?.querySelector('.serving caption');
   const captions = ['all', 'codex', 'studio'].map((name) => [caption(name)?.textContent?.trim(), caption(name)?.getAttribute('title')]);
@@ -1137,38 +1245,115 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   results.push({ name: '/pools nothing of the recap, the selection-order strip, the member list or the key chips is left', ok: m.container.querySelector('.pool .pool__policy, .pool .selection-order, .pool .pool__members, .pool .pool__eligibility, .pool a.badge[href="/keys"]') === null, missing: [] });
 }
 {
-  // Test data for the rows alone, mounted on their own: the pool card passes an empty list, since no route answers one.
-  // Each condition started a whole number of hours before the instant the rows are drawn at, so its age reads exactly.
+  // The rows mounted on their own over every kind, in the route's order, which is the ranking: the tones do not group
+  // it. Each condition started a whole number of hours before the instant the rows are drawn at, so its age reads
+  // exactly.
   const { createElement: h } = React;
   const now = Date.now();
   const at = (hours) => new Date(now - hours * 3_600_000).toISOString();
+  const account = (id, label) => ({ link: { id, page: 'accounts' }, subject: { id, label, type: 'account' } });
   const items = [
-    { detail: 'The usage poll answered 429; the next read waits 4 minutes.', kind: 'poll_backoff', since: at(2), subject: { id: 'mail', kind: 'account', label: 'mail' } },
-    { detail: 'Every member is out of quota or at its budget.', kind: 'pool_exhausted', since: at(1), subject: { id: 'codex', kind: 'pool', label: 'codex' } },
-    { detail: 'The refresh token was revoked; sign in again.', kind: 'reauth_required', since: at(5), subject: { id: 'team', kind: 'account', label: 'team' } },
-    { detail: 'The client build changed its fingerprint.', kind: 'client_drift', since: at(3), subject: { id: 'cli-2.1.290', kind: 'client', label: 'Claude Code 2.1.290' } },
+    { detail: { key: 'ci', pool: 'codex' }, kind: 'pool_exhausted', link: { id: 'codex', page: 'pools' }, pools: ['codex'], since: at(1), subject: { id: 'codex', label: 'codex', type: 'pool' } },
+    { detail: { client_version: '2.1.271', key: 'laptop', trigger: 'hash' }, kind: 'client_drift', link: { id: 'laptop', page: 'keys' }, pools: ['all'], since: at(3), subject: { id: '2.1.271', label: '2.1.271', type: 'client' } },
+    { detail: { client_version: '2.1.272', key: null, trigger: 'version_suffix' }, kind: 'client_drift', link: null, pools: [], since: at(2), subject: { id: '2.1.272', label: '2.1.272', type: 'client' } },
+    { ...account('team', 'team'), detail: { account: 'team', label: 'team' }, kind: 'reauth_required', pools: [], since: at(5) },
+    { ...account('evals', 'Evals workspace'), detail: { account: 'evals', label: 'Evals workspace' }, kind: 'funding_required', pools: ['codex'], since: at(4) },
+    { ...account('team', 'team'), detail: { account: 'team', failures: 3, last_error: 'invalid_grant', outcome: 'failed' }, kind: 'refresh_failed', pools: [], since: at(6) },
+    { ...account('mail', 'mail'), detail: { account: 'mail', backoff_since: now - 2 * 3_600_000, next_attempt_at: null, rate_limited_in_a_row: 6 }, kind: 'poll_backoff', pools: ['all'], since: at(2) },
   ];
   const a = await mountNode(h(AttentionRows, { items, now }));
-  const rows = [...a.container.querySelectorAll('ul.attention > li.attention__row')].map((li) => ({
-    href: li.querySelector('a')?.getAttribute('href') ?? null,
-    kind: li.querySelector('.badge')?.textContent?.trim(),
-    subject: li.children[1]?.textContent?.trim(),
-    tag: li.children[1]?.tagName,
-    title: li.getAttribute('title'),
-    tone: li.querySelector('.badge')?.className.replace('badge ', ''),
-  }));
+  const rows = [...a.container.querySelectorAll('ul.attention > li.attention__row')].map((li) => [
+    li.querySelector('.badge')?.textContent?.trim(),
+    li.querySelector('.badge')?.className.replace('badge ', ''),
+    li.children[1]?.textContent?.trim(),
+    li.children[1]?.tagName,
+    li.querySelector('a')?.getAttribute('href') ?? null,
+    li.querySelector('.attention__detail')?.textContent,
+    li.getAttribute('title'),
+  ]);
+  const row = (label, tone, subject, href, detail, age) => [label, tone, subject, href ? 'A' : 'SPAN', href, detail, `${detail} (${age})`];
   const want = [
-    ['Re-auth required', 'badge--critical', 'team', 'A', '/accounts/team', 'The refresh token was revoked; sign in again. (5h 0m ago)'],
-    ['Pool exhausted', 'badge--critical', 'codex', 'SPAN', null, 'Every member is out of quota or at its budget. (1h 0m ago)'],
-    ['Usage poll backing off', 'badge--warning', 'mail', 'A', '/accounts/mail', 'The usage poll answered 429; the next read waits 4 minutes. (2h 0m ago)'],
-    ['Client drift', 'badge--warning', 'Claude Code 2.1.290', 'SPAN', null, 'The client build changed its fingerprint. (3h 0m ago)'],
+    row('Pool exhausted', 'badge--critical', 'codex', null, 'no member could take a request from key ci', '1h 0m ago'),
+    row('Client drift', 'badge--serious', '2.1.271', '/keys#laptop', 'its billing hash differs from the pinned build, newest refusal from key laptop', '3h 0m ago'),
+    row('Client drift', 'badge--serious', '2.1.272', null, 'its version suffix differs from the pinned build', '2h 0m ago'),
+    row('Re-auth required', 'badge--critical', 'team', '/accounts/team', 'serves nothing until its credential is renewed', '5h 0m ago'),
+    row('Funding required', 'badge--serious', 'Evals workspace', '/accounts/evals', 'serves nothing until its organization is funded again', '4h 0m ago'),
+    row('Credential refresh failed', 'badge--critical', 'team', '/accounts/team', '3 refreshes failed in a row: invalid_grant', '6h 0m ago'),
+    row('Usage poll backing off', 'badge--warning', 'mail', '/accounts/mail', '6 rate-limited answers in a row', '2h 0m ago'),
   ];
-  const read = rows.map((r) => [r.kind, r.tone, r.subject, r.tag, r.href, r.title]);
-  results.push({ name: 'the attention rows read worst first, an account or a key linked to where it is fixed, a pool or a client named alone, each titled with its detail and age', ok: JSON.stringify(read) === JSON.stringify(want), missing: read.map((r) => r.join(' | ')) });
+  results.push({
+    name: "the attention rows keep the route's order, link a subject through the item's link, name the pool's own row and a keyless drift alone, and read each detail as one sentence titled with its age",
+    ok: JSON.stringify(rows) === JSON.stringify(want),
+    missing: rows.map((r) => r.join(' | ')),
+  });
   a.unmount();
   const empty = await mountNode(h(AttentionRows, { items: [], now }));
   results.push({ name: 'an empty attention list draws nothing', ok: empty.container.innerHTML === '', missing: [empty.container.innerHTML.slice(0, 120)] });
   empty.unmount();
+}
+{
+  // jsdom implements no scrollIntoView, so the check stands one in that records each element it was asked to bring
+  // into view and how.
+  const proto = window.Element.prototype;
+  const had = Object.prototype.hasOwnProperty.call(proto, 'scrollIntoView');
+  const original = proto.scrollIntoView;
+  const scrolls = [];
+  proto.scrollIntoView = function (options) {
+    scrolls.push([this.tagName, this.id, options?.behavior ?? null]);
+  };
+  /** Mounts `path`, with `held` answered only after the mount when named, and reads where the page scrolled and focused. */
+  const arrive = async (path, held, target) => {
+    scrolls.length = 0;
+    const late = held ? deferNextCall(held) : null;
+    const page = await mount(path);
+    const early = scrolls.length;
+    if (late) {
+      late.release();
+      late.restore();
+      await page.settle(300);
+    }
+    const el = [...page.container.querySelectorAll(target.selector)].find((e) => e.id === target.id) ?? null;
+    return { early, focused: el !== null && document.activeElement === el, page, scrolled: JSON.stringify(scrolls) };
+  };
+  const card = { id: 'codex', selector: '.pool' };
+  const row = { id: 'laptop', selector: 'tbody tr' };
+  const pool = await arrive('/pools#codex', null, card);
+  await pool.page.navigate('/pools?edit=codex#codex');
+  const rewritten = pool.page.location();
+  results.push({
+    name: "/pools#<pool id> scrolls the card into view and focuses it, and the dialog query's rewrite that keeps the hash scrolls nothing more",
+    ok: pool.scrolled === JSON.stringify([['SECTION', 'codex', 'smooth']]) && pool.focused && JSON.stringify(scrolls) === pool.scrolled && rewritten.search === '' && rewritten.hash === '#codex',
+    missing: [pool.scrolled, `focused ${pool.focused}`, JSON.stringify(scrolls), JSON.stringify(rewritten)],
+  });
+  pool.page.unmount();
+  const latePool = await arrive('/pools#codex', 'listPools', card);
+  results.push({
+    name: '/pools#<pool id> still lands on the card when the pools answer after the page has mounted',
+    ok: latePool.early === 0 && latePool.scrolled === JSON.stringify([['SECTION', 'codex', 'smooth']]) && latePool.focused,
+    missing: [`before the answer ${latePool.early}`, latePool.scrolled, `focused ${latePool.focused}`],
+  });
+  latePool.page.unmount();
+  const key = await arrive('/keys#laptop', null, row);
+  results.push({ name: '/keys#<key id> scrolls the row into view and focuses it', ok: key.scrolled === JSON.stringify([['TR', 'laptop', 'smooth']]) && key.focused, missing: [key.scrolled, `focused ${key.focused}`] });
+  key.page.unmount();
+  const lateKey = await arrive('/keys#laptop', 'listKeys', row);
+  results.push({
+    name: '/keys#<key id> still lands on the row when the keys answer after the page has mounted',
+    ok: lateKey.early === 0 && lateKey.scrolled === JSON.stringify([['TR', 'laptop', 'smooth']]) && lateKey.focused,
+    missing: [`before the answer ${lateKey.early}`, lateKey.scrolled, `focused ${lateKey.focused}`],
+  });
+  lateKey.page.unmount();
+  // laptop is all's key, so a filter to codex would hide its row.
+  const filtered = await arrive('/keys?pool=codex#laptop', null, row);
+  const cleared = filtered.page.location();
+  results.push({
+    name: '/keys#<key id> clears a pool filter that hides the row, then lands on it',
+    ok: cleared.search === '' && cleared.hash === '#laptop' && filtered.scrolled === JSON.stringify([['TR', 'laptop', 'smooth']]) && filtered.focused,
+    missing: [JSON.stringify(cleared), filtered.scrolled, `focused ${filtered.focused}`],
+  });
+  filtered.page.unmount();
+  if (had) proto.scrollIntoView = original;
+  else delete proto.scrollIntoView;
 }
 {
   const del = [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Delete pool all');

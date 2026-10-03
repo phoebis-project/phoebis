@@ -1,10 +1,10 @@
-import { Fragment, useEffect, useId, useMemo, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { Bar, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { api, ApiError, CACHE_TTL_DEFAULTS, KEEPALIVE_TUNING_DEFAULTS, type PoolInput } from '@/api';
 import { POOL_AFFINITY_DEFAULTS, POOL_ENGINE_DEFAULTS, type PoolEngineFields } from '@/api/client';
 import type {
-  Account, AffinityMode, ApiKey, CacheTtl, CreatedApiKey, KeyStatus, MemberEligibility, ModelRule, OveragePolicy, Pool, PoolCacheTtl, PoolKeepalive, PoolMember, PoolStrategy, Session, SessionPlacement,
+  Account, AffinityMode, ApiKey, AttentionItem, CacheTtl, CreatedApiKey, KeyStatus, MemberEligibility, ModelRule, OveragePolicy, Pool, PoolCacheTtl, PoolKeepalive, PoolMember, PoolStrategy, Session, SessionPlacement,
   SubagentPlacement, TtlRules, WarmSessions,
 } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
@@ -17,13 +17,14 @@ import { UtilizationBar } from '@/components/UtilizationBar';
 import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, ErrorState, Expert, Field, GroupedDialog, GroupLink, Input, Menu, PageLink, Select, Skeleton, SwitchedNumber, Toast, Toggle, type DialogGroup } from '@/components/ui/primitives';
 import { moveLabel, sizedAccounts } from '@/lib/analytics';
-import type { AttentionItem } from '@/lib/attention';
+import { anchorOf } from '@/lib/attention';
 import { fmtAbsolute, fmtCompact, fmtHourTick, fmtInt, fmtPeriodEnd, fmtRelative, fmtUsd } from '@/lib/format';
 import { ENGINE_BOUNDS, ENGINE_FIELD_LABELS, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_LABELS, POOL_GROUPS, PROBE_TUNING_ROWS, bandRefusal, poolRefusals, type PoolGroup } from '@/lib/forms';
-import { useAsync, useNow } from '@/lib/hooks';
+import { useAsync, useAttention, useNow } from '@/lib/hooks';
 import { POOL_RAIL } from '@/lib/poolRail';
 import { FAILOVER_PRESETS, SHEDDING_PRESETS, failoverPresetOf, sheddingPresetOf, shedPreview, shedPreviewLine, type FailoverPreset, type SheddingPreset } from '@/lib/presets';
 import { windowOf } from '@/lib/quota';
+import { scrollToElement } from '@/lib/scroll';
 import { GROUP_LABEL, INELIGIBLE_LABEL, LAST_RESORT_LABEL, RULE_NOTE, STRATEGY_LABEL, kindOrdered, poolStatusSentence, selectionOrder } from '@/lib/selection';
 import { KeyDialog } from './KeysPage';
 
@@ -146,9 +147,12 @@ export function PoolsPage() {
   // Feeds the cache TTL per-model override picker's options.
   const catalog = useAsync(() => api.listCatalog(), []);
   const sessions = useAsync(() => api.listSessions(), []);
+  const attention = useAttention();
   const now = useNow();
   const location = useLocation();
   const navigate = useNavigate();
+  const pageRef = useRef<HTMLDivElement>(null);
+  const landed = useRef<string | null>(null);
   const [dialog, setDialog] = useState<{ initialGroup: PoolGroup | null; pool: Pool | null } | null>(null);
   const [deleting, setDeleting] = useState<Pool | null>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -171,6 +175,24 @@ export function PoolsPage() {
     }
     setDialog({ initialGroup: isPoolGroup(group) ? group : 'identity', pool });
   }, [accounts.data, location, navigate, pools.data]);
+
+  // `/pools#<pool id>` lands on the card once the pools have drawn it, whenever the list arrives after the mount, and
+  // once per arrival: the dialog query's own address rewrites keep the hash and must not scroll the page back. The
+  // card is looked up inside this page, so an id such as `root` cannot name the app's container.
+  useEffect(() => {
+    if (location.hash === landed.current) return;
+    const id = anchorOf(location.hash);
+    if (id === null) {
+      landed.current = location.hash;
+      return;
+    }
+    if (!pools.data) return;
+    const card = [...(pageRef.current?.querySelectorAll<HTMLElement>('.pool') ?? [])].find((el) => el.id === id);
+    if (!card) return;
+    landed.current = location.hash;
+    scrollToElement(card);
+    card.focus({ preventScroll: true });
+  }, [location.hash, pools.data]);
 
   const accountById = useMemo(() => new Map((accounts.data ?? []).map((a) => [a.id, a])), [accounts.data]);
   const keysByPool = useMemo(() => {
@@ -214,7 +236,7 @@ export function PoolsPage() {
     : null;
 
   return (
-    <div className="stack">
+    <div className="stack" ref={pageRef}>
       <div className="page-head">
         <p className="page-head__meta">A pool groups accounts behind a set of keys. Requests pick a member by priority, stick to it per session, and fail over when a member hits a rate limit.</p>
         <Button variant="primary" icon={<IconPlus size={14} />} onClick={() => setDialog({ initialGroup: null, pool: null })}>
@@ -238,8 +260,7 @@ export function PoolsPage() {
                 keysRead={keysRead}
                 accounts={accounts.data}
                 accountById={accountById}
-                // No route answers the attention list yet, so the card draws no row.
-                attention={[]}
+                attention={(attention.items ?? []).filter((i) => i.pools.includes(p.id))}
                 sessions={sessionsByPool.get(p.id) ?? []}
                 now={now}
                 onEdit={() => setDialog({ initialGroup: null, pool: p })}
@@ -478,7 +499,7 @@ function PoolCard({
   const movesTotal = moveCounts.reduce((s, [, count]) => s + count, 0);
   const movesTitle = moveCounts.length === 0 ? 'No session moved in the last hour.' : moveCounts.map(([reason, count]) => `${moveLabel(reason)} ${fmtInt(count)}`).join(', ');
   return (
-    <Card padded={false} className="pool">
+    <Card id={pool.id} tabIndex={-1} padded={false} className="pool">
       <header className="pool__head">
         <div className="pool__title">
           <h2 className="card__title mono">{pool.name}</h2>

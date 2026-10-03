@@ -1208,3 +1208,25 @@ test('a session decodes its burn unit and both net balances, and a pin the table
   const recipe = d.decodeRecipe({ ...fixture('keepalive_recipes').recipes[0], net_five_hour_share: -0.0002 });
   assert.equal(recipe.netFiveHourShare, -0.0002);
 });
+
+test("an attention item decodes the route's shape, its start an instant and its detail passed through", () => {
+  const [raw] = fixture('attention').items;
+  assert.deepEqual(d.decodeAttention(raw), {
+    detail: { key: 'desktop', pool: 'main' },
+    kind: 'pool_exhausted',
+    link: { id: 'main', page: 'pools' },
+    pools: ['main'],
+    since: new Date(1_000_000).toISOString(),
+    subject: { id: 'main', label: 'Main', type: 'pool' },
+  });
+  const drift = d.decodeAttention({ ...raw, detail: { client_version: '2.1.271', key: null, trigger: 'hash' }, kind: 'client_drift', link: null, pools: [], subject: { id: '2.1.271', label: '2.1.271', type: 'client' } });
+  assert.deepEqual([drift.kind, drift.link, drift.pools, drift.subject.type], ['client_drift', null, [], 'client'], 'a drift refusal that carried no key links nowhere');
+});
+
+test('an attention item with a spelling the console does not know reads the worst kind, a pool subject and the pools page', () => {
+  const odd = d.decodeAttention({ detail: 'text', kind: 'cache_cold', link: { id: 'r1', page: 'requests' }, pools: ['all', 3], since: 'yesterday', subject: { id: 'x', label: 'x', type: 'key' } });
+  assert.deepEqual(
+    [odd.kind, odd.subject.type, odd.link, odd.pools, odd.since, odd.detail],
+    ['pool_exhausted', 'pool', { id: 'r1', page: 'pools' }, ['all'], '1970-01-01T00:00:00.000Z', {}],
+  );
+});

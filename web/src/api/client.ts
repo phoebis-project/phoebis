@@ -7,6 +7,7 @@ import type {
   AnalyticsPoint,
   AnalyticsQuery,
   ApiKey,
+  AttentionItem,
   BurnGroup,
   BurnPoint,
   CapturedBodies,
@@ -167,6 +168,8 @@ export interface Api {
   getAnalyticsBurn(range: Pick<AnalyticsQuery, 'from' | 'to'>, groupBy: BurnGroup): Promise<{ bucketSeconds: number; points: BurnPoint[] }>;
   getAnalyticsRewrites(range: Pick<AnalyticsQuery, 'from' | 'to'>): Promise<{ moves: Record<string, number>; points: RewritePoint[] }>;
   getAnalyticsSeries(query: AnalyticsQuery): Promise<AnalyticsPoint[]>;
+  /** The conditions that hold now, worst first and the oldest first within a kind: the route's order is the ranking. */
+  getAttention(): Promise<AttentionItem[]>;
   getCapturedBodies(requestId: string): Promise<CapturedBodies | null>;
   getKeepaliveOverview(): Promise<KeepaliveOverview>;
   getKeyModels(keyId: string): Promise<KeyModels>;

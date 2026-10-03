@@ -6,10 +6,11 @@ import { Donut } from '@/components/charts/Donut';
 import { Sparkline } from '@/components/charts/Sparkline';
 import { accountColor } from '@/components/charts/theme';
 import { useChartInk } from '@/components/charts/useChartInk';
+import { AttentionLine } from '@/components/ui/AttentionLine';
 import { Badge, Card, EmptyState, ErrorState, Skeleton } from '@/components/ui/primitives';
 import { WindowTriple } from '@/components/ui/QuotaBars';
 import { fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortId, tokensTotal } from '@/lib/format';
-import { useAsync, useNow } from '@/lib/hooks';
+import { useAsync, useAttention, useNow } from '@/lib/hooks';
 import { STATUS_LABEL, STATUS_TONE, isFastScope, isSubscription, remainingOf, windowOf } from '@/lib/quota';
 
 export function DashboardPage() {
@@ -17,6 +18,7 @@ export function DashboardPage() {
   const accounts = useAsync(() => api.listAccounts(), []);
   const requests = useAsync(() => api.listRequests({ limit: 10 }), []);
   const sessions = useAsync(() => api.listSessions(), []);
+  const attention = useAttention();
   const now = useNow();
   const ink = useChartInk();
 
@@ -25,6 +27,7 @@ export function DashboardPage() {
 
   return (
     <div className="stack">
+      <AttentionLine items={attention.items} error={attention.error} loadedAt={attention.loadedAt} now={now} />
       <div className="stat-grid">
         <StatTile label="Requests, 24h" value={o ? fmtInt(o.requests24h) : null} note={o ? `${(o.requests24h / 24).toFixed(1)} per hour` : null} spark={hourly.map((h) => h.requests)} color={ink.series[0]} />
         <StatTile label="Tokens, 24h" value={o ? fmtCompact(o.tokens24h) : null} note={o ? `${fmtPct(o.tokens24h ? o.tokensCached24h / o.tokens24h : 0)} served from cache` : null} spark={hourly.map((h) => h.tokens)} color={ink.series[2]} />

@@ -133,11 +133,22 @@ const OUTCOME_LABEL: Record<PollOutcome, string> = { clean: 'clean', failed: 'fa
 /** A poll that last failed or is backing off wants a look even while the card still draws the windows it had. */
 const needsAttention = (poll: QuotaPoll | null) => poll !== null && (poll.lastOutcome !== 'clean' || poll.backoffSince !== null);
 
-/** When the poll last asked the endpoint and how it answered; "not yet polled" until it first asks. */
+/**
+ * When the poll last asked the endpoint and how it answered; "not yet polled" until it first asks. A failed poll names
+ * its reason, cut to the line's width so the line never wraps, the whole message under the time in the title.
+ */
 function PollLine({ poll, now }: { now: number; poll: QuotaPoll | null }) {
   if (!poll) return <span className="muted">not yet polled</span>;
+  const at = poll.lastAttemptAt ? fmtAbsolute(poll.lastAttemptAt) : undefined;
+  if (poll.lastOutcome === 'failed' && poll.lastError) {
+    return (
+      <span className="muted qcard__poll" title={at ? `${at}\n${poll.lastError}` : poll.lastError}>
+        polled {fmtRelative(poll.lastAttemptAt, now)}: failed: <span className="qcard__reason">{poll.lastError}</span>
+      </span>
+    );
+  }
   return (
-    <span className="muted" title={poll.lastAttemptAt ? fmtAbsolute(poll.lastAttemptAt) : undefined}>
+    <span className="muted" title={at}>
       polled {fmtRelative(poll.lastAttemptAt, now)}: {OUTCOME_LABEL[poll.lastOutcome]}
     </span>
   );

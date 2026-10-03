@@ -228,9 +228,11 @@ and at most 64 sockets are served at once, a further one refused `503 live feed 
 
 ### Dashboard
 
-Four tiles report requests, tokens, estimated cost, and the error rate over the last 24 hours; two cards below
-them show the 5-hour and 7-day quota remaining for each subscription account; and the page ends with the most
-recent requests and a sessions card that leads with the router's live pins and the accounts they sit on.
+A line above the tiles names what needs the operator's attention, worst first, each item a badge that opens the account,
+pool or key where it is fixed; it reads the same conditions the `phoebis_attention` gauge exports. Four tiles report
+requests, tokens, estimated cost, and the error rate over the last 24 hours; two cards below them show the 5-hour and
+7-day quota remaining for each subscription account; and the page ends with the most recent requests and a sessions card
+that leads with the router's live pins and the accounts they sit on.
 
 ### Observe
 
@@ -246,19 +248,19 @@ that fails after its 200 head keeps that status, so a finished request with an e
 ### Quota
 
 A card per account shows one row per rate-limit window, filterable by tabs for all accounts, OAuth accounts, and
-Anthropic-key accounts. Each OAuth card's footer says when the poll last asked the endpoint and how it answered, when
-the snapshot it shows was read, and, while the account backs off, since when and when the next attempt comes; Refresh
-reads the endpoint now unless the account is backing off or a fresh snapshot is cached. A card draws the windows the
-ledger sampled in the last day, or the ones the router holds when the ledger has none, whatever the last read said, and
-shows an error in their place only when it holds none; the page counts a card that shows an error, whose last poll
-failed, or that is backing off as needing attention. Each card names the account's plan with the date its subscription
-started and, for an account on the Claude Code trial, when the trial ends; an account marked cancelled says when its
-plan ends, in the serious tone inside a week. A card whose account served a fast-mode request shows a Fast mode line:
-the share of the fast lane's input and output buckets used, as the last answer reported them, with the reset, a bucket
-past its reset reading as refilled, and a chip while the account's fast lane cools, naming the reason (rate limited, or
-credits unavailable) and when it lifts; the account page's Usage card shows the same line and chip. Below the cards, a
-reset timeline lays the same windows across a calendar, zoomable between a two-week weekly view and a three-day 5-hour
-view.
+Anthropic-key accounts. Each OAuth card's footer says when the poll last asked the endpoint and how it answered, a
+failed poll naming its reason (cut to the line's width, the whole message in the line's title), when the snapshot it
+shows was read, and, while the account backs off, since when and when the next attempt comes; Refresh reads the endpoint
+now unless the account is backing off or a fresh snapshot is cached. A card draws the windows the ledger sampled in the
+last day, or the ones the router holds when the ledger has none, whatever the last read said, and shows an error in
+their place only when it holds none; the page counts a card that shows an error, whose last poll failed, or that is
+backing off as needing attention. Each card names the account's plan with the date its subscription started and, for an
+account on the Claude Code trial, when the trial ends; an account marked cancelled says when its plan ends, in the
+serious tone inside a week. A card whose account served a fast-mode request shows a Fast mode line: the share of the
+fast lane's input and output buckets used, as the last answer reported them, with the reset, a bucket past its reset
+reading as refilled, and a chip while the account's fast lane cools, naming the reason (rate limited, or credits
+unavailable) and when it lifts; the account page's Usage card shows the same line and chip. Below the cards, a reset
+timeline lays the same windows across a calendar, zoomable between a two-week weekly view and a three-day 5-hour view.
 
 ![The Quota view: the cards per account and the reset timeline](assets/quota-light.png#only-light)
 ![The Quota view: the cards per account and the reset timeline](assets/quota-dark.png#only-dark)

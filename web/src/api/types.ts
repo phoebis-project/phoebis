@@ -229,6 +229,28 @@ export interface QuotaSnapshot {
   status: QuotaFetchStatus;
 }
 
+/**
+ * The conditions that need the operator, worst first: the order the route ranks by and the dashboard's line draws,
+ * so not alphabetical.
+ */
+export const ATTENTION_KIND_VALUES = ['pool_exhausted', 'client_drift', 'reauth_required', 'funding_required', 'refresh_failed', 'poll_backoff'] as const;
+export type AttentionKind = (typeof ATTENTION_KIND_VALUES)[number];
+
+/** One condition that holds now, as `GET /admin/attention` answers it. */
+export interface AttentionItem {
+  /** The members the condition's kind carries, passed through as the route sent them. */
+  detail: Record<string, unknown>;
+  kind: AttentionKind;
+  /** Where the operator fixes it; null for a drift refusal that carried no key. */
+  link: { id: string; page: 'accounts' | 'keys' | 'pools' } | null;
+  /** The pools the item belongs to, which a pool card filters the same list by. */
+  pools: string[];
+  /** When the condition started, as an ISO instant. */
+  since: string;
+  /** An account or a pool by id and label, or a client version as both. */
+  subject: { id: string; label: string; type: 'account' | 'client' | 'pool' };
+}
+
 export type PoolStrategy = 'pace' | 'priority' | 'round_robin';
 export type OveragePolicy = 'allow' | 'never' | 'prefer_plan';
 

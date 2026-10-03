@@ -532,6 +532,44 @@ async function sidebarBrand(theme) {
   if (read.right > read.contentRight) say(`row ends at ${read.right}, past the sidebar's content box at ${read.contentRight}`);
 }
 
+/**
+ * The dashboard's attention line above the tiles: one 22 px row per line of badges with the lead on the first and a
+ * 6 px gap between rows, every badge the 22 px and the 12 px type at weight 500 of the pool card's strip badges, the
+ * line inside the content box and clear of the tiles. The mock pass draws the story's six items. The router pass seeds
+ * an exhaustion of its main pool, which any request the pool serves later in the run (a keepalive probe among them)
+ * clears, so it draws that item or the quiet line, and never the unavailable one.
+ */
+async function attentionLine(theme) {
+  const say = (what) => failures.push(`${theme} /: the attention line ${what}`);
+  const read = await page.evaluate(() => {
+    const line = document.querySelector('.attention-line');
+    const grid = document.querySelector('.stat-grid');
+    if (!line || !grid) return null;
+    const box = line.getBoundingClientRect();
+    const badges = [...line.querySelectorAll('.badge')].map((b) => {
+      const at = b.getBoundingClientRect();
+      const style = getComputedStyle(b);
+      return { font: `${style.fontSize} ${style.fontWeight}`, height: at.height, right: at.right, text: b.textContent?.trim() ?? '', top: Math.round(at.top) };
+    });
+    return { badges, bottom: box.bottom, contentRight: line.parentElement.getBoundingClientRect().right, gridTop: grid.getBoundingClientRect().top, height: box.height, lead: line.querySelector('.attention-line__lead')?.textContent?.trim() ?? null };
+  });
+  measurements.push(`${theme} / attention line ${JSON.stringify(read)}`);
+  if (!read) return say('is not drawn above the tiles');
+  const rows = new Set(read.badges.map((b) => b.top)).size;
+  if (Math.abs(read.height - (rows * 22 + (rows - 1) * 6)) > 0.5) say(`is ${read.height} px tall over ${rows} rows of badges`);
+  for (const b of read.badges) {
+    if (Math.abs(b.height - 22) > 0.5 || b.font !== '12px 500') say(`draws ${JSON.stringify(b.text)} ${b.height} px tall in ${b.font}, not the strip badge's 22 px in 12px 500`);
+    if (b.right > read.contentRight + 0.5) say(`runs ${JSON.stringify(b.text)} past the content box`);
+  }
+  if (read.bottom > read.gridTop) say('reaches into the tiles');
+  const texts = read.badges.map((b) => b.text);
+  if (mock) {
+    if (read.lead !== '6 need attention' || texts.length !== 6) say(`reads ${read.lead} over ${JSON.stringify(texts)}, not the story's six items`);
+  } else if (read.lead === null ? JSON.stringify(texts) !== '["Nothing needs attention"]' : !texts.includes('Pool exhausted: Main')) {
+    say(`reads ${read.lead} over ${JSON.stringify(texts)}, neither the seeded exhaustion nor the quiet line`);
+  }
+}
+
 /** The sidebar's Expert view row stands above the version line in the status block, the two rows clear of each other. */
 async function expertRow(theme) {
   const read = await page.evaluate(() => {
@@ -1639,6 +1677,19 @@ async function quotaPollLines(theme) {
     }
   }
   if (mock && !polled.some((c) => c.lines.some((l) => l.serious))) say('the story backs one account off, yet no card draws a backoff line');
+  // A failed poll's reason is cut inside its line, and the line's title carries it whole.
+  const reasons = await page.evaluate(() =>
+    [...document.querySelectorAll('.qcard__reason')].map((reason) => {
+      const line = reason.closest('.qcard__poll');
+      return { cut: reason.scrollWidth > reason.clientWidth, inside: !!line && reason.getBoundingClientRect().right <= line.getBoundingClientRect().right + 0.5, text: reason.textContent ?? '', title: line?.getAttribute('title') ?? '' };
+    }),
+  );
+  measurements.push(`${theme} /quota failed poll reasons ${JSON.stringify(reasons)}`);
+  if (mock && reasons.length === 0) say('the story fails one poll, yet no card names its reason');
+  for (const r of reasons) {
+    if (!r.inside) say(`the reason ${JSON.stringify(r.text)} runs past its line`);
+    if (!r.title.endsWith(`\n${r.text}`)) say(`the failed line's title does not carry the reason ${JSON.stringify(r.text)} whole`);
+  }
 }
 
 /**
@@ -2871,7 +2922,10 @@ try {
       if (title !== `${view.title} - Phoebis Router`) failures.push(`${theme} ${view.path}: title is ${JSON.stringify(title)}`);
       const applied = await page.evaluate(() => document.documentElement.getAttribute('data-theme'));
       if (applied !== theme) failures.push(`${theme} ${view.path}: data-theme is ${applied}`);
-      if (view.path === '/') await sidebarBrand(theme);
+      if (view.path === '/') {
+        await sidebarBrand(theme);
+        await attentionLine(theme);
+      }
       if (view.path === '/' && !mock) {
         await remainingCards(theme);
         await errorStateBox(theme);
