@@ -499,6 +499,10 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
         {
             last.outcome = "canceled".into();
         }
+        // Only the committed answer has a message; an earlier attempt of the request never carries one.
+        if last.upstream_status.is_some() {
+            last.upstream_message_id = complete.message_id.clone();
+        }
         // A head classified as succeeded whose body then failed: the request's terminal cause wins for this
         // attempt alone; a failover classification on an earlier attempt is left as it was.
         if last.upstream_status.is_some() && last.outcome == "succeeded" {
@@ -826,6 +830,7 @@ mod tests {
             response_bytes: Some(20),
             response_chunks: None,
             held: None,
+            message_id: None,
             finished_at: 1_500,
         })
     }
@@ -853,6 +858,7 @@ mod tests {
             response_bytes,
             response_chunks,
             held: None,
+            message_id: None,
             finished_at: 1_500,
         }
     }
@@ -1064,6 +1070,41 @@ mod tests {
             (request.ttfc_ms, attempts[1].ttfc_ms),
             (Some(800), Some(300)),
             "the request row keeps the request-relative value; the attempt's is re-based on its own start"
+        );
+    }
+
+    #[test]
+    fn the_completions_message_id_lands_on_the_serving_attempt_and_stays_null_on_a_failover_attempt(
+    ) {
+        let mut a = Assembler::new(clock());
+        a.observe(observed("r13", Some("k")));
+        a.observe(selected("r13", 1, "a", 1_010));
+        a.observe(head("r13", 1, 429, AttemptOutcome::RateLimited, 1_060));
+        a.observe(selected("r13", 2, "b", 1_100));
+        a.observe(head("r13", 2, 200, AttemptOutcome::Succeeded, 1_250));
+        let Event::RequestComplete(mut done) =
+            complete("r13", 2, Some("b"), Outcome::Succeeded, 200, None)
+        else {
+            panic!()
+        };
+        done.message_id = Some("msg_01abc".into());
+        let Some(Record::Request { attempts, .. }) = a.observe(Event::RequestComplete(done)).pop()
+        else {
+            panic!()
+        };
+        assert_eq!(
+            attempts
+                .iter()
+                .map(|a| (
+                    a.upstream_request_id.as_deref(),
+                    a.upstream_message_id.as_deref()
+                ))
+                .collect::<Vec<_>>(),
+            [
+                (Some("req_up_1"), None),
+                (Some("req_up_2"), Some("msg_01abc"))
+            ],
+            "the 429 carries its own request id and no message; the 200 carries both"
         );
     }
 

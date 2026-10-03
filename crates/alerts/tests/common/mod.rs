@@ -432,6 +432,7 @@ pub fn complete(
         response_bytes: None,
         response_chunks: None,
         held: None,
+        message_id: None,
         finished_at: NOW,
     })
 }

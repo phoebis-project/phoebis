@@ -15,6 +15,9 @@ import { ACCOUNT_ROLLUP_SAMPLE, REQUEST_SAMPLE } from './samples';
 import { DAY, HOUR, MINUTE, NOW, daysAgo, iso, startOfHour } from './time';
 
 const rng = createRng(7_331);
+// The upstream's own ids draw from a stream of their own, so they move no draw of the rows.
+const upstreamIds = createRng(9_191);
+const upstreamId = (prefix: string) => `${prefix}${upstreamIds.uuid().replace(/-/g, '').slice(0, 22)}`;
 
 export const SESSION_IDS = Array.from({ length: 14 }, () => rng.uuid());
 
@@ -236,6 +239,9 @@ function buildAttempts(lane: Lane, atMs: number, finalStatus: number, attemptsWa
       // Drawn once the events exist, since a trace names the move an event records.
       selection: null,
       startedAt: iso(cursor),
+      // The upstream names its request on every answer, an error document included, and a message on a 200 alone.
+      upstreamMessageId: upstreamStatus === 200 ? upstreamId('msg_01') : null,
+      upstreamRequestId: upstreamId('req_011C'),
       upstreamStatus,
       windows: rateLimitHit ? windows.map((w) => (w.id === '5h' ? { ...w, utilization: 1 } : w)) : windows,
     });
@@ -421,6 +427,8 @@ function buildRequests(): RequestLog[] {
       response: { clearedInputTokens: null, inferenceGeo: null, refusalCategory: null, refusalRecommendedModel: null, servedModel: null, speed: null, stopReason: null, stopSequence: null },
       selection: null,
       startedAt: story.at,
+      upstreamMessageId: null,
+      upstreamRequestId: upstreamId('req_011C'),
       upstreamStatus: 404,
       windows: [],
     };

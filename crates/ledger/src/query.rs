@@ -229,7 +229,7 @@ pub fn list_requests(
     if let Some(text) = filter.text.as_deref().filter(|t| !t.is_empty()) {
         args.push(Box::new(format!("%{text}%")));
         let n = args.len();
-        clauses.push(format!("(id LIKE ?{n} OR session_id LIKE ?{n} OR key_id LIKE ?{n} OR model LIKE ?{n} OR error_code LIKE ?{n} OR EXISTS (SELECT 1 FROM attempts a WHERE a.request_id = requests.id AND a.account_id LIKE ?{n}))"));
+        clauses.push(format!("(id LIKE ?{n} OR session_id LIKE ?{n} OR key_id LIKE ?{n} OR model LIKE ?{n} OR error_code LIKE ?{n} OR EXISTS (SELECT 1 FROM attempts a WHERE a.request_id = requests.id AND (a.account_id LIKE ?{n} OR a.upstream_request_id LIKE ?{n} OR a.upstream_message_id LIKE ?{n})))"));
     }
     key_lifetimes(&filter.keys, live, &mut args, &mut clauses);
     in_list_or_null("pool_id", &filter.pools, &mut args, &mut clauses);

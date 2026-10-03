@@ -416,6 +416,9 @@ pub struct RequestComplete {
     /// carries; `None` for a request never held. Set on a request held and then served, and on one whose hold
     /// ended in an exhaustion with no attempt dispatched.
     pub held: Option<String>,
+    /// The `id` of the message the committed answer carried (`message_start`, or the JSON document), as the
+    /// upstream sent it; `None` for a local answer, a cut before the first event, or an answer without one.
+    pub message_id: Option<String>,
     pub finished_at: i64,
 }
 

@@ -526,6 +526,16 @@ test('a request page carries the trail with zero-based attempt indexes and the c
   assert.equal(d.decodeRequest(fixture('request').request).canonicalModel, 'claude-sonnet-5-5');
 });
 
+test("an attempt reads the upstream's request id, and its message id only on the answer that served", () => {
+  const failover = d.decodeRequestPage(fixture('requests')).requests.find((r) => r.id === 'r-failover');
+  assert.deepEqual(
+    failover.attempts.map((a) => [a.upstreamStatus, a.upstreamRequestId, a.upstreamMessageId]),
+    [[429, 'req_r-failover_1', null], [200, 'req_r-failover_2', 'msg_r-failover_2']],
+  );
+  const missing = d.decodeRequest({ attempts: [{ index: 1 }] }).attempts[0];
+  assert.deepEqual([missing.upstreamRequestId, missing.upstreamMessageId], [null, null], 'an attempt with no head names neither');
+});
+
 test('a stream that ended before its end decodes as incomplete and a group reads its own counter', () => {
   const cut = d.decodeRequestPage(fixture('requests')).requests.find((r) => r.id === 'r-incomplete');
   assert.deepEqual([cut.outcome, cut.status, cut.errorCode, cut.transport], ['incomplete', 200, 'stream_incomplete', 'sse'], 'the sixth outcome reads as itself, not the failed fallback');

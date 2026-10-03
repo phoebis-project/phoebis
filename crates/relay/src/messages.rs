@@ -560,6 +560,7 @@ impl Trace {
         response_bytes: Option<u64>,
         response_chunks: Option<u32>,
         end: Option<(Outcome, Option<String>)>,
+        message_id: Option<String>,
         finished_at: i64,
     ) {
         let (final_outcome, error_code) = match end {
@@ -585,6 +586,7 @@ impl Trace {
                 .held
                 .as_ref()
                 .and_then(|h| serde_json::to_string(h).ok()),
+            message_id,
             finished_at,
         }))
         .await;
@@ -3015,6 +3017,7 @@ impl Relay {
                 response_bytes,
                 None,
                 None,
+                None,
                 (self.clock)(),
             )
             .await;
@@ -3370,8 +3373,8 @@ impl Relay {
                 });
                 chunk_published = true;
                 message_id = message_id_from_json(&text, &[]);
-                // Only the refresh path reaches here with a 200; the ordinary JSON answer is inspected by the
-                // body task.
+                // Only the error statuses `respond` drains (400, 401, 403, 404, 429) reach here; a 200 is read
+                // by the body task.
                 (head.status == 200).then(|| answer_from_json(&text, &[]))
             }
         };
@@ -3404,6 +3407,8 @@ impl Relay {
                 None,
                 Some(payload.len() as u64),
                 chunk_published.then_some(1),
+                None,
+                // An error document carries no message `id`.
                 None,
                 (self.clock)(),
             )

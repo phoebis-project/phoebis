@@ -89,7 +89,8 @@ fn attempt_json(a: &AttemptRecord) -> Value {
     .collect();
     json!({
         "index": a.attempt, "account_id": a.account_id, "account_kind": a.account_kind, "outcome": a.outcome,
-        "upstream_status": a.upstream_status, "upstream_request_id": a.upstream_request_id, "started_at": a.started_at,
+        "upstream_status": a.upstream_status, "upstream_request_id": a.upstream_request_id,
+        "upstream_message_id": a.upstream_message_id, "started_at": a.started_at,
         "duration_ms": a.finished_at.map(|f| f - a.started_at), "ttfb_ms": a.ttfb_ms, "ttft_ms": a.ttfc_ms,
         "cache_miss_reason": a.cache_miss_reason, "service_tier": a.service_tier, "client_drift": a.client_drift,
         "cooldown_set": a.cooldown_scope.as_ref().map(|scope| json!({ "reason": scope, "until": a.cooldown_until })),

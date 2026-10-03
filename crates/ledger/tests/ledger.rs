@@ -584,6 +584,56 @@ async fn a_request_with_no_user_agent_is_found_by_the_wildcard_and_the_exact_das
     up.shutdown().await;
 }
 
+/// The two upstream ids are what an operator holding a client transcript or an upstream support reply searches by.
+#[tokio::test]
+async fn text_matches_an_upstream_message_id_and_an_upstream_request_id() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: Respond::Json {
+            status: 200,
+            headers: vec![("request-id".into(), "req_up_7".into())],
+            body: br#"{"id":"msg_01abc","type":"message","model":"claude-sonnet-4-5","stop_reason":"end_turn","usage":{"input_tokens":3,"output_tokens":4}}"#
+                .to_vec(),
+        },
+    }])
+    .await;
+    let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let id = request_id(&resp);
+    let _ = resp.into_body().collect().await.unwrap();
+    ledgered(&h, &id).await;
+    let listed = |text: &str| {
+        let filter = RequestFilter {
+            text: Some(text.into()),
+            ..Default::default()
+        };
+        h.db.read_blocking(|c| list_requests(c, &filter, &LiveKeys::default(), None, 10))
+            .unwrap()
+            .0
+            .iter()
+            .map(|(row, _)| row.id.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        listed("msg_01abc"),
+        [id.as_str()],
+        "the served attempt's message id"
+    );
+    assert_eq!(
+        listed("req_up_7"),
+        [id.as_str()],
+        "the attempt's upstream request id"
+    );
+    assert!(listed("msg_nope").is_empty(), "an id no attempt carries");
+    up.shutdown().await;
+}
+
 /// The answer's own counts and facts reach the attempt row and the three counts reach the hour's rollup; the
 /// served model is recorded only when it is not the one the router resolved.
 #[tokio::test]
@@ -953,6 +1003,7 @@ fn complete_event(id: &str) -> BusEvent {
         response_bytes: None,
         response_chunks: None,
         held: None,
+        message_id: None,
         finished_at: 1,
     })
 }

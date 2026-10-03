@@ -2966,6 +2966,33 @@ expect('/requests', m.text(), ['Columns (13)', 'Rows', 'SSE', 'Details', 'Client
 await m.navigate(`/requests/${laptopRow.id}`);
 expect('/requests/:laptop drawer (admin)', m.text(), ['Summary', 'Session', 'Agent', 'Attempts', 'Succeeded', 'Usage', 'Cache read', 'Cache write, 5m', 'Cache write, 1h', 'Output, thinking', 'Output, plain', 'Server tool calls', 'Estimated cost', 'Captured bodies', 'Request', 'Response', 'cache_control', 'ephemeral_5m_input_tokens']);
 {
+  // The two ids sit right under the served attempt's head, the request id first, as the drawer draws them.
+  const served = laptopRow.attempts[laptopRow.attempts.length - 1];
+  const head = [...m.container.querySelectorAll('.attempt')].at(-1)?.querySelector('.attempt__head');
+  const lines = [head?.nextElementSibling, head?.nextElementSibling?.nextElementSibling].map((e) => (e?.classList.contains('attempt__id') ? e.textContent : 'no id line'));
+  results.push({
+    name: '/requests/:laptop drawer names the upstream request id and message id under the served attempt',
+    ok: /^req_/.test(served.upstreamRequestId ?? '') && /^msg_/.test(served.upstreamMessageId ?? '') && lines[0] === `request ${served.upstreamRequestId}` && lines[1] === `message ${served.upstreamMessageId}`,
+    missing: lines,
+  });
+  await m.navigate('/requests');
+  await m.settle(300);
+  const search = m.container.querySelector('input.filters__search');
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  setter.call(search, served.upstreamMessageId ?? '');
+  search?.dispatchEvent(new window.Event('input', { bubbles: true }));
+  await m.settle(700);
+  const found = [...m.container.querySelectorAll('.requests__table tbody tr')].map((tr) => tr.querySelector('.sub.mono')?.textContent?.replace(/…$/, '') ?? '');
+  results.push({
+    name: '/requests the search by an upstream message id lists the one request that carried it',
+    ok: found.length === 1 && laptopRow.id.startsWith(found[0]) && found[0] !== '',
+    missing: found,
+  });
+  setter.call(search, '');
+  search?.dispatchEvent(new window.Event('input', { bubbles: true }));
+  await m.settle(700);
+}
+{
   const cut = requests.find((r) => r.keyId === 'laptop' && r.capturedBodies && r.responseTruncated);
   if (cut) {
     await m.navigate(`/requests/${cut.id}`);

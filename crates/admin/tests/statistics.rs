@@ -848,6 +848,7 @@ async fn a_request_answers_its_hold_with_its_wait_and_held_filters_the_list() {
         response_bytes: None,
         response_chunks: None,
         held: Some(held),
+        message_id: None,
         finished_at: now + 1_300,
     }));
     let all = wait_json(&parts.app, "/admin/requests?limit=500", &cookie, |v| {
@@ -1310,6 +1311,7 @@ fn publish_capture(bus: &phoebis_bus::Bus, id: &str, delivered: u32, published: 
         response_bytes: None,
         response_chunks: Some(published),
         held: None,
+        message_id: None,
         finished_at: common::NOW + 900,
     }));
 }

@@ -40,7 +40,7 @@ A session that
 branched from another conversation carries that conversation's root and the matched depth as well. The session it names
 is the client's own,
 and the Sessions view groups a row by it.
-The attempt row names the account and its kind; the upstream status and request id; the outcome; the
+The attempt row names the account and its kind; the upstream status, request id and message id; the outcome; the
 cooldown the attempt set; the stop reason, the model the answer names when it differs from the one the router
 resolved, the speed, the region inference ran in, the tokens a context edit cleared, and a refusal's category and
 recommended model; the five token counts, with the thinking share of the output and the web search and fetch calls the
@@ -280,17 +280,20 @@ beneath it on a subagent's turn.
 One row is one
 client request however many attempts it took, and the attempt trail reads as "mail 429, business 200" when a 429 on the
 first account failed over to a 200 on the second. A request that waited for a slot while every account was at its cap
-carries a held marker beside its attempts with the time it waited. Filters narrow the table: the user agent filter takes
-a pattern (`claude-cli/2.1.*`, `*sdk-cli*`; `*` for any run of characters, `?` for one, a backslash quoting either, and
-a value with no wildcard matching in full), the client filter takes a pattern over the class (`claude-code/*`), the
-agent type and turn origin filters pick from the values the client's hint headers and attribution line carry, the speed
-filter picks `fast` or `standard` by the speed the answer reported, and the held toggle keeps the requests that waited
-for a slot. Selecting a row opens a drawer with the request's detail, which shows
-the user agent, the model as the client spelled it and, when it differs, the canonical id the router
-recorded, its auto-mode standing (asked for a server-side check under an on setting; carried the safeguards member under
-an off setting, which the dispatch drops; refused for its body shape; or not requested), and the client hints: the agent
-type, the compaction and context-compacted markers, the turn origin, and the tool time before the turn; the trail names
-an account the model was rejected on and the one that served it. The drawer's effort is the level the upstream applies:
+carries a held marker beside its attempts with the time it waited. The search matches the request id, the session, the
+key, the model, the error code, and an attempt's account, upstream request id or upstream message id. Filters narrow the
+table: the user agent filter takes a pattern (`claude-cli/2.1.*`, `*sdk-cli*`; `*` for any run of characters, `?` for
+one, a backslash quoting either, and a value with no wildcard matching in full), the client filter takes a pattern over
+the class (`claude-code/*`), the agent type and turn origin filters pick from the values the client's hint headers and
+attribution line carry, the speed filter picks `fast` or `standard` by the speed the answer reported, and the held
+toggle keeps the requests that waited for a slot. Selecting a row opens a drawer with the request's detail, which shows
+how the request was identified beneath the client, the user agent, the model as the client spelled it and, when it
+differs, the canonical id the router recorded, its auto-mode standing (asked for a server-side check under an on
+setting; carried the safeguards member under an off setting, which the dispatch drops; refused for its body shape; or
+not requested), and the client hints: the agent type, the compaction and context-compacted markers, the turn origin, and
+the tool time before the turn; the trail names an account the model was rejected on and the one that served it, and each
+attempt names the upstream's request id under its head and, on the answer that served, the message id a Claude Code
+transcript's assistant entry carries. The drawer's effort is the level the upstream applies:
 when the client sends a per-turn control entry, the last entry's level, else the request's top-level
 `output_config.effort`; a turn that ends with such an entry still counts as the user's turn, so it starts its own
 prompt. The table holds the requests up to the moment you opened it, so paging does not shift as new ones arrive;

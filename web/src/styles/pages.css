@@ -1733,6 +1733,11 @@
   border-radius: 50%;
 }
 
+/* An upstream id is one unbroken token; without this a long one would scroll the drawer sideways. */
+.attempt__id {
+  overflow-wrap: anywhere;
+}
+
 .attempt__windows {
   display: flex;
   flex-direction: column;

@@ -520,6 +520,9 @@ export interface Attempt {
   /** Null for an attempt the router stored no trace for. */
   selection: SelectionTrace | null;
   startedAt: string;
+  /** The `id` of the message the answer carried, the join to a transcript's assistant entry; null without one. */
+  upstreamMessageId: string | null;
+  upstreamRequestId: string | null;
   upstreamStatus: number | null;
   windows: AttemptWindow[];
 }

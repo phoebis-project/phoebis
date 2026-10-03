@@ -467,6 +467,7 @@ impl Publish {
                 Some(self.bytes),
                 Some(self.index),
                 outcome,
+                self.message_id.clone(),
                 (self.clock)(),
             )
             .await;
