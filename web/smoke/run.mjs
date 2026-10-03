@@ -4327,10 +4327,11 @@ m.unmount();
 
   const applied = await mount('/requests?keys=laptop&statuses=429');
   const keysApplied = column(applied, 'Key');
-  const statusesApplied = column(applied, 'Status');
+  // The badge alone, since a request that did not succeed names its outcome beside it in the same cell.
+  const statusesApplied = [...applied.container.querySelectorAll('.requests__table tbody .requests__status .badge')].map((b) => b.textContent?.trim() ?? '');
   results.push({
     name: '/requests mounts with keys=laptop&statuses=429 applied',
-    ok: trigger(applied, 'Keys') === 'Keys (1)' && trigger(applied, 'Status') === 'Status (1)' && keysApplied.length > 0 && keysApplied.every((k) => k === 'laptop') && statusesApplied.every((s) => s === '429'),
+    ok: trigger(applied, 'Keys') === 'Keys (1)' && trigger(applied, 'Status') === 'Status (1)' && keysApplied.length > 0 && keysApplied.every((k) => k === 'laptop') && statusesApplied.length === keysApplied.length && statusesApplied.every((s) => s === '429'),
     missing: [trigger(applied, 'Keys'), trigger(applied, 'Status'), JSON.stringify(keysApplied), JSON.stringify(statusesApplied)],
   });
   applied.unmount();
@@ -4512,6 +4513,91 @@ m.unmount();
     });
   }
   opened.unmount();
+}
+
+// A request that did not succeed names how it ended, in the ledger's own words, beside its status, in the drawer and as
+// a filter; the status filter offers the codes the router and Anthropic answer.
+{
+  const filterOf = (page, label) => [...page.container.querySelectorAll('.filters .mselect')].find((d) => d.querySelector('.mselect__trigger')?.textContent?.trim().startsWith(label));
+  const openOptions = async (page, filter) => {
+    filter?.querySelector('.mselect__trigger')?.click();
+    await page.settle(150);
+    return [...(filter?.querySelectorAll('.mselect__option') ?? [])];
+  };
+
+  const canceledCheck = '/requests a canceled request names its outcome in the list and the drawer';
+  const canceled = requests.find((r) => r.outcome === 'canceled');
+  if (!canceled) results.push({ name: canceledCheck, ok: false, missing: ['fixture'] });
+  else {
+    const page = await mount(`/requests?search=${canceled.id}`);
+    const rows = [...page.container.querySelectorAll('.requests__table tbody tr')];
+    const word = rows[0]?.querySelector('.requests__outcome');
+    const cell = word?.closest('td');
+    const listed = { badge: cell?.querySelector('.badge')?.textContent?.trim() ?? 'no badge', cell: cell?.textContent?.trim() ?? 'no Status cell', word: word?.textContent?.trim() ?? 'no outcome word' };
+    rows[0]?.click();
+    await page.settle();
+    const row = [...page.container.querySelectorAll('.drawer .kv__row')].find((r) => r.querySelector('dt')?.textContent?.trim() === 'Outcome');
+    const drawn = row?.querySelector('dd')?.textContent?.trim() ?? 'no Outcome row';
+    results.push({
+      name: canceledCheck,
+      ok: rows.length === 1 && listed.word === 'canceled' && listed.badge === '200' && listed.cell.includes('canceled') && drawn === 'canceled',
+      missing: [`${rows.length} rows`, JSON.stringify(listed), drawn],
+    });
+    page.unmount();
+  }
+
+  // The page's rows are matched back to the story by their short id, so the rule is read against each row's own outcome.
+  const wordCheck = '/requests a row names its outcome beside the status only when it did not succeed';
+  const listed = await mount('/requests');
+  const read = [...listed.container.querySelectorAll('.requests__table tbody tr')].map((tr) => {
+    const short = tr.querySelector('.sub.mono')?.textContent?.replace(/…$/, '') ?? '';
+    return { outcome: requests.find((r) => r.id.startsWith(short))?.outcome ?? 'unmatched', word: tr.querySelector('.requests__outcome')?.textContent?.trim() ?? null };
+  });
+  const wrong = read.filter((r) => r.word !== (r.outcome === 'succeeded' ? null : r.outcome));
+  results.push({ name: wordCheck, ok: read.length > 0 && read.some((r) => r.word !== null) && wrong.length === 0, missing: [`${read.length} rows`, ...wrong.slice(0, 3).map((r) => JSON.stringify(r))] });
+  listed.unmount();
+
+  const filterCheck = '/requests the Outcome filter narrows to canceled requests and sends outcomes';
+  const narrowed = await mount('/requests');
+  const outcome = filterOf(narrowed, 'Outcome');
+  if (!outcome) controlMissing(filterCheck, 'Outcome');
+  else {
+    const options = (await openOptions(narrowed, outcome)).map((o) => o.textContent?.trim());
+    const spy = countCalls('listRequests');
+    [...outcome.querySelectorAll('.mselect__option')].find((o) => o.textContent?.trim() === 'canceled')?.click();
+    await narrowed.settle();
+    spy.restore();
+    const sent = spy.calls.map(([q]) => q?.outcomes ?? null);
+    const words = [...narrowed.container.querySelectorAll('.requests__table tbody tr')].map((tr) => tr.querySelector('.requests__outcome')?.textContent?.trim() ?? 'no outcome word');
+    results.push({
+      name: filterCheck,
+      ok: JSON.stringify(options) === JSON.stringify(['canceled', 'exhausted', 'failed', 'rejected', 'succeeded']) && sent.length === 1 && JSON.stringify(sent[0]) === '["canceled"]' && words.length > 0 && words.every((w) => w === 'canceled'),
+      missing: [JSON.stringify(options), JSON.stringify(sent), ...new Set(words)],
+    });
+  }
+  narrowed.unmount();
+
+  // A hand-edited address may carry a word that names no outcome; the filter keeps the outcomes and drops the rest.
+  const addressCheck = '/requests mounts with the outcomes the address names and drops a value that is no outcome';
+  const spy = countCalls('listRequests');
+  const addressed = await mount('/requests?outcomes=canceled,nonsense');
+  spy.restore();
+  const summary = filterOf(addressed, 'Outcome')?.querySelector('.mselect__trigger')?.textContent?.trim() ?? 'no Outcome filter';
+  const sent = spy.calls.map(([q]) => JSON.stringify(q?.outcomes ?? null));
+  results.push({ name: addressCheck, ok: summary === 'Outcome (1)' && sent.length > 0 && sent.every((o) => o === '["canceled"]'), missing: [summary, ...sent] });
+  addressed.unmount();
+
+  // A code the address selects stays offered under its number, so it can be seen and cleared.
+  const statusCheck = '/requests the Status filter offers the common codes';
+  const coded = await mount('/requests?statuses=418');
+  const status = filterOf(coded, 'Status');
+  if (!status) controlMissing(statusCheck, 'Status');
+  else {
+    const options = (await openOptions(coded, status)).map((o) => o.textContent?.trim() ?? '');
+    const common = ['200 OK', '400 Bad request', '401 Unauthorized', '403 Forbidden', '404 Not found', '413 Payload too large', '418', '429 Rate limited', '500 Server error', '502 Bad gateway', '503 Unavailable', '504 Gateway timeout', '524 Timeout', '529 Overloaded'];
+    results.push({ name: statusCheck, ok: JSON.stringify(options) === JSON.stringify(common), missing: options });
+  }
+  coded.unmount();
 }
 
 // A read that fails for new filters draws the error state alone, none of the sections and none of the rows the filters before

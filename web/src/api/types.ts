@@ -442,6 +442,8 @@ export const AUTO_MODE_VALUES = ['body_shape', 'server', 'stripped'] as const sa
 export type RequestKind = 'count_tokens' | 'inference' | 'probe';
 export type Transport = 'json' | 'sse';
 export type AttemptOutcome = 'auth_failed' | 'canceled' | 'rate_limited' | 'succeeded' | 'transport_error' | 'upstream_error';
+/** How a request ended, in the ledger's own words. */
+export type RequestOutcome = 'canceled' | 'exhausted' | 'failed' | 'rejected' | 'succeeded';
 
 export interface AttemptWindow {
   id: WindowId;
@@ -588,7 +590,7 @@ export interface RequestLog {
   kind: RequestKind;
   model: string;
   /** How the request ended, once every attempt is in. */
-  outcome: 'canceled' | 'exhausted' | 'failed' | 'rejected' | 'succeeded';
+  outcome: RequestOutcome;
   poolId: string | null;
   /** The sum of the client's `x-claude-code-prev-tool-durations`, in milliseconds. */
   prevToolMs: number | null;
@@ -681,6 +683,7 @@ export interface RequestQuery {
   kind?: RequestKind | null;
   limit?: number;
   models?: string[];
+  outcomes?: RequestOutcome[];
   poolIds?: string[];
   search?: string;
   /** `fast`, `standard`: the serving attempt's speed. */

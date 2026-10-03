@@ -120,6 +120,14 @@ test('listRequests passes the speeds as one comma list', async () => {
   assert.ok(!String(calls[1].url).includes('speeds'), 'no speed filter, no parameter');
 });
 
+test('the request list encodes the outcome list', async () => {
+  const calls = stub(() => answer(200, { next_cursor: null, requests: [] }));
+  await new HttpApi().listRequests({ outcomes: ['canceled', 'failed'] });
+  assert.equal(new URL(calls[0].url, 'http://x').searchParams.get('outcomes'), 'canceled,failed');
+  await new HttpApi().listRequests({});
+  assert.ok(!String(calls[1].url).includes('outcomes'), 'no outcome filter, no parameter');
+});
+
 test('the analytics reads encode the range, the dimension, and every id list', async () => {
   const calls = stub((url) => answer(200, url.startsWith('/admin/analytics/series') ? { points: [] } : { rows: [] }));
   const api = new HttpApi();

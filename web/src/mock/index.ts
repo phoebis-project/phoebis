@@ -326,6 +326,7 @@ function matchesQuery(r: RequestLog, q: RequestQuery, live: Map<string, number>)
   if (q.accountIds?.length && (r.accountId === null || !q.accountIds.includes(r.accountId))) return false;
   if (q.models?.length && !q.models.includes(r.model)) return false;
   if (q.statuses?.length && (r.status === null || !q.statuses.includes(r.status))) return false;
+  if (q.outcomes?.length && !q.outcomes.includes(r.outcome)) return false;
   if (q.kind && r.kind !== q.kind) return false;
   if (q.from && Date.parse(r.at) < Date.parse(q.from)) return false;
   if (q.to && Date.parse(r.at) > Date.parse(q.to)) return false;

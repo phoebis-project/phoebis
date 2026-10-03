@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { api } from '@/api';
-import type { Attempt, CapturedBodies, CohortHold, PinReleaseReason, RequestKind, RequestLog, RequestQuery, Usage, WindowId } from '@/api/types';
-import { PIN_RELEASE_REASON_VALUES } from '@/api/decode';
+import type { Attempt, CapturedBodies, CohortHold, PinReleaseReason, RequestKind, RequestLog, RequestOutcome, RequestQuery, Usage, WindowId } from '@/api/types';
+import { PIN_RELEASE_REASON_VALUES, REQUEST_OUTCOME_VALUES } from '@/api/decode';
 import { useAppSettings } from '@/app/settings';
 import { SelectionTrace } from '@/components/SelectionTrace';
 import { AttemptTrail } from '@/components/ui/AttemptTrail';
@@ -47,6 +47,29 @@ const RANGES = [
 ];
 const PAGE_SIZES = [10, 25, 50, 100];
 const KINDS: readonly RequestKind[] = ['count_tokens', 'inference', 'probe'];
+/** The codes the router and Anthropic answer; any other code a page or the address holds is offered by its number. */
+const STATUS_CODES: readonly (readonly [number, string])[] = [
+  [200, 'OK'],
+  [400, 'Bad request'],
+  [401, 'Unauthorized'],
+  [403, 'Forbidden'],
+  [404, 'Not found'],
+  [413, 'Payload too large'],
+  [429, 'Rate limited'],
+  [500, 'Server error'],
+  [502, 'Bad gateway'],
+  [503, 'Unavailable'],
+  [504, 'Gateway timeout'],
+  [524, 'Timeout'],
+  [529, 'Overloaded'],
+];
+const statusOptions = (rows: RequestLog[], selected: string[]) => {
+  const named = new Map(STATUS_CODES);
+  const codes = new Set([...named.keys(), ...rows.flatMap((r) => (r.status === null ? [] : [r.status])), ...selected.map(Number)]);
+  return [...codes].sort((a, b) => a - b).map((code) => ({ label: named.has(code) ? `${code} ${named.get(code)}` : String(code), value: String(code) }));
+};
+/** The words the ledger records an outcome under; one the address carries that names no outcome is dropped. */
+const outcomesOf = (values: string[]): RequestOutcome[] => values.flatMap((v) => REQUEST_OUTCOME_VALUES.filter((o) => o === v));
 
 /** Every filter, the range and the page size, which the page's address holds so a reload or a shared link keeps them. */
 interface Filters {
@@ -59,6 +82,7 @@ interface Filters {
   keys: string[];
   kind: '' | RequestKind;
   models: string[];
+  outcomes: RequestOutcome[];
   pools: string[];
   range: string;
   rows: number;
@@ -68,7 +92,7 @@ interface Filters {
   turnOrigins: string[];
 }
 
-const DEFAULTS: Filters = { accounts: [], agent: '', agentTypes: [], client: '', held: false, keys: [], kind: '', models: [], pools: [], range: '24h', rows: 25, search: '', speeds: [], statuses: [], turnOrigins: [] };
+const DEFAULTS: Filters = { accounts: [], agent: '', agentTypes: [], client: '', held: false, keys: [], kind: '', models: [], outcomes: [], pools: [], range: '24h', rows: 25, search: '', speeds: [], statuses: [], turnOrigins: [] };
 
 /** Absent keys read as the defaults, and so does a kind, range, page size or status the page could not have written. */
 function filtersFromParams(params: URLSearchParams): Filters {
@@ -86,6 +110,7 @@ function filtersFromParams(params: URLSearchParams): Filters {
     keys: list('keys'),
     kind: kind ?? DEFAULTS.kind,
     models: list('models'),
+    outcomes: outcomesOf(list('outcomes')),
     pools: list('pools'),
     range: range?.value ?? DEFAULTS.range,
     rows: PAGE_SIZES.includes(rows) ? rows : DEFAULTS.rows,
@@ -114,11 +139,21 @@ function paramsFromFilters(f: Filters): URLSearchParams {
   put('accounts', f.accounts.join(','));
   put('models', f.models.join(','));
   put('statuses', f.statuses.join(','));
+  put('outcomes', f.outcomes.join(','));
   put('kind', f.kind);
   put('range', f.range === DEFAULTS.range ? '' : f.range);
   put('rows', f.rows === DEFAULTS.rows ? '' : String(f.rows));
   return params;
 }
+
+/** Keyed by every outcome the ledger records, so one it gains is a type error until it is named here. */
+const REQUEST_OUTCOME_LABEL: Record<RequestOutcome, string> = {
+  canceled: 'canceled',
+  exhausted: 'exhausted',
+  failed: 'failed',
+  rejected: 'rejected',
+  succeeded: 'succeeded',
+};
 
 const OUTCOME_LABEL: Record<Attempt['outcome'], string> = {
   auth_failed: 'Auth failed',
@@ -203,7 +238,7 @@ export function RequestsPage() {
   const query = useMemo<RequestQuery>(() => {
     const r = RANGES.find((x) => x.value === filters.range) ?? RANGES[2];
     // Probes are off the log unless they are what the filter asks for.
-    return { accountIds: filters.accounts, agentTypes: filters.agentTypes, client: filters.client, cursor, from: new Date(loadedAt - r.ms).toISOString(), held: filters.held, includeProbes: filters.kind === 'probe', keyIds: filters.keys, kind: filters.kind || null, limit: filters.rows, models: filters.models, poolIds: filters.pools, search: filters.search, speeds: filters.speeds, statuses: filters.statuses.map(Number), to: new Date(loadedAt).toISOString(), turnOrigins: filters.turnOrigins, userAgent: filters.agent };
+    return { accountIds: filters.accounts, agentTypes: filters.agentTypes, client: filters.client, cursor, from: new Date(loadedAt - r.ms).toISOString(), held: filters.held, includeProbes: filters.kind === 'probe', keyIds: filters.keys, kind: filters.kind || null, limit: filters.rows, models: filters.models, outcomes: filters.outcomes, poolIds: filters.pools, search: filters.search, speeds: filters.speeds, statuses: filters.statuses.map(Number), to: new Date(loadedAt).toISOString(), turnOrigins: filters.turnOrigins, userAgent: filters.agent };
   }, [filters, cursor, loadedAt]);
   const requests = useAsync(() => api.listRequests(query), [query]);
 
@@ -279,16 +314,12 @@ export function RequestsPage() {
           />
           <PatternInput label="Client pattern" value={filters.client} onCommit={(v) => update({ client: v })} />
           <PatternInput label="User agent pattern" value={filters.agent} onCommit={(v) => update({ agent: v })} />
+          <MultiSelect label="Status" options={statusOptions(rows, filters.statuses)} value={filters.statuses} onChange={(v) => update({ statuses: v })} />
           <MultiSelect
-            label="Status"
-            options={[
-              { label: '200 OK', value: '200' },
-              { label: '429 Rate limited', value: '429' },
-              { label: '502 Bad gateway', value: '502' },
-              { label: '529 Overloaded', value: '529' },
-            ]}
-            value={filters.statuses}
-            onChange={(v) => update({ statuses: v })}
+            label="Outcome"
+            options={REQUEST_OUTCOME_VALUES.map((o) => ({ label: REQUEST_OUTCOME_LABEL[o], value: o }))}
+            value={filters.outcomes}
+            onChange={(v) => update({ outcomes: outcomesOf(v) })}
           />
           <MultiSelect label="Agent type" options={AGENT_TYPES.map((v) => ({ label: v, value: v }))} value={filters.agentTypes} onChange={(v) => update({ agentTypes: v })} mono />
           <MultiSelect label="Turn origin" options={TURN_ORIGINS.map((v) => ({ label: v, value: v }))} value={filters.turnOrigins} onChange={(v) => update({ turnOrigins: v })} mono />
@@ -395,7 +426,10 @@ export function RequestsPage() {
                         )}
                         {visible.has('status') && (
                           <td>
-                            <StatusBadge status={r.status} />
+                            <span className="requests__status">
+                              <StatusBadge status={r.status} />
+                              {r.outcome !== 'succeeded' && <span className="muted requests__outcome">{REQUEST_OUTCOME_LABEL[r.outcome]}</span>}
+                            </span>
                           </td>
                         )}
                         {visible.has('attempts') && (
@@ -550,6 +584,7 @@ function RequestDrawer({ request, requestId, now, onClose }: { now: number; onCl
                 ...(r.canonicalModel !== r.model ? [{ label: 'Canonical model', value: r.canonicalModel, mono: true }] : []),
                 { label: 'Kind', value: `${r.kind.replace('_', ' ')}, ${r.transport === 'sse' ? 'SSE' : 'JSON'}` },
                 { label: 'Status', value: <StatusBadge status={r.status} /> },
+                { label: 'Outcome', value: REQUEST_OUTCOME_LABEL[r.outcome] },
                 { label: 'TTFB', value: fmtMs(r.ttfbMs) },
                 { label: 'Duration', value: fmtMs(r.durationMs) },
                 { label: 'Error', value: r.errorCode ?? <span className="muted">none</span>, mono: Boolean(r.errorCode) },

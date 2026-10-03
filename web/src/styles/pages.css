@@ -1628,6 +1628,15 @@
   font-size: 11.5px;
 }
 
+/* The outcome word follows the status badge at the attempts' step and drops under it where the column is narrow, so
+   the word widens the column by its own width at most, never by the pair's. */
+.requests__status {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+
 .filters {
   display: flex;
   flex-wrap: wrap;

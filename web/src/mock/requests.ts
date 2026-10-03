@@ -430,6 +430,14 @@ function buildRequests(): RequestLog[] {
     r.attempts = r.attempts.map((a, i, all) => (i === all.length - 1 ? { ...a, response: { ...a.response, speed: 'fast' } } : a));
     r.costUsd = Math.round(costOf(r.model, r.usage, true) * 10_000) / 10_000;
   }
+  // A stream the client closed: its 200 head went out and no error followed, so the request ends canceled with the
+  // usage it had reached. One drawn row takes it, so no count another view draws moves: a single-attempt stream off
+  // the laptop key whose captures the drawer checks read, past Observe's 30-minute ring, and none of the rows above.
+  const canceled = rows.find((r) => r !== story && r.keyId !== 'laptop' && r.kind === 'inference' && r.transport === 'sse' && r.outcome === 'succeeded' && r.attempts.length === 1 && Date.parse(r.at) < NOW - HOUR);
+  if (canceled) {
+    canceled.outcome = 'canceled';
+    canceled.attempts = canceled.attempts.map((a) => ({ ...a, outcome: 'canceled' as const }));
+  }
   return rows;
 }
 
