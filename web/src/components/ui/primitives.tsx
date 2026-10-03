@@ -381,7 +381,8 @@ function DialogGroupPanel({ chosen, group, on, register, turnOn }: { chosen: str
       <ExpertGroup.Provider value={registry}>{group.body}</ExpertGroup.Provider>
       {count > 0 && (
         <p className="field__hint dialog-group__more">
-          {count === 1 ? '1 more setting in the' : `${count} more settings in the`}
+          {/* The trailing space keeps the button's focus ring clear of the last word. */}
+          {count === 1 ? '1 more setting in the ' : `${count} more settings in the `}
           <button
             type="button"
             className="link-btn dialog-group__more-link"
@@ -429,7 +430,7 @@ export function GroupedDialog({
   hold?: string | null;
   /**
    * The group the page opens the dialog on from its address; focus moves to that group's heading once the page's
-   * reset has chosen it. Null (Edit, Create) leaves focus where the browser put it, so a field's autoFocus still wins.
+   * reset has chosen it. Null (Edit, Create) leaves focus where the browser's dialog focusing put it.
    */
   initialGroup?: string | null;
   /** The rail, a hint link and Go to call it; the page stores the id. */
@@ -488,8 +489,7 @@ export function GroupedDialog({
   // to, its refused control, and for the group the address named: the page's reset chooses that group after this
   // effect has run, so the choice waits here until `chosen` matches it. A group the mode hid mounts its section only in
   // the render after the mode turns on, so the choice also waits for the group to be shown, even when the page already
-  // holds it. A group the page sets itself on open leaves focus where the browser put it, so a field's autoFocus still
-  // wins.
+  // holds it. A group the page sets itself on open leaves focus where the browser's dialog focusing put it.
   useEffect(() => {
     if (!open) {
       wasOpen.current = false;

@@ -93,8 +93,8 @@ the fixture that lacks one), and back it in `MockApi` from a story row that spre
   the ring filtered to the span.
 - The attempts column in the request log and in observe is a trail of badges, one per attempt, reading "account
   status" in the order the router tried them.
-- Long forms open as a sectioned dialog: a section rail beside one scrolling body, with the rail tracking the scroll
-  position. The pool and key dialogs use it; small dialogs keep the plain `Dialog`.
+- Long forms open as a sectioned dialog: a rail of groups beside one group's body, one group shown at a time. The pool
+  and key dialogs use it; small dialogs keep the plain `Dialog`.
 - A key always belongs to a pool: the key dialog preselects one and locks it when opened from a pool, and the pool
   dialog's key rows offer "Move to…" and "Revoke" rather than a plain remove.
 - Analytics percentiles are read from per-hour latency histograms (64 log-spaced buckets, `src/lib/histogram.ts`)

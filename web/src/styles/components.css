@@ -31,7 +31,9 @@
   height: 36px;
 }
 
-/* A font a few pixels wider runs past the sidebar's padding rather than wrapping the name under the mark. */
+/* On DejaVu Sans Bold, about the widest system font a browser picks, the name ends 6.7 px inside the row. A wider font
+   then shrinks the mark's box to the 26 px logo (10 px more) and runs into the sidebar's 12 px padding; the name never
+   wraps under the mark, and it reaches the border only on a font about 29 px wider. */
 .brand__name {
   font-size: 17px;
   font-weight: 600;
@@ -1571,6 +1573,13 @@ textarea.input {
   /* A strip has no indent and no hairline, and a parent is the one way to reach its run, so it answers the pointer. */
   .dialog-rail__run.has-parent .dialog-rail__group {
     padding: 4px 10px;
+  }
+
+  /* A strip's entry shrinks to its words, so a dot kept in its right padding would sit 2 px after them. */
+  .dialog-rail__run.has-parent .dialog-rail__dot {
+    position: static;
+    margin-left: 6px;
+    transform: none;
   }
 
   .dialog-rail__run + .dialog-rail__run::before {

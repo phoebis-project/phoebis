@@ -73,11 +73,12 @@ export function KeysPage() {
   const poolList = useMemo(() => pools.data ?? [], [pools.data]);
   const poolById = useMemo(() => new Map(poolList.map((p) => [p.id, p])), [poolList]);
   // The pool filter is the address: the select reads `?pool=<id>` and writes it back, so a reload keeps the filter and
-  // the pool card's key count link lands on it. An id no pool carries reads as All pools and leaves the address once
-  // the pools have loaded; while a dialog query is still in the address, its own effect goes first. All pools is the
-  // empty string, which no pool id can be, since `all` is a real pool's id.
+  // the pool card's key count link lands on it. Until the pools are read the address filters as written, so the rows
+  // match it during the read and after a failed one. An id no pool carries reads as All pools and leaves the address
+  // once the pools have loaded; while a dialog query is still in the address, its own effect goes first. All pools is
+  // the empty string, which no pool id can be, since `all` is a real pool's id.
   const poolParam = useMemo(() => new URLSearchParams(location.search).get('pool'), [location.search]);
-  const poolFilter = poolParam !== null && poolById.has(poolParam) ? poolParam : '';
+  const poolFilter = poolParam !== null && (pools.data === null || poolById.has(poolParam)) ? poolParam : '';
   const writePool = (id: string) => {
     const params = new URLSearchParams(location.search);
     if (id === '') params.delete('pool');

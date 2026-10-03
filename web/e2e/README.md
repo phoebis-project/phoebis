@@ -20,10 +20,11 @@ legend's model unlisted entry, the placement and budget tables, the speed filter
 (each Analytics check opens the tab it reads and returns to Traffic), the tab strip docked under the filter bar at the
 end of the Latency tab, the fast lane, the request drawer, which opens once the request list's shot is taken, the
 subscription end editor, the catalog popup, the key dialog's cap field and selects, the Pool select against the Status
-select, the Sessions lead and its disclosure (the head's height closed and open, the button on the sentence's last line
-or flush left on the next), the cost reference, the agent lines, the fork link, which is
-followed once the session list's shot is taken). A check that opens an editor, a dialog or a row closes it again before
-the view's shot.
+select, the Sessions lead and its disclosure at 1280 by 800 and 1440 by 900 (the head's height closed and open, the
+button on the sentence's last line or flush left on the next, the opened paragraph 6 px under the lead, Cost reference
+one line at the head's top right), the cost reference, the agent lines, the fork link, which
+is followed once the session list's shot is taken). A check that opens an editor, a dialog or a row closes it again
+before the view's shot.
 The script exits non-zero with the list of failures when any of that does not hold.
 
 The screenshot directory has to lie outside the repository, which the script enforces against every worktree `git

@@ -205,7 +205,8 @@ export function PoolsPage() {
     ? {
         pools: pools.data.length,
         accounts: new Set(pools.data.flatMap((p) => p.members.map((m) => m.accountId))).size,
-        keys: (keys.data ?? []).length,
+        // Null until the key list is read, so the tile waits as the cards' Keys tiles do rather than reading 0.
+        keys: keys.data ? keys.data.length : null,
         requests: pools.data.reduce((s, p) => s + p.requests24h, 0),
         cost: pools.data.reduce((s, p) => s + p.cost24h, 0),
       }
@@ -224,7 +225,7 @@ export function PoolsPage() {
       <div className="stat-grid stat-grid--5">
         <Tile label="Pools" value={totals ? fmtInt(totals.pools) : null} />
         <Tile label="Accounts in pools" value={totals ? fmtInt(totals.accounts) : null} />
-        <Tile label="Keys" value={totals ? fmtInt(totals.keys) : null} />
+        <Tile label="Keys" value={totals && totals.keys !== null ? fmtInt(totals.keys) : keys.error ? <span className="muted">n/a</span> : null} />
         <Tile label="Requests, 24h" value={totals ? fmtInt(totals.requests) : null} />
         <Tile label="Cost, 24h" value={totals ? fmtUsd(totals.cost) : null} />
       </div>
@@ -294,7 +295,7 @@ export function PoolsPage() {
   );
 }
 
-function Tile({ label, value }: { label: string; value: string | null }) {
+function Tile({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div className="stat stat--compact">
       <span className="stat__label">{label}</span>
@@ -586,16 +587,24 @@ function PoolCard({
                 );
               }),
             )}
-            {unlisted.map((m) => (
-              <tr key={m.accountId}>
-                <td className="pool__prio num">P{m.priority}</td>
-                <td className="mono">{m.accountId}</td>
-                <td className="serving__standing">
-                  <Eligibility verdict={m.eligible} account={undefined} now={now} periodEnd={m.budgetUntil} />
-                </td>
-                <td className="right num">{pinsOf(m.accountId) === 0 ? <span className="muted">0</span> : pinsOf(m.accountId)}</td>
-              </tr>
-            ))}
+            {unlisted.map((m) => {
+              const whyId = `${standingId}-${m.accountId}`;
+              return (
+                <tr key={m.accountId}>
+                  <td className="pool__prio num">P{m.priority}</td>
+                  <td className="mono">{m.accountId}</td>
+                  <td className="serving__standing" aria-describedby={whyId}>
+                    <span className="chips">
+                      <Eligibility verdict={m.eligible} account={undefined} now={now} periodEnd={m.budgetUntil} />
+                    </span>
+                    <span id={whyId} className="sr-only">
+                      {`${m.accountId}: not a known account`}
+                    </span>
+                  </td>
+                  <td className="right num">{pinsOf(m.accountId) === 0 ? <span className="muted">0</span> : pinsOf(m.accountId)}</td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>

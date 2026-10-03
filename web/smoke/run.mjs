@@ -2146,15 +2146,27 @@ m.unmount();
     const dd = [...c.querySelectorAll('.pool__stats > div')].find((d) => d.querySelector('dt')?.textContent?.trim() === 'Keys')?.querySelector('dd');
     return dd ? [dd.textContent?.trim(), dd.querySelector('.muted')?.textContent?.trim() ?? null] : ['no tile'];
   });
+  const headTile = (page) => {
+    const value = [...page.container.querySelectorAll('.stat-grid .stat')].find((t) => t.querySelector('.stat__label')?.textContent === 'Keys')?.querySelector('.stat__value');
+    return value ? [value.textContent?.trim(), value.querySelector('.skeleton') !== null, value.querySelector('.muted')?.textContent?.trim() ?? null] : ['no tile'];
+  };
+  const total = (await api.listKeys()).length;
   const held = deferNextCall('listKeys');
   let p = await mount('/pools');
   const waiting = lineOf(p);
   const waitingTiles = tileOf(p);
+  const waitingHead = headTile(p);
   held.release();
   held.restore();
   await p.settle(300);
   const loaded = lineOf(p);
   const loadedTiles = tileOf(p);
+  const loadedHead = headTile(p);
+  results.push({
+    name: "/pools the page's Keys tile waits while the key list loads, then counts every key",
+    ok: total > 0 && JSON.stringify(waitingHead) === '["",true,null]' && JSON.stringify(loadedHead) === JSON.stringify([String(total), false, null]),
+    missing: [JSON.stringify(waitingHead), JSON.stringify(loadedHead), `${total} keys`],
+  });
   results.push({
     name: '/pools the key count line and the Keys tile draw nothing while the key list loads, then the count',
     ok:
@@ -2172,6 +2184,8 @@ m.unmount();
   p = await mount('/pools');
   const failed = lineOf(p);
   const failedTiles = tileOf(p);
+  const failedHead = headTile(p);
+  results.push({ name: "/pools a failed key read leaves the page's Keys tile at n/a in the muted ink, never 0", ok: JSON.stringify(failedHead) === '["n/a",false,"n/a"]', missing: [JSON.stringify(failedHead)] });
   results.push({
     name: '/pools a failed key read says the keys are unavailable in the muted ink, never "No keys yet", and the Keys tile reads n/a',
     ok:
@@ -2182,6 +2196,30 @@ m.unmount();
       !p.text().includes('No keys yet') &&
       p.container.querySelector('.pool__keys--none') === null,
     missing: [...failed, ...failedTiles].map((l) => JSON.stringify(l)),
+  });
+  p.unmount();
+}
+
+// A member the accounts list does not carry still gets a row after the tiers, its verdict in the chips the listed rows
+// use and a sentence saying why selection passes it over.
+{
+  const listAccounts = api.listAccounts;
+  api.listAccounts = () => listAccounts.call(api).then((list) => list.filter((a) => a.id !== 'mail'));
+  let p;
+  try {
+    p = await mount('/pools');
+  } finally {
+    api.listAccounts = listAccounts;
+  }
+  const all = [...p.container.querySelectorAll('.pool')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'all');
+  const row = [...(all?.querySelectorAll('.serving tbody tr') ?? [])].find((tr) => tr.children[1]?.textContent?.trim() === 'mail' && tr.children[1].querySelector('a') === null);
+  const td = row?.children[2];
+  const chips = td?.querySelector(':scope > .chips');
+  const why = document.getElementById(td?.getAttribute('aria-describedby') ?? '')?.textContent ?? '';
+  results.push({
+    name: '/pools a member the accounts list lacks reads its verdict in chips and says it is not a known account',
+    ok: !!row && !!chips && chips.querySelectorAll('.badge').length > 0 && td.querySelectorAll('.badge').length === chips.querySelectorAll('.badge').length && why === 'mail: not a known account',
+    missing: [row ? 'row' : 'no row', chips ? 'chips' : 'no chips', why],
   });
   p.unmount();
 }
@@ -2333,7 +2371,7 @@ m.unmount();
   let identity = group(dialogOf(x), 'Identity');
   const members = group(dialogOf(x), 'Members');
   const lineReads = (section) =>
-    (line(section)?.firstChild?.textContent ?? '') === '1 more setting in the' &&
+    (line(section)?.firstChild?.textContent ?? '') === '1 more setting in the ' &&
     line(section)?.querySelector('button.link-btn')?.textContent?.trim() === 'expert view' &&
     line(section)?.querySelector('button.link-btn')?.getAttribute('aria-label') === 'Turn on the expert view';
   results.push({
@@ -2460,6 +2498,21 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
   k.unmount();
   k = await mount('/keys?pool=nope');
   results.push({ name: '/keys?pool=nope leaves All pools and clears the address', ok: select(k)?.value === '' && poolCells(k).length === stored.length && k.location().search === '', missing: [select(k)?.value ?? 'no select', `${poolCells(k).length} of ${stored.length}`, k.location().search] });
+  k.unmount();
+  // Until the pools land the page cannot tell a known id from an unknown one, so it takes the address at its word: the
+  // key count link lands on the pool's rows from the first render, never on every key.
+  const heldPools = deferNextCall('listPools');
+  k = await mount('/keys?pool=codex');
+  const waiting = poolCells(k);
+  const waitingSearch = k.location().search;
+  heldPools.release();
+  heldPools.restore();
+  await k.settle(300);
+  results.push({
+    name: "/keys?pool=codex lists the pool's keys alone while the pools are still loading",
+    ok: narrows('codex') && heldPools.calls.length > 0 && waiting.length === inPool('codex') && waiting.every((c) => c === 'codex') && waitingSearch === '?pool=codex' && poolCells(k).length === inPool('codex') && select(k)?.value === 'codex' && k.location().search === '?pool=codex',
+    missing: [`expected ${inPool('codex')} of ${stored.length}`, `held ${heldPools.calls.length}`, `loading ${waiting.join(',')}`, waitingSearch, `loaded ${poolCells(k).join(',')}`, select(k)?.value ?? 'no select', k.location().search],
+  });
   k.unmount();
   k = await mount('/keys?pool=codex&edit=batch&group=models');
   await k.settle(200);
@@ -4414,7 +4467,9 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
         await m.settle(700);
         pool?.querySelector('.mselect__trigger')?.click();
         await m.settle(60);
-        const shown = await optionsOf('Key');
+        const lists = ['Account', 'Key', 'Model', 'Pool'];
+        const shown = {};
+        for (const label of lists) shown[label] = await optionsOf(label);
         const breakdown = api.getAnalyticsBreakdown;
         let open = () => {};
         const gate = new Promise((resolve) => {
@@ -4423,16 +4478,26 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
         api.getAnalyticsBreakdown = (...args) => gate.then(() => breakdown.apply(api, args));
         [...m.container.querySelectorAll('[aria-label="Range"] button')].find((b) => b.textContent?.trim() === '7d')?.click();
         await m.settle(300);
-        trigger('Key')?.querySelector('.mselect__trigger')?.click();
-        await m.settle(60);
-        const during = listed('Key');
-        const empty = trigger('Key')?.querySelector('.mselect__empty') !== null;
-        trigger('Key')?.querySelector('.mselect__trigger')?.click();
-        await m.settle(60);
+        // A click that missed would send no read out, and every list would pass for keeping what it never lost.
+        const range = m.container.querySelector('[aria-label="Range"] button[aria-pressed="true"]')?.textContent?.trim() ?? '';
+        const during = {};
+        const empty = {};
+        for (const label of lists) {
+          trigger(label)?.querySelector('.mselect__trigger')?.click();
+          await m.settle(60);
+          during[label] = listed(label);
+          empty[label] = trigger(label)?.querySelector('.mselect__empty') !== null;
+          trigger(label)?.querySelector('.mselect__trigger')?.click();
+          await m.settle(60);
+        }
         open();
         await m.settle(300);
         api.getAnalyticsBreakdown = breakdown;
-        results.push({ name: '/analytics a range change with a filter set keeps each list while its read is out', ok: poolName !== '' && shown.length > 1 && JSON.stringify(during) === JSON.stringify(shown) && !empty, missing: [`pool ${poolName}`, `keys ${shown.join(',')}`, `during ${during.join(',')}`, `no matches ${empty}`] });
+        results.push({
+          name: '/analytics a range change with a filter set keeps each list while its read is out',
+          ok: poolName !== '' && range === '7d' && shown.Key.length > 1 && lists.every((label) => shown[label].length > 0 && JSON.stringify(during[label]) === JSON.stringify(shown[label]) && !empty[label]),
+          missing: [`pool ${poolName}`, `range ${range}`, ...lists.flatMap((label) => [`${label} ${shown[label].join(',')}`, `${label} during ${during[label].join(',')}`, `${label} no matches ${empty[label]}`])],
+        });
       }
       m.unmount();
     }

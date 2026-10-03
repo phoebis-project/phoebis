@@ -943,8 +943,8 @@ const disabledIn = (dialog, label, selectors) =>
  * two columns, every label beside its switch or above its control, every control and hint as wide as its field, every
  * dependent drawn and disabled while its switch is off or its preset is not Custom, the warnings at their ends of their
  * groups, no clipped select, nothing pushed apart or past the frame, and the mono Name input as tall as the Status
- * select beside it. The strips draw their groups without the column rail's indent and hairline, and a parent there
- * answers the pointer.
+ * select beside it. The strips draw their groups without the column rail's indent and hairline, a parent there
+ * answers the pointer, and a refusal dot follows its entry's words by 6 px on their line.
  */
 async function poolDialogGeometry(theme) {
   const sayIn = (group, what) => failures.push(`${theme} /pools dialog${group ? ` ${group}` : ''}: ${what}`);
@@ -1110,6 +1110,24 @@ async function poolDialogGeometry(theme) {
     await page.mouse.move(0, 0);
     measurements.push(`${theme} /pools dialog at 720 px Routing parent ${JSON.stringify({ ...hover, rest })}`);
     if (hover.routing === rest || hover.routing !== hover.chosen) sayIn(null, `at 720 px the Routing parent reads ${hover.routing} under the pointer and ${rest} at rest, not the chosen parent's ${hover.chosen}`);
+    // A strip's entry shrinks to its words, so its refusal dot follows them as on the flat rail rather than sitting in
+    // the right padding. An empty name refuses Identity, which dots Identity and its parent; Escape below discards it.
+    await dialog.locator('section.dialog-group[aria-label="Identity"] input[placeholder="research"]').fill('');
+    await settle();
+    const dots = await dialog.evaluate((el) =>
+      [...el.querySelectorAll('.dialog-rail__parent[data-parent="Pool"], .dialog-rail__group[data-group="identity"]')].map((entry) => {
+        const dot = entry.querySelector('.dialog-rail__dot')?.getBoundingClientRect();
+        const words = entry.querySelector('.dialog-rail__dot')?.previousElementSibling?.getBoundingClientRect();
+        const label = entry.querySelector('.dialog-rail__label')?.getBoundingClientRect();
+        return {
+          after: dot && words ? +(dot.left - words.right).toFixed(2) : null,
+          entry: entry.dataset.parent ?? entry.dataset.group,
+          onLine: !!dot && !!label && dot.top >= label.top - 0.5 && dot.bottom <= label.bottom + 0.5,
+        };
+      }),
+    );
+    measurements.push(`${theme} /pools dialog at 720 px refusal dots ${JSON.stringify(dots)}`);
+    if (dots.length !== 2 || dots.some((d) => d.after === null || Math.abs(d.after - 6) > 0.5 || !d.onLine)) sayIn(null, `at 720 px the refusal dots read ${JSON.stringify(dots)}, not the Pool parent's and Identity's each 6 px after its words on their line`);
     await close();
   } catch (error) {
     sayIn(null, `at 720 px: ${error instanceof Error ? error.message : String(error)}`);
