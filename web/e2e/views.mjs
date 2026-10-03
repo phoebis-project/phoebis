@@ -2015,10 +2015,6 @@ async function trafficCards(theme) {
   }
 }
 
-/**
- * The tab strip docks under the sticky filter bar: on Latency, the longest section, scrolled to the page's end, the
- * strip's top sits on the filter bar's bottom, the height the page measured from the bar.
- */
 /** The Analytics tab strip in the 720 px strip and at 400 px: every tab stays within the viewport's width. */
 async function analyticsTabs(theme) {
   for (const width of [720, 400]) {
@@ -2040,6 +2036,10 @@ async function analyticsTabs(theme) {
   await settle();
 }
 
+/**
+ * The tab strip docks under the sticky filter bar: on Latency, the longest section, scrolled to the page's end, the
+ * strip's top sits on the filter bar's bottom, the height the page measured from the bar.
+ */
 async function stickyStrip(theme) {
   try {
     if (!(await tabTo(theme, 'Latency'))) return;

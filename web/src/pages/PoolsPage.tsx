@@ -955,7 +955,7 @@ export function PoolDialog({
   // Keys created before the pool is saved use the id the pool will get from its name.
   const draftPoolId = form.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-') || 'new';
   const draftName = form.name.trim() || 'new pool';
-  // Memoized so the key dialog's reset effect does not fire on every keystroke in this form.
+  // Memoized so a keystroke in this form hands the key dialog the same list, sparing its first-pool fill a run.
   const draftCaptureHours = form.capture ? form.captureHours : 0;
   const keyDialogPools = useMemo(
     () =>
