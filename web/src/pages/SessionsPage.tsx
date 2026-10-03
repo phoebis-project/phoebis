@@ -130,11 +130,13 @@ function stateSummary(agents: KeepaliveRecipe[]): string {
 
 export function SessionsPage() {
   // The router keeps a session while it is used, so the list is read again rather than aged on this clock alone:
-  // a session still sending requests would otherwise drop off once its first-read activity crossed the expiry.
+  // a session still sending requests would otherwise drop off once its first-read activity crossed the expiry. The
+  // overview reads a week of rollups for tiles that move slowly, so it is read once a minute.
   const tick = useNow(15_000);
+  const overviewTick = useNow(60_000);
   const accounts = useAsync(() => api.listAccounts(), []);
   const keys = useAsync(() => api.listKeys(), []);
-  const overview = useAsync(() => api.getKeepaliveOverview(), [tick]);
+  const overview = useAsync(() => api.getKeepaliveOverview(), [overviewTick]);
   const pools = useAsync(() => api.listPools(), []);
   const recipes = useAsync(() => api.listKeepaliveRecipes(), [tick]);
   const sessions = useAsync(() => api.listSessions(), [tick]);
@@ -163,9 +165,10 @@ export function SessionsPage() {
     [sessionData, recipeData, accounts.data, keys.data, pools.data, expireAfterSeconds, now],
   );
   const o = overview.data;
-  // The overview's `sessions` counts every row, recipe or not, so the recipe count is taken over the rows shown.
+  // Counted over the rows shown, so the note agrees with the table under it and the count beside it.
+  const withCompanion = rows ? rows.filter((r) => r.session.companion === 'reporting' || r.session.companion === 'silent').length : null;
   const withRecipe = rows ? rows.filter((r) => r.session.keepalive.state !== null).length : null;
-  const sessionsNote = o && withRecipe !== null ? `${fmtInt(o.sessionsWithCompanion)} with a companion, ${fmtInt(withRecipe)} with a recipe` : null;
+  const sessionsNote = withCompanion !== null && withRecipe !== null ? `${fmtInt(withCompanion)} with a companion, ${fmtInt(withRecipe)} with a recipe` : null;
   const onConfirmRelease = () => {
     if (!pending) return;
     void api.releaseSession(pending.session.keyId, pending.session.sessionId).then(

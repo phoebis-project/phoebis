@@ -966,8 +966,6 @@ export interface KeepaliveOverview {
   expiredBetweenTurns24h: number;
   netSaved7dUsd: number;
   probes24h: { failed: number; migrated: number; ok: number; skipped: number };
-  sessions: number;
-  sessionsWithCompanion: number;
 }
 
 export type AlertKind =

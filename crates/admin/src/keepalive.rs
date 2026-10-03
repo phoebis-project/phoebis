@@ -60,22 +60,12 @@ pub(crate) async fn overview(State(state): State<Arc<AdminState>>) -> Response {
             }
         }
     }
-    // Shared with `sessions_with_companion`: a row with no engine entry (a pin or ledger row alone) carries
-    // `"none"` and is excluded there but still counted here.
-    let session_rows = crate::sessions::rows(&state).await.unwrap_or_default();
-    let sessions = session_rows.len();
-    let sessions_with_companion = session_rows
-        .iter()
-        .filter(|r| matches!(r["companion"].as_str(), Some("reporting") | Some("silent")))
-        .count();
     Json(json!({
         "agents": state.keepalive.agent_counts(),
         "cost_today": cost_today,
         "expired_between_turns_24h": expired,
         "net_saved_7d_usd": net,
         "probes_24h": probes,
-        "sessions": sessions,
-        "sessions_with_companion": sessions_with_companion,
     }))
     .into_response()
 }

@@ -287,8 +287,6 @@ const EXPIRED_BETWEEN_TURNS_24H = REQUESTS.filter((r) => r.status === 200 && r.u
 
 export const KEEPALIVE_OVERVIEW: KeepaliveOverview = {
   ...KEEPALIVE_OVERVIEW_SAMPLE,
-  // Every session row, as the route counts them; the page counts the ones holding a recipe itself.
-  sessions: SESSIONS.length,
   agents: {
     busy: WARMED.filter((p) => p.keepalive.state === 'busy').reduce((n, p) => n + p.agents, 0),
     idle: WARMED.filter((p) => p.keepalive.state === 'idle').reduce((n, p) => n + p.agents, 0),
@@ -304,7 +302,6 @@ export const KEEPALIVE_OVERVIEW: KeepaliveOverview = {
     { poolId: 'codex', usd: 0, capUsd: null },
   ],
   netSaved7dUsd: 41.8,
-  sessionsWithCompanion: SESSIONS.filter((pin) => pin.companion !== 'none').length,
 };
 
 export const ALERT_RULES: AlertRule[] = [

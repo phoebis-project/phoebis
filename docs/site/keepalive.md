@@ -295,7 +295,7 @@ against its cap. Its table lists one row per session (key, session, model, accou
 last request, agents, companion, cache warming, next probe), and opening a row expands into the recipe each of its
 agents carries. A session's menu offers Release, and, once it has ledgered traffic, "View in analytics" and "View in
 observe"; the analytics view opens on the requests of the key holder the row belongs to. The view reads its sessions
-again every 15 seconds, so a session that keeps sending requests stays on it.
+again every 15 seconds, so a session that keeps sending requests stays on it, and its tiles once a minute.
 
 A session whose first request branched from another
 conversation carries a `fork at 3` badge beside its id, 3 being the depth where the two part; following the badge

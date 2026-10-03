@@ -5136,9 +5136,7 @@ export const FIXTURES: Record<string, Fixture> = {
         "migrated": 0,
         "ok": 0,
         "skipped": 0
-      },
-      "sessions": 5,
-      "sessions_with_companion": 1
+      }
     }
   },
   "keepalive_recipes": {

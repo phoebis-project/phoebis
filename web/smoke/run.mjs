@@ -5737,6 +5737,26 @@ m = await mount('/keepalive');
 results.push({ name: '/keepalive redirects to /sessions', ok: m.text().includes('One row per session'), missing: [m.text().slice(0, 120)] });
 m.unmount();
 
+{
+  // The tiles' figures move slowly and the sessions do not, so the page reads the overview once a minute and the list
+  // every 15 seconds, which keeps a session that is still sending requests on it.
+  const page = await mount('/sessions', { now: CLOCK_ORIGIN });
+  const overview = countCalls('getKeepaliveOverview');
+  const listed = countCalls('listSessions');
+  for (let i = 0; i < 4; i += 1) {
+    tick(15_000);
+    await page.settle();
+  }
+  overview.restore();
+  listed.restore();
+  results.push({
+    name: '/sessions reads the overview once a minute and the sessions every 15 seconds',
+    ok: overview.calls.length === 1 && listed.calls.length === 4,
+    missing: [`getKeepaliveOverview ${overview.calls.length}`, `listSessions ${listed.calls.length}`],
+  });
+  page.unmount();
+}
+
 m = await mount('/sessions');
 expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agents', 'busy', 'idle', 'parked', 'Cache probes, 24h', 'ok (', 'migrated', 'skipped', 'failed', 'Expired between turns, 24h', 'misses cache warming exists to prevent', 'Probe cost today', 'of $4.00', 'uncapped', 'Net saved, 7d', 'Cost reference', 'Key', 'Session', 'Model', 'Account', 'Last used', 'expires in', 'Requests', 'Last request', 'Agents', 'Companion', 'Cache warming', 'Next probe', 'Expand all', 'epoch 2', 'reporting', 'silent', 'since ', 'none', 'no recipe', 'not scheduled', 'claude-fable-5-1']);
 {

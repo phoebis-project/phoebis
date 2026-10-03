@@ -225,8 +225,6 @@ const EMPTY_KEEPALIVE_OVERVIEW: KeepaliveOverview = {
   expiredBetweenTurns24h: 0,
   netSaved7dUsd: 0,
   probes24h: { failed: 0, migrated: 0, ok: 0, skipped: 0 },
-  sessions: 0,
-  sessionsWithCompanion: 0,
 };
 
 type WireMetric = { quality: string; series: number[]; value: number | null };

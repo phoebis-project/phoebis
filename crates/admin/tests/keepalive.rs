@@ -461,7 +461,7 @@ async fn the_sessions_view_carries_the_companion_and_the_recipes_and_release_dis
         (row["companion"].as_str(), row["companion_since"].as_i64()),
         (Some("silent"), Some(now))
     );
-    // The overview counts what the view shows.
+    // The view counts its sessions over the rows it lists, so the overview answers the tiles' figures alone.
     let overview = json(get(&parts.app, "/admin/keepalive/overview", Some(&cookie)).await).await;
     assert_eq!(
         overview
@@ -475,20 +475,16 @@ async fn the_sessions_view_carries_the_companion_and_the_recipes_and_release_dis
             "cost_today",
             "expired_between_turns_24h",
             "net_saved_7d_usd",
-            "probes_24h",
-            "sessions",
-            "sessions_with_companion"
+            "probes_24h"
         ]
     );
     assert_eq!(
         (
             overview["agents"]["busy"].as_u64(),
-            overview["sessions"].as_u64(),
-            overview["sessions_with_companion"].as_u64(),
             overview["cost_today"][0]["pool_id"].as_str(),
             overview["cost_today"][0]["cap_usd"].is_null()
         ),
-        (Some(1), Some(1), Some(1), Some("main"), true)
+        (Some(1), Some("main"), true)
     );
     // Release discards the recipes; with no pin the router releases nothing, and the route still answers 204.
     let released = post(
@@ -825,7 +821,7 @@ fn every_engine_reason_maps_onto_the_view_vocabulary() {
 }
 
 /// A `session_end` leaves the session listed, as the tombstone the lifecycle protocol needs, but nothing is
-/// reporting for it any more: the view says so, and the overview leaves it out of the companion count.
+/// reporting for it any more: the view says so, which keeps it out of the console's companion count.
 #[tokio::test]
 async fn an_ended_session_is_listed_without_a_companion() {
     let parts = common::admin_parts_full().await;
@@ -853,13 +849,15 @@ async fn an_ended_session_is_listed_without_a_companion() {
             start(1, "session_start"),
         )
         .unwrap();
-    let overview = json(get(&parts.app, "/admin/keepalive/overview", Some(&cookie)).await).await;
+    let listed = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
     assert_eq!(
-        (
-            overview["sessions"].as_u64(),
-            overview["sessions_with_companion"].as_u64()
-        ),
-        (Some(1), Some(1)),
+        listed["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| (r["session_id"].as_str(), r["companion"].as_str()))
+            .collect::<Vec<_>>(),
+        [(Some("s1"), Some("reporting"))],
         "the registered session is reporting"
     );
     parts
@@ -882,13 +880,10 @@ async fn an_ended_session_is_listed_without_a_companion() {
         (Some("none"), Some(common::NOW)),
         "the end time is when the companion stopped reporting"
     );
-    let overview = json(get(&parts.app, "/admin/keepalive/overview", Some(&cookie)).await).await;
     assert_eq!(
-        (
-            overview["sessions"].as_u64(),
-            overview["sessions_with_companion"].as_u64()
-        ),
-        (Some(1), Some(0))
+        listed["sessions"].as_array().map(Vec::len),
+        Some(1),
+        "the ended session is the one row"
     );
 }
 
