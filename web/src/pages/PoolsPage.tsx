@@ -12,6 +12,7 @@ import { AttentionRows } from '@/components/AttentionRows';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { ChartTooltip, Legend } from '@/components/charts/Tooltip';
 import { PatternEditor, useCatalogSuggestions } from '@/components/PatternEditor';
+import { AttentionLine } from '@/components/ui/AttentionLine';
 import { CostReferenceLink } from '@/components/ui/CostReference';
 import { UtilizationBar } from '@/components/UtilizationBar';
 import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
@@ -250,6 +251,8 @@ export function PoolsPage() {
         <Tile label="Requests, 24h" value={totals ? fmtInt(totals.requests) : null} />
         <Tile label="Cost, 24h" value={totals ? fmtUsd(totals.cost) : null} />
       </div>
+      {/* A failed read leaves the cards on the last answer's items, or none before the first; this line says so. */}
+      {attention.error !== null && <AttentionLine items={attention.items} error={attention.error} loadedAt={attention.loadedAt} now={now} />}
       <div className="pool-grid">
         {pools.data
           ? pools.data.map((p) => (

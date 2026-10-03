@@ -237,13 +237,23 @@ pub fn usage_over(rig: &Rig, up: &FakeUpstream) -> Arc<UsageService> {
     ))
 }
 
-/// A request's observation, which carries the key and pool its completion does not; `None` for a refusal published
-/// before the key was read.
+/// A client inference's observation, which carries the key and pool its completion does not; `None` for a refusal
+/// published before the key was read.
 pub fn observed(id: &str, key: Option<&str>, pool: &str) -> Event {
+    observed_as(id, key, pool, Origin::Client, RequestKind::Inference)
+}
+
+pub fn observed_as(
+    id: &str,
+    key: Option<&str>,
+    pool: &str,
+    origin: Origin,
+    kind: RequestKind,
+) -> Event {
     Event::RequestObserved(RequestObserved {
         request_id: id.into(),
-        origin: Origin::Client,
-        kind: RequestKind::Inference,
+        origin,
+        kind,
         key_id: key.map(String::from),
         key_generation: 0,
         pool_id: Some(pool.into()),

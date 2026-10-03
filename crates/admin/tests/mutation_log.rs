@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 
 use axum::body::Body;
 use axum::http::Response;
-use common::{admin_app, delete, get, json, login, patch, post, put};
+use common::{admin_app, admin_parts, delete, get, json, login, patch, post, put};
 
 /// The formatter's output, kept in memory so the test reads back exactly what the host's journal would hold.
 #[derive(Clone, Default)]
@@ -144,4 +144,61 @@ async fn every_admin_mutation_writes_one_line_with_its_route_entity_and_session_
     ] {
         assert!(!text.contains(needle), "the log holds {what}: {text}");
     }
+}
+
+/// A create whose row committed but whose answer is a refusal (here the registry reload failing) still names the row
+/// it left behind, so the trail never reads `id=-` for an entity that exists.
+#[tokio::test]
+async fn a_create_refused_after_its_row_committed_logs_the_created_id() {
+    let captured = Captured::default();
+    let subscriber = tracing_subscriber::fmt()
+        .with_ansi(false)
+        .with_writer(captured.clone())
+        .finish();
+    let _guard = tracing::subscriber::set_default(subscriber);
+    let (app, _up, store, _router) = admin_parts().await;
+
+    let cookie = login(&app, "admin-secret").await;
+    let session = json(get(&app, "/admin/session", Some(&cookie)).await).await["session_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    for (path, body) in [
+        (
+            "/admin/pools",
+            r#"{"id":"main","label":"Main","strategy":"priority"}"#,
+        ),
+        (
+            "/admin/keys",
+            r#"{"id":"desk","label":"Desk","pool_id":"main"}"#,
+        ),
+        (
+            "/admin/accounts",
+            r#"{"id":"spare","kind":"oauth","label":"Spare"}"#,
+        ),
+    ] {
+        store.debug_fail_next_load();
+        let refused = post(&app, path, body, Some(&cookie)).await;
+        assert_eq!(status(&refused), 503, "{path}");
+    }
+    assert!(
+        store.pool("main").unwrap().is_some()
+            && store.api_key("desk").unwrap().is_some()
+            && store.account("spare").unwrap().is_some(),
+        "every row was written before its reload failed"
+    );
+
+    let admitted = format!("credential=session session={session}");
+    assert_eq!(
+        captured.mutations(),
+        vec![
+            "method=POST route=/admin/session status=204 entity=admin_session id=- credential=none"
+                .to_string(),
+            format!("method=POST route=/admin/pools status=503 entity=pool id=main {admitted}"),
+            format!("method=POST route=/admin/keys status=503 entity=key id=desk {admitted}"),
+            format!(
+                "method=POST route=/admin/accounts status=503 entity=account id=spare {admitted}"
+            ),
+        ]
+    );
 }

@@ -94,6 +94,44 @@ const failoverRow = requests.find((r) => r.attempts.length > 1 && r.attempts.som
 }
 
 {
+  // The attention poll is one per page load and keeps its last list through a failed read, so a first read that fails
+  // can only be met here, before any page has read the conditions.
+  const { getAttention } = api;
+  const failing = () => Promise.reject(new Error('the store is unavailable'));
+  api.getAttention = failing;
+  const held = deferNextCall('listPools');
+  const p = await mount('/pools');
+  const line = () => p.container.querySelector('.attention-line');
+  const unavailable = () => line()?.textContent?.trim() === 'Attention unavailable: the store is unavailable' && line()?.nextElementSibling?.classList.contains('pool-grid') === true;
+  const rows = () => JSON.stringify([...p.container.querySelectorAll('.pool')].map((c) => c.querySelectorAll('ul.attention > li.attention__row').length));
+  const loading = [unavailable(), p.container.querySelectorAll('.pool').length];
+  held.release();
+  held.restore();
+  await p.settle(300);
+  results.push({
+    name: '/pools a first attention read that fails draws the unavailable line above the grid, while the pools load and over cards without a badge',
+    ok: loading[0] === true && loading[1] === 0 && unavailable() && rows() === '[0,0,0]',
+    missing: [JSON.stringify(loading), line()?.outerHTML.slice(0, 200) ?? 'no line', rows()],
+  });
+  api.getAttention = getAttention;
+  window.dispatchEvent(new window.Event('focus'));
+  await p.settle(300);
+  const healthy = [line() === null, rows()];
+  api.getAttention = failing;
+  window.dispatchEvent(new window.Event('focus'));
+  await p.settle(300);
+  api.getAttention = getAttention;
+  results.push({
+    name: "/pools a refresh that fails after a read answered draws the unavailable line and the cards keep the last read's badges",
+    ok: healthy[0] === true && healthy[1] !== '[0,0,0]' && unavailable() && rows() === healthy[1],
+    missing: [...healthy.map(String), line()?.outerHTML.slice(0, 200) ?? 'no line', rows()],
+  });
+  window.dispatchEvent(new window.Event('focus'));
+  await p.settle(300);
+  p.unmount();
+}
+
+{
   localStorage.removeItem('phoebis.mockSession');
   const login = await mount('/');
   expect('login screen without a session', login.text(), ['Admin secret', 'Log in']);

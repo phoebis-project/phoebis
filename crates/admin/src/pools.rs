@@ -521,7 +521,18 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
     if let Err(error) = state.store.insert_pool(&row, ACTOR) {
         return store_failure(error);
     }
-    if let Some(writes) = &writes {
+    // The row exists from here on, so every answer, a refusal included, names it to the mutation log.
+    let mut response = publish_created(&state, &row, writes.as_deref()).await;
+    response.extensions_mut().insert(CreatedId(row.id));
+    response
+}
+
+async fn publish_created(
+    state: &AdminState,
+    row: &PoolRow,
+    writes: Option<&[MemberWrite]>,
+) -> Response {
+    if let Some(writes) = writes {
         match state.store.set_pool_members(&row.id, writes, ACTOR) {
             Ok(()) => {}
             Err(StoreError::AccountNotFound(id)) => {
@@ -538,15 +549,11 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
             Err(error) => return store_failure(error),
         }
     }
-    if let Err(refusal) = reload_or_refuse(&state).await {
+    if let Err(refusal) = reload_or_refuse(state).await {
         return refusal;
     }
-    match pool_json(&state, &row).await {
-        Ok(v) => {
-            let mut response = (StatusCode::CREATED, Json(v)).into_response();
-            response.extensions_mut().insert(CreatedId(row.id));
-            response
-        }
+    match pool_json(state, row).await {
+        Ok(v) => (StatusCode::CREATED, Json(v)).into_response(),
         Err(e) => store_failure(e),
     }
 }

@@ -4,7 +4,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use phoebis_bus::{Event, Outcome};
+use phoebis_bus::{Event, Kind as RequestKind, Origin, Outcome};
 use phoebis_ledger::polled;
 use phoebis_oauth::UsageService;
 use phoebis_routing::RouterHandle;
@@ -25,6 +25,16 @@ const IN_FLIGHT_TTL_MS: i64 = 15 * 60 * 1_000;
 
 /// The subject of a drift refusal whose completion names no client version.
 const UNKNOWN_VERSION: &str = "unknown";
+
+/// The subject of a drift refusal whose version does not read as a release, so a malformed or oversized label shares
+/// one series.
+const OTHER_VERSION: &str = "other";
+
+/// The most client versions the drift record holds. The version is the client's own user agent, so without a cap a
+/// caller sending refused stamps under ever new versions would grow the record and the scrape's series without bound.
+const DRIFT_SUBJECTS: usize = 16;
+
+const RELEASE_VERSION_MAX_BYTES: usize = 32;
 
 /// Declared worst first, so the derived order is the ranking: a pool that serves nothing, a client build refused in
 /// every pool, an account that serves nothing until the operator acts, a credential about to lapse, windows that read
@@ -134,9 +144,11 @@ pub(crate) struct ReaderState {
     state_since: HashMap<(Kind, String), i64>,
 }
 
-/// A request's key and pool, which its completion does not carry, held from its observation until then.
+/// A request's key, pool, origin and kind, which its completion does not carry, held from its observation until then.
 struct InFlight {
     key: Option<String>,
+    kind: RequestKind,
+    origin: Origin,
     pool: Option<String>,
     seen_at: i64,
 }
@@ -147,7 +159,7 @@ struct Exhausted {
 }
 
 /// One client version refused for drift since the process started. A cleared version keeps its record, so its series
-/// reads 0 under the same labels instead of vanishing.
+/// reads 0 under the same labels instead of vanishing, until a newer version needs its place.
 struct Drift {
     active: bool,
     /// The key of the newest refused request, which the link opens.
@@ -168,6 +180,8 @@ pub(crate) fn observe(state: &mut ReaderState, event: &Event, now: i64) {
                 o.request_id.clone(),
                 InFlight {
                     key: o.key_id.clone(),
+                    kind: o.kind,
+                    origin: o.origin,
                     pool: o.pool_id.clone(),
                     seen_at: now,
                 },
@@ -202,12 +216,12 @@ pub(crate) fn observe(state: &mut ReaderState, event: &Event, now: i64) {
             }
             // A completion that names no version is filed under one name on both paths, so a refusal without a
             // version clears on a relayed request without one.
-            let version = c
-                .client_version
-                .clone()
-                .unwrap_or_else(|| UNKNOWN_VERSION.into());
+            let version = drift_subject(c.client_version.as_deref());
             if let Some(trigger) = &c.client_drift {
-                let drift = state.drift.entry(version).or_insert_with(|| Drift {
+                if !state.drift.contains_key(version) && state.drift.len() >= DRIFT_SUBJECTS {
+                    evict_drift(&mut state.drift);
+                }
+                let drift = state.drift.entry(version.into()).or_insert_with(|| Drift {
                     active: false,
                     key: None,
                     since: c.finished_at,
@@ -219,15 +233,48 @@ pub(crate) fn observe(state: &mut ReaderState, event: &Event, now: i64) {
                 }
                 drift.key.clone_from(&e.key);
                 drift.trigger.clone_from(trigger);
-            } else if c.outcome == Outcome::Succeeded {
-                // Only a relayed answer says the build is accepted again; a request refused for any other reason
-                // says nothing about its version.
-                if let Some(drift) = state.drift.get_mut(&version) {
+            } else if c.outcome == Outcome::Succeeded
+                && e.origin == Origin::Client
+                && e.kind == RequestKind::Inference
+            {
+                // Only a relayed client inference says the build passes the stamp check again: a count carries no
+                // stamped line, a keepalive request replays a body the router kept rather than the client's next one,
+                // and a request refused for any other reason says nothing about its version.
+                if let Some(drift) = state.drift.get_mut(version) {
                     drift.active = false;
                 }
             }
         }
         Event::AccountSelected(_) | Event::ResponseHead(_) => {}
+    }
+}
+
+/// The drift subject a completion files under: the version when it reads as a release (one to four runs of ASCII
+/// digits joined by single dots, at most 32 bytes), else one fixed subject, since the label is client-controlled.
+fn drift_subject(version: Option<&str>) -> &str {
+    match version {
+        None => UNKNOWN_VERSION,
+        Some(v)
+            if v.len() <= RELEASE_VERSION_MAX_BYTES
+                && v.split('.').count() <= 4
+                && v.split('.')
+                    .all(|run| !run.is_empty() && run.bytes().all(|b| b.is_ascii_digit())) =>
+        {
+            v
+        }
+        Some(_) => OTHER_VERSION,
+    }
+}
+
+/// Makes room for a new version at the cap: the cleared version whose run started first goes, else the holding one
+/// that has held longest, so a version refused now always reads.
+fn evict_drift(drift: &mut HashMap<String, Drift>) {
+    let oldest = drift
+        .iter()
+        .min_by_key(|&(version, d)| (d.active, d.since, version))
+        .map(|(version, _)| version.clone());
+    if let Some(version) = oldest {
+        drift.remove(&version);
     }
 }
 
@@ -335,9 +382,13 @@ pub(crate) fn conditions(
                 account.incarnation,
                 REFRESH_RUN_READ,
             )?;
+            // A commit ends the run, and so does a `superseded` settlement, which exists only because a newer bundle
+            // committed.
             let run: Vec<&ResolvedAttempt> = attempts
                 .iter()
-                .take_while(|a| a.outcome != "committed")
+                .take_while(|a| {
+                    a.outcome != "committed" && a.detail.as_deref() != Some("superseded")
+                })
                 .collect();
             // One failure is a token endpoint having a bad moment; two in a row is a credential that is not coming
             // back on its own.

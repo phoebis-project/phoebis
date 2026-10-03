@@ -279,14 +279,17 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
         }
         Err(error) => return store_failure(error),
     }
-    if let Err(refusal) = reload_or_refuse(&state).await {
-        return refusal;
-    }
-    let (week, lifetime) = totals(&state).await;
-    // A key this route just created has never rotated, so no session can present a retired secret of it.
-    let mut v = key_json(&state.router.snapshot(), &row, &week, &lifetime, 0);
-    v["secret"] = json!(secret);
-    let mut response = (StatusCode::CREATED, Json(v)).into_response();
+    // The row exists from here on, so every answer, a refusal included, names it to the mutation log.
+    let mut response = match reload_or_refuse(&state).await {
+        Err(refusal) => refusal,
+        Ok(()) => {
+            let (week, lifetime) = totals(&state).await;
+            // A key this route just created has never rotated, so no session can present a retired secret of it.
+            let mut v = key_json(&state.router.snapshot(), &row, &week, &lifetime, 0);
+            v["secret"] = json!(secret);
+            (StatusCode::CREATED, Json(v)).into_response()
+        }
+    };
     response.extensions_mut().insert(CreatedId(row.id));
     response
 }

@@ -121,18 +121,20 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
         };
     }
     state.catalog.evict(&row.id);
-    if let Err(refusal) = reload_or_refuse(&state).await {
-        return refusal;
-    }
-    match account(&state, &row.id) {
-        Ok(row) => {
-            let mut response =
-                (StatusCode::CREATED, Json(account_json(&state, &row).await)).into_response();
-            response.extensions_mut().insert(CreatedId(row.id));
-            response
-        }
+    // The row exists from here on, so every answer, a refusal included, names it to the mutation log.
+    let mut response = match reload_or_refuse(&state).await {
         Err(refusal) => refusal,
-    }
+        Ok(()) => match account(&state, &row.id) {
+            Ok(created) => (
+                StatusCode::CREATED,
+                Json(account_json(&state, &created).await),
+            )
+                .into_response(),
+            Err(refusal) => refusal,
+        },
+    };
+    response.extensions_mut().insert(CreatedId(row.id));
+    response
 }
 
 /// A discovery request with the staged secret against the staged account doubles as the key check: a 401

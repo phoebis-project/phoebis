@@ -10,10 +10,10 @@ use axum::http::Request;
 use common::*;
 use http_body_util::BodyExt;
 use phoebis_attention::{Attention, Condition, Kind, Link, BACKOFF_ATTENTION_AFTER_MS};
-use phoebis_bus::Outcome;
+use phoebis_bus::{Kind as RequestKind, Origin, Outcome};
 use phoebis_ledger::{Metrics, PriceTable, Pricing};
 use phoebis_oauth::PollOutcome;
-use phoebis_store::{AccountState, AttemptOutcome, NewBundle, Secret};
+use phoebis_store::{AccountState, AttemptOutcome, NewBundle, Secret, StorageKey, Store};
 use serde_json::json;
 use tower::ServiceExt;
 
@@ -249,6 +249,185 @@ async fn a_drift_refusal_without_a_version_clears_on_a_relayed_request_without_o
     assert_eq!((cleared.holds, cleared.since), (false, None));
 }
 
+/// The drift series' subjects in the read, sorted.
+fn drift_subjects(conditions: &[Condition]) -> Vec<String> {
+    let mut out: Vec<String> = conditions
+        .iter()
+        .filter(|c| c.kind == Kind::ClientDrift)
+        .map(|c| c.subject.id.clone())
+        .collect();
+    out.sort();
+    out
+}
+
+fn refuse(attention: &Attention, id: &str, version: &str, at: i64) {
+    attention.observe(&observed(id, Some("desktop"), "main"));
+    attention.observe(&complete(
+        id,
+        Outcome::Rejected,
+        Some("hash"),
+        Some(version),
+        at,
+    ));
+}
+
+#[tokio::test]
+async fn a_drift_condition_clears_only_on_a_relayed_client_inference_of_its_version() {
+    let rig = rig().await;
+    let (attention, _arm) = rig.attention(None);
+    refuse(&attention, "d1", "2.1.274", NOW);
+    // A count carries no stamped line and a keepalive request is the router's own, so neither says the build passes
+    // the stamp check again.
+    for (id, origin, kind) in [
+        ("c1", Origin::Client, RequestKind::CountTokens),
+        ("k1", Origin::Keepalive, RequestKind::Inference),
+    ] {
+        attention.observe(&observed_as(id, Some("desktop"), "main", origin, kind));
+        attention.observe(&complete(
+            id,
+            Outcome::Succeeded,
+            None,
+            Some("2.1.274"),
+            NOW + 1_000,
+        ));
+        assert!(
+            find(&read(&attention, NOW + 1_000), Kind::ClientDrift, "2.1.274")
+                .unwrap()
+                .holds,
+            "a succeeded {} {} leaves the condition held",
+            origin.as_str(),
+            kind.as_str()
+        );
+    }
+    attention.observe(&observed("i1", Some("desktop"), "main"));
+    attention.observe(&complete(
+        "i1",
+        Outcome::Succeeded,
+        None,
+        Some("2.1.274"),
+        NOW + 2_000,
+    ));
+    assert!(
+        !find(&read(&attention, NOW + 2_000), Kind::ClientDrift, "2.1.274")
+            .unwrap()
+            .holds
+    );
+}
+
+#[tokio::test]
+async fn a_flood_of_refused_versions_keeps_the_newest_sixteen_series_on_the_read_and_the_scrape() {
+    let rig = rig().await;
+    let (attention, _arm) = rig.attention(None);
+    for n in 0..40 {
+        refuse(&attention, &format!("d{n}"), &format!("2.1.{n}"), NOW + n);
+    }
+    let conditions = read(&attention, NOW + 40);
+    let mut want: Vec<String> = (24..40).map(|n| format!("2.1.{n}")).collect();
+    want.sort();
+    assert_eq!(
+        drift_subjects(&conditions),
+        want,
+        "the oldest versions make room for the newest"
+    );
+    let (status, text) = scrape(&rig, &attention).await;
+    assert_eq!(status, 200);
+    assert_eq!(
+        text.lines()
+            .filter(|l| l.starts_with(r#"phoebis_attention{kind="client_drift","#))
+            .count(),
+        16,
+        "{text}"
+    );
+    // A kept version still clears on a relayed request.
+    attention.observe(&observed("i1", Some("desktop"), "main"));
+    attention.observe(&complete(
+        "i1",
+        Outcome::Succeeded,
+        None,
+        Some("2.1.39"),
+        NOW + 50,
+    ));
+    let cleared = read(&attention, NOW + 50);
+    let cleared = find(&cleared, Kind::ClientDrift, "2.1.39").unwrap();
+    assert_eq!((cleared.holds, cleared.since), (false, None));
+}
+
+#[tokio::test]
+async fn at_the_cap_a_new_version_evicts_the_oldest_cleared_version_before_any_holding_one() {
+    let rig = rig().await;
+    let (attention, _arm) = rig.attention(None);
+    for n in 0..16 {
+        refuse(&attention, &format!("d{n}"), &format!("2.1.{n}"), NOW + n);
+    }
+    for (id, version) in [("i1", "2.1.9"), ("i2", "2.1.5")] {
+        attention.observe(&observed(id, Some("desktop"), "main"));
+        attention.observe(&complete(
+            id,
+            Outcome::Succeeded,
+            None,
+            Some(version),
+            NOW + 20,
+        ));
+    }
+    refuse(&attention, "d16", "2.1.16", NOW + 30);
+    let subjects = drift_subjects(&read(&attention, NOW + 30));
+    assert_eq!(subjects.len(), 16);
+    assert!(
+        !subjects.contains(&"2.1.5".to_string()) && subjects.contains(&"2.1.9".to_string()),
+        "the cleared version whose run started first goes, the holding 2.1.0 stays: {subjects:?}"
+    );
+    assert!(subjects.contains(&"2.1.0".to_string()));
+}
+
+#[tokio::test]
+async fn a_version_that_does_not_read_as_a_release_files_under_one_other_subject() {
+    let rig = rig().await;
+    let (attention, _arm) = rig.attention(None);
+    let long = format!("2.1.{}", "9".repeat(196));
+    let widest = format!("1.{}", "2".repeat(30));
+    let too_wide = format!("1.{}", "2".repeat(31));
+    assert_eq!((long.len(), widest.len(), too_wide.len()), (200, 32, 33));
+    for (n, version) in [
+        "2.1.286-beta",
+        long.as_str(),
+        too_wide.as_str(),
+        "2.1.286.1.2",
+        "2..1",
+        "2.1.",
+        "2.1.286.1",
+        widest.as_str(),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        refuse(&attention, &format!("d{n}"), version, NOW);
+    }
+    let conditions = read(&attention, NOW);
+    let mut want = vec![widest.clone(), "2.1.286.1".to_string(), "other".to_string()];
+    want.sort();
+    assert_eq!(
+        drift_subjects(&conditions),
+        want,
+        "up to four digit runs within 32 bytes keep their version"
+    );
+    let other = find(&conditions, Kind::ClientDrift, "other").unwrap();
+    assert_eq!(
+        (
+            other.holds,
+            &other.subject.label,
+            &other.detail["client_version"]
+        ),
+        (true, &"other".to_string(), &json!("other"))
+    );
+    let (_, text) = scrape(&rig, &attention).await;
+    assert!(
+        text.contains(r#"phoebis_attention{kind="client_drift",subject="other"} 1"#)
+            && !text.contains("2.1.286-beta")
+            && !text.contains(&long),
+        "{text}"
+    );
+}
+
 #[tokio::test]
 async fn the_account_states_hold_by_kind_and_date_from_the_first_read_that_saw_them() {
     let rig = rig().await;
@@ -444,6 +623,69 @@ async fn a_lost_refresh_a_committed_retry_supersedes_counts_no_second_failure() 
     let held = read(&attention, NOW);
     let held = find(&held, Kind::RefreshFailed, "business").unwrap();
     assert_eq!((held.holds, &held.detail["failures"]), (true, &json!(2)));
+}
+
+/// A pairing commits a bundle under no attempt, settling the retry still pending as `superseded`: that row exists only
+/// because a newer credential committed, so it ends the run as a commit does.
+#[tokio::test]
+async fn a_pairing_that_supersedes_a_pending_retry_leaves_no_refresh_run() {
+    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+    let rig = rig_with_store(store.clone()).await;
+    let failed = resolve(&rig, AttemptOutcome::Failed("invalid_grant".into()));
+    tokio::time::sleep(Duration::from_millis(2)).await;
+    let pending = rig.store.open_refresh_attempt("business", 1, 1, 1).unwrap();
+    tokio::time::sleep(Duration::from_millis(2)).await;
+    rig.store
+        .commit_credentials(
+            "business",
+            1,
+            1,
+            None,
+            None,
+            &NewBundle {
+                access_token: Secret::new("sk-ant-oat01-PLACEHOLDER"),
+                refresh_token: Some(Secret::new("sk-ant-ort01-PLACEHOLDER")),
+                issued_at: NOW,
+                expires_at: i64::MAX / 2,
+                refresh_expires_at: None,
+                scopes: "user:profile user:inference".into(),
+            },
+        )
+        .unwrap();
+    let rows: Vec<_> = rig
+        .store
+        .newest_resolved_refresh_attempts("business", 1, 16)
+        .unwrap()
+        .into_iter()
+        .map(|a| (a.id, a.outcome, a.detail))
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            (
+                pending,
+                "failed".to_string(),
+                Some("superseded".to_string())
+            ),
+            (
+                failed,
+                "failed".to_string(),
+                Some("invalid_grant".to_string())
+            ),
+        ]
+    );
+    let (attention, _arm) = rig.attention(None);
+    let conditions = read(&attention, NOW);
+    let cleared = find(&conditions, Kind::RefreshFailed, "business").unwrap();
+    assert_eq!(
+        (cleared.holds, cleared.since, &cleared.detail),
+        (
+            false,
+            None,
+            &json!({ "account": "business", "failures": 0, "last_error": null, "outcome": null })
+        ),
+        "neither the superseded retry nor the failure before the new credential counts"
+    );
 }
 
 #[tokio::test]

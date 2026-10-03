@@ -399,7 +399,7 @@ backoff run is thirty minutes old; only the conditions read from the registry ho
 | Kind | Subject | Clears when |
 | --- | --- | --- |
 | `pool_exhausted` | the pool | a request of the pool succeeds |
-| `client_drift` | the client version | a request from that version is relayed, or a re-pinned build starts |
+| `client_drift` | the client version | an inference request from that version is relayed, or a re-pinned build starts |
 | `reauth_required` | the account | the account is paired again, or an Anthropic-key account gets a new secret |
 | `funding_required` | the Anthropic-key account | the operator clears funding |
 | `refresh_failed` | the OAuth account | a refresh commits |
@@ -410,9 +410,14 @@ succeeded since; it is fed by the request bus. An `incomplete` answer neither ra
 pool and the key of the request that raised it.
 
 **`client_drift`** holds while a request from that client version has been refused for drift since the process started
-([re-pinning](operations.md#re-pinning-the-client-build)); it is fed by the request bus. The detail names the version,
-what drifted (`hash` or `version_suffix`) and the key of the newest refusal, which the item opens; a refusal that named
-no key opens nothing.
+and no inference request from it has been relayed since ([re-pinning](operations.md#re-pinning-the-client-build)); it
+is fed by the request bus. A token count or a keepalive request clears nothing: a count carries no stamp for the check
+to read, and a keepalive request replays a body the router kept rather than the client's next one. The subject is the
+version the client's user agent names when it reads as a release, one to four runs of digits joined by dots in at most
+32 bytes; any other value is filed under `other`, and a request that named none under `unknown`. At most sixteen
+versions are kept: a new one takes the place of the cleared version whose run started first, or of the one that has
+held longest when every version holds. The detail names the version, what drifted (`hash` or `version_suffix`) and the
+key of the newest refusal, which the item opens; a refusal that named no key opens nothing.
 
 **`reauth_required`** holds while the account's state is `reauth_required`, read from the registry
 ([account states](pairing.md#account-states)). The registry records no time for a state change, so the item dates from
@@ -422,7 +427,9 @@ the first read of this process that saw the state. The detail names the account 
 over the account's credit balance; it is read from the registry and dated and detailed as `reauth_required` is.
 
 **`refresh_failed`** holds while the account's newest two resolved credential refreshes both failed or went uncertain,
-a run read from the registry. The detail counts the run's failures and gives the newest attempt's outcome and error.
+a run read from the registry. A refresh that commits ends the run, and so does one a newer credential superseded, as a
+re-pairing settles a refresh still pending. The detail counts the run's failures and gives the newest attempt's outcome
+and error.
 
 **`poll_backoff`** holds once the usage poll has been backing off from the endpoint's 429 answers on the account for
 thirty minutes, counted from the run's first 429. The detail gives when the run started, when the next attempt comes,
