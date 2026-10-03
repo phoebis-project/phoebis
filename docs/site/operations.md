@@ -69,9 +69,9 @@ that same empty file.
 The registry carries a canary sealed under the key at its first open, and every open proves the key against it before
 any credential is read: a restore onto a host whose key file differs, or a key regenerated after the file was moved,
 is refused at start and by `check-config` with `the storage key does not match the registry at {path}`. A registry
-from before the canary existed is proved against its first sealed row of each kind instead (a credential, an
-Anthropic-key secret and an alert secret), passing when any of them opens, by `check-config` and at start, and is
-sealed at that start.
+from before the canary existed is proved against its sealed rows instead, up to the first 32 of each kind (credentials,
+Anthropic-key secrets and alert secrets), passing when any of them opens, by `check-config` and at start, and is sealed
+at that start.
 
 The key seals OAuth credential bundles, Anthropic-key secrets, and alert secrets. `Store::digest_key` also derives, from
 this same key, the digest every downstream key authenticates against: the secrets the admin API mints and hands to

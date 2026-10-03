@@ -383,11 +383,12 @@ Refused with:
 `max_request_bytes` is the per-body bound, the Messages API's own request limit, so the router never refuses what the
 upstream accepts, and a value above it is refused as pointless. `body_budget_bytes` is the bytes of bodies the whole
 process holds at once, sized for a household whose keys carry agent tools that fan out (512 one-MiB bodies, or sixteen
-at the per-body bound); a request that would pass it is refused with the router's own `503 body_budget_exhausted`.
-`key_body_reads` bounds the bodies one key has arriving at once, or the key's own `in_flight_cap` when it is set; a
-request past it is refused `429 key_body_reads` with `Retry-After: 1`. `body_read_seconds` is how long a body may take
-to arrive after authentication, under the stream's idle bound of 600 seconds; a body that takes longer is answered
-`408 request_timeout`.
+at the per-body bound); a request that would pass it is refused with the router's own `503 body_budget_exhausted`. The
+budget counts each body as received; the edited copy and the wire copy a pass holds beside it can take up to twice that
+again, so size the process's memory at three times `body_budget_bytes`. `key_body_reads` bounds the bodies one key has
+arriving at once, or the key's own `in_flight_cap` when it is set; a request past it is refused `429 key_body_reads`
+with `Retry-After: 1`. `body_read_seconds` is how long a body may take to arrive after authentication, under the
+stream's idle bound of 600 seconds; a body that takes longer is answered `408 request_timeout`.
 
 `sign_cch_placeholder` signs a restored `cch=00000` with this build's formula instead of sending the placeholder; off
 until a server rejection of the placeholder proves it necessary.

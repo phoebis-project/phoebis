@@ -523,70 +523,66 @@ impl SealedRow {
     }
 }
 
-/// Whether the key opens any of the registry's first sealed rows, or `None` when it holds nothing sealed. A row
-/// that does not open is no proof of a wrong key, since the runtime survives a corrupt row too; a wrong key opens
-/// none of them.
+/// How many sealed rows of each kind the proof against a registry without a canary reads. A corrupt row cannot
+/// stop a start whose key the rows behind it prove, and a wrong key, which opens none, costs a bounded read rather
+/// than every row of a large registry at each start and each `check-config`.
+const PROOF_ROWS_PER_KIND: i64 = 32;
+
+/// Whether the key opens any of the sealed rows `leading_sealed_rows` reads, or `None` when the registry holds
+/// nothing sealed. A row that does not open is no proof of a wrong key, since the runtime survives a corrupt row
+/// too; a wrong key opens none of them.
 fn sealed_rows_open_under(conn: &Connection, key: &StorageKey) -> Result<Option<bool>, StoreError> {
-    let rows = first_sealed_rows(conn)?;
+    let rows = leading_sealed_rows(conn)?;
     if rows.is_empty() {
         return Ok(None);
     }
     Ok(Some(rows.iter().any(|row| row.opens_under(key))))
 }
 
-/// The first sealed row of each kind: a credential bundle, an Anthropic-key secret, an alert secret.
-/// `read_canary` meets the file as it is, without `prepare`, so a table the registry does not have yet holds
-/// nothing sealed rather than failing the read.
-fn first_sealed_rows(conn: &Connection) -> Result<Vec<SealedRow>, StoreError> {
+/// The first `PROOF_ROWS_PER_KIND` sealed rows of each kind in row order: credential bundles, Anthropic-key
+/// secrets, alert secrets. `read_canary` meets the file as it is, without `prepare`, so a table the registry does
+/// not have yet holds nothing sealed rather than failing the read.
+fn leading_sealed_rows(conn: &Connection) -> Result<Vec<SealedRow>, StoreError> {
     let mut rows = Vec::new();
     if has_table(conn, "credentials")? {
-        rows.extend(
-            conn.query_row(
-                "SELECT account_id, generation, nonce, sealed FROM credentials LIMIT 1",
-                [],
-                |row| {
-                    Ok(SealedRow {
-                        aad: credentials::credential_aad(&row.get::<_, String>(0)?, row.get(1)?),
-                        nonce: row.get(2)?,
-                        sealed: row.get(3)?,
-                    })
-                },
-            )
-            .optional()?,
-        );
+        let mut statement = conn.prepare(
+            "SELECT account_id, generation, nonce, sealed FROM credentials ORDER BY rowid LIMIT ?1",
+        )?;
+        let found = statement.query_map(params![PROOF_ROWS_PER_KIND], |row| {
+            Ok(SealedRow {
+                aad: credentials::credential_aad(&row.get::<_, String>(0)?, row.get(1)?),
+                nonce: row.get(2)?,
+                sealed: row.get(3)?,
+            })
+        })?;
+        rows.extend(found.collect::<rusqlite::Result<Vec<_>>>()?);
     }
     if has_table(conn, "api_key_secrets")? {
-        rows.extend(
-            conn.query_row(
-                "SELECT account_id, nonce, sealed FROM api_key_secrets LIMIT 1",
-                [],
-                |row| {
-                    Ok(SealedRow {
-                        aad: credentials::api_key_aad(&row.get::<_, String>(0)?),
-                        nonce: row.get(1)?,
-                        sealed: row.get(2)?,
-                    })
-                },
-            )
-            .optional()?,
-        );
+        let mut statement = conn.prepare(
+            "SELECT account_id, nonce, sealed FROM api_key_secrets ORDER BY rowid LIMIT ?1",
+        )?;
+        let found = statement.query_map(params![PROOF_ROWS_PER_KIND], |row| {
+            Ok(SealedRow {
+                aad: credentials::api_key_aad(&row.get::<_, String>(0)?),
+                nonce: row.get(1)?,
+                sealed: row.get(2)?,
+            })
+        })?;
+        rows.extend(found.collect::<rusqlite::Result<Vec<_>>>()?);
     }
     if has_table(conn, "alert_rules")? {
-        rows.extend(
-            conn.query_row(
-                "SELECT id, secret_nonce, secret_sealed FROM alert_rules \
-                 WHERE secret_sealed IS NOT NULL AND secret_nonce IS NOT NULL LIMIT 1",
-                [],
-                |row| {
-                    Ok(SealedRow {
-                        aad: alerts::secret_aad(&row.get::<_, String>(0)?),
-                        nonce: row.get(1)?,
-                        sealed: row.get(2)?,
-                    })
-                },
-            )
-            .optional()?,
-        );
+        let mut statement = conn.prepare(
+            "SELECT id, secret_nonce, secret_sealed FROM alert_rules \
+             WHERE secret_sealed IS NOT NULL AND secret_nonce IS NOT NULL ORDER BY rowid LIMIT ?1",
+        )?;
+        let found = statement.query_map(params![PROOF_ROWS_PER_KIND], |row| {
+            Ok(SealedRow {
+                aad: alerts::secret_aad(&row.get::<_, String>(0)?),
+                nonce: row.get(1)?,
+                sealed: row.get(2)?,
+            })
+        })?;
+        rows.extend(found.collect::<rusqlite::Result<Vec<_>>>()?);
     }
     Ok(rows)
 }
@@ -712,13 +708,17 @@ mod tests {
             .unwrap()
     }
 
-    /// An account holding one committed credential bundle, the first sealed row the one-time path proves.
+    /// Account `a` holding one committed credential bundle, the first sealed row the one-time path proves.
     fn with_a_credential(store: &Store) {
+        with_a_credential_on(store, "a");
+    }
+
+    fn with_a_credential_on(store: &Store, id: &str) {
         store
             .insert_account(&AccountRow {
-                id: "a".into(),
+                id: id.into(),
                 kind: AccountKind::Oauth,
-                label: "a".into(),
+                label: id.into(),
                 enabled: true,
                 identity: None,
                 lifecycle_generation: 1,
@@ -729,7 +729,7 @@ mod tests {
             .unwrap();
         store
             .commit_credentials(
-                "a",
+                id,
                 1,
                 1,
                 None,
@@ -927,6 +927,39 @@ mod tests {
             Store::open(&only_corrupt, &key),
             Err(StoreError::KeyMismatch { .. })
         ));
+    }
+
+    #[test]
+    fn a_corrupt_first_credential_leaves_the_proof_to_an_intact_credential_behind_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = StorageKey::generate();
+
+        let db = dir.path().join("router.sqlite");
+        let store = Store::open(&db, &key).unwrap();
+        with_a_credential_on(&store, "a");
+        with_a_credential_on(&store, "b");
+        store.debug_corrupt_credentials("a").unwrap();
+        store.debug_drop_canary().unwrap();
+        drop(store);
+        assert_the_sealed_rows_prove_the_key(&db, &key);
+
+        let all_corrupt = dir.path().join("all-corrupt.sqlite");
+        let store = Store::open(&all_corrupt, &key).unwrap();
+        with_a_credential_on(&store, "a");
+        with_a_credential_on(&store, "b");
+        store.debug_corrupt_credentials("a").unwrap();
+        store.debug_corrupt_credentials("b").unwrap();
+        store.debug_drop_canary().unwrap();
+        drop(store);
+        match Store::read_canary(&all_corrupt, &key) {
+            Err(StoreError::KeyMismatch { path }) => assert_eq!(path, all_corrupt),
+            answer => panic!("{answer:?}"),
+        }
+        match Store::open(&all_corrupt, &key) {
+            Err(StoreError::KeyMismatch { path }) => assert_eq!(path, all_corrupt),
+            Err(other) => panic!("refused for another reason: {other}"),
+            Ok(_) => panic!("opened with no sealed row to prove the key by"),
+        }
     }
 
     #[test]

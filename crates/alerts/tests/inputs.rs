@@ -1305,6 +1305,102 @@ async fn two_failed_refreshes_name_the_failed_outcome_on_the_event_and_the_deliv
     );
 }
 
+/// The retry's commit closes the lost attempt `superseded` under a new resolution time, so the poller reads that
+/// row a second time: a recovered refresh must not read as a second failure.
+#[tokio::test]
+async fn a_lost_refresh_a_committed_retry_supersedes_counts_no_second_failure() {
+    let rig = rig().await;
+    rig.store
+        .upsert_alert_rule(
+            &rule("refresh", Kind::RefreshFailed, ScopeType::AnyAccount, None),
+            None,
+            "test",
+        )
+        .unwrap();
+    rig.alerts.reload().unwrap();
+    let mut poller = Poller::new(
+        rig.alerts.clone(),
+        &inputs(&rig, BTreeMap::new()),
+        Tracked::default(),
+    );
+    let lost = rig.store.open_refresh_attempt("business", 1, 1, 1).unwrap();
+    rig.store
+        .resolve_refresh_attempt(
+            lost,
+            1,
+            phoebis_store::AttemptOutcome::Uncertain("refresh response lost".into()),
+        )
+        .unwrap();
+    poller.tick().await;
+    // The poller's watermark reads a row again only from a later millisecond, which a retry spaced by the token
+    // endpoint's floor always reaches.
+    tokio::time::sleep(Duration::from_millis(5)).await;
+    let retry = rig.store.open_refresh_attempt("business", 1, 1, 1).unwrap();
+    rig.store
+        .commit_credentials(
+            "business",
+            1,
+            1,
+            None,
+            Some(retry),
+            &phoebis_store::NewBundle {
+                access_token: phoebis_store::Secret::new("sk-ant-oat01-PLACEHOLDER"),
+                refresh_token: Some(phoebis_store::Secret::new("sk-ant-ort01-PLACEHOLDER")),
+                issued_at: NOW,
+                expires_at: i64::MAX / 2,
+                refresh_expires_at: None,
+                scopes: "user:profile user:inference".into(),
+            },
+        )
+        .unwrap();
+    let rows = rig
+        .store
+        .refresh_attempts_resolved_after(0, 0, 10)
+        .unwrap()
+        .into_iter()
+        .map(|a| (a.id, a.outcome, a.detail))
+        .collect::<Vec<_>>();
+    assert!(
+        rows.contains(&(lost, "failed".into(), Some("superseded".into()))),
+        "{rows:?}"
+    );
+    poller.tick().await;
+    settled(&rig).await;
+    assert!(
+        rig.store
+            .alert_events(None, 100)
+            .unwrap()
+            .iter()
+            .all(|e| e.kind != "refresh_failed"),
+        "the superseded row opened nothing"
+    );
+    assert!(rig.webhook.posts().is_empty(), "nothing was delivered");
+
+    // A refresh that fails after the commit still counts, once: one failure is no alert, the second opens it.
+    for _ in 0..2 {
+        let attempt = rig.store.open_refresh_attempt("business", 1, 1, 1).unwrap();
+        rig.store
+            .resolve_refresh_attempt(
+                attempt,
+                1,
+                phoebis_store::AttemptOutcome::Failed("invalid_grant".into()),
+            )
+            .unwrap();
+        poller.tick().await;
+    }
+    settled(&rig).await;
+    let event = rig
+        .store
+        .open_alert_events()
+        .unwrap()
+        .into_iter()
+        .find(|e| e.kind == "refresh_failed")
+        .expect("two failures in a row open the event");
+    let detail: serde_json::Value =
+        serde_json::from_str(event.detail_json.as_deref().unwrap()).unwrap();
+    assert_eq!(detail["failures"], 2, "{detail}");
+}
+
 #[tokio::test]
 async fn a_question_open_before_the_arm_existed_resolves_on_the_next_client_turn() {
     let rig = rig().await;

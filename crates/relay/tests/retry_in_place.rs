@@ -324,3 +324,81 @@ async fn a_retry_after_over_the_bound_or_a_non_portable_request_fails_over_as_to
     assert_eq!(credentials_seen(&up), [A, A, A, A]);
     up.shutdown().await;
 }
+
+#[tokio::test]
+async fn a_throttle_the_request_deadline_would_outlast_fails_over_at_once_and_one_inside_it_is_waited(
+) {
+    // 31 s is one second past the margin, so the request's deadline is one second after its admission on the
+    // harness's clock, which stands still: a two-second throttle outlasts it on every account.
+    let up = FakeUpstream::start(vec![]).await;
+    up.add_credential_rule(A, "/v1/messages", json_429_retry_after("2"));
+    up.add_credential_rule(B, "/v1/messages", json_429_retry_after("2"));
+    let h = harness_with_limits(
+        &up,
+        &[oauth("a", A, 0), oauth("b", B, 1)],
+        PoolSpec::default(),
+        phoebis_relay::Limits {
+            head_timeout: Duration::from_secs(31),
+            ..default_limits()
+        },
+    )
+    .await;
+    let started = Instant::now();
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, MODEL, "s1"))
+        .await
+        .unwrap();
+    let waited = started.elapsed();
+    assert!(waited < Duration::from_millis(900), "no wait: {waited:?}");
+    assert_eq!(
+        credentials_seen(&up),
+        [A, B],
+        "one submission per account, none retried in place"
+    );
+    assert_eq!(
+        (
+            resp.status().as_u16(),
+            resp.headers()["x-phoebis-error-code"].to_str().unwrap()
+        ),
+        (429, "accounts_exhausted"),
+        "the pool's own answer once no account is left"
+    );
+    up.shutdown().await;
+
+    // Three seconds left: a one-second throttle ends inside the deadline and is waited out on its account.
+    let up = FakeUpstream::start(vec![]).await;
+    up.push_credential_rule(A, "/v1/messages", json_429_retry_after("1"));
+    up.push_credential_rule(A, "/v1/messages", json_200());
+    let h = harness_with_limits(
+        &up,
+        &[oauth("a", A, 0)],
+        PoolSpec::default(),
+        phoebis_relay::Limits {
+            head_timeout: Duration::from_secs(33),
+            ..default_limits()
+        },
+    )
+    .await;
+    let started = Instant::now();
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, MODEL, "s1"))
+        .await
+        .unwrap();
+    let waited = started.elapsed();
+    assert_eq!(
+        (resp.status().as_u16(), outcome(&resp).attempt),
+        (200, 2),
+        "retried in place"
+    );
+    assert_eq!(credentials_seen(&up), [A, A]);
+    assert!(
+        waited >= Duration::from_millis(950),
+        "the Retry-After was waited out: {waited:?}"
+    );
+    drain(resp).await;
+    up.shutdown().await;
+}

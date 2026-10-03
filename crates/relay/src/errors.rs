@@ -148,8 +148,10 @@ pub(crate) fn auth_failure(error: &AuthError) -> Failure {
     }
 }
 
-/// `Failure.message` is `&'static str`, so the four spellings `BodyMember::Repeated` names are constants
-/// rather than a formatted string.
+/// `Failure.message` is `&'static str`, so the spellings `BodyMember::Repeated` names are constants rather than
+/// a formatted string.
+const REPEATED_BILLING_LINE: &str =
+    "the request body carries the member \"system[0].text\" more than once";
 const REPEATED_METADATA: &str =
     "the request body carries the top-level member \"metadata\" more than once";
 const REPEATED_MODEL: &str =
@@ -158,6 +160,8 @@ const REPEATED_SAFEGUARDS: &str =
     "the request body carries the top-level member \"safeguards\" more than once";
 const REPEATED_STREAM: &str =
     "the request body carries the top-level member \"stream\" more than once";
+const REPEATED_SYSTEM: &str =
+    "the request body carries the top-level member \"system\" more than once";
 
 pub(crate) fn relay_failure(error: &RelayError) -> Failure {
     match error {
@@ -201,12 +205,14 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
                 }
                 BodyMember::Model => "the request body has no top-level model to resolve",
                 BodyMember::Repeated(name) => match *name {
+                    crate::body::BILLING_LINE_PATH => REPEATED_BILLING_LINE,
                     "metadata" => REPEATED_METADATA,
                     "model" => REPEATED_MODEL,
                     "safeguards" => REPEATED_SAFEGUARDS,
                     "stream" => REPEATED_STREAM,
+                    "system" => REPEATED_SYSTEM,
                     _ => unreachable!(
-                        "BodyMember::Repeated only ever names metadata, model, safeguards or stream"
+                        "BodyMember::Repeated only ever names metadata, model, safeguards, stream, system or the billing line"
                     ),
                 },
                 BodyMember::Safeguards => {
@@ -403,6 +409,8 @@ mod tests {
             BodyMember::Repeated("model"),
             BodyMember::Repeated("safeguards"),
             BodyMember::Repeated("stream"),
+            BodyMember::Repeated("system"),
+            BodyMember::Repeated("system[0].text"),
             BodyMember::Safeguards,
         ] {
             let failure = relay_failure(&RelayError::BodyShape(member));

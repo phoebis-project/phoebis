@@ -86,8 +86,8 @@ pub enum BodyMember {
     CacheControl,
     MetadataUserId,
     Model,
-    /// A top-level member the caller's body carries more than once, raw or escaped; the name is one of the
-    /// members admission and the body edit act on.
+    /// A member the caller's body carries more than once, raw or escaped: one of the top-level members admission
+    /// and the body edit act on, or `BILLING_LINE_PATH`, whose first spelling alone the drift check reads.
     Repeated(&'static str),
     /// A `safeguards` member the decoded top-level key count finds and the raw walk cannot reach.
     Safeguards,
@@ -96,7 +96,7 @@ pub enum BodyMember {
 impl BodyMember {
     pub fn path(self) -> &'static str {
         match self {
-            BodyMember::BillingStamp => "system[0].text",
+            BodyMember::BillingStamp => BILLING_LINE_PATH,
             BodyMember::CacheControl => "cache_control",
             BodyMember::MetadataUserId => "metadata.user_id",
             BodyMember::Model => "model",
@@ -115,6 +115,9 @@ impl BodyMember {
             }
             BodyMember::CacheControl => {
                 "request body carries a cache_control marker the router cannot place".into()
+            }
+            BodyMember::Repeated(BILLING_LINE_PATH) => {
+                format!("request body carries the member \"{BILLING_LINE_PATH}\" more than once")
             }
             BodyMember::Repeated(name) => {
                 format!("request body carries the top-level member \"{name}\" more than once")
@@ -143,6 +146,8 @@ const ESCAPED_QUOTE: &[u8] = br#"\""#;
 
 /// Opening quote and prefix of the billing block as it appears in `system[0].text`.
 pub(crate) const BILLING_BLOCK: &[u8] = br#""x-anthropic-billing-header:"#;
+
+pub(crate) const BILLING_LINE_PATH: &str = "system[0].text";
 
 /// Length of the hash after `cch=`, the only bytes `phoebis_cch::sign` rewrites.
 const CCH_DIGITS: usize = 5;
@@ -1291,6 +1296,11 @@ mod tests {
         assert_eq!(
             RelayError::BodyShape(BodyMember::Repeated("model")).to_string(),
             "request body carries the top-level member \"model\" more than once"
+        );
+        assert_eq!(
+            RelayError::BodyShape(BodyMember::Repeated("system[0].text")).to_string(),
+            "request body carries the member \"system[0].text\" more than once",
+            "the billing line is no top-level member"
         );
         assert_eq!(
             RelayError::BodyShape(BodyMember::Model).to_string(),

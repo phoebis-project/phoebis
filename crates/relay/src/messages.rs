@@ -45,7 +45,7 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
 use crate::billing::{restorable_version, Restore};
-use crate::body::{tier_ttls, uniform_ttl};
+use crate::body::{tier_ttls, uniform_ttl, BILLING_LINE_PATH};
 use crate::budget::{BodyBudget, BodyReads};
 use crate::casing::OriginalHead;
 use crate::catalog::CatalogService;
@@ -1235,11 +1235,20 @@ impl Relay {
         });
         let stream = wants_stream(&raw);
         // Admission and the body edit both act on the first spelling of a member; a second one would reach
-        // the wire untouched and a last-wins parser upstream would act on it instead. Refused whole rather
-        // than repaired: the caller's body is not edited on its way through. A scan that could not finish
-        // proves nothing about the members past where it stopped, so it refuses as well.
-        let repeated =
-            phoebis_cch::repeated_top_level_member(&raw, &["model", "metadata", "stream"]);
+        // the wire untouched and a last-wins parser upstream would act on it instead. The billing line's path
+        // counts as well: the drift check and its placeholder exemption read the first `system` and the first
+        // `text` of its first block, so a second spelling would carry a hash nothing verified. Refused whole
+        // rather than repaired: the caller's body is not edited on its way through. A scan that could not
+        // finish proves nothing about the members past where it stopped, so it refuses as well.
+        let repeated = phoebis_cch::repeated_top_level_member(
+            &raw,
+            &["metadata", "model", "stream", "system"],
+        )
+        .and_then(|repeated| match repeated {
+            Some(name) => Ok(Some(name)),
+            None => phoebis_cch::first_system_block_member_count(&raw, "text")
+                .map(|texts| (texts > 1).then_some(BILLING_LINE_PATH)),
+        });
         let refusal = match repeated {
             Ok(None) => None,
             Ok(Some(name)) => Some(RelayError::BodyShape(BodyMember::Repeated(name))),
@@ -3002,8 +3011,9 @@ impl Relay {
     }
 
     /// How long to wait before trying the same account again, for a fail-over this leg can wait out instead: a
-    /// portable request, a throttle the upstream timed with a `Retry-After` at or under the pool's bound, no
-    /// mark on the account, and no retry in place on this leg yet. Anything else fails over.
+    /// portable request, a throttle the upstream timed with a `Retry-After` at or under the pool's bound that
+    /// ends before the request's deadline, no mark on the account, and no retry in place on this leg yet.
+    /// Anything else fails over.
     fn retry_in_place(
         &self,
         ctx: &Responding<'_>,
@@ -3023,7 +3033,13 @@ impl Relay {
         }
         let delay = cooldown.until.saturating_sub(now).saturating_sub(MARGIN_MS);
         let delay = Duration::from_millis(u64::try_from(delay).unwrap_or(0));
-        (delay <= ctx.retry_in_place).then_some(delay)
+        // The deadline bounds this wait as it bounds the refresh ladder's: the retry a longer wait leads to would
+        // be submitted after the request is due its answer, with its permits and buffers held all the while, so
+        // the request moves on at once instead.
+        let left = ctx.deadline.map(|deadline| {
+            Duration::from_millis(u64::try_from(deadline.saturating_sub(now)).unwrap_or(0))
+        });
+        (delay <= ctx.retry_in_place && left.is_none_or(|left| delay < left)).then_some(delay)
     }
 
     /// The credential to dispatch with, fenced by the revision of the row the selection handed over:

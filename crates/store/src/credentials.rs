@@ -491,7 +491,10 @@ impl Store {
 
     /// Attempts settled after a watermark, oldest first. Keyed on the resolution time rather than the id
     /// because an attempt opened early can settle late, and a mirror that walked ids would skip it; the id is
-    /// the tie-breaker, so rows settled in the same millisecond page through without a gap.
+    /// the tie-breaker, so rows settled in the same millisecond page through without a gap. An attempt
+    /// resolved `uncertain` that a later commit closes `superseded` settles again under the commit's time, so
+    /// a reader meets it twice; the second reading records the attempt the commit replaced, not a failure, and
+    /// a failure count skips it.
     pub fn refresh_attempts_resolved_after(
         &self,
         resolved_at: i64,

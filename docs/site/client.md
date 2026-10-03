@@ -230,13 +230,13 @@ A well-formed but unrecognized key is refused too, again in an Anthropic-shaped 
 The same answer meets a request or a keepalive probe whose key was deleted, or deleted and created again under its
 id, between admission and routing.
 
-A request body whose top-level object carries `model`, `metadata` or `stream` more than once, raw or escaped, whose
-`safeguards` member cannot be cut while its key's server-side auto mode is off (carried twice, or spelled with an
-escape), whose `cache_control` marker the pool's cache TTL policy cannot reach (a key on the marker's path spelled with
-an escape), or whose billing stamp the router cannot restamp after an edit (a key on its path, the billing line's header
-name or its `cch=` spelled with an escape, or a key on its path carried more than once), is refused before anything
-reaches the upstream: `400` with the error code `body_shape` and a message naming the member. A body whose top-level
-object nests deeper than the relay reads is refused `400` with the error code `invalid_body`.
+A request body whose top-level object carries `metadata`, `model`, `stream` or `system` more than once, or whose first
+`system` block carries `text` more than once, raw or escaped, whose `safeguards` member cannot be cut while its key's
+server-side auto mode is off (carried twice, or spelled with an escape), whose `cache_control` marker the pool's cache
+TTL policy cannot reach (a key on the marker's path spelled with an escape), or whose billing stamp the router cannot
+restamp after an edit (a key on its path, the billing line's header name or its `cch=` spelled with an escape), is
+refused before anything reaches the upstream: `400` with the error code `body_shape` and a message naming the member. A
+body whose top-level object nests deeper than the relay reads is refused `400` with the error code `invalid_body`.
 
 A request body that does not finish arriving within `proxy.body_read_seconds` (60 by default) after authentication is
 refused `408` with the error code `request_timeout` and the message `the request body did not arrive in time`.

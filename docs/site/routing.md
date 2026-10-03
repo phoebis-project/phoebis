@@ -623,8 +623,9 @@ presets beside custom: balanced (16, 10 s, 5 %, the default), fast (8, 5 s, 10 %
 A throttle on a portable request whose `Retry-After` is at or under the pool's `retry_in_place_seconds` (default 10) is
 waited out on the same account and retried there once, with the same credential. The cooldown row is still recorded, so
 a sibling request selecting meanwhile skips the account, and the session's pin stays where it is. The retry is a wire
-submission like any other and runs once per leg. A second throttle on the retry, a `Retry-After` past the bound, a
-throttle that names no `Retry-After`, and a request bound to its account all take the failover path above.
+submission like any other and runs once per leg. A second throttle on the retry, a `Retry-After` past the bound or past
+the request's deadline, a throttle that names no `Retry-After`, and a request bound to its account all take the failover
+path above.
 
 ### In-flight caps
 

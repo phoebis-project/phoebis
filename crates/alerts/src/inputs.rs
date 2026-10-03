@@ -1003,6 +1003,12 @@ impl Poller {
         ) {
             for attempt in attempts {
                 self.last_resolved = (attempt.resolved_at, attempt.id);
+                // A commit closes the attempts still pending beside it as `superseded`, a lost answer already
+                // counted among them, and each comes back under the commit's time: the credential recovered, so
+                // none is a failure.
+                if attempt.detail.as_deref() == Some("superseded") {
+                    continue;
+                }
                 if attempt.outcome == "committed" {
                     self.failures.insert(attempt.account_id.clone(), 0);
                     self.alerts.clear(Kind::RefreshFailed, &attempt.account_id);
