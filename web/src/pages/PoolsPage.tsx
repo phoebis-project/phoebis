@@ -2,6 +2,7 @@ import { Fragment, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { Bar, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { api, ApiError, CACHE_TTL_DEFAULTS, KEEPALIVE_TUNING_DEFAULTS, type PoolInput } from '@/api';
+import { slug } from '@/api/http';
 import { POOL_AFFINITY_DEFAULTS, POOL_ENGINE_DEFAULTS, type PoolEngineFields } from '@/api/client';
 import type {
   Account, AffinityMode, ApiKey, CacheTtl, CreatedApiKey, KeyStatus, MemberEligibility, ModelRule, OveragePolicy, Pool, PoolCacheTtl, PoolKeepalive, PoolMember, PoolStrategy, QuotaHeaders, Session, SessionPlacement,
@@ -957,8 +958,8 @@ export function PoolDialog({
   };
   const poolKeys = (pool ? [...localKeys, ...keys.filter((k) => k.poolId === pool.id && !localKeys.some((l) => l.id === k.id))] : localKeys).filter((k) => !moved.has(k.id));
   const otherPools = pools.filter((p) => p.id !== pool?.id);
-  // Keys created before the pool is saved use the id the pool will get from its name.
-  const draftPoolId = form.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-') || 'new';
+  // The id the create call derives from the name, which keys created before the pool is saved use too.
+  const draftPoolId = slug(form.name.trim());
   const draftName = form.name.trim() || 'new pool';
   // Memoized so the key dialog's reset effect does not fire on every keystroke in this form.
   const draftCaptureHours = form.capture ? Number(form.captureHours) || 0 : 0;
@@ -1016,6 +1017,7 @@ export function PoolDialog({
   // Until the list answers every stored member stands, so nothing is refused for an id the list may yet hold.
   const refusals = poolRefusals(input, accountsFailed !== null ? null : accountsLoaded ? listed : new Set(Object.keys(form.members)), {
     capture: { maxHours: captureMaxHours, on: form.capture, typed: form.captureHours },
+    identity: { isNew: pool === null, poolIds: new Set(pools.map((p) => p.id)) },
     migrateChanged,
   });
   const refusedFields = new Set(refusals.map((r) => r.field));
@@ -1144,7 +1146,16 @@ export function PoolDialog({
   const bodies: Record<PoolGroup, ReactNode> = {
     identity: (
       <div className="cells">
-        <Field label="Name" className="cell--half" hint="The pool's id is made from this name when the pool is created, and stays when it is renamed.">
+        <Field
+          label="Name"
+          className="cell--half"
+          hint={
+            <>
+              The pool&apos;s id is made from this name when the pool is created, and stays when it is renamed.
+              {pool === null && form.name.trim() !== '' && ` Id: ${draftPoolId}`}
+            </>
+          }
+        >
           <Input value={form.name} onChange={(e) => set('name', e.target.value)} placeholder="research" className="mono" aria-invalid={invalid('Name')} />
         </Field>
         <Field label="Status" className="cell--half" hint="A disabled pool keeps its keys and members but stops accepting requests.">

@@ -367,6 +367,18 @@ test('a retention while capture is on must be a whole number of hours inside the
   assert.equal(d.validatePoolInput(input, accounts, { capture: { maxHours: 72, on: true, typed: '24' } }), true);
 });
 
+test("a new pool's name is refused when its id is taken, by case or by punctuation, or holds no letter or digit", () => {
+  const named = (name, isNew = true) => d.poolRefusals({ ...input, name }, accounts, { identity: { isNew, poolIds: new Set(['codex', 'main']) } });
+  const taken = [{ field: 'Name', group: 'identity', text: 'Another pool already has the id codex.' }];
+  assert.deepEqual(named('Codex'), taken, 'by case');
+  assert.deepEqual(named('codex!'), taken, 'by punctuation');
+  assert.deepEqual(named('研究'), [{ field: 'Name', group: 'identity', text: 'The pool needs a name with a letter or a digit.' }], 'no ASCII letter or digit');
+  assert.deepEqual(named('Codex 2'), [], 'codex-2 is free');
+  assert.deepEqual(named(''), [{ field: 'Name', group: 'identity', text: 'the pool needs a name.' }], 'an empty name draws its own sentence alone');
+  assert.deepEqual(named('Codex', false), [], 'a rename keeps its id and is never held for it');
+  assert.equal(d.slug('codex!'), 'codex', 'the id is the one the create call derives');
+});
+
 test('the Probe tuning rows lay out every numeric keepalive bound but the grace count, in the order the refusals read', () => {
   assert.deepEqual(d.PROBE_TUNING_ROWS, [['leadSeconds5m', 'leadSeconds1h'], ['jitterSeconds5m', 'jitterSeconds1h'], ['coldProbeLimit'], ['retrySeconds', 'retryMaxSeconds'], ['maxIdleSeconds', 'maxIdleTicks']]);
   assert.deepEqual(d.PROBE_TUNING_KEYS, d.PROBE_TUNING_ROWS.flat(), 'the refusals walk the fields in the order the group draws them');

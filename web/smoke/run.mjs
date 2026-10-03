@@ -2459,6 +2459,27 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace',
   await m.settle(200);
 }
 {
+  // A new pool's id is derived from its name the way the create call derives it, so a name whose id a listed pool holds
+  // is held in the dialog rather than refused by the route with an id the operator never saw.
+  [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Create pool')?.click();
+  await m.settle(300);
+  const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
+  const name = [...(group(dlg, 'Identity')?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === 'Name');
+  const input = name?.querySelector('input');
+  if (input) Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(input, 'Codex');
+  input?.dispatchEvent(new window.Event('input', { bubbles: true }));
+  await m.settle(150);
+  const create = [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Create pool');
+  const read = [name?.querySelector('.field__hint')?.textContent ?? '', dlg?.querySelector('.dialog__status')?.textContent ?? '', create?.disabled, input?.getAttribute('aria-invalid')];
+  results.push({
+    name: '/pools typing Codex beside the story pool codex holds Save and shows the id under Name',
+    ok: read[0].endsWith(' Id: codex') && read[1] === 'Save is held: Another pool already has the id codex.Go to Identity' && read[2] === true && read[3] === 'true',
+    missing: read.map(String),
+  });
+  [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
+  await m.settle(200);
+}
+{
   const edit = [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool codex');
   edit?.click();
   await m.settle(300);

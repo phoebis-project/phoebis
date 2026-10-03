@@ -1,4 +1,5 @@
 import type { AccountPatch, KeyInput, PoolEngineFields, PoolInput } from '@/api/client';
+import { slug } from '@/api/http';
 import { AFFINITY_MODE_VALUES, QUOTA_HEADERS_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES } from '@/api/decode';
 import type { Account, AffinitySource, ApiKey, ModelRule, ModelRulesMode, PoolKeepalive } from '@/api/types';
 import { fmtInt, toLocalInput } from './format';
@@ -129,6 +130,8 @@ const listed = (label: string) => `${label} is one of its listed choices.`;
 export interface PoolChecks {
   /** The input sends 0 for an emptied retention as for capture off, so the field is read as typed while capture is on. */
   capture?: { maxHours: number; on: boolean; typed: string };
+  /** On create the id derives from the name, so a taken one is held before the route's 409; a rename keeps its id. */
+  identity?: { isNew: boolean; poolIds: ReadonlySet<string> };
   /** Whether the operator wrote the migrate threshold in this dialog: the form's floor binds a typed value alone. */
   migrateChanged?: boolean;
 }
@@ -147,6 +150,12 @@ export function poolRefusals(input: PoolInput, accountIds: ReadonlySet<string> |
   const affinity = input.affinityTtlSeconds;
 
   refuse('identity', 'Name', input.name.length > 0 ? null : 'the pool needs a name.');
+  if (checks.identity?.isNew && input.name.length > 0) {
+    const id = slug(input.name);
+    // `slug` keeps ASCII letters and digits alone, so a name without one falls back to the id `item`.
+    const unnamed = id === 'item' && !/[a-z0-9]/i.test(input.name);
+    refuse('identity', 'Name', unnamed ? 'The pool needs a name with a letter or a digit.' : checks.identity.poolIds.has(id) ? `Another pool already has the id ${id}.` : null);
+  }
 
   refuse('members', 'members', accountIds !== null ? null : 'the account list did not load, so the members cannot be checked.');
   refuse('members', 'members', input.members.length > 0 ? null : 'the pool needs a member.');
