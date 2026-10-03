@@ -1500,9 +1500,17 @@ async function recentRowsOneLine(theme) {
       range.selectNodeContents(cell);
       return [{ cut: cell.scrollWidth > cell.clientWidth, lines: new Set([...range.getClientRects()].map((r) => Math.round(r.top))).size, text: cell.textContent?.trim() ?? '', title: cell.getAttribute('title') ?? '' }];
     });
-    return { cells, client: wrap?.clientWidth ?? null, scroll: wrap?.scrollWidth ?? null };
+    // The table stretches to its wrap whenever it fits, so its narrowest layout is what tells the room it has left.
+    const table = wrap?.querySelector('table');
+    let least = null;
+    if (table) {
+      table.style.width = 'min-content';
+      least = Math.ceil(table.getBoundingClientRect().width);
+      table.style.width = '';
+    }
+    return { cells, client: wrap?.clientWidth ?? null, least, scroll: wrap?.scrollWidth ?? null };
   });
-  measurements.push(`${theme} / recent table ${read.scroll} of ${read.client}px, model cells ${JSON.stringify(read.cells)}`);
+  measurements.push(`${theme} / recent table ${read.scroll} of ${read.client}px, at least ${read.least}px (slack ${read.client === null || read.least === null ? 'n/a' : read.client - read.least}px), model cells ${JSON.stringify(read.cells)}`);
   if (mock && read.cells.length === 0) failures.push(`${theme} /: the story has recent requests, yet no Model cell is drawn`);
   if (read.client === null) failures.push(`${theme} /: no Recent requests table to measure`);
   else if (read.scroll > read.client) failures.push(`${theme} /: the Recent requests table needs ${read.scroll}px of its card's ${read.client}px`);

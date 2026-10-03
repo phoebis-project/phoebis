@@ -272,6 +272,14 @@
   white-space: nowrap;
 }
 
+/* Eight columns in the narrower of the two cards: at the table's usual padding they need more than the card holds at
+   1280px once the Model cell stops wrapping. */
+.dash__recent th,
+.dash__recent td {
+  padding-left: 8px;
+  padding-right: 8px;
+}
+
 /* The page caps the cell's width in characters, so the box leaves the padding out of that count. */
 .dash__model {
   box-sizing: content-box;

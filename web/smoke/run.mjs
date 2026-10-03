@@ -6074,11 +6074,14 @@ else localStorage.setItem('phoebis.role', roleBeforePreview);
 }
 
 {
-  // The story's newest ten requests at the pinned clock carry undated ids alone, each longer than the Model column
-  // holds, so the recent list leads with the newest request whose model is dated, picked by shape, and the first
-  // undated row reads a short id the column holds whole. Every drawn row is read against the row the list answered.
+  // The story's newest ten requests at the pinned clock carry undated ids alone, each one the Model column holds whole
+  // once its prefix is dropped, so the recent list leads with the newest request whose model is dated, picked by shape;
+  // the first undated row reads a short id with no prefix to drop, and the second one an id too long for the column.
+  // Every drawn row is read against the row the list answered.
   const DATED = /-\d{8}$/;
+  const PREFIX = /^claude-/;
   const SHORT = 'opus-4-1';
+  const LONG = 'claude-opus-4-1-research-preview';
   const datedRequest = requests.filter((r) => DATED.test(r.model)).sort((a, b) => Date.parse(b.at) - Date.parse(a.at))[0];
   const answered = new Map();
   const { listRequests } = api;
@@ -6086,8 +6089,11 @@ else localStorage.setItem('phoebis.role', roleBeforePreview);
     const answer = await listRequests.call(api, query);
     if (!datedRequest) return answer;
     const rows = [datedRequest, ...answer.requests.filter((r) => r.id !== datedRequest.id)].slice(0, answer.requests.length);
-    const shortAt = rows.findIndex((r) => !DATED.test(r.model));
-    if (shortAt >= 0) rows[shortAt] = { ...rows[shortAt], model: SHORT };
+    const undated = rows.flatMap((r, i) => (DATED.test(r.model) ? [] : [i]));
+    if (undated.length > 1) {
+      rows[undated[0]] = { ...rows[undated[0]], model: SHORT };
+      rows[undated[1]] = { ...rows[undated[1]], model: LONG };
+    }
     for (const r of rows) answered.set(r.id, r);
     return { ...answer, requests: rows };
   };
@@ -6096,26 +6102,33 @@ else localStorage.setItem('phoebis.role', roleBeforePreview);
   const modelCells = [...page.container.querySelectorAll('.dash-bottom tbody tr')].flatMap((tr) => {
     const request = answered.get(idOf(tr.querySelector('a[href^="/requests/"]') ?? tr));
     const cell = tr.children[3];
-    return request && cell ? [{ cap: Number.parseFloat(cell.style.maxWidth), cell, model: request.model }] : [];
+    if (!request || !cell) return [];
+    // The column counts characters of the monospace face, so a shown id longer than its cap is the one the ellipsis cuts.
+    const cap = Number.parseFloat(cell.style.maxWidth);
+    const shown = request.model.replace(DATED, '').replace(PREFIX, '');
+    return [{ cap, cell, cut: shown.length > cap, model: request.model, shown, title: shown !== request.model || shown.length > cap ? request.model : null }];
   });
   page.unmount();
   const said = (c) => `${c.model}: ${JSON.stringify(c.cell.textContent)} titled ${JSON.stringify(c.cell.getAttribute('title'))} under a ${c.cell.style.maxWidth || 'missing'} cap`;
+  const wrong = (c) => !(c.cap > 0) || c.cell.textContent !== c.shown || c.cell.getAttribute('title') !== c.title;
   const datedCells = modelCells.filter((c) => DATED.test(c.model));
-  const misdated = datedCells.filter((c) => c.cell.textContent !== c.model.replace(DATED, '') || c.cell.getAttribute('title') !== c.model);
   results.push({
     name: '/ a dated model reads undated with the dated id in its title',
-    ok: datedCells.length > 0 && misdated.length === 0,
-    missing: datedCells.length === 0 ? ['no dated row', ...modelCells.map((c) => c.model)] : misdated.map(said),
+    ok: datedCells.length > 0 && datedCells.every((c) => !wrong(c)),
+    missing: datedCells.length === 0 ? ['no dated row', ...modelCells.map((c) => c.model)] : datedCells.filter(wrong).map(said),
   });
-  // The column counts characters of the monospace face, so an id longer than its cap is the one the ellipsis cuts.
-  const undatedCells = modelCells.filter((c) => !DATED.test(c.model));
-  const cut = undatedCells.filter((c) => c.model.length > c.cap);
-  const whole = undatedCells.filter((c) => c.model.length <= c.cap);
-  const misread = undatedCells.filter((c) => !(c.cap > 0) || c.cell.textContent !== c.model || c.cell.getAttribute('title') !== (c.model.length > c.cap ? c.model : null));
+  const prefixed = modelCells.filter((c) => !DATED.test(c.model) && PREFIX.test(c.model) && !c.cut);
   results.push({
-    name: '/ a model id the Model column cuts carries the whole id in its title, and one it holds whole carries none',
-    ok: cut.length > 0 && whole.length > 0 && misread.length === 0 && new Set(modelCells.map((c) => c.cell.style.maxWidth)).size === 1,
-    missing: [`${cut.length} cut, ${whole.length} whole`, ...misread.map(said)],
+    name: '/ a model id reads without its claude- prefix, the whole id in its title',
+    ok: prefixed.length > 0 && prefixed.every((c) => !wrong(c)),
+    missing: [`${prefixed.length} prefixed`, ...prefixed.filter(wrong).map(said)],
+  });
+  const cut = modelCells.filter((c) => c.cut);
+  const whole = modelCells.filter((c) => c.shown === c.model && !c.cut);
+  results.push({
+    name: '/ a model id the Model column cuts carries the whole id in its title, and one shown as sent carries none',
+    ok: cut.length > 0 && whole.length > 0 && [...cut, ...whole].every((c) => !wrong(c)) && new Set(modelCells.map((c) => c.cell.style.maxWidth)).size === 1,
+    missing: [`${cut.length} cut, ${whole.length} shown as sent`, ...[...cut, ...whole].filter(wrong).map(said)],
   });
 }
 

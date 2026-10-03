@@ -215,15 +215,16 @@ function AccountMini({ account, now }: { account: Account; now: number }) {
 }
 
 /**
- * The Model column's cap in characters of the monospace face: the most the Recent requests table holds at 1280 px with
- * every column's padding as it is, enough to tell the model families apart. A longer id is cut behind an ellipsis.
+ * The Model column's cap in characters of the monospace face: a family and version such as `sonnet-5-5` shows whole,
+ * and a longer id is cut behind an ellipsis. Every Anthropic id starts `claude-`, so the cell drops that prefix and
+ * the date, and its title carries the id as sent whenever the cell shows less of it.
  */
-const MODEL_CHARS = 9;
+const MODEL_CHARS = 12;
 
 function RecentTable({ rows, error }: { error: string | null; rows: RequestLog[] | null }) {
   return (
     <div className="table-wrap">
-      <table className="table">
+      <table className="table dash__recent">
         <thead>
           <tr>
             <th>Time</th>
@@ -254,7 +255,7 @@ function RecentTable({ rows, error }: { error: string | null; rows: RequestLog[]
                   </tr>
                 ))
             : rows.map((r) => {
-                const shown = undatedModel(r.model);
+                const shown = undatedModel(r.model).replace(/^claude-/, '');
                 return (
                   <tr key={r.id}>
                     <td className="num" title={fmtAbsolute(r.at)}>
