@@ -166,7 +166,7 @@ const failoverRow = requests.find((r) => r.attempts.length > 1 && r.attempts.som
     ['Pool exhausted: codex', 'badge--critical', '/pools#codex', ['key: ci', 'pool: codex']],
     ['Client drift: 2.1.271', 'badge--serious', '/keys#laptop', ['client_version: 2.1.271', 'key: laptop', 'trigger: hash']],
     ['Re-auth required: team', 'badge--critical', '/accounts/team', ['account: team', 'label: team']],
-    ['Funding required: Evals workspace', 'badge--serious', '/accounts/evals', ['account: evals', 'label: Evals workspace']],
+    ['Funding required: personal', 'badge--serious', '/accounts/personal', ['account: personal', 'label: personal']],
     ['Credential refresh failed: team', 'badge--critical', '/accounts/team', ['account: team', 'failures: 5', 'last_error: refresh_token rejected: invalid_grant', 'outcome: failed']],
     ['Usage poll backing off: mail', 'badge--warning', '/accounts/mail', ['account: mail', 'backoff_since: <instant>', 'next_attempt_at: <instant>', 'rate_limited_in_a_row: 6']],
   ];
@@ -1174,13 +1174,13 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   }
   const attentionRows = (name) =>
     [...(card(name)?.querySelectorAll('ul.attention > li.attention__row') ?? [])].map((li) => [li.querySelector('.badge')?.textContent?.trim(), li.children[1]?.textContent?.trim(), li.children[1]?.getAttribute('href') ?? null]);
-  // The story's items: codex exhausted and its one member out of funding, the laptop key's client drift and mail's
-  // poll backoff in all, and nothing on studio, whose one member and one key carry no item.
+  // The story's items: codex exhausted; the laptop key's client drift, personal out of funding and mail's poll
+  // backoff in all; and nothing on studio, whose one member and one key carry no item.
   results.push({
     name: "/pools each card draws the dashboard's items that belong to it, the pool's own row unlinked, and a card with none draws no list",
     ok:
-      JSON.stringify(attentionRows('codex')) === JSON.stringify([['Pool exhausted', 'codex', null], ['Funding required', 'Evals workspace', '/accounts/evals']]) &&
-      JSON.stringify(attentionRows('all')) === JSON.stringify([['Client drift', '2.1.271', '/keys#laptop'], ['Usage poll backing off', 'mail', '/accounts/mail']]) &&
+      JSON.stringify(attentionRows('codex')) === JSON.stringify([['Pool exhausted', 'codex', null]]) &&
+      JSON.stringify(attentionRows('all')) === JSON.stringify([['Client drift', '2.1.271', '/keys#laptop'], ['Funding required', 'personal', '/accounts/personal'], ['Usage poll backing off', 'mail', '/accounts/mail']]) &&
       card('studio')?.querySelector('.attention') === null,
     missing: ['codex', 'all', 'studio'].map((name) => `${name}: ${JSON.stringify(attentionRows(name))}`),
   });
