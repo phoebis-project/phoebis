@@ -192,14 +192,13 @@ function AccountDetail({ account, now, onBusyChange, onToast, onPair, onChanged 
   const [catalogOpen, setCatalogOpen] = useState(false);
   const [confirm, setConfirm] = useState<{ body: string; danger?: boolean; label: string; onConfirm: () => void; title: string } | null>(null);
   const [editing, setEditing] = useState(false);
-  const [label, setLabel] = useState(account.label);
+  const [draft, setDraft] = useState('');
   // Null while the subscription end is not being edited.
   const [endForm, setEndForm] = useState<SubscriptionEndForm | null>(null);
   useEffect(() => {
-    setLabel(account.label);
     setEditing(false);
-  }, [account.id, account.label]);
-  useEffect(() => setEndForm(null), [account.id]);
+    setEndForm(null);
+  }, [account.id]);
   // The list holds its refresh while anything here is open or running. The cleanup reports false too: Delete account
   // navigates away inside its action, so the detail can unmount before `busy` clears.
   const held = busy || catalogOpen || confirm !== null || editing || endForm !== null;
@@ -231,6 +230,33 @@ function AccountDetail({ account, now, onBusyChange, onToast, onPair, onChanged 
     }
   };
   const act = (title: string, body: string, label: string, action: () => Promise<unknown>, done: string, danger = false) => setConfirm({ title, body, label, danger, onConfirm: () => void run(action, done) });
+  // The editors close only once the router took the change, so a refusal leaves what was typed in front of the operator.
+  const save = async () => {
+    setBusy(true);
+    try {
+      await api.renameAccount(account.id, draft.trim());
+      onToast('Label saved');
+      onChanged();
+      setEditing(false);
+    } catch (e) {
+      onToast(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const saveEnd = async (form: SubscriptionEndForm) => {
+    setBusy(true);
+    try {
+      await api.updateAccount(account.id, accountPatchOf(form));
+      onToast('Subscription end saved');
+      onChanged();
+      setEndForm(null);
+    } catch (e) {
+      onToast(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   return (
     <div className="detail">
@@ -239,16 +265,8 @@ function AccountDetail({ account, now, onBusyChange, onToast, onPair, onChanged 
           <h2 className="detail__title">
             {editing ? (
               <span className="row">
-                <Input value={label} onChange={(e) => setLabel(e.target.value)} style={{ width: 200 }} autoFocus />
-                <Button
-                  size="sm"
-                  variant="primary"
-                  disabled={busy}
-                  onClick={() => {
-                    setEditing(false);
-                    void run(() => api.renameAccount(account.id, label.trim()), 'Label saved');
-                  }}
-                >
+                <Input value={draft} onChange={(e) => setDraft(e.target.value)} style={{ width: 200 }} autoFocus />
+                <Button size="sm" variant="primary" disabled={busy || draft.trim() === ''} onClick={() => void save()}>
                   Save
                 </Button>
                 <Button size="sm" variant="ghost" onClick={() => setEditing(false)}>
@@ -257,9 +275,17 @@ function AccountDetail({ account, now, onBusyChange, onToast, onPair, onChanged 
               </span>
             ) : (
               <>
-                {label}
+                {account.label}
                 {canMutate && (
-                  <button type="button" className="icon-btn" aria-label="Edit label" onClick={() => setEditing(true)}>
+                  <button
+                    type="button"
+                    className="icon-btn"
+                    aria-label="Edit label"
+                    onClick={() => {
+                      setDraft(account.label);
+                      setEditing(true);
+                    }}
+                  >
                     <IconPencil size={14} />
                   </button>
                 )}
@@ -455,16 +481,7 @@ function AccountDetail({ account, now, onBusyChange, onToast, onPair, onChanged 
                 </div>
               )}
               <span className="row">
-                <Button
-                  size="sm"
-                  variant="primary"
-                  disabled={busy || endRefusal !== null}
-                  onClick={() => {
-                    const patch = accountPatchOf(endForm);
-                    setEndForm(null);
-                    void run(() => api.updateAccount(account.id, patch), 'Subscription end saved');
-                  }}
-                >
+                <Button size="sm" variant="primary" disabled={busy || endRefusal !== null} onClick={() => void saveEnd(endForm)}>
                   Save
                 </Button>
                 <Button size="sm" variant="ghost" onClick={() => setEndForm(null)}>

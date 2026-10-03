@@ -1185,6 +1185,92 @@ await m.navigate('/accounts/spare');
   });
 }
 m.unmount();
+{
+  // A mount of its own on the frozen clock: the shell holds a refusal's route failure for six seconds ahead of the
+  // page's own report, and only a tick takes it down, so neither toast reaches another check's read.
+  const page = await mount('/accounts/business', { now: CLOCK_ORIGIN });
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  const typeInto = async (input, value) => {
+    setter.call(input, value);
+    input?.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await page.settle(100);
+  };
+  const toast = () => page.container.querySelector('.toast')?.textContent ?? '';
+  const title = () => page.container.querySelector('.detail__title');
+  const labelInput = () => title()?.querySelector('input') ?? null;
+  const titleButton = (text) => [...(title()?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === text);
+  const editLabel = async () => {
+    page.container.querySelector('button[aria-label="Edit label"]')?.click();
+    await page.settle(150);
+  };
+  /** The shell's route failure shows first; after its six seconds the page's own report takes its place. */
+  const reports = async () => {
+    const shell = toast();
+    tick(6_000);
+    await page.settle(100);
+    const own = toast();
+    tick(2_400);
+    await page.settle(100);
+    return { own, shell };
+  };
+
+  await editLabel();
+  await typeInto(labelInput(), 'business 2');
+  failNextCall('renameAccount', '/admin/accounts/business', 'that label is taken');
+  titleButton('Save')?.click();
+  await page.settle(600);
+  const typed = labelInput()?.value ?? null;
+  const renamed = await reports();
+  results.push({
+    name: '/accounts a refused rename keeps the editor open with the typed label and reports the sentence',
+    ok: typed === 'business 2' && renamed.shell === '/admin/accounts/business failed: that label is taken' && renamed.own === 'that label is taken',
+    missing: [typed === null ? 'the editor closed' : `input ${typed}`, renamed.shell || 'no route failure', renamed.own || 'no page report'],
+  });
+
+  titleButton('Cancel')?.click();
+  await page.settle(100);
+  const header = title()?.textContent?.trim() ?? '';
+  await editLabel();
+  const reopened = labelInput()?.value ?? null;
+  results.push({
+    name: '/accounts Cancel after typing drops the draft',
+    ok: header === 'business' && reopened === 'business',
+    missing: [`header ${header}`, `reopened ${reopened}`],
+  });
+
+  const blanks = [];
+  for (const value of ['', '   ']) {
+    await typeInto(labelInput(), value);
+    blanks.push(titleButton('Save')?.disabled === true);
+  }
+  results.push({ name: '/accounts an emptied label disables Save', ok: blanks.length === 2 && blanks.every(Boolean), missing: blanks.map(String) });
+  titleButton('Cancel')?.click();
+  await page.settle(100);
+
+  const identity = () => [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Identity');
+  const identityButton = (text) => [...(identity()?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === text);
+  const box = () => identity()?.querySelector('label.row input[type="checkbox"]') ?? null;
+  const field = () => identity()?.querySelector('input[type="datetime-local"]') ?? null;
+  identityButton('Edit end')?.click();
+  await page.settle(100);
+  box()?.click();
+  await page.settle(100);
+  await typeInto(field(), '2027-03-01T10:00');
+  failNextCall('updateAccount', '/admin/accounts/business', 'the store is unavailable');
+  identityButton('Save')?.click();
+  await page.settle(600);
+  const kept = { checked: box()?.checked ?? null, ends: field()?.value ?? null };
+  const ended = await reports();
+  const stored = (await api.listAccounts()).find((a) => a.id === 'business');
+  results.push({
+    name: '/accounts a refused end edit keeps the form with the typed date',
+    ok: kept.checked === true && kept.ends === '2027-03-01T10:00' && ended.shell === '/admin/accounts/business failed: the store is unavailable' && ended.own === 'the store is unavailable' && stored?.cancelled === false,
+    missing: [kept.checked === null ? 'the form closed' : `ticked ${kept.checked}, ends ${kept.ends}`, ended.shell || 'no route failure', ended.own || 'no page report', `stored cancelled ${stored?.cancelled}`],
+  });
+  identityButton('Cancel')?.click();
+  await page.settle(100);
+  page.unmount();
+}
 await readsAgain('/accounts', 'listAccounts');
 
 {
