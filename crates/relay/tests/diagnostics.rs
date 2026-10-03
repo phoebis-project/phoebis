@@ -80,10 +80,20 @@ fn assert_diagnosed_inference_turn(r: &fake_upstream::RecordedRequest, previous:
     );
 }
 
-/// Asserts the shape `cache_diagnostics` forces on a native wire body: the beta ends the caller's list exactly
-/// once, `diagnostics` precedes `stream`, `previous_message_id` matches `previous`, and the member leaves no
-/// signed hash behind: a probe's line carries no `cch`, and an inference turn's carries the placeholder.
+/// Asserts the shape `cache_diagnostics` forces on a native wire body, and that the member leaves no signed hash
+/// behind: a probe's line carries no `cch`, and an inference turn's carries the placeholder.
 fn assert_diagnosed_turn(r: &fake_upstream::RecordedRequest, previous: Option<&str>) {
+    assert_diagnosed_shape(r, previous);
+    assert!(
+        matches!(cch_digits(&r.body), None | Some(b"00000")),
+        "the rewrite leaves the placeholder unsigned: {}",
+        String::from_utf8_lossy(&r.body)
+    );
+}
+
+/// The beta ends the caller's list exactly once, `diagnostics` precedes `stream`, and `previous_message_id` matches
+/// `previous`.
+fn assert_diagnosed_shape(r: &fake_upstream::RecordedRequest, previous: Option<&str>) {
     let beta = beta_header(r).expect("the beta line is present");
     let tokens: Vec<&str> = beta.split(',').map(str::trim).collect();
     assert_eq!(
@@ -105,11 +115,6 @@ fn assert_diagnosed_turn(r: &fake_upstream::RecordedRequest, previous: Option<&s
     let d_at = text.find("\"diagnostics\"").expect("the member is present");
     let s_at = text.find("\"stream\"").expect("the fixture body streams");
     assert!(d_at < s_at, "diagnostics precedes stream: {text}");
-    assert!(
-        matches!(cch_digits(&r.body), None | Some(b"00000")),
-        "the rewrite leaves the placeholder unsigned: {}",
-        String::from_utf8_lossy(&r.body)
-    );
 }
 
 /// The reduced billing line stripped so `cch`, `cc_prompt_id`, and the whole line's insertion are genuinely
@@ -219,7 +224,7 @@ async fn a_client_hash_is_re_signed_over_the_inserted_member() {
         &up,
         &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
         PoolSpec {
-            cache_diagnostics: Some(true),
+            cache_diagnostics: true,
             ..Default::default()
         },
     )
@@ -462,7 +467,13 @@ async fn a_full_shape_request_gets_the_beta_and_the_member_on_a_pool_with_the_sw
     );
     let resp = h.app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), 200);
-    assert_diagnosed_turn(&up.requests()[0], None);
+    let sent = &up.requests()[0];
+    assert_diagnosed_shape(sent, None);
+    assert_eq!(
+        phoebis_cch::sign(&sent.body).unwrap(),
+        sent.body,
+        "the client's own hash is re-signed over the inserted member"
+    );
     up.shutdown().await;
 }
 

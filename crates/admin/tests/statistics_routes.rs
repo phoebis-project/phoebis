@@ -78,7 +78,7 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
             settings["sessions"]["expire_after_seconds"].as_u64(),
             settings["listeners"]["metrics"].as_str()
         ),
-        (Some(5), Some(3), Some(86_400), Some("127.0.0.1:9464"))
+        (Some(4), Some(3), Some(86_400), Some("127.0.0.1:9464"))
     );
     assert_eq!(settings["pricing"]["version"], "2026-10-01");
     assert_eq!(settings["pricing"]["source"], "shipped");

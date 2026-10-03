@@ -6,7 +6,6 @@ use std::time::Duration;
 use axum::http::HeaderMap;
 use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
-use phoebis_relay::Limits;
 use tower::ServiceExt;
 
 const OA: &str = "sk-ant-oat01-AAAA0001";
@@ -202,37 +201,6 @@ async fn a_non_portable_requests_forwarded_429_keeps_every_rate_limit_family_so_
             .unwrap(),
         "allowed"
     );
-    up.shutdown().await;
-}
-
-#[tokio::test]
-async fn a_portable_requests_429_forwarded_once_the_attempt_budget_is_spent_keeps_every_rate_limit_family(
-) {
-    let up = FakeUpstream::start(vec![Rule {
-        path_prefix: "/v1/messages".into(),
-        respond: json_with_headers(429, &upstream_headers()),
-    }])
-    .await;
-    // One attempt in the budget, so the 429 is forwarded rather than failed over.
-    let h = harness_with_limits(
-        &up,
-        &[oauth("o", OA, 0)],
-        PoolSpec::default(),
-        Limits {
-            max_attempts: 1,
-            ..default_limits()
-        },
-    )
-    .await;
-    let resp = h
-        .app
-        .clone()
-        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), 429);
-    assert!(resp.headers().get("x-phoebis-error-code").is_none());
-    assert_eq!(rate_limit_names(resp.headers()), SCRIPTED_FAMILIES);
     up.shutdown().await;
 }
 

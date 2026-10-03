@@ -257,7 +257,15 @@ async fn a_scrape_reads_the_routers_drop_counters_at_gather() {
     .unwrap();
     router.shutdown().await.unwrap();
     router.report(phoebis_routing::Report::MemberSpend(Vec::new()));
-    let gauges = phoebis_ledger::gather(&router, &PriceTable::shipped(), 1_000, 60_000, None).await;
+    let gauges = phoebis_ledger::gather(
+        &router,
+        &PriceTable::shipped(),
+        1_000,
+        60_000,
+        None,
+        AttentionGauges::default(),
+    )
+    .await;
     assert_eq!(
         gauges
             .dropped_reports

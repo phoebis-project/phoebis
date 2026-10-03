@@ -766,6 +766,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             response_bytes: None,
             response_chunks: None,
             held: None,
+            message_id: None,
             finished_at: now,
         }));
     // The GET reads no endpoint of its own, so the capture reads a clean poll's snapshot and standing.
