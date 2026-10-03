@@ -1,4 +1,4 @@
-//! The effective bootstrap values, redacted: a setting's value, never a secret and never the name of the
+//! The bootstrap values the console reads, redacted: a setting's value, never a secret and never the name of the
 //! variable that holds one.
 
 use std::sync::Arc;
@@ -15,17 +15,16 @@ pub(crate) async fn show(State(state): State<Arc<AdminState>>) -> Response {
     let table = state.pricing.current();
     let tables = &state.tables;
     Json(json!({
-        "about": { "profile": s.profile, "version": env!("CARGO_PKG_VERSION"), "public_url": s.admin_origin },
+        "about": { "profile": s.profile, "version": env!("CARGO_PKG_VERSION") },
         "access": { "admin_configured": true },
         "keepalive": s.keepalive,
-        "listeners": { "admin": s.admin_listen, "metrics": s.metrics_listen, "proxy": s.proxy_listen },
+        "listeners": { "metrics": s.metrics_listen, "proxy": s.proxy_listen },
         "plan_tables": { "cost": tables.cost },
         "pricing": crate::pricing::table_json(&table),
-        "retention": { "body_capture_max_hours": s.body_capture_max_hours, "ledger_days": s.retention_days, "rollup_days": s.rollup_retention_days },
-        "routing": { "catalog_refresh_seconds": s.catalog_refresh_seconds, "cooldown_fallback_seconds": s.cooldown_fallback_seconds, "model_rejection_seconds": s.model_rejection_seconds, "startup_fetch_seconds": s.startup_fetch_seconds },
+        "retention": { "body_capture_max_hours": s.body_capture_max_hours },
         "sessions": { "expire_after_seconds": s.session_expire_after_seconds },
         "storage": { "ledger_path": s.ledger_path, "path": s.storage_path, "pricing_path": s.pricing_path },
-        "usage": { "cache_ttl_seconds": s.usage_cache_ttl_seconds, "refresh_concurrency": s.usage_refresh_concurrency },
+        "usage": { "cache_ttl_seconds": s.usage_cache_ttl_seconds },
     }))
     .into_response()
 }

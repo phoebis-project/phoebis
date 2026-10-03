@@ -7538,8 +7538,7 @@ export const FIXTURES: Record<string, Fixture> = {
     "body": {
       "about": {
         "profile": "claude-code-2.1.269-linux-x64",
-        "version": "0.1.0",
-        "public_url": null
+        "version": "0.1.0"
       },
       "access": {
         "admin_configured": true
@@ -7550,7 +7549,6 @@ export const FIXTURES: Record<string, Fixture> = {
         "max_sessions": 128
       },
       "listeners": {
-        "admin": "test",
         "metrics": "127.0.0.1:9464",
         "proxy": "test"
       },
@@ -7787,15 +7785,7 @@ export const FIXTURES: Record<string, Fixture> = {
         ]
       },
       "retention": {
-        "body_capture_max_hours": 72,
-        "ledger_days": 90,
-        "rollup_days": 400
-      },
-      "routing": {
-        "catalog_refresh_seconds": 21600,
-        "cooldown_fallback_seconds": 60,
-        "model_rejection_seconds": 3600,
-        "startup_fetch_seconds": 5
+        "body_capture_max_hours": 72
       },
       "sessions": {
         "expire_after_seconds": 86400
@@ -7806,8 +7796,7 @@ export const FIXTURES: Record<string, Fixture> = {
         "pricing_path": null
       },
       "usage": {
-        "cache_ttl_seconds": 60,
-        "refresh_concurrency": 4
+        "cache_ttl_seconds": 60
       }
     }
   },

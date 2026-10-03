@@ -92,25 +92,19 @@ pub struct AdminState {
 /// at where a credential lives.
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct SettingsView {
-    pub admin_listen: String,
-    pub admin_origin: Option<String>,
     pub body_capture_max_hours: u32,
-    pub catalog_refresh_seconds: u64,
+    /// Not answered by the settings route: the pool and session routes read it to tell whether a cooldown the
+    /// upstream gave no length for still stands.
     pub cooldown_fallback_seconds: u64,
     pub keepalive: KeepaliveLimits,
     pub ledger_path: String,
     pub metrics_listen: String,
-    pub model_rejection_seconds: u64,
     pub pricing_path: Option<String>,
     pub profile: String,
     pub proxy_listen: String,
-    pub retention_days: u32,
-    pub rollup_retention_days: u32,
     pub session_expire_after_seconds: u64,
-    pub startup_fetch_seconds: u64,
     pub storage_path: String,
     pub usage_cache_ttl_seconds: u64,
-    pub usage_refresh_concurrency: usize,
 }
 
 /// Credentials exchanged during pairing, held between the callback and the operator's confirmation.

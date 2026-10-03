@@ -334,15 +334,11 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         pricing: pricing.clone(),
         tables,
         settings: Arc::new(SettingsView {
-            admin_listen: config.admin.listen.to_string(),
-            admin_origin: config.admin.origin.clone(),
             body_capture_max_hours: config.stats.body_capture_max_hours,
-            catalog_refresh_seconds: config.routing.catalog_refresh_seconds,
             cooldown_fallback_seconds: config.routing.cooldown_fallback_seconds,
             keepalive: config.keepalive.clone(),
             ledger_path: config.stats.ledger_path.display().to_string(),
             metrics_listen: config.stats.metrics_listen.to_string(),
-            model_rejection_seconds: config.routing.model_rejection_seconds,
             pricing_path: config
                 .stats
                 .pricing_path
@@ -350,13 +346,9 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
                 .map(|p| p.display().to_string()),
             profile: profile.name.to_string(),
             proxy_listen: config.proxy.listen.to_string(),
-            retention_days: config.stats.retention_days,
-            rollup_retention_days: config.stats.rollup_retention_days,
             session_expire_after_seconds: config.sessions.expire_after_seconds,
-            startup_fetch_seconds: config.routing.startup_fetch_seconds,
             storage_path: config.storage.path.display().to_string(),
             usage_cache_ttl_seconds: config.usage.cache_ttl_seconds,
-            usage_refresh_concurrency: config.usage.refresh_concurrency,
         }),
         // Cloned rather than moved: the local binding still serves the companion router and the shutdown
         // sequence below.

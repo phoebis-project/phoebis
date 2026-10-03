@@ -1472,6 +1472,8 @@ async function keysPageMenus(theme) {
  * The Settings cards in the order an operator uses them, the client block first with its own snippet, and the
  * listener hint spaced from the Optional group's heading as the block is spaced from the hint, so the heading never
  * sits against the hint's last line. The hint reads at the subtitle's size, the size the page's other hints take.
+ * About's lines run in their order at the Storage path line's type and one gap between every two, so the keepalive
+ * limits and the admin secret's badge read as lines of the same list.
  */
 async function settingsOrder(theme) {
   const say = (what) => failures.push(`${theme} /settings: ${what}`);
@@ -1494,8 +1496,30 @@ async function settingsOrder(theme) {
     };
   });
   measurements.push(`${theme} /settings cards ${JSON.stringify(read)}`);
-  const want = ['Downstream client configuration', 'Pricing', 'Appearance', 'Access', 'About'];
+  const want = ['Downstream client configuration', 'Pricing', 'Appearance', 'About'];
   if (JSON.stringify(read.titles) !== JSON.stringify(want)) say(`the cards run ${JSON.stringify(read.titles)}, not ${JSON.stringify(want)}`);
+  const about = await page.evaluate(() => {
+    const card = [...document.querySelectorAll('.settings > .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'About');
+    const rows = [...(card?.querySelectorAll('.kv__row') ?? [])].map((row) => {
+      const dt = row.querySelector('dt');
+      const dd = row.querySelector('dd');
+      const boxes = [dt, dd].map((el) => el?.getBoundingClientRect());
+      const type = (el) => (el ? `${getComputedStyle(el).fontSize} ${getComputedStyle(el).color}` : null);
+      return { bottom: Math.max(...boxes.map((b) => b?.bottom ?? 0)), dt: type(dt), label: dt?.textContent?.trim() ?? '', top: Math.min(...boxes.map((b) => b?.top ?? 0)) };
+    });
+    return {
+      gaps: rows.slice(1).map((row, i) => Math.round((row.top - rows[i].bottom) * 10) / 10),
+      labels: rows.map((row) => row.label),
+      types: rows.map((row) => row.dt),
+    };
+  });
+  measurements.push(`${theme} /settings about ${JSON.stringify(about)}`);
+  const lines = ['Version', 'Profile', 'Metrics listener', 'Ledger path', 'Pricing path', 'Storage path', 'Keepalive sessions', 'Keepalive agents', 'Keepalive retained bytes', 'Admin secret'];
+  if (JSON.stringify(about.labels) !== JSON.stringify(lines)) say(`About runs ${JSON.stringify(about.labels)}, not ${JSON.stringify(lines)}`);
+  const storage = about.types[about.labels.indexOf('Storage path')];
+  const offType = about.labels.filter((label, i) => about.types[i] !== storage);
+  if (offType.length > 0) say(`About's ${offType.join(', ')} read at another type than Storage path's ${storage}`);
+  if (new Set(about.gaps).size > 1) say(`About's lines sit ${JSON.stringify(about.gaps)} px apart, not one gap`);
   if (!read.blockFirst) say("the client block's snippet is not in the first card");
   if (read.above === null || read.below === null) say('no listener hint between the client block and the Optional group');
   else if (read.above < 8 || read.below !== read.above) say(`the hint sits ${read.above} px under the block and ${read.below} px over the Optional group, not one gap on both sides`);

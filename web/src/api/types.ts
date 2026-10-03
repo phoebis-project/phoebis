@@ -986,23 +986,19 @@ export interface CostTable { bands: PlanBand[]; effective: string; tiers: Record
 export interface PlanTables { cost: CostTable }
 
 export interface Settings {
-  about: { profile: string; publicUrl: string | null; version: string };
-  access: { adminConfigured: boolean; viewerConfigured: boolean };
-  /** What the bootstrap file's compatibility block sets, which the route reads and never writes. */
-  compatibility: { cacheDiagnostics: boolean; profile: string };
-  keepalive: { leaseSeconds: number; maxAgents: number; maxRequestBytes: number; maxRetainedBytes: number; maxSessions: number; maxWorkers: number; oauthPrewarmVerified: boolean };
-  listeners: { admin: string; metrics: string; proxy: string };
+  about: { profile: string; version: string };
+  access: { adminConfigured: boolean };
+  keepalive: { maxAgents: number; maxRetainedBytes: number; maxSessions: number };
+  listeners: { metrics: string; proxy: string };
   planTables: PlanTables;
   /** The price table shown to the user and used to cost the ledger. */
   pricing: { effectiveDate: string; models: ModelPrice[]; source: string };
-  quota: { sampleRetentionDays: number };
-  retention: { bodyCaptureMaxHours: number; ledgerDays: number; quotaSamplesDays: number; rollupDays: number };
-  routing: { catalogCacheSeconds: number; catalogRefreshSeconds: number; cooldownFallbackSeconds: number; modelRejectionSeconds: number; startupFetchSeconds: number };
+  retention: { bodyCaptureMaxHours: number };
   /** How long a session stays listed after its last activity. */
   sessions: { expireAfterSeconds: number };
   /** `pricingPath` is null when no override file is configured. */
   storage: { ledgerPath: string; path: string; pricingPath: string | null };
-  usage: { cacheTtlSeconds: number; refreshConcurrency: number };
+  usage: { cacheTtlSeconds: number };
 }
 
 export interface SessionInfo {

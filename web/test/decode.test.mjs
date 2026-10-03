@@ -1009,22 +1009,51 @@ test('a placement row and a member budget keep the figures the routes leave null
   assert.equal(d.decodeMemberBudget({ ...member, kind: 'robot' }).kind, 'oauth', "a kind outside the two reads as the pool member's decoder reads it");
 });
 
-test('a settings answer with no compatibility block reads the defaults the router ships with', () => {
-  const bare = fixture('settings');
-  assert.equal(bare.compatibility, undefined, 'the route answers no compatibility block');
-  assert.deepEqual(d.decodeSettings(bare).compatibility, { cacheDiagnostics: false, profile: 'claude-code-2.1.269-linux-x64' }, 'the profile falls back to the one the about block carries, and the rest to what the router does without the block');
-  assert.deepEqual(d.decodeSettings({ ...bare, about: { ...bare.about, profile: 'claude-code-9.9.9-linux-x64' } }).compatibility.profile, 'claude-code-9.9.9-linux-x64');
-});
-
-test('settings decode the quota, routing, storage, and usage blocks the route answers', () => {
+test('settings decode the members the route answers and nothing more', () => {
   const wire = fixture('settings');
   const s = d.decodeSettings(wire);
-  assert.deepEqual(s.quota, { sampleRetentionDays: 0 }, 'the route answers no quota block, which reads as zero');
-  assert.equal(s.retention.quotaSamplesDays, 0, 'the samples follow the ledger window, so the route answers no member of their own');
-  assert.deepEqual(s.routing, { catalogCacheSeconds: 0, catalogRefreshSeconds: wire.routing.catalog_refresh_seconds, cooldownFallbackSeconds: wire.routing.cooldown_fallback_seconds, modelRejectionSeconds: wire.routing.model_rejection_seconds, startupFetchSeconds: wire.routing.startup_fetch_seconds });
+  assert.deepEqual(
+    Object.keys(s).sort(),
+    ['about', 'access', 'keepalive', 'listeners', 'planTables', 'pricing', 'retention', 'sessions', 'storage', 'usage'],
+  );
+  const members = Object.fromEntries(Object.entries(s).map(([name, body]) => [name, Object.keys(body).sort()]));
+  assert.deepEqual(
+    members,
+    {
+      about: ['profile', 'version'],
+      access: ['adminConfigured'],
+      keepalive: ['maxAgents', 'maxRetainedBytes', 'maxSessions'],
+      listeners: ['metrics', 'proxy'],
+      planTables: ['cost'],
+      pricing: ['effectiveDate', 'models', 'source'],
+      retention: ['bodyCaptureMaxHours'],
+      sessions: ['expireAfterSeconds'],
+      storage: ['ledgerPath', 'path', 'pricingPath'],
+      usage: ['cacheTtlSeconds'],
+    },
+    'each member carries what the pages read and no other key',
+  );
+  assert.deepEqual(s.keepalive, { maxAgents: wire.keepalive.max_agents, maxRetainedBytes: wire.keepalive.max_retained_bytes, maxSessions: wire.keepalive.max_sessions });
   assert.deepEqual(s.storage, { ledgerPath: wire.storage.ledger_path, path: wire.storage.path, pricingPath: null }, 'no override file is a null path, never an empty one');
-  assert.deepEqual(s.usage, { cacheTtlSeconds: wire.usage.cache_ttl_seconds, refreshConcurrency: wire.usage.refresh_concurrency });
+  assert.deepEqual(s.usage, { cacheTtlSeconds: wire.usage.cache_ttl_seconds });
   assert.equal(d.decodeSettings({ ...wire, storage: { ...wire.storage, pricing_path: './pricing.yaml' } }).storage.pricingPath, './pricing.yaml');
+});
+
+test('a settings member the answer leaves out decodes to its default', () => {
+  const wire = fixture('settings');
+  const without = (name) => {
+    const bare = { ...wire };
+    delete bare[name];
+    return d.decodeSettings(bare)[name];
+  };
+  assert.deepEqual(without('about'), { profile: '', version: '' });
+  assert.deepEqual(without('access'), { adminConfigured: true }, 'no session reaches the console without the admin secret');
+  assert.deepEqual(without('keepalive'), { maxAgents: 0, maxRetainedBytes: 0, maxSessions: 0 });
+  assert.deepEqual(without('listeners'), { metrics: '', proxy: '' });
+  assert.deepEqual(without('retention'), { bodyCaptureMaxHours: 0 });
+  assert.deepEqual(without('sessions'), { expireAfterSeconds: 0 });
+  assert.deepEqual(without('storage'), { ledgerPath: '', path: '', pricingPath: null });
+  assert.deepEqual(without('usage'), { cacheTtlSeconds: 0 });
 });
 
 test('settings decode the cost table with its tiers and null for unmeasured', () => {
@@ -1054,16 +1083,9 @@ test('an account patch encodes the cancelled flag and its end', () => {
 
 test('settings, pricing, pairing, quota, and usage decode', () => {
   const s = d.decodeSettings(fixture('settings'));
-  assert.equal(s.access.viewerConfigured, false);
-  assert.equal(s.about.publicUrl, null);
   assert.equal(s.sessions.expireAfterSeconds, 86400);
-  assert.deepEqual(
-    [s.keepalive.maxSessions, s.keepalive.leaseSeconds, s.keepalive.maxRequestBytes, s.keepalive.maxWorkers, s.keepalive.oauthPrewarmVerified],
-    [128, 0, 0, 0, false],
-    'the route answers the three keepalive limits the file keeps; the rest read as their absent defaults',
-  );
+  assert.deepEqual(s.keepalive, { maxAgents: 1024, maxRetainedBytes: 268_435_456, maxSessions: 128 });
   assert.equal(s.listeners.metrics, '127.0.0.1:9464');
-  assert.deepEqual(s.compatibility, { cacheDiagnostics: false, profile: 'claude-code-2.1.269-linux-x64' });
   assert.equal(s.pricing.models.find((m) => m.model === 'claude-sonnet-5').inputPerM, 2);
   const pairing = d.decodePairingSession(fixture('pairing_started'));
   assert.ok(pairing.id && pairing.state && pairing.authorizeUrl.includes('state=') && isIso(pairing.expiresAt));

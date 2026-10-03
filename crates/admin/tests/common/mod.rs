@@ -822,25 +822,17 @@ async fn build_app(
         usage: Some(usage.clone()),
     });
     let settings = Arc::new(SettingsView {
-        admin_listen: "test".into(),
-        admin_origin: origin.clone(),
         body_capture_max_hours: BODY_CAPTURE_MAX_HOURS,
-        catalog_refresh_seconds: 21_600,
         cooldown_fallback_seconds: 60,
         keepalive: KeepaliveLimits::default(),
         ledger_path: "test".into(),
         metrics_listen: "127.0.0.1:9464".into(),
-        model_rejection_seconds: 3_600,
         pricing_path: None,
         profile: p.name.into(),
         proxy_listen: "test".into(),
-        retention_days: 90,
-        rollup_retention_days: 400,
         session_expire_after_seconds: 86_400,
-        startup_fetch_seconds: 5,
         storage_path: "test".into(),
         usage_cache_ttl_seconds: 60,
-        usage_refresh_concurrency: 4,
     });
     let vault = Arc::new(PairingVault::new());
     let state = Arc::new(AdminState {

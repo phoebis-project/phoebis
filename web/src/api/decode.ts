@@ -553,29 +553,20 @@ const decodePlanTables = (v: unknown): PlanTables => {
 
 export function decodeSettings(v: unknown): Settings {
   const s = rec(v);
-  const c = rec(s.compatibility);
   const k = rec(s.keepalive);
-  const r = rec(s.retention);
   const l = rec(s.listeners);
-  const q = rec(s.quota);
-  const route = rec(s.routing);
   const store = rec(s.storage);
-  const u = rec(s.usage);
   return {
-    about: { profile: str(rec(s.about).profile), publicUrl: strOrNull(rec(s.about).public_url), version: str(rec(s.about).version) },
-    access: { adminConfigured: bool(rec(s.access).admin_configured, true), viewerConfigured: bool(rec(s.access).viewer_configured) },
-    // A router too old to answer the block behaves as the block's own defaults describe, and runs the profile the about card already shows.
-    compatibility: { cacheDiagnostics: bool(c.cache_diagnostics), profile: str(c.profile, str(rec(s.about).profile)) },
-    keepalive: { leaseSeconds: num(k.lease_seconds), maxAgents: num(k.max_agents), maxRequestBytes: num(k.max_request_bytes), maxRetainedBytes: num(k.max_retained_bytes), maxSessions: num(k.max_sessions), maxWorkers: num(k.max_workers), oauthPrewarmVerified: bool(k.oauth_prewarm_verified) },
-    listeners: { admin: str(l.admin), metrics: str(l.metrics), proxy: str(l.proxy) },
+    about: { profile: str(rec(s.about).profile), version: str(rec(s.about).version) },
+    access: { adminConfigured: bool(rec(s.access).admin_configured, true) },
+    keepalive: { maxAgents: num(k.max_agents), maxRetainedBytes: num(k.max_retained_bytes), maxSessions: num(k.max_sessions) },
+    listeners: { metrics: str(l.metrics), proxy: str(l.proxy) },
     planTables: decodePlanTables(s.plan_tables),
     pricing: decodePricing(s.pricing),
-    quota: { sampleRetentionDays: num(q.sample_retention_days) },
-    retention: { bodyCaptureMaxHours: num(r.body_capture_max_hours), ledgerDays: num(r.ledger_days), quotaSamplesDays: num(r.quota_samples_days), rollupDays: num(r.rollup_days) },
-    routing: { catalogCacheSeconds: num(route.catalog_cache_seconds), catalogRefreshSeconds: num(route.catalog_refresh_seconds), cooldownFallbackSeconds: num(route.cooldown_fallback_seconds), modelRejectionSeconds: num(route.model_rejection_seconds), startupFetchSeconds: num(route.startup_fetch_seconds) },
+    retention: { bodyCaptureMaxHours: num(rec(s.retention).body_capture_max_hours) },
     sessions: { expireAfterSeconds: num(rec(s.sessions).expire_after_seconds) },
     storage: { ledgerPath: str(store.ledger_path), path: str(store.path), pricingPath: strOrNull(store.pricing_path) },
-    usage: { cacheTtlSeconds: num(u.cache_ttl_seconds), refreshConcurrency: num(u.refresh_concurrency) },
+    usage: { cacheTtlSeconds: num(rec(s.usage).cache_ttl_seconds) },
   };
 }
 

@@ -3,7 +3,7 @@ import type { FastPrice, Settings } from '@/api/types';
 import { useAppSettings, type ThemeChoice } from '@/app/settings';
 import { IconMonitor, IconMoon, IconSun } from '@/components/ui/icons';
 import { Badge, Button, Card, CopyButton, ErrorState, KeyValue, Segmented, Skeleton } from '@/components/ui/primitives';
-import { fmtDate } from '@/lib/format';
+import { fmtDate, fmtMiB } from '@/lib/format';
 import type { TimeFormat } from '@/lib/format';
 import { useAsync } from '@/lib/hooks';
 import { snippetFor } from '@/lib/snippet';
@@ -52,6 +52,7 @@ const ENV_TERMS: { body: string; term: string }[] = [
 
 /** These come from the bootstrap file and the admin API only reads them, so each says where it is set. */
 const bootstrapNote = (setting: string) => `Set by ${setting} in the bootstrap file`;
+const restartNote = (key: string) => `${key}\nSet in the configuration file; a change takes a restart.`;
 
 type PriceField = 'cacheReadPerM' | 'cacheWrite1hPerM' | 'cacheWrite5mPerM' | 'inputPerM' | 'outputPerM';
 
@@ -74,7 +75,6 @@ function sourceLabel(source: string): string {
   return source;
 }
 
-/** The admin secret reads configured while the settings load, since no session reaches this page without one. */
 function SecretBadge({ configured }: { configured: boolean }) {
   return <Badge tone={configured ? 'good' : 'warning'}>{configured ? 'configured' : 'not configured'}</Badge>;
 }
@@ -155,27 +155,6 @@ export function SettingsPage() {
         </div>
       </Card>
 
-      <Card title="Access" subtitle="Two shared secrets, both set in the router's environment.">
-        <div className="setting-row">
-          <div>
-            <b>Admin secret</b>
-            <p className="muted">
-              The secret the variable <code>admin.secret_env</code> names. Full read and write, including captured bodies.
-            </p>
-          </div>
-          <SecretBadge configured={s?.access.adminConfigured ?? true} />
-        </div>
-        <div className="setting-row">
-          <div>
-            <b>Viewer secret</b>
-            <p className="muted">
-              The secret the variable <code>admin.viewer_secret_env</code> names. Reads everything except captured bodies and live previews. Cannot create, edit, or delete.
-            </p>
-          </div>
-          <SecretBadge configured={s?.access.viewerConfigured ?? false} />
-        </div>
-      </Card>
-
       <Card title="About">
         {s ? (
           <>
@@ -187,6 +166,10 @@ export function SettingsPage() {
                 { label: 'Ledger path', value: s.storage.ledgerPath, mono: true, title: bootstrapNote('stats.ledger_path') },
                 { label: 'Pricing path', value: s.storage.pricingPath ?? 'not configured', mono: s.storage.pricingPath !== null, title: bootstrapNote('stats.pricing_path') },
                 { label: 'Storage path', value: s.storage.path, mono: true, title: bootstrapNote('storage.path') },
+                { label: 'Keepalive sessions', value: String(s.keepalive.maxSessions), mono: true, title: restartNote('keepalive.max_sessions') },
+                { label: 'Keepalive agents', value: String(s.keepalive.maxAgents), mono: true, title: restartNote('keepalive.max_agents') },
+                { label: 'Keepalive retained bytes', value: fmtMiB(s.keepalive.maxRetainedBytes), mono: true, title: restartNote('keepalive.max_retained_bytes') },
+                { label: 'Admin secret', value: <SecretBadge configured={s.access.adminConfigured} />, title: 'The secret the variable admin.secret_env names; it reaches every route.' },
               ]}
             />
             <p className="muted" style={{ marginTop: 10 }}>

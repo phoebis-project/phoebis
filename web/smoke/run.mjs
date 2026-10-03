@@ -5753,7 +5753,7 @@ m.unmount();
   const rows = [...(about()?.querySelectorAll('.kv__row dt') ?? [])].map((dt) => dt.textContent?.trim());
   results.push({
     name: '/settings Try again reads the settings into About and the hint beside the block',
-    ok: JSON.stringify(rows) === JSON.stringify(['Version', 'Profile', 'Metrics listener', 'Ledger path', 'Pricing path', 'Storage path']) && about()?.querySelector('.empty--error') === null && failed.container.querySelector('pre.snippet + p.snippet__hint') !== null,
+    ok: JSON.stringify(rows) === JSON.stringify(['Version', 'Profile', 'Metrics listener', 'Ledger path', 'Pricing path', 'Storage path', 'Keepalive sessions', 'Keepalive agents', 'Keepalive retained bytes', 'Admin secret']) && about()?.querySelector('.empty--error') === null && failed.container.querySelector('pre.snippet + p.snippet__hint') !== null,
     missing: rows,
   });
   failed.unmount();
@@ -5781,17 +5781,25 @@ m.unmount();
 }
 
 m = await mount('/settings');
-expect('/settings', m.text(), ['Downstream client configuration', 'Pricing', 'Appearance', 'Access', 'About', 'Theme', 'Time format', 'Admin secret', 'Viewer secret', 'except captured bodies and live previews', 'claude-fable-5-1', 'ANTHROPIC_BASE_URL=https://router.example.com', 'CLAUDE_CODE_OAUTH_TOKEN=<key>', '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1', 'CLAUDE_CODE_GATEWAY_HINT_HEADERS=1', 'DISABLE_TELEMETRY=1', 'CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1', 'Inference is served on 127.0.0.1:8080', 'Version', 'Profile', 'Metrics listener', 'Ledger path', 'Pricing path', 'Storage path', "prints this router's"]);
+expect('/settings', m.text(), ['Downstream client configuration', 'Pricing', 'Appearance', 'About', 'Theme', 'Time format', 'Admin secret', 'claude-fable-5-1', 'ANTHROPIC_BASE_URL=https://router.example.com', 'CLAUDE_CODE_OAUTH_TOKEN=<key>', '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1', 'CLAUDE_CODE_GATEWAY_HINT_HEADERS=1', 'DISABLE_TELEMETRY=1', 'CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1', 'Inference is served on 127.0.0.1:8080', 'Version', 'Profile', 'Metrics listener', 'Ledger path', 'Pricing path', 'Storage path', "prints this router's"]);
 results.push({ name: '/settings has no statusline mention', ok: !/statusline/i.test(m.text()), missing: [] });
 results.push({ name: '/settings has no retention save button', ok: ![...m.container.querySelectorAll('button')].some((b) => b.textContent?.trim() === 'Save retention'), missing: [] });
 {
   const titles = [...m.container.querySelectorAll('.settings > .card .card__title')].map((t) => t.textContent?.trim());
-  results.push({ name: '/settings the cards run client block, Pricing, Appearance, Access, About', ok: JSON.stringify(titles) === JSON.stringify(['Downstream client configuration', 'Pricing', 'Appearance', 'Access', 'About']), missing: titles });
+  results.push({ name: '/settings the cards run client block, Pricing, Appearance, About', ok: JSON.stringify(titles) === JSON.stringify(['Downstream client configuration', 'Pricing', 'Appearance', 'About']), missing: titles });
   const subtitle = m.container.querySelector('.settings > .card')?.querySelector('.card__subtitle')?.textContent;
   results.push({ name: "/settings the client block's subtitle names the settings file and the shell", ok: subtitle === "Put it in the env block of the client's settings file or export it in the shell that launches the client, and replace the token with a key from the Keys page.", missing: [subtitle ?? 'no subtitle'] });
   const about = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'About');
   const rows = [...(about?.querySelectorAll('.kv__row') ?? [])].map((r) => `${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.textContent?.trim()}`);
-  results.push({ name: '/settings About lists the version, the profile, the metrics listener and the three paths, then the installation sentence', ok: JSON.stringify(rows) === JSON.stringify([`Version=${MOCK_VERSION}`, 'Profile=claude-code-2.1.269-linux-x64', 'Metrics listener=127.0.0.1:9464', 'Ledger path=./data/ledger.sqlite', 'Pricing path=./pricing.yaml', 'Storage path=./data/router.sqlite']) && (about?.textContent ?? '').includes("The values the configuration file sets are on the installation page; phoebis check-config prints this router's.") && !(about?.textContent ?? '').includes('Public URL'), missing: rows });
+  // The mock stores 268435456 retained bytes, which is 256 MiB.
+  results.push({ name: '/settings About lists the version, the profile, the metrics listener, the three paths, the three keepalive limits and the admin secret, then the installation sentence', ok: JSON.stringify(rows) === JSON.stringify([`Version=${MOCK_VERSION}`, 'Profile=claude-code-2.1.269-linux-x64', 'Metrics listener=127.0.0.1:9464', 'Ledger path=./data/ledger.sqlite', 'Pricing path=./pricing.yaml', 'Storage path=./data/router.sqlite', 'Keepalive sessions=128', 'Keepalive agents=1024', 'Keepalive retained bytes=256 MiB', 'Admin secret=configured']) && (about?.textContent ?? '').includes("The values the configuration file sets are on the installation page; phoebis check-config prints this router's.") && !(about?.textContent ?? '').includes('Public URL'), missing: rows });
+  const titled = [...(about?.querySelectorAll('.kv__row') ?? [])].slice(6).map((r) => `${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.getAttribute('title')}`);
+  const restart = 'Set in the configuration file; a change takes a restart.';
+  results.push({
+    name: '/settings each keepalive line names its file key and the restart, and the admin secret line its variable',
+    ok: JSON.stringify(titled) === JSON.stringify([`Keepalive sessions=keepalive.max_sessions\n${restart}`, `Keepalive agents=keepalive.max_agents\n${restart}`, `Keepalive retained bytes=keepalive.max_retained_bytes\n${restart}`, 'Admin secret=The secret the variable admin.secret_env names; it reaches every route.']) && about?.querySelector('.kv__row:last-child dd .badge.badge--good') !== null,
+    missing: titled,
+  });
   const mirrored = ['Body capture, max hours', 'Cache TTL (seconds)', 'Catalog refresh (seconds)', 'Max workers', 'Sample retention (days)'].filter((w) => m.text().includes(w));
   results.push({ name: '/settings carries no mirror words', ok: mirrored.length === 0, missing: mirrored });
   results.push({ name: '/settings no card reads a configuration mirror', ok: ['Sessions', 'Retention', 'Keepalive', 'Listeners', 'Compatibility', 'Quota', 'Routing', 'Storage', 'Usage'].every((t) => !titles.includes(t)) && !m.text().includes('Session expiry') && !m.text().includes('HTTP/1.1') && !m.text().includes('https://router.home.example'), missing: titles });

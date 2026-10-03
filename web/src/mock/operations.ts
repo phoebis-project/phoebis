@@ -308,18 +308,15 @@ export const KEEPALIVE_OVERVIEW: KeepaliveOverview = {
 
 export const SETTINGS: Settings = {
   ...SETTINGS_SAMPLE,
-  about: { profile: 'claude-code-2.1.269-linux-x64', publicUrl: 'https://router.home.example', version: SETTINGS_SAMPLE.about.version },
-  access: { adminConfigured: true, viewerConfigured: true },
-  compatibility: { cacheDiagnostics: false, profile: 'claude-code-2.1.269-linux-x64' },
-  keepalive: { leaseSeconds: 90, maxAgents: 1024, maxRequestBytes: 8_388_608, maxRetainedBytes: 268_435_456, maxSessions: 128, maxWorkers: 4, oauthPrewarmVerified: false },
-  listeners: { admin: '127.0.0.1:8081', metrics: '127.0.0.1:9464', proxy: '127.0.0.1:8080' },
+  about: { profile: 'claude-code-2.1.269-linux-x64', version: SETTINGS_SAMPLE.about.version },
+  access: { adminConfigured: true },
+  keepalive: { maxAgents: 1024, maxRetainedBytes: 268_435_456, maxSessions: 128 },
+  listeners: { metrics: '127.0.0.1:9464', proxy: '127.0.0.1:8080' },
   // The route answers the table the ledger ships, so the captured answer is the table itself.
   planTables: SETTINGS_SAMPLE.planTables,
   pricing: { effectiveDate: '2026-09-30', models: PRICES, source: 'shipped' },
-  quota: { sampleRetentionDays: 30 },
-  retention: { bodyCaptureMaxHours: 72, ledgerDays: 90, quotaSamplesDays: 30, rollupDays: 400 },
-  routing: { catalogCacheSeconds: 60, catalogRefreshSeconds: 21_600, cooldownFallbackSeconds: 60, modelRejectionSeconds: 3_600, startupFetchSeconds: 5 },
+  retention: { bodyCaptureMaxHours: 72 },
   sessions: { expireAfterSeconds: 86_400 },
   storage: { ledgerPath: './data/ledger.sqlite', path: './data/router.sqlite', pricingPath: './pricing.yaml' },
-  usage: { cacheTtlSeconds: 60, refreshConcurrency: 2 },
+  usage: { cacheTtlSeconds: 60 },
 };

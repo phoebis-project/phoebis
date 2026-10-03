@@ -54,31 +54,69 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
     let settings = json(get(&parts.app, "/admin/settings", Some(&cookie)).await).await;
+    let keys_of = |member: &serde_json::Value| {
+        let mut keys: Vec<String> = member
+            .as_object()
+            .map(|body| body.keys().cloned().collect())
+            .unwrap_or_default();
+        keys.sort();
+        keys
+    };
+    let mut members: Vec<(String, Vec<String>)> = settings
+        .as_object()
+        .map(|top| {
+            top.iter()
+                .map(|(name, body)| (name.clone(), keys_of(body)))
+                .collect()
+        })
+        .unwrap_or_default();
+    members.sort();
+    let expected: Vec<(String, Vec<String>)> = [
+        ("about", &["profile", "version"][..]),
+        ("access", &["admin_configured"]),
+        (
+            "keepalive",
+            &["max_agents", "max_retained_bytes", "max_sessions"],
+        ),
+        ("listeners", &["metrics", "proxy"]),
+        ("plan_tables", &["cost"]),
+        ("pricing", &["effective", "models", "source", "version"]),
+        ("retention", &["body_capture_max_hours"]),
+        ("sessions", &["expire_after_seconds"]),
+        ("storage", &["ledger_path", "path", "pricing_path"]),
+        ("usage", &["cache_ttl_seconds"]),
+    ]
+    .iter()
+    .map(|(name, keys)| {
+        (
+            name.to_string(),
+            keys.iter().map(|key| key.to_string()).collect(),
+        )
+    })
+    .collect();
+    assert_eq!(
+        members, expected,
+        "the route answers what the console reads and no other member: {settings}"
+    );
     assert_eq!(
         (
-            settings["retention"]["ledger_days"].as_u64(),
             settings["retention"]["body_capture_max_hours"].as_u64(),
-            settings["retention"]
-                .as_object()
-                .map(|retention| retention.len())
-        ),
-        (Some(90), Some(72), Some(3)),
-        "the samples follow the ledger's own window, so retention has three members"
-    );
-    assert!(
-        settings["compatibility"].is_null() && settings["quota"].is_null(),
-        "neither removed block is answered: {settings}"
-    );
-    assert_eq!(
-        (
-            settings["routing"].as_object().map(|routing| routing.len()),
-            settings["keepalive"]
-                .as_object()
-                .map(|keepalive| keepalive.len()),
+            settings["keepalive"]["max_agents"].as_u64(),
+            settings["keepalive"]["max_retained_bytes"].as_u64(),
+            settings["keepalive"]["max_sessions"].as_u64(),
             settings["sessions"]["expire_after_seconds"].as_u64(),
-            settings["listeners"]["metrics"].as_str()
+            settings["listeners"]["metrics"].as_str(),
+            settings["usage"]["cache_ttl_seconds"].as_u64()
         ),
-        (Some(4), Some(3), Some(86_400), Some("127.0.0.1:9464"))
+        (
+            Some(72),
+            Some(1_024),
+            Some(268_435_456),
+            Some(128),
+            Some(86_400),
+            Some("127.0.0.1:9464"),
+            Some(60)
+        )
     );
     assert_eq!(settings["pricing"]["version"], "2026-10-01");
     assert_eq!(settings["pricing"]["source"], "shipped");

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { earlierHolderLabel, fmtAbsolute, fmtEndsIn, fmtHourTick, fmtShare, fmtShortTime, fmtTime, fmtUsd, placementHit, setTimeFormat } from './dist/api.js';
+import { earlierHolderLabel, fmtAbsolute, fmtEndsIn, fmtHourTick, fmtMiB, fmtShare, fmtShortTime, fmtTime, fmtUsd, placementHit, setTimeFormat } from './dist/api.js';
 
 test('a placement is a hit when the cache read what it promised: a content one its prefix, any other one anything', () => {
   const content = { depth: 3, prefixTokens: 130_000, rung: 'content' };
@@ -71,4 +71,10 @@ test('a window share reads as a percent to three significant digits with no trai
   assert.equal(fmtShare(0.125), '12.5%');
   assert.equal(fmtShare(0.0061), '0.61%', 'a trailing zero drops');
   assert.equal(fmtShare(0.0000571), '0.00571%', 'a small share keeps its three digits');
+});
+
+test('a byte count reads in MiB, a whole number without decimals and any other to one decimal', () => {
+  assert.equal(fmtMiB(268_435_456), '256 MiB');
+  assert.equal(fmtMiB(1_572_864), '1.5 MiB');
+  assert.equal(fmtMiB(0), '0 MiB');
 });

@@ -14,17 +14,17 @@ ink), the cell grid through an expert field's wrapper (a half cell beside the pl
 the sidebar's brand row (the mark's box 36 px square with the logo drawn 26 px square in it, the name 17 px at weight
 600 on one line and inside the sidebar's content box), the sidebar's Expert view row above the version line, pool chips,
 the caching controls, the select-below threshold, the load groups, the pool card's serving table and tiles, the settings
-cards' order and the listener hint's gaps and size, the Delete account button, the account lines, the remaining cards,
-the error state, the cost-cap rows, the live feed, the wasted-probe rows, the burn cards, the plan legend's model
-unlisted entry, the placement and budget tables, the speed filter, the traffic cards (each
-Analytics check opens the tab it reads and returns to Traffic), the tab strip docked under the filter bar at the end of
-the Latency tab, the fast lane, the request drawer, which opens once the request list's shot is taken, the subscription
-end editor, the catalog popup, the key dialog's Access selects, the Pool select against the Status select, the
-Sessions lead and its disclosure at 1280 by 800 and 1440 by 900 (the head's height closed and open, the button on the
-sentence's last line or flush left on the next, the opened paragraph 6 px under the lead, Cost reference one line at the
-head's top right), the cost reference, the agent lines, the fork link, which is followed
-once the session list's shot is taken). A check that opens an editor, a dialog or a row closes it again before the
-view's shot.
+cards' order, the listener hint's gaps and size and About's lines (their order, one type and one gap), the Delete
+account button, the account lines, the remaining cards, the error state, the cost-cap rows, the live feed, the
+wasted-probe rows, the burn cards, the plan legend's model unlisted entry, the placement and budget tables,
+the speed filter, the traffic cards (each Analytics check opens the tab it reads and returns to Traffic), the
+tab strip docked under the filter bar at the end of the Latency tab, the fast lane, the request drawer, which opens once
+the request list's shot is taken, the subscription end editor, the catalog popup, the key dialog's Access selects, the
+Pool select against the Status select, the Sessions lead and its disclosure at 1280 by 800 and 1440 by 900 (the head's
+height closed and open, the button on the sentence's last line or flush left on the next, the opened paragraph 6 px
+under the lead, Cost reference one line at the head's top right), the cost reference, the agent lines,
+the fork link, which is followed once the session list's shot is taken). A check that opens an editor, a
+dialog or a row closes it again before the view's shot.
 The script exits non-zero with the list of failures when any of that does not hold.
 
 The screenshot directory has to lie outside the repository, which the script enforces against every worktree `git

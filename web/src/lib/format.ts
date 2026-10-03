@@ -30,6 +30,10 @@ export const fmtPct = (ratio: number, digits = 0) => `${(ratio * 100).toFixed(di
 export const fmtShare = (ratio: number) => `${Number((ratio * 100).toPrecision(3))}%`;
 export const fmtMs = (ms: number | null) => (ms === null ? '-' : ms >= 1000 ? `${(ms / 1000).toFixed(ms >= 10_000 ? 0 : 1)} s` : `${Math.round(ms)} ms`);
 export const fmtCredits = (credits: number) => usd.format(credits / 100);
+export const fmtMiB = (bytes: number) => {
+  const mib = bytes / 1_048_576;
+  return `${Number.isInteger(mib) ? mib : mib.toFixed(1)} MiB`;
+};
 
 export function fmtDuration(ms: number): string {
   const abs = Math.abs(ms);
