@@ -50,8 +50,8 @@ const ENV_TERMS: { body: string; term: string }[] = [
   },
 ];
 
-/** These come from the bootstrap file and the admin API only reads them, so each says where it is set. */
-const bootstrapNote = (setting: string) => `Set by ${setting} in the bootstrap file`;
+/** These come from the configuration file and the admin API only reads them, so each says where it is set. */
+const bootstrapNote = (setting: string) => `Set by ${setting} in the configuration file`;
 const restartNote = (key: string) => `${key}\nSet in the configuration file; a change takes a restart.`;
 
 type PriceField = 'cacheReadPerM' | 'cacheWrite1hPerM' | 'cacheWrite5mPerM' | 'inputPerM' | 'outputPerM';

@@ -216,7 +216,7 @@ async fn a_probe_preserves_routing_and_constraints() {
             .unwrap()
             .as_millisecond()
             > lease_before,
-        "only the heartbeat renewed the lease"
+        "the heartbeats carried the lease past the one the session started with"
     );
     // The ledger has the probe under kind probe with the same session, and the pin is the real request's.
     let rows = wait_for(std::time::Duration::from_secs(5), || {

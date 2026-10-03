@@ -228,10 +228,10 @@ and at most 64 sockets are served at once, a further one refused `503 live feed 
 ### Dashboard
 
 A line above the tiles names what needs the operator's attention, worst first, each item a badge that opens the account,
-pool or key where it is fixed; it reads the same conditions the `phoebis_attention` gauge exports. Four tiles report
-requests, tokens, estimated cost, and the error rate over the last 24 hours; two cards below them show the 5-hour and
-7-day quota remaining for each subscription account; and the page ends with the most recent requests and a sessions card
-that leads with the router's live pins and the accounts they sit on.
+pool or key where it is fixed; it reads the same conditions the [`phoebis_attention` gauge](#conditions-and-gauges)
+exports. Four tiles report requests, tokens, estimated cost, and the error rate over the last 24 hours; two cards below
+them show the 5-hour and 7-day quota remaining for each subscription account; and the page ends with the most recent
+requests and a sessions card that leads with the router's live pins and the accounts they sit on.
 
 ### Observe
 

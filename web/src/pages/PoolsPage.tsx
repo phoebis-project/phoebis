@@ -1863,7 +1863,7 @@ export function PoolDialog({
           beside
           hint={
             <>
-              Keeps the request and response bodies of this pool&apos;s keys for the request drawer on the <PageLink to="/requests">Requests page</PageLink>. A key can override it, and only admins read bodies.
+              Keeps the request and response bodies of this pool&apos;s keys for the request drawer on the <PageLink to="/requests">Requests page</PageLink>. A key can override it, and only the admin secret can read them.
             </>
           }
         >

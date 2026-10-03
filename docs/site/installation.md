@@ -179,11 +179,11 @@ every 30 seconds ([the container](#run-the-container)).
 
 ## Environment variables
 
-The bootstrap file names environment variables and never holds a secret. `phoebis` resolves them at startup and
-refuses to start when one is unset or empty, with `environment variable {name} is unset or empty` and nothing
-else. A value shorter than 16 characters refuses with `environment variable {name} holds a secret shorter than
-16 characters`, and the example file's own placeholder refuses with `environment variable {name} still holds the
-example placeholder`.
+The bootstrap file names the admin secret's environment variable and never holds a secret. `phoebis` resolves it at
+startup and refuses to start when it is unset or empty, with `environment variable {name} is unset or empty` and nothing
+else. A value shorter than 16 characters refuses with `environment variable {name} holds a secret shorter than 16
+characters`, and the example file's own placeholder refuses with `environment variable {name} still holds the example
+placeholder`.
 
 | Variable | Named by | Holds |
 | --- | --- | --- |
@@ -198,8 +198,8 @@ the registry, not the bootstrap file.
 ## The bootstrap file
 
 ```yaml title="deploy/config.example.yaml"
-# Bootstrap settings only. Every secret is named here and read from the environment at startup, so this file
-# can be committed and read by anyone who may read the deployment.
+# Bootstrap settings only. The admin secret is named here and read from the environment at startup, so this
+# file can be committed and read by anyone who may read the deployment.
 admin:
   listen: 127.0.0.1:8081
   origin: https://phoebis.example
@@ -248,7 +248,7 @@ stats:
   metrics_listen: 127.0.0.1:9464
   # Overrides the shipped price table; a missing file is fine.
   pricing_path: ./pricing.yaml
-  # Raw requests, attempts, and events are purged past this; 0 keeps them forever.
+  # Raw requests, attempts, events, and the quota and extra-usage samples are purged past this; 0 keeps them forever.
   retention_days: 90
   # Hourly rollups are purged past this; 0 keeps them forever, otherwise at least retention_days.
   rollup_retention_days: 400

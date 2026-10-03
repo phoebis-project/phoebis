@@ -46,14 +46,17 @@ The proxy listener answers `HEAD /api/hello`, `HEAD` and `GET /api/ready`, `POST
 The admin listener serves a React console over the same routes as the admin API. The top bar carries the theme
 toggle, and the sidebar carries eleven views.
 
-![The dashboard: four tiles, the remaining-quota cards, recent requests](assets/dashboard-light.png#only-light)
-![The dashboard: four tiles, the remaining-quota cards, recent requests](assets/dashboard-dark.png#only-dark)
+![The dashboard: the attention line, four tiles, the remaining-quota cards, recent requests][dl]
+![The dashboard: the attention line, four tiles, the remaining-quota cards, recent requests][dd]
+
+[dl]: assets/dashboard-light.png#only-light
+[dd]: assets/dashboard-dark.png#only-dark
 
 The sidebar shows the views in this order:
 
 | View | Describes |
 | --- | --- |
-| Dashboard | Shown above: 24-hour tiles, remaining subscription quota, and recent requests and sessions. |
+| Dashboard | Shown above: the attention line, 24-hour tiles, remaining plan quota, and recent requests and sessions. |
 | Observe | The live feed (see [Statistics](statistics.md)). |
 | Quota | Each account's usage windows and reset timing (see [Statistics](statistics.md)). |
 | Accounts | Accounts and their credentials (see [Pairing an account](pairing.md)). |

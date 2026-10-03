@@ -126,6 +126,21 @@ random.
 **`round_robin`**: Within the first priority tier that has an eligible account, each in turn; a restart starts the
 round again.
 
+Each card on the Pools view carries attention rows under its status sentence: the conditions of the dashboard's
+attention line ([conditions](statistics.md#conditions-and-gauges)) filtered to the pools each item names, one row per
+condition with its badge, its subject linked where it is fixed (the pool's own row stays unlinked) and its detail, the
+age in the row's title.
+
+![The Pools view: one card per pool with its status badge and key count, the features it has on, one sentence on what
+the status means, what needs attention and a table of who serves next; the codex pool reads exhausted because its one
+member is at its daily budget][pl]
+![The Pools view: one card per pool with its status badge and key count, the features it has on, one sentence on what
+the status means, what needs attention and a table of who serves next; the codex pool reads exhausted because its one
+member is at its daily budget][pd]
+
+[pl]: assets/pools-light.png#only-light
+[pd]: assets/pools-dark.png#only-dark
+
 ### Cache TTL
 
 A pool can set the prompt cache TTL of every request it serves toward `api.anthropic.com`. The policy object carries
@@ -148,21 +163,6 @@ replay included, reads `main` or `subagent` by its agent, and one without an age
 The TTL is priced per attempt, so a request that fails over reads its destination's state. Mixed TTLs across a session's
 requests are fine: the cache is keyed on the prefix, and the TTL sets an entry's lifetime and price alone. The cost of
 each choice is on the [keepalive page](keepalive.md#the-cost-reference).
-
-Each card on the Pools view carries attention rows under its status sentence: the conditions of the dashboard's
-attention line that belong to the pool ([conditions](statistics.md#conditions-and-gauges)), the same list filtered by
-the pools each item names, one row per condition with its badge, its subject linked where it is fixed (the pool's own
-row stays unlinked) and its detail, the age in the row's title.
-
-![The Pools view: one card per pool with its status badge and key count, the features it has on, one sentence on what
-the status means, what needs attention and a table of who serves next; the codex pool reads exhausted because its one
-member is at its daily budget][pl]
-![The Pools view: one card per pool with its status badge and key count, the features it has on, one sentence on what
-the status means, what needs attention and a table of who serves next; the codex pool reads exhausted because its one
-member is at its daily budget][pd]
-
-[pl]: assets/pools-light.png#only-light
-[pd]: assets/pools-dark.png#only-dark
 
 ## Keys
 
@@ -355,7 +355,8 @@ router never fetches usage at a selection; use of an account outside the router 
 decision can lag it by up to five minutes plus any backoff, and by up to one more interval after a failed poll or a
 restart. The [Quota view](statistics.md#quota) shows when the poll last asked the endpoint for each OAuth account and
 how it answered, and while an account backs off, since when and when its next attempt comes; the `poll_backoff`
-condition of the [`phoebis_attention` gauge](statistics.md) holds once an account has backed off for thirty minutes.
+condition of the [`phoebis_attention` gauge](statistics.md#conditions-and-gauges) holds once an account has backed off
+for thirty minutes.
 
 ### Moves
 

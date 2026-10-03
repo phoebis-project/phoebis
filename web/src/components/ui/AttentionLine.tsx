@@ -6,8 +6,9 @@ import { Badge, Skeleton } from './primitives';
 
 /**
  * The dashboard's line above the tiles: what needs the operator, worst first, each a badge that opens where it is
- * fixed. Loading, quiet and failed, it keeps the one line's height, so the tiles below never move for the state. A
- * failed read never draws the quiet line, which would claim a health the read did not see.
+ * fixed. The loading, quiet and failed states keep the one-row height, so the tiles hold still between them; a
+ * populated line wraps to a second row once its badges outgrow the first. A failed read never draws the quiet line,
+ * which would claim a health the read did not see.
  */
 export function AttentionLine({ items, error, loadedAt, now }: { error: string | null; items: AttentionItem[] | null; loadedAt: number | null; now: number }) {
   if (error !== null) {

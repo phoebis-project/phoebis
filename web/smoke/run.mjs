@@ -108,8 +108,10 @@ const failoverRow = requests.find((r) => r.attempts.length > 1 && r.attempts.som
   input.dispatchEvent(new window.Event('input', { bubbles: true }));
   [...login.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Log in')?.click();
   await login.settle(500);
+  // The bar must exist, or a renamed class would pass the count by matching nothing.
+  const topbarRight = login.container.querySelector('.topbar__right');
   const topbarBadges = login.container.querySelectorAll('.topbar__right .badge').length;
-  results.push({ name: 'a login lands on the dashboard with no badge in the top bar', ok: login.text().includes('Requests, 24h') && topbarBadges === 0 && !login.text().includes('Log in'), missing: [`top bar badges ${topbarBadges}`] });
+  results.push({ name: 'a login lands on the dashboard with no badge in the top bar', ok: login.text().includes('Requests, 24h') && topbarRight !== null && topbarBadges === 0 && !login.text().includes('Log in'), missing: [`top bar ${topbarRight === null ? 'absent' : 'drawn'}`, `top bar badges ${topbarBadges}`] });
   [...login.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Log out')?.click();
   await login.settle(400);
   results.push({ name: 'Log out returns to the login screen', ok: login.text().includes('Admin secret'), missing: [] });
@@ -188,15 +190,17 @@ const failoverRow = requests.find((r) => r.attempts.length > 1 && r.attempts.som
   results.push({ name: '/ with nothing held the attention line reads the quiet state in the good tone', ok: quiet(), missing: [line()?.outerHTML.slice(0, 200) ?? 'no line'] });
   const { getAttention } = api;
   const exhausted = { detail: { key: 'desktop', pool: 'all' }, kind: 'pool_exhausted', link: { id: 'all', page: 'pools' }, pools: ['all'], since: new Date(Date.now() - 5 * 60_000).toISOString(), subject: { id: 'all', label: 'all', type: 'pool' } };
-  api.getAttention = async () => [exhausted];
+  // A drift refusal that carried no key has nowhere to be fixed, so the route sends it without a link.
+  const keyless = { detail: { client_version: '2.1.272', trigger: 'hash' }, kind: 'client_drift', link: null, pools: [], since: new Date(Date.now() - 2 * 60_000).toISOString(), subject: { id: '2.1.272', label: '2.1.272', type: 'client' } };
+  api.getAttention = async () => [exhausted, keyless];
   await tick();
-  const gained = [lead(), JSON.stringify(badges().map((b) => [b.text, b.tone, b.href]))];
+  const gained = [lead(), JSON.stringify(badges().map((b) => [b.text, b.tone, b.href])), line()?.querySelectorAll('a').length];
   api.getAttention = getAttention;
   await tick();
   const lost = quiet();
   results.push({
-    name: '/ with the dashboard open, a refresh tick draws an item the route gains and the next one the quiet state once it clears',
-    ok: gained[0] === '1 needs attention' && gained[1] === JSON.stringify([['Pool exhausted: all', 'badge--critical', '/pools#all']]) && lost,
+    name: '/ with the dashboard open, a refresh tick draws the items the route gains, an item without a link as a badge that opens nothing, and the next one the quiet state once they clear',
+    ok: gained[0] === '2 need attention' && gained[1] === JSON.stringify([['Pool exhausted: all', 'badge--critical', '/pools#all'], ['Client drift: 2.1.272', 'badge--serious', null]]) && gained[2] === 1 && lost,
     missing: [...gained.map(String), `quiet after the clear: ${lost}`],
   });
   api.getAttention = () => Promise.reject(new Error('the store is unavailable'));
@@ -1349,6 +1353,12 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     missing: [`before the answer ${lateKey.early}`, lateKey.scrolled, `focused ${lateKey.focused}`],
   });
   lateKey.page.unmount();
+  const { matchMedia } = window;
+  window.matchMedia = (query) => ({ ...matchMedia(query), matches: query === '(prefers-reduced-motion: reduce)' });
+  const reduced = await arrive('/keys#laptop', null, row);
+  window.matchMedia = matchMedia;
+  results.push({ name: '/keys#<key id> under reduced motion brings the row into view without the smooth scroll', ok: reduced.scrolled === JSON.stringify([['TR', 'laptop', 'auto']]) && reduced.focused, missing: [reduced.scrolled, `focused ${reduced.focused}`] });
+  reduced.page.unmount();
   // laptop is all's key, so a filter to codex would hide its row.
   const filtered = await arrive('/keys?pool=codex#laptop', null, row);
   const cleared = filtered.page.location();
@@ -1821,7 +1831,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     expect('/pools capture section', group(dlg, 'Body capture')?.textContent ?? '', [
       'Capture request and response bodies',
       "Keeps the request and response bodies of this pool's keys for the request drawer on the Requests page",
-      'A key can override it, and only admins read bodies.',
+      'A key can override it, and only the admin secret can read them.',
       'Retention (hours)',
       "At most the bootstrap's body capture limit, 72 hours here, shown on the Settings page",
     ]);
@@ -2945,6 +2955,15 @@ localStorage.removeItem('phoebis.expertView');
       localStorage.getItem('phoebis.expertView') === 'off',
     missing: [JSON.stringify(before), JSON.stringify(refused), document.activeElement?.outerHTML.slice(0, 80) ?? 'nothing focused', util()?.querySelector('[role="slider"][aria-label="Select-below threshold"]') ? 'handle drawn' : 'no select-below handle'],
   });
+  {
+    const handle = util()?.querySelector('[role="slider"][aria-label="Select-below threshold"]');
+    const drawn = [handle?.getAttribute('aria-valuenow'), handle?.getAttribute('aria-valuemax'), handle?.style.left, handle?.getAttribute('aria-valuetext')];
+    results.push({
+      name: "/pools a refused select-below past the track draws its handle at the track's end, the field's value in its text",
+      ok: JSON.stringify(drawn) === JSON.stringify(['100', '100', '100%', '120%']),
+      missing: drawn.map(String),
+    });
+  }
   foot(dlg, 'Cancel')?.click();
   await p.settle(200);
 
@@ -3895,7 +3914,7 @@ expect('/requests', m.text(), ['Columns (13)', 'Rows', 'SSE', 'Details', 'Client
   results.push({ name: 'fixture has a three-attempt request', ok: three.length >= 1, missing: [String(three.length)] });
 }
 await m.navigate(`/requests/${laptopRow.id}`);
-expect('/requests/:laptop drawer (admin)', m.text(), ['Summary', 'Session', 'Agent', 'Attempts', 'Succeeded', 'Usage', 'Cache read', 'Cache write, 5m', 'Cache write, 1h', 'Output, thinking', 'Output, plain', 'Server tool calls', 'Estimated cost', 'Captured bodies', 'Request', 'Response', 'cache_control', 'ephemeral_5m_input_tokens']);
+expect('/requests/:laptop drawer', m.text(), ['Summary', 'Session', 'Agent', 'Attempts', 'Succeeded', 'Usage', 'Cache read', 'Cache write, 5m', 'Cache write, 1h', 'Output, thinking', 'Output, plain', 'Server tool calls', 'Estimated cost', 'Captured bodies', 'Request', 'Response', 'cache_control', 'ephemeral_5m_input_tokens']);
 {
   // The two ids sit right under the served attempt's head, the request id first, as the drawer draws them.
   const served = laptopRow.attempts[laptopRow.attempts.length - 1];
@@ -5984,16 +6003,16 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
   const rows = [...(about?.querySelectorAll('.kv__row') ?? [])].map((r) => `${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.textContent?.trim()}`);
   // The mock stores 268435456 retained bytes, which is 256 MiB.
   results.push({ name: '/settings About lists the version, the profile, the metrics listener, the three paths, the three keepalive limits and the admin secret, then the installation sentence', ok: JSON.stringify(rows) === JSON.stringify([`Version=${MOCK_VERSION}`, 'Profile=claude-code-2.1.269-linux-x64', 'Metrics listener=127.0.0.1:9464', 'Ledger path=./data/ledger.sqlite', 'Pricing path=./pricing.yaml', 'Storage path=./data/router.sqlite', 'Keepalive sessions=128', 'Keepalive agents=1024', 'Keepalive retained bytes=256 MiB', 'Admin secret=configured']) && (about?.textContent ?? '').includes("The values the configuration file sets are on the installation page; phoebis check-config prints this router's.") && !(about?.textContent ?? '').includes('Public URL'), missing: rows });
-  const titled = [...(about?.querySelectorAll('.kv__row') ?? [])].slice(6).map((r) => `${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.getAttribute('title')}`);
+  const titled = [...(about?.querySelectorAll('.kv__row') ?? [])].slice(3).map((r) => `${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.getAttribute('title')}`);
   const restart = 'Set in the configuration file; a change takes a restart.';
   results.push({
-    name: '/settings each keepalive line names its file key and the restart, and the admin secret line its variable',
-    ok: JSON.stringify(titled) === JSON.stringify([`Keepalive sessions=keepalive.max_sessions\n${restart}`, `Keepalive agents=keepalive.max_agents\n${restart}`, `Keepalive retained bytes=keepalive.max_retained_bytes\n${restart}`, 'Admin secret=The secret the variable admin.secret_env names; it reaches every route.']) && about?.querySelector('.kv__row:last-child dd .badge.badge--good') !== null,
+    name: '/settings each path and keepalive line names its key in the configuration file, each keepalive line the restart, and the admin secret line its variable',
+    ok: JSON.stringify(titled) === JSON.stringify(['Ledger path=Set by stats.ledger_path in the configuration file', 'Pricing path=Set by stats.pricing_path in the configuration file', 'Storage path=Set by storage.path in the configuration file', `Keepalive sessions=keepalive.max_sessions\n${restart}`, `Keepalive agents=keepalive.max_agents\n${restart}`, `Keepalive retained bytes=keepalive.max_retained_bytes\n${restart}`, 'Admin secret=The secret the variable admin.secret_env names; it reaches every route.']) && about?.querySelector('.kv__row:last-child dd .badge.badge--good') !== null,
     missing: titled,
   });
   const mirrored = ['Body capture, max hours', 'Cache TTL (seconds)', 'Catalog refresh (seconds)', 'Max workers', 'Sample retention (days)'].filter((w) => m.text().includes(w));
   results.push({ name: '/settings carries no mirror words', ok: mirrored.length === 0, missing: mirrored });
-  results.push({ name: '/settings no card reads a configuration mirror', ok: ['Sessions', 'Retention', 'Keepalive', 'Listeners', 'Compatibility', 'Quota', 'Routing', 'Storage', 'Usage'].every((t) => !titles.includes(t)) && !m.text().includes('Session expiry') && !m.text().includes('HTTP/1.1') && !m.text().includes('https://router.home.example'), missing: titles });
+  results.push({ name: '/settings no card reads a configuration mirror', ok: ['Sessions', 'Retention', 'Keepalive', 'Listeners', 'Compatibility', 'Quota', 'Routing', 'Storage', 'Usage'].every((t) => !titles.includes(t)) && !m.text().includes('Session expiry') && !m.text().includes('HTTP/1.1'), missing: titles });
   const block = m.container.querySelector('pre.snippet');
   const hint = block?.nextElementSibling;
   results.push({

@@ -537,7 +537,8 @@ async function sidebarBrand(theme) {
  * 6 px gap between rows, every badge the 22 px and the 12 px type at weight 500 of the pool card's strip badges, the
  * line inside the content box and clear of the tiles. The mock pass draws the story's six items. The router pass seeds
  * an exhaustion of its main pool, which any request the pool serves later in the run (a keepalive probe among them)
- * clears, so it draws that item or the quiet line, and never the unavailable one.
+ * clears: the light pass, which reaches the dashboard first, requires that item, so a route answering an empty list
+ * fails it, and the dark pass draws that item or the quiet line, never the unavailable one.
  */
 async function attentionLine(theme) {
   const say = (what) => failures.push(`${theme} /: the attention line ${what}`);
@@ -565,6 +566,8 @@ async function attentionLine(theme) {
   const texts = read.badges.map((b) => b.text);
   if (mock) {
     if (read.lead !== '6 need attention' || texts.length !== 6) say(`reads ${read.lead} over ${JSON.stringify(texts)}, not the story's six items`);
+  } else if (theme === 'light') {
+    if (read.lead === null || !texts.includes('Pool exhausted: Main')) say(`reads ${read.lead} over ${JSON.stringify(texts)}, not the seeded exhaustion`);
   } else if (read.lead === null ? JSON.stringify(texts) !== '["Nothing needs attention"]' : !texts.includes('Pool exhausted: Main')) {
     say(`reads ${read.lead} over ${JSON.stringify(texts)}, neither the seeded exhaustion nor the quiet line`);
   }

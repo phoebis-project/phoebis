@@ -9,8 +9,8 @@ use phoebis_profile::fixtures::{
 use std::net::TcpListener;
 use std::sync::Mutex;
 
-/// Secrets are read from the process environment inside `load`, and the tests in this binary name the same
-/// variables with different values, so each holds this across its whole set-then-load sequence.
+/// `load` reads the admin secret from the process environment, and the tests in this binary set the same
+/// variables to different values, so each holds this across its whole set-then-load sequence.
 static ENV: Mutex<()> = Mutex::new(());
 
 /// How long a poll waits for the binary's asynchronous pipeline (the routing task, the ledger's writer, an

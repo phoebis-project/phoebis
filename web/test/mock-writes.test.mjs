@@ -107,6 +107,17 @@ test('the story reads a member at its budget as the route does, and a member hal
     [half.spends.map((s) => [s.period, s.spentUsd]), half.budgetDailyUsd, half.budgetMonthlyUsd, half.budgetUntil, half.eligible],
     [[['day', 1.1], ['month', 25]], 5, 50, null, 'unavailable'],
   );
+  // The mock reads each member's verdict once, from the story's accounts as it is built, so the flag is cleared on the
+  // story's account before a second mock reads it, and restored for the cases after this one.
+  const seed = d.ACCOUNTS.find((a) => a.id === 'console');
+  const flagged = seed.status;
+  seed.status = 'ready';
+  try {
+    const cleared = (await (await signedIn()).listPools()).find((p) => p.id === 'all').members.find((m) => m.accountId === 'console');
+    assert.deepEqual([cleared.budgetUntil, cleared.eligible], [null, 'eligible'], 'without the flag, a member under both its budgets is eligible');
+  } finally {
+    seed.status = flagged;
+  }
   const spent = member('codex', 'evals');
   const [day] = spent.spends;
   assert.ok(day.spentUsd >= spent.budgetDailyUsd && Date.parse(day.periodEnd) > Date.now(), 'the story spends one member past its daily budget inside the day');

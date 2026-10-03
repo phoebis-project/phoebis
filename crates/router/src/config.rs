@@ -230,14 +230,14 @@ pub enum ConfigError {
     UsageCacheTtlOutOfRange { value: u64 },
 }
 
-/// Reads, parses, and validates the bootstrap file, resolving every secret from the environment.
+/// Reads, parses, and validates the bootstrap file, resolving the admin secret from the environment.
 pub fn load(path: &Path) -> Result<Config, ConfigError> {
     let mut config = load_unresolved(path)?;
     resolve_secrets(&mut config)?;
     Ok(config)
 }
 
-/// Reads, parses and validates the bootstrap file and leaves every secret unresolved, for `check-config`,
+/// Reads, parses and validates the bootstrap file and leaves the admin secret unresolved, for `check-config`,
 /// which must run without the environment the service gets from its unit.
 pub fn load_unresolved(path: &Path) -> Result<Config, ConfigError> {
     let text = std::fs::read_to_string(path).map_err(|source| ConfigError::Read {
@@ -923,17 +923,31 @@ mod tests {
         "compatibility:\n  profile: claude-code-2.1.269-linux-x64\n"; // removed name
     const REMOVED_QUOTA: &str = "quota:\n  sample_retention_days: 30\n"; // removed name
     const REMOVED_CATALOG_CACHE: &str = "routing:\n  catalog_cache_seconds: 60\n"; // removed name
+    const REMOVED_VIEWER: &str = "  viewer_secret_env: PHOEBIS_VIEWER_SECRET\n"; // removed name
 
     #[test]
     fn a_file_naming_a_removed_key_is_refused_as_invalid_yaml_with_the_unknown_field_underneath() {
         let dir = tempfile::tempdir().unwrap();
         std::env::set_var("TEST_CFG_ADMIN", "admin-secret-001");
-        for (name, body) in [
-            ("compatibility", REMOVED_COMPATIBILITY),
-            ("quota", REMOVED_QUOTA),
-            ("catalog-cache", REMOVED_CATALOG_CACHE),
+        // `file` already writes an `admin` block, and a second one is refused as a duplicate field before its keys
+        // are read, so the removed key joins the first.
+        let admin_block = format!("admin:\n{REMOVED_VIEWER}"); // removed name
+        let admin = file(dir.path(), "admin", "");
+        let text = std::fs::read_to_string(&admin).unwrap();
+        std::fs::write(&admin, text.replacen("admin:\n", &admin_block, 1)).unwrap();
+        for (name, path) in [
+            (
+                "compatibility",
+                file(dir.path(), "compatibility", REMOVED_COMPATIBILITY),
+            ),
+            ("quota", file(dir.path(), "quota", REMOVED_QUOTA)),
+            (
+                "catalog-cache",
+                file(dir.path(), "catalog-cache", REMOVED_CATALOG_CACHE),
+            ),
+            ("admin", admin),
         ] {
-            let error = load(&file(dir.path(), name, body)).unwrap_err();
+            let error = load(&path).unwrap_err();
             assert_eq!(
                 error.to_string(),
                 "the configuration is not valid YAML",

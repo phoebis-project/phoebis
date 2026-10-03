@@ -1,5 +1,5 @@
-# Bootstrap settings only. Every secret is named here and read from the environment at startup, so this file
-# can be committed and read by anyone who may read the deployment.
+# Bootstrap settings only. The admin secret is named here and read from the environment at startup, so this
+# file can be committed and read by anyone who may read the deployment.
 admin:
   listen: 127.0.0.1:8081
   origin: https://phoebis.example
@@ -48,7 +48,7 @@ stats:
   metrics_listen: 127.0.0.1:9464
   # Overrides the shipped price table; a missing file is fine.
   pricing_path: ./pricing.yaml
-  # Raw requests, attempts, and events are purged past this; 0 keeps them forever.
+  # Raw requests, attempts, events, and the quota and extra-usage samples are purged past this; 0 keeps them forever.
   retention_days: 90
   # Hourly rollups are purged past this; 0 keeps them forever, otherwise at least retention_days.
   rollup_retention_days: 400

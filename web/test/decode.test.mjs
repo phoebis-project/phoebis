@@ -1034,6 +1034,8 @@ test('settings decode the members the route answers and nothing more', () => {
     'each member carries what the pages read and no other key',
   );
   assert.deepEqual(s.keepalive, { maxAgents: wire.keepalive.max_agents, maxRetainedBytes: wire.keepalive.max_retained_bytes, maxSessions: wire.keepalive.max_sessions });
+  assert.deepEqual(s.listeners, { metrics: wire.listeners.metrics, proxy: wire.listeners.proxy });
+  assert.deepEqual(s.retention, { bodyCaptureMaxHours: wire.retention.body_capture_max_hours });
   assert.deepEqual(s.storage, { ledgerPath: wire.storage.ledger_path, path: wire.storage.path, pricingPath: null }, 'no override file is a null path, never an empty one');
   assert.deepEqual(s.usage, { cacheTtlSeconds: wire.usage.cache_ttl_seconds });
   assert.equal(d.decodeSettings({ ...wire, storage: { ...wire.storage, pricing_path: './pricing.yaml' } }).storage.pricingPath, './pricing.yaml');

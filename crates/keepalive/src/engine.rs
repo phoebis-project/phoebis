@@ -560,10 +560,6 @@ impl Engine {
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    pub fn limits(&self) -> &KeepaliveLimits {
-        &self.parts.limits
-    }
-
     pub fn now(&self) -> i64 {
         (self.parts.clock)()
     }

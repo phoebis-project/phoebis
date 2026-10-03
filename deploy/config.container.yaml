@@ -42,7 +42,7 @@ stats:
   metrics_listen: 0.0.0.0:9464
   # Overrides the shipped price table; a missing file is fine, and the volume is where one would be dropped.
   pricing_path: /var/lib/phoebis/pricing.yaml
-  # Raw requests, attempts, and events are purged past this; 0 keeps them forever.
+  # Raw requests, attempts, events, and the quota and extra-usage samples are purged past this; 0 keeps them forever.
   retention_days: 90
   # Hourly rollups are purged past this; 0 keeps them forever, otherwise at least retention_days.
   rollup_retention_days: 400

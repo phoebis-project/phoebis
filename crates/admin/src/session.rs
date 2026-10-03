@@ -1,5 +1,5 @@
-//! Cookie sessions for the admin API: one admin secret, one role, in-memory sessions, and a throttle that makes
-//! the secret expensive to guess.
+//! Cookie sessions for the admin API: one admin secret, in-memory sessions, and a throttle that makes the secret
+//! expensive to guess.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
