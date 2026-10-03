@@ -307,7 +307,9 @@ export class HttpApi implements Api {
   updateAccount = async (accountId: string, patch: AccountPatch) => d.decodeAccount(await call('PATCH', `/admin/accounts/${enc(accountId)}`, d.encodeAccountPatch(patch)));
   updateAlertRule = async (id: string, input: AlertRuleInput) => d.decodeAlertRule(await call('PATCH', `/admin/alerts/rules/${enc(id)}`, d.encodeRule(input)));
   updateKey = async (id: string, input: KeyInput): Promise<ApiKey> => d.decodeKey(await call('PATCH', `/admin/keys/${enc(id)}`, d.encodeKey(input)));
-  // One write, so a refused member list cannot leave the settings saved behind a dialog that reports a failure.
+  // The route refuses an unknown member with 404 before it stores anything, then stores the settings before it writes
+  // the members, so a member write that fails answers 409 with the settings saved; the dialog reloads the lists when
+  // it closes after such an answer.
   updatePool = async (id: string, input: PoolInput) => d.decodePool(await call('PATCH', `/admin/pools/${enc(id)}`, d.encodePool(input)));
   verifyAccount = (accountId: string) => call<{ ok: boolean; status: number }>('POST', `/admin/accounts/${enc(accountId)}/verify`);
 }

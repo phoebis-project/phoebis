@@ -2298,6 +2298,40 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace',
   await m.settle(200);
 }
 {
+  // The route stores a pool's settings before its members, so a save it refused may have changed the pool after all:
+  // a dialog closed after a refused save reads the lists again, and one closed after no save reads nothing.
+  const footButton = (dialog, label) => [...(dialog?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === label);
+  const openAll = async () => {
+    [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool all')?.click();
+    await m.settle(300);
+    return [...m.container.querySelectorAll('dialog[open]')].pop();
+  };
+  const readsOnCancel = async (dialog) => {
+    const pools = countCalls('listPools');
+    const keys = countCalls('listKeys');
+    footButton(dialog, 'Cancel')?.click();
+    await m.settle(400);
+    pools.restore();
+    keys.restore();
+    return [pools.calls.length, keys.calls.length];
+  };
+  const quiet = await readsOnCancel(await openAll());
+  results.push({ name: '/pools Cancel without a refused save reloads nothing', ok: JSON.stringify(quiet) === '[0,0]', missing: quiet.map(String) });
+  const dlg = await openAll();
+  const sentence = "the pool's settings were saved; its members were not: account ghost not found";
+  failNextCall('updatePool', '/admin/pools/all', sentence, { status: 409 });
+  footButton(dlg, 'Save pool')?.click();
+  await m.settle(600);
+  const stayed = dlg?.hasAttribute('open') === true;
+  const status = dlg?.querySelector('.dialog__status')?.textContent ?? '';
+  const reads = await readsOnCancel(dlg);
+  results.push({
+    name: '/pools Cancel after a refused save reloads the pools and keys',
+    ok: stayed && status.startsWith(sentence) && JSON.stringify(reads) === '[1,1]' && m.container.querySelector('dialog[open]') === null,
+    missing: [stayed ? 'open' : 'closed', status, ...reads.map(String)],
+  });
+}
+{
   // The rule editor holds a pattern the route would refuse out of the save, in the route's words and under the
   // index the route would name, and a pattern it takes saves into the pool.
   const story = (await api.listPools()).find((p) => p.id === 'all');

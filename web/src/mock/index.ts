@@ -377,6 +377,7 @@ export class MockApi implements Api {
   // Public so a check can set its own page size; the default sits below the nine-row seed so the control renders
   // in the mock bundle without extra setup, while a smoke check that wants the route's own cap sets it to 500.
   lifecyclePageSize = 6;
+  private memberWriteFailure: string | null = null;
   private pairings = new Map<string, { accountId: string; state: string }>();
   // The route reads every member's kind and verdict afresh on each answer; the story's are read once, at load.
   private pools: Omit<Pool, 'keys'>[] = POOLS.map((p) => ({
@@ -621,6 +622,14 @@ export class MockApi implements Api {
     // the poll's standing goes too.
     this.putAccount({ ...a, credential: { accessTokenExpiresAt: null, lastError: null, lastRefreshAt: null, quarantined: false, refreshTokenExpiresAt: null }, status: 'unpaired', usage: usageOf({ ...a, status: 'unpaired' }) });
     return latency(undefined, 250);
+  }
+
+  /**
+   * A test seam outside the client's interface: the next pool save stores its settings, then fails its member write
+   * with `reason`, the route's partial save, which the mock's own store cannot reach otherwise.
+   */
+  failMemberWriteOnce(reason: string): void {
+    this.memberWriteFailure = reason;
   }
 
   /** `refresh` re-stamps `fetchedAt` rather than answering a fresh fixture; every account answers the same
@@ -1007,7 +1016,16 @@ export class MockApi implements Api {
     if (input.bodyCaptureHours > this.settings.retention.bodyCaptureMaxHours) {
       return Promise.reject(new ApiError(400, 'body_capture_hours exceeds stats.body_capture_max_hours', null));
     }
+    // The route checks every member against the registry before it stores anything.
+    const unknown = input.members.find((m) => !this.accounts.some((a) => a.id === m.accountId));
+    if (unknown) return Promise.reject(new ApiError(404, `account ${unknown.accountId} not found`, null));
     const current = this.pools[idx];
+    const reason = this.memberWriteFailure;
+    if (reason !== null) {
+      this.memberWriteFailure = null;
+      this.pools = this.pools.map((p, i) => (i === idx ? { ...current, ...input, members: current.members } : p));
+      return Promise.reject(new ApiError(409, `the pool's settings were saved; its members were not: ${reason}`, null));
+    }
     const verdict = new Map(current.members.map((m) => [m.accountId, m.eligible]));
     const next: Omit<Pool, 'keys'> = {
       ...current,

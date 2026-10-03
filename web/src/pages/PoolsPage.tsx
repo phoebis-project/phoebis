@@ -227,7 +227,13 @@ export function PoolsPage() {
       <PoolDialog
         open={dialog !== null}
         pool={dialog?.pool ?? null}
-        onClose={() => setDialog(null)}
+        onClose={(reload) => {
+          setDialog(null);
+          if (reload) {
+            pools.reload();
+            keys.reload();
+          }
+        }}
         accounts={accounts.data ?? []}
         keys={keys.data ?? []}
         pools={pools.data ?? []}
@@ -870,7 +876,8 @@ export function PoolDialog({
   accounts: Account[];
   keys: ApiKey[];
   models: { label: string; value: string }[];
-  onClose: () => void;
+  /** `reload` is true after a save the route answered with a refusal: it may have stored the settings before refusing. */
+  onClose: (reload: boolean) => void;
   onKeyCreated: (c: CreatedApiKey) => void;
   onKeysChanged: () => void;
   onSaved: (created: boolean) => void;
@@ -884,6 +891,7 @@ export function PoolDialog({
   const [form, setForm] = useState<PoolForm>(blankForm);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [attempted, setAttempted] = useState(false);
   const [chosen, setChosen] = useState<PoolGroup>('identity');
   const settings = useAsync(() => api.getSettings(), []);
   const captureMaxHours = settings.data?.retention.bodyCaptureMaxHours ?? 72;
@@ -910,6 +918,7 @@ export function PoolDialog({
     setRevoked(new Set());
     setBusy(false);
     setError(null);
+    setAttempted(false);
     setChosen('identity');
     // `accounts` is read but not tracked: the parent hands down a fresh array on
     // every render, and reacting to that would wipe the form mid-edit.
@@ -1070,6 +1079,7 @@ export function PoolDialog({
       // behind its backdrop would never be seen, and the edit that was refused is still on screen.
       setBusy(false);
       setError(e instanceof Error ? e.message : String(e));
+      if (e instanceof ApiError && e.status >= 400) setAttempted(true);
       return;
     }
     setBusy(false);
@@ -1856,7 +1866,7 @@ export function PoolDialog({
     <>
       <GroupedDialog
         open={open}
-        onClose={onClose}
+        onClose={() => onClose(attempted)}
         title={pool ? `Edit pool ${pool.name}` : 'Create pool'}
         railLabel="Pool settings"
         groups={groups}
@@ -1869,7 +1879,7 @@ export function PoolDialog({
         held={first !== null || error !== null}
         footer={
           <>
-            <Button variant="ghost" onClick={onClose}>
+            <Button variant="ghost" onClick={() => onClose(attempted)}>
               Cancel
             </Button>
             <Button variant="primary" disabled={!valid || busy} onClick={submit}>

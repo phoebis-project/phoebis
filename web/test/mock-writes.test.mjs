@@ -293,6 +293,29 @@ test('a pool write with an unknown spelling or a budget the route refuses is ref
   assert.deepEqual(await api.listPools(), before, 'a refused write stores nothing');
 });
 
+test('a pool save naming an unknown member answers the route\'s 404 and stores nothing', async () => {
+  const api = await as('admin');
+  const all = await storyPool(api);
+  const before = await api.listPools();
+  const ghost = { accountId: 'ghost', budgetDailyUsd: null, budgetMonthlyUsd: null, priority: 0 };
+  await assert.rejects(() => api.updatePool('all', { ...all, members: [...all.members, ghost], name: 'everything' }), refusedAs(404, 'account ghost not found'));
+  assert.deepEqual(await api.listPools(), before, 'neither the settings nor the members were stored');
+});
+
+test('a member write that fails after the settings are stored answers the partial-save 409 with the settings kept', async () => {
+  const api = await as('admin');
+  const all = await storyPool(api);
+  const stored = (await api.listPools()).find((p) => p.id === 'all');
+  const members = all.members.filter((m) => m.accountId !== 'mail');
+  api.failMemberWriteOnce('storage failure');
+  await assert.rejects(() => api.updatePool('all', { ...all, members, name: 'everything' }), refusedAs(409, "the pool's settings were saved; its members were not: storage failure"));
+  const after = (await api.listPools()).find((p) => p.id === 'all');
+  assert.equal(after.name, 'everything', 'the settings were stored');
+  assert.deepEqual(after.members, stored.members, 'the members were not');
+  const retried = await api.updatePool('all', { ...all, members, name: 'everything' });
+  assert.deepEqual(retried.members.map((m) => m.accountId), members.map((m) => m.accountId), 'the failure is injected once, so the retry writes the members');
+});
+
 test('a model rule list the route refuses is refused on every pool and key write, with the route\'s text', async () => {
   const api = await as('admin');
   const all = await storyPool(api);

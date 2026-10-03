@@ -71,12 +71,13 @@ export const emitLive = (event: LiveEvent) => {
  * Fails one mock call the way the transport fails a real one: the rejection reaches the page's `useAsync`,
  * and the route reaches the shell's toast, which the mock would otherwise never report because it never goes
  * through `call`. The override puts the original method back as it fires, so a retry reads the mock again.
- * `network` fails it as a router that never answered, with status 0.
+ * `network` fails it as a router that never answered, with status 0; otherwise the refusal carries `status`, 503
+ * unless one is given.
  */
-export const failNextCall = (name: string, path: string, message: string, options: { network?: boolean } = {}) => {
+export const failNextCall = (name: string, path: string, message: string, options: { network?: boolean; status?: number } = {}) => {
   const mock = api as unknown as Record<string, () => unknown>;
   const original = mock[name].bind(api);
-  const status = options.network ? 0 : 503;
+  const status = options.network ? 0 : (options.status ?? 503);
   mock[name] = () => {
     mock[name] = original;
     // The transport reads the session straight through and keeps the login's refusals to the login screen, so
