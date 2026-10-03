@@ -1124,10 +1124,13 @@ async fn a_declared_body_past_the_budget_is_refused_503_before_a_byte_is_read() 
 #[tokio::test]
 async fn the_bodies_arriving_on_one_key_are_bounded_by_key_body_reads_with_retry_after_1() {
     let up = FakeUpstream::start(messages(json_200())).await;
-    let h = harness_with(
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test");
+    let h = harness_with_bus_limits(
         &up,
         &[oauth("a", A, 0)],
         PoolSpec::default(),
+        bus,
         phoebis_relay::Limits {
             key_body_reads: 2,
             ..default_limits()
@@ -1144,6 +1147,7 @@ async fn the_bodies_arriving_on_one_key_are_bounded_by_key_body_reads_with_retry
     assert_eq!(refused.status().as_u16(), 429);
     assert_eq!(refused.headers()["x-phoebis-error-code"], "key_body_reads");
     assert_eq!(refused.headers()["retry-after"], "1");
+    let refused_id = outcome(&refused).request_id;
     let json: serde_json::Value = serde_json::from_slice(&drain(refused).await).unwrap();
     assert_eq!(
         (
@@ -1154,6 +1158,15 @@ async fn the_bodies_arriving_on_one_key_are_bounded_by_key_body_reads_with_retry
             Some("rate_limit_error"),
             Some("this key has as many request bodies arriving as it allows")
         )
+    );
+    let (observed, complete) = observed_and_completed(&mut sub, &refused_id).await;
+    assert!(
+        observed.body.is_empty(),
+        "the bound is met before the read, so the refusal carries no body"
+    );
+    assert_eq!(
+        (complete.status, complete.error_code.as_deref()),
+        (429, Some("key_body_reads"))
     );
     drop(third_tx);
 
@@ -1216,9 +1229,50 @@ async fn a_keys_own_cap_bounds_its_body_reads_instead_of_the_default() {
 }
 
 #[tokio::test]
+async fn a_keys_own_cap_below_the_default_bounds_its_body_reads_so_a_count_is_refused_past_it() {
+    let up = FakeUpstream::start(messages(json_200())).await;
+    let h = harness(
+        &up,
+        &[oauth("a", A, 0)],
+        PoolSpec {
+            key_in_flight_cap: Some(1),
+            ..PoolSpec::default()
+        },
+    )
+    .await;
+    // The message holds the key's one slot and its one read. A count takes no slot, so only the read bound can
+    // refuse it, and the key's cap of one sets that bound below the default.
+    let (message, message_tx) = reading(&h).await;
+    let refused = tokio::time::timeout(
+        Duration::from_secs(5),
+        h.app.clone().oneshot(request_from_fixture(
+            inference_head(FixtureKind::CountOauthNonFirstParty),
+            body(BodyFixture::CountOauth),
+            KEY,
+        )),
+    )
+    .await
+    .expect("refused at once")
+    .unwrap();
+    assert_eq!(
+        (
+            refused.status().as_u16(),
+            refused.headers()["x-phoebis-error-code"].to_str().unwrap()
+        ),
+        (429, "key_body_reads"),
+        "the key's own cap of one bounds the reads, never the default"
+    );
+    drop(message_tx);
+    message.await.unwrap();
+    up.shutdown().await;
+}
+
+#[tokio::test]
 async fn a_declared_length_past_the_per_body_bound_is_413_without_a_read() {
     let up = FakeUpstream::start(messages(json_200())).await;
-    let h = harness(&up, &[oauth("a", A, 0)], PoolSpec::default()).await;
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test");
+    let h = harness_with_bus(&up, &[oauth("a", A, 0)], PoolSpec::default(), bus).await;
     let (request, tx) = channel_request(Some((32 << 20) + 1));
     let refused = tokio::time::timeout(Duration::from_secs(5), h.app.clone().oneshot(request))
         .await
@@ -1228,6 +1282,13 @@ async fn a_declared_length_past_the_per_body_bound_is_413_without_a_read() {
     assert_eq!(
         refused.headers()["x-phoebis-error-code"],
         "request_too_large"
+    );
+    let refused_id = outcome(&refused).request_id;
+    let (observed, complete) = observed_and_completed(&mut sub, &refused_id).await;
+    assert!(observed.body.is_empty(), "no byte of the body was read");
+    assert_eq!(
+        (complete.status, complete.error_code.as_deref()),
+        (413, Some("request_too_large"))
     );
     assert_eq!(posts(&up), 0);
     drop(tx);

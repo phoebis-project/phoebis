@@ -49,8 +49,14 @@ jobs:
           path: companion
           token: ${{ secrets.COMPANION_READ_TOKEN }}
           persist-credentials: false
+      # `cargo test` exits 0 on a filter that matches no test, so the count is what fails the step once the test
+      # is renamed.
       - if: env.HAS_COMPANION_TOKEN == 'true'
-        run: cargo test -p phoebis-router --test end_to_end the_companion_registers --locked
+        shell: bash
+        run: |
+          cargo test -p phoebis-router --test end_to_end the_companion_registers --locked 2>&1 \
+            | tee "$RUNNER_TEMP/companion.log"
+          grep -q 'test result: ok. 1 passed' "$RUNNER_TEMP/companion.log"
         env:
           PHOEBIS_COMPANION_DIR: ${{ github.workspace }}/companion
       - if: env.HAS_COMPANION_TOKEN != 'true'

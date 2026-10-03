@@ -220,6 +220,8 @@ pub struct Store {
     #[cfg(any(test, feature = "debug-hooks"))]
     fail_next_load: AtomicBool,
     #[cfg(any(test, feature = "debug-hooks"))]
+    fail_next_schema_version: AtomicBool,
+    #[cfg(any(test, feature = "debug-hooks"))]
     routing_commits: AtomicU64,
     #[cfg(any(test, feature = "debug-hooks"))]
     routing_hold: Mutex<Option<Arc<HoldGate>>>,
@@ -271,6 +273,8 @@ impl Store {
             #[cfg(any(test, feature = "debug-hooks"))]
             fail_next_load: AtomicBool::new(false),
             #[cfg(any(test, feature = "debug-hooks"))]
+            fail_next_schema_version: AtomicBool::new(false),
+            #[cfg(any(test, feature = "debug-hooks"))]
             routing_commits: AtomicU64::new(0),
             #[cfg(any(test, feature = "debug-hooks"))]
             routing_hold: Mutex::new(None),
@@ -291,6 +295,8 @@ impl Store {
             #[cfg(any(test, feature = "debug-hooks"))]
             fail_next_load: AtomicBool::new(false),
             #[cfg(any(test, feature = "debug-hooks"))]
+            fail_next_schema_version: AtomicBool::new(false),
+            #[cfg(any(test, feature = "debug-hooks"))]
             routing_commits: AtomicU64::new(0),
             #[cfg(any(test, feature = "debug-hooks"))]
             routing_hold: Mutex::new(None),
@@ -298,6 +304,12 @@ impl Store {
     }
 
     pub fn schema_version(&self) -> Result<u32, StoreError> {
+        #[cfg(any(test, feature = "debug-hooks"))]
+        if self.fail_next_schema_version.swap(false, Ordering::SeqCst) {
+            return Err(StoreError::Io(std::io::Error::other(
+                "injected schema version read failure",
+            )));
+        }
         read_version(&self.conn.lock().expect(LOCK_POISONED))
     }
 
@@ -320,6 +332,14 @@ impl Store {
     #[doc(hidden)]
     pub fn debug_fail_next_load(&self) {
         self.fail_next_load.store(true, Ordering::SeqCst);
+    }
+
+    /// Fails the next `schema_version`, so a test reaches the readiness answer's dead store without a broken
+    /// disk.
+    #[cfg(any(test, feature = "debug-hooks"))]
+    #[doc(hidden)]
+    pub fn debug_fail_next_schema_version(&self) {
+        self.fail_next_schema_version.store(true, Ordering::SeqCst);
     }
 
     /// Reads the canary through a read-only connection: no process lock, no `prepare`, no migration, no write,

@@ -1174,7 +1174,8 @@ impl Relay {
         if let Some(reservation) = &mut reservation {
             // The declared length frames the body and the per-body bound caps a chunked one, so the read never
             // holds more than was reserved: this only shrinks, and a shrink never fails.
-            let _ = reservation.resize(raw.len() as u64);
+            let shrunk = reservation.resize(raw.len() as u64);
+            debug_assert!(shrunk.is_ok(), "the read outgrew its reservation");
         }
         // Every read below, the edits and the stamp included, sees the plaintext with the client's tail after the
         // JSON in place, as an identity body is seen.
@@ -1213,9 +1214,13 @@ impl Relay {
                         .await;
                 }
             };
+            // Once the shrink below counts the inflated bytes alone, the compressed copy kept to the end of the
+            // request would hold up to the per-body bound the budget no longer sees.
+            drop(raw);
             if let Some(reservation) = &mut reservation {
                 // The inflated bytes are what the bound and the budget measure from here; a shrink never fails.
-                let _ = reservation.resize(plain.len() as u64);
+                let shrunk = reservation.resize(plain.len() as u64);
+                debug_assert!(shrunk.is_ok(), "the inflated body outgrew its reservation");
             }
             Bytes::from(plain)
         } else {
@@ -3514,8 +3519,8 @@ impl Relay {
                 });
                 chunk_published = true;
                 message_id = message_id_from_json(&text, &[]);
-                // Only the error statuses `respond` drains (400, 401, 403, 404, 429) reach here; a 200 is read
-                // by the body task.
+                // Only the error statuses `respond` drains (400, 401, 403, 404, 429) reach here, a 200 being read
+                // by the body task; the 200 arm guards a caller that would buffer one, whose usage still counts.
                 (head.status == 200).then(|| answer_from_json(&text, &[]))
             }
         };
@@ -3993,6 +3998,31 @@ mod tests {
         assert!(!caller_accepts(&caller, "gzip"));
         assert!(caller_accepts(&caller, "br"));
         assert!(!caller_accepts(&HeaderMap::new(), "gzip"));
+    }
+
+    #[test]
+    fn a_request_with_no_content_encoding_line_is_identity() {
+        assert_eq!(request_coding(&HeaderMap::new()), Some(Encoding::Identity));
+    }
+
+    #[test]
+    fn two_content_encoding_lines_leave_the_coding_ambiguous_and_are_refused() {
+        let mut headers = HeaderMap::new();
+        headers.append(CONTENT_ENCODING, HeaderValue::from_static("gzip"));
+        headers.append(CONTENT_ENCODING, HeaderValue::from_static("gzip"));
+        assert_eq!(request_coding(&headers), None);
+    }
+
+    #[test]
+    fn a_content_encoding_value_that_is_not_visible_ascii_is_refused() {
+        // A no-break space after `gzip` decodes as UTF-8 and trims away, so only the visible-ASCII rule refuses
+        // it.
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            CONTENT_ENCODING,
+            HeaderValue::from_bytes(b"gzip\xc2\xa0").unwrap(),
+        );
+        assert_eq!(request_coding(&headers), None);
     }
 
     #[test]

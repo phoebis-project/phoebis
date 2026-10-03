@@ -335,12 +335,11 @@ fn billing_line(body: &[u8]) -> String {
     root["system"][0]["text"].as_str().unwrap().to_string()
 }
 
-/// A client-sent placeholder is kept whatever the switch: `proxy.sign_cch_placeholder` governs the relay's
-/// restored placeholder alone and never reaches the keepalive, so the recipe keeps the client's line and the
-/// probe reaches the upstream with it. The relay's side over both switch positions is
+/// Signing a placeholder is the relay's call over a line it restored, never the recipe's, so the recipe keeps a
+/// client-sent placeholder line as the client wrote it. The relay's side is
 /// `a_client_sent_placeholder_on_a_full_shape_line_is_relayed_intact` in the relay's restoration suite.
-#[tokio::test]
-async fn a_client_sent_placeholder_is_kept_whatever_the_switch() {
+#[test]
+fn the_recipe_keeps_a_client_sent_placeholder_line() {
     let body = placeholder_body();
     let recipe =
         phoebis_keepalive::make_recipe(&[], body.as_bytes(), "claude-sonnet-4-5", 1 << 20).unwrap();
@@ -348,17 +347,6 @@ async fn a_client_sent_placeholder_is_kept_whatever_the_switch() {
         billing_line(&recipe.body),
         billing_line(body.as_bytes()),
         "the recipe keeps the client's line"
-    );
-    let mut r = rig(RigSpec {
-        accounts: vec![api_key("a", A, 0)],
-        ..RigSpec::default()
-    })
-    .await;
-    let probe = probe_of_a_placeholder_request(&mut r).await;
-    assert_eq!(
-        billing_line(&probe),
-        billing_line(body.as_bytes()),
-        "the probe reaches the upstream with the client's line"
     );
 }
 

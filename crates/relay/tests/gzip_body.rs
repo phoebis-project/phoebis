@@ -414,7 +414,16 @@ async fn a_body_that_inflates_past_the_bound_is_refused_413_with_no_upstream_att
 #[tokio::test]
 async fn an_unsupported_request_encoding_is_refused_415_before_its_body_is_read() {
     let up = FakeUpstream::start(messages(json_200())).await;
-    let h = harness_with(&up, &[account()], PoolSpec::default(), default_limits()).await;
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test");
+    let h = harness_with_bus_limits(
+        &up,
+        &[account()],
+        PoolSpec::default(),
+        bus,
+        default_limits(),
+    )
+    .await;
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(1);
     let request = Request::post("/v1/messages")
         .header("authorization", format!("Bearer {KEY}"))
@@ -436,6 +445,7 @@ async fn an_unsupported_request_encoding_is_refused_415_before_its_body_is_read(
         (415, "unsupported_content_encoding")
     );
     assert!(refused.headers().get("retry-after").is_none());
+    let refused_id = outcome(&refused).request_id;
     let json: serde_json::Value = serde_json::from_slice(&drain(refused).await).unwrap();
     assert_eq!(
         (
@@ -446,6 +456,12 @@ async fn an_unsupported_request_encoding_is_refused_415_before_its_body_is_read(
             Some("invalid_request_error"),
             Some("the request body's content-encoding is not supported; send gzip or identity")
         )
+    );
+    let (observed, complete) = observed_and_completed(&mut sub, &refused_id).await;
+    assert!(observed.body.is_empty(), "no byte of the body was read");
+    assert_eq!(
+        (complete.status, complete.error_code.as_deref()),
+        (415, Some("unsupported_content_encoding"))
     );
     assert!(up.requests().is_empty());
     drop(tx);

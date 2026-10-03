@@ -187,6 +187,33 @@ async fn a_stopped_ledger_reads_not_ready_on_the_system_document() {
 }
 
 #[tokio::test]
+async fn a_store_whose_read_fails_reads_not_ready_on_the_system_document_until_it_answers_again() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    parts.store.debug_fail_next_schema_version();
+    let system = json(get(&parts.app, "/admin/system", Some(&cookie)).await).await;
+    assert_eq!(
+        (&system["ready"], &system["dead"], &system["storage_ok"]),
+        (
+            &serde_json::json!(false),
+            &serde_json::json!(["store"]),
+            &serde_json::json!(false)
+        ),
+        "the store's read failed while the ledger and the router task still answer: {system}"
+    );
+    let system = json(get(&parts.app, "/admin/system", Some(&cookie)).await).await;
+    assert_eq!(
+        (&system["ready"], &system["dead"], &system["storage_ok"]),
+        (
+            &serde_json::json!(true),
+            &serde_json::json!([]),
+            &serde_json::json!(true)
+        ),
+        "each answer reads the store afresh, so the next one is ready again: {system}"
+    );
+}
+
+#[tokio::test]
 async fn readiness_reads_the_ledger_dead_when_its_bus_subscriber_is_absent_or_panicked() {
     let parts = common::admin_parts_full().await;
     let readiness = |bus: phoebis_bus::Bus| phoebis_admin::Readiness {

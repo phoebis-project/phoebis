@@ -672,7 +672,8 @@ impl Store {
     }
 
     /// Whether the holder `incarnation` names has an attempt still open, which a restart quarantines the account
-    /// for: one in flight, or one resolved uncertain, whatever a later retry beside it answered.
+    /// for: one in flight, or one resolved uncertain that no later commit has superseded; a later retry that
+    /// failed leaves it open.
     pub fn has_pending_refresh_attempt(
         &self,
         account_id: &str,

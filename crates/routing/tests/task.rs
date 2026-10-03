@@ -582,7 +582,8 @@ async fn every_report_kind_is_named_in_the_drop_counters_list_in_its_order() {
         a_million_input("a", 1_000),
     ];
     for report in &reports {
-        // No wildcard, so a new variant fails to compile here until the list above carries a report of it.
+        // No wildcard, so a new variant fails to compile here until it is named; it also needs a report above and a
+        // name in `KINDS`.
         match report {
             Report::AccountState { .. }
             | Report::Affinity(_)

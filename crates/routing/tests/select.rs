@@ -3493,6 +3493,52 @@ fn a_probe_that_tried_its_pinned_account_with_no_sibling_left_answers_the_pools_
     );
 }
 
+/// The probe's own attempt marked `a` and the mark reached the snapshot, while `b` is cooling: with no sibling
+/// to move to, the attempt hides nothing, so the pool's exhaustion answers as it does for an unmarked attempt.
+#[test]
+fn a_probe_whose_attempt_marked_its_pinned_account_with_no_sibling_left_answers_the_pools_exhaustion(
+) {
+    let s = snapshot(a_before_b());
+    let marked = snapshot_with(a_before_b(), &[("a", true, AccountState::ReauthRequired)]);
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    assert_eq!(
+        picked(
+            &select(
+                &mut st,
+                &s,
+                &request(&s, Some("s1"), "claude-sonnet-5", true, &[], 1_000),
+                &mut rng(),
+            )
+            .0
+        ),
+        "a",
+        "a serves the session's first request"
+    );
+    st.record_cooldown(cooled("b", "account", 10_000, "five_hour", "rate_limit"));
+    let probe = SelectRequest {
+        probe: true,
+        ..request(&marked, Some("s1"), "claude-sonnet-5", true, &["a"], 2_000)
+    };
+    let (result, writes) = select(&mut st, &marked, &probe, &mut rng());
+    assert_eq!(
+        result,
+        SelectResult::Exhausted(Exhaustion::Timed {
+            deadline: 10_000,
+            window: "five_hour".into(),
+        }),
+        "with no sibling to move to, the marked member's attempt answers the pool's exhaustion"
+    );
+    assert_eq!(
+        st.pin(&pin_key("s1")).map(|p| p.account_id.as_str()),
+        Some("a"),
+        "the pin still names a after the probe"
+    );
+    assert!(
+        writes.is_empty(),
+        "the probe moves no pin and releases nothing: {writes:?}"
+    );
+}
+
 #[test]
 fn a_non_portable_request_bound_to_a_member_at_its_budget_answers_the_timed_exhaustion_with_the_overage_claim(
 ) {

@@ -357,7 +357,26 @@ fn render_html(answer: &UsageAnswer) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::wants_html;
+    use super::{wants_html, window_html, KeyUsageWindow};
+
+    #[test]
+    fn a_windows_sum_line_names_its_incomplete_count_beside_failed() {
+        let window = KeyUsageWindow {
+            requests: 6,
+            succeeded: 3,
+            failed: 2,
+            incomplete: 1,
+            cost_usd: 0.25,
+            ..KeyUsageWindow::default()
+        };
+        let html = window_html("Last 24 hours", &window);
+        assert!(
+            html.contains(
+                "<p class=\"sum\">6 requests, 3 succeeded, 2 failed, 1 incomplete, $0.2500</p>"
+            ),
+            "{html}"
+        );
+    }
 
     #[test]
     fn wants_html_weighs_the_accept_headers_media_ranges() {

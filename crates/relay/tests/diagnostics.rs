@@ -197,6 +197,60 @@ async fn the_beta_and_the_member_are_added_when_absent_with_the_previous_id_acro
     up.shutdown().await;
 }
 
+/// The first-party fixture as a client that sends no `diagnostics` member signs it: the fixture's own member cut
+/// and the hash signed over what is left, so the relay has a member to insert under a client hash.
+fn first_party_without_diagnostics() -> Vec<u8> {
+    let mut native = body(BodyFixture::FirstParty9b244).to_vec();
+    phoebis_cch::remove_top_level_member(&mut native, "diagnostics")
+        .expect("the fixture carries the client's own member");
+    phoebis_cch::sign(&native).expect("the fixture signs")
+}
+
+/// The inserted member is part of the edit a client hash is re-signed over, so the hash the upstream reads covers
+/// the body with the member in it.
+#[tokio::test]
+async fn a_client_hash_is_re_signed_over_the_inserted_member() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: ok_with_id("msg_01"),
+    }])
+    .await;
+    let h = harness(
+        &up,
+        &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
+        PoolSpec {
+            cache_diagnostics: Some(true),
+            ..Default::default()
+        },
+    )
+    .await;
+    let native = first_party_without_diagnostics();
+    assert!(!has_diagnostics(&native), "the client sent no member");
+    let req = request_from_fixture(inference_head(FixtureKind::OauthFirstParty), &native, KEY);
+    let resp = h.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let sent = &up.requests()[0].body;
+    assert!(
+        has_diagnostics(sent),
+        "the member is inserted: {}",
+        String::from_utf8_lossy(sent)
+    );
+    assert_eq!(diagnostics_previous(sent), None);
+    assert_ne!(
+        cch_digits(sent),
+        cch_digits(&native),
+        "the client's hash no longer covers the edited body"
+    );
+    // `sign` rewrites the five digits alone, so equal digits are an equal body.
+    let resigned = phoebis_cch::sign(sent).unwrap();
+    assert_eq!(
+        cch_digits(&resigned),
+        cch_digits(sent),
+        "the hash is re-signed over the body with the member in it"
+    );
+    up.shutdown().await;
+}
+
 #[tokio::test]
 async fn an_immediate_next_request_carries_the_id_the_last_answer_named() {
     let up = FakeUpstream::start(vec![Rule {

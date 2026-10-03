@@ -131,7 +131,8 @@ async fn released(
 }
 
 /// How the fresh pin leaves: a client error the caller reads releases it, and an authentication failure the
-/// router answers itself fails over, which invalidates it, so the session's next placement is a move.
+/// router answers itself fails over, which invalidates it when the failed refresh left the account unmarked (the
+/// token endpoint's `503` here), so the session's next placement is a move.
 #[derive(Clone, Copy)]
 enum Released {
     ClientError,

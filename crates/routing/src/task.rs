@@ -476,6 +476,12 @@ impl RouterHandle {
     pub fn report(&self, report: Report) -> Option<u64> {
         // Read before the send moves the report into the command.
         let kind = report.kind();
+        // `sent` finds the kind's counter only on a drop, so a kind missing from the list would otherwise pass
+        // every test that never fills the queue.
+        debug_assert!(
+            Report::KINDS.contains(&kind),
+            "the report kind `{kind}` is missing from Report::KINDS"
+        );
         if !matches!(report, Report::Affinity(_)) {
             self.sent(kind, self.tx.try_send(Command::Report(report, None)));
             return None;

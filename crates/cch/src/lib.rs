@@ -1306,6 +1306,28 @@ mod tests {
     }
 
     #[test]
+    fn a_placeholder_beside_an_escaped_second_cch_field_is_not_the_placeholder_alone() {
+        let body = br#"{"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.220.test; cch=00000; c\u0063h=12345;"}],"model":"m"}"#;
+        assert_eq!(
+            String::from_utf8_lossy(body).matches("cch=").count(),
+            1,
+            "the raw line spells its second field with an escape"
+        );
+        assert!(!carries_only_the_placeholder(body));
+    }
+
+    #[test]
+    fn a_placeholder_on_a_line_that_does_not_decode_is_not_the_placeholder_alone() {
+        // A lone surrogate escape: the scanner walks it, a strict decoder refuses the line.
+        let body = br#"{"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.220.test; cch=00000; \ud800"}],"model":"m"}"#;
+        assert!(
+            find_cch(body).is_some(),
+            "the raw walk reads the placeholder"
+        );
+        assert!(!carries_only_the_placeholder(body));
+    }
+
+    #[test]
     fn cache_control_spans_walks_one_level_into_a_tool_results_content_and_no_further() {
         let body = br#"{"messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":[{"type":"text","text":"a","cache_control":{"type":"ephemeral"}},{"type":"text","text":"b"}],"cache_control":{"type":"ephemeral","ttl":"1h"}},{"type":"text","text":"c","content":[{"type":"text","content":[{"cache_control":{"type":"ephemeral"}}]}]}]}],"model":"m"}"#;
         let spans = cache_control_spans(body).unwrap();
