@@ -1878,6 +1878,35 @@ async function requestsTableFits(theme) {
 }
 
 /**
+ * The default set over every page of the list, walked with Next once the drawer is closed and measured as the first
+ * page is: a later page can hold longer cells, or an outcome word that widens the Status column, which the first
+ * page's fit never sees. Recorded rather than asserted, since room for them would have to come from another default
+ * column.
+ */
+async function requestPageWidths(theme) {
+  await page.keyboard.press('Escape');
+  await advance(LOAD_MS);
+  const widths = [];
+  for (let n = 1; n <= 20; n += 1) {
+    const read = await page.evaluate(() => {
+      const table = document.querySelector('.requests__table');
+      const wrap = table?.closest('.table-wrap');
+      const next = document.querySelector('button[aria-label="Next page"]');
+      return table && wrap ? { client: wrap.clientWidth, drawer: document.querySelector('.drawer') !== null, more: next !== null && !next.disabled, scroll: table.scrollWidth } : null;
+    });
+    if (read === null || read.drawer) {
+      failures.push(`${theme} /requests: page ${n} ${read === null ? 'draws no request table' : 'still has the drawer open'}, so its width is not measured`);
+      break;
+    }
+    widths.push(`${read.scroll} of ${read.client}px${read.scroll > read.client ? ` (${read.scroll - read.client}px over)` : ''}`);
+    if (!read.more) break;
+    await page.locator('button[aria-label="Next page"]').click();
+    await advance(LOAD_MS);
+  }
+  measurements.push(`${theme} /requests default pages ${JSON.stringify(widths)}`);
+}
+
+/**
  * The Speed control at the end of the request log's filter bar against the Turn origin control it follows: the
  * same trigger box, type and border, on the same row of the bar or at the start of the next one.
  */
@@ -2666,7 +2695,10 @@ try {
       await page.waitForFunction(() => !document.querySelector('.skeleton'), null, { timeout: 3_000 }).catch(() => {});
       await advance(SHOT_MS);
       await page.screenshot({ fullPage: true, path: join(shots, theme, `${view.slug}.png`) });
-      if (view.path === '/requests') await requestDrawer(theme);
+      if (view.path === '/requests') {
+        await requestDrawer(theme);
+        await requestPageWidths(theme);
+      }
       if (view.path === '/sessions') await forkLink(theme);
     }
   }

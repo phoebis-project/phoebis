@@ -3905,17 +3905,20 @@ expect('/requests/:laptop drawer (admin)', m.text(), ['Summary', 'Session', 'Age
     const before = { button: pretty(response()) !== undefined, text: shown(response()) };
     copy(response());
     await m.settle(100);
-    pretty(response())?.click();
+    // Pressed from the keyboard's place: the button leaves as it is pressed, and the focus has to land on the text.
+    const pressed = pretty(response());
+    pressed?.focus();
+    pressed?.click();
     await m.settle();
-    const after = { button: pretty(response()) !== undefined, text: shown(response()) };
+    const after = { button: pretty(response()) !== undefined, focused: document.activeElement === response()?.querySelector('.body-block__pre'), text: shown(response()) };
     copy(response());
     await m.settle(100);
     api.getCapturedBodies = original;
     delete window.navigator.clipboard;
     results.push({
       name: largeCheck,
-      ok: before.button && before.text.length > 300_000 && !before.text.includes('\n') && !after.button && after.text.includes('\n  "') && copied.length === 2 && copied[0] === before.text && copied[1] === after.text,
-      missing: [`before: ${before.button ? 'Pretty-print' : 'no Pretty-print'}, ${before.text.length} characters, ${before.text.includes('\n') ? 'indented' : 'compact'}`, `after: ${after.button ? 'Pretty-print' : 'no Pretty-print'}, ${after.text.includes('\n') ? 'indented' : 'compact'}`, `copied ${copied.map((t) => t.length).join(', ')}`],
+      ok: before.button && before.text.length > 300_000 && !before.text.includes('\n') && !after.button && after.focused && after.text.includes('\n  "') && copied.length === 2 && copied[0] === before.text && copied[1] === after.text,
+      missing: [`before: ${before.button ? 'Pretty-print' : 'no Pretty-print'}, ${before.text.length} characters, ${before.text.includes('\n') ? 'indented' : 'compact'}`, `after: ${after.button ? 'Pretty-print' : 'no Pretty-print'}, ${after.text.includes('\n') ? 'indented' : 'compact'}, focus on ${after.focused ? 'the text' : (document.activeElement?.tagName ?? 'nothing')}`, `copied ${copied.map((t) => t.length).join(', ')}`],
     });
   }
 
@@ -4674,6 +4677,26 @@ m.unmount();
     results.push({ name: statusCheck, ok: JSON.stringify(options) === JSON.stringify(common), missing: options });
   }
   coded.unmount();
+
+  // A code no address names but a loaded row holds is offered too, so the page's own rows can be picked by status.
+  const rowCheck = '/requests the Status filter offers a code a loaded row holds';
+  const listRequests = api.listRequests;
+  api.listRequests = async (...args) => {
+    api.listRequests = listRequests;
+    const answer = await listRequests.apply(api, args);
+    return { ...answer, requests: answer.requests.map((r, i) => (i === 0 ? { ...r, status: 418 } : r)) };
+  };
+  const held = await mount('/requests');
+  api.listRequests = listRequests;
+  const heldStatus = filterOf(held, 'Status');
+  if (!heldStatus) controlMissing(rowCheck, 'Status');
+  else {
+    const summary = heldStatus.querySelector('.mselect__trigger')?.textContent?.trim();
+    const options = (await openOptions(held, heldStatus)).map((o) => o.textContent?.trim() ?? '');
+    const common = ['200 OK', '400 Bad request', '401 Unauthorized', '403 Forbidden', '404 Not found', '413 Payload too large', '418', '429 Rate limited', '500 Server error', '502 Bad gateway', '503 Unavailable', '504 Gateway timeout', '524 Timeout', '529 Overloaded'];
+    results.push({ name: rowCheck, ok: summary === 'Status' && JSON.stringify(options) === JSON.stringify(common), missing: [String(summary), ...options] });
+  }
+  held.unmount();
 }
 
 // A read that fails for new filters draws the error state alone, none of the sections and none of the rows the filters before

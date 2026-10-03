@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { api } from '@/api';
 import type { Attempt, CapturedBodies, CohortHold, PinReleaseReason, RequestKind, RequestLog, RequestOutcome, RequestQuery, Usage, WindowId } from '@/api/types';
@@ -825,6 +825,11 @@ function BodyBlock({ dropped, label, value }: { dropped?: number; label: string;
   const large = useMemo(() => new TextEncoder().encode(compact).length > PRETTY_LIMIT, [compact]);
   const [pretty, setPretty] = useState(false);
   const text = useMemo(() => (large && !pretty ? compact : JSON.stringify(value, null, 2)), [compact, large, pretty, value]);
+  // Pretty-print leaves as it is pressed, so the focus moves to the text it indented rather than falling to the page.
+  const pre = useRef<HTMLPreElement>(null);
+  useEffect(() => {
+    if (pretty) pre.current?.focus();
+  }, [pretty]);
   return (
     <div className="body-block">
       <div className="body-block__head">
@@ -832,14 +837,16 @@ function BodyBlock({ dropped, label, value }: { dropped?: number; label: string;
         {dropped !== undefined && <span className="muted">cut at 8 MiB, {fmtInt(dropped)} bytes dropped</span>}
         <span className="body-block__actions">
           {large && !pretty && (
-            <Button size="sm" onClick={() => setPretty(true)}>
+            <Button size="sm" variant="ghost" onClick={() => setPretty(true)}>
               Pretty-print
             </Button>
           )}
           <CopyButton text={text} />
         </span>
       </div>
-      <pre className="body-block__pre">{text}</pre>
+      <pre ref={pre} className="body-block__pre" tabIndex={-1}>
+        {text}
+      </pre>
     </div>
   );
 }
