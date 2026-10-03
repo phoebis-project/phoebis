@@ -19,7 +19,7 @@ import { CostReferenceLink } from '@/components/ui/CostReference';
 import { Tile } from '@/components/ui/Tile';
 import { UtilizationBar } from '@/components/UtilizationBar';
 import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
-import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, ErrorState, Expert, Field, GroupedDialog, GroupLink, Input, Menu, PageLink, Select, Skeleton, SwitchedNumber, Toggle, type DialogGroup } from '@/components/ui/primitives';
+import { Badge, BadgeLink, Button, Card, ConfirmDialog, CopyButton, Dialog, ErrorState, Expert, Field, GroupedDialog, GroupLink, Input, Menu, PageLink, Select, Skeleton, SwitchedNumber, Toggle, type DialogGroup } from '@/components/ui/primitives';
 import { moveLabel, sizedAccounts } from '@/lib/analytics';
 import { anchorOf } from '@/lib/attention';
 import { fmtAbsolute, fmtCompact, fmtHourTick, fmtInt, fmtPeriodEnd, fmtRelative, fmtUsd } from '@/lib/format';
@@ -528,9 +528,9 @@ function PoolCard({
         {features.length > 0 && (
           <div className="pool__features chips">
             {features.map((f) => (
-              <Link key={f.group} to={`/pools?edit=${pool.id}&group=${f.group}`} className="badge badge--neutral" title={`Opens the pool dialog on ${POOL_RAIL[f.group].label}`}>
+              <BadgeLink key={f.group} to={`/pools?edit=${pool.id}&group=${f.group}`} title={`Opens the pool dialog on ${POOL_RAIL[f.group].label}`}>
                 {f.word}
-              </Link>
+              </BadgeLink>
             ))}
           </div>
         )}

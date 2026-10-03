@@ -3802,7 +3802,7 @@ export const FIXTURES: Record<string, Fixture> = {
     }
   },
   "bound_refusals": {
-    "route": "PATCH /admin/pools/{id}, PATCH /admin/keys/{id}",
+    "route": "PATCH /admin/pools/{id}",
     "body": {
       "probes": [
         {
@@ -4136,31 +4136,6 @@ export const FIXTURES: Record<string, Fixture> = {
           "value": 257,
           "status": 400,
           "error": "model_rules holds at most 256 entries"
-        },
-        {
-          "route": "PATCH /admin/keys/{id}",
-          "field": "in_flight_cap",
-          "value": 1,
-          "status": 200
-        },
-        {
-          "route": "PATCH /admin/keys/{id}",
-          "field": "in_flight_cap",
-          "value": 0,
-          "status": 400,
-          "error": "in_flight_cap is at least 1"
-        },
-        {
-          "route": "PATCH /admin/keys/{id}",
-          "field": "in_flight_cap",
-          "value": 4294967295,
-          "status": 200
-        },
-        {
-          "route": "PATCH /admin/keys/{id}",
-          "field": "in_flight_cap",
-          "value": 4294967296,
-          "status": 400
         }
       ]
     }

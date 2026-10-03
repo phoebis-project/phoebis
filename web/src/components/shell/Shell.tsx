@@ -4,7 +4,7 @@ import { api } from '@/api';
 import { useSession } from '@/app/session';
 import { useAppSettings, type ThemeChoice } from '@/app/settings';
 import { useAsync } from '@/lib/hooks';
-import { Button, Segmented, Toast, Toggle } from '@/components/ui/primitives';
+import { Button, Descriptions, Segmented, Toast, Toggle } from '@/components/ui/primitives';
 import { IconActivity, IconChart, IconGauge, IconGrid, IconKey, IconLayers, IconList, IconMonitor, IconMoon, IconSessions, IconShield, IconSliders, IconSun, IconUser } from '@/components/ui/icons';
 import { Mark } from '@/components/ui/Mark';
 
@@ -98,7 +98,10 @@ export function Shell() {
           </div>
         </header>
         <main className="content">
-          <Outlet />
+          {/* A titled badge a page draws outside its cards, such as the attention line's, describes through this host. */}
+          <Descriptions>
+            <Outlet />
+          </Descriptions>
         </main>
       </div>
       {navOpen && <button type="button" className="scrim" aria-label="Close navigation" onClick={() => setNavOpen(false)} />}

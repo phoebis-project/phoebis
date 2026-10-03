@@ -69,6 +69,17 @@ export function Badge({ tone = 'neutral', children, dot = false, title }: { chil
   );
 }
 
+/** A badge that opens a page: it describes itself through its host as a `Badge` does. */
+export function BadgeLink({ tone = 'neutral', children, title, to }: { children: ReactNode; title?: string; to: string; tone?: BadgeTone }) {
+  const described = useDescription(title);
+  const hosted = described && !described.sibling ? described.id : undefined;
+  return (
+    <Link to={to} className={`badge badge--${tone}`} title={title} aria-describedby={hosted}>
+      {children}
+    </Link>
+  );
+}
+
 type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   icon?: ReactNode;
   size?: 'md' | 'sm';

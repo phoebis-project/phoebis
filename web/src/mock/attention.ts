@@ -1,5 +1,5 @@
 import type { AttentionItem } from '@/api/types';
-import { QUOTA_SNAPSHOTS, accountById } from './accounts';
+import { accountById } from './accounts';
 import { KEYS, POOLS } from './pools';
 import { ATTENTION_ITEM_SAMPLE } from './samples';
 import { DAY, HOUR, MINUTE, ago } from './time';
@@ -13,7 +13,7 @@ const ofAccount = (id: string): Pick<AttentionItem, 'link' | 'pools' | 'subject'
   subject: { id, label: accountById.get(id)?.label ?? id, type: 'account' },
 });
 
-const mailPoll = QUOTA_SNAPSHOTS.find((s) => s.accountId === 'mail')?.poll ?? null;
+const mailPoll = accountById.get('mail')?.usage?.poll ?? null;
 
 /**
  * One item per kind on the story's accounts, pools and keys, in the route's order: codex exhausted since the runner's

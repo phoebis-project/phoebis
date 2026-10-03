@@ -91,7 +91,7 @@ test('an account row decodes its usage block and null for an Anthropic-key accou
     accountId: 'business',
     error: null,
     fetchedAt: d.iso(rows.find((r) => r.id === 'business').usage.fetched_at),
-    poll: { backoffSince: null, lastAttemptAt: at, lastCleanAt: at, lastOutcome: 'clean', nextAttemptAt: null, rateLimitedInARow: 0 },
+    poll: { backoffSince: null, lastAttemptAt: at, lastCleanAt: at, lastError: null, lastOutcome: 'clean', nextAttemptAt: null, rateLimitedInARow: 0 },
     status: 'success',
   });
   assert.equal(direct.usage, null, 'the poll never reads an Anthropic-key account');
@@ -1068,7 +1068,7 @@ test('settings decode the members the route answers and nothing more', () => {
       keepalive: ['maxAgents', 'maxRetainedBytes', 'maxSessions'],
       listeners: ['metrics', 'proxy'],
       planTables: ['cost'],
-      pricing: ['effectiveDate', 'models', 'source'],
+      pricing: ['effective', 'effectiveDate', 'models', 'source'],
       retention: ['bodyCaptureMaxHours'],
       sessions: ['expireAfterSeconds'],
       storage: ['ledgerPath', 'path', 'pricingPath'],

@@ -1,8 +1,7 @@
-import { Link } from 'react-router-dom';
 import type { AttentionItem } from '@/api/types';
 import { ATTENTION_LABEL, ATTENTION_TONE, attentionHref, attentionTitle } from '@/lib/attention';
 import { fmtRelative } from '@/lib/format';
-import { Badge, Skeleton } from './primitives';
+import { Badge, BadgeLink, Skeleton } from './primitives';
 
 /**
  * The dashboard's line above the tiles: what needs the operator, worst first, each a badge that opens where it is
@@ -46,9 +45,9 @@ export function AttentionLine({ items, error, loadedAt, now }: { error: string |
         const href = attentionHref(item);
         const key = `${item.kind}:${item.subject.type}:${item.subject.id}`;
         return href ? (
-          <Link key={key} to={href} className={`badge badge--${ATTENTION_TONE[item.kind]}`} title={title}>
+          <BadgeLink key={key} to={href} tone={ATTENTION_TONE[item.kind]} title={title}>
             {text}
-          </Link>
+          </BadgeLink>
         ) : (
           <Badge key={key} tone={ATTENTION_TONE[item.kind]} title={title}>
             {text}

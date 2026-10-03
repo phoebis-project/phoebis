@@ -460,7 +460,7 @@ m = await mount('/observe');
   await m.settle(300);
   const detailText = m.container.querySelector('.observe__detail')?.textContent ?? '';
   results.push({ name: '/observe the detail pane names the error of a stream that failed after its head', ok: failedAfterHead !== undefined && detailText.includes('Erroroverloaded_error'), missing: [detailText.slice(0, 160)] });
-  const badFinished = [...m.container.querySelectorAll('.live-table tbody tr')].filter((tr) => tr.children[9]?.textContent === '200' && tr.querySelector('.ldot--bad') !== null);
+  const badFinished = [...m.container.querySelectorAll('.live-table tbody tr')].filter((tr) => liveCell(m, tr, 'Status')?.textContent === '200' && tr.querySelector('.ldot--bad') !== null);
   let cutDetail = '';
   for (const tr of badFinished) {
     tr.click();
@@ -5707,7 +5707,7 @@ m.unmount();
     const words = [...narrowed.container.querySelectorAll('.requests__table tbody tr')].map((tr) => tr.querySelector('.requests__outcome')?.textContent?.trim() ?? 'no outcome word');
     results.push({
       name: filterCheck,
-      ok: JSON.stringify(options) === JSON.stringify(['canceled', 'exhausted', 'failed', 'rejected', 'succeeded']) && sent.length === 1 && JSON.stringify(sent[0]) === '["canceled"]' && words.length > 0 && words.every((w) => w === 'canceled'),
+      ok: JSON.stringify(options) === JSON.stringify(['canceled', 'exhausted', 'failed', 'incomplete', 'rejected', 'succeeded']) && sent.length === 1 && JSON.stringify(sent[0]) === '["canceled"]' && words.length > 0 && words.every((w) => w === 'canceled'),
       missing: [JSON.stringify(options), JSON.stringify(sent), ...new Set(words)],
     });
   }
@@ -5937,8 +5937,8 @@ m.unmount();
 }
 
 // Every filter control moves the window's end, and a custom range that has ended keeps its window while the clock runs
-// on, so there only the retry's generation sends the reads again. The account rollups read the window alone, so a read
-// of them is a moved end.
+// on, so there only the retry's generation sends the reads again. The account rollups on the Accounts tab and the burn
+// read on the Burn tab read the window alone, so a read of either is a moved end.
 {
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
   const typeInto = (input, text) => {
@@ -5955,8 +5955,9 @@ m.unmount();
   };
 
   const handlersCheck = '/analytics every filter control reads the window up to the instant it changed';
-  const page = await mount('/analytics', { now: CLOCK_ORIGIN });
-  const spy = countCalls('listAccountRollups');
+  let page = await mount('/analytics#accounts', { now: CLOCK_ORIGIN });
+  let spy = countCalls('listAccountRollups');
+  let endOf = ([, to]) => to;
   let at = CLOCK_ORIGIN;
   const moved = [];
   const act = async (name, change) => {
@@ -5965,7 +5966,7 @@ m.unmount();
     const before = spy.calls.length;
     await change();
     await page.settle();
-    const ends = spy.calls.slice(before).map(([, to]) => to);
+    const ends = spy.calls.slice(before).map(endOf);
     if (JSON.stringify(ends) !== JSON.stringify([new Date(at).toISOString()])) moved.push(`${name}: ${ends.join(',') || 'no read'}`);
   };
   await act('a Key pick', async () => {
@@ -5981,12 +5982,21 @@ m.unmount();
     Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set.call(select, 'model');
     select?.dispatchEvent(new window.Event('change', { bubbles: true }));
   });
-  await act('Burn group by', async () => [...page.container.querySelectorAll('#burn .segmented button')].find((b) => b.textContent?.trim() === 'Key')?.click());
   await act('Include probes', async () => page.container.querySelector('button[role="switch"][aria-label="Include probes"]')?.click());
   await act('the session field', async () => {
     const field = page.container.querySelector('input[aria-label="Session id"]');
     typeInto(field, requests.find((r) => r.sessionId !== null)?.sessionId ?? '');
     field?.dispatchEvent(new window.KeyboardEvent('keydown', { bubbles: true, key: 'Enter' }));
+  });
+  spy.restore();
+  page.unmount();
+  page = await mount('/analytics#burn', { now: at });
+  spy = countCalls('getAnalyticsBurn');
+  endOf = ([range]) => range?.to;
+  await act('Burn group by', async () => {
+    const select = page.container.querySelector('#burn select[aria-label="Burn group by"]');
+    Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set.call(select, 'key');
+    select?.dispatchEvent(new window.Event('change', { bubbles: true }));
   });
   results.push({ name: handlersCheck, ok: moved.length === 0, missing: moved });
   spy.restore();
@@ -6012,21 +6022,23 @@ m.unmount();
   // One bucket at 14:00 holding 18,000 tokens: its rate is 18,000 over the minutes the read saw of it.
   const wiringCheck = "/analytics the burn charts rate the last bucket up to the instant its read was made";
   api.getAnalyticsBurn = async () => ({ bucketSeconds: 3_600, points: [{ at: new Date(at14).toISOString(), cachedTokens: 0, fiveHourShare: null, group: 'console', sevenDayShare: null, tokens: 18_000, uncachedTokens: 18_000, unit: 'usd', usd: 0 }] });
-  const burnPage = await mount('/analytics', { now: at14 + 20 * 60_000 });
+  const burnPage = await mount('/analytics#burn', { now: at14 + 20 * 60_000 });
   const rate = () => {
     const card = [...burnPage.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Tokens per minute');
     return card?.querySelector('.legend li .legend__value')?.textContent?.trim() ?? 'no legend';
   };
-  const regroup = async (label) => {
-    [...burnPage.container.querySelectorAll('#burn .segmented button')].find((b) => b.textContent?.trim() === label)?.click();
+  const regroup = async (value) => {
+    const select = burnPage.container.querySelector('#burn select[aria-label="Burn group by"]');
+    Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set.call(select, value);
+    select?.dispatchEvent(new window.Event('change', { bubbles: true }));
     await burnPage.settle();
   };
   await customRange(burnPage);
   // Read at the range's end, 20 minutes into the hour.
   const atEnd = rate();
   tick(10 * 60_000);
-  await regroup('Key');
-  await regroup('Account');
+  await regroup('key');
+  await regroup('account');
   // Read again ten minutes past the end: the route answered 30 minutes of the hour.
   const later = rate();
   tick(31 * 60_000);
@@ -6054,7 +6066,7 @@ m.unmount();
 
   const partialCheck = '/analytics the running burn bucket draws in the partial tone and the note names it';
   api.getAnalyticsBurn = burnAt([60_000, 30_000]);
-  const running = await mount('/analytics', { now: CLOCK_ORIGIN });
+  const running = await mount('/analytics#burn', { now: CLOCK_ORIGIN });
   const card = tokensCard(running);
   const bars = [...(card?.querySelectorAll('.recharts-bar-rectangle path') ?? [])];
   const partial = bars.filter((b) => b.classList.contains('is-partial'));
@@ -6069,7 +6081,7 @@ m.unmount();
   // 20 seconds into 14:00, 1,000 tokens read as 3,000 a minute against the full hour's 1,000.
   const floorCheck = '/analytics a running bucket under a tenth of its width does not set the axis';
   api.getAnalyticsBurn = burnAt([60_000, 1_000]);
-  const early = await mount('/analytics', { now: at13 + 3_600_000 + 20_000 });
+  const early = await mount('/analytics#burn', { now: at13 + 3_600_000 + 20_000 });
   const ticks = [...(tokensCard(early)?.querySelectorAll('.recharts-yAxis .recharts-cartesian-axis-tick text') ?? [])].map((t) => t.textContent?.trim() ?? '');
   const valueOf = (label) => Number.parseFloat(label) * (label.endsWith('K') ? 1_000 : 1);
   results.push({ name: floorCheck, ok: ticks.length > 1 && Math.max(...ticks.map(valueOf)) <= 1_000, missing: ticks });
@@ -8658,8 +8670,8 @@ m.unmount();
     missing: cells.map((c) => `${c.path}: ${c.count} described in cells, stray ${JSON.stringify(c.stray)}`),
   });
 
-  // A badge outside every host keeps its title alone, so a page that draws one outside a card or a dialog loses its
-  // description; the fork marker draws its own badge-styled element rather than a Badge.
+  // A badge outside every host keeps its title alone, so the sweep reads every page for one that lost its description;
+  // the fork marker draws its own badge-styled element rather than a Badge.
   const loose = [];
   const counts = [];
   const sweep = (where) => {
