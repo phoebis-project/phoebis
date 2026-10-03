@@ -526,6 +526,84 @@ async fn a_full_command_queue_counts_the_dropped_report_under_its_kind() {
     assert_dropped(&handle, "cooldown", 1);
 }
 
+/// The handle counts a dropped report by looking its kind up in `Report::KINDS` and panics on a name the list lacks,
+/// so one report of every variant pins `kind()` against the list.
+#[tokio::test]
+async fn every_report_kind_is_named_in_the_drop_counters_list_in_its_order() {
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(seeded(&["a"]), clock(&now), RouterConfig::default()).unwrap();
+    let pin = PinRef {
+        key_id: "k".into(),
+        session_id: "s1".into(),
+        agent_id: "main".into(),
+        model: "claude-sonnet-5".into(),
+        epoch: 1,
+        lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
+    };
+    let reports = [
+        Report::AccountState {
+            account_id: "a".into(),
+            state: AccountState::ReauthRequired,
+            incarnation: 1,
+            lifecycle_generation: 1,
+            credential_generation: 1,
+        },
+        Report::Affinity(affinity_report(&handle, "a", 1_000)),
+        model_cooldown("a", "model:claude-sonnet-5", 1_000),
+        credits_at(true, None, None, 1_000),
+        Report::MemberSpend(Vec::new()),
+        Report::Overage {
+            account_id: "a".into(),
+            evidence: phoebis_routing::OverageEvidence {
+                in_use: true,
+                since: None,
+                reset: None,
+                observed_at: 1_000,
+                source: phoebis_routing::EvidenceSource::Head,
+                incarnation: 1,
+            },
+            incarnation: 1,
+        },
+        Report::PinInvalidated {
+            account_id: "a".into(),
+            pin: pin.clone(),
+            incarnation: 1,
+            lifecycle_generation: 1,
+            credential_generation: 1,
+        },
+        Report::PinReleased {
+            pin: pin.clone(),
+            incarnation: 1,
+            lifecycle_generation: 1,
+            credential_generation: 1,
+        },
+        renewal(pin, 1_000, PinUsage::default(), "client", 0),
+        observed("a", sample(1_000)),
+        a_million_input("a", 1_000),
+    ];
+    for report in &reports {
+        // No wildcard, so a new variant fails to compile here until the list above carries a report of it.
+        match report {
+            Report::AccountState { .. }
+            | Report::Affinity(_)
+            | Report::Cooldown { .. }
+            | Report::Credits { .. }
+            | Report::MemberSpend(_)
+            | Report::Overage { .. }
+            | Report::PinInvalidated { .. }
+            | Report::PinReleased { .. }
+            | Report::PinRenewed { .. }
+            | Report::Sample { .. }
+            | Report::Usage { .. } => {}
+        }
+    }
+    assert_eq!(
+        reports.iter().map(Report::kind).collect::<Vec<_>>(),
+        Report::KINDS,
+        "every variant's kind is listed under the same spelling, in order, and the list names nothing else"
+    );
+}
+
 #[tokio::test]
 async fn a_state_verdict_about_a_replaced_credential_changes_nothing() {
     let store = seeded(&["a"]);
