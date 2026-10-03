@@ -169,7 +169,7 @@ struct Drift {
 }
 
 /// The bus arm's reading of one event: an exhausted outcome on a pool enters it and a succeeded one clears it, and a
-/// drift refusal activates its version until a request from that version succeeds.
+/// drift refusal activates its version until a client inference from that version succeeds.
 pub(crate) fn observe(state: &mut ReaderState, event: &Event, now: i64) {
     state
         .in_flight
@@ -215,7 +215,7 @@ pub(crate) fn observe(state: &mut ReaderState, event: &Event, now: i64) {
                 }
             }
             // A completion that names no version is filed under one name on both paths, so a refusal without a
-            // version clears on a relayed request without one.
+            // version clears on a relayed client inference without one.
             let version = drift_subject(c.client_version.as_deref());
             if let Some(trigger) = &c.client_drift {
                 if !state.drift.contains_key(version) && state.drift.len() >= DRIFT_SUBJECTS {

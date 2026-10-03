@@ -402,7 +402,7 @@ backoff run is thirty minutes old; only the conditions read from the registry ho
 | `client_drift` | the client version | an inference request from that version is relayed, or a re-pinned build starts |
 | `reauth_required` | the account | the account is paired again, or an Anthropic-key account gets a new secret |
 | `funding_required` | the Anthropic-key account | the operator clears funding |
-| `refresh_failed` | the OAuth account | a refresh commits |
+| `refresh_failed` | the OAuth account | a refresh commits, or a newer credential supersedes a pending one |
 | `poll_backoff` | the polled account | a poll answers clean |
 
 **`pool_exhausted`** holds while a request of the pool has ended exhausted and none of the pool's requests has
