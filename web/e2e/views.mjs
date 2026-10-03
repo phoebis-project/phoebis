@@ -1878,13 +1878,13 @@ async function requestsTableFits(theme) {
 }
 
 /**
- * The default set over every page of the list, walked with Next once the drawer is closed and measured as the first
- * page is: a later page can hold longer cells, or an outcome word that widens the Status column, which the first
- * page's fit never sees. Recorded rather than asserted, since room for them would have to come from another default
- * column.
+ * The default set over every page of the list, walked with Next on a load of its own and measured as the first page
+ * is: a later page can hold longer cells, or an outcome word that widens the Status column, which the first page's
+ * fit never sees. Recorded rather than asserted, since room for them would have to come from another default column.
  */
 async function requestPageWidths(theme) {
-  await page.keyboard.press('Escape');
+  await page.goto(`${base}/requests`);
+  await booted();
   await advance(LOAD_MS);
   const widths = [];
   for (let n = 1; n <= 20; n += 1) {
@@ -1892,10 +1892,10 @@ async function requestPageWidths(theme) {
       const table = document.querySelector('.requests__table');
       const wrap = table?.closest('.table-wrap');
       const next = document.querySelector('button[aria-label="Next page"]');
-      return table && wrap ? { client: wrap.clientWidth, drawer: document.querySelector('.drawer') !== null, more: next !== null && !next.disabled, scroll: table.scrollWidth } : null;
+      return table && wrap ? { client: wrap.clientWidth, more: next !== null && !next.disabled, scroll: table.scrollWidth } : null;
     });
-    if (read === null || read.drawer) {
-      failures.push(`${theme} /requests: page ${n} ${read === null ? 'draws no request table' : 'still has the drawer open'}, so its width is not measured`);
+    if (read === null) {
+      failures.push(`${theme} /requests: page ${n} draws no request table, so its width is not measured`);
       break;
     }
     widths.push(`${read.scroll} of ${read.client}px${read.scroll > read.client ? ` (${read.scroll - read.client}px over)` : ''}`);
@@ -2695,10 +2695,7 @@ try {
       await page.waitForFunction(() => !document.querySelector('.skeleton'), null, { timeout: 3_000 }).catch(() => {});
       await advance(SHOT_MS);
       await page.screenshot({ fullPage: true, path: join(shots, theme, `${view.slug}.png`) });
-      if (view.path === '/requests') {
-        await requestDrawer(theme);
-        await requestPageWidths(theme);
-      }
+      if (view.path === '/requests') await requestDrawer(theme);
       if (view.path === '/sessions') await forkLink(theme);
     }
   }
@@ -2715,6 +2712,12 @@ try {
     at = `${theme} /pools cost reference`;
     await page.evaluate((t) => localStorage.setItem('phoebis.theme', t), theme);
     await poolCostReference(theme);
+  }
+  // A step per page moves the page clock as far as the story has pages, so the walk runs after every shot.
+  for (const theme of ['light', 'dark']) {
+    at = `${theme} /requests default pages`;
+    await page.evaluate((t) => localStorage.setItem('phoebis.theme', t), theme);
+    await requestPageWidths(theme);
   }
   // Headless Chromium hides scrollbars, and with them the gutter a list in flow gives a clipping wrap, which pushes a
   // right-aligned trigger aside wherever a browser draws scrollbars (Windows and Linux by default). The Keys page's

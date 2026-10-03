@@ -844,7 +844,7 @@ function BodyBlock({ dropped, label, value }: { dropped?: number; label: string;
           <CopyButton text={text} />
         </span>
       </div>
-      <pre ref={pre} className="body-block__pre" tabIndex={-1}>
+      <pre ref={pre} className="body-block__pre" tabIndex={0}>
         {text}
       </pre>
     </div>
