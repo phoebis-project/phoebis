@@ -1905,6 +1905,13 @@
   color: var(--ink-2);
 }
 
+/* Grouped, so the head's spread keeps Pretty-print beside Copy rather than in the middle of the row. */
+.body-block__actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
 .body-block__pre,
 .snippet {
   max-height: 260px;

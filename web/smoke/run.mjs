@@ -3871,6 +3871,82 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
 }
 await m.navigate(`/requests/${laptopRow.id}`);
 expect('/requests/:laptop drawer (admin)', m.text(), ['Summary', 'Session', 'Agent', 'Attempts', 'Succeeded', 'Usage', 'Cache read', 'Cache write, 5m', 'Cache write, 1h', 'Output, thinking', 'Output, plain', 'Server tool calls', 'Estimated cost', 'Captured bodies', 'Request', 'Response', 'cache_control', 'ephemeral_5m_input_tokens']);
+// A captured body is serialized once per answer: a small one is indented at once, one past 256 KiB shows compact until
+// Pretty-print is pressed, Copy takes the text on screen, and a clock tick that redraws the drawer serializes nothing.
+{
+  const blockOf = (page, label) => [...page.container.querySelectorAll('.drawer .body-block')].find((b) => b.querySelector('.body-block__head')?.children[0]?.textContent?.trim() === label);
+  const pretty = (block) => [...(block?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Pretty-print');
+  const shown = (block) => block?.querySelector('.body-block__pre')?.textContent ?? '';
+
+  const small = ['Request', 'Response'].map((label) => ({ label, pretty: pretty(blockOf(m, label)) !== undefined, text: shown(blockOf(m, label)) }));
+  results.push({
+    name: '/requests a captured body under the threshold is indented',
+    ok: small.every((b) => b.text.includes('\n  "') && !b.pretty),
+    missing: small.map((b) => `${b.label}: ${b.text.slice(0, 40)}${b.pretty ? ' with Pretty-print' : ''}`),
+  });
+
+  const largeCheck = '/requests a body over 256 KiB renders unindented with a Pretty-print action';
+  const other = requests.find((r) => r.capturedBodies && r.id !== laptopRow.id);
+  if (!other) results.push({ name: largeCheck, ok: false, missing: ['fixture'] });
+  else {
+    const original = api.getCapturedBodies;
+    const large = { content: [{ text: 'x'.repeat(300_000), type: 'text' }], role: 'assistant' };
+    api.getCapturedBodies = async (id) => {
+      api.getCapturedBodies = original;
+      const answer = await original.call(api, id);
+      return { ...answer, requestId: id, response: large, responseBytesStored: 300_000 };
+    };
+    const copied = [];
+    Object.defineProperty(window.navigator, 'clipboard', { configurable: true, value: { writeText: (text) => (copied.push(text), Promise.resolve()) } });
+    // The button reads Copied for a moment after a write and still copies when pressed again.
+    const copy = (block) => [...(block?.querySelectorAll('button') ?? [])].find((b) => ['Copied', 'Copy'].includes(b.textContent?.trim() ?? ''))?.click();
+    await m.navigate(`/requests/${other.id}`);
+    const response = () => blockOf(m, 'Response');
+    const before = { button: pretty(response()) !== undefined, text: shown(response()) };
+    copy(response());
+    await m.settle(100);
+    pretty(response())?.click();
+    await m.settle();
+    const after = { button: pretty(response()) !== undefined, text: shown(response()) };
+    copy(response());
+    await m.settle(100);
+    api.getCapturedBodies = original;
+    delete window.navigator.clipboard;
+    results.push({
+      name: largeCheck,
+      ok: before.button && before.text.length > 300_000 && !before.text.includes('\n') && !after.button && after.text.includes('\n  "') && copied.length === 2 && copied[0] === before.text && copied[1] === after.text,
+      missing: [`before: ${before.button ? 'Pretty-print' : 'no Pretty-print'}, ${before.text.length} characters, ${before.text.includes('\n') ? 'indented' : 'compact'}`, `after: ${after.button ? 'Pretty-print' : 'no Pretty-print'}, ${after.text.includes('\n') ? 'indented' : 'compact'}`, `copied ${copied.map((t) => t.length).join(', ')}`],
+    });
+  }
+
+  // The frozen clock lets one tick fire the page's 15-second clock, which redraws the drawer around the same answer.
+  const tickCheck = '/requests a clock tick does not serialize the bodies again';
+  const original = api.getCapturedBodies;
+  const answered = [];
+  api.getCapturedBodies = async (...args) => {
+    const answer = await original.apply(api, args);
+    answered.push(answer);
+    return answer;
+  };
+  const frozen = await mount(`/requests/${laptopRow.id}`, { now: CLOCK_ORIGIN });
+  api.getCapturedBodies = original;
+  const bodies = answered.at(-1);
+  const stringify = JSON.stringify;
+  let serialized = 0;
+  JSON.stringify = function (value, ...rest) {
+    if (bodies && (value === bodies.request || value === bodies.response)) serialized += 1;
+    return stringify.call(this, value, ...rest);
+  };
+  try {
+    tick(15_000);
+    await frozen.settle();
+  } finally {
+    JSON.stringify = stringify;
+  }
+  const drawn = frozen.container.querySelectorAll('.drawer .body-block__pre').length;
+  results.push({ name: tickCheck, ok: bodies !== undefined && drawn === 2 && serialized === 0, missing: [`${answered.length} answers`, `${drawn} bodies drawn`, `${serialized} serializations after the tick`] });
+  frozen.unmount();
+}
 {
   const cut = requests.find((r) => r.keyId === 'laptop' && r.capturedBodies && r.responseTruncated);
   if (cut) {

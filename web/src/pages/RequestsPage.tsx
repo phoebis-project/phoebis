@@ -780,8 +780,9 @@ function RequestDrawer({ request, requestId, now, onClose }: { now: number; onCl
               <Skeleton height={120} />
             ) : bodies.data ? (
               <div className="bodies">
-                <BodyBlock label="Request" value={bodies.data.request} dropped={bodies.data.requestTruncated ? bytesDropped(bodies.data.requestBytesSeen, bodies.data.requestBytesStored) : undefined} />
-                <BodyBlock label="Response" value={bodies.data.response} dropped={bodies.data.responseTruncated ? bytesDropped(bodies.data.responseBytesSeen, bodies.data.responseBytesStored) : undefined} />
+                {/* Keyed on the request, so a large body of the next request starts compact again. */}
+                <BodyBlock key={`request ${r.id}`} label="Request" value={bodies.data.request} dropped={bodies.data.requestTruncated ? bytesDropped(bodies.data.requestBytesSeen, bodies.data.requestBytesStored) : undefined} />
+                <BodyBlock key={`response ${r.id}`} label="Response" value={bodies.data.response} dropped={bodies.data.responseTruncated ? bytesDropped(bodies.data.responseBytesSeen, bodies.data.responseBytesStored) : undefined} />
               </div>
             ) : (
               <p className="muted">Bodies for this request have aged out of retention.</p>
@@ -815,14 +816,28 @@ function CacheRow({ attempt, usage }: { attempt: Attempt; usage: Usage }) {
   );
 }
 
-function BodyBlock({ label, value, dropped }: { dropped?: number; label: string; value: unknown }) {
-  const text = JSON.stringify(value, null, 2);
+/** Indenting a body past this many serialized bytes is a long render and a far longer text, so it waits to be asked. */
+const PRETTY_LIMIT = 256 * 1024;
+
+function BodyBlock({ dropped, label, value }: { dropped?: number; label: string; value: unknown }) {
+  // Serialized once per answer rather than per render: the drawer redraws on every clock tick and list reload.
+  const compact = useMemo(() => JSON.stringify(value), [value]);
+  const large = useMemo(() => new TextEncoder().encode(compact).length > PRETTY_LIMIT, [compact]);
+  const [pretty, setPretty] = useState(false);
+  const text = useMemo(() => (large && !pretty ? compact : JSON.stringify(value, null, 2)), [compact, large, pretty, value]);
   return (
     <div className="body-block">
       <div className="body-block__head">
         <span>{label}</span>
         {dropped !== undefined && <span className="muted">cut at 8 MiB, {fmtInt(dropped)} bytes dropped</span>}
-        <CopyButton text={text} />
+        <span className="body-block__actions">
+          {large && !pretty && (
+            <Button size="sm" onClick={() => setPretty(true)}>
+              Pretty-print
+            </Button>
+          )}
+          <CopyButton text={text} />
+        </span>
       </div>
       <pre className="body-block__pre">{text}</pre>
     </div>

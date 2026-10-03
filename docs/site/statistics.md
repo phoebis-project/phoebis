@@ -317,7 +317,9 @@ where it landed: by its messages or by its static prefix at the depth that match
 request held while every account was at its cap names the account it was held on: its cohort's, or else the last one it
 waited on, and how long it waited. The cache line reads a placement as a hit or a miss against the prefix it was
 promised: a placement by its messages is a hit when the response read at least that prefix, one by its static prefix
-when it read anything, and one with the main conversation keeps the plain cache line.
+when it read anything, and one with the main conversation keeps the plain cache line. The drawer shows the captured
+request and response bodies, each with Copy, which copies the text as shown; a body past 256 KiB shows compact until
+Pretty-print is pressed.
 
 ![The Requests view: the filterable table with its client column](assets/requests-light.png#only-light)
 ![The Requests view: the filterable table with its client column](assets/requests-dark.png#only-dark)
