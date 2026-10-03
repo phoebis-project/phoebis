@@ -1567,15 +1567,41 @@
   grid-template-columns: minmax(0, 1fr) 440px;
 }
 
-/* The page bounds the cell at the longest class it knows, counted in characters of the monospace face, so the
-   box leaves the padding out of that count. A class past that bound truncates behind an ellipsis rather than
-   widening the column, and a wrapped cell would set the height of every row; the title keeps the full class. */
-.requests__client {
-  box-sizing: content-box;
-  max-width: 25ch;
+/* The ten default columns fit a 990px card at 1280px only with the cells 8px apart and the Client
+   text cut at a bound, whole on the cell's title. */
+.requests__table th,
+.requests__table td {
+  padding-left: 4px;
+  padding-right: 4px;
+}
+
+.requests__table th:first-child,
+.requests__table td:first-child {
+  padding-left: 12px;
+}
+
+.requests__table th:last-child,
+.requests__table td:last-child {
+  padding-right: 12px;
+}
+
+/* The caps sit on the text's own boxes: Firefox applies no max-width to a table cell. A wrapped cell would set the
+   height of every row, so a value past its cap ends in an ellipsis. */
+.requests__client-text {
+  display: inline-block;
+  vertical-align: bottom;
+}
+
+.requests__client-text,
+.requests__client .sub {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.requests__client-text,
+.requests__client .sub {
+  max-width: 12ch;
 }
 
 /* Thirteen columns leave the token counts too little room for their sub to hold one line, and a log a third taller

@@ -3539,7 +3539,82 @@ m = await mount('/models');
 m.unmount();
 
 m = await mount('/requests');
-expect('/requests', m.text(), ['Columns (13)', 'Rows', 'SSE', 'Details', 'Client', 'claude-code/cli', 'Agent type', 'Turn origin', 'claude-fable-5-1', 'desktop', 'laptop', 'shown']);
+expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'claude-code/cli', 'Agent type', 'Turn origin', 'claude-fable-5-1', 'desktop', 'laptop', 'shown']);
+{
+  // Pool, Kind and Transport start hidden, since the drawer names all three, and the control still offers every column.
+  const ALL = ['Time', 'Key', 'Pool', 'Account', 'Model', 'Client', 'Kind', 'Transport', 'Status', 'Attempts', 'TTFB', 'Tokens', 'Cost'];
+  const HIDDEN = ['Pool', 'Kind', 'Transport'];
+  const colsButton = () => [...m.container.querySelectorAll('.filters__cols button')].find((b) => b.textContent?.trim().startsWith('Columns'));
+  const heads = () => [...m.container.querySelectorAll('.requests__table thead th')].map((th) => th.textContent?.trim() ?? '');
+  const offered = () => [...m.container.querySelectorAll('.cols-popover label')].map((l) => ({ checked: l.querySelector('input[type="checkbox"]')?.checked ?? null, label: l.textContent?.trim() ?? '' }));
+  const turn = async (label) => {
+    [...m.container.querySelectorAll('.cols-popover label')].find((l) => l.textContent?.trim() === label)?.querySelector('input[type="checkbox"]')?.click();
+    await m.settle(100);
+  };
+  const shownBefore = heads();
+  colsButton()?.click();
+  await m.settle(100);
+  const listed = offered();
+  await turn('Pool');
+  const withPool = heads();
+  const poolAt = withPool.indexOf('Pool');
+  const poolCells = [...m.container.querySelectorAll('.requests__table tbody tr')].map((tr) => tr.children[poolAt]?.textContent?.trim() ?? '');
+  const poolCount = colsButton()?.textContent?.trim();
+  results.push({
+    name: '/requests the Columns control lists all thirteen columns and turning Pool on draws it',
+    ok:
+      JSON.stringify(listed.map((c) => c.label)) === JSON.stringify(ALL) &&
+      listed.every((c) => c.checked === !HIDDEN.includes(c.label)) &&
+      HIDDEN.every((h) => !shownBefore.includes(h)) &&
+      poolAt === withPool.indexOf('Key') + 1 &&
+      poolCells.length > 0 &&
+      poolCells.every((c) => c.length > 0) &&
+      poolCount === 'Columns (11)',
+    missing: [JSON.stringify(listed), JSON.stringify(shownBefore), JSON.stringify(withPool), String(poolCount)],
+  });
+  // Transport stays a column the control offers, so its badges draw once it is turned on.
+  await turn('Transport');
+  expect('/requests turning Transport on through the Columns control draws its SSE badges', m.text(), ['SSE', 'Transport']);
+  await turn('Pool');
+  await turn('Transport');
+  colsButton()?.click();
+  await m.settle(100);
+  results.push({ name: '/requests the Columns control closes on its button and the default set returns', ok: m.container.querySelector('.cols-popover') === null && JSON.stringify(heads()) === JSON.stringify(shownBefore), missing: heads() });
+}
+{
+  // The cell reads the id without its date, so a dated id reads as its undated sibling does; the title keeps it whole.
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  const dated = requests.find((r) => /-\d{8}$/.test(r.model) && r.kind !== 'probe');
+  const field = m.container.querySelector('input.filters__search');
+  const modelCell = () => {
+    const at = [...m.container.querySelectorAll('.requests__table thead th')].findIndex((th) => th.textContent?.trim() === 'Model');
+    const cells = [...m.container.querySelectorAll('.requests__table tbody tr')].map((tr) => tr.children[at]);
+    return cells.length === 1 ? { text: cells[0]?.textContent?.trim() ?? '', title: cells[0]?.getAttribute('title') ?? null } : { text: `${cells.length} rows`, title: null };
+  };
+  results.push({ name: 'fixture: a request whose model id carries a date', ok: dated !== undefined, missing: [] });
+  if (dated && field) {
+    setter.call(field, dated.id);
+    field.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await m.settle(700);
+    const cell = modelCell();
+    setter.call(field, '');
+    field.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await m.settle(700);
+    const undated = requests.find((r) => !/-\d{8}$/.test(r.model) && r.kind !== 'probe');
+    setter.call(field, undated?.id ?? '');
+    field.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await m.settle(700);
+    const bare = modelCell();
+    setter.call(field, '');
+    field.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await m.settle(700);
+    results.push({
+      name: '/requests the Model cell reads the id without its date, the dated id on its title',
+      ok: cell.text === dated.model.replace(/-\d{8}$/, '') && cell.title === dated.model && bare.text === undated?.model && bare.title === null,
+      missing: [JSON.stringify(cell), JSON.stringify(bare)],
+    });
+  }
+}
 {
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
   const type = async (check, label, value) => {
@@ -3553,8 +3628,8 @@ expect('/requests', m.text(), ['Columns (13)', 'Rows', 'SSE', 'Details', 'Client
     await m.settle(700);
   };
   const keyColumn = () => [...m.container.querySelectorAll('.requests__table tbody tr td:nth-child(2)')].map((td) => td.textContent?.trim());
-  // The class is the cell's own text; an agent type rides beneath it in a line of its own.
-  const classColumn = () => [...m.container.querySelectorAll('.requests__table tbody .requests__client')].map((td) => td.firstChild?.textContent?.trim());
+  // The class is the capped text's own; an agent type rides beneath it in a line of its own.
+  const classColumn = () => [...m.container.querySelectorAll('.requests__table tbody .requests__client')].map((td) => td.querySelector('.requests__client-text')?.textContent?.trim());
   const agentCheck = '/requests the user agent filter is a pattern';
   await type(agentCheck, 'User agent pattern', 'phoebis-batch/*');
   const wildcard = keyColumn();
@@ -3580,10 +3655,10 @@ expect('/requests', m.text(), ['Columns (13)', 'Rows', 'SSE', 'Details', 'Client
   await type(classCheck, 'Client pattern', '');
 
   const cells = [...m.container.querySelectorAll('.requests__table tbody .requests__client')];
-  // A row with no class draws a muted dash and carries no title.
-  const titleOf = (td) => (td.firstChild?.textContent?.trim() === '-' ? null : td.firstChild?.textContent?.trim());
-  const untitled = cells.filter((td) => td.getAttribute('title') !== titleOf(td)).map((td) => `${td.firstChild?.textContent?.trim()} titled ${td.getAttribute('title')}`);
-  results.push({ name: '/requests the client cell carries the class on its title', ok: cells.length > 0 && untitled.length === 0, missing: [...new Set(untitled)].slice(0, 3) });
+  // A row with no class draws a muted dash and no capped text, and carries no title.
+  const titleOf = (td) => td.querySelector('.requests__client-text')?.textContent?.trim() ?? null;
+  const untitled = cells.filter((td) => td.getAttribute('title') !== titleOf(td) || (titleOf(td) === null && td.querySelector('.muted')?.textContent !== '-')).map((td) => `${td.textContent?.trim()} titled ${td.getAttribute('title')}`);
+  results.push({ name: '/requests the client cell carries the class on its title', ok: cells.length > 0 && cells.some((td) => titleOf(td) !== null) && untitled.length === 0, missing: [...new Set(untitled)].slice(0, 3) });
 
   const subCheck = '/requests agent type narrows to subagent rows';
   const agentType = [...m.container.querySelectorAll('.filters .mselect')].find((d) => d.querySelector('.mselect__trigger')?.textContent?.trim().startsWith('Agent type'));

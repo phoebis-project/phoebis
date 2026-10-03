@@ -6,15 +6,16 @@ import { PIN_RELEASE_REASON_VALUES } from '@/api/decode';
 import { useAppSettings } from '@/app/settings';
 import { SelectionTrace } from '@/components/SelectionTrace';
 import { AttemptTrail } from '@/components/ui/AttemptTrail';
+import { ColumnsControl } from '@/components/ui/ColumnsControl';
 import { MultiSelect } from '@/components/ui/MultiSelect';
-import { IconChevronLeft, IconChevronRight, IconChevronsLeft, IconColumns, IconRefresh, IconX } from '@/components/ui/icons';
+import { IconChevronLeft, IconChevronRight, IconChevronsLeft, IconRefresh, IconX } from '@/components/ui/icons';
 import { Badge, Button, Card, CopyButton, Descriptions, EmptyState, ErrorState, Input, KeyValue, SearchInput, Select, Skeleton, Toggle } from '@/components/ui/primitives';
 import { moveLabel } from '@/lib/analytics';
 import { autoModeLabel } from '@/lib/autoMode';
 import { isDivergence, missLabel } from '@/lib/cache';
-import { AGENT_TYPES, CLIENT_CLASS_CHARS, TURN_ORIGINS } from '@/lib/client';
+import { AGENT_TYPES, TURN_ORIGINS } from '@/lib/client';
 import { clock } from '@/lib/clock';
-import { bytesDropped, fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortAgent, shortId, tokensTotal } from '@/lib/format';
+import { bytesDropped, fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortAgent, shortId, tokensTotal, undatedModel } from '@/lib/format';
 import { useAsync, useNow } from '@/lib/hooks';
 import { requestTrail } from '@/lib/trail';
 import { StatusBadge } from './DashboardPage';
@@ -35,6 +36,8 @@ const COLUMNS = [
   { id: 'cost', label: 'Cost' },
 ] as const;
 type ColumnId = (typeof COLUMNS)[number]['id'];
+// The drawer names all three, and leaving them out lets the default set fit the card at 1280 by 800.
+const HIDDEN_BY_DEFAULT: readonly ColumnId[] = ['kind', 'pool', 'transport'];
 
 const RANGES = [
   { label: 'Last hour', value: '1h', ms: 3_600_000 },
@@ -115,8 +118,7 @@ export function RequestsPage() {
   const [statuses, setStatuses] = useState<string[]>([]);
   const [kind, setKind] = useState<'' | RequestKind>('');
   const [range, setRange] = useState('24h');
-  const [visible, setVisible] = useState<Set<ColumnId>>(() => new Set(COLUMNS.map((c) => c.id)));
-  const [colsOpen, setColsOpen] = useState(false);
+  const [visible, setVisible] = useState<Set<ColumnId>>(() => new Set(COLUMNS.map((c) => c.id).filter((id) => !HIDDEN_BY_DEFAULT.includes(id))));
   const [pageSize, setPageSize] = useState(25);
   const [cursor, setCursor] = useState<string | undefined>(undefined);
   const [stack, setStack] = useState<(string | undefined)[]>([]);
@@ -142,10 +144,6 @@ export function RequestsPage() {
   useEffect(resetPaging, [search, userAgent, clientPattern, agentTypes, turnOrigins, speeds, held, keyIds, poolIds, accountIds, models, statuses, kind, range, pageSize]);
 
   const rows = requests.data?.requests ?? [];
-  // Sized to the longest class the loaded rows actually carry, floored at the header label so the column never
-  // collapses under it and capped at the longest known class; a wider forged class truncates behind the cell's
-  // ellipsis instead of widening the column.
-  const clientColumnChars = Math.min(CLIENT_CLASS_CHARS, Math.max('Client'.length, ...rows.map((r) => (r.client ?? '').length)));
   const nextCursor = requests.data?.nextCursor ?? null;
   const goNext = () => {
     if (!nextCursor) return;
@@ -238,28 +236,7 @@ export function RequestsPage() {
             <Button size="sm" icon={<IconRefresh size={14} />} onClick={refresh} title={`Rows up to ${fmtTime(new Date(loadedAt).toISOString())}; Refresh reads up to now`}>
               Refresh
             </Button>
-            <Button size="sm" icon={<IconColumns size={14} />} onClick={() => setColsOpen((v) => !v)} aria-expanded={colsOpen}>
-              Columns ({visible.size})
-            </Button>
-            {colsOpen && (
-              <div className="cols-popover">
-                {COLUMNS.map((c) => (
-                  <label key={c.id}>
-                    <input
-                      type="checkbox"
-                      checked={visible.has(c.id)}
-                      onChange={(e) => {
-                        const next = new Set(visible);
-                        if (e.target.checked) next.add(c.id);
-                        else next.delete(c.id);
-                        setVisible(next);
-                      }}
-                    />
-                    {c.label}
-                  </label>
-                ))}
-              </div>
-            )}
+            <ColumnsControl columns={COLUMNS} visible={visible} onChange={setVisible} />
           </div>
         </div>
 
@@ -304,11 +281,19 @@ export function RequestsPage() {
                         {visible.has('key') && <td className="mono">{r.keyId ?? '-'}</td>}
                         {visible.has('pool') && <td className="mono">{r.poolId ?? '-'}</td>}
                         {visible.has('account') && <td>{r.accountId ?? '-'}</td>}
-                        {visible.has('model') && <td className="mono">{r.model}</td>}
+                        {visible.has('model') && (
+                          <td className="mono nowrap" title={undatedModel(r.model) === r.model ? undefined : r.model}>
+                            {undatedModel(r.model)}
+                          </td>
+                        )}
                         {visible.has('client') && (
-                          <td className="mono requests__client" title={r.client ?? undefined} style={{ minWidth: `${clientColumnChars}ch` }}>
-                            {r.client ?? <span className="muted">-</span>}
-                            {r.agentType && <span className="sub">{r.agentType}</span>}
+                          <td className="mono requests__client" title={r.client ?? undefined}>
+                            {r.client === null ? <span className="muted">-</span> : <span className="requests__client-text">{r.client}</span>}
+                            {r.agentType && (
+                              <span className="sub" title={r.agentType}>
+                                {r.agentType}
+                              </span>
+                            )}
                           </td>
                         )}
                         {visible.has('kind') && <td>{r.kind.replace('_', ' ')}</td>}

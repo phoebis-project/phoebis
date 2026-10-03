@@ -1829,6 +1829,44 @@ async function analyticsTables(theme) {
 }
 
 /**
+ * The request list's default columns fit its card with the drawer closed: the table needs no more than its wrap's
+ * width, so nothing scrolls sideways at the pass's 1280 by 800. The Client text gives up its room behind an ellipsis,
+ * the whole class on the cell's title.
+ */
+async function requestsTableFits(theme) {
+  const read = await page.evaluate(() => {
+    const table = document.querySelector('.requests__table');
+    const wrap = table?.closest('.table-wrap');
+    if (!table || !wrap) return null;
+    // The table stretches to its wrap whenever it fits, so its narrowest layout is what tells the room it has left.
+    table.style.width = 'min-content';
+    const least = Math.ceil(table.getBoundingClientRect().width);
+    table.style.width = '';
+    const columns = [...table.querySelectorAll('thead th')].map((th) => [th.textContent?.trim() ?? '', Math.round(th.getBoundingClientRect().width)]);
+    const classes = [...table.querySelectorAll('tbody .requests__client-text')];
+    const cut = classes.filter((c) => c.scrollWidth > c.clientWidth);
+    return {
+      classes: { cut: cut.length, ellipsis: [...new Set(classes.map((c) => getComputedStyle(c).textOverflow))], shown: classes.length, untitled: cut.filter((c) => c.closest('td')?.getAttribute('title') !== c.textContent).map((c) => c.textContent) },
+      client: wrap.clientWidth,
+      columns,
+      drawer: document.querySelector('.drawer') !== null,
+      least,
+      rows: table.querySelectorAll('tbody tr').length,
+      scroll: table.scrollWidth,
+    };
+  });
+  measurements.push(`${theme} /requests table ${read === null ? 'not drawn' : `${read.scroll} of ${read.client}px, at least ${read.least}px (slack ${read.client - read.least}px), ${read.rows} rows, columns ${JSON.stringify(read.columns)}, client text ${JSON.stringify(read.classes)}`}`);
+  if (read === null) {
+    failures.push(`${theme} /requests: no request table to measure`);
+    return;
+  }
+  if (read.drawer) failures.push(`${theme} /requests: the drawer is open, so the default set is not measured alone`);
+  if (read.scroll > read.client) failures.push(`${theme} /requests: the request table needs ${read.scroll}px of its card's ${read.client}px`);
+  if (read.classes.shown > 0 && JSON.stringify(read.classes.ellipsis) !== JSON.stringify(['ellipsis'])) failures.push(`${theme} /requests: the Client text overflows as ${read.classes.ellipsis.join(', ')}, not behind an ellipsis`);
+  for (const text of read.classes.untitled) failures.push(`${theme} /requests: the cut Client text "${text}" does not carry its whole class on the cell's title`);
+}
+
+/**
  * The Speed control at the end of the request log's filter bar against the Turn origin control it follows: the
  * same trigger box, type and border, on the same row of the bar or at the start of the next one.
  */
@@ -2603,6 +2641,7 @@ try {
         await keysPageMenus(theme);
       }
       if (view.path === '/requests') {
+        await requestsTableFits(theme);
         await speedFilter(theme);
       }
       if (view.path === '/alerts') await alertRuleDialog(theme);

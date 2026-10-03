@@ -275,9 +275,11 @@ model-scoped cooldown grouped by model with a clear button per row, and the newe
 
 ### Requests
 
-The table lists thirteen columns: time, key, pool, account, model, client, kind, transport, status,
-attempts, TTFB, tokens, and cost. The client column shows the class the router derived from the user agent
-(`claude-code/<entrypoint>` or `other`), with the agent type beneath it on a subagent's turn.
+The table offers thirteen columns, ten shown by default (pool, kind and transport start hidden, since the drawer
+names all three, and the Columns control turns any on): time, key, pool, account, model, client, kind,
+transport, status, attempts, TTFB, tokens, and cost. The model column reads the id without its date, with the whole id
+on hover. The client column shows the class the router derived from the user agent (`claude-code/<entrypoint>`
+or `other`), cut at 12 characters, whole on hover, and the agent type beneath it on a subagent's turn.
 One row is one client request however many attempts it took, and
 the attempt trail reads as "mail 429, business 200" when a 429 on the first account failed over to a 200 on the second.
 A request that waited for a slot while every account was at its cap carries a held marker beside its attempts with the
