@@ -225,9 +225,14 @@ and at most 64 sockets are served at once, a further one refused `503 live feed 
 
 ### Dashboard
 
-Four tiles report requests, tokens, estimated cost, and the error rate over the last 24 hours; two cards below
-them show the 5-hour and 7-day quota remaining for each subscription account; and the page ends with the most
-recent requests and a sessions card that leads with the router's live pins and the accounts they sit on.
+Four tiles report requests, tokens, estimated cost, and the error rate over the last 24 hours, and a line under them
+says when the figures were read, or that the last refresh failed and why. Two cards below show how much of the pooled
+5-hour and 7-day capacity is left: each subscription account is weighed by its tier's capacity in Max 20x windows from
+the cost table and listed with its own remaining share, and the line under the ring reads the windows left against the
+pooled capacity, such as 0.39 of 1.30 Max 20x windows left. A window whose reset has passed with no reading since counts
+as a full allowance. An account whose tier the table does not size, or whose window the table has not measured, is named
+under the ring instead, with the reason. The page ends with the most recent requests and a sessions card that leads with
+the router's live pins and the accounts they sit on.
 
 ### Observe
 

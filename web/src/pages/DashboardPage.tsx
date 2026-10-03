@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '@/api';
-import type { Account, RequestLog, Session } from '@/api/types';
+import type { Account, CostTable, RequestLog, Session } from '@/api/types';
 import { Donut } from '@/components/charts/Donut';
 import { Sparkline } from '@/components/charts/Sparkline';
 import { accountColor } from '@/components/charts/theme';
@@ -10,18 +10,21 @@ import { Badge, Card, EmptyState, ErrorState, Skeleton } from '@/components/ui/p
 import { WindowTriple } from '@/components/ui/QuotaBars';
 import { fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortId, tokensTotal } from '@/lib/format';
 import { useAsync, useNow } from '@/lib/hooks';
-import { STATUS_LABEL, STATUS_TONE, isFastScope, isSubscription, remainingOf, windowOf } from '@/lib/quota';
+import { STATUS_LABEL, STATUS_TONE, isFastScope } from '@/lib/quota';
+import { fmtWindows, ringFigures, type RingFigures, type RingLeftOut, type RingRow } from '@/lib/rings';
 
 export function DashboardPage() {
   const overview = useAsync(() => api.getOverview(), [], { refreshMs: 30_000 });
   const accounts = useAsync(() => api.listAccounts(), [], { refreshMs: 30_000 });
   const requests = useAsync(() => api.listRequests({ limit: 10 }), [], { refreshMs: 30_000 });
   const sessions = useAsync(() => api.listSessions(), [], { refreshMs: 30_000 });
+  const settings = useAsync(() => api.getSettings(), [], { refreshMs: 30_000 });
   const now = useNow();
   const ink = useChartInk();
 
   const o = overview.data;
   const hourly = o?.hourly ?? [];
+  const tiers = settings.data?.planTables.cost.tiers ?? null;
 
   return (
     <div className="stack">
@@ -44,8 +47,8 @@ export function DashboardPage() {
       )}
 
       <div className="grid-2">
-        <RemainingCard title="5h remaining" subtitle="Subscription accounts, 5-hour window" windowId="5h" accounts={accounts.data} />
-        <RemainingCard title="7d remaining" subtitle="Subscription accounts, 7-day window" windowId="7d" accounts={accounts.data} />
+        <RemainingCard title="5h remaining" subtitle="Subscription accounts, 5-hour window, weighed by tier" windowId="5h" accounts={accounts.data} tiers={tiers} now={now} />
+        <RemainingCard title="7d remaining" subtitle="Subscription accounts, 7-day window, weighed by tier" windowId="7d" accounts={accounts.data} tiers={tiers} now={now} />
       </div>
 
       <section>
@@ -86,50 +89,68 @@ function StatTile({ label, value, note, spark, color }: { color: string; label: 
   );
 }
 
-function RemainingCard({ title, subtitle, windowId, accounts }: { accounts: Account[] | null; subtitle: string; title: string; windowId: '5h' | '7d' }) {
-  const ink = useChartInk();
-  const [hover, setHover] = useState<string | null>(null);
-  const rows = useMemo(() => {
-    if (!accounts) return [];
-    return accounts
-      .filter((a) => isSubscription(a) && a.routingEnabled)
-      .map((a) => ({ account: a, window: windowOf(a, windowId) }))
-      .filter((r) => r.window !== null)
-      .map((r) => ({ id: r.account.id, label: r.account.label, remaining: remainingOf(r.window!), color: accountColor(ink, r.account.id) }));
-  }, [accounts, windowId, ink]);
-  // Every listed account weighs one unit of capacity, so the mean remaining
-  // share is also the ring's colored fraction.
-  const totalRemaining = rows.reduce((s, r) => s + r.remaining, 0);
-  const mean = rows.length ? totalRemaining / rows.length : 0;
-  const shareOfPool = (remaining: number) => (rows.length ? remaining / rows.length : 0);
+function RemainingCard({ title, subtitle, windowId, accounts, tiers, now }: { accounts: Account[] | null; now: number; subtitle: string; tiers: CostTable['tiers'] | null; title: string; windowId: '5h' | '7d' }) {
+  const figures = useMemo(() => (accounts && tiers ? ringFigures(accounts, windowId, tiers, now) : null), [accounts, tiers, windowId, now]);
   return (
     <Card title={title} subtitle={subtitle}>
-      {accounts && rows.length === 0 ? (
+      {figures === null ? (
+        <Skeleton height={148} />
+      ) : figures.rows.length === 0 && figures.leftOut.length === 0 ? (
         // A registry of Anthropic-key accounts alone has no window to draw, and an empty ring reads as exhausted.
         <EmptyState title="No subscription accounts" body="A subscription account reports the window this card draws." />
-      ) : accounts ? (
-        <div className="remaining">
-          <Donut
-            slices={rows.map((r) => ({ id: r.id, label: r.label, value: r.remaining, color: r.color, title: `${r.label}: ${fmtPct(r.remaining)} of its window remaining (${fmtPct(shareOfPool(r.remaining))} of pooled capacity)` }))}
-            total={rows.length}
-            centerLabel="remaining"
-            centerValue={fmtPct(mean)}
-            onHover={setHover}
-          />
-          <ul className="remaining__list">
-            {rows.map((r) => (
-              <li key={r.id} className={hover && hover !== r.id ? 'is-dim' : ''} title={`${fmtPct(shareOfPool(r.remaining))} of pooled capacity`}>
-                <span className="legend__swatch" style={{ background: r.color }} />
-                <Link to={`/accounts/${r.id}`}>{r.label}</Link>
-                <span className="num">{fmtPct(r.remaining)}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
+      ) : figures.rows.length === 0 ? (
+        <>
+          <p className="muted">No listed account's tier is sized for the {windowId === '5h' ? '5-hour' : '7-day'} window.</p>
+          <LeftOut accounts={figures.leftOut} />
+        </>
       ) : (
-        <Skeleton height={148} />
+        <WeighedRing figures={figures} />
       )}
     </Card>
+  );
+}
+
+function WeighedRing({ figures }: { figures: RingFigures }) {
+  const ink = useChartInk();
+  const [hover, setHover] = useState<string | null>(null);
+  const { capacity, left, leftOut, rows } = figures;
+  const share = (r: RingRow) => r.weight * r.remaining;
+  const titleOf = (r: RingRow) => `${r.label}: ${fmtWindows(share(r))} of ${fmtWindows(capacity)} Max 20x windows, ${fmtPct(share(r) / capacity)} of the pooled capacity`;
+  return (
+    <div className="remaining">
+      <Donut
+        slices={rows.map((r) => ({ id: r.id, label: r.label, value: share(r), color: accountColor(ink, r.id), title: titleOf(r) }))}
+        total={capacity}
+        centerLabel="of capacity left"
+        centerValue={fmtPct(left / capacity)}
+        onHover={setHover}
+      />
+      <ul className="remaining__list">
+        {rows.map((r) => (
+          <li key={r.id} className={hover && hover !== r.id ? 'is-dim' : ''} title={titleOf(r)}>
+            <span className="legend__swatch" style={{ background: accountColor(ink, r.id) }} />
+            <Link to={`/accounts/${r.id}`}>{r.label}</Link>
+            <span className="num">{fmtPct(r.remaining)}</span>
+          </li>
+        ))}
+      </ul>
+      <p className="remaining__line">
+        {fmtWindows(left)} of {fmtWindows(capacity)} Max 20x windows left
+      </p>
+      {leftOut.length > 0 && <LeftOut accounts={leftOut} />}
+    </div>
+  );
+}
+
+function LeftOut({ accounts }: { accounts: RingLeftOut[] }) {
+  return (
+    <ul className="remaining__left-out muted">
+      {accounts.map((a) => (
+        <li key={a.id}>
+          {a.label}: {a.reason}
+        </li>
+      ))}
+    </ul>
   );
 }
 

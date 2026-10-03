@@ -11,9 +11,9 @@ export interface DonutSlice {
 
 /**
  * Part-to-whole ring. Each slice is drawn as `value / total` of the ring and
- * the gray remainder is `total - sum(values)`. For quota, every account
- * contributes one unit of capacity, so a slice is that account's remaining
- * share of the pooled capacity and the gray arc is what has been spent.
+ * the grey remainder is `total - sum(values)`. For quota, a slice is an
+ * account's remaining share weighed by its tier's capacity, the total the
+ * pooled capacity, and the grey arc what has been spent.
  */
 export function Donut({ slices, total, centerLabel, centerValue, size = 148, onHover }: { centerLabel: string; centerValue: string; onHover?: (id: string | null) => void; size?: number; slices: DonutSlice[]; total: number }) {
   const [hover, setHover] = useState<string | null>(null);

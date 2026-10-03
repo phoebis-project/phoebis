@@ -300,6 +300,17 @@
   color: inherit;
 }
 
+.remaining__line,
+.remaining__left-out {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+.remaining__left-out {
+  padding: 0;
+  list-style: none;
+}
+
 .badge__extra {
   opacity: 0.8;
 }

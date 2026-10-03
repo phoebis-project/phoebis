@@ -15,6 +15,7 @@ export * as modelPatterns from '@/lib/patterns';
 export * from '@/lib/presets';
 export * from '@/lib/projection';
 export * from '@/lib/quota';
+export * from '@/lib/rings';
 export * from '@/lib/selection';
 export * from '@/lib/snippet';
 export * from '@/lib/trail';

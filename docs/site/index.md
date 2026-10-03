@@ -46,14 +46,14 @@ own routable models ([models listing](client.md#the-models-listing)).
 The admin listener serves a React console over the same routes as the admin API. The top bar carries the theme
 toggle and the role badge, and the sidebar carries twelve views.
 
-![The dashboard: four tiles, the remaining-quota cards, recent requests](assets/dashboard-light.png#only-light)
-![The dashboard: four tiles, the remaining-quota cards, recent requests](assets/dashboard-dark.png#only-dark)
+![The dashboard: four tiles, the capacity-left rings, recent requests](assets/dashboard-light.png#only-light)
+![The dashboard: four tiles, the capacity-left rings, recent requests](assets/dashboard-dark.png#only-dark)
 
 The sidebar shows the views in this order:
 
 | View | Describes |
 | --- | --- |
-| Dashboard | Shown above: 24-hour tiles, remaining subscription quota, and recent requests and sessions. |
+| Dashboard | 24-hour tiles, the pooled subscription capacity left weighed by tier, and recent requests and sessions. |
 | Observe | The live feed (see [Statistics and alerts](statistics.md)). |
 | Quota | Each account's usage windows and reset timing (see [Statistics and alerts](statistics.md)). |
 | Accounts | Accounts and their credentials (see [Pairing an account](pairing.md)). |

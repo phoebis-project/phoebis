@@ -1464,6 +1464,26 @@ async function errorStateBox(theme) {
   if (measured.error.borderColor === measured.empty.borderColor) failures.push(`${theme} /: the error state's border colour equals the empty state's`);
 }
 
+/**
+ * The line under each quota ring and the accounts it leaves out read across the ring's whole grid, under the ring and
+ * the legend both, rather than wrapping inside the 148 px ring column. The router's seed has no subscription account,
+ * so only the story's pass draws a ring.
+ */
+async function ringLinesSpan(theme) {
+  const read = await page.evaluate(() =>
+    [...document.querySelectorAll('.remaining > .remaining__line, .remaining > .remaining__left-out')].map((el) => {
+      const box = el.getBoundingClientRect();
+      return { grid: Math.round(el.parentElement.getBoundingClientRect().left), left: Math.round(box.left), text: el.textContent?.trim().slice(0, 60) ?? '', width: Math.round(box.width) };
+    }),
+  );
+  measurements.push(`${theme} / ring lines ${JSON.stringify(read)}`);
+  if (mock && read.length === 0) failures.push(`${theme} /: the story weighs subscription accounts, yet no ring draws its line`);
+  for (const line of read) {
+    if (line.left !== line.grid) failures.push(`${theme} /: "${line.text}" starts at ${line.left}px, not at its ring grid's left edge (${line.grid}px)`);
+    if (line.width <= 148) failures.push(`${theme} /: "${line.text}" is ${line.width}px wide, inside the ring column`);
+  }
+}
+
 /** The pool id and the amount are the two ends of one row, and a narrow tile used to run them together. */
 async function costCapRows(theme) {
   const rows = await page.evaluate(() =>
@@ -2404,6 +2424,7 @@ try {
         await remainingCards(theme);
         await errorStateBox(theme);
       }
+      if (view.path === '/') await ringLinesSpan(theme);
       if (['/', '/pools', '/accounts'].includes(view.path)) await accountLines(theme, view.path);
       if (view.path === '/observe') await liveFeed(theme);
       if (view.path === '/sessions') {

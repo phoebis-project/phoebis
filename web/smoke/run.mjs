@@ -65,7 +65,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { api, AttemptTrail, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, failCalls, failNextCall, Field, GroupedDialog, GroupLink, Input, MOCK_VERSION, mount, mountNode, PageLink, React, requestEvents, requests, rollups, SessionNotKept, SETTINGS_WIRE, stallLive, SwitchedNumber, tick } = await import('./dist/entry.js');
+const { api, AttemptTrail, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, failCalls, failNextCall, Field, fmtPct, fmtWindows, GroupedDialog, GroupLink, Input, MOCK_VERSION, mount, mountNode, PageLink, React, requestEvents, requests, ringFigures, rollups, SessionNotKept, SETTINGS_WIRE, stallLive, SwitchedNumber, tick } = await import('./dist/entry.js');
 
 const results = [];
 /**
@@ -174,8 +174,51 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   // sessions route answers 17 rows, so a hero counting rows or a note counting every row's account reads otherwise.
   const hero = m.container.querySelector('.sess-summary__hero');
   results.push({ name: "/ the sessions card counts the router's live pins over the pinned rows' accounts", ok: hero?.querySelector('.stat__value')?.textContent === '12' && hero?.querySelector('.stat__note')?.textContent === 'active pins across 2 accounts', missing: [hero?.textContent ?? 'absent'] });
-  const t = m.text();
-  results.push({ name: '/ donut center says remaining, not average', ok: !t.includes('average') && (m.container.querySelectorAll('.donut__label').length >= 2), missing: [] });
+  // The expectations come from the figures the page draws, over the accounts route and the decoded cost table's tiers,
+  // which the tier match reads in camelCase.
+  const tiers = decodeSettings(SETTINGS_WIRE).planTables.cost.tiers;
+  const listed = await api.listAccounts();
+  const figures = { '5h': ringFigures(listed, '5h', tiers, Date.now()), '7d': ringFigures(listed, '7d', tiers, Date.now()) };
+  const ringCard = (title) => [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent === title);
+  const rings = { '5h': ringCard('5h remaining'), '7d': ringCard('7d remaining') };
+  const labels = [...m.container.querySelectorAll('.donut__label')].map((l) => l.textContent);
+  const center = rings['5h']?.querySelector('.donut__value')?.textContent ?? '';
+  const f5 = figures['5h'];
+  const f7 = figures['7d'];
+  results.push({
+    name: '/ donut center says of capacity left',
+    ok: JSON.stringify(labels) === JSON.stringify(['of capacity left', 'of capacity left']) && f5.capacity > 0 && center === fmtPct(f5.left / f5.capacity),
+    missing: [JSON.stringify(labels), `5-hour center ${center || 'absent'} against ${fmtPct(f5.left / f5.capacity)}`],
+  });
+  const lineOf = (id) => rings[id]?.querySelector('.remaining__line')?.textContent ?? '';
+  const lineFrom = (f) => `${fmtWindows(f.left)} of ${fmtWindows(f.capacity)} Max 20x windows left`;
+  results.push({
+    name: '/ the line under each ring reads the weighed figures',
+    ok: lineOf('5h') === lineFrom(f5) && lineOf('7d') === lineFrom(f7) && f5.rows.length === 3 && JSON.stringify(f7.rows.map((r) => r.id)) === JSON.stringify(['business']),
+    missing: [`5-hour ${JSON.stringify(lineOf('5h'))} against ${JSON.stringify(lineFrom(f5))}`, `7-day ${JSON.stringify(lineOf('7d'))} against ${JSON.stringify(lineFrom(f7))}`, `rows ${f5.rows.map((r) => r.id)} and ${f7.rows.map((r) => r.id)}`],
+  });
+  const named = (id) => [...(rings[id]?.querySelectorAll('.remaining__left-out li') ?? [])].map((li) => li.textContent ?? '');
+  const onRing = (id) => [...(rings[id]?.querySelectorAll('.remaining__list a, .remaining__left-out li') ?? [])].map((e) => (e.textContent ?? '').split(':')[0]);
+  const strays = ['5h', '7d'].flatMap((id) => onRing(id).filter((n) => n === 'team' || n === 'spare').map((n) => `${n} on the ${id} ring`));
+  results.push({
+    name: '/ the 7-day ring names the unpriced accounts and the 5-hour ring names none',
+    ok: JSON.stringify(named('7d').sort()) === JSON.stringify(['mail: Pro 7-day capacity not measured', 'personal: Max 5x 7-day capacity not measured']) && lineOf('5h') !== '' && named('5h').length === 0 && strays.length === 0,
+    missing: [`7-day ${JSON.stringify(named('7d'))}`, `5-hour ${JSON.stringify(named('5h'))}`, ...strays],
+  });
+  const titled = (id) => {
+    const f = figures[id];
+    const want = f.rows.map((r) => `${r.label}: ${fmtWindows(r.weight * r.remaining)} of ${fmtWindows(f.capacity)} Max 20x windows, ${fmtPct((r.weight * r.remaining) / f.capacity)} of the pooled capacity`);
+    const legend = [...(rings[id]?.querySelectorAll('.remaining__list li') ?? [])];
+    // The grey remainder is the spent arc, which carries its own title.
+    const slices = [...(rings[id]?.querySelectorAll('svg.donut circle > title') ?? [])].map((t) => t.textContent ?? '').filter((t) => !t.startsWith('Spent: '));
+    return { id, legend: legend.map((li) => li.getAttribute('title')), shares: legend.map((li) => li.querySelector('.num')?.textContent ?? ''), slices, want, wantShares: f.rows.map((r) => fmtPct(r.remaining)) };
+  };
+  const titles = ['5h', '7d'].map(titled);
+  results.push({
+    name: '/ legend rows and slices carry the weighed share in their titles',
+    ok: titles.every((t) => t.want.length > 0 && JSON.stringify(t.legend) === JSON.stringify(t.want) && JSON.stringify(t.slices) === JSON.stringify(t.want) && JSON.stringify(t.shares) === JSON.stringify(t.wantShares)),
+    missing: titles.map((t) => JSON.stringify(t)),
+  });
   const fableAbsent = m.container.querySelectorAll('.account-mini .wbar--absent[title="no Fable window"]').length;
   results.push({ name: '/ account strip greys missing Fable windows', ok: fableAbsent >= 2, missing: [String(fableAbsent)] });
   const triples = [...m.container.querySelectorAll('.account-mini .wbars--3')].filter((el) => el.querySelectorAll('.wbar').length === 3).length;
