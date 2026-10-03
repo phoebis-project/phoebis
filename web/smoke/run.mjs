@@ -65,7 +65,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { api, AttemptTrail, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, failCalls, failNextCall, Field, fmtPct, fmtWindows, GroupedDialog, GroupLink, Input, MOCK_VERSION, mount, mountNode, PageLink, React, requestEvents, requests, ringFigures, rollups, SessionNotKept, SETTINGS_WIRE, shortModel, stallLive, SwitchedNumber, tick } = await import('./dist/entry.js');
+const { api, AttemptTrail, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, emitLive, failCalls, failNextCall, Field, fmtPct, fmtWindows, GroupedDialog, GroupLink, Input, MOCK_VERSION, mount, mountNode, PageLink, React, requestEvents, requests, ringFigures, rollups, SessionNotKept, SETTINGS_WIRE, shortModel, stallLive, SwitchedNumber, tick } = await import('./dist/entry.js');
 
 const results = [];
 /**
@@ -6282,6 +6282,78 @@ else localStorage.setItem('phoebis.role', roleBeforePreview);
     missing: [why(trail), node ? JSON.stringify(node.textContent) : 'no node', JSON.stringify(trail?.textContent ?? '')],
   });
   lone.unmount();
+}
+
+{
+  // Two Observe checks that spend real time on a mount of their own, late in the run like the checks around them, so
+  // the time they take moves none of the story's relative times the checks above read.
+  const live = await mount('/observe');
+  const keyOf = (tr) => liveCell(live, tr, 'Key')?.textContent ?? '';
+  const drawn = () => [...live.container.querySelectorAll('.live-table tbody tr')].map((tr) => `${liveCell(live, tr, 'Time')?.textContent} ${keyOf(tr)}`);
+  const button = (label) => [...live.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === label);
+
+  // The page draws the feed on an animation frame, so an event that lands just before Pause leaves a frame queued. The
+  // page's frames go through the global the bundle reads, which this check holds in a queue of its own, numbered apart
+  // from jsdom's handles; a frame asked of jsdom before the swap runs during the settle.
+  const realFrame = globalThis.requestAnimationFrame;
+  const realCancel = globalThis.cancelAnimationFrame;
+  const held = [];
+  let nextHeld = 1_000_000;
+  globalThis.requestAnimationFrame = (cb) => {
+    const id = nextHeld;
+    nextHeld += 1;
+    held.push({ cb, id });
+    return id;
+  };
+  globalThis.cancelAnimationFrame = (id) => {
+    const at = held.findIndex((h) => h.id === id);
+    if (at >= 0) held.splice(at, 1);
+    else realCancel(id);
+  };
+  let frozen = [];
+  let shownPaused = true;
+  let afterClick = [];
+  let shownResumed = false;
+  try {
+    await live.settle(100);
+    const request = { accountId: null, agentId: 'main', attempts: [], costUsd: 0, errorCode: null, id: 'smoke-pause-gap', keyId: 'pause-gap', kind: 'inference', model: 'claude-sonnet-5', outputTps: null, phases: { receivedAt: new Date().toISOString() }, poolId: null, preview: null, sessionId: null, state: 'in_flight', status: null, transport: 'sse', usage: null, userAgent: null };
+    // One synchronous turn from the event to the click: an await between them would let a frame draw the row first.
+    emitLive({ delta: { cursor: Number.MAX_SAFE_INTEGER, request, type: 'started' }, kind: 'delta' });
+    button('Pause')?.click();
+    afterClick = drawn();
+    for (const h of held.splice(0)) h.cb(performance.now());
+    await live.settle(150);
+    frozen = drawn();
+    shownPaused = frozen.some((r) => r.endsWith(' pause-gap'));
+  } finally {
+    globalThis.requestAnimationFrame = realFrame;
+    globalThis.cancelAnimationFrame = realCancel;
+  }
+  button('Resume')?.click();
+  await live.settle(150);
+  shownResumed = drawn().some((r) => r.endsWith(' pause-gap'));
+  results.push({
+    name: '/observe a pause between a queued event and its frame keeps the view frozen',
+    ok: afterClick.length > 0 && JSON.stringify(frozen) === JSON.stringify(afterClick) && !shownPaused && shownResumed,
+    missing: [`${afterClick.length} rows after the click, ${frozen.length} after the held frames`, shownPaused ? 'the row drew while paused' : '', shownResumed ? '' : 'Resume did not draw the row'].filter(Boolean),
+  });
+
+  // jsdom runs no activation for a key press on a button, so the keyboard path is a focus and then the button's click.
+  const opener = live.container.querySelector('.live-table tbody tr .live-row__open');
+  opener?.focus();
+  opener?.click();
+  await live.settle(150);
+  const close = live.container.querySelector('.observe__detail [aria-label="Close detail"]');
+  const onClose = close !== null && document.activeElement === close;
+  close?.click();
+  await live.settle(150);
+  const returned = opener !== null && opener.isConnected && document.activeElement === opener;
+  results.push({
+    name: '/observe a row opens its pane from the keyboard and focus returns on close',
+    ok: onClose && returned && live.container.querySelector('.observe__detail') === null,
+    missing: [opener ? '' : 'no row button', close ? '' : 'no pane', onClose ? '' : `focus on ${document.activeElement?.outerHTML.slice(0, 80)} after opening`, returned ? '' : `focus on ${document.activeElement?.outerHTML.slice(0, 80)} after closing`].filter(Boolean),
+  });
+  live.unmount();
 }
 
 {

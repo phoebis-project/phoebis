@@ -3066,6 +3066,19 @@
   text-overflow: ellipsis;
 }
 
+.live-row__open {
+  all: unset;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+}
+
+/* `all: unset` drops the global focus ring with everything else, so the button draws it again. */
+.live-row__open:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .live-table .elapsed {
   min-width: 64px;
 }

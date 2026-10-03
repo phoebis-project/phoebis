@@ -9,6 +9,7 @@ export * from '@/lib/cache';
 export * from '@/lib/chunks';
 export * from '@/lib/format';
 export * from '@/lib/forms';
+export * from '@/lib/frame';
 export * from '@/lib/menu';
 export * from '@/lib/pattern';
 export * as modelPatterns from '@/lib/patterns';

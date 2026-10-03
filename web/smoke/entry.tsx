@@ -48,11 +48,24 @@ export const stallLive = (on: boolean) => {
   stalled = on;
 };
 const subscribeLive = api.subscribeLive.bind(api);
-api.subscribeLive = (handler: (event: LiveEvent) => void) =>
-  subscribeLive((e) => {
+let liveHandler: ((event: LiveEvent) => void) | null = null;
+api.subscribeLive = (handler: (event: LiveEvent) => void) => {
+  liveHandler = handler;
+  const off = subscribeLive((e) => {
     if (stalled && e.kind === 'delta' && e.delta.type === 'tick') return;
     handler(e);
   });
+  return () => {
+    off();
+    if (liveHandler === handler) liveHandler = null;
+  };
+};
+
+/** Delivers one event to the live handler the mounted page subscribed, in the caller's turn, as the feed would. */
+export const emitLive = (event: LiveEvent) => {
+  if (liveHandler === null) throw new Error('no page is subscribed to the live feed');
+  liveHandler(event);
+};
 
 /**
  * Fails one mock call the way the transport fails a real one: the rejection reaches the page's `useAsync`,

@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { api } from '@/api';
 import type { LiveDelta, LiveEvent, LiveMetric, LivePhases, LiveRequest, LiveSnapshot, LiveTick, MetricQuality } from '@/api/types';
@@ -10,6 +10,7 @@ import { MultiSelect } from '@/components/ui/MultiSelect';
 import { IconExpand, IconPause, IconPlay, IconWarning, IconX } from '@/components/ui/icons';
 import { Badge, Button, Card, EmptyState, KeyValue, Meter, Segmented, Select, Skeleton, Toggle } from '@/components/ui/primitives';
 import { clock } from '@/lib/clock';
+import { coalesce } from '@/lib/frame';
 import { fmtAbsolute, fmtCompact, fmtDuration, fmtInt, fmtMs, fmtPct, fmtShortTime, fmtTime, fmtUsd, shortAgent, shortId, tokensTotal, undatedModel } from '@/lib/format';
 import { PERCENTILE_HINT } from '@/lib/histogram';
 import { useNow } from '@/lib/hooks';
@@ -99,7 +100,10 @@ export function ObservePage() {
   const [status, setStatus] = useState<StatusFilter>('all');
   const [inFlightOnly, setInFlightOnly] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const openerRef = useRef<HTMLElement | null>(null);
   const { canMutate } = useAppSettings();
+  // The feed can send many frames inside one animation frame; the store takes each as it lands and the view the last.
+  const pushView = useMemo(() => coalesce<Store>(setView), []);
 
   // Arriving from a session row carries the session in the query; dropping the
   // chip clears the parameter too so this does not put the filter straight back.
@@ -115,21 +119,38 @@ export function ObservePage() {
     setSearchParams(next, { replace: true });
   };
 
-  useEffect(
-    () =>
-      api.subscribeLive((e: LiveEvent) => {
-        storeRef.current = e.kind === 'snapshot' ? fromSnapshot(e.snapshot) : applyDelta(storeRef.current, e.delta);
-        if (e.kind === 'snapshot' || e.delta.type === 'tick') lastTickAt.current = clock.now();
-        if (!pausedRef.current) setView(storeRef.current);
-      }),
-    [],
-  );
+  useEffect(() => {
+    const off = api.subscribeLive((e: LiveEvent) => {
+      storeRef.current = e.kind === 'snapshot' ? fromSnapshot(e.snapshot) : applyDelta(storeRef.current, e.delta);
+      if (e.kind === 'snapshot' || e.delta.type === 'tick') lastTickAt.current = clock.now();
+      if (!pausedRef.current) pushView.push(storeRef.current);
+    });
+    return () => {
+      off();
+      pushView.cancel();
+    };
+  }, [pushView]);
 
   const togglePause = () => {
     const next = paused === null;
     pausedRef.current = next;
     setPaused(next ? clock.now() : null);
-    if (!next) setView(storeRef.current);
+    // A frame an event queued just before the click would otherwise draw that event after it, so the view the pause
+    // freezes is the last one drawn.
+    if (next) pushView.cancel();
+    else {
+      pushView.push(storeRef.current);
+      pushView.flush();
+    }
+  };
+
+  const onSelect = useCallback((id: string, opener: HTMLElement | null) => {
+    openerRef.current = opener;
+    setSelectedId(id);
+  }, []);
+  const closeDetail = () => {
+    setSelectedId(null);
+    if (openerRef.current?.isConnected) openerRef.current.focus();
   };
 
   // The feed ticks once a second, so a second-resolution clock is what notices it stop.
@@ -154,6 +175,9 @@ export function ObservePage() {
     setSpan((s) => ({ ...s, endS: RING_SPAN_S }));
   };
 
+  // Parsed once per view: the density bins, the window's filter and the newest-first sort all read each row's arrival.
+  const receivedMs = useMemo(() => new Map([...view.inFlight.values(), ...view.recent].map((r) => [r.id, Date.parse(r.phases.receivedAt)])), [view]);
+
   const sessionFilter = filters.sessionId;
   // Binned by wall-clock minute rather than by offset from the window start, so
   // a bar names the same minute as the axis tick under it and the two slide
@@ -164,16 +188,17 @@ export function ObservePage() {
     const counts = new Array(RING_SPAN_S / 60 + 1).fill(0) as number[];
     for (const r of [...view.recent, ...view.inFlight.values()]) {
       if (sessionFilter.length && (r.sessionId === null || !sessionFilter.includes(r.sessionId))) continue;
-      const bin = Math.floor((Date.parse(r.phases.receivedAt) - firstMinute) / MINUTE_MS);
+      const bin = Math.floor((receivedMs.get(r.id)! - firstMinute) / MINUTE_MS);
       if (bin >= 0 && bin < counts.length) counts[bin] += 1;
     }
     return { counts, firstMinute };
-  }, [view, windowStart, sessionFilter]);
+  }, [view, receivedMs, windowStart, sessionFilter]);
 
   const all = useMemo(() => {
-    if (historical) return view.recent.filter((r) => Date.parse(r.phases.receivedAt) <= atMs && Date.parse(r.phases.receivedAt) >= fromMs).map((r) => projectAt(r, atMs));
-    return [...view.inFlight.values(), ...view.recent].filter((r) => Date.parse(r.phases.receivedAt) >= fromMs).sort((a, b) => Date.parse(b.phases.receivedAt) - Date.parse(a.phases.receivedAt));
-  }, [view, historical, atMs, fromMs]);
+    const at = (r: LiveRequest) => receivedMs.get(r.id)!;
+    if (historical) return view.recent.filter((r) => at(r) <= atMs && at(r) >= fromMs).map((r) => projectAt(r, atMs));
+    return [...view.inFlight.values(), ...view.recent].filter((r) => at(r) >= fromMs).sort((a, b) => at(b) - at(a));
+  }, [view, receivedMs, historical, atMs, fromMs]);
 
   const options = useMemo(() => {
     const distinct = (dim: Dim) => [...new Set(all.map((r) => r[dim]).filter((v): v is string => v !== null))].sort();
@@ -310,7 +335,7 @@ export function ObservePage() {
                   </thead>
                   <tbody>
                     {rows.map((r) => (
-                      <LiveRow key={r.id} r={r} selected={r.id === selectedId} onSelect={setSelectedId} frozenAt={frozenAt} />
+                      <LiveRow key={r.id} r={r} selected={r.id === selectedId} onSelect={onSelect} frozenAt={frozenAt} />
                     ))}
                   </tbody>
                 </table>
@@ -322,7 +347,7 @@ export function ObservePage() {
         )}
       </div>
 
-      {selected && <DetailPane r={selected} onClose={() => setSelectedId(null)} canPreview={canMutate} frozenAt={frozenAt} />}
+      {selected && <DetailPane r={selected} onClose={closeDetail} canPreview={canMutate} frozenAt={frozenAt} />}
     </div>
   );
 }
@@ -516,13 +541,24 @@ const statusTone = (r: LiveRequest) => (r.status === 200 && r.errorCode === null
 // The Status badge is the readable signal; the dot only repeats it in colour, so its name is for a pointer's hover.
 const DOT_TITLE = { 'ldot--bad': 'failed', 'ldot--inflight': 'in flight', 'ldot--ok': 'succeeded', 'ldot--warn': 'rate limited' };
 
-const LiveRow = memo(function LiveRow({ r, selected, onSelect, frozenAt }: { frozenAt: number | null; onSelect: (id: string) => void; r: LiveRequest; selected: boolean }) {
+const LiveRow = memo(function LiveRow({ r, selected, onSelect, frozenAt }: { frozenAt: number | null; onSelect: (id: string, opener: HTMLElement | null) => void; r: LiveRequest; selected: boolean }) {
   const model = undatedModel(r.model);
   return (
-    <tr className={selected ? 'is-selected' : ''} onClick={() => onSelect(r.id)} aria-selected={selected} data-kind={r.kind}>
+    <tr className={selected ? 'is-selected' : ''} onClick={() => onSelect(r.id, null)} aria-selected={selected} data-kind={r.kind}>
       <td className="num" title={fmtAbsolute(r.phases.receivedAt)}>
         <span className={`ldot ${statusDot(r)}`} aria-hidden title={DOT_TITLE[statusDot(r)]} />
-        {fmtTime(r.phases.receivedAt)}
+        {/* The row's click serves the mouse; this button is the same action reachable by Tab, and the pane hands the
+            focus back to it on close. */}
+        <button
+          type="button"
+          className="live-row__open"
+          onClick={(e) => {
+            e.stopPropagation();
+            onSelect(r.id, e.currentTarget);
+          }}
+        >
+          {fmtTime(r.phases.receivedAt)}
+        </button>
       </td>
       <td>{r.status === null ? <span className="muted">pending</span> : <Badge tone={statusTone(r)} title={r.errorCode ?? undefined}>{r.status}</Badge>}</td>
       <td className="mono">{r.keyId}</td>
@@ -653,6 +689,8 @@ const PHASES: { key: keyof LivePhases; label: string }[] = [
 ];
 
 function DetailPane({ r, onClose, canPreview, frozenAt }: { canPreview: boolean; frozenAt: number | null; onClose: () => void; r: LiveRequest }) {
+  const closeRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => closeRef.current?.focus(), []);
   const running = r.state === 'in_flight' && frozenAt === null;
   const now = useClock(running, 500);
   const endMs = r.phases.finishedAt ? Date.parse(r.phases.finishedAt) : frozenAt ?? now;
@@ -665,7 +703,7 @@ function DetailPane({ r, onClose, canPreview, frozenAt }: { canPreview: boolean;
             {r.kind} on {r.keyId}, {r.transport === 'sse' ? 'SSE' : 'JSON'}
           </div>
         </div>
-        <button type="button" className="dialog__close" aria-label="Close detail" onClick={onClose}>
+        <button ref={closeRef} type="button" className="dialog__close" aria-label="Close detail" onClick={onClose}>
           <IconX size={16} />
         </button>
       </div>
