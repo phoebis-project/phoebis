@@ -284,7 +284,7 @@ names all three, and the Columns control turns any on): time, key, pool, account
 transport, status, attempts, TTFB, tokens, and cost. A request whose 200 answer ended short reads `incomplete` with the
 code that says how: `stream_cut` when the connection or the decoder failed mid-body, `stream_incomplete` when the stream
 closed without its `message_stop`, `stream_stalled` when the upstream went silent past the idle bound. The model column
-reads the id without its date, with the whole id on hover. The client column shows the class the router derived from the
+reads the family and version, with the whole id on hover. The client column shows the class the router derived from the
 user agent (`claude-code/<entrypoint>` or `other`), cut at 12 characters, whole on hover, and the agent
 type beneath it on a subagent's turn.
 One row is one

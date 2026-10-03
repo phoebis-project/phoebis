@@ -15,7 +15,7 @@ import { autoModeLabel } from '@/lib/autoMode';
 import { isDivergence, missLabel } from '@/lib/cache';
 import { AGENT_TYPES, TURN_ORIGINS } from '@/lib/client';
 import { clock } from '@/lib/clock';
-import { bytesDropped, fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortAgent, shortId, tokensTotal, undatedModel } from '@/lib/format';
+import { bytesDropped, fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortAgent, shortId, shortModel, tokensTotal } from '@/lib/format';
 import { useAsync, useCommittedText, useNow } from '@/lib/hooks';
 import { requestTrail } from '@/lib/trail';
 import { StatusBadge } from './DashboardPage';
@@ -404,8 +404,8 @@ export function RequestsPage() {
                         {visible.has('pool') && <td className="mono">{r.poolId ?? '-'}</td>}
                         {visible.has('account') && <td>{r.accountId ?? '-'}</td>}
                         {visible.has('model') && (
-                          <td className="mono nowrap" title={undatedModel(r.model) === r.model ? undefined : r.model}>
-                            {undatedModel(r.model)}
+                          <td className="mono nowrap" title={shortModel(r.model) === r.model ? undefined : r.model}>
+                            {shortModel(r.model)}
                           </td>
                         )}
                         {visible.has('client') && (

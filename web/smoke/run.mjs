@@ -4555,7 +4555,7 @@ m = await mount('/models');
 m.unmount();
 
 m = await mount('/requests');
-expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'claude-code/cli', 'Agent type', 'Turn origin', 'claude-fable-5-1', 'desktop', 'laptop', 'shown']);
+expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'claude-code/cli', 'Agent type', 'Turn origin', 'fable-5-1', 'desktop', 'laptop', 'shown']);
 {
   // Pool, Kind and Transport start hidden, since the drawer names all three, and the control still offers every column.
   const ALL = ['Time', 'Key', 'Pool', 'Account', 'Model', 'Client', 'Kind', 'Transport', 'Status', 'Attempts', 'TTFB', 'Tokens', 'Cost'];
@@ -4598,7 +4598,8 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
   results.push({ name: '/requests the Columns control closes on its button and the default set returns', ok: m.container.querySelector('.cols-popover') === null && JSON.stringify(heads()) === JSON.stringify(shownBefore), missing: heads() });
 }
 {
-  // The cell reads the id without its date, so a dated id reads as its undated sibling does; the title keeps it whole.
+  // The cell reads the family and version, as the Dashboard and Sessions do, so the column gives its width to the fit;
+  // the title keeps the id whole whenever the cell shows less.
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
   const dated = requests.find((r) => /-\d{8}$/.test(r.model) && r.kind !== 'probe');
   const field = m.container.querySelector('input.filters__search');
@@ -4615,7 +4616,7 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
     field.dispatchEvent(new window.KeyboardEvent('keydown', { bubbles: true, key: 'Enter' }));
     await m.settle();
   };
-  const modelCheck = '/requests the Model cell reads the id without its date, the dated id on its title';
+  const modelCheck = '/requests the Model cell reads the family and version, the whole id on its title';
   if (!field) controlMissing(modelCheck, 'the search');
   else if (dated) {
     await searchFor(dated.id);
@@ -4627,7 +4628,7 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
     await searchFor('');
     results.push({
       name: modelCheck,
-      ok: cell.text === dated.model.replace(/-\d{8}$/, '') && cell.title === dated.model && bare.text === undated?.model && bare.title === null,
+      ok: cell.text === shortModel(dated.model) && cell.title === dated.model && undated !== undefined && bare.text === shortModel(undated.model) && bare.title === (shortModel(undated.model) === undated.model ? null : undated.model),
       missing: [JSON.stringify(cell), JSON.stringify(bare)],
     });
   }
