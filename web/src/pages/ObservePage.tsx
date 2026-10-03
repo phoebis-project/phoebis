@@ -2,7 +2,6 @@ import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { api } from '@/api';
 import type { LiveDelta, LiveEvent, LiveMetric, LivePhases, LiveRequest, LiveSnapshot, LiveTick, MetricQuality } from '@/api/types';
-import { useAppSettings } from '@/app/settings';
 import { Sparkline } from '@/components/charts/Sparkline';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { AttemptTrail } from '@/components/ui/AttemptTrail';
@@ -98,7 +97,6 @@ export function ObservePage() {
   const [status, setStatus] = useState<StatusFilter>('all');
   const [inFlightOnly, setInFlightOnly] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const { canMutate } = useAppSettings();
 
   // Arriving from a session row carries the session in the query; dropping the
   // chip clears the parameter too so this does not put the filter straight back.
@@ -319,11 +317,11 @@ export function ObservePage() {
             )}
           </Card>
         ) : (
-          <StreamsGrid streams={streams} fullscreen={fullscreen} onFullscreen={setFullscreen} canPreview={canMutate} frozenAt={frozenAt} />
+          <StreamsGrid streams={streams} fullscreen={fullscreen} onFullscreen={setFullscreen} frozenAt={frozenAt} />
         )}
       </div>
 
-      {selected && <DetailPane r={selected} onClose={() => setSelectedId(null)} canPreview={canMutate} frozenAt={frozenAt} />}
+      {selected && <DetailPane r={selected} onClose={() => setSelectedId(null)} frozenAt={frozenAt} />}
     </div>
   );
 }
@@ -574,7 +572,7 @@ function Elapsed({ from, to, frozenAt }: { from: string; frozenAt: number | null
 
 /* Streams */
 
-function StreamsGrid({ streams, fullscreen, onFullscreen, canPreview, frozenAt }: { canPreview: boolean; frozenAt: number | null; fullscreen: boolean; onFullscreen: (v: boolean) => void; streams: LiveRequest[] }) {
+function StreamsGrid({ streams, fullscreen, onFullscreen, frozenAt }: { frozenAt: number | null; fullscreen: boolean; onFullscreen: (v: boolean) => void; streams: LiveRequest[] }) {
   const count = streams.length;
   const cols = count <= 1 ? 1 : count === 2 ? 2 : 3;
   useEffect(() => {
@@ -594,13 +592,13 @@ function StreamsGrid({ streams, fullscreen, onFullscreen, canPreview, frozenAt }
         </Button>
       </div>
       {streams.map((r) => (
-        <StreamTile key={r.id} r={r} canPreview={canPreview} frozenAt={frozenAt} />
+        <StreamTile key={r.id} r={r} frozenAt={frozenAt} />
       ))}
     </div>
   );
 }
 
-const StreamTile = memo(function StreamTile({ r, canPreview, frozenAt }: { canPreview: boolean; frozenAt: number | null; r: LiveRequest }) {
+const StreamTile = memo(function StreamTile({ r, frozenAt }: { frozenAt: number | null; r: LiveRequest }) {
   const tps = r.outputTps ?? 0;
   return (
     <article className="stile" aria-label={`Stream ${shortId(r.id, 12)}`}>
@@ -622,7 +620,7 @@ const StreamTile = memo(function StreamTile({ r, canPreview, frozenAt }: { canPr
         <Meter value={Math.min(1, tps / 150)} tone="accent" thin label="Output tokens per second" />
         <span className="num">{r.outputTps === null ? '-' : `${tps.toFixed(0)} tok/s`}</span>
       </div>
-      {canPreview && r.preview !== null && (
+      {r.preview !== null && (
         <div className="preview">
           {r.preview}
           {r.state === 'in_flight' && <span className="preview__cursor" aria-hidden />}
@@ -644,7 +642,7 @@ const PHASES: { key: keyof LivePhases; label: string }[] = [
   { key: 'finishedAt', label: 'Finished' },
 ];
 
-function DetailPane({ r, onClose, canPreview, frozenAt }: { canPreview: boolean; frozenAt: number | null; onClose: () => void; r: LiveRequest }) {
+function DetailPane({ r, onClose, frozenAt }: { frozenAt: number | null; onClose: () => void; r: LiveRequest }) {
   const running = r.state === 'in_flight' && frozenAt === null;
   const now = useClock(running, 500);
   const endMs = r.phases.finishedAt ? Date.parse(r.phases.finishedAt) : frozenAt ?? now;
@@ -733,17 +731,13 @@ function DetailPane({ r, onClose, canPreview, frozenAt }: { canPreview: boolean;
 
       <section>
         <h3 className="section-title">Preview</h3>
-        {canPreview ? (
-          r.preview === null ? (
-            <p className="muted">{r.state === 'in_flight' ? 'Waiting for the first content token.' : 'No captured output for this request.'}</p>
-          ) : (
-            <div className="preview">
-              {r.preview}
-              {r.state === 'in_flight' && <span className="preview__cursor" aria-hidden />}
-            </div>
-          )
+        {r.preview === null ? (
+          <p className="muted">{r.state === 'in_flight' ? 'Waiting for the first content token.' : 'No captured output for this request.'}</p>
         ) : (
-          <p className="muted">Preview is available to admin sessions.</p>
+          <div className="preview">
+            {r.preview}
+            {r.state === 'in_flight' && <span className="preview__cursor" aria-hidden />}
+          </div>
         )}
       </section>
     </aside>

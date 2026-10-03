@@ -39,7 +39,8 @@ pub fn run_retention(
         let request_cutoff = (config.retention_days != 0).then(|| now - config.retention_days as i64 * DAY_MS);
         let rollup_cutoff = (config.rollup_retention_days != 0)
             .then(|| now / 1_000 - config.rollup_retention_days as i64 * DAY_S);
-        let sample_cutoff = now / 1_000 - config.sample_retention_days as i64 * DAY_S;
+        // The samples' buckets are seconds while the requests' timestamps are milliseconds; one window, two units.
+        let sample_cutoff = request_cutoff.map(|at| at / 1_000);
         let purge = |sql: &str, cutoff: Option<i64>| -> Result<usize, LedgerError> {
             match cutoff {
                 Some(at) => Ok(tx.execute(sql, params![at])?),
@@ -55,9 +56,11 @@ pub fn run_retention(
             requests: purge("DELETE FROM requests WHERE received_at < ?1", request_cutoff)?
                 + purge("DELETE FROM kept_warm_marks WHERE marked_at < ?1", request_cutoff)?,
             events: purge("DELETE FROM events WHERE at < ?1", request_cutoff)?,
-            quota_samples: tx.execute("DELETE FROM quota_samples WHERE bucket < ?1", params![sample_cutoff])?,
-            extra_usage_samples: tx
-                .execute("DELETE FROM extra_usage_samples WHERE bucket < ?1", params![sample_cutoff])?,
+            quota_samples: purge("DELETE FROM quota_samples WHERE bucket < ?1", sample_cutoff)?,
+            extra_usage_samples: purge(
+                "DELETE FROM extra_usage_samples WHERE bucket < ?1",
+                sample_cutoff,
+            )?,
             rollups: purge_hourly_rollups(&tx, rollup_cutoff, budgeted, now)?
                 + purge("DELETE FROM account_rollups_hourly WHERE hour < ?1", rollup_cutoff)?,
         };

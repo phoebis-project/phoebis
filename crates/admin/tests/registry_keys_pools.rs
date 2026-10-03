@@ -1,6 +1,6 @@
 mod common;
 use common::{delete, get, json, login, patch, post, put};
-use phoebis_store::{Affinity, AffinitySource, QuotaHeaders};
+use phoebis_store::Affinity;
 
 #[tokio::test]
 async fn pools_are_created_edited_and_deleted_with_their_members_and_validation() {
@@ -266,12 +266,6 @@ async fn pools_are_created_edited_and_deleted_with_their_members_and_validation(
         204
     );
     assert_eq!(get(&app, "/admin/pools", Some(&cookie)).await.status(), 200);
-    let viewer = login(&app, "viewer-secret").await;
-    assert_eq!(get(&app, "/admin/pools", Some(&viewer)).await.status(), 200);
-    assert_eq!(
-        get(&app, "/admin/sessions", Some(&viewer)).await.status(),
-        200
-    );
 }
 
 #[tokio::test]
@@ -519,25 +513,6 @@ async fn keys_are_issued_once_rotated_revoked_and_never_shown_again() {
         .status(),
         409,
         "or re-enabled"
-    );
-    let viewer = login(&app, "viewer-secret").await;
-    assert_eq!(get(&app, "/admin/keys", Some(&viewer)).await.status(), 200);
-    assert_eq!(
-        post(
-            &app,
-            "/admin/keys",
-            r#"{"id":"k2","label":"x","pool_id":"main"}"#,
-            Some(&viewer)
-        )
-        .await
-        .status(),
-        403
-    );
-    assert_eq!(
-        post(&app, "/admin/keys/desktop/rotate", "", Some(&viewer))
-            .await
-            .status(),
-        403
     );
 }
 
@@ -952,10 +927,9 @@ async fn sessions_list_live_pins_and_a_release_expires_them() {
                 shedding: phoebis_store::Shedding::default(),
                 failover: phoebis_store::Failover::default(),
                 cache_ttl_json: "{}".into(),
-                cache_diagnostics: None,
+                cache_diagnostics: false,
                 auto_mode_server: true,
                 affinity: Affinity::default(),
-                quota_headers: QuotaHeaders::Pass,
                 created_at: common::NOW,
                 updated_at: common::NOW,
             },
@@ -983,8 +957,6 @@ async fn sessions_list_live_pins_and_a_release_expires_them() {
                 rotated_at: None,
                 last_used_at: None,
                 retired_secret_last_used_at: None,
-                in_flight_cap: None,
-                affinity_source: AffinitySource::Auto,
                 auto_mode_server: None,
             },
             "test",
@@ -1316,109 +1288,6 @@ async fn an_overage_whose_reset_has_passed_no_longer_marks_the_pool() {
 }
 
 #[tokio::test]
-async fn a_key_carries_an_in_flight_cap_that_null_clears_and_zero_is_refused() {
-    let (app, _up) = common::admin_app().await;
-    let cookie = login(&app, "admin-secret").await;
-    post(
-        &app,
-        "/admin/pools",
-        r#"{"id":"main","label":"Main","strategy":"priority"}"#,
-        Some(&cookie),
-    )
-    .await;
-    let created = json(
-        post(
-            &app,
-            "/admin/keys",
-            r#"{"id":"desktop","label":"Desktop","pool_id":"main","in_flight_cap":4}"#,
-            Some(&cookie),
-        )
-        .await,
-    )
-    .await;
-    assert_eq!(created["in_flight_cap"].as_u64(), Some(4));
-    let refused = patch(
-        &app,
-        "/admin/keys/desktop",
-        r#"{"in_flight_cap":0}"#,
-        Some(&cookie),
-    )
-    .await;
-    assert_eq!(refused.status(), 400);
-    assert_eq!(
-        json(refused).await["error"].as_str(),
-        Some("in_flight_cap is at least 1")
-    );
-    let cleared = json(
-        patch(
-            &app,
-            "/admin/keys/desktop",
-            r#"{"in_flight_cap":null}"#,
-            Some(&cookie),
-        )
-        .await,
-    )
-    .await;
-    assert!(
-        cleared["in_flight_cap"].is_null(),
-        "an explicit null clears the stored cap"
-    );
-}
-
-#[tokio::test]
-async fn a_key_accepts_its_affinity_source_and_refuses_a_bad_value() {
-    let (app, _up) = common::admin_app().await;
-    let cookie = login(&app, "admin-secret").await;
-    post(
-        &app,
-        "/admin/pools",
-        r#"{"id":"main","label":"Main","strategy":"priority"}"#,
-        Some(&cookie),
-    )
-    .await;
-    let created = json(
-        post(
-            &app,
-            "/admin/keys",
-            r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
-            Some(&cookie),
-        )
-        .await,
-    )
-    .await;
-    assert_eq!(
-        created["affinity_source"].as_str(),
-        Some("auto"),
-        "the source defaults to auto"
-    );
-    let patched = json(
-        patch(
-            &app,
-            "/admin/keys/desktop",
-            r#"{"affinity_source":"content"}"#,
-            Some(&cookie),
-        )
-        .await,
-    )
-    .await;
-    assert_eq!(
-        patched["affinity_source"].as_str(),
-        Some("content"),
-        "a patch round-trips the source"
-    );
-    for (body, message) in [
-        (
-            r#"{"affinity_source":"whatever"}"#,
-            "affinity_source must be auto, session, user_id, content, or whole_key",
-        ),
-    ] {
-        let refused = patch(&app, "/admin/keys/desktop", body, Some(&cookie)).await;
-        assert_eq!(refused.status(), 400, "{body}");
-        assert_eq!(json(refused).await["error"].as_str(), Some(message));
-    }
-}
-
-#[tokio::test]
 async fn the_account_list_answers_from_one_router_ask_for_the_whole_list() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
@@ -1496,6 +1365,49 @@ async fn a_pool_defaults_to_pace_with_the_kind_order_on_and_the_flag_is_the_oper
             .await
             .status(),
         400
+    );
+}
+
+const CREATE_WITH_HEADER_SWITCH: &str = r#"{"id":"main2","label":"Main","quota_headers":"hide"}"#; // removed name
+const PATCH_WITH_HEADER_SWITCH: &str = r#"{"quota_headers":"pass"}"#; // removed name
+
+#[tokio::test]
+async fn a_pool_body_naming_the_header_switch_is_refused_as_an_unknown_field() {
+    let (app, _up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    let refused = post(
+        &app,
+        "/admin/pools",
+        CREATE_WITH_HEADER_SWITCH,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(refused.status(), 400);
+    assert_eq!(
+        json(refused).await["error"].as_str(),
+        Some("body must be a JSON object")
+    );
+    let created = post(
+        &app,
+        "/admin/pools",
+        r#"{"id":"main2","label":"Main"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(created.status(), 201, "the refused create wrote nothing");
+    let created = json(created).await;
+    assert!(created.get("quota_headers").is_none(), "{created}"); // removed name
+    let refused = patch(
+        &app,
+        "/admin/pools/main2",
+        PATCH_WITH_HEADER_SWITCH,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(refused.status(), 400);
+    assert_eq!(
+        json(refused).await["error"].as_str(),
+        Some("body must be a JSON object")
     );
 }
 
@@ -1599,7 +1511,7 @@ async fn a_round_robin_pool_created_with_prefer_subscription_answers_the_flag() 
 }
 
 #[tokio::test]
-async fn a_pool_carries_a_cache_ttl_policy_and_a_diagnostics_override() {
+async fn a_pool_carries_a_cache_ttl_policy_and_its_diagnostics_switch() {
     let (app, _up) = common::admin_app().await;
     let cookie = login(&app, "admin-secret").await;
     let created = json(post(&app, "/admin/pools", r#"{"id":"cached","label":"Cached","cache_ttl":{"enabled":true,"plan":{"main":"1h","subagent":"5m","models":[{"model":"claude-haiku-4-5-20251001","main":"5m","subagent":"5m"}]},"metered":{"main":"5m"}},"cache_diagnostics":true}"#, Some(&cookie)).await).await;
@@ -1608,31 +1520,11 @@ async fn a_pool_carries_a_cache_ttl_policy_and_a_diagnostics_override() {
         "claude-haiku-4-5-20251001"
     );
     assert_eq!(created["cache_diagnostics"], true);
-    let plain = json(
-        post(
-            &app,
-            "/admin/pools",
-            r#"{"id":"plain","label":"Plain"}"#,
-            Some(&cookie),
-        )
-        .await,
-    )
-    .await;
-    assert_eq!(
-        (
-            plain["cache_ttl"]["enabled"].as_bool(),
-            plain["cache_ttl"]["plan"]["main"].as_str(),
-            plain["cache_ttl"]["metered"]["main"].as_str(),
-            plain["cache_diagnostics"].is_null()
-        ),
-        (Some(false), Some("1h"), Some("5m"), true),
-        "defaults are answered in full; null inherits the bootstrap option"
-    );
     let patched = json(
         patch(
             &app,
             "/admin/pools/cached",
-            r#"{"cache_ttl":{"plan":{"subagent":"1h"}},"cache_diagnostics":null}"#,
+            r#"{"cache_ttl":{"plan":{"subagent":"1h"}}}"#,
             Some(&cookie),
         )
         .await,
@@ -1642,10 +1534,10 @@ async fn a_pool_carries_a_cache_ttl_policy_and_a_diagnostics_override() {
         (
             patched["cache_ttl"]["plan"]["subagent"].as_str(),
             patched["cache_ttl"]["metered"]["main"].as_str(),
-            patched["cache_diagnostics"].is_null()
+            patched["cache_diagnostics"].as_bool()
         ),
-        (Some("1h"), Some("5m"), true),
-        "a partial policy merges over the stored one, one set at a time"
+        (Some("1h"), Some("5m"), Some(true)),
+        "a partial policy merges over the stored one, one set at a time, and an omitted switch keeps its state"
     );
     let repatched = json(
         patch(
@@ -1695,6 +1587,81 @@ async fn a_pool_carries_a_cache_ttl_policy_and_a_diagnostics_override() {
             "{body}"
         );
     }
+}
+
+#[tokio::test]
+async fn a_new_pool_starts_with_its_diagnostics_switch_off() {
+    let (app, _up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    let plain = json(
+        post(
+            &app,
+            "/admin/pools",
+            r#"{"id":"plain","label":"Plain"}"#,
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        (
+            plain["cache_ttl"]["enabled"].as_bool(),
+            plain["cache_ttl"]["plan"]["main"].as_str(),
+            plain["cache_ttl"]["metered"]["main"].as_str(),
+            plain["cache_diagnostics"].as_bool()
+        ),
+        (Some(false), Some("1h"), Some("5m"), Some(false)),
+        "defaults are answered in full, and the switch starts off"
+    );
+}
+
+#[tokio::test]
+async fn a_null_diagnostics_switch_is_refused_and_the_stored_one_stands() {
+    let (app, _up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    let refused = post(
+        &app,
+        "/admin/pools",
+        r#"{"id":"unset","label":"Unset","cache_diagnostics":null}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(refused.status(), 400, "a create sending null is refused");
+    assert_eq!(
+        json(refused).await["error"],
+        "cache_diagnostics must be true or false"
+    );
+    post(
+        &app,
+        "/admin/pools",
+        r#"{"id":"cached","label":"Cached","cache_diagnostics":true}"#,
+        Some(&cookie),
+    )
+    .await;
+    let refused = patch(
+        &app,
+        "/admin/pools/cached",
+        r#"{"cache_diagnostics":null}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(refused.status(), 400, "a patch sending null is refused");
+    assert_eq!(
+        json(refused).await["error"],
+        "cache_diagnostics must be true or false"
+    );
+    let listed = json(get(&app, "/admin/pools", Some(&cookie)).await).await;
+    let ids_and_switches: Vec<_> = listed["pools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| (p["id"].as_str().unwrap(), p["cache_diagnostics"].as_bool()))
+        .collect();
+    assert_eq!(
+        ids_and_switches,
+        [("cached", Some(true))],
+        "the refused create stored nothing and the refused patch left the switch on"
+    );
 }
 
 #[tokio::test]
@@ -2017,7 +1984,7 @@ async fn a_pool_accepts_the_shedding_and_failover_fields_and_refuses_each_out_of
 }
 
 #[tokio::test]
-async fn a_pool_accepts_its_affinity_and_quota_fields_and_a_members_budget() {
+async fn a_pool_accepts_its_affinity_fields_and_a_members_budget() {
     use common::{generation, wait_json};
     use phoebis_ledger::{AttemptRecord, Record, RequestRecord};
 
@@ -2041,7 +2008,6 @@ async fn a_pool_accepts_its_affinity_and_quota_fields_and_a_members_budget() {
             created["subagent_placement"].as_str(),
             created["session_placement"].as_str(),
             created["min_shared_prefix_tokens"].as_u64(),
-            created["quota_headers"].as_str(),
             created["cache_ttl"]["inject_when_absent"].as_bool(),
         ),
         (
@@ -2049,10 +2015,9 @@ async fn a_pool_accepts_its_affinity_and_quota_fields_and_a_members_budget() {
             Some("by_cohort"),
             Some("by_strategy"),
             Some(20_000),
-            Some("pass"),
             Some(false)
         ),
-        "the five fields and the toggle default to the shipped preset"
+        "the four fields and the toggle default to the shipped preset"
     );
     assert_eq!(
         (
@@ -2122,7 +2087,7 @@ async fn a_pool_accepts_its_affinity_and_quota_fields_and_a_members_budget() {
             app,
             "/admin/pools/main",
             r#"{"affinity_mode":"when_cached","subagent_placement":"with_main","session_placement":"by_warm_prefix",
-                "min_shared_prefix_tokens":5000,"quota_headers":"hide",
+                "min_shared_prefix_tokens":5000,
                 "members":[{"account_id":"direct","priority":0,"budget_daily_usd":10.0}]}"#,
             Some(&cookie),
         )
@@ -2135,7 +2100,6 @@ async fn a_pool_accepts_its_affinity_and_quota_fields_and_a_members_budget() {
             patched["subagent_placement"].as_str(),
             patched["session_placement"].as_str(),
             patched["min_shared_prefix_tokens"].as_u64(),
-            patched["quota_headers"].as_str(),
             patched["members"][0]["budget_daily_usd"].as_f64(),
             patched["members"][0]["budget_monthly_usd"].as_f64(),
         ),
@@ -2144,11 +2108,10 @@ async fn a_pool_accepts_its_affinity_and_quota_fields_and_a_members_budget() {
             Some("with_main"),
             Some("by_warm_prefix"),
             Some(5_000),
-            Some("hide"),
             Some(10.0),
             None
         ),
-        "a patch round-trips the five fields and a member's budget"
+        "a patch round-trips the four fields and a member's budget"
     );
     for (body, message) in [
         (
@@ -2162,10 +2125,6 @@ async fn a_pool_accepts_its_affinity_and_quota_fields_and_a_members_budget() {
         (
             r#"{"session_placement":"nowhere"}"#,
             "session_placement must be by_strategy or by_warm_prefix",
-        ),
-        (
-            r#"{"quota_headers":"maybe"}"#,
-            "quota_headers must be hide or pass",
         ),
         (
             r#"{"members":[{"account_id":"direct","priority":0,"budget_daily_usd":0}]}"#,

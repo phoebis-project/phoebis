@@ -1,7 +1,7 @@
-//! `phoebis check-config` warns about a wide key file mode, refuses a file that sets an unknown key, names the routing
-//! keys in its summary, and passes every shipped deploy config. It reads the key file as the start does and proves the
-//! key against the registry's canary, or against the sealed rows of a registry from before the canary, and warns
-//! about an unset secret variable while refusing a set one the start refuses.
+//! `phoebis check-config` warns about a wide key file mode, refuses a file that sets an unknown or removed key,
+//! names the routing keys in its summary, and passes every shipped deploy config. It reads the key file as the start
+//! does and proves the key against the registry's canary, or against the sealed rows of a registry from before the
+//! canary, and warns about an unset secret variable while refusing a set one the start refuses.
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -16,28 +16,8 @@ fn config_file(dir: &Path, name: &str, extra: &str) -> PathBuf {
     std::fs::write(&key, HEX_KEY).unwrap();
     let yaml = format!(
         "admin:\n  listen: 127.0.0.1:0\n  plain_http: true\n  secret_env: TEST_CHECK_CONFIG_ADMIN\n\
-         compatibility:\n  profile: claude-code-2.1.269-linux-x64\nproxy:\n  listen: 127.0.0.1:0\n\
-         storage:\n  encryption_key_file: {}\n  path: {}\nusage:\n  cache_ttl_seconds: 60\n  \
-         refresh_concurrency: 2\n{extra}",
-        key.display(),
-        dir.join("router.sqlite").display()
-    );
-    let path = dir.join(format!("{name}.yaml"));
-    std::fs::write(&path, yaml).unwrap();
-    path
-}
-
-/// `config_file`'s `extra` lands after `usage:`, so a file naming the viewer's variable inside `admin:` is written
-/// whole here.
-fn config_with_viewer(dir: &Path, name: &str) -> PathBuf {
-    let key = dir.join("storage.key");
-    std::fs::write(&key, HEX_KEY).unwrap();
-    let yaml = format!(
-        "admin:\n  listen: 127.0.0.1:0\n  plain_http: true\n  secret_env: TEST_CHECK_CONFIG_ADMIN\n  \
-         viewer_secret_env: TEST_CHECK_CONFIG_VIEWER\n\
-         compatibility:\n  profile: claude-code-2.1.269-linux-x64\nproxy:\n  listen: 127.0.0.1:0\n\
-         storage:\n  encryption_key_file: {}\n  path: {}\nusage:\n  cache_ttl_seconds: 60\n  \
-         refresh_concurrency: 2\n",
+         proxy:\n  listen: 127.0.0.1:0\n\
+         storage:\n  encryption_key_file: {}\n  path: {}\n{extra}",
         key.display(),
         dir.join("router.sqlite").display()
     );
@@ -168,9 +148,40 @@ fn the_summary_names_the_routing_keys() {
         String::from_utf8_lossy(&out.stderr)
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(
-        stdout.contains("catalog refresh 21600s, startup fetch 5s"),
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        lines.get(4..10),
+        Some(
+            &[
+                "proxy: body budget 536870912 bytes, body read 60s, key body reads 128, max request 33554432 bytes, \
+                 sign cch placeholder off, upstream gzip auto",
+                "profile claude-code-2.1.269-linux-x64",
+                "routing: cooldown_fallback 60s, model_rejection 3600s, catalog refresh 21600s, startup fetch 30s",
+                "ledger at ./data/ledger.sqlite",
+                "retention 90 days, rollups 400 days",
+                "keepalive: 128 sessions, 1024 agents, 256 MiB retained",
+            ][..]
+        ),
         "{stdout}"
+    );
+}
+
+const REMOVED_KEY: &str = "routing:\n  catalog_cache_seconds: 60\n"; // removed name
+
+#[test]
+fn a_removed_key_fails_check_config_as_invalid_yaml() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_file(dir.path(), "removed-key", REMOVED_KEY);
+    let out = phoebis()
+        .args(["check-config", "--config"])
+        .arg(&config)
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("the configuration is not valid YAML") && stderr.contains("unknown field"),
+        "{stderr}"
     );
 }
 
@@ -230,9 +241,7 @@ fn every_shipped_deploy_config_passes_check_config() {
         let config = dir.path().join(name);
         std::fs::write(&config, copy).unwrap();
         let out = check_config(
-            phoebis()
-                .env("PHOEBIS_ADMIN_SECRET", "deploy-check-admin-secret")
-                .env("PHOEBIS_VIEWER_SECRET", "deploy-check-viewer-secret"),
+            phoebis().env("PHOEBIS_ADMIN_SECRET", "deploy-check-admin-secret"),
             &config,
         );
         assert!(out.status.success(), "{name}: {}", printed(&out));
@@ -387,38 +396,21 @@ fn a_set_secret_shorter_than_sixteen_characters_fails_check_config() {
 }
 
 #[test]
-fn a_set_secret_the_start_refuses_fails_check_config_beside_an_unset_one() {
+fn a_set_secret_holding_the_example_placeholder_fails_check_config() {
     let dir = tempfile::tempdir().unwrap();
-    let config = config_with_viewer(dir.path(), "placeholder");
+    let config = config_file(dir.path(), "placeholder", "");
     let out = check_config(
-        phoebis().env_remove("TEST_CHECK_CONFIG_ADMIN").env(
-            "TEST_CHECK_CONFIG_VIEWER",
-            "replace-with-a-different-long-random-string",
+        phoebis().env(
+            "TEST_CHECK_CONFIG_ADMIN",
+            "replace-with-a-long-random-string",
         ),
         &config,
     );
     assert_eq!(out.status.code(), Some(1), "{}", printed(&out));
     assert!(
         String::from_utf8_lossy(&out.stderr).contains(
-            "environment variable TEST_CHECK_CONFIG_VIEWER still holds the example placeholder"
+            "environment variable TEST_CHECK_CONFIG_ADMIN still holds the example placeholder"
         ),
-        "{}",
-        printed(&out)
-    );
-}
-
-#[test]
-fn two_equal_secrets_still_fail() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = config_with_viewer(dir.path(), "equal");
-    let out = check_config(
-        phoebis().env("TEST_CHECK_CONFIG_VIEWER", "admin-secret-checkconfig"),
-        &config,
-    );
-    assert_eq!(out.status.code(), Some(1), "{}", printed(&out));
-    assert!(
-        String::from_utf8_lossy(&out.stderr)
-            .contains("the admin secret and the viewer secret resolve to the same secret"),
         "{}",
         printed(&out)
     );

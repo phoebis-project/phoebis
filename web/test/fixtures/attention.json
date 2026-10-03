@@ -1,0 +1,27 @@
+{
+  "route": "GET /admin/attention",
+  "body": {
+    "items": [
+      {
+        "kind": "pool_exhausted",
+        "subject": {
+          "type": "pool",
+          "id": "main",
+          "label": "Main"
+        },
+        "link": {
+          "page": "pools",
+          "id": "main"
+        },
+        "pools": [
+          "main"
+        ],
+        "since": 1000000,
+        "detail": {
+          "key": "desktop",
+          "pool": "main"
+        }
+      }
+    ]
+  }
+}

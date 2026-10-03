@@ -1238,7 +1238,6 @@ async fn a_probe_is_authenticated_by_key_id_and_published_under_origin_keepalive
             phoebis_relay::Probe {
                 key_id: "desktop".into(),
                 key_generation: h.store.api_key("desktop").unwrap().unwrap().created_at,
-                allow_oauth: true,
             },
             req,
         )
@@ -1293,7 +1292,6 @@ async fn a_probe_is_authenticated_by_key_id_and_published_under_origin_keepalive
     let probe = |key: &str| phoebis_relay::Probe {
         key_id: key.into(),
         key_generation: 0,
-        allow_oauth: true,
     };
     let refused = h
         .relay
@@ -1363,7 +1361,6 @@ async fn a_probe_from_an_earlier_generation_of_a_reused_id_is_refused_before_any
     let probe = |generation: i64| phoebis_relay::Probe {
         key_id: "desktop".into(),
         key_generation: generation,
-        allow_oauth: true,
     };
     let refused = h
         .relay
@@ -1387,10 +1384,10 @@ async fn a_probe_from_an_earlier_generation_of_a_reused_id_is_refused_before_any
     up.shutdown().await;
 }
 
-/// A probe's eligibility holds on every attempt: a 429 on the eligible account fails over to nothing when the
-/// only sibling is an unverified `oauth` account, and the probe gets the exhaustion answer.
+/// A 429 on the account a probe first reaches fails it over to the sibling a real request's failover would take,
+/// whatever the sibling's kind.
 #[tokio::test]
-async fn a_probe_fails_over_only_to_an_eligible_sibling() {
+async fn a_probe_fails_over_to_an_oauth_sibling_as_a_real_request_does() {
     let up = FakeUpstream::start_tls_for(
         vec![Rule {
             path_prefix: "/v1/messages".into(),
@@ -1404,55 +1401,6 @@ async fn a_probe_fails_over_only_to_an_eligible_sibling() {
         "/v1/messages",
         json_429_unified(4_600, "five_hour"),
     );
-    for (name, sibling, allow_oauth) in [(
-        "unverified oauth",
-        oauth("o", "sk-ant-oat01-OOOO", 1),
-        false,
-    )] {
-        let h = harness_with_bus(
-            &up,
-            &[api_key("a", "sk-ant-api03-AAAA", 0), sibling],
-            PoolSpec::default(),
-            Bus::new(),
-        )
-        .await;
-        let before = up.requests().len();
-        let resp = h
-            .relay
-            .probe(
-                phoebis_relay::Probe {
-                    key_id: "desktop".into(),
-                    key_generation: h.store.api_key("desktop").unwrap().unwrap().created_at,
-                    allow_oauth,
-                },
-                request_for(KEY, "claude-sonnet-4-5", "s1"),
-            )
-            .await;
-        // The eligible account cools down on its own 429; the sibling is never a candidate, so the re-select
-        // finds the eligible account cooling and nothing else, which is a timed exhaustion rather than an
-        // untimed one.
-        assert_eq!(
-            resp.status(),
-            429,
-            "{name}: the only eligible account is now cooling down"
-        );
-        assert_eq!(resp.headers()["x-phoebis-error-code"], "accounts_exhausted");
-        assert!(resp.headers().contains_key("retry-after"));
-        let sent: Vec<_> = up.requests().into_iter().skip(before).collect();
-        assert_eq!(
-            sent.len(),
-            1,
-            "{name}: one attempt on the eligible account and none on the sibling"
-        );
-        assert_eq!(sent[0].credential(), Some("sk-ant-api03-AAAA"));
-        assert!(
-            !credentials_seen(&up)
-                .iter()
-                .any(|c| c == "sk-ant-oat01-OOOO" || c == "vendor-key"),
-            "{name}"
-        );
-    }
-    // Allowed, the oauth sibling takes the probe as a real request's failover would.
     let h = harness_with_bus(
         &up,
         &[
@@ -1469,7 +1417,6 @@ async fn a_probe_fails_over_only_to_an_eligible_sibling() {
             phoebis_relay::Probe {
                 key_id: "desktop".into(),
                 key_generation: h.store.api_key("desktop").unwrap().unwrap().created_at,
-                allow_oauth: true,
             },
             request_for(KEY, "claude-sonnet-4-5", "s1"),
         )
@@ -1482,8 +1429,8 @@ async fn a_probe_fails_over_only_to_an_eligible_sibling() {
 }
 
 /// A probe held on its pinned member's pause answers the probe alone while a sibling could serve: the relay hands
-/// the keepalive the obstacle, and the completion reads rejected rather than exhausted, so the pool exhaustion
-/// alert, which reads only an exhausted completion, is not raised for a pool that can still serve.
+/// the keepalive the obstacle, and the completion reads rejected rather than exhausted, so the gauge's pool exhaustion
+/// condition, which reads only an exhausted completion, does not hold for a pool that can still serve.
 #[tokio::test]
 async fn a_probe_held_on_its_pinned_members_pause_completes_rejected_beside_a_sibling_that_can_serve(
 ) {
@@ -1522,7 +1469,6 @@ async fn a_probe_held_on_its_pinned_members_pause_completes_rejected_beside_a_si
             phoebis_relay::Probe {
                 key_id: "desktop".into(),
                 key_generation: h.store.api_key("desktop").unwrap().unwrap().created_at,
-                allow_oauth: false,
             },
             request_for(KEY, "claude-sonnet-4-5", "s1"),
         )
@@ -1550,76 +1496,6 @@ async fn a_probe_held_on_its_pinned_members_pause_completes_rejected_beside_a_si
         credentials_seen(&up),
         vec!["sk-ant-api03-AAAA".to_string()],
         "the probe never reached b"
-    );
-    up.shutdown().await;
-}
-
-/// A registry write landing while the eligible account's attempt is gated bumps the revision the router task
-/// compares against; the reselect that follows recomputes candidates from the current registry, past the
-/// pre-loop filter. The sibling it re-admits is still the one `allow_oauth: false` disallows, so the reselect
-/// must never dispatch to it.
-#[tokio::test]
-async fn a_mid_request_reload_still_only_serves_a_probe_an_eligible_account() {
-    let up = FakeUpstream::start(vec![Rule {
-        path_prefix: "/v1/messages".into(),
-        respond: json_200(),
-    }])
-    .await;
-    up.add_credential_rule(
-        "sk-ant-api03-AAAA",
-        "/v1/messages",
-        Respond::Gated(Box::new(json_429_unified(4_600, "five_hour"))),
-    );
-    let h = harness_with_bus(
-        &up,
-        &[
-            api_key("a", "sk-ant-api03-AAAA", 0),
-            oauth("o", "sk-ant-oat01-OOOO", 1),
-        ],
-        PoolSpec::default(),
-        Bus::new(),
-    )
-    .await;
-    let relay = h.relay.clone();
-    let generation = h.store.api_key("desktop").unwrap().unwrap().created_at;
-    let pending = tokio::spawn(async move {
-        relay
-            .probe(
-                phoebis_relay::Probe {
-                    key_id: "desktop".into(),
-                    key_generation: generation,
-                    allow_oauth: false,
-                },
-                request_for(KEY, "claude-sonnet-4-5", "s1"),
-            )
-            .await
-    });
-    wait_for(Duration::from_secs(2), || {
-        credentials_seen(&up)
-            .contains(&"sk-ant-api03-AAAA".to_string())
-            .then_some(())
-    })
-    .await;
-    // Any admin write bumps the revision; the pool's label is an arbitrary field that does it without
-    // changing anything the request itself depends on.
-    let mut pool = h.store.pool("main").unwrap().unwrap();
-    pool.label = "renamed".into();
-    h.store.update_pool(&pool, "test").unwrap();
-    h.router.reload().await.unwrap();
-    up.release();
-    let resp = pending.await.unwrap();
-    assert_eq!(
-        resp.status(),
-        429,
-        "the only eligible account is now cooling down; the reselect must not reach the oauth sibling"
-    );
-    assert_eq!(resp.headers()["x-phoebis-error-code"], "accounts_exhausted");
-    let sent = up.requests();
-    assert_eq!(sent.len(), 1, "the oauth sibling never dispatches");
-    assert_eq!(sent[0].credential(), Some("sk-ant-api03-AAAA"));
-    assert!(
-        !credentials_seen(&up).contains(&"sk-ant-oat01-OOOO".to_string()),
-        "a registry write that re-admits the sibling still must not serve a probe with it"
     );
     up.shutdown().await;
 }

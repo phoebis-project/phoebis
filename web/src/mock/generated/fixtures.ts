@@ -209,6 +209,7 @@ export const FIXTURES: Record<string, Fixture> = {
         "backoff_since": null,
         "last_attempt_at": 1000000,
         "last_clean_at": 1000000,
+        "last_error": null,
         "last_outcome": "clean",
         "next_attempt_at": null,
         "rate_limited_in_a_row": 0
@@ -367,163 +368,6 @@ export const FIXTURES: Record<string, Fixture> = {
             "last_7d": 1,
             "lifetime": 1
           }
-        }
-      ]
-    }
-  },
-  "alert_deliveries": {
-    "route": "GET /admin/alerts/events/{id}/deliveries",
-    "body": {
-      "deliveries": [
-        {
-          "at": 1000000,
-          "attempt": 1,
-          "error": "refused",
-          "id": 1,
-          "state": "opened",
-          "status": null
-        },
-        {
-          "at": 1000000,
-          "attempt": 2,
-          "error": null,
-          "id": 2,
-          "state": "opened",
-          "status": 500
-        },
-        {
-          "at": 1000000,
-          "attempt": 3,
-          "error": null,
-          "id": 3,
-          "state": "opened",
-          "status": 200
-        }
-      ]
-    }
-  },
-  "alert_events": {
-    "route": "GET /admin/alerts/events",
-    "body": {
-      "events": [
-        {
-          "deliveries": [
-            {
-              "at": 1000000,
-              "attempt": 1,
-              "error": "refused",
-              "id": 1,
-              "state": "opened",
-              "status": null
-            },
-            {
-              "at": 1000000,
-              "attempt": 2,
-              "error": null,
-              "id": 2,
-              "state": "opened",
-              "status": 500
-            },
-            {
-              "at": 1000000,
-              "attempt": 3,
-              "error": null,
-              "id": 3,
-              "state": "opened",
-              "status": 200
-            }
-          ],
-          "detail": {
-            "client_version": "2.1.274",
-            "key": "desktop",
-            "trigger": "hash"
-          },
-          "id": "evt_135afd4594d7b510",
-          "kind": "client_drift",
-          "opened_at": 1000000,
-          "resolved_at": null,
-          "rule_id": "rule_3a70bc09aa6fdebc",
-          "state": "open",
-          "subject": "client 2.1.274"
-        }
-      ]
-    }
-  },
-  "alert_lifecycle": {
-    "route": "GET /admin/alerts/deliveries",
-    "body": {
-      "deliveries": [
-        {
-          "at": 1000000,
-          "attempt": 1,
-          "detail": {
-            "key": "desktop",
-            "pool": "main",
-            "session": "e2e-ui",
-            "source": "request",
-            "event": "session_started"
-          },
-          "error": null,
-          "event": "session_started",
-          "id": 4,
-          "kind": "session_active",
-          "rule_id": "rule_62d9f3ba48b528a4",
-          "state": "event",
-          "status": 200,
-          "subject": "desktop, session e2e-ui"
-        }
-      ],
-      "next_cursor": null
-    }
-  },
-  "alert_rules": {
-    "route": "GET /admin/alerts/rules",
-    "body": {
-      "rules": [
-        {
-          "created_at": 1000000,
-          "enabled": true,
-          "has_secret": false,
-          "id": "rule_452c54362ff4db35",
-          "kind": "poll_backoff",
-          "scope": {
-            "id": "business",
-            "type": "account"
-          },
-          "threshold": null,
-          "updated_at": 1000000,
-          "webhook_url": "http://127.0.0.1:1/backoff",
-          "window": null
-        },
-        {
-          "created_at": 1000000,
-          "enabled": false,
-          "has_secret": false,
-          "id": "rule_3a70bc09aa6fdebc",
-          "kind": "client_drift",
-          "scope": {
-            "id": null,
-            "type": "all"
-          },
-          "threshold": null,
-          "updated_at": 1000000,
-          "webhook_url": "http://127.0.0.1:1/drift",
-          "window": null
-        },
-        {
-          "created_at": 1000000,
-          "enabled": true,
-          "has_secret": true,
-          "id": "rule_7ac05ca9addbb508",
-          "kind": "utilization_above",
-          "scope": {
-            "id": "main",
-            "type": "pool"
-          },
-          "threshold": 0.9,
-          "updated_at": 1000000,
-          "webhook_url": "http://127.0.0.1:1/hook",
-          "window": "7d_oi"
         }
       ]
     }
@@ -3903,6 +3747,33 @@ export const FIXTURES: Record<string, Fixture> = {
       ]
     }
   },
+  "attention": {
+    "route": "GET /admin/attention",
+    "body": {
+      "items": [
+        {
+          "kind": "pool_exhausted",
+          "subject": {
+            "type": "pool",
+            "id": "main",
+            "label": "Main"
+          },
+          "link": {
+            "page": "pools",
+            "id": "main"
+          },
+          "pools": [
+            "main"
+          ],
+          "since": 1000000,
+          "detail": {
+            "key": "desktop",
+            "pool": "main"
+          }
+        }
+      ]
+    }
+  },
   "dashboard": {
     "route": "GET /admin/dashboard",
     "body": {
@@ -4925,8 +4796,6 @@ export const FIXTURES: Record<string, Fixture> = {
       "keepalive_opt_out": false,
       "body_capture_hours": null,
       "effective_body_capture_hours": 24,
-      "in_flight_cap": null,
-      "affinity_source": "auto",
       "auto_mode_server": null,
       "effective_auto_mode_server": true,
       "prefix": "LGWWN5RB",
@@ -4993,8 +4862,6 @@ export const FIXTURES: Record<string, Fixture> = {
           "keepalive_opt_out": false,
           "body_capture_hours": null,
           "effective_body_capture_hours": 24,
-          "in_flight_cap": null,
-          "affinity_source": "auto",
           "auto_mode_server": null,
           "effective_auto_mode_server": true,
           "prefix": "LGWWN5RB",
@@ -5969,7 +5836,6 @@ export const FIXTURES: Record<string, Fixture> = {
           "subagent_placement": "by_cohort",
           "session_placement": "by_strategy",
           "min_shared_prefix_tokens": 20000,
-          "quota_headers": "pass",
           "migrate_above_utilization": null,
           "select_below_utilization": null,
           "model_rules": [
@@ -6022,7 +5888,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "subagent": "1h"
             }
           },
-          "cache_diagnostics": null,
+          "cache_diagnostics": false,
           "auto_mode_server": true,
           "body_capture_hours": 24,
           "created_at": 1790987341272,
@@ -7380,7 +7246,6 @@ export const FIXTURES: Record<string, Fixture> = {
   "session": {
     "route": "GET /admin/session",
     "body": {
-      "role": "admin",
       "session_id": "eqvPW0tzHJFvCUDuMatNTI-C9k2Ju3OIoJZbveua0U0"
     }
   },
@@ -7673,28 +7538,17 @@ export const FIXTURES: Record<string, Fixture> = {
     "body": {
       "about": {
         "profile": "claude-code-2.1.269-linux-x64",
-        "version": "0.1.0",
-        "public_url": null
+        "version": "0.1.0"
       },
       "access": {
-        "admin_configured": true,
-        "viewer_configured": true
-      },
-      "compatibility": {
-        "cache_diagnostics": false,
-        "profile": "claude-code-2.1.269-linux-x64"
+        "admin_configured": true
       },
       "keepalive": {
-        "lease_seconds": 90,
         "max_agents": 1024,
-        "max_request_bytes": 8388608,
         "max_retained_bytes": 268435456,
-        "max_sessions": 128,
-        "max_workers": 4,
-        "oauth_prewarm_verified": false
+        "max_sessions": 128
       },
       "listeners": {
-        "admin": "test",
         "metrics": "127.0.0.1:9464",
         "proxy": "test"
       },
@@ -7930,21 +7784,8 @@ export const FIXTURES: Record<string, Fixture> = {
           }
         ]
       },
-      "quota": {
-        "sample_retention_days": 30
-      },
       "retention": {
-        "body_capture_max_hours": 72,
-        "ledger_days": 90,
-        "quota_samples_days": 30,
-        "rollup_days": 400
-      },
-      "routing": {
-        "catalog_cache_seconds": 60,
-        "catalog_refresh_seconds": 21600,
-        "cooldown_fallback_seconds": 60,
-        "model_rejection_seconds": 3600,
-        "startup_fetch_seconds": 5
+        "body_capture_max_hours": 72
       },
       "sessions": {
         "expire_after_seconds": 86400
@@ -7955,8 +7796,7 @@ export const FIXTURES: Record<string, Fixture> = {
         "pricing_path": null
       },
       "usage": {
-        "cache_ttl_seconds": 60,
-        "refresh_concurrency": 4
+        "cache_ttl_seconds": 60
       }
     }
   },
@@ -8004,6 +7844,11 @@ export const FIXTURES: Record<string, Fixture> = {
           "subscriber": "live",
           "dropped": 0,
           "panics": 0
+        },
+        {
+          "subscriber": "attention",
+          "dropped": 0,
+          "panics": 0
         }
       ],
       "live": {
@@ -8018,12 +7863,6 @@ export const FIXTURES: Record<string, Fixture> = {
         "retained_bytes": 116,
         "running_probes": 0,
         "sessions": 1
-      },
-      "alerts": {
-        "deliveries_failed": 0,
-        "deliveries_ok": 2,
-        "open": 1,
-        "rules": 3
       }
     }
   }

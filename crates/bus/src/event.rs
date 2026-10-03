@@ -448,8 +448,9 @@ impl Event {
     }
 }
 
-/// What the keepalive engine learns from the companion about a session, handed to the alert inputs. Not an
-/// `Event`: it belongs to no request, and the request bus drops under pressure while these must not.
+/// What the keepalive engine learns from the companion about a session, sent on the lifecycle channel when a
+/// consumer is wired. Not an `Event`: it belongs to no request, and the request bus drops under pressure while these
+/// must not.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SessionLifecycle {
     AgentReleased {

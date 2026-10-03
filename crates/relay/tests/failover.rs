@@ -1714,11 +1714,10 @@ fn invalid_key() -> Respond {
 }
 
 /// The engine's own probe under the harness key.
-fn probe_of(h: &Harness, allow_oauth: bool) -> phoebis_relay::Probe {
+fn probe_of(h: &Harness) -> phoebis_relay::Probe {
     phoebis_relay::Probe {
         key_id: "desktop".into(),
         key_generation: h.store.api_key("desktop").unwrap().unwrap().created_at,
-        allow_oauth,
     }
 }
 
@@ -1756,10 +1755,7 @@ async fn a_probe_whose_leg_marks_its_pinned_account_names_the_mark_though_a_sibl
     resp.into_body().collect().await.unwrap();
     let probed = h
         .relay
-        .probe(
-            probe_of(&h, false),
-            request_for(KEY, "claude-sonnet-4-5", "s1"),
-        )
+        .probe(probe_of(&h), request_for(KEY, "claude-sonnet-4-5", "s1"))
         .await;
     assert_eq!(
         probe_answer(&probed),
@@ -1817,10 +1813,7 @@ async fn a_probe_whose_refresh_answers_invalid_grant_names_the_mark() {
     resp.into_body().collect().await.unwrap();
     let probed = h
         .relay
-        .probe(
-            probe_of(&h, true),
-            request_for(KEY, "claude-sonnet-4-5", "s1"),
-        )
+        .probe(probe_of(&h), request_for(KEY, "claude-sonnet-4-5", "s1"))
         .await;
     assert_eq!(
         probe_answer(&probed),
@@ -1846,7 +1839,7 @@ async fn a_non_portable_probe_whose_leg_marks_its_account_names_the_mark() {
     resp.into_body().collect().await.unwrap();
     let probed = h
         .relay
-        .probe(probe_of(&h, false), non_portable_request(KEY, "s1"))
+        .probe(probe_of(&h), non_portable_request(KEY, "s1"))
         .await;
     assert_eq!(
         probe_answer(&probed),
@@ -2128,7 +2121,6 @@ async fn the_renewal_report_carries_the_usage_the_origin_and_the_ttl_and_a_probe
             phoebis_relay::Probe {
                 key_id: "desktop".into(),
                 key_generation: h.store.api_key("desktop").unwrap().unwrap().created_at,
-                allow_oauth: false,
             },
             request_for(KEY, "claude-sonnet-4-5", "s1"),
         )

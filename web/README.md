@@ -16,7 +16,7 @@ forms bound, in the route's own wording, so a form that drifts from its route fa
 ```sh
 npm install
 npm run dev                        # http://127.0.0.1:5173, /admin proxied to a router on 127.0.0.1:8081
-VITE_PHOEBIS_MOCK=1 npm run dev    # the same page against the mock; sign in with admin or viewer
+VITE_PHOEBIS_MOCK=1 npm run dev    # the same page against the mock; sign in with the secret admin
 npm run build                      # typecheck, then bundle into dist/
 ```
 
@@ -54,13 +54,12 @@ the fixture that lacks one), and back it in `MockApi` from a story row that spre
 ## What is in the mock
 
 - Light, dark, and system themes, switchable from the top bar and stored in `localStorage`.
-- A viewer-mode toggle in Settings that hides every mutating control and the captured-bodies section.
 - Body capture is a pool setting in hours, which every key in the pool inherits unless it sets an override of its own
   or turns capture off for itself; the keys table shows the effective value and marks the inherited ones.
 - Views for the dashboard, observe (a simulated live feed of in-flight and recent requests), quota, accounts, pools,
-  keys, request logs, analytics, sessions, alerts, and settings. What the router holds is an account everywhere: the
-  code, the API, the fixtures, the copy and the `/accounts` route; "upstream" names the provider's host and the party
-  that answered a request.
+  keys, request logs, analytics, sessions, and settings. What the router holds is an account everywhere: the code, the
+  API, the fixtures, the copy and the `/accounts` route; "upstream" names the provider's host and the party that
+  answered a request.
 - The sessions view is one table of every session the router has seen within the session expiry, whether or not a
   cache-keepalive companion registered for it. Each row carries its companion state (reporting, silent since a time,
   or none), its ledgered request count and last request, and when it drops off the list. The Model and Account cells
@@ -76,10 +75,6 @@ the fixture that lacks one), and back it in `MockApi` from a story row that spre
 - Each session row carries an overflow menu that jumps to analytics or observe pre-filtered to that session, through
   a `session` query parameter both pages read and show as a removable chip, and releases the session's pin. Sessions
   with no ledgered requests offer the jumps disabled.
-- The Settings price table is editable for the admin role: a price cell turns into a numeric input on click, "Add
-  model" appends a row, and a Save bar validates before it writes. Importing a LiteLLM or models.dev catalog by URL
-  opens a diff of what would change and writes nothing until it is confirmed; its subtitle counts the models in the
-  file, how many of them the router serves, and the changes the diff would write.
 - A "Cost reference" link on the sessions page and in the pool dialog's cache-warming section opens the shipped price
   table, including how many cache reads one cache write costs on each model. Its footnote also says when a 5-minute
   entry kept warm by probes beats a 1-hour entry, and which client-side TTL that implies.

@@ -12,12 +12,12 @@ use axum::Json;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use phoebis_routing::RegistrySnapshot;
-use phoebis_store::{AffinitySource, ApiKeyRow, StoreError, ROTATION_GRACE_MS};
+use phoebis_store::{ApiKeyRow, StoreError, ROTATION_GRACE_MS};
 use rand::Rng;
 use serde_json::{json, Value};
 
 use crate::pools::valid_slug;
-use crate::routes::{double_option, failure, reload_or_refuse, store_failure};
+use crate::routes::{double_option, failure, reload_or_refuse, store_failure, CreatedId};
 use crate::rules::{parse_mode, parse_rules, RuleInput};
 use crate::AdminState;
 
@@ -47,10 +47,6 @@ struct KeyInput {
     keepalive_opt_out: Option<bool>,
     #[serde(default, deserialize_with = "double_option")]
     body_capture_hours: Option<Option<u32>>,
-    #[serde(default, deserialize_with = "double_option")]
-    in_flight_cap: Option<Option<u32>>,
-    #[serde(default)]
-    affinity_source: Option<String>,
     #[serde(default, deserialize_with = "double_option")]
     auto_mode_server: Option<Option<Value>>,
 }
@@ -110,26 +106,6 @@ fn apply(state: &AdminState, row: &mut ApiKeyRow, input: &KeyInput) -> Result<()
             ));
         }
         row.body_capture_hours = hours;
-    }
-    if let Some(cap) = input.in_flight_cap {
-        if cap == Some(0) {
-            return Err(failure(
-                StatusCode::BAD_REQUEST,
-                "in_flight_cap is at least 1",
-            ));
-        }
-        row.in_flight_cap = cap;
-    }
-    if let Some(source) = &input.affinity_source {
-        row.affinity_source = match AffinitySource::parse(source) {
-            Some(source) => source,
-            None => {
-                return Err(failure(
-                    StatusCode::BAD_REQUEST,
-                    "affinity_source must be auto, session, user_id, content, or whole_key",
-                ))
-            }
-        };
     }
     if let Some(value) = &input.auto_mode_server {
         row.auto_mode_server = match value {
@@ -289,8 +265,6 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
         rotated_at: None,
         last_used_at: None,
         retired_secret_last_used_at: None,
-        in_flight_cap: None,
-        affinity_source: phoebis_store::AffinitySource::Auto,
         auto_mode_server: None,
     };
     if let Err(refusal) = apply(&state, &mut row, &input) {
@@ -305,14 +279,19 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
         }
         Err(error) => return store_failure(error),
     }
-    if let Err(refusal) = reload_or_refuse(&state).await {
-        return refusal;
-    }
-    let (week, lifetime) = totals(&state).await;
-    // A key this route just created has never rotated, so no session can present a retired secret of it.
-    let mut v = key_json(&state.router.snapshot(), &row, &week, &lifetime, 0);
-    v["secret"] = json!(secret);
-    (StatusCode::CREATED, Json(v)).into_response()
+    // The row exists from here on, so every answer, a refusal included, names it to the mutation log.
+    let mut response = match reload_or_refuse(&state).await {
+        Err(refusal) => refusal,
+        Ok(()) => {
+            let (week, lifetime) = totals(&state).await;
+            // A key this route just created has never rotated, so no session can present a retired secret of it.
+            let mut v = key_json(&state.router.snapshot(), &row, &week, &lifetime, 0);
+            v["secret"] = json!(secret);
+            (StatusCode::CREATED, Json(v)).into_response()
+        }
+    };
+    response.extensions_mut().insert(CreatedId(row.id));
+    response
 }
 
 pub(crate) async fn patch(
@@ -426,8 +405,6 @@ fn key_json(
         "revoked_at": row.revoked_at, "expires_at": row.expires_at, "model_rules": row.model_rules,
         "model_rules_mode": row.model_rules_mode.as_str(), "long_context_twins": row.long_context_twins,
         "keepalive_opt_out": row.keepalive_opt_out, "body_capture_hours": row.body_capture_hours, "effective_body_capture_hours": snapshot.body_capture_hours(row),
-        "in_flight_cap": row.in_flight_cap,
-        "affinity_source": row.affinity_source.as_str(),
         "auto_mode_server": row.auto_mode_server, "effective_auto_mode_server": snapshot.auto_mode_server(row),
         "prefix": row.prefix, "created_at": row.created_at, "rotated_at": row.rotated_at, "last_used_at": row.last_used_at,
         "retired_secret_last_used_at": row.retired_secret_last_used_at, "sessions_on_retired_secret": sessions_on_retired_secret,

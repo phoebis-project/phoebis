@@ -35,7 +35,6 @@ const TASKS_POISONED: &str = "ledger background-task list poisoned by a prior pa
 pub struct LedgerConfig {
     pub retention_days: u32,
     pub rollup_retention_days: u32,
-    pub sample_retention_days: u32,
     pub purge_interval: Duration,
     pub event_poll: Duration,
     /// How often the assembler ages out entries whose completion never arrived.
@@ -47,7 +46,6 @@ impl Default for LedgerConfig {
         LedgerConfig {
             retention_days: 90,
             rollup_retention_days: 400,
-            sample_retention_days: 30,
             purge_interval: Duration::from_secs(3_600),
             event_poll: Duration::from_secs(5),
             expire_interval: EXPIRE_INTERVAL,
@@ -689,10 +687,9 @@ mod tests {
                     shedding: phoebis_store::Shedding::default(),
                     failover: phoebis_store::Failover::default(),
                     cache_ttl_json: "{}".into(),
-                    cache_diagnostics: None,
+                    cache_diagnostics: false,
                     auto_mode_server: true,
                     affinity: phoebis_store::Affinity::default(),
-                    quota_headers: phoebis_store::QuotaHeaders::Pass,
                     created_at: 0,
                     updated_at: 0,
                 },

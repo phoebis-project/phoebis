@@ -1,4 +1,4 @@
-import { decodeAccount, decodeAccountRollups, decodeAlertEvent, decodeAlertRule, decodeAnalyticsGroup, decodeDashboard, decodeDelivery, decodeKeepaliveOverview, decodeKey, decodeLifecycleDelivery, decodeLiveRequest, decodePairingSession, decodePool, decodeQuotaHistory, decodeRecipe, decodeRequest, decodeRequestEvent, decodeSession, decodeSettings, decodeSnapshot } from '@/api/decode';
+import { decodeAccount, decodeAccountRollups, decodeAnalyticsGroup, decodeAttention, decodeDashboard, decodeKeepaliveOverview, decodeKey, decodeLiveRequest, decodePairingSession, decodePool, decodeQuotaHistory, decodeRecipe, decodeRequest, decodeRequestEvent, decodeSession, decodeSettings, decodeSnapshot } from '@/api/decode';
 import { FIXTURES } from './generated/fixtures';
 
 /** The fixture's body, or the named member of it, as the decoder takes it. */
@@ -7,13 +7,10 @@ const first = (name: string, member: string): unknown => (body(name)[member] as 
 
 export const ACCOUNT_SAMPLE = decodeAccount(body('account'));
 export const ACCOUNT_ROLLUP_SAMPLE = decodeAccountRollups(body('analytics_accounts'))[0];
-export const ALERT_EVENT_SAMPLE = decodeAlertEvent(first('alert_events', 'events'));
-export const ALERT_RULE_SAMPLE = decodeAlertRule(first('alert_rules', 'rules'));
 export const ANALYTICS_GROUP_SAMPLE = decodeAnalyticsGroup(first('analytics_breakdown', 'rows'));
-export const DELIVERY_SAMPLE = decodeDelivery(first('alert_deliveries', 'deliveries'));
+export const ATTENTION_ITEM_SAMPLE = decodeAttention(first('attention', 'items'));
 export const KEEPALIVE_OVERVIEW_SAMPLE = decodeKeepaliveOverview(body('keepalive_overview'));
 export const KEY_SAMPLE = decodeKey(first('keys', 'keys'));
-export const LIFECYCLE_DELIVERY_SAMPLE = decodeLifecycleDelivery(first('alert_lifecycle', 'deliveries'));
 export const LIVE_REQUEST_SAMPLE = decodeLiveRequest(((body('live_messages').deltas as { delta: { request: unknown } }[])[0]).delta.request);
 export const OVERVIEW_SAMPLE = decodeDashboard(body('dashboard'));
 export const PAIRING_SAMPLE = decodePairingSession(body('pairing_started'));

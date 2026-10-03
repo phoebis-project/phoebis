@@ -1334,6 +1334,36 @@ textarea.input {
 }
 
 /* Stat tiles */
+/*
+ * The dashboard's attention line. A badge row is 22 px (18 px of line and 2 px of padding each side), and the quiet,
+ * loading and failed states hold that one row, so the tiles below stay where they are; many items wrap onto more rows
+ * rather than hide one.
+ */
+.attention-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  align-items: center;
+  min-height: 22px;
+}
+
+.attention-line__lead {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+/* A failure's message can run past the line, so it cuts there and reads whole in the title. */
+.attention-line > .badge {
+  max-width: 100%;
+}
+
+.attention-line__cut {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .stat-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));

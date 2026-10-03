@@ -1,5 +1,5 @@
 //! The in-flight counts: an account ticket per wire attempt, a key permit per request, both held until the
-//! response ends, and what a selection or an admission does when one is at its cap.
+//! response ends, and what a selection does when an account is at its cap.
 
 mod common;
 
@@ -567,7 +567,7 @@ async fn a_request_whose_every_hold_ran_out_answers_at_cap_naming_both_waits_on_
             429,
             Some("accounts_at_cap")
         ),
-        "a pool at its cap is an exhausted pool to the ledger and the alerts"
+        "a pool at its cap is an exhausted pool to the ledger and the attention gauge"
     );
     let body: serde_json::Value = serde_json::from_slice(&drain(resp).await).unwrap();
     assert_eq!(
@@ -845,100 +845,10 @@ async fn a_cancelled_leg_releases_its_ticket() {
 }
 
 #[tokio::test]
-async fn a_key_past_its_cap_is_refused_before_selection_with_a_retry_after_and_the_row_names_the_code_without_its_body(
-) {
-    let up = FakeUpstream::start(messages(held_stream())).await;
-    let bus = Bus::new();
-    let mut sub = bus.subscribe("test");
-    let h = harness_with_bus(
-        &up,
-        &[oauth("a", A, 0)],
-        PoolSpec {
-            key_in_flight_cap: Some(1),
-            ..PoolSpec::default()
-        },
-        bus,
-    )
-    .await;
-    let held = h
-        .app
-        .clone()
-        .oneshot(request_for(KEY, MODEL, "s1"))
-        .await
-        .unwrap();
-    assert_eq!(held.status().as_u16(), 200);
-    let refused = h
-        .app
-        .clone()
-        .oneshot(request_for(KEY, MODEL, "s2"))
-        .await
-        .unwrap();
-    assert_eq!(refused.status().as_u16(), 429);
-    assert_eq!(refused.headers()["retry-after"], "10");
-    assert_eq!(
-        refused.headers()["x-phoebis-error-code"],
-        "key_in_flight_cap"
-    );
-    assert!(
-        refused.headers().get("x-should-retry").is_none(),
-        "the client's own retry policy decides"
-    );
-    let refused_id = outcome(&refused).request_id;
-    let body = drain(refused).await;
-    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["error"]["type"], "rate_limit_error");
-    assert_eq!(posts(&up), 1, "the refusal came before any selection");
-    let mut events = Vec::new();
-    wait_for(Duration::from_secs(5), || {
-        while let Ok(e) = sub.events.try_recv() {
-            events.push(e);
-        }
-        events
-            .iter()
-            .any(|e| matches!(e, Event::RequestComplete(c) if c.request_id == refused_id))
-            .then_some(())
-    })
-    .await;
-    let observed = events
-        .iter()
-        .find_map(|e| match e {
-            Event::RequestObserved(o) if o.request_id == refused_id => Some(o),
-            _ => None,
-        })
-        .expect("the refused request is observed");
-    assert!(
-        observed.body.is_empty(),
-        "the permit is taken before the body is read, so the refusal carries no body"
-    );
-    let complete = events
-        .iter()
-        .find_map(|e| match e {
-            Event::RequestComplete(c) if c.request_id == refused_id => Some(c),
-            _ => None,
-        })
-        .unwrap();
-    assert_eq!(
-        (complete.status, complete.error_code.as_deref()),
-        (429, Some("key_in_flight_cap"))
-    );
-    drop(held);
-    up.release();
-    up.shutdown().await;
-}
-
-#[tokio::test]
-async fn a_probe_and_a_count_on_a_key_at_its_cap_are_served_without_a_permit() {
+async fn a_probe_and_a_count_take_no_key_permit() {
     let up = FakeUpstream::start(vec![]).await;
     up.add_credential_rule(A, "/v1/messages", held_stream());
-    let h = harness(
-        &up,
-        &[oauth("a", A, 0)],
-        PoolSpec {
-            key_in_flight_cap: Some(1),
-            ..PoolSpec::default()
-        },
-    )
-    .await;
+    let h = harness(&up, &[oauth("a", A, 0)], PoolSpec::default()).await;
     let held = h
         .app
         .clone()
@@ -949,7 +859,7 @@ async fn a_probe_and_a_count_on_a_key_at_its_cap_are_served_without_a_permit() {
     assert_eq!(
         h.router.in_flight().key("desktop"),
         1,
-        "the key is at its cap"
+        "the held message holds the key's one permit"
     );
 
     // The engine's own probe: no credential header, the key named by id.
@@ -965,7 +875,6 @@ async fn a_probe_and_a_count_on_a_key_at_its_cap_are_served_without_a_permit() {
             phoebis_relay::Probe {
                 key_id: "desktop".into(),
                 key_generation: h.store.api_key("desktop").unwrap().unwrap().created_at,
-                allow_oauth: true,
             },
             probe,
         )
@@ -989,22 +898,7 @@ async fn a_probe_and_a_count_on_a_key_at_its_cap_are_served_without_a_permit() {
     assert_eq!(
         h.router.in_flight().key("desktop"),
         1,
-        "neither took a slot of the key's cap"
-    );
-
-    let refused = h
-        .app
-        .clone()
-        .oneshot(request_for(KEY, MODEL, "s3"))
-        .await
-        .unwrap();
-    assert_eq!(
-        (
-            refused.status().as_u16(),
-            refused.headers()["x-phoebis-error-code"].to_str().unwrap()
-        ),
-        (429, "key_in_flight_cap"),
-        "a message on the key is still refused"
+        "neither took a permit"
     );
     drop(held);
     up.release();
@@ -1053,7 +947,6 @@ async fn a_probe_takes_no_read_permit_and_no_budget() {
             phoebis_relay::Probe {
                 key_id: "desktop".into(),
                 key_generation: h.store.api_key("desktop").unwrap().unwrap().created_at,
-                allow_oauth: true,
             },
             probe,
         )
@@ -1190,84 +1083,6 @@ async fn the_bodies_arriving_on_one_key_are_bounded_by_key_body_reads_with_retry
 }
 
 #[tokio::test]
-async fn a_keys_own_cap_bounds_its_body_reads_instead_of_the_default() {
-    let up = FakeUpstream::start(messages(json_200())).await;
-    let h = harness_with(
-        &up,
-        &[oauth("a", A, 0)],
-        PoolSpec {
-            key_in_flight_cap: Some(3),
-            ..PoolSpec::default()
-        },
-        phoebis_relay::Limits {
-            key_body_reads: 2,
-            ..default_limits()
-        },
-    )
-    .await;
-    // The third read is past the default of two; the key's own cap of three admits it.
-    let open = [reading(&h).await, reading(&h).await, reading(&h).await];
-    let (request, fourth_tx) = channel_request(None);
-    let refused = tokio::time::timeout(Duration::from_secs(5), h.app.clone().oneshot(request))
-        .await
-        .expect("refused at once")
-        .unwrap();
-    assert_eq!(
-        (
-            refused.status().as_u16(),
-            refused.headers()["x-phoebis-error-code"].to_str().unwrap()
-        ),
-        (429, "key_in_flight_cap"),
-        "the key's own cap answers, never key_body_reads"
-    );
-    drop(fourth_tx);
-    for (task, tx) in open {
-        drop(tx);
-        task.await.unwrap();
-    }
-    up.shutdown().await;
-}
-
-#[tokio::test]
-async fn a_keys_own_cap_below_the_default_bounds_its_body_reads_so_a_count_is_refused_past_it() {
-    let up = FakeUpstream::start(messages(json_200())).await;
-    let h = harness(
-        &up,
-        &[oauth("a", A, 0)],
-        PoolSpec {
-            key_in_flight_cap: Some(1),
-            ..PoolSpec::default()
-        },
-    )
-    .await;
-    // The message holds the key's one slot and its one read. A count takes no slot, so only the read bound can
-    // refuse it, and the key's cap of one sets that bound below the default.
-    let (message, message_tx) = reading(&h).await;
-    let refused = tokio::time::timeout(
-        Duration::from_secs(5),
-        h.app.clone().oneshot(request_from_fixture(
-            inference_head(FixtureKind::CountOauthNonFirstParty),
-            body(BodyFixture::CountOauth),
-            KEY,
-        )),
-    )
-    .await
-    .expect("refused at once")
-    .unwrap();
-    assert_eq!(
-        (
-            refused.status().as_u16(),
-            refused.headers()["x-phoebis-error-code"].to_str().unwrap()
-        ),
-        (429, "key_body_reads"),
-        "the key's own cap of one bounds the reads, never the default"
-    );
-    drop(message_tx);
-    message.await.unwrap();
-    up.shutdown().await;
-}
-
-#[tokio::test]
 async fn a_declared_length_past_the_per_body_bound_is_413_without_a_read() {
     let up = FakeUpstream::start(messages(json_200())).await;
     let bus = Bus::new();
@@ -1296,7 +1111,7 @@ async fn a_declared_length_past_the_per_body_bound_is_413_without_a_read() {
 }
 
 #[tokio::test]
-async fn a_token_count_at_the_key_and_account_caps_is_served_and_takes_no_slot() {
+async fn a_token_count_at_the_accounts_cap_is_served_and_takes_no_slot() {
     let up = FakeUpstream::start(vec![]).await;
     up.add_credential_rule(A, "/v1/messages", held_stream());
     let h = harness(
@@ -1304,7 +1119,6 @@ async fn a_token_count_at_the_key_and_account_caps_is_served_and_takes_no_slot()
         &[oauth("a", A, 0)],
         PoolSpec {
             failover: account_cap(1, 1),
-            key_in_flight_cap: Some(1),
             ..PoolSpec::default()
         },
     )
@@ -1319,7 +1133,7 @@ async fn a_token_count_at_the_key_and_account_caps_is_served_and_takes_no_slot()
     assert_eq!(
         in_flight(&h, "a"),
         (1, 1),
-        "the stream holds the account's one slot and the key's"
+        "the stream holds the account's one slot and a key permit"
     );
 
     up.push_credential_rule(A, "/v1/messages", json_200());
@@ -1336,18 +1150,18 @@ async fn a_token_count_at_the_key_and_account_caps_is_served_and_takes_no_slot()
     assert_eq!(
         counted.status().as_u16(),
         200,
-        "a count is neither held nor refused at either cap"
+        "a count is neither held nor refused at the account's cap"
     );
     assert_eq!(
         in_flight(&h, "a"),
         (1, 1),
-        "the count's open response holds no slot of either cap"
+        "the count's open response holds no ticket and no permit"
     );
     drain(counted).await;
     assert_eq!(
         in_flight(&h, "a"),
         (1, 1),
-        "the count took no slot of either cap"
+        "the count took no ticket and no permit"
     );
     drop(held);
     up.release();
@@ -1403,50 +1217,33 @@ async fn a_pool_with_nothing_to_hold_for_still_answers_accounts_unavailable() {
 }
 
 #[tokio::test]
-async fn two_admissions_released_together_against_a_key_capped_at_one_admit_exactly_one() {
+async fn two_admissions_released_together_are_both_counted_and_both_released() {
     let up = FakeUpstream::start(messages(held_stream())).await;
-    let h = harness(
-        &up,
-        &[oauth("a", A, 0)],
-        PoolSpec {
-            key_in_flight_cap: Some(1),
-            ..PoolSpec::default()
-        },
-    )
-    .await;
+    let h = harness(&up, &[oauth("a", A, 0)], PoolSpec::default()).await;
     let (one, two) = tokio::join!(
         h.app.clone().oneshot(request_for(KEY, MODEL, "s1")),
         h.app.clone().oneshot(request_for(KEY, MODEL, "s2")),
     );
     let (one, two) = (one.unwrap(), two.unwrap());
-    let mut statuses = [one.status().as_u16(), two.status().as_u16()];
-    statuses.sort();
-    assert_eq!(statuses, [200, 429], "exactly one admission");
-    assert_eq!(posts(&up), 1);
-    let (admitted, refused) = if one.status() == 200 {
-        (one, two)
-    } else {
-        (two, one)
-    };
     assert_eq!(
-        refused.headers()["x-phoebis-error-code"],
-        "key_in_flight_cap"
+        [one.status().as_u16(), two.status().as_u16()],
+        [200, 200],
+        "a key bounds none of its requests"
+    );
+    assert_eq!(posts(&up), 2);
+    assert_eq!(
+        h.router.in_flight().key("desktop"),
+        2,
+        "each admission holds its own permit"
     );
     up.release();
-    drain(admitted).await;
-    let third = h
-        .app
-        .clone()
-        .oneshot(request_for(KEY, MODEL, "s3"))
-        .await
-        .unwrap();
+    drain(one).await;
+    drain(two).await;
     assert_eq!(
-        third.status().as_u16(),
-        200,
-        "the permit came back with the body's end"
+        h.router.in_flight().key("desktop"),
+        0,
+        "each permit came back with its body's end"
     );
-    drain(third).await;
-    assert_eq!(posts(&up), 2);
     up.shutdown().await;
 }
 
@@ -1455,34 +1252,16 @@ async fn a_retry_in_place_keeps_the_one_key_permit() {
     let up = FakeUpstream::start(messages(json_200())).await;
     up.push_credential_rule(A, "/v1/messages", json_429_retry_after("1"));
     up.push_credential_rule(A, "/v1/messages", json_200());
-    let h = harness(
-        &up,
-        &[oauth("a", A, 0)],
-        PoolSpec {
-            key_in_flight_cap: Some(1),
-            ..PoolSpec::default()
-        },
-    )
-    .await;
+    let h = harness(&up, &[oauth("a", A, 0)], PoolSpec::default()).await;
     let app = h.app.clone();
     let waiting =
         tokio::spawn(async move { app.oneshot(request_for(KEY, MODEL, "s1")).await.unwrap() });
     wait_for(Duration::from_secs(5), || (posts(&up) == 1).then_some(())).await;
-    let refused = h
-        .app
-        .clone()
-        .oneshot(request_for(KEY, MODEL, "s2"))
-        .await
-        .unwrap();
     assert_eq!(
-        (
-            refused.status().as_u16(),
-            refused.headers()["x-phoebis-error-code"].to_str().unwrap()
-        ),
-        (429, "key_in_flight_cap"),
-        "the request sleeping in its retry still holds the key's one slot"
+        h.router.in_flight().key("desktop"),
+        1,
+        "the request sleeping in its retry still holds its one permit"
     );
-    assert_eq!(h.router.in_flight().key("desktop"), 1);
     let resp = tokio::time::timeout(Duration::from_secs(5), waiting)
         .await
         .expect("the retry lands")

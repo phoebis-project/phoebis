@@ -9,8 +9,8 @@ use phoebis_profile::fixtures::{
 use std::net::TcpListener;
 use std::sync::Mutex;
 
-/// Secrets are read from the process environment inside `load`, and the tests in this binary name the same
-/// variables with different values, so each holds this across its whole set-then-load sequence.
+/// `load` reads the admin secret from the process environment, and the tests in this binary set the same
+/// variables to different values, so each holds this across its whole set-then-load sequence.
 static ENV: Mutex<()> = Mutex::new(());
 
 /// How long a poll waits for the binary's asynchronous pipeline (the routing task, the ledger's writer, an
@@ -250,8 +250,6 @@ admin:
   listen: 127.0.0.1:{admin_port}
   secret_env: TEST_ADMIN_SECRET
   plain_http: true
-compatibility:
-  profile: claude-code-2.1.269-linux-x64
 proxy:
   listen: 127.0.0.1:{proxy_port}
 stats:
@@ -499,7 +497,7 @@ async fn a_key_set_off_through_the_admin_api_strips_the_next_request_and_set_bac
     .unwrap();
     let (proxy_port, admin_port, metrics_port) = (free_port(), free_port(), free_port());
     let yaml = format!(
-        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\n  plain_http: true\ncompatibility:\n  profile: claude-code-2.1.269-linux-x64\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
+        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\n  plain_http: true\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
         ledger = dir.path().join("ledger.sqlite").display(),
         key = dir.path().join("storage.key").display(),
         db = dir.path().join("phoebis.sqlite").display(),
@@ -700,8 +698,6 @@ admin:
   listen: 127.0.0.1:{admin_port}
   secret_env: TEST_SHUTDOWN_ADMIN
   plain_http: true
-compatibility:
-  profile: claude-code-2.1.269-linux-x64
 proxy:
   listen: 127.0.0.1:{proxy_port}
 stats:
@@ -793,8 +789,6 @@ admin:
   listen: 127.0.0.1:{admin_port}
   secret_env: TEST_ADMIN_SECRET
   plain_http: true
-compatibility:
-  profile: claude-code-2.1.269-linux-x64
 proxy:
   listen: 127.0.0.1:{proxy_port}
 routing:
@@ -1015,7 +1009,7 @@ async fn a_fast_session_is_served_fast_walked_on_a_fast_429_and_refused_locally_
     .unwrap();
     let (proxy_port, admin_port, metrics_port) = (free_port(), free_port(), free_port());
     let yaml = format!(
-        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_FAST_ADMIN_SECRET\n  plain_http: true\ncompatibility:\n  profile: claude-code-2.1.269-linux-x64\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nrouting:\n  cooldown_fallback_seconds: 3600\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
+        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_FAST_ADMIN_SECRET\n  plain_http: true\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nrouting:\n  cooldown_fallback_seconds: 3600\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
         key = dir.path().join("storage.key").display(),
         db = dir.path().join("phoebis.sqlite").display(),
         ledger = dir.path().join("ledger.sqlite").display(),
@@ -1310,8 +1304,6 @@ admin:
   listen: 127.0.0.1:{admin_port}
   secret_env: TEST_ADMIN_SECRET
   plain_http: true
-compatibility:
-  profile: claude-code-2.1.269-linux-x64
 proxy:
   listen: 127.0.0.1:{proxy_port}
 stats:
@@ -1579,8 +1571,6 @@ fn config_with(dir: &std::path::Path, name: &str, admin: &str) -> std::path::Pat
     let yaml = format!(
         r#"admin:
 {admin}
-compatibility:
-  profile: claude-code-2.1.269-linux-x64
 proxy:
   listen: 127.0.0.1:0
 storage:
@@ -1599,15 +1589,13 @@ usage:
 }
 
 #[test]
-fn shared_secrets_are_rejected_and_plain_http_is_allowed_on_any_address() {
+fn plain_http_is_allowed_on_any_address_and_a_secure_listener_needs_an_origin() {
     use phoebis_router::config::{load, ConfigError};
     let dir = tempfile::tempdir().unwrap();
     let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     std::env::set_var("TEST_ADMIN_SECRET", "admin-secret-001");
-    std::env::set_var("TEST_VIEWER_SECRET", "viewer-secret-01");
-    std::env::set_var("TEST_SHARED_SECRET", "admin-secret-001");
-    let loopback_plain = "  listen: 127.0.0.1:8081\n  secret_env: TEST_ADMIN_SECRET\n  viewer_secret_env: TEST_VIEWER_SECRET\n  plain_http: true";
-    let shared = "  listen: 127.0.0.1:8081\n  secret_env: TEST_ADMIN_SECRET\n  viewer_secret_env: TEST_SHARED_SECRET\n  plain_http: true";
+    let loopback_plain =
+        "  listen: 127.0.0.1:8081\n  secret_env: TEST_ADMIN_SECRET\n  plain_http: true";
     let public_plain =
         "  listen: 0.0.0.0:8081\n  secret_env: TEST_ADMIN_SECRET\n  plain_http: true";
     let public_plain_with_origin =
@@ -1615,10 +1603,6 @@ fn shared_secrets_are_rejected_and_plain_http_is_allowed_on_any_address() {
     let public_secure =
         "  listen: 0.0.0.0:8081\n  secret_env: TEST_ADMIN_SECRET\n  plain_http: false";
     assert!(load(&config_with(dir.path(), "ok", loopback_plain)).is_ok());
-    assert!(matches!(
-        load(&config_with(dir.path(), "dup", shared)),
-        Err(ConfigError::DuplicateSecret { .. })
-    ));
     assert!(load(&config_with(dir.path(), "public", public_plain)).is_ok());
     let pinned = load(&config_with(dir.path(), "pinned", public_plain_with_origin)).unwrap();
     assert_eq!(
@@ -1648,7 +1632,7 @@ fn shared_secrets_are_rejected_and_plain_http_is_allowed_on_any_address() {
 }
 
 #[test]
-fn stats_and_quota_settings_are_validated_with_the_specs_bounds() {
+fn stats_and_cooldown_settings_are_validated_with_the_specs_bounds() {
     use phoebis_router::config::{load, ConfigError};
     let dir = tempfile::tempdir().unwrap();
     let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -1669,7 +1653,6 @@ fn stats_and_quota_settings_are_validated_with_the_specs_bounds() {
         ),
         (90, "127.0.0.1:9464", "./data/ledger.sqlite")
     );
-    assert_eq!(config.quota.sample_retention_days, 30);
     assert_eq!(
         config
             .stats
@@ -1678,14 +1661,10 @@ fn stats_and_quota_settings_are_validated_with_the_specs_bounds() {
             .and_then(|p| p.to_str()),
         Some("./pricing.yaml")
     );
-    let full = load(&with("full", "stats:\n  body_capture_max_hours: 24\n  ledger_path: ./data/l.sqlite\n  metrics_listen: 127.0.0.1:9999\n  pricing_path: ./p.yaml\n  retention_days: 7\n  rollup_retention_days: 500\nquota:\n  sample_retention_days: 3\n")).unwrap();
+    let full = load(&with("full", "stats:\n  body_capture_max_hours: 24\n  ledger_path: ./data/l.sqlite\n  metrics_listen: 127.0.0.1:9999\n  pricing_path: ./p.yaml\n  retention_days: 7\n  rollup_retention_days: 500\n")).unwrap();
     assert_eq!(
-        (
-            full.stats.retention_days,
-            full.stats.rollup_retention_days,
-            full.quota.sample_retention_days
-        ),
-        (7, 500, 3)
+        (full.stats.retention_days, full.stats.rollup_retention_days),
+        (7, 500)
     );
     let zero_retention = load(&with("retention", "stats:\n  retention_days: 0\n")).unwrap();
     assert_eq!(zero_retention.stats.retention_days, 0);
@@ -1714,10 +1693,15 @@ fn stats_and_quota_settings_are_validated_with_the_specs_bounds() {
         (0, 7),
         "no floor when the raw rows are kept forever"
     );
-    assert!(matches!(
-        load(&with("samples", "quota:\n  sample_retention_days: 0\n")),
-        Err(ConfigError::RetentionTooShort { .. })
-    ));
+    assert_eq!(
+        load(&with(
+            "cooldown",
+            "routing:\n  cooldown_fallback_seconds: 3601\n"
+        ))
+        .unwrap_err()
+        .to_string(),
+        "routing.cooldown_fallback_seconds must be between 1 and 3600, not 3601"
+    );
     assert!(matches!(
         load(&with("ledger", "stats:\n  ledger_path: /\n")),
         Err(ConfigError::LedgerPath { .. })
@@ -1808,6 +1792,11 @@ fn stats_and_quota_settings_are_validated_with_the_specs_bounds() {
     );
 }
 
+const REMOVED_LEASE: &str = "keepalive:\n  lease_seconds: 90\n"; // removed name
+const REMOVED_WORKERS: &str = "keepalive:\n  max_workers: 4\n"; // removed name
+const REMOVED_REQUEST_BYTES: &str = "keepalive:\n  max_request_bytes: 8388608\n"; // removed name
+const REMOVED_PREWARM: &str = "keepalive:\n  oauth_prewarm_verified: false\n"; // removed name
+
 #[test]
 fn keepalive_limits_are_validated_with_the_go_engines_bounds() {
     use phoebis_router::config::{load, ConfigError};
@@ -1824,41 +1813,53 @@ fn keepalive_limits_are_validated_with_the_go_engines_bounds() {
     let defaults = load(&with("defaults", "")).unwrap();
     assert_eq!(
         (
-            defaults.keepalive.lease_seconds,
-            defaults.keepalive.max_workers,
-            defaults.keepalive.oauth_prewarm_verified
+            defaults.keepalive.max_agents,
+            defaults.keepalive.max_retained_bytes,
+            defaults.keepalive.max_sessions
         ),
-        (90, 4, false),
+        (1_024, 256 << 20, 128),
         "an absent block is the spec's defaults"
     );
-    let full = load(&with("full", "keepalive:\n  lease_seconds: 120\n  max_agents: 2048\n  max_request_bytes: 1048576\n  max_retained_bytes: 16777216\n  max_sessions: 256\n  max_workers: 8\n  oauth_prewarm_verified: true\n")).unwrap();
+    let full = load(&with(
+        "full",
+        "keepalive:\n  max_agents: 2048\n  max_retained_bytes: 33554432\n  max_sessions: 256\n",
+    ))
+    .unwrap();
     assert_eq!(
         (
-            full.keepalive.lease_seconds,
             full.keepalive.max_agents,
-            full.keepalive.max_workers,
-            full.keepalive.oauth_prewarm_verified
+            full.keepalive.max_retained_bytes,
+            full.keepalive.max_sessions
         ),
-        (120, 2_048, 8, true)
+        (2_048, 32 << 20, 256)
     );
-    assert!(matches!(
-        load(&with("lease", "keepalive:\n  lease_seconds: 9\n")),
-        Err(ConfigError::Keepalive(
-            phoebis_keepalive::LimitsError::OutOfRange {
-                field: "lease_seconds",
-                ..
-            }
-        ))
-    ));
-    assert!(matches!(
+    for (name, body) in [
+        ("lease", REMOVED_LEASE),
+        ("workers", REMOVED_WORKERS),
+        ("request-bytes", REMOVED_REQUEST_BYTES),
+        ("prewarm", REMOVED_PREWARM),
+    ] {
+        let error = load(&with(name, body)).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "the configuration is not valid YAML",
+            "{name}"
+        );
+        assert!(
+            matches!(&error, ConfigError::Syntax(cause) if cause.to_string().contains("unknown field")),
+            "{name}: {error:?}"
+        );
+    }
+    assert_eq!(
         load(&with(
             "retained",
-            "keepalive:\n  max_request_bytes: 4194304\n  max_retained_bytes: 2097152\n"
-        )),
-        Err(ConfigError::Keepalive(
-            phoebis_keepalive::LimitsError::RetainedBelowRequest
+            "keepalive:\n  max_retained_bytes: 33554431\n"
         ))
-    ));
+        .unwrap_err()
+        .to_string(),
+        "keepalive.max_retained_bytes must be between 33554432 and 536870912, not 33554431",
+        "the retained budget holds at least one recipe at the relay's request bound"
+    );
     assert!(
         matches!(
             load(&with("unknown", "keepalive:\n  probe_enabled: true\n")),
@@ -1885,7 +1886,7 @@ async fn the_binary_ledgers_serves_statistics_and_metrics_and_lands_the_ledger_o
     std::fs::write(dir.path().join("pricing.yaml"), "effective: 2026-10-01\nmodels:\n  claude-sonnet-4-5: {input: 3, cache_write_5m: 3.75, cache_write_1h: 6, cache_read: 0.3, output: 15}\n").unwrap();
     let (proxy_port, admin_port, metrics_port) = (free_port(), free_port(), free_port());
     let yaml = format!(
-        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\n  plain_http: true\ncompatibility:\n  profile: claude-code-2.1.269-linux-x64\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\n  pricing_path: {pricing}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
+        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\n  plain_http: true\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\n  pricing_path: {pricing}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
         ledger = dir.path().join("ledger.sqlite").display(), pricing = dir.path().join("pricing.yaml").display(),
         key = dir.path().join("storage.key").display(), db = dir.path().join("phoebis.sqlite").display(),
         addr = up.addr(), ca = dir.path().join("ca.pem").display(),
@@ -2047,6 +2048,10 @@ async fn the_binary_ledgers_serves_statistics_and_metrics_and_lands_the_ledger_o
     assert!(
         text.contains(r#"phoebis_pins_active{pool="main"} 3"#),
         "three sessions, three pins: {text}"
+    );
+    assert!(
+        text.contains(r#"phoebis_attention{kind="pool_exhausted",subject="main"} 0"#),
+        "the binary hands the attention reader to the metrics listener: {text}"
     );
     assert!(
         client
@@ -2248,7 +2253,7 @@ async fn a_client_request_folds_the_pins_typed_burn_and_the_sessions_route_price
     .unwrap();
     let (proxy_port, admin_port, metrics_port) = (free_port(), free_port(), free_port());
     let yaml = format!(
-        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_BURN_ADMIN_SECRET\n  plain_http: true\ncompatibility:\n  profile: claude-code-2.1.269-linux-x64\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
+        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_BURN_ADMIN_SECRET\n  plain_http: true\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
         ledger = dir.path().join("ledger.sqlite").display(),
         key = key_path.display(),
         db = db_path.display(),
@@ -2398,7 +2403,6 @@ async fn the_proxy_listener_binds_after_the_startup_fetch_or_its_bound_whichever
                        routing: &str| {
         format!(
             "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_STARTUP_ADMIN\n  plain_http: true\n\
-             compatibility:\n  profile: claude-code-2.1.269-linux-x64\n\
              proxy:\n  listen: 127.0.0.1:{proxy_port}\n{routing}\
              stats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\n\
              storage:\n  encryption_key_file: {key}\n  path: {db}\n\
@@ -2588,8 +2592,8 @@ async fn the_proxy_listener_binds_after_the_startup_fetch_or_its_bound_whichever
         up.shutdown().await;
     }
 
-    // The catalog fetch fails and its retry sleeps the cache window: the proxy still binds at the bound, and
-    // the retry does not outlive `run` holding the store and its process lock.
+    // The catalog fetch fails and its retry sleeps `ERROR_HOLD`, sixty seconds: the proxy still binds at the
+    // bound, and the retry does not outlive `run` holding the store and its process lock.
     {
         let up = FakeUpstream::start(vec![
             Rule {
@@ -2775,10 +2779,9 @@ async fn a_startup_poll_the_endpoint_refuses_routes_the_first_request_from_the_p
                     shedding: phoebis_store::Shedding::default(),
                     failover: phoebis_store::Failover::default(),
                     cache_ttl_json: "{}".into(),
-                    cache_diagnostics: None,
+                    cache_diagnostics: false,
                     auto_mode_server: true,
                     affinity: phoebis_store::Affinity::default(),
-                    quota_headers: phoebis_store::QuotaHeaders::Pass,
                     created_at: 0,
                     updated_at: 0,
                 },
@@ -2807,8 +2810,6 @@ async fn a_startup_poll_the_endpoint_refuses_routes_the_first_request_from_the_p
                     rotated_at: None,
                     last_used_at: None,
                     retired_secret_last_used_at: None,
-                    in_flight_cap: None,
-                    affinity_source: phoebis_store::AffinitySource::Auto,
                     auto_mode_server: None,
                 },
                 "test",
@@ -2836,7 +2837,6 @@ async fn a_startup_poll_the_endpoint_refuses_routes_the_first_request_from_the_p
             &cfg_path,
             format!(
                 "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_PERSISTED_ADMIN\n  plain_http: true\n\
-                 compatibility:\n  profile: claude-code-2.1.269-linux-x64\n\
                  proxy:\n  listen: 127.0.0.1:{proxy_port}\n\
                  routing:\n  startup_fetch_seconds: 5\n\
                  stats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\n\
@@ -3032,7 +3032,7 @@ async fn the_binary_retains_a_session_probes_it_and_serves_the_keepalive_views()
     .unwrap();
     let (proxy_port, admin_port, metrics_port) = (free_port(), free_port(), free_port());
     let yaml = format!(
-        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\n  plain_http: true\ncompatibility:\n  profile: claude-code-2.1.269-linux-x64\nkeepalive:\n  max_workers: 2\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
+        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\n  plain_http: true\nkeepalive:\n  max_sessions: 64\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
         ledger = dir.path().join("ledger.sqlite").display(), key = dir.path().join("storage.key").display(), db = dir.path().join("phoebis.sqlite").display(), addr = up.addr(), ca = dir.path().join("ca.pem").display(),
     );
     let cfg_path = dir.path().join("config.yaml");
@@ -3180,7 +3180,7 @@ async fn the_binary_retains_a_session_probes_it_and_serves_the_keepalive_views()
         .json()
         .await
         .unwrap();
-    assert_eq!(settings["keepalive"]["max_workers"].as_u64(), Some(2));
+    assert_eq!(settings["keepalive"]["max_sessions"].as_u64(), Some(64));
     let text = client
         .get(format!("http://127.0.0.1:{metrics_port}/metrics"))
         .send()
@@ -3258,7 +3258,7 @@ async fn the_companion_registers_through_the_binary_under_the_clients_environmen
     .unwrap();
     let (proxy_port, admin_port, metrics_port) = (free_port(), free_port(), free_port());
     let yaml = format!(
-        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\n  plain_http: true\ncompatibility:\n  profile: claude-code-2.1.269-linux-x64\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
+        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\n  plain_http: true\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
         ledger = dir.path().join("ledger.sqlite").display(), key = dir.path().join("storage.key").display(), db = dir.path().join("phoebis.sqlite").display(), addr = up.addr(), ca = dir.path().join("ca.pem").display(),
     );
     let cfg_path = dir.path().join("config.yaml");
@@ -3432,8 +3432,6 @@ admin:
   listen: 127.0.0.1:{admin_port}
   secret_env: TEST_ADMIN_SECRET
   plain_http: true
-compatibility:
-  profile: claude-code-2.1.269-linux-x64
 proxy:
   listen: 127.0.0.1:{proxy_port}
 stats:
@@ -3493,9 +3491,10 @@ usage:
         200,
         "the session route answers JSON, not the shell"
     );
-    assert_eq!(
-        api.json::<serde_json::Value>().await.unwrap()["role"],
-        "admin"
+    let session = api.json::<serde_json::Value>().await.unwrap();
+    assert!(
+        session["session_id"].is_string() && session.get("role").is_none(),
+        "the session answer names the session and no role: {session}"
     );
     let unknown = client.get(admin("/nope")).send().await.unwrap();
     assert_eq!(
@@ -3542,7 +3541,7 @@ async fn the_ui_passes_the_browser_pass_over_every_view_in_both_themes() {
     .unwrap();
     let (proxy_port, admin_port, metrics_port) = (free_port(), free_port(), free_port());
     let yaml = format!(
-        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\n  viewer_secret_env: TEST_VIEWER_SECRET\n  plain_http: true\ncompatibility:\n  profile: claude-code-2.1.269-linux-x64\nkeepalive:\n  max_workers: 2\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nrouting:\n  cooldown_fallback_seconds: 3600\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
+        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\n  plain_http: true\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nrouting:\n  cooldown_fallback_seconds: 3600\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
         ledger = dir.path().join("ledger.sqlite").display(), key = dir.path().join("storage.key").display(), db = dir.path().join("phoebis.sqlite").display(), addr = up.addr(), ca = dir.path().join("ca.pem").display(),
     );
     let cfg_path = dir.path().join("config.yaml");
@@ -3550,7 +3549,6 @@ async fn the_ui_passes_the_browser_pass_over_every_view_in_both_themes() {
     let config = {
         let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         std::env::set_var("TEST_ADMIN_SECRET", "admin-secret-001");
-        std::env::set_var("TEST_VIEWER_SECRET", "viewer-secret-01");
         phoebis_router::config::load(&cfg_path).unwrap()
     };
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
@@ -3577,10 +3575,6 @@ async fn the_ui_passes_the_browser_pass_over_every_view_in_both_themes() {
         .await
         .unwrap();
     let secret = key["secret"].as_str().unwrap().to_string();
-    // Written before the first request: a session rule posts its start as the request arrives, and the
-    // lifecycle log the alerts view draws has nothing to list without one. The destination resolves to
-    // nothing, as the pool rule's below does, so the attempts land as rows without reaching a network.
-    assert_eq!(client.post(admin("/alerts/rules")).json(&serde_json::json!({ "kind": "session_active", "scope": { "type": "all" }, "webhook_url": "http://hook.invalid/life" })).send().await.unwrap().status(), 201);
     // The fixture body asks for fixed-budget thinking, which no probe may replay; an adaptive block is the
     // probe-capable shape.
     let adaptive = String::from_utf8(body(BodyFixture::ApiKey).to_vec())
@@ -3660,12 +3654,9 @@ async fn the_ui_passes_the_browser_pass_over_every_view_in_both_themes() {
         },
     )
     .await;
-    // The destination resolves to nothing (RFC 6761 reserves .invalid), so the delivery fails without reaching
-    // a network; the event opens either way, which is what the alerts view shows.
-    assert_eq!(client.post(admin("/alerts/rules")).json(&serde_json::json!({ "kind": "pool_exhausted", "scope": { "type": "all" }, "webhook_url": "http://hook.invalid/hook" })).send().await.unwrap().status(), 201);
     // The pool's only member answers a unified 429 once: the router cools it, finds no sibling, answers the
-    // exhaustion 429, and the alert engine opens the pool_exhausted event the alerts view shows. The standing
-    // answer under this credential stays the 200, so a keepalive probe after the 429 is still served.
+    // exhaustion 429, and the attention reader holds the pool's pool_exhausted condition. The standing answer
+    // under this credential stays the 200, so a keepalive probe after the 429 is still served.
     up.add_credential_rule("sk-ant-api03-PLACEHOLDER", "/v1/messages", warm_answer());
     up.push_credential_rule("sk-ant-api03-PLACEHOLDER", "/v1/messages", exhausted_429());
     let exhausted = fixture_request(&client, proxy_port, &secret, "e2e-exhausted")
@@ -3677,20 +3668,16 @@ async fn the_ui_passes_the_browser_pass_over_every_view_in_both_themes() {
         exhausted.headers()["x-phoebis-error-code"],
         "accounts_exhausted"
     );
-    let _ = wait_json(&client, &admin("/alerts/events"), |v| {
-        v["events"]
+    let _ = wait_json(&client, &admin("/attention"), |v| {
+        v["items"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|e| e["kind"] == "pool_exhausted" && e["state"] == "open")
+            .any(|i| i["kind"] == "pool_exhausted" && i["subject"]["id"] == "main")
     })
     .await;
     let _ = wait_json(&client, &admin("/requests"), |v| {
         !v["requests"].as_array().unwrap().is_empty()
-    })
-    .await;
-    let _ = wait_json(&client, &admin("/alerts/deliveries"), |v| {
-        !v["deliveries"].as_array().unwrap().is_empty()
     })
     .await;
     let shots = std::env::var("PHOEBIS_SCREENSHOT_DIR")
@@ -3718,8 +3705,8 @@ async fn the_ui_passes_the_browser_pass_over_every_view_in_both_themes() {
         .count();
     assert_eq!(
         pngs,
-        24,
-        "twelve views in two themes under {}",
+        22,
+        "eleven views in two themes under {}",
         shots.display()
     );
     println!("screenshots: {}", shots.display());
@@ -3821,8 +3808,6 @@ admin:
   listen: 127.0.0.1:{admin_port}
   secret_env: TEST_ADMIN_SECRET
   plain_http: true
-compatibility:
-  profile: claude-code-2.1.269-linux-x64
 proxy:
   listen: 127.0.0.1:{proxy_port}
 stats:

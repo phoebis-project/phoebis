@@ -22,9 +22,9 @@ use phoebis_relay::{
 };
 use phoebis_routing::{spawn, RouterConfig, RouterHandle};
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, Affinity, AffinitySource, ApiKeyRow,
-    Failover, Identity, MemberWrite, ModelRule, NewBundle, OveragePolicy, PoolRow, QuotaHeaders,
-    RulesMode, Secret, Shedding, StorageKey, Store, Strategy,
+    AccountKind, AccountRow, AccountState, Affinity, ApiKeyRow, Failover, Identity,
+    MemberWrite, ModelRule, NewBundle, OveragePolicy, PoolRow, RulesMode, Secret, Shedding,
+    StorageKey, Store, Strategy,
 };
 use phoebis_transport::request::parse_head;
 // The polls live with the fake so every integration suite has them; the call sites here name them as before.
@@ -39,8 +39,6 @@ pub const KEY: &str = "phoebis-testkey";
 pub const SDK_USER_AGENT: &str = "anthropic-sdk-python/0.40.0";
 
 pub const NOW: i64 = 1_000_000;
-/// The catalog cache's window in every harness but `harness_with_catalog_window`'s: the bootstrap default.
-pub const CATALOG_WINDOW: Duration = Duration::from_secs(60);
 /// The startup bound every harness passes to `CatalogService::new`, short enough for a test to wait past it.
 pub const STARTUP_BOUND: Duration = Duration::from_millis(500);
 
@@ -108,17 +106,14 @@ pub fn test_account_row(account: &TestAccount) -> AccountRow {
 pub struct PoolSpec {
     pub affinity_ttl_seconds: u64,
     pub auto_mode_server: bool,
-    pub cache_diagnostics: Option<bool>,
+    pub cache_diagnostics: bool,
     pub cache_ttl: &'static str,
     pub failover: Failover,
     /// The harness key's own override of `auto_mode_server`; `None` inherits the pool's.
     pub key_auto_mode_server: Option<bool>,
-    /// The harness key's own `in_flight_cap`; the pool's rows are the rest of this spec.
-    pub key_in_flight_cap: Option<u32>,
     pub migrate_above_utilization: Option<f64>,
     pub model_rules: Vec<ModelRule>,
     pub overage_policy: OveragePolicy,
-    pub quota_headers: QuotaHeaders,
     pub strategy: Strategy,
 }
 
@@ -127,15 +122,13 @@ impl Default for PoolSpec {
         PoolSpec {
             affinity_ttl_seconds: 3600,
             auto_mode_server: true,
-            cache_diagnostics: None,
+            cache_diagnostics: false,
             cache_ttl: "{}",
             failover: Failover::default(),
             key_auto_mode_server: None,
-            key_in_flight_cap: None,
             migrate_above_utilization: None,
             model_rules: Vec::new(),
             overage_policy: OveragePolicy::PreferPlan,
-            quota_headers: QuotaHeaders::Pass,
             strategy: Strategy::Priority,
         }
     }
@@ -323,10 +316,8 @@ pub async fn harness_with_router_config(
         default_limits(),
         None,
         false,
-        false,
         None,
         None,
-        CATALOG_WINDOW,
         config,
     )
     .await
@@ -389,10 +380,8 @@ pub async fn harness_on(
         limits,
         None,
         false,
-        false,
         None,
         None,
-        CATALOG_WINDOW,
         RouterConfig::default(),
     )
     .await
@@ -414,10 +403,8 @@ pub async fn harness_on_with_bus(
         default_limits(),
         Some(bus),
         false,
-        false,
         None,
         None,
-        CATALOG_WINDOW,
         RouterConfig::default(),
     )
     .await
@@ -440,36 +427,8 @@ pub async fn harness_with_memory_cap(
         default_limits(),
         None,
         false,
-        false,
         Some(cap),
         None,
-        CATALOG_WINDOW,
-        RouterConfig::default(),
-    )
-    .await
-}
-
-/// The default harness with the bootstrap-level `cache_diagnostics` option set, for the cases that check how it
-/// interacts with a pool's own override.
-pub async fn harness_with_cache_diagnostics_default(
-    up: &FakeUpstream,
-    accounts: &[TestAccount],
-    pool: PoolSpec,
-    cache_diagnostics: bool,
-) -> Harness {
-    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
-    build(
-        store,
-        up,
-        accounts,
-        pool,
-        default_limits(),
-        None,
-        cache_diagnostics,
-        false,
-        None,
-        None,
-        CATALOG_WINDOW,
         RouterConfig::default(),
     )
     .await
@@ -490,11 +449,9 @@ pub async fn harness_with_signed_placeholder(
         pool,
         default_limits(),
         None,
-        false,
         true,
         None,
         None,
-        CATALOG_WINDOW,
         RouterConfig::default(),
     )
     .await
@@ -527,10 +484,8 @@ pub async fn harness_with_bus_limits(
         limits,
         Some(bus),
         false,
-        false,
         None,
         None,
-        CATALOG_WINDOW,
         RouterConfig::default(),
     )
     .await
@@ -553,37 +508,8 @@ pub async fn harness_with_catalog(
         default_limits(),
         None,
         false,
-        false,
         None,
         Some(catalog_up),
-        CATALOG_WINDOW,
-        RouterConfig::default(),
-    )
-    .await
-}
-
-/// `harness_with_catalog` with the cache held for `window` rather than `CATALOG_WINDOW`, for the tests that need a
-/// window shorter than a discovery.
-pub async fn harness_with_catalog_window(
-    up: &FakeUpstream,
-    catalog_up: FakeUpstream,
-    accounts: &[TestAccount],
-    pool: PoolSpec,
-    window: Duration,
-) -> Harness {
-    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
-    build(
-        store,
-        up,
-        accounts,
-        pool,
-        default_limits(),
-        None,
-        false,
-        false,
-        None,
-        Some(catalog_up),
-        window,
         RouterConfig::default(),
     )
     .await
@@ -608,10 +534,8 @@ pub async fn harness_with_bus_and_catalog(
         default_limits(),
         Some(bus),
         false,
-        false,
         None,
         Some(catalog_up),
-        CATALOG_WINDOW,
         RouterConfig::default(),
     )
     .await
@@ -625,7 +549,6 @@ pub async fn harness_with_store_and_catalog(
     catalog_up: FakeUpstream,
     accounts: &[TestAccount],
     pool: PoolSpec,
-    window: Duration,
 ) -> Harness {
     build(
         store,
@@ -635,10 +558,8 @@ pub async fn harness_with_store_and_catalog(
         default_limits(),
         None,
         false,
-        false,
         None,
         Some(catalog_up),
-        window,
         RouterConfig::default(),
     )
     .await
@@ -652,11 +573,9 @@ async fn build(
     pool: PoolSpec,
     limits: Limits,
     bus: Option<Bus>,
-    cache_diagnostics: bool,
     sign_placeholder: bool,
     memory_cap: Option<usize>,
     catalog_up: Option<FakeUpstream>,
-    catalog_window: Duration,
     router_config: RouterConfig,
 ) -> Harness {
     let p = claude_code_2_1_269_linux_x64();
@@ -737,7 +656,6 @@ async fn build(
                     cache_diagnostics: pool.cache_diagnostics,
                     auto_mode_server: pool.auto_mode_server,
                     affinity: Affinity::default(),
-                    quota_headers: pool.quota_headers,
                     created_at: NOW,
                     updated_at: NOW,
                 },
@@ -780,8 +698,6 @@ async fn build(
                     rotated_at: None,
                     last_used_at: None,
                     retired_secret_last_used_at: None,
-                    in_flight_cap: pool.key_in_flight_cap,
-                    affinity_source: AffinitySource::Auto,
                     auto_mode_server: pool.key_auto_mode_server,
                 },
                 "test",
@@ -854,7 +770,6 @@ async fn build(
         router_handle.clone(),
         clock.clone(),
         limits.head_timeout,
-        catalog_window,
         STARTUP_BOUND,
     ));
     let relay = Relay::new(
@@ -873,9 +788,7 @@ async fn build(
     // A tick fast enough for a test to step the clock and wait on it in real time, rather than the production
     // default's six-hour interval.
     let refresh = catalog.spawn_refresh(Duration::from_secs(21_600), Duration::from_millis(20));
-    let relay = relay
-        .with_cache_diagnostics(cache_diagnostics)
-        .with_signed_placeholder(sign_placeholder);
+    let relay = relay.with_signed_placeholder(sign_placeholder);
     // Before the store is attached, which rebuilds the memory around whatever cap it finds.
     let relay = match memory_cap {
         // The idle bound the relay's own default carries, so the cap is the only thing that differs.
@@ -1048,6 +961,20 @@ pub fn models_request(key: &str, path: &str) -> Request<Body> {
         .header("Authorization", format!("Bearer {key}"))
         .body(Body::empty())
         .unwrap()
+}
+
+/// The profile body with `"speed":"fast"` spliced at the top level, under the session header.
+pub fn fast_request(session: &str) -> Request<Body> {
+    let native = String::from_utf8(body(BodyFixture::Oauth).to_vec())
+        .unwrap()
+        .replacen(r#"{"model""#, r#"{"speed":"fast","model""#, 1);
+    let mut req = request_from_fixture(
+        inference_head(FixtureKind::OauthNonFirstParty),
+        native.as_bytes(),
+        KEY,
+    );
+    set_header(&mut req, "x-claude-code-session-id", session);
+    req
 }
 
 /// The same request carrying a top-level `container`, which binds it to the account that holds the container.

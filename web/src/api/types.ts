@@ -212,6 +212,8 @@ export interface QuotaPoll {
   lastAttemptAt: string | null;
   /** When the windows of the last clean answer were read; null until one lands. */
   lastCleanAt: string | null;
+  /** The message of the last attempt that was not clean; null after a clean one. */
+  lastError: string | null;
   lastOutcome: PollOutcome;
   /** When the account may be asked again; null when its next slot may ask it. */
   nextAttemptAt: string | null;
@@ -225,6 +227,28 @@ export interface QuotaSnapshot {
   fetchedAt: string | null;
   poll: QuotaPoll | null;
   status: QuotaFetchStatus;
+}
+
+/**
+ * The conditions that need the operator, worst first: the order the route ranks by and the dashboard's line draws,
+ * so not alphabetical.
+ */
+export const ATTENTION_KIND_VALUES = ['pool_exhausted', 'client_drift', 'reauth_required', 'funding_required', 'refresh_failed', 'poll_backoff'] as const;
+export type AttentionKind = (typeof ATTENTION_KIND_VALUES)[number];
+
+/** One condition that holds now, as `GET /admin/attention` answers it. */
+export interface AttentionItem {
+  /** The members the condition's kind carries, passed through as the route sent them. */
+  detail: Record<string, unknown>;
+  kind: AttentionKind;
+  /** Where the operator fixes it; null for a drift refusal that carried no key. */
+  link: { id: string; page: 'accounts' | 'keys' | 'pools' } | null;
+  /** The pools the item belongs to, which a pool card filters the same list by. */
+  pools: string[];
+  /** When the condition started, as an ISO instant. */
+  since: string;
+  /** An account or a pool by id and label, or a client version as both. */
+  subject: { id: string; label: string; type: 'account' | 'client' | 'pool' };
 }
 
 export type PoolStrategy = 'pace' | 'priority' | 'round_robin';
@@ -293,11 +317,7 @@ export type MemberEligibility = 'budget' | 'cooldown' | 'eligible' | 'overage' |
 
 /** Whether a session's pin is made for every request, or only for one whose body carries a cache marker. */
 export type AffinityMode = 'always' | 'when_cached';
-/** What a key identifies a conversation by: the climb's first source that answers, or one source alone. */
-export type AffinitySource = 'auto' | 'content' | 'session' | 'user_id' | 'whole_key';
 export type BudgetPeriod = 'day' | 'month';
-/** Whether the upstream's quota headers reach the client on a committed answer. */
-export type QuotaHeaders = 'hide' | 'pass';
 /** Where a fresh session with no pin lands: by the strategy, or where its static prefix is warm. */
 export type SessionPlacement = 'by_strategy' | 'by_warm_prefix';
 /** Where a subagent with no pin of its own lands. */
@@ -339,8 +359,8 @@ export interface Pool {
   bodyCaptureHours: number;
   /** The time constant of each pin's burn average, which a shedding round sizes its target from. */
   burnWindowSeconds: number;
-  /** Null inherits the bootstrap option `compatibility.cache_diagnostics`; true or false overrides it for this pool. */
-  cacheDiagnostics: boolean | null;
+  /** The pool's switch for the cache-diagnosis beta and `diagnostics.previous_message_id`; off by default. */
+  cacheDiagnostics: boolean;
   /** Always answered; `enabled` off is how a pool that rewrites no breakpoint reads. */
   cacheTtl: PoolCacheTtl;
   cost24h: number;
@@ -367,7 +387,6 @@ export interface Pool {
   paceFloor: number;
   /** Order the selection set by account kind before priority; the operator's answer alone. */
   preferSubscription: boolean;
-  quotaHeaders: QuotaHeaders;
   requests24h: number;
   /** The longest throttle a request waits out on its own member before it fails over. */
   retryInPlaceSeconds: number;
@@ -391,7 +410,6 @@ export interface Pool {
 export type KeyStatus = 'active' | 'disabled' | 'expired' | 'revoked';
 
 export interface ApiKey {
-  affinitySource: AffinitySource;
   /** Null inherits the pool's `autoModeServer`; true or false overrides it for this key. */
   autoModeServer: boolean | null;
   /** Hours of captured bodies for this key; null inherits the pool, 0 turns capture off here. */
@@ -401,8 +419,6 @@ export interface ApiKey {
   enabled: boolean;
   expiresAt: string | null;
   id: string;
-  /** Requests in flight the key may hold; null is no cap. */
-  inFlightCap: number | null;
   /** Sessions on this key never receive cache-warming probes. */
   keepaliveOptOut: boolean;
   lastUsedAt: string | null;
@@ -921,7 +937,6 @@ export type RecipeReason =
   | 'cooled'
   | 'idle_limit'
   | 'net_negative'
-  | 'oauth_unverified'
   | 'overage'
   | 'paused'
   | 'pool_exhausted'
@@ -968,151 +983,6 @@ export interface KeepaliveOverview {
   sessionsWithCompanion: number;
 }
 
-export type AlertKind =
-  | 'ask_user_question'
-  | 'client_drift'
-  | 'funding_required'
-  | 'keepalive_cost_cap'
-  | 'poll_backoff'
-  | 'pool_exhausted'
-  | 'reauth_required'
-  | 'refresh_failed'
-  | 'session_active'
-  | 'session_idle'
-  | 'session_parked'
-  | 'subagent_active'
-  | 'utilization_above';
-
-/** What an event captured; null for the kinds that need no extra fields, and for the session kinds, which open none. */
-export type AlertEventDetail = Record<string, unknown> | null;
-
-/**
- * The details a page draws a sentence from. A detail is the free-form object the signal built, passed through
- * undecoded, so each carries the wire's own spelling rather than the camelCase every decoded type uses.
- */
-export interface AskUserQuestionDetail {
-  agent: string | null;
-  key: string;
-  question: string | null;
-  /**
-   * Unix milliseconds when the captured body the text was copied from expires, and the text with it; absent when
-   * the body was never captured. The route blanks the question for every role from this instant on.
-   */
-  question_expires_at?: number | null;
-  /** True with a null question when a viewer reads the event: the text sits behind the admin secret. */
-  question_redacted?: boolean;
-  session: string;
-}
-
-export interface ClientDriftDetail {
-  client_version: string;
-  key: string | null;
-  /** Free text: the relay names the check that caught the drift, and a later build may name another one. */
-  trigger: string;
-}
-
-/** What a poll_backoff event carried: since when the account's usage poll has been answered 429. */
-export interface PollBackoffDetail {
-  account: string;
-  backoff_since: number;
-  /** Null once the hold has passed and the account's next slot may ask it. */
-  next_attempt_at: number | null;
-  rate_limited_in_a_row: number;
-}
-
-export interface RefreshFailedDetail {
-  account: string;
-  failures: number;
-  last_error: string | null;
-  /** Whether the refusal was the upstream's answer or a lost one, which decides whether the token is really gone. */
-  outcome: 'failed' | 'uncertain';
-}
-
-/** What a session_active, session_idle, session_parked, or subagent_active delivery carried about its session. */
-export interface SessionLifecycleDetail {
-  agent?: string;
-  event?: LifecycleEventName;
-  idle_minutes?: number;
-  key: string;
-  last_request_at?: number;
-  parent_agent?: string | null;
-  pool: string | null;
-  session: string;
-  source?: 'companion' | 'expiry' | 'request';
-}
-
-export interface AlertRule {
-  createdAt: string;
-  enabled: boolean;
-  hasSecret: boolean;
-  id: string;
-  kind: AlertKind;
-  scope: { id: string | null; type: 'account' | 'all' | 'any_account' | 'key' | 'pool' };
-  threshold: number | null;
-  updatedAt: string;
-  webhookUrl: string;
-  /** The window the router names on the wire, which is not the UI's own spelling of the third one. */
-  windowId: '5h' | '7d' | '7d_oi' | null;
-}
-
-export interface AlertRuleInput {
-  enabled: boolean;
-  kind: AlertKind;
-  scope: AlertRule['scope'];
-  /** Absent leaves the stored secret alone; an empty string clears it. */
-  secret?: string;
-  /** A fraction for utilization_above and whole minutes for session_idle; every other kind takes none. */
-  threshold: number | null;
-  webhookUrl: string;
-  windowId: AlertRule['windowId'];
-}
-
-export interface AlertDeliveryTest {
-  error: string | null;
-  status: number | null;
-}
-
-export interface Delivery {
-  at: string;
-  attempt: number;
-  error: string | null;
-  state: 'opened' | 'resolved';
-  status: number | null;
-}
-
-/** One session event as it was posted: the log the Alerts view lists, since a lifecycle rule opens no event. */
-export interface LifecycleDelivery {
-  at: string;
-  attempt: number;
-  detail: SessionLifecycleDetail;
-  error: string | null;
-  event: LifecycleEventName;
-  id: number;
-  kind: AlertKind;
-  ruleId: string;
-  status: number | null;
-  subject: string;
-}
-
-export interface LifecyclePage {
-  deliveries: LifecycleDelivery[];
-  nextCursor: string | null;
-}
-
-export type LifecycleEventName = 'session_ended' | 'session_idle' | 'session_parked' | 'session_resumed' | 'session_started' | 'subagent_ended' | 'subagent_started';
-
-export interface AlertEvent {
-  deliveries: Delivery[];
-  detail: AlertEventDetail;
-  id: string;
-  kind: AlertKind;
-  openedAt: string;
-  resolvedAt: string | null;
-  ruleId: string;
-  state: 'open' | 'resolved';
-  subject: string;
-}
-
 /** A model's fast-mode cells, USD per million tokens, which an answer served fast is priced at. */
 export interface FastPrice { cacheReadPerM: number; cacheWrite1hPerM: number; cacheWrite5mPerM: number; inputPerM: number; outputPerM: number }
 
@@ -1138,29 +1008,22 @@ export interface CostTable { bands: PlanBand[]; effective: string; tiers: Record
 export interface PlanTables { cost: CostTable }
 
 export interface Settings {
-  about: { profile: string; publicUrl: string | null; version: string };
-  access: { adminConfigured: boolean; viewerConfigured: boolean };
-  /** What the bootstrap file's compatibility block sets, which the route reads and never writes. */
-  compatibility: { cacheDiagnostics: boolean; profile: string };
-  keepalive: { leaseSeconds: number; maxAgents: number; maxRequestBytes: number; maxRetainedBytes: number; maxSessions: number; maxWorkers: number; oauthPrewarmVerified: boolean };
-  listeners: { admin: string; metrics: string; proxy: string };
+  about: { profile: string; version: string };
+  access: { adminConfigured: boolean };
+  keepalive: { maxAgents: number; maxRetainedBytes: number; maxSessions: number };
+  listeners: { metrics: string; proxy: string };
   planTables: PlanTables;
   /** The price table shown to the user and used to cost the ledger. */
   pricing: { effectiveDate: string; models: ModelPrice[]; source: string };
-  quota: { sampleRetentionDays: number };
-  retention: { bodyCaptureMaxHours: number; ledgerDays: number; quotaSamplesDays: number; rollupDays: number };
-  routing: { catalogCacheSeconds: number; catalogRefreshSeconds: number; cooldownFallbackSeconds: number; modelRejectionSeconds: number; startupFetchSeconds: number };
+  retention: { bodyCaptureMaxHours: number };
   /** How long a session stays listed after its last activity. */
   sessions: { expireAfterSeconds: number };
   /** `pricingPath` is null when no override file is configured. */
   storage: { ledgerPath: string; path: string; pricingPath: string | null };
-  usage: { cacheTtlSeconds: number; refreshConcurrency: number };
+  usage: { cacheTtlSeconds: number };
 }
 
-export type Role = 'admin' | 'viewer';
-
 export interface SessionInfo {
-  role: Role;
   sessionId: string;
 }
 

@@ -96,21 +96,6 @@ pub(crate) fn key_body_reads() -> Failure {
     }
 }
 
-/// The error code of the per-key cap refusal.
-pub const KEY_IN_FLIGHT_CAP: &str = "key_in_flight_cap";
-
-/// The per-key cap refusal: 429 `rate_limit_error`, code `key_in_flight_cap`, `Retry-After` in seconds. No
-/// `x-should-retry`: the client's own retry policy for a 429 decides.
-pub(crate) fn key_in_flight_cap(retry_after_seconds: u64) -> Failure {
-    Failure {
-        status: StatusCode::TOO_MANY_REQUESTS,
-        error_type: "rate_limit_error",
-        code: KEY_IN_FLIGHT_CAP,
-        message: "this key has as many requests in flight as it allows",
-        retry_after: Some(retry_after_seconds),
-    }
-}
-
 /// The error code of a pool whose every account was held at its in-flight cap until the hold ran out.
 pub const ACCOUNTS_AT_CAP: &str = "accounts_at_cap";
 

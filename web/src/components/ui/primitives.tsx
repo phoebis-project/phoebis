@@ -51,9 +51,10 @@ export function Segmented<T extends string>({ value, options, onChange, ariaLabe
   );
 }
 
-export function Card({ children, className = '', title, subtitle, actions, padded = true }: { actions?: ReactNode; children: ReactNode; className?: string; padded?: boolean; subtitle?: ReactNode; title?: ReactNode }) {
+/** `id` and `tabIndex` make the card an address's target: a link can name it, and the page can move focus to it. */
+export function Card({ children, className = '', title, subtitle, actions, padded = true, id, tabIndex }: { actions?: ReactNode; children: ReactNode; className?: string; id?: string; padded?: boolean; subtitle?: ReactNode; tabIndex?: number; title?: ReactNode }) {
   return (
-    <section className={`card ${padded ? 'card--padded' : ''} ${className}`}>
+    <section id={id} tabIndex={tabIndex} className={`card ${padded ? 'card--padded' : ''} ${className}`}>
       {(title || actions) && (
         <header className="card__head">
           <div>

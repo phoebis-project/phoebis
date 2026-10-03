@@ -41,7 +41,7 @@ test('an account decodes with its windows, plan, pools, and models', () => {
   );
 });
 
-test('an account decodes its cancelled flag and both ends, and a key its cap', () => {
+test('an account decodes its cancelled flag and both ends', () => {
   const body = fixture('account');
   const cancelled = d.decodeAccount({ ...body, cancelled: true, subscription: { ...body.subscription, ends_at: 5_000, derived_ends_at: 9_000 } });
   assert.deepEqual(
@@ -49,9 +49,6 @@ test('an account decodes its cancelled flag and both ends, and a key its cap', (
     [true, d.iso(5_000), d.iso(9_000)],
   );
   assert.equal(d.decodeAccount(body).cancelled, false, 'a row the wire answers no flag for reads uncancelled');
-  const key = fixture('keys').keys[0];
-  assert.equal(d.decodeKey({ ...key, in_flight_cap: 4 }).inFlightCap, 4);
-  assert.equal(d.decodeKey(key).inFlightCap, null, 'no cap on the wire is no cap in the type');
 });
 
 test('an account decodes its quarantine flag and the router\'s overage evidence', () => {
@@ -224,25 +221,6 @@ test('a key edit sends enabled every time and expires_at only when the dialog ch
   assert.equal(d.encodeKey({ ...input, enabled: true, expiresAt: undefined }).enabled, true);
 });
 
-test("a key decodes its affinity source, or the store's default, and a write sends it as the route spells it", () => {
-  const row = fixture('keys').keys[0];
-  const stored = d.decodeKey(row);
-  assert.deepEqual([stored.affinitySource], [row.affinity_source], 'the captured key answers it');
-  const strict = d.decodeKey({ ...row, affinity_source: 'user_id' });
-  assert.deepEqual([strict.affinitySource], ['user_id']);
-  const bare = { ...row };
-  delete bare.affinity_source;
-  const defaults = d.decodeKey(bare);
-  assert.deepEqual([defaults.affinitySource], ['auto'], 'a row without the field reads the store default');
-  const odd = d.decodeKey({ ...row, affinity_source: 'hash' });
-  assert.deepEqual([odd.affinitySource], ['auto'], 'a spelling the console does not know reads the default rather than a value no control offers');
-  assert.deepEqual([...d.AFFINITY_SOURCE_VALUES], ['auto', 'content', 'session', 'user_id', 'whole_key']);
-  const input = { affinitySource: 'content', autoModeServer: false, bodyCaptureHours: null, enabled: true, keepaliveOptOut: false, longContextTwins: true, modelRules: [], modelRulesMode: 'extend', name: 'strict', notes: null, poolId: 'main' };
-  const body = d.encodeKey(input);
-  assert.deepEqual([body.affinity_source, body.auto_mode_server], ['content', false]);
-  const back = d.decodeKey({ ...row, ...body });
-  assert.deepEqual([back.affinitySource, back.autoModeServer], ['content', false], 'the route answers the body back as it was sent');
-});
 
 test("a key decodes its server-side auto mode override as on, off, or inheriting, and a write sends it as set", () => {
   const row = fixture('keys').keys[0];
@@ -252,7 +230,7 @@ test("a key decodes its server-side auto mode override as on, off, or inheriting
   const bare = { ...row };
   delete bare.auto_mode_server;
   assert.equal(d.decodeKey(bare).autoModeServer, null, 'a row without the field inherits');
-  const input = { affinitySource: 'auto', autoModeServer: null, bodyCaptureHours: null, enabled: true, keepaliveOptOut: false, longContextTwins: true, modelRules: [], modelRulesMode: 'extend', name: 'desktop', notes: null, poolId: 'main' };
+  const input = { autoModeServer: null, bodyCaptureHours: null, enabled: true, keepaliveOptOut: false, longContextTwins: true, modelRules: [], modelRulesMode: 'extend', name: 'desktop', notes: null, poolId: 'main' };
   assert.equal(d.encodeKey(input).auto_mode_server, null, 'inherit is sent as null so a patch clears an override');
   assert.equal(d.encodeKey({ ...input, autoModeServer: true }).auto_mode_server, true);
 });
@@ -293,7 +271,7 @@ test('a pool decodes its policy, status, members, and traffic', () => {
   assert.equal(p.keepalive.warmSubagents, true);
   assert.equal(p.cacheTtl.enabled, false);
   assert.equal(p.cacheTtl.plan.main, '1h');
-  assert.equal(p.cacheDiagnostics, null);
+  assert.equal(p.cacheDiagnostics, false);
   assert.equal(p.status, 'active');
   assert.equal(p.traffic24h.length, 24);
   assert.ok(isIso(p.traffic24h[0].at));
@@ -351,6 +329,7 @@ test("a pool's cache TTL decodes the two rule sets and encodes them back", () =>
   assert.equal(back.cache_diagnostics, true);
   assert.equal(back.keepalive.warm_subagents, false);
   assert.equal(d.decodePool({ ...row, cache_diagnostics: false }).cacheDiagnostics, false);
+  assert.equal(d.encodePool({ ...p, name: p.name, cacheDiagnostics: false, status: 'active' }).cache_diagnostics, false, 'the switch is sent off as it is sent on');
 });
 
 test('a pool decodes its server-side auto mode switch, on when the row carries none, and encodes it back', () => {
@@ -419,12 +398,12 @@ test('a pool the route answers without a cache TTL policy decodes to the default
   assert.equal(d.decodePool({ ...wire, keepalive }).keepalive.warmSubagents, true, 'a keepalive block without the flag warms subagents');
 });
 
-test('a pool decodes the pin, placement and quota fields and its members\' budgets, and encodes them back', () => {
+test('a pool decodes the pin and placement fields and its members\' budgets, and encodes them back', () => {
   const row = fixture('pools').pools[0];
   const p = d.decodePool(row);
   assert.deepEqual(
-    [p.affinityMode, p.subagentPlacement, p.sessionPlacement, p.minSharedPrefixTokens, p.quotaHeaders],
-    ['always', 'by_cohort', 'by_strategy', 20_000, 'pass'],
+    [p.affinityMode, p.subagentPlacement, p.sessionPlacement, p.minSharedPrefixTokens],
+    ['always', 'by_cohort', 'by_strategy', 20_000],
     'the captured pool holds the store defaults',
   );
   const direct = p.members.find((m) => m.accountId === 'direct');
@@ -449,12 +428,11 @@ test('a pool decodes the pin, placement and quota fields and its members\' budge
     subagent_placement: 'with_main',
     session_placement: 'by_warm_prefix',
     min_shared_prefix_tokens: 30_000,
-    quota_headers: 'hide',
     members: [{ ...row.members[1], budget_daily_usd: 12.5, budget_monthly_usd: 50, budget_until: 86_400_000, eligible: 'budget' }],
     keys: [{ ...row.keys[0], enabled: false }],
   };
   const q = d.decodePool(wire);
-  assert.deepEqual([q.affinityMode, q.subagentPlacement, q.sessionPlacement, q.minSharedPrefixTokens, q.quotaHeaders], ['when_cached', 'with_main', 'by_warm_prefix', 30_000, 'hide']);
+  assert.deepEqual([q.affinityMode, q.subagentPlacement, q.sessionPlacement, q.minSharedPrefixTokens], ['when_cached', 'with_main', 'by_warm_prefix', 30_000]);
   assert.deepEqual(
     [q.members[0].budgetDailyUsd, q.members[0].budgetMonthlyUsd, q.members[0].budgetUntil, q.members[0].eligible],
     [12.5, 50, new Date(86_400_000).toISOString(), 'budget'],
@@ -463,18 +441,18 @@ test('a pool decodes the pin, placement and quota fields and its members\' budge
   assert.equal(q.keys[0].enabled, false);
   const back = d.encodePool({ ...q, name: q.name, status: 'active' });
   assert.deepEqual(
-    [back.affinity_mode, back.subagent_placement, back.session_placement, back.min_shared_prefix_tokens, back.quota_headers],
-    ['when_cached', 'with_main', 'by_warm_prefix', 30_000, 'hide'],
+    [back.affinity_mode, back.subagent_placement, back.session_placement, back.min_shared_prefix_tokens],
+    ['when_cached', 'with_main', 'by_warm_prefix', 30_000],
   );
   assert.deepEqual(back.members, [{ account_id: 'direct', budget_daily_usd: 12.5, budget_monthly_usd: 50, priority: 1 }], 'a member goes back with its budgets and nothing the route reports');
   assert.equal('keys' in back, false, 'the keys are the registry\'s, never a pool setting');
 
   const bare = { ...row, members: [{ account_id: 'direct', priority: 0, eligible: 'eligible' }], keys: [{ id: 'k', label: 'K', prefix: 'p' }] };
-  for (const field of ['affinity_mode', 'subagent_placement', 'session_placement', 'min_shared_prefix_tokens', 'quota_headers']) delete bare[field];
+  for (const field of ['affinity_mode', 'subagent_placement', 'session_placement', 'min_shared_prefix_tokens']) delete bare[field];
   const defaults = d.decodePool(bare);
   assert.deepEqual(
-    [defaults.affinityMode, defaults.subagentPlacement, defaults.sessionPlacement, defaults.minSharedPrefixTokens, defaults.quotaHeaders],
-    ['always', 'by_cohort', 'by_strategy', 20_000, 'pass'],
+    [defaults.affinityMode, defaults.subagentPlacement, defaults.sessionPlacement, defaults.minSharedPrefixTokens],
+    ['always', 'by_cohort', 'by_strategy', 20_000],
     'a field the route leaves out reads the store default',
   );
   assert.deepEqual(
@@ -487,13 +465,12 @@ test('a pool decodes the pin, placement and quota fields and its members\' budge
     ...wire,
     affinity_mode: 'sometimes',
     members: [{ ...wire.members[0], eligible: 'maybe', kind: 'robot', spends: [{ period: 'week', period_end: null, spent_usd: 1 }] }],
-    quota_headers: 'strip',
     session_placement: 'by_luck',
     subagent_placement: 'alone',
   });
   assert.deepEqual(
-    [odd.affinityMode, odd.quotaHeaders, odd.sessionPlacement, odd.subagentPlacement, odd.members[0].spends[0].period, odd.members[0].eligible, odd.members[0].kind],
-    ['always', 'pass', 'by_strategy', 'by_cohort', 'month', 'unavailable', 'oauth'],
+    [odd.affinityMode, odd.sessionPlacement, odd.subagentPlacement, odd.members[0].spends[0].period, odd.members[0].eligible, odd.members[0].kind],
+    ['always', 'by_strategy', 'by_cohort', 'month', 'unavailable', 'oauth'],
     'every unknown spelling reads its default',
   );
 });
@@ -1032,21 +1009,53 @@ test('a placement row and a member budget keep the figures the routes leave null
   assert.equal(d.decodeMemberBudget({ ...member, kind: 'robot' }).kind, 'oauth', "a kind outside the two reads as the pool member's decoder reads it");
 });
 
-test('a settings answer with no compatibility block reads the defaults the router ships with', () => {
-  const bare = { ...fixture('settings') };
-  delete bare.compatibility;
-  assert.deepEqual(d.decodeSettings(bare).compatibility, { cacheDiagnostics: false, profile: 'claude-code-2.1.269-linux-x64' }, 'the profile falls back to the one the about block carries, and the rest to what the router does without the block');
-  assert.deepEqual(d.decodeSettings({ ...bare, about: { ...bare.about, profile: 'claude-code-9.9.9-linux-x64' } }).compatibility.profile, 'claude-code-9.9.9-linux-x64');
-});
-
-test('settings decode the quota, routing, storage, and usage blocks the route answers', () => {
+test('settings decode the members the route answers and nothing more', () => {
   const wire = fixture('settings');
   const s = d.decodeSettings(wire);
-  assert.deepEqual(s.quota, { sampleRetentionDays: wire.quota.sample_retention_days });
-  assert.deepEqual(s.routing, { catalogCacheSeconds: wire.routing.catalog_cache_seconds, catalogRefreshSeconds: wire.routing.catalog_refresh_seconds, cooldownFallbackSeconds: wire.routing.cooldown_fallback_seconds, modelRejectionSeconds: wire.routing.model_rejection_seconds, startupFetchSeconds: wire.routing.startup_fetch_seconds });
+  assert.deepEqual(
+    Object.keys(s).sort(),
+    ['about', 'access', 'keepalive', 'listeners', 'planTables', 'pricing', 'retention', 'sessions', 'storage', 'usage'],
+  );
+  const members = Object.fromEntries(Object.entries(s).map(([name, body]) => [name, Object.keys(body).sort()]));
+  assert.deepEqual(
+    members,
+    {
+      about: ['profile', 'version'],
+      access: ['adminConfigured'],
+      keepalive: ['maxAgents', 'maxRetainedBytes', 'maxSessions'],
+      listeners: ['metrics', 'proxy'],
+      planTables: ['cost'],
+      pricing: ['effectiveDate', 'models', 'source'],
+      retention: ['bodyCaptureMaxHours'],
+      sessions: ['expireAfterSeconds'],
+      storage: ['ledgerPath', 'path', 'pricingPath'],
+      usage: ['cacheTtlSeconds'],
+    },
+    'each member carries what the pages read and no other key',
+  );
+  assert.deepEqual(s.keepalive, { maxAgents: wire.keepalive.max_agents, maxRetainedBytes: wire.keepalive.max_retained_bytes, maxSessions: wire.keepalive.max_sessions });
+  assert.deepEqual(s.listeners, { metrics: wire.listeners.metrics, proxy: wire.listeners.proxy });
+  assert.deepEqual(s.retention, { bodyCaptureMaxHours: wire.retention.body_capture_max_hours });
   assert.deepEqual(s.storage, { ledgerPath: wire.storage.ledger_path, path: wire.storage.path, pricingPath: null }, 'no override file is a null path, never an empty one');
-  assert.deepEqual(s.usage, { cacheTtlSeconds: wire.usage.cache_ttl_seconds, refreshConcurrency: wire.usage.refresh_concurrency });
+  assert.deepEqual(s.usage, { cacheTtlSeconds: wire.usage.cache_ttl_seconds });
   assert.equal(d.decodeSettings({ ...wire, storage: { ...wire.storage, pricing_path: './pricing.yaml' } }).storage.pricingPath, './pricing.yaml');
+});
+
+test('a settings member the answer leaves out decodes to its default', () => {
+  const wire = fixture('settings');
+  const without = (name) => {
+    const bare = { ...wire };
+    delete bare[name];
+    return d.decodeSettings(bare)[name];
+  };
+  assert.deepEqual(without('about'), { profile: '', version: '' });
+  assert.deepEqual(without('access'), { adminConfigured: true }, 'no session reaches the console without the admin secret');
+  assert.deepEqual(without('keepalive'), { maxAgents: 0, maxRetainedBytes: 0, maxSessions: 0 });
+  assert.deepEqual(without('listeners'), { metrics: '', proxy: '' });
+  assert.deepEqual(without('retention'), { bodyCaptureMaxHours: 0 });
+  assert.deepEqual(without('sessions'), { expireAfterSeconds: 0 });
+  assert.deepEqual(without('storage'), { ledgerPath: '', path: '', pricingPath: null });
+  assert.deepEqual(without('usage'), { cacheTtlSeconds: 0 });
 });
 
 test('settings decode the cost table with its tiers and null for unmeasured', () => {
@@ -1076,12 +1085,9 @@ test('an account patch encodes the cancelled flag and its end', () => {
 
 test('settings, pricing, pairing, quota, and usage decode', () => {
   const s = d.decodeSettings(fixture('settings'));
-  assert.equal(s.access.viewerConfigured, true);
-  assert.equal(s.about.publicUrl, null);
   assert.equal(s.sessions.expireAfterSeconds, 86400);
-  assert.equal(s.keepalive.maxWorkers, 4);
+  assert.deepEqual(s.keepalive, { maxAgents: 1024, maxRetainedBytes: 268_435_456, maxSessions: 128 });
   assert.equal(s.listeners.metrics, '127.0.0.1:9464');
-  assert.deepEqual(s.compatibility, { cacheDiagnostics: false, profile: 'claude-code-2.1.269-linux-x64' });
   assert.equal(s.pricing.models.find((m) => m.model === 'claude-sonnet-5').inputPerM, 2);
   const pairing = d.decodePairingSession(fixture('pairing_started'));
   assert.ok(pairing.id && pairing.state && pairing.authorizeUrl.includes('state=') && isIso(pairing.expiresAt));
@@ -1091,12 +1097,13 @@ test('settings, pricing, pairing, quota, and usage decode', () => {
   const snapshot = d.decodeSnapshot('business', fixture('account_usage'));
   assert.equal(snapshot.status, 'success');
   const at = new Date(fixture('account_usage').poll.last_attempt_at).toISOString();
-  assert.deepEqual(snapshot.poll, { backoffSince: null, lastAttemptAt: at, lastCleanAt: at, lastOutcome: 'clean', nextAttemptAt: null, rateLimitedInARow: 0 }, 'a clean poll');
-  const held = d.decodeSnapshot('mail', { error: 'usage request rate-limited', fetched_at: 1_000, poll: { backoff_since: 60_000, last_attempt_at: 120_000, last_clean_at: 1_000, last_outcome: 'rate_limited', next_attempt_at: 240_000, rate_limited_in_a_row: 2 } });
+  assert.deepEqual(snapshot.poll, { backoffSince: null, lastAttemptAt: at, lastCleanAt: at, lastError: null, lastOutcome: 'clean', nextAttemptAt: null, rateLimitedInARow: 0 }, 'a clean poll');
+  const hold = 'the usage endpoint rate-limited the account; next attempt at 1970-01-01 00:04:00 UTC';
+  const held = d.decodeSnapshot('mail', { error: 'usage request rate-limited', fetched_at: 1_000, poll: { backoff_since: 60_000, last_attempt_at: 120_000, last_clean_at: 1_000, last_error: hold, last_outcome: 'rate_limited', next_attempt_at: 240_000, rate_limited_in_a_row: 2 } });
   assert.deepEqual(
     [held.status, held.poll],
-    ['error', { backoffSince: '1970-01-01T00:01:00.000Z', lastAttemptAt: '1970-01-01T00:02:00.000Z', lastCleanAt: '1970-01-01T00:00:01.000Z', lastOutcome: 'rate_limited', nextAttemptAt: '1970-01-01T00:04:00.000Z', rateLimitedInARow: 2 }],
-    'a poll backing off keeps each instant and the count',
+    ['error', { backoffSince: '1970-01-01T00:01:00.000Z', lastAttemptAt: '1970-01-01T00:02:00.000Z', lastCleanAt: '1970-01-01T00:00:01.000Z', lastError: hold, lastOutcome: 'rate_limited', nextAttemptAt: '1970-01-01T00:04:00.000Z', rateLimitedInARow: 2 }],
+    'a poll backing off keeps each instant, the count and the last error',
   );
   assert.equal(d.decodeSnapshot('spare', { error: 'the poll has not read this account yet', fetched_at: null, poll: null }).poll, null, 'no poll before the first ask');
   assert.equal(d.decodeSnapshot('a', { poll: { last_outcome: 'somewhere_new' } }).poll.lastOutcome, 'failed', 'an outcome this build does not know reads as a failure');
@@ -1190,71 +1197,6 @@ test('the mock feed speaks the router\'s wire and the mock hands the handler wha
   assert.ok(finished.length > 0 && finished.every((r) => r.preview === null), 'a finished row carries no preview');
 });
 
-test('alert rules, events, and deliveries decode with the secret reduced to has_secret', () => {
-  const rules = fixture('alert_rules').rules.map(d.decodeAlertRule);
-  const util = rules.find((r) => r.kind === 'utilization_above');
-  assert.equal(util.hasSecret, true);
-  assert.equal(util.windowId, '7d_oi');
-  assert.equal(util.threshold, 0.9);
-  assert.deepEqual(util.scope, { id: 'main', type: 'pool' });
-  assert.ok(isIso(util.createdAt) && !('secret' in util));
-  assert.equal(rules.find((r) => r.kind === 'client_drift').enabled, false);
-  assert.deepEqual(rules.find((r) => r.kind === 'poll_backoff').scope, { id: 'business', type: 'account' }, 'an account scope reads as its own type, not as the fallback');
-  assert.equal(d.decodeAlertRule({ ...fixture('alert_rules').rules[0], kind: 'poll_backoff' }).kind, 'poll_backoff', 'the backoff kind is its own, not read as the fallback');
-  assert.equal(d.decodeAlertEvent({ ...fixture('alert_events').events[0], kind: 'poll_backoff' }).kind, 'poll_backoff');
-  const [event] = fixture('alert_events').events.map(d.decodeAlertEvent);
-  assert.equal(event.state, 'open');
-  assert.equal(event.detail.trigger, 'hash');
-  assert.deepEqual(event.deliveries.map((x) => [x.attempt, x.status, x.error]), [[1, null, 'refused'], [2, 500, null], [3, 200, null]]);
-  assert.ok(isIso(event.openedAt) && event.resolvedAt === null);
-  assert.equal(fixture('alert_deliveries').deliveries.map(d.decodeDelivery).length, 3);
-  const [life] = fixture('alert_lifecycle').deliveries.map(d.decodeLifecycleDelivery);
-  assert.equal(life.event, 'session_started');
-  assert.equal(life.detail.session, 'e2e-ui');
-  assert.equal(life.kind, 'session_active');
-  assert.equal(life.ruleId, fixture('alert_lifecycle').deliveries[0].rule_id, 'a lifecycle delivery names the rule that posted it, which no event row holds');
-});
-
-test('a question reads as redacted, expired, or missing from the wire detail and the page clock in milliseconds', () => {
-  const [wire] = fixture('alert_events').events;
-  const detail = { agent: null, key: 'desktop', question: null, question_expires_at: 1_000_000, session: 'sess-1' };
-  const asked = d.decodeAlertEvent({ ...wire, detail, kind: 'ask_user_question' }).detail;
-  assert.equal(asked.question_expires_at, 1_000_000, 'the deadline passes through as the number the route stores');
-  assert.deepEqual(d.questionLine(asked, 1_000_000), { muted: true, text: 'question expired with its captured body' }, 'the route blanks the text at the deadline itself');
-  assert.deepEqual(d.questionLine(asked, 999_999), { muted: true, text: 'question not captured' });
-  assert.deepEqual(d.questionLine({ ...asked, question_expires_at: null }, 2_000_000), { muted: true, text: 'question not captured' });
-  assert.deepEqual(d.questionLine({ ...asked, question_redacted: true }, 2_000_000), { muted: true, text: 'question is for administrators' }, 'a viewer is told who may read it, not that the capture failed');
-  assert.deepEqual(d.questionLine({ ...asked, question: 'Which branch?' }, 2_000_000), { muted: false, text: 'asked: Which branch?' });
-});
-
-test('a lifecycle delivery whose event name this build does not know still decodes', () => {
-  const [wire] = fixture('alert_lifecycle').deliveries;
-  const later = d.decodeLifecycleDelivery({ ...wire, event: 'session_hibernated' });
-  assert.equal(later.event, 'session_started', 'an unknown event name falls back to the first event of a session rather than throwing the log away');
-  assert.equal(d.decodeLifecycleDelivery({ ...wire, status: null, error: 'refused' }).status, null);
-});
-
-test('a lifecycle page carries the cursor for its next page, or none on the last one', () => {
-  const body = fixture('alert_lifecycle');
-  const page = d.decodeLifecyclePage(body);
-  assert.equal(page.nextCursor, null);
-  assert.equal(page.deliveries.length, body.deliveries.length);
-  assert.equal(d.decodeLifecyclePage({ deliveries: [], next_cursor: '1758000000000:41' }).nextCursor, '1758000000000:41');
-});
-
-test('a session lifecycle rule keeps its threshold in minutes and a lifecycle event keeps its detail', () => {
-  const [wire] = fixture('alert_rules').rules;
-  const idle = d.decodeAlertRule({ ...wire, kind: 'session_idle', threshold: 30, window: null });
-  assert.equal(idle.kind, 'session_idle');
-  assert.equal(idle.threshold, 30, 'an idle rule counts whole minutes, so the threshold arrives as the number the operator wrote');
-  assert.equal(idle.windowId, null);
-  const [wireEvent] = fixture('alert_events').events;
-  const detail = { agent: 'sub-1', key: 'desktop', parent_agent: 'main', pool: 'main', session: 'e2e-ui' };
-  const started = d.decodeAlertEvent({ ...wireEvent, detail, kind: 'subagent_active', subject: 'desktop, session e2e-ui, agent sub-1' });
-  assert.equal(started.kind, 'subagent_active');
-  assert.deepEqual(started.detail, detail, 'a detail is the free-form object the signal built and is passed through undecoded');
-});
-
 test('a session decodes its burn unit and both net balances, and a pin the table cannot price reads no burn', () => {
   const rows = fixture('sessions').sessions;
   const wire = rows.find((s) => s.session_id === 's-fixture');
@@ -1267,4 +1209,26 @@ test('a session decodes its burn unit and both net balances, and a pin the table
   assert.deepEqual([k.netFiveHourShare, k.netUsd], [-0.0004, 0.25]);
   const recipe = d.decodeRecipe({ ...fixture('keepalive_recipes').recipes[0], net_five_hour_share: -0.0002 });
   assert.equal(recipe.netFiveHourShare, -0.0002);
+});
+
+test("an attention item decodes the route's shape, its start an instant and its detail passed through", () => {
+  const [raw] = fixture('attention').items;
+  assert.deepEqual(d.decodeAttention(raw), {
+    detail: { key: 'desktop', pool: 'main' },
+    kind: 'pool_exhausted',
+    link: { id: 'main', page: 'pools' },
+    pools: ['main'],
+    since: new Date(1_000_000).toISOString(),
+    subject: { id: 'main', label: 'Main', type: 'pool' },
+  });
+  const drift = d.decodeAttention({ ...raw, detail: { client_version: '2.1.271', key: null, trigger: 'hash' }, kind: 'client_drift', link: null, pools: [], subject: { id: '2.1.271', label: '2.1.271', type: 'client' } });
+  assert.deepEqual([drift.kind, drift.link, drift.pools, drift.subject.type], ['client_drift', null, [], 'client'], 'a drift refusal that carried no key links nowhere');
+});
+
+test('an attention item with a spelling the console does not know reads the worst kind, a pool subject and the pools page', () => {
+  const odd = d.decodeAttention({ detail: 'text', kind: 'cache_cold', link: { id: 'r1', page: 'requests' }, pools: ['all', 3], since: 'yesterday', subject: { id: 'x', label: 'x', type: 'key' } });
+  assert.deepEqual(
+    [odd.kind, odd.subject.type, odd.link, odd.pools, odd.since, odd.detail],
+    ['pool_exhausted', 'pool', { id: 'r1', page: 'pools' }, ['all'], '1970-01-01T00:00:00.000Z', {}],
+  );
 });

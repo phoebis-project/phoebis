@@ -13,10 +13,9 @@ use phoebis_routing::{
     FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
 };
 use phoebis_store::{
-    key_prefix, AccountKind, AccountRow, AccountState, Affinity, AffinitySource, ApiKeyRow,
-    CooldownRow, Failover, MemberWrite, ModelRule, OveragePolicy, PinBurn, PoolRow,
-    QuotaHeaders, RoutingLoad, RulesMode, Shedding, StorageKey, Store, Strategy, SubscriptionRow,
-    WindowRow,
+    key_prefix, AccountKind, AccountRow, AccountState, Affinity, ApiKeyRow,
+    CooldownRow, Failover, MemberWrite, ModelRule, OveragePolicy, PinBurn, PoolRow, RoutingLoad,
+    RulesMode, Shedding, StorageKey, Store, Strategy, SubscriptionRow, WindowRow,
 };
 
 const HOUR: i64 = 3_600_000;
@@ -65,10 +64,9 @@ fn seeded_kind(kind: AccountKind, ids: &[&str]) -> Arc<Store> {
                 shedding: Shedding::default(),
                 failover: Failover::default(),
                 cache_ttl_json: "{}".into(),
-                cache_diagnostics: None,
+                cache_diagnostics: false,
                 auto_mode_server: true,
                 affinity: Affinity::default(),
-                quota_headers: QuotaHeaders::Pass,
                 created_at: 0,
                 updated_at: 0,
             },
@@ -110,8 +108,6 @@ fn seeded_kind(kind: AccountKind, ids: &[&str]) -> Arc<Store> {
                 rotated_at: None,
                 last_used_at: None,
                 retired_secret_last_used_at: None,
-                in_flight_cap: None,
-                affinity_source: AffinitySource::Auto,
                 auto_mode_server: None,
             },
             "test",
@@ -1643,8 +1639,6 @@ fn insert_key_k(store: &Store) {
                 rotated_at: None,
                 last_used_at: None,
                 retired_secret_last_used_at: None,
-                in_flight_cap: None,
-                affinity_source: AffinitySource::Auto,
                 auto_mode_server: None,
             },
             "test",
@@ -3019,26 +3013,25 @@ async fn a_model_scoped_row_reads_the_model_window_and_nothing_else() {
 }
 
 #[test]
-fn a_key_permit_is_reserved_atomically_and_released_once_by_its_drop() {
+fn a_key_permit_counts_every_request_and_is_released_once_by_its_drop() {
     use phoebis_routing::InFlight;
     let in_flight = InFlight::default();
     assert_eq!(in_flight.key("k"), 0);
-    let first = in_flight.try_acquire_key("k", Some(1), 1_000);
-    assert!(first.is_some());
-    assert_eq!(in_flight.key("k"), 1);
-    let second = in_flight.try_acquire_key("k", Some(1), 1_000);
-    assert!(second.is_none(), "the cap is reached");
-    assert_eq!(in_flight.key("k"), 1);
+    let first = in_flight.try_acquire_key("k", 1_000);
+    let second = in_flight.try_acquire_key("k", 1_000);
+    assert_eq!(
+        in_flight.key("k"),
+        2,
+        "a key has no cap, so a second request takes its own permit"
+    );
     drop(first);
-    assert_eq!(in_flight.key("k"), 0);
-    let third = in_flight.try_acquire_key("k", Some(1), 1_000);
-    assert!(third.is_some());
     assert_eq!(in_flight.key("k"), 1);
-
-    // No cap always answers a permit and still counts.
-    let uncapped = in_flight.try_acquire_key("other", None, 1_000);
-    assert!(uncapped.is_some());
-    assert_eq!(in_flight.key("other"), 1);
+    drop(second);
+    assert_eq!(in_flight.key("k"), 0);
+    let other = in_flight.try_acquire_key("other", 1_000);
+    assert_eq!((in_flight.key("k"), in_flight.key("other")), (0, 1));
+    drop(other);
+    assert_eq!(in_flight.key("other"), 0);
 }
 
 #[test]
@@ -3046,7 +3039,7 @@ fn the_purge_reclaims_a_permit_and_a_ticket_whose_guard_never_dropped() {
     use phoebis_routing::{InFlight, IN_FLIGHT_RECLAIM_MS};
     let in_flight = InFlight::default();
     let taken_at = 1_000 - IN_FLIGHT_RECLAIM_MS - 1;
-    let permit = in_flight.try_acquire_key("k", None, taken_at).unwrap();
+    let permit = in_flight.try_acquire_key("k", taken_at);
     let ticket = in_flight.dispatched("a", taken_at);
     assert_eq!((in_flight.key("k"), in_flight.account("a")), (1, 1));
     assert_eq!(

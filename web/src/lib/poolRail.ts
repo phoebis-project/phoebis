@@ -16,7 +16,6 @@ export const POOL_RAIL: Record<PoolGroup, { label: string; parent: string }> = {
   pinning: { label: 'Pinning', parent: 'Routing' },
   placement: { label: 'Placement', parent: 'Routing' },
   probeTuning: { label: 'Probe tuning', parent: 'Caching' },
-  responseHeaders: { label: 'Response headers', parent: 'Visibility' },
   selection: { label: 'Selection', parent: 'Routing' },
   shedding: { label: 'Load shedding', parent: 'Load' },
   utilization: { label: 'Utilization thresholds', parent: 'Load' },

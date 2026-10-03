@@ -1,20 +1,15 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
-import type { Role } from '@/api';
 import { setTimeFormat as applyTimeFormat, type TimeFormat } from '@/lib/format';
 import { useLocalStorage, useMediaQuery } from '@/lib/hooks';
-import { useSession } from './session';
 
 export type ExpertChoice = 'off' | 'on';
 export type ThemeChoice = 'dark' | 'light' | 'system';
-export type { Role };
 
 interface AppSettings {
-  canMutate: boolean;
   expertView: boolean;
   /** Bumped by every time-format change, so a component that only formats times has something to depend on. */
   formatVersion: number;
   resolvedTheme: 'dark' | 'light';
-  role: Role;
   setExpertView: (on: boolean) => void;
   setTheme: (t: ThemeChoice) => void;
   setTimeFormat: (f: TimeFormat) => void;
@@ -25,7 +20,6 @@ interface AppSettings {
 const Ctx = createContext<AppSettings | null>(null);
 
 export function AppSettingsProvider({ children }: { children: ReactNode }) {
-  const { role } = useSession();
   const [theme, setTheme] = useLocalStorage<ThemeChoice>('phoebis.theme', 'system');
   const [storedFormat, storeFormat] = useLocalStorage<TimeFormat>('phoebis.timeFormat', '24h');
   const [storedExpert, storeExpert] = useLocalStorage<ExpertChoice>('phoebis.expertView', 'off');
@@ -52,8 +46,8 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
   };
 
   const value = useMemo<AppSettings>(
-    () => ({ canMutate: role === 'admin', expertView, formatVersion, resolvedTheme, role, setExpertView, setTheme, setTimeFormat, theme, timeFormat: storedFormat }),
-    [expertView, formatVersion, resolvedTheme, role, theme, storedFormat],
+    () => ({ expertView, formatVersion, resolvedTheme, setExpertView, setTheme, setTimeFormat, theme, timeFormat: storedFormat }),
+    [expertView, formatVersion, resolvedTheme, theme, storedFormat],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

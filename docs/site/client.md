@@ -131,8 +131,9 @@ member unchanged, as the router does with the setting on; an Anthropic-key accou
 that asks takes two to four seconds against one to two for one that does not, and the client's own classifier request
 about 1.3 seconds.
 
-What the router does with that request is the pool's **Support server-side auto mode** setting, on by default,
-which a key can override ([routing](routing.md#pools)):
+What the router does with that request is the pool's **Support server-side auto mode** setting, on by default, which a
+key can override; both sit in the expert view, the pool's in its dialog's Auto mode group and the key's in its dialog's
+Access group ([routing](routing.md#pools)):
 
 - On, the router passes the member, the beta and the verdict through unchanged, and the request log and the drawer
   record the request as a server-side check ([statistics](statistics.md#requests)).
@@ -244,20 +245,16 @@ refused `408` with the error code `request_timeout` and the message `the request
 A caller that stops sending before its body is complete is refused `400` with the error code
 `request_incomplete` and the message `the request body ended before it was complete`.
 
-A Messages request on a key that already has its `in_flight_cap` of requests in flight is refused before it reaches any
-account: `429` with the error type `rate_limit_error`, the error code `key_in_flight_cap`, and a `Retry-After` of the
-pool's `retry_in_place_seconds`, one second when that is 0. A request counts from its admission until its response ends,
-a stream for its whole length. A `count_tokens` request takes no in-flight slot on the key or on the account and is
-never held or refused for want of one, though it takes a body-read slot on every key, bounded by `proxy.key_body_reads`
-when the key sets no cap, and can be refused `429 key_body_reads`.
+A `count_tokens` request takes no slot of the pool's per-account [in-flight cap](routing.md#in-flight-caps) and is
+never held or refused for want of one, though it takes one of its key's body-read slots, bounded by
+`proxy.key_body_reads`, and can be refused `429 key_body_reads`.
 
 A request body larger than `proxy.max_request_bytes` (32 MiB by default), declared or arriving, is refused `413` with
 the error code `request_too_large`. A request whose body would take the router past `proxy.body_budget_bytes` of bodies
 in flight is refused `503` `api_error` with the error code `body_budget_exhausted` and the message `the router holds as
 many request bytes as it allows`, with no `Retry-After`; a request past the key's bound on bodies arriving at once
-(`proxy.key_body_reads`, or the key's own `in_flight_cap` when set) is refused `429 rate_limit_error` `key_body_reads`
-with `Retry-After: 1`. Each of these, the key cap's `429` included, is refused before its body is read and observed
-without one.
+(`proxy.key_body_reads`) is refused `429 rate_limit_error` `key_body_reads` with `Retry-After: 1`. Each of these is
+refused before its body is read and observed without one.
 
 A request body sent with `content-encoding: gzip` is inflated within the body bound before it is read, so a body that
 inflates past `proxy.max_request_bytes` is the same `413`, and a body that is not valid gzip is refused `400` with the
@@ -269,11 +266,10 @@ its body is read with `415` `invalid_request_error`, the error code `unsupported
 ### How a request is identified
 
 A conversation is identified by the `x-claude-code-session-id` header.
-A key's `affinity_source` can fix one of these instead of the router walking the whole
-list. Every one of these hints is optional: a client that sends none of them is still relayed.
-A client that forks a session under a new id, whose messages
-continue an earlier conversation of the same key, keeps the new id as that session's own identity; the fork is
-recorded beside it, visible in the console, without moving the new session off the account its own history names.
+Every one of these hints is optional: a client that sends none of them is still relayed.
+A client that forks a session under a new id, whose messages continue
+an earlier conversation of the same key, keeps the new id as that session's own identity; the fork is recorded beside
+it, visible in the console, without moving the new session off the account its own history names.
 
 ### The per-turn effort form
 

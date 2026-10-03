@@ -84,6 +84,7 @@ static PROFILE_2_1_269: Profile = Profile {
     },
 };
 
+/// The one profile this build carries: every reader takes it from here, and a re-pin changes it with the rebuild.
 pub fn claude_code_2_1_269_linux_x64() -> &'static Profile {
     &PROFILE_2_1_269
 }

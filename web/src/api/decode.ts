@@ -1,10 +1,10 @@
 import type {
-  Account, AccountCatalog, AccountRollup, AffinityMode, AffinitySource, AlertEvent, AlertRule, AlertRuleInput, AnalyticsGroup, AnalyticsPoint, ApiKey, AttemptOutcome, AttemptResponse, BudgetPeriod, BurnPoint, BurnUnit, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
-  CohortHold, Delivery, FastLaneReading, FastPrice, GuardVerdict, KeepaliveOverview, KeepaliveRecipe, KeyModels, LifecycleDelivery, LifecyclePage, LiveAttempt, LiveDelta, LiveMetric, LiveRequest, LiveSnapshot, LiveTick, MemberBudget, MemberEligibility, ModelEvent, ModelPrice, ModelRule, ModelRulesMode,
-  ModelsState, Overview, PairingSession, PinMigrationReason, PinReleaseReason, Placement, PlacementRow, PlanBand, PlanModelCells, PlanTables, Pool, PoolCacheTtl, QuotaHeaders, QuotaHistory, QuotaPoll, QuotaSnapshot, RateLimitWindow, RequestEvent, RequestLog, RequestPage, RequestShape, RewritePoint,
-  RuleCooldown, SelectionTrace, Session, SessionLifecycleDetail, SessionPlacement, Settings, SubagentPlacement, Subscription, TtlRules, WarmSessions, WindowId,
+  Account, AccountCatalog, AccountRollup, AffinityMode, AnalyticsGroup, AnalyticsPoint, ApiKey, AttemptOutcome, AttemptResponse, AttentionItem, BudgetPeriod, BurnPoint, BurnUnit, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
+  CohortHold, FastLaneReading, FastPrice, GuardVerdict, KeepaliveOverview, KeepaliveRecipe, KeyModels, LiveAttempt, LiveDelta, LiveMetric, LiveRequest, LiveSnapshot, LiveTick, MemberBudget, MemberEligibility, ModelEvent, ModelPrice, ModelRule, ModelRulesMode,
+  ModelsState, Overview, PairingSession, PinMigrationReason, PinReleaseReason, Placement, PlacementRow, PlanBand, PlanModelCells, PlanTables, Pool, PoolCacheTtl, QuotaHistory, QuotaPoll, QuotaSnapshot, RateLimitWindow, RequestEvent, RequestLog, RequestPage, RequestShape, RewritePoint,
+  RuleCooldown, SelectionTrace, Session, SessionPlacement, Settings, SubagentPlacement, Subscription, TtlRules, WarmSessions, WindowId,
 } from './types';
-import { ACCOUNT_KIND_VALUES, AUTO_MODE_VALUES } from './types';
+import { ACCOUNT_KIND_VALUES, ATTENTION_KIND_VALUES, AUTO_MODE_VALUES } from './types';
 import { CACHE_TTL_DEFAULTS, METERED_TTL_DEFAULTS, PLAN_TTL_DEFAULTS, POOL_AFFINITY_DEFAULTS, POOL_ENGINE_DEFAULTS, type AccountPatch, type KeyInput, type PoolInput } from './client';
 import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons } from '@/lib/cache';
 import { emptyCounts } from '@/lib/counts';
@@ -100,8 +100,9 @@ export function decodeModelsState(v: unknown): ModelsState {
   };
 }
 
-// The account kinds are defined beside the type they spell; exported here with the decoder's other closed sets.
-export { ACCOUNT_KIND_VALUES };
+// The account and attention kinds are defined beside the types they spell; exported here with the decoder's other
+// closed sets.
+export { ACCOUNT_KIND_VALUES, ATTENTION_KIND_VALUES };
 
 /** The typed subscription the route's `profile` and `subscription` records fold into; null when both are absent. */
 export function decodeSubscription(profile: Rec | null, sub: Rec | null): Subscription | null {
@@ -213,6 +214,7 @@ function decodePoll(v: unknown): QuotaPoll | null {
     backoffSince: isoOrNull(p.backoff_since),
     lastAttemptAt: isoOrNull(p.last_attempt_at),
     lastCleanAt: isoOrNull(p.last_clean_at),
+    lastError: strOrNull(p.last_error),
     // An outcome this build does not know reads as a failure rather than as a clean answer.
     lastOutcome: POLL_OUTCOME_VALUES.find((o) => o === str(p.last_outcome)) ?? 'failed',
     nextAttemptAt: isoOrNull(p.next_attempt_at),
@@ -226,6 +228,24 @@ export function decodeSnapshot(accountId: string, v: unknown): QuotaSnapshot {
   return { accountId, error, fetchedAt: isoOrNull(u.fetched_at), poll: decodePoll(u.poll), status: error ? 'error' : 'success' };
 }
 
+export const ATTENTION_PAGE_VALUES = ['accounts', 'keys', 'pools'] as const satisfies readonly NonNullable<AttentionItem['link']>['page'][];
+export const ATTENTION_SUBJECT_VALUES = ['account', 'client', 'pool'] as const satisfies readonly AttentionItem['subject']['type'][];
+
+export function decodeAttention(v: unknown): AttentionItem {
+  const a = rec(v);
+  const subject = rec(a.subject);
+  const link = a.link ? rec(a.link) : null;
+  return {
+    detail: rec(a.detail),
+    // A kind this build does not know reads as the worst one, so it is never drawn quieter than it may be.
+    kind: ATTENTION_KIND_VALUES.find((k) => k === str(a.kind)) ?? 'pool_exhausted',
+    link: link && { id: str(link.id), page: ATTENTION_PAGE_VALUES.find((p) => p === str(link.page)) ?? 'pools' },
+    pools: strings(a.pools),
+    since: isoOr(a.since, epoch),
+    subject: { id: str(subject.id), label: str(subject.label), type: ATTENTION_SUBJECT_VALUES.find((t) => t === str(subject.type)) ?? 'pool' },
+  };
+}
+
 export function decodeKey(v: unknown): ApiKey {
   const k = rec(v);
   const expires = isoOrNull(k.expires_at);
@@ -233,14 +253,12 @@ export function decodeKey(v: unknown): ApiKey {
   // A row from a route that reports no `enabled` is taken as on rather than off.
   const enabled = bool(k.enabled, true);
   return {
-    affinitySource: AFFINITY_SOURCE_VALUES.find((s) => s === str(k.affinity_source)) ?? 'auto',
     autoModeServer: k.auto_mode_server === true ? true : k.auto_mode_server === false ? false : null,
     bodyCaptureHours: numOrNull(k.body_capture_hours),
     createdAt: isoOr(k.created_at, epoch),
     enabled,
     expiresAt: expires,
     id: str(k.id),
-    inFlightCap: numOrNull(k.in_flight_cap),
     keepaliveOptOut: bool(k.keepalive_opt_out),
     lastUsedAt: isoOrNull(k.last_used_at),
     lifetime: { cost: num(rec(k.lifetime).cost_usd), requests: num(rec(k.lifetime).requests) },
@@ -260,10 +278,8 @@ export function decodeKey(v: unknown): ApiKey {
 }
 
 export const AFFINITY_MODE_VALUES = ['always', 'when_cached'] as const satisfies readonly AffinityMode[];
-export const AFFINITY_SOURCE_VALUES = ['auto', 'content', 'session', 'user_id', 'whole_key'] as const satisfies readonly AffinitySource[];
 export const BUDGET_PERIOD_VALUES = ['day', 'month'] as const satisfies readonly BudgetPeriod[];
 export const ELIGIBILITY_VALUES = ['budget', 'cooldown', 'eligible', 'overage', 'unavailable'] as const satisfies readonly MemberEligibility[];
-export const QUOTA_HEADERS_VALUES = ['hide', 'pass'] as const satisfies readonly QuotaHeaders[];
 export const SESSION_PLACEMENT_VALUES = ['by_strategy', 'by_warm_prefix'] as const satisfies readonly SessionPlacement[];
 export const SUBAGENT_PLACEMENT_VALUES = ['by_cohort', 'by_strategy', 'with_main'] as const satisfies readonly SubagentPlacement[];
 export const MODEL_RULES_MODE_VALUES = ['extend', 'replace'] as const satisfies readonly ModelRulesMode[];
@@ -303,7 +319,7 @@ export function decodePool(v: unknown): Pool {
     autoModeServer: bool(p.auto_mode_server, true),
     bodyCaptureHours: num(p.body_capture_hours),
     burnWindowSeconds: num(p.burn_window_seconds, POOL_ENGINE_DEFAULTS.burnWindowSeconds),
-    cacheDiagnostics: p.cache_diagnostics === true ? true : p.cache_diagnostics === false ? false : null,
+    cacheDiagnostics: bool(p.cache_diagnostics),
     cacheTtl: decodeCacheTtl(p.cache_ttl),
     cost24h: num(p.cost_24h),
     id: str(p.id),
@@ -337,7 +353,6 @@ export function decodePool(v: unknown): Pool {
     overagePolicy: OVERAGE_POLICY_VALUES.find((x) => x === str(p.overage_policy)) ?? 'prefer_plan',
     paceFloor: num(p.pace_floor, POOL_ENGINE_DEFAULTS.paceFloor),
     preferSubscription: bool(p.prefer_subscription),
-    quotaHeaders: QUOTA_HEADERS_VALUES.find((x) => x === str(p.quota_headers)) ?? POOL_AFFINITY_DEFAULTS.quotaHeaders,
     requests24h: num(p.requests_24h),
     retryInPlaceSeconds: num(p.retry_in_place_seconds, POOL_ENGINE_DEFAULTS.retryInPlaceSeconds),
     selectBelowUtilization: numOrNull(p.select_below_utilization),
@@ -414,7 +429,6 @@ export function decodeRequest(v: unknown): RequestLog {
 }
 
 export const decodeRequestPage = (v: unknown): RequestPage => ({ nextCursor: strOrNull(rec(v).next_cursor), requests: list(rec(v).requests).map(decodeRequest) });
-export const decodeLifecyclePage = (v: unknown): LifecyclePage => ({ deliveries: list(rec(v).deliveries).map(decodeLifecycleDelivery), nextCursor: strOrNull(rec(v).next_cursor) });
 // The four counts are the route's own; nothing here measures the request or the response it passes through.
 export const decodeBodies = (v: unknown): CapturedBodies => { const b = rec(v); return { request: b.request, requestBytesSeen: num(b.request_bytes_seen), requestBytesStored: num(b.request_bytes_stored), requestId: str(b.request_id), requestTruncated: bool(b.request_truncated), response: b.response, responseBytesSeen: num(b.response_bytes_seen), responseBytesStored: num(b.response_bytes_stored), responseTruncated: bool(b.response_truncated) }; };
 export const decodeRequestEvent = (v: unknown): RequestEvent => ({ accountId: strOrNull(rec(v).account_id), at: isoOr(rec(v).at, epoch), detail: rec(v).detail === null || rec(v).detail === undefined ? null : rec(rec(v).detail), keyId: strOrNull(rec(v).key_id), kind: str(rec(v).kind), model: strOrNull(rec(v).model), sessionId: strOrNull(rec(v).session_id) });
@@ -523,7 +537,7 @@ export function decodeSession(v: unknown): Session {
   return { accountId: strOrNull(s.account_id), agentId: strOrNull(s.agent_id), agents: num(s.agents), burn: numOrNull(s.burn), burnAt: isoOrNull(s.burn_at), burnUnit: burnUnit(s.burn_unit), cacheTtlMs: numOrNull(s.cache_ttl_ms), companion: companion(s.companion), companionSince: isoOrNull(s.companion_since), createdAt: isoOrNull(s.created_at), epoch: numOrNull(s.epoch), forkDepth: numOrNull(s.fork_depth), forkedFrom: strOrNull(s.forked_from), historical: bool(s.historical), keepalive: { lastGuard: guardVerdict(k.last_guard), netFiveHourShare: numOrNull(k.net_five_hour_share), netUsd: numOrNull(k.net_usd), nextProbeAt: isoOrNull(k.next_probe_at), state: agentState(k.state) }, keyGeneration: num(s.key_generation), keyId: str(s.key_id), lastInputTokens: numOrNull(s.last_input_tokens), lastRefreshAt: isoOrNull(s.last_refresh_at), lastRequestAt: isoOrNull(s.last_request_at), lastUsedAt: isoOrNull(s.last_used_at) ?? isoOrNull(s.last_request_at), model: strOrNull(s.model), pinned: bool(s.pinned), requests: num(s.requests), sessionId: str(s.session_id), shedFrom: strOrNull(s.shed_from) };
 }
 
-export const RECIPE_REASON_VALUES = ['affinity_too_short', 'awaiting_cache_evidence', 'budget', 'cap_reached', 'cold_probes', 'cooled', 'idle_limit', 'net_negative', 'oauth_unverified', 'overage', 'paused', 'pool_exhausted', 'probe_error', 'quota_exhausted', 'reauth', 'retrying', 'storage_limit', 'unsupported_shape'] as const;
+export const RECIPE_REASON_VALUES = ['affinity_too_short', 'awaiting_cache_evidence', 'budget', 'cap_reached', 'cold_probes', 'cooled', 'idle_limit', 'net_negative', 'overage', 'paused', 'pool_exhausted', 'probe_error', 'quota_exhausted', 'reauth', 'retrying', 'storage_limit', 'unsupported_shape'] as const;
 export const RECIPE_STATE_VALUES = ['armed', 'held', 'probing'] as const;
 export function decodeRecipe(v: unknown): KeepaliveRecipe {
   const r = rec(v);
@@ -536,25 +550,7 @@ export function decodeKeepaliveOverview(v: unknown): KeepaliveOverview {
   return { agents: { busy: num(rec(o.agents).busy), idle: num(rec(o.agents).idle), parked: num(rec(o.agents).parked) }, costToday: list(o.cost_today).map(rec).map((c) => ({ capUsd: numOrNull(c.cap_usd), poolId: str(c.pool_id), usd: num(c.usd) })), expiredBetweenTurns24h: num(o.expired_between_turns_24h), netSaved7dUsd: num(o.net_saved_7d_usd), probes24h: { failed: num(p.failed), migrated: num(p.migrated), ok: num(p.ok), skipped: num(p.skipped) }, sessions: num(o.sessions), sessionsWithCompanion: num(o.sessions_with_companion) };
 }
 
-export const ALERT_KIND_VALUES = ['ask_user_question', 'client_drift', 'funding_required', 'keepalive_cost_cap', 'poll_backoff', 'pool_exhausted', 'reauth_required', 'refresh_failed', 'session_active', 'session_idle', 'session_parked', 'subagent_active', 'utilization_above'] as const;
-export const SCOPE_TYPE_VALUES = ['account', 'all', 'any_account', 'key', 'pool'] as const;
 export const WINDOW_ID_VALUES = ['5h', '7d', '7d_oi'] as const;
-const scopeOf = (v: unknown): AlertRule['scope'] => { const s = rec(v); return { id: strOrNull(s.id), type: SCOPE_TYPE_VALUES.find((t) => t === str(s.type)) ?? 'all' }; };
-export function decodeAlertRule(v: unknown): AlertRule {
-  const r = rec(v);
-  return { createdAt: isoOr(r.created_at, epoch), enabled: bool(r.enabled), hasSecret: bool(r.has_secret), id: str(r.id), kind: ALERT_KIND_VALUES.find((k) => k === str(r.kind)) ?? 'utilization_above', scope: scopeOf(r.scope), threshold: numOrNull(r.threshold), updatedAt: isoOr(r.updated_at, epoch), webhookUrl: str(r.webhook_url), windowId: WINDOW_ID_VALUES.find((w) => w === str(r.window)) ?? null };
-}
-export const decodeDelivery = (v: unknown): Delivery => ({ at: isoOr(rec(v).at, epoch), attempt: num(rec(v).attempt), error: strOrNull(rec(v).error), state: str(rec(v).state) === 'resolved' ? 'resolved' : 'opened', status: numOrNull(rec(v).status) });
-export const LIFECYCLE_EVENT_VALUES = ['session_ended', 'session_idle', 'session_parked', 'session_resumed', 'session_started', 'subagent_ended', 'subagent_started'] as const;
-// An event name a later router adds still reads as a row: the log is worth more whole than exact.
-export function decodeLifecycleDelivery(v: unknown): LifecycleDelivery {
-  const d = rec(v);
-  return { at: isoOr(d.at, epoch), attempt: num(d.attempt), detail: (d.detail && typeof d.detail === 'object' ? d.detail : {}) as SessionLifecycleDetail, error: strOrNull(d.error), event: LIFECYCLE_EVENT_VALUES.find((e) => e === str(d.event)) ?? 'session_started', id: num(d.id), kind: ALERT_KIND_VALUES.find((k) => k === str(d.kind)) ?? 'session_active', ruleId: str(d.rule_id), status: numOrNull(d.status), subject: str(d.subject) };
-}
-export function decodeAlertEvent(v: unknown): AlertEvent {
-  const e = rec(v);
-  return { deliveries: list(e.deliveries).map(decodeDelivery), detail: e.detail && typeof e.detail === 'object' ? (e.detail as Record<string, unknown>) : null, id: str(e.id), kind: ALERT_KIND_VALUES.find((k) => k === str(e.kind)) ?? 'utilization_above', openedAt: isoOr(e.opened_at, epoch), resolvedAt: isoOrNull(e.resolved_at), ruleId: str(e.rule_id), state: str(e.state) === 'resolved' ? 'resolved' : 'open', subject: str(e.subject) };
-}
 
 const priceCells = (m: Rec): FastPrice => ({ cacheReadPerM: num(m.cache_read_per_m), cacheWrite1hPerM: num(m.cache_write_1h_per_m), cacheWrite5mPerM: num(m.cache_write_5m_per_m), inputPerM: num(m.input_per_m), outputPerM: num(m.output_per_m) });
 const price = (m: Rec): ModelPrice => ({ ...priceCells(m), fast: m.fast && typeof m.fast === 'object' ? priceCells(rec(m.fast)) : null, model: str(m.model) });
@@ -576,29 +572,20 @@ const decodePlanTables = (v: unknown): PlanTables => {
 
 export function decodeSettings(v: unknown): Settings {
   const s = rec(v);
-  const c = rec(s.compatibility);
   const k = rec(s.keepalive);
-  const r = rec(s.retention);
   const l = rec(s.listeners);
-  const q = rec(s.quota);
-  const route = rec(s.routing);
   const store = rec(s.storage);
-  const u = rec(s.usage);
   return {
-    about: { profile: str(rec(s.about).profile), publicUrl: strOrNull(rec(s.about).public_url), version: str(rec(s.about).version) },
-    access: { adminConfigured: bool(rec(s.access).admin_configured, true), viewerConfigured: bool(rec(s.access).viewer_configured) },
-    // A router too old to answer the block behaves as the block's own defaults describe, and runs the profile the about card already shows.
-    compatibility: { cacheDiagnostics: bool(c.cache_diagnostics), profile: str(c.profile, str(rec(s.about).profile)) },
-    keepalive: { leaseSeconds: num(k.lease_seconds), maxAgents: num(k.max_agents), maxRequestBytes: num(k.max_request_bytes), maxRetainedBytes: num(k.max_retained_bytes), maxSessions: num(k.max_sessions), maxWorkers: num(k.max_workers), oauthPrewarmVerified: bool(k.oauth_prewarm_verified) },
-    listeners: { admin: str(l.admin), metrics: str(l.metrics), proxy: str(l.proxy) },
+    about: { profile: str(rec(s.about).profile), version: str(rec(s.about).version) },
+    access: { adminConfigured: bool(rec(s.access).admin_configured, true) },
+    keepalive: { maxAgents: num(k.max_agents), maxRetainedBytes: num(k.max_retained_bytes), maxSessions: num(k.max_sessions) },
+    listeners: { metrics: str(l.metrics), proxy: str(l.proxy) },
     planTables: decodePlanTables(s.plan_tables),
     pricing: decodePricing(s.pricing),
-    quota: { sampleRetentionDays: num(q.sample_retention_days) },
-    retention: { bodyCaptureMaxHours: num(r.body_capture_max_hours), ledgerDays: num(r.ledger_days), quotaSamplesDays: num(r.quota_samples_days), rollupDays: num(r.rollup_days) },
-    routing: { catalogCacheSeconds: num(route.catalog_cache_seconds), catalogRefreshSeconds: num(route.catalog_refresh_seconds), cooldownFallbackSeconds: num(route.cooldown_fallback_seconds), modelRejectionSeconds: num(route.model_rejection_seconds), startupFetchSeconds: num(route.startup_fetch_seconds) },
+    retention: { bodyCaptureMaxHours: num(rec(s.retention).body_capture_max_hours) },
     sessions: { expireAfterSeconds: num(rec(s.sessions).expire_after_seconds) },
     storage: { ledgerPath: str(store.ledger_path), path: str(store.path), pricingPath: strOrNull(store.pricing_path) },
-    usage: { cacheTtlSeconds: num(u.cache_ttl_seconds), refreshConcurrency: num(u.refresh_concurrency) },
+    usage: { cacheTtlSeconds: num(rec(s.usage).cache_ttl_seconds) },
   };
 }
 
@@ -636,21 +623,20 @@ const encodeTtlRules = (r: TtlRules) => ({ main: r.main, models: r.models.map((m
 
 export const encodeAccountPatch = (p: AccountPatch) => ({ cancelled: p.cancelled, subscription_ends_at: p.subscriptionEndsAt === null ? null : Date.parse(p.subscriptionEndsAt) });
 export const encodeKey = (i: KeyInput) => ({
-  affinity_source: i.affinitySource, auto_mode_server: i.autoModeServer, body_capture_hours: i.bodyCaptureHours, enabled: i.enabled,
+  auto_mode_server: i.autoModeServer, body_capture_hours: i.bodyCaptureHours, enabled: i.enabled,
   ...(i.expiresAt === undefined ? {} : { expires_at: i.expiresAt === null ? null : Date.parse(i.expiresAt) }),
-  ...(i.inFlightCap === undefined ? {} : { in_flight_cap: i.inFlightCap }),
   keepalive_opt_out: i.keepaliveOptOut, label: i.name, long_context_twins: i.longContextTwins,
   model_rules: encodeModelRules(i.modelRules), model_rules_mode: i.modelRulesMode, notes: i.notes, pool_id: i.poolId,
 });
 export const encodePool = (i: PoolInput) => ({
-  affinity_mode: i.affinityMode, affinity_ttl_seconds: i.affinityTtlSeconds, auto_mode_server: i.autoModeServer, body_capture_hours: i.bodyCaptureHours, cache_diagnostics: i.cacheDiagnostics,
+  affinity_mode: i.affinityMode, affinity_ttl_seconds: i.affinityTtlSeconds, auto_mode_server: i.autoModeServer, body_capture_hours: i.bodyCaptureHours,
+  cache_diagnostics: i.cacheDiagnostics,
   cache_ttl: { enabled: i.cacheTtl.enabled, inject_when_absent: i.cacheTtl.injectWhenAbsent, metered: encodeTtlRules(i.cacheTtl.metered), plan: encodeTtlRules(i.cacheTtl.plan) },
   enabled: i.status === 'active', model_rules: encodeModelRules(i.modelRules),
   keepalive: { cold_probe_limit: i.keepalive.coldProbeLimit, enabled: i.keepalive.enabled, jitter_seconds_1h: i.keepalive.jitterSeconds1h, jitter_seconds_5m: i.keepalive.jitterSeconds5m, lead_seconds_1h: i.keepalive.leadSeconds1h, lead_seconds_5m: i.keepalive.leadSeconds5m, max_idle_seconds: i.keepalive.maxIdleSeconds, max_idle_ticks: i.keepalive.maxIdleTicks, net_negative_grace_probes: i.keepalive.netNegativeGraceProbes, probe_cap_window_share_per_day: i.keepalive.capWindowSharePerDay, probe_cost_cap_usd_per_day: i.keepalive.costCapUsdPerDay, retry_max_seconds: i.keepalive.retryMaxSeconds, retry_seconds: i.keepalive.retrySeconds, stop_when_net_negative: i.keepalive.stopWhenNetNegative, warm_subagents: i.keepalive.warmSubagents },
   label: i.name, members: i.members.map((m) => ({ account_id: m.accountId, budget_daily_usd: m.budgetDailyUsd, budget_monthly_usd: m.budgetMonthlyUsd, priority: m.priority })), migrate_above_utilization: i.migrateAboveUtilization,
-  min_shared_prefix_tokens: i.minSharedPrefixTokens, overage_policy: i.overagePolicy, prefer_subscription: i.preferSubscription, quota_headers: i.quotaHeaders, select_below_utilization: i.selectBelowUtilization,
+  min_shared_prefix_tokens: i.minSharedPrefixTokens, overage_policy: i.overagePolicy, prefer_subscription: i.preferSubscription, select_below_utilization: i.selectBelowUtilization,
   session_placement: i.sessionPlacement, strategy: i.strategy, subagent_placement: i.subagentPlacement,
   burn_window_seconds: i.burnWindowSeconds, in_flight_cap: i.inFlightCap, migrate_when_spent: i.migrateWhenSpent, overage_move_grace_minutes: i.overageMoveGraceMinutes, pace_floor: i.paceFloor,
   retry_in_place_seconds: i.retryInPlaceSeconds, shed_share: i.shedShare, source_dwell_seconds: i.sourceDwellSeconds, warm_sessions: i.warmSessions, wind_down_minutes: i.windDownMinutes,
 });
-export const encodeRule = (i: AlertRuleInput) => ({ enabled: i.enabled, kind: i.kind, scope: i.scope, ...(i.secret === undefined ? {} : { secret: i.secret }), threshold: i.threshold, webhook_url: i.webhookUrl, window: i.windowId });

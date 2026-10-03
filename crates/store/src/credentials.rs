@@ -1,5 +1,8 @@
 //! Encrypted credential bundles, API-key secrets, and refresh-attempt bookkeeping.
 
+#[cfg(any(test, feature = "debug-hooks"))]
+use std::sync::atomic::Ordering;
+
 use rusqlite::{params, OptionalExtension};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
@@ -706,6 +709,40 @@ impl Store {
         )
         .optional()
         .map_err(StoreError::from)
+    }
+
+    /// The newest settled attempts of the holder `incarnation` names, newest first, bounded by `limit`: the
+    /// attention reader walks them for a run of failures, and a previous holder's history is not this one's.
+    pub fn newest_resolved_refresh_attempts(
+        &self,
+        account_id: &str,
+        incarnation: u64,
+        limit: usize,
+    ) -> Result<Vec<ResolvedAttempt>, StoreError> {
+        #[cfg(any(test, feature = "debug-hooks"))]
+        if self.fail_next_refresh_read.swap(false, Ordering::SeqCst) {
+            return Err(StoreError::Io(std::io::Error::other(
+                "injected refresh read failure",
+            )));
+        }
+        let conn = self.conn.lock().expect(LOCK_POISONED);
+        let mut stmt = conn.prepare(
+            "SELECT id, account_id, started_at, resolved_at, outcome, detail FROM refresh_attempts \
+             WHERE account_id = ?1 AND incarnation = ?2 AND outcome IS NOT NULL \
+             ORDER BY resolved_at DESC, id DESC LIMIT ?3",
+        )?;
+        let rows = stmt.query_map(params![account_id, incarnation as i64, limit as i64], |r| {
+            Ok(ResolvedAttempt {
+                id: r.get::<_, i64>(0)? as u64,
+                account_id: r.get(1)?,
+                started_at: r.get(2)?,
+                resolved_at: r.get(3)?,
+                outcome: r.get(4)?,
+                detail: r.get(5)?,
+            })
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(StoreError::from)
     }
 }
 

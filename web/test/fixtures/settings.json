@@ -3,28 +3,17 @@
   "body": {
     "about": {
       "profile": "claude-code-2.1.269-linux-x64",
-      "version": "0.1.0",
-      "public_url": null
+      "version": "0.1.0"
     },
     "access": {
-      "admin_configured": true,
-      "viewer_configured": true
-    },
-    "compatibility": {
-      "cache_diagnostics": false,
-      "profile": "claude-code-2.1.269-linux-x64"
+      "admin_configured": true
     },
     "keepalive": {
-      "lease_seconds": 90,
       "max_agents": 1024,
-      "max_request_bytes": 8388608,
       "max_retained_bytes": 268435456,
-      "max_sessions": 128,
-      "max_workers": 4,
-      "oauth_prewarm_verified": false
+      "max_sessions": 128
     },
     "listeners": {
-      "admin": "test",
       "metrics": "127.0.0.1:9464",
       "proxy": "test"
     },
@@ -260,21 +249,8 @@
         }
       ]
     },
-    "quota": {
-      "sample_retention_days": 30
-    },
     "retention": {
-      "body_capture_max_hours": 72,
-      "ledger_days": 90,
-      "quota_samples_days": 30,
-      "rollup_days": 400
-    },
-    "routing": {
-      "catalog_cache_seconds": 60,
-      "catalog_refresh_seconds": 21600,
-      "cooldown_fallback_seconds": 60,
-      "model_rejection_seconds": 3600,
-      "startup_fetch_seconds": 5
+      "body_capture_max_hours": 72
     },
     "sessions": {
       "expire_after_seconds": 86400
@@ -285,8 +261,7 @@
       "pricing_path": null
     },
     "usage": {
-      "cache_ttl_seconds": 60,
-      "refresh_concurrency": 4
+      "cache_ttl_seconds": 60
     }
   }
 }

@@ -120,7 +120,7 @@ export const ACCOUNTS: Account[] = ([
     kind: 'oauth',
     label: 'personal',
     email: 'personal@example.com',
-    status: 'funding_required',
+    status: 'ready',
     routingEnabled: true,
     pools: [{ poolId: 'all', priority: 0 }],
     windows: [win('5h', 0.97, 3 * HOUR + 41 * MINUTE), win('7d', 0.35, 1 * DAY + 18 * HOUR + 12 * MINUTE)],
@@ -145,7 +145,7 @@ export const ACCOUNTS: Account[] = ([
     kind: 'api_key',
     label: 'Console workspace',
     email: null,
-    status: 'ready',
+    status: 'funding_required',
     routingEnabled: true,
     pools: [{ poolId: 'all', priority: 1 }],
     windows: [],
@@ -231,18 +231,21 @@ export const QUOTA_SNAPSHOTS: QuotaSnapshot[] = ACCOUNTS.map((a) => {
       accountId: a.id,
       error: null,
       fetchedAt: ago(2 * DAY + 3 * HOUR),
-      poll: { backoffSince: null, lastAttemptAt: ago(3 * MINUTE), lastCleanAt: ago(2 * DAY + 3 * HOUR), lastOutcome: 'failed', nextAttemptAt: null, rateLimitedInARow: 0 },
+      poll: { backoffSince: null, lastAttemptAt: ago(3 * MINUTE), lastCleanAt: ago(2 * DAY + 3 * HOUR), lastError: 'usage request rejected with status 503', lastOutcome: 'failed', nextAttemptAt: null, rateLimitedInARow: 0 },
       status: 'success',
     };
   }
-  // Past thirty minutes of 429s, so the poll_backoff event on the alerts page is open for this one.
+  // Past thirty minutes of 429s, so the poll_backoff condition holds for this one.
   if (a.id === 'mail') {
+    const nextAttemptAt = ahead(4 * MINUTE);
+    // The hold sentence as the router writes it, its instant cut to whole seconds.
+    const lastError = `the usage endpoint rate-limited the account; next attempt at ${nextAttemptAt.slice(0, 10)} ${nextAttemptAt.slice(11, 19)} UTC`;
     return {
       ...QUOTA_SNAPSHOT_SAMPLE,
       accountId: a.id,
       error: null,
       fetchedAt: ago(47 * MINUTE),
-      poll: { backoffSince: ago(42 * MINUTE), lastAttemptAt: ago(11 * MINUTE), lastCleanAt: ago(47 * MINUTE), lastOutcome: 'rate_limited', nextAttemptAt: ahead(4 * MINUTE), rateLimitedInARow: 6 },
+      poll: { backoffSince: ago(42 * MINUTE), lastAttemptAt: ago(11 * MINUTE), lastCleanAt: ago(47 * MINUTE), lastError, lastOutcome: 'rate_limited', nextAttemptAt, rateLimitedInARow: 6 },
       status: 'success',
     };
   }

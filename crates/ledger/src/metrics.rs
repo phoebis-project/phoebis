@@ -6,12 +6,14 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use axum::http::header::CONTENT_TYPE;
+use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::Router;
 use phoebis_bus::{Bus, SubscriberStats};
 use phoebis_oauth::Clock;
 use phoebis_routing::RouterHandle;
+use phoebis_store::StoreError;
 
 use crate::histogram::{bucket_edges, bucket_index, top_edge, BUCKET_COUNT};
 use crate::pricing::{PriceTable, Pricing};
@@ -184,14 +186,6 @@ impl Metrics {
         );
     }
 
-    pub fn observe_alert_delivery(&self, rule: &str, outcome: &str) {
-        self.add(
-            "phoebis_alert_deliveries_total",
-            vec![("outcome", outcome.into()), ("rule", rule.into())],
-            1.0,
-        );
-    }
-
     pub fn render(
         &self,
         gauges: &RoutingGauges,
@@ -203,8 +197,7 @@ impl Metrics {
         for (name, kind) in FAMILIES.iter().copied() {
             out.push_str(&format!("# TYPE {name} {kind}\n"));
             match name {
-                "phoebis_alert_deliveries_total"
-                | "phoebis_attempts_total"
+                "phoebis_attempts_total"
                 | "phoebis_keepalive_probes_total"
                 | "phoebis_keepalive_saved_usd_total"
                 | "phoebis_ledger_dropped_total"
@@ -224,6 +217,16 @@ impl Metrics {
                     out.push_str(&format!(
                         "phoebis_pricing_unknown_model_total {pricing_unknown}\n"
                     ));
+                }
+                "phoebis_attention" => {
+                    // The kind is one of the reader's own static names, so only the subject needs escaping.
+                    for (kind, subject, holds) in &gauges.attention.conditions {
+                        out.push_str(&format!(
+                            "phoebis_attention{{kind=\"{kind}\",subject=\"{}\"}} {}\n",
+                            escape(subject),
+                            u8::from(*holds)
+                        ));
+                    }
                 }
                 "phoebis_bus_dropped_total" => {
                     for (subscriber, stats) in bus {
@@ -384,8 +387,8 @@ pub const FAMILIES: &[(&str, &str)] = &[
     ("phoebis_account_cooldown_seconds", "gauge"),
     ("phoebis_account_overage_in_use", "gauge"),
     ("phoebis_account_ratelimit_utilization", "gauge"),
-    ("phoebis_alert_deliveries_total", "counter"),
     ("phoebis_attempts_total", "counter"),
+    ("phoebis_attention", "gauge"),
     ("phoebis_bus_dropped_total", "counter"),
     ("phoebis_bus_subscriber_panics_total", "counter"),
     ("phoebis_keepalive_agents", "gauge"),
@@ -411,12 +414,23 @@ pub struct KeepaliveAgents {
 /// crate has no dependency on the keepalive crate, so the binary supplies this instead of a type it can name.
 pub type KeepaliveGaugeSource = Arc<dyn Fn() -> KeepaliveAgents + Send + Sync>;
 
+/// One series per condition the attention reader answers: its kind, its subject, and whether it holds.
+#[derive(Clone, Debug, Default)]
+pub struct AttentionGauges {
+    pub conditions: Vec<(&'static str, String, bool)>,
+}
+
+/// A closure over the attention reader, read fresh on every scrape: the attention crate depends on this one for these
+/// types, so the binary supplies the closure rather than a type the ledger could name.
+pub type AttentionGaugeSource = Arc<dyn Fn() -> Result<AttentionGauges, StoreError> + Send + Sync>;
+
 #[derive(Clone, Debug, Default)]
 pub struct RoutingGauges {
     pub cooldowns: Vec<(String, String, i64)>,
     pub overage: Vec<(String, bool)>,
     pub pins_by_pool: Vec<(String, u64)>,
     pub keepalive_agents: KeepaliveAgents,
+    pub attention: AttentionGauges,
     /// The accounts the registry still holds, for `render` to drop a deleted account's stale utilization
     /// reading rather than scrape it forever.
     pub live_accounts: BTreeSet<String>,
@@ -430,10 +444,12 @@ pub async fn gather(
     now: i64,
     fallback_ms: i64,
     keepalive: Option<&KeepaliveGaugeSource>,
+    attention: AttentionGauges,
 ) -> RoutingGauges {
     let snapshot = router.snapshot();
     let mut gauges = RoutingGauges {
         keepalive_agents: keepalive.map(|k| k()).unwrap_or_default(),
+        attention,
         dropped_reports: router.dropped_reports(),
         ..RoutingGauges::default()
     };
@@ -483,6 +499,7 @@ pub async fn gather(
     gauges
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn metrics_router(
     metrics: Arc<Metrics>,
     router: RouterHandle,
@@ -491,24 +508,44 @@ pub fn metrics_router(
     clock: Clock,
     cooldown_fallback: Duration,
     keepalive: Option<KeepaliveGaugeSource>,
+    attention: Option<AttentionGaugeSource>,
 ) -> Router {
     let fallback_ms = cooldown_fallback.as_millis() as i64;
     Router::new()
         .route(
             "/metrics",
             get(move || {
-                let (metrics, router, pricing, bus, clock, keepalive) = (
+                let (metrics, router, pricing, bus, clock, keepalive, attention) = (
                     metrics.clone(),
                     router.clone(),
                     pricing.clone(),
                     bus.clone(),
                     clock.clone(),
                     keepalive.clone(),
+                    attention.clone(),
                 );
                 async move {
+                    // A scrape answered without the conditions would read 0 for a held one and clear the alarm a
+                    // rule fires on, so the scraper records a failed scrape instead. The listener asks for no
+                    // credential, so the store's words stay in the log.
+                    let attention = match attention.map(|a| a()).transpose() {
+                        Ok(attention) => attention.unwrap_or_default(),
+                        Err(error) => {
+                            tracing::warn!(%error, "the attention read failed; the scrape answers 500");
+                            return (StatusCode::INTERNAL_SERVER_ERROR, "attention read failed")
+                                .into_response();
+                        }
+                    };
                     let table = pricing.current();
-                    let gauges =
-                        gather(&router, &table, clock(), fallback_ms, keepalive.as_ref()).await;
+                    let gauges = gather(
+                        &router,
+                        &table,
+                        clock(),
+                        fallback_ms,
+                        keepalive.as_ref(),
+                        attention,
+                    )
+                    .await;
                     let text = metrics.render(&gauges, &bus.stats(), pricing.unknown_models());
                     (
                         [(CONTENT_TYPE, "text/plain; version=0.0.4; charset=utf-8")],

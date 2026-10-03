@@ -88,8 +88,8 @@ impl LiveFeed {
         feed
     }
 
-    pub fn snapshot(&self, preview: bool) -> LiveSnapshot {
-        self.state.lock().expect(LOCK_POISONED).snapshot(preview)
+    pub fn snapshot(&self) -> LiveSnapshot {
+        self.state.lock().expect(LOCK_POISONED).snapshot()
     }
 
     pub fn past(&self, from: i64, to: i64) -> PastSnapshot {
@@ -110,16 +110,8 @@ impl LiveFeed {
     }
 
     /// Serves one socket until the client goes away, falls behind, its session ends, or the feed shuts down.
-    /// The snapshot and the subscription are taken under one lock so no delta falls between them, and the
-    /// snapshot is built for the socket's role: a viewer's first message carries no more than its later ones
-    /// would.
-    pub async fn attach(
-        &self,
-        socket: WebSocket,
-        preview: bool,
-        alive: SessionCheck,
-        slot: SocketSlot,
-    ) {
+    /// The snapshot and the subscription are taken under one lock so no delta falls between them.
+    pub async fn attach(&self, socket: WebSocket, alive: SessionCheck, slot: SocketSlot) {
         // A logout between the gate and this callback: the close frame and nothing else leaves.
         if !alive() {
             ws::close_ended(socket).await;
@@ -127,14 +119,14 @@ impl LiveFeed {
         }
         let (snapshot, deltas) = {
             let mut state = self.state.lock().expect(LOCK_POISONED);
-            (state.snapshot(preview), self.deltas.subscribe())
+            (state.snapshot(), self.deltas.subscribe())
         };
         let (cancel, clients) = (self.cancel.clone(), self.clients.clone());
         clients.fetch_add(1, Ordering::SeqCst);
         // Tracked, so a shutdown can cancel it and wait: hyper detaches the upgrade task this runs on.
         let served = self.sockets.spawn(async move {
             let _slot = slot;
-            ws::serve(socket, snapshot, deltas, preview, alive, cancel).await;
+            ws::serve(socket, snapshot, deltas, alive, cancel).await;
             clients.fetch_sub(1, Ordering::SeqCst);
         });
         let _ = served.await;

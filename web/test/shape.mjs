@@ -9,8 +9,8 @@ export function shapeOf(v) {
   return typeof v;
 }
 
-/** A `detail` (`AlertEventDetail`/`RequestEvent.detail`, both `Record<string, unknown> | null`) is the wire's
- * free-form object passed through undecoded, its keys per event kind: type only. */
+/** A `detail` (`RequestEvent.detail`, `Record<string, unknown> | null`) is the wire's free-form object passed
+ * through undecoded, its keys per event kind: type only. */
 export const OPAQUE = (path) => path.endsWith('.detail');
 
 /** An open map (`AnalyticsGroup.errors`, `Record<string, number>`) holds one entry per error code observed in

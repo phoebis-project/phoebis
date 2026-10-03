@@ -32,7 +32,7 @@ sed -e "s#/run/secrets/router-storage-key#$HOME/.config/phoebis/storage.key#" \
   -e 's/plain_http: false/plain_http: true/' -e '/^  origin:/d' \
   deploy/config.example.yaml > ~/.config/phoebis/config.yaml
 export PHOEBIS_CONFIG=$HOME/.config/phoebis/config.yaml
-export PHOEBIS_ADMIN_SECRET=$(openssl rand -base64 36) PHOEBIS_VIEWER_SECRET=$(openssl rand -base64 36)
+export PHOEBIS_ADMIN_SECRET=$(openssl rand -base64 36)
 target/release/phoebis
 ```
 
@@ -58,7 +58,7 @@ store is dead ([how](docs/site/installation.md#run-the-container)).
 | [Pairing an account](docs/site/pairing.md) | Pairing an OAuth account through the console or with `curl`. |
 | [Pools, keys, and routing](docs/site/routing.md) | Pace, load shedding, cooldowns, failover, overage. |
 | [Keepalive](docs/site/keepalive.md) | Keeping prompt caches warm: the companion, the gates, the tuning, the cost. |
-| [Statistics and alerts](docs/site/statistics.md) | Ledger, plan meter, views, metrics, live feed, webhook alerts. |
+| [Statistics](docs/site/statistics.md) | Ledger, plan meter, views, metrics, live feed, gauges. |
 | [Operations](docs/site/operations.md) | Backup, storage key, upgrades, client re-pinning, publishing, releasing. |
 | [Changelog](docs/site/changelog.md) | What changed for an operator, by date. |
 

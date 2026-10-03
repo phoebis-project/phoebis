@@ -3,7 +3,6 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { api } from '@/api';
 import type { Account, AccountStatus, PairingPreview, PairingSession, QuotaHistory } from '@/api/types';
-import { useAppSettings } from '@/app/settings';
 import { CatalogDialog } from '@/components/CatalogDialog';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { ChartTooltip, Legend } from '@/components/charts/Tooltip';
@@ -25,7 +24,6 @@ export function AccountsPage() {
   const navigate = useNavigate();
   const accounts = useAsync(() => api.listAccounts(), []);
   const now = useNow();
-  const { canMutate } = useAppSettings();
   const [query, setQuery] = useState('');
   const [status, setStatus] = useState<'all' | AccountStatus>('all');
   const [sort, setSort] = useState<SortKey>('name');
@@ -76,11 +74,9 @@ export function AccountsPage() {
             <option value="status">Status</option>
           </Select>
         </div>
-        {canMutate && (
-          <Button variant="primary" icon={<IconPlus size={14} />} onClick={() => setAddOpen(true)} className="accounts__add">
-            Add account
-          </Button>
-        )}
+        <Button variant="primary" icon={<IconPlus size={14} />} onClick={() => setAddOpen(true)} className="accounts__add">
+          Add account
+        </Button>
         <ul className="account-rows">
           {!accounts.data
             ? accounts.error
@@ -163,7 +159,6 @@ function AccountRow({ account, active, now }: { account: Account; active: boolea
 }
 
 function AccountDetail({ account, now, onToast, onPair, onChanged }: { account: Account; now: number; onChanged: () => void; onPair: (repair: boolean) => void; onToast: (m: string) => void }) {
-  const { canMutate } = useAppSettings();
   const navigate = useNavigate();
   const history = useAsync(() => api.getQuotaHistory(account.id), [account.id]);
   const [busy, setBusy] = useState(false);
@@ -229,11 +224,9 @@ function AccountDetail({ account, now, onToast, onPair, onChanged }: { account: 
             ) : (
               <>
                 {label}
-                {canMutate && (
-                  <button type="button" className="icon-btn" aria-label="Edit label" onClick={() => setEditing(true)}>
-                    <IconPencil size={14} />
-                  </button>
-                )}
+                <button type="button" className="icon-btn" aria-label="Edit label" onClick={() => setEditing(true)}>
+                  <IconPencil size={14} />
+                </button>
               </>
             )}
           </h2>
@@ -263,104 +256,96 @@ function AccountDetail({ account, now, onToast, onPair, onChanged }: { account: 
           )}
         </div>
         <div className="detail__actions">
-          {canMutate && (
-            <>
-              {isOauth ? (
-                <Button variant="primary" disabled={busy} onClick={() => onPair(Boolean(account.credential.refreshTokenExpiresAt))}>
-                  {account.credential.refreshTokenExpiresAt ? 'Re-pair' : 'Pair'}
-                </Button>
-              ) : (
-                <Button
-                  variant="primary"
-                  disabled={busy}
-                  onClick={() =>
-                    act(
-                      'Verify account',
-                      'Sends a models request to the upstream with the stored key and reports the status.',
-                      'Verify',
-                      async () => {
-                        const r = await api.verifyAccount(account.id);
-                        if (!r.ok) throw new Error(`Upstream answered ${r.status}`);
-                      },
-                      'Verify: upstream answered 200',
-                    )
-                  }
-                >
-                  Verify
-                </Button>
-              )}
-              <Button
-                disabled={busy}
-                onClick={() =>
-                  act(
-                    paused ? 'Resume account' : 'Pause account',
-                    'Paused accounts stay in their pools but receive no new sessions. Pinned sessions migrate on their next request.',
-                    paused ? 'Resume' : 'Pause',
-                    paused ? () => api.resumeAccount(account.id) : () => api.pauseAccount(account.id),
-                    paused ? 'Resumed' : 'Paused',
-                  )
-                }
-              >
-                {paused ? 'Resume' : 'Pause'}
-              </Button>
-            </>
+          {isOauth ? (
+            <Button variant="primary" disabled={busy} onClick={() => onPair(Boolean(account.credential.refreshTokenExpiresAt))}>
+              {account.credential.refreshTokenExpiresAt ? 'Re-pair' : 'Pair'}
+            </Button>
+          ) : (
+            <Button
+              variant="primary"
+              disabled={busy}
+              onClick={() =>
+                act(
+                  'Verify account',
+                  'Sends a models request to the upstream with the stored key and reports the status.',
+                  'Verify',
+                  async () => {
+                    const r = await api.verifyAccount(account.id);
+                    if (!r.ok) throw new Error(`Upstream answered ${r.status}`);
+                  },
+                  'Verify: upstream answered 200',
+                )
+              }
+            >
+              Verify
+            </Button>
           )}
+          <Button
+            disabled={busy}
+            onClick={() =>
+              act(
+                paused ? 'Resume account' : 'Pause account',
+                'Paused accounts stay in their pools but receive no new sessions. Pinned sessions migrate on their next request.',
+                paused ? 'Resume' : 'Pause',
+                paused ? () => api.resumeAccount(account.id) : () => api.pauseAccount(account.id),
+                paused ? 'Resumed' : 'Paused',
+              )
+            }
+          >
+            {paused ? 'Resume' : 'Pause'}
+          </Button>
           <Button onClick={() => setCatalogOpen(true)}>Catalog</Button>
-          {canMutate && (
-            <>
-              {account.status === 'funding_required' && (
-                <Button
-                  disabled={busy}
-                  onClick={() =>
-                    act(
-                      'Clear funding flag',
-                      'Overage becomes eligible again on the next request. If the provider still refuses to fund it, the flag comes back with the new reason.',
-                      'Clear',
-                      () => api.clearFunding(account.id),
-                      'Funding flag cleared',
-                    )
-                  }
-                >
-                  Clear funding flag
-                </Button>
-              )}
-              <Button
-                variant="danger"
-                disabled={busy}
-                onClick={() =>
-                  act(
-                    'Disconnect account',
-                    `Deletes ${account.label}'s credential. Pool memberships and request history stay; re-pairing stores the credential again.`,
-                    'Disconnect',
-                    () => api.disconnectAccount(account.id),
-                    'Disconnected',
-                    true,
-                  )
-                }
-              >
-                Disconnect
-              </Button>
-              <Button
-                variant="danger"
-                disabled={busy}
-                onClick={() =>
-                  act(
-                    'Delete account',
-                    `Removes ${account.label} from every pool it is in and deletes it; request history stays in the ledger.`,
-                    'Delete',
-                    async () => {
-                      await api.deleteAccount(account.id);
-                      navigate('/accounts');
-                    },
-                    'Deleted',
-                    true,
-                  )
-                }
-              >
-                Delete account
-              </Button>
-            </>
+          {account.status === 'funding_required' && (
+            <Button
+              disabled={busy}
+              onClick={() =>
+                act(
+                  'Clear funding flag',
+                  'Overage becomes eligible again on the next request. If the provider still refuses to fund it, the flag comes back with the new reason.',
+                  'Clear',
+                  () => api.clearFunding(account.id),
+                  'Funding flag cleared',
+                )
+              }
+            >
+              Clear funding flag
+            </Button>
           )}
+          <Button
+            variant="danger"
+            disabled={busy}
+            onClick={() =>
+              act(
+                'Disconnect account',
+                `Deletes ${account.label}'s credential. Pool memberships and request history stay; re-pairing stores the credential again.`,
+                'Disconnect',
+                () => api.disconnectAccount(account.id),
+                'Disconnected',
+                true,
+              )
+            }
+          >
+            Disconnect
+          </Button>
+          <Button
+            variant="danger"
+            disabled={busy}
+            onClick={() =>
+              act(
+                'Delete account',
+                `Removes ${account.label} from every pool it is in and deletes it; request history stays in the ledger.`,
+                'Delete',
+                async () => {
+                  await api.deleteAccount(account.id);
+                  navigate('/accounts');
+                },
+                'Deleted',
+                true,
+              )
+            }
+          >
+            Delete account
+          </Button>
         </div>
       </header>
 
@@ -379,7 +364,7 @@ function AccountDetail({ account, now, onToast, onPair, onChanged }: { account: 
           className="card--fill"
           actions={
             // Kept while the editor is open, so the card's rows do not jump as the head loses its button.
-            canMutate && isOauth ? (
+            isOauth ? (
               <Button size="sm" disabled={endForm !== null} onClick={() => setEndForm(subscriptionEndFormOf(account))}>
                 Edit end
               </Button>
@@ -499,17 +484,14 @@ function AccountDetail({ account, now, onToast, onPair, onChanged }: { account: 
           busy={busy}
           now={now}
           rows={account.cooldowns.map((c) => ({ accountId: account.id, reason: c.reason, scope: c.scope, until: c.until }))}
-          onClear={
-            canMutate
-              ? (row) =>
-                  act(
-                    'Clear cooldown',
-                    'The account becomes eligible immediately. If the account is still rate limited, the next request re-enters cooldown.',
-                    'Clear',
-                    () => api.clearCooldown(account.id, row.scope),
-                    'Cooldown cleared',
-                  )
-              : undefined
+          onClear={(row) =>
+            act(
+              'Clear cooldown',
+              'The account becomes eligible immediately. If the account is still rate limited, the next request re-enters cooldown.',
+              'Clear',
+              () => api.clearCooldown(account.id, row.scope),
+              'Cooldown cleared',
+            )
           }
         />
         <div className="stack">

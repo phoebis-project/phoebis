@@ -5,7 +5,7 @@ use std::sync::atomic::Ordering;
 use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule};
 use http_body_util::BodyExt;
-use phoebis_store::{AffinitySource, ApiKeyRow, CooldownRow, RulesMode};
+use phoebis_store::{ApiKeyRow, CooldownRow, RulesMode};
 use tower::ServiceExt;
 
 const A: &str = "sk-ant-oat01-AAAAAAAAAAAAAAAA";
@@ -125,8 +125,6 @@ async fn the_listing_answers_the_callers_key_with_each_list_level_applied() {
                 rotated_at: None,
                 last_used_at: None,
                 retired_secret_last_used_at: None,
-                in_flight_cap: None,
-                affinity_source: AffinitySource::Auto,
                 auto_mode_server: None,
             },
             "test",

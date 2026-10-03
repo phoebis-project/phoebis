@@ -1,4 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
+import { api } from '@/api';
+import { createAttentionPoll, type AttentionRead } from './attention';
 
 export interface Loaded<T> {
   data: T | null;
@@ -43,6 +45,17 @@ export function useAsync<T>(load: () => Promise<T>, deps: readonly unknown[] = [
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [...deps, nonce]);
   return { data, error, loading, reload: () => setNonce((n) => n + 1), stale: error !== null || (loadedFor !== null && !sameDeps(loadedFor, deps)) };
+}
+
+const attention = createAttentionPoll(() => api.getAttention());
+
+/**
+ * The conditions that need attention, from one poll however many readers a page mounts: the dashboard's line and
+ * every pool card's rows read the same answer. `useAsync`'s single load would never show a pool exhausting, or a
+ * failure clearing, while the page stays open.
+ */
+export function useAttention(): AttentionRead {
+  return useSyncExternalStore(attention.subscribe, attention.snapshot);
 }
 
 /** A shared clock so every countdown on a page advances in the same tick. */

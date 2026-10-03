@@ -1,6 +1,6 @@
 import type { AccountPatch, KeyInput, PoolEngineFields, PoolInput } from '@/api/client';
-import { AFFINITY_MODE_VALUES, QUOTA_HEADERS_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES } from '@/api/decode';
-import type { Account, AffinitySource, ApiKey, ModelRule, ModelRulesMode, PoolKeepalive } from '@/api/types';
+import { AFFINITY_MODE_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES } from '@/api/decode';
+import type { Account, ApiKey, ModelRule, ModelRulesMode, PoolKeepalive } from '@/api/types';
 import { fmtInt, toLocalInput } from './format';
 import { checkPattern } from './patterns';
 import { MIGRATE_BAND } from './presets';
@@ -80,7 +80,7 @@ export function prefixThresholdRefusal(value: string): string | null {
 }
 
 /** The pool dialog's groups in rail order; a refusal names the one its control sits in. */
-export const POOL_GROUPS = ['identity', 'members', 'keys', 'models', 'autoMode', 'selection', 'placement', 'pinning', 'utilization', 'shedding', 'failover', 'overage', 'cacheTtl', 'keepalive', 'probeTuning', 'responseHeaders', 'bodyCapture', 'cacheDiagnostics'] as const;
+export const POOL_GROUPS = ['identity', 'members', 'keys', 'models', 'autoMode', 'selection', 'placement', 'pinning', 'utilization', 'shedding', 'failover', 'overage', 'cacheTtl', 'keepalive', 'probeTuning', 'bodyCapture', 'cacheDiagnostics'] as const;
 export type PoolGroup = (typeof POOL_GROUPS)[number];
 
 export interface PoolRefusal {
@@ -182,8 +182,6 @@ export function poolRefusals(input: PoolInput, accountIds: ReadonlySet<string>):
 
   for (const key of PROBE_TUNING_KEYS) keepalive('probeTuning', key);
   refuse('probeTuning', KEEPALIVE_FIELD_LABELS.retryMaxSeconds, k.retryMaxSeconds >= k.retrySeconds ? null : 'Retry backoff max (s) is at or above Retry backoff base (s).');
-
-  refuse('responseHeaders', 'Quota headers', QUOTA_HEADERS_VALUES.some((headers) => headers === input.quotaHeaders) ? null : listed('Quota headers'));
   return out;
 }
 
@@ -198,15 +196,12 @@ export type CaptureMode = 'inherit' | 'off' | 'override';
 
 /** The key dialog's fields as the operator leaves them. */
 export interface KeyForm {
-  affinitySource: AffinitySource;
   autoModeServer: AutoModeOverride;
   captureHours: number;
   captureMode: CaptureMode;
   enabled: boolean;
   /** `keep` leaves the stored expiry alone, `never` clears it, and a number is days from the save. */
   expiry: string;
-  /** The number field's text; empty is no cap. */
-  inFlightCap: string;
   longContextTwins: boolean;
   modelRules: ModelRule[];
   modelRulesMode: ModelRulesMode;
@@ -219,7 +214,6 @@ export interface KeyForm {
 /** The dialog's starting fields: the stored key's, or a new key's in `poolId`. */
 export function keyFormOf(existing: ApiKey | null, poolId: string): KeyForm {
   return {
-    affinitySource: existing?.affinitySource ?? 'auto',
     autoModeServer: existing?.autoModeServer == null ? 'inherit' : existing.autoModeServer ? 'on' : 'off',
     captureHours: existing?.bodyCaptureHours || 6,
     captureMode: existing ? (existing.bodyCaptureHours === null ? 'inherit' : existing.bodyCaptureHours === 0 ? 'off' : 'override') : 'inherit',
@@ -227,7 +221,6 @@ export function keyFormOf(existing: ApiKey | null, poolId: string): KeyForm {
     // say nothing about it.
     enabled: existing?.enabled ?? true,
     expiry: existing ? 'keep' : 'never',
-    inFlightCap: existing?.inFlightCap == null ? '' : String(existing.inFlightCap),
     longContextTwins: existing?.longContextTwins ?? true,
     modelRules: existing?.modelRules ?? [],
     modelRulesMode: existing?.modelRulesMode ?? 'extend',
@@ -240,12 +233,10 @@ export function keyFormOf(existing: ApiKey | null, poolId: string): KeyForm {
 
 export function keyInputOf(form: KeyForm, now: number): KeyInput {
   return {
-    affinitySource: form.affinitySource,
     autoModeServer: form.autoModeServer === 'inherit' ? null : form.autoModeServer === 'on',
     bodyCaptureHours: form.captureMode === 'inherit' ? null : form.captureMode === 'off' ? 0 : form.captureHours,
     enabled: form.enabled,
     expiresAt: form.expiry === 'keep' ? undefined : form.expiry === 'never' ? null : new Date(now + Number(form.expiry) * 86_400_000).toISOString(),
-    inFlightCap: form.inFlightCap.trim() === '' ? null : Number(form.inFlightCap),
     keepaliveOptOut: form.optOut,
     longContextTwins: form.longContextTwins,
     modelRules: form.modelRules,
@@ -256,35 +247,23 @@ export function keyInputOf(form: KeyForm, now: number): KeyInput {
   };
 }
 
-/** The key route's bound on `in_flight_cap`, a u32 of at least 1. */
-const KEY_CAP_MAX = 4_294_967_295;
-
-/** Why the key route would refuse the cap field as it stands, or null; empty is no cap. */
-export function inFlightCapRefusal(value: string): string | null {
-  if (value.trim() === '') return null;
-  const n = Number(value);
-  return whole(n, 1, KEY_CAP_MAX) ? null : 'Requests in flight is a whole number of at least 1; leave it empty for no cap.';
-}
-
 /** The key dialog's groups in rail order; a refusal names the one its control sits in. */
 export const KEY_GROUPS = ['key', 'access', 'models', 'sessions', 'capture'] as const;
 export type KeyGroup = (typeof KEY_GROUPS)[number];
 
 export interface KeyRefusal {
-  /** The refused control's accessible name: Name, Pool, Requests in flight, Model rules. */
+  /** The refused control's accessible name: Name, Pool, Model rules. */
   field: string;
   group: KeyGroup;
   text: string;
 }
 
-/** The key dialog's holds in rail order: a missing name or pool, the in-flight cap, the model rules; empty when Save may go. */
-export function keyRefusals(form: Pick<KeyForm, 'inFlightCap' | 'modelRules' | 'name' | 'poolId'>): KeyRefusal[] {
+/** The key dialog's holds in rail order: a missing name or pool, the model rules; empty when Save may go. */
+export function keyRefusals(form: Pick<KeyForm, 'modelRules' | 'name' | 'poolId'>): KeyRefusal[] {
   const out: KeyRefusal[] = [];
   // Trimmed, as `keyInputOf` sends it: a name of spaces reaches the route empty.
   if (!form.name.trim()) out.push({ field: 'Name', group: 'key', text: 'the key needs a name.' });
   if (!form.poolId) out.push({ field: 'Pool', group: 'key', text: 'the key needs a pool.' });
-  const cap = inFlightCapRefusal(form.inFlightCap);
-  if (cap) out.push({ field: 'Requests in flight', group: 'access', text: cap });
   const rules = modelRulesRefusal(form.modelRules);
   if (rules) out.push({ field: 'Model rules', group: 'models', text: rules });
   return out;

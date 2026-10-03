@@ -5,8 +5,8 @@
 #![recursion_limit = "256"]
 
 mod accounts;
-mod alerts;
 mod analytics;
+mod attention;
 mod dashboard;
 mod keepalive;
 mod keys;
@@ -26,7 +26,6 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use phoebis_alerts::Alerts;
 use phoebis_bus::Bus;
 use phoebis_keepalive::{Engine, KeepaliveLimits};
 use phoebis_ledger::{Ledger, Metrics, Pricing};
@@ -42,7 +41,7 @@ use phoebis_transport::control::ControlClient;
 
 pub use readiness::{Readiness, ReadinessSource};
 pub use routes::router;
-pub use session::{AdminSecrets, LoginError, Role, Sessions};
+pub use session::{AdminSecrets, LoginError, Sessions};
 
 // A poisoned vault mutex means a prior panic happened while a pending bundle was being moved, so what
 // is still held, and what was already committed, can no longer be told apart.
@@ -82,13 +81,10 @@ pub struct AdminState {
     pub tables: Arc<phoebis_ledger::PlanTables>,
     pub settings: Arc<SettingsView>,
     pub keepalive: Arc<Engine>,
-    pub alerts: Arc<Alerts>,
+    /// The condition reader the metrics listener scrapes too, so the attention route and a scrape never disagree.
+    pub attention: Arc<phoebis_attention::Attention>,
     /// The same reads `/api/ready` answers from, so `GET /admin/system` and the proxy listener agree.
     pub readiness: Arc<Readiness>,
-    /// Whether a rule may aim its webhook at loopback, a link-local address, or the unspecified address. Off
-    /// everywhere but the test harness, whose receiver is on loopback: the deliverer posts wherever a rule
-    /// points and follows no redirect, so the alert routes are the only place a destination is checked.
-    pub allow_local_webhooks: bool,
 }
 
 /// The running configuration an operator reads back from the admin API. Every secret is left out, and so is
@@ -96,29 +92,19 @@ pub struct AdminState {
 /// at where a credential lives.
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct SettingsView {
-    pub admin_listen: String,
-    pub admin_origin: Option<String>,
     pub body_capture_max_hours: u32,
-    pub cache_diagnostics: bool,
-    pub catalog_cache_seconds: u64,
-    pub catalog_refresh_seconds: u64,
+    /// Not answered by the settings route: the pool and session routes read it to tell whether a cooldown the
+    /// upstream gave no length for still stands.
     pub cooldown_fallback_seconds: u64,
     pub keepalive: KeepaliveLimits,
     pub ledger_path: String,
     pub metrics_listen: String,
-    pub model_rejection_seconds: u64,
     pub pricing_path: Option<String>,
     pub profile: String,
     pub proxy_listen: String,
-    pub quota_sample_retention_days: u32,
-    pub retention_days: u32,
-    pub rollup_retention_days: u32,
     pub session_expire_after_seconds: u64,
-    pub startup_fetch_seconds: u64,
     pub storage_path: String,
     pub usage_cache_ttl_seconds: u64,
-    pub usage_refresh_concurrency: usize,
-    pub viewer_configured: bool,
 }
 
 /// Credentials exchanged during pairing, held between the callback and the operator's confirmation.

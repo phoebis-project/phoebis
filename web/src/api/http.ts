@@ -1,6 +1,6 @@
 import type { AccountPatch, Api, CreateKeyInput, KeyInput, PoolInput } from './client';
 import * as d from './decode';
-import type { Account, AccountCatalog, AccountInput, AlertDeliveryTest, AlertEvent, AlertKind, AlertRule, AlertRuleInput, AnalyticsGroup, AnalyticsPoint, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, LiveEvent, PairingInput, PairingPreview, QuotaSnapshot, RequestDetail, RequestQuery, SessionInfo } from './types';
+import type { Account, AccountCatalog, AccountInput, AnalyticsGroup, AnalyticsPoint, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, LiveEvent, PairingInput, PairingPreview, QuotaSnapshot, RequestDetail, RequestQuery, SessionInfo } from './types';
 
 export class ApiError extends Error {
   code: string | null;
@@ -37,7 +37,11 @@ export const setHooks = (next: Hooks) => {
 /** The one place a failed call is reported from, so the mock build can stand in for the transport too. */
 export const reportFailure = (failure: Failure) => hooks.onFailure(failure);
 
-export async function call<T = unknown>(method: string, path: string, body?: unknown, raw = false): Promise<T> {
+/**
+ * `quiet` keeps a failure from the shell's toast for a read that draws its own failed state and repeats on a schedule,
+ * which would otherwise toast once per tick; a 401 still returns the console to the login.
+ */
+export async function call<T = unknown>(method: string, path: string, body?: unknown, raw = false, { quiet = false }: { quiet?: boolean } = {}): Promise<T> {
   // The login screen draws every refusal of its own route, and the shell that would toast one mounts only after
   // the next login succeeds, where it would report a failure the operator has already read.
   const login = method === 'POST' && path === '/admin/session';
@@ -47,7 +51,7 @@ export async function call<T = unknown>(method: string, path: string, body?: unk
   } catch (e) {
     // A router that never answered: the page below draws its error state, and the hook says which route.
     const message = e instanceof Error ? e.message : String(e);
-    if (!login) reportFailure({ message, path, status: 0 });
+    if (!login && !quiet) reportFailure({ message, path, status: 0 });
     throw new ApiError(0, message, null);
   }
   if (response.status === 204) return undefined as T;
@@ -63,10 +67,10 @@ export async function call<T = unknown>(method: string, path: string, body?: unk
     const message = answered ?? `${method} ${path} answered ${response.status}`;
     if (!login) {
       if (response.status === 401) hooks.onUnauthorized();
-      else if (response.status === 403) hooks.onForbidden(message);
+      else if (response.status === 403 && !quiet) hooks.onForbidden(message);
       // A 404 is how the routes answer for a request or a body the router never kept, which the page reading
       // it draws as a state of its own; everything else is a failure the operator has to be told about.
-      else if (response.status !== 404) reportFailure({ message: answered, path, status: response.status });
+      else if (response.status !== 404 && !quiet) reportFailure({ message: answered, path, status: response.status });
     }
     throw new ApiError(response.status, message, response.headers.get('x-phoebis-error-code'));
   }
@@ -105,7 +109,6 @@ export class HttpApi implements Api {
   };
   confirmPairing = (pairingId: string) => call<void>('POST', `/admin/oauth/sessions/${enc(pairingId)}/confirm`);
   createAccount = async (input: AccountInput): Promise<Account> => d.decodeAccount(await call('POST', '/admin/accounts', { id: input.id, kind: input.kind, label: input.label, secret: input.secret }));
-  createAlertRule = async (input: AlertRuleInput): Promise<AlertRule> => d.decodeAlertRule(await call('POST', '/admin/alerts/rules', d.encodeRule(input)));
   createKey = async (input: CreateKeyInput): Promise<CreatedApiKey> => {
     const expires_at = input.expiresInDays === null ? null : Date.now() + input.expiresInDays * 86_400_000;
     const r = await call<Record<string, unknown>>('POST', '/admin/keys', { ...d.encodeKey(input), expires_at, id: slug(input.name) });
@@ -113,7 +116,6 @@ export class HttpApi implements Api {
   };
   createPool = async (input: PoolInput) => d.decodePool(await call('POST', '/admin/pools', { ...d.encodePool(input), id: slug(input.name) }));
   deleteAccount = (accountId: string) => call<void>('DELETE', `/admin/accounts/${enc(accountId)}`);
-  deleteAlertRule = (id: string) => call<void>('DELETE', `/admin/alerts/rules/${enc(id)}`);
   deleteKey = (id: string) => call<void>('DELETE', `/admin/keys/${enc(id)}`);
   deletePool = (id: string) => call<void>('DELETE', `/admin/pools/${enc(id)}`);
   disconnectAccount = (accountId: string) => call<void>('DELETE', `/admin/accounts/${enc(accountId)}/credentials`);
@@ -122,6 +124,7 @@ export class HttpApi implements Api {
   getAnalyticsBurn = async (r: Pick<AnalyticsQuery, 'from' | 'to'>, groupBy: BurnGroup) => d.decodeBurn(await call('GET', `/admin/analytics/burn${qs({ group_by: groupBy, range: range(r.from, r.to) })}`));
   getAnalyticsRewrites = async (r: Pick<AnalyticsQuery, 'from' | 'to'>) => d.decodeRewrites(await call('GET', `/admin/analytics/rewrites${qs({ range: range(r.from, r.to) })}`));
   getAnalyticsSeries = async (q: AnalyticsQuery): Promise<AnalyticsPoint[]> => (await call<{ points: unknown[] }>('GET', `/admin/analytics/series${analytics(q)}`)).points.map(d.decodeAnalyticsPoint);
+  getAttention = async () => (await call<{ items: unknown[] }>('GET', '/admin/attention', undefined, false, { quiet: true })).items.map(d.decodeAttention);
   getCapturedBodies = async (requestId: string) => {
     try {
       return d.decodeBodies(await call('GET', `/admin/requests/${enc(requestId)}/bodies`));
@@ -149,15 +152,12 @@ export class HttpApi implements Api {
     const response = await fetch('/admin/session', { credentials: 'same-origin' });
     if (response.status === 401) return null;
     if (!response.ok) throw new ApiError(response.status, `GET /admin/session answered ${response.status}`, null);
-    const r = (await response.json()) as { role: string; session_id: string };
-    return { role: r.role === 'viewer' ? 'viewer' : 'admin', sessionId: r.session_id };
+    const r = (await response.json()) as { session_id: string };
+    return { sessionId: r.session_id };
   };
   getSettings = async () => d.decodeSettings(await call('GET', '/admin/settings'));
   listAccountRollups = async (from: string, to: string) => d.decodeAccountRollups(await call('GET', `/admin/analytics/accounts?range=${range(from, to)}`));
   listAccounts = async () => (await call<{ accounts: unknown[] }>('GET', '/admin/accounts')).accounts.map(d.decodeAccount);
-  listAlertDeliveries = async (eventId: string) => (await call<{ deliveries: unknown[] }>('GET', `/admin/alerts/events/${enc(eventId)}/deliveries`)).deliveries.map(d.decodeDelivery);
-  listAlertEvents = async (state?: 'open' | 'resolved'): Promise<AlertEvent[]> => (await call<{ events: unknown[] }>('GET', `/admin/alerts/events${qs({ state })}`)).events.map(d.decodeAlertEvent);
-  listAlertRules = async () => (await call<{ rules: unknown[] }>('GET', '/admin/alerts/rules')).rules.map(d.decodeAlertRule);
   listCatalog = async (): Promise<CatalogModel[]> => {
     // The decoded status folds a disconnected account into 'unpaired' along with one never paired; both are
     // the accounts a catalog fetch has nothing to ask.
@@ -167,7 +167,6 @@ export class HttpApi implements Api {
   listCatalogOf = async (accountIds: string[]): Promise<CatalogModel[]> => catalogUnion(await Promise.all(accountIds.map((id) => this.getAccountCatalog(id).catch(() => null))));
   listKeepaliveRecipes = async () => (await call<{ recipes: unknown[] }>('GET', '/admin/keepalive/recipes')).recipes.map(d.decodeRecipe);
   listKeys = async () => (await call<{ keys: unknown[] }>('GET', '/admin/keys')).keys.map(d.decodeKey);
-  listLifecycleDeliveries = async (kind?: AlertKind, cursor?: string) => d.decodeLifecyclePage(await call('GET', `/admin/alerts/deliveries${qs({ cursor, kind })}`));
   listPools = async () => (await call<{ pools: unknown[] }>('GET', '/admin/pools')).pools.map(d.decodePool);
   listQuotaSnapshots = async (): Promise<QuotaSnapshot[]> => {
     const accounts = (await this.listAccounts()).filter((a) => a.kind === 'oauth');
@@ -199,7 +198,6 @@ export class HttpApi implements Api {
   };
   releaseSession = (keyId: string, sessionId: string) => call<void>('POST', `/admin/sessions/${enc(keyId)}/${enc(sessionId)}/release`);
   renameAccount = async (accountId: string, label: string) => d.decodeAccount(await call('PATCH', `/admin/accounts/${enc(accountId)}`, { label }));
-  resolveAlertEvent = async (id: string) => d.decodeAlertEvent(await call('POST', `/admin/alerts/events/${enc(id)}/resolve`));
   resumeAccount = (accountId: string) => call<void>('POST', `/admin/accounts/${enc(accountId)}/resume`);
   revokeKey = (id: string) => call<void>('POST', `/admin/keys/${enc(id)}/revoke`);
   rotateKey = async (id: string): Promise<CreatedApiKey> => {
@@ -269,12 +267,7 @@ export class HttpApi implements Api {
       socket?.close();
     };
   };
-  testAlertRule = async (id: string): Promise<AlertDeliveryTest> => {
-    const r = await call<Record<string, unknown>>('POST', `/admin/alerts/rules/${enc(id)}/test`);
-    return { error: (r.error as string | null) ?? null, status: typeof r.status === 'number' ? r.status : null };
-  };
   updateAccount = async (accountId: string, patch: AccountPatch) => d.decodeAccount(await call('PATCH', `/admin/accounts/${enc(accountId)}`, d.encodeAccountPatch(patch)));
-  updateAlertRule = async (id: string, input: AlertRuleInput) => d.decodeAlertRule(await call('PATCH', `/admin/alerts/rules/${enc(id)}`, d.encodeRule(input)));
   updateKey = async (id: string, input: KeyInput): Promise<ApiKey> => d.decodeKey(await call('PATCH', `/admin/keys/${enc(id)}`, d.encodeKey(input)));
   // One write, so a refused member list cannot leave the settings saved behind a dialog that reports a failure.
   updatePool = async (id: string, input: PoolInput) => d.decodePool(await call('PATCH', `/admin/pools/${enc(id)}`, d.encodePool(input)));

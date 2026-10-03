@@ -1,6 +1,6 @@
 //! The acceptance row "Live feed": the snapshot's in-flight set equals the relay's; started, head, progress,
 //! finished arrive in order; a client that stops reading is disconnected after 1,024 queued messages and the
-//! relay is unaffected; the viewer role never receives a preview.
+//! relay is unaffected; every client receives the preview.
 mod common;
 use std::time::Duration;
 
@@ -110,7 +110,7 @@ async fn a_client_gets_the_relays_in_flight_set_then_the_deltas_of_a_streamed_re
         (h.feed.in_flight() == 1).then_some(())
     })
     .await;
-    let mut client = connect(&h, true).await;
+    let mut client = connect(&h).await;
     let first = next_event(&mut client).await;
     assert_live_event_shape(&first);
     assert_eq!(first["kind"], "snapshot");
@@ -270,7 +270,7 @@ async fn a_client_that_stops_reading_is_disconnected_and_the_relay_is_unaffected
     }])
     .await;
     let h = harness(&up, 0).await;
-    let mut client = connect(&h, true).await;
+    let mut client = connect(&h).await;
     let _snapshot = next_event(&mut client).await;
     wait_for(Duration::from_secs(5), || {
         (h.feed.clients() == 1).then_some(())
@@ -320,7 +320,7 @@ async fn a_client_that_stops_reading_is_disconnected_and_the_relay_is_unaffected
         assert_eq!(resp.status(), 200);
         let _ = resp.into_body().collect().await.unwrap();
     }
-    let mut again = connect(&h, true).await;
+    let mut again = connect(&h).await;
     let snapshot = next_event(&mut again).await;
     assert_eq!(snapshot["snapshot"]["recent"].as_array().unwrap().len(), 20);
     assert_eq!(
@@ -333,7 +333,7 @@ async fn a_client_that_stops_reading_is_disconnected_and_the_relay_is_unaffected
 }
 
 #[tokio::test]
-async fn the_preview_reaches_admin_clients_only_and_is_dropped_at_completion() {
+async fn the_preview_reaches_every_client_and_is_dropped_at_completion() {
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
         respond: Respond::Sse {
@@ -345,8 +345,8 @@ async fn the_preview_reaches_admin_clients_only_and_is_dropped_at_completion() {
     }])
     .await;
     let h = harness(&up, 24).await;
-    // Preview text accumulates on a stalled request before any viewer connects: the snapshot a viewer then
-    // receives must not carry it, while an admin's does.
+    // Preview text accumulates on a stalled request before the client connects: the snapshot it then receives
+    // carries it.
     up.set_rule_after(
         0,
         "/v1/messages",
@@ -366,25 +366,18 @@ async fn the_preview_reaches_admin_clients_only_and_is_dropped_at_completion() {
         (h.feed.in_flight() == 1).then_some(())
     })
     .await;
-    h.bus.publish(phoebis_bus::Event::ResponseChunk(phoebis_bus::ResponseChunk { request_id: h.feed.snapshot(true).in_flight[0].id.clone(), attempt: 1, index: 0, body: bytes::Bytes::from_static(b"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"already streamed\"}}\n\n"), phase: None }));
+    h.bus.publish(phoebis_bus::Event::ResponseChunk(phoebis_bus::ResponseChunk { request_id: h.feed.snapshot().in_flight[0].id.clone(), attempt: 1, index: 0, body: bytes::Bytes::from_static(b"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"already streamed\"}}\n\n"), phase: None }));
     wait_for(Duration::from_secs(5), || {
-        h.feed.snapshot(true).in_flight[0].preview.clone()
+        h.feed.snapshot().in_flight[0].preview.clone()
     })
     .await;
-    let mut late_viewer = connect(&h, false).await;
-    let first = next_event(&mut late_viewer).await;
-    assert!(
-        first["snapshot"]["in_flight"][0]["preview"].is_null(),
-        "a viewer's snapshot carries no preview text"
-    );
-    let mut late_admin = connect(&h, true).await;
-    let first = next_event(&mut late_admin).await;
+    let mut late = connect(&h).await;
+    let first = next_event(&mut late).await;
     assert_eq!(
         first["snapshot"]["in_flight"][0]["preview"],
         "already streamed"
     );
-    send_close(&mut late_viewer).await;
-    send_close(&mut late_admin).await;
+    send_close(&mut late).await;
     up.release();
     let _ = stalled.await.unwrap().into_body().collect().await;
     up.set_rule_after(
@@ -397,10 +390,8 @@ async fn the_preview_reaches_admin_clients_only_and_is_dropped_at_completion() {
             delay_between: Duration::from_millis(2),
         },
     );
-    let mut admin = connect(&h, true).await;
-    let mut viewer = connect(&h, false).await;
-    let _ = next_event(&mut admin).await;
-    let _ = next_event(&mut viewer).await;
+    let mut client = connect(&h).await;
+    let _ = next_event(&mut client).await;
     let resp = h
         .app
         .clone()
@@ -409,23 +400,14 @@ async fn the_preview_reaches_admin_clients_only_and_is_dropped_at_completion() {
         .unwrap();
     let id = request_id(&resp);
     let _ = resp.into_body().collect().await.unwrap();
-    let admin_deltas = until_delta(&mut admin, &id, "finished").await;
-    let previews: String = admin_deltas
+    let deltas = until_delta(&mut client, &id, "finished").await;
+    let previews: String = deltas
         .iter()
         .filter(|d| d["type"] == "preview")
         .map(|d| d["chunk"].as_str().unwrap())
         .collect();
     assert_eq!(previews, "hello world", "the output text, as it streamed");
-    let viewer_deltas = until_delta(&mut viewer, &id, "finished").await;
-    assert!(
-        viewer_deltas.iter().all(|d| d["type"] != "preview"),
-        "the viewer role never receives a preview"
-    );
-    assert!(
-        viewer_deltas.iter().any(|d| d["type"] == "progress"),
-        "everything else reaches the viewer"
-    );
-    let snapshot = h.feed.snapshot(true);
+    let snapshot = h.feed.snapshot();
     assert!(
         snapshot.recent.iter().all(|r| r.preview.is_none()),
         "the preview is dropped at completion"
@@ -433,8 +415,7 @@ async fn the_preview_reaches_admin_clients_only_and_is_dropped_at_completion() {
     let past = h.feed.past(0, i64::MAX);
     assert_eq!(past.entries.len(), 2);
     assert!(past.density.iter().map(|b| b.requests).sum::<u64>() == 2);
-    send_close(&mut admin).await;
-    send_close(&mut viewer).await;
+    send_close(&mut client).await;
     up.shutdown().await;
 }
 
@@ -443,7 +424,7 @@ async fn a_request_whose_completion_the_bus_dropped_is_lost_after_the_ttl_and_a_
 ) {
     let up = FakeUpstream::start(vec![]).await;
     let h = harness(&up, 0).await;
-    let mut client = connect(&h, true).await;
+    let mut client = connect(&h).await;
     let _ = next_event(&mut client).await;
     // Two requests observed and headed; their completions never come. One keeps sending chunks.
     for id in ["lost", "busy"] {
@@ -480,7 +461,7 @@ async fn a_request_whose_completion_the_bus_dropped_is_lost_after_the_ttl_and_a_
         1,
         "the stream that kept sending is still in flight"
     );
-    let snapshot = h.feed.snapshot(true);
+    let snapshot = h.feed.snapshot();
     assert_eq!(snapshot.in_flight[0].id, "busy");
     assert!(
         snapshot.recent.iter().all(|r| r.id != "lost"),
@@ -511,7 +492,7 @@ async fn a_request_whose_completion_the_bus_dropped_is_lost_after_the_ttl_and_a_
         .publish(chunk("busy", 15, bytes::Bytes::from_static(b"x")));
     wait_for(Duration::from_secs(5), || {
         h.feed
-            .snapshot(true)
+            .snapshot()
             .in_flight
             .iter()
             .any(|r| r.id == "busy" && r.bytes_relayed >= 4)
@@ -532,7 +513,7 @@ async fn a_request_whose_completion_the_bus_dropped_is_lost_after_the_ttl_and_a_
     let ids = wait_for(Duration::from_secs(10), || {
         let ids: Vec<String> = h
             .feed
-            .snapshot(true)
+            .snapshot()
             .in_flight
             .iter()
             .map(|r| r.id.clone())
@@ -557,7 +538,7 @@ async fn a_check_that_fails_before_the_snapshot_sends_only_the_close() {
     let up = FakeUpstream::start(vec![]).await;
     let h = harness(&up, 0).await;
     h.alive.store(false, std::sync::atomic::Ordering::SeqCst);
-    let mut client = connect(&h, true).await;
+    let mut client = connect(&h).await;
     let closed = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             match client.next().await {
@@ -582,7 +563,7 @@ async fn a_check_that_fails_before_the_snapshot_sends_only_the_close() {
 async fn an_ended_session_drops_its_queued_backlog_ahead_of_the_close() {
     let up = FakeUpstream::start(vec![]).await;
     let h = harness(&up, 24).await;
-    let mut client = connect(&h, true).await;
+    let mut client = connect(&h).await;
     let _ = next_event(&mut client).await;
     h.bus.publish(observed("backlog", NOW, 24));
     h.alive.store(false, std::sync::atomic::Ordering::SeqCst);
@@ -619,7 +600,7 @@ async fn an_ended_session_drops_its_queued_backlog_ahead_of_the_close() {
 async fn a_socket_open_at_shutdown_is_closed_within_the_bound() {
     let up = FakeUpstream::start(vec![]).await;
     let h = harness(&up, 0).await;
-    let mut client = connect(&h, true).await;
+    let mut client = connect(&h).await;
     let _ = next_event(&mut client).await;
     tokio::time::timeout(Duration::from_secs(2), h.feed.shutdown())
         .await

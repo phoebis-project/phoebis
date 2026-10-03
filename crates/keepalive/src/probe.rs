@@ -214,7 +214,7 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
     let request = request
         .header(header::CONTENT_LENGTH, job.recipe.body.len())
         .body(Body::from(job.recipe.body.clone()));
-    let marker = crate::probe_marker(&engine, &job.key.0, job.key_generation);
+    let marker = crate::probe_marker(&job.key.0, job.key_generation);
     let exchange = match request {
         Err(_) => Exchange::Answered(ProbeResult {
             status: 0,

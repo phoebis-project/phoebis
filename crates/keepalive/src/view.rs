@@ -18,7 +18,6 @@ pub enum ViewReason {
     Cooled,
     IdleLimit,
     NetNegative,
-    OauthUnverified,
     Overage,
     Paused,
     PoolExhausted,
@@ -45,7 +44,6 @@ pub fn view_reason(reason: Reason) -> Option<ViewReason> {
         Cooled => ViewReason::Cooled,
         IdleLimit => ViewReason::IdleLimit,
         NetNegative => ViewReason::NetNegative,
-        OauthUnverified => ViewReason::OauthUnverified,
         Overage => ViewReason::Overage,
         Paused | PoolDisabled | KeepaliveOff | OptedOut | KeyOptedOut | IneligibleCredential
         | SubagentsOff => ViewReason::Paused,

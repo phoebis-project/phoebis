@@ -4,8 +4,8 @@ import { api } from '@/api';
 import { useSession } from '@/app/session';
 import { useAppSettings, type ThemeChoice } from '@/app/settings';
 import { useAsync } from '@/lib/hooks';
-import { Badge, Button, Segmented, Toast, Toggle } from '@/components/ui/primitives';
-import { IconActivity, IconBell, IconChart, IconGauge, IconGrid, IconKey, IconLayers, IconList, IconMonitor, IconMoon, IconSessions, IconShield, IconSliders, IconSun, IconUser } from '@/components/ui/icons';
+import { Button, Segmented, Toast, Toggle } from '@/components/ui/primitives';
+import { IconActivity, IconChart, IconGauge, IconGrid, IconKey, IconLayers, IconList, IconMonitor, IconMoon, IconSessions, IconShield, IconSliders, IconSun, IconUser } from '@/components/ui/icons';
 import { Mark } from '@/components/ui/Mark';
 
 const NAV: { icon: ReactNode; label: string; to: string }[] = [
@@ -19,14 +19,12 @@ const NAV: { icon: ReactNode; label: string; to: string }[] = [
   { to: '/requests', label: 'Requests', icon: <IconList size={16} /> },
   { to: '/analytics', label: 'Analytics', icon: <IconChart size={16} /> },
   { to: '/sessions', label: 'Sessions', icon: <IconSessions size={16} /> },
-  { to: '/alerts', label: 'Alerts', icon: <IconBell size={16} /> },
   { to: '/settings', label: 'Settings', icon: <IconSliders size={16} /> },
 ];
 
 export const PAGE_TITLES: Record<string, string> = {
   '/': 'Dashboard',
   '/accounts': 'Accounts',
-  '/alerts': 'Alerts',
   '/analytics': 'Analytics',
   '/keys': 'Keys',
   '/models': 'Models',
@@ -41,7 +39,7 @@ export const PAGE_TITLES: Record<string, string> = {
 export function Shell() {
   const { pathname } = useLocation();
   const { expertView, setExpertView, setTheme, theme } = useAppSettings();
-  const { clearToast, logout, role, toast } = useSession();
+  const { clearToast, logout, toast } = useSession();
   const settings = useAsync(() => api.getSettings(), []);
   const [navOpen, setNavOpen] = useState(false);
   const base = `/${pathname.split('/')[1] ?? ''}`;
@@ -84,9 +82,6 @@ export function Shell() {
           </button>
           <h1 className="topbar__title">{title}</h1>
           <div className="topbar__right">
-            <Badge tone={role === 'admin' ? 'accent' : 'neutral'} title={role === 'admin' ? 'Admin secret: full read and write' : 'Viewer secret: read everything except captured bodies, live previews, question text, and webhook URLs beyond their host'}>
-              {role}
-            </Badge>
             <Button variant="ghost" size="sm" aria-label="Log out" onClick={() => void logout()}>
               Log out
             </Button>

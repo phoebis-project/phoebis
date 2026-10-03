@@ -1,15 +1,16 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { api } from '@/api';
-import type { AffinitySource, ApiKey, CreatedApiKey, KeyModels, KeyStatus, ModelRule, ModelRulesMode, Pool } from '@/api/types';
-import { useAppSettings } from '@/app/settings';
+import type { ApiKey, CreatedApiKey, KeyModels, KeyStatus, ModelRule, ModelRulesMode, Pool } from '@/api/types';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { PatternEditor, useCatalogSuggestions } from '@/components/PatternEditor';
 import { IconInfo, IconPlus, IconWarning } from '@/components/ui/icons';
-import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, ErrorState, Field, GroupedDialog, Input, Menu, PageLink, SearchInput, Segmented, Select, Skeleton, Toast, Toggle, type DialogGroup } from '@/components/ui/primitives';
+import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, ErrorState, Expert, Field, GroupedDialog, Input, Menu, PageLink, SearchInput, Segmented, Select, Skeleton, Toast, Toggle, type DialogGroup } from '@/components/ui/primitives';
+import { anchorOf } from '@/lib/attention';
 import { fmtAbsolute, fmtCompact, fmtDate, fmtInt, fmtRelative, fmtUsd } from '@/lib/format';
 import { KEY_GROUPS, keyFormOf, keyInputOf, keyRefusals, type AutoModeOverride, type CaptureMode, type KeyGroup } from '@/lib/forms';
 import { useAsync, useNow, type Loaded } from '@/lib/hooks';
+import { scrollToElement } from '@/lib/scroll';
 
 const STATUS_TONE: Record<KeyStatus, 'critical' | 'good' | 'neutral' | 'warning'> = { active: 'good', disabled: 'warning', expired: 'neutral', revoked: 'critical' };
 const isKeyGroup = (value: string | null): value is KeyGroup => value !== null && (KEY_GROUPS as readonly string[]).includes(value);
@@ -22,25 +23,16 @@ const MODES: { label: string; value: ModelRulesMode }[] = [
   { label: 'Replace pool rules', value: 'replace' },
 ];
 const RETIRED_SECRET_HINT = 'Sessions whose newest request presented the previous secret; a session that registered a companion and sent no request since counts as switched.';
-// The dialog's hint for the cap, less its page link, so the table's tooltip says the same.
-const IN_FLIGHT_CAP_HINT = 'Past this many requests at once the key is refused with a 429 and a Retry-After until one finishes; empty means no cap.';
-// The climb's own order, which Automatic runs.
-const AFFINITY_SOURCES: { label: string; value: AffinitySource }[] = [
-  { label: 'Automatic', value: 'auto' },
-  { label: 'Session id', value: 'session' },
-  { label: 'User id', value: 'user_id' },
-  { label: 'Conversation content', value: 'content' },
-  { label: 'Whole key', value: 'whole_key' },
-];
 
 export function KeysPage() {
   const keys = useAsync(() => api.listKeys(), []);
   const pools = useAsync(() => api.listPools(), []);
   const now = useNow();
   const ink = useChartInk();
-  const { canMutate } = useAppSettings();
   const location = useLocation();
   const navigate = useNavigate();
+  const pageRef = useRef<HTMLDivElement>(null);
+  const landed = useRef<string | null>(null);
   const [query, setQuery] = useState('');
   const [status, setStatus] = useState<'all' | KeyStatus>('all');
   const [dialog, setDialog] = useState<{ initialGroup: KeyGroup | null; key: ApiKey | null } | null>(null);
@@ -50,8 +42,7 @@ export function KeysPage() {
   const [toast, setToast] = useState<string | null>(null);
 
   // The address opens the dialog on a named group once the key list has loaded; the entry is then replaced by the
-  // bare route, so closing the dialog, a reload or Back does not open it again. A viewer's address is cleared without
-  // a dialog or a toast, since the Edit action it stands in for is admin-only.
+  // bare route, so closing the dialog, a reload or Back does not open it again.
   useEffect(() => {
     const params = new URLSearchParams(location.search);
     const edit = params.get('edit');
@@ -61,14 +52,13 @@ export function KeysPage() {
     params.delete('group');
     const search = params.toString();
     navigate({ hash: location.hash, pathname: location.pathname, search: search ? `?${search}` : '' }, { replace: true });
-    if (!canMutate) return;
     const key = keys.data.find((k) => k.id === edit);
     if (!key) {
       setToast(`Key ${edit} not found`);
       return;
     }
     setDialog({ initialGroup: isKeyGroup(group) ? group : 'key', key });
-  }, [canMutate, keys.data, location, navigate]);
+  }, [keys.data, location, navigate]);
 
   const poolList = useMemo(() => pools.data ?? [], [pools.data]);
   const poolById = useMemo(() => new Map(poolList.map((p) => [p.id, p])), [poolList]);
@@ -106,6 +96,36 @@ export function KeysPage() {
     [keys.data, poolFilter, query, status],
   );
 
+  // `/keys#<key id>` lands on the row once the keys have drawn it, whenever the list arrives after the mount, and once
+  // per arrival, since the page's own address rewrites keep the hash. A filter that would hide the row is cleared
+  // first, and the next run finds the row drawn. The row is looked up inside this page, so an id such as `root` cannot
+  // name the app's container.
+  useEffect(() => {
+    if (location.hash === landed.current) return;
+    const id = anchorOf(location.hash);
+    if (id === null) {
+      landed.current = location.hash;
+      return;
+    }
+    if (!keys.data?.some((k) => k.id === id)) return;
+    if (!rows.some((k) => k.id === id)) {
+      setQuery('');
+      setStatus('all');
+      if (poolParam !== null) {
+        const params = new URLSearchParams(location.search);
+        params.delete('pool');
+        const search = params.toString();
+        navigate({ hash: location.hash, pathname: location.pathname, search: search ? `?${search}` : '' }, { replace: true });
+      }
+      return;
+    }
+    const row = [...(pageRef.current?.querySelectorAll<HTMLElement>('tbody tr') ?? [])].find((el) => el.id === id);
+    if (!row) return;
+    landed.current = location.hash;
+    scrollToElement(row);
+    row.focus({ preventScroll: true });
+  }, [keys.data, location.hash, location.pathname, location.search, navigate, poolParam, rows]);
+
   const totals = keys.data
     ? {
         keys: keys.data.length,
@@ -128,7 +148,7 @@ export function KeysPage() {
   };
 
   return (
-    <div className="stack">
+    <div className="stack" ref={pageRef}>
       <div className="stat-grid">
         <Tile label="Keys" value={totals ? fmtInt(totals.keys) : null} />
         <Tile label="Active" value={totals ? fmtInt(totals.active) : null} />
@@ -182,11 +202,9 @@ export function KeysPage() {
                 </option>
               ))}
             </Select>
-            {canMutate && (
-              <Button variant="primary" icon={<IconPlus size={14} />} onClick={() => setDialog({ initialGroup: null, key: null })} style={{ marginLeft: 'auto' }}>
-                Create key
-              </Button>
-            )}
+            <Button variant="primary" icon={<IconPlus size={14} />} onClick={() => setDialog({ initialGroup: null, key: null })} style={{ marginLeft: 'auto' }}>
+              Create key
+            </Button>
           </div>
           <div className="table-wrap">
             <table className="table">
@@ -199,7 +217,7 @@ export function KeysPage() {
                   <th className="right">Usage, 7d</th>
                   <th>Expiry</th>
                   <th>Status</th>
-                  {canMutate && <th />}
+                  <th />
                 </tr>
               </thead>
               <tbody>
@@ -220,7 +238,7 @@ export function KeysPage() {
                         </tr>
                       ))
                   : rows.map((k) => (
-                      <tr key={k.id}>
+                      <tr key={k.id} id={k.id} tabIndex={-1} className="key-row">
                         <td>
                           <b>{k.name}</b>
                           <span className="sub">
@@ -233,11 +251,6 @@ export function KeysPage() {
                             )}
                           </span>
                           {k.keepaliveOptOut && <span className="sub">keepalive off</span>}
-                          {k.inFlightCap !== null && (
-                            <span className="sub" title={IN_FLIGHT_CAP_HINT}>
-                              at most {fmtInt(k.inFlightCap)} in flight
-                            </span>
-                          )}
                         </td>
                         <td className="mono">{k.prefix}…</td>
                         <td className="mono">{k.poolId}</td>
@@ -259,60 +272,58 @@ export function KeysPage() {
                             </span>
                           )}
                         </td>
-                        {canMutate && (
-                          <td className="right">
-                            <Menu
-                              items={[
-                                { label: 'Edit', onClick: () => setDialog({ initialGroup: null, key: k }) },
-                                {
-                                  label: 'Rotate',
-                                  onClick: () =>
-                                    setConfirm({
-                                      title: `Rotate ${k.name}`,
-                                      body: 'A new secret is issued and shown once. The old secret keeps working for 15 minutes so running sessions can switch.',
-                                      label: 'Rotate',
-                                      onConfirm: () =>
-                                        void run(async () => {
-                                          setCreated({ key: await api.rotateKey(k.id), title: 'Key rotated' });
-                                        }),
-                                    }),
-                                },
-                                {
-                                  label: 'Revoke',
-                                  disabled: k.status !== 'active',
-                                  onClick: () =>
-                                    setConfirm({
-                                      title: `Revoke ${k.name}`,
-                                      body: 'Requests with this key are rejected immediately. Its history stays in the ledger.',
-                                      label: 'Revoke',
-                                      danger: true,
-                                      onConfirm: () =>
-                                        void run(async () => {
-                                          await api.revokeKey(k.id);
-                                          setToast('Key revoked');
-                                        }),
-                                    }),
-                                },
-                                {
-                                  label: 'Delete',
-                                  danger: true,
-                                  onClick: () =>
-                                    setConfirm({
-                                      title: `Delete ${k.name}`,
-                                      body: 'Removes the key and detaches its request history from the key name. This cannot be undone.',
-                                      label: 'Delete',
-                                      danger: true,
-                                      onConfirm: () =>
-                                        void run(async () => {
-                                          await api.deleteKey(k.id);
-                                          setToast('Key deleted');
-                                        }),
-                                    }),
-                                },
-                              ]}
-                            />
-                          </td>
-                        )}
+                        <td className="right">
+                          <Menu
+                            items={[
+                              { label: 'Edit', onClick: () => setDialog({ initialGroup: null, key: k }) },
+                              {
+                                label: 'Rotate',
+                                onClick: () =>
+                                  setConfirm({
+                                    title: `Rotate ${k.name}`,
+                                    body: 'A new secret is issued and shown once. The old secret keeps working for 15 minutes so running sessions can switch.',
+                                    label: 'Rotate',
+                                    onConfirm: () =>
+                                      void run(async () => {
+                                        setCreated({ key: await api.rotateKey(k.id), title: 'Key rotated' });
+                                      }),
+                                  }),
+                              },
+                              {
+                                label: 'Revoke',
+                                disabled: k.status !== 'active',
+                                onClick: () =>
+                                  setConfirm({
+                                    title: `Revoke ${k.name}`,
+                                    body: 'Requests with this key are rejected immediately. Its history stays in the ledger.',
+                                    label: 'Revoke',
+                                    danger: true,
+                                    onConfirm: () =>
+                                      void run(async () => {
+                                        await api.revokeKey(k.id);
+                                        setToast('Key revoked');
+                                      }),
+                                  }),
+                              },
+                              {
+                                label: 'Delete',
+                                danger: true,
+                                onClick: () =>
+                                  setConfirm({
+                                    title: `Delete ${k.name}`,
+                                    body: 'Removes the key and detaches its request history from the key name. This cannot be undone.',
+                                    label: 'Delete',
+                                    danger: true,
+                                    onConfirm: () =>
+                                      void run(async () => {
+                                        await api.deleteKey(k.id);
+                                        setToast('Key deleted');
+                                      }),
+                                  }),
+                              },
+                            ]}
+                          />
+                        </td>
                       </tr>
                     ))}
               </tbody>
@@ -394,8 +405,6 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing
   const [modelRules, setModelRules] = useState<ModelRule[]>([]);
   const [modelRulesMode, setModelRulesMode] = useState<ModelRulesMode>('extend');
   const [expiry, setExpiry] = useState('never');
-  const [inFlightCap, setInFlightCap] = useState('');
-  const [affinitySource, setAffinitySource] = useState<AffinitySource>('auto');
   const [autoModeServer, setAutoModeServer] = useState<AutoModeOverride>('inherit');
   const [notes, setNotes] = useState('');
   const [captureMode, setCaptureMode] = useState<CaptureMode>('inherit');
@@ -411,14 +420,13 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing
   const maxHours = settings.data?.retention.bodyCaptureMaxHours ?? 72;
   const effectiveHours = captureMode === 'inherit' ? poolHours : captureMode === 'off' ? 0 : captureHours;
   const suggestions = useCatalogSuggestions(pool?.members.map((m) => m.accountId) ?? [], open);
-  const refusals = keyRefusals({ inFlightCap, modelRules, name, poolId });
+  const refusals = keyRefusals({ modelRules, name, poolId });
   const refusedFields = new Set(refusals.map((r) => r.field));
   const refusedGroups = new Set<KeyGroup>(refusals.map((r) => r.group));
   const invalid = (field: string) => (refusedFields.has(field) ? true : undefined);
   const refusalOf = (field: string) => refusals.find((r) => r.field === field)?.text ?? null;
   const first = refusals[0] ?? null;
   const rulesRefusal = refusalOf('Model rules');
-  const capRefusal = refusalOf('Requests in flight');
   const processed = useAsync(() => (open && existing ? api.getKeyModels(existing.id) : Promise.resolve(null)), [open, existing?.id]);
 
   // Once per opening: the address can open the dialog before the pool list lands, and a reset on its arrival would
@@ -434,8 +442,6 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing
     setModelRules(form.modelRules);
     setModelRulesMode(form.modelRulesMode);
     setExpiry(form.expiry);
-    setInFlightCap(form.inFlightCap);
-    setAffinitySource(form.affinitySource);
     setAutoModeServer(form.autoModeServer);
     setNotes(form.notes);
     setCaptureMode(form.captureMode);
@@ -451,14 +457,14 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing
   }, [existing, open, poolId, pools]);
 
   // The server's words leave with the next edit to any field; a failed save changes none, so they stand until then.
-  useEffect(() => setError(null), [affinitySource, autoModeServer, captureHours, captureMode, enabled, expiry, inFlightCap, longContextTwins, modelRules, modelRulesMode, name, notes, optOut, poolId]);
+  useEffect(() => setError(null), [autoModeServer, captureHours, captureMode, enabled, expiry, longContextTwins, modelRules, modelRulesMode, name, notes, optOut, poolId]);
 
   const moving = existing !== null && poolId !== existing.poolId;
 
   const submit = async () => {
     setBusy(true);
     setError(null);
-    const form = { affinitySource, autoModeServer, captureHours, captureMode, enabled, expiry, inFlightCap, longContextTwins, modelRules, modelRulesMode, name, notes, optOut, poolId };
+    const form = { autoModeServer, captureHours, captureMode, enabled, expiry, longContextTwins, modelRules, modelRulesMode, name, notes, optOut, poolId };
     const input = keyInputOf(form, Date.now());
     try {
       if (existing) {
@@ -547,71 +553,53 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing
             {existing && <option value="never">No expiration</option>}
           </Select>
         </Field>
-        <Field label="Server-side auto mode" hint="Inherit follows the pool. Off drops the client's server-side tool-use checks on this key, so the client reviews with classifier requests of its own; On keeps them whatever the pool says.">
-          <Select value={autoModeServer} onChange={(e) => setAutoModeServer(e.target.value as AutoModeOverride)} aria-label="Server-side auto mode">
-            <option value="inherit">Inherit ({pool?.autoModeServer === false ? 'off' : 'on'}, the pool&apos;s setting)</option>
-            <option value="on">On</option>
-            <option value="off">Off</option>
-          </Select>
-        </Field>
-        <Field
-          label="Requests in flight"
-          hint={
-            <>
-              {IN_FLIGHT_CAP_HINT} The pool&apos;s cap per member is under Failover on the <PageLink to="/pools">Pools page</PageLink>.
-            </>
-          }
-        >
-          <Input type="number" min={1} step={1} value={inFlightCap} onChange={(e) => setInFlightCap(e.target.value)} placeholder="No cap" aria-label="Requests in flight" aria-invalid={invalid('Requests in flight')} />
-        </Field>
-        {capRefusal && refusalCallout(capRefusal)}
+        <Expert>
+          <Field label="Server-side auto mode" hint="Inherit follows the pool. Off drops the client's server-side tool-use checks on this key, so the client reviews with classifier requests of its own; On keeps them whatever the pool says.">
+            <Select value={autoModeServer} onChange={(e) => setAutoModeServer(e.target.value as AutoModeOverride)} aria-label="Server-side auto mode">
+              <option value="inherit">Inherit ({pool?.autoModeServer === false ? 'off' : 'on'}, the pool&apos;s setting)</option>
+              <option value="on">On</option>
+              <option value="off">Off</option>
+            </Select>
+          </Field>
+        </Expert>
       </div>
     ),
     models: (
       <div className="cells">
         {/* Field's frame without its label element: a label forwards a click on its text to the first control
-            inside, which here would flip the mode. */}
+            inside, which here would press Add rule or flip the first row. */}
         <Field
           label="Model rules"
           plain
           hint={
             <>
-              Top to bottom, first match wins. Under Extend the pool&apos;s rules, in grey, apply after this key&apos;s own; under Replace they do not apply. The <PageLink to="/models">Models page</PageLink> shows the list per key.
+              Top to bottom, first match wins. The <PageLink to="/models">Models page</PageLink> shows the list per key.
             </>
           }
         >
-          {/* Its own block, so the segmented control keeps its content width. */}
-          <div>
-            <Segmented<ModelRulesMode> ariaLabel="How this key's rules meet the pool's" value={modelRulesMode} options={MODES} onChange={setModelRulesMode} />
-          </div>
           <PatternEditor label="Model rules" value={modelRules} onChange={setModelRules} inherited={modelRulesMode === 'extend' ? (pool?.modelRules ?? []) : []} suggestions={suggestions} />
         </Field>
         {rulesRefusal && refusalCallout(rulesRefusal)}
-        <Field label="List [1m] twins in the models listing" beside hint="Claude Code sizes its context window by the id; the twin lets it use the long-context window the upstream reports.">
-          <Toggle checked={longContextTwins} onChange={setLongContextTwins} label="List [1m] twins in the models listing" />
-        </Field>
+        <Expert>
+          {/* Field's frame without its label element: a label forwards a click on its text to the first control
+              inside, which here would flip the mode. */}
+          <Field label="Pool rules" plain hint="Extend applies the pool's rules, in grey, after this key's own; Replace applies this key's rules alone.">
+            {/* Its own block, so the segmented control keeps its content width. */}
+            <div>
+              <Segmented<ModelRulesMode> ariaLabel="How this key's rules meet the pool's" value={modelRulesMode} options={MODES} onChange={setModelRulesMode} />
+            </div>
+          </Field>
+        </Expert>
+        <Expert>
+          <Field label="List [1m] twins in the models listing" beside hint="Claude Code sizes its context window by the id; the twin lets it use the long-context window the upstream reports.">
+            <Toggle checked={longContextTwins} onChange={setLongContextTwins} label="List [1m] twins in the models listing" />
+          </Field>
+        </Expert>
         {existing && <EffectiveList processed={processed} />}
       </div>
     ),
     sessions: (
       <div className="cells">
-        <Field
-          label="Affinity source"
-          hint={
-            <>
-              What names a conversation for pinning. Automatic takes the first of: the session id, a parent id the client sends back, the user id, the messages, the key. A fixed source uses that alone, and a request without it gets no pin. How long a pin lasts is the pool&apos;s Session affinity on the{' '}
-              <PageLink to="/pools">Pools page</PageLink>.
-            </>
-          }
-        >
-          <Select value={affinitySource} onChange={(e) => setAffinitySource(e.target.value as AffinitySource)} aria-label="Affinity source">
-            {AFFINITY_SOURCES.map((s) => (
-              <option key={s.value} value={s.value}>
-                {s.label}
-              </option>
-            ))}
-          </Select>
-        </Field>
         <Field
           label="Cache warming opt-out"
           beside

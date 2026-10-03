@@ -1,24 +1,24 @@
 import type { AccountPatch, Api, CreateKeyInput, KeyInput, PoolInput } from '@/api/client';
-import { AFFINITY_MODE_VALUES, AFFINITY_SOURCE_VALUES, QUOTA_HEADERS_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES, decodeLiveDelta, decodeLiveSnapshot } from '@/api/decode';
+import { AFFINITY_MODE_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES, decodeLiveDelta, decodeLiveSnapshot } from '@/api/decode';
 import { ApiError, catalogUnion, slug } from '@/api/http';
 import type {
-  Account, AccountCatalog, AccountInput, AlertDeliveryTest, AlertEvent, AlertKind, AlertRule, AlertRuleInput, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, Delivery, KeyModels, LifecycleDelivery, LifecyclePage, LiveEvent, MemberEligibility, ModelEvent,
-  ModelRule, ModelsState, PairingInput, PairingPreview, PairingSession, Pool, PoolMember, RequestDetail, RequestLog, RequestPage, RequestQuery, Role, RuleCooldown, Session, SessionInfo, Settings, Subscription,
+  Account, AccountCatalog, AccountInput, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, KeyModels, LiveEvent, MemberEligibility, ModelEvent,
+  ModelRule, ModelsState, PairingInput, PairingPreview, PairingSession, Pool, PoolMember, RequestDetail, RequestLog, RequestPage, RequestQuery, RuleCooldown, Session, SessionInfo, Settings, Subscription,
 } from '@/api/types';
-import { urlHost } from '@/lib/format';
 import { modelRulesRefusal, type NumericKeepaliveKey } from '@/lib/forms';
 import { matchesPattern } from '@/lib/pattern';
 import { matchesPattern as matchesModelPattern, processRules } from '@/lib/patterns';
 import { isFastScope } from '@/lib/quota';
 import { ACCOUNTS, QUOTA_HISTORY, QUOTA_SNAPSHOTS } from './accounts';
 import { breakdownOf, burnOf, placementsOf, rewritesOf, seriesOf } from './analytics';
+import { ATTENTION } from './attention';
 import { CATALOG } from './catalog';
 import { liveFeed } from './live';
-import { ALERT_EVENTS, ALERT_RULES, KEEPALIVE_OVERVIEW, LIFECYCLE_DELIVERIES, RECIPES, SESSIONS, SETTINGS } from './operations';
+import { KEEPALIVE_OVERVIEW, RECIPES, SESSIONS, SETTINGS } from './operations';
 import { KEYS, POOLS } from './pools';
 import { ACCOUNT_ROLLUPS, ALL_ROLLUPS, REQUEST_EVENTS, REQUESTS, capturedBodiesFor, requestById } from './requests';
 import { createRng } from './rng';
-import { ACCOUNT_SAMPLE, ALERT_RULE_SAMPLE, KEY_SAMPLE, PAIRING_SAMPLE, POOL_SAMPLE } from './samples';
+import { ACCOUNT_SAMPLE, KEY_SAMPLE, PAIRING_SAMPLE, POOL_SAMPLE } from './samples';
 import { DAY, MINUTE, NOW, ago, ahead, iso } from './time';
 
 // Fixed, like the live feed's draw: a pass over the mock reads the same secrets every run.
@@ -28,18 +28,8 @@ const MOCK_SEED = 4_211;
 const latency = <T,>(value: T, ms = 120): Promise<T> => new Promise((resolve) => setTimeout(() => resolve(value), ms));
 
 // The routes' own wording, so a page draws the text the router would have sent.
-const VIEWER_WRITE = 'the viewer role cannot change anything';
-const VIEWER_BODIES = 'captured bodies are for administrators';
 const KEY_TAKEN = 'a key with this id exists';
 const POOL_TAKEN = 'a pool with this id exists';
-
-/** The part of the rule check a dialog can reach, in the route's order and wording; create and edit share it. */
-const ruleRefusal = (input: AlertRuleInput): string | null => {
-  if (input.kind !== 'utilization_above') return null;
-  if (input.threshold === null || !(input.threshold >= 0 && input.threshold <= 1)) return 'utilization_above needs a threshold between 0 and 1';
-  if (input.windowId === null) return 'utilization_above needs a window of 5h, 7d, or 7d_oi';
-  return null;
-};
 
 /**
  * The policy check's bounds in its own order and wording, written out apart from the form's table so a form that
@@ -66,17 +56,13 @@ const rulesRefusal = (rules: ModelRule[] | undefined): string | null =>
   rules === undefined ? null : modelRulesRefusal(rules);
 
 /**
- * The key routes read the list, the mode, the cap, then the affinity source, so a body wrong in
- * two is refused for the first. An absent field is the stored one, or the default on a create.
+ * The key routes read the list, then the mode, so a body wrong in both is refused for the list. An absent field is the
+ * stored one, or the default on a create.
  */
-const keyRulesRefusal = (input: Partial<Pick<KeyInput, 'affinitySource' | 'inFlightCap' | 'modelRules' | 'modelRulesMode'>>): string | null => {
+const keyRulesRefusal = (input: Partial<Pick<KeyInput, 'modelRules' | 'modelRulesMode'>>): string | null => {
   const mode = input.modelRulesMode;
   const rules = rulesRefusal(input.modelRules) ?? (mode === undefined || mode === 'extend' || mode === 'replace' ? null : 'model_rules_mode is extend or replace');
   if (rules) return rules;
-  if (input.inFlightCap === 0) return 'in_flight_cap is at least 1';
-  if (input.affinitySource !== undefined && !AFFINITY_SOURCE_VALUES.some((a) => a === input.affinitySource)) {
-    return 'affinity_source must be auto, session, user_id, content, or whole_key';
-  }
   return null;
 };
 
@@ -95,12 +81,11 @@ const engineRefusal = (input: PoolInput): string | null => {
   return null;
 };
 
-/** The pin, placement and quota header spellings, in the order and words of the pool routes; an absent field is kept. */
+/** The pin and placement spellings, in the order and words of the pool routes; an absent field is kept. */
 const affinityRefusal = (input: Partial<PoolInput>): string | null => {
   if (input.affinityMode !== undefined && !AFFINITY_MODE_VALUES.some((mode) => mode === input.affinityMode)) return 'affinity_mode must be always or when_cached';
   if (input.subagentPlacement !== undefined && !SUBAGENT_PLACEMENT_VALUES.some((p) => p === input.subagentPlacement)) return 'subagent_placement must be by_cohort, by_strategy, or with_main';
   if (input.sessionPlacement !== undefined && !SESSION_PLACEMENT_VALUES.some((p) => p === input.sessionPlacement)) return 'session_placement must be by_strategy or by_warm_prefix';
-  if (input.quotaHeaders !== undefined && !QUOTA_HEADERS_VALUES.some((h) => h === input.quotaHeaders)) return 'quota_headers must be hide or pass';
   return null;
 };
 
@@ -170,42 +155,31 @@ const MODEL_REJECTIONS = modelEvents('model_rejected');
 const MODEL_PERMITS = modelEvents('model_permitted');
 
 /**
- * The signed-in role, which outlives a reload the way the router's session cookie does: the smoke runner writes
+ * The signed-in mark, which outlives a reload the way the router's session cookie does: the smoke runner writes
  * it so every mount starts signed in, and a login writes it so a browser pass that loads each view by URL stays
  * signed in.
  */
 const SEEDED_SESSION_KEY = 'phoebis.mockSession';
-const seededRole = (): Role | null => {
+const MOCK_SESSION: SessionInfo = { sessionId: 'mock-admin' };
+const seededSession = (): boolean => {
   try {
-    const role = localStorage.getItem(SEEDED_SESSION_KEY);
-    return role === null ? null : role === 'viewer' ? 'viewer' : 'admin';
+    return localStorage.getItem(SEEDED_SESSION_KEY) !== null;
   } catch {
-    return null;
+    return false;
   }
 };
-const seedRole = (role: Role | null) => {
+const seedSession = (signedIn: boolean) => {
   try {
-    if (role === null) localStorage.removeItem(SEEDED_SESSION_KEY);
-    else localStorage.setItem(SEEDED_SESSION_KEY, role);
+    if (signedIn) localStorage.setItem(SEEDED_SESSION_KEY, 'admin');
+    else localStorage.removeItem(SEEDED_SESSION_KEY);
   } catch {
     // No storage (the Node tests): the session lives on the instance alone.
   }
 };
 
-/** The role the mock build previews, which outranks the session's the way the console's own reading of it does. */
-const PREVIEW_ROLE_KEY = 'phoebis.role';
-const previewedRole = (): Role | null => {
-  try {
-    const role = localStorage.getItem(PREVIEW_ROLE_KEY);
-    return role === 'admin' || role === 'viewer' ? role : null;
-  } catch {
-    return null;
-  }
-};
-
-/** Set to stand in for a fresh installation, whose alert lists are empty until an operator writes a rule. */
-const EMPTY_STORE_KEY = 'phoebis.mockEmpty';
-const emptyStore = (): boolean => {
+/** Set to stand in for a fresh installation, whose lists are empty. */
+export const EMPTY_STORE_KEY = 'phoebis.mockEmpty';
+export const emptyStore = (): boolean => {
   try {
     return localStorage.getItem(EMPTY_STORE_KEY) === '1';
   } catch {
@@ -223,17 +197,6 @@ function fromCallbackUrl(url: string): { code: string; state: string } | null {
   const code = params.get('code');
   const state = params.get('state');
   return code && state ? { code, state } : null;
-}
-
-/**
- * What the events route hands a caller: the question text came out of a captured body, so past that body's deadline
- * it is gone for every role, and before it a viewer, who may not read the body either, gets it blanked with a flag.
- */
-function questionFor(e: AlertEvent, viewer: boolean): AlertEvent {
-  if (e.detail === null || !('question' in e.detail)) return e;
-  const expiresAt = e.detail.question_expires_at;
-  if (typeof expiresAt === 'number' && Date.now() >= expiresAt) return { ...e, detail: { ...e.detail, question: null } };
-  return viewer ? { ...e, detail: { ...e.detail, question: null, question_redacted: true } } : e;
 }
 
 /** A flag outranks the enabled bit and the cooldowns in the status the account view folds, so pausing never hides one. */
@@ -330,24 +293,9 @@ function isAfterCursor(r: RequestLog, cursor: string): boolean {
   return rowAt < at || (rowAt === at && r.id < id);
 }
 
-/** The lifecycle route's cursor is the same `<at>:<id>` shape, but the delivery id is the table's integer key
- * rather than the request's string one, so the tie-break compares numbers. */
-function isAfterLifecycleCursor(d: LifecycleDelivery, cursor: string): boolean {
-  const sep = cursor.indexOf(':');
-  const at = Number(cursor.slice(0, sep));
-  const id = Number(cursor.slice(sep + 1));
-  const rowAt = Date.parse(d.at);
-  return rowAt < at || (rowAt === at && d.id < id);
-}
-
 export class MockApi implements Api {
   private accounts = ACCOUNTS.map((a) => ({ ...a }));
-  private events: AlertEvent[] = ALERT_EVENTS.map((e) => ({ ...e }));
   private keys: ApiKey[] = [...KEYS];
-  private lifecycle: LifecycleDelivery[] = LIFECYCLE_DELIVERIES.map((d) => ({ ...d }));
-  // Public so a check can set its own page size; the default sits below the nine-row seed so the control renders
-  // in the mock bundle without extra setup, while a smoke check that wants the route's own cap sets it to 500.
-  lifecyclePageSize = 6;
   private pairings = new Map<string, { accountId: string; state: string }>();
   // The route reads every member's kind and verdict afresh on each answer; the story's are read once, at load.
   private pools: Omit<Pool, 'keys'>[] = POOLS.map((p) => ({
@@ -357,21 +305,10 @@ export class MockApi implements Api {
       return { ...m, budgetUntil: budgetUntilOf(m, Date.now()), eligible: eligibilityOf(account, p.overagePolicy, m), kind: account?.kind ?? 'oauth' };
     }),
   }));
-  private rules: AlertRule[] = ALERT_RULES.map((r) => ({ ...r }));
   private secretRng = createRng(MOCK_SEED);
   private session: SessionInfo | null = null;
   private sessions: Session[] = [...SESSIONS];
   private settings: Settings = { ...SETTINGS };
-
-  /** The role the console is drawn for: a preview first, as the session provider reads it, then the signed-in one. */
-  private role(): Role | null {
-    return previewedRole() ?? this.session?.role ?? seededRole();
-  }
-
-  /** The gate's refusal of a write to anyone but the admin; the writes it lets a viewer through never call this. */
-  private mutation(): void {
-    if (this.role() !== 'admin') throw new ApiError(403, VIEWER_WRITE, null);
-  }
 
   private token(n: number) {
     return Array.from({ length: n }, () => 'abcdefghijklmnopqrstuvwxyz0123456789'[this.secretRng.int(0, 35)]).join('');
@@ -420,13 +357,11 @@ export class MockApi implements Api {
   }
 
   async cancelPairing(pairingId: string) {
-    this.mutation();
     this.pairings.delete(pairingId);
     return latency(undefined, 150);
   }
 
   async clearCooldown(accountId: string, scope: string) {
-    this.mutation();
     const a = this.account(accountId);
     const cooldowns = a.cooldowns.filter((c) => c.scope !== scope);
     this.putAccount({ ...a, cooldowns, status: cooling(cooldowns) ? a.status : 'ready' });
@@ -434,14 +369,12 @@ export class MockApi implements Api {
   }
 
   async clearFunding(accountId: string) {
-    this.mutation();
     const a = this.account(accountId);
     this.putAccount({ ...a, extraUsage: a.extraUsage ? { ...a.extraUsage, disabledReason: null } : null, status: a.status === 'funding_required' ? 'ready' : a.status });
     return latency(undefined, 200);
   }
 
   async completePairing(pairingId: string, input: PairingInput): Promise<PairingPreview> {
-    this.mutation();
     const submitted = 'url' in input ? fromCallbackUrl(input.url) : input;
     if (!submitted) throw new Error('That URL carries no authorization code and state. Paste the whole address the browser landed on, or the code on its own.');
     // The router refuses a callback whose state does not belong to the pairing the id names.
@@ -452,13 +385,11 @@ export class MockApi implements Api {
   }
 
   async confirmPairing(pairingId: string) {
-    this.mutation();
     this.pairings.delete(pairingId);
     return latency(undefined, 250);
   }
 
   async createAccount(input: AccountInput): Promise<Account> {
-    this.mutation();
     const account: Account = {
       ...ACCOUNT_SAMPLE,
       cooldowns: [],
@@ -482,17 +413,7 @@ export class MockApi implements Api {
     return latency(account, 300);
   }
 
-  async createAlertRule(input: AlertRuleInput): Promise<AlertRule> {
-    this.mutation();
-    const refusal = ruleRefusal(input);
-    if (refusal) throw new ApiError(400, refusal, null);
-    const rule: AlertRule = { ...ALERT_RULE_SAMPLE, createdAt: iso(NOW), enabled: input.enabled, hasSecret: Boolean(input.secret), id: `rule_${this.token(6)}`, kind: input.kind, scope: input.scope, threshold: input.threshold, updatedAt: iso(NOW), webhookUrl: input.webhookUrl, windowId: input.windowId };
-    this.rules = [...this.rules, rule];
-    return latency(rule, 250);
-  }
-
   async createKey(input: CreateKeyInput): Promise<CreatedApiKey> {
-    this.mutation();
     // The client sends the id it derives from the name, so a name already taken is an id already taken.
     const id = slug(input.name);
     if (this.keys.some((k) => k.id === id)) throw new ApiError(409, KEY_TAKEN, null);
@@ -507,7 +428,6 @@ export class MockApi implements Api {
       prefix: secret.slice(0, 12),
       poolId: input.poolId,
       // The route's defaults for a body that leaves these fields out, which a caller outside the console may.
-      affinitySource: input.affinitySource ?? 'auto',
       autoModeServer: input.autoModeServer ?? null,
       longContextTwins: input.longContextTwins ?? true,
       modelRules: input.modelRules ?? [],
@@ -515,7 +435,6 @@ export class MockApi implements Api {
       status: 'active',
       createdAt: iso(NOW),
       expiresAt: input.expiresInDays ? iso(NOW + input.expiresInDays * DAY) : null,
-      inFlightCap: input.inFlightCap ?? null,
       keepaliveOptOut: input.keepaliveOptOut,
       lastUsedAt: null,
       notes: input.notes,
@@ -528,7 +447,6 @@ export class MockApi implements Api {
   }
 
   async createPool(input: PoolInput): Promise<Pool> {
-    this.mutation();
     const id = slug(input.name);
     if (this.pools.some((p) => p.id === id)) throw new ApiError(409, POOL_TAKEN, null);
     const refusal = poolRefusal(input);
@@ -555,27 +473,18 @@ export class MockApi implements Api {
   }
 
   async deleteAccount(accountId: string) {
-    this.mutation();
     this.account(accountId);
     this.accounts = this.accounts.filter((a) => a.id !== accountId);
     this.pools = this.pools.map((p) => ({ ...p, members: p.members.filter((m) => m.accountId !== accountId) }));
     return latency(undefined, 250);
   }
 
-  async deleteAlertRule(id: string) {
-    this.mutation();
-    this.rules = this.rules.filter((r) => r.id !== id);
-    return latency(undefined, 200);
-  }
-
   async deleteKey(id: string) {
-    this.mutation();
     this.keys = this.keys.filter((k) => k.id !== id);
     return latency(undefined, 200);
   }
 
   async deletePool(id: string) {
-    this.mutation();
     // A key reaches only its own pool's members, so a pool cannot leave while keys still point at it.
     if (this.keys.some((k) => k.poolId === id)) return Promise.reject(new ApiError(409, 'pool still has keys', null));
     this.pools = this.pools.filter((p) => p.id !== id);
@@ -583,7 +492,6 @@ export class MockApi implements Api {
   }
 
   async disconnectAccount(accountId: string) {
-    this.mutation();
     const a = this.account(accountId);
     // The route drops the credential and leaves the identity, so the row still says whose it was.
     this.putAccount({ ...a, credential: { accessTokenExpiresAt: null, lastError: null, lastRefreshAt: null, quarantined: false, refreshTokenExpiresAt: null }, status: 'unpaired' });
@@ -615,9 +523,12 @@ export class MockApi implements Api {
     return latency(seriesOf(ALL_ROLLUPS, query));
   }
 
+  /** The story's conditions, or none for a fresh installation. */
+  getAttention() {
+    return latency(emptyStore() ? [] : ATTENTION);
+  }
+
   async getCapturedBodies(requestId: string) {
-    // The bodies route checks the role itself: it is the one read the gate would let a viewer through to.
-    if (this.role() !== 'admin') throw new ApiError(403, VIEWER_BODIES, null);
     const r = requestById.get(requestId);
     return latency(r ? capturedBodiesFor(r) : null);
   }
@@ -713,8 +624,7 @@ export class MockApi implements Api {
 
   getSession(): Promise<SessionInfo | null> {
     if (this.session) return latency(this.session, 60);
-    const role = seededRole();
-    return latency(role ? { role, sessionId: `mock-${role}` } : null, 60);
+    return latency(seededSession() ? MOCK_SESSION : null, 60);
   }
 
   getSettings() {
@@ -729,23 +639,6 @@ export class MockApi implements Api {
 
   listAccounts() {
     return latency(this.accounts);
-  }
-
-  listAlertDeliveries(eventId: string): Promise<Delivery[]> {
-    return latency(this.events.find((e) => e.id === eventId)?.deliveries ?? []);
-  }
-
-  listAlertEvents(state?: 'open' | 'resolved') {
-    const stored = emptyStore() ? [] : this.events;
-    const viewer = this.role() !== 'admin';
-    const events = stored.map((e) => questionFor(e, viewer));
-    return latency(state ? events.filter((e) => e.state === state) : events);
-  }
-
-  listAlertRules() {
-    const rules = emptyStore() ? [] : this.rules;
-    // A webhook URL can carry the receiver's credential in its path, so the route answers a viewer the host alone.
-    return latency(this.role() === 'admin' ? rules : rules.map((r) => ({ ...r, webhookUrl: urlHost(r.webhookUrl) })));
   }
 
   listCatalog() {
@@ -773,17 +666,6 @@ export class MockApi implements Api {
     return latency(this.keys);
   }
 
-  listLifecycleDeliveries(kind?: AlertKind, cursor?: string): Promise<LifecyclePage> {
-    const rows = emptyStore() ? [] : this.lifecycle.filter((d) => kind === undefined || d.kind === kind);
-    const sorted = [...rows].sort((a, b) => Date.parse(b.at) - Date.parse(a.at) || b.id - a.id);
-    const after = cursor ? sorted.filter((d) => isAfterLifecycleCursor(d, cursor)) : sorted;
-    const page = after.slice(0, this.lifecyclePageSize);
-    const last = page[page.length - 1];
-    // The route's own rule: a full page carries a cursor even when nothing lies beyond it, so a page exactly the
-    // seed's size still says so, the way an operator's log can land on that boundary too.
-    return latency({ deliveries: page, nextCursor: page.length === this.lifecyclePageSize && last ? `${Date.parse(last.at)}:${last.id}` : null });
-  }
-
   listPools() {
     return latency(this.pools.map((p) => this.poolView(p)));
   }
@@ -808,20 +690,19 @@ export class MockApi implements Api {
   }
 
   login(secret: string): Promise<SessionInfo> {
-    if (secret !== 'admin' && secret !== 'viewer') return Promise.reject(new ApiError(401, 'that secret does not match', null));
-    this.session = { role: secret, sessionId: `mock-${secret}` };
-    seedRole(secret);
+    if (secret !== 'admin') return Promise.reject(new ApiError(401, 'that secret does not match', null));
+    this.session = MOCK_SESSION;
+    seedSession(true);
     return latency(this.session, 200);
   }
 
   logout() {
     this.session = null;
-    seedRole(null);
+    seedSession(false);
     return latency(undefined, 150);
   }
 
   async pauseAccount(accountId: string) {
-    this.mutation();
     const a = this.account(accountId);
     this.putAccount({ ...a, routingEnabled: false, status: statusOf(a, false) });
     return latency(undefined, 250);
@@ -832,41 +713,27 @@ export class MockApi implements Api {
   }
 
   async releaseSession(keyId: string, sessionId: string) {
-    this.mutation();
     this.sessions = this.sessions.filter((s) => !(s.keyId === keyId && s.sessionId === sessionId && !s.historical));
     return latency(undefined, 250);
   }
 
   async renameAccount(accountId: string, label: string) {
-    this.mutation();
     return latency(this.putAccount({ ...this.account(accountId), label }), 250);
   }
 
-  async resolveAlertEvent(id: string): Promise<AlertEvent> {
-    this.mutation();
-    const event = this.events.find((e) => e.id === id);
-    if (!event) return Promise.reject(new ApiError(404, 'alert event not found', null));
-    const next: AlertEvent = { ...event, resolvedAt: iso(NOW), state: 'resolved' };
-    this.events = this.events.map((e) => (e.id === id ? next : e));
-    return latency(next, 250);
-  }
-
   async resumeAccount(accountId: string) {
-    this.mutation();
     const a = this.account(accountId);
     this.putAccount({ ...a, routingEnabled: true, status: statusOf(a, true) });
     return latency(undefined, 250);
   }
 
   async revokeKey(id: string) {
-    this.mutation();
     // The route switches a revoked key off in the same write, and an edit sends that flag back.
     this.keys = this.keys.map((k) => (k.id === id ? { ...k, enabled: false, status: 'revoked' as const } : k));
     return latency(undefined, 250);
   }
 
   async rotateKey(id: string): Promise<CreatedApiKey> {
-    this.mutation();
     const key = this.keys.find((k) => k.id === id);
     if (!key) return Promise.reject(new ApiError(404, 'key not found', null));
     const secret = `phoebis-${this.token(40)}`;
@@ -876,7 +743,6 @@ export class MockApi implements Api {
   }
 
   async startPairing(accountId: string): Promise<PairingSession> {
-    this.mutation();
     const state = this.token(24);
     // The router names the pairing with an id of its own; the state only ever travels through the browser.
     const id = `pair_${this.token(10)}`;
@@ -902,16 +768,8 @@ export class MockApi implements Api {
     });
   }
 
-  async testAlertRule(id: string): Promise<AlertDeliveryTest> {
-    this.mutation();
-    const rule = this.rules.find((r) => r.id === id);
-    if (!rule) return Promise.reject(new ApiError(404, 'alert rule not found', null));
-    return latency({ error: null, status: 200 }, 400);
-  }
-
   /** The account route's refusals in its order and words; the end is kept only while the flag stands. */
   async updateAccount(accountId: string, patch: AccountPatch): Promise<Account> {
-    this.mutation();
     const a = this.account(accountId);
     if (patch.cancelled && a.kind === 'api_key') throw new ApiError(400, 'only an oauth account is cancelled', null);
     if (!patch.cancelled && patch.subscriptionEndsAt !== null) throw new ApiError(400, 'subscription_ends_at needs cancelled', null);
@@ -923,24 +781,7 @@ export class MockApi implements Api {
     return latency(this.putAccount({ ...a, cancelled: patch.cancelled, subscription }), 250);
   }
 
-  async updateAlertRule(id: string, input: AlertRuleInput): Promise<AlertRule> {
-    this.mutation();
-    const rule = this.rules.find((r) => r.id === id);
-    if (!rule) return Promise.reject(new ApiError(404, 'alert rule not found', null));
-    // An open event resolves under the rule's kind, so the route holds the kind still while one is open.
-    const open = this.events.filter((e) => e.ruleId === id && e.state === 'open').length;
-    if (input.kind !== rule.kind && open > 0) throw new ApiError(409, `the condition cannot change while ${open} ${open === 1 ? 'event is' : 'events are'} open for this rule`, null);
-    const refusal = ruleRefusal(input);
-    if (refusal) throw new ApiError(400, refusal, null);
-    // An absent secret leaves the stored one alone, so the badge only turns off when an empty string clears it.
-    const hasSecret = input.secret === undefined ? rule.hasSecret : input.secret !== '';
-    const next: AlertRule = { ...rule, enabled: input.enabled, hasSecret, kind: input.kind, scope: input.scope, threshold: input.threshold, updatedAt: iso(NOW), webhookUrl: input.webhookUrl, windowId: input.windowId };
-    this.rules = this.rules.map((r) => (r.id === id ? next : r));
-    return latency(next, 250);
-  }
-
   async updateKey(id: string, input: KeyInput): Promise<ApiKey> {
-    this.mutation();
     const idx = this.keys.findIndex((k) => k.id === id);
     if (idx < 0) return Promise.reject(new Error(`Unknown key ${id}`));
     const refusal = keyRulesRefusal(input);
@@ -956,7 +797,6 @@ export class MockApi implements Api {
   }
 
   async updatePool(id: string, input: PoolInput): Promise<Pool> {
-    this.mutation();
     const idx = this.pools.findIndex((p) => p.id === id);
     if (idx < 0) return Promise.reject(new Error(`Unknown pool ${id}`));
     const refusal = poolRefusal(input);
@@ -982,7 +822,6 @@ export class MockApi implements Api {
   }
 
   async verifyAccount(accountId: string) {
-    this.mutation();
     this.account(accountId);
     return latency({ ok: true, status: 200 }, 400);
   }

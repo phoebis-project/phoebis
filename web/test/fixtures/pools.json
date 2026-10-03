@@ -14,7 +14,6 @@
         "subagent_placement": "by_cohort",
         "session_placement": "by_strategy",
         "min_shared_prefix_tokens": 20000,
-        "quota_headers": "pass",
         "migrate_above_utilization": null,
         "select_below_utilization": null,
         "model_rules": [
@@ -67,7 +66,7 @@
             "subagent": "1h"
           }
         },
-        "cache_diagnostics": null,
+        "cache_diagnostics": false,
         "auto_mode_server": true,
         "body_capture_hours": 24,
         "created_at": 1790987341272,

@@ -3,28 +3,32 @@
 `views.mjs` drives a headless Chromium over every view of the console in the light and the dark theme. It logs in
 through the login screen, then for each theme visits the dashboard, observe, quota, accounts (which lands on the first
 account through a client-side redirect, since `/accounts` carries no account id), pools, keys, request logs, analytics
-(on its Traffic tab), sessions, alerts, and settings, and in the mock pass the Analytics page once more on its Cache
-warming tab. Per view it waits for one element, asserts the document title, records every console error and page error,
-and writes a full-page screenshot to `$PHOEBIS_SCREENSHOT_DIR/<theme>/<view>.png`. Further layout assertions ride along,
-one function each in `views.mjs`, in the order the file defines them (the rail's two levels (the indent, the gaps, the
+(on its Traffic tab), sessions, and settings, and in the mock pass the Analytics page once more on its Cache warming
+tab. Per view it waits for one element, asserts the document title, records every console error and page error, and
+writes a full-page screenshot to `$PHOEBIS_SCREENSHOT_DIR/<theme>/<view>.png`. Further layout assertions ride along, one
+function each in `views.mjs`, in the order the file defines them (the rail's two levels (the indent, the gaps, the
 hairlines, a parent's color at rest and under the pointer), the create marks with and without the refusal dots (a mark's
 size, weight and ink, 6 px after its label on the label's line and short of the dot, at the pass's viewport and in the
 720 px strip), the expert view's discovery line (below the group's last field, in the hint's size and a rail parent's
 ink), the cell grid through an expert field's wrapper (a half cell beside the plain one, a lone field the grid's width),
 the sidebar's brand row (the mark's box 36 px square with the logo drawn 26 px square in it, the name 17 px at weight
-600 on one line and inside the sidebar's content box), the sidebar's Expert view row above the version line, pool chips,
-the caching controls, the select-below threshold, the load groups, the pool card's serving table and tiles, the settings
-cards' order and the listener hint's gaps and size, the Delete account button, the account lines, the alert rule dialog,
+600 on one line and inside the sidebar's content box), the dashboard's attention line (one 22 px row per line of badges,
+each badge the pool card's strip badge, inside the content box and clear of the tiles; the story's six items in the mock
+pass, the seeded exhaustion or the quiet line in the router pass), the sidebar's Expert view row above the version line,
+pool chips, the caching controls, the select-below threshold, the load groups, the pool card's serving table and tiles,
+the settings cards' order, the listener hint's gaps and size and About's lines (their order, one type and one gap), the
+Delete account button, the account lines, the Quota cards' poll lines (short of the Refresh pill and inside the card,
+the backoff line in the serious ink, none wrapping, a failed poll's reason cut inside its line and whole in its title),
 the remaining cards, the error state, the cost-cap rows, the live feed, the wasted-probe rows, the burn cards, the plan
 legend's model unlisted entry, the placement and budget tables, the speed filter, the traffic cards
 (each Analytics check opens the tab it reads and returns to Traffic), the tab strip docked under the filter bar at the
 end of the Latency tab, the fast lane, the request drawer, which opens once the request list's shot is taken, the
-subscription end editor, the catalog popup, the key dialog's cap field and selects, the Pool select against the Status
-select, the Sessions lead and its disclosure at 1280 by 800 and 1440 by 900 (the head's height closed and open, the
-button on the sentence's last line or flush left on the next, the opened paragraph 6 px under the lead, Cost reference
-one line at the head's top right), the cost reference, the agent lines, the fork link, which
-is followed once the session list's shot is taken). A check that opens an editor, a dialog or a row closes it again
-before the view's shot.
+subscription end editor, the catalog popup, the key dialog's Access selects, the Pool select against the Status select,
+the Sessions lead and its disclosure at 1280 by 800 and 1440 by 900 (the head's height closed and open, the button on
+the sentence's last line or flush left on the next, the opened paragraph 6 px under the lead, Cost reference one line at
+the head's top right), the cost reference, the agent lines, the fork link, which is followed
+once the session list's shot is taken). A check that opens an editor, a dialog or a row closes it again before the
+view's shot.
 The script exits non-zero with the list of failures when any of that does not hold.
 
 The screenshot directory has to lie outside the repository, which the script enforces against every worktree `git

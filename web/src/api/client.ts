@@ -3,26 +3,19 @@ import type {
   AccountCatalog,
   AccountInput,
   AccountRollup,
-  AffinitySource,
-  AlertDeliveryTest,
-  AlertEvent,
-  AlertKind,
-  AlertRule,
-  AlertRuleInput,
   AnalyticsGroup,
   AnalyticsPoint,
   AnalyticsQuery,
   ApiKey,
+  AttentionItem,
   BurnGroup,
   BurnPoint,
   CapturedBodies,
   CatalogModel,
   CreatedApiKey,
-  Delivery,
   KeepaliveOverview,
   KeepaliveRecipe,
   KeyModels,
-  LifecyclePage,
   LiveEvent,
   MemberBudget,
   ModelRule,
@@ -51,7 +44,7 @@ import type {
 } from './types';
 import { FAILOVER_PRESETS, SHEDDING_PRESETS } from '@/lib/presets';
 
-export type { AccountInput, AlertRuleInput, AnalyticsQuery } from './types';
+export type { AccountInput, AnalyticsQuery } from './types';
 
 /** The account route's cancellation pair; the route refuses an end without the flag and the flag without an end. */
 export interface AccountPatch {
@@ -61,14 +54,11 @@ export interface AccountPatch {
 }
 
 export interface KeyInput {
-  affinitySource: AffinitySource;
   autoModeServer: boolean | null;
   bodyCaptureHours: number | null;
   enabled: boolean;
   /** An ISO instant, or null for no expiry; undefined leaves the stored expiry alone. */
   expiresAt?: string | null;
-  /** Null clears the cap; undefined leaves the stored one alone. */
-  inFlightCap?: number | null;
   keepaliveOptOut: boolean;
   longContextTwins: boolean;
   modelRules: ModelRule[];
@@ -119,13 +109,12 @@ export const POOL_ENGINE_DEFAULTS: PoolEngineFields = {
   windDownMinutes: 30,
 };
 
-export type PoolAffinityFields = Pick<Pool, 'affinityMode' | 'minSharedPrefixTokens' | 'quotaHeaders' | 'sessionPlacement' | 'subagentPlacement'>;
+export type PoolAffinityFields = Pick<Pool, 'affinityMode' | 'minSharedPrefixTokens' | 'sessionPlacement' | 'subagentPlacement'>;
 
-/** The store's pin, placement and quota header defaults, which a new pool starts with. */
+/** The store's pin and placement defaults, which a new pool starts with. */
 export const POOL_AFFINITY_DEFAULTS: PoolAffinityFields = {
   affinityMode: 'always',
   minSharedPrefixTokens: 20_000,
-  quotaHeaders: 'pass',
   sessionPlacement: 'by_strategy',
   subagentPlacement: 'by_cohort',
 };
@@ -134,7 +123,7 @@ export interface PoolInput extends PoolEngineFields, PoolAffinityFields {
   affinityTtlSeconds: number;
   autoModeServer: boolean;
   bodyCaptureHours: number;
-  cacheDiagnostics: boolean | null;
+  cacheDiagnostics: boolean;
   cacheTtl: PoolCacheTtl;
   keepalive: PoolKeepalive;
   /** A member list replaces the pool's whole membership, so a member sent without a budget clears its budget. */
@@ -164,12 +153,10 @@ export interface Api {
   completePairing(pairingId: string, input: PairingInput): Promise<PairingPreview>;
   confirmPairing(pairingId: string): Promise<void>;
   createAccount(input: AccountInput): Promise<Account>;
-  createAlertRule(input: AlertRuleInput): Promise<AlertRule>;
   createKey(input: CreateKeyInput): Promise<CreatedApiKey>;
   createPool(input: PoolInput): Promise<Pool>;
   /** Removes the account from every pool and deletes it; its request history stays in the ledger. */
   deleteAccount(accountId: string): Promise<void>;
-  deleteAlertRule(id: string): Promise<void>;
   deleteKey(id: string): Promise<void>;
   deletePool(id: string): Promise<void>;
   /** Deletes the credential; the account keeps its pool memberships and can be paired again. */
@@ -181,6 +168,8 @@ export interface Api {
   getAnalyticsBurn(range: Pick<AnalyticsQuery, 'from' | 'to'>, groupBy: BurnGroup): Promise<{ bucketSeconds: number; points: BurnPoint[] }>;
   getAnalyticsRewrites(range: Pick<AnalyticsQuery, 'from' | 'to'>): Promise<{ moves: Record<string, number>; points: RewritePoint[] }>;
   getAnalyticsSeries(query: AnalyticsQuery): Promise<AnalyticsPoint[]>;
+  /** The conditions that hold now, worst first and the oldest first within a kind: the route's order is the ranking. */
+  getAttention(): Promise<AttentionItem[]>;
   getCapturedBodies(requestId: string): Promise<CapturedBodies | null>;
   getKeepaliveOverview(): Promise<KeepaliveOverview>;
   getKeyModels(keyId: string): Promise<KeyModels>;
@@ -194,16 +183,11 @@ export interface Api {
   getSettings(): Promise<Settings>;
   listAccountRollups(from: string, to: string): Promise<AccountRollup[]>;
   listAccounts(): Promise<Account[]>;
-  listAlertDeliveries(eventId: string): Promise<Delivery[]>;
-  listAlertEvents(state?: 'open' | 'resolved'): Promise<AlertEvent[]>;
-  listAlertRules(): Promise<AlertRule[]>;
   listCatalog(): Promise<CatalogModel[]>;
   /** The union by id of the named accounts' live catalogs; a failed fetch contributes nothing. */
   listCatalogOf(accountIds: string[]): Promise<CatalogModel[]>;
   listKeepaliveRecipes(): Promise<KeepaliveRecipe[]>;
   listKeys(): Promise<ApiKey[]>;
-  /** The session events as they were posted; a lifecycle rule opens no event, so this log is all there is to read. */
-  listLifecycleDeliveries(kind?: AlertKind, cursor?: string): Promise<LifecyclePage>;
   listPools(): Promise<Pool[]>;
   listQuotaSnapshots(): Promise<QuotaSnapshot[]>;
   listRequests(query?: RequestQuery): Promise<RequestPage>;
@@ -214,16 +198,13 @@ export interface Api {
   refreshUsage(accountId: string): Promise<void>;
   releaseSession(keyId: string, sessionId: string): Promise<void>;
   renameAccount(accountId: string, label: string): Promise<Account>;
-  resolveAlertEvent(id: string): Promise<AlertEvent>;
   resumeAccount(accountId: string): Promise<void>;
   revokeKey(id: string): Promise<void>;
   rotateKey(id: string): Promise<CreatedApiKey>;
   startPairing(accountId: string): Promise<PairingSession>;
   /** Delivers a snapshot first, then deltas; returns the unsubscribe function. */
   subscribeLive(handler: (event: LiveEvent) => void): () => void;
-  testAlertRule(id: string): Promise<AlertDeliveryTest>;
   updateAccount(accountId: string, patch: AccountPatch): Promise<Account>;
-  updateAlertRule(id: string, input: AlertRuleInput): Promise<AlertRule>;
   updateKey(id: string, input: KeyInput): Promise<ApiKey>;
   updatePool(id: string, input: PoolInput): Promise<Pool>;
   verifyAccount(accountId: string): Promise<{ ok: boolean; status: number }>;

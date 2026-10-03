@@ -3,7 +3,6 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api } from '@/api';
 import type { Attempt, CapturedBodies, CohortHold, PinReleaseReason, RequestKind, RequestLog, RequestQuery, Usage, WindowId } from '@/api/types';
 import { PIN_RELEASE_REASON_VALUES } from '@/api/decode';
-import { useAppSettings } from '@/app/settings';
 import { SelectionTrace } from '@/components/SelectionTrace';
 import { AttemptTrail } from '@/components/ui/AttemptTrail';
 import { MultiSelect } from '@/components/ui/MultiSelect';
@@ -398,14 +397,13 @@ export function RequestsPage() {
 }
 
 function RequestDrawer({ request, requestId, now, onClose }: { now: number; onClose: () => void; request: RequestLog | null; requestId: string }) {
-  const { canMutate } = useAppSettings();
   // One read answers the row and its events; the list's own row draws the summary while it runs.
   const detail = useAsync(() => api.getRequest(requestId), [requestId]);
   // A load that is pending or has failed leaves the answer to the request before it in hand, so only an answer
   // for this id is read.
   const fetched = detail.data?.request.id === requestId ? detail.data : null;
   const r = request ?? fetched?.request ?? null;
-  const bodies = useAsync<CapturedBodies | null>(() => (r?.capturedBodies && canMutate ? api.getCapturedBodies(r.id) : Promise.resolve(null)), [r?.id, canMutate]);
+  const bodies = useAsync<CapturedBodies | null>(() => (r?.capturedBodies ? api.getCapturedBodies(r.id) : Promise.resolve(null)), [r?.id]);
   // A load that is pending or has failed leaves the answer to the request before it in hand; prompts and
   // responses belong to the row they were read for and to no other, so that answer is never drawn here.
   const otherRequestsBodies = bodies.data !== null && bodies.data?.requestId !== r?.id;
@@ -658,8 +656,6 @@ function RequestDrawer({ request, requestId, now, onClose }: { now: number; onCl
             <h3 className="section-title">Captured bodies</h3>
             {!r.capturedBodies ? (
               <p className="muted">Not captured for this key. Enable body capture on the key to record the exchange.</p>
-            ) : !canMutate ? (
-              <p className="muted">Captured, but only the admin secret can read bodies.</p>
             ) : bodies.error ? (
               <ErrorState title="Could not load the captured bodies" body={bodies.error} action={<Button onClick={bodies.reload}>Try again</Button>} />
             ) : bodies.loading || otherRequestsBodies ? (

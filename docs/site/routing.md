@@ -7,26 +7,27 @@ itself, and the answers a client gets when nothing can serve it.
 
 ## Catalogs
 
-An account's model list is read live from `GET /v1/models` on `api.anthropic.com` with the account's own credential,
-at startup, on the refresh interval, and on demand, and held for `routing.catalog_cache_seconds` (sixty by default)
-from the moment the answer arrives; the Accounts view's catalog popup, the rule editors' suggestions, and the
-proxy's [models listing](client.md#the-models-listing) all read that cache, and `GET /admin/accounts/{id}/catalog`
-answers it with `?refresh=1` to read again. Nothing about routing depends on it: every enabled member of a pool is a
-candidate for any model the rules allow, and an upstream that does not serve a model to an account says so with a `404`
-the router records as a rejection ([cooldowns](#cooldowns-and-failover)). An account whose fetch failed contributes
-nothing to a listing until the next fetch, and the popup shows the error.
+An account's model list is read live from `GET /v1/models` on `api.anthropic.com` with the account's own credential, at
+startup, on the refresh interval, and on demand. The listing is held until the scheduled refresh
+(`routing.catalog_refresh_seconds`) or an eviction replaces it, and a failed fetch for sixty seconds from the moment its
+answer arrives; the Accounts view's catalog popup, the rule editors' suggestions, and the proxy's
+[models listing](client.md#the-models-listing) all read that cache, and `GET /admin/accounts/{id}/catalog` answers it
+with `?refresh=1` to read again. Nothing about routing depends on it: every enabled member of a pool is a candidate for
+any model the rules allow, and an upstream that does not serve a model to an account says so with a `404` the router
+records as a rejection ([cooldowns](#cooldowns-and-failover)). An account whose fetch failed contributes nothing to a
+listing until the next fetch, and the popup shows the error.
 
 The catalog lists some models under a dated id (`claude-sonnet-4-5-20250929`) while Claude Code asks for the undated one
 (`claude-sonnet-4-5`). An undated spelling is an alias for the newest dated snapshot the listing holds, so the router
 derives the dated id from the listings it caches: the newest `<spelling>-YYYYMMDD` entry across every enabled account,
 else the spelling itself (a dateless id such as `claude-sonnet-4-6` is its own snapshot). The listings are fetched at
 startup for every enabled account before the proxy listener accepts requests (waiting `routing.startup_fetch_seconds`,
-five by default, at most; an account still fetching then finishes in the background), and a request's model is resolved
-by a lookup in that cache, never by a request of its own. The dated id is the canonical name the rules, the ledger, the
-pricing, the pins, and the cooldowns use for that spelling from the session's first request; the body toward the
-upstream keeps the client's spelling. A resolution is kept across restarts: the first request after a restart carries
-the dated id from the stored mapping even before the listings arrive, and only a fresh installation that reaches no
-listing at startup runs requests under the spelling, until the listing arrives. A listing that later lacks the dated
+thirty by default, at most; an account still fetching then finishes in the background), and a request's model is
+resolved by a lookup in that cache, never by a request of its own. The dated id is the canonical name the rules, the
+ledger, the pricing, the pins, and the cooldowns use for that spelling from the session's first request; the body toward
+the upstream keeps the client's spelling. A resolution is kept across restarts: the first request after a restart
+carries the dated id from the stored mapping even before the listings arrive, and only a fresh installation that reaches
+no listing at startup runs requests under the spelling, until the listing arrives. A listing that later lacks the dated
 entry never takes a resolution back.
 
 The listings are refreshed every `routing.catalog_refresh_seconds` (six hours by default), once more within a minute of
@@ -75,27 +76,21 @@ Every field, in the order the request body takes them:
 | `model_rules` | empty | an ordered list of `{pattern, not}` entries, at most 256; see Model rules |
 | `keepalive` | disabled | a policy object; its defaults are on the [Keepalive page](keepalive.md) |
 | `cache_ttl` | off | a policy object, `inject_when_absent` off by default; see below |
-| `cache_diagnostics` | unset (inherits) | `true`, `false`, or `null` |
+| `cache_diagnostics` | `false` | `true` or `false`: `cache_diagnostics must be true or false` |
 | `auto_mode_server` | `true` | `true` or `false`: `auto_mode_server must be true or false` |
-| `quota_headers` | `pass` | `hide` or `pass`; see below |
 | `body_capture_hours` | `0` (off) | `body_capture_hours exceeds stats.body_capture_max_hours` |
 | `wind_down_minutes` | `30` | 0 to 10,080 (a week) |
 | `members` | none | create only; replaced wholesale by `PUT /admin/pools/{id}/members` |
 
-`cache_diagnostics` forces the cache-diagnosis beta and the `previous_message_id` member toward
-`api.anthropic.com` for this pool's requests, whatever the [bootstrap option](installation.md#compatibility)
-says; `null` inherits it.
+The pool's `cache_diagnostics`, the pool dialog's Cache diagnostics switch in the expert view, forces the
+cache-diagnosis beta and the `previous_message_id` member toward `api.anthropic.com` for this pool's requests, whatever
+the client; off by default, and `count_tokens` is never touched.
 
 `auto_mode_server` is whether the client's server-side auto mode checks travel to the upstream. On, the default,
 the router passes the request for a check and its verdict through unchanged; off, it drops the request so the
 client reviews each tool use with a classifier request of its own. The [client
 page](client.md#auto-mode-behind-the-router) says what the client does in each case, and a key can override the pool
 (below).
-
-On `hide` every answer but a 429 loses the `anthropic-ratelimit-unified-*` family, so an organization-wide quota
-never reaches a key holder as its own; a 429 keeps the family so the client's continue-when-reset arms;
-`request-id` passes either way, and the client shows no notice for the hidden family. The upstream's own
-`anthropic-organization-id` and `set-cookie` are never forwarded to a key holder.
 
 Under `when_cached` a request that carries no `cache_control` marker, and receives none from the cache TTL
 policy, creates no pin and lands by the strategy instead of pinning; a non-portable request keeps its pin
@@ -131,6 +126,21 @@ random.
 **`round_robin`**: Within the first priority tier that has an eligible account, each in turn; a restart starts the
 round again.
 
+Each card on the Pools view carries attention rows under its status sentence: the conditions of the dashboard's
+attention line ([conditions](statistics.md#conditions-and-gauges)) filtered to the pools each item names, one row per
+condition with its badge, its subject linked where it is fixed (the pool's own row stays unlinked) and its detail, the
+age in the row's title.
+
+![The Pools view: one card per pool with its status badge and key count, the features it has on, one sentence on what
+the status means, what needs attention and a table of who serves next; the codex pool reads exhausted because its one
+member is at its daily budget][pl]
+![The Pools view: one card per pool with its status badge and key count, the features it has on, one sentence on what
+the status means, what needs attention and a table of who serves next; the codex pool reads exhausted because its one
+member is at its daily budget][pd]
+
+[pl]: assets/pools-light.png#only-light
+[pd]: assets/pools-dark.png#only-dark
+
 ### Cache TTL
 
 A pool can set the prompt cache TTL of every request it serves toward `api.anthropic.com`. The policy object carries
@@ -153,16 +163,6 @@ replay included, reads `main` or `subagent` by its agent, and one without an age
 The TTL is priced per attempt, so a request that fails over reads its destination's state. Mixed TTLs across a session's
 requests are fine: the cache is keyed on the prefix, and the TTL sets an entry's lifetime and price alone. The cost of
 each choice is on the [keepalive page](keepalive.md#the-cost-reference).
-
-![The Pools view: one card per pool with its status badge and key count, the features it has on, one sentence on what
-the status means, what needs attention and a table of who serves next; the codex pool reads exhausted because its one
-member is at its daily budget][pl]
-![The Pools view: one card per pool with its status badge and key count, the features it has on, one sentence on what
-the status means, what needs attention and a table of who serves next; the codex pool reads exhausted because its one
-member is at its daily budget][pd]
-
-[pl]: assets/pools-light.png#only-light
-[pd]: assets/pools-dark.png#only-dark
 
 ## Keys
 
@@ -188,7 +188,6 @@ creation and to rotation and nowhere else; the console shows it once, in a modal
 | `model_rules`, `model_rules_mode`, `long_context_twins` | see Model rules and the client page's models listing |
 | `keepalive_opt_out` | `false` by default |
 | `body_capture_hours` | unset inherits the pool's; `0` turns it off; capped by `stats.body_capture_max_hours` |
-| `affinity_source` | `auto`, `session`, `user_id`, `content`, or `whole_key`, default `auto`; see [Clients](#clients) |
 | `auto_mode_server` | `true`, `false`, or unset (inherits the pool's); see below |
 
 A key's `auto_mode_server` refuses a value of another type with `auto_mode_server must be true, false, or null`;
@@ -200,10 +199,8 @@ for a key: "Bodies contain the prompts, file contents, and tool results of every
 session in auto mode sends the machine's permission rules with their literal text, its working and home directories
 and its git remotes with every request. Only the admin secret can read them."
 
-The key form sets
-`auto_mode_server` as **Server-side auto mode** (Inherit, naming the pool's value, On, or Off) in its Access group, and
-`affinity_source` as **Affinity source** (Automatic, Session id, User id, Conversation content, or Whole key) in its
-Sessions group.
+The key form sets, in the expert
+view, `auto_mode_server` as **Server-side auto mode** (Inherit, naming the pool's value, On, or Off) in its Access group.
 
 ![The Keys view: stat tiles and the table of keys with prefix, pool, usage, and actions][kl]
 ![The Keys view: stat tiles and the table of keys with prefix, pool, usage, and actions][kd]
@@ -230,10 +227,8 @@ refused `400` with the error code `body_shape` before anything reaches the upstr
 A conversation is identified by its session header: the session id the client sends names it.
 A turn that follows its own conversation's previous answer within milliseconds waits on its session id,
 at most five milliseconds, for that answer's report to reach the map.
-A key's
-`affinity_source` fixes one of these rungs instead of walking the whole ladder, and a request that does not fit a fixed
-rung has no identity and no pin. A new session id whose messages continue another conversation of the same key keeps its
-own identity, and is recorded as a fork of that conversation at the depth where the two part.
+A new session id whose messages continue another conversation of the
+same key keeps its own identity, and is recorded as a fork of that conversation at the depth where the two part.
 
 ## Model rules
 
@@ -359,8 +354,9 @@ startup, so a restart, and an account whose first poll the endpoint refuses, rou
 router never fetches usage at a selection; use of an account outside the router shows in the next head or poll, so a
 decision can lag it by up to five minutes plus any backoff, and by up to one more interval after a failed poll or a
 restart. The [Quota view](statistics.md#quota) shows when the poll last asked the endpoint for each OAuth account and
-how it answered, and while an account backs off, since when and when its next attempt comes; a `poll_backoff`
-[alert](statistics.md#alerts) fires once an account has backed off for thirty minutes.
+how it answered, and while an account backs off, since when and when its next attempt comes; the `poll_backoff`
+condition of the [`phoebis_attention` gauge](statistics.md#conditions-and-gauges) holds once an account has backed off
+for thirty minutes.
 
 ### Moves
 
@@ -416,11 +412,11 @@ credits and no plan window, so the pin has no share to shed. In dollars, on an A
 it stays in the round. A session that returns to standard requests brings its pin back with the plan burn it still
 carries.
 
-The console's Pools form offers `shed_share`, `burn_window_seconds`, and `source_dwell_seconds` together as three
-presets beside custom: balanced (0.5, 600 s, 900 s, the default), fast (0.5, 300 s, 600 s), and conservative (0.3,
-900 s, 1800 s). The form's preview of what a shedding round would move leaves out the pins of a subscription account
-on its plan whose tier the cost table does not size, which the round still ranks on the table's reference tier and
-sheds, and keeps a pin whose burn the table cannot price in the order unmarked, as the round does.
+The console's Pools form offers, in its expert view, `shed_share`, `burn_window_seconds`, and `source_dwell_seconds`
+together as three presets beside custom: balanced (0.5, 600 s, 900 s, the default), fast (0.5, 300 s, 600 s), and
+conservative (0.3, 900 s, 1800 s). The form's preview of what a shedding round would move leaves out the pins of a
+subscription account on its plan whose tier the cost table does not size, which the round still ranks on the table's
+reference tier and sheds, and keeps a pin whose burn the table cannot price in the order unmarked, as the round does.
 
 A marked session moves at its next request, onto a cool sibling (see above) that did not shed this pin within
 `source_dwell_seconds`. A mark from a round on plan quota moves a standard request alone: a fast-mode request of the
@@ -601,7 +597,7 @@ fresh one; any other failover moves the pin. The failover, its waits included, s
 deadline, ten minutes less a margin: past it the request is answered `503 accounts_unavailable` rather than tried on
 another account. The attempt rows read `auth_failed` with the upstream status, and the account reads `reauth_required`
 after a conclusive failure (a rejected replay, an `invalid_grant`, a token endpoint's `401`), which the Accounts view
-and the `reauth_required` alert show.
+and the `reauth_required` attention condition show.
 
 A stream commits at its `message_start` event or its first `error` event, whichever comes first; earlier events
 are buffered, up to 64 KiB, and relayed after commit in order; a stream that exceeds the buffer or sends no
@@ -616,9 +612,9 @@ The Accounts view shows what an account is cooling under in a cooling-down block
 account or one model, with the reason, the deadline, and a clear button; the Models view lists the same rows grouped
 by model.
 
-The console's Pools form offers `in_flight_cap`, `retry_in_place_seconds`, and `pace_floor` together as three
-presets beside custom: balanced (16, 10 s, 5 %, the default), fast (8, 5 s, 10 %), and conservative (16, 20 s,
-5 %); balanced and conservative differ in the retry-in-place bound alone.
+The console's Pools form offers, in its expert view, `in_flight_cap`, `retry_in_place_seconds`, and `pace_floor`
+together as three presets beside custom: balanced (16, 10 s, 5 %, the default), fast (8, 5 s, 10 %), and conservative
+(16, 20 s, 5 %); balanced and conservative differ in the retry-in-place bound alone.
 
 ### Retry in place
 
@@ -631,12 +627,12 @@ path above.
 
 ### In-flight caps
 
-**Per account.** Every wire submission counts against its account from its charge until its response ends: a buffered
-answer when it is returned, a stream for its whole length, whether it finishes, fails, or the client hangs up. The first
-attempt on an account is charged by the selection that chose it, so two selections answered together never read the same
-free slot; a retry on the same account is charged at its dispatch. The count is kept by the router itself; no report is
-involved. A token count is not counted: it occupies no slot, is never passed over at the cap and is never held for one.
-An account at the pool's `in_flight_cap` (default 16) is passed over while a sibling is under it, even a sibling above
+Every wire submission counts against its account from its charge until its response ends: a buffered answer when it is
+returned, a stream for its whole length, whether it finishes, fails, or the client hangs up. The first attempt on an
+account is charged by the selection that chose it, so two selections answered together never read the same free slot; a
+retry on the same account is charged at its dispatch. The count is kept by the router itself; no report is involved. A
+token count is not counted: it occupies no slot, is never passed over at the cap and is never held for one. An account
+at the pool's `in_flight_cap` (default 16) is passed over while a sibling is under it, even a sibling above
 `select_below_utilization`: the cap is a bound, the ceiling a preference. Only when every account that could serve is at
 its cap is the request held: it waits up to `retry_in_place_seconds` for a slot on the account it would have chosen and
 lands there when one frees; past the bound it is selected again with that account passed over, and with every account
@@ -649,17 +645,6 @@ and passed over, the answer is the `429` above. A request that dialled an accoun
 with no account to hold for, keep the `503 accounts_unavailable` below. A request whose session already holds a pin
 under any agent is never held, and a move whose every destination is at its cap is not made: the pin renews in place and
 the next request judges the move again; a held subagent waits where its cohort is.
-
-**Per key.** A key's own `in_flight_cap`, unset by default, counts each Messages request once, from its admission,
-before anything is selected, until its response ends. A keepalive probe and a `count_tokens` request take no in-flight
-slot and are never refused for want of one: the probe is the router's own traffic, and a token count is no conversation
-turn. The count is held across every attempt, retry, and hold, so a request sleeping in a retry in place keeps its key's
-slot. A request past the cap is refused before it reaches an account: `429` with the error type `rate_limit_error`, the
-error code `key_in_flight_cap`, and a `Retry-After` of the pool's `retry_in_place_seconds`, one second when that is 0.
-The refused request is observed without its body, since the key's permit is taken before the body is read, and gets its
-own request row under that code; `proxy.key_body_reads`, or the key's own cap when set, bounds the bodies arriving on
-one key at once the same way, and a `count_tokens` request takes a body-read slot too, so it can be refused
-`429 key_body_reads` ([installation](installation.md#proxy)).
 
 ### When nothing can serve
 
@@ -679,8 +664,16 @@ pinned to a member at its budget is answered with the end of the latest period w
 whatever its siblings hold. A probe whose pinned account is disabled or past its subscription's end is answered `503`
 `accounts_unavailable` whatever its siblings hold, and so is one that already tried its pinned account while a sibling
 could take it, where moving would otherwise land the pin on that sibling; such a probe never moves the pin, and its
-request row reads rejected rather than exhausted, so the pool exhaustion alert does not count it. A probe that already
-tried its pinned account with no sibling to take it gets the pool's own answer above.
+request row reads rejected rather than exhausted, so the `pool_exhausted` condition of the `phoebis_attention` gauge
+does not count it. A probe that already tried its pinned account with no sibling to take it gets the pool's own answer
+above.
+
+Every answer the router commits loses the upstream's rate-limit headers, the `anthropic-ratelimit-*` families and the
+`anthropic-fast-*` token family, so an organization's standing never reads as the key holder's own and a client sees
+one quota, the router's. A rate limit keeps them: the upstream's own when the relay forwards a 429 or a stream whose
+first event is a `rate_limit_error`, and the three unified headers above when the router composes the exhaustion
+answer, so the client's continue arms on the reset. The upstream's `anthropic-organization-id` and `set-cookie` are
+never forwarded; `request-id` passes either way.
 
 A request sent fast that no account's fast lane can take is answered locally, before any dial, with `429` and the error
 type `rate_limit_error`. While any account holds only a fast rate limit, the error code is `fast_lane_exhausted`, the

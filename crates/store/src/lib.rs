@@ -1,7 +1,6 @@
 //! SQLite registry and encrypted credentials.
 
 mod accounts;
-mod alerts;
 mod budgets;
 mod credentials;
 mod lock;
@@ -31,10 +30,6 @@ use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 pub use accounts::{
     AccountKind, AccountRow, AccountState, Identity, SubscriptionRow, INFERENCE_HOST,
 };
-pub use alerts::{
-    event_deliveries_sql, events_deliveries_sql, lifecycle_deliveries_sql, webhook_host,
-    AlertDeliveryRow, AlertEventRow, AlertRuleRow,
-};
 pub use budgets::{BudgetRow, BudgetScope};
 pub use credentials::{
     AttemptOutcome, CredentialBundle, CredentialMetadata, LastAttempt, NewBundle, PendingAttempt,
@@ -42,11 +37,10 @@ pub use credentials::{
 };
 pub use memory::{MemoryKey, MemoryRecord, MemoryStore};
 pub use registry::{
-    canonical_id, key_prefix, AccountUpdate, Affinity, AffinityMode, AffinitySource, ApiKeyRow,
-    BudgetPeriod, Failover, MemberWrite, ModelRule, OveragePolicy, PoolMember,
-    PoolRow, QuotaHeaders, RegistryChange, RegistryLoad, RetiredSecret, RulesMode,
-    SessionPlacement, Shedding, Strategy, SubagentPlacement, SubscriptionTerm, WarmSessions,
-    ROTATION_GRACE_MS,
+    canonical_id, key_prefix, AccountUpdate, Affinity, AffinityMode, ApiKeyRow, BudgetPeriod,
+    Failover, MemberWrite, ModelRule, OveragePolicy, PoolMember, PoolRow,
+    RegistryChange, RegistryLoad, RetiredSecret, RulesMode, SessionPlacement, Shedding, Strategy,
+    SubagentPlacement, SubscriptionTerm, WarmSessions, ROTATION_GRACE_MS,
 };
 pub use routing::{
     AffinityChain, AffinityRow, CooldownRow, CreditsRow, OverageRow, PinBurn, PinKey, PinRow,
@@ -86,8 +80,6 @@ thread_local! {
 pub enum StoreError {
     #[error("account {0} not found")]
     AccountNotFound(String),
-    #[error("alert rule {0} not found")]
-    AlertRuleNotFound(String),
     #[error("refresh attempt {0} not found")]
     AttemptNotFound(u64),
     #[error("a refresh attempt is already pending for this account")]
@@ -220,6 +212,8 @@ pub struct Store {
     #[cfg(any(test, feature = "debug-hooks"))]
     fail_next_load: AtomicBool,
     #[cfg(any(test, feature = "debug-hooks"))]
+    fail_next_refresh_read: AtomicBool,
+    #[cfg(any(test, feature = "debug-hooks"))]
     fail_next_schema_version: AtomicBool,
     #[cfg(any(test, feature = "debug-hooks"))]
     routing_commits: AtomicU64,
@@ -273,6 +267,8 @@ impl Store {
             #[cfg(any(test, feature = "debug-hooks"))]
             fail_next_load: AtomicBool::new(false),
             #[cfg(any(test, feature = "debug-hooks"))]
+            fail_next_refresh_read: AtomicBool::new(false),
+            #[cfg(any(test, feature = "debug-hooks"))]
             fail_next_schema_version: AtomicBool::new(false),
             #[cfg(any(test, feature = "debug-hooks"))]
             routing_commits: AtomicU64::new(0),
@@ -294,6 +290,8 @@ impl Store {
             fail_next_credential_commit: AtomicBool::new(false),
             #[cfg(any(test, feature = "debug-hooks"))]
             fail_next_load: AtomicBool::new(false),
+            #[cfg(any(test, feature = "debug-hooks"))]
+            fail_next_refresh_read: AtomicBool::new(false),
             #[cfg(any(test, feature = "debug-hooks"))]
             fail_next_schema_version: AtomicBool::new(false),
             #[cfg(any(test, feature = "debug-hooks"))]
@@ -332,6 +330,13 @@ impl Store {
     #[doc(hidden)]
     pub fn debug_fail_next_load(&self) {
         self.fail_next_load.store(true, Ordering::SeqCst);
+    }
+
+    /// The next holder read errors, so the attention reader's failure path has a test.
+    #[cfg(any(test, feature = "debug-hooks"))]
+    #[doc(hidden)]
+    pub fn debug_fail_next_refresh_read(&self) {
+        self.fail_next_refresh_read.store(true, Ordering::SeqCst);
     }
 
     /// Fails the next `schema_version`, so a test reaches the readiness answer's dead store without a broken
@@ -539,8 +544,8 @@ fn sealed_rows_open_under(conn: &Connection, key: &StorageKey) -> Result<Option<
     Ok(Some(rows.iter().any(|row| row.opens_under(key))))
 }
 
-/// The first `PROOF_ROWS_PER_KIND` sealed rows of each kind in row order: credential bundles, Anthropic-key
-/// secrets, alert secrets. `read_canary` meets the file as it is, without `prepare`, so a table the registry does
+/// The first `PROOF_ROWS_PER_KIND` sealed rows of each kind in row order: credential bundles and Anthropic-key
+/// secrets. `read_canary` meets the file as it is, without `prepare`, so a table the registry does
 /// not have yet holds nothing sealed rather than failing the read.
 fn leading_sealed_rows(conn: &Connection) -> Result<Vec<SealedRow>, StoreError> {
     let mut rows = Vec::new();
@@ -564,20 +569,6 @@ fn leading_sealed_rows(conn: &Connection) -> Result<Vec<SealedRow>, StoreError> 
         let found = statement.query_map(params![PROOF_ROWS_PER_KIND], |row| {
             Ok(SealedRow {
                 aad: credentials::api_key_aad(&row.get::<_, String>(0)?),
-                nonce: row.get(1)?,
-                sealed: row.get(2)?,
-            })
-        })?;
-        rows.extend(found.collect::<rusqlite::Result<Vec<_>>>()?);
-    }
-    if has_table(conn, "alert_rules")? {
-        let mut statement = conn.prepare(
-            "SELECT id, secret_nonce, secret_sealed FROM alert_rules \
-             WHERE secret_sealed IS NOT NULL AND secret_nonce IS NOT NULL ORDER BY rowid LIMIT ?1",
-        )?;
-        let found = statement.query_map(params![PROOF_ROWS_PER_KIND], |row| {
-            Ok(SealedRow {
-                aad: alerts::secret_aad(&row.get::<_, String>(0)?),
                 nonce: row.get(1)?,
                 sealed: row.get(2)?,
             })
@@ -863,37 +854,6 @@ mod tests {
     }
 
     #[test]
-    fn a_registry_whose_only_sealed_row_is_an_alert_secret_proves_the_key_against_it() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = dir.path().join("router.sqlite");
-        let key = StorageKey::generate();
-        let store = Store::open(&db, &key).unwrap();
-        let rule = AlertRuleRow {
-            id: "r1".into(),
-            kind: "reauth_required".into(),
-            scope_type: "any_account".into(),
-            scope_id: None,
-            threshold: None,
-            window: None,
-            webhook_url: "http://127.0.0.1:1/hook".into(),
-            has_secret: false,
-            enabled: true,
-            created_at: 1_000,
-            updated_at: 1_000,
-        };
-        store
-            .upsert_alert_rule(
-                &rule,
-                Some(Some(&Secret::new("webhook-test-not-a-secret"))),
-                "test",
-            )
-            .unwrap();
-        store.debug_drop_canary().unwrap();
-        drop(store);
-        assert_the_sealed_rows_prove_the_key(&db, &key);
-    }
-
-    #[test]
     fn a_sealed_row_that_does_not_open_refuses_no_key_another_sealed_row_proves() {
         let dir = tempfile::tempdir().unwrap();
         let key = StorageKey::generate();
@@ -1005,8 +965,8 @@ mod tests {
         );
         assert!(!missing.exists(), "the read created no file");
 
-        // An empty file is what a first open leaves when it dies before `prepare`, and a v1 registry predates
-        // `alert_rules`: neither has every table the sealed-row proof reads.
+        // An empty file is what a first open leaves when it dies before `prepare`, with none of the tables the
+        // sealed-row proof reads; a v1 registry is the oldest shape the proof meets as it is.
         let empty_file = dir.path().join("empty-file.sqlite");
         std::fs::write(&empty_file, b"").unwrap();
         let v1 = dir.path().join("v1.sqlite");
@@ -1175,10 +1135,9 @@ mod tests {
             shedding: Shedding::default(),
             failover: Failover::default(),
             cache_ttl_json: "{}".into(),
-            cache_diagnostics: None,
+            cache_diagnostics: false,
             auto_mode_server: true,
             affinity: Affinity::default(),
-            quota_headers: QuotaHeaders::Pass,
             created_at: 0,
             updated_at: 0,
         }

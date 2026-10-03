@@ -1493,7 +1493,6 @@ async fn a_probe_through_the_relay_is_ledgered_with_kind_probe_and_origin_keepal
             phoebis_relay::Probe {
                 key_id: "desktop".into(),
                 key_generation: h.store.api_key("desktop").unwrap().unwrap().created_at,
-                allow_oauth: true,
             },
             request_for(KEY, "claude-sonnet-4-5", "s1"),
         )

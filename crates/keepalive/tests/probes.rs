@@ -5,7 +5,7 @@ use std::str::FromStr;
 
 use common::*;
 use fake_upstream::{Respond, SseEvent};
-use phoebis_keepalive::{Event, KeepaliveLimits, KeepalivePolicy, Reason};
+use phoebis_keepalive::{Event, KeepalivePolicy, Reason, MAIN_AGENT, MAX_WORKERS};
 use phoebis_store::AccountState;
 
 fn json(status: u16, body: &str) -> Respond {
@@ -151,8 +151,8 @@ async fn a_probe_preserves_routing_and_constraints() {
     let mut r = rig(RigSpec::default()).await;
     r.observe("main").await;
     r.state("main", "idle");
-    let lease_before = r.now() + 3_600_000;
-    r.advance(270_000);
+    let lease_before = r.now() + r.lease_ms();
+    r.advance_attended(270_000);
     r.step().await;
     let sent = r.up.requests();
     let probe = sent.last().unwrap();
@@ -216,7 +216,7 @@ async fn a_probe_preserves_routing_and_constraints() {
             .unwrap()
             .as_millisecond()
             > lease_before,
-        "only the heartbeat renewed the lease"
+        "the heartbeats carried the lease past the one the session started with"
     );
     // The ledger has the probe under kind probe with the same session, and the pin is the real request's.
     let rows = wait_for(std::time::Duration::from_secs(5), || {
@@ -363,14 +363,14 @@ async fn a_heartbeat_does_not_reset_idle_or_refresh() {
     r.observe("main").await;
     r.state("main", "idle");
     let original = r.status("main");
-    r.advance(270_000);
+    r.advance_attended(270_000);
     r.step().await;
     r.event(Event {
         event: "heartbeat".into(),
         ..Default::default()
     })
     .unwrap();
-    r.advance(270_000);
+    r.advance_attended(270_000);
     r.step().await;
     let status = r.status("main");
     assert_eq!(
@@ -406,7 +406,7 @@ async fn idle_seconds_include_parked_time_and_exclude_subagents() {
     r.observe("worker").await;
     r.state("main", "parked");
     r.state("worker", "idle");
-    r.advance(270_000);
+    r.advance_attended(270_000);
     r.step().await;
     assert_eq!(
         r.status("main").probes,
@@ -414,7 +414,7 @@ async fn idle_seconds_include_parked_time_and_exclude_subagents() {
         "a parked main is not under the idle budget"
     );
     r.state("main", "idle");
-    r.advance(270_000);
+    r.advance_attended(270_000);
     r.step().await;
     assert_eq!(
         (r.status("main").probes, r.status("worker").probes),
@@ -428,10 +428,6 @@ async fn a_lapsed_lease_keeps_probing_under_the_idle_limit_and_a_release_discard
     // The lapse case: the recipe stays, the probe at 270 s still runs, a heartbeat is refused, and the idle
     // limit counted from the last real request ends it with the wasted label idle_limit.
     let mut r = rig(RigSpec {
-        limits: KeepaliveLimits {
-            lease_seconds: 90,
-            ..KeepaliveLimits::default()
-        },
         policy: KeepalivePolicy {
             max_idle_seconds: 500,
             ..RigSpec::default().policy
@@ -512,7 +508,7 @@ async fn a_late_probe_cannot_revive_a_new_generation() {
             "/v1/messages",
             Respond::Gated(Box::new(probe_answer(2_000, 0))),
         );
-        r.advance(270_000);
+        r.advance_attended(270_000);
         r.engine.step().await;
         wait_for(std::time::Duration::from_secs(5), || {
             (r.up.requests().len() == 2).then_some(())
@@ -718,51 +714,51 @@ async fn an_oversized_or_stalled_probe_body_releases_the_worker_and_shutdown_fin
 
 #[tokio::test]
 async fn concurrency_is_bounded_by_max_workers_alone() {
-    let mut r = rig(RigSpec {
-        limits: KeepaliveLimits {
-            max_workers: 1,
-            lease_seconds: 3_600,
-            ..KeepaliveLimits::default()
-        },
-        ..RigSpec::default()
-    })
-    .await;
-    r.event(Event {
-        event: "agent_start".into(),
-        agent_id: Some("worker".into()),
-        ..Default::default()
-    })
-    .unwrap();
-    r.observe("main").await;
-    r.observe("worker").await;
-    r.up.push_credential_rule(
-        A,
-        "/v1/messages",
-        Respond::Gated(Box::new(probe_answer(2_000, 0))),
-    );
+    let mut r = rig(RigSpec::default()).await;
+    // One due agent more than there are workers.
+    let mut agents = vec![MAIN_AGENT.to_string()];
+    for n in 1..=MAX_WORKERS {
+        let agent = format!("worker-{n}");
+        r.event(Event {
+            event: "agent_start".into(),
+            agent_id: Some(agent.clone()),
+            ..Default::default()
+        })
+        .unwrap();
+        agents.push(agent);
+    }
+    for agent in &agents {
+        r.observe(agent).await;
+    }
+    for _ in 0..MAX_WORKERS {
+        r.up.push_credential_rule(
+            A,
+            "/v1/messages",
+            Respond::Gated(Box::new(probe_answer(2_000, 0))),
+        );
+    }
+    let probes = |r: &Rig| {
+        agents
+            .iter()
+            .map(|agent| r.status(agent).probes)
+            .sum::<u64>()
+    };
     r.advance(270_000);
     r.engine.step().await;
     wait_for(std::time::Duration::from_secs(5), || {
-        (r.up.requests().len() == 3).then_some(())
+        (r.up.requests().len() == agents.len() + MAX_WORKERS).then_some(())
     })
     .await;
     r.engine.step().await;
     assert_eq!(
-        (
-            r.engine.stats().running_probes,
-            r.status("main").probes + r.status("worker").probes
-        ),
-        (1, 1),
-        "one worker, one probe in flight, the other waits"
+        (r.engine.stats().running_probes, probes(&r)),
+        (MAX_WORKERS, MAX_WORKERS as u64),
+        "every worker holds a probe in flight, and the fifth due agent waits"
     );
     r.up.release();
     r.engine.wait_idle().await;
     r.step().await;
-    assert_eq!(
-        r.status("main").probes + r.status("worker").probes,
-        2,
-        "the capacity recovered"
-    );
+    assert_eq!(probes(&r), agents.len() as u64, "the capacity recovered");
 }
 
 #[tokio::test]
@@ -1256,10 +1252,6 @@ const FAST_PRICED: &str = "claude-opus-5";
 fn plan_funded_spec() -> RigSpec {
     RigSpec {
         accounts: vec![oauth("o", OAUTH_SECRET, 0)],
-        limits: KeepaliveLimits {
-            oauth_prewarm_verified: true,
-            ..KeepaliveLimits::default()
-        },
         pool: PoolSpec {
             overage_policy: phoebis_store::OveragePolicy::Allow,
             ..PoolSpec::default()

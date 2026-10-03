@@ -323,7 +323,6 @@ async fn a_probe_under_an_off_key_loses_the_beta_as_an_inference_does() {
                 phoebis_relay::Probe {
                     key_id: "desktop".into(),
                     key_generation: h.store.api_key("desktop").unwrap().unwrap().created_at,
-                    allow_oauth: true,
                 },
                 req,
             )

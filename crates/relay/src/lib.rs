@@ -40,7 +40,7 @@ pub use cache_ttl::{
 pub use casing::{head_queue, HeadQueue, HeadRecorder, OriginalHead};
 pub use catalog::{
     derive, derive_all, Catalog, CatalogRow, CatalogService, Discovered, DiscoveryError,
-    Prefetched, Warmth, MAX_BODY, REFRESH_TICK,
+    Prefetched, Warmth, ERROR_HOLD, MAX_BODY, REFRESH_TICK,
 };
 pub use chains::{canonical, Chains};
 pub use classify::{

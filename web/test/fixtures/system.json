@@ -42,6 +42,11 @@
         "subscriber": "live",
         "dropped": 0,
         "panics": 0
+      },
+      {
+        "subscriber": "attention",
+        "dropped": 0,
+        "panics": 0
       }
     ],
     "live": {
@@ -56,12 +61,6 @@
       "retained_bytes": 116,
       "running_probes": 0,
       "sessions": 1
-    },
-    "alerts": {
-      "deliveries_failed": 0,
-      "deliveries_ok": 2,
-      "open": 1,
-      "rules": 3
     }
   }
 }

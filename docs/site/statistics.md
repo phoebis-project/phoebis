@@ -1,9 +1,8 @@
-# Statistics and alerts
+# Statistics
 
 Every request that finished lands in the ledger, a second SQLite file beside the registry, and the console, the
-analytics routes, the metrics listener, and the alert engine read from it or from the same events. This page
-describes what is recorded, how long it is kept, what each view shows, and how an alert rule is written and
-delivered.
+analytics routes and the metrics listener read from it or from the same events. This page describes what is recorded,
+how long it is kept, what each view shows, and which conditions the router exports as gauges.
 
 ## The ledger
 
@@ -40,13 +39,13 @@ A session that
 branched from another conversation carries that conversation's root and the matched depth as well. The session it names
 is the client's own,
 and the Sessions view groups a row by it.
-The attempt row names the account and its kind; the
-upstream status, request id and message id; the outcome; the cooldown the attempt set; the stop reason, the model the
-answer names when it differs from the one the router resolved, the speed, the region inference ran in, the tokens a
-context edit cleared, and a refusal's category and recommended model; the five token counts, with the thinking share of
-the output and the web search and fetch calls the answer made; the cache miss reason the diagnostics beta reports; the
-unified rate-limit window readings; overage; the cost split across input, cache read, cache write, and output; and the
-pricing version the estimate used.
+The attempt row names the
+account and its kind; the upstream status, request id and message id; the outcome; the cooldown the attempt set; the
+stop reason, the model the answer names when it differs from the one the router resolved, the speed, the region
+inference ran in, the tokens a context edit cleared, and a refusal's category and recommended model; the five token
+counts, with the thinking share of the output and the web search and fetch calls the answer made; the cache miss reason
+the diagnostics beta reports; the unified rate-limit window readings; overage; the cost split across input, cache read,
+cache write, and output; and the pricing version the estimate used.
 
 Placements are counted by rung, with a hit share from the trace and the response's cache-read tokens: a
 placement by the conversation's own messages is a hit when the response read the prefix the entry promised; one
@@ -161,9 +160,8 @@ Body capture is off until a key or a pool asks for it. Once asked for, a capture
 bodies of that key or pool in the ledger for the hours it names, each body cut at 8 MiB if the stream ran longer,
 the row keeping the length it ran to so the drawer can say how much was dropped, and each captured body is dropped
 once its hours run out. `stats.body_capture_max_hours` is the ceiling a key or pool may ask for, because the
-bodies are prompts and how long they are kept is the operator's call rather than the caller's. Only the admin role
-reads bodies: a viewer's request for them is answered `403 captured bodies are for administrators`. The console
-shows a captured body in the request drawer, with a control to copy it. A captured request body is the body as the
+bodies are prompts and how long they are kept is the operator's call rather than the caller's. The console shows a
+captured body in the request drawer, with a control to copy it. A captured request body is the body as the
 client sent it, so a session in auto mode shows its `safeguards` member whole, the machine's permission rules and paths
 included, whether or not the router dropped it on the way upstream.
 
@@ -172,12 +170,12 @@ included, whether or not the router dropped it on the way upstream.
 | Data | Kept for |
 | --- | --- |
 | Requests, attempts, events, kept-warm marks | `stats.retention_days` (90 days by default; 0 forever) |
-| Quota and extra-usage samples | `quota.sample_retention_days` (30 days by default) |
+| Quota and extra-usage samples | `stats.retention_days` (90 days by default; 0 forever) |
 | Captured bodies | The hours the capture named |
 | Hourly rollups | `stats.rollup_retention_days` (400 days; 0 forever, otherwise at least `stats.retention_days`) |
 
 The purge that enforces these runs once an hour. Every five-minute poll's reading is kept for
-`quota.sample_retention_days`, so an idle account adds 288 quota rows per window per day.
+`stats.retention_days`, so an idle account adds 288 quota rows per window per day.
 
 ## Metrics
 
@@ -190,8 +188,8 @@ rendered:
 | `phoebis_account_cooldown_seconds` | gauge | `account`, `scope` |
 | `phoebis_account_overage_in_use` | gauge | `account` |
 | `phoebis_account_ratelimit_utilization` | gauge | `account`, `window` |
-| `phoebis_alert_deliveries_total` | counter | `outcome`, `rule` |
 | `phoebis_attempts_total` | counter | `account`, `model`, `outcome` |
+| `phoebis_attention` | gauge | `kind`, `subject` |
 | `phoebis_bus_dropped_total` | counter | `subscriber` |
 | `phoebis_bus_subscriber_panics_total` | counter | `subscriber` |
 | `phoebis_keepalive_agents` | gauge | `state` |
@@ -222,17 +220,18 @@ session, like every other admin route. After the upgrade the socket sends one `{
 message and then a `{"kind": "delta", ...}` message for every change. The feed keeps 30 minutes or 2,048
 finished requests, whichever bound is reached first; a request or response preview inside a message is at most
 4 KiB; and a client that falls 1,024 messages behind the broadcast is disconnected rather than left to grow an
-unbounded backlog. A session logged in with the viewer secret sees no preview on the socket, and a past
-snapshot carries no preview whatever the role. The socket closes `1008 session ended` once its session ends,
+unbounded backlog. A past snapshot carries no preview. The socket closes `1008 session ended` once its session ends,
 and at most 64 sockets are served at once, a further one refused `503 live feed at capacity` until one closes.
 
 ## The console's views
 
 ### Dashboard
 
-Four tiles report requests, tokens, estimated cost, and the error rate over the last 24 hours; two cards below
-them show the 5-hour and 7-day quota remaining for each subscription account; and the page ends with the most
-recent requests and a sessions card that leads with the router's live pins and the accounts they sit on.
+A line above the tiles names what needs the operator's attention, worst first, each item a badge that opens the account,
+pool or key where it is fixed; it reads the same conditions the [`phoebis_attention` gauge](#conditions-and-gauges)
+exports. Four tiles report requests, tokens, estimated cost, and the error rate over the last 24 hours; two cards below
+them show the 5-hour and 7-day quota remaining for each subscription account; and the page ends with the most recent
+requests and a sessions card that leads with the router's live pins and the accounts they sit on.
 
 ### Observe
 
@@ -248,19 +247,19 @@ that fails after its 200 head keeps that status, so a finished request with an e
 ### Quota
 
 A card per account shows one row per rate-limit window, filterable by tabs for all accounts, OAuth accounts, and
-Anthropic-key accounts. Each OAuth card's footer says when the poll last asked the endpoint and how it answered, when
-the snapshot it shows was read, and, while the account backs off, since when and when the next attempt comes; Refresh
-reads the endpoint now unless the account is backing off or a fresh snapshot is cached. A card draws the windows the
-ledger sampled in the last day, or the ones the router holds when the ledger has none, whatever the last read said, and
-shows an error in their place only when it holds none; the page counts a card that shows an error, whose last poll
-failed, or that is backing off as needing attention. Each card names the account's plan with the date its subscription
-started and, for an account on the Claude Code trial, when the trial ends; an account marked cancelled says when its
-plan ends, in the serious tone inside a week. A card whose account served a fast-mode request shows a Fast mode line:
-the share of the fast lane's input and output buckets used, as the last answer reported them, with the reset, a bucket
-past its reset reading as refilled, and a chip while the account's fast lane cools, naming the reason (rate limited, or
-credits unavailable) and when it lifts; the account page's Usage card shows the same line and chip. Below the cards, a
-reset timeline lays the same windows across a calendar, zoomable between a two-week weekly view and a three-day 5-hour
-view.
+Anthropic-key accounts. Each OAuth card's footer says when the poll last asked the endpoint and how it answered, a
+failed poll naming its reason (cut to the line's width, the whole message in the line's title), when the snapshot it
+shows was read, and, while the account backs off, since when and when the next attempt comes; Refresh reads the endpoint
+now unless the account is backing off or a fresh snapshot is cached. A card draws the windows the ledger sampled in the
+last day, or the ones the router holds when the ledger has none, whatever the last read said, and shows an error in
+their place only when it holds none; the page counts a card that shows an error, whose last poll failed, or that is
+backing off as needing attention. Each card names the account's plan with the date its subscription started and, for an
+account on the Claude Code trial, when the trial ends; an account marked cancelled says when its plan ends, in the
+serious tone inside a week. A card whose account served a fast-mode request shows a Fast mode line: the share of the
+fast lane's input and output buckets used, as the last answer reported them, with the reset, a bucket past its reset
+reading as refilled, and a chip while the account's fast lane cools, naming the reason (rate limited, or credits
+unavailable) and when it lifts; the account page's Usage card shows the same line and chip. Below the cards, a reset
+timeline lays the same windows across a calendar, zoomable between a two-week weekly view and a three-day 5-hour view.
 
 ![The Quota view: the cards per account and the reset timeline](assets/quota-light.png#only-light)
 ![The Quota view: the cards per account and the reset timeline](assets/quota-dark.png#only-dark)
@@ -383,115 +382,68 @@ its subtitle says so.
 Settings opens on the downstream client configuration, the six-line environment block that points Claude Code at the
 router with a reason under each line. Its base URL is a placeholder for the URL that reaches the proxy listener, and
 the address the listener binds shows beside the block. Then come the price table, the appearance and time-format
-choices, the access secrets and what each may do, and an About card with the version, the profile, the metrics
-listener and the three storage paths. The values the configuration file sets are on the [installation
-page](installation.md) and `phoebis check-config` prints them.
+choices, and an About card with the version, the profile, the metrics listener, the three storage paths, the three
+keepalive limits the file sets and the admin secret's standing. About closes on a pointer: the values the configuration
+file sets are on the [installation page](installation.md), and `phoebis check-config` prints them.
 
-## Alerts
+## Conditions and gauges
 
-A rule names a kind, a scope, a webhook URL, an optional secret, and an enabled flag; only `utilization_above`
-also takes a threshold from 0 to 1 and a window of `5h`, `7d`, or `7d_oi`, and `session_idle` takes a threshold in
-whole minutes from 1 to 10080. `all` and `any_account` take no scope id; `account`, `key`, and `pool` each require
-one.
+The router exports what needs an operator as Prometheus gauges and shows the same conditions on the dashboard's
+attention line and the pool cards, which read `GET /admin/attention` ([API](api.md#get-adminattention)), worst first
+and the oldest first within a kind. `phoebis_attention` carries the labels `kind` and `subject`, reads 1 while the cause
+holds and 0 once it clears, and has a series for every subject the kind applies to, so a cleared condition reads 0
+rather than vanishing; a deleted account or pool loses its series at the next read. A restart starts the conditions fed
+by the request bus over, and the usage poll keeps its backoff in memory as well, so `poll_backoff` reads 0 until a new
+backoff run is thirty minutes old; only the conditions read from the registry hold again at the first read.
 
-| Kind | Label | Scopes |
+| Kind | Subject | Clears when |
 | --- | --- | --- |
-| `ask_user_question` | Waiting for user input | `all`, `key`, `pool` |
-| `client_drift` | Client drift | `all` |
-| `funding_required` | Funding required | `account`, `any_account` |
-| `keepalive_cost_cap` | Probe cost cap reached | `all`, `pool` |
-| `poll_backoff` | Usage poll backing off | `account`, `any_account` |
-| `pool_exhausted` | Pool exhausted | `all`, `pool` |
-| `reauth_required` | Re-auth required | `account`, `any_account` |
-| `refresh_failed` | Credential refresh failed | `account`, `any_account` |
-| `session_active` | Session active | `all`, `key`, `pool` |
-| `session_idle` | Session idle | `all`, `key`, `pool` |
-| `session_parked` | Session parked | `all`, `key`, `pool` |
-| `subagent_active` | Subagent active | `all`, `key`, `pool` |
-| `utilization_above` | Utilization above threshold | `account`, `all`, `any_account`, `key`, `pool` |
+| `pool_exhausted` | the pool | a request of the pool succeeds |
+| `client_drift` | the client version | an inference request from that version is relayed, or a re-pinned build starts |
+| `reauth_required` | the account | the account is paired again, or an Anthropic-key account gets a new secret |
+| `funding_required` | the Anthropic-key account | the operator clears funding |
+| `refresh_failed` | the OAuth account | a refresh commits, or a newer credential supersedes a pending one |
+| `poll_backoff` | the polled account | a poll answers clean |
 
-**Waiting for user input** fires when a response relayed to a client carries an AskUserQuestion tool call, so the
-agent is blocked on an answer; it resolves on the session's next request, the first sign the user replied, or
-when the session expires. Once the captured body it was read from has passed its own retention, the question
-text is withheld from the webhook the same way it is from the API and the console.
+**`pool_exhausted`** holds while a request of the pool has ended exhausted and none of the pool's requests has
+succeeded since; it is fed by the request bus. An `incomplete` answer neither raises nor clears it. The detail names the
+pool and the key of the request that raised it.
 
-**Client drift** fires when a self-check fails for a client request: the client stamped a billing hash, or a
-`cc_version` suffix, this build cannot reproduce; re-pinning the router to that client build and resolving the event by
-hand clears it.
+**`client_drift`** holds while a request from that client version has been refused for drift since the process started
+and no inference request from it has been relayed since ([re-pinning](operations.md#re-pinning-the-client-build)); it
+is fed by the request bus. A token count or a keepalive request clears nothing: a count carries no stamp for the check
+to read, and a keepalive request replays a body the router kept rather than the client's next one. The subject is the
+version the client's user agent names when it reads as a release, one to four runs of digits joined by dots in at most
+32 bytes; any other value is filed under `other`, and a request that named none under `unknown`. At most sixteen
+versions are kept: a new one takes the place of the cleared version whose run started first, or of the one that has
+held longest when every version holds. The detail names the version, what drifted (`hash` or `version_suffix`) and the
+key of the newest refusal, which the item opens; a refusal that named no key opens nothing.
 
-**Funding required** fires when an Anthropic-key account is refused for billing reasons and resolves when an operator
-clears the funding flag.
+**`reauth_required`** holds while the account's state is `reauth_required`, read from the registry
+([account states](pairing.md#account-states)). The registry records no time for a state change, so the item dates from
+the first read of this process that saw the state. The detail names the account and its label.
 
-**Probe cost cap reached** fires when a pool's daily probe cost cap is reached; probes pause until the next UTC
-day, which resolves it, as removing the cap resolves it at the next poll.
+**`funding_required`** holds while the account's state is `funding_required`, set when the upstream refuses a request
+over the account's credit balance; it is read from the registry and dated and detailed as `reauth_required` is.
 
-**Usage poll backing off** fires when an OAuth account's usage poll has been backing off from the endpoint's 429
-answers for thirty minutes, counted from the run's first 429, and resolves on the account's next clean poll, or once
-the account is disconnected or its credential removed, since the poll no longer asks about it. The detail names the
-account, since when it has backed off, when the next attempt comes, and how many 429s it answered in a row. An event
-left open across a restart resolves once the account's first poll reads clean.
+**`refresh_failed`** holds while the account's newest two resolved credential refreshes both failed or went uncertain,
+a run read from the registry. A refresh that commits ends the run, and so does one a newer credential superseded, as a
+re-pairing settles a refresh still pending. The detail counts the run's failures and gives the newest attempt's outcome
+and error.
 
-**Pool exhausted** fires when a request finds no eligible account in the pool and resolves on the next request
-the pool serves; an `incomplete` answer neither fires nor resolves it.
+**`poll_backoff`** holds once the usage poll has been backing off from the endpoint's 429 answers on the account for
+thirty minutes, counted from the run's first 429. The detail gives when the run started, when the next attempt comes,
+and how many 429s the endpoint answered in a row.
 
-**Re-auth required** fires when an account enters the reauth-required state and resolves once the account is
-paired or verified again.
+A threshold is a Prometheus rule over the gauge:
 
-**Credential refresh failed** fires when a credential refresh fails twice in a row, an attempt whose answer was
-lost counting as a failure, and resolves on the next refresh that succeeds. The detail names the account, the
-length of the run, the last error, and `outcome`: `failed` for a refresh the token endpoint refused, `uncertain`
-for one whose answer never arrived, so the token may or may not have rotated upstream.
-
-The four session kinds are events rather than conditions: a rule of one of them receives one delivery per event
-as it happens, opens nothing, and has nothing to resolve. `session_active` receives `session_started` and
-`session_ended`, `subagent_active` receives `subagent_started` and `subagent_ended`, `session_parked` receives
-`session_parked` and `session_resumed`, and `session_idle` receives `session_idle`. A delivery goes to every
-enabled rule of the kind whose scope matches the session at that moment, so a rule enabled mid-session receives
-the session's later events and no start it missed; after a restart nothing is posted, since the router no longer
-knows which sessions live, and a live session's next event is posted as it comes. A graceful stop posts the end of
-every session it still tracks, so a session whose start was posted is never left open across the restart. Each
-delivery lands in the event log as `lifecycle` with the event's name, and the Alerts view lists them as a log.
-
-**Session active** posts `session_started` on a session's first request through the router, or on the keepalive
-companion's `session_start` when that comes first, and `session_ended` on the companion's `session_end` or when
-the session has been silent for `sessions.expire_after_seconds`, checked every second. A heartbeat from the
-companion counts as a sign of life there, so a session whose user has stepped away is not ended while its client
-is still attended. The detail's `source` says which side posted the event: `request`, `companion`, `expiry`, or
-`shutdown`.
-
-**Session idle** posts `session_idle` once no request has arrived on the session for the rule's threshold in
-minutes, measured from the session's last request on any of its agents, once per crossing; the session's next
-request arms the rule again.
-
-**Session parked** posts `session_parked` when the companion reports the main agent parked and `session_resumed`
-on the main agent's next request or when the companion reports the agent busy or idle again; without a companion
-for the session neither happens.
-
-**Subagent active** posts `subagent_started` on a subagent's first request, or on the companion's `agent_start`,
-and `subagent_ended` when the companion releases the agent, when the session ends, or at the session's expiry.
-The detail names the parent agent when the client sent `x-claude-code-parent-agent-id`.
-
-**Utilization above threshold** fires when the router's reading of the chosen window, carried forward between heads and
-polls as the [routing page](routing.md#the-windows-the-router-works-from) says, reaches the threshold and resolves once
-a sample reads five points below it.
-
-For the other ten kinds at most one open event exists per rule and subject; an event resolves either on the
-condition its description names or by hand, through Resolve. A webhook may not point at `localhost` or a
-`.localhost` name, a loopback, link-local, or unspecified address; the refusal reads `webhook_url must not point
-at {reason}`, and the same check runs again on every delivery against whatever address DNS actually answers with,
-since a name can resolve differently over time.
-
-A delivery posts a JSON body with the keys `detail`, `kind`, `opened_at`, `resolved_at`, `router`, `rule`,
-`state` (`opened` or `resolved` for an event's two transitions, `event` for a session event, whose `opened_at`
-is the event's time and whose `resolved_at` is null), and `subject`, in that order. When the rule has a secret,
-the body carries an `x-phoebis-signature: sha256=<hex>` header, an HMAC-SHA256 of the raw bytes keyed by the
-secret; a rule with a secret never posts unsigned. Delivery makes three attempts, the first immediate and the
-next two after waits of 1 and 4 seconds; each request has a 10-second timeout and follows no redirect, since a
-redirect would carry the signature to a URL it was never computed for. A 2xx response counts as delivered, and
-Test fires one synthetic delivery through the same path.
-
-A viewer sees a rule's webhook host and never its full URL, since the URL can carry the receiver's credential in
-its path or query.
-
-![The Alerts view: the rules, the events with deliveries, and the lifecycle log](assets/alerts-light.png#only-light)
-![The Alerts view: the rules, the events with deliveries, and the lifecycle log](assets/alerts-dark.png#only-dark)
+```yaml title="prometheus rules"
+groups:
+  - name: phoebis
+    rules:
+      - alert: PhoebisNeedsAttention
+        expr: phoebis_attention == 1
+        for: 10m
+        labels: { severity: page }
+        annotations: { summary: "{{ $labels.kind }} on {{ $labels.subject }}" }
+```

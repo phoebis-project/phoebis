@@ -60,6 +60,8 @@ pub struct PollStatus {
     pub last_attempt_at: i64,
     /// When the windows of the last clean answer were read; `None` until one lands.
     pub last_clean_at: Option<i64>,
+    /// The message of the last attempt that was not clean; `None` after a clean one.
+    pub last_error: Option<String>,
     pub last_outcome: PollOutcome,
     /// When the account may be asked again; `None` when the next slot may ask it.
     pub next_attempt_at: Option<i64>,
@@ -251,6 +253,8 @@ struct CachedEntry {
     held_by: &'static str,
     backoff_since: Option<i64>,
     last_clean_at: Option<i64>,
+    /// The message of the last attempt that was not clean; `None` after a clean one.
+    last_error: Option<String>,
     last_outcome: PollOutcome,
     rate_limited_in_a_row: u32,
 }
@@ -271,6 +275,7 @@ impl CachedEntry {
         self.held_by = endpoint;
         let wait = retry_after.unwrap_or_else(|| ladder_step(self.rate_limited_in_a_row));
         self.not_before = self.not_before.max(at.saturating_add(wait));
+        self.last_error = Some(self.hold_message());
         tracing::warn!(
             account = %account_id,
             next_attempt_at = %utc(self.not_before),
@@ -283,13 +288,18 @@ impl CachedEntry {
     /// the poll and a manual refresh must not record the cached windows as freshly read.
     fn held_answer(&self) -> UsageSnapshot {
         UsageSnapshot {
-            error: Some(format!(
-                "the {} endpoint rate-limited the account; next attempt at {}",
-                self.held_by,
-                utc(self.not_before)
-            )),
+            error: Some(self.hold_message()),
             ..self.snapshot.clone()
         }
+    }
+
+    /// The one sentence the held answer and the poll's last error both read.
+    fn hold_message(&self) -> String {
+        format!(
+            "the {} endpoint rate-limited the account; next attempt at {}",
+            self.held_by,
+            utc(self.not_before)
+        )
     }
 }
 
@@ -421,6 +431,7 @@ impl UsageService {
             backoff_since: entry.backoff_since,
             last_attempt_at: entry.fetched_at,
             last_clean_at: entry.last_clean_at,
+            last_error: entry.last_error.clone(),
             last_outcome: entry.last_outcome,
             next_attempt_at: (now < entry.not_before).then_some(entry.not_before),
             rate_limited_in_a_row: entry.rate_limited_in_a_row,
@@ -704,6 +715,7 @@ impl Inner {
                         held_by,
                         backoff_since: None,
                         last_clean_at: Some(fetched_at),
+                        last_error: None,
                         last_outcome: PollOutcome::Clean,
                         rate_limited_in_a_row: 0,
                     },
@@ -733,6 +745,7 @@ impl Inner {
                         Some((received_at, retry_after)),
                     ),
                 };
+                let last_error = Some(message.clone());
                 let snapshot = match previous {
                     // The snapshot's timestamp says when its windows were read, and a failed attempt read
                     // none, so it keeps the one from the last success rather than passing stale quota off as
@@ -757,6 +770,7 @@ impl Inner {
                     held_by,
                     backoff_since,
                     last_clean_at,
+                    last_error,
                     last_outcome: PollOutcome::Failed,
                     rate_limited_in_a_row,
                 };
@@ -796,6 +810,7 @@ impl Inner {
                     held_by: endpoint,
                     backoff_since: None,
                     last_clean_at: None,
+                    last_error: None,
                     last_outcome: PollOutcome::RateLimited,
                     rate_limited_in_a_row: 0,
                 };

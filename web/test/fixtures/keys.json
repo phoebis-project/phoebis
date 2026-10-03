@@ -21,8 +21,6 @@
         "keepalive_opt_out": false,
         "body_capture_hours": null,
         "effective_body_capture_hours": 24,
-        "in_flight_cap": null,
-        "affinity_source": "auto",
         "auto_mode_server": null,
         "effective_auto_mode_server": true,
         "prefix": "LGWWN5RB",

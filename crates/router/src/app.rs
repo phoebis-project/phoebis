@@ -25,11 +25,6 @@ use tokio::task::JoinHandle;
 use crate::config::{Config, UpstreamConfig};
 use crate::listen;
 
-/// Whether an alert rule may aim its webhook at an address only this host can reach. Off in the binary; the
-/// routes refuse such a destination when a rule is written and the deliverer drops it out of every answer a
-/// name resolves to, so both read it from here.
-const ALLOW_LOCAL_WEBHOOKS: bool = false;
-
 /// How long a shutdown waits for relays that are still running. A stream that has not ended by then is not
 /// going to end sooner because the process keeps waiting.
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
@@ -82,12 +77,7 @@ const SESSION_IDLE: Duration = Duration::from_secs(900);
 /// until `shutdown` resolves, then drains.
 pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::Result<()> {
     init_tracing();
-    let profile = phoebis_profile::by_name(&config.compatibility.profile).ok_or_else(|| {
-        anyhow!(
-            "compatibility.profile {} is not a profile this build carries",
-            config.compatibility.profile
-        )
-    })?;
+    let profile = phoebis_profile::claude_code_2_1_269_linux_x64();
 
     let key = StorageKey::from_file(&config.storage.encryption_key_file).with_context(|| {
         format!(
@@ -214,7 +204,6 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         LedgerConfig {
             retention_days: config.stats.retention_days,
             rollup_retention_days: config.stats.rollup_retention_days,
-            sample_retention_days: config.quota.sample_retention_days,
             purge_interval: Duration::from_secs(3_600),
             event_poll: Duration::from_secs(5),
             expire_interval: Duration::from_secs(60),
@@ -237,7 +226,6 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         router_task.clone(),
         clock.clone(),
         DISCOVERY_TIMEOUT,
-        Duration::from_secs(config.routing.catalog_cache_seconds),
         Duration::from_secs(config.routing.startup_fetch_seconds),
     ));
     let relay = Arc::new(
@@ -273,7 +261,6 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             let readiness = readiness.clone();
             Arc::new(move || readiness.dead())
         })
-        .with_cache_diagnostics(config.compatibility.cache_diagnostics)
         .with_signed_placeholder(config.proxy.sign_cch_placeholder)
         .with_profile_name(profile.name)
         .with_session_memory(
@@ -288,16 +275,14 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
     let memory_flush = relay
         .clone()
         .spawn_memory_flush(phoebis_relay::MEMORY_FLUSH_INTERVAL);
-    // The companion's reports reach the alerts off the request bus, which drops under pressure while a
-    // session's start and end must not.
-    let (lifecycle_tx, lifecycle_rx) = phoebis_bus::lifecycle_channel();
     let keepalive = Engine::new(EngineParts {
         bus: bus.clone(),
         clock: clock.clone(),
         cooldown_fallback: Duration::from_secs(config.routing.cooldown_fallback_seconds),
         ledger: ledger.clone(),
-        lifecycle: Some(lifecycle_tx),
+        lifecycle: None,
         limits: config.keepalive.clone(),
+        max_request_bytes: config.proxy.max_request_bytes,
         metrics: metrics.clone(),
         pricing: pricing.clone(),
         relay: relay.clone(),
@@ -308,35 +293,14 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
     });
     // Both daily budgets are read back from the store so a restart resets neither cap.
     keepalive.load_spent_today().await;
-    let alerts = phoebis_alerts::Alerts::new(phoebis_alerts::AlertParts {
-        clock: clock.clone(),
-        ledger: ledger.clone(),
-        metrics: metrics.clone(),
-        // The body names this router so a receiver fed by several can tell them apart.
-        router_name: config
-            .admin
-            .origin
-            .clone()
-            .unwrap_or_else(|| config.admin.listen.to_string()),
-        store: store.clone(),
-        webhook: Arc::new(phoebis_alerts::ReqwestWebhook::new(ALLOW_LOCAL_WEBHOOKS)),
-    });
-    let mut alert_inputs = phoebis_alerts::spawn_inputs(
-        alerts.clone(),
-        phoebis_alerts::AlertInputs {
-            body_capture_max_hours: config.stats.body_capture_max_hours,
+    let (attention, mut attention_handles) =
+        phoebis_attention::spawn(phoebis_attention::AttentionParts {
             bus: bus.clone(),
-            lifecycle: Some(lifecycle_rx),
+            clock: clock.clone(),
             router: router_task.clone(),
-            session_expiry: Duration::from_secs(config.sessions.expire_after_seconds),
-            spent_today: Arc::new({
-                let engine = keepalive.clone();
-                move || engine.spent_today()
-            }),
-            tick: Duration::from_secs(1),
+            store: store.clone(),
             usage: Some(usage.clone()),
-        },
-    );
+        });
     let observer = spawn_observer(keepalive.clone());
     let scheduler_tick = keepalive.spawn_scheduler();
     // Captured here so the metrics listener reads the engine's agent counts on every scrape without depending
@@ -353,11 +317,6 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         sessions: Arc::new(Sessions::new(SESSION_IDLE, SESSION_ABSOLUTE)),
         secrets: AdminSecrets {
             admin: Secret::new(config.admin.secret.expose()),
-            viewer: config
-                .admin
-                .viewer_secret
-                .as_ref()
-                .map(|secret| Secret::new(secret.expose())),
         },
         clock: clock.clone(),
         plain_http: config.admin.plain_http,
@@ -375,40 +334,27 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         pricing: pricing.clone(),
         tables,
         settings: Arc::new(SettingsView {
-            admin_listen: config.admin.listen.to_string(),
-            admin_origin: config.admin.origin.clone(),
             body_capture_max_hours: config.stats.body_capture_max_hours,
-            cache_diagnostics: config.compatibility.cache_diagnostics,
-            catalog_cache_seconds: config.routing.catalog_cache_seconds,
-            catalog_refresh_seconds: config.routing.catalog_refresh_seconds,
             cooldown_fallback_seconds: config.routing.cooldown_fallback_seconds,
             keepalive: config.keepalive.clone(),
             ledger_path: config.stats.ledger_path.display().to_string(),
             metrics_listen: config.stats.metrics_listen.to_string(),
-            model_rejection_seconds: config.routing.model_rejection_seconds,
             pricing_path: config
                 .stats
                 .pricing_path
                 .as_ref()
                 .map(|p| p.display().to_string()),
-            profile: config.compatibility.profile.clone(),
+            profile: profile.name.to_string(),
             proxy_listen: config.proxy.listen.to_string(),
-            quota_sample_retention_days: config.quota.sample_retention_days,
-            retention_days: config.stats.retention_days,
-            rollup_retention_days: config.stats.rollup_retention_days,
             session_expire_after_seconds: config.sessions.expire_after_seconds,
-            startup_fetch_seconds: config.routing.startup_fetch_seconds,
             storage_path: config.storage.path.display().to_string(),
             usage_cache_ttl_seconds: config.usage.cache_ttl_seconds,
-            usage_refresh_concurrency: config.usage.refresh_concurrency,
-            viewer_configured: config.admin.viewer_secret.is_some(),
         }),
         // Cloned rather than moved: the local binding still serves the companion router and the shutdown
         // sequence below.
         keepalive: keepalive.clone(),
-        alerts: alerts.clone(),
+        attention: attention.clone(),
         readiness,
-        allow_local_webhooks: ALLOW_LOCAL_WEBHOOKS,
     });
 
     // Before the proxy listener binds, so the first request finds the dated ids and the samples in place; each
@@ -534,6 +480,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             clock.clone(),
             Duration::from_secs(config.routing.cooldown_fallback_seconds),
             Some(keepalive_gauge_source),
+            Some(attention.gauge_source()),
         ),
         stop_rx,
         ListenLimits {
@@ -571,17 +518,13 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
     });
     tracing::info!("shutting down");
     let _ = stop.send(true);
-    // Stop, close, drain, listeners: the inputs stop posting starts and the poller ends before the keepalive
-    // close, so no request observed during the drain is posted after the end of its session; the close
-    // enqueues a session_ended per live session; the lifecycle consumer posts those, and the drain then ends
-    // whatever sessions are left, before the listeners are joined. The stop is synchronous and sits outside
-    // the timed block, so it has run whatever the block does.
-    alert_inputs.stop();
+    // The attention arm's state dies with the process, so nothing the drain completes is worth reading into it. The
+    // stop is synchronous and sits outside the timed block, so it has run whatever the block does.
+    attention_handles.stop();
     let served = match tokio::time::timeout(DRAIN_TIMEOUT, async {
         // The scheduler stops and its probes end before the listeners drain: a probe runs through the relay,
         // which the drain is about to drop.
         keepalive.shutdown().await;
-        alert_inputs.drain().await;
         join_remaining(
             &mut ended,
             [&mut proxy, &mut admin_server, &mut metrics_server],
@@ -605,7 +548,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             proxy.abort();
             admin_server.abort();
             metrics_server.abort();
-            alert_inputs.abort();
+            attention_handles.abort();
             Ok(())
         }
     };
@@ -613,11 +556,8 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         Some(error) => Err(error),
         None => served,
     };
-    // Every delivery queued before the stop lands before the ledger and the bus close.
-    alerts.shutdown().await;
-    // The bus arm read through the whole drain so a request completing in it still reached the conditions it
-    // carries; with the listeners joined and the engine closed there is nothing left for it to post.
-    alert_inputs.abort();
+    // The stop lets the arm finish the event in hand; whatever is left of it ends before the bus closes.
+    attention_handles.abort();
     // The bus closes further down, so the observer is still subscribed on both paths and this ends it.
     observer.abort();
     scheduler_tick.abort();

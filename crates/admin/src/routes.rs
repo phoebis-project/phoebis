@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::body::Bytes;
-use axum::extract::{Path, Request, State};
+use axum::extract::{MatchedPath, Path, Request, State};
 use axum::http::header::{
     CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE, COOKIE, HOST, ORIGIN, SET_COOKIE,
     TRANSFER_ENCODING, UPGRADE,
@@ -35,8 +35,8 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::{
-    accounts, alerts, analytics, dashboard, keepalive, keys, live, models, pools, pricing,
-    requests, sessions, settings, AdminState, LoginError, Role,
+    accounts, analytics, attention, dashboard, keepalive, keys, live, models, pools, pricing,
+    requests, sessions, settings, AdminState, LoginError,
 };
 
 /// Covers a slow control-plane answer without letting one stalled exchange hold an admin request open
@@ -72,25 +72,6 @@ pub fn router(state: Arc<AdminState>) -> Router {
         .route("/admin/accounts/{id}/usage", get(usage_latest))
         .route("/admin/accounts/{id}/usage/refresh", post(usage_refresh))
         .route("/admin/accounts/{id}/verify", post(verify))
-        .route("/admin/alerts/deliveries", get(alerts::list_lifecycle))
-        .route("/admin/alerts/events", get(alerts::list_events))
-        .route(
-            "/admin/alerts/events/{id}/deliveries",
-            get(alerts::list_deliveries),
-        )
-        .route(
-            "/admin/alerts/events/{id}/resolve",
-            post(alerts::resolve_event),
-        )
-        .route(
-            "/admin/alerts/rules",
-            get(alerts::list_rules).post(alerts::create_rule),
-        )
-        .route(
-            "/admin/alerts/rules/{id}",
-            patch(alerts::patch_rule).delete(alerts::delete_rule),
-        )
-        .route("/admin/alerts/rules/{id}/test", post(alerts::test_rule))
         .route("/admin/analytics/accounts", get(analytics::accounts))
         .route("/admin/analytics/breakdown", get(analytics::breakdown))
         .route("/admin/analytics/budgets", get(analytics::budgets))
@@ -98,6 +79,7 @@ pub fn router(state: Arc<AdminState>) -> Router {
         .route("/admin/analytics/placements", get(analytics::placements))
         .route("/admin/analytics/rewrites", get(analytics::rewrites))
         .route("/admin/analytics/series", get(analytics::series))
+        .route("/admin/attention", get(attention::show))
         .route("/admin/dashboard", get(dashboard::show))
         .route("/admin/keepalive/overview", get(keepalive::overview))
         .route("/admin/keepalive/recipes", get(keepalive::recipes))
@@ -146,19 +128,45 @@ pub fn router(state: Arc<AdminState>) -> Router {
 }
 
 /// Who is calling, as the gate resolved them: the handle that names this admin session in pairing
-/// ownership. The cookie that produced it never leaves the session store.
+/// ownership and in the mutation log. The cookie that produced it never leaves the session store.
 #[derive(Clone)]
 pub(crate) struct Caller {
     pub session_id: String,
-    pub role: Role,
 }
 
-/// Authentication, the role gate, the origin check, and `Cache-Control` for every route at once, so no
+/// The id a create handler made, which its path does not carry; read by the mutation log.
+#[derive(Clone)]
+pub(crate) struct CreatedId(pub String);
+
+/// Authentication, the origin check, `Cache-Control` and the mutation log for every route at once, so no
 /// handler can be added that quietly skips one of them.
 async fn gate(State(state): State<Arc<AdminState>>, mut request: Request, next: Next) -> Response {
+    let method = request.method().clone();
+    let mutation = is_mutation(&method);
+    // The matched pattern names the route in the line; the request's own path supplies the id's segment.
+    let route = request.extensions().get::<MatchedPath>().map_or_else(
+        || request.uri().path().to_string(),
+        |m| m.as_str().to_string(),
+    );
+    let path = request.uri().path().to_string();
     let mut response = match admit(&state, &mut request) {
-        None => next.run(request).await,
-        Some(refusal) => refusal,
+        None => {
+            let session = request
+                .extensions()
+                .get::<Caller>()
+                .map(|c| c.session_id.clone());
+            let response = next.run(request).await;
+            if mutation {
+                log_mutation(&method, &route, &path, session.as_deref(), &response);
+            }
+            response
+        }
+        Some(refusal) => {
+            if mutation {
+                log_mutation(&method, &route, &path, None, &refusal);
+            }
+            refusal
+        }
     };
     // An admin answer describes credentials and usage; a cache between the browser and this process has
     // no business holding any of it.
@@ -168,14 +176,73 @@ async fn gate(State(state): State<Arc<AdminState>>, mut request: Request, next: 
     response
 }
 
+fn is_mutation(method: &Method) -> bool {
+    matches!(
+        *method,
+        Method::DELETE | Method::PATCH | Method::POST | Method::PUT
+    )
+}
+
+/// The trail of what the operator changed lives in the host's journal and nowhere else, so the line carries what
+/// an operator reading it needs and nothing a log must not hold: no body, no query string, no secret, no cookie.
+fn log_mutation(
+    method: &Method,
+    route: &str,
+    path: &str,
+    session: Option<&str>,
+    response: &Response,
+) {
+    let (entity, id) = entity_of(route, path, response.extensions().get::<CreatedId>());
+    let status = response.status().as_u16();
+    let id = id.as_deref().unwrap_or("-");
+    match session {
+        Some(session) => tracing::info!(
+            %method, %route, status, %entity, %id, credential = %"session", %session, "admin mutation"
+        ),
+        None => tracing::info!(
+            %method, %route, status, %entity, %id, credential = %"none", "admin mutation"
+        ),
+    }
+}
+
+/// The entity a mutation touched, read off the route's own kind segment, and its id: the path's segment where
+/// the pattern names one, else the id a create handler left on its answer.
+fn entity_of(
+    route: &str,
+    path: &str,
+    created: Option<&CreatedId>,
+) -> (&'static str, Option<String>) {
+    let pattern: Vec<&str> = route.split('/').collect();
+    let actual: Vec<&str> = path.split('/').collect();
+    let segment = |name: &str| {
+        pattern
+            .iter()
+            .position(|s| *s == name)
+            .and_then(|i| actual.get(i))
+            .map(|s| s.to_string())
+    };
+    let created = created.map(|c| c.0.clone());
+    match pattern.get(2).copied() {
+        Some("accounts") => ("account", segment("{id}").or(created)),
+        Some("keys") => ("key", segment("{id}").or(created)),
+        Some("pools") => ("pool", segment("{id}").or(created)),
+        Some("oauth") => ("pairing", segment("{id}").or(created)),
+        Some("sessions") => (
+            "session",
+            segment("{key}")
+                .zip(segment("{session}"))
+                .map(|(k, s)| format!("{k}/{s}")),
+        ),
+        Some("session") => ("admin_session", None),
+        _ => ("none", None),
+    }
+}
+
 /// `None` admits the request; anything else is the refusal to answer with.
 fn admit(state: &AdminState, request: &mut Request) -> Option<Response> {
     let method = request.method().clone();
     let path = request.uri().path().to_string();
-    let mutation = matches!(
-        method,
-        Method::DELETE | Method::PATCH | Method::POST | Method::PUT
-    );
+    let mutation = is_mutation(&method);
 
     let websocket = request
         .headers()
@@ -243,25 +310,11 @@ fn admit(state: &AdminState, request: &mut Request) -> Option<Response> {
     let Some(cookie) = presented_cookie(request.headers()) else {
         return Some(failure(StatusCode::UNAUTHORIZED, "no admin session"));
     };
-    let Some((session_id, role)) = state.sessions.authenticate(&cookie, (state.clock)()) else {
+    let Some(session_id) = state.sessions.authenticate(&cookie, (state.clock)()) else {
         return Some(failure(StatusCode::UNAUTHORIZED, "no admin session"));
     };
-    if mutation && role != Role::Admin && !viewer_may_mutate(&method, &path) {
-        return Some(failure(
-            StatusCode::FORBIDDEN,
-            "the viewer role cannot change anything",
-        ));
-    }
-    request.extensions_mut().insert(Caller { session_id, role });
+    request.extensions_mut().insert(Caller { session_id });
     None
-}
-
-/// The two mutations a viewer may issue: ending its own session, which reaches nothing but itself, and a
-/// usage refresh, which only reads the account's windows and asks the endpoint no sooner than the backoff and
-/// the usage cache allow.
-fn viewer_may_mutate(method: &Method, path: &str) -> bool {
-    (method == Method::DELETE && path == LOGIN_PATH)
-        || (path.starts_with("/admin/accounts/") && path.ends_with("/usage/refresh"))
 }
 
 /// `origin` names the request's own authority: its scheme stripped, the rest equals `host` ignoring case.
@@ -312,7 +365,7 @@ async fn login(State(state): State<Arc<AdminState>>, body: Bytes) -> Response {
         .sessions
         .login(&input.secret, &state.secrets, (state.clock)())
     {
-        Ok((cookie, _)) => {
+        Ok(cookie) => {
             let mut attributes =
                 format!("{COOKIE_NAME}={cookie}; Path=/admin; HttpOnly; SameSite=Strict");
             if !state.plain_http {
@@ -340,14 +393,10 @@ async fn logout(State(state): State<Arc<AdminState>>, headers: HeaderMap) -> Res
     )
 }
 
-/// The console's first call: whether the cookie it holds still names a session, and which role that session
-/// carries. The body names the session by the id pairing ownership uses, never by the cookie value.
+/// The console's first call: whether the cookie it holds still names a session. The body names the session by
+/// the id pairing ownership uses, never by the cookie value.
 async fn whoami(Extension(caller): Extension<Caller>) -> Response {
-    Json(json!({
-        "role": match caller.role { Role::Admin => "admin", Role::Viewer => "viewer" },
-        "session_id": caller.session_id,
-    }))
-    .into_response()
+    Json(json!({ "session_id": caller.session_id })).into_response()
 }
 
 async fn list_accounts(State(state): State<Arc<AdminState>>) -> Response {
@@ -571,7 +620,7 @@ async fn pairing_start(
         &session.pkce.challenge,
         &session.state,
     );
-    (
+    let mut response = (
         StatusCode::CREATED,
         Json(json!({
             "id": session.id,
@@ -580,7 +629,11 @@ async fn pairing_start(
             "expires_at": session.deadline,
         })),
     )
-        .into_response()
+        .into_response();
+    response
+        .extensions_mut()
+        .insert(CreatedId(session.id.clone()));
+    response
 }
 
 async fn pairing_show(
@@ -889,7 +942,6 @@ async fn system(State(state): State<Arc<AdminState>>) -> Response {
             "running_probes": keepalive_stats.running_probes,
             "sessions": keepalive_stats.sessions,
         },
-        "alerts": state.alerts.stats(),
     }))
     .into_response()
 }
@@ -1320,6 +1372,7 @@ fn usage_json(
             "backoff_since": status.backoff_since,
             "last_attempt_at": status.last_attempt_at,
             "last_clean_at": status.last_clean_at,
+            "last_error": status.last_error,
             "last_outcome": status.last_outcome,
             "next_attempt_at": status.next_attempt_at,
             "rate_limited_in_a_row": status.rate_limited_in_a_row,

@@ -30,8 +30,7 @@ use phoebis_routing::{
     SelectionTrace, BUDGET_WINDOW,
 };
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, MemoryStore,
-    QuotaHeaders, Store,
+    AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, MemoryStore, Store,
 };
 use phoebis_transport::control::Resolver;
 use phoebis_transport::decode::{decoder, encoding, request_encoding, Decoder, Encoding};
@@ -55,8 +54,8 @@ use crate::classify::{
 };
 use crate::dispatch::{self, until_cancelled, AttemptFailure, Sent};
 use crate::errors::{
-    accounts_at_cap, auth_failure, body_budget_exhausted, key_body_reads, key_in_flight_cap,
-    key_refusal, relay_failure, Failure, ACCOUNTS_AT_CAP, ACCOUNT_CANCELLED, METHOD_NOT_ALLOWED,
+    accounts_at_cap, auth_failure, body_budget_exhausted, key_body_reads, key_refusal,
+    relay_failure, Failure, ACCOUNTS_AT_CAP, ACCOUNT_CANCELLED, METHOD_NOT_ALLOWED,
     MODEL_NOT_ALLOWED, MODEL_REJECTED, NOT_FOUND, ROUTER_UNAVAILABLE, UPSTREAM_UNREACHABLE,
 };
 use crate::exhaustion::exhaustion_response;
@@ -119,8 +118,11 @@ const NOT_FORWARDED: &[&str] = &[
     "upgrade",
 ];
 
-/// The family `quota_headers = hide` drops from a committed answer.
-const QUOTA_FAMILY_PREFIX: &str = "anthropic-ratelimit-unified-";
+/// The upstream's rate-limit header families, hidden from every committed answer so an organization's standing
+/// never reads as the key holder's own: the unified family and the Anthropic-key bucket family under the first
+/// prefix, the fast-token family under the second. A rate limit keeps them, a 429 or a 200 whose first event is a
+/// `rate_limit_error`, so the client's continue arms on the reset the upstream named.
+const RATE_LIMIT_FAMILY_PREFIXES: [&str; 2] = ["anthropic-ratelimit-", "anthropic-fast-"];
 
 #[derive(Clone, Copy, Debug)]
 pub struct Limits {
@@ -137,7 +139,7 @@ pub struct Limits {
     pub hold_timeout: Duration,
     /// The longest an upstream may go silent mid-stream before the relay gives up.
     pub idle_timeout: Duration,
-    /// The bodies one key may have arriving at once; a key's own `in_flight_cap`, when set, replaces it.
+    /// The bodies one key may have arriving at once.
     pub key_body_reads: u32,
     pub max_request_bytes: usize,
     /// How long an account is skipped for a model it answered 404 for.
@@ -200,17 +202,13 @@ pub struct ServedUnder {
 
 /// Marks a request the keepalive engine sent on a session's behalf, and names the key it runs under. The
 /// engine never holds a key's secret (the store keeps a digest), so a probe authenticates by id; the extension
-/// can only be set in process, so the by-id path is not reachable from the socket. `allow_oauth` is the
-/// operator's statement that the expiry-crossing experiment passed; without it an `oauth` account serves no
-/// probe on any attempt, even one a registry write re-routed mid-request (`probe_eligible` holds the rule
-/// against the account actually selected, not just the list admission started with).
+/// can only be set in process, so the by-id path is not reachable from the socket.
 #[derive(Clone, Debug)]
 pub struct Probe {
     pub key_id: String,
     /// The generation of the key the recipe was retained under; the relay refuses a probe whose key now carries
     /// another one, so no probe crosses into a replacement key's pool.
     pub key_generation: i64,
-    pub allow_oauth: bool,
 }
 
 pub struct Relay {
@@ -220,8 +218,6 @@ pub struct Relay {
     body_budget: Arc<BodyBudget>,
     body_reads: BodyReads,
     bus: Option<Bus>,
-    /// The bootstrap default under `compatibility.cache_diagnostics`; a pool's own setting overrides it.
-    cache_diagnostics: bool,
     catalog: Arc<CatalogService>,
     pub(crate) clock: Clock,
     drift: DriftGuard,
@@ -263,7 +259,6 @@ impl Relay {
             body_budget: BodyBudget::new(limits.body_budget_bytes),
             body_reads: BodyReads::default(),
             bus: None,
-            cache_diagnostics: false,
             catalog,
             clock,
             drift: DriftGuard,
@@ -301,15 +296,6 @@ impl Relay {
     pub fn with_readiness(self, source: ReadinessSource) -> Relay {
         Relay {
             readiness: Some(source),
-            ..self
-        }
-    }
-
-    /// Opt-in, off by default: forces the cache-diagnosis beta and `diagnostics.previous_message_id` toward
-    /// `api.anthropic.com` for a request whose pool leaves `cache_diagnostics` unset.
-    pub fn with_cache_diagnostics(self, enabled: bool) -> Relay {
-        Relay {
-            cache_diagnostics: enabled,
             ..self
         }
     }
@@ -686,10 +672,10 @@ fn outcome_of(outcome: &RelayOutcome) -> Outcome {
         Some("account_cancelled") => Outcome::Canceled,
         // A probe answered on its pinned member's standing (`Exhaustion::Pinned`, the one untimed answer that
         // names an obstacle) is refused for the probe alone, whatever its siblings hold: conclusive, and no
-        // exhaustion of the pool for the alert or the rollups to count.
+        // exhaustion of the pool for the attention gauge or the rollups to count.
         Some("accounts_unavailable") if outcome.obstacle.is_some() => Outcome::Rejected,
         // A pool whose every account is at its in-flight cap had nothing to place the request on either, and the
-        // pool alert and the rollups count it with the other exhaustions.
+        // attention gauge and the rollups count it with the other exhaustions.
         Some("accounts_exhausted") | Some("accounts_unavailable") | Some(ACCOUNTS_AT_CAP) => {
             Outcome::Exhausted
         }
@@ -869,14 +855,6 @@ impl From<AccessToken> for Credential {
     }
 }
 
-/// Whether an account may serve a probe: `api_key` always, and `oauth` only when the operator's `allow_oauth`
-/// cleared it. Checked before the failover loop against admission's candidate list, and again after every
-/// selection, because a registry write landing between admission and a select bumps the revision and the
-/// router recomputes candidates from its own snapshot, which does not carry this restriction.
-fn probe_eligible(account: &AccountRow, allow_oauth: bool) -> bool {
-    account.kind == AccountKind::ApiKey || allow_oauth
-}
-
 impl Relay {
     async fn handle(&self, request: Request) -> Response {
         let received_at = (self.clock)();
@@ -1031,34 +1009,16 @@ impl Relay {
         let pool = snapshot.pool(&key.pool_id);
         let failover = pool.map(|p| p.failover).unwrap_or_default();
         // One permit for the whole request, held across every attempt, retry in place and hold until the
-        // response ends. Taken before a body byte is buffered, so a refused request holds no body and is observed
-        // without one; the kind is known from the head. The check and the increment are one call under the
-        // table's lock. The cap bounds a key's conversations: a keepalive probe is the router's own traffic and a
-        // token count is no turn, so neither takes a slot or is refused for want of one.
-        let admission = match trace.kind {
-            Kind::Inference => self
-                .router
-                .in_flight()
-                .try_acquire_key(&key.id, key.in_flight_cap, (self.clock)())
-                .map(Some),
-            Kind::CountTokens | Kind::Probe => Some(None),
-        };
-        let mut key_permit = match admission {
-            Some(permit) => permit,
-            None => {
-                let seconds = pool.map_or(1, |p| p.failover.retry_in_place_seconds.max(1));
-                return self
-                    .refused_before_body(
-                        &trace,
-                        &key,
-                        &parts.headers,
-                        capture_hours,
-                        retired,
-                        key_in_flight_cap(seconds),
-                        client_version.as_deref(),
-                    )
-                    .await;
-            }
+        // response ends; it counts the key's requests and bounds nothing. Taken from the head, before a body byte
+        // is buffered. A keepalive probe is the router's own traffic and a token count is no turn, so neither
+        // takes a slot.
+        let mut key_permit = match trace.kind {
+            Kind::Inference => Some(
+                self.router
+                    .in_flight()
+                    .try_acquire_key(&key.id, (self.clock)()),
+            ),
+            Kind::CountTokens | Kind::Probe => None,
         };
         let Some(coding) = request_coding(&parts.headers) else {
             return self
@@ -1080,8 +1040,10 @@ impl Relay {
         let (read_permit, mut reservation) = match trace.kind {
             Kind::Probe => (None, None),
             Kind::CountTokens | Kind::Inference => {
-                let read_bound = key.in_flight_cap.unwrap_or(self.limits.key_body_reads);
-                let Some(read_permit) = self.body_reads.try_acquire(&key.id, read_bound) else {
+                let Some(read_permit) = self
+                    .body_reads
+                    .try_acquire(&key.id, self.limits.key_body_reads)
+                else {
                     return self
                         .refused_before_body(
                             &trace,
@@ -1388,20 +1350,6 @@ impl Relay {
                     .await
             }
         };
-        // Narrows what a probe starts the loop with; a registry write can move the revision before any
-        // attempt, and then the router recomputes candidates from its own snapshot without this filter, so
-        // `probe_eligible` runs again on every selection below to hold the same rule against the chosen row.
-        let candidates = match &probe {
-            None => candidates,
-            Some(probe) => candidates
-                .into_iter()
-                .filter(|c| {
-                    snapshot
-                        .account(&c.account_id)
-                        .is_some_and(|account| probe_eligible(account, probe.allow_oauth))
-                })
-                .collect(),
-        };
         // A separate field from `restore`: every client inference request of a conversation gets one,
         // because the diagnostics member the option forces names the previous answer in
         // that conversation whoever sent it. A probe reads under the same key, since it replays the session's own
@@ -1458,20 +1406,15 @@ impl Relay {
             }
             _ => None,
         };
-        // The pool's own setting overrides the bootstrap default; either way a `count_tokens` request never
-        // gets it, since its public schema has no slot for the beta or the member to land in.
+        // The pool's switch alone; a request with no pool reads off. A `count_tokens` request never gets it, since
+        // its public schema has no slot for the beta or the member to land in.
         let cache_diagnostics_on = snapshot
             .pool(&key.pool_id)
-            .and_then(|p| p.cache_diagnostics)
-            .unwrap_or(self.cache_diagnostics);
+            .is_some_and(|p| p.cache_diagnostics);
         let diagnostics = cache_diagnostics_on && trace.kind != Kind::CountTokens;
         let cache_ttl_policy = snapshot
             .pool(&key.pool_id)
             .map(|p| CacheTtlPolicy::from_json(&p.cache_ttl_json))
-            .unwrap_or_default();
-        let quota_headers = snapshot
-            .pool(&key.pool_id)
-            .map(|p| p.quota_headers)
             .unwrap_or_default();
         let portable = is_portable(&raw);
         let target = parts
@@ -1514,7 +1457,6 @@ impl Relay {
             memory_key,
             original,
             portable,
-            quota_headers,
             raw: &raw,
             request_id: &trace.request_id,
             restore,
@@ -1693,14 +1635,6 @@ impl Relay {
                 }
             };
             attempted.push(selection.account.id.clone());
-            // A reload between admission and this select recomputes candidates from the current registry, past
-            // the filter above: re-checked here against the row the router actually chose, so a probe still
-            // never dispatches to an account the operator has not cleared for it.
-            if let Some(probe) = &probe {
-                if !probe_eligible(&selection.account, probe.allow_oauth) {
-                    continue;
-                }
-            }
             dialed = true;
             match self
                 .dispatch_to(
@@ -2161,7 +2095,6 @@ impl Relay {
                 pin: selection.pin.as_ref(),
                 pin_epoch,
                 portable: admitted.portable,
-                quota_headers: admitted.quota_headers,
                 replayed,
                 request_id: admitted.request_id,
                 retry_in_place: admitted.retry_in_place,
@@ -2452,12 +2385,12 @@ impl Relay {
                             checkin,
                             guards: ctx.guards(),
                             head: &head,
-                            hide_quota: ctx.hides_quota(head.status),
                             keep_alive: reusable,
                             observer: None,
                             on_message_id: None,
                             outcome,
                             prefix,
+                            rate_limit_event: false,
                             reader,
                             renewal: release,
                             trace: ctx.trace,
@@ -2787,12 +2720,10 @@ impl Relay {
                         (bytes, Some(PostCommit { inspect, on_error }))
                     }
                 };
-                let hide_quota = ctx.hides_quota(head.status);
                 let responded = match buffered {
                     Some(buffered) => {
                         self.forward_buffered(
                             ctx.trace, &head, buffered, ctx.caller, outcome, renewal, affinity,
-                            hide_quota,
                         )
                         .await
                     }
@@ -2805,12 +2736,12 @@ impl Relay {
                             checkin,
                             guards,
                             head: &head,
-                            hide_quota,
                             keep_alive: reusable,
                             observer,
                             on_message_id,
                             outcome,
                             prefix,
+                            rate_limit_event: false,
                             reader: reader.expect(
                                 "a head the table reads no body for still holds its reader",
                             ),
@@ -2865,12 +2796,14 @@ impl Relay {
                     checkin,
                     guards,
                     head: &head,
-                    hide_quota: ctx.hides_quota(head.status),
                     keep_alive: false,
                     observer: None,
                     on_message_id: None,
                     outcome,
                     prefix: held.bytes,
+                    rate_limit_event: first_event
+                        .as_deref()
+                        .is_some_and(|e| error_type(e).as_deref() == Some("rate_limit_error")),
                     reader: reader
                         .expect("a streaming head still holds the reader the hold read from"),
                     renewal: None,
@@ -2899,17 +2832,8 @@ impl Relay {
             );
         }
         Next::Respond(
-            self.forward_buffered(
-                ctx.trace,
-                &head,
-                buffered,
-                ctx.caller,
-                outcome,
-                None,
-                None,
-                ctx.hides_quota(head.status),
-            )
-            .await,
+            self.forward_buffered(ctx.trace, &head, buffered, ctx.caller, outcome, None, None)
+                .await,
         )
     }
 
@@ -3379,17 +3303,17 @@ impl Relay {
             checkin,
             guards,
             head,
-            hide_quota,
             keep_alive,
             observer,
             on_message_id,
             outcome,
             prefix,
+            rate_limit_event,
             reader,
             renewal,
             trace,
         } = forward;
-        let (builder, decoder) = match forward_head(head, caller, hide_quota) {
+        let (builder, decoder) = match forward_head(head, caller, rate_limit_event) {
             Ok(parts) => parts,
             Err(error) => {
                 tracing::warn!(%error, "the upstream response cannot be forwarded");
@@ -3481,9 +3405,9 @@ impl Relay {
         outcome: RelayOutcome,
         renewal: Option<Renewal>,
         affinity: Option<AffinityFacts>,
-        hide_quota: bool,
     ) -> Response {
-        let (builder, decoder) = match forward_head(head, caller, hide_quota) {
+        // A buffered answer is never an event stream, so its status alone says whether it is a rate limit.
+        let (builder, decoder) = match forward_head(head, caller, false) {
             Ok(parts) => parts,
             Err(error) => {
                 tracing::warn!(%error, "the upstream response cannot be forwarded");
@@ -3598,14 +3522,15 @@ struct Forward<'a, C> {
     /// The response's in-flight counts, which ride the body to its end.
     guards: Guards,
     head: &'a ResponseHead,
-    /// Whether the quota family is dropped from this answer: `quota_headers = hide` and a status other than 429.
-    hide_quota: bool,
     keep_alive: bool,
     /// Set for a committed stream, which is watched for a rate-limit error arriving after the commit.
     observer: Option<PostCommit>,
     on_message_id: Option<Box<dyn FnOnce(String) -> BoxFuture<'static, ()> + Send>>,
     outcome: RelayOutcome,
     prefix: Bytes,
+    /// Set where a held 200's first event is a `rate_limit_error`: that answer is the upstream's rate limit as a
+    /// 429 is, so it keeps the rate-limit families.
+    rate_limit_event: bool,
     reader: BodyReader<C>,
     /// A pinned request's report, sent when the body ends: a committed answer's renewal, or the release of a
     /// pin its own rejection ends.
@@ -3665,8 +3590,6 @@ struct Responding<'a> {
     pin: Option<&'a PinRef>,
     pin_epoch: Option<u64>,
     portable: bool,
-    /// Whether the quota family reaches the caller on this pool's answers other than a 429.
-    quota_headers: QuotaHeaders,
     replayed: bool,
     request_id: &'a str,
     retry_in_place: Duration,
@@ -3686,12 +3609,6 @@ impl Responding<'_> {
             _key: self.key_permit.take(),
             _account: self.ticket.take(),
         }
-    }
-
-    /// Whether this pool's answer to `status` drops the quota family: never on a 429, so the client's continue
-    /// still arms.
-    fn hides_quota(&self, status: u16) -> bool {
-        self.quota_headers == QuotaHeaders::Hide && status != 429
     }
 }
 
@@ -3746,9 +3663,9 @@ struct Admitted<'a> {
     /// which a wait on an account's backoff ends: admission plus `head_timeout` less `ATTEMPT_DEADLINE_MARGIN`.
     /// `None` when `head_timeout` is no longer than the margin.
     deadline: Option<i64>,
-    /// `compatibility.cache_diagnostics`, or the pool's own override, resolved at admission and never for a
-    /// `count_tokens` request: the public schema refuses an unknown top-level member and the beta names nothing
-    /// there, and a 400 on that path must never latch the account for its inference requests.
+    /// The pool's `cache_diagnostics` switch, resolved at admission and never for a `count_tokens` request: the
+    /// public schema refuses an unknown top-level member and the beta names nothing there, and a 400 on that path
+    /// must never latch the account for its inference requests.
     diagnostics: bool,
     fallback_ms: i64,
     /// The request carried `speed: "fast"`: fast eligibility applies to its selections and its throttles cool the
@@ -3771,9 +3688,6 @@ struct Admitted<'a> {
     /// gave up on.
     original: Option<&'a OriginalHead>,
     portable: bool,
-    /// Whether the quota family reaches the caller on this pool's answers other than a 429, read once at
-    /// admission alongside `cache_ttl_policy`.
-    quota_headers: QuotaHeaders,
     raw: &'a Bytes,
     request_id: &'a str,
     /// The first-party fields to restore, absent for anything but a `claude-cli/` inference request.
@@ -3886,24 +3800,31 @@ fn decode_all(decoder: &mut dyn Decoder, raw: &[u8]) -> Result<Bytes, TransportE
 }
 
 /// Builds the caller's response head from the upstream's and decides whether the payload can be passed through
-/// as it came. Returns the decoder to run over the body when it cannot.
+/// as it came. Returns the decoder to run over the body when it cannot. `rate_limit_event` marks a 200 whose
+/// first event is a `rate_limit_error`, which keeps the rate-limit families as a 429 does.
 fn forward_head(
     head: &ResponseHead,
     caller: &HeaderMap,
-    hide_quota: bool,
+    rate_limit_event: bool,
 ) -> Result<(Builder, Option<Box<dyn Decoder>>), TransportError> {
     let upstream = encoding(head)?;
     let coding = head.get("content-encoding").unwrap_or("identity");
     let passthrough = matches!(upstream, Encoding::Identity) || caller_accepts(caller, coding);
     let mut builder = Response::builder()
         .status(StatusCode::from_u16(head.status).unwrap_or(StatusCode::BAD_GATEWAY));
+    // The relay's own read of the families (`ratelimit.rs`) already ran on the upstream head; hiding them
+    // from the caller changes nothing it saw.
+    let hide_rate_limits = head.status != 429 && !rate_limit_event;
     for (name, value) in &head.headers {
         if NOT_FORWARDED.iter().any(|n| name.eq_ignore_ascii_case(n)) {
             continue;
         }
-        // The relay's own read of this family (`ratelimit.rs`) already ran on the upstream head; hiding it
-        // from the caller changes nothing it saw.
-        if hide_quota && name.to_ascii_lowercase().starts_with(QUOTA_FAMILY_PREFIX) {
+        let lower = name.to_ascii_lowercase();
+        if hide_rate_limits
+            && RATE_LIMIT_FAMILY_PREFIXES
+                .iter()
+                .any(|p| lower.starts_with(p))
+        {
             continue;
         }
         if !passthrough && name.eq_ignore_ascii_case("content-encoding") {

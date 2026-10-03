@@ -20,7 +20,7 @@ use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
-use crate::config::{KeepaliveLimits, KeepalivePolicy, MIN_AFFINITY_SECONDS};
+use crate::config::{KeepaliveLimits, KeepalivePolicy, MAX_WORKERS, MIN_AFFINITY_SECONDS};
 use crate::probe::{run_job, wasted_label, ProbeJob};
 use crate::recipe::{make_recipe, Recipe};
 use crate::savings::{dispatched_types, gross_saving, settlement_unit};
@@ -129,7 +129,6 @@ reasons! {
     NetNegative => "net_negative",
     NoCacheEvidence => "no_cache_evidence",
     NoProbeCacheEvidence => "no_probe_cache_evidence",
-    OauthUnverified => "oauth_unverified",
     OptedOut => "opted_out",
     Overage => "overage",
     OwnerMismatch => "owner_mismatch",
@@ -267,9 +266,12 @@ pub struct EngineParts {
     /// same value the relay's `Limits` gets, so the probe gate and the selector read one account the same way.
     pub cooldown_fallback: Duration,
     pub ledger: Ledger,
-    /// Where the companion's reports reach the alert inputs; `None` when nothing is listening.
+    /// Where the companion's reports go when a consumer is wired; `None` when nothing is listening, as in the binary.
     pub lifecycle: Option<LifecycleSender>,
     pub limits: KeepaliveLimits,
+    /// The relay's per-body bound: the largest body a recipe may retain, so every request the relay accepts is
+    /// retainable.
+    pub max_request_bytes: usize,
     pub metrics: Arc<Metrics>,
     pub pricing: Arc<Pricing>,
     pub relay: Arc<Relay>,
@@ -558,10 +560,6 @@ impl Engine {
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    pub fn limits(&self) -> &KeepaliveLimits {
-        &self.parts.limits
-    }
-
     pub fn now(&self) -> i64 {
         (self.parts.clock)()
     }
@@ -606,8 +604,8 @@ impl Engine {
             for agent in agents {
                 inner.discard(&key, &agent, Reason::Reset, None);
             }
-            // The alerts post a session's end once, so one already announced by the companion gets none here;
-            // the rest end now, as they would at the expiry, since nothing will report for them again.
+            // A session ends once on the channel, so one already announced by the companion gets none here; the
+            // rest end now, as they would at the expiry, since nothing will report for them again.
             if !inner.sessions[&key].ended {
                 inner.emit(SessionLifecycle::SessionEnded {
                     key_id: key.0.clone(),
@@ -615,8 +613,8 @@ impl Engine {
                 });
             }
         }
-        // The ends above are the channel's last messages: with the sender gone the consumer's `recv()` returns
-        // `None` once it has drained them, which is what the alert inputs' shutdown joins on.
+        // The ends above are the channel's last messages: with the sender gone a consumer's `recv()` returns `None`
+        // once it has drained them, which is what its shutdown can join on.
         inner.lifecycle = None;
         inner.sessions.clear();
         inner.pending.clear();
@@ -650,8 +648,8 @@ impl Inner {
         }
     }
 
-    /// A send never blocks and a closed receiver is the alerts having shut down first, which loses nothing worth
-    /// a log line.
+    /// A send never blocks and a closed receiver is a consumer that shut down first, which loses nothing worth a log
+    /// line.
     pub(crate) fn emit(&self, event: SessionLifecycle) {
         if let Some(tx) = &self.lifecycle {
             let _ = tx.send(event);
@@ -843,7 +841,7 @@ impl Inner {
             }
             self.agents -= agents.len();
             // A session whose companion reported its end was announced then; the entry outlives the report
-            // only so a result still in flight finds it, and the alerts resolve on one end, not two.
+            // only so a result still in flight finds it, and the channel carries one end, not two.
             let announced = self.sessions.remove(&key).is_some_and(|s| s.ended);
             if !announced {
                 self.emit(SessionLifecycle::SessionEnded {
@@ -1182,7 +1180,7 @@ impl Engine {
             &observed.headers,
             &observed.body,
             &observed.model,
-            limits.max_request_bytes,
+            self.parts.max_request_bytes,
         ) {
             Ok(recipe) => recipe,
             Err(reason) => {
@@ -1223,7 +1221,6 @@ impl Engine {
 
     fn on_selected(&self, selected: AccountSelected) {
         let snapshot = self.parts.router.snapshot();
-        let verified = self.parts.limits.oauth_prewarm_verified;
         let mut inner = self.lock();
         let Some((key, agent_id)) = inner.pending.get(&selected.request_id).cloned() else {
             return;
@@ -1267,13 +1264,10 @@ impl Engine {
             Some(Reason::KeepaliveOff)
         } else if opted_out {
             Some(Reason::OptedOut)
+        } else if snapshot.account(&selected.account_id).is_none() {
+            Some(Reason::IneligibleCredential)
         } else {
-            match snapshot.account(&selected.account_id).map(|a| a.kind) {
-                Some(AccountKind::ApiKey) => None,
-                Some(AccountKind::Oauth) if verified => None,
-                Some(AccountKind::Oauth) => Some(Reason::OauthUnverified),
-                None => Some(Reason::IneligibleCredential),
-            }
+            None
         };
         if let Some(reason) = refusal {
             inner.set_reason(&key, &agent_id, reason);
@@ -1513,15 +1507,11 @@ impl Engine {
                 // The gap that poisoned it is what this request proved nothing under.
                 inner.discard(&key, &agent_id, Reason::BusGap, None);
             } else {
-                // The four gates are pool, key, or credential-kind properties that do not vary between
-                // attempts of one request, so ending the observation must not recount a reason the request
-                // already carries.
+                // The three gates are pool, key, or credential properties that do not vary between attempts of
+                // one request, so ending the observation must not recount a reason the request already carries.
                 match current {
                     Some(
-                        Reason::KeepaliveOff
-                        | Reason::OptedOut
-                        | Reason::OauthUnverified
-                        | Reason::IneligibleCredential,
+                        Reason::KeepaliveOff | Reason::OptedOut | Reason::IneligibleCredential,
                     ) if !ready => {
                         inner.end_observation(&key, &agent_id, None);
                     }
@@ -1608,7 +1598,6 @@ impl Engine {
     pub async fn step(self: &Arc<Self>) {
         let now = self.now();
         let expiry = self.parts.session_expiry.as_millis() as i64;
-        let max_workers = self.parts.limits.max_workers;
         // The four asks behind `router_view` are a round trip apiece; a tick with nothing due pays none of
         // them. `drop_sessions_of_dead_keys` reads the snapshot alone, which `RouterHandle::snapshot` answers
         // without a command.
@@ -1732,7 +1721,7 @@ impl Engine {
             due.sort_by(|a, b| (a.0, &a.1, &a.2).cmp(&(b.0, &b.1, &b.2)));
             let mut jobs = Vec::new();
             for (_, key, agent_id, types) in due {
-                if inner.running >= max_workers {
+                if inner.running >= MAX_WORKERS {
                     break;
                 }
                 let idle = agent_id == MAIN_AGENT
@@ -2249,8 +2238,6 @@ mod tests {
                 rotated_at: None,
                 last_used_at: None,
                 retired_secret_last_used_at: None,
-                in_flight_cap: None,
-                affinity_source: phoebis_store::AffinitySource::default(),
                 auto_mode_server: None,
             }],
             members: vec![member("a"), member("o")],
@@ -2270,10 +2257,9 @@ mod tests {
                 shedding: phoebis_store::Shedding::default(),
                 failover: phoebis_store::Failover::default(),
                 cache_ttl_json: cache_ttl_json.into(),
-                cache_diagnostics: None,
+                cache_diagnostics: false,
                 auto_mode_server: true,
                 affinity: phoebis_store::Affinity::default(),
-                quota_headers: phoebis_store::QuotaHeaders::default(),
                 created_at: 0,
                 updated_at: 0,
             }],

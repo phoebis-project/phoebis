@@ -21,7 +21,7 @@ hyper = { workspace = true }
 hyper-util = { workspace = true }
 jiff = { workspace = true }
 phoebis-admin = { path = "../admin" }
-phoebis-alerts = { path = "../alerts" }
+phoebis-attention = { path = "../attention" }
 phoebis-bus = { path = "../bus" }
 phoebis-cch = { path = "../cch" }
 phoebis-keepalive = { path = "../keepalive" }

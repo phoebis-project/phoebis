@@ -1,7 +1,6 @@
 export * from '@/api/decode';
 export * from '@/api/fold';
 export * from '@/api/http';
-export * from '@/lib/alerts';
 export * from '@/lib/analytics';
 export * from '@/lib/attention';
 export * from '@/lib/autoMode';
@@ -18,6 +17,7 @@ export * from '@/lib/selection';
 export * from '@/lib/snippet';
 export * from '@/lib/trail';
 export { MockApi } from '@/mock';
+export { ACCOUNTS } from '@/mock/accounts';
 export { burnOf, groupsOf } from '@/mock/analytics';
 export { ALL_ROLLUPS } from '@/mock/requests';
 export { liveFeed } from '@/mock/live';

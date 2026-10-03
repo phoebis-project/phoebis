@@ -6,11 +6,10 @@ publishing this site, and releasing the container image.
 
 ## Backup
 
-The router's state lives in three files: `storage.path`, the registry of accounts, sealed credentials, pools,
-keys, alert rules, pricing versions, pins, cooldowns, and the relay's session memory; `stats.ledger_path`, the
-ledger of requests, attempts, events, samples, rollups, and captured bodies; and `storage.encryption_key_file`,
-the key that seals every credential the registry holds. No script in this repository takes a backup of any of
-them.
+The router's state lives in three files: `storage.path`, the registry of accounts, sealed credentials, pools, keys,
+pricing versions, pins, cooldowns, and the relay's session memory; `stats.ledger_path`, the ledger of requests,
+attempts, events, samples, rollups, and captured bodies; and `storage.encryption_key_file`, the key that seals every
+credential the registry holds. No script in this repository takes a backup of any of them.
 
 Both databases are SQLite, and both run in WAL mode. A plain file copy taken while the service is running can land
 mid-transaction and split either database file from its `-wal` file, losing the last transactions in between.
@@ -69,13 +68,13 @@ that same empty file.
 The registry carries a canary sealed under the key at its first open, and every open proves the key against it before
 any credential is read: a restore onto a host whose key file differs, or a key regenerated after the file was moved,
 is refused at start and by `check-config` with `the storage key does not match the registry at {path}`. A registry
-from before the canary existed is proved against its sealed rows instead, up to the first 32 of each kind (credentials,
-Anthropic-key secrets and alert secrets), passing when any of them opens, by `check-config` and at start, and is sealed
-at that start.
+from before the canary existed is proved against its sealed rows instead, up to the first 32 of each kind (credentials
+and Anthropic-key secrets), passing when any of them opens, by `check-config` and at start, and is sealed at that
+start.
 
-The key seals OAuth credential bundles, Anthropic-key secrets, and alert secrets. `Store::digest_key` also derives, from
-this same key, the digest every downstream key authenticates against: the secrets the admin API mints and hands to
-clients and the companion.
+The key seals OAuth credential bundles and Anthropic-key secrets. `Store::digest_key` also derives, from this same key,
+the digest every downstream key authenticates against: the secrets the admin API mints and hands to clients and the
+companion.
 
 There is no re-key command. Under a lost or replaced key no sealed row opens again and the canary refuses the start,
 so recovering means discarding the registry's secrets while keeping everything else. Stop the service
@@ -88,7 +87,6 @@ BEGIN IMMEDIATE;
 DELETE FROM meta WHERE key = 'storage_key_canary';
 DELETE FROM credentials;
 DELETE FROM api_key_secrets;
-UPDATE alert_rules SET secret_sealed = NULL, secret_nonce = NULL;
 UPDATE accounts SET state = CASE kind WHEN 'oauth' THEN 'disconnected' ELSE 'unpaired' END,
   lifecycle_generation = lifecycle_generation + 1, revision = revision + 1;
 UPDATE refresh_attempts SET resolved_at = CAST(strftime('%s', 'now') AS INTEGER) * 1000, outcome = 'failed',
@@ -101,14 +99,13 @@ Under the container the image ships no `sqlite3`, so after `docker compose stop`
 as uid 65532, either from the host against `router.sqlite` on the `phoebis-data` volume or from a one-off container that
 carries `sqlite3` and mounts that volume.
 
-The sequence discards every secret the registry holds, and nothing else: the alert secrets, the Anthropic-key
-secrets, the canary and the OAuth credential bundles go, and each account rests where the Accounts view's Disconnect
-leaves it, with its open refresh attempts settled. The accounts, alert rules, downstream keys, pins, pools and session
-memory stay. `-bail` stops at the first statement that fails, and the transaction it leaves open rolls back, so the
-file is either wholly changed or untouched. The next start under the new key finds nothing sealed and seals a new
-canary; then:
+The sequence discards every secret the registry holds, and nothing else: the Anthropic-key secrets, the canary and the
+OAuth credential bundles go, and each account rests where the Accounts view's Disconnect leaves it, with its open
+refresh attempts settled. The accounts, downstream keys, pins, pools and session memory stay. `-bail` stops at the
+first statement that fails, and the transaction it leaves open rolls back, so the file is either wholly changed or
+untouched. The next start under the new key finds nothing sealed and seals a new canary; then:
 
-- Re-enter every `api_key` secret and alert secret.
+- Re-enter every `api_key` secret.
 - Re-pair every `oauth` account.
 - Rotate every downstream key. Replacing the storage key changes what `digest_key` derives, so every digest already
   stored against the old key stops matching a client's presented secret, and every existing downstream key starts
@@ -116,16 +113,15 @@ canary; then:
   to the clients and the companion.
 
 An operator who would rather start over moves the registry file aside instead, with its `-wal` and `-shm` files if
-present, and lets the next start create an empty registry, in which every account, pool, key and rule is created
-again.
+present, and lets the next start create an empty registry, in which every account, pool and key is created again.
 
 ## Upgrades
 
 1. Build the new binary: `cargo build --release`.
 2. Validate the live configuration file with the binary just built, not the one still installed, since step 5 is
-   what replaces that one: `sudo target/release/phoebis check-config --config /etc/phoebis/config.yaml`. The secrets
-   are optional here (an unset one prints a warning), and `check-config` takes no lock and opens no socket, so it is
-   safe to run while the old binary still serves traffic; it reads the key file and proves it against the registry's
+   what replaces that one: `sudo target/release/phoebis check-config --config /etc/phoebis/config.yaml`. The secret is
+   optional here (an unset one prints a warning), and `check-config` takes no lock and opens no socket, so it is safe
+   to run while the old binary still serves traffic; it reads the key file and proves it against the registry's
    canary, so a key file that drifted is caught before the restart.
 3. Read the [changelog](changelog.md) for a bootstrap key that changed.
 4. Take the [backup](#backup) above.
@@ -157,20 +153,20 @@ Every configuration block denies unknown keys, so a key the new build does not r
 ## Re-pinning the client build
 
 A drift refusal lasts until the router is re-pinned: every request whose hash this build cannot reproduce, or whose
-`cc_version` suffix does not reproduce, is refused with `client_drift` meanwhile, the `client_drift` alert kind names
-the first refusal, and the re-pin is the procedure below, a source change and a release.
+`cc_version` suffix does not reproduce, is refused with `client_drift` meanwhile, the `client_drift` attention condition
+names the first refusal, and the re-pin is the procedure below, a source change and a release.
 
-A "pinned" build is the one Claude Code release the router is measured against: `claude-code-2.1.269-linux-x64`, named by
-`compatibility.profile`. A profile is a fixed set of constants, the version and build tag, the two user agents, the
-Stainless headers, the three beta lists, the control-plane URLs and client id, and the TLS curves and cipher list,
-checked against the fixtures under `crates/profile/fixtures/`.
+A "pinned" build is the one Claude Code release the router is measured against: `claude-code-2.1.269-linux-x64`, the one profile
+this build carries, named by no key. A profile is a fixed set of constants, the version and build tag, the two user
+agents, the Stainless headers, the three beta lists, the control-plane URLs and client id, and the TLS curves and cipher
+list, checked against the fixtures under `crates/profile/fixtures/`.
 A newer client build is not relayed in its own shape automatically: headers travel as the
 client sends them, with the `anthropic-beta` line copied as sent and edited for three betas only: the OAuth beta,
 claimed for a subscription credential and stripped for an Anthropic key on every request that carries the line; the
-cache-diagnosis beta under `cache_diagnostics` (the compatibility option or the pool's own); and the extended-TTL beta
-the cache TTL rewrite adds or drops. The profile's beta lists record what the measured client sends, as the fixtures
-show, and the fields the router restores for a Claude Code request are the ones on the [client
-page](client.md#the-environment-block), not what a newer client might add.
+cache-diagnosis beta under the pool's `cache_diagnostics` switch; and the extended-TTL beta the cache TTL rewrite adds
+or drops. The profile's beta lists record what the measured client sends, as the fixtures
+show, and the fields the router restores for a Claude Code request are the ones on the
+[client page](client.md#the-environment-block), not what a newer client might add.
 
 To re-pin the profile against a new build:
 
@@ -191,8 +187,8 @@ To re-pin the profile against a new build:
 4. Land the re-pin as a change to the repository: `python3 scripts/build-fixtures.py <output-dir>` writes the new
    fixtures; a new `Profile` value in `crates/profile/src/lib.rs` carries the new constants, and `by_name` learns
    its name; the tests in
-   the profile, relay, and router crates grade the relay against the new fixtures. Until that change lands,
-   `compatibility.profile` keeps naming the one profile this build carries.
+   the profile, relay, and router crates grade the relay against the new fixtures. Until that change lands, the router
+   is measured against the one profile this build carries.
 5. `scripts/capture-through-router.sh` captures what the router hands its own upstream from a real paired account
    and grades it with `--through-router`. Its header names the two router keys it needs, that the service must be
    stopped while it runs since it opens the same store the running service does, and that it shares its client

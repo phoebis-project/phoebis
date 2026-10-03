@@ -13,8 +13,8 @@ mod usage;
 mod view;
 
 pub use config::{
-    KeepaliveLimits, KeepalivePolicy, LimitsError, PolicyError, FIVE_MINUTES_MS,
-    MIN_AFFINITY_SECONDS, ONE_HOUR_MS,
+    KeepaliveLimits, KeepalivePolicy, LimitsError, PolicyError, FIVE_MINUTES_MS, LEASE_MS,
+    LEASE_SECONDS, MAX_WORKERS, MIN_AFFINITY_SECONDS, ONE_HOUR_MS,
 };
 pub use engine::{
     guard, spawn_observer, AgentState, AgentStatus, Engine, EngineParts, EngineStats, Funding,
@@ -35,12 +35,11 @@ pub use view::{
     SessionView, ViewReason,
 };
 
-/// What a probe declares to the relay when the engine sends it: which key and which of its lifetimes it runs
-/// under, and whether the operator has verified that oauth's expiry-crossing behavior is safe to probe.
-pub fn probe_marker(engine: &Engine, key_id: &str, key_generation: i64) -> phoebis_relay::Probe {
+/// What a probe declares to the relay when the engine sends it: the key it runs under and the key's generation,
+/// so the relay refuses it once the key id names a replacement.
+pub fn probe_marker(key_id: &str, key_generation: i64) -> phoebis_relay::Probe {
     phoebis_relay::Probe {
         key_id: key_id.into(),
         key_generation,
-        allow_oauth: engine.limits().oauth_prewarm_verified,
     }
 }
