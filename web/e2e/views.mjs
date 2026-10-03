@@ -1563,7 +1563,9 @@ async function costCapRows(theme) {
  * WebSocket, so a policy that refused the handshake would leave it there and the banner would show instead. The page
  * draws what the feed sent on its next animation frame, which the paused clock fires only inside a step, so the wait
  * steps the clock until the table or the empty state is drawn. With the detail pane closed, the table's columns end
- * inside its card, and the eight metric tiles above it stand in two full rows of four.
+ * inside its card, and the eight metric tiles above it stand in two full rows of four. With a row's pane open the strip
+ * has the main column's width alone, so it draws two columns; open or closed, every tile's value stays on one line
+ * inside its tile. The pane closes again before the view's shot.
  */
 async function liveFeed(theme) {
   const say = (what) => failures.push(`${theme} /observe: ${what}`);
@@ -1571,6 +1573,31 @@ async function liveFeed(theme) {
   const rows = [...new Set(tops)].map((top) => tops.filter((t) => t === top).length);
   measurements.push(`${theme} /observe metric tiles per row ${JSON.stringify(rows)}`);
   if (tops.length !== 8 || JSON.stringify(rows) !== '[4,4]') say(`the ${tops.length} metric tiles stand in rows of ${JSON.stringify(rows)}, not two rows of four`);
+  // A value's line boxes all cross one horizontal band when it sits on one line; the quality tag is set smaller on the
+  // same baseline, so its box overlaps the figure's.
+  const strip = () =>
+    page.evaluate(() => {
+      const chips = [...document.querySelectorAll('.mchip')];
+      const cut = chips.flatMap((chip) => {
+        const value = chip.querySelector('.mchip__value');
+        if (!value) return [];
+        const range = document.createRange();
+        range.selectNodeContents(value);
+        const boxes = [...range.getClientRects()].filter((r) => r.width > 0);
+        const tile = chip.getBoundingClientRect();
+        const style = getComputedStyle(chip);
+        const left = tile.left + parseFloat(style.borderLeftWidth) + parseFloat(style.paddingLeft);
+        const right = tile.right - parseFloat(style.borderRightWidth) - parseFloat(style.paddingRight);
+        const leaves = boxes.some((b) => b.left < left - 0.5 || b.right > right + 0.5);
+        const wraps = boxes.length > 0 && Math.max(...boxes.map((b) => b.top)) >= Math.min(...boxes.map((b) => b.bottom));
+        return leaves || wraps ? [`${chip.querySelector('.mchip__label')?.textContent} "${value.textContent}"${wraps ? ' wraps' : ''}${leaves ? ' leaves its tile' : ''}`] : [];
+      });
+      return { columns: new Set(chips.map((c) => Math.round(c.getBoundingClientRect().left))).size, cut, width: Math.round(document.querySelector('.metric-strip')?.getBoundingClientRect().width ?? 0) };
+    });
+  const closedStrip = await strip();
+  measurements.push(`${theme} /observe metric strip with the pane closed ${JSON.stringify(closedStrip)}`);
+  if (closedStrip.columns !== 4) say(`with the pane closed the metric strip draws ${closedStrip.columns} columns, not four`);
+  for (const c of closedStrip.cut) say(`with the pane closed the metric tile ${c}`);
   const drawn = () => page.evaluate(() => document.querySelector('.card--table .live-table, .card--table .empty') !== null);
   const deadline = Date.now() + 15_000;
   while (!(await drawn()) && Date.now() < deadline) await advance(CLOCK_STEP_MS);
@@ -1595,7 +1622,24 @@ async function liveFeed(theme) {
   // The router's seed may hold no request inside the window; the mock's story always runs some.
   if (table === null) {
     if (mock) say('the story runs requests, yet no live table is drawn');
-  } else if (table.scroll > table.client) say(`the live table needs ${table.scroll}px of its card's ${table.client}px`);
+    return;
+  }
+  if (table.scroll > table.client) say(`the live table needs ${table.scroll}px of its card's ${table.client}px`);
+  if (table.rows === 0) return;
+  await page.locator('.card--table .live-table tbody tr').first().click();
+  await settle();
+  if ((await page.locator('.observe__detail').count()) === 0) {
+    say('a click on the first row opened no detail pane');
+    return;
+  }
+  const openStrip = await strip();
+  measurements.push(`${theme} /observe metric strip with the pane open ${JSON.stringify(openStrip)}`);
+  if (openStrip.columns !== 2) say(`with the pane open the metric strip draws ${openStrip.columns} columns in ${openStrip.width}px, not two`);
+  for (const c of openStrip.cut) say(`with the pane open the metric tile ${c}`);
+  await page.getByRole('button', { name: 'Close detail' }).click();
+  await settle();
+  if ((await page.locator('.observe__detail').count()) !== 0) say('Close detail left the pane open');
+  await atRest();
 }
 
 async function wastedProbeRows(theme) {
