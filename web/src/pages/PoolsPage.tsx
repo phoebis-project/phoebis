@@ -201,12 +201,15 @@ export function PoolsPage() {
     pools.reload();
     keys.reload();
   };
+  // `useAsync` keeps the last list through a reload and after a failed one, so the read's state decides rather than the
+  // list: during a refresh the old list lacks the key just created, and a failed refresh leaves it standing.
+  const keysRead = keys.loading ? 'loading' : keys.error ? 'failed' : 'loaded';
   const totals = pools.data
     ? {
         pools: pools.data.length,
         accounts: new Set(pools.data.flatMap((p) => p.members.map((m) => m.accountId))).size,
         // Null until the key list is read, so the tile waits as the cards' Keys tiles do rather than reading 0.
-        keys: keys.data ? keys.data.length : null,
+        keys: keysRead === 'loaded' && keys.data ? keys.data.length : null,
         requests: pools.data.reduce((s, p) => s + p.requests24h, 0),
         cost: pools.data.reduce((s, p) => s + p.cost24h, 0),
       }
@@ -225,7 +228,7 @@ export function PoolsPage() {
       <div className="stat-grid stat-grid--5">
         <Tile label="Pools" value={totals ? fmtInt(totals.pools) : null} />
         <Tile label="Accounts in pools" value={totals ? fmtInt(totals.accounts) : null} />
-        <Tile label="Keys" value={totals && totals.keys !== null ? fmtInt(totals.keys) : keys.error ? <span className="muted">n/a</span> : null} />
+        <Tile label="Keys" value={totals && totals.keys !== null ? fmtInt(totals.keys) : keysRead === 'failed' ? <span className="muted">n/a</span> : null} />
         <Tile label="Requests, 24h" value={totals ? fmtInt(totals.requests) : null} />
         <Tile label="Cost, 24h" value={totals ? fmtUsd(totals.cost) : null} />
       </div>
@@ -236,8 +239,8 @@ export function PoolsPage() {
                 key={p.id}
                 pool={p}
                 keys={keysByPool.get(p.id) ?? []}
-                keysRead={keys.data ? 'loaded' : keys.error ? 'failed' : 'loading'}
-                accounts={accounts.data ?? []}
+                keysRead={keysRead}
+                accounts={accounts.data}
                 accountById={accountById}
                 // No route answers the attention list yet, so the card draws no row.
                 attention={[]}
@@ -446,11 +449,12 @@ function PoolCard({
   onDelete,
 }: {
   accountById: Map<string, Account>;
-  accounts: Account[];
+  /** Null until the account list is read; the status sentence then says only what the pool's verdicts carry. */
+  accounts: Account[] | null;
   attention: AttentionItem[];
   canMutate: boolean;
   keys: ApiKey[];
-  /** Until the key list has loaded, `keys` is empty whatever the pool holds, so the count line and the tile wait. */
+  /** Until the key list has loaded, `keys` says nothing about the pool's keys, so the count line and the tile wait. */
   keysRead: 'failed' | 'loaded' | 'loading';
   now: number;
   onDelete: () => void;
@@ -465,7 +469,7 @@ function PoolCard({
     return { at: Date.parse(b.at), requests: b.requests, tokens: b.tokens, average: window.reduce((s, x) => s + x.requests, 0) / window.length };
   });
   const tokens24h = pool.traffic24h.reduce((s, b) => s + b.tokens, 0);
-  const tiers = selectionOrder(pool, accounts, sessions, now);
+  const tiers = selectionOrder(pool, accounts ?? [], sessions, now);
   const grouped = kindOrdered(pool);
   const sentence = poolStatusSentence(pool, accounts, sessions, now);
   const features = FEATURES.filter((f) => f.on(pool));

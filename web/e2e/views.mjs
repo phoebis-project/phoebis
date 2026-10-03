@@ -794,6 +794,9 @@ async function poolRoutingCards(theme) {
 /**
  * The first pool card at the pass's viewport and in the 720 px strip: the serving table ends inside the card, and the
  * six tiles stand on two rows of three, then three rows of two, with a left hairline on every tile but a row's first.
+ * Then every card's serving table at the pass's viewport, at 1160 px where two card columns leave a card narrower than
+ * the table, in the 720 px strip and at 400 px: the wrapper stays inside its card and scrolls a table wider than
+ * itself, and the page gains no horizontal overflow.
  */
 async function poolCardLayout(theme) {
   const say = (what) => failures.push(`${theme} /pools card: ${what}`);
@@ -822,6 +825,36 @@ async function poolCardLayout(theme) {
   measurements.push(`${theme} /pools card at 720 px ${JSON.stringify(narrow)}`);
   if (JSON.stringify(rowsOf(narrow.tops)) !== '[2,2,2]') say(`at 720 px the tiles stand in rows of ${JSON.stringify(rowsOf(narrow.tops))}, not three rows of two`);
   if (JSON.stringify(narrow.lefts) !== JSON.stringify(['0px', '1px', '0px', '1px', '0px', '1px'])) say(`at 720 px the tiles' left hairlines read ${narrow.lefts.join(' ')}`);
+  const serving = () =>
+    page.evaluate(() => {
+      const root = document.scrollingElement;
+      return {
+        cards: [...document.querySelectorAll('.pool')].map((card) => {
+          const box = card.getBoundingClientRect();
+          const wrap = card.querySelector('.pool__serving');
+          const inner = wrap?.getBoundingClientRect();
+          return {
+            clips: !!wrap && ['auto', 'scroll'].includes(getComputedStyle(wrap).overflowX),
+            inside: !!inner && inner.left >= box.left && inner.right <= box.right,
+            name: card.querySelector('.card__title')?.textContent ?? '',
+            wider: !!wrap && wrap.scrollWidth > wrap.clientWidth,
+          };
+        }),
+        overflow: root.scrollWidth - root.clientWidth,
+      };
+    });
+  for (const width of [1280, 1160, 720, 400]) {
+    await page.setViewportSize({ height: 800, width });
+    await settle();
+    const tables = await serving();
+    measurements.push(`${theme} /pools serving tables at ${width} px ${JSON.stringify(tables)}`);
+    if (tables.cards.length === 0) say(`at ${width} px no pool card to measure`);
+    for (const card of tables.cards) {
+      if (!card.inside) say(`at ${width} px the ${card.name} card's serving wrapper leaves the card`);
+      if (card.wider && !card.clips) say(`at ${width} px the ${card.name} card's serving table is wider than its wrapper and paints past the card`);
+    }
+    if (tables.overflow > 0) say(`at ${width} px the page overflows its width by ${tables.overflow} px`);
+  }
   await page.setViewportSize({ height: 800, width: 1280 });
   await settle();
   await atRest();
@@ -1986,6 +2019,27 @@ async function trafficCards(theme) {
  * The tab strip docks under the sticky filter bar: on Latency, the longest section, scrolled to the page's end, the
  * strip's top sits on the filter bar's bottom, the height the page measured from the bar.
  */
+/** The Analytics tab strip in the 720 px strip and at 400 px: every tab stays within the viewport's width. */
+async function analyticsTabs(theme) {
+  for (const width of [720, 400]) {
+    await page.setViewportSize({ height: 800, width });
+    await settle();
+    const read = await page.evaluate(() => ({
+      tabs: [...document.querySelectorAll('.section-bar [role="tab"]')].map((tab) => {
+        const box = tab.getBoundingClientRect();
+        return [tab.textContent, Math.round(box.left), Math.round(box.right)];
+      }),
+      width: document.documentElement.clientWidth,
+    }));
+    measurements.push(`${theme} /analytics tabs at ${width} px ${JSON.stringify(read)}`);
+    if (read.tabs.length === 0) failures.push(`${theme} /analytics: at ${width} px no tab to measure`);
+    const out = read.tabs.filter(([, left, right]) => left < 0 || right > read.width).map(([label]) => label);
+    if (out.length) failures.push(`${theme} /analytics: at ${width} px the ${out.join(', ')} tab leaves the ${read.width} px viewport`);
+  }
+  await page.setViewportSize({ height: 800, width: 1280 });
+  await settle();
+}
+
 async function stickyStrip(theme) {
   try {
     if (!(await tabTo(theme, 'Latency'))) return;
@@ -2839,6 +2893,7 @@ try {
         await planLegend(theme);
         await analyticsTables(theme);
         await trafficCards(theme);
+        await analyticsTabs(theme);
         await stickyStrip(theme);
       }
       if (view.path === '/settings') await settingsOrder(theme);

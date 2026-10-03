@@ -74,9 +74,10 @@ export function KeysPage() {
   const poolById = useMemo(() => new Map(poolList.map((p) => [p.id, p])), [poolList]);
   // The pool filter is the address: the select reads `?pool=<id>` and writes it back, so a reload keeps the filter and
   // the pool card's key count link lands on it. Until the pools are read the address filters as written, so the rows
-  // match it during the read and after a failed one. An id no pool carries reads as All pools and leaves the address
-  // once the pools have loaded; while a dialog query is still in the address, its own effect goes first. All pools is
-  // the empty string, which no pool id can be, since `all` is a real pool's id.
+  // match it during the read and after a failed one, and the select holds an option for the id: without one it would
+  // read All pools beside the filtered rows, and choosing All pools would change nothing. An id no pool carries reads
+  // as All pools and leaves the address once the pools have loaded; while a dialog query is still in the address, its
+  // own effect goes first. All pools is the empty string, which no pool id can be, since `all` is a real pool's id.
   const poolParam = useMemo(() => new URLSearchParams(location.search).get('pool'), [location.search]);
   const poolFilter = poolParam !== null && (pools.data === null || poolById.has(poolParam)) ? poolParam : '';
   const writePool = (id: string) => {
@@ -174,6 +175,7 @@ export function KeysPage() {
             </Select>
             <Select value={poolFilter} onChange={(e) => writePool(e.target.value)} aria-label="Pool">
               <option value="">All pools</option>
+              {pools.data === null && poolFilter !== '' && <option value={poolFilter}>{poolFilter}</option>}
               {poolList.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.name}
@@ -419,6 +421,8 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing
   const capRefusal = refusalOf('Requests in flight');
   const processed = useAsync(() => (open && existing ? api.getKeyModels(existing.id) : Promise.resolve(null)), [open, existing?.id]);
 
+  // Once per opening: the address can open the dialog before the pool list lands, and a reset on its arrival would
+  // discard every edit made meanwhile and put back the group the dialog opened on, the focus left in a hidden one.
   useEffect(() => {
     if (!open) return;
     // A key cannot exist without a pool, so the first pool stands in until one is picked.
@@ -440,7 +444,11 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing
     setEnabled(form.enabled);
     setBusy(false);
     setError(null);
-  }, [open, existing, initialPoolId, initialGroup, pools]);
+  }, [open, existing, initialPoolId, initialGroup]);
+  // A new key opened before the pools landed has no pool yet; the first one fills it once they do.
+  useEffect(() => {
+    if (open && existing === null && poolId === '' && pools.length > 0) setPoolId(pools[0].id);
+  }, [existing, open, poolId, pools]);
 
   // The server's words leave with the next edit to any field; a failed save changes none, so they stand until then.
   useEffect(() => setError(null), [affinitySource, autoModeServer, captureHours, captureMode, enabled, expiry, inFlightCap, longContextTwins, modelRules, modelRulesMode, name, notes, optOut, poolId]);

@@ -1273,8 +1273,11 @@
   border-top: 1px solid var(--hairline);
 }
 
+/* Two card columns just above 1100 px and a phone's width leave a card narrower than its table, which then scrolls
+   inside the card as `.table-wrap` scrolls the other tables. */
 .pool__serving {
   padding: 14px 18px 16px;
+  overflow-x: auto;
 }
 
 .pool__prio {

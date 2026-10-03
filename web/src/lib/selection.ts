@@ -183,13 +183,15 @@ const listOf = (names: StatusPart[]): StatusPart[] => names.flatMap((name, i) =>
 
 /**
  * When a skipped member returns, as the card already writes it: once every blocker the route reports has ended. The
- * verdict names the first blocker alone (cooldown before budget), while `budgetUntil` is set whenever a budget holds
- * the member, so a member in cooldown can sit at its budget too, and it returns at the later of its budget's period
- * end (daily, monthly, or plain "budget" when no spend report names the period) and its latest account-scope cooldown
- * end. A blocker without an end (unavailable, overage, a cooldown without an account-scope row) gives no return, and so
- * does a budget verdict without an end.
+ * verdict names the first blocker alone (unavailable, cooldown, budget, overage), while `budgetUntil` is set whenever
+ * a budget holds the member, and under a pool's `never` overage policy the account's overage holds it until its window
+ * resets. So a member in cooldown can sit at its budget and in overage too, and it returns at the latest of its
+ * budget's period end (daily, monthly, or plain "budget" when no spend report names the period), its latest
+ * account-scope cooldown end and its overage window's reset. A blocker without an end (unavailable, overage, a cooldown
+ * without an account-scope row, an overage window without a reset) gives no return, and so does a budget verdict
+ * without an end.
  */
-function returnOf(member: PoolMember, name: StatusPart, account: Account | undefined, now: number): { at: number; parts: StatusPart[] } | null {
+function returnOf(pool: Pool, member: PoolMember, name: StatusPart, account: Account | undefined, now: number): { at: number; parts: StatusPart[] } | null {
   const ends: { at: number; parts: StatusPart[] }[] = [];
   if (member.budgetUntil) {
     const period = member.spends.find((s) => s.periodEnd === member.budgetUntil)?.period;
@@ -207,14 +209,23 @@ function returnOf(member: PoolMember, name: StatusPart, account: Account | undef
   } else if (member.eligible !== 'budget') {
     return null;
   }
+  if (ends.length > 0 && pool.overagePolicy === 'never' && account?.overage?.inUse) {
+    const { reset } = account.overage;
+    if (reset === null) return null;
+    ends.push({ at: Date.parse(reset), parts: [name, { text: `'s overage window resets ${fmtRelative(reset, now)}` }] });
+  }
   return ends.sort((a, b) => b.at - a.at)[0] ?? null;
 }
 
-/** One sentence on what the status badge means for this pool, from the verdicts and the order the card already reads. */
-export function poolStatusSentence(pool: Pool, accounts: Account[], sessions: Session[], now: number = Date.now()): PoolStatusSentence {
+/**
+ * One sentence on what the status badge means for this pool, from the verdicts and the order the card already reads.
+ * `accounts` is null until the account list is read: without it the order places no member and no return or name can
+ * be read, so the sentence says what the pool's own verdicts carry and names no account.
+ */
+export function poolStatusSentence(pool: Pool, accounts: Account[] | null, sessions: Session[], now: number = Date.now()): PoolStatusSentence {
   const { status } = pool;
   const word = STATUS_WORD[status];
-  const byId = new Map(accounts.map((a) => [a.id, a]));
+  const byId = new Map((accounts ?? []).map((a) => [a.id, a]));
   const nameOf = (id: string): StatusPart => {
     const account = byId.get(id);
     return account ? { accountId: account.id, label: account.label } : { text: id };
@@ -222,8 +233,9 @@ export function poolStatusSentence(pool: Pool, accounts: Account[], sessions: Se
   const say = (parts: StatusPart[]): PoolStatusSentence => ({ parts, status, word });
   if (status === 'disabled') return say([{ text: 'the pool accepts no requests; its keys and members stay.' }]);
   if (status === 'exhausted') {
+    if (accounts === null) return say([{ text: 'no member can take a request.' }]);
     const first = pool.members
-      .map((m) => returnOf(m, nameOf(m.accountId), byId.get(m.accountId), now))
+      .map((m) => returnOf(pool, m, nameOf(m.accountId), byId.get(m.accountId), now))
       .filter((r): r is { at: number; parts: StatusPart[] } => r !== null)
       .sort((a, b) => a.at - b.at)[0];
     if (!first) return say([{ text: 'no member can take a request, and none reports when it returns.' }]);
@@ -233,12 +245,10 @@ export function poolStatusSentence(pool: Pool, accounts: Account[], sessions: Se
   const eligible = pool.members.filter((m) => m.eligible === 'eligible');
   if (members === 0) return say([{ text: 'the pool has no members yet.' }]);
   if (eligible.length === 0) return say([{ text: 'no member takes a fresh session right now.' }]);
+  const count = eligible.length === members ? `all ${members} members take fresh sessions` : `${eligible.length} of ${members} members ${eligible.length === 1 ? 'takes' : 'take'} fresh sessions`;
+  if (accounts === null) return say([{ text: members === 1 ? "the pool's one member takes every fresh session." : `${count}.` }]);
   if (members === 1) return say([nameOf(eligible[0].accountId), { text: ' takes every fresh session.' }]);
   const next = selectionOrder(pool, accounts, sessions, now).find((tier) => tier.next.length > 0)?.next ?? [];
   if (next.length === 0) return say([{ text: 'no listed member takes fresh sessions.' }]);
-  const lead =
-    eligible.length === members
-      ? `all ${members} members take fresh sessions; the next one goes to `
-      : `${eligible.length} of ${members} members ${eligible.length === 1 ? 'takes' : 'take'} fresh sessions; the next one goes to `;
-  return say([{ text: lead }, ...listOf(next.map(nameOf)), { text: '.' }]);
+  return say([{ text: `${count}; the next one goes to ` }, ...listOf(next.map(nameOf)), { text: '.' }]);
 }

@@ -1029,6 +1029,31 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       sentence('studio') === 'Active: business takes every fresh session.',
     missing: [sentence('all'), sentence('codex'), sentence('studio')].map(String),
   });
+  {
+    // Without the accounts the order has no members to place, so until they land the sentence says what the pool's
+    // own verdicts carry, the serving table's word for it, and names no account.
+    const held = deferNextCall('listAccounts');
+    const d = await mount('/pools');
+    const read = () =>
+      ['all', 'codex', 'studio'].map((name) => {
+        const line = [...d.container.querySelectorAll('.pool')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === name)?.querySelector('.pool__status');
+        return [line?.textContent?.replace(/\s+/g, ' ').trim() ?? 'no sentence', line?.querySelectorAll('a').length ?? 0];
+      });
+    const waiting = read();
+    held.release();
+    held.restore();
+    await d.settle(300);
+    const landed = read();
+    d.unmount();
+    results.push({
+      name: '/pools while the accounts load the status sentence counts the members that take fresh sessions, then names the next one',
+      ok:
+        held.calls.length > 0 &&
+        JSON.stringify(waiting) === JSON.stringify([['Degraded: 2 of 4 members take fresh sessions.', 0], ['Exhausted: no member can take a request.', 0], ["Active: the pool's one member takes every fresh session.", 0]]) &&
+        JSON.stringify(landed) === JSON.stringify([[sentence('all'), 1], [sentence('codex'), 1], [sentence('studio'), 1]]),
+      missing: [`held ${held.calls.length}`, ...waiting, ...landed].map((x) => JSON.stringify(x)),
+    });
+  }
   results.push({
     name: '/pools no card draws an attention row',
     ok:
@@ -2200,6 +2225,72 @@ m.unmount();
   p.unmount();
 }
 
+// The page keeps the old key list through a refresh and after a failed one, so after the first key of a pool the count
+// line and the Keys tiles wait for the refresh rather than read "No keys yet" and 0, and a failed refresh reads
+// unavailable rather than the list from before it.
+{
+  const studio = (await api.listPools()).find((p) => p.id === 'studio');
+  await api.createPool({ ...studio, members: studio.members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })), name: 'keyless' });
+  const read = (page) => {
+    const card = [...page.container.querySelectorAll('.pool')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'keyless');
+    const tile = [...(card?.querySelectorAll('.pool__stats > div') ?? [])].find((d) => d.querySelector('dt')?.textContent?.trim() === 'Keys')?.querySelector('dd');
+    const head = [...page.container.querySelectorAll('.stat-grid .stat')].find((t) => t.querySelector('.stat__label')?.textContent === 'Keys')?.querySelector('.stat__value');
+    return [card?.querySelector('.pool__keys')?.textContent?.trim() ?? null, tile?.textContent?.trim() ?? 'no tile', head?.textContent?.trim() ?? 'no tile', head?.querySelector('.skeleton') !== null];
+  };
+  const createKey = async (page, name) => {
+    [...page.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool keyless')?.click();
+    await page.settle(300);
+    const dlg = [...page.container.querySelectorAll('dialog[open]')].pop();
+    [...(dlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Create key')?.click();
+    await page.settle(300);
+    const keyDlg = [...page.container.querySelectorAll('dialog[open]')].pop();
+    const input = keyDlg?.querySelector('input[placeholder="workstation"]');
+    if (input) {
+      Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(input, name);
+      input.dispatchEvent(new window.Event('input', { bubbles: true }));
+      await page.settle(100);
+    }
+    [...(keyDlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Create')?.click();
+    await page.settle(700);
+  };
+  const dropKeys = async () => {
+    for (const key of (await api.listKeys()).filter((k) => k.poolId === 'keyless')) await api.deleteKey(key.id);
+  };
+  let p = await mount('/pools');
+  const before = read(p);
+  const held = deferNextCall('listKeys');
+  await createKey(p, 'first');
+  const waiting = read(p);
+  held.release();
+  held.restore();
+  await p.settle(400);
+  const landed = read(p);
+  p.unmount();
+  const total = (await api.listKeys()).length;
+  results.push({
+    name: "/pools after a pool's first key the count line and the Keys tiles wait for the refresh, then count the key",
+    ok:
+      JSON.stringify(before) === JSON.stringify(['No keys yet', '0', String(total - 1), false]) &&
+      held.calls.length > 0 &&
+      JSON.stringify(waiting) === JSON.stringify([null, '', '', true]) &&
+      JSON.stringify(landed) === JSON.stringify(['1 key', '1', String(total), false]),
+    missing: [before, waiting, landed].map((x) => JSON.stringify(x)),
+  });
+  await dropKeys();
+  p = await mount('/pools');
+  failNextCall('listKeys', '/admin/keys', 'the key store is unavailable');
+  await createKey(p, 'first');
+  const failed = read(p);
+  p.unmount();
+  results.push({
+    name: '/pools a failed refresh after the first key reads Keys unavailable and n/a, never the list from before it',
+    ok: JSON.stringify(failed) === JSON.stringify(['Keys unavailable', 'n/a', 'n/a', false]),
+    missing: [JSON.stringify(failed)],
+  });
+  await dropKeys();
+  await api.deletePool('keyless');
+}
+
 // A member the accounts list does not carry still gets a row after the tiers, its verdict in the chips the listed rows
 // use and a sentence saying why selection passes it over.
 {
@@ -2282,6 +2373,27 @@ m.unmount();
     name: '/keys?edit=desktop&group=models opens the key dialog on Models, focuses its heading and leaves the address at /keys',
     ok: titleOf(q) === `Edit ${desktop}` && shown(q) === 'Models' && !!models && document.activeElement === models.querySelector('h3') && q.location().pathname === '/keys' && q.location().search === '',
     missing: [titleOf(q), shown(q), focused(), JSON.stringify(q.location())],
+  });
+  q.unmount();
+  // The address opens the dialog once the keys are read, which can be before the pools land; their arrival leaves the
+  // edit made meanwhile, the group and the focus as they stand.
+  // The pools checks above revoke desktop, so the edit lands on laptop, which is still active here.
+  const heldPools = deferNextCall('listPools');
+  q = await mount('/keys?edit=laptop&group=access');
+  await q.settle(200);
+  const enabled = () => group(dialogOf(q), 'Access')?.querySelector('button[role="switch"][aria-label="Enabled"]');
+  const opened = [enabled()?.getAttribute('aria-checked') ?? 'no switch', q.container.querySelectorAll('.table-toolbar select[aria-label="Pool"] option').length];
+  enabled()?.click();
+  await q.settle(100);
+  const switched = enabled()?.getAttribute('aria-checked') ?? 'no switch';
+  heldPools.release();
+  heldPools.restore();
+  await q.settle(300);
+  const visible = dialogOf(q)?.querySelector('section.dialog-group:not([hidden])');
+  results.push({
+    name: '/keys a pool list that lands after the dialog query opened the dialog keeps the edit, the group and the focus',
+    ok: heldPools.calls.length > 0 && JSON.stringify(opened) === '["true",1]' && switched === 'false' && enabled()?.getAttribute('aria-checked') === 'false' && shown(q) === 'Access' && !!visible && visible.contains(document.activeElement),
+    missing: [`held ${heldPools.calls.length}`, `opened ${JSON.stringify(opened)}`, `switched ${switched}`, `after release ${enabled()?.getAttribute('aria-checked') ?? 'no switch'}`, shown(q), focused()],
   });
   q.unmount();
   q = await mount('/keys?edit=nope');
@@ -2501,17 +2613,42 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
   k.unmount();
   // Until the pools land the page cannot tell a known id from an unknown one, so it takes the address at its word: the
   // key count link lands on the pool's rows from the first render, never on every key.
+  // The select holds an option for the id meanwhile, since one it lacks would read All pools beside filtered rows.
+  const options = (page) => [...(select(page)?.options ?? [])].map((o) => [o.value, o.textContent]);
+  const codexName = (await api.listPools()).find((p) => p.id === 'codex')?.name;
   const heldPools = deferNextCall('listPools');
   k = await mount('/keys?pool=codex');
   const waiting = poolCells(k);
   const waitingSearch = k.location().search;
+  const waitingSelect = [select(k)?.value ?? 'no select', options(k)];
   heldPools.release();
   heldPools.restore();
   await k.settle(300);
   results.push({
-    name: "/keys?pool=codex lists the pool's keys alone while the pools are still loading",
-    ok: narrows('codex') && heldPools.calls.length > 0 && waiting.length === inPool('codex') && waiting.every((c) => c === 'codex') && waitingSearch === '?pool=codex' && poolCells(k).length === inPool('codex') && select(k)?.value === 'codex' && k.location().search === '?pool=codex',
-    missing: [`expected ${inPool('codex')} of ${stored.length}`, `held ${heldPools.calls.length}`, `loading ${waiting.join(',')}`, waitingSearch, `loaded ${poolCells(k).join(',')}`, select(k)?.value ?? 'no select', k.location().search],
+    name: "/keys?pool=codex lists the pool's keys alone with the Pool select on codex while the pools are still loading",
+    ok:
+      narrows('codex') &&
+      heldPools.calls.length > 0 &&
+      waiting.length === inPool('codex') &&
+      waiting.every((c) => c === 'codex') &&
+      waitingSearch === '?pool=codex' &&
+      JSON.stringify(waitingSelect) === JSON.stringify(['codex', [['', 'All pools'], ['codex', 'codex']]]) &&
+      poolCells(k).length === inPool('codex') &&
+      select(k)?.value === 'codex' &&
+      JSON.stringify(options(k).filter(([value]) => value === 'codex')) === JSON.stringify([['codex', codexName]]) &&
+      k.location().search === '?pool=codex',
+    missing: [`expected ${inPool('codex')} of ${stored.length}`, `held ${heldPools.calls.length}`, `loading ${waiting.join(',')}`, waitingSearch, JSON.stringify(waitingSelect), `loaded ${poolCells(k).join(',')}`, select(k)?.value ?? 'no select', JSON.stringify(options(k)), k.location().search],
+  });
+  k.unmount();
+  failNextCall('listPools', '/admin/pools', 'the pool store is unavailable');
+  k = await mount('/keys?pool=codex');
+  const failed = poolCells(k);
+  const failedValue = select(k)?.value ?? 'no select';
+  await choosePool(k, '');
+  results.push({
+    name: '/keys?pool=codex after a failed pool read keeps the rows filtered and the Pool select on codex, and All pools clears both',
+    ok: narrows('codex') && failed.length === inPool('codex') && failed.every((c) => c === 'codex') && failedValue === 'codex' && select(k)?.value === '' && poolCells(k).length === stored.length && k.location().search === '',
+    missing: [`expected ${inPool('codex')} of ${stored.length}`, `failed ${failed.join(',')}`, failedValue, select(k)?.value ?? 'no select', `cleared ${poolCells(k).length}`, k.location().search],
   });
   k.unmount();
   k = await mount('/keys?pool=codex&edit=batch&group=models');
