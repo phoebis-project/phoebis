@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { api } from '@/api';
 import type { Attempt, CapturedBodies, CohortHold, PinReleaseReason, RequestKind, RequestLog, RequestQuery, Usage, WindowId } from '@/api/types';
 import { PIN_RELEASE_REASON_VALUES } from '@/api/decode';
@@ -45,6 +45,80 @@ const RANGES = [
   { label: 'Last 6 hours', value: '6h', ms: 6 * 3_600_000 },
   { label: 'Last 24 hours', value: '24h', ms: 24 * 3_600_000 },
 ];
+const PAGE_SIZES = [10, 25, 50, 100];
+const KINDS: readonly RequestKind[] = ['count_tokens', 'inference', 'probe'];
+
+/** Every filter, the range and the page size, which the page's address holds so a reload or a shared link keeps them. */
+interface Filters {
+  accounts: string[];
+  /** The user agent pattern. */
+  agent: string;
+  agentTypes: string[];
+  client: string;
+  held: boolean;
+  keys: string[];
+  kind: '' | RequestKind;
+  models: string[];
+  pools: string[];
+  range: string;
+  rows: number;
+  search: string;
+  speeds: string[];
+  statuses: string[];
+  turnOrigins: string[];
+}
+
+const DEFAULTS: Filters = { accounts: [], agent: '', agentTypes: [], client: '', held: false, keys: [], kind: '', models: [], pools: [], range: '24h', rows: 25, search: '', speeds: [], statuses: [], turnOrigins: [] };
+
+/** Absent keys read as the defaults, and so does a kind, range, page size or status the page could not have written. */
+function filtersFromParams(params: URLSearchParams): Filters {
+  const text = (name: string) => params.get(name) ?? '';
+  const list = (name: string) => text(name).split(',').filter(Boolean);
+  const kind = KINDS.find((k) => k === params.get('kind'));
+  const range = RANGES.find((r) => r.value === params.get('range'));
+  const rows = Number(params.get('rows'));
+  return {
+    accounts: list('accounts'),
+    agent: text('agent'),
+    agentTypes: list('agent_types'),
+    client: text('client'),
+    held: params.get('held') === '1',
+    keys: list('keys'),
+    kind: kind ?? DEFAULTS.kind,
+    models: list('models'),
+    pools: list('pools'),
+    range: range?.value ?? DEFAULTS.range,
+    rows: PAGE_SIZES.includes(rows) ? rows : DEFAULTS.rows,
+    search: text('search'),
+    speeds: list('speeds'),
+    statuses: list('statuses').filter((code) => /^\d+$/.test(code)),
+    turnOrigins: list('turn_origins'),
+  };
+}
+
+/** A filter at its default is left out, so an unfiltered page has a bare address. */
+function paramsFromFilters(f: Filters): URLSearchParams {
+  const params = new URLSearchParams();
+  const put = (name: string, value: string) => {
+    if (value) params.set(name, value);
+  };
+  put('search', f.search);
+  put('client', f.client);
+  put('agent', f.agent);
+  put('agent_types', f.agentTypes.join(','));
+  put('turn_origins', f.turnOrigins.join(','));
+  put('speeds', f.speeds.join(','));
+  put('held', f.held ? '1' : '');
+  put('keys', f.keys.join(','));
+  put('pools', f.pools.join(','));
+  put('accounts', f.accounts.join(','));
+  put('models', f.models.join(','));
+  put('statuses', f.statuses.join(','));
+  put('kind', f.kind);
+  put('range', f.range === DEFAULTS.range ? '' : f.range);
+  put('rows', f.rows === DEFAULTS.rows ? '' : String(f.rows));
+  return params;
+}
 
 const OUTCOME_LABEL: Record<Attempt['outcome'], string> = {
   auth_failed: 'Auth failed',
@@ -99,102 +173,78 @@ const ATTEMPT_WINDOWS: { id: WindowId; label: string }[] = [
 export function RequestsPage() {
   const { requestId } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const now = useNow();
   const keys = useAsync(() => api.listKeys(), []);
   const pools = useAsync(() => api.listPools(), []);
   const accounts = useAsync(() => api.listAccounts(), []);
   const catalog = useAsync(() => api.listCatalog(), []);
 
-  const [search, setSearch] = useState('');
-  const [userAgent, setUserAgent] = useState('');
-  const [clientPattern, setClientPattern] = useState('');
-  const [agentTypes, setAgentTypes] = useState<string[]>([]);
-  const [turnOrigins, setTurnOrigins] = useState<string[]>([]);
-  const [speeds, setSpeeds] = useState<string[]>([]);
-  const [held, setHeld] = useState(false);
-  const [keyIds, setKeyIds] = useState<string[]>([]);
-  const [poolIds, setPoolIds] = useState<string[]>([]);
-  const [accountIds, setAccountIds] = useState<string[]>([]);
-  const [models, setModels] = useState<string[]>([]);
-  const [statuses, setStatuses] = useState<string[]>([]);
-  const [kind, setKind] = useState<'' | RequestKind>('');
-  const [range, setRange] = useState('24h');
+  const [searchParams, setSearchParams] = useSearchParams();
+  const filters = useMemo(() => filtersFromParams(searchParams), [searchParams]);
+  const address = searchParams.toString();
   const [visible, setVisible] = useState<Set<ColumnId>>(() => new Set(COLUMNS.map((c) => c.id).filter((id) => !HIDDEN_BY_DEFAULT.includes(id))));
-  const [pageSize, setPageSize] = useState(25);
-  const [cursor, setCursor] = useState<string | undefined>(undefined);
-  const [stack, setStack] = useState<(string | undefined)[]>([]);
+  // The cursor and the pages before it belong to the address they were read under, so a filter change drops them in
+  // the render that brings the new filters: React Router applies the address in a transition, and a reset of its own
+  // beside it would render apart and read the old filters once more without the cursor. The stale entry is replaced
+  // in that same render, so changing a filter back does not return to the page left behind under it.
+  const [paging, setPaging] = useState<{ for: string; cursor?: string; stack: (string | undefined)[] }>({ for: address, stack: [] });
+  if (paging.for !== address) setPaging({ for: address, stack: [] });
+  const cursor = paging.for === address ? paging.cursor : undefined;
+  const stack = paging.for === address ? paging.stack : [];
   // The range ends where the list was loaded, so a cursor page is read against the window its cursor came from;
   // Refresh moves the end to now.
   const [loadedAt, setLoadedAt] = useState(() => clock.now());
-  const searchField = useCommittedText(search, setSearch);
+  const update = (patch: Partial<Filters>) => setSearchParams(paramsFromFilters({ ...filters, ...patch }), { replace: true });
+  const search = useCommittedText(filters.search, (next) => update({ search: next }));
 
   const query = useMemo<RequestQuery>(() => {
-    const r = RANGES.find((x) => x.value === range) ?? RANGES[2];
+    const r = RANGES.find((x) => x.value === filters.range) ?? RANGES[2];
     // Probes are off the log unless they are what the filter asks for.
-    return { accountIds, agentTypes, client: clientPattern, cursor, from: new Date(loadedAt - r.ms).toISOString(), held, includeProbes: kind === 'probe', keyIds, kind: kind || null, limit: pageSize, models, poolIds, search, speeds, statuses: statuses.map(Number), to: new Date(loadedAt).toISOString(), turnOrigins, userAgent };
-  }, [search, userAgent, clientPattern, agentTypes, turnOrigins, speeds, held, keyIds, poolIds, accountIds, models, statuses, kind, range, pageSize, cursor, loadedAt]);
+    return { accountIds: filters.accounts, agentTypes: filters.agentTypes, client: filters.client, cursor, from: new Date(loadedAt - r.ms).toISOString(), held: filters.held, includeProbes: filters.kind === 'probe', keyIds: filters.keys, kind: filters.kind || null, limit: filters.rows, models: filters.models, poolIds: filters.pools, search: filters.search, speeds: filters.speeds, statuses: filters.statuses.map(Number), to: new Date(loadedAt).toISOString(), turnOrigins: filters.turnOrigins, userAgent: filters.agent };
+  }, [filters, cursor, loadedAt]);
   const requests = useAsync(() => api.listRequests(query), [query]);
 
-  const resetPaging = () => {
-    setCursor(undefined);
-    setStack([]);
-  };
+  const resetPaging = () => setPaging({ for: address, stack: [] });
   const refresh = () => {
     resetPaging();
     setLoadedAt(clock.now());
   };
-  useEffect(resetPaging, [search, userAgent, clientPattern, agentTypes, turnOrigins, speeds, held, keyIds, poolIds, accountIds, models, statuses, kind, range, pageSize]);
 
   const rows = requests.data?.requests ?? [];
   const nextCursor = requests.data?.nextCursor ?? null;
   const goNext = () => {
     if (!nextCursor) return;
-    setStack((s) => [...s, cursor]);
-    setCursor(nextCursor);
+    setPaging({ for: address, cursor: nextCursor, stack: [...stack, cursor] });
   };
   const goPrevious = () => {
     const copy = [...stack];
     const previous = copy.pop();
-    setStack(copy);
-    setCursor(previous);
+    setPaging({ for: address, cursor: previous, stack: copy });
   };
-  const active = search || userAgent || clientPattern || agentTypes.length || turnOrigins.length || speeds.length || held || keyIds.length || poolIds.length || accountIds.length || models.length || statuses.length || kind || range !== '24h';
-  const reset = () => {
-    setSearch('');
-    setUserAgent('');
-    setClientPattern('');
-    setAgentTypes([]);
-    setTurnOrigins([]);
-    setSpeeds([]);
-    setHeld(false);
-    setKeyIds([]);
-    setPoolIds([]);
-    setAccountIds([]);
-    setModels([]);
-    setStatuses([]);
-    setKind('');
-    setRange('24h');
-  };
+  // The page size is how the operator reads the log rather than what it narrows to, so Reset keeps it.
+  const active = paramsFromFilters({ ...filters, rows: DEFAULTS.rows }).toString() !== '';
+  const reset = () => setSearchParams(paramsFromFilters({ ...DEFAULTS, rows: filters.rows }), { replace: true });
   const selected = requestId ? rows.find((r) => r.id === requestId) ?? null : null;
 
   return (
     <div className={`requests ${requestId ? 'has-drawer' : ''}`}>
       <div className="stack">
         <div className="filters">
-          <SearchInput placeholder="Search id, session, key, account, model, error" value={searchField.draft} onChange={(e) => searchField.onChange(e.target.value)} onBlur={searchField.onBlur} onKeyDown={searchField.onKeyDown} className="filters__search" />
-          <Select value={range} onChange={(e) => setRange(e.target.value)} aria-label="Date range">
+          <SearchInput placeholder="Search id, session, key, account, model, error" value={search.draft} onChange={(e) => search.onChange(e.target.value)} onBlur={search.onBlur} onKeyDown={search.onKeyDown} className="filters__search" />
+          <Select value={filters.range} onChange={(e) => update({ range: e.target.value })} aria-label="Date range">
             {RANGES.map((r) => (
               <option key={r.value} value={r.value}>
                 {r.label}
               </option>
             ))}
           </Select>
-          <MultiSelect label="Keys" options={(keys.data ?? []).map((k) => ({ label: k.name, value: k.id }))} value={keyIds} onChange={setKeyIds} mono />
-          <MultiSelect label="Pools" options={(pools.data ?? []).map((p) => ({ label: p.name, value: p.id }))} value={poolIds} onChange={setPoolIds} mono />
-          <MultiSelect label="Accounts" options={(accounts.data ?? []).map((a) => ({ label: a.label, value: a.id }))} value={accountIds} onChange={setAccountIds} />
-          <MultiSelect label="Models" options={(catalog.data ?? []).map((m) => ({ label: m.id, value: m.id }))} value={models} onChange={setModels} searchable mono />
-          <PatternInput label="Client pattern" value={clientPattern} onCommit={setClientPattern} />
-          <PatternInput label="User agent pattern" value={userAgent} onCommit={setUserAgent} />
+          <MultiSelect label="Keys" options={(keys.data ?? []).map((k) => ({ label: k.name, value: k.id }))} value={filters.keys} onChange={(v) => update({ keys: v })} mono />
+          <MultiSelect label="Pools" options={(pools.data ?? []).map((p) => ({ label: p.name, value: p.id }))} value={filters.pools} onChange={(v) => update({ pools: v })} mono />
+          <MultiSelect label="Accounts" options={(accounts.data ?? []).map((a) => ({ label: a.label, value: a.id }))} value={filters.accounts} onChange={(v) => update({ accounts: v })} />
+          <MultiSelect label="Models" options={(catalog.data ?? []).map((m) => ({ label: m.id, value: m.id }))} value={filters.models} onChange={(v) => update({ models: v })} searchable mono />
+          <PatternInput label="Client pattern" value={filters.client} onCommit={(v) => update({ client: v })} />
+          <PatternInput label="User agent pattern" value={filters.agent} onCommit={(v) => update({ agent: v })} />
           <MultiSelect
             label="Status"
             options={[
@@ -203,12 +253,12 @@ export function RequestsPage() {
               { label: '502 Bad gateway', value: '502' },
               { label: '529 Overloaded', value: '529' },
             ]}
-            value={statuses}
-            onChange={setStatuses}
+            value={filters.statuses}
+            onChange={(v) => update({ statuses: v })}
           />
-          <MultiSelect label="Agent type" options={AGENT_TYPES.map((v) => ({ label: v, value: v }))} value={agentTypes} onChange={setAgentTypes} mono />
-          <MultiSelect label="Turn origin" options={TURN_ORIGINS.map((v) => ({ label: v, value: v }))} value={turnOrigins} onChange={setTurnOrigins} mono />
-          <Select value={kind} onChange={(e) => setKind(e.target.value as '' | RequestKind)} aria-label="Kind">
+          <MultiSelect label="Agent type" options={AGENT_TYPES.map((v) => ({ label: v, value: v }))} value={filters.agentTypes} onChange={(v) => update({ agentTypes: v })} mono />
+          <MultiSelect label="Turn origin" options={TURN_ORIGINS.map((v) => ({ label: v, value: v }))} value={filters.turnOrigins} onChange={(v) => update({ turnOrigins: v })} mono />
+          <Select value={filters.kind} onChange={(e) => update({ kind: e.target.value as '' | RequestKind })} aria-label="Kind">
             <option value="">Any kind</option>
             <option value="inference">Inference</option>
             <option value="count_tokens">Count tokens</option>
@@ -220,12 +270,12 @@ export function RequestsPage() {
               { label: 'fast', value: 'fast' },
               { label: 'standard', value: 'standard' },
             ]}
-            value={speeds}
-            onChange={setSpeeds}
+            value={filters.speeds}
+            onChange={(v) => update({ speeds: v })}
             mono
           />
           <label className="row">
-            <Toggle checked={held} onChange={setHeld} label="Held only" />
+            <Toggle checked={filters.held} onChange={(v) => update({ held: v })} label="Held only" />
             <span className="secondary">Held only</span>
           </label>
           {active ? (
@@ -272,7 +322,13 @@ export function RequestsPage() {
                       </tr>
                     ))
                   : rows.map((r) => (
-                      <tr key={r.id} className={r.id === requestId ? 'is-selected' : ''} onClick={() => navigate(`/requests/${r.id}`)} tabIndex={0} onKeyDown={(e) => e.key === 'Enter' && navigate(`/requests/${r.id}`)}>
+                      <tr
+                        key={r.id}
+                        className={r.id === requestId ? 'is-selected' : ''}
+                        onClick={() => navigate({ pathname: `/requests/${r.id}`, search: location.search })}
+                        tabIndex={0}
+                        onKeyDown={(e) => e.key === 'Enter' && navigate({ pathname: `/requests/${r.id}`, search: location.search })}
+                      >
                         {visible.has('time') && (
                           <td className="num" title={fmtAbsolute(r.at)}>
                             {fmtTime(r.at)}
@@ -329,7 +385,7 @@ export function RequestsPage() {
                         )}
                         {visible.has('cost') && <td className="right num">{fmtUsd(r.costUsd)}</td>}
                         <td className="right">
-                          <Link to={`/requests/${r.id}`} onClick={(e) => e.stopPropagation()}>
+                          <Link to={{ pathname: `/requests/${r.id}`, search: location.search }} onClick={(e) => e.stopPropagation()}>
                             Details
                           </Link>
                         </td>
@@ -352,8 +408,8 @@ export function RequestsPage() {
           <footer className="pager">
             <label className="row">
               <span className="muted">Rows</span>
-              <Select value={pageSize} onChange={(e) => setPageSize(Number(e.target.value))}>
-                {[10, 25, 50, 100].map((n) => (
+              <Select value={filters.rows} onChange={(e) => update({ rows: Number(e.target.value) })}>
+                {PAGE_SIZES.map((n) => (
                   <option key={n} value={n}>
                     {n}
                   </option>
@@ -381,7 +437,7 @@ export function RequestsPage() {
 
       {requestId && (
         <Descriptions>
-          <RequestDrawer request={selected} requestId={requestId} now={now} onClose={() => navigate('/requests')} />
+          <RequestDrawer request={selected} requestId={requestId} now={now} onClose={() => navigate({ pathname: '/requests', search: location.search })} />
         </Descriptions>
       )}
     </div>

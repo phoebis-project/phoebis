@@ -4272,6 +4272,105 @@ m.unmount();
   pressing.unmount();
 }
 
+// Every filter, the range and the page size live in the address: a mount reads them, a change writes them, and the
+// drawer's route keeps them on its way in and out.
+{
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  const typeInto = (input, text) => {
+    setter.call(input, text);
+    input.dispatchEvent(new window.Event('input', { bubbles: true }));
+  };
+  const choose = (select, value) => {
+    Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set.call(select, value);
+    select.dispatchEvent(new window.Event('change', { bubbles: true }));
+  };
+  const trigger = (page, label) => [...page.container.querySelectorAll('.filters .mselect__trigger')].find((t) => t.textContent?.trim().startsWith(label))?.textContent?.trim() ?? `no ${label} filter`;
+  const column = (page, header) => {
+    const at = [...page.container.querySelectorAll('.requests__table thead th')].findIndex((th) => th.textContent?.trim() === header);
+    return [...page.container.querySelectorAll('.requests__table tbody tr')].map((tr) => tr.children[at]?.textContent?.trim() ?? '');
+  };
+
+  const applied = await mount('/requests?keys=laptop&statuses=429');
+  const keysApplied = column(applied, 'Key');
+  const statusesApplied = column(applied, 'Status');
+  results.push({
+    name: '/requests mounts with keys=laptop&statuses=429 applied',
+    ok: trigger(applied, 'Keys') === 'Keys (1)' && trigger(applied, 'Status') === 'Status (1)' && keysApplied.length > 0 && keysApplied.every((k) => k === 'laptop') && statusesApplied.every((s) => s === '429'),
+    missing: [trigger(applied, 'Keys'), trigger(applied, 'Status'), JSON.stringify(keysApplied), JSON.stringify(statusesApplied)],
+  });
+  applied.unmount();
+
+  // The drawer is a route of its own, so a row, its Details link, Close and Escape each carry the address's filters.
+  const drawerCheck = '/requests opening and closing the drawer keeps the filters in the address';
+  const kept = await mount('/requests?keys=laptop');
+  const state = () => ({ drawer: kept.container.querySelector('.drawer') !== null, keys: column(kept, 'Key'), trigger: trigger(kept, 'Keys') });
+  const held = (s) => s.trigger === 'Keys (1)' && s.keys.length > 0 && s.keys.every((k) => k === 'laptop');
+  const before = state();
+  const details = kept.container.querySelector('.requests__table tbody tr a')?.getAttribute('href') ?? 'no Details link';
+  kept.container.querySelector('.requests__table tbody tr')?.click();
+  await kept.settle();
+  const clicked = state();
+  kept.container.querySelector('button[aria-label="Close details"]')?.click();
+  await kept.settle();
+  const closed = state();
+  kept.container.querySelector('.requests__table tbody tr')?.dispatchEvent(new window.KeyboardEvent('keydown', { bubbles: true, key: 'Enter' }));
+  await kept.settle();
+  const entered = state();
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { bubbles: true, key: 'Escape' }));
+  await kept.settle();
+  const escaped = state();
+  results.push({
+    name: drawerCheck,
+    ok: held(before) && /^\/requests\/[^?]+\?keys=laptop$/.test(details) && clicked.drawer && held(clicked) && !closed.drawer && held(closed) && entered.drawer && held(entered) && !escaped.drawer && held(escaped),
+    missing: [details, ...[before, clicked, closed, entered, escaped].map((s) => JSON.stringify({ ...s, keys: [...new Set(s.keys)] }))],
+  });
+  kept.unmount();
+
+  // The cursor belongs to the filters it was read under: a change drops it in the same update, so the one read that
+  // follows starts at the first page, and changing the filter back does not return to the page left behind.
+  const pagingCheck = '/requests a filter change on a later page issues one read with no cursor';
+  const paged = await mount('/requests', { now: CLOCK_ORIGIN });
+  const range = paged.container.querySelector('select[aria-label="Date range"]');
+  if (!range) controlMissing(pagingCheck, 'Date range');
+  else {
+    paged.container.querySelector('button[aria-label="Next page"]')?.click();
+    await paged.settle();
+    const later = paged.container.querySelector('button[aria-label="Previous page"]')?.disabled === false;
+    let spy = countCalls('listRequests');
+    choose(range, '6h');
+    await paged.settle();
+    const changed = spy.calls.map(([q]) => ({ cursor: q?.cursor ?? null, from: q?.from }));
+    spy.restore();
+    results.push({ name: pagingCheck, ok: later && changed.length === 1 && changed[0].cursor === null, missing: [`on a later page ${later}`, JSON.stringify(changed)] });
+    // Straight back, with no paging under the other range, so only the change itself can have dropped the cursor.
+    spy = countCalls('listRequests');
+    choose(range, '24h');
+    await paged.settle();
+    const back = spy.calls.map(([q]) => q?.cursor ?? null);
+    spy.restore();
+    const first = paged.container.querySelector('button[aria-label="Previous page"]')?.disabled === true;
+    results.push({ name: '/requests a filter changed back on a later page reads the first page again', ok: back.length === 1 && back[0] === null && first, missing: [JSON.stringify(back), `Previous disabled ${first}`] });
+  }
+  paged.unmount();
+
+  // The address replacing the search while an edit waits drops the edit: the commit it armed would undo the address.
+  const replacedCheck = '/requests a pending search edit replaced by a navigation commits nothing';
+  const replaced = await mount('/requests', { now: CLOCK_ORIGIN });
+  const field = replaced.container.querySelector('input.filters__search');
+  if (!field) controlMissing(replacedCheck, 'the search');
+  else {
+    const spy = countCalls('listRequests');
+    for (const text of ['a', 'ab', 'abc']) typeInto(field, text);
+    await replaced.navigate('/requests?search=other');
+    tick(400);
+    await replaced.settle();
+    const searched = spy.calls.map(([q]) => q?.search);
+    spy.restore();
+    results.push({ name: replacedCheck, ok: field.value === 'other' && !searched.includes('abc') && searched.includes('other'), missing: [`field ${JSON.stringify(field.value)}`, JSON.stringify(searched)] });
+  }
+  replaced.unmount();
+}
+
 // A read that fails for new filters draws the error state alone, none of the sections and none of the rows the filters before
 // the change read; Try again reads the new filters again.
 {
