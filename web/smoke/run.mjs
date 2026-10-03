@@ -5775,6 +5775,81 @@ m.unmount();
   });
   page.unmount();
 }
+{
+  // A failed overview read draws every tile it feeds as a dash, not a placeholder, and the row offers one Try again.
+  failNextCall('getKeepaliveOverview', '/admin/keepalive/overview', 'ledger locked');
+  const page = await mount('/sessions');
+  await page.settle();
+  const tiles = () =>
+    [...page.container.querySelectorAll('.stat-grid > .stat')].map((t) => ({
+      label: t.querySelector('.stat__label')?.textContent?.trim() ?? '',
+      note: t.querySelector(':scope > .stat__note')?.textContent?.trim() ?? '',
+      title: t.getAttribute('title'),
+      value: t.querySelector('.stat__value')?.textContent?.trim() ?? '',
+    }));
+  const fed = tiles().filter((t) => t.label !== 'Sessions');
+  const retries = [...page.container.querySelectorAll('button')].filter((b) => b.textContent?.trim() === 'Try again');
+  const line = page.container.querySelector('.stat-grid + .sessions__notice');
+  results.push({
+    name: '/sessions a failed overview read draws dashes, could not load and one Try again',
+    ok:
+      page.container.querySelector('.stat-grid .skeleton') === null &&
+      fed.length === 5 &&
+      fed.every((t) => t.value === '-' && t.note === 'could not load' && t.title === 'ledger locked') &&
+      tiles().find((t) => t.label === 'Sessions')?.value !== '-' &&
+      retries.length === 1 &&
+      line !== null &&
+      line.contains(retries[0]) &&
+      (line.textContent ?? '').includes('ledger locked'),
+    missing: [JSON.stringify(tiles()), `${retries.length} Try again`, line?.textContent ?? 'no line under the tiles'],
+  });
+  retries[0]?.click();
+  await page.settle();
+  results.push({
+    name: '/sessions Try again under the tiles reads the overview again',
+    ok: retries.length === 1 && tiles().every((t) => t.value !== '-' && t.value !== '' && t.title === null) && page.container.querySelector('.sessions__notice') === null,
+    missing: [JSON.stringify(tiles())],
+  });
+  page.unmount();
+}
+{
+  // Without the pools a session's missing recipe has no cause the page can name but the read that failed.
+  failNextCall('listPools', '/admin/pools', 'store locked');
+  const page = await mount('/sessions');
+  [...page.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Expand all')?.click();
+  await page.settle(300);
+  const causes = [...page.container.querySelectorAll('.agents__none > span:not(.badge)')].map((s) => s.textContent?.trim() ?? '');
+  const live = causes.filter((c) => !c.includes('created again'));
+  results.push({
+    name: '/sessions a failed pools read names the pool list as the missing recipe\'s cause',
+    ok: live.length > 0 && live.every((c) => c === 'Nothing is scheduled because the pool list did not load.'),
+    missing: [...new Set(causes)],
+  });
+  page.unmount();
+}
+{
+  // A failed accounts read leaves every account cell bare, so one line between the tiles and the table says why.
+  failNextCall('listAccounts', '/admin/accounts', 'registry locked');
+  const page = await mount('/sessions');
+  const notices = () => [...page.container.querySelectorAll('.sessions__notice')];
+  const line = notices()[0];
+  const button = line?.querySelector('button');
+  results.push({
+    name: '/sessions a failed accounts read draws one notice line',
+    ok:
+      notices().length === 1 &&
+      (line?.textContent ?? '').startsWith('Could not load the accounts: registry locked') &&
+      button?.textContent?.trim() === 'Try again' &&
+      line?.getAttribute('role') === 'status' &&
+      line?.closest('.card') === null &&
+      line?.nextElementSibling?.classList.contains('card--table') === true,
+    missing: notices().map((n) => n.outerHTML.slice(0, 200)),
+  });
+  button?.click();
+  await page.settle();
+  results.push({ name: '/sessions Try again on the accounts notice reads the accounts again', ok: button !== undefined && button !== null && notices().length === 0 && page.container.querySelectorAll('td[title^="Subscription account"]').length > 0, missing: notices().map((n) => n.textContent ?? '') });
+  page.unmount();
+}
 
 m = await mount('/sessions');
 expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agents', 'busy', 'idle', 'parked', 'Cache probes, 24h', 'ok (', 'migrated', 'skipped', 'failed', 'Expired between turns, 24h', 'misses cache warming exists to prevent', 'Probe cost today', 'of $4.00', 'uncapped', 'Net saved, 7d', 'Cost reference', 'Key', 'Session', 'Model', 'Account', 'Last used', 'expires in', 'Requests', 'Companion', 'Cache warming', 'Expand all', 'epoch 2', 'reporting', 'silent', 'since ', 'none', 'no recipe', 'fable-5-1']);

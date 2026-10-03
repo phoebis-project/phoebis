@@ -2376,6 +2376,18 @@
   color: var(--warning-ink);
 }
 
+/* A read that failed under the tiles or the table: one line between the two, 12px from each, its Try again inline. The
+   negative margin takes the page stack's 18px gap down to that. */
+.sessions__notice {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin: -6px 0;
+  font-size: 12.5px;
+  color: var(--critical-ink);
+}
+
 /* Per-agent columns left no room for a wrapped model id or timestamp, so the
    table scrolls sideways rather than growing three-line rows. */
 .sessions-table td {

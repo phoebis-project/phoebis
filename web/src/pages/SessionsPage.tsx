@@ -95,7 +95,8 @@ function idleLimitRanOutAt(session: Session, pool: Pool | null): string | null {
   return seconds > 0 && session.lastUsedAt !== null ? new Date(Date.parse(session.lastUsedAt) + seconds * 1000).toISOString() : null;
 }
 
-function buildRows(sessions: Session[], recipes: KeepaliveRecipe[], accounts: Account[], keys: ApiKey[], pools: Pool[], now: number): Row[] {
+/** `poolsFailed`: the pool list did not load, so a session whose pool is not found has no cause the rows can name but that. */
+function buildRows(sessions: Session[], recipes: KeepaliveRecipe[], accounts: Account[], keys: ApiKey[], pools: Pool[], poolsFailed: boolean, now: number): Row[] {
   const accountById = new Map(accounts.map((a) => [a.id, a]));
   const keyById = new Map(keys.map((k) => [k.id, k]));
   const poolById = new Map(pools.map((p) => [p.id, p]));
@@ -123,6 +124,7 @@ function buildRows(sessions: Session[], recipes: KeepaliveRecipe[], accounts: Ac
     // The live key's pool and opt-out say nothing about a session that no longer belongs to it, so an earlier
     // holder carries that reason alone.
     if (session.historical) causes.push(HISTORICAL_CAUSE);
+    else if (poolsFailed && key !== null && pool === null) causes.push('the pool list did not load');
     else {
       if (pool && !pool.keepalive.enabled) causes.push(`pool ${pool.name} keeps no caches warm`);
       if (key?.keepaliveOptOut) causes.push(`key ${key.name} opts out`);
@@ -175,18 +177,21 @@ export function SessionsPage() {
   const sessionData = sessions.data;
   const recipeData = recipes.data;
   const expireAfterSeconds = settings.data?.sessions.expireAfterSeconds ?? null;
+  const poolsFailed = pools.data === null && pools.error !== null;
   // The router forgets a session once it has been idle for the expiry, so this list has to as well.
   const rows = useMemo(
     () =>
       sessionData && recipeData && keys.data
-        ? buildRows(sessionData, recipeData, accounts.data ?? [], keys.data, pools.data ?? [], now).filter((r) => {
+        ? buildRows(sessionData, recipeData, accounts.data ?? [], keys.data, pools.data ?? [], poolsFailed, now).filter((r) => {
             const lastUsed = r.session.lastUsedAt ?? r.session.lastRequestAt;
             return expireAfterSeconds === null || lastUsed === null || Date.parse(lastUsed) + expireAfterSeconds * 1000 > now;
           })
         : null,
-    [sessionData, recipeData, accounts.data, keys.data, pools.data, expireAfterSeconds, now],
+    [sessionData, recipeData, accounts.data, keys.data, pools.data, poolsFailed, expireAfterSeconds, now],
   );
   const o = overview.data;
+  // A refresh that fails keeps the tiles it drew, so only a read that never answered draws them as failed.
+  const overviewError = o === null ? overview.error : null;
   // Counted over the rows shown, so the note agrees with the table under it and the count beside it.
   const withCompanion = rows ? rows.filter((r) => r.session.companion === 'reporting' || r.session.companion === 'silent').length : null;
   const withRecipe = rows ? rows.filter((r) => r.session.keepalive.state !== null).length : null;
@@ -232,18 +237,35 @@ export function SessionsPage() {
 
       <div className="stat-grid stat-grid--6">
         <Tile label="Sessions" value={rows ? fmtInt(rows.length) : null} note={sessionsNote} />
-        <Tile label="Cache-warming agents" value={o ? `${o.agents.busy} busy` : null} note={o ? `${o.agents.idle} idle, ${o.agents.parked} parked` : null} />
-        <ProbeTile overview={o} />
+        <Tile label="Cache-warming agents" value={o ? `${o.agents.busy} busy` : null} note={o ? `${o.agents.idle} idle, ${o.agents.parked} parked` : null} error={overviewError} />
+        <ProbeTile overview={o} error={overviewError} />
         {/* The count is router-wide, so a warm tone means at least one pool is paying for probes that did not land. */}
         <Tile
           label="Expired between turns, 24h"
           value={o ? fmtInt(o.expiredBetweenTurns24h) : null}
           note="misses cache warming exists to prevent"
           tone={o && o.expiredBetweenTurns24h > 0 && warmingSomewhere ? 'warning' : undefined}
+          error={overviewError}
         />
-        <Tile label="Net saved, 7d" value={o ? fmtUsd(o.netSaved7dUsd) : null} note="gross saved minus probe cost" tone={o && o.netSaved7dUsd < 0 ? 'critical' : undefined} />
-        <CostTile overview={o} />
+        <Tile label="Net saved, 7d" value={o ? fmtUsd(o.netSaved7dUsd) : null} note="gross saved minus probe cost" tone={o && o.netSaved7dUsd < 0 ? 'critical' : undefined} error={overviewError} />
+        <CostTile overview={o} error={overviewError} />
       </div>
+      {overviewError !== null && (
+        <p className="sessions__notice" role="status">
+          Could not load the tiles: {overviewError}{' '}
+          <Button size="sm" onClick={overview.reload}>
+            Try again
+          </Button>
+        </p>
+      )}
+      {accounts.data === null && accounts.error !== null && (
+        <p className="sessions__notice" role="status">
+          Could not load the accounts: {accounts.error}{' '}
+          <Button size="sm" onClick={accounts.reload}>
+            Try again
+          </Button>
+        </p>
+      )}
 
       <Card
         padded={false}
@@ -648,57 +670,60 @@ function OtherPins({ agents }: { agents: KeepaliveRecipe[] }) {
   );
 }
 
-function ProbeTile({ overview: o }: { overview: KeepaliveOverview | null }) {
+function ProbeTile({ error, overview: o }: { error: string | null; overview: KeepaliveOverview | null }) {
   const total = o ? o.probes24h.ok + o.probes24h.migrated + o.probes24h.skipped + o.probes24h.failed : 0;
   return (
-    <div className="stat stat--compact">
-      <span className="stat__label">Cache probes, 24h</span>
-      <span className="stat__value">{o ? fmtInt(total) : <Skeleton width={60} height={22} />}</span>
-      {o ? (
-        <>
-          <div className="probe-bar" role="img" aria-label={`Probes in the last 24h: ${o.probes24h.ok} ok, ${o.probes24h.migrated} migrated, ${o.probes24h.skipped} skipped, ${o.probes24h.failed} failed`}>
-            <span className="probe-bar__seg probe-bar__seg--ok" style={{ flex: o.probes24h.ok }} />
-            <span className="probe-bar__seg probe-bar__seg--migrated" style={{ flex: o.probes24h.migrated }} title={MIGRATED_PROBE_HINT} />
-            <span className="probe-bar__seg probe-bar__seg--skipped" style={{ flex: o.probes24h.skipped }} />
-            <span className="probe-bar__seg probe-bar__seg--failed" style={{ flex: o.probes24h.failed }} />
-          </div>
-          <span className="stat__note">
-            {fmtInt(o.probes24h.ok)} ok ({fmtPct(total ? o.probes24h.ok / total : 0)}), <span title={MIGRATED_PROBE_HINT}>{fmtInt(o.probes24h.migrated)} migrated</span>, {fmtInt(o.probes24h.skipped)} skipped,{' '}
-            {fmtInt(o.probes24h.failed)} failed
-          </span>
-        </>
-      ) : (
-        <Skeleton width={120} />
-      )}
-    </div>
+    <Tile
+      label="Cache probes, 24h"
+      value={o ? fmtInt(total) : null}
+      error={error}
+      note={
+        o ? (
+          <>
+            <div className="probe-bar" role="img" aria-label={`Probes in the last 24h: ${o.probes24h.ok} ok, ${o.probes24h.migrated} migrated, ${o.probes24h.skipped} skipped, ${o.probes24h.failed} failed`}>
+              <span className="probe-bar__seg probe-bar__seg--ok" style={{ flex: o.probes24h.ok }} />
+              <span className="probe-bar__seg probe-bar__seg--migrated" style={{ flex: o.probes24h.migrated }} title={MIGRATED_PROBE_HINT} />
+              <span className="probe-bar__seg probe-bar__seg--skipped" style={{ flex: o.probes24h.skipped }} />
+              <span className="probe-bar__seg probe-bar__seg--failed" style={{ flex: o.probes24h.failed }} />
+            </div>
+            <span className="stat__note">
+              {fmtInt(o.probes24h.ok)} ok ({fmtPct(total ? o.probes24h.ok / total : 0)}), <span title={MIGRATED_PROBE_HINT}>{fmtInt(o.probes24h.migrated)} migrated</span>, {fmtInt(o.probes24h.skipped)} skipped,{' '}
+              {fmtInt(o.probes24h.failed)} failed
+            </span>
+          </>
+        ) : null
+      }
+    />
   );
 }
 
-function CostTile({ overview: o }: { overview: KeepaliveOverview | null }) {
+function CostTile({ error, overview: o }: { error: string | null; overview: KeepaliveOverview | null }) {
   return (
-    <div className="stat stat--compact">
-      <span className="stat__label">Probe cost today</span>
-      {o ? (
-        <ul className="cost-caps">
-          {o.costToday.map((c) => {
-            const ratio = c.capUsd ? c.usd / c.capUsd : 0;
-            return (
-              <li key={c.poolId}>
-                <div className="cost-caps__head">
-                  <span className="mono">{c.poolId}</span>
-                  <span className="num">
-                    {fmtUsd(c.usd)}
-                    {c.capUsd !== null ? <span className="muted"> of {fmtUsd(c.capUsd)}</span> : <span className="muted"> uncapped</span>}
-                  </span>
-                </div>
-                {c.capUsd !== null && <Meter value={ratio} tone={ratio >= 0.9 ? 'low' : ratio >= 0.6 ? 'warn' : 'accent'} thin label={`Probe cost today for ${c.poolId} against its cap`} />}
-              </li>
-            );
-          })}
-        </ul>
-      ) : (
-        <Skeleton width={120} height={22} />
-      )}
-    </div>
+    <Tile
+      label="Probe cost today"
+      value={o ? fmtUsd(o.costToday.reduce((sum, c) => sum + c.usd, 0)) : null}
+      error={error}
+      note={
+        o ? (
+          <ul className="cost-caps">
+            {o.costToday.map((c) => {
+              const ratio = c.capUsd ? c.usd / c.capUsd : 0;
+              return (
+                <li key={c.poolId}>
+                  <div className="cost-caps__head">
+                    <span className="mono">{c.poolId}</span>
+                    <span className="num">
+                      {fmtUsd(c.usd)}
+                      {c.capUsd !== null ? <span className="muted"> of {fmtUsd(c.capUsd)}</span> : <span className="muted"> uncapped</span>}
+                    </span>
+                  </div>
+                  {c.capUsd !== null && <Meter value={ratio} tone={ratio >= 0.9 ? 'low' : ratio >= 0.6 ? 'warn' : 'accent'} thin label={`Probe cost today for ${c.poolId} against its cap`} />}
+                </li>
+              );
+            })}
+          </ul>
+        ) : null
+      }
+    />
   );
 }
