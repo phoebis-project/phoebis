@@ -3229,6 +3229,37 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
   });
   foot(ci, 'Cancel')?.click();
   await m.settle(200);
+  {
+    // Under Override the field is read as typed: an emptied one holds Save rather than sending 0, which the route stores
+    // as capture off while the radio still says Override.
+    const desktop = await editOf('desktop');
+    rail(desktop, 'capture')?.click();
+    await m.settle(100);
+    const capture = group(desktop, 'Capture');
+    const override = capture?.querySelectorAll('.radio-list__item')[1]?.querySelector('input[type="radio"]');
+    override?.click();
+    await m.settle(100);
+    const field = capture?.querySelector('input[aria-label="Capture hours for this key"]');
+    if (field) {
+      Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(field, '');
+      field.dispatchEvent(new window.Event('input', { bubbles: true }));
+    }
+    await m.settle(100);
+    const status = desktop?.querySelector('.dialog__status');
+    // Every rail entry carrying a refusal dot, in the rail's order.
+    const marked = [...(desktop?.querySelectorAll('.dialog-rail__group') ?? [])].filter((b) => b.querySelector('.dialog-rail__dot')).map((b) => b.getAttribute('data-group'));
+    const read = [String(override?.checked), String(foot(desktop, 'Save')?.disabled), status?.textContent ?? '', JSON.stringify(marked), JSON.stringify(field?.value), String(field?.getAttribute('aria-invalid'))];
+    status?.querySelector('button')?.click();
+    await m.settle(100);
+    const landed = field !== null && field !== undefined && desktop?.ownerDocument.activeElement === field;
+    results.push({
+      name: '/keys an emptied override field holds Save with its sentence on the Capture rail entry',
+      ok: read[0] === 'true' && read[1] === 'true' && read[2] === 'Save is held: Capture hours is a whole number from 1 to 72.Go to Capture' && read[3] === '["capture"]' && read[4] === '""' && read[5] === 'true' && landed,
+      missing: [...read, `focus on the field: ${landed}`],
+    });
+    foot(desktop, 'Cancel')?.click();
+    await m.settle(200);
+  }
   // A new key opens on its first pool, which is on; notebook sets its own off under a pool that is off.
   const autoModeOf = (dlg) => group(dlg, 'Access')?.querySelector('select[aria-label="Server-side auto mode"]');
   [...m.container.querySelectorAll('button')].find((b) => b.textContent?.includes('Create key'))?.click();

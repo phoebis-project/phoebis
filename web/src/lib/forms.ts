@@ -223,7 +223,8 @@ export type CaptureMode = 'inherit' | 'off' | 'override';
 export interface KeyForm {
   affinitySource: AffinitySource;
   autoModeServer: AutoModeOverride;
-  captureHours: number;
+  /** The override field's text, kept as typed so an emptied field reads empty rather than 0. */
+  captureHours: string;
   captureMode: CaptureMode;
   enabled: boolean;
   /** `keep` leaves the stored expiry alone, `never` clears it, and a number is days from the save. */
@@ -244,7 +245,7 @@ export function keyFormOf(existing: ApiKey | null, poolId: string): KeyForm {
   return {
     affinitySource: existing?.affinitySource ?? 'auto',
     autoModeServer: existing?.autoModeServer == null ? 'inherit' : existing.autoModeServer ? 'on' : 'off',
-    captureHours: existing?.bodyCaptureHours || 6,
+    captureHours: String(existing?.bodyCaptureHours || 6),
     captureMode: existing ? (existing.bodyCaptureHours === null ? 'inherit' : existing.bodyCaptureHours === 0 ? 'off' : 'override') : 'inherit',
     // The stored switch rather than `status`: every edit sends it, and an expired or revoked key's status would
     // say nothing about it.
@@ -265,7 +266,7 @@ export function keyInputOf(form: KeyForm, now: number): KeyInput {
   return {
     affinitySource: form.affinitySource,
     autoModeServer: form.autoModeServer === 'inherit' ? null : form.autoModeServer === 'on',
-    bodyCaptureHours: form.captureMode === 'inherit' ? null : form.captureMode === 'off' ? 0 : form.captureHours,
+    bodyCaptureHours: form.captureMode === 'inherit' ? null : form.captureMode === 'off' ? 0 : Number(form.captureHours),
     enabled: form.enabled,
     expiresAt: form.expiry === 'keep' ? undefined : form.expiry === 'never' ? null : new Date(now + Number(form.expiry) * 86_400_000).toISOString(),
     inFlightCap: form.inFlightCap.trim() === '' ? null : Number(form.inFlightCap),
@@ -294,7 +295,7 @@ export const KEY_GROUPS = ['key', 'access', 'models', 'sessions', 'capture'] as 
 export type KeyGroup = (typeof KEY_GROUPS)[number];
 
 export interface KeyRefusal {
-  /** The refused control's accessible name: Name, Pool, Requests in flight, Model rules. */
+  /** The refused control's accessible name: Name, Pool, Requests in flight, Model rules, Capture hours for this key. */
   field: string;
   group: KeyGroup;
   text: string;
@@ -304,13 +305,15 @@ export interface KeyRefusal {
 export interface KeyChecks {
   /** On create the id derives from the name, so a taken one is held before the route's 409; an edit keeps its id. */
   identity?: { existingIds: ReadonlySet<string>; isNew: boolean };
+  /** The bootstrap's ceiling on capture hours; without it only the floor of 1 is checked. */
+  maxHours?: number;
 }
 
 /**
  * The key dialog's holds in rail order: a missing name, a new key's id that is taken or that the name gives no letter
- * or digit for, a missing pool, the in-flight cap, the model rules; empty when Save may go.
+ * or digit for, a missing pool, the in-flight cap, the model rules, an override's hours; empty when Save may go.
  */
-export function keyRefusals(form: Pick<KeyForm, 'inFlightCap' | 'modelRules' | 'name' | 'poolId'>, checks: KeyChecks = {}): KeyRefusal[] {
+export function keyRefusals(form: Pick<KeyForm, 'captureHours' | 'captureMode' | 'inFlightCap' | 'modelRules' | 'name' | 'poolId'>, checks: KeyChecks = {}): KeyRefusal[] {
   const out: KeyRefusal[] = [];
   // Trimmed, as `keyInputOf` sends it: a name of spaces reaches the route empty.
   const name = form.name.trim();
@@ -327,6 +330,14 @@ export function keyRefusals(form: Pick<KeyForm, 'inFlightCap' | 'modelRules' | '
   if (cap) out.push({ field: 'Requests in flight', group: 'access', text: cap });
   const rules = modelRulesRefusal(form.modelRules);
   if (rules) out.push({ field: 'Model rules', group: 'models', text: rules });
+  // An emptied field would send 0, which the route stores as capture off while the radio still says Override.
+  if (form.captureMode === 'override') {
+    const { maxHours } = checks;
+    if (!whole(Number(form.captureHours), 1, maxHours ?? Number.MAX_SAFE_INTEGER)) {
+      const text = maxHours === undefined ? 'Capture hours is a whole number of at least 1.' : `Capture hours is a whole number from 1 to ${maxHours}.`;
+      out.push({ field: 'Capture hours for this key', group: 'capture', text });
+    }
+  }
   return out;
 }
 

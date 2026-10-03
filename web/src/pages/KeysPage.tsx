@@ -365,7 +365,7 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing
   const [autoModeServer, setAutoModeServer] = useState<AutoModeOverride>('inherit');
   const [notes, setNotes] = useState('');
   const [captureMode, setCaptureMode] = useState<CaptureMode>('inherit');
-  const [captureHours, setCaptureHours] = useState(6);
+  const [captureHours, setCaptureHours] = useState('6');
   const [optOut, setOptOut] = useState(false);
   const [enabled, setEnabled] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -375,9 +375,9 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing
   const poolName = pool?.name ?? poolId;
   const poolHours = pool?.bodyCaptureHours ?? 0;
   const maxHours = settings.data?.retention.bodyCaptureMaxHours ?? 72;
-  const effectiveHours = captureMode === 'inherit' ? poolHours : captureMode === 'off' ? 0 : captureHours;
+  const effectiveHours = captureMode === 'inherit' ? poolHours : captureMode === 'off' ? 0 : Number(captureHours);
   const suggestions = useCatalogSuggestions(pool?.members.map((m) => m.accountId) ?? [], open);
-  const refusals = keyRefusals({ inFlightCap, modelRules, name, poolId }, { identity: { existingIds, isNew: existing === null } });
+  const refusals = keyRefusals({ captureHours, captureMode, inFlightCap, modelRules, name, poolId }, { identity: { existingIds, isNew: existing === null }, maxHours });
   const refusedFields = new Set(refusals.map((r) => r.field));
   const refusedGroups = new Set<KeyGroup>(refusals.map((r) => r.group));
   const invalid = (field: string) => (refusedFields.has(field) ? true : undefined);
@@ -618,10 +618,11 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing
                     min={1}
                     max={maxHours}
                     value={captureHours}
-                    onChange={(e) => setCaptureHours(Number(e.target.value))}
+                    onChange={(e) => setCaptureHours(e.target.value)}
                     onFocus={() => setCaptureMode('override')}
                     style={{ flex: 1 }}
                     aria-label="Capture hours for this key"
+                    aria-invalid={invalid('Capture hours for this key')}
                   />
                   hours
                 </span>
