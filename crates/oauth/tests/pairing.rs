@@ -58,7 +58,16 @@ fn pkce_challenge_is_s256_of_the_verifier() {
 #[test]
 fn a_pasted_callback_url_is_validated_against_the_session() {
     let s = PairingSessions::new();
-    let sess = s
+    let first = s
+        .start(
+            "business",
+            "admin-1",
+            "http://localhost:4567/callback",
+            1_000,
+        )
+        .unwrap()
+        .session;
+    let started = s
         .start(
             "business",
             "admin-1",
@@ -66,15 +75,27 @@ fn a_pasted_callback_url_is_validated_against_the_session() {
             1_000,
         )
         .unwrap();
+    assert_eq!(
+        started.superseded.as_deref(),
+        Some(first.id.as_str()),
+        "the owner's second start replaces the pairing it left standing"
+    );
     assert!(matches!(
-        s.start(
-            "business",
-            "admin-1",
-            "http://localhost:4567/callback",
-            1_000
-        ),
-        Err(PairingError::Busy)
+        s.get(&first.id, "admin-1", 1_000).unwrap().status,
+        PairingStatus::Cancelled
     ));
+    let first_link = format!(
+        "http://localhost:4567/callback?code=abc&state={}",
+        first.state
+    );
+    assert!(
+        matches!(
+            s.accept_callback(&first.id, "admin-1", CallbackInput::Url(first_link), 1_001),
+            Err(PairingError::AlreadyConsumed)
+        ),
+        "the replaced pairing's link stops working"
+    );
+    let sess = started.session;
     let wrong_state = "http://localhost:4567/callback?code=abc&state=nope".to_string();
     assert!(matches!(
         s.accept_callback(&sess.id, "admin-1", CallbackInput::Url(wrong_state), 1_001),
@@ -137,7 +158,8 @@ fn sessions_expire_after_ten_minutes() {
             "http://localhost:4567/callback",
             1_000,
         )
-        .unwrap();
+        .unwrap()
+        .session;
     let url = format!(
         "http://localhost:4567/callback?code=abc&state={}",
         sess.state
@@ -163,7 +185,8 @@ fn an_abandoned_session_expires_and_frees_the_account() {
             "http://localhost:4567/callback",
             1_000,
         )
-        .unwrap();
+        .unwrap()
+        .session;
     let later = 1_000 + 601_000;
     assert!(s
         .start(
@@ -181,7 +204,10 @@ fn an_abandoned_session_expires_and_frees_the_account() {
 fn a_session_walks_from_a_code_through_the_exchange_to_confirmed() {
     let s = PairingSessions::new();
     let redirect = "http://localhost:4567/callback";
-    let sess = s.start("business", "admin-1", redirect, 1_000).unwrap();
+    let sess = s
+        .start("business", "admin-1", redirect, 1_000)
+        .unwrap()
+        .session;
     let pending = || PendingIdentity {
         account_uuid: "00000000-0000-4000-8000-000000000001".into(),
         email: "test@example.invalid".into(),
@@ -222,10 +248,10 @@ fn a_session_walks_from_a_code_through_the_exchange_to_confirmed() {
     ));
     assert!(
         matches!(
-            s.start("business", "admin-1", redirect, 1_002),
+            s.start("business", "admin-2", redirect, 1_002),
             Err(PairingError::Busy)
         ),
-        "an exchanged session still holds the account's slot"
+        "an exchanged session still holds the account's slot against another admin session"
     );
 
     assert!(matches!(
@@ -263,7 +289,10 @@ fn a_session_walks_from_a_code_through_the_exchange_to_confirmed() {
 fn an_exchange_that_sat_past_the_deadline_cannot_be_confirmed() {
     let s = PairingSessions::new();
     let redirect = "http://localhost:4567/callback";
-    let sess = s.start("business", "admin-1", redirect, 1_000).unwrap();
+    let sess = s
+        .start("business", "admin-1", redirect, 1_000)
+        .unwrap()
+        .session;
     let url = format!("{redirect}?code=CODE123&state={}", sess.state);
     s.accept_callback(&sess.id, "admin-1", CallbackInput::Url(url), 1_001)
         .unwrap();
@@ -287,7 +316,10 @@ fn an_exchange_that_sat_past_the_deadline_cannot_be_confirmed() {
 
 /// An exchanged session, one step short of the confirmation that installs its credential.
 fn exchanged(s: &PairingSessions, redirect: &str) -> String {
-    let sess = s.start("business", "admin-1", redirect, 1_000).unwrap();
+    let sess = s
+        .start("business", "admin-1", redirect, 1_000)
+        .unwrap()
+        .session;
     let url = format!("{redirect}?code=CODE123&state={}", sess.state);
     s.accept_callback(&sess.id, "admin-1", CallbackInput::Url(url), 1_001)
         .unwrap();
@@ -342,6 +374,48 @@ fn a_claimed_session_cannot_be_cancelled_out_from_under_the_commit() {
         s.get(&id, "admin-1", 1_004).unwrap().status,
         PairingStatus::Confirmed
     ));
+}
+
+#[test]
+fn a_start_by_the_owner_supersedes_its_exchanged_pairing() {
+    let s = PairingSessions::new();
+    let redirect = "http://localhost:4567/callback";
+    let id = exchanged(&s, redirect);
+    let started = s.start("business", "admin-1", redirect, 1_003).unwrap();
+    assert_eq!(started.superseded.as_deref(), Some(id.as_str()));
+    assert!(matches!(started.session.status, PairingStatus::Pending));
+    assert!(matches!(
+        s.get(&id, "admin-1", 1_003).unwrap().status,
+        PairingStatus::Cancelled
+    ));
+    assert!(
+        matches!(
+            s.claim_confirm(&id, "admin-1", 1_003),
+            Err(PairingError::AlreadyConsumed)
+        ),
+        "a replaced pairing has nothing left to confirm"
+    );
+}
+
+#[test]
+fn another_admin_sessions_start_is_refused_while_a_pairing_stands() {
+    let s = PairingSessions::new();
+    let redirect = "http://localhost:4567/callback";
+    let first = s
+        .start("business", "admin-1", redirect, 1_000)
+        .unwrap()
+        .session;
+    assert!(matches!(
+        s.start("business", "admin-2", redirect, 1_001),
+        Err(PairingError::Busy)
+    ));
+    assert!(
+        matches!(
+            s.get(&first.id, "admin-1", 1_001).unwrap().status,
+            PairingStatus::Pending
+        ),
+        "the refused start left the owner's pairing alone"
+    );
 }
 
 #[test]

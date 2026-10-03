@@ -124,6 +124,13 @@ pub struct PairingSessions {
     sessions: Mutex<HashMap<String, PairingSession>>,
 }
 
+#[derive(Debug, Clone)]
+pub struct Started {
+    pub session: PairingSession,
+    /// The id of the caller's own pairing this start cancelled, so the route can discard its vault record.
+    pub superseded: Option<String>,
+}
+
 impl Default for PairingSessions {
     fn default() -> Self {
         Self::new()
@@ -137,26 +144,34 @@ impl PairingSessions {
         }
     }
 
-    /// One pending session per account: a second `start` while one is in flight is a caller bug,
-    /// not a race to arbitrate, so it fails outright rather than replacing the first.
+    /// One pending session per account. A second start by the admin session that owns the standing one supersedes
+    /// it: a reload or a closed tab leaves a pairing that would otherwise hold the account for ten minutes. A start
+    /// while a confirmation is installing the credential, or by another admin session, is refused.
     pub fn start(
         &self,
         account_id: &str,
         admin_session_id: &str,
         redirect_uri: &str,
         now: i64,
-    ) -> Result<PairingSession, PairingError> {
+    ) -> Result<Started, PairingError> {
         let mut sessions = self.sessions.lock().expect(LOCK_POISONED);
         // An abandoned session must not hold an account `Busy` forever; expire stale entries
-        // before scanning so an old one no longer blocks a fresh start.
+        // before scanning so an old one neither blocks a fresh start nor reads as superseded.
         for session in sessions.values_mut() {
             expire_if_stale(session, now);
         }
-        let busy = sessions
-            .values()
-            .any(|s| s.account_id == account_id && is_in_flight(&s.status));
-        if busy {
-            return Err(PairingError::Busy);
+        let mut superseded = None;
+        for standing in sessions
+            .values_mut()
+            .filter(|s| s.account_id == account_id && is_in_flight(&s.status))
+        {
+            if standing.admin_session_id != admin_session_id
+                || matches!(standing.status, PairingStatus::Confirming { .. })
+            {
+                return Err(PairingError::Busy);
+            }
+            standing.status = PairingStatus::Cancelled;
+            superseded = Some(standing.id.clone());
         }
         let session = PairingSession {
             id: generate_state(),
@@ -169,7 +184,10 @@ impl PairingSessions {
             status: PairingStatus::Pending,
         };
         sessions.insert(session.id.clone(), session.clone());
-        Ok(session)
+        Ok(Started {
+            session,
+            superseded,
+        })
     }
 
     pub fn get(&self, id: &str, admin_session_id: &str, now: i64) -> Option<PairingSession> {

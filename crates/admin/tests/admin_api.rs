@@ -1198,6 +1198,70 @@ async fn an_abandoned_exchange_is_swept_at_its_deadline() {
 }
 
 #[tokio::test]
+async fn a_second_start_by_the_owning_session_replaces_its_standing_pairing() {
+    use common::{get, json, login, post};
+    // What a reload or a closed tab leaves behind: the same cookie starts again while its first pairing,
+    // already holding an exchanged credential, still stands.
+    let (app, _up, _store, _router, vault) = common::admin_parts_with_vault().await;
+    let cookie = login(&app, "admin-secret").await;
+    let first = common::exchanged_session_for(&app, &cookie, "business").await;
+
+    let start = r#"{"account_id":"business","login":"claude_ai"}"#;
+    let replaced = post(&app, "/admin/oauth/sessions", start, Some(&cookie)).await;
+    assert_eq!(replaced.status(), 201);
+    let second = json(replaced).await["id"].as_str().unwrap().to_string();
+    assert_ne!(second, first);
+
+    let shown = json(
+        get(
+            &app,
+            &format!("/admin/oauth/sessions/{first}"),
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(shown["status"], "cancelled");
+    let shown = json(
+        get(
+            &app,
+            &format!("/admin/oauth/sessions/{second}"),
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(shown["status"], "pending");
+    assert!(
+        vault.take_exchange(&first).is_none(),
+        "the replaced pairing's credential is dropped at once, not left for the sweep"
+    );
+}
+
+#[tokio::test]
+async fn a_start_by_another_admin_session_answers_409() {
+    use common::{get, json, login, post};
+    let (app, _up) = common::admin_app().await;
+    let owner = login(&app, "admin-secret").await;
+    let other = login(&app, "admin-secret").await;
+    let start = r#"{"account_id":"business","login":"claude_ai"}"#;
+    let started = json(post(&app, "/admin/oauth/sessions", start, Some(&owner)).await).await;
+    let id = started["id"].as_str().unwrap().to_string();
+
+    let refused = post(&app, "/admin/oauth/sessions", start, Some(&other)).await;
+    assert_eq!(refused.status(), 409);
+    assert_eq!(
+        json(refused).await["error"],
+        "a pairing session is already in progress for this account"
+    );
+    let shown = json(get(&app, &format!("/admin/oauth/sessions/{id}"), Some(&owner)).await).await;
+    assert_eq!(
+        shown["status"], "pending",
+        "the refused start left the owner's pairing alone"
+    );
+}
+
+#[tokio::test]
 async fn the_session_route_answers_the_role_and_settings_say_which_secrets_are_configured() {
     use common::{cookie_of, delete, get, json, post};
     let (app, _up) = common::admin_app().await;

@@ -38,7 +38,9 @@ Confirm the identity shown, the account's email and organization, to store the r
 
 The console starts every pairing as a `claude_ai` login, authorizing against `claude.com`; a `console` login,
 authorizing against `platform.claude.com`, is available through the API. A pairing session expires ten minutes
-after it starts, and the dialog shows the remaining time.
+after it starts, and the dialog shows the remaining time. Starting again from the same console session, after a reload
+or a closed tab, replaces the pairing left standing; a pairing another session started, or one being confirmed, has to
+finish or expire first.
 
 ![The Accounts view: the list on the left, the selected account's actions, identity, usage, cooling-down block,
 and credential on the right](assets/accounts-light.png#only-light)

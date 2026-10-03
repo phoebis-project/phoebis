@@ -20,7 +20,7 @@ use phoebis_oauth::{
     authorization_url, control_request, ephemeral_port, exchange_body, loopback_redirect_uri,
     parse_profile, parse_token_response, CallbackInput, ControlKind, LoginKind, OauthError,
     PairingError, PairingSession, PairingStatus, PendingIdentity, PollStatus, ProfileResponse,
-    UsageSnapshot, UsageWindow,
+    Started, UsageSnapshot, UsageWindow,
 };
 use phoebis_relay::DiscoveryError;
 use phoebis_routing::{
@@ -553,14 +553,20 @@ async fn pairing_start(
     // platform.claude.com that shows the code. The loopback one keeps the browser off the provider's page: the
     // navigation to localhost fails to load and the operator pastes the URL from the address bar, or the code.
     let redirect_uri = loopback_redirect_uri(ephemeral_port());
-    let session =
-        match state
-            .pairing
-            .start(&row.id, &caller.session_id, &redirect_uri, (state.clock)())
-        {
-            Ok(session) => session,
-            Err(error) => return pairing_failure(error),
-        };
+    let Started {
+        session,
+        superseded,
+    } = match state
+        .pairing
+        .start(&row.id, &caller.session_id, &redirect_uri, (state.clock)())
+    {
+        Ok(started) => started,
+        Err(error) => return pairing_failure(error),
+    };
+    // The replaced pairing can never be confirmed, so its bundle leaves memory now rather than at the sweep.
+    if let Some(id) = superseded {
+        state.vault.discard(&id);
+    }
     state.vault.open(
         &session.id,
         &row.id,
