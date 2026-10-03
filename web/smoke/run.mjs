@@ -4806,7 +4806,8 @@ m.unmount();
     const groupings = reads.map((r) => r.groupBy).sort();
     results.push({
       name: tenCheck,
-      ok: beforePause === 0 && reads.length === 2 && JSON.stringify(groupings) === JSON.stringify(['key', 'speed']) && reads.every((r) => JSON.stringify(r.clients) === '["claude-cli"]' && r.from === reads[0].from && r.to === reads[0].to),
+      // The commit moves the window's end to the instant it fired.
+      ok: beforePause === 0 && reads.length === 2 && JSON.stringify(groupings) === JSON.stringify(['key', 'speed']) && reads.every((r) => JSON.stringify(r.clients) === '["claude-cli"]' && r.from === reads[0].from && r.to === new Date(CLOCK_ORIGIN + 400).toISOString()),
       missing: [`${beforePause} reads while typing`, JSON.stringify(reads)],
     });
     spy.restore();
@@ -4829,6 +4830,45 @@ m.unmount();
     spy.restore();
   }
   pressing.unmount();
+}
+
+// The window's end follows the clock. The page looks once a minute and moves the end only when the range's bucket
+// boundary has passed, so the reads stay put between boundaries; Try again moves it to the instant it runs.
+{
+  const groupingsOf = (calls) => JSON.stringify(calls.map(([q]) => q?.groupBy).sort());
+  const boundaryCheck = "/analytics the window's end moves past the next hour boundary";
+  const open = await mount('/analytics', { now: CLOCK_ORIGIN });
+  const spy = countCalls('getAnalyticsSeries');
+  tick(29 * 60_000);
+  await open.settle();
+  const beforeBoundary = spy.calls.length;
+  tick(2 * 60_000);
+  await open.settle();
+  const hour = Date.UTC(2026, 8, 16, 15);
+  results.push({
+    name: boundaryCheck,
+    ok: beforeBoundary === 0 && spy.calls.length === 2 && groupingsOf(spy.calls) === JSON.stringify(['key', 'speed']) && spy.calls.every(([q]) => Date.parse(q?.to) >= hour),
+    missing: [`${beforeBoundary} reads before 15:00`, ...spy.calls.map(([q]) => `${q?.groupBy} to ${q?.to}`)],
+  });
+  spy.restore();
+  open.unmount();
+
+  const retryCheck = '/analytics Try again after a failed read sends a later to';
+  const failing = failCalls({ getAnalyticsSeries: '/admin/analytics/series' }, 'ledger locked');
+  const failed = await mount('/analytics', { now: CLOCK_ORIGIN });
+  const errorShown = failed.text().includes('Could not load the analytics for these filters');
+  tick(5_000);
+  failing.recover();
+  [...failed.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Try again')?.click();
+  await failed.settle();
+  const retried = failing.calls.getAnalyticsSeries;
+  failing.restore();
+  results.push({
+    name: retryCheck,
+    ok: errorShown && retried.length === 2 && groupingsOf(retried) === JSON.stringify(['key', 'speed']) && retried.every(([q]) => q?.to === new Date(CLOCK_ORIGIN + 5_000).toISOString()),
+    missing: [`error state ${errorShown}`, ...retried.map(([q]) => `${q?.groupBy} to ${q?.to}`)],
+  });
+  failed.unmount();
 }
 
 m = await mount('/analytics');

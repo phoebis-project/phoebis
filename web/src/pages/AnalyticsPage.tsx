@@ -128,14 +128,17 @@ function timeTip<T extends { at: number }>(rows: (p: T) => TooltipRow[]) {
 }
 
 /** Every key the range holds on one dimension, read once per range so a filter never hides its own options. */
-function useDimensionKeys(from: string, to: string, groupBy: GroupBy) {
-  return useAsync(() => api.getAnalyticsBreakdown({ from, groupBy, to }), [from, to, groupBy]);
+function useDimensionKeys(from: string, to: string, groupBy: GroupBy, generation: number) {
+  return useAsync(() => api.getAnalyticsBreakdown({ from, groupBy, to }), [from, to, groupBy, generation]);
 }
 
 const optionsOf = (rows: AnalyticsGroup[] | null): Option[] => (rows ?? []).map((g) => ({ label: g.label, value: g.key })).sort((a, b) => a.label.localeCompare(b.label));
 
 export function AnalyticsPage() {
-  const now = useMemo(() => clock.now(), []);
+  const [now, setNow] = useState(() => clock.now());
+  // Try again bumps it with the end, so every read keyed on the window runs again even while the clock stands still.
+  const [generation, setGeneration] = useState(0);
+  const moveEnd = () => setNow(clock.now());
   const [range, setRange] = useState<Range>('24h');
   const [custom, setCustom] = useState({ from: toLocalInput(now - 3 * 24 * HOUR), to: toLocalInput(now) });
   const [groupBy, setGroupBy] = useState<GroupBy>('key');
@@ -157,9 +160,45 @@ export function AnalyticsPage() {
   const [filters, setFilters] = useState<Record<Dim, string[]>>(() => ({ accountId: [], keyId: [], model: [], poolId: [], sessionId: sessionParam ? [sessionParam] : [] }));
   const [sessionText, setSessionText] = useState(sessionParam ?? '');
   const ink = useChartInk();
-  const commitClass = (next: string) => setClassPattern(next);
-  const commitAgent = (next: string) => setUserAgentPattern(next);
-  const commitGroups = (next: string) => setClientGroups(next);
+  // A committed filter reads the window up to the instant it changed, as a range change does.
+  const commitClass = (next: string) => {
+    setClassPattern(next);
+    moveEnd();
+  };
+  const commitAgent = (next: string) => {
+    setUserAgentPattern(next);
+    moveEnd();
+  };
+  const commitGroups = (next: string) => {
+    setClientGroups(next);
+    moveEnd();
+  };
+  const changeRange = (next: Range) => {
+    if (next === range) return;
+    setRange(next);
+    moveEnd();
+  };
+  const changeCustom = (next: { from: string; to: string }) => {
+    setCustom(next);
+    moveEnd();
+  };
+  const changeGroupBy = (next: GroupBy) => {
+    setGroupBy(next);
+    moveEnd();
+  };
+  const changeFilter = (dim: QueryDim, next: string[]) => {
+    setFilters({ ...filters, [dim]: next });
+    moveEnd();
+  };
+  const changeProbes = (on: boolean) => {
+    setIncludeProbes(on);
+    moveEnd();
+  };
+  const changeBurnGroup = (next: BurnGroup) => {
+    if (next === burnGroup) return;
+    setBurnGroup(next);
+    moveEnd();
+  };
   // Enter inserts a line in the groups field, so it commits on the pause and on blur alone.
   const groupsText = useCommittedText(clientGroups, commitGroups);
 
@@ -172,6 +211,7 @@ export function AnalyticsPage() {
   }, [sessionParam]);
   /** The one writer for the session filter, so the field, the chip, and the query parameter cannot disagree. */
   const selectSession = (id: string) => {
+    if ((filters.sessionId[0] ?? '') !== id) moveEnd();
     setFilters((f) => ((f.sessionId[0] ?? '') === id ? f : { ...f, sessionId: id ? [id] : [] }));
     setSessionText(id);
     if (sessionParam === null || sessionParam === id) return;
@@ -203,10 +243,10 @@ export function AnalyticsPage() {
   // may be wider than the pattern, so the fold applies every pattern control again over what it holds.
   const foldOptions = useMemo(() => ({ agentGroups, agentPatterns: userAgentPattern.trim() ? [userAgentPattern.trim()] : undefined, clientPatterns: classPattern.trim() ? [classPattern.trim()] : undefined }), [agentGroups, classPattern, userAgentPattern]);
   // A session view answers every section from the request log, so the rollup reads stay home while one is set.
-  const series = useAsync(() => (sessionId === null ? api.getAnalyticsSeries(query) : Promise.resolve<AnalyticsPoint[]>([])), [query, sessionId]);
-  const breakdown = useAsync(() => (sessionId === null ? api.getAnalyticsBreakdown(query) : Promise.resolve<AnalyticsGroup[]>([])), [query, sessionId]);
-  const byModel = useAsync(() => (sessionId === null ? api.getAnalyticsBreakdown({ ...query, groupBy: 'model' }) : Promise.resolve<AnalyticsGroup[]>([])), [query, sessionId]);
-  const byPool = useAsync(() => (sessionId === null ? api.getAnalyticsBreakdown({ ...query, groupBy: 'pool' }) : Promise.resolve<AnalyticsGroup[]>([])), [query, sessionId]);
+  const series = useAsync(() => (sessionId === null ? api.getAnalyticsSeries(query) : Promise.resolve<AnalyticsPoint[]>([])), [query, sessionId, generation]);
+  const breakdown = useAsync(() => (sessionId === null ? api.getAnalyticsBreakdown(query) : Promise.resolve<AnalyticsGroup[]>([])), [query, sessionId, generation]);
+  const byModel = useAsync(() => (sessionId === null ? api.getAnalyticsBreakdown({ ...query, groupBy: 'model' }) : Promise.resolve<AnalyticsGroup[]>([])), [query, sessionId, generation]);
+  const byPool = useAsync(() => (sessionId === null ? api.getAnalyticsBreakdown({ ...query, groupBy: 'pool' }) : Promise.resolve<AnalyticsGroup[]>([])), [query, sessionId, generation]);
   const log = useAsync(
     () =>
       sessionId === null
@@ -220,40 +260,51 @@ export function AnalyticsPage() {
                 .then((page) => ({ ...page, requests: page.requests.filter((r) => r.sessionId === sessionId && (sessionKey === null || `${r.keyId}@${r.keyGeneration}` === sessionKey)) })),
             SESSION_PAGE_LIMIT,
           ),
-    [classPattern, userAgentPattern, filters, fromIso, includeProbes, sessionId, sessionKey, toIso],
+    [classPattern, userAgentPattern, filters, fromIso, includeProbes, sessionId, sessionKey, toIso, generation],
   );
-  const accountRollups = useAsync(() => api.listAccountRollups(fromIso, toIso), [fromIso, toIso]);
-  const burn = useAsync(() => readBurn(api, { from: fromIso, to: toIso }, burnGroup), [fromIso, toIso, burnGroup]);
+  const accountRollups = useAsync(() => api.listAccountRollups(fromIso, toIso), [fromIso, toIso, generation]);
+  const burn = useAsync(() => readBurn(api, { from: fromIso, to: toIso }, burnGroup), [fromIso, toIso, burnGroup, generation]);
   // The plan chart's line category reads each account's stored tier against the cost table's tiers.
   const burnSettings = useAsync(() => api.getSettings(), []);
   const sized = useMemo(() => (burn.data && burnSettings.data ? sizedAccounts(burn.data.accounts, burnSettings.data.planTables.cost.tiers) : null), [burn.data, burnSettings.data]);
-  const rewrites = useAsync(() => api.getAnalyticsRewrites({ from: fromIso, to: toIso }), [fromIso, toIso]);
+  const rewrites = useAsync(() => api.getAnalyticsRewrites({ from: fromIso, to: toIso }), [fromIso, toIso, generation]);
   // Side groupings on the page's own query, as byModel and byPool are; a session view folds them from the log.
-  const bySpeed = useAsync(() => (sessionId === null ? api.getAnalyticsSeries({ ...query, groupBy: 'speed' }) : Promise.resolve<AnalyticsPoint[]>([])), [query, sessionId]);
-  const byEffort = useAsync(() => (sessionId === null ? api.getAnalyticsBreakdown({ ...query, groupBy: 'effort' }) : Promise.resolve<AnalyticsGroup[]>([])), [query, sessionId]);
+  const bySpeed = useAsync(() => (sessionId === null ? api.getAnalyticsSeries({ ...query, groupBy: 'speed' }) : Promise.resolve<AnalyticsPoint[]>([])), [query, sessionId, generation]);
+  const byEffort = useAsync(() => (sessionId === null ? api.getAnalyticsBreakdown({ ...query, groupBy: 'effort' }) : Promise.resolve<AnalyticsGroup[]>([])), [query, sessionId, generation]);
   const placements = useAsync(
     () => (sessionId === null ? api.analyticsPlacements({ from: fromIso, keyIds: filters.keyId, poolIds: filters.poolId, to: toIso }) : Promise.resolve<PlacementRow[]>([])),
-    [fromIso, toIso, filters.keyId, filters.poolId, sessionId],
+    [fromIso, toIso, filters.keyId, filters.poolId, sessionId, generation],
   );
   const budgets = useAsync(() => api.analyticsBudgets(), []);
-  const accountKeys = useDimensionKeys(fromIso, toIso, DIM_GROUP.accountId);
-  const keyKeys = useDimensionKeys(fromIso, toIso, DIM_GROUP.keyId);
-  const modelKeys = useDimensionKeys(fromIso, toIso, DIM_GROUP.model);
-  const poolKeys = useDimensionKeys(fromIso, toIso, DIM_GROUP.poolId);
+  const accountKeys = useDimensionKeys(fromIso, toIso, DIM_GROUP.accountId, generation);
+  const keyKeys = useDimensionKeys(fromIso, toIso, DIM_GROUP.keyId, generation);
+  const modelKeys = useDimensionKeys(fromIso, toIso, DIM_GROUP.model, generation);
+  const poolKeys = useDimensionKeys(fromIso, toIso, DIM_GROUP.poolId, generation);
   const options = useMemo<Record<QueryDim, Option[]>>(
     () => ({ accountId: optionsOf(accountKeys.data), keyId: optionsOf(keyKeys.data), model: optionsOf(modelKeys.data), poolId: optionsOf(poolKeys.data) }),
     [accountKeys.data, keyKeys.data, modelKeys.data, poolKeys.data],
   );
 
   const rangeBucketMs = bucketSizeFor(span.toMs - span.fromMs);
+  // Once a minute: a passed bucket boundary moves the end, so a page left open shows the hour it is in.
+  useEffect(() => {
+    const id = clock.setInterval(() => {
+      if (Math.floor(clock.now() / rangeBucketMs) !== Math.floor(now / rangeBucketMs)) setNow(clock.now());
+    }, 60_000);
+    return () => clock.clearInterval(id);
+  }, [now, rangeBucketMs]);
   // A read that failed or that still answers the filters before the change draws nothing, so no figure stands
   // under a filter it was not read for.
   const failure = series.error ?? breakdown.error ?? log.error;
   const stale = series.stale || breakdown.stale || log.stale;
   // An outage of the ledger fails the section and filter-choice reads with these three, and this is the one
-  // control that reads again, so it reads everything the view draws from.
+  // control that reads again, so it reads everything the view draws from: the reads keyed on the window through the
+  // moved end and the generation in one update, so none runs twice, and the two with no window by reloading.
   const retry = () => {
-    for (const read of [accountKeys, accountRollups, breakdown, budgets, burn, burnSettings, byEffort, byModel, byPool, bySpeed, keyKeys, log, modelKeys, placements, poolKeys, rewrites, series]) read.reload();
+    setNow(clock.now());
+    setGeneration((g) => g + 1);
+    budgets.reload();
+    burnSettings.reload();
   };
   const rows = useMemo(() => (log.stale ? [] : (log.data?.requests ?? [])), [log.stale, log.data]);
   const points = useMemo(() => (stale ? [] : sessionId === null ? (series.data ?? []) : foldRequests(rows, rangeBucketMs, fromIso, toIso, groupBy, foldOptions)), [stale, sessionId, series.data, rows, rangeBucketMs, fromIso, toIso, groupBy, foldOptions]);
@@ -312,8 +363,9 @@ export function AnalyticsPage() {
       <div className="filters filters--sticky" ref={filtersRef}>
         <Segmented<Range>
           ariaLabel="Range"
+          title={`Window ends ${fmtAbsolute(toIso)}`}
           value={range}
-          onChange={setRange}
+          onChange={changeRange}
           options={[
             { value: '1h', label: '1h' },
             { value: '24h', label: '24h' },
@@ -324,9 +376,9 @@ export function AnalyticsPage() {
         />
         {range === 'custom' && (
           <span className="filters__range">
-            <Input type="datetime-local" value={custom.from} max={custom.to} onChange={(e) => setCustom({ ...custom, from: e.target.value })} aria-label="From" />
+            <Input type="datetime-local" value={custom.from} max={custom.to} onChange={(e) => changeCustom({ ...custom, from: e.target.value })} aria-label="From" />
             <span className="muted">to</span>
-            <Input type="datetime-local" value={custom.to} min={custom.from} max={toLocalInput(now)} onChange={(e) => setCustom({ ...custom, to: e.target.value })} aria-label="To" />
+            <Input type="datetime-local" value={custom.to} min={custom.from} max={toLocalInput(now)} onChange={(e) => changeCustom({ ...custom, to: e.target.value })} aria-label="To" />
             {span.invalid && <span className="pairing__expired">End must be after start; showing the last 24h.</span>}
           </span>
         )}
@@ -334,7 +386,7 @@ export function AnalyticsPage() {
         <span className="filters__sep" aria-hidden />
         <label className="row">
           <span className="muted">Group by</span>
-          <Select value={groupBy} onChange={(e) => setGroupBy(e.target.value as GroupBy)}>
+          <Select value={groupBy} onChange={(e) => changeGroupBy(e.target.value as GroupBy)}>
             {(Object.keys(GROUP_LABEL) as GroupBy[]).map((g) => (
               <option key={g} value={g}>
                 {GROUP_LABEL[g]}
@@ -343,7 +395,7 @@ export function AnalyticsPage() {
           </Select>
         </label>
         {DIMS.map((dim) => (
-          <MultiSelect key={dim} label={DIM_LABEL[dim]} options={options[dim]} value={filters[dim]} onChange={(v) => setFilters({ ...filters, [dim]: v })} mono />
+          <MultiSelect key={dim} label={DIM_LABEL[dim]} options={options[dim]} value={filters[dim]} onChange={(v) => changeFilter(dim, v)} mono />
         ))}
         <PatternInput label="Client pattern" value={classPattern} onCommit={commitClass} />
         <PatternInput label="User agent pattern" value={userAgentPattern} onCommit={commitAgent} />
@@ -385,7 +437,7 @@ export function AnalyticsPage() {
           />
         </label>
         <label className="row">
-          <Toggle checked={includeProbes} onChange={setIncludeProbes} label="Include probes" />
+          <Toggle checked={includeProbes} onChange={changeProbes} label="Include probes" />
           <span className="secondary">Include cache probes</span>
         </label>
         {filters.sessionId.length > 0 && (
@@ -479,7 +531,7 @@ export function AnalyticsPage() {
       <Section id="burn" offset={headOffset} title="Burn" meta={`Tokens, spend and plan share over the range${unfiltered ? UNFILTERED_NOTE : ''}`}>
         <div className="row">
           <span className="muted">Group by</span>
-          <Segmented<BurnGroup> ariaLabel="Burn group by" value={burnGroup} onChange={setBurnGroup} options={BURN_GROUPS.map((g) => ({ label: BURN_GROUP_LABEL[g], value: g }))} />
+          <Segmented<BurnGroup> ariaLabel="Burn group by" value={burnGroup} onChange={changeBurnGroup} options={BURN_GROUPS.map((g) => ({ label: BURN_GROUP_LABEL[g], value: g }))} />
         </div>
         <BurnCharts answer={burn.stale ? null : (burn.data?.answer ?? null)} error={burn.error ?? burnSettings.error} groupBy={burnGroup} loading={burn.data === null || burn.stale || sized === null} sized={sized} />
         <BudgetTable budgets={budgets.data} error={budgets.error} now={now} />
