@@ -565,30 +565,45 @@ async function poolChips(theme) {
 const railEntry = (dialog, name) => dialog.locator('.dialog-rail').getByRole('button', { exact: true, name });
 
 /**
- * The Cache TTL, Cache diagnostics and Keepalive groups of a served pool: the TTL policy toggle, the marker toggle
- * under it, the grid's two main selects, the diagnostics override and the subagent switch, each reached the way an
- * operator reaches it and measured while its group shows. The diagnostics select is measured against the metered
- * main select, that select against the plan one beside it, and the marker toggle against the policy toggle, since a
- * control that reads a size smaller than its neighbours is the defect this dialog would show first.
+ * Turns the expert view on or off through the sidebar's switch, as an operator does, with no dialog open: the stored
+ * choice reaches a loaded page only through the switch, and the open dialog's backdrop covers the sidebar. A check
+ * that turns it on turns it off again, so every view's shot draws the switch as a fresh browser has it.
+ */
+async function expertView(on) {
+  const toggle = page.locator('.sidebar__status button[role="switch"][aria-label="Expert view"]');
+  if ((await toggle.getAttribute('aria-checked')) !== String(on)) await toggle.click();
+  await settle();
+}
+
+/**
+ * The Cache TTL, Cache diagnostics, Body capture and Keepalive groups of a served pool in the expert view: the TTL
+ * policy toggle, the marker toggle under it, the grid's two main selects, the diagnostics switch, the capture switch
+ * and the subagent switch, each reached the way an operator reaches it and measured while its group shows. The
+ * metered main select is measured against the plan one beside it, the marker toggle against the policy toggle and the
+ * diagnostics switch against the capture switch, since a control that reads a size smaller than its neighbours is the
+ * defect this dialog would show first.
  */
 async function poolCachingControls(theme) {
   const say = (what) => failures.push(`${theme} /pools: ${what}`);
   const dialog = page.locator('dialog[open]');
   try {
+    await expertView(true);
     await page.locator('.pool button[aria-label^="Edit pool"]').first().click();
     await dialog.waitFor({ state: 'visible', timeout: 15_000 });
     await railEntry(dialog, 'Cache TTL').click();
     await settle();
   } catch (error) {
     say(`the pool dialog never reached its Cache TTL group (${error instanceof Error ? error.message : String(error)})`);
+    await page.keyboard.press('Escape');
+    await expertView(false).catch(() => {});
     return;
   }
   const toggle = (label) => dialog.locator(`button[role="switch"][aria-label="${label}"]`);
   const policy = toggle('Set the cache TTL for this pool');
   if ((await policy.count()) !== 1) say('no cache TTL policy toggle');
-  const options = await dialog.evaluate((el) => [...el.querySelectorAll('select')].map((s) => [...s.options].map((o) => (o.textContent ?? '').trim()).join(', ')));
-  const diagnostics = options.filter((o) => o === 'Inherit the bootstrap setting, On, Off');
-  if (diagnostics.length !== 1) say(`${diagnostics.length} cache diagnostics selects among ${JSON.stringify(options)}`);
+  if ((await toggle('Cache diagnostics').count()) !== 1) say('no cache diagnostics switch');
+  const diagnosticsSelects = await dialog.locator('section.dialog-group[aria-label="Cache diagnostics"] select').count();
+  if (diagnosticsSelects !== 0) say(`the Cache diagnostics group draws ${diagnosticsSelects} selects beside its switch`);
   // The grid and the marker toggle are compared while the policy is on, the state an operator edits them in.
   if ((await policy.count()) === 1 && (await policy.getAttribute('aria-checked')) === 'false') await policy.click();
   await settle();
@@ -612,9 +627,9 @@ async function poolCachingControls(theme) {
       const box = node.getBoundingClientRect();
       return { border: `${style.borderWidth} ${style.borderStyle}`, height: box.height, radius: style.borderRadius, width: box.width };
     };
-    const diagnostics = [...el.querySelectorAll('.field')].find((f) => f.querySelector('.field__label')?.textContent?.trim() === 'Cache diagnostics')?.querySelector('select');
     return {
-      diagnostics: select(diagnostics),
+      capture: readSwitch(el.querySelector('button[role="switch"][aria-label="Capture request and response bodies"]')),
+      diagnostics: readSwitch(el.querySelector('button[role="switch"][aria-label="Cache diagnostics"]')),
       main: select(el.querySelector('select[aria-label="Metered writes main conversation TTL"]')),
       marker: readSwitch(el.querySelector('button[role="switch"][aria-label="Add a cache marker to a request without one"]')),
       planMain: select(el.querySelector('select[aria-label="Plan writes main conversation TTL"]')),
@@ -625,13 +640,16 @@ async function poolCachingControls(theme) {
   await railEntry(dialog, 'Cache diagnostics').click();
   await settle();
   pair.diagnostics = (await dialog.evaluate(read)).diagnostics;
+  await railEntry(dialog, 'Body capture').click();
+  await settle();
+  pair.capture = (await dialog.evaluate(read)).capture;
   await railEntry(dialog, 'Keepalive').click();
   await settle();
   // The subagent switch is drawn whatever keepalive reads; keepalive is turned on so the switch is compared live.
   const keepalive = toggle('Keep prompt caches warm');
   if ((await keepalive.count()) === 1 && (await keepalive.getAttribute('aria-checked')) === 'false' && (await keepalive.isEnabled())) await keepalive.click();
   if ((await toggle('Also warm subagent caches').count()) !== 1) say('no subagent warming toggle');
-  const names = { diagnostics: 'cache diagnostics', main: 'metered main', marker: 'marker toggle', planMain: 'plan main', policy: 'policy toggle' };
+  const names = { capture: 'capture switch', diagnostics: 'cache diagnostics switch', main: 'metered main', marker: 'marker toggle', planMain: 'plan main', policy: 'policy toggle' };
   for (const [key, name] of Object.entries(names)) if (pair[key]) measurements.push(`${theme} /pools ${name} ${JSON.stringify(pair[key])}`);
   const compare = (a, b, keys) => {
     if (!pair[a] || !pair[b]) {
@@ -641,27 +659,32 @@ async function poolCachingControls(theme) {
     const differs = keys.filter((key) => String(pair[a][key]) !== String(pair[b][key]));
     if (differs.length) say(`the ${names[a]}'s ${differs.join(', ')} differs from the ${names[b]}'s`);
   };
-  compare('diagnostics', 'main', ['border', 'font', 'height', 'padding']);
   compare('main', 'planMain', ['border', 'font', 'height', 'padding']);
   compare('marker', 'policy', ['border', 'height', 'radius', 'width']);
+  compare('diagnostics', 'capture', ['border', 'height', 'radius', 'width']);
   await page.keyboard.press('Escape');
   await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => say('the dialog stayed open after Escape'));
+  await expertView(false);
   await atRest();
 }
 
 /**
- * The Utilization thresholds group's select-below switch against the migrate switch beside it: the same switch, the
- * same percent field and the same label, so either reading smaller or lighter than the other is the defect to catch.
+ * The Utilization thresholds group's select-below switch, drawn in the expert view, against the migrate switch beside
+ * it: the same switch, the same percent field and the same label, so either reading smaller or lighter than the other
+ * is the defect to catch.
  */
 async function poolSelectBelow(theme) {
   const say = (what) => failures.push(`${theme} /pools: ${what}`);
   const dialog = page.locator('dialog[open]');
   try {
+    await expertView(true);
     await page.locator('.pool button[aria-label^="Edit pool"]').first().click();
     await dialog.waitFor({ state: 'visible', timeout: 15_000 });
     await railEntry(dialog, 'Utilization thresholds').click();
   } catch (error) {
     say(`the pool dialog never reached its Utilization thresholds group (${error instanceof Error ? error.message : String(error)})`);
+    await page.keyboard.press('Escape');
+    await expertView(false).catch(() => {});
     return;
   }
   for (const label of ['Migrate above utilization', 'Select below utilization']) {
@@ -699,23 +722,28 @@ async function poolSelectBelow(theme) {
   }
   await page.keyboard.press('Escape');
   await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => say('the dialog stayed open after Escape'));
+  await expertView(false);
   await atRest();
 }
 
 /**
- * The load groups against the controls beside them, each measured while its group shows: a preset pill against a
- * session-affinity pill, the overage grace field against the migrate percent field, and a warm-sessions choice
- * against an overage choice. Then the utilization bar's migrate handle and the shedding preview line.
+ * The load groups in the expert view against the controls beside them, each measured while its group shows: a preset
+ * pill against a session-affinity pill, the overage grace field against the migrate percent field, and a
+ * warm-sessions choice against an overage choice. Then the utilization bar's migrate handle and the shedding preview
+ * line.
  */
 async function poolRoutingCards(theme) {
   const say = (what) => failures.push(`${theme} /pools: ${what}`);
   const dialog = page.locator('dialog[open]');
   try {
+    await expertView(true);
     await page.locator('.pool button[aria-label^="Edit pool"]').first().click();
     await dialog.waitFor({ state: 'visible', timeout: 15_000 });
     await railEntry(dialog, 'Utilization thresholds').click();
   } catch (error) {
     say(`the pool dialog never reached its Utilization thresholds group (${error instanceof Error ? error.message : String(error)})`);
+    await page.keyboard.press('Escape');
+    await expertView(false).catch(() => {});
     return;
   }
   const migrate = dialog.locator('button[role="switch"][aria-label="Migrate above utilization"]');
@@ -788,6 +816,7 @@ async function poolRoutingCards(theme) {
   if (!read.preview || !/^(Would (move|mark)|No member is above the threshold)/.test(read.preview)) say(`the shedding preview reads ${JSON.stringify(read.preview)}`);
   await page.keyboard.press('Escape');
   await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => say('the dialog stayed open after Escape'));
+  await expertView(false);
   await atRest();
 }
 
@@ -862,10 +891,21 @@ async function poolCardLayout(theme) {
 
 /** The pool dialog's groups in rail order. */
 const POOL_GROUP_LABELS = ['Identity', 'Members', 'Keys', 'Models', 'Auto mode', 'Selection', 'Placement', 'Pinning', 'Utilization thresholds', 'Load shedding', 'Failover', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Probe tuning', 'Body capture', 'Cache diagnostics'];
-/** Per group, the switches whose dependents the geometry pass turns off, and the controls that must go disabled. */
+/** The groups whose every field is expert, which the rail leaves out while the mode is off. */
+const POOL_EXPERT_GROUPS = ['Auto mode', 'Placement', 'Load shedding', 'Failover', 'Cache diagnostics'];
+/**
+ * Per group, the switches whose dependents the geometry pass turns off, and the controls that must go disabled. An
+ * `expert` switch and the `expertControls` are drawn in the expert view alone, so the plain walk leaves them out.
+ */
 const POOL_DEPENDENTS = {
   'Body capture': [{ switch: 'Capture request and response bodies', controls: ['input[aria-label="Capture retention in hours"]'] }],
-  'Cache TTL': [{ switch: 'Set the cache TTL for this pool', controls: ['button[role="switch"][aria-label="Add a cache marker to a request without one"]', '.ttl-grid select', '[data-rule-set] select', '[data-rule-set] button'] }],
+  'Cache TTL': [
+    {
+      switch: 'Set the cache TTL for this pool',
+      controls: ['.ttl-grid select'],
+      expertControls: ['button[role="switch"][aria-label="Add a cache marker to a request without one"]', '[data-rule-set] select', '[data-rule-set] button'],
+    },
+  ],
   Keepalive: [
     { switch: 'Keep prompt caches warm', controls: ['button[role="switch"][aria-label="Also warm subagent caches"]', 'button[role="switch"][aria-label="Stop when probes cost more than they save"]', 'input[aria-label="Grace probes after the net turns negative"]', 'button[role="switch"][aria-label="Daily probe cost cap ($)"]', 'input[aria-label="Daily probe cost cap in dollars"]'] },
     { switch: 'Stop when probes cost more than they save', controls: ['input[aria-label="Grace probes after the net turns negative"]'] },
@@ -875,7 +915,7 @@ const POOL_DEPENDENTS = {
   'Probe tuning': [{ switch: 'Keep prompt caches warm', in: 'Keepalive', controls: ['input[type="number"]'] }],
   'Utilization thresholds': [
     { switch: 'Migrate above utilization', controls: ['input[aria-label="Migrate above utilization (%)"]'] },
-    { switch: 'Select below utilization', controls: ['input[aria-label="Select below utilization (%)"]'] },
+    { switch: 'Select below utilization', controls: ['input[aria-label="Select below utilization (%)"]'], expert: true },
   ],
 };
 
@@ -907,7 +947,9 @@ const groupGeometry = (dialog, label, maxWindows) =>
         const second = box.left + (box.width + gap) / 2;
         if (!near(box.left, contentLeft)) found.push(`its cells start at ${box.left}, not the body's ${contentLeft}`);
         let column = 0;
-        for (const child of cells.children) {
+        // An expert wrapper draws no box of its own, so the cells inside it stand in its place on the grid.
+        const placed = [...cells.children].flatMap((child) => (child.classList.contains('expert') ? [...child.children] : [child]));
+        for (const child of placed) {
           const at = child.getBoundingClientRect();
           const half = child.classList.contains('cell--half');
           const expected = half && column === 1 ? second : box.left;
@@ -971,16 +1013,29 @@ const disabledIn = (dialog, label, selectors) =>
   );
 
 /**
- * The pool dialog's frame and every group's layout at the pass's viewport, then the frame and the rail's strips at
- * 720 px. Every group is chosen and read while it shows: its height against the body's window, every cell against the
- * two columns, every label beside its switch or above its control, every control and hint as wide as its field, every
- * dependent drawn and disabled while its switch is off or its preset is not Custom, the warnings at their ends of their
- * groups, no clipped select, nothing pushed apart or past the frame, and the mono Name input as tall as the Status
- * select beside it. The strips draw their groups without the column rail's indent and hairline, a parent there
- * answers the pointer, and a refusal dot follows its entry's words by 6 px on their line.
+ * The pool dialog in the plain view, then in the expert view: the frame and every group's layout at the pass's
+ * viewport, then the frame and the rail's strips at 720 px. The plain rail holds twelve groups under the five parents,
+ * the five expert-only groups left out, and the expert rail all seventeen. Every group on the rail is chosen and read
+ * while it shows: its height against the body's window, every cell against the two columns, every label beside its
+ * switch or above its control, every control and hint as wide as its field, every dependent drawn and disabled while
+ * its switch is off or its preset is not Custom, the warnings at their ends of their groups, no clipped select, nothing
+ * pushed apart or past the frame, and the mono Name input as tall as the Status select beside it. The strips draw their
+ * groups without the column rail's indent and hairline, a parent there answers the pointer, and a refusal dot follows
+ * its entry's words by 6 px on their line.
  */
 async function poolDialogGeometry(theme) {
-  const sayIn = (group, what) => failures.push(`${theme} /pools dialog${group ? ` ${group}` : ''}: ${what}`);
+  for (const mode of ['plain', 'expert']) {
+    await expertView(mode === 'expert');
+    await poolDialogWalk(theme, mode);
+  }
+  await expertView(false);
+  await atRest();
+}
+
+async function poolDialogWalk(theme, mode) {
+  const expert = mode === 'expert';
+  const labels = expert ? POOL_GROUP_LABELS : POOL_GROUP_LABELS.filter((label) => !POOL_EXPERT_GROUPS.includes(label));
+  const sayIn = (group, what) => failures.push(`${theme} /pools dialog, ${mode} view${group ? `, ${group}` : ''}: ${what}`);
   const dialog = page.locator('dialog[open]');
   const open = async () => {
     await page.locator('.pool button[aria-label^="Edit pool"]').first().click();
@@ -1001,11 +1056,19 @@ async function poolDialogGeometry(theme) {
     const box = el.getBoundingClientRect();
     const rail = el.querySelector('.dialog-rail');
     const body = el.querySelector('.dialog__body--grouped');
-    return { body: body?.clientHeight ?? null, height: box.height, rail: rail ? { clientHeight: rail.clientHeight, scrollHeight: rail.scrollHeight } : null, width: box.width };
+    return {
+      body: body?.clientHeight ?? null,
+      entries: el.querySelectorAll('.dialog-rail__parent, .dialog-rail__group').length,
+      groups: [...el.querySelectorAll('.dialog-rail__group .dialog-rail__label')].map((l) => l.textContent?.trim()),
+      height: box.height,
+      rail: rail ? { clientHeight: rail.clientHeight, scrollHeight: rail.scrollHeight } : null,
+      width: box.width,
+    };
   });
-  measurements.push(`${theme} /pools dialog frame ${JSON.stringify(frame)}`);
+  measurements.push(`${theme} /pools ${mode} dialog frame ${JSON.stringify(frame)}`);
   if (frame.width !== 1040 || frame.height !== 752) sayIn(null, `the frame measures ${frame.width} by ${frame.height}, not 1040 by 752`);
   if (!frame.rail || frame.rail.scrollHeight > frame.rail.clientHeight) sayIn(null, `the rail scrolls: ${JSON.stringify(frame.rail)}`);
+  if (JSON.stringify(frame.groups) !== JSON.stringify(labels) || frame.entries !== labels.length + 5) sayIn(null, `the rail reads ${JSON.stringify(frame.groups)} in ${frame.entries} entries, not ${JSON.stringify(labels)} in ${labels.length + 5}`);
   const check = async (group) => {
     const { found, line, warning } = await groupGeometry(dialog, group, 1.7);
     if (group === 'Identity') {
@@ -1014,7 +1077,7 @@ async function poolDialogGeometry(theme) {
         const control = (text, tag) => [...(section?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === text)?.querySelector(tag)?.getBoundingClientRect().height ?? null;
         return { name: control('Name', 'input'), status: control('Status', 'select') };
       });
-      measurements.push(`${theme} /pools dialog Identity heights ${JSON.stringify(heights)}`);
+      measurements.push(`${theme} /pools ${mode} dialog Identity heights ${JSON.stringify(heights)}`);
       if (heights.name === null || heights.status === null) found.push('the Name input and the Status select are not both drawn to compare');
       else if (Math.abs(heights.name - heights.status) > 1) found.push(`the Name input is ${heights.name} px tall against the Status select's ${heights.status} px`);
     }
@@ -1040,7 +1103,9 @@ async function poolDialogGeometry(theme) {
       if (home !== group) await railEntry(dialog, group).click();
       await settle();
     };
-    for (const { switch: label, controls, in: home = group } of POOL_DEPENDENTS[group] ?? []) {
+    for (const { switch: label, controls: plain, expertControls = [], expert: expertSwitch = false, in: home = group } of POOL_DEPENDENTS[group] ?? []) {
+      if (expertSwitch && !expert) continue;
+      const controls = expert ? [...plain, ...expertControls] : plain;
       const toggle = dialog.locator(`section.dialog-group[aria-label="${home}"] button[role="switch"][aria-label="${label}"]`);
       if ((await toggle.count()) !== 1) {
         found.push(`no ${label} switch`);
@@ -1085,13 +1150,13 @@ async function poolDialogGeometry(theme) {
     }
     return found;
   };
-  for (const group of POOL_GROUP_LABELS) {
+  for (const group of labels) {
     try {
       await railEntry(dialog, group).click();
       await settle();
       const { found, line } = await check(group);
       found.push(...(await dependents(group)));
-      measurements.push(`${theme} /pools dialog ${group} ${JSON.stringify(line)}`);
+      measurements.push(`${theme} /pools ${mode} dialog ${group} ${JSON.stringify(line)}`);
       for (const what of found) sayIn(group, what);
     } catch (error) {
       sayIn(group, error instanceof Error ? error.message : String(error));
@@ -1123,7 +1188,7 @@ async function poolDialogGeometry(theme) {
         width: box.width,
       };
     });
-    measurements.push(`${theme} /pools dialog at 720 px ${JSON.stringify(narrow)}`);
+    measurements.push(`${theme} /pools ${mode} dialog at 720 px ${JSON.stringify(narrow)}`);
     if (narrow.width !== 720 || narrow.height !== 800) sayIn(null, `at 720 px the frame measures ${narrow.width} by ${narrow.height}, not 720 by 800`);
     if (narrow.parents !== 5 || !narrow.chosen || !narrow.others) sayIn(null, `at 720 px the strips read ${JSON.stringify(narrow)}: five parents above the body and the chosen run's groups under them`);
     // On a strip the column rail's indent and hairline would read as stray marks.
@@ -1141,7 +1206,7 @@ async function poolDialogGeometry(theme) {
       routing: getComputedStyle(el.querySelector('.dialog-rail__parent[data-parent="Routing"]')).color,
     }));
     await page.mouse.move(0, 0);
-    measurements.push(`${theme} /pools dialog at 720 px Routing parent ${JSON.stringify({ ...hover, rest })}`);
+    measurements.push(`${theme} /pools ${mode} dialog at 720 px Routing parent ${JSON.stringify({ ...hover, rest })}`);
     if (hover.routing === rest || hover.routing !== hover.chosen) sayIn(null, `at 720 px the Routing parent reads ${hover.routing} under the pointer and ${rest} at rest, not the chosen parent's ${hover.chosen}`);
     // A strip's entry shrinks to its words, so its refusal dot follows them as on the flat rail rather than sitting in
     // the right padding. An empty name refuses Identity, which dots Identity and its parent; Escape below discards it.
@@ -1159,7 +1224,7 @@ async function poolDialogGeometry(theme) {
         };
       }),
     );
-    measurements.push(`${theme} /pools dialog at 720 px refusal dots ${JSON.stringify(dots)}`);
+    measurements.push(`${theme} /pools ${mode} dialog at 720 px refusal dots ${JSON.stringify(dots)}`);
     if (dots.length !== 2 || dots.some((d) => d.after === null || Math.abs(d.after - 6) > 0.5 || !d.onLine)) sayIn(null, `at 720 px the refusal dots read ${JSON.stringify(dots)}, not the Pool parent's and Identity's each 6 px after its words on their line`);
     await close();
   } catch (error) {
@@ -1167,7 +1232,6 @@ async function poolDialogGeometry(theme) {
   }
   await page.setViewportSize({ height: 800, width: 1280 });
   await settle();
-  await atRest();
 }
 
 /**
@@ -2275,17 +2339,19 @@ const measureSelect = (label) =>
   }, label);
 
 /**
- * The key dialog's Access select: the Server-side auto mode select is the Expiry select's box on
+ * The key dialog's Access select in the expert view: the Server-side auto mode select is the Expiry select's box on
  * a full row, with the Pool field's hint type.
  */
 async function keyAccessSelects(theme) {
   const say = (what) => failures.push(`${theme} /keys: ${what}`);
   const dialog = page.locator('dialog[open]');
   try {
+    await expertView(true);
     await page.getByRole('button', { name: 'Create key', exact: true }).first().click();
     await dialog.waitFor({ state: 'visible', timeout: 15_000 });
   } catch (error) {
     say(`the create dialog never opened (${error instanceof Error ? error.message : String(error)})`);
+    await expertView(false).catch(() => {});
     return;
   }
   // A hidden group measures no box, so each control is read while its group shows.
@@ -2309,17 +2375,18 @@ async function keyAccessSelects(theme) {
   if (!hints.autoMode || hints.autoMode !== hints.pool) say(`the Server-side auto mode hint reads ${hints.autoMode} against the Pool hint's ${hints.pool}`);
   await page.keyboard.press('Escape');
   await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => say('the dialog stayed open after Escape'));
+  await expertView(false);
   await atRest();
 }
 
 const KEY_GROUP_LABELS = ['Key', 'Access', 'Models', 'Sessions', 'Capture'];
 
 /**
- * The key dialog on the grouped frame, on create and on edit: the frame and a flat rail of five groups that fits it,
- * 8 px apart with no line between them and a refusal dot 6 px after its label on its line, each group inside one
- * window of the body with the layout `groupGeometry` reads, the moving warning leading Key on an edit that changes the
- * pool, the bodies warning leading Capture while capture is on, and a revoked key's Enabled switch drawn and disabled.
- * Nothing is saved: every dialog leaves by Escape.
+ * The key dialog on the grouped frame, on create and on edit, in the plain view and then in the expert view: the frame
+ * and a flat rail of five groups that fits it, 8 px apart with no line between them and a refusal dot 6 px after its
+ * label on its line, each group inside one window of the body with the layout `groupGeometry` reads, the moving
+ * warning leading Key on an edit that changes the pool, the bodies warning leading Capture while capture is on, and a
+ * revoked key's Enabled switch drawn and disabled. Nothing is saved: every dialog leaves by Escape.
  */
 async function keyDialogGeometry(theme) {
   const sayIn = (where, what) => failures.push(`${theme} /keys dialog${where ? ` ${where}` : ''}: ${what}`);
@@ -2338,7 +2405,7 @@ async function keyDialogGeometry(theme) {
     await page.keyboard.press('Escape');
     await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => sayIn(mode, 'the dialog stayed open after Escape'));
   };
-  const walk = async (mode) => {
+  const walk = async (mode, view) => {
     const frame = await dialog.evaluate((el) => {
       const box = el.getBoundingClientRect();
       const rail = el.querySelector('.dialog-rail');
@@ -2361,17 +2428,18 @@ async function keyDialogGeometry(theme) {
         width: box.width,
       };
     });
-    measurements.push(`${theme} /keys dialog ${mode} frame ${JSON.stringify(frame)}`);
-    if (frame.width !== 1040 || frame.height !== 752) sayIn(mode, `the frame measures ${frame.width} by ${frame.height}, not 1040 by 752`);
-    if (JSON.stringify(frame.labels) !== JSON.stringify(KEY_GROUP_LABELS) || frame.parents !== 0) sayIn(mode, `the rail reads ${JSON.stringify(frame.labels)} under ${frame.parents} parents`);
+    const at = `${mode}, ${view} view`;
+    measurements.push(`${theme} /keys dialog ${at} frame ${JSON.stringify(frame)}`);
+    if (frame.width !== 1040 || frame.height !== 752) sayIn(at, `the frame measures ${frame.width} by ${frame.height}, not 1040 by 752`);
+    if (JSON.stringify(frame.labels) !== JSON.stringify(KEY_GROUP_LABELS) || frame.parents !== 0) sayIn(at, `the rail reads ${JSON.stringify(frame.labels)} under ${frame.parents} parents`);
     // Each group of a flat rail is a run of its own, so the pool rail's 14 px and hairline between runs would reach it.
-    if (frame.gaps.some((gap) => Math.abs(gap - 8) > 0.5) || JSON.stringify(frame.lines) !== JSON.stringify(['none'])) sayIn(mode, `the rail's entries stand ${frame.gaps.join(', ')} px apart with ${frame.lines.join(', ')} before them, not 8 px with none`);
+    if (frame.gaps.some((gap) => Math.abs(gap - 8) > 0.5) || JSON.stringify(frame.lines) !== JSON.stringify(['none'])) sayIn(at, `the rail's entries stand ${frame.gaps.join(', ')} px apart with ${frame.lines.join(', ')} before them, not 8 px with none`);
     // A flat rail keeps its dot in the label's line, where the parented rail moves it into the row's right padding.
-    if (mode === 'create' && !frame.dots.length) sayIn(mode, 'the empty name draws no refusal dot on the rail to read');
-    for (const dot of frame.dots) if (Math.abs(dot.after - 6) > 0.5 || !dot.onLine) sayIn(mode, `the ${dot.group} entry's refusal dot sits ${dot.after} px past its label${dot.onLine ? '' : ' and off its line'}, not 6 px after it on its line`);
-    if (!frame.rail || frame.rail.scrollHeight > frame.rail.clientHeight) sayIn(mode, `the rail scrolls: ${JSON.stringify(frame.rail)}`);
+    if (mode === 'create' && !frame.dots.length) sayIn(at, 'the empty name draws no refusal dot on the rail to read');
+    for (const dot of frame.dots) if (Math.abs(dot.after - 6) > 0.5 || !dot.onLine) sayIn(at, `the ${dot.group} entry's refusal dot sits ${dot.after} px past its label${dot.onLine ? '' : ' and off its line'}, not 6 px after it on its line`);
+    if (!frame.rail || frame.rail.scrollHeight > frame.rail.clientHeight) sayIn(at, `the rail scrolls: ${JSON.stringify(frame.rail)}`);
     for (const group of KEY_GROUP_LABELS) {
-      const where = `${mode} ${group}`;
+      const where = `${at}, ${group}`;
       try {
         await railEntry(dialog, group).click();
         await settle();
@@ -2404,17 +2472,21 @@ async function keyDialogGeometry(theme) {
       }
     }
   };
-  try {
-    await openBy(() => page.getByRole('button', { name: 'Create key', exact: true }).first().click());
-    await walk('create');
-    await close('create');
-    await openBy(editOf(rows.first()));
-    await walk('edit');
-    await close('edit');
-  } catch (error) {
-    sayIn(null, error instanceof Error ? error.message : String(error));
-    await page.keyboard.press('Escape').catch(() => {});
+  for (const view of ['plain', 'expert']) {
+    try {
+      await expertView(view === 'expert');
+      await openBy(() => page.getByRole('button', { name: 'Create key', exact: true }).first().click());
+      await walk('create', view);
+      await close('create');
+      await openBy(editOf(rows.first()));
+      await walk('edit', view);
+      await close('edit');
+    } catch (error) {
+      sayIn(`${view} view`, error instanceof Error ? error.message : String(error));
+      await page.keyboard.press('Escape').catch(() => {});
+    }
   }
+  await expertView(false);
   // The route refuses to re-enable a revoked key, so its dialog draws the switch disabled; a router with no revoked key says so.
   const revoked = rows.filter({ has: page.locator('td:nth-child(7) .badge', { hasText: /^revoked$/ }) }).first();
   if ((await revoked.count()) === 0) {

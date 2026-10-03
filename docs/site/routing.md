@@ -82,9 +82,9 @@ Every field, in the order the request body takes them:
 | `wind_down_minutes` | `30` | 0 to 10,080 (a week) |
 | `members` | none | create only; replaced wholesale by `PUT /admin/pools/{id}/members` |
 
-The pool's `cache_diagnostics`, the pool dialog's Cache diagnostics switch, forces the cache-diagnosis beta and the
-`previous_message_id` member toward `api.anthropic.com` for this pool's requests, whatever the client; off by default,
-and `count_tokens` is never touched.
+The pool's `cache_diagnostics`, the pool dialog's Cache diagnostics switch in the expert view, forces the
+cache-diagnosis beta and the `previous_message_id` member toward `api.anthropic.com` for this pool's requests, whatever
+the client; off by default, and `count_tokens` is never touched.
 
 `auto_mode_server` is whether the client's server-side auto mode checks travel to the upstream. On, the default,
 the router passes the request for a check and its verdict through unchanged; off, it drops the request so the
@@ -194,8 +194,8 @@ for a key: "Bodies contain the prompts, file contents, and tool results of every
 session in auto mode sends the machine's permission rules with their literal text, its working and home directories
 and its git remotes with every request. Only the admin secret can read them."
 
-The key form sets
-`auto_mode_server` as **Server-side auto mode** (Inherit, naming the pool's value, On, or Off) in its Access group.
+The key form sets, in the expert
+view, `auto_mode_server` as **Server-side auto mode** (Inherit, naming the pool's value, On, or Off) in its Access group.
 
 ![The Keys view: stat tiles and the table of keys with prefix, pool, usage, and actions][kl]
 ![The Keys view: stat tiles and the table of keys with prefix, pool, usage, and actions][kd]
@@ -406,11 +406,11 @@ credits and no plan window, so the pin has no share to shed. In dollars, on an A
 it stays in the round. A session that returns to standard requests brings its pin back with the plan burn it still
 carries.
 
-The console's Pools form offers `shed_share`, `burn_window_seconds`, and `source_dwell_seconds` together as three
-presets beside custom: balanced (0.5, 600 s, 900 s, the default), fast (0.5, 300 s, 600 s), and conservative (0.3,
-900 s, 1800 s). The form's preview of what a shedding round would move leaves out the pins of a subscription account
-on its plan whose tier the cost table does not size, which the round still ranks on the table's reference tier and
-sheds, and keeps a pin whose burn the table cannot price in the order unmarked, as the round does.
+The console's Pools form offers, in its expert view, `shed_share`, `burn_window_seconds`, and `source_dwell_seconds`
+together as three presets beside custom: balanced (0.5, 600 s, 900 s, the default), fast (0.5, 300 s, 600 s), and
+conservative (0.3, 900 s, 1800 s). The form's preview of what a shedding round would move leaves out the pins of a
+subscription account on its plan whose tier the cost table does not size, which the round still ranks on the table's
+reference tier and sheds, and keeps a pin whose burn the table cannot price in the order unmarked, as the round does.
 
 A marked session moves at its next request, onto a cool sibling (see above) that did not shed this pin within
 `source_dwell_seconds`. A mark from a round on plan quota moves a standard request alone: a fast-mode request of the
@@ -606,9 +606,9 @@ The Accounts view shows what an account is cooling under in a cooling-down block
 account or one model, with the reason, the deadline, and a clear button; the Models view lists the same rows grouped
 by model.
 
-The console's Pools form offers `in_flight_cap`, `retry_in_place_seconds`, and `pace_floor` together as three
-presets beside custom: balanced (16, 10 s, 5 %, the default), fast (8, 5 s, 10 %), and conservative (16, 20 s,
-5 %); balanced and conservative differ in the retry-in-place bound alone.
+The console's Pools form offers, in its expert view, `in_flight_cap`, `retry_in_place_seconds`, and `pace_floor`
+together as three presets beside custom: balanced (16, 10 s, 5 %, the default), fast (8, 5 s, 10 %), and conservative
+(16, 20 s, 5 %); balanced and conservative differ in the retry-in-place bound alone.
 
 ### Retry in place
 

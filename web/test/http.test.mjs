@@ -293,7 +293,7 @@ test('a pool save is one PATCH that carries the members with the settings', asyn
   await new HttpApi().updatePool('main', {
     affinityTtlSeconds: 600,
     bodyCaptureHours: 0,
-    cacheDiagnostics: null,
+    cacheDiagnostics: false,
     cacheTtl: { enabled: false, injectWhenAbsent: false, metered: { main: '5m', models: [], subagent: '5m' }, plan: { main: '1h', models: [], subagent: '5m' } },
     keepalive: { coldProbeLimit: 2, costCapUsdPerDay: null, enabled: false, jitterSeconds1h: 30, jitterSeconds5m: 5, leadSeconds1h: 360, leadSeconds5m: 60, maxIdleSeconds: 3_600, maxIdleTicks: 0, netNegativeGraceProbes: 2, retryMaxSeconds: 300, retrySeconds: 30, stopWhenNetNegative: true, warmSubagents: true },
     affinityMode: 'when_cached',
@@ -317,7 +317,7 @@ test('a pool save is one PATCH that carries the members with the settings', asyn
     { account_id: 'direct', budget_daily_usd: 12.5, budget_monthly_usd: 50, priority: 1 },
   ], 'a member without a budget sends null, which clears a stored one');
   assert.equal(body.select_below_utilization, 0.4);
-  assert.equal('cache_diagnostics' in body, false, 'an unset switch is not sent');
+  assert.equal(body.cache_diagnostics, false, 'the switch is sent off as it is sent on');
   assert.deepEqual(
     [body.affinity_mode, body.subagent_placement, body.session_placement, body.min_shared_prefix_tokens],
     ['when_cached', 'with_main', 'by_warm_prefix', 30_000],

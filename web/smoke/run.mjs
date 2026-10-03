@@ -999,6 +999,8 @@ const tab = async (page, label) => {
   early.unmount();
 }
 
+// The pool dialog checks below read every field, the expert ones included; the plain view's checks come further on.
+localStorage.setItem('phoebis.expertView', 'on');
 m = await mount('/pools');
 expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, subscription accounts first', 'Round robin', 'Priority, then random; subscription accounts first', 'Traffic, 24h', 'Requests per hour', '3-hour average', 'Members', 'Console workspace', 'codex', 'Evals workspace', 'Active pins', 'Moves in the last hour', 'Edit']);
 {
@@ -2048,12 +2050,32 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   await m.settle(300);
   const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
   const ttlToggle = [...(group(dlg, 'Cache TTL')?.querySelectorAll('button[role="switch"]') ?? [])].find((b) => b.getAttribute('aria-label') === 'Set the cache TTL for this pool');
-  const diagnostics = group(dlg, 'Cache diagnostics')?.querySelector('select');
+  const diagnostics = () => group(dlg, 'Cache diagnostics')?.querySelector('button[role="switch"][aria-label="Cache diagnostics"]');
   results.push({
     name: '/pools a pool that rewrites no breakpoint still offers the TTL block and the diagnostics switch',
-    ok: ttlToggle?.getAttribute('aria-checked') === 'false' && diagnostics?.value === 'off',
-    missing: [ttlToggle ? '' : 'no cache TTL toggle', String(ttlToggle?.getAttribute('aria-checked')), diagnostics ? '' : 'no diagnostics select', String(diagnostics?.value)],
+    ok: ttlToggle?.getAttribute('aria-checked') === 'false' && diagnostics()?.getAttribute('aria-checked') === 'false',
+    missing: [ttlToggle ? '' : 'no cache TTL toggle', String(ttlToggle?.getAttribute('aria-checked')), diagnostics() ? '' : 'no diagnostics switch', String(diagnostics()?.getAttribute('aria-checked'))],
   });
+  {
+    const states = [diagnostics()?.getAttribute('aria-checked')];
+    diagnostics()?.click();
+    await m.settle(120);
+    states.push(diagnostics()?.getAttribute('aria-checked'));
+    diagnostics()?.click();
+    await m.settle(120);
+    states.push(diagnostics()?.getAttribute('aria-checked'));
+    const section = group(dlg, 'Cache diagnostics');
+    const hint = diagnostics()?.closest('.field')?.querySelector('.field__hint')?.textContent?.trim();
+    results.push({
+      name: '/pools the Cache diagnostics switch has two states, off and on, and no inherit choice',
+      ok:
+        JSON.stringify(states) === '["false","true","false"]' &&
+        section?.querySelector('select') === null &&
+        !(section?.textContent ?? '').includes('Inherit') &&
+        hint === 'On asks the upstream why a cache read missed, on every account of this pool, and the reason lands in the request log (opens in a new tab).',
+      missing: [JSON.stringify(states), section?.querySelector('select') ? 'a select is left' : '', hint ?? 'no hint'],
+    });
+  }
   // Subagents by cohort read the threshold too, so it is enabled with sessions by strategy.
   const placements = [dlg?.querySelector('select[aria-label="Subagent placement"]')?.value, dlg?.querySelector('select[aria-label="Session placement"]')?.value];
   const threshold = dlg?.querySelector('input[aria-label="Minimum shared prefix, tokens"]');
@@ -2162,6 +2184,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   await api.updatePool('studio', studio);
 }
 m.unmount();
+localStorage.removeItem('phoebis.expertView');
 
 // Until the key list is read, an empty list says nothing about a pool's keys: the count line and the Keys tile wait
 // while the read is out, and a failed read says the list is unavailable rather than "No keys yet" in the warning ink.
@@ -2532,6 +2555,274 @@ m.unmount();
   localStorage.removeItem('phoebis.expertView');
 }
 
+// The plain view of the two dialogs: each group draws its plain fields and ends with the line where the expert view
+// adds some, the groups whose every field is expert leave the rail, a hidden field keeps its value through a save, and
+// a refusal on a hidden field shows it whatever the mode.
+{
+  localStorage.removeItem('phoebis.expertView');
+  const sw = (page) => page.container.querySelector('.sidebar__status button[role="switch"][aria-label="Expert view"]');
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  const labelsIn = (section) => [...(section?.querySelectorAll('.field__label') ?? [])].map((l) => l.textContent?.trim());
+  const lineIn = (section) => section?.querySelector('.dialog-group__more')?.firstChild?.textContent ?? null;
+  const parentsOf = (dlg) => [...(dlg?.querySelectorAll('.dialog-rail__parent .dialog-rail__label') ?? [])].map((s) => s.textContent?.trim());
+  const railOf = (dlg) => [...(dlg?.querySelectorAll('.dialog-rail__group .dialog-rail__label') ?? [])].map((s) => s.textContent?.trim());
+  const headingsOf = (dlg) => [...(dlg?.querySelectorAll('.dialog-group__title') ?? [])].map((h) => h.textContent?.trim());
+  const foot = (dlg, label) => [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === label);
+  const PARENTS = ['Pool', 'Routing', 'Load', 'Caching', 'Visibility'];
+  const PLAIN_GROUPS = ['Identity', 'Members', 'Keys', 'Models', 'Selection', 'Pinning', 'Utilization thresholds', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Probe tuning', 'Body capture'];
+  const EVERY_GROUP = ['Identity', 'Members', 'Keys', 'Models', 'Auto mode', 'Selection', 'Placement', 'Pinning', 'Utilization thresholds', 'Load shedding', 'Failover', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Probe tuning', 'Body capture', 'Cache diagnostics'];
+  const KEEPALIVE = ['Keep prompt caches warm', 'Also warm subagent caches', 'Stop when probes cost more than they save', 'Grace probes after the net turns negative', 'Daily probe cost cap ($)'];
+  const TUNING = ['Lead time, 5m cache (s)', 'Lead time, 1h cache (s)', 'Jitter, 5m cache (s)', 'Jitter, 1h cache (s)', 'Cold probe limit', 'Retry backoff base (s)', 'Retry backoff max (s)', 'Max idle seconds', 'Max idle ticks'];
+  // Each group's labels and line with the mode off, the Interfaces' plain fields; the line is null where none draws.
+  const PLAIN_FIELDS = {
+    Identity: [['Name', 'Status'], null],
+    Members: [[], null],
+    Keys: [[], null],
+    Models: [['Model rules'], null],
+    Selection: [['Strategy', 'Prioritize subscription accounts'], null],
+    Pinning: [['Session affinity'], '1 more setting in the '],
+    'Utilization thresholds': [['Migrate above utilization', 'Utilization (%)', 'Member utilization'], '1 more setting in the '],
+    'Overage and plan end': [['Overage policy'], '2 more settings in the '],
+    'Cache TTL': [['Set the cache TTL for this pool', 'Write cost'], '3 more settings in the '],
+    Keepalive: [KEEPALIVE, null],
+    'Probe tuning': [TUNING, null],
+    'Body capture': [['Capture request and response bodies', 'Retention (hours)'], null],
+  };
+  // With the mode on, the groups that hold an expert field read every one of them.
+  const EXPERT_FIELDS = {
+    'Auto mode': ['Support server-side auto mode'],
+    Placement: ['Subagent placement', 'Session placement', 'Minimum shared prefix, tokens'],
+    Pinning: ['Session affinity', 'Pin sessions'],
+    'Utilization thresholds': ['Migrate above utilization', 'Utilization (%)', 'Select below utilization', 'Utilization (%)', 'Member utilization'],
+    'Load shedding': ['Preset', 'Share (%)', 'Burn window (s)', 'Source dwell (s)', 'Migrate when spent', 'Warm sessions', 'Preview'],
+    Failover: ['Preset', 'In flight', 'Retry in place (s)', 'Pace floor (%)'],
+    'Overage and plan end': ['Overage policy', 'Overage grace (min)', 'Wind down (min)'],
+    'Cache TTL': ['Set the cache TTL for this pool', 'Add a cache marker to a request without one', 'Write cost', 'Plan writes', 'Metered writes'],
+    'Cache diagnostics': ['Cache diagnostics'],
+  };
+
+  let p = await mount('/pools');
+  const open = async (name) => {
+    [...p.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === `Edit pool ${name}`)?.click();
+    await p.settle(300);
+    return [...p.container.querySelectorAll('dialog[open]')].pop();
+  };
+  const flip = async () => {
+    sw(p)?.click();
+    await p.settle(150);
+  };
+  let dlg = await open('all');
+  const plainRail = [parentsOf(dlg), railOf(dlg), headingsOf(dlg)];
+  results.push({
+    name: '/pools with the mode off the rail and the body hold twelve groups under the five parents, the five expert-only groups gone',
+    ok: JSON.stringify(plainRail) === JSON.stringify([PARENTS, PLAIN_GROUPS, PLAIN_GROUPS]) && (dlg?.querySelectorAll('.dialog-rail__parent, .dialog-rail__group').length ?? 0) === 17,
+    missing: plainRail.map((x) => JSON.stringify(x)),
+  });
+  const plainRead = Object.fromEntries(PLAIN_GROUPS.map((label) => [label, [labelsIn(group(dlg, label)), lineIn(group(dlg, label))]]));
+  results.push({
+    name: "/pools with the mode off each group reads its plain fields, and the line counts the expert ones where a group holds some",
+    ok: JSON.stringify(plainRead) === JSON.stringify(PLAIN_FIELDS),
+    missing: Object.entries(plainRead)
+      .filter(([label, read]) => JSON.stringify(read) !== JSON.stringify(PLAIN_FIELDS[label]))
+      .map(([label, read]) => `${label}: ${JSON.stringify(read)}`),
+  });
+  results.push({
+    name: '/pools with the mode off no expert control is drawn',
+    ok: ['input[aria-label="Select below utilization (%)"]', 'select[aria-label="Pin sessions"]', '[aria-label="Load shedding preset"]', '[aria-label="Failover preset"]', '[data-rule-set]', 'button[role="switch"][aria-label="Add a cache marker to a request without one"]', 'button[role="switch"][aria-label="Cache diagnostics"]', '[role="slider"][aria-label="Select-below threshold"]'].every((s) => dlg?.querySelector(s) === null),
+    missing: [],
+  });
+  group(dlg, 'Pinning')?.querySelector('.dialog-group__more button')?.click();
+  await p.settle(150);
+  const expertRail = [parentsOf(dlg), railOf(dlg), headingsOf(dlg)];
+  const expertRead = Object.fromEntries(Object.keys(EXPERT_FIELDS).map((label) => [label, labelsIn(group(dlg, label))]));
+  results.push({
+    name: '/pools the line turns the mode on: the rail holds all 22 entries, every group draws its expert fields, and no line is left',
+    ok:
+      localStorage.getItem('phoebis.expertView') === 'on' &&
+      JSON.stringify(expertRail) === JSON.stringify([PARENTS, EVERY_GROUP, EVERY_GROUP]) &&
+      (dlg?.querySelectorAll('.dialog-rail__parent, .dialog-rail__group').length ?? 0) === 22 &&
+      JSON.stringify(expertRead) === JSON.stringify(EXPERT_FIELDS) &&
+      dlg?.querySelector('.dialog-group__more') === null,
+    missing: [localStorage.getItem('phoebis.expertView'), ...expertRail.map((x) => JSON.stringify(x)), ...Object.entries(expertRead).filter(([label, read]) => JSON.stringify(read) !== JSON.stringify(EXPERT_FIELDS[label])).map(([label, read]) => `${label}: ${JSON.stringify(read)}`)],
+  });
+  foot(dlg, 'Cancel')?.click();
+  await p.settle(200);
+
+  // Set in the expert view: a select-below, a failover floor and a plan override per model; then saved in the plain
+  // view, where none of the three is drawn.
+  const story = (await api.listPools()).find((x) => x.id === 'all');
+  dlg = await open('all');
+  rail(dlg, 'utilization')?.click();
+  await p.settle(120);
+  dlg?.querySelector('button[role="switch"][aria-label="Select below utilization"]')?.click();
+  await p.settle(120);
+  const selectBelow = dlg?.querySelector('input[aria-label="Select below utilization (%)"]');
+  if (selectBelow) {
+    setter.call(selectBelow, '70');
+    selectBelow.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await p.settle(120);
+  }
+  [...(dlg?.querySelectorAll('[aria-label="Failover preset"] .pill') ?? [])].find((b) => b.textContent?.trim() === 'Custom')?.click();
+  await p.settle(120);
+  const floor = [...(group(dlg, 'Failover')?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === 'Pace floor (%)')?.querySelector('input');
+  if (floor) {
+    setter.call(floor, '12');
+    floor.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await p.settle(120);
+  }
+  const picker = dlg?.querySelector('[data-rule-set="plan"] select[aria-label^="Model to add"]');
+  const added = [...(picker?.querySelectorAll('option') ?? [])].map((o) => o.value).find(Boolean);
+  if (picker && added) {
+    Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set.call(picker, added);
+    picker.dispatchEvent(new window.Event('change', { bubbles: true }));
+    await p.settle(120);
+    [...(dlg?.querySelector('[data-rule-set="plan"]')?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Add')?.click();
+    await p.settle(120);
+  }
+  foot(dlg, 'Save pool')?.click();
+  await p.settle(700);
+  const stored = (await api.listPools()).find((x) => x.id === 'all');
+  const kept = (pool) => [pool?.selectBelowUtilization, pool?.paceFloor, pool?.cacheTtl.plan.models.map((x) => x.model)];
+  const typed = kept(stored);
+  await flip();
+  dlg = await open('all');
+  const hidden = [dlg?.querySelector('input[aria-label="Select below utilization (%)"]') ?? null, group(dlg, 'Failover') ?? null, dlg?.querySelector('[data-rule-set="plan"]') ?? null];
+  const updatePool = api.updatePool;
+  const sent = [];
+  api.updatePool = (id, input) => {
+    sent.push(input);
+    return updatePool.call(api, id, input);
+  };
+  try {
+    foot(dlg, 'Save pool')?.click();
+    await p.settle(700);
+  } finally {
+    api.updatePool = updatePool;
+  }
+  const reread = (await api.listPools()).find((x) => x.id === 'all');
+  results.push({
+    name: '/pools a pool saved in the plain view keeps the select-below, the pace floor and the plan overrides the expert view set, none of them drawn',
+    ok:
+      JSON.stringify(typed) === JSON.stringify([0.7, 0.12, ['claude-haiku-4-5-20251001', added]]) &&
+      hidden.every((x) => x === null) &&
+      sent.length === 1 &&
+      JSON.stringify(kept(sent[0])) === JSON.stringify(typed) &&
+      JSON.stringify(kept(reread)) === JSON.stringify(typed) &&
+      !p.container.querySelector('dialog[open]'),
+    missing: [JSON.stringify(typed), ...hidden.map((x) => (x === null ? 'hidden' : `drawn: ${x.tagName}`)), `${sent.length} saves`, JSON.stringify(kept(sent[0])), JSON.stringify(kept(reread))],
+  });
+  await api.updatePool('all', { ...story, members: story.members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })) });
+  p.unmount();
+
+  // A select-below past 100 typed in the expert view, then the mode turned off: the refused field stays drawn and the
+  // footer's Go to reaches it. The field is read hidden first, so the check fails where nothing hides it.
+  localStorage.removeItem('phoebis.expertView');
+  p = await mount('/pools');
+  dlg = await open('all');
+  rail(dlg, 'utilization')?.click();
+  await p.settle(120);
+  const util = () => group(dlg, 'Utilization thresholds');
+  const percent = () => dlg?.querySelector('input[aria-label="Select below utilization (%)"]');
+  const before = [percent() ? 'drawn' : 'hidden', lineIn(util())];
+  util()?.querySelector('.dialog-group__more button')?.click();
+  await p.settle(150);
+  dlg?.querySelector('button[role="switch"][aria-label="Select below utilization"]')?.click();
+  await p.settle(120);
+  if (percent()) {
+    setter.call(percent(), '120');
+    percent().dispatchEvent(new window.Event('input', { bubbles: true }));
+    await p.settle(120);
+  }
+  await flip();
+  const status = () => dlg?.querySelector('.dialog__status');
+  const refused = [localStorage.getItem('phoebis.expertView'), percent()?.getAttribute('aria-invalid') ?? 'absent', status()?.textContent ?? '', !!rail(dlg, 'utilization')?.querySelector('.dialog-rail__dot'), lineIn(util())];
+  rail(dlg, 'identity')?.click();
+  await p.settle(120);
+  [...(status()?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Go to Utilization thresholds')?.click();
+  await p.settle(120);
+  results.push({
+    name: '/pools a refusal on a field the plain view hides shows the field, and the footer names it and reaches it with the mode still off',
+    ok:
+      JSON.stringify(before) === '["hidden","1 more setting in the "]' &&
+      JSON.stringify(refused) === JSON.stringify(['off', 'true', 'Save is held: Select below utilization is from 0 to 100.Go to Utilization thresholds', true, null]) &&
+      util()?.hidden === false &&
+      !!percent() &&
+      document.activeElement === percent() &&
+      localStorage.getItem('phoebis.expertView') === 'off',
+    missing: [JSON.stringify(before), JSON.stringify(refused), document.activeElement?.outerHTML.slice(0, 80) ?? 'nothing focused'],
+  });
+  foot(dlg, 'Cancel')?.click();
+  await p.settle(200);
+
+  // The card's badge for an expert-only group turns the mode on before it opens the dialog there.
+  localStorage.removeItem('phoebis.expertView');
+  p.unmount();
+  p = await mount('/pools');
+  [...p.container.querySelectorAll('.pool')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'codex')?.querySelector('.pool__features a[href="/pools?edit=codex&group=shedding"]')?.click();
+  await p.settle(300);
+  dlg = p.container.querySelector('dialog[open]');
+  results.push({
+    name: "/pools the load shedding badge turns the mode on and opens the dialog on its group",
+    ok: localStorage.getItem('phoebis.expertView') === 'on' && group(dlg, 'Load shedding')?.hidden === false && rail(dlg, 'shedding')?.getAttribute('aria-current') === 'true',
+    missing: [localStorage.getItem('phoebis.expertView') ?? 'unset', dlg?.querySelector('section.dialog-group:not([hidden])')?.getAttribute('aria-label') ?? 'no group shown'],
+  });
+  p.unmount();
+
+  localStorage.removeItem('phoebis.expertView');
+  const k = await mount('/keys');
+  [...k.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Create key')?.click();
+  await k.settle(300);
+  let keyDlg = [...k.container.querySelectorAll('dialog[open]')].pop();
+  const keyRead = (dlgOf) => Object.fromEntries(['Key', 'Access', 'Models', 'Sessions', 'Capture'].map((label) => [label, [labelsIn(group(dlgOf, label)), lineIn(group(dlgOf, label))]]));
+  const plainKey = keyRead(keyDlg);
+  const plainKeyWanted = {
+    Key: [['Name', 'Pool', 'Notes'], null],
+    Access: [['Expiry'], '1 more setting in the '],
+    Models: [['Model rules'], '2 more settings in the '],
+    Sessions: [['Cache warming opt-out'], null],
+    Capture: [['Capture request and response bodies'], null],
+  };
+  results.push({
+    name: '/keys with the mode off each group reads its plain fields, and the line counts the expert ones in Access and Models',
+    ok: JSON.stringify(plainKey) === JSON.stringify(plainKeyWanted) && keyDlg?.querySelector('select[aria-label="Server-side auto mode"], .segmented, button[role="switch"][aria-label="List [1m] twins in the models listing"]') === null && JSON.stringify(railOf(keyDlg)) === '["Key","Access","Models","Sessions","Capture"]',
+    missing: [JSON.stringify(plainKey), JSON.stringify(railOf(keyDlg))],
+  });
+  group(keyDlg, 'Models')?.querySelector('.dialog-group__more button')?.click();
+  await k.settle(150);
+  const expertKey = keyRead(keyDlg);
+  results.push({
+    name: '/keys with the mode on Access draws Server-side auto mode and Models the Pool rules and the twins switch, with no line',
+    ok:
+      localStorage.getItem('phoebis.expertView') === 'on' &&
+      JSON.stringify(expertKey.Access) === JSON.stringify([['Expiry', 'Server-side auto mode'], null]) &&
+      JSON.stringify(expertKey.Models) === JSON.stringify([['Model rules', 'Pool rules', 'List [1m] twins in the models listing'], null]) &&
+      keyDlg?.querySelector('.dialog-group__more') === null,
+    missing: [JSON.stringify(expertKey)],
+  });
+  foot(keyDlg, 'Cancel')?.click();
+  await k.settle(200);
+  sw(k)?.click();
+  await k.settle(150);
+  const row = [...k.container.querySelectorAll('.card--table tbody tr')].find((r) => r.children[0]?.querySelector('b')?.textContent?.trim() === 'laptop');
+  row?.querySelector('.menu__trigger')?.click();
+  await k.settle(120);
+  [...k.container.querySelectorAll('[role="menuitem"]')].find((b) => b.textContent?.trim() === 'Edit')?.click();
+  await k.settle(300);
+  keyDlg = [...k.container.querySelectorAll('dialog[open]')].pop();
+  const editAccess = [labelsIn(group(keyDlg, 'Access')), lineIn(group(keyDlg, 'Access'))];
+  results.push({
+    name: '/keys the edit dialog with the mode off reads Enabled and Expiry in Access and the line for the one more',
+    ok: localStorage.getItem('phoebis.expertView') === 'off' && JSON.stringify(editAccess) === JSON.stringify([['Enabled', 'Expiry'], '1 more setting in the ']),
+    missing: [localStorage.getItem('phoebis.expertView') ?? 'unset', JSON.stringify(editAccess)],
+  });
+  foot(keyDlg, 'Cancel')?.click();
+  await k.settle(200);
+  k.unmount();
+  localStorage.removeItem('phoebis.expertView');
+}
+
+// As on the pools, the key dialog checks below read the expert fields too.
+localStorage.setItem('phoebis.expertView', 'on');
 m = await mount('/keys');
 expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost', 'Lifetime cost by key', 'phoebis-8f2a', 'phoebis-c41d', 'phoebis-19e7', 'Pool rules', 'revoked', 'Create key', 'Never', 'still on the previous secret']);
 {
@@ -2796,13 +3087,26 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
     mode('Replace pool rules')?.click();
     await m.settle(120);
     const replaced = grey();
-    const hint = models?.querySelector('.field__hint')?.textContent ?? '';
+    const fieldOf = (label) => [...(models?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === label);
+    const hint = fieldOf('Pool rules')?.querySelector('.field__hint')?.textContent ?? '';
+    const rulesHint = fieldOf('Model rules')?.querySelector('.field__hint')?.textContent ?? '';
     mode('Extend pool rules')?.click();
     await m.settle(120);
+    const labels = [...(models?.querySelectorAll('.field__label') ?? [])].map((l) => l.textContent?.trim());
     results.push({
       name: "/keys the pool's rules show in grey under extend and go under replace",
-      ok: JSON.stringify(extended) === JSON.stringify(['Deny claude-3* from pool']) && mode('Extend pool rules')?.getAttribute('aria-pressed') === 'true' && twins === 'true' && replaced.length === 0 && hint.includes("Under Extend the pool's rules, in grey, apply after this key's own; under Replace they do not apply.") && grey().length === 1,
+      ok: JSON.stringify(extended) === JSON.stringify(['Deny claude-3* from pool']) && mode('Extend pool rules')?.getAttribute('aria-pressed') === 'true' && twins === 'true' && replaced.length === 0 && hint === "Extend applies the pool's rules, in grey, after this key's own; Replace applies this key's rules alone." && grey().length === 1,
       missing: [JSON.stringify(extended), String(twins), JSON.stringify(replaced), hint],
+    });
+    results.push({
+      name: '/keys Models holds the rule editor, then the Pool rules mode in a field of its own, then the twins switch',
+      ok:
+        JSON.stringify(labels) === JSON.stringify(['Model rules', 'Pool rules', 'List [1m] twins in the models listing']) &&
+        fieldOf('Model rules')?.querySelector('.segmented') === null &&
+        !!fieldOf('Pool rules')?.querySelector('.segmented') &&
+        fieldOf('Pool rules')?.querySelector('label') === null &&
+        rulesHint === 'Top to bottom, first match wins. The Models page (opens in a new tab) shows the list per key.',
+      missing: [JSON.stringify(labels), rulesHint],
     });
   }
   const nameInput = dlg?.querySelector('input[placeholder="workstation"]');
@@ -3049,6 +3353,7 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
   });
 }
 m.unmount();
+localStorage.removeItem('phoebis.expertView');
 
 // A helper that cannot find the control a check needs fails that check by name, so a control that disappears
 // fails the run rather than leaving the check to read a page nothing narrowed.

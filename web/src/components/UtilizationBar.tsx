@@ -61,10 +61,11 @@ function Handle({ kind, label, min, max, threshold, track }: { kind: 'migrate' |
 
 /**
  * Both utilization thresholds as handles over the members' current 5-hour and 7-day readings, 0 to 100 %. A handle
- * drags or takes the arrow keys, a percent a step; a threshold that is off draws no handle. The band under the
+ * drags or takes the arrow keys, a percent a step; a threshold that is off draws no handle, and the select-below
+ * handle draws only with `expert`, since the plain view leaves that threshold to the expert view. The band under the
  * migrate handle is shaded, since a shed session lands only on a member reading below it.
  */
-export function UtilizationBar({ readings, migrate, migrateMin, selectBelow }: { migrate: Threshold | null; migrateMin: number; readings: MemberReading[]; selectBelow: Threshold | null }) {
+export function UtilizationBar({ expert, migrate, migrateMin, readings, selectBelow }: { expert: boolean; migrate: Threshold | null; migrateMin: number; readings: MemberReading[]; selectBelow: Threshold | null }) {
   const track = useRef<HTMLDivElement>(null);
   const band = MIGRATE_BAND * 100;
   const ticks = readings.flatMap((r) =>
@@ -82,7 +83,7 @@ export function UtilizationBar({ readings, migrate, migrateMin, selectBelow }: {
         {ticks.map((t) => (
           <span key={t.key} className={`ubar__tick ubar__tick--${t.id}`} style={{ left: `${t.left}%` }} title={t.title} />
         ))}
-        {selectBelow && <Handle kind="select" label="Select-below threshold" min={0} max={100} threshold={selectBelow} track={track} />}
+        {expert && selectBelow && <Handle kind="select" label="Select-below threshold" min={0} max={100} threshold={selectBelow} track={track} />}
         {migrate && <Handle kind="migrate" label="Migrate threshold" min={migrateMin} max={100} threshold={migrate} track={track} />}
       </div>
       {/* Placed rather than spread: spreading centres the middle mark between labels of unequal width, off the track's 50%. */}

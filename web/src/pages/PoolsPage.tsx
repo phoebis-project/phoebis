@@ -7,6 +7,7 @@ import type {
   Account, AffinityMode, ApiKey, CacheTtl, CreatedApiKey, KeyStatus, MemberEligibility, ModelRule, OveragePolicy, Pool, PoolCacheTtl, PoolKeepalive, PoolMember, PoolStrategy, Session, SessionPlacement,
   SubagentPlacement, TtlRules, WarmSessions,
 } from '@/api/types';
+import { useAppSettings } from '@/app/settings';
 import { AttentionRows } from '@/components/AttentionRows';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { ChartTooltip, Legend } from '@/components/charts/Tooltip';
@@ -14,7 +15,7 @@ import { PatternEditor, useCatalogSuggestions } from '@/components/PatternEditor
 import { CostReferenceLink } from '@/components/ui/CostReference';
 import { UtilizationBar } from '@/components/UtilizationBar';
 import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
-import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, ErrorState, Field, GroupedDialog, GroupLink, Input, Menu, PageLink, Select, Skeleton, SwitchedNumber, Toast, Toggle, type DialogGroup } from '@/components/ui/primitives';
+import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, ErrorState, Expert, Field, GroupedDialog, GroupLink, Input, Menu, PageLink, Select, Skeleton, SwitchedNumber, Toast, Toggle, type DialogGroup } from '@/components/ui/primitives';
 import { moveLabel, sizedAccounts } from '@/lib/analytics';
 import type { AttentionItem } from '@/lib/attention';
 import { fmtAbsolute, fmtCompact, fmtHourTick, fmtInt, fmtPeriodEnd, fmtRelative, fmtUsd } from '@/lib/format';
@@ -30,6 +31,9 @@ const KEY_STATUS_TONE: Record<KeyStatus, 'critical' | 'good' | 'neutral' | 'warn
 const POOL_STATUS_TONE = { active: 'good', degraded: 'warning', disabled: 'neutral', exhausted: 'critical' } as const;
 // What a first pool needs, said on the create dialog's rail; the words stay while the refusal dots come and go.
 const CREATE_MARKS: Partial<Record<PoolGroup, string>> = { identity: 'needed', keys: 'after saving', members: 'needed' };
+// Every field of these groups belongs to the expert view, so with the mode off a group has nothing to show and leaves
+// the rail.
+const EXPERT_ONLY: ReadonlySet<PoolGroup> = new Set(['autoMode', 'cacheDiagnostics', 'failover', 'placement', 'shedding']);
 const isPoolGroup = (value: string | null): value is PoolGroup => value !== null && (POOL_GROUPS as readonly string[]).includes(value);
 /** The strip: a feature the pool has on, in the rail's order, each opening the dialog on the group that edits it. */
 const FEATURES: { group: PoolGroup; on: (pool: Pool) => boolean; word: string }[] = [
@@ -728,7 +732,7 @@ interface PoolForm {
   autoModeServer: boolean;
   /** Each member's daily and monthly budget fields as typed, empty for none; kept for an unticked member too. */
   budgets: Record<string, { daily: string; monthly: string }>;
-  cacheDiagnostics: boolean | null;
+  cacheDiagnostics: boolean;
   cacheTtl: PoolCacheTtl;
   capEnabled: boolean;
   capture: boolean;
@@ -766,7 +770,7 @@ const blankForm = (): PoolForm => ({
   affinityMode: POOL_AFFINITY_DEFAULTS.affinityMode,
   autoModeServer: true,
   budgets: {},
-  cacheDiagnostics: null,
+  cacheDiagnostics: false,
   cacheTtl: { ...CACHE_TTL_DEFAULTS },
   capEnabled: false,
   capture: false,
@@ -890,6 +894,7 @@ export function PoolDialog({
   sessions: Session[];
 }) {
   const now = useNow();
+  const { expertView } = useAppSettings();
   const [form, setForm] = useState<PoolForm>(blankForm);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1281,17 +1286,19 @@ export function PoolDialog({
     ),
     autoMode: (
       <div className="cells">
-        <Field
-          label="Support server-side auto mode"
-          beside
-          hint={
-            <>
-              Claude Code asks the upstream to review each tool use on the model&apos;s own turn. Off, the router drops that request from every message of this pool&apos;s keys, and the client reviews with classifier requests of its own, billed to the account&apos;s windows; a key can override this. The Client page of the documentation explains what the client does in each state.
-            </>
-          }
-        >
-          <Toggle checked={form.autoModeServer} onChange={(v) => set('autoModeServer', v)} label="Support server-side auto mode" />
-        </Field>
+        <Expert>
+          <Field
+            label="Support server-side auto mode"
+            beside
+            hint={
+              <>
+                Claude Code asks the upstream to review each tool use on the model&apos;s own turn. Off, the router drops that request from every message of this pool&apos;s keys, and the client reviews with classifier requests of its own, billed to the account&apos;s windows; a key can override this. The Client page of the documentation explains what the client does in each state.
+              </>
+            }
+          >
+            <Toggle checked={form.autoModeServer} onChange={(v) => set('autoModeServer', v)} label="Support server-side auto mode" />
+          </Field>
+        </Expert>
       </div>
     ),
     selection: (
@@ -1320,52 +1327,58 @@ export function PoolDialog({
     ),
     placement: (
       <div className="cells">
-        <Field
-          label="Subagent placement"
-          hint={
-            <>
-              Where a subagent&apos;s first request lands. By cohort: with the subagents that share its static prefix. With the main conversation: on its parent&apos;s account. By strategy: wherever the <GroupLink id="selection">strategy</GroupLink> picks.
-            </>
-          }
-        >
-          <Select value={form.subagentPlacement} onChange={(e) => set('subagentPlacement', e.target.value as SubagentPlacement)} aria-label="Subagent placement" aria-invalid={invalid('Subagent placement')}>
-            <option value="by_cohort">By cohort</option>
-            <option value="by_strategy">By strategy</option>
-            <option value="with_main">With the main conversation</option>
-          </Select>
-        </Field>
-        <Field
-          label="Session placement"
-          hint={
-            <>
-              By warm prefix lands a fresh session where its static prefix is already cached, when the prefix reaches the minimum below; By strategy leaves it to the <GroupLink id="selection">strategy</GroupLink>.
-            </>
-          }
-        >
-          <Select value={form.sessionPlacement} onChange={(e) => set('sessionPlacement', e.target.value as SessionPlacement)} aria-label="Session placement" aria-invalid={invalid('Session placement')}>
-            <option value="by_strategy">By strategy</option>
-            <option value="by_warm_prefix">By warm prefix</option>
-          </Select>
-        </Field>
-        <Field
-          label="Minimum shared prefix, tokens"
-          hint={
-            <>
-              The smallest shared prefix that places a fresh session, or a subagent by cohort, by warmth; below it the <GroupLink id="selection">strategy</GroupLink> decides. Estimated from the request&apos;s bytes, not counted by the upstream.
-            </>
-          }
-        >
-          <Input
-            type="number"
-            min={0}
-            step={1_000}
-            value={form.prefixTokens}
-            onChange={(e) => set('prefixTokens', e.target.value)}
-            disabled={!prefixEnabled}
-            aria-label="Minimum shared prefix, tokens"
-            aria-invalid={invalid('Minimum shared prefix, tokens')}
-          />
-        </Field>
+        <Expert refused={refusedFields.has('Subagent placement')}>
+          <Field
+            label="Subagent placement"
+            hint={
+              <>
+                Where a subagent&apos;s first request lands. By cohort: with the subagents that share its static prefix. With the main conversation: on its parent&apos;s account. By strategy: wherever the <GroupLink id="selection">strategy</GroupLink> picks.
+              </>
+            }
+          >
+            <Select value={form.subagentPlacement} onChange={(e) => set('subagentPlacement', e.target.value as SubagentPlacement)} aria-label="Subagent placement" aria-invalid={invalid('Subagent placement')}>
+              <option value="by_cohort">By cohort</option>
+              <option value="by_strategy">By strategy</option>
+              <option value="with_main">With the main conversation</option>
+            </Select>
+          </Field>
+        </Expert>
+        <Expert refused={refusedFields.has('Session placement')}>
+          <Field
+            label="Session placement"
+            hint={
+              <>
+                By warm prefix lands a fresh session where its static prefix is already cached, when the prefix reaches the minimum below; By strategy leaves it to the <GroupLink id="selection">strategy</GroupLink>.
+              </>
+            }
+          >
+            <Select value={form.sessionPlacement} onChange={(e) => set('sessionPlacement', e.target.value as SessionPlacement)} aria-label="Session placement" aria-invalid={invalid('Session placement')}>
+              <option value="by_strategy">By strategy</option>
+              <option value="by_warm_prefix">By warm prefix</option>
+            </Select>
+          </Field>
+        </Expert>
+        <Expert refused={refusedFields.has('Minimum shared prefix, tokens')}>
+          <Field
+            label="Minimum shared prefix, tokens"
+            hint={
+              <>
+                The smallest shared prefix that places a fresh session, or a subagent by cohort, by warmth; below it the <GroupLink id="selection">strategy</GroupLink> decides. Estimated from the request&apos;s bytes, not counted by the upstream.
+              </>
+            }
+          >
+            <Input
+              type="number"
+              min={0}
+              step={1_000}
+              value={form.prefixTokens}
+              onChange={(e) => set('prefixTokens', e.target.value)}
+              disabled={!prefixEnabled}
+              aria-label="Minimum shared prefix, tokens"
+              aria-invalid={invalid('Minimum shared prefix, tokens')}
+            />
+          </Field>
+        </Expert>
         {prefixRefusal && refusalCallout(prefixRefusal)}
       </div>
     ),
@@ -1404,19 +1417,21 @@ export function PoolDialog({
             aria-invalid={invalid('Session affinity in seconds')}
           />
         </Field>
-        <Field
-          label="Pin sessions"
-          hint={
-            <>
-              Only when the request caches: a request with no cache marker, and none added by the <GroupLink id="cacheTtl">cache TTL policy</GroupLink>, lands by the <GroupLink id="selection">strategy</GroupLink> and takes no pin. A request bound to its account keeps its pin either way.
-            </>
-          }
-        >
-          <Select value={form.affinityMode} onChange={(e) => set('affinityMode', e.target.value as AffinityMode)} aria-label="Pin sessions" aria-invalid={invalid('Pin sessions')}>
-            <option value="always">Always</option>
-            <option value="when_cached">Only when the request caches</option>
-          </Select>
-        </Field>
+        <Expert refused={refusedFields.has('Pin sessions')}>
+          <Field
+            label="Pin sessions"
+            hint={
+              <>
+                Only when the request caches: a request with no cache marker, and none added by the <GroupLink id="cacheTtl">cache TTL policy</GroupLink>, lands by the <GroupLink id="selection">strategy</GroupLink> and takes no pin. A request bound to its account keeps its pin either way.
+              </>
+            }
+          >
+            <Select value={form.affinityMode} onChange={(e) => set('affinityMode', e.target.value as AffinityMode)} aria-label="Pin sessions" aria-invalid={invalid('Pin sessions')}>
+              <option value="always">Always</option>
+              <option value="when_cached">Only when the request caches</option>
+            </Select>
+          </Field>
+        </Expert>
       </div>
     ),
     utilization: (
@@ -1435,20 +1450,22 @@ export function PoolDialog({
             }
           />
         </div>
-        <div className="cell--half">
-          <SwitchedNumber
-            label="Select below utilization"
-            numberLabel="Utilization (%)"
-            checked={form.selectBelowOn}
-            onChange={(v) => set('selectBelowOn', v)}
-            input={{ min: 0, max: 100, value: form.selectBelow, onChange: (e) => set('selectBelow', Number(e.target.value)), 'aria-label': 'Select below utilization (%)', 'aria-invalid': invalid('Select below utilization (%)') }}
-            hint={
-              <>
-                A <GroupLink id="selection">fresh pick</GroupLink> passes over members at or above this 5-hour utilization, unless every member is. With both lines on, it sits at least 5% under the migrate line.
-              </>
-            }
-          />
-        </div>
+        <Expert refused={refusedFields.has('Select below utilization (%)')}>
+          <div className="cell--half">
+            <SwitchedNumber
+              label="Select below utilization"
+              numberLabel="Utilization (%)"
+              checked={form.selectBelowOn}
+              onChange={(v) => set('selectBelowOn', v)}
+              input={{ min: 0, max: 100, value: form.selectBelow, onChange: (e) => set('selectBelow', Number(e.target.value)), 'aria-label': 'Select below utilization (%)', 'aria-invalid': invalid('Select below utilization (%)') }}
+              hint={
+                <>
+                  A <GroupLink id="selection">fresh pick</GroupLink> passes over members at or above this 5-hour utilization, unless every member is. With both lines on, it sits at least 5% under the migrate line.
+                </>
+              }
+            />
+          </div>
+        </Expert>
         <Field
           label="Member utilization"
           plain
@@ -1459,6 +1476,7 @@ export function PoolDialog({
           }
         >
           <UtilizationBar
+            expert={expertView}
             readings={readings}
             migrate={form.migrateOn ? { onChange: (v) => set('migrate', v), value: form.migrate } : null}
             migrateMin={50}
@@ -1474,68 +1492,82 @@ export function PoolDialog({
           A member at or above the <GroupLink id="utilization">migrate line</GroupLink> runs a round that marks some of its sessions; each moves to a cooler sibling at its next request.
         </p>
         <div className="cells">
-          <Field label="Preset" plain hint={SHEDDING_HINT[sheddingPill]}>
-            <PresetPills label="Load shedding preset" value={sheddingPill} onPick={pickShedding} hints={SHEDDING_HINT} />
-          </Field>
-          <Field label="Share (%)" className="cell--half" hint="The part of the member's recent burn one round marks to move.">
-            <Input type="number" min={0} max={100} value={percentOf(form.engine.shedShare)} onChange={(e) => setEngine('shedShare', Number(e.target.value) / 100)} disabled={sheddingPill !== 'custom'} aria-invalid={invalid('Share (%)')} />
-          </Field>
-          <Field label={ENGINE_FIELD_LABELS.burnWindowSeconds} className="cell--half" hint="The span each session's burn is averaged over.">
-            <Input
-              type="number"
-              min={ENGINE_BOUNDS.burnWindowSeconds.min}
-              step={60}
-              value={form.engine.burnWindowSeconds}
-              onChange={(e) => setEngine('burnWindowSeconds', Number(e.target.value))}
-              disabled={sheddingPill !== 'custom'}
-              aria-invalid={invalid(ENGINE_FIELD_LABELS.burnWindowSeconds)}
-            />
-          </Field>
-          <Field label={ENGINE_FIELD_LABELS.sourceDwellSeconds} className="cell--half" hint="The least time between two rounds on one member, and how long a moved session stays off it.">
-            <Input
-              type="number"
-              min={ENGINE_BOUNDS.sourceDwellSeconds.min}
-              step={60}
-              value={form.engine.sourceDwellSeconds}
-              onChange={(e) => setEngine('sourceDwellSeconds', Number(e.target.value))}
-              disabled={sheddingPill !== 'custom'}
-              aria-invalid={invalid(ENGINE_FIELD_LABELS.sourceDwellSeconds)}
-            />
-          </Field>
-          <Field label="Migrate when spent" beside hint="Moves a session off a member whose window for its model is spent, to a sibling with allowance left, without waiting for a round or the upstream's 429.">
-            <Toggle checked={form.engine.migrateWhenSpent} onChange={(v) => setEngine('migrateWhenSpent', v)} label="Migrate when spent" />
-          </Field>
-          <Field
-            label="Warm sessions"
-            plain
-            hint={
-              <>
-                A warm session rewrites its cache where it lands; the <CostReferenceLink /> shows what that write costs.
-              </>
-            }
-          >
-            <div className="radio-list" role="radiogroup" aria-label="Warm sessions" aria-invalid={invalid('Warm sessions')}>
-              {WARM_CHOICES.map((c) => (
-                <label key={c.value} className={`radio-list__item ${form.engine.warmSessions === c.value ? 'is-active' : ''}`}>
-                  <input type="radio" name={`warm-${pool?.id ?? 'new'}`} checked={form.engine.warmSessions === c.value} onChange={() => setEngine('warmSessions', c.value)} />
-                  <span>
-                    <b>{c.title}:</b> {c.body}
-                  </span>
-                </label>
-              ))}
-            </div>
-          </Field>
-          <Field label="Preview" plain>
-            <p className="shed-preview num" role="status">
-              {form.migrateOn ? (
-                shedPreviewLine(preview, true)
-              ) : (
+          <Expert>
+            <Field label="Preset" plain hint={SHEDDING_HINT[sheddingPill]}>
+              <PresetPills label="Load shedding preset" value={sheddingPill} onPick={pickShedding} hints={SHEDDING_HINT} />
+            </Field>
+          </Expert>
+          <Expert refused={refusedFields.has('Share (%)')}>
+            <Field label="Share (%)" className="cell--half" hint="The part of the member's recent burn one round marks to move.">
+              <Input type="number" min={0} max={100} value={percentOf(form.engine.shedShare)} onChange={(e) => setEngine('shedShare', Number(e.target.value) / 100)} disabled={sheddingPill !== 'custom'} aria-invalid={invalid('Share (%)')} />
+            </Field>
+          </Expert>
+          <Expert refused={refusedFields.has(ENGINE_FIELD_LABELS.burnWindowSeconds)}>
+            <Field label={ENGINE_FIELD_LABELS.burnWindowSeconds} className="cell--half" hint="The span each session's burn is averaged over.">
+              <Input
+                type="number"
+                min={ENGINE_BOUNDS.burnWindowSeconds.min}
+                step={60}
+                value={form.engine.burnWindowSeconds}
+                onChange={(e) => setEngine('burnWindowSeconds', Number(e.target.value))}
+                disabled={sheddingPill !== 'custom'}
+                aria-invalid={invalid(ENGINE_FIELD_LABELS.burnWindowSeconds)}
+              />
+            </Field>
+          </Expert>
+          <Expert refused={refusedFields.has(ENGINE_FIELD_LABELS.sourceDwellSeconds)}>
+            <Field label={ENGINE_FIELD_LABELS.sourceDwellSeconds} className="cell--half" hint="The least time between two rounds on one member, and how long a moved session stays off it.">
+              <Input
+                type="number"
+                min={ENGINE_BOUNDS.sourceDwellSeconds.min}
+                step={60}
+                value={form.engine.sourceDwellSeconds}
+                onChange={(e) => setEngine('sourceDwellSeconds', Number(e.target.value))}
+                disabled={sheddingPill !== 'custom'}
+                aria-invalid={invalid(ENGINE_FIELD_LABELS.sourceDwellSeconds)}
+              />
+            </Field>
+          </Expert>
+          <Expert>
+            <Field label="Migrate when spent" beside hint="Moves a session off a member whose window for its model is spent, to a sibling with allowance left, without waiting for a round or the upstream's 429.">
+              <Toggle checked={form.engine.migrateWhenSpent} onChange={(v) => setEngine('migrateWhenSpent', v)} label="Migrate when spent" />
+            </Field>
+          </Expert>
+          <Expert refused={refusedFields.has('Warm sessions')}>
+            <Field
+              label="Warm sessions"
+              plain
+              hint={
                 <>
-                  No round runs while <GroupLink id="utilization">migrate above utilization</GroupLink> is off.
+                  A warm session rewrites its cache where it lands; the <CostReferenceLink /> shows what that write costs.
                 </>
-              )}
-            </p>
-          </Field>
+              }
+            >
+              <div className="radio-list" role="radiogroup" aria-label="Warm sessions" aria-invalid={invalid('Warm sessions')}>
+                {WARM_CHOICES.map((c) => (
+                  <label key={c.value} className={`radio-list__item ${form.engine.warmSessions === c.value ? 'is-active' : ''}`}>
+                    <input type="radio" name={`warm-${pool?.id ?? 'new'}`} checked={form.engine.warmSessions === c.value} onChange={() => setEngine('warmSessions', c.value)} />
+                    <span>
+                      <b>{c.title}:</b> {c.body}
+                    </span>
+                  </label>
+                ))}
+              </div>
+            </Field>
+          </Expert>
+          <Expert>
+            <Field label="Preview" plain>
+              <p className="shed-preview num" role="status">
+                {form.migrateOn ? (
+                  shedPreviewLine(preview, true)
+                ) : (
+                  <>
+                    No round runs while <GroupLink id="utilization">migrate above utilization</GroupLink> is off.
+                  </>
+                )}
+              </p>
+            </Field>
+          </Expert>
         </div>
       </>
     ),
@@ -1545,50 +1577,53 @@ export function PoolDialog({
           How long a request waits out a throttle on its member, how many requests one member serves at once, and how far <GroupLink id="selection">Pace</GroupLink> spends a member before it is the last resort.
         </p>
         <div className="cells">
-          <Field label="Preset" plain hint={FAILOVER_HINT[failoverPill]}>
-            <PresetPills label="Failover preset" value={failoverPill} onPick={pickFailover} hints={FAILOVER_HINT} />
-          </Field>
-          <Field
-            label={ENGINE_FIELD_LABELS.inFlightCap}
-            className="cell--half"
-            hint={
-              <>
-                Requests one member serves at once. A member at the cap takes no fresh session while a sibling has room; with every member full, a request waits up to Retry in place for a slot. A key&apos;s own cap is on the{' '}
-                <PageLink to="/keys">Keys page</PageLink>.
-              </>
-            }
-          >
-            <Input
-              type="number"
-              min={ENGINE_BOUNDS.inFlightCap.min}
-              value={form.engine.inFlightCap}
-              onChange={(e) => setEngine('inFlightCap', Number(e.target.value))}
-              disabled={failoverPill !== 'custom'}
-              aria-invalid={invalid(ENGINE_FIELD_LABELS.inFlightCap)}
-            />
-          </Field>
-          <Field label={ENGINE_FIELD_LABELS.retryInPlaceSeconds} className="cell--half" hint="The longest throttle a request waits out on its member before failing over, and the longest wait for a free slot; 0 fails over at once.">
-            <Input
-              type="number"
-              min={ENGINE_BOUNDS.retryInPlaceSeconds.min}
-              max={ENGINE_BOUNDS.retryInPlaceSeconds.max}
-              value={form.engine.retryInPlaceSeconds}
-              onChange={(e) => setEngine('retryInPlaceSeconds', Number(e.target.value))}
-              disabled={failoverPill !== 'custom'}
-              aria-invalid={invalid(ENGINE_FIELD_LABELS.retryInPlaceSeconds)}
-            />
-          </Field>
-          <Field
-            label="Pace floor (%)"
-            className="cell--half"
-            hint={
-              <>
-                Under <GroupLink id="selection">Pace</GroupLink>, a member with this share of its window left or less serves only as the last resort.
-              </>
-            }
-          >
-            <Input type="number" min={0} max={100} value={percentOf(form.engine.paceFloor)} onChange={(e) => setEngine('paceFloor', Number(e.target.value) / 100)} disabled={failoverPill !== 'custom'} aria-invalid={invalid('Pace floor (%)')} />
-          </Field>
+          <Expert>
+            <Field label="Preset" plain hint={FAILOVER_HINT[failoverPill]}>
+              <PresetPills label="Failover preset" value={failoverPill} onPick={pickFailover} hints={FAILOVER_HINT} />
+            </Field>
+          </Expert>
+          <Expert refused={refusedFields.has(ENGINE_FIELD_LABELS.inFlightCap)}>
+            <Field
+              label={ENGINE_FIELD_LABELS.inFlightCap}
+              className="cell--half"
+              hint="Requests one member serves at once. A member at the cap takes no fresh session while a sibling has room; with every member full, a request waits up to Retry in place for a slot."
+            >
+              <Input
+                type="number"
+                min={ENGINE_BOUNDS.inFlightCap.min}
+                value={form.engine.inFlightCap}
+                onChange={(e) => setEngine('inFlightCap', Number(e.target.value))}
+                disabled={failoverPill !== 'custom'}
+                aria-invalid={invalid(ENGINE_FIELD_LABELS.inFlightCap)}
+              />
+            </Field>
+          </Expert>
+          <Expert refused={refusedFields.has(ENGINE_FIELD_LABELS.retryInPlaceSeconds)}>
+            <Field label={ENGINE_FIELD_LABELS.retryInPlaceSeconds} className="cell--half" hint="The longest throttle a request waits out on its member before failing over, and the longest wait for a free slot; 0 fails over at once.">
+              <Input
+                type="number"
+                min={ENGINE_BOUNDS.retryInPlaceSeconds.min}
+                max={ENGINE_BOUNDS.retryInPlaceSeconds.max}
+                value={form.engine.retryInPlaceSeconds}
+                onChange={(e) => setEngine('retryInPlaceSeconds', Number(e.target.value))}
+                disabled={failoverPill !== 'custom'}
+                aria-invalid={invalid(ENGINE_FIELD_LABELS.retryInPlaceSeconds)}
+              />
+            </Field>
+          </Expert>
+          <Expert refused={refusedFields.has('Pace floor (%)')}>
+            <Field
+              label="Pace floor (%)"
+              className="cell--half"
+              hint={
+                <>
+                  Under <GroupLink id="selection">Pace</GroupLink>, a member with this share of its window left or less serves only as the last resort.
+                </>
+              }
+            >
+              <Input type="number" min={0} max={100} value={percentOf(form.engine.paceFloor)} onChange={(e) => setEngine('paceFloor', Number(e.target.value) / 100)} disabled={failoverPill !== 'custom'} aria-invalid={invalid('Pace floor (%)')} />
+            </Field>
+          </Expert>
         </div>
       </>
     ),
@@ -1614,33 +1649,37 @@ export function PoolDialog({
             ))}
           </div>
         </Field>
-        <Field label={ENGINE_FIELD_LABELS.overageMoveGraceMinutes} hint="Under Prefer plan quota, a session stays on an account in overage while its window resets within this many minutes; 0 moves it at once.">
-          <Input
-            type="number"
-            min={ENGINE_BOUNDS.overageMoveGraceMinutes.min}
-            max={ENGINE_BOUNDS.overageMoveGraceMinutes.max}
-            value={form.engine.overageMoveGraceMinutes}
-            onChange={(e) => setEngine('overageMoveGraceMinutes', Number(e.target.value))}
-            aria-invalid={invalid(ENGINE_FIELD_LABELS.overageMoveGraceMinutes)}
-          />
-        </Field>
-        <Field
-          label={ENGINE_FIELD_LABELS.windDownMinutes}
-          hint={
-            <>
-              This long before a cancelled subscription ends, its account takes new sessions only as the last resort and cold sessions move off. The end is set on the <PageLink to="/accounts">Accounts page</PageLink>.
-            </>
-          }
-        >
-          <Input
-            type="number"
-            min={ENGINE_BOUNDS.windDownMinutes.min}
-            max={ENGINE_BOUNDS.windDownMinutes.max}
-            value={form.engine.windDownMinutes}
-            onChange={(e) => setEngine('windDownMinutes', Number(e.target.value))}
-            aria-invalid={invalid(ENGINE_FIELD_LABELS.windDownMinutes)}
-          />
-        </Field>
+        <Expert refused={refusedFields.has(ENGINE_FIELD_LABELS.overageMoveGraceMinutes)}>
+          <Field label={ENGINE_FIELD_LABELS.overageMoveGraceMinutes} hint="Under Prefer plan quota, a session stays on an account in overage while its window resets within this many minutes; 0 moves it at once.">
+            <Input
+              type="number"
+              min={ENGINE_BOUNDS.overageMoveGraceMinutes.min}
+              max={ENGINE_BOUNDS.overageMoveGraceMinutes.max}
+              value={form.engine.overageMoveGraceMinutes}
+              onChange={(e) => setEngine('overageMoveGraceMinutes', Number(e.target.value))}
+              aria-invalid={invalid(ENGINE_FIELD_LABELS.overageMoveGraceMinutes)}
+            />
+          </Field>
+        </Expert>
+        <Expert refused={refusedFields.has(ENGINE_FIELD_LABELS.windDownMinutes)}>
+          <Field
+            label={ENGINE_FIELD_LABELS.windDownMinutes}
+            hint={
+              <>
+                This long before a cancelled subscription ends, its account takes new sessions only as the last resort and cold sessions move off. The end is set on the <PageLink to="/accounts">Accounts page</PageLink>.
+              </>
+            }
+          >
+            <Input
+              type="number"
+              min={ENGINE_BOUNDS.windDownMinutes.min}
+              max={ENGINE_BOUNDS.windDownMinutes.max}
+              value={form.engine.windDownMinutes}
+              onChange={(e) => setEngine('windDownMinutes', Number(e.target.value))}
+              aria-invalid={invalid(ENGINE_FIELD_LABELS.windDownMinutes)}
+            />
+          </Field>
+        </Expert>
       </div>
     ),
     cacheTtl: (
@@ -1648,17 +1687,19 @@ export function PoolDialog({
         <Field label="Set the cache TTL for this pool" beside hint="Rewrites every cache marker a request carries to the TTL below, on every account of this pool, so the client's own TTL setting has no effect through it.">
           <Toggle checked={form.cacheTtl.enabled} onChange={(v) => setCacheTtl('enabled', v)} label="Set the cache TTL for this pool" />
         </Field>
-        <Field
-          label="Add a cache marker to a request without one"
-          beside
-          hint={
-            <>
-              Adds a marker to a request that carries none; off leaves such a request as sent. <GroupLink id="pinning">Pin sessions</GroupLink> counts an added marker.
-            </>
-          }
-        >
-          <Toggle checked={form.cacheTtl.injectWhenAbsent} onChange={(v) => setCacheTtl('injectWhenAbsent', v)} label="Add a cache marker to a request without one" disabled={!form.cacheTtl.enabled} />
-        </Field>
+        <Expert>
+          <Field
+            label="Add a cache marker to a request without one"
+            beside
+            hint={
+              <>
+                Adds a marker to a request that carries none; off leaves such a request as sent. <GroupLink id="pinning">Pin sessions</GroupLink> counts an added marker.
+              </>
+            }
+          >
+            <Toggle checked={form.cacheTtl.injectWhenAbsent} onChange={(v) => setCacheTtl('injectWhenAbsent', v)} label="Add a cache marker to a request without one" disabled={!form.cacheTtl.enabled} />
+          </Field>
+        </Expert>
         <Field
           label="Write cost"
           plain
@@ -1679,24 +1720,28 @@ export function PoolDialog({
             </>
           }
         />
-        <CacheTtlOverrides
-          key={`plan-${open}-${pool?.id ?? 'new'}`}
-          name="plan"
-          label="Plan writes"
-          disabled={!form.cacheTtl.enabled}
-          rules={form.cacheTtl.plan}
-          onChange={(rules) => setCacheTtl('plan', rules)}
-          models={models}
-        />
-        <CacheTtlOverrides
-          key={`metered-${open}-${pool?.id ?? 'new'}`}
-          name="metered"
-          label="Metered writes"
-          disabled={!form.cacheTtl.enabled}
-          rules={form.cacheTtl.metered}
-          onChange={(rules) => setCacheTtl('metered', rules)}
-          models={models}
-        />
+        <Expert>
+          <CacheTtlOverrides
+            key={`plan-${open}-${pool?.id ?? 'new'}`}
+            name="plan"
+            label="Plan writes"
+            disabled={!form.cacheTtl.enabled}
+            rules={form.cacheTtl.plan}
+            onChange={(rules) => setCacheTtl('plan', rules)}
+            models={models}
+          />
+        </Expert>
+        <Expert>
+          <CacheTtlOverrides
+            key={`metered-${open}-${pool?.id ?? 'new'}`}
+            name="metered"
+            label="Metered writes"
+            disabled={!form.cacheTtl.enabled}
+            rules={form.cacheTtl.metered}
+            onChange={(rules) => setCacheTtl('metered', rules)}
+            models={models}
+          />
+        </Expert>
       </div>
     ),
     keepalive: (
@@ -1707,8 +1752,7 @@ export function PoolDialog({
             beside
             hint={
               <>
-                Probes an idle session shortly before its cache expires, so its next turn reads instead of writes. A probe follows the session&apos;s pin, so <GroupLink id="pinning">Session affinity</GroupLink> must be at least 5m. Subscription accounts also wait for OAuth prewarm verified on the{' '}
-                <PageLink to="/settings">Settings page</PageLink>.
+                Probes an idle session shortly before its cache expires, so its next turn reads instead of writes. A probe follows the session&apos;s pin, so <GroupLink id="pinning">Session affinity</GroupLink> must be at least 5m.
                 {keepaliveBlocked && (
                   <p className="field__hint">
                     Needs Session affinity of at least 5 minutes: a probe follows the session&apos;s pin, and a shorter pin cannot keep the session on the account it warmed. Set it under <GroupLink id="pinning">Pinning</GroupLink>.
@@ -1818,25 +1862,23 @@ export function PoolDialog({
     ),
     cacheDiagnostics: (
       <div className="cells">
-        <Field
-          label="Cache diagnostics"
-          hint={
-            <>
-              On asks the upstream why a cache read missed, on every account of this pool, and the reason lands in the <PageLink to="/requests">request log</PageLink>. Inherit follows the bootstrap setting on the{' '}
-              <PageLink to="/settings">Settings page</PageLink>.
-            </>
-          }
-        >
-          <Select value={form.cacheDiagnostics === null ? 'inherit' : form.cacheDiagnostics ? 'on' : 'off'} onChange={(e) => set('cacheDiagnostics', e.target.value === 'inherit' ? null : e.target.value === 'on')}>
-            <option value="inherit">Inherit the bootstrap setting</option>
-            <option value="on">On</option>
-            <option value="off">Off</option>
-          </Select>
-        </Field>
+        <Expert>
+          <Field
+            label="Cache diagnostics"
+            beside
+            hint={
+              <>
+                On asks the upstream why a cache read missed, on every account of this pool, and the reason lands in the <PageLink to="/requests">request log</PageLink>.
+              </>
+            }
+          >
+            <Toggle checked={form.cacheDiagnostics} onChange={(v) => set('cacheDiagnostics', v)} label="Cache diagnostics" />
+          </Field>
+        </Expert>
       </div>
     ),
   };
-  const groups: DialogGroup[] = POOL_GROUPS.map((id) => ({ ...POOL_RAIL[id], body: bodies[id], id, mark: pool ? undefined : CREATE_MARKS[id], refused: refusedGroups.has(id) }));
+  const groups: DialogGroup[] = POOL_GROUPS.map((id) => ({ ...POOL_RAIL[id], body: bodies[id], expertOnly: EXPERT_ONLY.has(id), id, mark: pool ? undefined : CREATE_MARKS[id], refused: refusedGroups.has(id) }));
 
   return (
     <>

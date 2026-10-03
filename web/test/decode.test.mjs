@@ -329,7 +329,7 @@ test("a pool's cache TTL decodes the two rule sets and encodes them back", () =>
   assert.equal(back.cache_diagnostics, true);
   assert.equal(back.keepalive.warm_subagents, false);
   assert.equal(d.decodePool({ ...row, cache_diagnostics: false }).cacheDiagnostics, false);
-  assert.equal('cache_diagnostics' in d.encodePool({ ...p, name: p.name, cacheDiagnostics: null, status: 'active' }), false, 'an unset switch is left out, so a new pool starts off');
+  assert.equal(d.encodePool({ ...p, name: p.name, cacheDiagnostics: false, status: 'active' }).cache_diagnostics, false, 'the switch is sent off as it is sent on');
 });
 
 test('a pool decodes its server-side auto mode switch, on when the row carries none, and encodes it back', () => {

@@ -5,7 +5,7 @@ import type { ApiKey, CreatedApiKey, KeyModels, KeyStatus, ModelRule, ModelRules
 import { useChartInk } from '@/components/charts/useChartInk';
 import { PatternEditor, useCatalogSuggestions } from '@/components/PatternEditor';
 import { IconInfo, IconPlus, IconWarning } from '@/components/ui/icons';
-import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, ErrorState, Field, GroupedDialog, Input, Menu, PageLink, SearchInput, Segmented, Select, Skeleton, Toast, Toggle, type DialogGroup } from '@/components/ui/primitives';
+import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, ErrorState, Expert, Field, GroupedDialog, Input, Menu, PageLink, SearchInput, Segmented, Select, Skeleton, Toast, Toggle, type DialogGroup } from '@/components/ui/primitives';
 import { fmtAbsolute, fmtCompact, fmtDate, fmtInt, fmtRelative, fmtUsd } from '@/lib/format';
 import { KEY_GROUPS, keyFormOf, keyInputOf, keyRefusals, type AutoModeOverride, type CaptureMode, type KeyGroup } from '@/lib/forms';
 import { useAsync, useNow, type Loaded } from '@/lib/hooks';
@@ -519,38 +519,48 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing
             {existing && <option value="never">No expiration</option>}
           </Select>
         </Field>
-        <Field label="Server-side auto mode" hint="Inherit follows the pool. Off drops the client's server-side tool-use checks on this key, so the client reviews with classifier requests of its own; On keeps them whatever the pool says.">
-          <Select value={autoModeServer} onChange={(e) => setAutoModeServer(e.target.value as AutoModeOverride)} aria-label="Server-side auto mode">
-            <option value="inherit">Inherit ({pool?.autoModeServer === false ? 'off' : 'on'}, the pool&apos;s setting)</option>
-            <option value="on">On</option>
-            <option value="off">Off</option>
-          </Select>
-        </Field>
+        <Expert>
+          <Field label="Server-side auto mode" hint="Inherit follows the pool. Off drops the client's server-side tool-use checks on this key, so the client reviews with classifier requests of its own; On keeps them whatever the pool says.">
+            <Select value={autoModeServer} onChange={(e) => setAutoModeServer(e.target.value as AutoModeOverride)} aria-label="Server-side auto mode">
+              <option value="inherit">Inherit ({pool?.autoModeServer === false ? 'off' : 'on'}, the pool&apos;s setting)</option>
+              <option value="on">On</option>
+              <option value="off">Off</option>
+            </Select>
+          </Field>
+        </Expert>
       </div>
     ),
     models: (
       <div className="cells">
         {/* Field's frame without its label element: a label forwards a click on its text to the first control
-            inside, which here would flip the mode. */}
+            inside, which here would press Add rule or flip the first row. */}
         <Field
           label="Model rules"
           plain
           hint={
             <>
-              Top to bottom, first match wins. Under Extend the pool&apos;s rules, in grey, apply after this key&apos;s own; under Replace they do not apply. The <PageLink to="/models">Models page</PageLink> shows the list per key.
+              Top to bottom, first match wins. The <PageLink to="/models">Models page</PageLink> shows the list per key.
             </>
           }
         >
-          {/* Its own block, so the segmented control keeps its content width. */}
-          <div>
-            <Segmented<ModelRulesMode> ariaLabel="How this key's rules meet the pool's" value={modelRulesMode} options={MODES} onChange={setModelRulesMode} />
-          </div>
           <PatternEditor label="Model rules" value={modelRules} onChange={setModelRules} inherited={modelRulesMode === 'extend' ? (pool?.modelRules ?? []) : []} suggestions={suggestions} />
         </Field>
         {rulesRefusal && refusalCallout(rulesRefusal)}
-        <Field label="List [1m] twins in the models listing" beside hint="Claude Code sizes its context window by the id; the twin lets it use the long-context window the upstream reports.">
-          <Toggle checked={longContextTwins} onChange={setLongContextTwins} label="List [1m] twins in the models listing" />
-        </Field>
+        <Expert>
+          {/* Field's frame without its label element: a label forwards a click on its text to the first control
+              inside, which here would flip the mode. */}
+          <Field label="Pool rules" plain hint="Extend applies the pool's rules, in grey, after this key's own; Replace applies this key's rules alone.">
+            {/* Its own block, so the segmented control keeps its content width. */}
+            <div>
+              <Segmented<ModelRulesMode> ariaLabel="How this key's rules meet the pool's" value={modelRulesMode} options={MODES} onChange={setModelRulesMode} />
+            </div>
+          </Field>
+        </Expert>
+        <Expert>
+          <Field label="List [1m] twins in the models listing" beside hint="Claude Code sizes its context window by the id; the twin lets it use the long-context window the upstream reports.">
+            <Toggle checked={longContextTwins} onChange={setLongContextTwins} label="List [1m] twins in the models listing" />
+          </Field>
+        </Expert>
         {existing && <EffectiveList processed={processed} />}
       </div>
     ),

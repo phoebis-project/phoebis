@@ -122,7 +122,7 @@ export interface PoolInput extends PoolEngineFields, PoolAffinityFields {
   affinityTtlSeconds: number;
   autoModeServer: boolean;
   bodyCaptureHours: number;
-  cacheDiagnostics: boolean | null;
+  cacheDiagnostics: boolean;
   cacheTtl: PoolCacheTtl;
   keepalive: PoolKeepalive;
   /** A member list replaces the pool's whole membership, so a member sent without a budget clears its budget. */
