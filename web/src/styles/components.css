@@ -755,6 +755,11 @@ textarea.input {
   bottom: auto;
 }
 
+.menu__list--left {
+  right: auto;
+  left: 0;
+}
+
 .menu__list .is-danger {
   color: var(--critical-ink);
 }

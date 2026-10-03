@@ -2382,12 +2382,22 @@
   white-space: nowrap;
 }
 
-/* Thirteen columns do not fit a 1600 px window at the shared 12 px gutter, and
-   the overflow menu is the first cell pushed out of reach. */
+/* The default columns fit a 990px card at 1280px only with the cells 8px apart; the row's first and last cells keep the
+   card's 12px edge, and an expanded row's detail cell keeps its own inset. */
 .sessions-table th,
 .sessions-table td {
-  padding-left: 7px;
-  padding-right: 7px;
+  padding-left: 4px;
+  padding-right: 4px;
+}
+
+.sessions-table th:first-child,
+.srow > td:first-child {
+  padding-left: 12px;
+}
+
+.sessions-table th:last-child,
+.srow > td:last-child {
+  padding-right: 12px;
 }
 
 .sessions-table__gutter {
@@ -2458,9 +2468,11 @@
   border-left: 2px solid var(--accent);
 }
 
+/* The table fits its card collapsed, which leaves State no room of its own once a row opens; the floor gives a reason
+   badge a cell to wrap in, and the open row scrolls sideways for Net instead. */
 .agents__row {
   display: grid;
-  grid-template-columns: 90px 190px 110px 60px 120px 100px minmax(0, 1fr) 210px;
+  grid-template-columns: 90px 190px 110px 60px 120px 100px minmax(140px, 1fr) 210px;
   gap: 12px;
   align-items: center;
   padding: 6px 12px;
@@ -2476,6 +2488,14 @@
 
 .agents__row + .agents__row {
   border-top: 1px solid var(--hairline);
+}
+
+/* A badge keeps its text on one line, so the reason badge after the State badge carries the wrap itself: a long reason
+   wraps inside the State cell rather than running past it. */
+.agents__row > span:nth-child(7) .badge + .badge {
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
 }
 
 .agents__row--head {

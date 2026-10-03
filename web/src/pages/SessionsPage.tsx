@@ -4,14 +4,36 @@ import { api } from '@/api';
 import type { Account, ApiKey, CompanionState, KeepaliveOverview, KeepaliveRecipe, KeepaliveState, Pool, RecipeState, Session } from '@/api/types';
 import { useSession } from '@/app/session';
 import { useAppSettings } from '@/app/settings';
+import { ColumnsControl } from '@/components/ui/ColumnsControl';
 import { CostReferenceLink } from '@/components/ui/CostReference';
 import { Tile } from '@/components/ui/Tile';
 import { IconChevron } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Menu, Meter, Skeleton } from '@/components/ui/primitives';
-import { fmtAbsolute, fmtDuration, fmtInt, fmtPct, fmtRelative, fmtShare, fmtUsd, shortId } from '@/lib/format';
+import { fmtAbsolute, fmtDuration, fmtInt, fmtPct, fmtRelative, fmtShare, fmtUsd, shortId, shortModel, undatedModel } from '@/lib/format';
 import { REASON_HINT, REASON_LABEL, WARNING_REASONS } from '@/lib/keepalive';
 import { useAsync, useNow } from '@/lib/hooks';
 import type { BadgeTone } from '@/lib/quota';
+
+const SESSION_COLUMNS = [
+  { id: 'key', label: 'Key' },
+  { id: 'session', label: 'Session' },
+  { id: 'model', label: 'Model' },
+  { id: 'account', label: 'Account' },
+  { id: 'lastUsed', label: 'Last used' },
+  { id: 'requests', label: 'Requests' },
+  { id: 'lastRequest', label: 'Last request' },
+  { id: 'agents', label: 'Agents' },
+  { id: 'companion', label: 'Companion' },
+  { id: 'cacheWarming', label: 'Cache warming' },
+  { id: 'nextProbe', label: 'Next probe' },
+] as const;
+type SessionColumnId = (typeof SESSION_COLUMNS)[number]['id'];
+// The default set fits the card at 1280 by 800 without these: Last used carries recency, Cache warming and the expanded
+// row carry the agents and their next probes.
+const HIDDEN_BY_DEFAULT: readonly SessionColumnId[] = ['agents', 'lastRequest', 'nextProbe'];
+
+/** The id as sent on hover where the cell shows less of it. */
+const modelTitle = (model: string, shown: string) => (shown === model ? undefined : model);
 
 const PIN_TONE: Record<KeepaliveState, BadgeTone> = { busy: 'accent', idle: 'good', parked: 'neutral' };
 const PIN_HINT: Record<KeepaliveState, string> = {
@@ -29,7 +51,6 @@ const NO_RECIPE_HINT = 'Nothing probes this session, so its prompt cache expires
 const HISTORICAL_HINT = 'A holder of this key id that no longer exists; the ledger keeps its sessions until they expire';
 const HISTORICAL_NO_RECIPE_HINT = 'Belongs to an earlier holder of this key id; nothing is scheduled for it';
 const HISTORICAL_CAUSE = 'this key id was created again and the session belongs to the earlier holder';
-const KIND_LABEL: Record<Account['kind'], string> = { api_key: 'Anthropic key', oauth: 'subscription' };
 const KIND_HINT: Record<Account['kind'], string> = {
   api_key: 'Anthropic key account: billed per token, no quota windows',
   oauth: 'Subscription account: quota windows apply',
@@ -145,6 +166,7 @@ export function SessionsPage() {
   const navigate = useNavigate();
   const { canMutate } = useAppSettings();
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [visible, setVisible] = useState<Set<SessionColumnId>>(() => new Set(SESSION_COLUMNS.map((c) => c.id).filter((id) => !HIDDEN_BY_DEFAULT.includes(id))));
   const [pending, setPending] = useState<Row | null>(null);
   const { notify } = useSession();
   // The base row the last fork link led to, marked until another fork link is followed.
@@ -194,7 +216,8 @@ export function SessionsPage() {
       if (!next.delete(id)) next.add(id);
       return next;
     });
-  const columns = 13;
+  // The expand gutter and the menu are drawn whatever the control hides.
+  const columns = visible.size + 2;
 
   return (
     <div className="stack">
@@ -229,9 +252,14 @@ export function SessionsPage() {
         subtitle="One row per session; open a row for the cache-warming recipe each agent carries"
         actions={
           rows && rows.length > 0 ? (
-            <Button size="sm" onClick={() => setExpanded(allOpen ? new Set() : new Set(rows.map((r) => rowKey(r.session))))} aria-pressed={allOpen}>
-              {allOpen ? 'Collapse all' : 'Expand all'}
-            </Button>
+            <>
+              <Button size="sm" onClick={() => setExpanded(allOpen ? new Set() : new Set(rows.map((r) => rowKey(r.session))))} aria-pressed={allOpen}>
+                {allOpen ? 'Collapse all' : 'Expand all'}
+              </Button>
+              <div className="filters__cols">
+                <ColumnsControl columns={SESSION_COLUMNS} visible={visible} onChange={setVisible} />
+              </div>
+            </>
           ) : undefined
         }
       >
@@ -268,18 +296,18 @@ export function SessionsPage() {
               <thead>
                 <tr>
                   <th className="sessions-table__gutter" />
-                  <th>Key</th>
-                  <th>Session</th>
-                  <th>Model</th>
-                  <th>Account</th>
-                  <th>Last used</th>
-                  <th className="right">Requests</th>
-                  <th>Last request</th>
-                  <th className="right">Agents</th>
-                  <th>Companion</th>
-                  <th>Cache warming</th>
-                  <th>Next probe</th>
                   <th />
+                  {visible.has('key') && <th>Key</th>}
+                  {visible.has('session') && <th>Session</th>}
+                  {visible.has('model') && <th>Model</th>}
+                  {visible.has('account') && <th>Account</th>}
+                  {visible.has('lastUsed') && <th>Last used</th>}
+                  {visible.has('requests') && <th className="right">Requests</th>}
+                  {visible.has('lastRequest') && <th>Last request</th>}
+                  {visible.has('agents') && <th className="right">Agents</th>}
+                  {visible.has('companion') && <th>Companion</th>}
+                  {visible.has('cacheWarming') && <th>Cache warming</th>}
+                  {visible.has('nextProbe') && <th>Next probe</th>}
                 </tr>
               </thead>
               <tbody>
@@ -299,6 +327,7 @@ export function SessionsPage() {
                     onFollowFork={followFork}
                     onOpen={(path) => navigate(path)}
                     onRelease={() => setPending(row)}
+                    visible={visible}
                   />
                 ))}
               </tbody>
@@ -337,6 +366,7 @@ function SessionRows({
   onFollowFork,
   onOpen,
   onRelease,
+  visible,
 }: {
   canMutate: boolean;
   columns: number;
@@ -353,6 +383,7 @@ function SessionRows({
   onToggle: () => void;
   open: boolean;
   row: Row;
+  visible: ReadonlySet<SessionColumnId>;
 }) {
   const { account, agents, session } = row;
   const summary = stateSummary(agents);
@@ -388,104 +419,11 @@ function SessionRows({
             <IconChevron size={14} />
           </span>
         </td>
-        <td className="mono">
-          {session.keyId}
-          {session.historical && (
-            <span className="sub" title={HISTORICAL_HINT}>
-              deleted holder
-            </span>
-          )}
-        </td>
-        <td className="mono" title={session.sessionId}>
-          {sessionLabel(session)}
-          {session.forkedFrom !== null && forkBase !== null && <ForkBadge base={listedIds.has(forkBase) ? forkBase : null} depth={session.forkDepth} from={session.forkedFrom} onFollow={onFollowFork} />}
-          {(session.epoch ?? 1) > 1 && (
-            <span className="sub srow__epoch" title="How many times this session's pin was re-created">
-              epoch {session.epoch}
-            </span>
-          )}
-        </td>
-        <td className="mono">
-          <span className="srow__pin">
-            {session.model ?? <span className="muted">-</span>}
-            <OtherPins agents={otherModels} />
-          </span>
-        </td>
-        <td>
-          <span className="srow__account">
-            {session.accountId === null ? (
-              <span className="muted">-</span>
-            ) : (
-              <Link to={`/accounts/${session.accountId}`} onClick={(e) => e.stopPropagation()}>
-                {session.accountId}
-              </Link>
-            )}
-            {account && (
-              <Badge tone="neutral" title={KIND_HINT[account.kind]}>
-                {KIND_LABEL[account.kind]}
-              </Badge>
-            )}
-            <OtherPins agents={otherAccounts} />
-          </span>
-        </td>
-        {/* Expiry rides under the last-used time rather than in a column of its own, which is 90px the 1600px window did not have. */}
-        <td title={fmtAbsolute(lastUsed)}>
-          {fmtRelative(lastUsed, now)}
-          {expiresAt && (
-            <span className="sub" title={`Drops off this list at ${fmtAbsolute(expiresAt)}`}>
-              expires {fmtRelative(expiresAt, now)}
-            </span>
-          )}
-        </td>
-        <td className="right num" title={hasTraffic ? undefined : NO_TRAFFIC_HINT}>
-          {hasTraffic ? fmtInt(session.requests) : <span className="muted">0</span>}
-        </td>
-        <td title={session.lastRequestAt ? fmtAbsolute(session.lastRequestAt) : undefined}>
-          {session.lastRequestAt ? <span className="num">{fmtRelative(session.lastRequestAt, now)}</span> : <span className="muted">none</span>}
-        </td>
-        <td className="right num">{session.agents}</td>
-        <td>
-          {session.companion === 'reporting' ? (
-            <Badge tone="good" dot title={COMPANION_HINT.reporting}>
-              reporting
-            </Badge>
-          ) : session.companion === 'silent' ? (
-            <>
-              <Badge tone="warning" dot title={COMPANION_HINT.silent}>
-                silent
-              </Badge>
-              <span className="sub">since {fmtRelative(session.companionSince, now)}</span>
-            </>
-          ) : (
-            <span className="muted" title={COMPANION_HINT.none}>
-              none
-            </span>
-          )}
-        </td>
-        <td>
-          {session.keepalive.state && !row.noRecipe ? (
-            <>
-              <Badge tone={PIN_TONE[session.keepalive.state]} dot title={PIN_HINT[session.keepalive.state]}>
-                {session.keepalive.state}
-              </Badge>
-              {summary && <span className="sub">{summary}</span>}
-            </>
-          ) : (
-            <span className="muted" title={session.historical ? HISTORICAL_NO_RECIPE_HINT : NO_RECIPE_HINT}>
-              no recipe
-            </span>
-          )}
-        </td>
-        <td title={session.keepalive.nextProbeAt ? fmtAbsolute(session.keepalive.nextProbeAt) : undefined}>
-          {session.keepalive.nextProbeAt ? (
-            <span className="num">{fmtRelative(session.keepalive.nextProbeAt, now)}</span>
-          ) : (
-            <span className="muted">{pendingProbe ? 'pending' : 'not scheduled'}</span>
-          )}
-        </td>
-        {/* Spelled-out actions cost 300px of row width, which is what pushed the table past the window. */}
-        <td className="right" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+        {/* The actions sit in a menu, a fraction of spelled-out buttons' width, and lead the row so they stay reachable at
+            1280 px whatever the columns after them need. */}
+        <td onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
           <Menu
+            align="left"
             label={`Actions for session ${shortId(session.sessionId, 13)}${session.historical ? ', deleted holder' : ''}`}
             items={[
               { label: 'View in analytics', disabled: !hasTraffic, title: hasTraffic ? undefined : NO_TRAFFIC_HINT, onClick: () => onOpen(`/analytics?session=${encodeURIComponent(trafficSession)}&key=${encodeURIComponent(`${session.keyId}@${session.keyGeneration}`)}`) },
@@ -494,6 +432,116 @@ function SessionRows({
             ]}
           />
         </td>
+        {visible.has('key') && (
+          <td className="mono">
+            {session.keyId}
+            {session.historical && (
+              <span className="sub" title={HISTORICAL_HINT}>
+                deleted holder
+              </span>
+            )}
+          </td>
+        )}
+        {visible.has('session') && (
+          <td className="mono" title={session.sessionId}>
+            {sessionLabel(session)}
+            {session.forkedFrom !== null && forkBase !== null && <ForkBadge base={listedIds.has(forkBase) ? forkBase : null} depth={session.forkDepth} from={session.forkedFrom} onFollow={onFollowFork} />}
+            {(session.epoch ?? 1) > 1 && (
+              <span className="sub srow__epoch" title="How many times this session's pin was re-created">
+                epoch {session.epoch}
+              </span>
+            )}
+          </td>
+        )}
+        {visible.has('model') && (
+          <td className="mono nowrap" title={session.model === null ? undefined : modelTitle(session.model, shortModel(session.model))}>
+            <span className="srow__pin">
+              {session.model === null ? <span className="muted">-</span> : shortModel(session.model)}
+              <OtherPins agents={otherModels} />
+            </span>
+          </td>
+        )}
+        {visible.has('account') && (
+          <td title={account ? KIND_HINT[account.kind] : undefined}>
+            <span className="srow__account">
+              {session.accountId === null ? (
+                <span className="muted">-</span>
+              ) : (
+                <Link to={`/accounts/${session.accountId}`} onClick={(e) => e.stopPropagation()}>
+                  {session.accountId}
+                </Link>
+              )}
+              <OtherPins agents={otherAccounts} />
+            </span>
+          </td>
+        )}
+        {/* Expiry rides under the last-used time rather than in a column of its own, which is 90px the 1600px window did not have. */}
+        {visible.has('lastUsed') && (
+          <td title={fmtAbsolute(lastUsed)}>
+            {fmtRelative(lastUsed, now)}
+            {expiresAt && (
+              <span className="sub" title={`Drops off this list at ${fmtAbsolute(expiresAt)}`}>
+                expires {fmtRelative(expiresAt, now)}
+              </span>
+            )}
+          </td>
+        )}
+        {visible.has('requests') && (
+          <td className="right num" title={hasTraffic ? undefined : NO_TRAFFIC_HINT}>
+            {hasTraffic ? fmtInt(session.requests) : <span className="muted">0</span>}
+          </td>
+        )}
+        {visible.has('lastRequest') && (
+          <td title={session.lastRequestAt ? fmtAbsolute(session.lastRequestAt) : undefined}>
+            {session.lastRequestAt ? <span className="num">{fmtRelative(session.lastRequestAt, now)}</span> : <span className="muted">none</span>}
+          </td>
+        )}
+        {visible.has('agents') && <td className="right num">{session.agents}</td>}
+        {visible.has('companion') && (
+          <td>
+            {session.companion === 'reporting' ? (
+              <Badge tone="good" dot title={COMPANION_HINT.reporting}>
+                reporting
+              </Badge>
+            ) : session.companion === 'silent' ? (
+              <>
+                <Badge tone="warning" dot title={COMPANION_HINT.silent}>
+                  silent
+                </Badge>
+                <span className="sub">since {fmtRelative(session.companionSince, now)}</span>
+              </>
+            ) : (
+              <span className="muted" title={COMPANION_HINT.none}>
+                none
+              </span>
+            )}
+          </td>
+        )}
+        {visible.has('cacheWarming') && (
+          <td>
+            {session.keepalive.state && !row.noRecipe ? (
+              <>
+                <Badge tone={PIN_TONE[session.keepalive.state]} dot title={PIN_HINT[session.keepalive.state]}>
+                  {session.keepalive.state}
+                </Badge>
+                {summary && <span className="sub">{summary}</span>}
+              </>
+            ) : (
+              <span className="muted" title={session.historical ? HISTORICAL_NO_RECIPE_HINT : NO_RECIPE_HINT}>
+                no recipe
+              </span>
+            )}
+          </td>
+        )}
+        {visible.has('nextProbe') && (
+          <td title={session.keepalive.nextProbeAt ? fmtAbsolute(session.keepalive.nextProbeAt) : undefined}>
+            {session.keepalive.nextProbeAt ? (
+              <span className="num">{fmtRelative(session.keepalive.nextProbeAt, now)}</span>
+            ) : (
+              <span className="muted">{pendingProbe ? 'pending' : 'not scheduled'}</span>
+            )}
+          </td>
+        )}
       </tr>
       {open && (
         <tr className="srow__detail">
@@ -524,7 +572,9 @@ function SessionRows({
                 {agents.map((a) => (
                   <div className="agents__row" key={a.agentId}>
                     <span className="mono">{a.agentId}</span>
-                    <span className="mono">{a.model}</span>
+                    <span className="mono nowrap" title={modelTitle(a.model, undatedModel(a.model))}>
+                      {undatedModel(a.model)}
+                    </span>
                     <span className="mono">{a.accountId}</span>
                     <span className="num">{fmtDuration(a.ttlSeconds * 1000)}</span>
                     <span title={a.nextProbeAt ? fmtAbsolute(a.nextProbeAt) : undefined}>

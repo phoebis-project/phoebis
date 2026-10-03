@@ -108,6 +108,25 @@ const liveCell = (m, tr, header) => {
   const i = [...m.container.querySelectorAll('.live-table thead th')].findIndex((th) => th.textContent?.trim() === header);
   return i < 0 ? undefined : tr.children[i];
 };
+/** A Sessions row's cell under the header that reads `header`, so a check names its column whatever the control hides. */
+const sessionCell = (m, tr, header) => {
+  const i = [...m.container.querySelectorAll('.sessions-table thead th')].findIndex((th) => th.textContent?.trim() === header);
+  return i < 0 ? undefined : tr?.children[i];
+};
+/**
+ * Turns a Sessions column on through the card's Columns control, then closes the control, whose labels would otherwise
+ * join the page's text for every check after it.
+ */
+async function showColumn(m, label) {
+  const button = () => [...m.container.querySelectorAll('.card__actions .filters__cols button')].find((b) => b.textContent?.trim().startsWith('Columns'));
+  button()?.click();
+  await m.settle(100);
+  const box = [...m.container.querySelectorAll('.cols-popover label')].find((l) => l.textContent?.trim() === label)?.querySelector('input[type="checkbox"]');
+  if (box && !box.checked) box.click();
+  await m.settle(100);
+  button()?.click();
+  await m.settle(100);
+}
 /** The state each live status dot's class stands for, as its title names it. */
 const DOT_TITLES = { 'ldot--bad': 'failed', 'ldot--inflight': 'in flight', 'ldot--ok': 'succeeded', 'ldot--warn': 'rate limited' };
 
@@ -5758,7 +5777,7 @@ m.unmount();
 }
 
 m = await mount('/sessions');
-expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agents', 'busy', 'idle', 'parked', 'Cache probes, 24h', 'ok (', 'migrated', 'skipped', 'failed', 'Expired between turns, 24h', 'misses cache warming exists to prevent', 'Probe cost today', 'of $4.00', 'uncapped', 'Net saved, 7d', 'Cost reference', 'Key', 'Session', 'Model', 'Account', 'Last used', 'expires in', 'Requests', 'Last request', 'Agents', 'Companion', 'Cache warming', 'Next probe', 'Expand all', 'epoch 2', 'reporting', 'silent', 'since ', 'none', 'no recipe', 'not scheduled', 'claude-fable-5-1']);
+expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agents', 'busy', 'idle', 'parked', 'Cache probes, 24h', 'ok (', 'migrated', 'skipped', 'failed', 'Expired between turns, 24h', 'misses cache warming exists to prevent', 'Probe cost today', 'of $4.00', 'uncapped', 'Net saved, 7d', 'Cost reference', 'Key', 'Session', 'Model', 'Account', 'Last used', 'expires in', 'Requests', 'Companion', 'Cache warming', 'Expand all', 'epoch 2', 'reporting', 'silent', 'since ', 'none', 'no recipe', 'fable-5-1']);
 {
   const meters = m.container.querySelectorAll('.cost-caps .meter').length;
   results.push({ name: '/sessions cost meter against cap', ok: meters === 1, missing: [String(meters)] });
@@ -5774,35 +5793,89 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
     results.push({ name: '/sessions the tile counts the rows that hold a recipe, not every session', ok: (tile?.textContent ?? '').includes(', 10 with a recipe'), missing: [tile?.textContent ?? 'absent'] });
   }
   const rows = () => [...m.container.querySelectorAll('tbody tr.srow')];
+  const cell = (tr, header) => sessionCell(m, tr, header);
+  const heads = () => [...m.container.querySelectorAll('.sessions-table thead th')].map((th) => th.textContent?.trim() ?? '');
+  const COLUMNS = ['Key', 'Session', 'Model', 'Account', 'Last used', 'Requests', 'Last request', 'Agents', 'Companion', 'Cache warming', 'Next probe'];
+  const HIDDEN = ['Last request', 'Agents', 'Next probe'];
+  {
+    // The default set fits the card at 1280 by 800 without these three, each one tick away in the control.
+    const button = () => [...m.container.querySelectorAll('.card__actions .filters__cols button')].find((b) => b.textContent?.trim().startsWith('Columns'));
+    const shown = heads();
+    const label = button()?.textContent?.trim();
+    button()?.click();
+    await m.settle(100);
+    const offered = [...m.container.querySelectorAll('.cols-popover label')].map((l) => ({ checked: l.querySelector('input[type="checkbox"]')?.checked ?? null, label: l.textContent?.trim() ?? '' }));
+    button()?.click();
+    await m.settle(100);
+    results.push({
+      name: '/sessions the Columns control starts with Last request, Agents and Next probe hidden',
+      ok:
+        JSON.stringify(offered.map((c) => c.label)) === JSON.stringify(COLUMNS) &&
+        offered.every((c) => c.checked === !HIDDEN.includes(c.label)) &&
+        JSON.stringify(shown) === JSON.stringify(['', '', ...COLUMNS.filter((c) => !HIDDEN.includes(c))]) &&
+        label === `Columns (${COLUMNS.length - HIDDEN.length})` &&
+        m.container.querySelector('.cols-popover') === null,
+      missing: [JSON.stringify(offered), JSON.stringify(shown), String(label)],
+    });
+  }
+  results.push({
+    name: '/sessions the first data cell holds the actions menu',
+    ok: rows().length > 0 && rows().every((r) => r.children[1]?.querySelector('.menu__trigger') !== null && r.children[1]?.textContent?.trim() === '···'),
+    missing: rows().slice(0, 3).map((r) => r.children[1]?.innerHTML ?? 'no cell'),
+  });
   results.push({ name: '/sessions lists every session, not only warmed ones', ok: rows().length === 17, missing: [String(rows().length)] });
-  const ci = rows().filter((r) => r.children[1]?.textContent === 'ci');
+  await showColumn(m, 'Next probe');
+  const ci = rows().filter((r) => cell(r, 'Key')?.textContent === 'ci');
   results.push({ name: '/sessions still lists both ci sessions', ok: ci.length === 2, missing: [String(ci.length)] });
-  const ciCells = ci.map((r) => [r.children[10]?.textContent?.trim(), r.children[11]?.textContent?.trim()]);
+  const ciCells = ci.map((r) => [cell(r, 'Cache warming')?.textContent?.trim(), cell(r, 'Next probe')?.textContent?.trim()]);
   results.push({ name: '/sessions ci sessions read no recipe, not scheduled', ok: ciCells.every(([k, n]) => k === 'no recipe' && n === 'not scheduled'), missing: ciCells.flat() });
   results.push({ name: '/sessions rows start collapsed', ok: m.container.querySelectorAll('.srow__detail').length === 0, missing: [] });
-  const kinds = [...m.container.querySelectorAll('.srow__account .badge')].map((b) => b.textContent?.trim()).filter((t) => t === 'Anthropic key' || t === 'subscription');
-  results.push({ name: '/sessions account cells carry a kind badge', ok: kinds.length === 16 && kinds.includes('subscription') && kinds.includes('Anthropic key'), missing: [...new Set(kinds)] });
   {
-    const unrouted = rows().find((r) => r.children[3]?.textContent?.trim() === '-');
+    // The kind badge gave its width to the fit, so the cell's title names the account's kind.
+    const KINDS = { 'Anthropic key account: billed per token, no quota windows': 'api_key', 'Subscription account: quota windows apply': 'oauth' };
+    const kinds = rows().map((r) => KINDS[cell(r, 'Account')?.getAttribute('title') ?? '']).filter(Boolean);
+    const badges = [...m.container.querySelectorAll('.srow__account .badge')].map((b) => b.textContent?.trim() ?? '');
+    results.push({
+      name: '/sessions account cells carry the account kind on their title rather than a badge',
+      ok: kinds.length === 16 && kinds.includes('oauth') && kinds.includes('api_key') && badges.every((b) => /^\+\d+$/.test(b)),
+      missing: [...new Set(kinds), ...badges],
+    });
+  }
+  {
+    // The Model cell reads the family and version, so the column gives its width to the fit; the id as sent is its title.
+    const models = rows().map((r) => cell(r, 'Model')).filter((c) => c !== undefined && c.textContent?.trim() !== '-');
+    const wrong = models.filter((c) => {
+      const shown = c.querySelector('.srow__pin')?.firstChild?.textContent ?? '';
+      const sent = c.getAttribute('title') ?? '';
+      return shown.startsWith('claude-') || shortModel(sent) !== shown;
+    });
+    results.push({
+      name: '/sessions the Model cell reads the family and version, the id as sent on its title',
+      ok: models.length >= 12 && wrong.length === 0,
+      missing: wrong.map((c) => `${c.textContent?.trim()} titled ${c.getAttribute('title')}`),
+    });
+  }
+  {
+    const unrouted = rows().find((r) => cell(r, 'Model')?.textContent?.trim() === '-');
     results.push({
       name: '/sessions a session the router has not routed yet reads its blanks',
-      ok: unrouted !== undefined && unrouted.children[4]?.textContent?.trim() === '-' && unrouted.children[5]?.textContent?.trim() === '-' && unrouted.querySelector('.srow__epoch') === null,
+      ok: unrouted !== undefined && cell(unrouted, 'Account')?.textContent?.trim() === '-' && cell(unrouted, 'Last used')?.textContent?.trim() === '-' && unrouted.querySelector('.srow__epoch') === null,
       missing: [unrouted ? [...unrouted.children].map((c) => c.textContent?.trim() ?? '').join('|') : 'absent'],
     });
   }
-  const summaries = rows().map((r) => r.children[10]?.textContent?.trim() ?? '');
+  const summaries = rows().map((r) => cell(r, 'Cache warming')?.textContent?.trim() ?? '');
   results.push({ name: '/sessions collapsed rows summarise their recipes', ok: summaries.some((x) => /\d+ (armed|held|probing)/.test(x)), missing: summaries.slice(0, 3) });
 
   // Companion state: every row carries one of the three, and the silent ones say since when.
-  const companions = rows().map((r) => r.children[9]?.textContent?.trim() ?? '');
+  const companions = rows().map((r) => cell(r, 'Companion')?.textContent?.trim() ?? '');
   const silent = companions.filter((c) => c.startsWith('silent'));
   results.push({ name: '/sessions shows all three companion states', ok: companions.some((c) => c === 'reporting') && silent.length === 2 && companions.some((c) => c === 'none'), missing: [...new Set(companions)] });
   results.push({ name: '/sessions silent companions say since when', ok: silent.every((c) => /^silent ?since .+ ago$/.test(c)), missing: silent });
 
   // Expiry now rides under the last-used time rather than in a column of its own.
-  const expiries = rows().map((r) => r.children[5]?.querySelector('.sub')?.textContent?.trim() ?? '');
+  const expiries = rows().map((r) => cell(r, 'Last used')?.querySelector('.sub')?.textContent?.trim() ?? '');
   results.push({ name: '/sessions shows time left before expiry under Last used', ok: expiries.length === 17 && expiries.filter((e) => /^expires in \d+[hmd]/.test(e)).length === 16, missing: expiries.slice(0, 3) });
-  const counts = rows().map((r) => Number(r.children[6]?.textContent?.trim()));
+  const counts = rows().map((r) => Number(cell(r, 'Requests')?.textContent?.trim()));
   results.push({ name: '/sessions counts ledgered requests per session', ok: counts.filter((n) => n > 0).length >= 12 && counts.includes(0), missing: counts.map(String) });
 
   // Per-agent pins: a "+N" badge wherever an agent runs another model or sits on another account.
@@ -5821,19 +5894,26 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
 
   // The Last request column, and the two rows the state semantics changed.
   {
-    const heads = [...m.container.querySelectorAll('.sessions-table thead th')].map((th) => th.textContent?.trim() ?? '');
-    results.push({ name: '/sessions Last request follows the Requests count', ok: heads[6] === 'Requests' && heads[7] === 'Last request', missing: heads });
-    results.push({ name: '/sessions no longer carries an Epoch, a Created or an Expires column', ok: heads.length === 13 && !heads.includes('Epoch') && !heads.includes('Created') && !heads.includes('Expires'), missing: heads });
+    await showColumn(m, 'Last request');
+    const withLast = heads();
+    results.push({ name: '/sessions Last request follows the Requests count', ok: withLast.includes('Last request') && withLast.indexOf('Last request') === withLast.indexOf('Requests') + 1, missing: withLast });
+    for (const label of COLUMNS.filter((c) => !heads().includes(c))) await showColumn(m, label);
+    const all = heads();
+    results.push({
+      name: '/sessions no longer carries an Epoch, a Created or an Expires column',
+      ok: JSON.stringify(all) === JSON.stringify(['', '', ...COLUMNS]) && !all.includes('Epoch') && !all.includes('Created') && !all.includes('Expires') && m.text().includes('Last request') && m.text().includes('Agents'),
+      missing: all,
+    });
     const epochLines = [...m.container.querySelectorAll('.srow__epoch')].map((e) => e.textContent?.trim() ?? '');
     results.push({
       name: '/sessions a re-created pin says so under the session id',
       ok: epochLines.length === 4 && epochLines.every((t) => t === 'epoch 2') && [...m.container.querySelectorAll('.srow__epoch')].every((e) => (e.getAttribute('title') ?? '').includes('re-created')),
       missing: epochLines,
     });
-    const lasts = rows().map((r) => r.children[7]?.textContent?.trim() ?? '');
+    const lasts = rows().map((r) => cell(r, 'Last request')?.textContent?.trim() ?? '');
     results.push({ name: '/sessions last request is relative or none', ok: lasts.includes('none') && lasts.filter((v) => /ago$|^now$/.test(v)).length >= 12, missing: lasts.slice(0, 5) });
-    const silentRows = rows().filter((r) => (r.children[9]?.textContent?.trim() ?? '').startsWith('silent'));
-    const silentWarming = silentRows.map((r) => r.children[10]?.textContent?.trim() ?? '');
+    const silentRows = rows().filter((r) => (cell(r, 'Companion')?.textContent?.trim() ?? '').startsWith('silent'));
+    const silentWarming = silentRows.map((r) => cell(r, 'Cache warming')?.textContent?.trim() ?? '');
     results.push({
       name: '/sessions a silent companion keeps its recipes',
       ok: silentRows.length === 2 && silentWarming.some((v) => /^idle/.test(v)),
@@ -5841,7 +5921,7 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
     });
     results.push({
       name: '/sessions the silent session past its idle limit reads no recipe',
-      ok: silentWarming.includes('no recipe') && silentRows.some((r) => r.children[10]?.textContent?.trim() === 'no recipe' && r.children[11]?.textContent?.trim() === 'not scheduled'),
+      ok: silentWarming.includes('no recipe') && silentRows.some((r) => cell(r, 'Cache warming')?.textContent?.trim() === 'no recipe' && cell(r, 'Next probe')?.textContent?.trim() === 'not scheduled'),
       missing: silentWarming,
     });
     const silentBadge = [...(silentRows[0]?.querySelectorAll('.badge') ?? [])].find((b) => b.textContent?.trim() === 'silent');
@@ -5850,17 +5930,17 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
       ok: (silentBadge?.getAttribute('title') ?? '').includes("The retained prompts stay and are probed under the pool's idle limits, counted from the last real request") && !(silentBadge?.getAttribute('title') ?? '').includes('lease'),
       missing: [silentBadge?.getAttribute('title') ?? 'absent'],
     });
-    const parkedRow = rows().find((r) => (r.children[10]?.textContent?.trim() ?? '').startsWith('parked'));
+    const parkedRow = rows().find((r) => (cell(r, 'Cache warming')?.textContent?.trim() ?? '').startsWith('parked'));
     results.push({
       name: '/sessions parked sessions are probed like busy ones',
-      ok: parkedRow !== undefined && parkedRow.children[11]?.textContent?.trim() !== 'not scheduled' && !(parkedRow.children[10]?.textContent ?? '').includes('held'),
-      missing: [parkedRow?.children[10]?.textContent?.trim() ?? 'absent', parkedRow?.children[11]?.textContent?.trim() ?? 'absent'],
+      ok: parkedRow !== undefined && cell(parkedRow, 'Next probe')?.textContent?.trim() !== 'not scheduled' && !(cell(parkedRow, 'Cache warming')?.textContent ?? '').includes('held'),
+      missing: [cell(parkedRow, 'Cache warming')?.textContent?.trim() ?? 'absent', cell(parkedRow, 'Next probe')?.textContent?.trim() ?? 'absent'],
     });
     const mixedRow = rows()[0];
     results.push({
       name: '/sessions an agent awaiting cache evidence counts as armed in the row summary',
-      ok: (mixedRow?.children[10]?.textContent ?? '').includes('2 armed, 1 held'),
-      missing: [mixedRow?.children[10]?.textContent?.trim() ?? 'absent'],
+      ok: (cell(mixedRow, 'Cache warming')?.textContent ?? '').includes('2 armed, 1 held'),
+      missing: [cell(mixedRow, 'Cache warming')?.textContent?.trim() ?? 'absent'],
     });
     const parkedBadge = [...(parkedRow?.querySelectorAll('.badge') ?? [])].find((b) => b.textContent?.trim() === 'parked');
     results.push({ name: '/sessions parked badge says the idle limits do not apply', ok: (parkedBadge?.getAttribute('title') ?? '').includes('idle limits do not apply'), missing: [parkedBadge?.getAttribute('title') ?? 'absent'] });
@@ -5868,12 +5948,12 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
 
   // A forked session's badge links to the row of the session it branched from.
   {
-    const heads = [...m.container.querySelectorAll('.sessions-table thead th')].map((th) => th.textContent?.trim() ?? '');
-    const sessionAt = heads.indexOf('Session');
+    const named = heads();
+    const sessionAt = named.indexOf('Session');
     const listed = await api.listSessions();
     const cellOf = (r) => ({ label: r.children[sessionAt]?.firstChild?.textContent ?? '', title: r.children[sessionAt]?.getAttribute('title') ?? '' });
     const forked = listed.find((s) => s.forkedFrom !== null);
-    const forkRow = forked ? rows().find((r) => cellOf(r).title === forked.sessionId && r.children[1]?.textContent === forked.keyId) : undefined;
+    const forkRow = forked ? rows().find((r) => cellOf(r).title === forked.sessionId && cell(r, 'Key')?.textContent === forked.keyId) : undefined;
     const link = forkRow?.children[sessionAt]?.querySelector('a.badge');
     const target = link ? m.container.querySelector(`[id="${(link.getAttribute('href') ?? '').slice(1)}"]`) : null;
     results.push({
@@ -5885,7 +5965,7 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
         (link.getAttribute('title') ?? '').includes(forked.forkedFrom) &&
         target?.tagName === 'TR' &&
         cellOf(target).title === forked.forkedFrom &&
-        target.children[1]?.textContent === forked.keyId,
+        cell(target, 'Key')?.textContent === forked.keyId,
       missing: [String(forked?.sessionId), link?.outerHTML ?? 'no link', target?.textContent?.slice(0, 80) ?? 'no target row'],
     });
     const expandedBefore = m.container.querySelectorAll('.srow__detail').length;
@@ -5900,8 +5980,8 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
 
   // A session with no ledgered requests cannot open either view.
   // Only the first nine sessions also appear in the live feed, so the observe jump needs one of those.
-  const busyRow = () => rows().find((r, i) => i < 9 && Number(r.children[6]?.textContent?.trim()) > 0);
-  const barren = rows().find((r) => Number(r.children[6]?.textContent?.trim()) === 0);
+  const busyRow = () => rows().find((r, i) => i < 9 && Number(cell(r, 'Requests')?.textContent?.trim()) > 0);
+  const barren = rows().find((r) => Number(cell(r, 'Requests')?.textContent?.trim()) === 0);
   const openMenu = async (row) => {
     row?.querySelector('.menu__trigger')?.click();
     await m.settle(120);
@@ -5937,26 +6017,27 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
   // One row per key, generation and session: a key id created again leaves the earlier holder's sessions in
   // the ledger, so the id they share appears twice.
   {
-    const idOf = (r) => r.children[2]?.getAttribute('title') ?? '';
+    await showColumn(m, 'Agents');
+    const idOf = (r) => cell(r, 'Session')?.getAttribute('title') ?? '';
     const shared = rows().filter((r) => idOf(r) !== '' && idOf(r) === idOf(rows()[0]));
-    const gone = shared.find((r) => r.children[1]?.querySelector('.sub') !== null);
-    const live = shared.find((r) => r.children[1]?.querySelector('.sub') === null);
+    const gone = shared.find((r) => cell(r, 'Key')?.querySelector('.sub') !== null);
+    const live = shared.find((r) => cell(r, 'Key')?.querySelector('.sub') === null);
     results.push({ name: '/sessions a session id held by two generations of a key is two rows', ok: shared.length === 2 && gone !== undefined && live !== undefined, missing: [String(shared.length), idOf(rows()[0])] });
     results.push({
       name: '/sessions the earlier holder is marked, carries no agents and no recipe',
       ok:
         gone !== undefined &&
-        gone.children[1]?.querySelector('.sub')?.textContent?.trim() === 'deleted holder' &&
-        (gone.children[1]?.querySelector('.sub')?.getAttribute('title') ?? '').includes('no longer exists') &&
-        gone.children[8]?.textContent?.trim() === '0' &&
-        gone.children[10]?.textContent?.trim() === 'no recipe' &&
-        (gone.children[10]?.querySelector('[title]')?.getAttribute('title') ?? '') === 'Belongs to an earlier holder of this key id; nothing is scheduled for it',
+        cell(gone, 'Key')?.querySelector('.sub')?.textContent?.trim() === 'deleted holder' &&
+        (cell(gone, 'Key')?.querySelector('.sub')?.getAttribute('title') ?? '').includes('no longer exists') &&
+        cell(gone, 'Agents')?.textContent?.trim() === '0' &&
+        cell(gone, 'Cache warming')?.textContent?.trim() === 'no recipe' &&
+        (cell(gone, 'Cache warming')?.querySelector('[title]')?.getAttribute('title') ?? '') === 'Belongs to an earlier holder of this key id; nothing is scheduled for it',
       missing: gone ? [...gone.children].map((c) => c.textContent?.trim() ?? '') : ['absent'],
     });
     results.push({
       name: '/sessions the live holder keeps the recipes of the id they share',
-      ok: live !== undefined && Number(live.children[8]?.textContent?.trim()) > 0 && live.children[10]?.querySelector('.badge') !== null,
-      missing: live ? [live.children[8]?.textContent?.trim() ?? '', live.children[10]?.textContent?.trim() ?? ''] : ['absent'],
+      ok: live !== undefined && Number(cell(live, 'Agents')?.textContent?.trim()) > 0 && cell(live, 'Cache warming')?.querySelector('.badge') !== null,
+      missing: live ? [cell(live, 'Agents')?.textContent?.trim() ?? '', cell(live, 'Cache warming')?.textContent?.trim() ?? ''] : ['absent'],
     });
     const liveItems = (await openMenu(live)).map((b) => b.textContent?.trim());
     await openMenu(live);
@@ -6202,7 +6283,7 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
   close?.click();
   await m.settle(200);
 
-  const sessionId = busyRow()?.children[2]?.getAttribute('title') ?? '';
+  const sessionId = cell(busyRow(), 'Session')?.getAttribute('title') ?? '';
   const jump = async (label) => (await openMenu(busyRow())).find((b) => b.textContent?.trim() === label);
   const chipText = () => [...m.container.querySelectorAll('.chip--removable')].map((c) => c.textContent?.trim() ?? '');
 
@@ -6278,29 +6359,29 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
   // Last of the /sessions blocks: the release drops a row from the shared mock that every count above still expects.
   await m.navigate('/sessions');
   {
-    const id = busyRow()?.children[2]?.getAttribute('title') ?? '';
+    const id = cell(busyRow(), 'Session')?.getAttribute('title') ?? '';
     const release = (await openMenu(busyRow())).find((b) => b.textContent?.trim() === 'Release');
     release?.click();
     await m.settle(250);
     [...([...m.container.querySelectorAll('dialog[open]')].pop()?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Release')?.click();
     await m.settle(600);
-    const released = rows().filter((r) => r.children[2]?.getAttribute('title') === id);
+    const released = rows().filter((r) => cell(r, 'Session')?.getAttribute('title') === id);
     results.push({ name: '/sessions Release calls the API and the row leaves', ok: m.text().includes('Session released') && rows().length === 16, missing: [String(rows().length)] });
     results.push({
       name: '/sessions releasing the live holder leaves the earlier one in the ledger',
-      ok: released.length === 1 && released[0].children[1]?.querySelector('.sub')?.textContent?.trim() === 'deleted holder',
-      missing: released.map((r) => r.children[1]?.textContent?.trim() ?? ''),
+      ok: released.length === 1 && cell(released[0], 'Key')?.querySelector('.sub')?.textContent?.trim() === 'deleted holder',
+      missing: released.map((r) => cell(r, 'Key')?.textContent?.trim() ?? ''),
     });
   }
   {
     // A fork whose base is no longer listed names the base and links nowhere.
     const forked = (await api.listSessions()).find((s) => s.forkedFrom !== null);
-    const base = rows().find((r) => r.children[2]?.getAttribute('title') === forked?.forkedFrom);
+    const base = rows().find((r) => cell(r, 'Session')?.getAttribute('title') === forked?.forkedFrom);
     (await openMenu(base)).find((b) => b.textContent?.trim() === 'Release')?.click();
     await m.settle(250);
     [...([...m.container.querySelectorAll('dialog[open]')].pop()?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Release')?.click();
     await m.settle(600);
-    const forkCell = rows().find((r) => r.children[2]?.getAttribute('title') === forked?.sessionId)?.children[2];
+    const forkCell = cell(rows().find((r) => cell(r, 'Session')?.getAttribute('title') === forked?.sessionId), 'Session');
     const badge = forkCell?.querySelector('.badge--accent');
     results.push({
       name: '/sessions a fork whose base is not listed reads the base it branched from, with no link',

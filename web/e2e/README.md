@@ -12,10 +12,10 @@ the recent requests' model cells and their table's fit, the cost-cap rows, the l
 burn cards, the plan legend's model unlisted entry, the placement and budget tables, the request table's fit, the
 request pages' widths, walked on a load of their own once every view's shot is taken, the speed
 filter, the traffic cards, the fast lane, the request drawer, which opens once the request list's shot is taken, the
-subscription end editor, the catalog popup, the key dialog's cap field and selects, the cost reference, the agent lines,
-the fork link, which is followed once the session list's shot is taken). A check that opens
-an editor, a dialog or a row closes it again before the view's shot. The script exits non-zero with the list of failures
-when any of that does not hold.
+subscription end editor, the catalog popup, the key dialog's cap field and selects, the cost reference, the session
+table's fit, the session row menu, the agent lines, the fork badge's face, the fork link, which is followed once
+the session list's shot is taken). A check that opens an editor, a dialog or a row closes it
+again before the view's shot. The script exits non-zero with the list of failures when any of that does not hold.
 
 The screenshot directory has to lie outside the repository, which the script enforces against every worktree `git
 worktree list` reports, and against the tree holding the nearest `Cargo.toml` when git cannot answer.

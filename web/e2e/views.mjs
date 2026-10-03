@@ -2494,9 +2494,82 @@ async function costReference(theme) {
 }
 
 /**
- * The agent lines Expand all opens on Sessions: every line's state badge ends inside the table's visible width, which
- * at 1280px already scrolls for the session row's own last columns, and Net closes the line after State. A reason
- * badge is measured and logged; the longest ones ran past that edge before Net joined the line too.
+ * The Sessions table's default columns fit its card at the pass's 1280 by 800: the table needs no more than its wrap's
+ * width, so nothing scrolls sideways and the companion, the recipe state and the next probe stay in view.
+ */
+async function sessionsTableFits(theme) {
+  const read = await page.evaluate(() => {
+    const table = document.querySelector('.sessions-table');
+    const wrap = table?.closest('.table-wrap');
+    if (!table || !wrap) return null;
+    // The table stretches to its wrap whenever it fits, so its narrowest layout is what tells the room it has left.
+    table.style.width = 'min-content';
+    const least = Math.ceil(table.getBoundingClientRect().width);
+    table.style.width = '';
+    return {
+      client: wrap.clientWidth,
+      columns: [...table.querySelectorAll('thead th')].map((th) => [th.textContent?.trim() ?? '', Math.round(th.getBoundingClientRect().width)]),
+      least,
+      rows: table.querySelectorAll('tbody tr.srow').length,
+      scroll: table.scrollWidth,
+      wrapScroll: wrap.scrollWidth,
+    };
+  });
+  measurements.push(`${theme} /sessions table ${read === null ? 'not drawn' : `${read.scroll} of ${read.client}px, at least ${read.least}px (slack ${read.client - read.least}px), ${read.rows} rows, columns ${JSON.stringify(read.columns)}`}`);
+  if (read === null) failures.push(`${theme} /sessions: no session table to measure`);
+  else if (read.scroll > read.client || read.wrapScroll > read.client) failures.push(`${theme} /sessions: the default columns need ${Math.max(read.scroll, read.wrapScroll)}px of the wrap's ${read.client}px, so the table scrolls sideways`);
+}
+
+/**
+ * A Sessions row's menu leads the row, so its list opens rightward from the trigger: aligned to the trigger's right edge
+ * it would start left of the table wrap, which clips it. The list's left edge lies at or right of the wrap's, and each
+ * item takes a pointer at its centre.
+ */
+async function sessionRowMenu(theme) {
+  const say = (what) => failures.push(`${theme} /sessions row menu: ${what}`);
+  const trigger = page.locator('.sessions-table tbody tr.srow').first().locator('.menu__trigger');
+  if ((await trigger.count()) === 0) {
+    say('the first row draws no menu');
+    return;
+  }
+  await trigger.click();
+  await settle();
+  const read = await page.evaluate(() => {
+    const lists = document.querySelectorAll('.menu__list');
+    const wrap = document.querySelector('.sessions-table')?.closest('.table-wrap');
+    if (lists.length !== 1 || !wrap) return { lists: lists.length };
+    const list = lists[0];
+    const box = list.getBoundingClientRect();
+    const edge = wrap.getBoundingClientRect();
+    const items = [...list.querySelectorAll('[role="menuitem"]')].map((item) => {
+      const b = item.getBoundingClientRect();
+      const x = Math.round(b.left + b.width / 2);
+      const y = Math.round(b.top + b.height / 2);
+      const hit = document.elementFromPoint(x, y);
+      return { at: hit ? `${hit.tagName.toLowerCase()}.${hit.className}` : 'nothing', hit: hit !== null && item.contains(hit), label: item.textContent?.trim(), x, y };
+    });
+    return {
+      items,
+      list: { left: Math.round(box.left), right: Math.round(box.right) },
+      lists: 1,
+      placement: list.classList.contains('menu__list--float') ? 'float' : list.classList.contains('menu__list--up') ? 'up' : 'down',
+      wrap: { left: Math.round(edge.left + wrap.clientLeft), right: Math.round(edge.left + wrap.clientLeft + wrap.clientWidth) },
+    };
+  });
+  await trigger.click();
+  await settle();
+  await atRest();
+  measurements.push(`${theme} /sessions row menu ${JSON.stringify(read)}`);
+  if (read.lists !== 1) return say(`${read.lists} lists are open, not one`);
+  if (read.list.left < read.wrap.left) say(`the list starts at ${read.list.left}px, left of the table wrap's edge at ${read.wrap.left}px`);
+  if (read.items.length === 0) say('the list draws no item');
+  for (const item of read.items.filter((it) => !it.hit)) say(`item ${item.label} takes no pointer at its centre (${item.x}, ${item.y}): ${item.at} lies there`);
+}
+
+/**
+ * The agent lines Expand all opens on Sessions: every line's state badge ends inside the table's visible width, and
+ * Net closes the line after State. A reason badge wraps inside its own State cell, its left and right edges within the
+ * cell's box; its right edge against the table's visible edge is logged beside them.
  */
 async function agentLines(theme) {
   const say = (what) => failures.push(`${theme} /sessions: ${what}`);
@@ -2511,16 +2584,27 @@ async function agentLines(theme) {
     const edge = document.querySelector('.sessions-table')?.closest('.table-wrap')?.getBoundingClientRect().right ?? null;
     const head = [...(document.querySelector('.agents__row--head')?.children ?? [])].map((c) => c.textContent?.trim());
     const lines = [...document.querySelectorAll('.agents__row:not(.agents__row--head)')].map((row) => {
-      const badges = [...row.children[6].querySelectorAll('.badge')].map((b) => Math.round(b.getBoundingClientRect().right));
-      return { agent: row.children[0].textContent?.trim(), reasonRight: badges[1] ?? null, stateRight: badges[0] ?? null };
+      const state = row.children[6];
+      const cell = state.getBoundingClientRect();
+      const [badge, reason] = [...state.querySelectorAll('.badge')].map((b) => b.getBoundingClientRect());
+      return {
+        agent: row.children[0].textContent?.trim(),
+        cell: { left: Math.round(cell.left), right: Math.round(cell.right) },
+        reason: reason ? { left: Math.round(reason.left), lines: Math.round(reason.height / badge.height), right: Math.round(reason.right), text: state.querySelectorAll('.badge')[1].textContent?.trim() } : null,
+        stateRight: badge ? Math.round(badge.right) : null,
+      };
     });
     return { edge: edge === null ? null : Math.round(edge), head, lines };
   });
-  measurements.push(`${theme} /sessions agent lines ${JSON.stringify({ edge: read.edge, head: read.head, past: read.lines.filter((l) => l.reasonRight !== null && l.reasonRight > read.edge) })}`);
+  const reasons = read.lines.filter((l) => l.reason !== null);
+  measurements.push(`${theme} /sessions agent lines ${JSON.stringify({ edge: read.edge, head: read.head, past: reasons.filter((l) => l.reason.right > read.edge).map((l) => l.agent), wrapped: reasons.filter((l) => l.reason.lines > 1).map((l) => [l.agent, l.reason.text, l.cell, l.reason]) })}`);
   if (read.lines.length > 0 && read.head.slice(-2).join(',') !== 'State,Net') say(`the agent lines end ${JSON.stringify(read.head.slice(-2))}, not State then Net`);
   if (mock && read.lines.length === 0) say('Expand all opened no agent line');
   for (const line of read.lines.filter((l) => read.edge === null || l.stateRight === null || l.stateRight > read.edge)) {
     say(`agent ${line.agent}'s state badge ends at ${line.stateRight}px, past the table's visible edge at ${read.edge}px`);
+  }
+  for (const line of reasons.filter((l) => l.reason.left < l.cell.left || l.reason.right > l.cell.right)) {
+    say(`agent ${line.agent}'s reason "${line.reason.text}" runs from ${line.reason.left}px to ${line.reason.right}px, outside its State cell's ${line.cell.left}px to ${line.cell.right}px`);
   }
   await page.getByRole('button', { name: 'Collapse all', exact: true }).click();
   await atRest();
@@ -2528,10 +2612,10 @@ async function agentLines(theme) {
 }
 
 /**
- * The Sessions table's fork badge against the Account cell's kind badge: the fork
- * badge measures the same box and sits on
- * the session id's line. Both seeds record a fork, so both passes measure the fork badge; only the mock's pass fails
- * when none is drawn.
+ * The Sessions table's fork badge against the row's other badges: the fork badge
+ * measures the box the Companion and Cache warming badges do
+ * and sits on the session id's line. Both seeds record a fork, so both passes measure the fork
+ * badge; only the mock's pass fails when none is drawn.
  */
 async function sessionForkMark(theme) {
   const say = (what) => failures.push(`${theme} /sessions: ${what}`);
@@ -2541,6 +2625,10 @@ async function sessionForkMark(theme) {
       const s = getComputedStyle(el);
       return `${s.fontFamily}/${s.fontSize}/${s.lineHeight}/${s.paddingTop}/${s.paddingLeft}/${Math.round(el.getBoundingClientRect().height)}`;
     };
+    const heads = [...document.querySelectorAll('.sessions-table thead th')].map((th) => th.textContent?.trim());
+    const companion = heads.indexOf('Companion');
+    const warming = heads.indexOf('Cache warming');
+    const rows = [...document.querySelectorAll('.sessions-table tbody tr.srow')];
     const fork = document.querySelector('.sessions-table .srow__fork');
     // The badge is centred on the id's line when the two share it, and sits below it when the cell wrapped.
     const beside = (() => {
@@ -2556,14 +2644,14 @@ async function sessionForkMark(theme) {
     return {
       beside,
       forkBadge: badge(fork),
-      kindBadge: badge(document.querySelector('.sessions-table .srow__account .badge')),
+      rowBadge: badge(rows.map((r) => r.children[companion]?.querySelector('.badge') ?? r.children[warming]?.querySelector('.badge')).find(Boolean)),
     };
   });
   measurements.push(`${theme} /sessions fork mark ${JSON.stringify(read)}`);
   if (read.forkBadge === null) {
     if (mock) say('the story forks a session, yet no fork badge is drawn');
   } else {
-    if (read.forkBadge !== read.kindBadge) say(`the fork badge measures ${read.forkBadge} against the kind badge's ${read.kindBadge}`);
+    if (read.forkBadge !== read.rowBadge) say(`the fork badge measures ${read.forkBadge} against the row badge's ${read.rowBadge}`);
     if (read.beside !== true) say('the fork badge wraps under the session id rather than sitting beside it');
   }
 }
@@ -2646,6 +2734,8 @@ try {
       if (view.path === '/sessions') {
         await costCapRows(theme);
         await costReference(theme);
+        await sessionsTableFits(theme);
+        await sessionRowMenu(theme);
         await agentLines(theme);
         await sessionForkMark(theme);
       }

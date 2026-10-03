@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
 import type { ToastItem } from '@/app/session';
 import { clock } from '@/lib/clock';
-import { floatAt, menuPlacement, type MenuPlacement } from '@/lib/menu';
+import { floatAt, menuPlacement, type MenuAlign, type MenuPlacement } from '@/lib/menu';
 import type { BadgeTone } from '@/lib/quota';
 import { IconCheck, IconChevron, IconCopy, IconSearch, IconWarning, IconX } from './icons';
 
@@ -583,7 +583,11 @@ export function ConfirmDialog({ open, onClose, onConfirm, title, body, confirmLa
 const IN_FLOW: MenuPlacement = { kind: 'down' };
 const CLIPPING = new Set(['auto', 'clip', 'hidden', 'scroll']);
 
-export function Menu({ items, label = 'Actions', onOpenChange }: { items: { danger?: boolean; disabled?: boolean; label: string; onClick: () => void; title?: string }[]; label?: string; onOpenChange?: (open: boolean) => void }) {
+/**
+ * A row's actions behind a trigger. `align` names the trigger edge the list lines up with: a menu in a row's first column
+ * opens rightward, since a list aligned to its right edge would run past the table wrap's left edge, which clips it.
+ */
+export function Menu({ align = 'right', items, label = 'Actions', onOpenChange }: { align?: MenuAlign; items: { danger?: boolean; disabled?: boolean; label: string; onClick: () => void; title?: string }[]; label?: string; onOpenChange?: (open: boolean) => void }) {
   const [open, setOpen] = useState(false);
   // A page that holds its refresh while a menu is open counts the open ones, so a closed menu says nothing as it
   // mounts and one that unmounts open still reports itself closed.
@@ -624,7 +628,7 @@ export function Menu({ items, label = 'Actions', onOpenChange }: { items: { dang
     // clipping values are named because a page without styles, as in the smoke run, reads the property empty.
     const wrap = ref.current.closest<HTMLElement>('.table-wrap');
     const clip = wrap && CLIPPING.has(getComputedStyle(wrap).overflowY) ? wrap : null;
-    const next = menuPlacement(trigger, clip, { height: listRef.current?.offsetHeight ?? 0, width: listRef.current?.offsetWidth ?? 0 }, window.innerHeight);
+    const next = menuPlacement(trigger, clip, { height: listRef.current?.offsetHeight ?? 0, width: listRef.current?.offsetWidth ?? 0 }, window.innerHeight, align);
     setPlacement(next.kind === 'down' ? IN_FLOW : next);
   }, [open]);
   const floating = open && placement.kind === 'float';
@@ -635,7 +639,7 @@ export function Menu({ items, label = 'Actions', onOpenChange }: { items: { dang
     if (!floating || !ref.current) return;
     const trigger = ref.current.getBoundingClientRect();
     anchor.current = trigger;
-    const at = floatAt(trigger, { height: listRef.current?.offsetHeight ?? 0, width: listRef.current?.offsetWidth ?? 0 }, window.innerHeight);
+    const at = floatAt(trigger, { height: listRef.current?.offsetHeight ?? 0, width: listRef.current?.offsetWidth ?? 0 }, window.innerHeight, align);
     setPlacement((p) => (p.kind === 'float' && p.left === at.left && p.top === at.top ? p : at));
   }, [floating]);
   // A fixed layer stays where it was drawn while the page moves under it, so it closes rather than float beside
@@ -714,7 +718,7 @@ export function Menu({ items, label = 'Actions', onOpenChange }: { items: { dang
   const list = open && (
     <div
       ref={listRef}
-      className={placement.kind === 'down' ? 'menu__list' : `menu__list menu__list--${placement.kind}`}
+      className={`menu__list${placement.kind === 'down' ? '' : ` menu__list--${placement.kind}`}${align === 'left' ? ' menu__list--left' : ''}`}
       role="menu"
       style={placement.kind === 'float' ? { left: placement.left, top: placement.top } : undefined}
       onBlur={closeOnLeave}

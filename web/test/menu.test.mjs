@@ -36,6 +36,12 @@ test('a floating menu goes above its trigger when the viewport has no room below
   assert.deepEqual(d.menuPlacement(trigger(740), short, list, 800), { kind: 'float', left: 740, top: 595 });
 });
 
+test("a menu at a row's start floats aligned to its trigger's left edge, as its list in flow opens", () => {
+  const short = { clientHeight: 80, clientTop: 1, getBoundingClientRect: () => ({ bottom: 182, top: 100 }) };
+  assert.deepEqual(d.menuPlacement({ ...trigger(140), left: 40 }, short, list, 800, 'left'), { kind: 'float', left: 40, top: 166 });
+  assert.deepEqual(d.floatAt({ ...trigger(740), left: 40 }, list, 800, 'left'), { kind: 'float', left: 40, top: 595 });
+});
+
 test('a wrap that runs past the viewport bounds the list by the viewport', () => {
   const tall = { clientHeight: 900, clientTop: 1, getBoundingClientRect: () => ({ bottom: 1002, top: 100 }) };
   assert.deepEqual(d.menuPlacement(trigger(700), tall, list, 800), { kind: 'up' });
