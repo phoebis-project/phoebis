@@ -93,6 +93,14 @@ test('a pool input refuses members the member write would refuse', () => {
   assert.equal(d.validatePoolInput({ ...input, members: [{ accountId: input.members[0].accountId, priority: 7 }] }, accounts), true);
 });
 
+test('a members list that did not load holds the save once and names no member', () => {
+  const held = { field: 'members', group: 'members', text: 'the account list did not load, so the members cannot be checked.' };
+  assert.deepEqual(d.poolRefusals(input, null), [held]);
+  assert.equal(d.validatePoolInput(input, null), false);
+  const ghost = { accountId: 'ghost', budgetDailyUsd: null, budgetMonthlyUsd: null, priority: 0 };
+  assert.deepEqual(d.poolRefusals({ ...input, members: [...input.members, ghost] }, null), [held], 'an id the list may hold is not refused');
+});
+
 test('a pool input refuses thresholds outside their range and an empty name', () => {
   assert.equal(d.validatePoolInput({ ...input, name: '' }, accounts), false);
   assert.equal(d.validatePoolInput({ ...input, selectBelowUtilization: 1.2 }, accounts), false);

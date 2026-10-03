@@ -2557,6 +2557,105 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace',
   await api.updatePool('studio', studio);
 }
 m.unmount();
+{
+  // Members cannot be checked against a list the dialog does not hold, so a failed read is named once, in the Members
+  // group with Try again, rather than as a refusal of every stored member.
+  failNextCall('listAccounts', '/admin/accounts', 'the registry is unavailable');
+  m = await mount('/pools');
+  [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool all')?.click();
+  await m.settle(300);
+  const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
+  const members = group(dlg, 'Members');
+  const error = members?.querySelector('.empty--error');
+  const retry = [...(error?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Try again');
+  const status = () => dlg?.querySelector('.dialog__status')?.textContent ?? '';
+  const held = status();
+  const failed = [error?.querySelector('.empty__title')?.textContent, error?.querySelector('.empty__body')?.textContent];
+  const unchecked = !(dlg?.textContent ?? '').includes('is not an account') && members?.querySelector('.members-table') === null;
+  retry?.click();
+  await m.settle(600);
+  const labels = [...(members?.querySelectorAll('.members-table tbody tr') ?? [])].map((tr) => tr.querySelector('td:first-child label span:nth-child(2)')?.textContent);
+  results.push({
+    name: "/pools a failed accounts read holds the dialog's save without naming a member",
+    ok:
+      JSON.stringify(failed) === '["The account list did not load","the registry is unavailable"]' &&
+      !!retry &&
+      held.startsWith('Save is held: the account list did not load, so the members cannot be checked.') &&
+      held.includes('Go to Members') &&
+      unchecked &&
+      JSON.stringify(labels) === JSON.stringify(['business', 'mail', 'personal', 'Console workspace', 'Evals workspace', 'team']) &&
+      status() === 'Every group saves together.',
+    missing: [...failed.map(String), retry ? 'Try again' : 'no Try again', held, unchecked ? '' : 'a member refusal or a table while the read failed', ...labels.map(String), status()],
+  });
+  [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
+  await m.settle(200);
+}
+m.unmount();
+{
+  // Until the accounts read answers, the stored members draw as plain rows: no member is refused or marked for an id
+  // the list may yet hold.
+  const read = deferNextCall('listAccounts');
+  m = await mount('/pools');
+  [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool all')?.click();
+  await m.settle(300);
+  const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
+  const rows = () => [...(dlg?.querySelectorAll('.members-table tbody tr') ?? [])];
+  const status = () => dlg?.querySelector('.dialog__status')?.textContent ?? '';
+  const early = rows().map((tr) => [tr.querySelector('td:first-child label span:nth-child(2)')?.textContent, tr.querySelector('input[type="checkbox"]')?.checked, tr.querySelector('.badge') === null]);
+  const before = status();
+  read.release();
+  await m.settle(600);
+  read.restore();
+  const labels = rows().map((tr) => tr.querySelector('td:first-child label span:nth-child(2)')?.textContent);
+  results.push({
+    name: '/pools while the accounts read is out the stored members draw unmarked and hold nothing',
+    ok:
+      JSON.stringify(early) === JSON.stringify([['business', true, true], ['console', true, true], ['mail', true, true], ['personal', true, true]]) &&
+      before === 'Every group saves together.' &&
+      JSON.stringify(labels) === JSON.stringify(['business', 'mail', 'personal', 'Console workspace', 'Evals workspace', 'team']) &&
+      status() === 'Every group saves together.',
+    missing: [JSON.stringify(early), before, ...labels.map(String), status()],
+  });
+  [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
+  await m.settle(200);
+}
+m.unmount();
+{
+  // The mock refuses a member its registry lacks, as the route does, so the stored member stays registered and the
+  // list the page reads leaves it out.
+  const story = (await api.listPools()).find((p) => p.id === 'all');
+  const written = { ...story, members: story.members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })) };
+  await api.updatePool('all', written);
+  const listAccounts = api.listAccounts;
+  api.listAccounts = async () => (await listAccounts.call(api)).filter((a) => a.id !== 'mail');
+  m = await mount('/pools');
+  [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool all')?.click();
+  await m.settle(300);
+  const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
+  const rowOf = (name) => [...(dlg?.querySelectorAll('.members-table tbody tr') ?? [])].find((tr) => tr.querySelector('td:first-child label span:nth-child(2)')?.textContent === name);
+  const save = () => [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Save pool');
+  const status = () => dlg?.querySelector('.dialog__status')?.textContent ?? '';
+  const mail = rowOf('mail');
+  const drawn = [mail?.querySelector('input[type="checkbox"]')?.checked, mail?.querySelector('.badge')?.textContent?.trim(), ...[...(mail?.querySelectorAll('input[type="number"]') ?? [])].map((i) => i.disabled)];
+  const held = [status(), save()?.disabled];
+  mail?.querySelector('input[type="checkbox"]')?.click();
+  await m.settle(200);
+  const freed = [rowOf('mail') === undefined, status(), save()?.disabled];
+  results.push({
+    name: '/pools a stored member the list lacks draws a ticked row marked not listed, and unticking it frees Save',
+    ok:
+      JSON.stringify(drawn) === '[true,"not listed",true,true,true]' &&
+      held[0].startsWith('Save is held: mail is not an account the console lists.') &&
+      held[1] === true &&
+      JSON.stringify(freed) === '[true,"Every group saves together.",false]',
+    missing: [...drawn.map(String), ...held.map(String), ...freed.map(String)],
+  });
+  [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
+  await m.settle(200);
+  api.listAccounts = listAccounts;
+  await api.updatePool('all', written);
+}
+m.unmount();
 
 m = await mount('/keys');
 expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost', 'Lifetime cost by key', 'phoebis-8f2a', 'phoebis-c41d', 'phoebis-19e7', 'Pool rules', 'revoked', 'Create key', 'Never', 'still on the previous secret']);

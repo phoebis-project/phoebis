@@ -235,6 +235,9 @@ export function PoolsPage() {
           }
         }}
         accounts={accounts.data ?? []}
+        accountsFailed={accounts.data === null && accounts.error !== null ? accounts.error : null}
+        accountsLoaded={accounts.data !== null || accounts.error !== null}
+        onRetryAccounts={accounts.reload}
         keys={keys.data ?? []}
         pools={pools.data ?? []}
         sessions={sessions.data ?? []}
@@ -867,19 +870,27 @@ export function PoolDialog({
   onSaved,
   onKeyCreated,
   onKeysChanged,
+  onRetryAccounts,
   accounts,
+  accountsFailed,
+  accountsLoaded,
   keys,
   pools,
   models,
   sessions,
 }: {
   accounts: Account[];
+  /** The accounts read's error while it has never answered; the Members group names it in place of the table. */
+  accountsFailed: string | null;
+  /** Whether the accounts read has answered or failed; before that no stored member is refused or marked as unlisted. */
+  accountsLoaded: boolean;
   keys: ApiKey[];
   models: { label: string; value: string }[];
   /** `reload` is true after a save the route answered with a refusal: it may have stored the settings before refusing. */
   onClose: (reload: boolean) => void;
   onKeyCreated: (c: CreatedApiKey) => void;
   onKeysChanged: () => void;
+  onRetryAccounts: () => void;
   onSaved: (created: boolean) => void;
   open: boolean;
   pool: Pool | null;
@@ -926,6 +937,13 @@ export function PoolDialog({
   // The server's refusal describes the form it was sent; every control writes through `setForm`, so the next edit
   // takes it away, while a failed save changes no field and leaves it standing.
   useEffect(() => setError(null), [form]);
+  // The reset effect seeds the order once per open from the list it found, so a list that lands later, a slow first
+  // read or Try again after a failed one, seeds an order still empty. Keyed on the list alone: every member edit
+  // re-sorts the order through its own handler. The updater reads the order the reset effect queued in the same
+  // commit, since this render's form is still the one from before the open.
+  useEffect(() => {
+    if (open && accounts.length > 0) setMemberOrder((order) => (order.length > 0 ? order : orderedAccountIds(accounts, form.members)));
+  }, [open, accounts]);
 
   const set = <K extends keyof PoolForm>(key: K, value: PoolForm[K]) => setForm((f) => ({ ...f, [key]: value }));
   const poolKeys = (pool ? [...localKeys, ...keys.filter((k) => k.poolId === pool.id && !localKeys.some((l) => l.id === k.id))] : localKeys).filter((k) => !moved.has(k.id));
@@ -985,7 +1003,9 @@ export function PoolDialog({
     strategy: form.strategy,
     subagentPlacement: form.subagentPlacement,
   };
-  const refusals = poolRefusals(input, new Set(accounts.map((a) => a.id)));
+  const listed = new Set(accounts.map((a) => a.id));
+  // Until the list answers every stored member stands, so nothing is refused for an id the list may yet hold.
+  const refusals = poolRefusals(input, accountsFailed !== null ? null : accountsLoaded ? listed : new Set(Object.keys(form.members)));
   const refusedFields = new Set(refusals.map((r) => r.field));
   const refusedGroups = new Set<PoolGroup>(refusals.map((r) => r.group));
   const invalid = (field: string) => (refusedFields.has(field) ? true : undefined);
@@ -995,6 +1015,8 @@ export function PoolDialog({
 
   const orderIndex = new Map(memberOrder.map((id, i) => [id, i]));
   const orderedAccounts = [...accounts].sort((a, b) => (orderIndex.get(a.id) ?? accounts.length) - (orderIndex.get(b.id) ?? accounts.length) || a.label.localeCompare(b.label));
+  // A stored member the list does not hold gets a row of its own, the only place it can be unticked.
+  const unlisted = accountsFailed === null ? Object.keys(form.members).filter((id) => !listed.has(id)).sort() : [];
 
   const setTuning = <K extends NumericTuningKey>(key: K, value: number) => setForm((f) => ({ ...f, tuning: { ...f.tuning, [key]: value } }));
   const setEngine = <K extends keyof PoolEngineFields>(key: K, value: PoolEngineFields[K]) => setForm((f) => ({ ...f, engine: { ...f.engine, [key]: value } }));
@@ -1130,86 +1152,127 @@ export function PoolDialog({
         <p className="field__hint">
           A member whose spend reaches its daily or its monthly budget is skipped until that UTC day or month ends, priced at API list rates: an Anthropic-key member&apos;s whole spend counts, a subscription member&apos;s metered spend alone (overage and fast answers); set one, both, or neither.
         </p>
-        <div className="table-wrap">
-          <table className="table members-table">
-            <thead>
-              <tr>
-                <th>Account</th>
-                <th className="right">Priority</th>
-                <th className="right">Daily budget, USD</th>
-                <th className="right">Monthly budget, USD</th>
-              </tr>
-            </thead>
-            <tbody>
-              {orderedAccounts.map((a) => {
-                const on = a.id in form.members;
-                return (
-                  <tr key={a.id}>
+        {accountsFailed !== null ? (
+          <ErrorState
+            title="The account list did not load"
+            body={accountsFailed}
+            action={
+              <Button size="sm" onClick={onRetryAccounts}>
+                Try again
+              </Button>
+            }
+          />
+        ) : (
+          <div className="table-wrap">
+            <table className="table members-table">
+              <thead>
+                <tr>
+                  <th>Account</th>
+                  <th className="right">Priority</th>
+                  <th className="right">Daily budget, USD</th>
+                  <th className="right">Monthly budget, USD</th>
+                </tr>
+              </thead>
+              <tbody>
+                {orderedAccounts.map((a) => {
+                  const on = a.id in form.members;
+                  return (
+                    <tr key={a.id}>
+                      <td>
+                        <label>
+                          <input
+                            type="checkbox"
+                            checked={on}
+                            onChange={(e) => {
+                              const next = { ...form.members };
+                              if (e.target.checked) next[a.id] = 0;
+                              else delete next[a.id];
+                              set('members', next);
+                              setMemberOrder(orderedAccountIds(accounts, next));
+                            }}
+                          />
+                          <span>{a.label}</span>
+                          {a.email && <span className="muted mono">{a.email}</span>}
+                        </label>
+                      </td>
+                      <td className="right">
+                        <Input
+                          type="number"
+                          min={0}
+                          max={9}
+                          value={on ? form.members[a.id] : ''}
+                          disabled={!on}
+                          onChange={(e) => set('members', { ...form.members, [a.id]: Number(e.target.value) })}
+                          onBlur={() => setMemberOrder(orderedAccountIds(accounts, form.members))}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') setMemberOrder(orderedAccountIds(accounts, form.members));
+                          }}
+                          aria-label={`Priority for ${a.label}`}
+                          aria-invalid={invalid(`priority:${a.id}`)}
+                        />
+                      </td>
+                      <td className="right">
+                        <Input
+                          type="number"
+                          min={0.01}
+                          step="any"
+                          value={budgetOf(a.id).daily}
+                          disabled={!on}
+                          placeholder="none"
+                          onChange={(e) => setBudget(a.id, { daily: e.target.value })}
+                          aria-label={`Daily budget for ${a.label}, USD`}
+                          aria-invalid={invalid(`budget_daily:${a.id}`)}
+                        />
+                      </td>
+                      <td className="right">
+                        <Input
+                          type="number"
+                          min={0.01}
+                          step="any"
+                          value={budgetOf(a.id).monthly}
+                          disabled={!on}
+                          placeholder="none"
+                          onChange={(e) => setBudget(a.id, { monthly: e.target.value })}
+                          aria-label={`Monthly budget for ${a.label}, USD`}
+                          aria-invalid={invalid(`budget_monthly:${a.id}`)}
+                        />
+                      </td>
+                    </tr>
+                  );
+                })}
+                {unlisted.map((id) => (
+                  <tr key={id}>
                     <td>
                       <label>
                         <input
                           type="checkbox"
-                          checked={on}
-                          onChange={(e) => {
+                          checked
+                          onChange={() => {
                             const next = { ...form.members };
-                            if (e.target.checked) next[a.id] = 0;
-                            else delete next[a.id];
+                            delete next[id];
                             set('members', next);
-                            setMemberOrder(orderedAccountIds(accounts, next));
                           }}
+                          aria-invalid={invalid(`member:${id}`)}
                         />
-                        <span>{a.label}</span>
-                        {a.email && <span className="muted mono">{a.email}</span>}
+                        <span>{id}</span>
+                        {accountsLoaded && <Badge tone="neutral">not listed</Badge>}
                       </label>
                     </td>
                     <td className="right">
-                      <Input
-                        type="number"
-                        min={0}
-                        max={9}
-                        value={on ? form.members[a.id] : ''}
-                        disabled={!on}
-                        onChange={(e) => set('members', { ...form.members, [a.id]: Number(e.target.value) })}
-                        onBlur={() => setMemberOrder(orderedAccountIds(accounts, form.members))}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') setMemberOrder(orderedAccountIds(accounts, form.members));
-                        }}
-                        aria-label={`Priority for ${a.label}`}
-                        aria-invalid={invalid(`priority:${a.id}`)}
-                      />
+                      <Input type="number" value={form.members[id]} disabled aria-label={`Priority for ${id}`} />
                     </td>
                     <td className="right">
-                      <Input
-                        type="number"
-                        min={0.01}
-                        step="any"
-                        value={budgetOf(a.id).daily}
-                        disabled={!on}
-                        placeholder="none"
-                        onChange={(e) => setBudget(a.id, { daily: e.target.value })}
-                        aria-label={`Daily budget for ${a.label}, USD`}
-                        aria-invalid={invalid(`budget_daily:${a.id}`)}
-                      />
+                      <Input type="number" value={budgetOf(id).daily} disabled placeholder="none" aria-label={`Daily budget for ${id}, USD`} />
                     </td>
                     <td className="right">
-                      <Input
-                        type="number"
-                        min={0.01}
-                        step="any"
-                        value={budgetOf(a.id).monthly}
-                        disabled={!on}
-                        placeholder="none"
-                        onChange={(e) => setBudget(a.id, { monthly: e.target.value })}
-                        aria-label={`Monthly budget for ${a.label}, USD`}
-                        aria-invalid={invalid(`budget_monthly:${a.id}`)}
-                      />
+                      <Input type="number" value={budgetOf(id).monthly} disabled placeholder="none" aria-label={`Monthly budget for ${id}, USD`} />
                     </td>
                   </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
         {budgetRefused &&
           refusalCallout(
             <>

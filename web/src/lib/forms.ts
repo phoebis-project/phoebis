@@ -84,7 +84,7 @@ export const POOL_GROUPS = ['identity', 'members', 'keys', 'models', 'autoMode',
 export type PoolGroup = (typeof POOL_GROUPS)[number];
 
 export interface PoolRefusal {
-  /** The refused control's accessible name; `priority:<id>`, `budget_daily:<id>`, `budget_monthly:<id>`, `member:<id>` for a member row; `members` for the missing member. */
+  /** The refused control's accessible name; `priority:<id>`, `budget_daily:<id>`, `budget_monthly:<id>`, `member:<id>` for a member row; `members` for the missing member or an account list that did not load. */
   field: string;
   group: PoolGroup;
   /** The words the control's callout and the footer read. */
@@ -125,8 +125,12 @@ const boundText = (label: string, { max, min }: { max: number; min: number }) =>
   max === Number.MAX_SAFE_INTEGER ? `${label} is a whole number of at least ${fmtInt(min)}.` : `${label} is a whole number from ${fmtInt(min)} to ${fmtInt(max)}.`;
 const listed = (label: string) => `${label} is one of its listed choices.`;
 
-/** Every check of the pool routes the input fails, in rail order and in each group's order below; empty when the routes would take it. */
-export function poolRefusals(input: PoolInput, accountIds: ReadonlySet<string>): PoolRefusal[] {
+/**
+ * Every check of the pool routes the input fails, in rail order and in each group's order below; empty when the routes
+ * would take it. `accountIds` null means the account list did not load: one refusal holds the save, and no member is
+ * refused for an id the list might hold.
+ */
+export function poolRefusals(input: PoolInput, accountIds: ReadonlySet<string> | null): PoolRefusal[] {
   const out: PoolRefusal[] = [];
   const refuse = (group: PoolGroup, field: string, text: string | null) => {
     if (text !== null) out.push({ field, group, text });
@@ -136,10 +140,11 @@ export function poolRefusals(input: PoolInput, accountIds: ReadonlySet<string>):
 
   refuse('identity', 'Name', input.name.length > 0 ? null : 'the pool needs a name.');
 
+  refuse('members', 'members', accountIds !== null ? null : 'the account list did not load, so the members cannot be checked.');
   refuse('members', 'members', input.members.length > 0 ? null : 'the pool needs a member.');
   for (const m of input.members) {
     const id = m.accountId;
-    refuse('members', `member:${id}`, accountIds.has(id) ? null : `${id} is not an account the console lists.`);
+    if (accountIds !== null) refuse('members', `member:${id}`, accountIds.has(id) ? null : `${id} is not an account the console lists.`);
     refuse('members', `priority:${id}`, whole(m.priority, 0, Number.MAX_SAFE_INTEGER) ? null : 'Priority is a whole number of 0 or more.');
     // A member written without a budget field has no budget over that period, as the member write reads it.
     refuse('members', `budget_daily:${id}`, m.budgetDailyUsd == null ? null : budgetRefusal(String(m.budgetDailyUsd)));
@@ -187,8 +192,8 @@ export function poolRefusals(input: PoolInput, accountIds: ReadonlySet<string>):
   return out;
 }
 
-/** Whether the pool routes would take `input` as it stands, with every member one of `accountIds`. */
-export function validatePoolInput(input: PoolInput, accountIds: ReadonlySet<string>): boolean {
+/** Whether the pool routes would take `input` as it stands, with every member one of `accountIds`; null holds it. */
+export function validatePoolInput(input: PoolInput, accountIds: ReadonlySet<string> | null): boolean {
   return poolRefusals(input, accountIds).length === 0;
 }
 
