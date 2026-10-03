@@ -9,11 +9,11 @@ layout assertions ride along, one function each in `views.mjs`, in the order the
 caching controls, the select-below threshold, the routing cards, the compatibility card, the bootstrap cards, the Delete
 account button, the account lines, the alert rule dialog, the remaining cards, the error state, the lines under the
 quota rings, the recent requests' model cells and their table's fit, the cost-cap rows, the live feed, the wasted-probe
-rows, the burn cards, the plan legend's model unlisted entry, the placement and budget tables, the
-speed filter, the traffic cards, the fast lane, the request drawer, which opens once the request list's shot is taken,
-the subscription end editor, the catalog popup, the key dialog's cap field and selects, the cost reference, the agent
-lines, the fork link, which is followed once the session list's shot is taken). A check that
-opens an editor, a dialog or a row closes it again before the view's shot.
+rows, the burn cards, the plan legend's model unlisted entry, the placement and budget tables, the request table's fit,
+the speed filter, the traffic cards, the fast lane, the request drawer, which opens once the
+request list's shot is taken, the subscription end editor, the catalog popup, the key dialog's cap field and selects,
+the cost reference, the agent lines, the fork link, which is followed once the session
+list's shot is taken). A check that opens an editor, a dialog or a row closes it again before the view's shot.
 The script exits non-zero with the list of failures when any of that does not hold.
 
 The screenshot directory has to lie outside the repository, which the script enforces against every worktree `git

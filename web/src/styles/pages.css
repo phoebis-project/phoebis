@@ -1609,8 +1609,8 @@
   max-width: 12ch;
 }
 
-/* Thirteen columns leave the token counts too little room for their sub to hold one line, and a log a third taller
-   costs more than the scroll the wider table asks for below 1440px. */
+/* A sub that wrapped would set the height of its whole row, and a log a third taller costs more
+   than the room a one-line sub takes. */
 .requests__table .sub {
   white-space: nowrap;
 }

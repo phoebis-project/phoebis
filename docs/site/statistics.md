@@ -290,32 +290,31 @@ values the client's hint headers and attribution line carry, the speed filter pi
 the answer reported, and the held toggle keeps the requests that waited for a slot. The search and the two pattern
 fields apply 400 milliseconds after the last keystroke, on Enter, or when the field loses focus. Every filter, the range
 and the page size live in the page's address, so a reload or a shared link keeps them. A filter whose list did not load
-is disabled and says why. Selecting a row opens a drawer
-with the request's detail, which shows the user agent, the model as
-the client spelled it and, when it differs, the canonical id the router recorded, its auto-mode standing (asked for a
-server-side check under an on setting; carried the safeguards member under an off setting, which the dispatch drops;
-refused for its body shape; or not requested), and the client hints: the agent type, the compaction and
-context-compacted markers, the turn origin, and the tool time before the turn; the trail names an account the model was
-rejected on and the one that served it. The drawer's effort is the level the upstream applies: when the client sends a
-per-turn control entry, the last entry's level, else the request's top-level `output_config.effort`; a turn that ends
-with such an entry still counts as the user's turn, so it starts its own prompt. The table holds the requests up to the
-moment you opened it, so paging does not shift as new ones arrive; Refresh brings it up to now. When the session moved
-during the request, the drawer says from which account to which and why: rate limited, wound down, account marked,
-over its plan, back to plan, load shed, or window spent. When its pin was released without a move, the drawer says from
-which account and every reason the router found, among: already tried this request, the account at its spend budget,
-the creating request's own client error, an account cooldown, the account deleted, disconnected, idle past the affinity
-window, funding required, in overage, paused, needing reauthorization, released outright, window spent, the subscription
-ended, never paired, or no longer serving the model. The drawer also shows the strategy the selection used, the tier it
-drew from, whether the pin continued and was renewed, moved (naming the rule), or was placed afresh, whether the cache
-answered the request and by how many of its input tokens, and every candidate the selection passed over with the
-obstacle in its way: already tried, above the ceiling, at its in-flight cap, at its spend budget, an account cooldown,
-at the pace floor, an operator hold, in overage, ranked behind another candidate, its subscription ended, its window
-spent, or winding down. A placement names where it landed: by its messages or by its static prefix at the depth that
-matched, or with the main conversation. A request held while every account was at its cap names the account it was
-held on: its cohort's, or else the last one it waited on, and how long it waited. The cache line reads a placement as a
-hit or a miss against the prefix it was promised: a placement by its messages is a hit when the response read at least
-that prefix, one by its static prefix when it read anything, and one with the main conversation keeps the plain cache
-line.
+is disabled and says why. Selecting a row opens a drawer with the request's detail, which shows
+the user agent, the model as the client spelled it and, when it differs, the canonical id
+the router recorded, its auto-mode standing (asked for a server-side check under an on setting; carried the safeguards
+member under an off setting, which the dispatch drops; refused for its body shape; or not requested), and the client
+hints: the agent type, the compaction and context-compacted markers, the turn origin, and the tool time before the turn;
+the trail names an account the model was rejected on and the one that served it. The drawer's effort is the level the
+upstream applies: when the client sends a per-turn control entry, the last entry's level, else the request's top-level
+`output_config.effort`; a turn that ends with such an entry still counts as the user's turn, so it starts its own
+prompt. The table holds the requests up to the moment you opened it, so paging does not shift as new ones arrive;
+Refresh brings it up to now. When the session moved during the request, the drawer says from which account to which and
+why: rate limited, wound down, account marked, over its plan, back to plan, load shed, or window spent. When its pin was
+released without a move, the drawer says from which account and every reason the router found, among: already tried this
+request, the account at its spend budget, the creating request's own client error, an account cooldown, the account
+deleted, disconnected, idle past the affinity window, funding required, in overage, paused, needing reauthorization,
+released outright, window spent, the subscription ended, never paired, or no longer serving the model. The drawer also
+shows the strategy the selection used, the tier it drew from, whether the pin continued and was renewed, moved (naming
+the rule), or was placed afresh, whether the cache answered the request and by how many of its input tokens, and every
+candidate the selection passed over with the obstacle in its way: already tried, above the ceiling, at its in-flight
+cap, at its spend budget, an account cooldown, at the pace floor, an operator hold, in overage, ranked behind another
+candidate, its subscription ended, its window spent, or winding down. A placement names where it landed: by its messages
+or by its static prefix at the depth that matched, or with the main conversation. A request held while every account was
+at its cap names the account it was held on: its cohort's, or else the last one it waited on, and how long it waited.
+The cache line reads a placement as a hit or a miss against the prefix it was promised: a placement by its messages is a
+hit when the response read at least that prefix, one by its static prefix when it read anything, and one with the main
+conversation keeps the plain cache line.
 
 ![The Requests view: the filterable table with its client column](assets/requests-light.png#only-light)
 ![The Requests view: the filterable table with its client column](assets/requests-dark.png#only-dark)

@@ -3592,24 +3592,25 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
     return cells.length === 1 ? { text: cells[0]?.textContent?.trim() ?? '', title: cells[0]?.getAttribute('title') ?? null } : { text: `${cells.length} rows`, title: null };
   };
   results.push({ name: 'fixture: a request whose model id carries a date', ok: dated !== undefined, missing: [] });
-  if (dated && field) {
-    setter.call(field, dated.id);
+  // Enter commits the search at once, so no read waits on the typing pause's timer.
+  const searchFor = async (text) => {
+    setter.call(field, text);
     field.dispatchEvent(new window.Event('input', { bubbles: true }));
-    await m.settle(700);
+    field.dispatchEvent(new window.KeyboardEvent('keydown', { bubbles: true, key: 'Enter' }));
+    await m.settle();
+  };
+  const modelCheck = '/requests the Model cell reads the id without its date, the dated id on its title';
+  if (!field) controlMissing(modelCheck, 'the search');
+  else if (dated) {
+    await searchFor(dated.id);
     const cell = modelCell();
-    setter.call(field, '');
-    field.dispatchEvent(new window.Event('input', { bubbles: true }));
-    await m.settle(700);
+    await searchFor('');
     const undated = requests.find((r) => !/-\d{8}$/.test(r.model) && r.kind !== 'probe');
-    setter.call(field, undated?.id ?? '');
-    field.dispatchEvent(new window.Event('input', { bubbles: true }));
-    await m.settle(700);
+    await searchFor(undated?.id ?? '');
     const bare = modelCell();
-    setter.call(field, '');
-    field.dispatchEvent(new window.Event('input', { bubbles: true }));
-    await m.settle(700);
+    await searchFor('');
     results.push({
-      name: '/requests the Model cell reads the id without its date, the dated id on its title',
+      name: modelCheck,
       ok: cell.text === dated.model.replace(/-\d{8}$/, '') && cell.title === dated.model && bare.text === undated?.model && bare.title === null,
       missing: [JSON.stringify(cell), JSON.stringify(bare)],
     });
@@ -4393,6 +4394,90 @@ m.unmount();
     missing: [`disabled ${keysFilter?.disabled}`, `title ${keysFilter?.getAttribute('title')}`, `description ${describedBy(keysFilter)}`, `opened ${opened}`, `Pools disabled ${poolsFilter?.disabled}, titled ${poolsFilter?.getAttribute('title')}, described ${describedBy(poolsFilter)}`],
   });
   page.unmount();
+}
+// A disabled filter still holds what the address lists, so a shared link reads the same rows, and its clear button
+// still lets the value go.
+{
+  const keptCheck = '/requests a disabled filter keeps the value its address carries and can still be cleared';
+  failNextCall('listKeys', '/admin/keys', 'the registry is unavailable');
+  const spy = countCalls('listRequests');
+  const page = await mount('/requests?keys=laptop');
+  const filter = [...page.container.querySelectorAll('.filters .mselect')].find((d) => d.querySelector('.mselect__trigger')?.textContent?.trim().startsWith('Keys'));
+  const trigger = filter?.querySelector('.mselect__trigger');
+  const clear = filter?.querySelector('.mselect__clear');
+  const keyCells = [...page.container.querySelectorAll('.requests__table tbody tr td:nth-child(2)')].map((td) => td.textContent?.trim());
+  const sent = spy.calls.map(([q]) => JSON.stringify(q?.keyIds ?? null));
+  const clearable = clear !== null && clear !== undefined && !clear.disabled;
+  const summary = trigger?.textContent?.trim();
+  clear?.click();
+  await page.settle();
+  const cleared = { last: JSON.stringify(spy.calls.at(-1)?.[0]?.keyIds ?? null), trigger: trigger?.textContent?.trim() };
+  spy.restore();
+  results.push({
+    name: keptCheck,
+    ok: trigger?.disabled === true && summary === 'Keys (1)' && sent.length > 0 && sent.every((k) => k === '["laptop"]') && keyCells.length > 0 && keyCells.every((k) => k === 'laptop') && clearable && cleared.last === '[]' && cleared.trigger === 'Keys',
+    missing: [`disabled ${trigger?.disabled}`, String(summary), `sent ${sent.join(' ')}`, `key cells ${[...new Set(keyCells)].join(',')}`, `clear ${clear ? (clear.disabled ? 'disabled' : 'enabled') : 'missing'}`, JSON.stringify(cleared)],
+  });
+  page.unmount();
+}
+
+// A click that follows typing at once moves the focus first, so the search's blur commits before the click acts; the
+// click must act on the address that commit wrote, not on the one the page drew before it.
+{
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  const typeFocused = (field, text) => {
+    field.focus();
+    setter.call(field, text);
+    field.dispatchEvent(new window.Event('input', { bubbles: true }));
+  };
+  const reads = (spy) => spy.calls.map(([q]) => ({ held: q?.held ?? false, keys: q?.keyIds ?? [], search: q?.search ?? '' }));
+
+  const heldCheck = '/requests a click right after typing keeps the search the blur committed';
+  const switched = await mount('/requests', { now: CLOCK_ORIGIN });
+  const typed = switched.container.querySelector('input.filters__search');
+  const held = switched.container.querySelector('.filters button[role="switch"][aria-label="Held only"]');
+  if (!typed || !held) controlMissing(heldCheck, typed ? 'Held only' : 'the search');
+  else {
+    const spy = countCalls('listRequests');
+    typeFocused(typed, 'abc');
+    // One turn: the focus move and the click, with no render of the router between them.
+    held.focus();
+    held.click();
+    await switched.settle();
+    const read = reads(spy);
+    spy.restore();
+    const last = read.at(-1);
+    results.push({ name: heldCheck, ok: last?.search === 'abc' && last.held === true && typed.value === 'abc', missing: [JSON.stringify(read), `field ${JSON.stringify(typed.value)}`] });
+  }
+  switched.unmount();
+
+  const rowCheck = '/requests a row clicked right after typing opens under the search the blur committed';
+  const opened = await mount('/requests?keys=laptop', { now: CLOCK_ORIGIN });
+  const field = opened.container.querySelector('input.filters__search');
+  const row = opened.container.querySelector('.requests__table tbody tr');
+  // The row's own id, so the search the blur commits still lists it.
+  const id = row?.querySelector('.sub.mono')?.textContent?.replace(/…$/, '') ?? '';
+  if (!field || !row || !id) controlMissing(rowCheck, field ? 'a request row' : 'the search');
+  else {
+    const spy = countCalls('listRequests');
+    typeFocused(field, id);
+    row.focus();
+    row.click();
+    await opened.settle();
+    const read = reads(spy);
+    const drawer = opened.container.querySelector('.drawer') !== null;
+    opened.container.querySelector('button[aria-label="Close details"]')?.click();
+    await opened.settle();
+    spy.restore();
+    const keys = [...opened.container.querySelectorAll('.filters .mselect__trigger')].find((t) => t.textContent?.trim().startsWith('Keys'))?.textContent?.trim();
+    const last = read.at(-1);
+    results.push({
+      name: rowCheck,
+      ok: drawer && last?.search === id && JSON.stringify(last.keys) === '["laptop"]' && field.value === id && keys === 'Keys (1)' && opened.container.querySelector('.drawer') === null,
+      missing: [JSON.stringify(read), `drawer ${drawer}`, `field after Close ${JSON.stringify(field.value)}`, String(keys)],
+    });
+  }
+  opened.unmount();
 }
 
 // A read that fails for new filters draws the error state alone, none of the sections and none of the rows the filters before

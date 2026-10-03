@@ -184,10 +184,10 @@ export function RequestsPage() {
   const filters = useMemo(() => filtersFromParams(searchParams), [searchParams]);
   const address = searchParams.toString();
   const [visible, setVisible] = useState<Set<ColumnId>>(() => new Set(COLUMNS.map((c) => c.id).filter((id) => !HIDDEN_BY_DEFAULT.includes(id))));
-  // The cursor and the pages before it belong to the address they were read under, so a filter change drops them in
-  // the render that brings the new filters: React Router applies the address in a transition, and a reset of its own
-  // beside it would render apart and read the old filters once more without the cursor. The stale entry is replaced
-  // in that same render, so changing a filter back does not return to the page left behind under it.
+  // The cursor and the pages before it belong to the address they were read under, so any change of the address (a
+  // filter, Reset, a link) drops them in the render that brings it, with no reset of their own to render apart and read
+  // the old filters once more without the cursor. The stale entry is replaced in that same render, so changing a
+  // filter back does not return to the page left behind under it.
   const [paging, setPaging] = useState<{ for: string; cursor?: string; stack: (string | undefined)[] }>({ for: address, stack: [] });
   if (paging.for !== address) setPaging({ for: address, stack: [] });
   const cursor = paging.for === address ? paging.cursor : undefined;
@@ -195,7 +195,9 @@ export function RequestsPage() {
   // The range ends where the list was loaded, so a cursor page is read against the window its cursor came from;
   // Refresh moves the end to now.
   const [loadedAt, setLoadedAt] = useState(() => clock.now());
-  const update = (patch: Partial<Filters>) => setSearchParams(paramsFromFilters({ ...filters, ...patch }), { replace: true });
+  // Written at once rather than in the router's transition: a click that follows typing blurs the search first, and its
+  // own write or navigation would otherwise build on the address from before the blur's commit and drop it.
+  const update = (patch: Partial<Filters>) => setSearchParams(paramsFromFilters({ ...filters, ...patch }), { flushSync: true, replace: true });
   const search = useCommittedText(filters.search, (next) => update({ search: next }));
 
   const query = useMemo<RequestQuery>(() => {
