@@ -1476,7 +1476,7 @@ export function PoolDialog({
           }
         >
           <UtilizationBar
-            expert={expertView}
+            expert={expertView || refusedFields.has('Select below utilization (%)')}
             readings={readings}
             migrate={form.migrateOn ? { onChange: (v) => set('migrate', v), value: form.migrate } : null}
             migrateMin={50}

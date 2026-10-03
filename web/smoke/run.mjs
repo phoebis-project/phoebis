@@ -2626,11 +2626,8 @@ localStorage.removeItem('phoebis.expertView');
       .filter(([label, read]) => JSON.stringify(read) !== JSON.stringify(PLAIN_FIELDS[label]))
       .map(([label, read]) => `${label}: ${JSON.stringify(read)}`),
   });
-  results.push({
-    name: '/pools with the mode off no expert control is drawn',
-    ok: ['input[aria-label="Select below utilization (%)"]', 'select[aria-label="Pin sessions"]', '[aria-label="Load shedding preset"]', '[aria-label="Failover preset"]', '[data-rule-set]', 'button[role="switch"][aria-label="Add a cache marker to a request without one"]', 'button[role="switch"][aria-label="Cache diagnostics"]', '[role="slider"][aria-label="Select-below threshold"]'].every((s) => dlg?.querySelector(s) === null),
-    missing: [],
-  });
+  const drawnExpert = ['input[aria-label="Select below utilization (%)"]', 'select[aria-label="Pin sessions"]', '[aria-label="Load shedding preset"]', '[aria-label="Failover preset"]', '[data-rule-set]', 'button[role="switch"][aria-label="Add a cache marker to a request without one"]', 'button[role="switch"][aria-label="Cache diagnostics"]', '[role="slider"][aria-label="Select-below threshold"]'].filter((s) => dlg?.querySelector(s) !== null);
+  results.push({ name: '/pools with the mode off no expert control is drawn', ok: drawnExpert.length === 0, missing: drawnExpert });
   group(dlg, 'Pinning')?.querySelector('.dialog-group__more button')?.click();
   await p.settle(150);
   const expertRail = [parentsOf(dlg), railOf(dlg), headingsOf(dlg)];
@@ -2686,7 +2683,12 @@ localStorage.removeItem('phoebis.expertView');
   const typed = kept(stored);
   await flip();
   dlg = await open('all');
-  const hidden = [dlg?.querySelector('input[aria-label="Select below utilization (%)"]') ?? null, group(dlg, 'Failover') ?? null, dlg?.querySelector('[data-rule-set="plan"]') ?? null];
+  const hidden = [
+    dlg?.querySelector('input[aria-label="Select below utilization (%)"]') ?? null,
+    dlg?.querySelector('[role="slider"][aria-label="Select-below threshold"]') ?? null,
+    group(dlg, 'Failover') ?? null,
+    dlg?.querySelector('[data-rule-set="plan"]') ?? null,
+  ];
   const updatePool = api.updatePool;
   const sent = [];
   api.updatePool = (id, input) => {
@@ -2748,8 +2750,9 @@ localStorage.removeItem('phoebis.expertView');
       util()?.hidden === false &&
       !!percent() &&
       document.activeElement === percent() &&
+      util()?.querySelector('[role="slider"][aria-label="Select-below threshold"]') != null &&
       localStorage.getItem('phoebis.expertView') === 'off',
-    missing: [JSON.stringify(before), JSON.stringify(refused), document.activeElement?.outerHTML.slice(0, 80) ?? 'nothing focused'],
+    missing: [JSON.stringify(before), JSON.stringify(refused), document.activeElement?.outerHTML.slice(0, 80) ?? 'nothing focused', util()?.querySelector('[role="slider"][aria-label="Select-below threshold"]') ? 'handle drawn' : 'no select-below handle'],
   });
   foot(dlg, 'Cancel')?.click();
   await p.settle(200);

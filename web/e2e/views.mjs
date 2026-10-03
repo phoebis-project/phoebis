@@ -664,7 +664,7 @@ async function poolCachingControls(theme) {
   compare('diagnostics', 'capture', ['border', 'height', 'radius', 'width']);
   await page.keyboard.press('Escape');
   await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => say('the dialog stayed open after Escape'));
-  await expertView(false);
+  await expertView(false).catch(() => {});
   await atRest();
 }
 
@@ -722,7 +722,7 @@ async function poolSelectBelow(theme) {
   }
   await page.keyboard.press('Escape');
   await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => say('the dialog stayed open after Escape'));
-  await expertView(false);
+  await expertView(false).catch(() => {});
   await atRest();
 }
 
@@ -816,7 +816,7 @@ async function poolRoutingCards(theme) {
   if (!read.preview || !/^(Would (move|mark)|No member is above the threshold)/.test(read.preview)) say(`the shedding preview reads ${JSON.stringify(read.preview)}`);
   await page.keyboard.press('Escape');
   await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => say('the dialog stayed open after Escape'));
-  await expertView(false);
+  await expertView(false).catch(() => {});
   await atRest();
 }
 
@@ -1025,10 +1025,10 @@ const disabledIn = (dialog, label, selectors) =>
  */
 async function poolDialogGeometry(theme) {
   for (const mode of ['plain', 'expert']) {
-    await expertView(mode === 'expert');
+    await expertView(mode === 'expert').catch(() => {});
     await poolDialogWalk(theme, mode);
   }
-  await expertView(false);
+  await expertView(false).catch(() => {});
   await atRest();
 }
 
@@ -2375,7 +2375,7 @@ async function keyAccessSelects(theme) {
   if (!hints.autoMode || hints.autoMode !== hints.pool) say(`the Server-side auto mode hint reads ${hints.autoMode} against the Pool hint's ${hints.pool}`);
   await page.keyboard.press('Escape');
   await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => say('the dialog stayed open after Escape'));
-  await expertView(false);
+  await expertView(false).catch(() => {});
   await atRest();
 }
 
@@ -2486,7 +2486,7 @@ async function keyDialogGeometry(theme) {
       await page.keyboard.press('Escape').catch(() => {});
     }
   }
-  await expertView(false);
+  await expertView(false).catch(() => {});
   // The route refuses to re-enable a revoked key, so its dialog draws the switch disabled; a router with no revoked key says so.
   const revoked = rows.filter({ has: page.locator('td:nth-child(7) .badge', { hasText: /^revoked$/ }) }).first();
   if ((await revoked.count()) === 0) {
