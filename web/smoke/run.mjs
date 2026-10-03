@@ -2929,6 +2929,27 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
   await m.settle(200);
 }
 {
+  // A new key's id is derived from its name the way the create call derives it, so a name whose id a listed key holds
+  // is held in the dialog rather than refused by the route with an id the operator never saw.
+  [...m.container.querySelectorAll('button')].find((b) => b.textContent?.includes('Create key'))?.click();
+  await m.settle(200);
+  const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
+  const name = [...(group(dlg, 'Key')?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === 'Name');
+  const input = name?.querySelector('input');
+  if (input) Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(input, 'Laptop');
+  input?.dispatchEvent(new window.Event('input', { bubbles: true }));
+  await m.settle(150);
+  const create = [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Create');
+  const read = [name?.querySelector('.field__hint')?.textContent ?? '', dlg?.querySelector('.dialog__status')?.textContent ?? '', create?.disabled, input?.getAttribute('aria-invalid')];
+  results.push({
+    name: '/keys typing Laptop beside the story key laptop holds Save and shows the id under Name',
+    ok: read[0] === 'Id: laptop' && read[1] === 'Save is held: Another key already has the id laptop.Go to Key' && read[2] === true && read[3] === 'true',
+    missing: read.map(String),
+  });
+  [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
+  await m.settle(200);
+}
+{
   const btn = [...m.container.querySelectorAll('button')].find((b) => b.textContent?.includes('Create key'));
   btn?.click();
   await m.settle(200);

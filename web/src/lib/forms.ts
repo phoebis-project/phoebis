@@ -300,11 +300,28 @@ export interface KeyRefusal {
   text: string;
 }
 
-/** The key dialog's holds in rail order: a missing name or pool, the in-flight cap, the model rules; empty when Save may go. */
-export function keyRefusals(form: Pick<KeyForm, 'inFlightCap' | 'modelRules' | 'name' | 'poolId'>): KeyRefusal[] {
+/** What the key dialog knows beyond the fields it sends. */
+export interface KeyChecks {
+  /** On create the id derives from the name, so a taken one is held before the route's 409; an edit keeps its id. */
+  identity?: { existingIds: ReadonlySet<string>; isNew: boolean };
+}
+
+/**
+ * The key dialog's holds in rail order: a missing name, a new key's id that is taken or that the name gives no letter
+ * or digit for, a missing pool, the in-flight cap, the model rules; empty when Save may go.
+ */
+export function keyRefusals(form: Pick<KeyForm, 'inFlightCap' | 'modelRules' | 'name' | 'poolId'>, checks: KeyChecks = {}): KeyRefusal[] {
   const out: KeyRefusal[] = [];
   // Trimmed, as `keyInputOf` sends it: a name of spaces reaches the route empty.
-  if (!form.name.trim()) out.push({ field: 'Name', group: 'key', text: 'the key needs a name.' });
+  const name = form.name.trim();
+  if (!name) out.push({ field: 'Name', group: 'key', text: 'the key needs a name.' });
+  if (checks.identity?.isNew && name) {
+    const id = slug(name);
+    // `slug` keeps ASCII letters and digits alone, so a name without one falls back to the id `item`.
+    const unnamed = id === 'item' && !/[a-z0-9]/i.test(name);
+    if (unnamed) out.push({ field: 'Name', group: 'key', text: 'The key needs a name with a letter or a digit.' });
+    else if (checks.identity.existingIds.has(id)) out.push({ field: 'Name', group: 'key', text: `Another key already has the id ${id}.` });
+  }
   if (!form.poolId) out.push({ field: 'Pool', group: 'key', text: 'the key needs a pool.' });
   const cap = inFlightCapRefusal(form.inFlightCap);
   if (cap) out.push({ field: 'Requests in flight', group: 'access', text: cap });

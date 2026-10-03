@@ -2239,9 +2239,10 @@ const KEY_GROUP_LABELS = ['Key', 'Access', 'Models', 'Sessions', 'Capture'];
 
 /**
  * The key dialog on the grouped frame, on create and on edit: the frame and a flat rail of five groups that fits it,
- * each group inside one window of the body with the layout `groupGeometry` reads, the moving warning leading Key on an
- * edit that changes the pool, the bodies warning leading Capture while capture is on, and a revoked key's Enabled
- * switch drawn and disabled. Nothing is saved: every dialog leaves by Escape.
+ * each group inside one window of the body with the layout `groupGeometry` reads, the derived id under a new key's
+ * typed Name, the moving warning leading Key on an edit that changes the pool, the bodies warning leading Capture while
+ * capture is on, and a revoked key's Enabled switch drawn and disabled. Nothing is saved: every dialog leaves by
+ * Escape.
  */
 async function keyDialogGeometry(theme) {
   const sayIn = (where, what) => failures.push(`${theme} /keys dialog${where ? ` ${where}` : ''}: ${what}`);
@@ -2276,6 +2277,11 @@ async function keyDialogGeometry(theme) {
     if (frame.width !== 1040 || frame.height !== 752) sayIn(mode, `the frame measures ${frame.width} by ${frame.height}, not 1040 by 752`);
     if (JSON.stringify(frame.labels) !== JSON.stringify(KEY_GROUP_LABELS) || frame.parents !== 0) sayIn(mode, `the rail reads ${JSON.stringify(frame.labels)} under ${frame.parents} parents`);
     if (!frame.rail || frame.rail.scrollHeight > frame.rail.clientHeight) sayIn(mode, `the rail scrolls: ${JSON.stringify(frame.rail)}`);
+    // A new key's Name draws the id it will get under it once a name is typed, so Key is measured with that line.
+    if (mode === 'create') {
+      await dialog.locator('section.dialog-group[aria-label="Key"] input[placeholder="workstation"]').fill('Workstation');
+      await settle();
+    }
     for (const group of KEY_GROUP_LABELS) {
       const where = `${mode} ${group}`;
       try {
@@ -2303,6 +2309,10 @@ async function keyDialogGeometry(theme) {
           if (moved && !warning?.leads) found.push('the moving warning does not lead the group once the pool changes');
         }
         if (group === 'Key' && mode === 'create' && warning) found.push('a new key draws a moving warning');
+        if (group === 'Key' && mode === 'create') {
+          const idHint = await dialog.evaluate((el) => [...el.querySelectorAll('section.dialog-group[aria-label="Key"] .field')].find((f) => f.querySelector('.field__label')?.textContent?.trim() === 'Name')?.querySelector('.field__hint')?.textContent ?? null);
+          if (idHint !== 'Id: workstation') found.push(`the Name hint reads ${JSON.stringify(idHint)}, not the id the typed name derives`);
+        }
         measurements.push(`${theme} /keys dialog ${where} ${JSON.stringify(line)}`);
         for (const what of found) sayIn(where, what);
       } catch (error) {

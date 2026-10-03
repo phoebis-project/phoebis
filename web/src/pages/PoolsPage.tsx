@@ -1987,6 +1987,7 @@ export function PoolDialog({
         open={keyOpen}
         onClose={() => setKeyOpen(false)}
         pools={keyDialogPools}
+        existingIds={new Set(keys.map((k) => k.id))}
         initialPoolId={pool ? pool.id : draftPoolId}
         lockPool
         onCreated={(c) => {

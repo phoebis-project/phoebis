@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { api } from '@/api';
+import { slug } from '@/api/http';
 import type { AffinitySource, ApiKey, CreatedApiKey, KeyModels, KeyStatus, ModelRule, ModelRulesMode, Pool } from '@/api/types';
 import { useSession } from '@/app/session';
 import { useAppSettings } from '@/app/settings';
@@ -300,6 +301,7 @@ export function KeysPage() {
         existing={dialog?.key ?? null}
         onClose={() => setDialog(null)}
         pools={poolList}
+        existingIds={new Set((keys.data ?? []).map((k) => k.id))}
         onCreated={(c) => {
           setDialog(null);
           setCreated({ key: c, title: 'Key created' });
@@ -347,9 +349,10 @@ const KEY_GROUP_LABEL: Record<KeyGroup, string> = { access: 'Access', capture: '
 /**
  * Create or edit a key. `existing` switches the dialog to edit mode;
  * `initialPoolId` with `lockPool` pins the pool when the dialog is opened from
- * inside a pool's own dialog.
+ * inside a pool's own dialog. `existingIds` are the listed keys' ids, which a new
+ * key's derived id is checked against before the create.
  */
-export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing = null, initialPoolId, lockPool = false }: { existing?: ApiKey | null; initialPoolId?: string; lockPool?: boolean; onClose: () => void; onCreated: (c: CreatedApiKey) => void; onUpdated?: (k: ApiKey) => void; open: boolean; pools: KeyDialogPool[] }) {
+export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing = null, existingIds, initialPoolId, lockPool = false }: { existing?: ApiKey | null; existingIds: ReadonlySet<string>; initialPoolId?: string; lockPool?: boolean; onClose: () => void; onCreated: (c: CreatedApiKey) => void; onUpdated?: (k: ApiKey) => void; open: boolean; pools: KeyDialogPool[] }) {
   const [chosen, setChosen] = useState<KeyGroup>('key');
   const [name, setName] = useState('');
   const [poolId, setPoolId] = useState('all');
@@ -374,7 +377,7 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing
   const maxHours = settings.data?.retention.bodyCaptureMaxHours ?? 72;
   const effectiveHours = captureMode === 'inherit' ? poolHours : captureMode === 'off' ? 0 : captureHours;
   const suggestions = useCatalogSuggestions(pool?.members.map((m) => m.accountId) ?? [], open);
-  const refusals = keyRefusals({ inFlightCap, modelRules, name, poolId });
+  const refusals = keyRefusals({ inFlightCap, modelRules, name, poolId }, { identity: { existingIds, isNew: existing === null } });
   const refusedFields = new Set(refusals.map((r) => r.field));
   const refusedGroups = new Set<KeyGroup>(refusals.map((r) => r.group));
   const invalid = (field: string) => (refusedFields.has(field) ? true : undefined);
@@ -452,7 +455,7 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing
           </div>
         )}
         <div className="cells">
-          <Field label="Name" className="cell--half">
+          <Field label="Name" className="cell--half" hint={!existing && name.trim() ? `Id: ${slug(name.trim())}` : undefined}>
             <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="workstation" autoFocus aria-invalid={invalid('Name')} />
           </Field>
           <Field

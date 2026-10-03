@@ -299,6 +299,21 @@ test("the key dialog's holds agree with its Save condition", () => {
   for (const list of [rules('claude-*', 'NOT a***', ''), rules(''), rules(...Array(257).fill(''))]) assert.deepEqual(d.keyRefusals({ ...named, modelRules: list }), [{ field: 'Model rules', group: 'models', text: d.modelRulesRefusal(list) }]);
 });
 
+test("a new key's name is refused when its id is taken, by case or by punctuation, or holds no letter or digit", () => {
+  const named = (name, isNew = true, existingIds = new Set(['desktop', 'laptop'])) => d.keyRefusals({ inFlightCap: '', modelRules: [], name, poolId: 'all' }, { identity: { existingIds, isNew } });
+  const taken = [{ field: 'Name', group: 'key', text: 'Another key already has the id laptop.' }];
+  assert.deepEqual(named('Laptop'), taken, 'by case');
+  assert.deepEqual(named('laptop!'), taken, 'by punctuation');
+  assert.deepEqual(named('研究'), [{ field: 'Name', group: 'key', text: 'The key needs a name with a letter or a digit.' }], 'no ASCII letter or digit');
+  assert.deepEqual(named('Laptop 2'), [], 'laptop-2 is free');
+  assert.deepEqual(named(''), [{ field: 'Name', group: 'key', text: 'the key needs a name.' }], 'an empty name draws its own sentence alone');
+  assert.deepEqual(named('   '), [{ field: 'Name', group: 'key', text: 'the key needs a name.' }], 'a name of spaces is no name, and no id is checked for it');
+  assert.deepEqual(named('laptop', false), [], 'an edit keeps its id and is never held for it');
+  const long = 'a'.repeat(64);
+  assert.deepEqual(named(` ${long}`, true, new Set([long])), [{ field: 'Name', group: 'key', text: `Another key already has the id ${long}.` }], 'the id is derived from the trimmed name, as the create call sends it');
+  assert.equal(d.slug('laptop!'), 'laptop', 'the id is the one the create call derives');
+});
+
 test('a pool refusal names the group its control sits in', () => {
   assert.deepEqual(d.poolRefusals(input, accounts), [], 'the stored pool is refused nothing');
   const [first] = input.members;
