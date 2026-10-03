@@ -817,9 +817,10 @@ function rollups(): HourlyRollup[] {
       requests: {
         // A stream that ended short committed its 200 and still is no success, so it counts on its own.
         incomplete: list.filter((r) => r.outcome === 'incomplete').length,
-        ok: okRows.filter((r) => r.outcome !== 'incomplete').length,
+        ok: okRows.filter((r) => r.outcome === 'succeeded').length,
         rate_limited: list.filter((r) => r.status === 429).length,
-        overloaded: list.filter((r) => r.status === 529).length,
+        // A stream that failed after its 200 head is a failure, as the ledger files it, under the error it carried.
+        overloaded: list.filter((r) => r.status === 529 || (r.status === 200 && r.errorCode === 'overloaded_error')).length,
         upstream_error: list.filter((r) => r.status !== 200 && r.status !== 429 && r.status !== 529).length,
       },
       // Every attempt but the last one moved the request to another member.

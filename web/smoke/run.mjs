@@ -3489,6 +3489,37 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
     const drawn = Number((tile?.querySelector('.stat__value')?.textContent ?? '').replace(/[$,]/g, ''));
     results.push({ name: "/analytics the Fast mode spend tile reads the fast answers' dollars in range", ok: fastDay !== undefined && fastDay.costUsd > 0 && Math.abs(drawn - fastDay.costUsd) < 0.01, missing: [tile?.textContent ?? 'no tile', String(fastDay?.costUsd)] });
   }
+  {
+    // The story's incomplete desktop stream falls inside the day, so the legend and the desktop row both count it.
+    const incompleteItem = [...(card('Requests by outcome')?.querySelectorAll('.legend li') ?? [])].find((li) => [...li.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent?.trim()).join('') === 'Incomplete');
+    const legendCount = Number(incompleteItem?.querySelector('.legend__value')?.textContent?.trim().replace(/,/g, '') ?? 0);
+    const traffic = [...m.container.querySelectorAll('.card--table')].find((c) => (c.textContent ?? '').startsWith('Traffic by key'));
+    const heads = [...(traffic?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim() ?? '');
+    const at = heads.indexOf('Incomplete');
+    const desktop = [...(traffic?.querySelectorAll('tbody tr') ?? [])].find((tr) => tr.children[0]?.textContent?.trim() === 'desktop');
+    const cell = Number(desktop?.children[at]?.textContent?.trim().replace(/,/g, '') ?? 0);
+    results.push({
+      name: '/analytics a stream that ended short counts under Incomplete in the outcome legend and in the column after Failed',
+      ok: at > 1 && heads[at - 1] === 'Failed' && cell >= 1 && legendCount >= 1,
+      missing: [heads.join(','), `desktop ${desktop ? [...desktop.children].map((td) => td.textContent?.trim()).join('|') : 'no row'}`, `legend ${incompleteItem?.textContent ?? 'no Incomplete entry'}`],
+    });
+  }
+  {
+    // The ledger files a stream that failed after its 200 head under failed, so the log-derived rollup of its lane
+    // counts it among the failures and the lane's counters still add up to its rows.
+    const failedAfterHead = requests.find((r) => r.status === 200 && r.outcome === 'failed');
+    const sameLane = (a, b) => ['accountId', 'keyId', 'kind', 'model', 'poolId', 'sessionId'].every((f) => a[f] === b[f]);
+    const hourOf = (at) => Math.floor(Date.parse(at) / 3_600_000) * 3_600_000;
+    const lane = failedAfterHead ? requests.filter((r) => sameLane(r, failedAfterHead) && hourOf(r.at) === hourOf(failedAfterHead.at)) : [];
+    const rolled = failedAfterHead ? rollups.filter((g) => sameLane(g, failedAfterHead) && Date.parse(g.hour) === hourOf(failedAfterHead.at)) : [];
+    const counts = rolled[0]?.requests ?? {};
+    const succeeded = lane.filter((r) => r.outcome === 'succeeded').length;
+    results.push({
+      name: '/analytics the rollups count a stream that failed after its 200 head as a failure rather than OK',
+      ok: rolled.length === 1 && counts.ok === succeeded && Object.values(counts).reduce((a, b) => a + b, 0) === lane.length,
+      missing: [`lane ${lane.length} rows, ${succeeded} succeeded`, JSON.stringify(rolled.map((g) => g.requests))],
+    });
+  }
   const failovers = card('Failovers');
   results.push({ name: '/analytics the migration rewrites card sits beside Failovers', ok: failovers !== undefined && failovers.nextElementSibling === card('Migration rewrites'), missing: [failovers?.nextElementSibling?.querySelector('.card__title')?.textContent ?? 'no sibling'] });
   const moves = await api.getAnalyticsRewrites({ from: new Date(Date.now() - 24 * 3_600_000).toISOString(), to: new Date().toISOString() });

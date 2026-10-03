@@ -534,6 +534,9 @@ auxiliary class, or a request foreign to the conversation) moves that pin too.
 | Transport failure after fully written, no head | None | No; 502 `upstream_unreachable`, client retries |
 | 200 head, body ends before its end | None | No; the request reads `incomplete` |
 
+A `401` whose body is too large to classify fails over unread, while a `403` whose body is too large to classify is
+forwarded as it came, since it cannot be told from a `permission_error`.
+
 An `incomplete` request's error code says how its body ended: `stream_cut` when the connection or the decoder failed
 mid-body, `stream_incomplete` when an event stream closed without its `message_stop`, and `stream_stalled` when the
 upstream went silent past the idle bound. A forwarded answer with any other status stays `failed`, and its error code
@@ -591,12 +594,12 @@ per request; a refusal whose `Retry-After` is over five seconds and within the m
 request that already held its minute on another account fails over at once. A `Retry-After` past that minute, a second
 failure, or an Anthropic-key account's failure fails the request over to the next eligible account, and a request bound
 to its account, or one with no account left, is answered the router's own `503 accounts_unavailable` with no account
-named. An account the failover marks keeps its pin until the reselect expires it and places a fresh one; any other
-failover moves the pin. The failover, its waits included, starts no new leg past the request's own deadline, ten minutes
-less a margin: past it the request is answered `503 accounts_unavailable` rather than tried on another account. The
-attempt rows read `auth_failed` with the upstream status, and the account reads `reauth_required` after a conclusive
-failure (a rejected replay, an `invalid_grant`, a token endpoint's `401`), which the Accounts view and the
-`reauth_required` alert show.
+named. An account the failover marks, or finds disconnected, keeps its pin until the reselect expires it and places a
+fresh one; any other failover moves the pin. The failover, its waits included, starts no new leg past the request's own
+deadline, ten minutes less a margin: past it the request is answered `503 accounts_unavailable` rather than tried on
+another account. The attempt rows read `auth_failed` with the upstream status, and the account reads `reauth_required`
+after a conclusive failure (a rejected replay, an `invalid_grant`, a token endpoint's `401`), which the Accounts view
+and the `reauth_required` alert show.
 
 A stream commits at its `message_start` event or its first `error` event, whichever comes first; earlier events
 are buffered, up to 64 KiB, and relayed after commit in order; a stream that exceeds the buffer or sends no
@@ -645,14 +648,14 @@ under any agent is never held, and a move whose every destination is at its cap 
 the next request judges the move again; a held subagent waits where its cohort is.
 
 **Per key.** A key's own `in_flight_cap`, unset by default, counts each Messages request once, from its admission,
-before anything is selected, until its response ends. A keepalive probe and a `count_tokens` request take no slot and
-are never refused for want of one: the probe is the router's own traffic, and a token count is no conversation turn. The
-count is held across every attempt, retry, and hold, so a request sleeping in a retry in place keeps its key's slot. A
-request past the cap is refused before it reaches an account: `429` with the error type `rate_limit_error`, the error
-code `key_in_flight_cap`, and a `Retry-After` of the pool's `retry_in_place_seconds`, one second when that is 0. The
-refused request is observed without its body, since the key's permit is taken before the body is read, and gets its own
-request row under that code; `proxy.key_body_reads`, or the key's own cap when set, bounds the bodies arriving on one
-key at once the same way, and a `count_tokens` request takes a body-read slot too, so it can be refused
+before anything is selected, until its response ends. A keepalive probe and a `count_tokens` request take no in-flight
+slot and are never refused for want of one: the probe is the router's own traffic, and a token count is no conversation
+turn. The count is held across every attempt, retry, and hold, so a request sleeping in a retry in place keeps its key's
+slot. A request past the cap is refused before it reaches an account: `429` with the error type `rate_limit_error`, the
+error code `key_in_flight_cap`, and a `Retry-After` of the pool's `retry_in_place_seconds`, one second when that is 0.
+The refused request is observed without its body, since the key's permit is taken before the body is read, and gets its
+own request row under that code; `proxy.key_body_reads`, or the key's own cap when set, bounds the bodies arriving on
+one key at once the same way, and a `count_tokens` request takes a body-read slot too, so it can be refused
 `429 key_body_reads` ([installation](installation.md#proxy)).
 
 ### When nothing can serve
