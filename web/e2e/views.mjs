@@ -197,8 +197,8 @@ async function atRest() {
 }
 
 /**
- * The grouped dialog on a mock-only fixture that carries the pool dialog's eighteen groups under five parents: the
- * frame keeps its fixed size, no rail row wraps, no label is cut short and the rail holds all 23 entries without
+ * The grouped dialog on a mock-only fixture that carries the pool dialog's seventeen groups under five parents: the
+ * frame keeps its fixed size, no rail row wraps, no label is cut short and the rail holds all 22 entries without
  * scrolling either way at the pass's viewport. The two longest labels are read chosen, refused, and both, since the
  * chosen weight widens a label and the refusal dot takes the row's right padding. The numbers go to the measurements
  * whatever the outcome, since the rail's fit rests on text widths the browser's font decides. With Identity chosen,
@@ -208,7 +208,7 @@ async function atRest() {
  * Identity and Keys read 11 px at weight 400 in a resting parent's ink, 6 px after their label on its line and clear
  * of the refusal dot, at the pass's viewport and in the 720 px strip. With expert fields and the mode off, a group's
  * discovery line sits below its last field in the hint's size and a parent's ink, and the cell grid reaches a field
- * through its wrapper. Then the rail outgrows its height twice, on a 700 px viewport and with six more entries at
+ * through its wrapper. Then the rail outgrows its height twice, on a 700 px viewport and with eight more groups at
  * 800 px: it scrolls, and once scrolled to its end the parent heading of the run passing its top holds there in the
  * rail's own colour, over the groups that pass under it.
  */
@@ -255,7 +255,7 @@ async function groupedDialogFixture(theme) {
     measurements.push(`${theme} /fixtures/grouped-dialog ${state} ${JSON.stringify(read)}`);
     const sayIn = (what) => say(`${state}: ${what}`);
     if (read.frame.width !== 1040 || read.frame.height !== 752) sayIn(`the frame measures ${read.frame.width} by ${read.frame.height}, not 1040 by 752`);
-    if (read.groups !== 18 || read.parents !== 5) sayIn(`the rail draws ${read.groups} groups under ${read.parents} parents, not 18 under 5`);
+    if (read.groups !== 17 || read.parents !== 5) sayIn(`the rail draws ${read.groups} groups under ${read.parents} parents, not 17 under 5`);
     if (read.wrapped.length) sayIn(`${read.wrapped.join(', ')} wraps onto a second line`);
     if (read.truncated.length) sayIn(`${read.truncated.join(', ')} is cut short by its ellipsis`);
     if (read.rail.scrollHeight > read.rail.clientHeight) sayIn(`the rail scrolls: ${read.rail.scrollHeight} px of entries in ${read.rail.clientHeight} px`);
@@ -486,8 +486,9 @@ async function groupedDialogFixture(theme) {
     await load('');
     await scrolls('at 700 px', { height: 652, width: 1040 });
     await page.setViewportSize({ height: 800, width: 1280 });
-    await load('?extra=6');
-    await scrolls('with six more entries', { height: 752, width: 1040 });
+    // Eight, so the scrolled end falls well inside a run rather than at a run's edge, where no run passes the top.
+    await load('?extra=8');
+    await scrolls('with eight more groups', { height: 752, width: 1040 });
   } catch (error) {
     say(error instanceof Error ? error.message : String(error));
   }
@@ -552,11 +553,11 @@ async function poolChips(theme) {
       const style = getComputedStyle(el);
       return `${style.fontSize}/${style.paddingTop}/${style.paddingLeft}`;
     };
-    const reference = document.querySelector('.topbar .badge');
+    const reference = document.querySelector('.pool__title .badge');
     return { reference: reference ? box(reference) : null, sizes: [...new Set([...document.querySelectorAll('.pool .badge')].map(box))] };
   });
   if (chips.sizes.length !== 1 || chips.sizes[0] !== chips.reference) {
-    failures.push(`${theme} /pools: chip sizes ${chips.sizes.join(', ') || 'none'} against the reference ${chips.reference}`);
+    failures.push(`${theme} /pools: chip sizes ${chips.sizes.join(', ') || 'none'} against the status badge's ${chips.reference}`);
   }
 }
 
@@ -860,7 +861,7 @@ async function poolCardLayout(theme) {
 }
 
 /** The pool dialog's groups in rail order. */
-const POOL_GROUP_LABELS = ['Identity', 'Members', 'Keys', 'Models', 'Auto mode', 'Selection', 'Placement', 'Pinning', 'Utilization thresholds', 'Load shedding', 'Failover', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Probe tuning', 'Response headers', 'Body capture', 'Cache diagnostics'];
+const POOL_GROUP_LABELS = ['Identity', 'Members', 'Keys', 'Models', 'Auto mode', 'Selection', 'Placement', 'Pinning', 'Utilization thresholds', 'Load shedding', 'Failover', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Probe tuning', 'Body capture', 'Cache diagnostics'];
 /** Per group, the switches whose dependents the geometry pass turns off, and the controls that must go disabled. */
 const POOL_DEPENDENTS = {
   'Body capture': [{ switch: 'Capture request and response bodies', controls: ['input[aria-label="Capture retention in hours"]'] }],
@@ -1516,22 +1517,6 @@ async function accountLines(theme, path) {
     await atRest();
   }
 }
-
-/** The box a labelled input draws in the open dialog: the control itself, never the label around it. */
-const measureInput = (label) =>
-  page.locator('dialog[open]').evaluate((el, text) => {
-    const field = [...el.querySelectorAll('.field')].find((f) => f.querySelector('.field__label')?.textContent?.trim() === text);
-    const input = field?.querySelector('input');
-    if (!input) return null;
-    const style = getComputedStyle(input);
-    return {
-      background: style.backgroundColor,
-      border: `${style.borderWidth} ${style.borderStyle} ${style.borderTopColor}`,
-      font: style.fontSize,
-      height: input.getBoundingClientRect().height,
-      padding: `${style.paddingTop} ${style.paddingRight} ${style.paddingBottom} ${style.paddingLeft}`,
-    };
-  }, label);
 
 /**
  * Each Quota card's poll lines against the Refresh pill beside them: the lines end before the pill starts and
@@ -2272,7 +2257,7 @@ async function catalogDialog(theme) {
   await atRest();
 }
 
-/** A select's box in the open dialog, found by its field's label, in the terms `measureInput` reads an input. */
+/** The box a labelled select draws in the open dialog: the control itself, never the label around it. */
 const measureSelect = (label) =>
   page.locator('dialog[open]').evaluate((el, text) => {
     const field = [...el.querySelectorAll('.field')].find((f) => f.querySelector('.field__label')?.textContent?.trim() === text);
@@ -2290,12 +2275,10 @@ const measureSelect = (label) =>
   }, label);
 
 /**
- * The key dialog's Requests in flight field under Access against the Name field under Key: the same input box and the
- * same hint type as the Pool field's. The Affinity source select under Sessions is
- * the Expiry select's box, on a full row, and its hint the Pool hint's type; the Server-side auto mode select
- * under Access is the Expiry select's box, and its hint the Pool hint's type.
+ * The key dialog's Access select: the Server-side auto mode select is the Expiry select's box on
+ * a full row, with the Pool field's hint type.
  */
-async function keyCapField(theme) {
+async function keyAccessSelects(theme) {
   const say = (what) => failures.push(`${theme} /keys: ${what}`);
   const dialog = page.locator('dialog[open]');
   try {
@@ -2316,26 +2299,11 @@ async function keyCapField(theme) {
       return node ? `${getComputedStyle(node).fontSize} ${getComputedStyle(node).color} ${getComputedStyle(node).lineHeight}` : null;
     }, label);
   await show('Access');
-  const cap = await measureInput('Requests in flight');
   const expiry = await measureSelect('Expiry');
   const autoMode = await measureSelect('Server-side auto mode');
-  const hints = { autoMode: await hintOf('Server-side auto mode'), cap: await hintOf('Requests in flight') };
+  const hints = { autoMode: await hintOf('Server-side auto mode') };
   await show('Key');
-  const name = await measureInput('Name');
   hints.pool = await hintOf('Pool');
-  await show('Sessions');
-  const source = await measureSelect('Affinity source');
-  hints.source = await hintOf('Affinity source');
-  measurements.push(`${theme} /keys cap field ${JSON.stringify({ cap, hints, name })}`);
-  for (const finding of compare(cap, name, ['background', 'border', 'font', 'height', 'padding'], 'the Requests in flight input against the Name input')) say(finding);
-  if (!hints.cap || hints.cap !== hints.pool) say(`the cap's hint reads ${hints.cap} against the Pool hint's ${hints.pool}`);
-  for (const [label, select] of [['Affinity source', source]]) {
-    measurements.push(`${theme} /keys ${label} select ${JSON.stringify({ expiry, select })}`);
-    for (const finding of compare(select, expiry, ['background', 'border', 'font', 'height', 'padding', 'width'], `the ${label} select against the Expiry select`)) say(finding);
-  }
-  for (const [label, read] of [['Affinity source', hints.source]]) {
-    if (!read || read !== hints.pool) say(`the ${label} hint reads ${read} against the Pool hint's ${hints.pool}`);
-  }
   measurements.push(`${theme} /keys Server-side auto mode select ${JSON.stringify({ expiry, hints, select: autoMode })}`);
   for (const finding of compare(autoMode, expiry, ['background', 'border', 'font', 'height', 'padding', 'width'], 'the Server-side auto mode select against the Expiry select')) say(finding);
   if (!hints.autoMode || hints.autoMode !== hints.pool) say(`the Server-side auto mode hint reads ${hints.autoMode} against the Pool hint's ${hints.pool}`);
@@ -2777,7 +2745,7 @@ async function logIn() {
   await page.goto(`${base}/`);
   await booted();
   await advance(LOAD_MS);
-  await page.getByLabel('Admin or viewer secret').fill(secret);
+  await page.getByLabel('Admin secret').fill(secret);
   await page.getByRole('button', { name: 'Log in' }).click();
   await advance(LOAD_MS);
   await page.waitForSelector('.stat-grid');
@@ -2850,7 +2818,7 @@ try {
       }
       if (view.path === '/keys') {
         await keysPoolSelect(theme);
-        await keyCapField(theme);
+        await keyAccessSelects(theme);
         await keyDialogGeometry(theme);
         await keysPageMenus(theme);
       }

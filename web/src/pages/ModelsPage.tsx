@@ -2,7 +2,6 @@ import { useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '@/api';
 import type { KeyModels, ModelEvent, ProcessedRule } from '@/api/types';
-import { useAppSettings } from '@/app/settings';
 import { CoolingDown, scopeLabel, type CoolingRow } from '@/components/CoolingDown';
 import { IconInfo } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, ErrorState, Select, Skeleton, Toast } from '@/components/ui/primitives';
@@ -40,7 +39,6 @@ export function ModelsPage() {
   // without a reload.
   const tick = useNow(15_000);
   const now = useNow(5_000);
-  const { canMutate } = useAppSettings();
   const keys = useAsync(() => api.listKeys(), []);
   const [chosen, setChosen] = useState<string | null>(null);
   const keyId = chosen ?? keys.data?.[0]?.id ?? null;
@@ -153,7 +151,7 @@ export function ModelsPage() {
             <CoolingDown title="Cooling down" now={now} rows={[]} />
           ) : (
             // One block per model, so each opens on its own rows rather than keeping another model's toggle.
-            state.data.cooldowns.map((g) => <CoolingDown key={g.model} title={g.model} busy={busy} now={now} rows={g.rows} showAccount onClear={canMutate ? setPending : undefined} />)
+            state.data.cooldowns.map((g) => <CoolingDown key={g.model} title={g.model} busy={busy} now={now} rows={g.rows} showAccount onClear={setPending} />)
           )}
           <RecentEvents title="Recent rejections" subtitle="The newest refusals of a model by an account" events={state.data?.rejections ?? null} empty="No account has refused a model." now={now} />
           <RecentEvents title="Recent permits" subtitle="The newest requests an account served after another refused the model" events={state.data?.permits ?? null} empty="No request was served after a refusal." now={now} permits />

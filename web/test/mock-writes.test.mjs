@@ -3,9 +3,9 @@ import { test } from 'node:test';
 import * as d from './dist/api.js';
 
 /** A fresh mock signed in the way the login screen signs a browser in. */
-const as = async (role) => {
+const signedIn = async () => {
   const api = new d.MockApi();
-  await api.login(role);
+  await api.login('admin');
   return api;
 };
 
@@ -14,72 +14,10 @@ const poolInputOf = (p) => ({ ...p, members: p.members.map((m) => ({ accountId: 
 const storyPool = async (api) => poolInputOf((await api.listPools()).find((p) => p.id === 'all'));
 const keyInput = { autoModeServer: null, bodyCaptureHours: null, enabled: true, expiresInDays: null, keepaliveOptOut: false, longContextTwins: true, modelRules: [], modelRulesMode: 'extend', name: 'fresh', notes: null, poolId: 'all' };
 
-/** Every `Api` method the gate treats as a write, called with inputs the admin would be answered for. */
-const WRITES = [
-  ['cancelPairing', (api) => api.cancelPairing('pair_unknown')],
-  ['clearCooldown', (api) => api.clearCooldown('mail', 'account')],
-  ['clearFunding', (api) => api.clearFunding('personal')],
-  ['completePairing', (api) => api.completePairing('pair_unknown', { code: 'code', state: 'state' })],
-  ['confirmPairing', (api) => api.confirmPairing('pair_unknown')],
-  ['createAccount', (api) => api.createAccount({ id: 'fresh', kind: 'api_key', label: 'Fresh', secret: 'sk-ant-api03-FAKE' })],
-  ['createKey', (api) => api.createKey(keyInput)],
-  ['createPool', async (api) => api.createPool({ ...(await storyPool(api)), name: 'fresh' })],
-  ['deleteAccount', (api) => api.deleteAccount('spare')],
-  ['deleteKey', (api) => api.deleteKey('batch')],
-  ['deletePool', (api) => api.deletePool('codex')],
-  ['disconnectAccount', (api) => api.disconnectAccount('business')],
-  ['pauseAccount', (api) => api.pauseAccount('business')],
-  ['releaseSession', async (api) => { const s = (await api.listSessions()).find((x) => !x.historical); return api.releaseSession(s.keyId, s.sessionId); }],
-  ['renameAccount', (api) => api.renameAccount('business', 'Renamed')],
-  ['resumeAccount', (api) => api.resumeAccount('team')],
-  ['revokeKey', (api) => api.revokeKey('laptop')],
-  ['rotateKey', (api) => api.rotateKey('laptop')],
-  ['startPairing', (api) => api.startPairing('team')],
-  ['updateAccount', (api) => api.updateAccount('business', { cancelled: true, subscriptionEndsAt: '2026-10-19T09:15:00.000Z' })],
-  ['updateKey', (api) => api.updateKey('laptop', { ...keyInput, name: 'laptop', expiresAt: undefined })],
-  ['updatePool', async (api) => api.updatePool('all', await storyPool(api))],
-  ['verifyAccount', (api) => api.verifyAccount('business')],
-];
-/** The gate lets a viewer end its own session and refresh a usage snapshot; there is no session before a login. */
-const EXEMPT = ['login', 'logout', 'refreshUsage'];
-const READS = [
-  'analyticsBudgets', 'analyticsPlacements', 'getAccountCatalog', 'getAnalyticsBreakdown', 'getAnalyticsBurn', 'getAnalyticsRewrites', 'getAnalyticsSeries', 'getCapturedBodies', 'getKeepaliveOverview', 'getKeyModels', 'getModelsState', 'getOverview', 'getQuotaHistory', 'getRequest', 'getSession', 'getSettings',
-  'listAccountRollups', 'listAccounts', 'listCatalog', 'listCatalogOf', 'listKeepaliveRecipes', 'listKeys',
-  'listPools', 'listQuotaSnapshots', 'listRequests', 'listSessions', 'subscribeLive',
-];
-
 const refusedAs = (status, message) => (e) => e instanceof d.ApiError && e.status === status && e.message === message && e.code === null;
 
-test('the write table names every method of the client, so a new write cannot miss the role check', () => {
-  assert.deepEqual([...WRITES.map(([name]) => name), ...EXEMPT, ...READS].sort(), Object.keys(new d.HttpApi()).sort());
-});
-
-test('every write refuses a viewer with the gate\'s 403 and changes nothing', async () => {
-  const api = await as('viewer');
-  const before = await Promise.all([api.listAccounts(), api.listKeys(), api.listPools(), api.listSessions()]);
-  for (const [name, invoke] of WRITES) {
-    await assert.rejects(() => invoke(api), refusedAs(403, 'the viewer role cannot change anything'), name);
-  }
-  assert.deepEqual(await Promise.all([api.listAccounts(), api.listKeys(), api.listPools(), api.listSessions()]), before);
-});
-
-test('a viewer may still refresh usage and log out, which the gate lets through', async () => {
-  const api = await as('viewer');
-  await api.refreshUsage('business');
-  await api.logout();
-  assert.equal(await api.getSession(), null);
-});
-
-test('captured bodies are the admin\'s, as the bodies route answers a viewer', async () => {
-  const viewer = await as('viewer');
-  const captured = (await viewer.listRequests({ limit: 500 })).requests.find((r) => r.capturedBodies);
-  await assert.rejects(() => viewer.getCapturedBodies(captured.id), refusedAs(403, 'captured bodies are for administrators'));
-  const admin = await as('admin');
-  assert.notEqual(await admin.getCapturedBodies(captured.id), null);
-});
-
 test('a key or a pool whose id is taken is refused with the route\'s 409', async () => {
-  const api = await as('admin');
+  const api = await signedIn();
   const counts = async () => [(await api.listKeys()).length, (await api.listPools()).length];
   const before = await counts();
   await assert.rejects(() => api.createKey({ ...keyInput, name: 'Laptop' }), refusedAs(409, 'a key with this id exists'));
@@ -88,7 +26,7 @@ test('a key or a pool whose id is taken is refused with the route\'s 409', async
 });
 
 test('the mock derives an id from a name the way the client does, which the slug rule always admits', async () => {
-  const api = await as('admin');
+  const api = await signedIn();
   const pool = await api.createPool({ ...(await storyPool(api)), name: '  Nightly batch!  ' });
   const long = await api.createPool({ ...(await storyPool(api)), name: 'x'.repeat(80) });
   const { key } = await api.createKey({ ...keyInput, name: 'Build box' });
@@ -97,7 +35,7 @@ test('the mock derives an id from a name the way the client does, which the slug
 });
 
 test('a pool create refuses the values a pool edit refuses', async () => {
-  const api = await as('admin');
+  const api = await signedIn();
   const all = await storyPool(api);
   await assert.rejects(() => api.createPool({ ...all, affinityTtlSeconds: 30, keepalive: { ...all.keepalive, enabled: false }, name: 'short' }), refusedAs(400, 'affinity_ttl_seconds is 0 or at least 60'));
   await assert.rejects(() => api.createPool({ ...all, keepalive: { ...all.keepalive, coldProbeLimit: 0 }, name: 'cold' }), refusedAs(400, 'keepalive.cold_probe_limit must be between 1 and 20, not 0'));
@@ -106,7 +44,7 @@ test('a pool create refuses the values a pool edit refuses', async () => {
 });
 
 test('a new pool reads each member the way the pool route does', async () => {
-  const api = await as('admin');
+  const api = await signedIn();
   const members = (await api.listAccounts()).map((a) => ({ accountId: a.id, priority: 0 }));
   const verdicts = async (name, overagePolicy) => Object.fromEntries((await api.createPool({ ...(await storyPool(api)), members, name, overagePolicy })).members.map((m) => [m.accountId, m.eligible]));
   assert.deepEqual(await verdicts('first', 'never'), {
@@ -127,7 +65,7 @@ test('a new pool reads each member the way the pool route does', async () => {
 });
 
 test('a pool write round-trips the pin and placement fields and the members\' budgets', async () => {
-  const api = await as('admin');
+  const api = await signedIn();
   const all = await storyPool(api);
   const console_ = all.members.find((m) => m.accountId === 'console');
   assert.deepEqual([console_.budgetDailyUsd, console_.budgetMonthlyUsd], [5, 50], 'the story budgets its Anthropic-key member by the day and the month');
@@ -158,7 +96,7 @@ test('a pool write round-trips the pin and placement fields and the members\' bu
 });
 
 test('the story reads a member at its budget as the route does, and a member half way as eligible', async () => {
-  const api = await as('viewer');
+  const api = await signedIn();
   const pools = await api.listPools();
   const member = (poolId, accountId) => pools.find((p) => p.id === poolId).members.find((m) => m.accountId === accountId);
   const half = member('all', 'console');
@@ -174,7 +112,7 @@ test('the story reads a member at its budget as the route does, and a member hal
 });
 
 test('a pool answers its keys from the key registry', async () => {
-  const api = await as('admin');
+  const api = await signedIn();
   const keysOf = async (poolId) => (await api.listPools()).find((p) => p.id === poolId).keys.map((k) => [k.id, k.enabled]);
   assert.deepEqual(await keysOf('studio'), [['notebook', true]]);
   await api.createKey({ ...keyInput, name: 'scratch', poolId: 'studio' });
@@ -186,7 +124,7 @@ test('a pool answers its keys from the key registry', async () => {
 });
 
 test("a key write stores the server-side auto mode override and a pool write stores the switch", async () => {
-  const api = await as('admin');
+  const api = await signedIn();
   const { key: inheriting } = await api.createKey({ ...keyInput, name: 'inheriting' });
   assert.equal(inheriting.autoModeServer, null, 'the mock answers the inherit it was sent');
   const { key: pinned } = await api.createKey({ ...keyInput, autoModeServer: false, name: 'pinned' });
@@ -206,7 +144,7 @@ test("a key write stores the server-side auto mode override and a pool write sto
 
 
 test('a pool write with an unknown spelling or a budget the route refuses is refused with the route\'s text', async () => {
-  const api = await as('admin');
+  const api = await signedIn();
   const all = await storyPool(api);
   const before = await api.listPools();
   const refusals = [
@@ -227,7 +165,7 @@ test('a pool write with an unknown spelling or a budget the route refuses is ref
 });
 
 test('a model rule list the route refuses is refused on every pool and key write, with the route\'s text', async () => {
-  const api = await as('admin');
+  const api = await signedIn();
   const all = await storyPool(api);
   const laptop = { ...keyInput, name: 'laptop' };
   const stored = async () => [(await api.listPools()).map((p) => p.modelRules), (await api.listKeys()).map((k) => [k.modelRules, k.modelRulesMode])];
@@ -252,7 +190,7 @@ test('a model rule list the route refuses is refused on every pool and key write
 });
 
 test('a key write without the model fields takes the route\'s defaults on create and keeps the stored ones on edit', async () => {
-  const api = await as('admin');
+  const api = await signedIn();
   const { longContextTwins: _t, modelRules: _r, modelRulesMode: _m, ...bare } = keyInput;
   const { key } = await api.createKey({ ...bare, name: 'bare' });
   assert.deepEqual([key.modelRules, key.modelRulesMode, key.longContextTwins], [[], 'extend', true]);
@@ -265,7 +203,7 @@ test('a key write without the model fields takes the route\'s defaults on create
 });
 
 test('an account patch is refused where the account route refuses it, and a cancelled end stands only with its flag', async () => {
-  const api = await as('admin');
+  const api = await signedIn();
   const end = '2026-10-19T09:15:00.000Z';
   const before = await api.listAccounts();
   await assert.rejects(() => api.updateAccount('console', { cancelled: true, subscriptionEndsAt: end }), refusedAs(400, 'only an oauth account is cancelled'));
@@ -282,7 +220,7 @@ test('an account patch is refused where the account route refuses it, and a canc
 });
 
 test('a model-scoped cooldown reads its window from its reason, not a fixed model_rejection value', async () => {
-  const api = await as('viewer');
+  const api = await signedIn();
   const business = api.accounts.find((a) => a.id === 'business');
   const sample = business.cooldowns[0];
   business.cooldowns = [...business.cooldowns, { ...sample, reason: 'permission', scope: 'model:claude-test-permission' }];
@@ -294,7 +232,7 @@ test('a model-scoped cooldown reads its window from its reason, not a fixed mode
 });
 
 test('the catalog union names each model once and a failed fetch contributes nothing', async () => {
-  const api = await as('viewer');
+  const api = await signedIn();
   const ids = (models) => models.map((m) => m.id);
   const business = ids((await api.getAccountCatalog('business')).models);
   assert.ok(business.length > 0, 'the story has a catalog to union');
@@ -304,7 +242,7 @@ test('the catalog union names each model once and a failed fetch contributes not
 });
 
 test('a refusal never carries an error code, which the router sets for an unavailable registry alone', async () => {
-  const api = await as('admin');
+  const api = await signedIn();
   const missing = [
     () => api.renameAccount('nobody', 'x'),
     () => api.rotateKey('nothing'),
@@ -313,13 +251,13 @@ test('a refusal never carries an error code, which the router sets for an unavai
 });
 
 test('an unknown id is refused with the route\'s own 404 text, which the console shows as the toast body', async () => {
-  const api = await as('admin');
+  const api = await signedIn();
   await assert.rejects(() => api.renameAccount('nobody', 'x'), refusedAs(404, 'account not found'));
   await assert.rejects(() => api.rotateKey('nothing'), refusedAs(404, 'key not found'));
 });
 
 test('the quota snapshots never answer a status or a poll outcome the decoder cannot produce', async () => {
-  const api = await as('admin');
+  const api = await signedIn();
   for (let read = 0; read < 2; read += 1) {
     const snapshots = await api.listQuotaSnapshots();
     assert.deepEqual(snapshots.map((s) => s.status).filter((s) => s !== 'error' && s !== 'success'), [], `read ${read + 1}`);

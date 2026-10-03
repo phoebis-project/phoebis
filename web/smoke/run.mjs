@@ -96,7 +96,7 @@ const failoverRow = requests.find((r) => r.attempts.length > 1 && r.attempts.som
 {
   localStorage.removeItem('phoebis.mockSession');
   const login = await mount('/');
-  expect('login screen without a session', login.text(), ['Admin or viewer secret', 'Log in']);
+  expect('login screen without a session', login.text(), ['Admin secret', 'Log in']);
   // Counted by fill, so a cell drawn in a fixed colour (which the theme toggle would not reach) or a dropped body
   // square fails the check.
   const markCells = login.container.querySelectorAll('.brand__mark svg rect[fill="var(--mark-cell)"]').length;
@@ -104,14 +104,15 @@ const failoverRow = requests.find((r) => r.attempts.length > 1 && r.attempts.som
   results.push({ name: 'the login view carries the mark, 26 cells and 5 body squares on the theme tokens, and the couplet', ok: markCells === 26 && markBody === 5 && login.text().includes('Place every request. Keep every session.'), missing: [`cells ${markCells}`, `body ${markBody}`] });
   const input = login.container.querySelector('input[type="password"]');
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-  setter.call(input, 'viewer');
+  setter.call(input, 'admin');
   input.dispatchEvent(new window.Event('input', { bubbles: true }));
   [...login.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Log in')?.click();
   await login.settle(500);
-  results.push({ name: 'a viewer login lands on the dashboard with the viewer badge', ok: login.text().includes('Requests, 24h') && login.text().includes('viewer') && !login.text().includes('Log in'), missing: [] });
+  const topbarBadges = login.container.querySelectorAll('.topbar__right .badge').length;
+  results.push({ name: 'a login lands on the dashboard with no badge in the top bar', ok: login.text().includes('Requests, 24h') && topbarBadges === 0 && !login.text().includes('Log in'), missing: [`top bar badges ${topbarBadges}`] });
   [...login.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Log out')?.click();
   await login.settle(400);
-  results.push({ name: 'Log out returns to the login screen', ok: login.text().includes('Admin or viewer secret'), missing: [] });
+  results.push({ name: 'Log out returns to the login screen', ok: login.text().includes('Admin secret'), missing: [] });
   login.unmount();
   localStorage.setItem('phoebis.mockSession', 'admin');
 }
@@ -139,7 +140,7 @@ const failoverRow = requests.find((r) => r.attempts.length > 1 && r.attempts.som
 }
 
 let m = await mount('/');
-expect('/ dashboard', m.text(), ['Requests, 24h', 'Tokens, 24h', 'Estimated cost, 24h', 'Error rate, 24h', '5h remaining', '7d remaining', 'remaining', 'business', 'personal', 'Cooling down', 'Overage active', 'Needs re-auth', 'Recent requests', 'Sticky pins and cache-warming agents', 'active pins', 'admin', 'Fable', 'n/a']);
+expect('/ dashboard', m.text(), ['Requests, 24h', 'Tokens, 24h', 'Estimated cost, 24h', 'Error rate, 24h', '5h remaining', '7d remaining', 'remaining', 'business', 'personal', 'Cooling down', 'Overage active', 'Needs re-auth', 'Recent requests', 'Sticky pins and cache-warming agents', 'active pins', 'Fable', 'n/a']);
 results.push({ name: 'data-theme set', ok: document.documentElement.getAttribute('data-theme') === 'light', missing: [document.documentElement.getAttribute('data-theme')] });
 results.push({ name: 'the shell carries the mark beside the name and no couplet', ok: m.container.querySelector('.sidebar .brand__mark svg rect') !== null && m.container.querySelector('.sidebar .brand__name')?.textContent === 'Phoebis Router' && m.container.querySelector('.sidebar .brand__couplet') === null, missing: [] });
 {
@@ -527,6 +528,10 @@ m = await mount('/accounts');
   });
 }
 results.push({ name: 'nav calls the pages Accounts and Keys, and no text names the old page', ok: [...m.container.querySelectorAll('.nav__link')].some((a) => a.textContent?.trim() === 'Accounts') && [...m.container.querySelectorAll('.nav__link')].some((a) => a.textContent?.trim() === 'Keys') && !/\bupstreams\b/i.test(m.text()), missing: [...m.container.querySelectorAll('.nav__link')].map((a) => a.textContent?.trim() ?? '') });
+{
+  const nav = [...m.container.querySelectorAll('.nav__link')].map((a) => a.textContent?.trim());
+  results.push({ name: 'nav has Observe and Sessions, no Keepalive or Plugins', ok: nav.includes('Observe') && nav.includes('Sessions') && !nav.includes('Keepalive') && !nav.includes('Plugins') && nav.indexOf('Observe') === nav.indexOf('Dashboard') + 1, missing: nav });
+}
 expect('/accounts (lands on the first)', m.text(), ['business@example.com', 'Identity', 'OAuth login', 'Max since', 'default_claude_max_20x', 'Billing type', 'Organization', 'Renewal date is not reported by the provider', 'Usage', 'Fable', '7-day trend', 'Pools', 'priority 0', 'Credential', 'Requests', 'Re-pair', 'Pause', 'Disconnect', 'Delete account', 'Extra usage this month', 'Add account']);
 await emailLines('/accounts each row reads its email under the name, and draws no line without one', [...m.container.querySelectorAll('a.account-row')].map((r) => [idOf(r), r.querySelector('.account-row__sub')?.textContent ?? null]));
 await emailLines('/accounts/business the head reads the email under the name', [['business', m.container.querySelector('.detail__ident > .detail__sub.mono')?.textContent ?? null]]);
@@ -1190,11 +1195,11 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   results.push({ name: '/pools keys section is not a multi-select', ok: keysMulti.length === 0, missing: keysMulti });
 
   // Grouped dialog: a two-level rail beside one group at a time, one heading per group.
-  const groupLabels = ['Identity', 'Members', 'Keys', 'Models', 'Auto mode', 'Selection', 'Placement', 'Pinning', 'Utilization thresholds', 'Load shedding', 'Failover', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Probe tuning', 'Response headers', 'Body capture', 'Cache diagnostics'];
+  const groupLabels = ['Identity', 'Members', 'Keys', 'Models', 'Auto mode', 'Selection', 'Placement', 'Pinning', 'Utilization thresholds', 'Load shedding', 'Failover', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Probe tuning', 'Body capture', 'Cache diagnostics'];
   const railParents = [...(dlg?.querySelectorAll('.dialog-rail__parent .dialog-rail__label') ?? [])].map((s) => s.textContent?.trim());
   const railGroups = [...(dlg?.querySelectorAll('.dialog-rail__group .dialog-rail__label') ?? [])].map((s) => s.textContent?.trim());
   results.push({
-    name: '/pools dialog rail lists the five parents and the eighteen groups in order',
+    name: '/pools dialog rail lists the five parents and the seventeen groups in order',
     ok: JSON.stringify(railParents) === JSON.stringify(['Pool', 'Routing', 'Load', 'Caching', 'Visibility']) && JSON.stringify(railGroups) === JSON.stringify(groupLabels),
     missing: [...railParents, ...railGroups],
   });
@@ -1216,7 +1221,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     const members = group(dlg, 'Members');
     results.push({
       name: '/pools choosing a group hides every other group and marks its rail entry',
-      ok: (dlg?.querySelectorAll('section.dialog-group[hidden]').length ?? 0) === 17 && members?.hidden === false && rail(dlg, 'members')?.getAttribute('aria-current') === 'true',
+      ok: (dlg?.querySelectorAll('section.dialog-group[hidden]').length ?? 0) === 16 && members?.hidden === false && rail(dlg, 'members')?.getAttribute('aria-current') === 'true',
       missing: shown(),
     });
     results.push({ name: "/pools focus lands on the group's heading", ok: !!members && document.activeElement === members.querySelector('h3'), missing: [document.activeElement?.outerHTML.slice(0, 80) ?? 'nothing focused'] });
@@ -1619,7 +1624,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
 
   {
     const visibility = [...(dlg?.querySelector('.dialog-rail__parent[data-parent="Visibility"]')?.parentElement?.querySelectorAll('.dialog-rail__group .dialog-rail__label') ?? [])].map((s) => s.textContent?.trim());
-    results.push({ name: '/pools dialog lists Response headers, Body capture and Cache diagnostics under Visibility, in that order', ok: JSON.stringify(visibility) === '["Response headers","Body capture","Cache diagnostics"]', missing: visibility });
+    results.push({ name: '/pools dialog lists Body capture and Cache diagnostics under Visibility, in that order', ok: JSON.stringify(visibility) === '["Body capture","Cache diagnostics"]', missing: visibility });
     expect('/pools capture section', group(dlg, 'Body capture')?.textContent ?? '', [
       'Capture request and response bodies',
       "Keeps the request and response bodies of this pool's keys for the request drawer on the Requests page",
@@ -2354,15 +2359,6 @@ m.unmount();
   await q.settle(200);
   results.push({ name: '/pools?edit=all&group=nope opens on Identity', ok: titleOf(q) === 'Edit pool all' && shown(q) === 'Identity', missing: [titleOf(q), shown(q)] });
   q.unmount();
-  // The viewer check restores phoebis.role: the preview outlives a mount, and the checks after this block run as admin.
-  const role = localStorage.getItem('phoebis.role');
-  localStorage.setItem('phoebis.role', 'viewer');
-  q = await mount('/pools?edit=all');
-  await q.settle(200);
-  results.push({ name: '/pools?edit=all under the viewer preview opens nothing, toasts nothing and clears the address', ok: dialogOf(q) === null && !q.text().includes('not found') && q.location().search === '', missing: [titleOf(q), q.location().search] });
-  q.unmount();
-  if (role === null) localStorage.removeItem('phoebis.role');
-  else localStorage.setItem('phoebis.role', role);
   const desktop = (await api.listKeys()).find((k) => k.id === 'desktop')?.name ?? 'desktop';
   q = await mount('/keys?edit=desktop&group=models');
   await q.settle(200);
@@ -2510,7 +2506,7 @@ m.unmount();
   const labels = (page) => [...(dialogOf(page)?.querySelectorAll('.dialog-rail__group .dialog-rail__label') ?? [])].map((s) => s.textContent?.trim());
   const parents = (page) => [...(dialogOf(page)?.querySelectorAll('.dialog-rail__parent .dialog-rail__label') ?? [])].map((s) => s.textContent?.trim());
   x = await mount('/fixtures/grouped-dialog?expertOnly=autoMode');
-  results.push({ name: 'an expert-only group leaves the rail while the mode is off', ok: !labels(x).includes('Auto mode') && labels(x).length === 17 && parents(x).join() === 'Pool,Routing,Load,Caching,Visibility', missing: labels(x) });
+  results.push({ name: 'an expert-only group leaves the rail while the mode is off', ok: !labels(x).includes('Auto mode') && labels(x).length === 16 && parents(x).join() === 'Pool,Routing,Load,Caching,Visibility', missing: labels(x) });
   [...(group(dialogOf(x), 'Identity')?.querySelectorAll('button.link-btn') ?? [])].find((b) => b.textContent?.trim() === 'Auto mode')?.click();
   await x.settle(150);
   results.push({
@@ -2523,7 +2519,7 @@ m.unmount();
   x = await mount('/fixtures/grouped-dialog?expertOnly=identity,members,keys,models,autoMode');
   await x.settle(100);
   const panel = (page) => [...(dialogOf(page)?.querySelectorAll('section.dialog-group:not([hidden])') ?? [])].map((s) => s.getAttribute('aria-label')).join();
-  results.push({ name: 'an expert-only run leaves with its parent heading', ok: parents(x).join() === 'Routing,Load,Caching,Visibility' && labels(x).length === 13, missing: parents(x) });
+  results.push({ name: 'an expert-only run leaves with its parent heading', ok: parents(x).join() === 'Routing,Load,Caching,Visibility' && labels(x).length === 12, missing: parents(x) });
   results.push({
     name: 'a chosen group the filter takes off gives way to the first shown group',
     ok: panel(x) === 'Selection' && rail(dialogOf(x), 'selection')?.getAttribute('aria-current') === 'true' && localStorage.getItem('phoebis.expertView') === null,
@@ -2712,9 +2708,7 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
   btn?.click();
   await m.settle(200);
   const dlg = m.container.querySelector('dialog[open]');
-  // A hint that ends in a page link is read up to the link, whose text carries a hidden "opens in a new tab".
-  const CAP_HINT = "Past this many requests at once the key is refused with a 429 and a Retry-After until one finishes; empty means no cap. The pool's cap per member is under Failover on the";
-  expect('/keys create dialog opens', dlg?.textContent ?? '', ['Create key', 'Expiry', 'Requests in flight', CAP_HINT, 'Notes', 'Capture request and response bodies', 'Cache warming opt-out', 'Model rules', 'Extend pool rules', 'Replace pool rules', 'from pool', 'List [1m] twins in the models listing', 'written with a trailing *']);
+  expect('/keys create dialog opens', dlg?.textContent ?? '', ['Create key', 'Expiry', 'Notes', 'Capture request and response bodies', 'Cache warming opt-out', 'Model rules', 'Extend pool rules', 'Replace pool rules', 'from pool', 'List [1m] twins in the models listing', 'written with a trailing *']);
   {
     // Read while the name is blank, so Key carries its refusal mark; the label span passes over the dot and the note.
     const railLabels = [...(dlg?.querySelectorAll('.dialog-rail__group .dialog-rail__label') ?? [])].map((l) => l.textContent?.trim());
@@ -2777,27 +2771,20 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
     await m.settle(100);
   }
   {
-    // Access holds who may use the key and how much at once: on create, Expiry, Server-side auto mode, then
-    // the cap.
+    // Access holds who may use the key: on create, Expiry, then Server-side auto mode.
     const access = group(dlg, 'Access');
     const labels = [...(access?.querySelectorAll('.field__label') ?? [])].map((l) => l.textContent?.trim());
-    results.push({ name: '/keys Requests in flight follows Server-side auto mode in Access', ok: JSON.stringify(labels) === JSON.stringify(['Expiry', 'Server-side auto mode', 'Requests in flight']), missing: labels });
-    // What names a conversation sits in Sessions; it keeps its options and defaults.
+    results.push({ name: '/keys Access reads Expiry and Server-side auto mode', ok: JSON.stringify(labels) === JSON.stringify(['Expiry', 'Server-side auto mode']), missing: labels });
     const sessions = group(dlg, 'Sessions');
     const selectIn = (section, label) => section?.querySelector(`select[aria-label="${label}"]`);
     const optionsOf = (section, label) => [...(selectIn(section, label)?.options ?? [])].map((o) => `${o.value}:${o.textContent?.trim()}`);
     const sessionLabels = [...(sessions?.querySelectorAll('.field__label') ?? [])].map((l) => l.textContent?.trim());
     results.push({
-      name: '/keys the Affinity source select sits in Sessions, with its options and the default',
+      name: '/keys Sessions holds Cache warming opt-out alone',
       ok:
-        JSON.stringify(sessionLabels) === JSON.stringify(['Affinity source', 'Cache warming opt-out']) &&
-        JSON.stringify(optionsOf(sessions, 'Affinity source')) === JSON.stringify(['auto:Automatic', 'session:Session id', 'user_id:User id', 'content:Conversation content', 'whole_key:Whole key']) &&
-        selectIn(sessions, 'Affinity source')?.value === 'auto',
-      missing: [JSON.stringify(labels), JSON.stringify(sessionLabels), JSON.stringify(optionsOf(sessions, 'Affinity source')), String(selectIn(sessions, 'Affinity source')?.value)],
+        JSON.stringify(sessionLabels) === JSON.stringify(['Cache warming opt-out']),
+      missing: [JSON.stringify(labels), JSON.stringify(sessionLabels)],
     });
-    expect('/keys the Affinity source select carries its hint', sessions?.textContent ?? '', [
-      "What names a conversation for pinning. Automatic takes the first of: the session id, a parent id the client sends back, the user id, the messages, the key. A fixed source uses that alone, and a request without it gets no pin. How long a pin lasts is the pool's Session affinity on the",
-    ]);
   }
   {
     // A new key extends its pool's list, drawn read-only after its own rows; replacing the list drops them.
@@ -2886,7 +2873,7 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
     const labels = [...(group(editDlg, 'Access')?.querySelectorAll('.field__label') ?? [])].map((l) => l.textContent?.trim());
     results.push({
       name: '/keys edit dialog draws the Enabled switch and an expiry that keeps the current one by default',
-      ok: toggle !== null && toggle?.disabled === false && group(editDlg, 'Access')?.contains(toggle) && JSON.stringify(labels) === JSON.stringify(['Enabled', 'Expiry', 'Server-side auto mode', 'Requests in flight']) && expiry?.value === 'keep' && JSON.stringify(options) === JSON.stringify(['keep', '7', '30', '60', '90', '365', 'never']),
+      ok: toggle !== null && toggle?.disabled === false && group(editDlg, 'Access')?.contains(toggle) && JSON.stringify(labels) === JSON.stringify(['Enabled', 'Expiry', 'Server-side auto mode']) && expiry?.value === 'keep' && JSON.stringify(options) === JSON.stringify(['keep', '7', '30', '60', '90', '365', 'never']),
       missing: [toggle ? String(toggle.getAttribute('aria-checked')) : 'no switch', JSON.stringify(labels), expiry?.value ?? 'no expiry select', options.join(',')],
     });
   }
@@ -5486,7 +5473,7 @@ m.unmount();
 }
 
 m = await mount('/settings');
-expect('/settings', m.text(), ['Downstream client configuration', 'Pricing', 'Appearance', 'Access', 'About', 'Theme', 'Time format', 'Admin secret', 'Viewer secret', 'except captured bodies and live previews', 'Preview as viewer', 'claude-fable-5-1', 'ANTHROPIC_BASE_URL=https://router.example.com', 'CLAUDE_CODE_OAUTH_TOKEN=<key>', '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1', 'CLAUDE_CODE_GATEWAY_HINT_HEADERS=1', 'DISABLE_TELEMETRY=1', 'CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1', 'Inference is served on 127.0.0.1:8080', 'Version', 'Profile', 'Metrics listener', 'Ledger path', 'Pricing path', 'Storage path', "prints this router's"]);
+expect('/settings', m.text(), ['Downstream client configuration', 'Pricing', 'Appearance', 'Access', 'About', 'Theme', 'Time format', 'Admin secret', 'Viewer secret', 'except captured bodies and live previews', 'claude-fable-5-1', 'ANTHROPIC_BASE_URL=https://router.example.com', 'CLAUDE_CODE_OAUTH_TOKEN=<key>', '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1', 'CLAUDE_CODE_GATEWAY_HINT_HEADERS=1', 'DISABLE_TELEMETRY=1', 'CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1', 'Inference is served on 127.0.0.1:8080', 'Version', 'Profile', 'Metrics listener', 'Ledger path', 'Pricing path', 'Storage path', "prints this router's"]);
 results.push({ name: '/settings has no statusline mention', ok: !/statusline/i.test(m.text()), missing: [] });
 results.push({ name: '/settings has no retention save button', ok: ![...m.container.querySelectorAll('button')].some((b) => b.textContent?.trim() === 'Save retention'), missing: [] });
 {
@@ -5527,65 +5514,29 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
   }
   const shippedModels = [...m.container.querySelectorAll('tbody tr')].map((row) => row.children[0]?.textContent?.trim() ?? '').filter((n) => n.includes('-'));
   results.push({ name: '/settings price table is the shipped Anthropic table', ok: shippedModels.length === 10 && shippedModels.every((n) => n.startsWith('claude-')), missing: shippedModels });
+  {
+    const card = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Pricing');
+    const rows = card?.querySelectorAll('.price-table tbody tr:not(.price-table__fast)').length ?? 0;
+    const edits = card?.querySelectorAll('.price-cell__btn, input, .save-bar').length ?? 0;
+    const buttons = [...(card?.querySelectorAll('button') ?? [])].map((b) => b.textContent?.trim() || b.getAttribute('aria-label'));
+    results.push({
+      name: '/settings the Pricing card is read-only: the rows, no editable cell, no Add model and no button',
+      ok: card !== undefined && rows === 10 && edits === 0 && buttons.length === 0,
+      missing: [`rows ${rows}`, `editable parts ${edits}`, ...buttons],
+    });
+    const opus = [...(card?.querySelectorAll('.price-table tbody tr') ?? [])].find((tr) => tr.children[0]?.textContent?.trim() === 'claude-opus-5-5');
+    const fast = opus?.nextElementSibling?.classList.contains('price-table__fast') ? [...opus.nextElementSibling.children].map((td) => td.textContent?.trim()) : null;
+    results.push({
+      name: '/settings the fast-mode row sits under Opus 5.5',
+      ok: fast !== null && fast[0] === 'fast mode' && fast[1] === '$8.00' && fast[5] === '$40.00',
+      missing: fast ?? ['no fast-mode row under claude-opus-5-5'],
+    });
+  }
   results.push({
     name: '/settings no longer carries the other upstream prices section',
     ok: !m.text().includes('Other upstream prices') && !/gpt-\d/.test(m.text()) && m.container.querySelectorAll('.price-extra').length === 0,
     missing: [m.text().includes('Other upstream prices') ? 'heading still there' : '', /gpt-\d/.test(m.text()) ? 'a gpt row is still priced' : ''].filter(Boolean),
   });
-}
-
-// Editing a price by hand: cell, Save bar, validation, Discard.
-{
-  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-  m.container.querySelector('.price-cell__btn')?.click();
-  await m.settle(150);
-  const cell = m.container.querySelector('input.input--price');
-  results.push({
-    name: '/settings a price cell turns into a numeric input',
-    ok: cell !== null && cell.type === 'number' && cell.min === '0' && cell.step === '0.0001',
-    missing: [cell ? `${cell.type} min=${cell.min} step=${cell.step}` : 'no input'],
-  });
-  results.push({ name: '/settings the table is clean until a price changes', ok: m.container.querySelector('.save-bar') === null, missing: [] });
-  setter.call(cell, '11.5');
-  cell.dispatchEvent(new window.Event('input', { bubbles: true }));
-  await m.settle(200);
-  results.push({ name: '/settings an edited price raises the Save bar', ok: m.container.querySelector('.save-bar') !== null && m.text().includes('Unsaved price edits.'), missing: [] });
-  [...m.container.querySelectorAll('.save-bar button')].find((b) => b.textContent?.trim() === 'Save')?.click();
-  await m.settle(250);
-  results.push({
-    name: '/settings Save stamps the table as edited by hand',
-    ok: m.text().includes('source: edited by hand') && m.text().includes('$11.50') && m.container.querySelector('.save-bar') === null,
-    missing: [m.container.querySelector('.card__subtitle')?.textContent ?? 'absent'],
-  });
-  {
-    const opus = [...m.container.querySelectorAll('.price-table tbody tr')].find((tr) => tr.children[0]?.textContent?.trim() === 'claude-opus-5-5');
-    const fast = opus?.nextElementSibling?.classList.contains('price-table__fast') ? [...opus.nextElementSibling.children].map((td) => td.textContent?.trim()) : null;
-    results.push({
-      name: '/settings a hand edit keeps the read-only fast-mode row under Opus 5.5',
-      ok: fast !== null && fast[0] === 'fast mode' && fast[1] === '$8.00' && fast[5] === '$40.00' && opus?.nextElementSibling?.querySelector('button') === null,
-      missing: fast ?? ['no fast-mode row under claude-opus-5-5'],
-    });
-  }
-  [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Add model')?.click();
-  await m.settle(200);
-  results.push({ name: '/settings Add model appends a row with an empty model id', ok: m.container.querySelector('input[aria-label="Model id"]') !== null, missing: [] });
-  [...m.container.querySelectorAll('.save-bar button')].find((b) => b.textContent?.trim() === 'Save')?.click();
-  await m.settle(200);
-  results.push({ name: '/settings Save refuses a row without a model id', ok: m.text().includes('Every row needs a model id.') && m.container.querySelector('.save-bar__msg.is-error') !== null, missing: [] });
-  [...m.container.querySelectorAll('.save-bar button')].find((b) => b.textContent?.trim() === 'Discard')?.click();
-  await m.settle(200);
-  results.push({
-    name: '/settings Discard drops the edit and the Save bar',
-    ok: m.container.querySelector('input[aria-label="Model id"]') === null && m.container.querySelector('.save-bar') === null,
-    missing: [],
-  });
-  const remove = [...m.container.querySelectorAll('.price-table button')].find((b) => (b.getAttribute('title') ?? '').startsWith('Remove claude-fable-5-1'));
-  remove?.click();
-  await m.settle(250);
-  const confirmDlg = [...m.container.querySelectorAll('dialog[open]')].pop();
-  results.push({ name: '/settings Remove asks before dropping a model', ok: (confirmDlg?.textContent ?? '').includes('Remove model') && (confirmDlg?.textContent ?? '').includes('loses its prices'), missing: [confirmDlg?.textContent?.slice(0, 80) ?? 'absent'] });
-  [...(confirmDlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
-  await m.settle(200);
 }
 
 // The downstream client configuration card: two snippets and one definition per variable.
@@ -5633,17 +5584,11 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
     'Leave it unset without warming.',
   ]);
 }
-// The preview outlives a mount, so the viewer pass below puts this back when it ends.
-const roleBeforePreview = localStorage.getItem('phoebis.role');
 {
   const dark = [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Dark');
   dark?.click();
   await m.settle(100);
   results.push({ name: 'theme toggle -> dark', ok: document.documentElement.getAttribute('data-theme') === 'dark' && localStorage.getItem('phoebis.theme') === 'dark', missing: [document.documentElement.getAttribute('data-theme'), localStorage.getItem('phoebis.theme')] });
-  const sw = m.container.querySelector('button[role="switch"][aria-label="Preview as viewer"]');
-  sw?.click();
-  await m.settle(100);
-  results.push({ name: 'viewer toggle persisted', ok: localStorage.getItem('phoebis.role') === 'viewer', missing: [localStorage.getItem('phoebis.role')] });
 }
 m.unmount();
 
@@ -5861,119 +5806,6 @@ m.unmount();
   }
   f.unmount();
 }
-
-// Viewer mode: no mutating controls, no bodies.
-m = await mount('/keys');
-{
-  const t = m.text();
-  const heading = m.container.querySelector('.topbar__title')?.textContent ?? '';
-  results.push({ name: 'viewer: /keys is the Keys page and hides Create key', ok: heading === 'Keys' && !t.includes('Create key'), missing: [heading] });
-  results.push({ name: 'viewer: role badge', ok: t.includes('viewer'), missing: [] });
-  // A control a page forgets to hide would still reach the router's gate, so the mock answers it the same way.
-  const refused = await api.createKey({ bodyCaptureHours: null, enabled: true, expiresInDays: null, keepaliveOptOut: false, longContextTwins: true, modelRules: [], modelRulesMode: 'extend', name: 'viewer-write', notes: null, poolId: 'all' }).then(() => null, (e) => e);
-  results.push({
-    name: 'viewer: a write through the mock is refused with the gate\'s 403',
-    ok: refused?.status === 403 && refused.message === 'the viewer role cannot change anything' && refused.code === null && !(await api.listKeys()).some((k) => k.id === 'viewer-write'),
-    missing: [refused ? `${refused.status} ${refused.message} ${refused.code}` : 'the write went through'],
-  });
-}
-// Every control named here is a button, and a label is matched against the buttons rather than against the page
-// text because the copy carries the same words: the accounts status filter alone offers "Paused". A closed
-// dialog's own markup is in the DOM on every page and reaches nobody, so it is filtered out.
-for (const [path, absent, present, heading] of [
-  ['/', [], ['viewer'], 'Dashboard'],
-  ['/accounts/business', ['Add account', 'Clear', 'Clear funding flag', 'Delete account', 'Disconnect', 'Pause', 'Re-pair', 'Resume', 'Verify'], ['Catalog', 'Identity'], 'Accounts'],
-  ['/analytics', [], ['Traffic', 'Latency'], 'Analytics'],
-  ['/keys', ['Create key'], ['Lifetime cost by key'], 'Keys'],
-  ['/pools', ['Create pool', 'Delete', 'Edit'], ['Pace, subscription accounts first'], 'Pools'],
-  ['/sessions', ['Release'], ['Cache warming'], 'Sessions'],
-  ['/settings', ['Add model'], ['About', 'Pricing'], 'Settings'],
-]) {
-  await m.navigate(path);
-  const t = m.text();
-  const reachable = (selector) => [...m.container.querySelectorAll(selector)].filter((e) => e.closest('dialog') === null);
-  const labels = reachable('button').map((b) => b.textContent?.trim());
-  const title = m.container.querySelector('.topbar__title')?.textContent ?? '';
-  results.push({
-    name: `viewer: ${path} hides every mutating control`,
-    ok: title === heading && absent.every((a) => !labels.includes(a)) && present.every((p) => t.includes(p)),
-    missing: [...(title === heading ? [] : [`titled ${title}`]), ...absent.filter((a) => labels.includes(a)).map((a) => `offers ${a}`), ...present.filter((p) => !t.includes(p)).map((p) => `lacks ${p}`)],
-  });
-  // The sessions row keeps its menu for the two jumps that only read.
-  results.push({ name: `viewer: ${path} has no row menu`, ok: path === '/sessions' || reachable('.menu__trigger').length === 0, missing: [] });
-}
-{
-  // A viewer's address is cleared before any dialog opens, and the expert view's turn-on lives in the dialog, so a
-  // dialog query leaves the switch off.
-  await m.navigate('/pools?edit=all&group=autoMode');
-  await m.settle(200);
-  const expert = m.container.querySelector('.sidebar__status button[role="switch"][aria-label="Expert view"]');
-  results.push({
-    name: 'viewer: a dialog query on /pools opens nothing and leaves the Expert view switch off',
-    ok: m.container.querySelector('dialog[open]') === null && !m.text().includes('not found') && m.location().search === '' && expert?.getAttribute('aria-checked') === 'false' && localStorage.getItem('phoebis.expertView') === null,
-    missing: [expert?.getAttribute('aria-checked') ?? 'no switch', m.location().search, String(localStorage.getItem('phoebis.expertView'))],
-  });
-}
-await m.navigate('/accounts/business');
-results.push({ name: 'viewer: /accounts has no Edit label button', ok: m.container.querySelector('button[aria-label="Edit label"]') === null, missing: [] });
-await m.navigate(`/requests/${laptopRow.id}`);
-{
-  const t = m.text();
-  results.push({ name: 'viewer: bodies hidden', ok: t.includes('only the admin secret can read bodies') && !t.includes('cache_control'), missing: [] });
-}
-await m.navigate('/accounts/business');
-{
-  const t = m.text();
-  const at = accountsInPlace(m);
-  results.push({ name: 'viewer: /accounts/business stays at its path on the Accounts page and hides actions', ok: at.heading === 'Accounts' && at.nav === '/accounts' && at.row === '/accounts/business' && !t.includes('Disconnect') && !t.includes('Add account'), missing: [JSON.stringify(at)] });
-}
-await m.navigate('/');
-{
-  const badge = m.container.querySelector('.topbar__right .badge');
-  results.push({
-    name: 'viewer: the role badge names every redaction the viewer secret carries',
-    ok: badge?.getAttribute('title') === 'Viewer secret: read everything except captured bodies and live previews',
-    missing: [badge?.getAttribute('title') ?? 'no role badge'],
-  });
-}
-await m.navigate('/settings');
-results.push({
-  name: 'viewer: /settings price table is the plain one',
-  ok: m.container.querySelector('.price-cell__btn') === null && !m.text().includes('Add model') && m.text().includes('claude-fable-5-1'),
-  missing: [],
-});
-await m.navigate('/sessions');
-{
-  const row = m.container.querySelector('tbody tr.srow');
-  row?.querySelector('.menu__trigger')?.click();
-  await m.settle(150);
-  const items = [...(row?.querySelectorAll('.menu__list button') ?? [])].map((b) => b.textContent?.trim());
-  results.push({ name: 'viewer: /sessions hides Release', ok: !items.includes('Release'), missing: items });
-  results.push({ name: 'viewer: /sessions keeps both read-only jumps', ok: items.includes('View in analytics') && items.includes('View in observe'), missing: items });
-}
-await m.navigate('/models');
-{
-  // The confirm dialog is mounted closed on every page, so only a button outside a closed dialog counts.
-  const clears = [...m.container.querySelectorAll('button')].filter((b) => b.textContent?.trim() === 'Clear' && !b.closest('dialog:not([open])')).length;
-  const blocks = [...m.container.querySelectorAll('.card__title')].filter((t) => t.textContent?.startsWith('claude-')).length;
-  results.push({ name: 'viewer: /models reads every block and offers no Clear', ok: clears === 0 && blocks > 0 && m.text().includes('Processed rules for') && m.text().includes('Recent permits'), missing: [`${clears} Clear buttons`, `${blocks} model blocks`] });
-}
-await m.navigate('/quota');
-results.push({ name: 'viewer: /quota keeps Refresh all', ok: m.text().includes('Refresh all'), missing: [] });
-await m.navigate('/observe');
-{
-  const laptopRow = [...m.container.querySelectorAll('.live-table tbody tr')].find((tr) => tr.children[1]?.textContent === 'laptop');
-  laptopRow?.click();
-  await m.settle(300);
-  results.push({ name: 'viewer: /observe preview gated', ok: laptopRow ? m.text().includes('Preview is available to admin sessions') : true, missing: [laptopRow ? '' : 'no laptop row'] });
-}
-{
-  const nav = [...m.container.querySelectorAll('.nav__link')].map((a) => a.textContent?.trim());
-  results.push({ name: 'nav has Observe and Sessions, no Keepalive or Plugins', ok: nav.includes('Observe') && nav.includes('Sessions') && !nav.includes('Keepalive') && !nav.includes('Plugins') && nav.indexOf('Observe') === nav.indexOf('Dashboard') + 1, missing: nav });
-}
-m.unmount();
-if (roleBeforePreview === null) localStorage.removeItem('phoebis.role');
-else localStorage.setItem('phoebis.role', roleBeforePreview);
 
 const failed = results.filter((r) => !r.ok);
 for (const r of results) console.log(`${r.ok ? 'PASS' : 'FAIL'}  ${r.name}${r.ok ? '' : `  missing: ${JSON.stringify(r.missing)}`}`);

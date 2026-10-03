@@ -1,10 +1,8 @@
-import { useState } from 'react';
-import { api, MOCK } from '@/api';
-import type { FastPrice, ModelPrice, Settings } from '@/api/types';
-import { useSession } from '@/app/session';
+import { api } from '@/api';
+import type { FastPrice, Settings } from '@/api/types';
 import { useAppSettings, type ThemeChoice } from '@/app/settings';
-import { IconMonitor, IconMoon, IconSun, IconX } from '@/components/ui/icons';
-import { Badge, Button, Card, ConfirmDialog, CopyButton, ErrorState, Input, KeyValue, Segmented, Skeleton, Toast, Toggle } from '@/components/ui/primitives';
+import { IconMonitor, IconMoon, IconSun } from '@/components/ui/icons';
+import { Badge, Button, Card, CopyButton, ErrorState, KeyValue, Segmented, Skeleton } from '@/components/ui/primitives';
 import { fmtDate } from '@/lib/format';
 import type { TimeFormat } from '@/lib/format';
 import { useAsync } from '@/lib/hooks';
@@ -66,34 +64,12 @@ const PRICE_FIELDS: { key: PriceField; label: string }[] = [
   { key: 'outputPerM', label: 'Output' },
 ];
 
-interface PriceDraft extends Record<PriceField, string> {
-  /** Stable while the model id is being typed, so an edit cannot lose its row. */
-  id: string;
-  model: string;
-  /** Rows added by hand carry an editable model id; the ones already in the table do not. */
-  isNew: boolean;
-}
-
 type Pricing = Settings['pricing'];
 
 /** Two decimals, extended to at most four when a price needs them. */
 const fmtPrice = (n: number) => `$${n.toFixed(4).replace(/(\.\d\d[1-9]?)0+$/, '$1')}`;
 
-const toDraft = (m: ModelPrice): PriceDraft => ({
-  cacheReadPerM: String(m.cacheReadPerM),
-  cacheWrite1hPerM: String(m.cacheWrite1hPerM),
-  cacheWrite5mPerM: String(m.cacheWrite5mPerM),
-  id: m.model,
-  inputPerM: String(m.inputPerM),
-  isNew: false,
-  model: m.model,
-  outputPerM: String(m.outputPerM),
-});
-
-/**
- * `pricing.source` is `shipped`, `file` for the operator's `stats.pricing_path` table, or `edited by hand`, which
- * only the mock build's hand edit below applies; shown as it reads.
- */
+/** `pricing.source` is `shipped`, or `file` for the operator's `stats.pricing_path` table; shown as it reads. */
 function sourceLabel(source: string): string {
   return source;
 }
@@ -105,9 +81,7 @@ function SecretBadge({ configured }: { configured: boolean }) {
 
 export function SettingsPage() {
   const settings = useAsync(() => api.getSettings(), []);
-  const { theme, setTheme, timeFormat, setTimeFormat, role, canMutate } = useAppSettings();
-  const { setPreviewRole } = useSession();
-  const [toast, setToast] = useState<string | null>(null);
+  const { theme, setTheme, timeFormat, setTimeFormat } = useAppSettings();
   const s = settings.data;
   const snippet = snippetFor();
 
@@ -145,7 +119,7 @@ export function SettingsPage() {
         </dl>
       </Card>
 
-      <PricingCard canMutate={canMutate} error={settings.error} pricing={s ? s.pricing : null} onRetry={settings.reload} onToast={setToast} />
+      <PricingCard error={settings.error} pricing={s ? s.pricing : null} onRetry={settings.reload} />
 
       <Card title="Appearance" subtitle="Stored in this browser only.">
         <div className="setting-row">
@@ -200,18 +174,6 @@ export function SettingsPage() {
           </div>
           <SecretBadge configured={s?.access.viewerConfigured ?? false} />
         </div>
-        {MOCK && (
-          <div className="setting-row setting-row--demo">
-            <div>
-              <b>Preview as viewer</b>
-              <p className="muted">Hides every mutating control and the captured-bodies section, as the viewer secret would see it.</p>
-            </div>
-            <label className="row">
-              <span className="secondary">{role === 'viewer' ? 'viewer' : 'admin'}</span>
-              <Toggle checked={role === 'viewer'} onChange={(v) => setPreviewRole(v ? 'viewer' : 'admin')} label="Preview as viewer" />
-            </label>
-          </div>
-        )}
       </Card>
 
       <Card title="About">
@@ -237,93 +199,15 @@ export function SettingsPage() {
           <Skeleton height={60} />
         )}
       </Card>
-      <Toast message={toast} onDone={() => setToast(null)} />
     </div>
   );
 }
 
-function PricingCard({ canMutate, error: failed, onRetry, onToast, pricing: served }: { canMutate: boolean; error: string | null; onRetry: () => void; onToast: (message: string) => void; pricing: Pricing | null }) {
-  const [applied, setApplied] = useState<Pricing | null>(null);
-  const [draft, setDraft] = useState<PriceDraft[] | null>(null);
-  const [editing, setEditing] = useState<{ field: PriceField; id: string } | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [removing, setRemoving] = useState<PriceDraft | null>(null);
-
-  const pricing = applied ?? served;
-  const saved = pricing ? pricing.models.map(toDraft) : [];
-  const rows = draft ?? saved;
-  const editable = canMutate && pricing !== null;
-  // Editing a price by hand reaches no route on the router, so only the mock build offers the cells and the bar that saves them.
-  const handEdit = editable && MOCK;
-  const dirty = handEdit && draft !== null && JSON.stringify(draft) !== JSON.stringify(saved);
-
-  const edit = (next: (rows: PriceDraft[]) => PriceDraft[]) => setDraft((d) => next(d ?? saved));
-  const startEdit = (id: string, field: PriceField) => {
-    if (!handEdit) return;
-    edit((r) => r);
-    setEditing({ field, id });
-  };
-  const setCell = (id: string, field: PriceField | 'model', value: string) => edit((r) => r.map((row) => (row.id === id ? { ...row, [field]: value } : row)));
-  const discard = () => {
-    setDraft(null);
-    setEditing(null);
-    setError(null);
-  };
-
-  // A hand edit changes the standard cells alone, so each row keeps the fast cells of the served row it came from.
-  const fastOf = (id: string) => pricing?.models.find((m) => m.model === id)?.fast ?? null;
-  const save = () => {
-    const next: ModelPrice[] = [];
-    const seen = new Set<string>();
-    for (const row of rows) {
-      const model = row.model.trim();
-      if (!model) {
-        setError('Every row needs a model id.');
-        return;
-      }
-      if (seen.has(model)) {
-        setError(`${model} appears twice; model ids must be unique.`);
-        return;
-      }
-      seen.add(model);
-      const price = { fast: fastOf(row.id), model } as ModelPrice;
-      for (const f of PRICE_FIELDS) {
-        const raw = row[f.key].trim();
-        const value = Number(raw);
-        if (raw === '' || !Number.isFinite(value) || value < 0) {
-          setError(`${model}: ${f.label.toLowerCase()} must be a number of 0 or more.`);
-          return;
-        }
-        price[f.key] = value;
-      }
-      next.push(price);
-    }
-    setApplied({ effectiveDate: new Date().toISOString(), models: next, source: 'edited by hand' });
-    setDraft(null);
-    setEditing(null);
-    setError(null);
-    onToast('Price table saved');
-  };
-
+function PricingCard({ error: failed, onRetry, pricing }: { error: string | null; onRetry: () => void; pricing: Pricing | null }) {
   return (
     <Card
       title="Pricing"
       subtitle={pricing ? `Effective ${fmtDate(pricing.effectiveDate)}, source: ${sourceLabel(pricing.source)}` : undefined}
-      actions={
-        handEdit && (
-          <Button
-            size="md"
-            onClick={() =>
-              edit((r) => [
-                ...r,
-                { cacheReadPerM: '', cacheWrite1hPerM: '', cacheWrite5mPerM: '', id: `new-${Date.now()}`, inputPerM: '', isNew: true, model: '', outputPerM: '' },
-              ])
-            }
-          >
-            Add model
-          </Button>
-        )
-      }
       padded={false}
       className="card--table"
     >
@@ -337,47 +221,18 @@ function PricingCard({ canMutate, error: failed, onRetry, onToast, pricing: serv
                   {f.label}
                 </th>
               ))}
-              {handEdit && <th />}
             </tr>
           </thead>
           <tbody>
             {pricing ? (
-              rows.flatMap((row) => [
-                <tr key={row.id}>
-                  <td className="mono">
-                    {row.isNew ? (
-                      <Input aria-label="Model id" placeholder="model id" value={row.model} onChange={(e) => setCell(row.id, 'model', e.target.value)} style={{ width: 220 }} />
-                    ) : (
-                      row.model
-                    )}
-                  </td>
+              pricing.models.flatMap((m) => [
+                <tr key={m.model}>
+                  <td className="mono">{m.model}</td>
                   {PRICE_FIELDS.map((f) => (
-                    <PriceCell
-                      key={f.key}
-                      editable={handEdit}
-                      editing={editing?.id === row.id && editing.field === f.key}
-                      label={f.label}
-                      model={row.model}
-                      onDone={() => setEditing(null)}
-                      onEdit={() => startEdit(row.id, f.key)}
-                      onChange={(v) => setCell(row.id, f.key, v)}
-                      value={row[f.key]}
-                    />
+                    <PriceCell key={f.key} value={m[f.key]} />
                   ))}
-                  {handEdit && (
-                    <td className="right">
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        icon={<IconX size={14} />}
-                        aria-label={`Remove ${row.model || 'this row'}`}
-                        title={`Remove ${row.model || 'this row'} from the price table`}
-                        onClick={() => setRemoving(row)}
-                      />
-                    </td>
-                  )}
                 </tr>,
-                ...fastRow(row.id, fastOf(row.id), handEdit),
+                ...fastRow(m.model, m.fast),
               ])
             ) : (
               <tr>
@@ -389,41 +244,15 @@ function PricingCard({ canMutate, error: failed, onRetry, onToast, pricing: serv
           </tbody>
         </table>
       </div>
-      {dirty && (
-        <div className="save-bar">
-          <span className={error ? 'save-bar__msg is-error' : 'save-bar__msg'}>{error ?? 'Unsaved price edits.'}</span>
-          <span className="row">
-            <Button variant="ghost" onClick={discard}>
-              Discard
-            </Button>
-            <Button variant="primary" onClick={save}>
-              Save
-            </Button>
-          </span>
-        </div>
-      )}
       <p className="muted" style={{ padding: '10px 14px' }}>
         USD per million tokens. Costs in the ledger are estimates computed at request time.
       </p>
-
-      <ConfirmDialog
-        open={removing !== null}
-        onClose={() => setRemoving(null)}
-        title="Remove model"
-        confirmLabel="Remove"
-        danger
-        body={removing ? `${removing.model || 'The new row'} loses its prices. Requests on it are costed as unknown until the table carries it again.` : ''}
-        onConfirm={() => {
-          if (removing) edit((r) => r.filter((row) => row.id !== removing.id));
-          setError(null);
-        }}
-      />
     </Card>
   );
 }
 
 /** The read-only fast-mode sub-row under a model that has the cells, in the table's column order. */
-function fastRow(id: string, fast: FastPrice | null, handEdit: boolean) {
+function fastRow(id: string, fast: FastPrice | null) {
   if (!fast) return [];
   return [
     <tr key={`${id} fast`} className="price-table__fast">
@@ -435,58 +264,10 @@ function fastRow(id: string, fast: FastPrice | null, handEdit: boolean) {
           {fmtPrice(fast[f.key])}
         </td>
       ))}
-      {handEdit && <td />}
     </tr>,
   ];
 }
 
-function PriceCell({
-  editable,
-  editing,
-  label,
-  model,
-  onChange,
-  onDone,
-  onEdit,
-  value,
-}: {
-  editable: boolean;
-  editing: boolean;
-  label: string;
-  model: string;
-  onChange: (value: string) => void;
-  onDone: () => void;
-  onEdit: () => void;
-  value: string;
-}) {
-  const number = Number(value);
-  const shown = value.trim() === '' || !Number.isFinite(number) ? <span className="muted">-</span> : number === 0 ? <span className="muted">-</span> : fmtPrice(number);
-  if (editing) {
-    return (
-      <td className="right num price-cell">
-        <input
-          aria-label={`${label} for ${model}`}
-          autoFocus
-          className="input input--price"
-          min="0"
-          step="0.0001"
-          type="number"
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          onBlur={onDone}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' || e.key === 'Escape') onDone();
-          }}
-        />
-      </td>
-    );
-  }
-  if (!editable) return <td className="right num">{shown}</td>;
-  return (
-    <td className="right num price-cell">
-      <button type="button" className="price-cell__btn" title={`${label} for ${model}, USD per million tokens. Click to edit.`} onClick={onEdit}>
-        {shown}
-      </button>
-    </td>
-  );
+function PriceCell({ value }: { value: number }) {
+  return <td className="right num">{!Number.isFinite(value) || value === 0 ? <span className="muted">-</span> : fmtPrice(value)}</td>;
 }

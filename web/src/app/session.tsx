@@ -1,29 +1,13 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { api, MOCK, type Role, type SessionInfo } from '@/api';
+import { api, type SessionInfo } from '@/api';
 import { ApiError, setHooks } from '@/api/http';
 import { Button, Input } from '@/components/ui/primitives';
 import { Mark } from '@/components/ui/Mark';
 
-/** Only the mock build previews a role, and the smoke runner remounts between checks, so the choice outlives a mount. */
-const PREVIEW_KEY = 'phoebis.role';
-const storedPreview = (): Role | null => {
-  if (!MOCK) return null;
-  try {
-    const v = localStorage.getItem(PREVIEW_KEY);
-    return v === 'admin' || v === 'viewer' ? v : null;
-  } catch {
-    return null;
-  }
-};
-
 interface SessionState {
   clearToast: () => void;
   logout: () => Promise<void>;
-  /** Mock builds may preview the viewer role; the served app reads the role from the session alone. */
-  previewRole: Role | null;
-  role: Role;
   sessionId: string;
-  setPreviewRole: (role: Role | null) => void;
   /** What the transport reported last: a refusal, or a call that failed. The shell shows it once. */
   toast: string | null;
 }
@@ -34,14 +18,12 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<SessionInfo | null | undefined>(undefined);
   const [notice, setNotice] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
-  const [previewRole, setStoredPreviewRole] = useState<Role | null>(storedPreview);
 
   useEffect(() => {
     setHooks({
       // The route is named because a page draws several lists, and the operator has to know which one is gone.
       onFailure: ({ message, path, status }) => setToast(`${path} failed: ${message ?? (status === 0 ? 'the router did not answer' : `the router answered ${status}`)}`),
-      // The server's own wording: the gate refuses a viewer's write and a request from an unconfigured
-      // origin with the same status, and only it knows which one this was.
+      // The server's own wording: the origin check is what answers this status, and its message names the cause.
       onForbidden: (message) => setToast(message),
       onUnauthorized: () => {
         setNotice('Your session ended; log in again.');
@@ -60,20 +42,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const setPreviewRole = useCallback((role: Role | null) => {
-    setStoredPreviewRole(role);
-    if (!MOCK) return;
-    try {
-      if (role) localStorage.setItem(PREVIEW_KEY, role);
-      else localStorage.removeItem(PREVIEW_KEY);
-    } catch {
-      // Private mode or blocked storage: the preview still applies to this mount.
-    }
-  }, []);
-
   const value = useMemo<SessionState | null>(
-    () => (session ? { clearToast: () => setToast(null), logout, previewRole, role: (MOCK && previewRole) || session.role, sessionId: session.sessionId, setPreviewRole, toast } : null),
-    [session, toast, logout, previewRole, setPreviewRole],
+    () => (session ? { clearToast: () => setToast(null), logout, sessionId: session.sessionId, toast } : null),
+    [session, toast, logout],
   );
 
   if (session === undefined) return null;
@@ -136,7 +107,7 @@ export function LoginScreen({ notice, onLoggedIn }: { notice: string | null; onL
           <p className="brand__couplet">Place every request. Keep every session.</p>
         </div>
         <label className="field">
-          <span className="field__label">Admin or viewer secret</span>
+          <span className="field__label">Admin secret</span>
           <Input type="password" autoComplete="current-password" autoFocus value={secret} onChange={(e) => setSecret(e.target.value)} />
         </label>
         {notice && (

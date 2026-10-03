@@ -331,7 +331,7 @@ test("refusals come in rail order, a new pool's first two the name and the membe
     refusals.slice(0, 2).map((r) => r.text),
     ['the pool needs a name.', 'the pool needs a member.'],
   );
-  assert.deepEqual(d.POOL_GROUPS, ['identity', 'members', 'keys', 'models', 'autoMode', 'selection', 'placement', 'pinning', 'utilization', 'shedding', 'failover', 'overage', 'cacheTtl', 'keepalive', 'probeTuning', 'responseHeaders', 'bodyCapture', 'cacheDiagnostics']);
+  assert.deepEqual(d.POOL_GROUPS, ['identity', 'members', 'keys', 'models', 'autoMode', 'selection', 'placement', 'pinning', 'utilization', 'shedding', 'failover', 'overage', 'cacheTtl', 'keepalive', 'probeTuning', 'bodyCapture', 'cacheDiagnostics']);
 });
 
 test('every bounded engine field is refused once it leaves its bound', () => {

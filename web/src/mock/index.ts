@@ -3,7 +3,7 @@ import { AFFINITY_MODE_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALU
 import { ApiError, catalogUnion, slug } from '@/api/http';
 import type {
   Account, AccountCatalog, AccountInput, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, KeyModels, LiveEvent, MemberEligibility, ModelEvent,
-  ModelRule, ModelsState, PairingInput, PairingPreview, PairingSession, Pool, PoolMember, RequestDetail, RequestLog, RequestPage, RequestQuery, Role, RuleCooldown, Session, SessionInfo, Settings, Subscription,
+  ModelRule, ModelsState, PairingInput, PairingPreview, PairingSession, Pool, PoolMember, RequestDetail, RequestLog, RequestPage, RequestQuery, RuleCooldown, Session, SessionInfo, Settings, Subscription,
 } from '@/api/types';
 import { modelRulesRefusal, type NumericKeepaliveKey } from '@/lib/forms';
 import { matchesPattern } from '@/lib/pattern';
@@ -27,8 +27,6 @@ const MOCK_SEED = 4_211;
 const latency = <T,>(value: T, ms = 120): Promise<T> => new Promise((resolve) => setTimeout(() => resolve(value), ms));
 
 // The routes' own wording, so a page draws the text the router would have sent.
-const VIEWER_WRITE = 'the viewer role cannot change anything';
-const VIEWER_BODIES = 'captured bodies are for administrators';
 const KEY_TAKEN = 'a key with this id exists';
 const POOL_TAKEN = 'a pool with this id exists';
 
@@ -156,36 +154,25 @@ const MODEL_REJECTIONS = modelEvents('model_rejected');
 const MODEL_PERMITS = modelEvents('model_permitted');
 
 /**
- * The signed-in role, which outlives a reload the way the router's session cookie does: the smoke runner writes
+ * The signed-in mark, which outlives a reload the way the router's session cookie does: the smoke runner writes
  * it so every mount starts signed in, and a login writes it so a browser pass that loads each view by URL stays
  * signed in.
  */
 const SEEDED_SESSION_KEY = 'phoebis.mockSession';
-const seededRole = (): Role | null => {
+const MOCK_SESSION: SessionInfo = { sessionId: 'mock-admin' };
+const seededSession = (): boolean => {
   try {
-    const role = localStorage.getItem(SEEDED_SESSION_KEY);
-    return role === null ? null : role === 'viewer' ? 'viewer' : 'admin';
+    return localStorage.getItem(SEEDED_SESSION_KEY) !== null;
   } catch {
-    return null;
+    return false;
   }
 };
-const seedRole = (role: Role | null) => {
+const seedSession = (signedIn: boolean) => {
   try {
-    if (role === null) localStorage.removeItem(SEEDED_SESSION_KEY);
-    else localStorage.setItem(SEEDED_SESSION_KEY, role);
+    if (signedIn) localStorage.setItem(SEEDED_SESSION_KEY, 'admin');
+    else localStorage.removeItem(SEEDED_SESSION_KEY);
   } catch {
     // No storage (the Node tests): the session lives on the instance alone.
-  }
-};
-
-/** The role the mock build previews, which outranks the session's the way the console's own reading of it does. */
-const PREVIEW_ROLE_KEY = 'phoebis.role';
-const previewedRole = (): Role | null => {
-  try {
-    const role = localStorage.getItem(PREVIEW_ROLE_KEY);
-    return role === 'admin' || role === 'viewer' ? role : null;
-  } catch {
-    return null;
   }
 };
 
@@ -322,16 +309,6 @@ export class MockApi implements Api {
   private sessions: Session[] = [...SESSIONS];
   private settings: Settings = { ...SETTINGS };
 
-  /** The role the console is drawn for: a preview first, as the session provider reads it, then the signed-in one. */
-  private role(): Role | null {
-    return previewedRole() ?? this.session?.role ?? seededRole();
-  }
-
-  /** The gate's refusal of a write to anyone but the admin; the writes it lets a viewer through never call this. */
-  private mutation(): void {
-    if (this.role() !== 'admin') throw new ApiError(403, VIEWER_WRITE, null);
-  }
-
   private token(n: number) {
     return Array.from({ length: n }, () => 'abcdefghijklmnopqrstuvwxyz0123456789'[this.secretRng.int(0, 35)]).join('');
   }
@@ -379,13 +356,11 @@ export class MockApi implements Api {
   }
 
   async cancelPairing(pairingId: string) {
-    this.mutation();
     this.pairings.delete(pairingId);
     return latency(undefined, 150);
   }
 
   async clearCooldown(accountId: string, scope: string) {
-    this.mutation();
     const a = this.account(accountId);
     const cooldowns = a.cooldowns.filter((c) => c.scope !== scope);
     this.putAccount({ ...a, cooldowns, status: cooling(cooldowns) ? a.status : 'ready' });
@@ -393,14 +368,12 @@ export class MockApi implements Api {
   }
 
   async clearFunding(accountId: string) {
-    this.mutation();
     const a = this.account(accountId);
     this.putAccount({ ...a, extraUsage: a.extraUsage ? { ...a.extraUsage, disabledReason: null } : null, status: a.status === 'funding_required' ? 'ready' : a.status });
     return latency(undefined, 200);
   }
 
   async completePairing(pairingId: string, input: PairingInput): Promise<PairingPreview> {
-    this.mutation();
     const submitted = 'url' in input ? fromCallbackUrl(input.url) : input;
     if (!submitted) throw new Error('That URL carries no authorization code and state. Paste the whole address the browser landed on, or the code on its own.');
     // The router refuses a callback whose state does not belong to the pairing the id names.
@@ -411,13 +384,11 @@ export class MockApi implements Api {
   }
 
   async confirmPairing(pairingId: string) {
-    this.mutation();
     this.pairings.delete(pairingId);
     return latency(undefined, 250);
   }
 
   async createAccount(input: AccountInput): Promise<Account> {
-    this.mutation();
     const account: Account = {
       ...ACCOUNT_SAMPLE,
       cooldowns: [],
@@ -442,7 +413,6 @@ export class MockApi implements Api {
   }
 
   async createKey(input: CreateKeyInput): Promise<CreatedApiKey> {
-    this.mutation();
     // The client sends the id it derives from the name, so a name already taken is an id already taken.
     const id = slug(input.name);
     if (this.keys.some((k) => k.id === id)) throw new ApiError(409, KEY_TAKEN, null);
@@ -476,7 +446,6 @@ export class MockApi implements Api {
   }
 
   async createPool(input: PoolInput): Promise<Pool> {
-    this.mutation();
     const id = slug(input.name);
     if (this.pools.some((p) => p.id === id)) throw new ApiError(409, POOL_TAKEN, null);
     const refusal = poolRefusal(input);
@@ -505,7 +474,6 @@ export class MockApi implements Api {
   }
 
   async deleteAccount(accountId: string) {
-    this.mutation();
     this.account(accountId);
     this.accounts = this.accounts.filter((a) => a.id !== accountId);
     this.pools = this.pools.map((p) => ({ ...p, members: p.members.filter((m) => m.accountId !== accountId) }));
@@ -513,13 +481,11 @@ export class MockApi implements Api {
   }
 
   async deleteKey(id: string) {
-    this.mutation();
     this.keys = this.keys.filter((k) => k.id !== id);
     return latency(undefined, 200);
   }
 
   async deletePool(id: string) {
-    this.mutation();
     // A key reaches only its own pool's members, so a pool cannot leave while keys still point at it.
     if (this.keys.some((k) => k.poolId === id)) return Promise.reject(new ApiError(409, 'pool still has keys', null));
     this.pools = this.pools.filter((p) => p.id !== id);
@@ -527,7 +493,6 @@ export class MockApi implements Api {
   }
 
   async disconnectAccount(accountId: string) {
-    this.mutation();
     const a = this.account(accountId);
     // The route drops the credential and leaves the identity, so the row still says whose it was.
     this.putAccount({ ...a, credential: { accessTokenExpiresAt: null, lastError: null, lastRefreshAt: null, quarantined: false, refreshTokenExpiresAt: null }, status: 'unpaired' });
@@ -560,8 +525,6 @@ export class MockApi implements Api {
   }
 
   async getCapturedBodies(requestId: string) {
-    // The bodies route checks the role itself: it is the one read the gate would let a viewer through to.
-    if (this.role() !== 'admin') throw new ApiError(403, VIEWER_BODIES, null);
     const r = requestById.get(requestId);
     return latency(r ? capturedBodiesFor(r) : null);
   }
@@ -657,8 +620,7 @@ export class MockApi implements Api {
 
   getSession(): Promise<SessionInfo | null> {
     if (this.session) return latency(this.session, 60);
-    const role = seededRole();
-    return latency(role ? { role, sessionId: `mock-${role}` } : null, 60);
+    return latency(seededSession() ? MOCK_SESSION : null, 60);
   }
 
   getSettings() {
@@ -724,20 +686,19 @@ export class MockApi implements Api {
   }
 
   login(secret: string): Promise<SessionInfo> {
-    if (secret !== 'admin' && secret !== 'viewer') return Promise.reject(new ApiError(401, 'that secret does not match', null));
-    this.session = { role: secret, sessionId: `mock-${secret}` };
-    seedRole(secret);
+    if (secret !== 'admin') return Promise.reject(new ApiError(401, 'that secret does not match', null));
+    this.session = MOCK_SESSION;
+    seedSession(true);
     return latency(this.session, 200);
   }
 
   logout() {
     this.session = null;
-    seedRole(null);
+    seedSession(false);
     return latency(undefined, 150);
   }
 
   async pauseAccount(accountId: string) {
-    this.mutation();
     const a = this.account(accountId);
     this.putAccount({ ...a, routingEnabled: false, status: statusOf(a, false) });
     return latency(undefined, 250);
@@ -748,32 +709,27 @@ export class MockApi implements Api {
   }
 
   async releaseSession(keyId: string, sessionId: string) {
-    this.mutation();
     this.sessions = this.sessions.filter((s) => !(s.keyId === keyId && s.sessionId === sessionId && !s.historical));
     return latency(undefined, 250);
   }
 
   async renameAccount(accountId: string, label: string) {
-    this.mutation();
     return latency(this.putAccount({ ...this.account(accountId), label }), 250);
   }
 
   async resumeAccount(accountId: string) {
-    this.mutation();
     const a = this.account(accountId);
     this.putAccount({ ...a, routingEnabled: true, status: statusOf(a, true) });
     return latency(undefined, 250);
   }
 
   async revokeKey(id: string) {
-    this.mutation();
     // The route switches a revoked key off in the same write, and an edit sends that flag back.
     this.keys = this.keys.map((k) => (k.id === id ? { ...k, enabled: false, status: 'revoked' as const } : k));
     return latency(undefined, 250);
   }
 
   async rotateKey(id: string): Promise<CreatedApiKey> {
-    this.mutation();
     const key = this.keys.find((k) => k.id === id);
     if (!key) return Promise.reject(new ApiError(404, 'key not found', null));
     const secret = `phoebis-${this.token(40)}`;
@@ -783,7 +739,6 @@ export class MockApi implements Api {
   }
 
   async startPairing(accountId: string): Promise<PairingSession> {
-    this.mutation();
     const state = this.token(24);
     // The router names the pairing with an id of its own; the state only ever travels through the browser.
     const id = `pair_${this.token(10)}`;
@@ -811,7 +766,6 @@ export class MockApi implements Api {
 
   /** The account route's refusals in its order and words; the end is kept only while the flag stands. */
   async updateAccount(accountId: string, patch: AccountPatch): Promise<Account> {
-    this.mutation();
     const a = this.account(accountId);
     if (patch.cancelled && a.kind === 'api_key') throw new ApiError(400, 'only an oauth account is cancelled', null);
     if (!patch.cancelled && patch.subscriptionEndsAt !== null) throw new ApiError(400, 'subscription_ends_at needs cancelled', null);
@@ -824,7 +778,6 @@ export class MockApi implements Api {
   }
 
   async updateKey(id: string, input: KeyInput): Promise<ApiKey> {
-    this.mutation();
     const idx = this.keys.findIndex((k) => k.id === id);
     if (idx < 0) return Promise.reject(new Error(`Unknown key ${id}`));
     const refusal = keyRulesRefusal(input);
@@ -840,7 +793,6 @@ export class MockApi implements Api {
   }
 
   async updatePool(id: string, input: PoolInput): Promise<Pool> {
-    this.mutation();
     const idx = this.pools.findIndex((p) => p.id === id);
     if (idx < 0) return Promise.reject(new Error(`Unknown pool ${id}`));
     const refusal = poolRefusal(input);
@@ -868,7 +820,6 @@ export class MockApi implements Api {
   }
 
   async verifyAccount(accountId: string) {
-    this.mutation();
     this.account(accountId);
     return latency({ ok: true, status: 200 }, 400);
   }

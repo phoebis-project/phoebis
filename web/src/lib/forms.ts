@@ -80,7 +80,7 @@ export function prefixThresholdRefusal(value: string): string | null {
 }
 
 /** The pool dialog's groups in rail order; a refusal names the one its control sits in. */
-export const POOL_GROUPS = ['identity', 'members', 'keys', 'models', 'autoMode', 'selection', 'placement', 'pinning', 'utilization', 'shedding', 'failover', 'overage', 'cacheTtl', 'keepalive', 'probeTuning', 'responseHeaders', 'bodyCapture', 'cacheDiagnostics'] as const;
+export const POOL_GROUPS = ['identity', 'members', 'keys', 'models', 'autoMode', 'selection', 'placement', 'pinning', 'utilization', 'shedding', 'failover', 'overage', 'cacheTtl', 'keepalive', 'probeTuning', 'bodyCapture', 'cacheDiagnostics'] as const;
 export type PoolGroup = (typeof POOL_GROUPS)[number];
 
 export interface PoolRefusal {

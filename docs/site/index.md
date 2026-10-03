@@ -44,7 +44,7 @@ The proxy listener answers `HEAD /api/hello`, `HEAD` and `GET /api/ready`, `POST
 ## The console
 
 The admin listener serves a React console over the same routes as the admin API. The top bar carries the theme
-toggle and the role badge, and the sidebar carries twelve views.
+toggle, and the sidebar carries twelve views.
 
 ![The dashboard: four tiles, the remaining-quota cards, recent requests](assets/dashboard-light.png#only-light)
 ![The dashboard: four tiles, the remaining-quota cards, recent requests](assets/dashboard-dark.png#only-dark)

@@ -1005,10 +1005,7 @@ export interface Settings {
   usage: { cacheTtlSeconds: number; refreshConcurrency: number };
 }
 
-export type Role = 'admin' | 'viewer';
-
 export interface SessionInfo {
-  role: Role;
   sessionId: string;
 }
 

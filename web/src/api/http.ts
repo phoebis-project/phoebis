@@ -148,8 +148,7 @@ export class HttpApi implements Api {
     if (response.status === 401) return null;
     if (!response.ok) throw new ApiError(response.status, `GET /admin/session answered ${response.status}`, null);
     const r = (await response.json()) as { session_id: string };
-    // Every session the router grants is the admin's.
-    return { role: 'admin', sessionId: r.session_id };
+    return { sessionId: r.session_id };
   };
   getSettings = async () => d.decodeSettings(await call('GET', '/admin/settings'));
   listAccountRollups = async (from: string, to: string) => d.decodeAccountRollups(await call('GET', `/admin/analytics/accounts?range=${range(from, to)}`));

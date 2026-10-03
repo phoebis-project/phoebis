@@ -2,7 +2,6 @@ import { useId, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { api } from '@/api';
 import type { Account, ApiKey, CompanionState, KeepaliveOverview, KeepaliveRecipe, KeepaliveState, Pool, RecipeState, Session } from '@/api/types';
-import { useAppSettings } from '@/app/settings';
 import { CostReferenceLink } from '@/components/ui/CostReference';
 import { IconChevron } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Menu, Meter, Skeleton, Toast } from '@/components/ui/primitives';
@@ -139,7 +138,6 @@ export function SessionsPage() {
   const settings = useAsync(() => api.getSettings(), []);
   const now = useNow(5_000);
   const navigate = useNavigate();
-  const { canMutate } = useAppSettings();
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [pending, setPending] = useState<Row | null>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -295,7 +293,6 @@ export function SessionsPage() {
                     open={expanded.has(rowKey(row.session))}
                     onToggle={() => toggle(rowKey(row.session))}
                     now={now}
-                    canMutate={canMutate}
                     columns={columns}
                     current={current === rowDomId(row.session)}
                     expireAfterSeconds={expireAfterSeconds}
@@ -334,7 +331,6 @@ function SessionRows({
   open,
   onToggle,
   now,
-  canMutate,
   columns,
   current,
   expireAfterSeconds,
@@ -344,7 +340,6 @@ function SessionRows({
   onOpen,
   onRelease,
 }: {
-  canMutate: boolean;
   columns: number;
   /** Whether a fork link last led here. */
   current: boolean;
@@ -496,7 +491,7 @@ function SessionRows({
             items={[
               { label: 'View in analytics', disabled: !hasTraffic, title: hasTraffic ? undefined : NO_TRAFFIC_HINT, onClick: () => onOpen(`/analytics?session=${encodeURIComponent(trafficSession)}&key=${encodeURIComponent(`${session.keyId}@${session.keyGeneration}`)}`) },
               { label: 'View in observe', disabled: !hasTraffic, title: hasTraffic ? undefined : NO_TRAFFIC_HINT, onClick: () => onOpen(`/observe?session=${encodeURIComponent(trafficSession)}`) },
-              ...(canMutate && !session.historical ? [{ label: 'Release', onClick: onRelease }] : []),
+              ...(!session.historical ? [{ label: 'Release', onClick: onRelease }] : []),
             ]}
           />
         </td>

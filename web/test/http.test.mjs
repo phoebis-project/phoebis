@@ -196,7 +196,7 @@ test('getSession answers null on 401 without running the hook', async () => {
   assert.equal(await new HttpApi().getSession(), null);
   assert.equal(unauthorized, 0);
   stub(() => answer(200, { session_id: 's' }));
-  assert.deepEqual(await new HttpApi().getSession(), { role: 'admin', sessionId: 's' });
+  assert.deepEqual(await new HttpApi().getSession(), { sessionId: 's' });
 });
 
 test('the live feed reconnects behind a live session and stops once it is gone', async () => {

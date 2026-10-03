@@ -7,7 +7,6 @@ import type {
   Account, AffinityMode, ApiKey, CacheTtl, CreatedApiKey, KeyStatus, MemberEligibility, ModelRule, OveragePolicy, Pool, PoolCacheTtl, PoolKeepalive, PoolMember, PoolStrategy, Session, SessionPlacement,
   SubagentPlacement, TtlRules, WarmSessions,
 } from '@/api/types';
-import { useAppSettings } from '@/app/settings';
 import { AttentionRows } from '@/components/AttentionRows';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { ChartTooltip, Legend } from '@/components/charts/Tooltip';
@@ -82,8 +81,6 @@ const orderedAccountIds = (accounts: Account[], members: Record<string, number>)
     })
     .map((a) => a.id);
 const AFFINITY_HINT = 'How long a session stays on its account after its last request; off keeps no pins, and a custom value is at least 60 seconds.';
-const QUOTA_HEADERS_HINT =
-  "Hide drops the anthropic-ratelimit-unified-* headers from every answer but a 429, so an organization's quota never reads as the key holder's own; a 429 keeps them so the client can resume after the reset. request-id passes either way.";
 // The order the pills read in: the default, the two directions away from it, then a hand-set mix.
 const PRESET_PILLS = ['balanced', 'fast', 'conservative', 'custom'] as const;
 const PRESET_LABEL: Record<SheddingPreset, string> = { balanced: 'Balanced', conservative: 'Conservative', custom: 'Custom', fast: 'Fast' };
@@ -146,7 +143,6 @@ export function PoolsPage() {
   const catalog = useAsync(() => api.listCatalog(), []);
   const sessions = useAsync(() => api.listSessions(), []);
   const now = useNow();
-  const { canMutate } = useAppSettings();
   const location = useLocation();
   const navigate = useNavigate();
   const [dialog, setDialog] = useState<{ initialGroup: PoolGroup | null; pool: Pool | null } | null>(null);
@@ -154,8 +150,7 @@ export function PoolsPage() {
   const [toast, setToast] = useState<string | null>(null);
 
   // The address opens the dialog on a named group once both lists the dialog reads have loaded; the entry is then
-  // replaced by the bare route, so closing the dialog, a reload or Back does not open it again. A viewer's address is
-  // cleared without a dialog or a toast, since the Edit action it stands in for is admin-only.
+  // replaced by the bare route, so closing the dialog, a reload or Back does not open it again.
   useEffect(() => {
     const params = new URLSearchParams(location.search);
     const edit = params.get('edit');
@@ -165,14 +160,13 @@ export function PoolsPage() {
     params.delete('group');
     const search = params.toString();
     navigate({ hash: location.hash, pathname: location.pathname, search: search ? `?${search}` : '' }, { replace: true });
-    if (!canMutate) return;
     const pool = pools.data.find((p) => p.id === edit);
     if (!pool) {
       setToast(`Pool ${edit} not found`);
       return;
     }
     setDialog({ initialGroup: isPoolGroup(group) ? group : 'identity', pool });
-  }, [accounts.data, canMutate, location, navigate, pools.data]);
+  }, [accounts.data, location, navigate, pools.data]);
 
   const accountById = useMemo(() => new Map((accounts.data ?? []).map((a) => [a.id, a])), [accounts.data]);
   const keysByPool = useMemo(() => {
@@ -219,11 +213,9 @@ export function PoolsPage() {
     <div className="stack">
       <div className="page-head">
         <p className="page-head__meta">A pool groups accounts behind a set of keys. Requests pick a member by priority, stick to it per session, and fail over when a member hits a rate limit.</p>
-        {canMutate && (
-          <Button variant="primary" icon={<IconPlus size={14} />} onClick={() => setDialog({ initialGroup: null, pool: null })}>
-            Create pool
-          </Button>
-        )}
+        <Button variant="primary" icon={<IconPlus size={14} />} onClick={() => setDialog({ initialGroup: null, pool: null })}>
+          Create pool
+        </Button>
       </div>
       <div className="stat-grid stat-grid--5">
         <Tile label="Pools" value={totals ? fmtInt(totals.pools) : null} />
@@ -246,7 +238,6 @@ export function PoolsPage() {
                 attention={[]}
                 sessions={sessionsByPool.get(p.id) ?? []}
                 now={now}
-                canMutate={canMutate}
                 onEdit={() => setDialog({ initialGroup: null, pool: p })}
                 onDelete={() => setDeleting(p)}
               />
@@ -444,7 +435,6 @@ function PoolCard({
   attention,
   sessions,
   now,
-  canMutate,
   onEdit,
   onDelete,
 }: {
@@ -452,7 +442,6 @@ function PoolCard({
   /** Null until the account list is read; the status sentence then says only what the pool's verdicts carry. */
   accounts: Account[] | null;
   attention: AttentionItem[];
-  canMutate: boolean;
   keys: ApiKey[];
   /** Until the key list has loaded, `keys` says nothing about the pool's keys, so the count line and the tile wait. */
   keysRead: 'failed' | 'loaded' | 'loading';
@@ -499,30 +488,20 @@ function PoolCard({
           ) : (
             keysRead === 'failed' && <span className="pool__keys pool__keys--unread">Keys unavailable</span>
           )}
-          {canMutate && (
-            <>
-              <Button size="sm" variant="ghost" icon={<IconPencil size={13} />} onClick={onEdit} className="pool__edit" aria-label={`Edit pool ${pool.name}`}>
-                Edit
-              </Button>
-              <Button size="sm" variant="ghost" onClick={onDelete} aria-label={`Delete pool ${pool.name}`}>
-                Delete
-              </Button>
-            </>
-          )}
+          <Button size="sm" variant="ghost" icon={<IconPencil size={13} />} onClick={onEdit} className="pool__edit" aria-label={`Edit pool ${pool.name}`}>
+            Edit
+          </Button>
+          <Button size="sm" variant="ghost" onClick={onDelete} aria-label={`Delete pool ${pool.name}`}>
+            Delete
+          </Button>
         </div>
         {features.length > 0 && (
           <div className="pool__features chips">
-            {features.map((f) =>
-              canMutate ? (
-                <Link key={f.group} to={`/pools?edit=${pool.id}&group=${f.group}`} className="badge badge--neutral" title={`Opens the pool dialog on ${POOL_RAIL[f.group].label}`}>
-                  {f.word}
-                </Link>
-              ) : (
-                <Badge key={f.group} tone="neutral">
-                  {f.word}
-                </Badge>
-              ),
-            )}
+            {features.map((f) => (
+              <Link key={f.group} to={`/pools?edit=${pool.id}&group=${f.group}`} className="badge badge--neutral" title={`Opens the pool dialog on ${POOL_RAIL[f.group].label}`}>
+                {f.word}
+              </Link>
+            ))}
           </div>
         )}
         <p className="pool__status">
@@ -742,8 +721,6 @@ function Eligibility({ verdict, account, now, periodEnd }: { account: Account | 
 
 type ProbeTuning = Omit<PoolKeepalive, 'costCapUsdPerDay' | 'enabled' | 'warmSubagents'>;
 type NumericTuningKey = { [K in keyof ProbeTuning]-?: ProbeTuning[K] extends number ? K : never }[keyof ProbeTuning];
-/** The Quota headers control's own state: the pool routes carry no such member, so the dialog never sends it. */
-type QuotaHeadersChoice = 'hide' | 'pass';
 
 interface PoolForm {
   affinity: number;
@@ -771,7 +748,6 @@ interface PoolForm {
   preferSubscription: boolean;
   /** The threshold field as typed. */
   prefixTokens: string;
-  quotaHeaders: QuotaHeadersChoice;
   selectBelow: number;
   selectBelowOn: boolean;
   sessionPlacement: SessionPlacement;
@@ -808,7 +784,6 @@ const blankForm = (): PoolForm => ({
   overage: 'prefer_plan',
   preferSubscription: true,
   prefixTokens: String(POOL_AFFINITY_DEFAULTS.minSharedPrefixTokens),
-  quotaHeaders: 'pass',
   selectBelow: 80,
   selectBelowOn: false,
   sessionPlacement: POOL_AFFINITY_DEFAULTS.sessionPlacement,
@@ -859,7 +834,6 @@ const formFrom = (pool: Pool): PoolForm => ({
   // The stored answer, never the effective one, so reopening a pool shows what the operator chose.
   preferSubscription: pool.preferSubscription,
   prefixTokens: String(pool.minSharedPrefixTokens),
-  quotaHeaders: 'pass',
   // Two decimals, so a threshold the API set finer than a percent survives an unrelated edit.
   selectBelow: pool.selectBelowUtilization === null ? 80 : Math.round(pool.selectBelowUtilization * 10_000) / 100,
   selectBelowOn: pool.selectBelowUtilization !== null,
@@ -1815,16 +1789,6 @@ export function PoolDialog({
             </Fragment>
           ),
         )}
-      </div>
-    ),
-    responseHeaders: (
-      <div className="cells">
-        <Field label="Quota headers" hint={QUOTA_HEADERS_HINT}>
-          <Select value={form.quotaHeaders} onChange={(e) => set('quotaHeaders', e.target.value as QuotaHeadersChoice)} aria-label="Quota headers" aria-invalid={invalid('Quota headers')}>
-            <option value="pass">Pass through</option>
-            <option value="hide">Hide on committed answers</option>
-          </Select>
-        </Field>
       </div>
     ),
     bodyCapture: (

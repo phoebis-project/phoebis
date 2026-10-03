@@ -19,7 +19,7 @@ the error state, the cost-cap rows, the live feed, the wasted-probe rows, the bu
 unlisted entry, the placement and budget tables, the speed filter, the traffic cards (each
 Analytics check opens the tab it reads and returns to Traffic), the tab strip docked under the filter bar at the end of
 the Latency tab, the fast lane, the request drawer, which opens once the request list's shot is taken, the subscription
-end editor, the catalog popup, the key dialog's cap field and selects, the Pool select against the Status select, the
+end editor, the catalog popup, the key dialog's Access selects, the Pool select against the Status select, the
 Sessions lead and its disclosure at 1280 by 800 and 1440 by 900 (the head's height closed and open, the button on the
 sentence's last line or flush left on the next, the opened paragraph 6 px under the lead, Cost reference one line at the
 head's top right), the cost reference, the agent lines, the fork link, which is followed
