@@ -40,12 +40,13 @@ A session that
 branched from another conversation carries that conversation's root and the matched depth as well. The session it names
 is the client's own,
 and the Sessions view groups a row by it.
-The attempt row names the account and its kind; the upstream status, request id and message id; the outcome; the
-cooldown the attempt set; the stop reason, the model the answer names when it differs from the one the router
-resolved, the speed, the region inference ran in, the tokens a context edit cleared, and a refusal's category and
-recommended model; the five token counts, with the thinking share of the output and the web search and fetch calls the
-answer made; the cache miss reason the diagnostics beta reports; the unified rate-limit window readings; overage; the
-cost split across input, cache read, cache write, and output; and the pricing version the estimate used.
+The attempt row names the account and its kind; the
+upstream status, request id and message id; the outcome; the cooldown the attempt set; the stop reason, the model the
+answer names when it differs from the one the router resolved, the speed, the region inference ran in, the tokens a
+context edit cleared, and a refusal's category and recommended model; the five token counts, with the thinking share of
+the output and the web search and fetch calls the answer made; the cache miss reason the diagnostics beta reports; the
+unified rate-limit window readings; overage; the cost split across input, cache read, cache write, and output; and the
+pricing version the estimate used.
 
 Placements are counted by rung, with a hit share from the trace and the response's cache-read tokens: a
 placement by the conversation's own messages is a hit when the response read the prefix the entry promised; one

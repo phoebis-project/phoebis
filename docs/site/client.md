@@ -35,9 +35,10 @@ field, `x-client-request-id`, and the gateway hint headers, all by default, so t
 request log reads the turn origin and the hints as the client sent them. It also stops the client reading the router's
 models listing, which it otherwise uses to size its context window by the id. Without it the client sends the reduced
 shape, and the router restores, toward `api.anthropic.com`, the fields the reduced shape lacks on the attribution line
-the client sent: the `cch` billing hash, `x-client-request-id`, `cc_prev_req`, and `cc_prompt_id`, each only when
-absent. A request that carries no attribution line, as under `CLAUDE_CODE_ATTRIBUTION_HEADER=0`, is relayed as sent: the
-router never writes a line the client did not. The auto-mode classifier requests are the client's own: they keep the
+the client sent: the `cch` billing hash (the placeholder `cch=00000`, which stays unsigned unless
+`proxy.sign_cch_placeholder` is on), `x-client-request-id`, `cc_prev_req`, and `cc_prompt_id`, each only when absent. A
+request that carries no attribution line, as under `CLAUDE_CODE_ATTRIBUTION_HEADER=0`, is relayed as sent: the router
+never writes a line the client did not. The auto-mode classifier requests are the client's own: they keep the
 attribution block and the router fills them like any other line; in first-party mode only they carry the
 `auto-mode-classifier-2026-07-16` beta and the `auxiliary` request class in `x-claude-code-request-class`, and behind a
 plain base URL neither appears, so the router records and pins them as ordinary requests of their session ([Auto mode
@@ -246,8 +247,9 @@ A caller that stops sending before its body is complete is refused `400` with th
 A Messages request on a key that already has its `in_flight_cap` of requests in flight is refused before it reaches any
 account: `429` with the error type `rate_limit_error`, the error code `key_in_flight_cap`, and a `Retry-After` of the
 pool's `retry_in_place_seconds`, one second when that is 0. A request counts from its admission until its response ends,
-a stream for its whole length. A `count_tokens` request takes no slot on the key or on the account and is never held or
-refused for want of one.
+a stream for its whole length. A `count_tokens` request takes no in-flight slot on the key or on the account and is
+never held or refused for want of one, though it takes a body-read slot on every key, bounded by `proxy.key_body_reads`
+when the key sets no cap, and can be refused `429 key_body_reads`.
 
 A request body larger than `proxy.max_request_bytes` (32 MiB by default), declared or arriving, is refused `413` with
 the error code `request_too_large`. A request whose body would take the router past `proxy.body_budget_bytes` of bodies

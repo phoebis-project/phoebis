@@ -141,7 +141,8 @@ canonical ids. `plan` defaults to one hour throughout and `metered` to five minu
 metered account 2x base input against 1.25x for five minutes, and a plan-funded account the same window share either
 way. With the policy on, every `cache_control` marker in the body is rewritten to the TTL the request's set and branch
 choose, the ones inside a tool result's own content included, the `extended-cache-ttl-2025-04-11` beta travels exactly
-when the body is one hour, and the `cch` hash is restamped. A body whose marker the relay's cache TTL guard cannot reach
+when the body is one hour, and the `cch` hash is restamped when the client sent one; a restored placeholder `cch=00000`
+stays unsigned unless `proxy.sign_cch_placeholder` is on. A body whose marker the relay's cache TTL guard cannot reach
 (a key on the marker's path spelled with an escape) is refused `400` with the error code `body_shape`, so a TTL the
 policy could not enforce never travels unreported. On every other body the client's own `CLAUDE_CODE_PROMPT_CACHE_TTL`
 has no effect through the pool. A body that carries no marker is left as it came unless `inject_when_absent` is on, in
@@ -586,13 +587,16 @@ router refreshes the token and replays the request on a new token. A refresh the
 anything is tried a second time within the transient backoff, about five seconds unless the endpoint asked for longer;
 after a token endpoint's `5xx` or a lost answer the request is held on the same account for up to a minute, then
 refreshed a second time, so a session keeps its warm account through the endpoint's bad minute, which is waited out once
-per request. A `Retry-After` past that minute, a second failure, or an Anthropic-key account's failure fails the request
-over to the next eligible account with the pin moved, and a request bound to its account, or one with no account left,
-is answered the router's own `503 accounts_unavailable` with no account named. The failover, its waits included, starts
-no new leg past the request's own deadline, ten minutes less a margin: past it the request is answered
-`503 accounts_unavailable` rather than tried on another account. The attempt rows read `auth_failed` with the upstream
-status, and the account reads `reauth_required` after a conclusive failure (a rejected replay, an `invalid_grant`, a
-token endpoint's `401`), which the Accounts view and the `reauth_required` alert show.
+per request; a refusal whose `Retry-After` is over five seconds and within the minute counts as that minute, so a
+request that already held its minute on another account fails over at once. A `Retry-After` past that minute, a second
+failure, or an Anthropic-key account's failure fails the request over to the next eligible account, and a request bound
+to its account, or one with no account left, is answered the router's own `503 accounts_unavailable` with no account
+named. An account the failover marks keeps its pin until the reselect expires it and places a fresh one; any other
+failover moves the pin. The failover, its waits included, starts no new leg past the request's own deadline, ten minutes
+less a margin: past it the request is answered `503 accounts_unavailable` rather than tried on another account. The
+attempt rows read `auth_failed` with the upstream status, and the account reads `reauth_required` after a conclusive
+failure (a rejected replay, an `invalid_grant`, a token endpoint's `401`), which the Accounts view and the
+`reauth_required` alert show.
 
 A stream commits at its `message_start` event or its first `error` event, whichever comes first; earlier events
 are buffered, up to 64 KiB, and relayed after commit in order; a stream that exceeds the buffer or sends no
@@ -647,8 +651,9 @@ count is held across every attempt, retry, and hold, so a request sleeping in a 
 request past the cap is refused before it reaches an account: `429` with the error type `rate_limit_error`, the error
 code `key_in_flight_cap`, and a `Retry-After` of the pool's `retry_in_place_seconds`, one second when that is 0. The
 refused request is observed without its body, since the key's permit is taken before the body is read, and gets its own
-request row under that code; `proxy.key_body_reads` bounds the bodies arriving on one key at once the same way
-([installation](installation.md#proxy)).
+request row under that code; `proxy.key_body_reads`, or the key's own cap when set, bounds the bodies arriving on one
+key at once the same way, and a `count_tokens` request takes a body-read slot too, so it can be refused
+`429 key_body_reads` ([installation](installation.md#proxy)).
 
 ### When nothing can serve
 

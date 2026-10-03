@@ -97,6 +97,10 @@ COMMIT;
 SQL
 ```
 
+Under the container the image ships no `sqlite3`, so after `docker compose stop` and the backup the same sequence runs
+as uid 65532, either from the host against `router.sqlite` on the `phoebis-data` volume or from a one-off container that
+carries `sqlite3` and mounts that volume.
+
 The sequence discards every secret the registry holds, and nothing else: the alert secrets, the Anthropic-key
 secrets, the canary and the OAuth credential bundles go, and each account rests where the Accounts view's Disconnect
 leaves it, with its open refresh attempts settled. The accounts, alert rules, downstream keys, pins, pools and session
@@ -152,9 +156,9 @@ Every configuration block denies unknown keys, so a key the new build does not r
 
 ## Re-pinning the client build
 
-A drift refusal lasts until the router is re-pinned: every stamped request from that client build is refused with
-`client_drift` meanwhile, the `client_drift` alert kind names the first refusal, and the re-pin is the procedure below,
-a source change and a release.
+A drift refusal lasts until the router is re-pinned: every request whose hash this build cannot reproduce, or whose
+`cc_version` suffix does not reproduce, is refused with `client_drift` meanwhile, the `client_drift` alert kind names
+the first refusal, and the re-pin is the procedure below, a source change and a release.
 
 A "pinned" build is the one Claude Code release the router is measured against: `claude-code-2.1.269-linux-x64`, named by
 `compatibility.profile`. A profile is a fixed set of constants, the version and build tag, the two user agents, the
@@ -172,12 +176,13 @@ To re-pin the profile against a new build:
 
 1. With the build installed under `~/.local/share/claude/versions/<version>`, run `scripts/capture-baseline.sh
    <path-to-claude-binary> <output-dir>`. It re-executes itself under `unshare -rn` so the client has loopback as
-   its only route, drives the four credential modes and a gzip-forced run past a recording receiver, records the
-   ClientHello through a CONNECT receiver, and finishes by running `python3 scripts/build-fixtures.py --check
-   <output-dir>`, exiting with that command's status. It refuses to start with a real `ANTHROPIC_API_KEY` or a
-   real `CLAUDE_CODE_OAUTH_TOKEN` set in the environment. The system prompt the client sends embeds the current
-   date, so a re-capture taken on another day differs there; `--check` prints a bounded diff per body so that
-   shows as a date difference rather than a shape change.
+   its only route, drives the four credential modes and a gzip-forced run past a recording receiver (the forced run
+   records a plain body, since the 2.1.286 client gzips toward `api.anthropic.com` alone), records the ClientHello
+   through a CONNECT receiver, and finishes by running `python3 scripts/build-fixtures.py --check <output-dir>`, exiting
+   with that command's status. It refuses to start with a real `ANTHROPIC_API_KEY` or a real `CLAUDE_CODE_OAUTH_TOKEN`
+   set in the environment. The system prompt the client sends embeds the current date, so a re-capture taken on another
+   day differs there; `--check` prints a bounded diff per body so that shows as a date difference rather than a shape
+   change.
 2. Read the diff. A header added or renamed, a beta list that changed, or a new body field is the signal that the
    pinned profile no longer matches the client.
 3. The control plane (the token exchange and the profile, usage, and roles calls) is not captured by the script:
