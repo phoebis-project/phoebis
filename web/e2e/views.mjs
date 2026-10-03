@@ -1484,6 +1484,28 @@ async function ringLinesSpan(theme) {
   }
 }
 
+/**
+ * The Dashboard's recent requests read each model id on one line, so a long id cannot set its row's height. The Time
+ * and Tokens cells keep their second lines, so the rows' heights are not asserted.
+ */
+async function recentRowsOneLine(theme) {
+  const read = await page.evaluate(() =>
+    [...document.querySelectorAll('.dash-bottom tbody tr')].flatMap((tr) => {
+      // A placeholder or error row is one cell across the table.
+      const cell = tr.children.length > 3 ? tr.children[3] : null;
+      if (!cell) return [];
+      const range = document.createRange();
+      range.selectNodeContents(cell);
+      return [{ lines: new Set([...range.getClientRects()].map((r) => Math.round(r.top))).size, text: cell.textContent?.trim() ?? '' }];
+    }),
+  );
+  measurements.push(`${theme} / recent model cells ${JSON.stringify(read)}`);
+  if (mock && read.length === 0) failures.push(`${theme} /: the story has recent requests, yet no Model cell is drawn`);
+  for (const cell of read) {
+    if (cell.lines > 1) failures.push(`${theme} /: the Model cell "${cell.text}" wraps onto ${cell.lines} lines`);
+  }
+}
+
 /** The pool id and the amount are the two ends of one row, and a narrow tile used to run them together. */
 async function costCapRows(theme) {
   const rows = await page.evaluate(() =>
@@ -2424,7 +2446,10 @@ try {
         await remainingCards(theme);
         await errorStateBox(theme);
       }
-      if (view.path === '/') await ringLinesSpan(theme);
+      if (view.path === '/') {
+        await recentRowsOneLine(theme);
+        await ringLinesSpan(theme);
+      }
       if (['/', '/pools', '/accounts'].includes(view.path)) await accountLines(theme, view.path);
       if (view.path === '/observe') await liveFeed(theme);
       if (view.path === '/sessions') {

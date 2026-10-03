@@ -268,6 +268,10 @@
   gap: 18px;
 }
 
+.nowrap {
+  white-space: nowrap;
+}
+
 .remaining {
   display: grid;
   grid-template-columns: 148px 1fr;

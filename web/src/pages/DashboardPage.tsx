@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '@/api';
 import type { Account, CostTable, RequestLog, Session } from '@/api/types';
@@ -6,12 +6,22 @@ import { Donut } from '@/components/charts/Donut';
 import { Sparkline } from '@/components/charts/Sparkline';
 import { accountColor } from '@/components/charts/theme';
 import { useChartInk } from '@/components/charts/useChartInk';
-import { Badge, Card, EmptyState, ErrorState, Skeleton } from '@/components/ui/primitives';
+import { Badge, Button, Card, EmptyState, ErrorState, Skeleton } from '@/components/ui/primitives';
 import { WindowTriple } from '@/components/ui/QuotaBars';
-import { fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortId, tokensTotal } from '@/lib/format';
-import { useAsync, useNow } from '@/lib/hooks';
+import { fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortId, tokensTotal, undatedModel } from '@/lib/format';
+import { useAsync, useNow, type Loaded } from '@/lib/hooks';
 import { STATUS_LABEL, STATUS_TONE, isFastScope } from '@/lib/quota';
 import { fmtWindows, ringFigures, type RingFigures, type RingLeftOut, type RingRow } from '@/lib/rings';
+
+/**
+ * A read whose first answer failed holds no data, so its card would wait on a placeholder forever; a refresh that fails
+ * with data held keeps the card drawn.
+ */
+const failedFirst = (read: Loaded<unknown>) => read.data === null && read.error !== null;
+
+function ReadFailed({ title, error, retry }: { error: string | null; retry: () => void; title: string }) {
+  return <ErrorState title={title} body={error} action={<Button size="sm" onClick={retry}>Try again</Button>} />;
+}
 
 export function DashboardPage() {
   const overview = useAsync(() => api.getOverview(), [], { refreshMs: 30_000 });
@@ -25,21 +35,34 @@ export function DashboardPage() {
   const o = overview.data;
   const hourly = o?.hourly ?? [];
   const tiers = settings.data?.planTables.cost.tiers ?? null;
+  const ringFailure = failedFirst(accounts) ? (
+    <ReadFailed title="Could not load the accounts" error={accounts.error} retry={accounts.reload} />
+  ) : failedFirst(settings) ? (
+    <ReadFailed title="Could not load the settings" error={settings.error} retry={settings.reload} />
+  ) : null;
+  const retrySessions = () => {
+    if (failedFirst(overview)) overview.reload();
+    if (failedFirst(sessions)) sessions.reload();
+  };
 
   return (
     <div className="stack">
-      <div className="stat-grid">
-        <StatTile label="Requests, 24h" value={o ? fmtInt(o.requests24h) : null} note={o ? `${(o.requests24h / 24).toFixed(1)} per hour` : null} spark={hourly.map((h) => h.requests)} color={ink.series[0]} />
-        <StatTile label="Tokens, 24h" value={o ? fmtCompact(o.tokens24h) : null} note={o ? `${fmtPct(o.tokens24h ? o.tokensCached24h / o.tokens24h : 0)} served from cache` : null} spark={hourly.map((h) => h.tokens)} color={ink.series[2]} />
-        <StatTile label="Estimated cost, 24h" value={o ? fmtUsd(o.cost24h) : null} note={o ? `${fmtUsd(o.cost24h / 24)} per hour` : null} spark={hourly.map((h) => h.cost)} color={ink.series[1]} />
-        <StatTile
-          label="Error rate, 24h"
-          value={o ? fmtPct(o.errorRate24h ?? 0, 1) : null}
-          note={o ? (o.errorRate24h === null ? 'No requests' : o.topErrorCode ? `Most common: ${o.topErrorCode}` : 'No errors') : null}
-          spark={hourly.map((h) => h.errors)}
-          color={ink.series[7]}
-        />
-      </div>
+      {failedFirst(overview) ? (
+        <ReadFailed title="Could not load the 24-hour figures" error={overview.error} retry={overview.reload} />
+      ) : (
+        <div className="stat-grid">
+          <StatTile label="Requests, 24h" value={o ? fmtInt(o.requests24h) : null} note={o ? `${(o.requests24h / 24).toFixed(1)} per hour` : null} spark={hourly.map((h) => h.requests)} color={ink.series[0]} />
+          <StatTile label="Tokens, 24h" value={o ? fmtCompact(o.tokens24h) : null} note={o ? `${fmtPct(o.tokens24h ? o.tokensCached24h / o.tokens24h : 0)} served from cache` : null} spark={hourly.map((h) => h.tokens)} color={ink.series[2]} />
+          <StatTile label="Estimated cost, 24h" value={o ? fmtUsd(o.cost24h) : null} note={o ? `${fmtUsd(o.cost24h / 24)} per hour` : null} spark={hourly.map((h) => h.cost)} color={ink.series[1]} />
+          <StatTile
+            label="Error rate, 24h"
+            value={o ? fmtPct(o.errorRate24h ?? 0, 1) : null}
+            note={o ? (o.errorRate24h === null ? 'No requests' : o.topErrorCode ? `Most common: ${o.topErrorCode}` : 'No errors') : null}
+            spark={hourly.map((h) => h.errors)}
+            color={ink.series[7]}
+          />
+        </div>
+      )}
       {overview.data !== null && (
         <p className="muted dash__asof" title={fmtAbsolute(overview.fetchedAt)}>
           {overview.error === null ? `As of ${fmtRelative(overview.fetchedAt, now)}` : `Last refresh failed: ${overview.error}; showing data as of ${fmtRelative(overview.fetchedAt, now)}`}
@@ -47,23 +70,28 @@ export function DashboardPage() {
       )}
 
       <div className="grid-2">
-        <RemainingCard title="5h remaining" subtitle="Subscription accounts, 5-hour window, weighed by tier" windowId="5h" accounts={accounts.data} tiers={tiers} now={now} />
-        <RemainingCard title="7d remaining" subtitle="Subscription accounts, 7-day window, weighed by tier" windowId="7d" accounts={accounts.data} tiers={tiers} now={now} />
+        <RemainingCard title="5h remaining" subtitle="Subscription accounts, 5-hour window, weighed by tier" windowId="5h" accounts={accounts.data} tiers={tiers} now={now} failure={ringFailure} />
+        <RemainingCard title="7d remaining" subtitle="Subscription accounts, 7-day window, weighed by tier" windowId="7d" accounts={accounts.data} tiers={tiers} now={now} failure={ringFailure} />
       </div>
 
       <section>
         <h2 className="section-title">Accounts</h2>
-        <div className="account-strip">
-          {accounts.data
-            ? accounts.data.map((a) => <AccountMini key={a.id} account={a} now={now} />)
-            : Array.from({ length: 5 }, (_, i) => (
-                <div key={i} className="card card--padded">
-                  <Skeleton width="60%" />
-                  <Skeleton height={6} className="mt" />
-                  <Skeleton height={6} className="mt" />
-                </div>
-              ))}
-        </div>
+        {failedFirst(accounts) ? (
+          // One state across the section: inside the auto-fill grid it would take a single column.
+          <ReadFailed title="Could not load the accounts" error={accounts.error} retry={accounts.reload} />
+        ) : (
+          <div className="account-strip">
+            {accounts.data
+              ? accounts.data.map((a) => <AccountMini key={a.id} account={a} now={now} />)
+              : Array.from({ length: 5 }, (_, i) => (
+                  <div key={i} className="card card--padded">
+                    <Skeleton width="60%" />
+                    <Skeleton height={6} className="mt" />
+                    <Skeleton height={6} className="mt" />
+                  </div>
+                ))}
+          </div>
+        )}
       </section>
 
       <div className="dash-bottom">
@@ -71,7 +99,11 @@ export function DashboardPage() {
           <RecentTable rows={requests.data?.requests ?? null} error={requests.error} />
         </Card>
         <Card title="Sessions" subtitle="Sticky pins and cache-warming agents" actions={<Link to="/sessions">Open</Link>}>
-          <SessionsSummary activePins={o?.activePins ?? null} sessions={sessions.data} />
+          {failedFirst(overview) || failedFirst(sessions) ? (
+            <ReadFailed title="Could not load the sessions" error={failedFirst(overview) ? overview.error : sessions.error} retry={retrySessions} />
+          ) : (
+            <SessionsSummary activePins={o?.activePins ?? null} sessions={sessions.data} />
+          )}
         </Card>
       </div>
     </div>
@@ -89,11 +121,13 @@ function StatTile({ label, value, note, spark, color }: { color: string; label: 
   );
 }
 
-function RemainingCard({ title, subtitle, windowId, accounts, tiers, now }: { accounts: Account[] | null; now: number; subtitle: string; tiers: CostTable['tiers'] | null; title: string; windowId: '5h' | '7d' }) {
+function RemainingCard({ title, subtitle, windowId, accounts, tiers, now, failure }: { accounts: Account[] | null; failure: ReactNode; now: number; subtitle: string; tiers: CostTable['tiers'] | null; title: string; windowId: '5h' | '7d' }) {
   const figures = useMemo(() => (accounts && tiers ? ringFigures(accounts, windowId, tiers, now) : null), [accounts, tiers, windowId, now]);
   return (
     <Card title={title} subtitle={subtitle}>
-      {figures === null ? (
+      {failure ? (
+        failure
+      ) : figures === null ? (
         <Skeleton height={148} />
       ) : figures.rows.length === 0 && figures.leftOut.length === 0 ? (
         // A registry of Anthropic-key accounts alone has no window to draw, and an empty ring reads as exhausted.
@@ -221,7 +255,9 @@ function RecentTable({ rows, error }: { error: string | null; rows: RequestLog[]
                   </td>
                   <td className="mono">{r.keyId}</td>
                   <td>{r.accountId}</td>
-                  <td className="mono">{r.model}</td>
+                  <td className="mono nowrap" title={undatedModel(r.model) === r.model ? undefined : r.model}>
+                    {undatedModel(r.model)}
+                  </td>
                   <td>
                     <StatusBadge status={r.status} attempts={r.attempts.length} />
                   </td>

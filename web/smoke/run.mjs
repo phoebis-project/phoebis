@@ -5981,6 +5981,126 @@ else localStorage.setItem('phoebis.role', roleBeforePreview);
 }
 
 {
+  // A Dashboard card whose first read failed draws the route's message and Try again, which reads again what that card
+  // lost. Each mount runs on the frozen clock, so no refresh lands between the presses, and late in the run like the
+  // toast checks, so the real time the mounts take moves none of the story's relative times the earlier checks read.
+  const READS = { getOverview: '/admin/dashboard', listAccounts: '/admin/accounts', listSessions: '/admin/sessions' };
+  const cardTitled = (page, title) => [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent === title);
+  const strip = (page) => [...page.container.querySelectorAll('section')].find((s) => s.querySelector('h2')?.textContent === 'Accounts');
+  const failure = (el) => (el?.matches('.empty--error') ? el : el?.querySelector('.empty--error')) ?? null;
+  const tilesFailure = (page) => [...page.container.querySelectorAll('.empty--error')].find((e) => e.querySelector('.empty__title')?.textContent === 'Could not load the 24-hour figures') ?? null;
+  const tryAgain = async (page, el) => {
+    const button = failure(el)?.querySelector('button');
+    button?.click();
+    await page.settle();
+    return button !== undefined && button !== null;
+  };
+  const counts = (outage) => Object.fromEntries(Object.entries(outage.calls).map(([name, calls]) => [name, calls.length]));
+  const tilesDrawn = (page) => page.container.querySelectorAll('.stat-grid > .stat').length === 4 && tilesFailure(page) === null;
+
+  let outage = failCalls(READS, 'ledger locked');
+  let page = await mount('/', { now: CLOCK_ORIGIN });
+  const buttons = [...page.container.querySelectorAll('button')].filter((b) => b.textContent?.trim() === 'Try again');
+  const drawn = [...page.container.querySelectorAll('.empty--error')].map((e) => ({ body: e.querySelector('.empty__body')?.textContent ?? '', title: e.querySelector('.empty__title')?.textContent ?? '' }));
+  const where = {
+    rings: ['5h remaining', '7d remaining'].map((t) => failure(cardTitled(page, t))?.querySelector('.empty__title')?.textContent ?? 'none'),
+    sessions: failure(cardTitled(page, 'Sessions'))?.querySelector('.empty__title')?.textContent ?? 'none',
+    strip: failure(strip(page))?.querySelector('.empty__title')?.textContent ?? 'none',
+    stripGrid: strip(page)?.querySelector('.account-strip') !== null,
+    tiles: tilesFailure(page) !== null && page.container.querySelector('.stat-grid') === null,
+  };
+  const skeletons = page.container.querySelectorAll('.skeleton').length;
+  outage.recover();
+  const steps = [];
+  const step = async (name, el, drew) => {
+    const before = counts(outage);
+    const pressed = await tryAgain(page, el);
+    steps.push({ after: counts(outage), before, drew: drew(), name, pressed });
+    return steps[steps.length - 1];
+  };
+  const tiles = await step('tiles', tilesFailure(page), () => tilesDrawn(page));
+  const sessions = await step('sessions', cardTitled(page, 'Sessions'), () => page.container.querySelector('.sess-summary') !== null);
+  const stripStep = await step('strip', strip(page), () => page.container.querySelectorAll('.account-strip a.account-mini').length > 0);
+  outage.restore();
+  page.unmount();
+  const rose = (s, name) => s.after[name] === s.before[name] + 1;
+  const still = (s, name) => s.after[name] === s.before[name];
+  const firstOk =
+    buttons.length === 5 &&
+    JSON.stringify(drawn.map((d) => d.title).sort()) === JSON.stringify(['Could not load the 24-hour figures', 'Could not load the accounts', 'Could not load the accounts', 'Could not load the accounts', 'Could not load the sessions']) &&
+    drawn.every((d) => d.body === 'ledger locked') &&
+    JSON.stringify(where.rings) === JSON.stringify(['Could not load the accounts', 'Could not load the accounts']) &&
+    where.sessions === 'Could not load the sessions' &&
+    where.strip === 'Could not load the accounts' &&
+    !where.stripGrid &&
+    where.tiles &&
+    skeletons === 0 &&
+    [tiles, sessions, stripStep].every((s) => s.pressed && s.drew) &&
+    rose(tiles, 'getOverview') && still(tiles, 'listAccounts') && still(tiles, 'listSessions') &&
+    rose(sessions, 'listSessions') && still(sessions, 'getOverview') &&
+    rose(stripStep, 'listAccounts') && still(stripStep, 'getOverview') && still(stripStep, 'listSessions');
+
+  // A second outage proves a ring's accounts retry, and the sessions card reading both its reads again when both failed.
+  outage = failCalls(READS, 'ledger locked');
+  page = await mount('/', { now: CLOCK_ORIGIN });
+  outage.recover();
+  const ring = await step('5-hour ring', cardTitled(page, '5h remaining'), () => cardTitled(page, '5h remaining')?.querySelector('svg.donut') !== null && failure(cardTitled(page, '5h remaining')) === null);
+  const both = await step('sessions, both reads', cardTitled(page, 'Sessions'), () => page.container.querySelector('.sess-summary') !== null && tilesDrawn(page));
+  outage.restore();
+  page.unmount();
+  const secondOk = [ring, both].every((s) => s.pressed && s.drew) && rose(ring, 'listAccounts') && still(ring, 'getOverview') && still(ring, 'listSessions') && rose(both, 'getOverview') && rose(both, 'listSessions');
+  results.push({
+    name: '/ failed reads draw an error state per card, and Try again recovers each',
+    ok: firstOk && secondOk,
+    missing: [`${buttons.length} Try again`, JSON.stringify(drawn), JSON.stringify(where), `${skeletons} skeletons`, JSON.stringify(steps)],
+  });
+
+  outage = failCalls({ getSettings: '/admin/settings' }, 'ledger locked');
+  page = await mount('/', { now: CLOCK_ORIGIN });
+  const ringTitles = ['5h remaining', '7d remaining'].map((t) => failure(cardTitled(page, t))?.querySelector('.empty__title')?.textContent ?? 'none');
+  const ringBodies = ['5h remaining', '7d remaining'].map((t) => failure(cardTitled(page, t))?.querySelector('.empty__body')?.textContent ?? 'none');
+  outage.recover();
+  const settingsBefore = outage.calls.getSettings.length;
+  const pressed = await tryAgain(page, cardTitled(page, '7d remaining'));
+  const settingsAfter = outage.calls.getSettings.length;
+  const rings = ['5h remaining', '7d remaining'].map((t) => cardTitled(page, t)?.querySelector('svg.donut') !== null);
+  outage.restore();
+  page.unmount();
+  results.push({
+    name: '/ a failed settings read draws an error state on both rings, and Try again reads the settings again',
+    ok: JSON.stringify(ringTitles) === JSON.stringify(['Could not load the settings', 'Could not load the settings']) && ringBodies.every((b) => b === 'ledger locked') && pressed && settingsAfter === settingsBefore + 1 && rings.every(Boolean),
+    missing: [JSON.stringify(ringTitles), JSON.stringify(ringBodies), `getSettings ${settingsBefore} then ${settingsAfter}`, `rings drawn ${JSON.stringify(rings)}`],
+  });
+}
+
+{
+  // The story's newest ten requests at the pinned clock carry undated ids alone, so the recent list leads with the
+  // newest request whose model is dated, picked by shape, and every drawn row is read against the request it links to.
+  const DATED = /-\d{8}$/;
+  const datedRequest = requests.filter((r) => DATED.test(r.model)).sort((a, b) => Date.parse(b.at) - Date.parse(a.at))[0];
+  const { listRequests } = api;
+  api.listRequests = async (query) => {
+    const answer = await listRequests.call(api, query);
+    return datedRequest ? { ...answer, requests: [datedRequest, ...answer.requests.filter((r) => r.id !== datedRequest.id)].slice(0, answer.requests.length) } : answer;
+  };
+  const page = await mount('/', { now: CLOCK_ORIGIN });
+  api.listRequests = listRequests;
+  const byId = new Map(requests.map((r) => [r.id, r]));
+  const modelCells = [...page.container.querySelectorAll('.dash-bottom tbody tr')].flatMap((tr) => {
+    const request = byId.get(idOf(tr.querySelector('a[href^="/requests/"]') ?? tr));
+    return request && tr.children[3] ? [{ cell: tr.children[3], model: request.model }] : [];
+  });
+  page.unmount();
+  const datedCells = modelCells.filter((c) => DATED.test(c.model));
+  const misread = modelCells.filter((c) => (DATED.test(c.model) ? c.cell.textContent !== c.model.replace(DATED, '') || c.cell.getAttribute('title') !== c.model : c.cell.textContent !== c.model || c.cell.hasAttribute('title')));
+  results.push({
+    name: '/ a dated model reads undated with the dated id in its title',
+    ok: datedCells.length > 0 && misread.length === 0 && modelCells.length > datedCells.length,
+    missing: datedCells.length === 0 ? ['no dated row', ...modelCells.map((c) => c.model)] : misread.map((c) => `${c.model}: ${JSON.stringify(c.cell.textContent)} titled ${JSON.stringify(c.cell.getAttribute('title'))}`),
+  });
+}
+
+{
   // The descriptions beside titles, late in the run like the checks after them, so the real time their mounts take
   // moves none of the story's relative times the earlier checks read.
   // React's ids carry colons, which a selector would have to escape, so a reference is resolved by id.
