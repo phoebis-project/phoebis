@@ -9,8 +9,8 @@ use phoebis_routing::{
     BurnRates, ClientClass, CreditsState, Exhaustion, KeyRefusal, MemberSpend, PinRef,
     PinUsage, Presented, RateTable, Rates, Refusal, ReloadError, Report, ResolveError,
     RouterConfig, RouterHandle, RoutingState, SelectRequest, SelectResult, SharePricer,
-    UtilizationSample, WindowReading, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR,
-    SEVEN_DAY, SEVEN_DAY_FABLE,
+    UtilizationSample, WindowReading, COMMANDS, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON,
+    FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
 };
 use phoebis_store::{
     key_prefix, AccountKind, AccountRow, AccountState, Affinity, AffinitySource, ApiKeyRow,
@@ -473,6 +473,57 @@ async fn a_router_handle_reads_alive_until_its_task_has_shut_down() {
         !held.is_alive(),
         "a task that shut down takes none, the condition every ask reports as RouterGone"
     );
+}
+
+/// Asserts the drop table reads `count` under `kind` and zero under every other kind, every kind present in the
+/// listed order.
+fn assert_dropped(handle: &RouterHandle, kind: &str, count: u64) {
+    let dropped = handle.dropped_reports();
+    assert_eq!(
+        dropped.iter().map(|(k, _)| *k).collect::<Vec<_>>(),
+        Report::KINDS,
+        "every kind is read, in the listed order"
+    );
+    for (k, n) in dropped {
+        let expected = if k == kind { count } else { 0 };
+        assert_eq!(n, expected, "the drops counted under {k}");
+    }
+}
+
+#[tokio::test]
+async fn a_report_the_stopped_task_cannot_take_counts_one_drop_under_its_kind_and_nothing_under_the_others(
+) {
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(seeded(&["a"]), clock(&now), RouterConfig::default()).unwrap();
+    assert_dropped(&handle, "cooldown", 0);
+    handle.shutdown().await.unwrap();
+    assert_eq!(
+        handle.report(model_cooldown("a", "model:claude-sonnet-5", 1_000)),
+        None
+    );
+    assert_dropped(&handle, "cooldown", 1);
+}
+
+#[tokio::test]
+async fn a_full_command_queue_counts_the_dropped_report_under_its_kind() {
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(seeded(&["a"]), clock(&now), RouterConfig::default()).unwrap();
+    let park = handle.park_loop().await;
+    // The loop took its own park command off the queue, so every slot is free and only the last report is refused.
+    for _ in 0..COMMANDS + 1 {
+        handle.report(model_cooldown("a", "model:claude-sonnet-5", 1_000));
+    }
+    assert_dropped(&handle, "cooldown", 1);
+    drop(park);
+    // Queued behind the reports, so it answers once every one of them has landed.
+    let cooldowns = handle.cooldowns().await.unwrap();
+    assert!(
+        cooldowns
+            .iter()
+            .any(|c| c.account_id == "a" && c.scope == "model:claude-sonnet-5"),
+        "the queued reports land once the loop runs again: {cooldowns:?}"
+    );
+    assert_dropped(&handle, "cooldown", 1);
 }
 
 #[tokio::test]

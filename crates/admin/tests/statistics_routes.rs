@@ -124,6 +124,29 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
         (Some(26), Some(0), Some(4_096)),
         "the ledger schema is at the migration that counts an incomplete answer and keeps the upstream message id"
     );
+    assert_eq!(system["router"]["command_depth"].as_u64(), Some(4_096));
+    let dropped = system["router"]["dropped_reports"].as_object().unwrap();
+    assert_eq!(
+        dropped.keys().map(String::as_str).collect::<Vec<_>>(),
+        [
+            "account_state",
+            "affinity",
+            "cooldown",
+            "credits",
+            "member_spend",
+            "overage",
+            "pin_invalidated",
+            "pin_released",
+            "pin_renewed",
+            "sample",
+            "usage",
+        ],
+        "every kind of routing report, in name order"
+    );
+    assert!(
+        dropped.values().all(|n| n.as_u64() == Some(0)),
+        "nothing refused by a router that kept up: {dropped:?}"
+    );
     assert_eq!(system["gaps"][0]["detail"]["dropped"].as_u64(), Some(7));
     assert!(
         system["bus"]

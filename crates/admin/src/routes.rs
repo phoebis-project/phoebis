@@ -857,6 +857,12 @@ async fn system(State(state): State<Arc<AdminState>>) -> Response {
     };
     let keepalive_stats = state.keepalive.stats();
     let dead = state.readiness.dead();
+    let dropped = state
+        .router
+        .dropped_reports()
+        .into_iter()
+        .map(|(kind, n)| (kind.to_string(), serde_json::Value::from(n)))
+        .collect::<serde_json::Map<String, serde_json::Value>>();
     Json(json!({
         "version": env!("CARGO_PKG_VERSION"),
         "profile": state.profile.name,
@@ -871,6 +877,7 @@ async fn system(State(state): State<Arc<AdminState>>) -> Response {
             "gaps": load(&stats.gaps), "last_gap_at": stats.last_gap_at.load(std::sync::atomic::Ordering::Relaxed),
             "channel_depth": phoebis_ledger::CHANNEL_DEPTH,
         },
+        "router": { "command_depth": phoebis_routing::COMMANDS, "dropped_reports": dropped },
         "bus": state.bus.stats().iter().map(|(name, s)| json!({ "subscriber": name, "dropped": load(&s.dropped), "panics": load(&s.panics) })).collect::<Vec<_>>(),
         "live": { "clients": state.live.clients(), "in_flight": state.live.in_flight() },
         "pricing_unknown_models": state.pricing.unknown_models(),

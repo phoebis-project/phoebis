@@ -220,6 +220,62 @@ fn gauges_come_from_the_routing_state_and_drops_are_counted_per_table() {
     );
 }
 
+#[test]
+fn the_routers_drop_counters_render_one_series_per_kind() {
+    let gauges = RoutingGauges {
+        dropped_reports: vec![("cooldown", 2), ("usage", 0)],
+        ..RoutingGauges::default()
+    };
+    let text = Metrics::new().render(&gauges, &[], 0);
+    assert!(
+        text.contains("# TYPE phoebis_router_dropped_reports_total counter"),
+        "{text}"
+    );
+    for line in [
+        r#"phoebis_router_dropped_reports_total{kind="cooldown"} 2"#,
+        r#"phoebis_router_dropped_reports_total{kind="usage"} 0"#,
+    ] {
+        assert!(text.contains(line), "missing {line} in:\n{text}");
+    }
+    assert_eq!(
+        text.matches("phoebis_router_dropped_reports_total{")
+            .count(),
+        2,
+        "one series per kind the table carries: {text}"
+    );
+}
+
+#[tokio::test]
+async fn a_scrape_reads_the_routers_drop_counters_at_gather() {
+    use phoebis_store::{StorageKey, Store};
+    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+    let router = phoebis_routing::spawn(
+        store,
+        Arc::new(|| 1_000),
+        phoebis_routing::RouterConfig::default(),
+    )
+    .unwrap();
+    router.shutdown().await.unwrap();
+    router.report(phoebis_routing::Report::MemberSpend(Vec::new()));
+    let gauges = phoebis_ledger::gather(&router, &PriceTable::shipped(), 1_000, 60_000, None).await;
+    assert_eq!(
+        gauges
+            .dropped_reports
+            .iter()
+            .map(|(kind, _)| *kind)
+            .collect::<Vec<_>>(),
+        phoebis_routing::Report::KINDS,
+        "every kind of the router's table is copied"
+    );
+    let text = Metrics::new().render(&gauges, &[], 0);
+    for line in [
+        r#"phoebis_router_dropped_reports_total{kind="member_spend"} 1"#,
+        r#"phoebis_router_dropped_reports_total{kind="usage"} 0"#,
+    ] {
+        assert!(text.contains(line), "missing {line} in:\n{text}");
+    }
+}
+
 #[tokio::test]
 async fn cooldowns_on_two_unpriced_models_render_as_one_other_sample_with_the_longer_wait() {
     use phoebis_store::{AccountKind, AccountRow, AccountState, CooldownRow, StorageKey, Store};

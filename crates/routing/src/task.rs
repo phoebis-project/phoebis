@@ -26,7 +26,9 @@ use crate::state::{
 };
 use crate::{resolve, window_for, KeyRefusal, Presented, RegistrySnapshot};
 
-const COMMANDS: usize = 4_096;
+/// The router loop's command queue size, which `/admin/system` reports; a report that finds the queue full is
+/// dropped and counted under its kind.
+pub const COMMANDS: usize = 4_096;
 
 const EVENTS: usize = 1_024;
 
@@ -284,6 +286,41 @@ pub enum Report {
     },
 }
 
+impl Report {
+    /// Every kind, alphabetical, so a reader sees the whole set at zero.
+    pub const KINDS: &'static [&'static str] = &[
+        "account_state",
+        "affinity",
+        "cooldown",
+        "credits",
+        "member_spend",
+        "overage",
+        "pin_invalidated",
+        "pin_released",
+        "pin_renewed",
+        "sample",
+        "usage",
+    ];
+
+    /// The kind's name, the label of its drop counter.
+    pub fn kind(&self) -> &'static str {
+        // No wildcard, so a new variant fails to compile until it is named here; `sent` expects the name in `KINDS`.
+        match self {
+            Report::AccountState { .. } => "account_state",
+            Report::Affinity(_) => "affinity",
+            Report::Cooldown { .. } => "cooldown",
+            Report::Credits { .. } => "credits",
+            Report::MemberSpend(_) => "member_spend",
+            Report::Overage { .. } => "overage",
+            Report::PinInvalidated { .. } => "pin_invalidated",
+            Report::PinReleased { .. } => "pin_released",
+            Report::PinRenewed { .. } => "pin_renewed",
+            Report::Sample { .. } => "sample",
+            Report::Usage { .. } => "usage",
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 #[error("the router task has stopped")]
 pub struct RouterGone;
@@ -337,6 +374,11 @@ enum Command {
         reply: oneshot::Sender<()>,
     },
     #[cfg(any(test, feature = "debug-hooks"))]
+    Park {
+        release: oneshot::Receiver<()>,
+        reply: oneshot::Sender<()>,
+    },
+    #[cfg(any(test, feature = "debug-hooks"))]
     ReleaseReports {
         reply: oneshot::Sender<()>,
     },
@@ -386,6 +428,9 @@ impl ReportSequence {
 #[derive(Clone)]
 pub struct RouterHandle {
     affinity: Arc<RwLock<AffinityMap>>,
+    /// The reports the queue refused, one counter per kind at its position in `Report::KINDS`; the process's
+    /// alone, zero at start.
+    dropped: Arc<[AtomicU64; Report::KINDS.len()]>,
     events: broadcast::Sender<RouterEvent>,
     in_flight: InFlight,
     reports: Arc<ReportSequence>,
@@ -424,12 +469,15 @@ impl RouterHandle {
     }
 
     /// Never waits: a report is a fact about the past, and a relay holding a client stream must not block on
-    /// the task's queue. A full queue is logged and the report dropped, which delays a state change by one
-    /// request rather than stalling one. For `Report::Affinity` the sequence number the report took at enqueue,
-    /// `None` for every other report and for a report the full or closed queue dropped.
+    /// the task's queue. A full queue is counted under the report's kind, logged and the report dropped: a pin
+    /// change delays by one request, a cooldown or a usage reading is re-learned by the next request on that
+    /// account. For `Report::Affinity` the sequence number the report took at enqueue, `None` for every other
+    /// report and for a report the full or closed queue dropped.
     pub fn report(&self, report: Report) -> Option<u64> {
+        // Read before the send moves the report into the command.
+        let kind = report.kind();
         if !matches!(report, Report::Affinity(_)) {
-            Self::sent(self.tx.try_send(Command::Report(report, None)));
+            self.sent(kind, self.tx.try_send(Command::Report(report, None)));
             return None;
         }
         // Held across the send, so a later number never enters the queue ahead of an earlier one and the
@@ -440,24 +488,50 @@ impl RouterHandle {
             .lock()
             .expect("report sequence lock poisoned");
         let seq = *next + 1;
-        Self::sent(self.tx.try_send(Command::Report(report, Some(seq)))).then(|| {
-            *next = seq;
-            seq
-        })
+        self.sent(kind, self.tx.try_send(Command::Report(report, Some(seq))))
+            .then(|| {
+                *next = seq;
+                seq
+            })
     }
 
-    fn sent(result: Result<(), mpsc::error::TrySendError<Command>>) -> bool {
+    fn sent(
+        &self,
+        kind: &'static str,
+        result: Result<(), mpsc::error::TrySendError<Command>>,
+    ) -> bool {
+        let dropped = |handle: &Self| {
+            let index = Report::KINDS
+                .iter()
+                .position(|k| *k == kind)
+                .expect("every kind is listed");
+            handle.dropped[index].fetch_add(1, Ordering::Relaxed);
+        };
         match result {
             Ok(()) => true,
             Err(mpsc::error::TrySendError::Full(_)) => {
-                tracing::warn!("the router task's queue is full, a report was dropped");
+                dropped(self);
+                tracing::warn!(
+                    kind,
+                    "the router task's queue is full, a report was dropped"
+                );
                 false
             }
             Err(mpsc::error::TrySendError::Closed(_)) => {
-                tracing::warn!("the router task has stopped, a report was dropped");
+                dropped(self);
+                tracing::warn!(kind, "the router task has stopped, a report was dropped");
                 false
             }
         }
+    }
+
+    /// The reports the queue refused since start, per kind in `Report::KINDS` order; never persisted.
+    pub fn dropped_reports(&self) -> Vec<(&'static str, u64)> {
+        Report::KINDS
+            .iter()
+            .zip(self.dropped.iter())
+            .map(|(kind, count)| (*kind, count.load(Ordering::Relaxed)))
+            .collect()
     }
 
     /// The sequence of the last affinity report the task applied.
@@ -605,6 +679,36 @@ impl RouterHandle {
             handle: self.clone(),
         }
     }
+
+    /// Parks the loop before its next command until the guard drops, so a test can fill the queue.
+    pub async fn park_loop(&self) -> LoopPark {
+        let (release, parked) = oneshot::channel();
+        // Answered once the loop has taken the park off the queue, so the parked command holds no slot.
+        self.ask(|reply| Command::Park {
+            release: parked,
+            reply,
+        })
+        .await
+        .expect("the router task is running");
+        LoopPark {
+            release: Some(release),
+        }
+    }
+}
+
+/// The router loop parked from `RouterHandle::park_loop` until this drops.
+#[cfg(any(test, feature = "debug-hooks"))]
+pub struct LoopPark {
+    release: Option<oneshot::Sender<()>>,
+}
+
+#[cfg(any(test, feature = "debug-hooks"))]
+impl Drop for LoopPark {
+    fn drop(&mut self) {
+        if let Some(release) = self.release.take() {
+            let _ = release.send(());
+        }
+    }
 }
 
 /// The task's affinity reports parked from `RouterHandle::hold_reports` until `release`.
@@ -705,6 +809,7 @@ pub fn spawn(
     let reports = Arc::new(ReportSequence::default());
     let handle = RouterHandle {
         affinity,
+        dropped: Arc::default(),
         events: events.clone(),
         in_flight,
         reports: reports.clone(),
@@ -1282,6 +1387,12 @@ impl Task {
             Command::ReleaseReports { reply } => {
                 self.release_reports();
                 let _ = reply.send(());
+            }
+            #[cfg(any(test, feature = "debug-hooks"))]
+            Command::Park { release, reply } => {
+                let _ = reply.send(());
+                // Awaited inside the loop, so no command is taken until the guard drops.
+                let _ = release.await;
             }
             Command::Resolve {
                 spelling,

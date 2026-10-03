@@ -16,6 +16,22 @@
       "last_gap_at": 0,
       "channel_depth": 4096
     },
+    "router": {
+      "command_depth": 4096,
+      "dropped_reports": {
+        "account_state": 0,
+        "affinity": 0,
+        "cooldown": 0,
+        "credits": 0,
+        "member_spend": 0,
+        "overage": 0,
+        "pin_invalidated": 0,
+        "pin_released": 0,
+        "pin_renewed": 0,
+        "sample": 0,
+        "usage": 0
+      }
+    },
     "bus": [
       {
         "subscriber": "ledger",

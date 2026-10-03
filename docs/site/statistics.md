@@ -181,7 +181,7 @@ The purge that enforces these runs once an hour. Every five-minute poll's readin
 ## Metrics
 
 `stats.metrics_listen` serves `/metrics` in Prometheus text format and nothing else; it speaks plain HTTP and
-asks for no credential, so it belongs behind a network only the scraper can reach. Sixteen families are
+asks for no credential, so it belongs behind a network only the scraper can reach. Seventeen families are
 rendered:
 
 | Metric | Type | Labels |
@@ -200,6 +200,7 @@ rendered:
 | `phoebis_pins_active` | gauge | `pool` |
 | `phoebis_pricing_unknown_model_total` | counter | none |
 | `phoebis_requests_total` | counter | `key`, `kind`, `outcome` |
+| `phoebis_router_dropped_reports_total` | counter | `kind` |
 | `phoebis_tokens_total` | counter | `account`, `kind`, `model` |
 | `phoebis_upstream_ttfb_seconds` | histogram | `model` |
 
