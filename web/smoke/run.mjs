@@ -6074,29 +6074,48 @@ else localStorage.setItem('phoebis.role', roleBeforePreview);
 }
 
 {
-  // The story's newest ten requests at the pinned clock carry undated ids alone, so the recent list leads with the
-  // newest request whose model is dated, picked by shape, and every drawn row is read against the request it links to.
+  // The story's newest ten requests at the pinned clock carry undated ids alone, each longer than the Model column
+  // holds, so the recent list leads with the newest request whose model is dated, picked by shape, and the first
+  // undated row reads a short id the column holds whole. Every drawn row is read against the row the list answered.
   const DATED = /-\d{8}$/;
+  const SHORT = 'opus-4-1';
   const datedRequest = requests.filter((r) => DATED.test(r.model)).sort((a, b) => Date.parse(b.at) - Date.parse(a.at))[0];
+  const answered = new Map();
   const { listRequests } = api;
   api.listRequests = async (query) => {
     const answer = await listRequests.call(api, query);
-    return datedRequest ? { ...answer, requests: [datedRequest, ...answer.requests.filter((r) => r.id !== datedRequest.id)].slice(0, answer.requests.length) } : answer;
+    if (!datedRequest) return answer;
+    const rows = [datedRequest, ...answer.requests.filter((r) => r.id !== datedRequest.id)].slice(0, answer.requests.length);
+    const shortAt = rows.findIndex((r) => !DATED.test(r.model));
+    if (shortAt >= 0) rows[shortAt] = { ...rows[shortAt], model: SHORT };
+    for (const r of rows) answered.set(r.id, r);
+    return { ...answer, requests: rows };
   };
   const page = await mount('/', { now: CLOCK_ORIGIN });
   api.listRequests = listRequests;
-  const byId = new Map(requests.map((r) => [r.id, r]));
   const modelCells = [...page.container.querySelectorAll('.dash-bottom tbody tr')].flatMap((tr) => {
-    const request = byId.get(idOf(tr.querySelector('a[href^="/requests/"]') ?? tr));
-    return request && tr.children[3] ? [{ cell: tr.children[3], model: request.model }] : [];
+    const request = answered.get(idOf(tr.querySelector('a[href^="/requests/"]') ?? tr));
+    const cell = tr.children[3];
+    return request && cell ? [{ cap: Number.parseFloat(cell.style.maxWidth), cell, model: request.model }] : [];
   });
   page.unmount();
+  const said = (c) => `${c.model}: ${JSON.stringify(c.cell.textContent)} titled ${JSON.stringify(c.cell.getAttribute('title'))} under a ${c.cell.style.maxWidth || 'missing'} cap`;
   const datedCells = modelCells.filter((c) => DATED.test(c.model));
-  const misread = modelCells.filter((c) => (DATED.test(c.model) ? c.cell.textContent !== c.model.replace(DATED, '') || c.cell.getAttribute('title') !== c.model : c.cell.textContent !== c.model || c.cell.hasAttribute('title')));
+  const misdated = datedCells.filter((c) => c.cell.textContent !== c.model.replace(DATED, '') || c.cell.getAttribute('title') !== c.model);
   results.push({
     name: '/ a dated model reads undated with the dated id in its title',
-    ok: datedCells.length > 0 && misread.length === 0 && modelCells.length > datedCells.length,
-    missing: datedCells.length === 0 ? ['no dated row', ...modelCells.map((c) => c.model)] : misread.map((c) => `${c.model}: ${JSON.stringify(c.cell.textContent)} titled ${JSON.stringify(c.cell.getAttribute('title'))}`),
+    ok: datedCells.length > 0 && misdated.length === 0,
+    missing: datedCells.length === 0 ? ['no dated row', ...modelCells.map((c) => c.model)] : misdated.map(said),
+  });
+  // The column counts characters of the monospace face, so an id longer than its cap is the one the ellipsis cuts.
+  const undatedCells = modelCells.filter((c) => !DATED.test(c.model));
+  const cut = undatedCells.filter((c) => c.model.length > c.cap);
+  const whole = undatedCells.filter((c) => c.model.length <= c.cap);
+  const misread = undatedCells.filter((c) => !(c.cap > 0) || c.cell.textContent !== c.model || c.cell.getAttribute('title') !== (c.model.length > c.cap ? c.model : null));
+  results.push({
+    name: '/ a model id the Model column cuts carries the whole id in its title, and one it holds whole carries none',
+    ok: cut.length > 0 && whole.length > 0 && misread.length === 0 && new Set(modelCells.map((c) => c.cell.style.maxWidth)).size === 1,
+    missing: [`${cut.length} cut, ${whole.length} whole`, ...misread.map(said)],
   });
 }
 

@@ -214,6 +214,12 @@ function AccountMini({ account, now }: { account: Account; now: number }) {
   );
 }
 
+/**
+ * The Model column's cap in characters of the monospace face: the most the Recent requests table holds at 1280 px with
+ * every column's padding as it is, enough to tell the model families apart. A longer id is cut behind an ellipsis.
+ */
+const MODEL_CHARS = 9;
+
 function RecentTable({ rows, error }: { error: string | null; rows: RequestLog[] | null }) {
   return (
     <div className="table-wrap">
@@ -247,28 +253,31 @@ function RecentTable({ rows, error }: { error: string | null; rows: RequestLog[]
                     </td>
                   </tr>
                 ))
-            : rows.map((r) => (
-                <tr key={r.id}>
-                  <td className="num" title={fmtAbsolute(r.at)}>
-                    <Link to={`/requests/${r.id}`}>{fmtTime(r.at)}</Link>
-                    <span className="sub mono">{shortId(r.id, 12)}</span>
-                  </td>
-                  <td className="mono">{r.keyId}</td>
-                  <td>{r.accountId}</td>
-                  <td className="mono nowrap" title={undatedModel(r.model) === r.model ? undefined : r.model}>
-                    {undatedModel(r.model)}
-                  </td>
-                  <td>
-                    <StatusBadge status={r.status} attempts={r.attempts.length} />
-                  </td>
-                  <td className="right num">{fmtMs(r.ttfbMs)}</td>
-                  <td className="right num">
-                    {fmtCompact(tokensTotal(r.usage))}
-                    <span className="sub">{fmtCompact(r.usage.cacheRead)} cached</span>
-                  </td>
-                  <td className="right num">{fmtUsd(r.costUsd)}</td>
-                </tr>
-              ))}
+            : rows.map((r) => {
+                const shown = undatedModel(r.model);
+                return (
+                  <tr key={r.id}>
+                    <td className="num" title={fmtAbsolute(r.at)}>
+                      <Link to={`/requests/${r.id}`}>{fmtTime(r.at)}</Link>
+                      <span className="sub mono">{shortId(r.id, 12)}</span>
+                    </td>
+                    <td className="mono">{r.keyId}</td>
+                    <td>{r.accountId}</td>
+                    <td className="mono nowrap dash__model" style={{ maxWidth: `${MODEL_CHARS}ch` }} title={shown !== r.model || shown.length > MODEL_CHARS ? r.model : undefined}>
+                      {shown}
+                    </td>
+                    <td>
+                      <StatusBadge status={r.status} attempts={r.attempts.length} />
+                    </td>
+                    <td className="right num">{fmtMs(r.ttfbMs)}</td>
+                    <td className="right num">
+                      {fmtCompact(tokensTotal(r.usage))}
+                      <span className="sub">{fmtCompact(r.usage.cacheRead)} cached</span>
+                    </td>
+                    <td className="right num">{fmtUsd(r.costUsd)}</td>
+                  </tr>
+                );
+              })}
         </tbody>
       </table>
     </div>

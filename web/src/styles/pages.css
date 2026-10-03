@@ -272,6 +272,13 @@
   white-space: nowrap;
 }
 
+/* The page caps the cell's width in characters, so the box leaves the padding out of that count. */
+.dash__model {
+  box-sizing: content-box;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .remaining {
   display: grid;
   grid-template-columns: 148px 1fr;
@@ -313,6 +320,7 @@
 .remaining__left-out {
   padding: 0;
   list-style: none;
+  font-size: 12.5px;
 }
 
 .badge__extra {

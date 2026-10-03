@@ -1485,24 +1485,30 @@ async function ringLinesSpan(theme) {
 }
 
 /**
- * The Dashboard's recent requests read each model id on one line, so a long id cannot set its row's height. The Time
- * and Tokens cells keep their second lines, so the rows' heights are not asserted.
+ * The Dashboard's recent requests read each model id on one line, so a long id cannot set its row's height, and the
+ * table fits its card: the Model cell stops at its cap behind an ellipsis, with the whole id on the title. The Time and
+ * Tokens cells keep their second lines, so the rows' heights are not asserted.
  */
 async function recentRowsOneLine(theme) {
-  const read = await page.evaluate(() =>
-    [...document.querySelectorAll('.dash-bottom tbody tr')].flatMap((tr) => {
+  const read = await page.evaluate(() => {
+    const wrap = document.querySelector('.dash-bottom .table-wrap');
+    const cells = [...document.querySelectorAll('.dash-bottom tbody tr')].flatMap((tr) => {
       // A placeholder or error row is one cell across the table.
       const cell = tr.children.length > 3 ? tr.children[3] : null;
       if (!cell) return [];
       const range = document.createRange();
       range.selectNodeContents(cell);
-      return [{ lines: new Set([...range.getClientRects()].map((r) => Math.round(r.top))).size, text: cell.textContent?.trim() ?? '' }];
-    }),
-  );
-  measurements.push(`${theme} / recent model cells ${JSON.stringify(read)}`);
-  if (mock && read.length === 0) failures.push(`${theme} /: the story has recent requests, yet no Model cell is drawn`);
-  for (const cell of read) {
+      return [{ cut: cell.scrollWidth > cell.clientWidth, lines: new Set([...range.getClientRects()].map((r) => Math.round(r.top))).size, text: cell.textContent?.trim() ?? '', title: cell.getAttribute('title') ?? '' }];
+    });
+    return { cells, client: wrap?.clientWidth ?? null, scroll: wrap?.scrollWidth ?? null };
+  });
+  measurements.push(`${theme} / recent table ${read.scroll} of ${read.client}px, model cells ${JSON.stringify(read.cells)}`);
+  if (mock && read.cells.length === 0) failures.push(`${theme} /: the story has recent requests, yet no Model cell is drawn`);
+  if (read.client === null) failures.push(`${theme} /: no Recent requests table to measure`);
+  else if (read.scroll > read.client) failures.push(`${theme} /: the Recent requests table needs ${read.scroll}px of its card's ${read.client}px`);
+  for (const cell of read.cells) {
     if (cell.lines > 1) failures.push(`${theme} /: the Model cell "${cell.text}" wraps onto ${cell.lines} lines`);
+    if (cell.cut && !cell.title.startsWith(cell.text)) failures.push(`${theme} /: the cut Model cell "${cell.text}" does not carry its whole id on the title (${JSON.stringify(cell.title)})`);
   }
 }
 
