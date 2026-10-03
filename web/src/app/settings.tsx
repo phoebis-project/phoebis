@@ -47,7 +47,8 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo<AppSettings>(
     () => ({ expertView, formatVersion, resolvedTheme, setExpertView, setTheme, setTimeFormat, theme, timeFormat: storedFormat }),
-    // The setters are left out: setExpertView and setTimeFormat are rebuilt every render, and the context value must not be.
+    // The setters are left out: setExpertView and setTimeFormat are rebuilt every render, and the context value must
+    // not be.
     [expertView, formatVersion, resolvedTheme, theme, storedFormat],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

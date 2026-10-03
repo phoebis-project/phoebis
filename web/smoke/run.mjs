@@ -65,7 +65,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { api, ATTENTION_REFRESH_MS, AttemptTrail, AttentionRows, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, emitLive, Expert, failCalls, failNextCall, Field, fmtPct, fmtWindows, GroupedDialog, GroupLink, Input, MOCK_VERSION, mount, mountNode, PageLink, React, requestEvents, requests, ringFigures, rollups, SessionNotKept, SETTINGS_WIRE, shortModel, stallLive, SwitchedNumber, tick } = await import('./dist/entry.js');
+const { api, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, emitLive, Expert, failCalls, failNextCall, Field, fmtPct, fmtWindows, GroupedDialog, GroupLink, Input, MOCK_VERSION, mount, mountNode, PageLink, React, requestEvents, requests, ringFigures, rollups, SessionNotKept, SETTINGS_WIRE, shortModel, stallLive, SwitchedNumber, tick } = await import('./dist/entry.js');
 
 const results = [];
 /**
@@ -8685,9 +8685,9 @@ m.unmount();
     if (path === '/sessions') await expandAll();
     sweep(path);
   }
-  // A navigation that drew nothing would pass the sweep empty, and these pages draw titled badges of their own in the
-  // story.
-  const thin = counts.filter((c) => ['/accounts', '/observe', '/pools', '/requests', '/sessions'].includes(c.where) && c.onPage === 0);
+  // A navigation that drew nothing would pass the sweep empty, so every page that draws titled badges of its own in the
+  // story has to show one.
+  const thin = counts.filter((c) => ['/', '/accounts', '/observe', '/pools', '/requests', `/requests/${laptopRow.id}`, '/sessions'].includes(c.where) && c.onPage === 0);
   await page.navigate('/keys');
   [...page.container.querySelectorAll('.card--table tbody tr')].find((r) => r.children[0]?.querySelector('b')?.textContent?.trim() === 'laptop')?.querySelector('.menu__trigger')?.click();
   await page.settle(120);

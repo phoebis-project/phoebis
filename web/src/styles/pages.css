@@ -1259,10 +1259,6 @@
   color: var(--warning-ink);
 }
 
-.pool__keys--unread {
-  color: var(--ink-2);
-}
-
 .pool__status {
   margin: 0;
   font-size: 13px;
