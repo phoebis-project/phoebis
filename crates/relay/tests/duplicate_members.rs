@@ -1,4 +1,5 @@
-//! A body whose top-level object repeats a routing member is refused before anything reaches the upstream.
+//! A body whose top-level object repeats a routing member, or whose billing line's path repeats a member, is
+//! refused before anything reaches the upstream.
 
 mod common;
 
@@ -157,6 +158,63 @@ async fn a_second_top_level_model_is_refused_on_the_count_tokens_route_too() {
         text.contains(r#"top-level member \"model\" more than once"#),
         "{text}"
     );
+    assert!(up.requests().is_empty(), "nothing reached the upstream");
+    up.shutdown().await;
+}
+
+/// A billing line in the client's placeholder spelling, which the drift check exempts from the hash it verifies.
+const PLACEHOLDER_LINE: &str =
+    "x-anthropic-billing-header: cc_version=2.1.269.abc; cc_entrypoint=sdk-py; cch=00000;";
+/// A billing line stamping a hash this build never computed over the body.
+const UNCHECKED_LINE: &str =
+    "x-anthropic-billing-header: cc_version=2.1.269.abc; cc_entrypoint=sdk-py; cch=abcde;";
+
+#[tokio::test]
+async fn a_billing_block_repeating_its_text_is_refused_before_the_placeholder_exempts_it() {
+    let up = FakeUpstream::start(vec![ok_rule()]).await;
+    let h = harness_restricted_to(&up, "claude-sonnet-4-5").await;
+    // The drift check reads the first spelling and a last-wins parser upstream the second, raw or escaped.
+    for second in ["text", "\\u0074ext"] {
+        let body = format!(
+            r#"{{"model":"claude-sonnet-4-5","system":[{{"type":"text","text":"{PLACEHOLDER_LINE}","{second}":"{UNCHECKED_LINE}"}}],"messages":[],"max_tokens":8}}"#
+        );
+        let (status, code, text) = send(&h, "/v1/messages", &body).await;
+        assert_eq!(status, 400, "{body}");
+        assert_eq!(code, "body_shape", "{text}");
+        assert!(
+            // The wire body is JSON, so the message's own embedded quotes are backslash-escaped in it.
+            text.contains(r#"member \"system[0].text\" more than once"#),
+            "{text}"
+        );
+    }
+    assert!(up.requests().is_empty(), "nothing reached the upstream");
+    // A repeat in a later block is off the billing line's path and stays the upstream's to judge.
+    let later = format!(
+        r#"{{"model":"claude-sonnet-4-5","system":[{{"type":"text","text":"{PLACEHOLDER_LINE}"}},{{"type":"text","text":"a","text":"b"}}],"messages":[],"max_tokens":8}}"#
+    );
+    let (status, _, text) = send(&h, "/v1/messages", &later).await;
+    assert_eq!(status, 200, "{text}");
+    assert_eq!(up.requests().len(), 1);
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_body_repeating_its_top_level_system_is_refused_before_the_placeholder_exempts_it() {
+    let up = FakeUpstream::start(vec![ok_rule()]).await;
+    let h = harness_restricted_to(&up, "claude-sonnet-4-5").await;
+    for second in ["system", "\\u0073ystem"] {
+        let body = format!(
+            r#"{{"model":"claude-sonnet-4-5","system":[{{"type":"text","text":"{PLACEHOLDER_LINE}"}}],"messages":[],"max_tokens":8,"{second}":[{{"type":"text","text":"{UNCHECKED_LINE}"}}]}}"#
+        );
+        let (status, code, text) = send(&h, "/v1/messages", &body).await;
+        assert_eq!(status, 400, "{body}");
+        assert_eq!(code, "body_shape", "{text}");
+        assert!(
+            // The wire body is JSON, so the message's own embedded quotes are backslash-escaped in it.
+            text.contains(r#"top-level member \"system\" more than once"#),
+            "{text}"
+        );
+    }
     assert!(up.requests().is_empty(), "nothing reached the upstream");
     up.shutdown().await;
 }

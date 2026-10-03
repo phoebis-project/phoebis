@@ -3,7 +3,7 @@
 # against scripts/build-fixtures.py --check --through-router, in one command.
 #
 # Usage: PHOEBIS_CAPTURE_OAUTH_KEY=<router key> PHOEBIS_CAPTURE_API_KEY=<router key> \
-#        PHOEBIS_ADMIN_SECRET=<secret> [PHOEBIS_VIEWER_SECRET=<secret>] [PHOEBIS_CAPTURE_BASELINE=<dir>] \
+#        PHOEBIS_ADMIN_SECRET=<secret> [PHOEBIS_CAPTURE_BASELINE=<dir>] \
 #        scripts/capture-through-router.sh <path-to-claude-binary> <output-dir> <config.yaml>
 #
 # Mirrors scripts/capture-baseline.sh: the same credential refusal, the same `unshare -rn` re-exec (so this
@@ -21,7 +21,7 @@
 #   keepalive leases on the same accounts, since both would believe themselves the only writer. Run this as the
 #   store's owner:
 #     sudo -u phoebis env PHOEBIS_CAPTURE_OAUTH_KEY=... PHOEBIS_CAPTURE_API_KEY=... PHOEBIS_ADMIN_SECRET=... \
-#       PHOEBIS_VIEWER_SECRET=... scripts/capture-through-router.sh <binary> <output-dir> <config.yaml>
+#       scripts/capture-through-router.sh <binary> <output-dir> <config.yaml>
 # - This script and scripts/capture-baseline.sh share the same client state root (/tmp/cc-capture), the pinning
 #   its own header documents, so they must never run at the same time: the fixture bodies embed that path (and
 #   its cfg-<name> children) in the system prompt, and a capture rooted anywhere else fails --check on every
@@ -157,20 +157,20 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# admin.secret_env and admin.viewer_secret_env name the environment variables the config loader resolves; an
-# empty or unset one makes phoebis exit at load, before it ever opens a socket, which the readiness poll below
-# would otherwise misreport as "never answered" with no clue which variable was the problem.
+# admin.secret_env names the environment variable the config loader resolves; an empty or unset one makes
+# phoebis exit at load, before it ever opens a socket, which the readiness poll below would otherwise misreport
+# as "never answered" with no clue that the variable was the problem.
 while read -r key var; do
   if [[ -z "${!var:-}" ]]; then
     echo "capture-through-router.sh: $OUT/config.yaml's $key names $var, which is unset or empty" >&2
     exit 1
   fi
-done < <(grep -E '^\s*(secret_env|viewer_secret_env):' "$OUT/config.yaml" | sed -E 's/^\s*([a-z_]+):\s*(\S+)\s*$/\1 \2/')
+done < <(grep -E '^\s*secret_env:' "$OUT/config.yaml" | sed -E 's/^\s*([a-z_]+):\s*(\S+)\s*$/\1 \2/')
 
-# Exported inside the subshell rather than passed to `env`, so the secrets never sit in a process's argv
+# Exported inside the subshell rather than passed to `env`, so the secret never sits in a process's argv
 # between the assignment and the exec.
 (
-  export PHOEBIS_ADMIN_SECRET="$PHOEBIS_ADMIN_SECRET" PHOEBIS_VIEWER_SECRET="${PHOEBIS_VIEWER_SECRET:-}"
+  export PHOEBIS_ADMIN_SECRET="$PHOEBIS_ADMIN_SECRET"
   exec "$PHOEBIS_BIN" --config "$OUT/config.yaml"
 ) >"$OUT/phoebis.log" 2>&1 &
 ROUTER_PID=$!

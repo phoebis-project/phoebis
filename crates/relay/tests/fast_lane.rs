@@ -7,13 +7,11 @@ mod common;
 use std::time::{Duration, Instant};
 
 use axum::body::Body;
-use axum::http::Request;
 use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule};
 use http_body_util::BodyExt;
 use phoebis_bus::Bus;
 use phoebis_ledger::{Assembler, Record};
-use phoebis_profile::fixtures::{body, inference_head, BodyFixture, FixtureKind};
 use phoebis_routing::{CreditsState, Report};
 use phoebis_store::CooldownRow;
 use tower::ServiceExt;
@@ -22,20 +20,6 @@ const A: &str = "sk-ant-oat01-AAAA";
 const B: &str = "sk-ant-oat01-BBBB";
 const MODEL: &str = "claude-sonnet-4-5";
 const HOUR: i64 = 3_600_000;
-
-/// The profile body with `"speed":"fast"` spliced at the top level, under the session header.
-fn fast_request(session: &str) -> Request<Body> {
-    let native = String::from_utf8(body(BodyFixture::Oauth).to_vec())
-        .unwrap()
-        .replacen(r#"{"model""#, r#"{"speed":"fast","model""#, 1);
-    let mut req = request_from_fixture(
-        inference_head(FixtureKind::OauthNonFirstParty),
-        native.as_bytes(),
-        KEY,
-    );
-    set_header(&mut req, "x-claude-code-session-id", session);
-    req
-}
 
 async fn messages_up() -> FakeUpstream {
     FakeUpstream::start(vec![Rule {

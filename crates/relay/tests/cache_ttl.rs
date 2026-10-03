@@ -552,7 +552,6 @@ async fn a_probe_writes_with_its_agents_branch_ttl() {
     let probe = || phoebis_relay::Probe {
         key_id: "desktop".into(),
         key_generation: h.store.api_key("desktop").unwrap().unwrap().created_at,
-        allow_oauth: true,
     };
     let resp = h
         .relay
@@ -729,9 +728,10 @@ async fn a_refused_extended_ttl_beta_reverts_the_body_to_five_minutes_and_stays_
         .iter()
         .any(|b| b == EXTENDED_TTL_BETA));
     assert_eq!(
-        phoebis_cch::sign(&up.requests()[1].body).unwrap(),
-        up.requests()[1].body,
-        "the retry restamps"
+        phoebis_cch::find_cch(&up.requests()[1].body)
+            .map(|l| up.requests()[1].body[l.digits_start..l.digits_start + 5].to_vec()),
+        Some(b"00000".to_vec()),
+        "the rewrite leaves the placeholder unsigned"
     );
     assert_eq!(outcome(&resp).cache_ttl_ms, Some(300_000));
 

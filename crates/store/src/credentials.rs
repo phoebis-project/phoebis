@@ -1,9 +1,26 @@
 //! Encrypted credential bundles, API-key secrets, and refresh-attempt bookkeeping.
 
+#[cfg(any(test, feature = "debug-hooks"))]
+use std::sync::atomic::Ordering;
+
 use rusqlite::{params, OptionalExtension};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use crate::{crypto, StorageKey, Store, StoreError, LOCK_POISONED, PENDING_WHERE};
+
+// The gate of `open_refresh_attempt` reads an attempt still in flight alone. An attempt resolved `uncertain` does
+// not block here: the refresh manager spaces the retry by its floor, and the startup quarantine still reads the
+// attempt through `PENDING_WHERE`.
+const IN_FLIGHT_WHERE: &str = "resolved_at IS NULL";
+
+// `PENDING_WHERE` as one term is the predicate of the partial index `refresh_attempts_pending`, so SQLite answers
+// this read from that index rather than the table.
+fn holder_pending_query() -> String {
+    format!(
+        "SELECT EXISTS(SELECT 1 FROM refresh_attempts \
+         WHERE account_id = ?1 AND incarnation = ?2 AND ({PENDING_WHERE}))"
+    )
+}
 
 /// A secret string that zeroizes its buffer on drop and never prints its value.
 #[derive(Zeroize, ZeroizeOnDrop)]
@@ -115,11 +132,11 @@ pub struct LastAttempt {
 // (generation, sealed, nonce, issued_at, expires_at, refresh_expires_at, scopes, lifecycle_generation)
 type CredentialRow = (i64, Vec<u8>, Vec<u8>, i64, i64, Option<i64>, String, i64);
 
-fn credential_aad(account_id: &str, generation: i64) -> String {
+pub(crate) fn credential_aad(account_id: &str, generation: i64) -> String {
     format!("{account_id}:{generation}")
 }
 
-fn api_key_aad(account_id: &str) -> String {
+pub(crate) fn api_key_aad(account_id: &str) -> String {
     format!("{account_id}:api_key")
 }
 
@@ -269,6 +286,15 @@ impl Store {
         attempt_id: Option<u64>,
         bundle: &NewBundle,
     ) -> Result<u64, StoreError> {
+        #[cfg(any(test, feature = "debug-hooks"))]
+        if self
+            .fail_next_credential_commit
+            .swap(false, std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(StoreError::Io(std::io::Error::other(
+                "injected credential commit failure",
+            )));
+        }
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
 
@@ -468,7 +494,10 @@ impl Store {
 
     /// Attempts settled after a watermark, oldest first. Keyed on the resolution time rather than the id
     /// because an attempt opened early can settle late, and a mirror that walked ids would skip it; the id is
-    /// the tie-breaker, so rows settled in the same millisecond page through without a gap.
+    /// the tie-breaker, so rows settled in the same millisecond page through without a gap. An attempt
+    /// resolved `uncertain` that a later commit closes `superseded` settles again under the commit's time, so
+    /// a reader meets it twice; the second reading records the attempt the commit replaced, not a failure, and
+    /// a failure count skips it.
     pub fn refresh_attempts_resolved_after(
         &self,
         resolved_at: i64,
@@ -538,6 +567,15 @@ impl Store {
         Ok(())
     }
 
+    /// Fails the next `commit_credentials` before its transaction, so a test reaches the manager's failed-commit
+    /// arm without a broken disk.
+    #[cfg(any(test, feature = "debug-hooks"))]
+    #[doc(hidden)]
+    pub fn debug_fail_next_credential_commit(&self) {
+        self.fail_next_credential_commit
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
     pub fn open_refresh_attempt(
         &self,
         account_id: &str,
@@ -547,7 +585,7 @@ impl Store {
     ) -> Result<u64, StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
         let pending: bool = conn.query_row(
-            &format!("SELECT EXISTS(SELECT 1 FROM refresh_attempts WHERE account_id = ?1 AND ({PENDING_WHERE}))"),
+            &format!("SELECT EXISTS(SELECT 1 FROM refresh_attempts WHERE account_id = ?1 AND ({IN_FLIGHT_WHERE}))"),
             params![account_id],
             |row| row.get(0),
         )?;
@@ -563,10 +601,10 @@ impl Store {
         Ok(conn.last_insert_rowid() as u64)
     }
 
-    /// Settles an attempt, but only one that is still open: unresolved, or resolved uncertain, which is
-    /// what this crate treats as open everywhere else. A verdict that arrives after something else settled
-    /// the row for good, a disconnect racing a slow token request for instance, is dropped rather than
-    /// applied, and says so by returning `false`.
+    /// Settles an attempt, but only one that is still open: unresolved, or resolved uncertain, as `PENDING_WHERE`
+    /// reads it for the listing and the sweeps too. A verdict that arrives after something else settled the row
+    /// for good, a disconnect racing a slow token request for instance, is dropped rather than applied, and says
+    /// so by returning `false`.
     ///
     /// `incarnation` is the one the caller's work began under: a verdict from an incarnation the id has since
     /// moved past answers `Stale` rather than settling, or reopening as uncertain, a row under the id's new
@@ -639,6 +677,23 @@ impl Store {
             .map_err(StoreError::from)
     }
 
+    /// Whether the holder `incarnation` names has an attempt still open, which a restart quarantines the account
+    /// for: one in flight, or one resolved uncertain that no later commit has superseded; a later retry that
+    /// failed leaves it open.
+    pub fn has_pending_refresh_attempt(
+        &self,
+        account_id: &str,
+        incarnation: u64,
+    ) -> Result<bool, StoreError> {
+        let conn = self.conn.lock().expect(LOCK_POISONED);
+        conn.query_row(
+            &holder_pending_query(),
+            params![account_id, incarnation as i64],
+            |row| row.get(0),
+        )
+        .map_err(StoreError::from)
+    }
+
     /// The newest attempt of the holder `incarnation` names: a previous holder's history under the same id is
     /// not this one's.
     pub fn last_refresh_attempt(
@@ -654,5 +709,62 @@ impl Store {
         )
         .optional()
         .map_err(StoreError::from)
+    }
+
+    /// The newest settled attempts of the holder `incarnation` names, newest first, bounded by `limit`: the
+    /// attention reader walks them for a run of failures, and a previous holder's history is not this one's.
+    pub fn newest_resolved_refresh_attempts(
+        &self,
+        account_id: &str,
+        incarnation: u64,
+        limit: usize,
+    ) -> Result<Vec<ResolvedAttempt>, StoreError> {
+        #[cfg(any(test, feature = "debug-hooks"))]
+        if self.fail_next_refresh_read.swap(false, Ordering::SeqCst) {
+            return Err(StoreError::Io(std::io::Error::other(
+                "injected refresh read failure",
+            )));
+        }
+        let conn = self.conn.lock().expect(LOCK_POISONED);
+        let mut stmt = conn.prepare(
+            "SELECT id, account_id, started_at, resolved_at, outcome, detail FROM refresh_attempts \
+             WHERE account_id = ?1 AND incarnation = ?2 AND outcome IS NOT NULL \
+             ORDER BY resolved_at DESC, id DESC LIMIT ?3",
+        )?;
+        let rows = stmt.query_map(params![account_id, incarnation as i64, limit as i64], |r| {
+            Ok(ResolvedAttempt {
+                id: r.get::<_, i64>(0)? as u64,
+                account_id: r.get(1)?,
+                started_at: r.get(2)?,
+                resolved_at: r.get(3)?,
+                outcome: r.get(4)?,
+                detail: r.get(5)?,
+            })
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(StoreError::from)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_holders_pending_read_is_answered_from_the_partial_index() {
+        let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+        let conn = store.conn.lock().unwrap();
+        let plan: Vec<String> = conn
+            .prepare(&format!("EXPLAIN QUERY PLAN {}", holder_pending_query()))
+            .unwrap()
+            .query_map(params!["a", 1], |row| row.get(3))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert!(
+            plan.iter()
+                .any(|detail| detail.contains("USING INDEX refresh_attempts_pending")),
+            "{plan:?}"
+        );
     }
 }

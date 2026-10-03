@@ -207,6 +207,8 @@ pub enum Outcome {
     Canceled,
     Exhausted,
     Failed,
+    /// A 200 answer whose body ended before its end; the error code says how.
+    Incomplete,
     Rejected,
     Succeeded,
 }
@@ -217,6 +219,7 @@ impl Outcome {
             Outcome::Canceled => "canceled",
             Outcome::Exhausted => "exhausted",
             Outcome::Failed => "failed",
+            Outcome::Incomplete => "incomplete",
             Outcome::Rejected => "rejected",
             Outcome::Succeeded => "succeeded",
         }
@@ -413,6 +416,9 @@ pub struct RequestComplete {
     /// carries; `None` for a request never held. Set on a request held and then served, and on one whose hold
     /// ended in an exhaustion with no attempt dispatched.
     pub held: Option<String>,
+    /// The `id` of the message the committed answer carried (`message_start`, or the JSON document), as the
+    /// upstream sent it; `None` for a local answer, a cut before the first event, or an answer without one.
+    pub message_id: Option<String>,
     pub finished_at: i64,
 }
 
@@ -442,8 +448,9 @@ impl Event {
     }
 }
 
-/// What the keepalive engine learns from the companion about a session, handed to the alert inputs. Not an
-/// `Event`: it belongs to no request, and the request bus drops under pressure while these must not.
+/// What the keepalive engine learns from the companion about a session, sent on the lifecycle channel when a
+/// consumer is wired. Not an `Event`: it belongs to no request, and the request bus drops under pressure while these
+/// must not.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SessionLifecycle {
     AgentReleased {

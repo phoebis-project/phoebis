@@ -8,10 +8,10 @@ use phoebis_routing::{
     SEVEN_DAY, SEVEN_DAY_FABLE,
 };
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, Affinity, AffinityMode, AffinitySource, ApiKeyRow,
-    BudgetPeriod, CooldownRow, Failover, OveragePolicy, PinBurn, PinKey, PinRow,
-    PoolMember, PoolRow, QuotaHeaders, RegistryLoad, RoutingLoad, RulesMode, SessionPlacement,
-    Shedding, Strategy, SubagentPlacement, SubscriptionTerm, WarmSessions,
+    AccountKind, AccountRow, AccountState, Affinity, AffinityMode, ApiKeyRow, BudgetPeriod,
+    CooldownRow, Failover, OveragePolicy, PinBurn, PinKey, PinRow, PoolMember,
+    PoolRow, RegistryLoad, RoutingLoad, RulesMode, SessionPlacement, Shedding, Strategy,
+    SubagentPlacement, SubscriptionTerm, WarmSessions,
 };
 use rand::rngs::StdRng;
 use rand::SeedableRng;
@@ -122,8 +122,6 @@ fn load_of(pool: Pool, unavailable: &[(&str, bool, AccountState)]) -> RegistryLo
             rotated_at: None,
             last_used_at: None,
             retired_secret_last_used_at: None,
-            in_flight_cap: None,
-            affinity_source: AffinitySource::Auto,
             auto_mode_server: None,
         }],
         members: pool
@@ -153,7 +151,7 @@ fn load_of(pool: Pool, unavailable: &[(&str, bool, AccountState)]) -> RegistryLo
             shedding: pool.shedding,
             failover: pool.failover,
             cache_ttl_json: "{}".into(),
-            cache_diagnostics: None,
+            cache_diagnostics: false,
             auto_mode_server: true,
             affinity: Affinity {
                 mode: pool.mode,
@@ -161,7 +159,6 @@ fn load_of(pool: Pool, unavailable: &[(&str, bool, AccountState)]) -> RegistryLo
                 session_placement: pool.session_placement,
                 min_shared_prefix_tokens: pool.min_shared_prefix_tokens,
             },
-            quota_headers: QuotaHeaders::Pass,
             created_at: 0,
             updated_at: 0,
         }],
@@ -3427,6 +3424,30 @@ fn a_probe_that_already_tried_its_pinned_account_answers_attempted_and_moves_not
     );
 }
 
+/// The probe's own attempt marked `a` for re-authentication, and the mark reached the snapshot before the probe's
+/// reselection: `a` reads as the operator's obstacle, yet it is still the member this probe tried.
+#[test]
+fn a_probe_whose_attempt_marked_its_pinned_account_answers_attempted_and_moves_nothing() {
+    let marked = snapshot_with(a_before_b(), &[("a", true, AccountState::ReauthRequired)]);
+    let (result, writes, pinned) = probe_after_a_pin_on_a(&snapshot(a_before_b()), &marked, &["a"]);
+    assert_eq!(
+        result,
+        SelectResult::Exhausted(Exhaustion::Pinned {
+            obstacle: "attempted"
+        }),
+        "the probe answers its own attempt rather than moving to the free sibling"
+    );
+    assert_eq!(
+        pinned.as_deref(),
+        Some("a"),
+        "the pin still names a after the probe"
+    );
+    assert!(
+        writes.is_empty(),
+        "the probe moves no pin and releases nothing: {writes:?}"
+    );
+}
+
 #[test]
 fn a_probe_that_tried_its_pinned_account_with_no_sibling_left_answers_the_pools_exhaustion() {
     let s = snapshot(a_before_b());
@@ -3457,6 +3478,52 @@ fn a_probe_that_tried_its_pinned_account_with_no_sibling_left_answers_the_pools_
             window: "five_hour".into(),
         }),
         "with no sibling to move to, the attempt hides nothing and the pool's own exhaustion answers"
+    );
+    assert_eq!(
+        st.pin(&pin_key("s1")).map(|p| p.account_id.as_str()),
+        Some("a"),
+        "the pin still names a after the probe"
+    );
+    assert!(
+        writes.is_empty(),
+        "the probe moves no pin and releases nothing: {writes:?}"
+    );
+}
+
+/// The probe's own attempt marked `a` and the mark reached the snapshot, while `b` is cooling: with no sibling
+/// to move to, the attempt hides nothing, so the pool's exhaustion answers as it does for an unmarked attempt.
+#[test]
+fn a_probe_whose_attempt_marked_its_pinned_account_with_no_sibling_left_answers_the_pools_exhaustion(
+) {
+    let s = snapshot(a_before_b());
+    let marked = snapshot_with(a_before_b(), &[("a", true, AccountState::ReauthRequired)]);
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    assert_eq!(
+        picked(
+            &select(
+                &mut st,
+                &s,
+                &request(&s, Some("s1"), "claude-sonnet-5", true, &[], 1_000),
+                &mut rng(),
+            )
+            .0
+        ),
+        "a",
+        "a serves the session's first request"
+    );
+    st.record_cooldown(cooled("b", "account", 10_000, "five_hour", "rate_limit"));
+    let probe = SelectRequest {
+        probe: true,
+        ..request(&marked, Some("s1"), "claude-sonnet-5", true, &["a"], 2_000)
+    };
+    let (result, writes) = select(&mut st, &marked, &probe, &mut rng());
+    assert_eq!(
+        result,
+        SelectResult::Exhausted(Exhaustion::Timed {
+            deadline: 10_000,
+            window: "five_hour".into(),
+        }),
+        "with no sibling to move to, the marked member's attempt answers the pool's exhaustion"
     );
     assert_eq!(
         st.pin(&pin_key("s1")).map(|p| p.account_id.as_str()),
@@ -3860,8 +3927,6 @@ fn two_pools_sharing_an_account_share_its_entries() {
         rotated_at: None,
         last_used_at: None,
         retired_secret_last_used_at: None,
-        in_flight_cap: None,
-        affinity_source: AffinitySource::Auto,
         auto_mode_server: None,
     };
     let pool = |id: &str| PoolRow {
@@ -3880,10 +3945,9 @@ fn two_pools_sharing_an_account_share_its_entries() {
         shedding: Shedding::default(),
         failover: Failover::default(),
         cache_ttl_json: "{}".into(),
-        cache_diagnostics: None,
+        cache_diagnostics: false,
         auto_mode_server: true,
         affinity: Affinity::default(),
-        quota_headers: QuotaHeaders::Pass,
         created_at: 0,
         updated_at: 0,
     };

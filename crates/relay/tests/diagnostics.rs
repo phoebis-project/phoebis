@@ -6,7 +6,7 @@ use axum::http::{Request, StatusCode};
 use fake_upstream::{FakeUpstream, Respond, Rule};
 use http_body_util::BodyExt;
 use phoebis_profile::fixtures::{body, inference_head, BodyFixture, FixtureKind};
-use phoebis_relay::{Limits, MemoryKey, CACHE_DIAGNOSIS_BETA};
+use phoebis_relay::{MemoryKey, CACHE_DIAGNOSIS_BETA};
 use phoebis_store::MemoryStore;
 use tower::ServiceExt;
 
@@ -64,9 +64,36 @@ fn diagnostics_previous(body: &[u8]) -> Option<String> {
         .map(String::from)
 }
 
-/// Asserts the shape `cache_diagnostics` forces on a native wire body: the beta ends the caller's list exactly
-/// once, `diagnostics` precedes `stream`, `previous_message_id` matches `previous`, and the restamp is valid.
+/// The five digits after `cch=` on the billing line `find_cch` reads, `None` for a body that carries none.
+fn cch_digits(body: &[u8]) -> Option<&[u8]> {
+    phoebis_cch::find_cch(body).map(|l| &body[l.digits_start..l.digits_start + 5])
+}
+
+/// `assert_diagnosed_turn` on a Claude Code inference turn, whose reduced line the relay restores: the restored
+/// `cch` is the client's placeholder.
+fn assert_diagnosed_inference_turn(r: &fake_upstream::RecordedRequest, previous: Option<&str>) {
+    assert_diagnosed_turn(r, previous);
+    assert_eq!(
+        cch_digits(&r.body),
+        Some(&b"00000"[..]),
+        "the rewrite leaves the placeholder unsigned"
+    );
+}
+
+/// Asserts the shape `cache_diagnostics` forces on a native wire body, and that the member leaves no signed hash
+/// behind: a probe's line carries no `cch`, and an inference turn's carries the placeholder.
 fn assert_diagnosed_turn(r: &fake_upstream::RecordedRequest, previous: Option<&str>) {
+    assert_diagnosed_shape(r, previous);
+    assert!(
+        matches!(cch_digits(&r.body), None | Some(b"00000")),
+        "the rewrite leaves the placeholder unsigned: {}",
+        String::from_utf8_lossy(&r.body)
+    );
+}
+
+/// The beta ends the caller's list exactly once, `diagnostics` precedes `stream`, and `previous_message_id` matches
+/// `previous`.
+fn assert_diagnosed_shape(r: &fake_upstream::RecordedRequest, previous: Option<&str>) {
     let beta = beta_header(r).expect("the beta line is present");
     let tokens: Vec<&str> = beta.split(',').map(str::trim).collect();
     assert_eq!(
@@ -88,11 +115,6 @@ fn assert_diagnosed_turn(r: &fake_upstream::RecordedRequest, previous: Option<&s
     let d_at = text.find("\"diagnostics\"").expect("the member is present");
     let s_at = text.find("\"stream\"").expect("the fixture body streams");
     assert!(d_at < s_at, "diagnostics precedes stream: {text}");
-    assert_eq!(
-        phoebis_cch::sign(&r.body).unwrap(),
-        r.body,
-        "the restamp covers the inserted member"
-    );
 }
 
 /// The reduced billing line stripped so `cch`, `cc_prompt_id`, and the whole line's insertion are genuinely
@@ -127,7 +149,7 @@ async fn the_beta_and_the_member_are_added_when_absent_with_the_previous_id_acro
         &up,
         &[oauth("a", A, 0), oauth("b", B, 1)],
         PoolSpec {
-            cache_diagnostics: Some(true),
+            cache_diagnostics: true,
             ..Default::default()
         },
     )
@@ -141,7 +163,7 @@ async fn the_beta_and_the_member_are_added_when_absent_with_the_previous_id_acro
         .await
         .unwrap();
     assert_eq!(r1.status(), 200);
-    assert_diagnosed_turn(&up.requests()[0], None);
+    assert_diagnosed_inference_turn(&up.requests()[0], None);
 
     // Turn 2 on a: previous is turn 1's message_start id.
     let r2 = h
@@ -151,7 +173,7 @@ async fn the_beta_and_the_member_are_added_when_absent_with_the_previous_id_acro
         .await
         .unwrap();
     assert_eq!(r2.status(), 200);
-    assert_diagnosed_turn(&up.requests()[1], Some("msg_a01"));
+    assert_diagnosed_inference_turn(&up.requests()[1], Some("msg_a01"));
 
     // Turn 3: a 429 fails the session over to b, which has never answered it, so its previous id is null.
     up.set_credential_rule_after(A, 2, "/v1/messages", json_429_unified(RESET, "five_hour"));
@@ -165,7 +187,7 @@ async fn the_beta_and_the_member_are_added_when_absent_with_the_previous_id_acro
     assert_eq!(r3.status(), 200);
     assert_eq!(outcome(&r3).account_id, "b");
     assert_eq!(up.requests().len(), 4, "a's 429 and b's 200 both count");
-    assert_diagnosed_turn(&up.requests()[3], None);
+    assert_diagnosed_inference_turn(&up.requests()[3], None);
 
     // Turn 4 on b: previous is b's own turn-3 id.
     let r4 = h
@@ -175,8 +197,62 @@ async fn the_beta_and_the_member_are_added_when_absent_with_the_previous_id_acro
         .await
         .unwrap();
     assert_eq!(r4.status(), 200);
-    assert_diagnosed_turn(&up.requests()[4], Some("msg_b01"));
+    assert_diagnosed_inference_turn(&up.requests()[4], Some("msg_b01"));
 
+    up.shutdown().await;
+}
+
+/// The first-party fixture as a client that sends no `diagnostics` member signs it: the fixture's own member cut
+/// and the hash signed over what is left, so the relay has a member to insert under a client hash.
+fn first_party_without_diagnostics() -> Vec<u8> {
+    let mut native = body(BodyFixture::FirstParty9b244).to_vec();
+    phoebis_cch::remove_top_level_member(&mut native, "diagnostics")
+        .expect("the fixture carries the client's own member");
+    phoebis_cch::sign(&native).expect("the fixture signs")
+}
+
+/// The inserted member is part of the edit a client hash is re-signed over, so the hash the upstream reads covers
+/// the body with the member in it.
+#[tokio::test]
+async fn a_client_hash_is_re_signed_over_the_inserted_member() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: ok_with_id("msg_01"),
+    }])
+    .await;
+    let h = harness(
+        &up,
+        &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
+        PoolSpec {
+            cache_diagnostics: true,
+            ..Default::default()
+        },
+    )
+    .await;
+    let native = first_party_without_diagnostics();
+    assert!(!has_diagnostics(&native), "the client sent no member");
+    let req = request_from_fixture(inference_head(FixtureKind::OauthFirstParty), &native, KEY);
+    let resp = h.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let sent = &up.requests()[0].body;
+    assert!(
+        has_diagnostics(sent),
+        "the member is inserted: {}",
+        String::from_utf8_lossy(sent)
+    );
+    assert_eq!(diagnostics_previous(sent), None);
+    assert_ne!(
+        cch_digits(sent),
+        cch_digits(&native),
+        "the client's hash no longer covers the edited body"
+    );
+    // `sign` rewrites the five digits alone, so equal digits are an equal body.
+    let resigned = phoebis_cch::sign(sent).unwrap();
+    assert_eq!(
+        cch_digits(&resigned),
+        cch_digits(sent),
+        "the hash is re-signed over the body with the member in it"
+    );
     up.shutdown().await;
 }
 
@@ -191,7 +267,7 @@ async fn an_immediate_next_request_carries_the_id_the_last_answer_named() {
         &up,
         &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
         PoolSpec {
-            cache_diagnostics: Some(true),
+            cache_diagnostics: true,
             ..Default::default()
         },
     )
@@ -231,7 +307,7 @@ async fn a_flush_after_the_answer_completes_carries_its_id_to_the_store() {
         &up,
         &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
         PoolSpec {
-            cache_diagnostics: Some(true),
+            cache_diagnostics: true,
             ..Default::default()
         },
     )
@@ -280,7 +356,7 @@ async fn an_unsent_retry_still_lands_a_well_formed_edit_and_a_present_member_or_
         &up,
         &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
         PoolSpec {
-            cache_diagnostics: Some(true),
+            cache_diagnostics: true,
             ..Default::default()
         },
     )
@@ -293,7 +369,7 @@ async fn an_unsent_retry_still_lands_a_well_formed_edit_and_a_present_member_or_
         .unwrap();
     assert_eq!(resp.status(), 200);
     assert_eq!(up.requests().len(), 1);
-    assert_diagnosed_turn(&up.requests()[0], None);
+    assert_diagnosed_inference_turn(&up.requests()[0], None);
 
     // A body that already names both the member and the beta reaches the upstream with neither touched.
     let mut value: serde_json::Value =
@@ -323,18 +399,16 @@ async fn an_unsent_retry_still_lands_a_well_formed_edit_and_a_present_member_or_
 }
 
 #[tokio::test]
-async fn the_option_is_inherited_overridden_and_off_by_default() {
-    // The pool leaves cache_diagnostics unset and the relay's own default is off: nothing is added.
+async fn the_switch_is_off_by_default_and_on_for_the_pool_that_sets_it() {
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
         respond: json_200(),
     }])
     .await;
-    let h = harness_with_cache_diagnostics_default(
+    let h = harness(
         &up,
         &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
         PoolSpec::default(),
-        false,
     )
     .await;
     h.app
@@ -347,46 +421,18 @@ async fn the_option_is_inherited_overridden_and_off_by_default() {
     assert!(!has_diagnostics(&sent.body));
     up.shutdown().await;
 
-    // The relay's own default is on and the pool leaves it unset: it inherits and is added.
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
         respond: json_200(),
     }])
     .await;
-    let h = harness_with_cache_diagnostics_default(
-        &up,
-        &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
-        PoolSpec::default(),
-        true,
-    )
-    .await;
-    h.app
-        .clone()
-        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
-        .await
-        .unwrap();
-    let sent = &up.requests()[0];
-    assert!(beta_header(sent)
-        .unwrap()
-        .split(',')
-        .any(|t| t == CACHE_DIAGNOSIS_BETA));
-    assert!(has_diagnostics(&sent.body));
-    up.shutdown().await;
-
-    // The pool overrides the relay's own true default with an explicit false: nothing is added.
-    let up = FakeUpstream::start(vec![Rule {
-        path_prefix: "/v1/messages".into(),
-        respond: json_200(),
-    }])
-    .await;
-    let h = harness_with_cache_diagnostics_default(
+    let h = harness(
         &up,
         &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
         PoolSpec {
-            cache_diagnostics: Some(false),
+            cache_diagnostics: true,
             ..Default::default()
         },
-        true,
     )
     .await;
     h.app
@@ -394,9 +440,79 @@ async fn the_option_is_inherited_overridden_and_off_by_default() {
         .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
         .await
         .unwrap();
+    assert_diagnosed_turn(&up.requests()[0], None);
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_full_shape_request_gets_the_beta_and_the_member_on_a_pool_with_the_switch_on() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let h = harness(
+        &up,
+        &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
+        PoolSpec {
+            cache_diagnostics: true,
+            ..Default::default()
+        },
+    )
+    .await;
+    let req = request_from_fixture(
+        inference_head(FixtureKind::OauthFirstParty),
+        body(BodyFixture::FirstParty9b244),
+        KEY,
+    );
+    let resp = h.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), 200);
     let sent = &up.requests()[0];
-    assert!(!beta_header(sent).is_some_and(|b| b.split(',').any(|t| t == CACHE_DIAGNOSIS_BETA)));
-    assert!(!has_diagnostics(&sent.body));
+    assert_diagnosed_shape(sent, None);
+    assert_eq!(
+        phoebis_cch::sign(&sent.body).unwrap(),
+        sent.body,
+        "the client's own hash is re-signed over the inserted member"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_clients_own_beta_passes_through_once_with_the_switch_off_and_no_member_is_added() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let h = harness(
+        &up,
+        &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
+        PoolSpec::default(),
+    )
+    .await;
+    let mut req = request_for(KEY, "claude-sonnet-4-5", "s1");
+    let sent_list = req
+        .headers()
+        .get("anthropic-beta")
+        .map(|v| format!("{},{CACHE_DIAGNOSIS_BETA}", v.to_str().unwrap()))
+        .unwrap_or_else(|| CACHE_DIAGNOSIS_BETA.to_string());
+    set_header(&mut req, "anthropic-beta", &sent_list);
+    let resp = h.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let sent = &up.requests()[0];
+    assert_eq!(
+        beta_header(sent)
+            .expect("the beta line is present")
+            .split(',')
+            .filter(|t| t.trim() == CACHE_DIAGNOSIS_BETA)
+            .count(),
+        1,
+        "the client's own beta arrives once"
+    );
+    assert!(
+        !has_diagnostics(&sent.body),
+        "the relay adds no member with the switch off"
+    );
     up.shutdown().await;
 }
 
@@ -409,7 +525,7 @@ async fn a_400_naming_the_injected_beta_strips_it_retries_once_on_the_same_accou
         &up,
         &[api_key("acct", ACCT_SECRET, 0)],
         PoolSpec {
-            cache_diagnostics: Some(true),
+            cache_diagnostics: true,
             ..Default::default()
         },
     )
@@ -528,7 +644,7 @@ async fn a_400_naming_a_beta_the_client_sent_is_forwarded_unchanged() {
         &up,
         &[api_key("acct", ACCT_SECRET, 0)],
         PoolSpec {
-            cache_diagnostics: Some(true),
+            cache_diagnostics: true,
             ..Default::default()
         },
     )
@@ -571,7 +687,7 @@ async fn a_400_naming_the_generated_request_id_strips_the_header_and_retries() {
         &up,
         &[api_key("acct", ACCT_SECRET, 0)],
         PoolSpec {
-            cache_diagnostics: Some(true),
+            cache_diagnostics: true,
             ..Default::default()
         },
     )
@@ -613,7 +729,7 @@ async fn a_400_naming_the_diagnostics_member_strips_the_member_and_a_second_400_
         &up,
         &[api_key("acct", ACCT_SECRET, 0)],
         PoolSpec {
-            cache_diagnostics: Some(true),
+            cache_diagnostics: true,
             ..Default::default()
         },
     )
@@ -636,22 +752,17 @@ async fn a_400_naming_the_diagnostics_member_strips_the_member_and_a_second_400_
 }
 
 #[tokio::test]
-async fn a_strip_retry_spends_no_slot_of_the_budget_so_a_one_attempt_pool_still_strips() {
+async fn a_strip_retry_runs_on_the_same_account_before_any_failover() {
     let up = FakeUpstream::start(vec![]).await;
     up.push_credential_rule(ACCT_SECRET, "/v1/messages", json_400(REFUSED_BETA));
     up.push_credential_rule(ACCT_SECRET, "/v1/messages", json_200());
-    let limits = Limits {
-        max_attempts: 1,
-        ..default_limits()
-    };
-    let h = harness_with(
+    let h = harness(
         &up,
         &[api_key("acct", ACCT_SECRET, 0)],
         PoolSpec {
-            cache_diagnostics: Some(true),
+            cache_diagnostics: true,
             ..Default::default()
         },
-        limits,
     )
     .await;
     let resp = h
@@ -663,7 +774,7 @@ async fn a_strip_retry_spends_no_slot_of_the_budget_so_a_one_attempt_pool_still_
     assert_eq!(
         resp.status(),
         200,
-        "the one budget slot went to the 400; the strip retry cost none"
+        "the 400 named the router's own beta, so the corrected body went to the same account"
     );
     assert_eq!(up.requests().len(), 2);
     assert!(!beta_header(&up.requests()[1])
@@ -688,23 +799,18 @@ async fn a_strip_retry_spends_no_slot_of_the_budget_so_a_one_attempt_pool_still_
         .is_some_and(|b| b.split(',').any(|t| t == CACHE_DIAGNOSIS_BETA)));
     up.shutdown().await;
 
-    // Two accounts, two slots: a's 429 spends the first and b's 400 the second, and the strip on b still runs.
+    // Two accounts: a's 429 fails over and the strip on b still runs on b.
     let up2 = FakeUpstream::start(vec![]).await;
     up2.add_credential_rule(A, "/v1/messages", json_429_unified(RESET, "five_hour"));
     up2.push_credential_rule(B, "/v1/messages", json_400(REFUSED_BETA));
     up2.push_credential_rule(B, "/v1/messages", json_200());
-    let limits2 = Limits {
-        max_attempts: 2,
-        ..default_limits()
-    };
-    let h2 = harness_with(
+    let h2 = harness(
         &up2,
         &[oauth("a", A, 0), oauth("b", B, 1)],
         PoolSpec {
-            cache_diagnostics: Some(true),
+            cache_diagnostics: true,
             ..Default::default()
         },
-        limits2,
     )
     .await;
     let resp3 = h2
@@ -717,7 +823,7 @@ async fn a_strip_retry_spends_no_slot_of_the_budget_so_a_one_attempt_pool_still_
     assert_eq!(
         up2.requests().len(),
         3,
-        "a's 429, b's 400, and b's corrected retry: two slots, three submissions"
+        "a's 429, b's 400, and b's corrected retry: three submissions"
     );
     assert_eq!(outcome(&resp3).account_id, "b");
     assert!(!beta_header(&up2.requests()[2])
@@ -726,7 +832,7 @@ async fn a_strip_retry_spends_no_slot_of_the_budget_so_a_one_attempt_pool_still_
 }
 
 #[tokio::test]
-async fn count_tokens_gets_neither_the_member_nor_the_beta_under_the_option() {
+async fn count_tokens_gets_neither_the_member_nor_the_beta_under_the_switch() {
     let up = FakeUpstream::start(vec![
         Rule {
             path_prefix: "/v1/messages/count_tokens".into(),
@@ -746,7 +852,7 @@ async fn count_tokens_gets_neither_the_member_nor_the_beta_under_the_option() {
         &up,
         &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
         PoolSpec {
-            cache_diagnostics: Some(true),
+            cache_diagnostics: true,
             ..Default::default()
         },
     )
@@ -799,7 +905,7 @@ async fn a_probe_names_the_sessions_previous_message_id_and_its_own_answer_is_ne
         &up,
         &[api_key("acct", ACCT_SECRET, 0)],
         PoolSpec {
-            cache_diagnostics: Some(true),
+            cache_diagnostics: true,
             ..Default::default()
         },
     )
@@ -811,13 +917,12 @@ async fn a_probe_names_the_sessions_previous_message_id_and_its_own_answer_is_ne
         .await
         .unwrap();
     assert_eq!(resp.status(), 200);
-    assert_diagnosed_turn(&up.requests()[0], None);
+    assert_diagnosed_inference_turn(&up.requests()[0], None);
 
     // The probe replays the turn's own headers, session id among them.
     let probe = || phoebis_relay::Probe {
         key_id: "desktop".into(),
         key_generation: h.store.api_key("desktop").unwrap().unwrap().created_at,
-        allow_oauth: false,
     };
     let resp = h
         .relay
@@ -855,6 +960,6 @@ async fn a_probe_names_the_sessions_previous_message_id_and_its_own_answer_is_ne
         .await
         .unwrap();
     assert_eq!(resp.status(), 200);
-    assert_diagnosed_turn(&up.requests()[3], Some("msg_turn"));
+    assert_diagnosed_inference_turn(&up.requests()[3], Some("msg_turn"));
     up.shutdown().await;
 }

@@ -4,6 +4,7 @@
 mod auth;
 mod billing;
 mod body;
+mod budget;
 mod cache_ttl;
 mod casing;
 mod catalog;
@@ -39,7 +40,7 @@ pub use cache_ttl::{
 pub use casing::{head_queue, HeadQueue, HeadRecorder, OriginalHead};
 pub use catalog::{
     derive, derive_all, Catalog, CatalogRow, CatalogService, Discovered, DiscoveryError,
-    Prefetched, Warmth, MAX_BODY, REFRESH_TICK,
+    Prefetched, Warmth, ERROR_HOLD, MAX_BODY, REFRESH_TICK,
 };
 pub use chains::{canonical, Chains};
 pub use classify::{
@@ -54,7 +55,8 @@ pub use hold::{hold, Commit, Held, Inspect, INSPECT_BUFFER};
 pub use identity::{identify, RequestIdentity};
 pub use memory::{MemoryKey, Previous};
 pub use messages::{
-    new_request_id, router, Limits, Probe, Relay, RelayOutcome, ServedUnder, MEMORY_FLUSH_INTERVAL,
+    new_request_id, router, Limits, Probe, ReadinessSource, Relay, RelayOutcome, ServedUnder,
+    MEMORY_FLUSH_INTERVAL,
 };
 pub use portability::is_portable;
 pub use ratelimit::{
@@ -71,6 +73,8 @@ pub enum RelayError {
     AccountUuid,
     #[error("the request body ended before it was complete")]
     BodyIncomplete,
+    #[error("the request body is not valid gzip")]
+    BodyNotGzip,
     #[error("{}", .0.shape_message())]
     BodyShape(BodyMember),
     #[error("the request body did not arrive in time")]
@@ -81,6 +85,10 @@ pub enum RelayError {
     BodyTooLarge,
     #[error("billing header: {0}")]
     Cch(#[from] phoebis_cch::CchError),
+    /// The client stamped a billing hash or a version suffix this build's rules do not reproduce. A stamp the
+    /// router cannot verify never travels under an account's credential, edited or not: a wrong hash is
+    /// indistinguishable from tampering and the cost falls on the account, not on the request. Relaying the
+    /// body unedited under the client's stamp and stripping the stamp are the two alternatives this rejects.
     #[error("request body carries a billing hash this build's rules do not reproduce ({kind})")]
     ClientDrift { kind: &'static str },
     #[error("request body names a model the relay will not repeat")]
@@ -89,4 +97,15 @@ pub enum RelayError {
     NoModel,
     #[error("request body is not a JSON object")]
     NotAnObject,
+    #[error("the request body's content-encoding is not supported; send gzip or identity")]
+    UnsupportedEncoding,
+}
+
+/// How the edited body leaves toward the upstream, `proxy.upstream_gzip`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UpstreamGzip {
+    /// Gzip when the client sent gzip, identity otherwise.
+    Auto,
+    Off,
+    On,
 }

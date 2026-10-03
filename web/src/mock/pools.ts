@@ -49,7 +49,6 @@ const POOL_ROWS: PoolSeed[] = [
     // Pins only for a request that caches, and a fresh session placed where its static prefix is warm.
     affinityMode: 'when_cached',
     minSharedPrefixTokens: POOL_AFFINITY_DEFAULTS.minSharedPrefixTokens,
-    quotaHeaders: 'hide',
     sessionPlacement: 'by_warm_prefix',
     subagentPlacement: 'by_cohort',
     keepalive: { ...KEEPALIVE_TUNING_DEFAULTS, enabled: true, costCapUsdPerDay: 4, warmSubagents: true },
@@ -96,7 +95,7 @@ const POOL_ROWS: PoolSeed[] = [
     activePins: 10,
     // The sample's shedding and failover settings are the store's defaults, so this pool reads balanced on both.
     // With migration off no round runs, so every move comes from the rules that need no threshold.
-    movesPerHour: { overage: 0.5, spent: 2 },
+    movesPerHour: { overage: 1, spent: 2 },
   },
   {
     ...POOL_SAMPLE,
@@ -124,7 +123,7 @@ const POOL_ROWS: PoolSeed[] = [
     affinityTtlSeconds: 0,
     keepalive: { ...KEEPALIVE_TUNING_DEFAULTS, enabled: false, costCapUsdPerDay: null },
     autoModeServer: true,
-    cacheDiagnostics: null,
+    cacheDiagnostics: false,
     cacheTtl: { ...CACHE_TTL_DEFAULTS },
     bodyCaptureHours: 0,
     modelRules: [
@@ -152,7 +151,7 @@ const POOL_ROWS: PoolSeed[] = [
     keepalive: { ...KEEPALIVE_TUNING_DEFAULTS, enabled: false, costCapUsdPerDay: null },
     // Off, so the pool card's badge and the key dialog's Inherit label each read both states in the story.
     autoModeServer: false,
-    cacheDiagnostics: null,
+    cacheDiagnostics: false,
     cacheTtl: { ...CACHE_TTL_DEFAULTS },
     bodyCaptureHours: 0,
     modelRules: [],
@@ -172,7 +171,6 @@ export const KEYS: ApiKey[] = [
   {
     ...KEY_SAMPLE,
     id: 'desktop',
-    affinitySource: 'auto',
     autoModeServer: null,
     name: 'desktop',
     prefix: 'phoebis-8f2a',
@@ -198,15 +196,10 @@ export const KEYS: ApiKey[] = [
   {
     ...KEY_SAMPLE,
     id: 'laptop',
-    // A Claude Code install on a shared machine: the
-    // session id alone keeps its conversations apart.
-    affinitySource: 'session',
     autoModeServer: null,
     name: 'laptop',
     prefix: 'phoebis-c41d',
     poolId: 'all',
-    // A cap on a shared laptop key, so a runaway loop cannot hold every in-flight slot the pool has.
-    inFlightCap: 8,
     modelRules: [
       { not: false, pattern: 'claude-haiku-4-5-20251001' },
       { not: false, pattern: 'claude-sonnet-5' },
@@ -230,7 +223,6 @@ export const KEYS: ApiKey[] = [
   {
     ...KEY_SAMPLE,
     id: 'batch',
-    affinitySource: 'auto',
     autoModeServer: null,
     name: 'batch',
     prefix: 'phoebis-5b70',
@@ -254,7 +246,6 @@ export const KEYS: ApiKey[] = [
   {
     ...KEY_SAMPLE,
     id: 'ci',
-    affinitySource: 'auto',
     autoModeServer: null,
     name: 'ci',
     prefix: 'phoebis-19e7',
@@ -282,7 +273,6 @@ export const KEYS: ApiKey[] = [
   {
     ...KEY_SAMPLE,
     id: 'notebook',
-    affinitySource: 'auto',
     // Off under a pool that is off, so the key dialog reads an explicit key value beside the pool's.
     autoModeServer: false,
     name: 'notebook',

@@ -10,28 +10,26 @@ pub const ONE_HOUR_MS: i64 = 3_600_000;
 /// the account the probe warmed.
 pub const MIN_AFFINITY_SECONDS: u64 = 300;
 
+/// How long the companion's lease over a session lasts before the pool's idle limits take over.
+pub const LEASE_SECONDS: u64 = 90;
+pub const LEASE_MS: i64 = LEASE_SECONDS as i64 * 1_000;
+/// The most probes running at once.
+pub const MAX_WORKERS: usize = 4;
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields, default)]
 pub struct KeepaliveLimits {
-    pub lease_seconds: u64,
     pub max_agents: usize,
-    pub max_request_bytes: usize,
     pub max_retained_bytes: usize,
     pub max_sessions: usize,
-    pub max_workers: usize,
-    pub oauth_prewarm_verified: bool,
 }
 
 impl Default for KeepaliveLimits {
     fn default() -> Self {
         KeepaliveLimits {
-            lease_seconds: 90,
             max_agents: 1_024,
-            max_request_bytes: 8 << 20,
             max_retained_bytes: 256 << 20,
             max_sessions: 128,
-            max_workers: 4,
-            oauth_prewarm_verified: false,
         }
     }
 }
@@ -45,8 +43,6 @@ pub enum LimitsError {
         max: u64,
         value: u64,
     },
-    #[error("keepalive.max_retained_bytes must be at least keepalive.max_request_bytes")]
-    RetainedBelowRequest,
 }
 
 fn bound<E>(
@@ -64,39 +60,25 @@ fn bound<E>(
 }
 
 impl KeepaliveLimits {
-    pub fn validate(&self) -> Result<(), LimitsError> {
+    /// `max_request_bytes` is the relay's per-body bound, which is also the largest recipe the engine retains; a
+    /// retained budget below it could not hold one recipe the relay accepted.
+    pub fn validate(&self, max_request_bytes: usize) -> Result<(), LimitsError> {
         let range = |field, min, max, value| LimitsError::OutOfRange {
             field,
             min,
             max,
             value,
         };
-        bound("lease_seconds", self.lease_seconds, 10, 3_600, range)?;
         bound("max_agents", self.max_agents as u64, 1, 16_384, range)?;
         bound("max_sessions", self.max_sessions as u64, 1, 4_096, range)?;
-        bound("max_workers", self.max_workers as u64, 1, 64, range)?;
-        bound(
-            "max_request_bytes",
-            self.max_request_bytes as u64,
-            1_024,
-            8 << 20,
-            range,
-        )?;
         bound(
             "max_retained_bytes",
             self.max_retained_bytes as u64,
-            1_024,
+            max_request_bytes as u64,
             512 << 20,
             range,
         )?;
-        if self.max_retained_bytes < self.max_request_bytes {
-            return Err(LimitsError::RetainedBelowRequest);
-        }
         Ok(())
-    }
-
-    pub fn lease_ms(&self) -> i64 {
-        self.lease_seconds as i64 * 1_000
     }
 }
 

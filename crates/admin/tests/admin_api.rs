@@ -1,7 +1,7 @@
 mod common;
 
 #[tokio::test]
-async fn login_sets_a_cookie_and_viewer_cannot_mutate() {
+async fn login_sets_a_cookie_that_reaches_every_route_until_logout() {
     use common::{cookie_of, delete, get, post};
     let (app, _up) = common::admin_app().await;
     let bad = post(&app, "/admin/session", r#"{"secret":"nope"}"#, None).await;
@@ -16,53 +16,24 @@ async fn login_sets_a_cookie_and_viewer_cannot_mutate() {
         .to_str()
         .unwrap()
         .contains("HttpOnly"));
-    let viewer = post(
-        &app,
-        "/admin/session",
-        r#"{"secret":"viewer-secret"}"#,
-        None,
-    )
-    .await;
-    let vcookie = cookie_of(&viewer);
     assert_eq!(
-        get(&app, "/admin/accounts", Some(&vcookie)).await.status(),
+        get(&app, "/admin/accounts", Some(&cookie)).await.status(),
         200
-    );
-    assert_eq!(
-        post(&app, "/admin/accounts/business/pause", "", Some(&vcookie))
-            .await
-            .status(),
-        403
-    );
-    assert_eq!(
-        post(
-            &app,
-            "/admin/accounts/business/usage/refresh",
-            "",
-            Some(&vcookie)
-        )
-        .await
-        .status(),
-        200,
-        "usage refresh is the one POST a viewer may call"
-    );
-    assert_eq!(
-        delete(&app, "/admin/session", Some(&vcookie))
-            .await
-            .status(),
-        204,
-        "a viewer can end its own session"
-    );
-    assert_eq!(
-        get(&app, "/admin/accounts", Some(&vcookie)).await.status(),
-        401,
-        "the logged-out cookie no longer resolves"
     );
     assert_eq!(
         post(&app, "/admin/accounts/business/pause", "", Some(&cookie))
             .await
             .status(),
         204
+    );
+    assert_eq!(
+        delete(&app, "/admin/session", Some(&cookie)).await.status(),
+        204
+    );
+    assert_eq!(
+        get(&app, "/admin/accounts", Some(&cookie)).await.status(),
+        401,
+        "the logged-out cookie no longer resolves"
     );
     assert_eq!(get(&app, "/admin/accounts", None).await.status(), 401);
 }
@@ -478,6 +449,7 @@ async fn the_usage_get_answers_the_polls_latest_snapshot_and_standing_without_a_
             "backoff_since": null,
             "last_attempt_at": NOW,
             "last_clean_at": NOW,
+            "last_error": null,
             "last_outcome": "clean",
             "next_attempt_at": null,
             "rate_limited_in_a_row": 0,
@@ -507,6 +479,7 @@ async fn the_usage_get_answers_the_polls_latest_snapshot_and_standing_without_a_
             "backoff_since": NOW + 10_000,
             "last_attempt_at": NOW + 10_000,
             "last_clean_at": NOW,
+            "last_error": "the usage endpoint rate-limited the account; next attempt at 1970-01-01 00:18:50 UTC",
             "last_outcome": "rate_limited",
             "next_attempt_at": NOW + 10_000 + 120_000,
             "rate_limited_in_a_row": 1,
@@ -555,6 +528,7 @@ async fn the_usage_get_answers_the_polls_latest_snapshot_and_standing_without_a_
             "backoff_since": null,
             "last_attempt_at": NOW + 130_000,
             "last_clean_at": NOW + 130_000,
+            "last_error": null,
             "last_outcome": "clean",
             "next_attempt_at": null,
             "rate_limited_in_a_row": 0,
@@ -992,6 +966,26 @@ async fn an_uncertain_refresh_shows_as_quarantined_with_its_detail() {
 }
 
 #[tokio::test]
+async fn a_failed_retry_beside_an_uncertain_refresh_still_shows_as_quarantined() {
+    use common::{get, json, login};
+    let (app, _up, store, _manager) =
+        common::quarantined_parts("refresh response lost: connection closed").await;
+    // Past the manager's floor one retry opens beside the uncertain attempt, and a retry that fails settles
+    // nothing: the uncertain attempt is still the one a restart quarantines the account for.
+    let retry = store.open_refresh_attempt("business", 1, 1, 1).unwrap();
+    store
+        .resolve_refresh_attempt(
+            retry,
+            1,
+            phoebis_store::AttemptOutcome::Failed("refresh rejected with status 503".into()),
+        )
+        .unwrap();
+    let cookie = login(&app, "admin-secret").await;
+    let acct = json(get(&app, "/admin/accounts/business", Some(&cookie)).await).await;
+    assert_eq!(acct["credential"]["quarantined"], true);
+}
+
+#[tokio::test]
 async fn a_confirmed_pairing_supersedes_the_attempt_that_quarantined_the_slot() {
     use common::{get, json, login, post, NOW};
     // No disconnect anywhere in this test: the operator pairs the quarantined slot again, which is the one
@@ -1262,7 +1256,8 @@ async fn a_start_by_another_admin_session_answers_409() {
 }
 
 #[tokio::test]
-async fn the_session_route_answers_the_role_and_settings_say_which_secrets_are_configured() {
+async fn the_session_route_answers_the_session_id_and_settings_say_the_admin_secret_is_configured()
+{
     use common::{cookie_of, delete, get, json, post};
     let (app, _up) = common::admin_app().await;
     let anonymous = get(&app, "/admin/session", None).await;
@@ -1271,48 +1266,36 @@ async fn the_session_route_answers_the_role_and_settings_say_which_secrets_are_c
     let admin = post(&app, "/admin/session", r#"{"secret":"admin-secret"}"#, None).await;
     let cookie = cookie_of(&admin);
     let me = json(get(&app, "/admin/session", Some(&cookie)).await).await;
-    assert_eq!(me["role"], "admin");
+    assert_eq!(
+        me.as_object()
+            .map(|m| m.keys().cloned().collect::<Vec<_>>()),
+        Some(vec!["session_id".to_string()]),
+        "the session answer names the session and nothing else: {me}"
+    );
     assert!(
         me["session_id"].as_str().is_some_and(|id| id != cookie),
         "the cookie value stays in the store"
     );
-    let viewer = post(
-        &app,
-        "/admin/session",
-        r#"{"secret":"viewer-secret"}"#,
-        None,
-    )
-    .await;
-    let vcookie = cookie_of(&viewer);
+    let settings = json(get(&app, "/admin/settings", Some(&cookie)).await).await;
     assert_eq!(
-        json(get(&app, "/admin/session", Some(&vcookie)).await).await["role"],
-        "viewer"
-    );
-    let settings = json(get(&app, "/admin/settings", Some(&vcookie)).await).await;
-    assert_eq!(
-        (
-            settings["access"]["admin_configured"].as_bool(),
-            settings["access"]["viewer_configured"].as_bool()
-        ),
-        (Some(true), Some(true))
+        settings["access"],
+        serde_json::json!({ "admin_configured": true })
     );
     assert_eq!(
-        settings["compatibility"]["cache_diagnostics"].as_bool(),
-        Some(false)
+        settings["about"]["profile"].as_str(),
+        Some("claude-code-2.1.269-linux-x64")
     );
-    assert!(settings["compatibility"]["profile"].as_str().is_some());
+    assert!(settings["compatibility"].is_null());
     assert!(
         !settings.to_string().contains("secret"),
         "no secret and no variable name in the settings answer"
     );
     assert_eq!(
-        delete(&app, "/admin/session", Some(&vcookie))
-            .await
-            .status(),
+        delete(&app, "/admin/session", Some(&cookie)).await.status(),
         204
     );
     assert_eq!(
-        get(&app, "/admin/session", Some(&vcookie)).await.status(),
+        get(&app, "/admin/session", Some(&cookie)).await.status(),
         401
     );
 }

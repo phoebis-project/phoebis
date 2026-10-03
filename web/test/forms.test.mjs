@@ -27,7 +27,6 @@ const input = {
   overagePolicy: pool.overagePolicy,
   paceFloor: pool.paceFloor,
   preferSubscription: pool.preferSubscription,
-  quotaHeaders: pool.quotaHeaders,
   retryInPlaceSeconds: pool.retryInPlaceSeconds,
   selectBelowUtilization: pool.selectBelowUtilization,
   sessionPlacement: pool.sessionPlacement,
@@ -149,14 +148,13 @@ test('a pool input with select-below inside the band is refused and every engine
   assert.equal(d.validatePoolInput({ ...input, migrateWhenSpent: false }, accounts), true);
 });
 
-test('a pool input carries the store defaults for the pin, placement and quota fields, and each unknown spelling is refused', () => {
+test('a pool input carries the store defaults for the pin and placement fields, and each unknown spelling is refused', () => {
   assert.deepEqual(
-    [input.affinityMode, input.subagentPlacement, input.sessionPlacement, input.minSharedPrefixTokens, input.quotaHeaders],
-    ['always', 'by_cohort', 'by_strategy', 20_000, 'pass'],
+    [input.affinityMode, input.subagentPlacement, input.sessionPlacement, input.minSharedPrefixTokens],
+    ['always', 'by_cohort', 'by_strategy', 20_000],
   );
   const spellings = {
     affinityMode: [['always', 'when_cached'], 'sometimes'],
-    quotaHeaders: [['hide', 'pass'], 'strip'],
     sessionPlacement: [['by_strategy', 'by_warm_prefix'], 'by_luck'],
     subagentPlacement: [['by_cohort', 'by_strategy', 'with_main'], 'alone'],
   };
@@ -215,32 +213,6 @@ test('the key dialog starts from the stored key and builds the edit from it', ()
   assert.deepEqual([fresh.enabled, fresh.expiry, fresh.poolId, fresh.captureMode], [true, 'never', 'all', 'inherit'], 'a new key starts on, with no expiry, in the pool it was opened from');
 });
 
-test('the key dialog carries the affinity source from the stored key to the body', () => {
-  const stored = d.decodeKey({ ...fixture('keys').keys[0], affinity_source: 'session' });
-  const form = d.keyFormOf(stored, 'unused');
-  assert.deepEqual([form.affinitySource], ['session']);
-  const body = d.encodeKey(d.keyInputOf({ ...form, affinitySource: 'user_id' }, NOW));
-  assert.deepEqual([body.affinity_source], ['user_id']);
-  const fresh = d.keyInputOf(d.keyFormOf(null, 'all'), NOW);
-  assert.deepEqual([fresh.affinitySource], ['auto'], 'a new key starts where the store defaults one');
-});
-
-test('a key form carries the in-flight cap and null clears it', () => {
-  const row = fixture('keys').keys[0];
-  const form = d.keyFormOf(d.decodeKey({ ...row, in_flight_cap: 4 }), 'unused');
-  assert.equal(form.inFlightCap, '4');
-  const body = d.encodeKey(d.keyInputOf(form, NOW));
-  assert.equal(body.in_flight_cap, 4);
-  assert.equal(d.decodeKey({ ...row, ...body }).inFlightCap, 4, 'the route answers the cap back as it was sent');
-  const cleared = d.keyInputOf({ ...form, inFlightCap: '' }, NOW);
-  assert.equal(cleared.inFlightCap, null);
-  assert.equal(d.encodeKey(cleared).in_flight_cap, null, 'an empty field sends null, which clears the stored cap');
-  assert.equal('in_flight_cap' in d.encodeKey({ ...cleared, inFlightCap: undefined }), false, 'a write without the field, a key moved between pools, keeps the stored cap');
-  assert.equal(d.keyFormOf(d.decodeKey(row), 'unused').inFlightCap, '', 'no cap opens as an empty field');
-  assert.equal(d.keyInputOf(d.keyFormOf(null, 'all'), NOW).inFlightCap, null, 'a new key starts with no cap');
-  for (const v of ['', '1', '16', '4294967295']) assert.equal(d.inFlightCapRefusal(v), null, `${JSON.stringify(v)} is taken`);
-  for (const v of ['0', '-1', '1.5', '4294967296', 'x']) assert.notEqual(d.inFlightCapRefusal(v), null, `${v} is refused as the route refuses it`);
-});
 
 test('ticking cancelled prefills the derived end, unticking clears it, and the form refuses what the route refuses', () => {
   const body = fixture('account');
@@ -281,26 +253,23 @@ test('a model rule list is refused in the route\'s order and words, and the refu
 
 test("the key dialog's holds agree with its Save condition", () => {
   assert.deepEqual(d.KEY_GROUPS, ['key', 'access', 'models', 'sessions', 'capture']);
-  const named = { captureHours: '6', captureMode: 'inherit', inFlightCap: '', modelRules: [], name: 'workstation', poolId: 'all' };
-  assert.deepEqual(d.keyRefusals(named), [], 'a named key in a pool with no cap and no rules may save');
+  const named = { captureHours: '6', captureMode: 'inherit', modelRules: [], name: 'workstation', poolId: 'all' };
+  assert.deepEqual(d.keyRefusals(named), [], 'a named key in a pool with no rules may save');
   assert.deepEqual(d.keyRefusals({ ...named, name: '' }), [{ field: 'Name', group: 'key', text: 'the key needs a name.' }]);
   assert.deepEqual(d.keyRefusals({ ...named, name: '   ' }), [{ field: 'Name', group: 'key', text: 'the key needs a name.' }], 'a name of spaces is saved trimmed, so it is no name');
   assert.deepEqual(d.keyRefusals({ ...named, poolId: '' }), [{ field: 'Pool', group: 'key', text: 'the key needs a pool.' }]);
-  assert.deepEqual(d.keyRefusals({ ...named, inFlightCap: '0' }), [{ field: 'Requests in flight', group: 'access', text: d.inFlightCapRefusal('0') }]);
   assert.deepEqual(d.keyRefusals({ ...named, modelRules: rules('a***') }), [{ field: 'Model rules', group: 'models', text: d.modelRulesRefusal(rules('a***')) }]);
   assert.deepEqual(
-    d.keyRefusals({ captureHours: '', captureMode: 'override', inFlightCap: '0', modelRules: rules('a***'), name: '', poolId: '' }, { maxHours: 72 }).map((r) => [r.group, r.field]),
-    [['key', 'Name'], ['key', 'Pool'], ['access', 'Requests in flight'], ['models', 'Model rules'], ['capture', 'Capture hours for this key']],
+    d.keyRefusals({ captureHours: '', captureMode: 'override', modelRules: rules('a***'), name: '', poolId: '' }, { maxHours: 72 }).map((r) => [r.group, r.field]),
+    [['key', 'Name'], ['key', 'Pool'], ['models', 'Model rules'], ['capture', 'Capture hours for this key']],
     'every hold at once reads in rail order',
   );
-  for (const v of ['', '1', '16', '4294967295']) assert.deepEqual(d.keyRefusals({ ...named, inFlightCap: v }), [], `a cap of ${JSON.stringify(v)} holds nothing`);
-  for (const v of ['0', '-1', '1.5', '4294967296', 'x']) assert.deepEqual(d.keyRefusals({ ...named, inFlightCap: v }).map((r) => r.group), ['access'], `a cap of ${v} holds Access`);
   for (const list of [[], rules('claude-haiku-4-5*', 'NOT *'), rules(...Array(256).fill('*'))]) assert.deepEqual(d.keyRefusals({ ...named, modelRules: list }), [], 'a list the route takes holds nothing');
   for (const list of [rules('claude-*', 'NOT a***', ''), rules(''), rules(...Array(257).fill(''))]) assert.deepEqual(d.keyRefusals({ ...named, modelRules: list }), [{ field: 'Model rules', group: 'models', text: d.modelRulesRefusal(list) }]);
 });
 
 test("a new key's name is refused when its id is taken, by case or by punctuation, or holds no letter or digit", () => {
-  const named = (name, isNew = true, existingIds = new Set(['desktop', 'laptop'])) => d.keyRefusals({ inFlightCap: '', modelRules: [], name, poolId: 'all' }, { identity: { existingIds, isNew } });
+  const named = (name, isNew = true, existingIds = new Set(['desktop', 'laptop'])) => d.keyRefusals({ modelRules: [], name, poolId: 'all' }, { identity: { existingIds, isNew } });
   const taken = [{ field: 'Name', group: 'key', text: 'Another key already has the id laptop.' }];
   assert.deepEqual(named('Laptop'), taken, 'by case');
   assert.deepEqual(named('laptop!'), taken, 'by punctuation');
@@ -315,7 +284,7 @@ test("a new key's name is refused when its id is taken, by case or by punctuatio
 });
 
 test("an override's hours must be a whole number inside the ceiling", () => {
-  const form = { captureHours: '6', captureMode: 'override', inFlightCap: '', modelRules: [], name: 'workstation', poolId: 'all' };
+  const form = { captureHours: '6', captureMode: 'override', modelRules: [], name: 'workstation', poolId: 'all' };
   const hours = (captureHours, captureMode = 'override', checks = { maxHours: 72 }) => d.keyRefusals({ ...form, captureHours, captureMode }, checks);
   const refused = (text) => [{ field: 'Capture hours for this key', group: 'capture', text }];
   for (const v of ['', '0', '2.5', '73']) assert.deepEqual(hours(v), refused('Capture hours is a whole number from 1 to 72.'), `${JSON.stringify(v)} is refused`);
@@ -385,7 +354,6 @@ test('a pool refusal names the group its control sits in', () => {
       { keepalive: { ...input.keepalive, retryMaxSeconds: 20, retrySeconds: 30 } },
       refused('Retry backoff max (s)', 'probeTuning', 'Retry backoff max (s) is at or above Retry backoff base (s).'),
     ],
-    [{ quotaHeaders: 'strip' }, refused('Quota headers', 'responseHeaders', 'Quota headers is one of its listed choices.')],
   ];
   for (const [patch, expected, checks] of cases) assert.deepEqual(d.poolRefusals({ ...input, ...patch }, accounts, checks), expected, JSON.stringify(patch));
 });
@@ -421,16 +389,16 @@ test('the Probe tuning rows lay out every numeric keepalive bound but the grace 
 });
 
 test("refusals come in rail order, a new pool's first two the name and the member", () => {
-  const refusals = d.poolRefusals({ ...input, name: '', members: [], modelRules: rules('a***'), quotaHeaders: 'strip' }, accounts, { capture: { maxHours: 72, on: true, typed: '' } });
+  const refusals = d.poolRefusals({ ...input, name: '', members: [], modelRules: rules('a***') }, accounts, { capture: { maxHours: 72, on: true, typed: '' } });
   assert.deepEqual(
     refusals.map((r) => r.group),
-    ['identity', 'members', 'models', 'responseHeaders', 'bodyCapture'],
+    ['identity', 'members', 'models', 'bodyCapture'],
   );
   assert.deepEqual(
     refusals.slice(0, 2).map((r) => r.text),
     ['the pool needs a name.', 'the pool needs a member.'],
   );
-  assert.deepEqual(d.POOL_GROUPS, ['identity', 'members', 'keys', 'models', 'autoMode', 'selection', 'placement', 'pinning', 'utilization', 'shedding', 'failover', 'overage', 'cacheTtl', 'keepalive', 'probeTuning', 'responseHeaders', 'bodyCapture', 'cacheDiagnostics']);
+  assert.deepEqual(d.POOL_GROUPS, ['identity', 'members', 'keys', 'models', 'autoMode', 'selection', 'placement', 'pinning', 'utilization', 'shedding', 'failover', 'overage', 'cacheTtl', 'keepalive', 'probeTuning', 'bodyCapture', 'cacheDiagnostics']);
 });
 
 test('every bounded engine field is refused once it leaves its bound', () => {
@@ -474,10 +442,7 @@ test('the form admits and refuses the values the routes do', () => {
   assert.ok(probes.length > 0);
   for (const { field, route, status, value } of probes) {
     let admitted;
-    if (route === 'PATCH /admin/keys/{id}') {
-      assert.equal(field, 'in_flight_cap');
-      admitted = d.keyRefusals({ inFlightCap: String(value), modelRules: [], name: 'Desktop', poolId: 'main' }).length === 0;
-    } else if (field.startsWith('keepalive.')) {
+    if (field.startsWith('keepalive.')) {
       const key = camel(field.slice('keepalive.'.length));
       assert.ok(key in d.KEEPALIVE_BOUNDS, `${field} is a field the form bounds`);
       admitted = d.validatePoolInput(tuned({ ...RETRY_PAIR[field], [key]: value }), accounts);

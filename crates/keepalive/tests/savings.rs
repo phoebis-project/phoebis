@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use common::*;
 use fake_upstream::Respond;
-use phoebis_keepalive::{Event, KeepaliveLimits, KeepalivePolicy, Reason};
+use phoebis_keepalive::{Event, KeepalivePolicy, Reason};
 use phoebis_ledger::{hour_of, read_rollups, RollupRow};
 
 /// Every rollup row the rig wrote, once the writer has landed what the test waits for. The whole table
@@ -386,11 +386,11 @@ async fn unanswered_probes_are_settled_as_wasted_when_the_recipe_stops() {
     r.up.push_credential_rule(A, "/v1/messages", cold_answer());
     r.observe_with("main", &body).await;
     for _ in 0..2 {
-        r.advance(270_000);
+        r.advance_attended(270_000);
         r.step().await;
     }
     r.observe_with("main", &body).await;
-    r.advance(270_000);
+    r.advance_attended(270_000);
     r.step().await;
     r.state("main", "released");
     let rows = rollups(&r, |rows| probe_rows(rows).wasted_probes == 1).await;
@@ -401,7 +401,7 @@ async fn unanswered_probes_are_settled_as_wasted_when_the_recipe_stops() {
     // session_end and a replacement carry their own labels.
     let mut r = rig(RigSpec::default()).await;
     r.observe("main").await;
-    r.advance(270_000);
+    r.advance_attended(270_000);
     r.step().await;
     r.event(Event {
         event: "session_end".into(),
@@ -431,7 +431,7 @@ async fn unanswered_probes_are_settled_as_wasted_when_the_recipe_stops() {
         relay_common::json_429_unified(4_600, "five_hour"),
     );
     r.up.push_credential_rule(other, "/v1/messages", probe_answer(0, 2_000));
-    r.advance(270_000);
+    r.advance_attended(270_000);
     r.step().await;
     assert_eq!(r.status("main").migrations, 1);
     r.event(Event {
@@ -538,7 +538,7 @@ async fn a_late_or_orphaned_probe_is_still_paid_for() {
             "/v1/messages",
             Respond::Gated(Box::new(probe_answer(2_000, 0))),
         );
-        r.advance(270_000);
+        r.advance_attended(270_000);
         r.engine.step().await;
         wait_for(Duration::from_secs(5), || {
             (r.up.requests().len() == 2).then_some(())
@@ -546,8 +546,9 @@ async fn a_late_or_orphaned_probe_is_still_paid_for() {
         .await;
         match action {
             "close" => r.engine.close(),
+            // Past the 600-second expiry from the last heartbeat.
             "expire" => {
-                r.advance(400_000);
+                r.advance(600_000);
                 r.engine.expire();
             }
             "new_request" => {
@@ -1582,10 +1583,9 @@ async fn a_key_moved_to_another_pool_is_capped_and_charged_there() {
                 shedding: phoebis_store::Shedding::default(),
                 failover: phoebis_store::Failover::default(),
                 cache_ttl_json: "{}".into(),
-                cache_diagnostics: None,
+                cache_diagnostics: false,
                 auto_mode_server: true,
                 affinity: phoebis_store::Affinity::default(),
-                quota_headers: phoebis_store::QuotaHeaders::Pass,
                 created_at: NOW,
                 updated_at: NOW,
             },
@@ -1655,7 +1655,7 @@ async fn a_probe_answered_with_output_is_debited_and_settled_as_wasted() {
     r.observe_with("main", &body).await;
     // A 2xx answer with valid usage that generated output: paid for, and no evidence about the entry.
     r.up.push_credential_rule(A, "/v1/messages", Respond::Json { status: 200, headers: vec![], body: br#"{"id":"m","type":"message","content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":0,"cache_read_input_tokens":2000,"output_tokens":1}}"#.to_vec() });
-    r.advance(270_000);
+    r.advance_attended(270_000);
     r.step().await;
     let status = r.status("main");
     assert_eq!(
@@ -1826,10 +1826,6 @@ const OAUTH_SECRET: &str = "sk-ant-oat01-OOOO";
 fn subscription_spec() -> RigSpec {
     RigSpec {
         accounts: vec![oauth("o", OAUTH_SECRET, 0)],
-        limits: KeepaliveLimits {
-            oauth_prewarm_verified: true,
-            ..KeepaliveLimits::default()
-        },
         pool: PoolSpec {
             overage_policy: phoebis_store::OveragePolicy::Allow,
             ..PoolSpec::default()

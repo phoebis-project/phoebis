@@ -5,8 +5,8 @@ use common::{get, json, login, NOW};
 use phoebis_ledger::EventRecord;
 use phoebis_routing::{Report, MODEL_REJECTED_REASON};
 use phoebis_store::{
-    Affinity, AffinitySource, ApiKeyRow, CooldownRow, Failover, MemberWrite,
-    ModelRule, OveragePolicy, PoolRow, QuotaHeaders, RulesMode, Shedding, Strategy,
+    Affinity, ApiKeyRow, CooldownRow, Failover, MemberWrite, ModelRule,
+    OveragePolicy, PoolRow, RulesMode, Shedding, Strategy,
 };
 use serde_json::json as j;
 
@@ -65,10 +65,9 @@ async fn the_key_models_route_answers_the_processed_list_with_the_matching_coold
                 shedding: Shedding::default(),
                 failover: Failover::default(),
                 cache_ttl_json: "{}".into(),
-                cache_diagnostics: None,
+                cache_diagnostics: false,
                 auto_mode_server: true,
                 affinity: Affinity::default(),
-                quota_headers: QuotaHeaders::Pass,
                 created_at: NOW,
                 updated_at: NOW,
             },
@@ -122,8 +121,6 @@ async fn the_key_models_route_answers_the_processed_list_with_the_matching_coold
                 rotated_at: None,
                 last_used_at: None,
                 retired_secret_last_used_at: None,
-                in_flight_cap: None,
-                affinity_source: AffinitySource::Auto,
                 auto_mode_server: None,
             },
             "test",
@@ -181,15 +178,6 @@ async fn the_key_models_route_answers_the_processed_list_with_the_matching_coold
             .status(),
         404,
         "an unknown key 404s"
-    );
-
-    let viewer = login(&parts.app, "viewer-secret").await;
-    assert_eq!(
-        get(&parts.app, "/admin/keys/desktop/models", Some(&viewer))
-            .await
-            .status(),
-        200,
-        "a viewer may read it"
     );
 }
 
@@ -260,14 +248,5 @@ async fn the_models_state_route_groups_live_cooldowns_by_model_and_lists_the_las
     assert_eq!(
         body["permits"],
         j!([{ "at": NOW - 100, "account_id": "direct", "key_id": "desktop", "session_id": "s1", "model": MODEL, "wire_model": "claude-haiku-4-5", "request_id": "r-1", "upstream_request_id": "req-2", "rejected_by": ["business"] }]),
-    );
-
-    let viewer = login(&parts.app, "viewer-secret").await;
-    assert_eq!(
-        get(&parts.app, "/admin/models/state", Some(&viewer))
-            .await
-            .status(),
-        200,
-        "a viewer may read it"
     );
 }

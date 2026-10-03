@@ -553,17 +553,6 @@ async fn analytics_series_breakdown_and_accounts_read_the_rollups_with_percentil
         .status(),
         400
     );
-    let viewer = login(&parts.app, "viewer-secret").await;
-    assert_eq!(
-        get(
-            &parts.app,
-            "/admin/analytics/breakdown?range=7d&group_by=key",
-            Some(&viewer)
-        )
-        .await
-        .status(),
-        200
-    );
 }
 
 #[tokio::test]
@@ -848,6 +837,7 @@ async fn a_request_answers_its_hold_with_its_wait_and_held_filters_the_list() {
         response_bytes: None,
         response_chunks: None,
         held: Some(held),
+        message_id: None,
         finished_at: now + 1_300,
     }));
     let all = wait_json(&parts.app, "/admin/requests?limit=500", &cookie, |v| {
@@ -1172,20 +1162,6 @@ async fn the_request_log_filters_paginates_and_shows_one_row_per_request_with_it
             .status(),
         404
     );
-    let viewer = login(&parts.app, "viewer-secret").await;
-    assert_eq!(
-        get(&parts.app, "/admin/requests/r005/bodies", Some(&viewer))
-            .await
-            .status(),
-        403,
-        "captured bodies are admin only"
-    );
-    assert_eq!(
-        get(&parts.app, "/admin/requests/r005", Some(&viewer))
-            .await
-            .status(),
-        200
-    );
 }
 
 #[tokio::test]
@@ -1310,6 +1286,7 @@ fn publish_capture(bus: &phoebis_bus::Bus, id: &str, delivered: u32, published: 
         response_bytes: None,
         response_chunks: Some(published),
         held: None,
+        message_id: None,
         finished_at: common::NOW + 900,
     }));
 }

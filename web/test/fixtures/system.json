@@ -5,14 +5,32 @@
     "profile": "claude-code-2.1.269-linux-x64",
     "uptime_seconds": 0,
     "storage_ok": true,
+    "ready": true,
+    "dead": [],
     "ledger": {
-      "schema_version": 25,
-      "written": 15,
+      "schema_version": 26,
+      "written": 16,
       "dropped": 0,
       "write_failures": 0,
       "gaps": 0,
       "last_gap_at": 0,
       "channel_depth": 4096
+    },
+    "router": {
+      "command_depth": 4096,
+      "dropped_reports": {
+        "account_state": 0,
+        "affinity": 0,
+        "cooldown": 0,
+        "credits": 0,
+        "member_spend": 0,
+        "overage": 0,
+        "pin_invalidated": 0,
+        "pin_released": 0,
+        "pin_renewed": 0,
+        "sample": 0,
+        "usage": 0
+      }
     },
     "bus": [
       {
@@ -24,13 +42,18 @@
         "subscriber": "live",
         "dropped": 0,
         "panics": 0
+      },
+      {
+        "subscriber": "attention",
+        "dropped": 0,
+        "panics": 0
       }
     ],
     "live": {
       "clients": 0,
       "in_flight": 0
     },
-    "pricing_unknown_models": 4,
+    "pricing_unknown_models": 0,
     "gaps": [],
     "keepalive": {
       "agents": 1,
@@ -38,12 +61,6 @@
       "retained_bytes": 116,
       "running_probes": 0,
       "sessions": 1
-    },
-    "alerts": {
-      "deliveries_failed": 0,
-      "deliveries_ok": 2,
-      "open": 1,
-      "rules": 3
     }
   }
 }

@@ -313,6 +313,7 @@ async fn the_sessions_view_carries_the_companion_and_the_recipes_and_release_dis
             response_bytes: None,
             response_chunks: None,
             held: None,
+            message_id: None,
             finished_at: now,
         },
     ));
@@ -501,39 +502,9 @@ async fn the_sessions_view_carries_the_companion_and_the_recipes_and_release_dis
             .unwrap()
             .is_empty()
     );
-    let viewer = login(&parts.app, "viewer-secret").await;
-    assert_eq!(
-        get(&parts.app, "/admin/keepalive/recipes", Some(&viewer))
-            .await
-            .status(),
-        200
-    );
-    assert_eq!(
-        get(&parts.app, "/admin/keepalive/overview", Some(&viewer))
-            .await
-            .status(),
-        200
-    );
-    assert_eq!(
-        post(
-            &parts.app,
-            "/admin/sessions/desktop/s1/release",
-            "",
-            Some(&viewer)
-        )
-        .await
-        .status(),
-        403
-    );
-    let settings = json(get(&parts.app, "/admin/settings", Some(&viewer)).await).await;
-    assert_eq!(
-        (
-            settings["keepalive"]["lease_seconds"].as_u64(),
-            settings["keepalive"]["oauth_prewarm_verified"].as_bool()
-        ),
-        (Some(90), Some(false))
-    );
-    let system = json(get(&parts.app, "/admin/system", Some(&viewer)).await).await;
+    let settings = json(get(&parts.app, "/admin/settings", Some(&cookie)).await).await;
+    assert_eq!(settings["keepalive"]["max_sessions"].as_u64(), Some(128));
+    let system = json(get(&parts.app, "/admin/system", Some(&cookie)).await).await;
     assert_eq!(
         (
             system["keepalive"]["sessions"].as_u64(),
@@ -625,6 +596,7 @@ async fn a_session_row_groups_by_key_generation_and_a_historical_row_is_read_onl
             response_bytes: None,
             response_chunks: None,
             held: None,
+            message_id: None,
             finished_at: now,
         },
     ));

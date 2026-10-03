@@ -7,7 +7,7 @@ use std::time::Duration;
 use axum::http::HeaderMap;
 use phoebis_bus::OTHER_CLIENT;
 use phoebis_routing::{ClientClass, ConversationLookup, ConversationQuery};
-use phoebis_store::{AffinitySource, ApiKeyRow};
+use phoebis_store::ApiKeyRow;
 
 use crate::billing::entrypoint_of;
 use crate::RelayError;
@@ -89,10 +89,10 @@ pub fn identify(headers: &HeaderMap, body: &[u8]) -> Result<RequestIdentity, Rel
     })
 }
 
-/// Fixes `session_id` for the key's `affinity_source`, and `forked_from` and
-/// `fork_depth` for a request with a session id; reads `canonical_model`. `message_boundaries` are the request's own, from
-/// `BodyFacts.chains` (empty for a body without a chain): the fork detection's input, which `RequestIdentity` does
-/// not retain.
+/// Walks the conversation climb: fixes
+/// `forked_from` and `fork_depth` for a request with a session id; reads `canonical_model`. `message_boundaries` are the
+/// request's own, from `BodyFacts.chains` (empty for a body without a chain): the fork detection's input, which
+/// `RequestIdentity` does not retain.
 pub fn climb(
     identity: &mut RequestIdentity,
     key: &ApiKeyRow,
@@ -118,15 +118,6 @@ pub fn climb(
             incarnation_of: &no_incarnation,
         })
     };
-
-    // A fixed source other than `Session` runs its own rung alone, so rung 1's tentative guess never leaks
-    // through as the resolved identity.
-    if !matches!(
-        key.affinity_source,
-        AffinitySource::Auto | AffinitySource::Session
-    ) {
-        identity.session_id = None;
-    }
 
     // A session that has no pin of its own is new to the map, so its deepest own-key match names the
     // conversation it branched from; the session id keeps the identity.
@@ -383,7 +374,7 @@ mod tests {
     use phoebis_routing::ConversationMatch;
     use phoebis_store::RulesMode;
 
-    fn key(source: AffinitySource) -> ApiKeyRow {
+    fn key() -> ApiKeyRow {
         ApiKeyRow {
             id: "k".into(),
             label: "k".into(),
@@ -403,8 +394,6 @@ mod tests {
             rotated_at: None,
             last_used_at: None,
             retired_secret_last_used_at: None,
-            in_flight_cap: None,
-            affinity_source: source,
             auto_mode_server: None,
         }
     }
@@ -451,7 +440,7 @@ mod tests {
     #[test]
     fn a_session_header_names_the_conversation() {
         let mut identity = identity_of(Some("s1"));
-        let k = key(AffinitySource::Auto);
+        let k = key();
         climb(&mut identity, &k, &[], &Stub(HashMap::new()));
         assert_eq!(identity.session_id.as_deref(), Some("s1"));
         assert_eq!(identity.forked_from, None);
@@ -467,7 +456,7 @@ mod tests {
             }
         }
         let mut identity = identity_of(Some("s1"));
-        let k = key(AffinitySource::Content);
+        let k = key();
         climb(&mut identity, &k, &[], &Panicking);
         assert_eq!(identity.forked_from, None);
     }
@@ -475,7 +464,7 @@ mod tests {
     #[test]
     fn a_session_request_whose_messages_continue_another_conversation_is_a_fork_of_it() {
         let mut identity = identity_of(Some("s1"));
-        let k = key(AffinitySource::Auto);
+        let k = key();
         let mut map = HashMap::new();
         map.insert("b3", ("k", matched("s0", Some(3))));
         climb(
@@ -492,7 +481,7 @@ mod tests {
     #[test]
     fn a_session_requests_own_continuation_is_no_fork() {
         let mut identity = identity_of(Some("s1"));
-        let k = key(AffinitySource::Auto);
+        let k = key();
         let mut map = HashMap::new();
         map.insert("b3", ("k", matched("s1", Some(3))));
         climb(

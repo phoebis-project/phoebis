@@ -10,8 +10,10 @@ use axum::Router;
 use fake_upstream::{FakeUpstream, Respond, Rule};
 use futures::StreamExt;
 use http_body_util::BodyExt;
-use phoebis_admin::{router, AdminSecrets, AdminState, PairingVault, Sessions, SettingsView};
-use phoebis_alerts::{AlertParts, Alerts, Webhook};
+use phoebis_admin::{
+    router, AdminSecrets, AdminState, PairingVault, Readiness, Sessions, SettingsView,
+};
+use phoebis_attention::{Attention, AttentionHandles, AttentionParts};
 use phoebis_bus::Bus;
 use phoebis_keepalive::{Engine, EngineParts, KeepaliveLimits};
 use phoebis_ledger::{
@@ -23,7 +25,7 @@ use phoebis_profile::{
     claude_code_2_1_269_linux_x64,
     fixtures::{control_response, ControlFixture},
 };
-use phoebis_relay::{CatalogService, Limits, Relay};
+use phoebis_relay::{CatalogService, Limits, Relay, UpstreamGzip};
 use phoebis_routing::{spawn, RouterConfig, RouterHandle};
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, AttemptOutcome, Identity, NewBundle, Secret, StorageKey,
@@ -35,21 +37,14 @@ use phoebis_transport::{
     pool::Pool,
     trust_extra_ca, Plane,
 };
-use std::collections::VecDeque;
-use std::future::Future;
 use std::net::SocketAddr;
-use std::pin::Pin;
 use std::sync::atomic::{AtomicI64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 use tower::ServiceExt;
 
 /// The account uuid every control fixture names.
 pub const ACCOUNT_UUID: &str = "00000000-0000-4000-8000-000000000001";
-
-/// Runs on every read of the alerts engine's own clock, for a test that has to land a store mutation inside
-/// `Alerts::resolve`'s otherwise-synchronous read-then-write window: nothing else in that path yields.
-pub type ClockHook = Arc<dyn Fn() + Send + Sync>;
 
 /// The key stored on the API-key account, which the verify test expects to see on the wire.
 pub const API_KEY: &str = "sk-ant-api03-PLACEHOLDER";
@@ -68,61 +63,12 @@ const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long a socket read may wait before the test fails rather than hangs.
 const WS_DEADLINE: Duration = Duration::from_secs(10);
 
-/// One post the alert deliverer made. The alerts crate has a fake of its own, which no integration test module
-/// in another crate can reach, so the admin harness carries one too.
-#[derive(Clone, Debug)]
-pub struct Posted {
-    pub body: serde_json::Value,
-    pub signature: Option<String>,
-    pub url: String,
-}
-
-/// Answers the alert deliverer whatever the test queued, and keeps every post for it to read back. An empty
-/// queue answers 200, so a test that does not care about a delivery need not script one.
-pub struct FakeWebhook {
-    answers: Mutex<VecDeque<Result<u16, String>>>,
-    posts: Mutex<Vec<Posted>>,
-}
-
-impl FakeWebhook {
-    pub fn new() -> Arc<FakeWebhook> {
-        Arc::new(FakeWebhook {
-            answers: Mutex::new(VecDeque::new()),
-            posts: Mutex::new(Vec::new()),
-        })
-    }
-
-    pub fn answer(&self, a: Result<u16, String>) {
-        self.answers.lock().unwrap().push_back(a);
-    }
-
-    pub fn posts(&self) -> Vec<Posted> {
-        self.posts.lock().unwrap().clone()
-    }
-}
-
-impl Webhook for FakeWebhook {
-    fn post(
-        &self,
-        url: String,
-        body: Vec<u8>,
-        signature: Option<String>,
-    ) -> Pin<Box<dyn Future<Output = Result<u16, String>> + Send>> {
-        self.posts.lock().unwrap().push(Posted {
-            body: serde_json::from_slice(&body).unwrap(),
-            signature,
-            url,
-        });
-        let answer = self.answers.lock().unwrap().pop_front().unwrap_or(Ok(200));
-        Box::pin(async move { answer })
-    }
-}
-
 /// Everything `app_with` builds. A test reaching past the HTTP surface takes what it needs rather than
 /// every helper growing another tuple slot.
 struct Parts {
-    alerts: Arc<Alerts>,
     app: Router,
+    attention: Arc<Attention>,
+    attention_handles: AttentionHandles,
     bus: Bus,
     clock_cell: Arc<AtomicI64>,
     db: Arc<LedgerDb>,
@@ -138,14 +84,17 @@ struct Parts {
     up: FakeUpstream,
     usage: Arc<UsageService>,
     vault: Arc<PairingVault>,
-    webhook: Arc<FakeWebhook>,
 }
 
 /// The app with the observation stack behind it, for the tests that write rows into the ledger and then read
 /// them back through the analytics, request-log, and dashboard routes.
 pub struct Full {
-    pub alerts: Arc<Alerts>,
     pub app: Router,
+    /// The reader `GET /admin/attention` answers from, spawned on the harness bus; a test feeds it a request's
+    /// events through `observe`.
+    pub attention: Arc<Attention>,
+    /// Held so the reader's bus arm lives as long as the test does.
+    pub attention_handles: AttentionHandles,
     pub bus: Bus,
     pub clock_cell: Arc<AtomicI64>,
     pub db: Arc<LedgerDb>,
@@ -162,7 +111,6 @@ pub struct Full {
     pub up: FakeUpstream,
     /// No scheduler runs in the harness, so a test that needs a polled snapshot reads it through `usage.poll`.
     pub usage: Arc<UsageService>,
-    pub webhook: Arc<FakeWebhook>,
 }
 
 pub async fn admin_parts_full() -> Full {
@@ -175,33 +123,6 @@ pub async fn admin_parts_full_with_origin(origin: &str) -> Full {
     full_from(app_with(None, ACCOUNT_UUID, Some(origin.to_string()), None).await)
 }
 
-/// The full harness with the alert webhook destination check on, as every running router has it. The other
-/// builders leave it off so a rule may name the fake receiver, which is on loopback.
-pub async fn admin_parts_full_refusing_local_webhooks() -> Full {
-    full_from(
-        app_with_webhook_policy(None, ACCOUNT_UUID, None, true, None, false, None, USAGE_TTL).await,
-    )
-}
-
-/// The full harness with a hook on the alerts engine's own clock, for a test that must interleave a store
-/// mutation with `Alerts::resolve`'s internal read-then-write; every other builder's alerts engine reads the
-/// plain clock.
-pub async fn admin_parts_full_with_alert_clock_hook(hook: ClockHook) -> Full {
-    full_from(
-        app_with_webhook_policy(
-            None,
-            ACCOUNT_UUID,
-            None,
-            true,
-            None,
-            true,
-            Some(hook),
-            USAGE_TTL,
-        )
-        .await,
-    )
-}
-
 /// The full harness over a store the caller already holds. The router task reads the routing state once, at
 /// spawn, so a test that needs a pin in the list has to write it before this call.
 pub async fn admin_parts_full_on(store: Arc<Store>) -> Full {
@@ -210,8 +131,9 @@ pub async fn admin_parts_full_on(store: Arc<Store>) -> Full {
 
 fn full_from(parts: Parts) -> Full {
     Full {
-        alerts: parts.alerts,
         app: parts.app,
+        attention: parts.attention,
+        attention_handles: parts.attention_handles,
         bus: parts.bus,
         clock_cell: parts.clock_cell,
         db: parts.db,
@@ -225,7 +147,6 @@ fn full_from(parts: Parts) -> Full {
         store: parts.store,
         up: parts.up,
         usage: parts.usage,
-        webhook: parts.webhook,
     }
 }
 
@@ -258,11 +179,9 @@ pub struct Polled {
 /// No scheduler runs here, so the test reads the endpoint through `usage.poll` where a running router's
 /// schedule would; a TTL of zero lets every manual refresh past the backoff reach the endpoint.
 pub async fn admin_parts_polled(usage_ttl: Duration) -> Polled {
-    let parts = app_with_webhook_policy(
+    let parts = build_app(
         Some(fixture_identity()),
         ACCOUNT_UUID,
-        None,
-        true,
         None,
         true,
         None,
@@ -407,12 +326,10 @@ pub async fn admin_app_with_origin(origin: &str) -> (Router, FakeUpstream) {
 /// The origin-pinned app with `plain_http` on as well: the one shape that still enforces an origin while the
 /// cookie travels without `Secure`, which no other builder produces since they tie the two together.
 pub async fn admin_app_plain_with_origin(origin: &str) -> (Router, FakeUpstream) {
-    let parts = app_with_webhook_policy(
+    let parts = build_app(
         None,
         ACCOUNT_UUID,
         Some(origin.to_string()),
-        true,
-        None,
         true,
         None,
         USAGE_TTL,
@@ -699,28 +616,23 @@ async fn app_with(
 ) -> Parts {
     // Every builder but the plain-with-origin one ties this to whether an origin is pinned.
     let plain_http = origin.is_none();
-    app_with_webhook_policy(
+    build_app(
         identity,
         upstream_uuid,
         origin,
         plain_http,
         store,
-        true,
-        None,
         USAGE_TTL,
     )
     .await
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn app_with_webhook_policy(
+async fn build_app(
     identity: Option<Identity>,
     upstream_uuid: &str,
     origin: Option<String>,
     plain_http: bool,
     store: Option<Arc<Store>>,
-    allow_local_webhooks: bool,
-    alert_clock_hook: Option<ClockHook>,
     usage_ttl: Duration,
 ) -> Parts {
     let up = fake_control_plane(upstream_uuid).await;
@@ -840,7 +752,6 @@ async fn app_with_webhook_policy(
         router_handle.clone(),
         clock.clone(),
         DISCOVERY_TIMEOUT,
-        Duration::from_secs(60),
         Duration::from_secs(5),
     ));
     let bus = Bus::new();
@@ -861,14 +772,17 @@ async fn app_with_webhook_policy(
     // The admin harness had no relay before this task; keepalive needs one to probe through, even though
     // nothing here drives its scheduler.
     let limits = Limits {
+        body_budget_bytes: 512 << 20,
         body_capture_max_hours: BODY_CAPTURE_MAX_HOURS,
+        body_read_timeout: Duration::from_secs(60),
         cooldown_fallback: Duration::from_secs(60),
         head_timeout: Duration::from_secs(10),
         hold_timeout: Duration::from_secs(30),
         idle_timeout: Duration::from_secs(600),
-        max_attempts: 3,
+        key_body_reads: 128,
         max_request_bytes: 32 << 20,
         model_rejection: Duration::from_secs(3_600),
+        upstream_gzip: UpstreamGzip::Auto,
     };
     let relay = Arc::new(
         Relay::new(
@@ -891,6 +805,7 @@ async fn app_with_webhook_policy(
         ledger: ledger.clone(),
         lifecycle: None,
         limits: KeepaliveLimits::default(),
+        max_request_bytes: 32 << 20,
         metrics: metrics.clone(),
         pricing: pricing.clone(),
         relay: relay.clone(),
@@ -899,56 +814,25 @@ async fn app_with_webhook_policy(
         store: store.clone(),
         tables: tables.clone(),
     });
-    let webhook = FakeWebhook::new();
-    // A hooked clock for the alerts engine alone: sharing the hook with `clock` would fire it on every other
-    // service's reads too, which is far more than the one test that needs it wants to reason about.
-    let alert_clock: Clock = match alert_clock_hook {
-        Some(hook) => {
-            let c = clock_cell.clone();
-            Arc::new(move || {
-                hook();
-                c.load(Ordering::SeqCst)
-            })
-        }
-        None => clock.clone(),
-    };
-    // The instant sleeper: a delivery walks its three attempts in milliseconds rather than the real backoff.
-    let alerts = Alerts::with_sleeper(
-        AlertParts {
-            clock: alert_clock,
-            ledger: ledger.clone(),
-            metrics: metrics.clone(),
-            router_name: "phoebis-test".into(),
-            store: store.clone(),
-            webhook: webhook.clone(),
-        },
-        Box::new(|_| Box::pin(async {})),
-    );
+    let (attention, attention_handles) = phoebis_attention::spawn(AttentionParts {
+        bus: bus.clone(),
+        clock: clock.clone(),
+        router: router_handle.clone(),
+        store: store.clone(),
+        usage: Some(usage.clone()),
+    });
     let settings = Arc::new(SettingsView {
-        admin_listen: "test".into(),
-        admin_origin: origin.clone(),
         body_capture_max_hours: BODY_CAPTURE_MAX_HOURS,
-        cache_diagnostics: false,
-        catalog_cache_seconds: 60,
-        catalog_refresh_seconds: 21_600,
         cooldown_fallback_seconds: 60,
         keepalive: KeepaliveLimits::default(),
         ledger_path: "test".into(),
-        max_attempts: 3,
         metrics_listen: "127.0.0.1:9464".into(),
-        model_rejection_seconds: 3_600,
         pricing_path: None,
         profile: p.name.into(),
         proxy_listen: "test".into(),
-        quota_sample_retention_days: 30,
-        retention_days: 90,
-        rollup_retention_days: 400,
         session_expire_after_seconds: 86_400,
-        startup_fetch_seconds: 5,
         storage_path: "test".into(),
         usage_cache_ttl_seconds: 60,
-        usage_refresh_concurrency: 4,
-        viewer_configured: true,
     });
     let vault = Arc::new(PairingVault::new());
     let state = Arc::new(AdminState {
@@ -964,7 +848,6 @@ async fn app_with_webhook_policy(
         )),
         secrets: AdminSecrets {
             admin: Secret::new("admin-secret"),
-            viewer: Some(Secret::new("viewer-secret")),
         },
         clock,
         plain_http,
@@ -983,12 +866,18 @@ async fn app_with_webhook_policy(
         tables,
         settings,
         keepalive: keepalive.clone(),
-        alerts: alerts.clone(),
-        allow_local_webhooks,
+        attention: attention.clone(),
+        readiness: Arc::new(Readiness {
+            bus: bus.clone(),
+            ledger: ledger.clone(),
+            router: router_handle.clone(),
+            store: store.clone(),
+        }),
     });
     Parts {
-        alerts,
         app: router(state),
+        attention,
+        attention_handles,
         bus,
         clock_cell,
         db,
@@ -1004,7 +893,6 @@ async fn app_with_webhook_policy(
         up,
         usage,
         vault,
-        webhook,
     }
 }
 

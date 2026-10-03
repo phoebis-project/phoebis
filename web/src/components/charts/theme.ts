@@ -60,6 +60,7 @@ export const OUTCOME_SERIES = [
   { key: 'succeeded', label: 'OK', slot: 0 },
   { key: 'rateLimited', label: 'Rate limited', slot: 3 },
   { key: 'failed', label: 'Failed', slot: 7 },
+  { key: 'incomplete', label: 'Incomplete', slot: 2 },
   { key: 'exhausted', label: 'Exhausted', slot: 1 },
 ] as const;
 

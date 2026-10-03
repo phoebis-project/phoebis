@@ -9,9 +9,7 @@ use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
 use http_body_util::BodyExt;
 use phoebis_profile::fixtures::{body, inference_head, BodyFixture, FixtureKind};
 use phoebis_relay::MemoryKey;
-use phoebis_store::{
-    AccountKind, AffinitySource, ApiKeyRow, RulesMode, StorageKey, Store,
-};
+use phoebis_store::{AccountKind, ApiKeyRow, RulesMode, StorageKey, Store};
 use tower::ServiceExt;
 
 const UUID_RE_LEN: usize = 36;
@@ -27,6 +25,11 @@ fn field<'a>(line: &'a str, name: &str) -> Option<&'a str> {
     let at = line.find(&needle)?;
     let rest = &line[at + needle.len()..];
     Some(&rest[..rest.find(';').unwrap_or(rest.len())])
+}
+
+/// The five digits after `cch=` on the billing line `find_cch` reads, `None` for a body that carries none.
+fn cch_digits(wire: &[u8]) -> Option<&[u8]> {
+    phoebis_cch::find_cch(wire).map(|l| &wire[l.digits_start..l.digits_start + 5])
 }
 
 fn header<'a>(r: &'a fake_upstream::RecordedRequest, name: &str) -> Option<&'a str> {
@@ -147,10 +150,10 @@ async fn absent_fields_are_restored_in_native_order_and_present_ones_are_left_al
         field(&line, "cc_prompt_id").map(str::len),
         Some(UUID_RE_LEN)
     );
-    let signed = phoebis_cch::sign(&sent.body).unwrap();
     assert_eq!(
-        signed, sent.body,
-        "the restored cch is the signature of the body as sent"
+        cch_digits(&sent.body),
+        Some(&b"00000"[..]),
+        "the restored cch is the client's placeholder, unsigned"
     );
     assert_eq!(
         position(sent, "x-client-request-id"),
@@ -182,6 +185,72 @@ async fn absent_fields_are_restored_in_native_order_and_present_ones_are_left_al
         header(fp, "x-client-request-id"),
         Some("33333333-3333-4333-8333-333333333333")
     );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn the_restored_placeholder_is_signed_when_the_switch_is_on() {
+    let up = FakeUpstream::start(vec![ok_with_request_id("req_up_0001")]).await;
+    let h = harness_with_signed_placeholder(
+        &up,
+        &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
+        PoolSpec::default(),
+    )
+    .await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(cli_request("s-1", None, None))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let sent = &up.requests()[0];
+    assert!(field(&billing_line(&sent.body), "cch").is_some());
+    assert_eq!(
+        phoebis_cch::sign(&sent.body).unwrap(),
+        sent.body,
+        "the restored cch is the signature of the body as sent"
+    );
+    assert_ne!(cch_digits(&sent.body), Some(&b"00000"[..]));
+    up.shutdown().await;
+}
+
+/// The client's unpatched paths send the placeholder on the full first-party line, and the server accepts it:
+/// it is no hash to check and none to sign, so it travels as the client sent it, whether or not the switch is on.
+#[tokio::test]
+async fn a_client_sent_placeholder_on_a_full_shape_line_is_relayed_intact() {
+    let placeholder = String::from_utf8(body(BodyFixture::FirstParty9b244).to_vec())
+        .unwrap()
+        .replacen("cch=9b244", "cch=00000", 1)
+        .into_bytes();
+    let up = FakeUpstream::start(vec![ok_with_request_id("req_up_0001")]).await;
+    let off = relay_with(AccountKind::Oauth, &up).await;
+    let on = harness_with_signed_placeholder(
+        &up,
+        &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
+        PoolSpec::default(),
+    )
+    .await
+    .app;
+    for (switch, app) in [("off", off), ("on", on)] {
+        let resp = app
+            .oneshot(request_from_fixture(
+                inference_head(FixtureKind::OauthFirstParty),
+                &placeholder,
+                KEY,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200, "switch {switch}");
+        assert_eq!(outcome(&resp).client_drift, None, "switch {switch}");
+        let sent = up.requests().last().unwrap().body.clone();
+        assert_eq!(
+            cch_digits(&sent),
+            Some(&b"00000"[..]),
+            "switch {switch}: the wire carries the client's placeholder"
+        );
+    }
+    assert_eq!(up.requests().len(), 2);
     up.shutdown().await;
 }
 
@@ -487,8 +556,8 @@ async fn a_body_without_the_block_relays_byte_identical_under_a_claude_code_user
 }
 
 /// The wire-level characterization of `insert_if_absent`'s seating rule: a first-party line that already ends
-/// in `cc_turn_origin` still ends in it once a field is filled ahead of it, and the client's own hash formula
-/// over the wire body reproduces the stamp this build wrote.
+/// in `cc_turn_origin` still ends in it once a field is filled ahead of it, and the `cch` filled ahead of it is
+/// the client's own placeholder.
 #[tokio::test]
 async fn a_first_party_line_carrying_cc_turn_origin_keeps_its_order_when_a_field_is_filled() {
     const SESSION: &str = "b2f7a3c1-9e44-4a3f-8b02-2a6a1e9c4f10";
@@ -531,7 +600,11 @@ async fn a_first_party_line_carrying_cc_turn_origin_keeps_its_order_when_a_field
     assert_eq!(field(&line, "cc_prev_req"), Some("req_up_0001"));
     assert_eq!(field(&line, "cc_prompt_id"), Some(PROMPT_ID));
     assert_eq!(field(&line, "cc_turn_origin"), Some("human"));
-    assert_eq!(phoebis_cch::sign(&wire).unwrap(), wire);
+    assert_eq!(
+        cch_digits(&wire),
+        Some(&b"00000"[..]),
+        "the restored cch is the client's placeholder, unsigned"
+    );
     up.shutdown().await;
 }
 
@@ -548,7 +621,6 @@ async fn nothing_is_restored_for_a_probe_turn() {
     let probe = phoebis_relay::Probe {
         key_id: "desktop".into(),
         key_generation: h.store.api_key("desktop").unwrap().unwrap().created_at,
-        allow_oauth: true,
     };
     let resp = h.relay.probe(probe, cli_request("s-p", None, None)).await;
     assert_eq!(resp.status(), 200);
@@ -827,8 +899,6 @@ async fn a_key_created_again_under_a_used_id_reads_none_of_the_previous_holders_
                 rotated_at: None,
                 last_used_at: None,
                 retired_secret_last_used_at: None,
-                in_flight_cap: None,
-                affinity_source: AffinitySource::Auto,
                 auto_mode_server: None,
             },
             "test",

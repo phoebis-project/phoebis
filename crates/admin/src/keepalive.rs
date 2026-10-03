@@ -44,7 +44,8 @@ pub(crate) async fn overview(State(state): State<Arc<AdminState>>) -> Response {
                 .unwrap_or(0);
             if row.kind == "probe" {
                 probes.ok += row.succeeded;
-                probes.failed += row.failed + row.rate_limited + row.exhausted + row.rejected;
+                probes.failed +=
+                    row.failed + row.rate_limited + row.exhausted + row.rejected + row.incomplete;
                 probes.migrated += row.probe_migrated;
                 probes.skipped += row.probes_skipped;
             }

@@ -54,22 +54,69 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
     let settings = json(get(&parts.app, "/admin/settings", Some(&cookie)).await).await;
-    assert_eq!(
+    let keys_of = |member: &serde_json::Value| {
+        let mut keys: Vec<String> = member
+            .as_object()
+            .map(|body| body.keys().cloned().collect())
+            .unwrap_or_default();
+        keys.sort();
+        keys
+    };
+    let mut members: Vec<(String, Vec<String>)> = settings
+        .as_object()
+        .map(|top| {
+            top.iter()
+                .map(|(name, body)| (name.clone(), keys_of(body)))
+                .collect()
+        })
+        .unwrap_or_default();
+    members.sort();
+    let expected: Vec<(String, Vec<String>)> = [
+        ("about", &["profile", "version"][..]),
+        ("access", &["admin_configured"]),
         (
-            settings["retention"]["ledger_days"].as_u64(),
-            settings["retention"]["quota_samples_days"].as_u64(),
-            settings["retention"]["body_capture_max_hours"].as_u64()
+            "keepalive",
+            &["max_agents", "max_retained_bytes", "max_sessions"],
         ),
-        (Some(90), Some(30), Some(72))
+        ("listeners", &["metrics", "proxy"]),
+        ("plan_tables", &["cost"]),
+        ("pricing", &["effective", "models", "source", "version"]),
+        ("retention", &["body_capture_max_hours"]),
+        ("sessions", &["expire_after_seconds"]),
+        ("storage", &["ledger_path", "path", "pricing_path"]),
+        ("usage", &["cache_ttl_seconds"]),
+    ]
+    .iter()
+    .map(|(name, keys)| {
+        (
+            name.to_string(),
+            keys.iter().map(|key| key.to_string()).collect(),
+        )
+    })
+    .collect();
+    assert_eq!(
+        members, expected,
+        "the route answers what the console reads and no other member: {settings}"
     );
     assert_eq!(
         (
-            settings["quota"]["sample_retention_days"].as_u64(),
-            settings["quota"].as_object().map(|quota| quota.len()),
+            settings["retention"]["body_capture_max_hours"].as_u64(),
+            settings["keepalive"]["max_agents"].as_u64(),
+            settings["keepalive"]["max_retained_bytes"].as_u64(),
+            settings["keepalive"]["max_sessions"].as_u64(),
             settings["sessions"]["expire_after_seconds"].as_u64(),
-            settings["listeners"]["metrics"].as_str()
+            settings["listeners"]["metrics"].as_str(),
+            settings["usage"]["cache_ttl_seconds"].as_u64()
         ),
-        (Some(30), Some(1), Some(86_400), Some("127.0.0.1:9464"))
+        (
+            Some(72),
+            Some(1_024),
+            Some(268_435_456),
+            Some(128),
+            Some(86_400),
+            Some("127.0.0.1:9464"),
+            Some(60)
+        )
     );
     assert_eq!(settings["pricing"]["version"], "2026-10-01");
     assert_eq!(settings["pricing"]["source"], "shipped");
@@ -100,9 +147,7 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
     );
     let text = settings.to_string();
     assert!(
-        !text.contains("admin-secret")
-            && !text.contains("viewer-secret")
-            && !text.contains("secret_env"),
+        !text.contains("admin-secret") && !text.contains("secret_env"),
         "no secret and no secret's variable name"
     );
     parts
@@ -121,8 +166,31 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
             system["ledger"]["dropped"].as_u64(),
             system["ledger"]["channel_depth"].as_u64()
         ),
-        (Some(25), Some(0), Some(4_096)),
-        "the ledger schema is at the migration that keeps a request's holds on its row"
+        (Some(26), Some(0), Some(4_096)),
+        "the ledger schema is at the migration that counts an incomplete answer and keeps the upstream message id"
+    );
+    assert_eq!(system["router"]["command_depth"].as_u64(), Some(4_096));
+    let dropped = system["router"]["dropped_reports"].as_object().unwrap();
+    assert_eq!(
+        dropped.keys().map(String::as_str).collect::<Vec<_>>(),
+        [
+            "account_state",
+            "affinity",
+            "cooldown",
+            "credits",
+            "member_spend",
+            "overage",
+            "pin_invalidated",
+            "pin_released",
+            "pin_renewed",
+            "sample",
+            "usage",
+        ],
+        "every kind of routing report, in name order"
+    );
+    assert!(
+        dropped.values().all(|n| n.as_u64() == Some(0)),
+        "nothing refused by a router that kept up: {dropped:?}"
     );
     assert_eq!(system["gaps"][0]["detail"]["dropped"].as_u64(), Some(7));
     assert!(
@@ -139,6 +207,92 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
     );
     assert_eq!(system["live"]["clients"].as_u64(), Some(0));
     assert_eq!(system["storage_ok"], true);
+    assert_eq!(
+        (&system["ready"], &system["dead"]),
+        (&serde_json::json!(true), &serde_json::json!([])),
+        "the harness's router task, ledger consumer and store are all alive"
+    );
+}
+
+#[tokio::test]
+async fn a_stopped_ledger_reads_not_ready_on_the_system_document() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    parts.ledger.clone().shutdown().await.unwrap();
+    let system = json(get(&parts.app, "/admin/system", Some(&cookie)).await).await;
+    assert_eq!(
+        (&system["ready"], &system["dead"], &system["storage_ok"]),
+        (
+            &serde_json::json!(false),
+            &serde_json::json!(["ledger"]),
+            &serde_json::json!(true)
+        ),
+        "the writer closed its channel while the router task and the store still answer: {system}"
+    );
+}
+
+#[tokio::test]
+async fn a_store_whose_read_fails_reads_not_ready_on_the_system_document_until_it_answers_again() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    parts.store.debug_fail_next_schema_version();
+    let system = json(get(&parts.app, "/admin/system", Some(&cookie)).await).await;
+    assert_eq!(
+        (&system["ready"], &system["dead"], &system["storage_ok"]),
+        (
+            &serde_json::json!(false),
+            &serde_json::json!(["store"]),
+            &serde_json::json!(false)
+        ),
+        "the store's read failed while the ledger and the router task still answer: {system}"
+    );
+    let system = json(get(&parts.app, "/admin/system", Some(&cookie)).await).await;
+    assert_eq!(
+        (&system["ready"], &system["dead"], &system["storage_ok"]),
+        (
+            &serde_json::json!(true),
+            &serde_json::json!([]),
+            &serde_json::json!(true)
+        ),
+        "each answer reads the store afresh, so the next one is ready again: {system}"
+    );
+}
+
+#[tokio::test]
+async fn readiness_reads_the_ledger_dead_when_its_bus_subscriber_is_absent_or_panicked() {
+    let parts = common::admin_parts_full().await;
+    let readiness = |bus: phoebis_bus::Bus| phoebis_admin::Readiness {
+        bus,
+        ledger: parts.ledger.clone(),
+        router: parts.router.clone(),
+        store: parts.store.clone(),
+    };
+    assert_eq!(
+        readiness(parts.bus.clone()).dead(),
+        Vec::<&str>::new(),
+        "the harness's own bus carries the ledger's live subscriber"
+    );
+    let bus = phoebis_bus::Bus::new();
+    let _live = bus.subscribe("live");
+    assert_eq!(
+        readiness(bus.clone()).dead(),
+        vec!["ledger"],
+        "a bus the ledger never subscribed to"
+    );
+    let assembler = bus.subscribe("ledger");
+    assert_eq!(
+        readiness(bus.clone()).dead(),
+        Vec::<&str>::new(),
+        "a `ledger` subscriber with no panic counted"
+    );
+    phoebis_bus::spawn_subscriber(assembler, |_| async { panic!("the assembler died") })
+        .await
+        .unwrap();
+    assert_eq!(
+        readiness(bus).dead(),
+        vec!["ledger"],
+        "a `ledger` subscriber whose task panicked, while the writer's channel stays open"
+    );
 }
 
 #[tokio::test]
@@ -435,11 +589,10 @@ async fn a_pin_the_ledger_has_no_row_for_reports_no_request_count() {
 }
 
 #[tokio::test]
-async fn the_live_route_is_gated_and_the_preview_follows_the_role() {
+async fn the_live_route_is_gated_and_every_session_receives_the_preview() {
     let parts = common::admin_parts_full().await;
     let addr = common::serve(parts.app.clone()).await;
     let admin = login(&parts.app, "admin-secret").await;
-    let viewer = login(&parts.app, "viewer-secret").await;
     let connect = |cookie: Option<String>| {
         let mut request =
             tokio_tungstenite::tungstenite::client::IntoClientRequest::into_client_request(
@@ -494,9 +647,7 @@ async fn the_live_route_is_gated_and_the_preview_follows_the_role() {
     );
     let _ = same_ws.close(None).await;
     let (mut admin_ws, _) = connect(Some(admin.clone())).await.unwrap();
-    let (mut viewer_ws, _) = connect(Some(viewer)).await.unwrap();
     assert_eq!(common::next_text(&mut admin_ws).await["kind"], "snapshot");
-    assert_eq!(common::next_text(&mut viewer_ws).await["kind"], "snapshot");
     // Straight onto the bus: a capturing request and one text chunk.
     parts.bus.publish(Event::RequestObserved(RequestObserved {
         request_id: "live-1".into(),
@@ -531,15 +682,6 @@ async fn the_live_route_is_gated_and_the_preview_follows_the_role() {
     assert!(admin_seen
         .iter()
         .any(|d| d["type"] == "preview" && d["chunk"] == "secret prompt text"));
-    let viewer_seen = common::deltas_for(&mut viewer_ws, Duration::from_millis(500)).await;
-    assert!(
-        viewer_seen.iter().any(|d| d["type"] == "started"),
-        "the viewer sees the request"
-    );
-    assert!(
-        viewer_seen.iter().all(|d| d["type"] != "preview"),
-        "and never its text"
-    );
     let past = json(
         get(
             &parts.app,
@@ -556,23 +698,8 @@ async fn the_live_route_is_gated_and_the_preview_follows_the_role() {
     assert_eq!(past["entries"][0]["id"], "live-1");
     assert!(
         past["entries"][0]["preview"].is_null(),
-        "a past read carries no preview for anyone"
+        "a past read carries no preview"
     );
-    let viewer_cookie = login(&parts.app, "viewer-secret").await;
-    let past = json(
-        get(
-            &parts.app,
-            &format!(
-                "/admin/live/snapshot?from={}&to={}",
-                common::NOW - 1,
-                common::NOW + 1
-            ),
-            Some(&viewer_cookie),
-        )
-        .await,
-    )
-    .await;
-    assert!(past["entries"][0]["preview"].is_null());
     let by_instant = json(
         get(
             &parts.app,
@@ -613,7 +740,6 @@ async fn the_live_route_is_gated_and_the_preview_follows_the_role() {
         "a plain GET is not an upgrade"
     );
     let _ = admin_ws.close(None).await;
-    let _ = viewer_ws.close(None).await;
 }
 
 #[tokio::test]

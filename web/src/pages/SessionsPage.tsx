@@ -1,9 +1,8 @@
-import { useMemo, useState } from 'react';
+import { useId, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { api } from '@/api';
 import type { Account, ApiKey, CompanionState, KeepaliveOverview, KeepaliveRecipe, KeepaliveState, Pool, RecipeState, Session } from '@/api/types';
 import { useSession } from '@/app/session';
-import { useAppSettings } from '@/app/settings';
 import { ColumnsControl } from '@/components/ui/ColumnsControl';
 import { CostReferenceLink } from '@/components/ui/CostReference';
 import { Tile } from '@/components/ui/Tile';
@@ -166,13 +165,14 @@ export function SessionsPage() {
   const settings = useAsync(() => api.getSettings(), []);
   const now = useNow(5_000);
   const navigate = useNavigate();
-  const { canMutate } = useAppSettings();
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [visible, setVisible] = useState<Set<SessionColumnId>>(() => new Set(SESSION_COLUMNS.map((c) => c.id).filter((id) => !HIDDEN_BY_DEFAULT.includes(id))));
   const [pending, setPending] = useState<Row | null>(null);
   const { notify } = useSession();
   // The base row the last fork link led to, marked until another fork link is followed.
   const [current, setCurrent] = useState<string | null>(null);
+  const [howOpen, setHowOpen] = useState(false);
+  const howId = useId();
 
   const sessionData = sessions.data;
   const recipeData = recipes.data;
@@ -227,11 +227,19 @@ export function SessionsPage() {
   return (
     <div className="stack">
       <div className="page-head">
-        <p className="page-head__meta">
-          Every Claude Code session the router has seen within the session expiry, and every conversation it identified without a session id, whether or not a cache-keepalive companion registered for it. A pin binds each model a session uses to one
-          account, so subagents on another model may sit on another account, and with affinity off every request picks again; where cache warming is on, each agent carries a recipe that replays its
-          cacheable prefix just before the prompt cache expires, so the next real turn reads the cache instead of rewriting it.
-        </p>
+        <div className="page-head__lead">
+          <p className="page-head__meta">
+            Every session within the session expiry, with the account each model is pinned to and each agent&apos;s cache-warming recipe.{' '}
+            <button type="button" className="link-btn" aria-expanded={howOpen} aria-controls={howId} onClick={() => setHowOpen((v) => !v)}>
+              How pins and recipes work
+            </button>
+          </p>
+          <p id={howId} className="page-head__meta" hidden={!howOpen}>
+            Every Claude Code session the router has seen within the session expiry, and every conversation it identified without a session id, whether or not a cache-keepalive companion registered for it. A pin binds each model a session uses to one
+            account, so subagents on another model may sit on another account, and with affinity off every request picks again; where cache warming is on, each agent carries a recipe that replays its
+            cacheable prefix just before the prompt cache expires, so the next real turn reads the cache instead of rewriting it.
+          </p>
+        </div>
         <CostReferenceLink />
       </div>
 
@@ -340,7 +348,6 @@ export function SessionsPage() {
                     open={expanded.has(rowKey(row.session))}
                     onToggle={() => toggle(rowKey(row.session))}
                     now={now}
-                    canMutate={canMutate}
                     columns={columns}
                     current={current === rowDomId(row.session)}
                     expireAfterSeconds={expireAfterSeconds}
@@ -379,7 +386,6 @@ function SessionRows({
   open,
   onToggle,
   now,
-  canMutate,
   columns,
   current,
   expireAfterSeconds,
@@ -390,7 +396,6 @@ function SessionRows({
   onRelease,
   visible,
 }: {
-  canMutate: boolean;
   columns: number;
   /** Whether a fork link last led here. */
   current: boolean;
@@ -450,7 +455,7 @@ function SessionRows({
             items={[
               { label: 'View in analytics', disabled: !hasTraffic, title: hasTraffic ? undefined : NO_TRAFFIC_HINT, onClick: () => onOpen(`/analytics?session=${encodeURIComponent(trafficSession)}&key=${encodeURIComponent(`${session.keyId}@${session.keyGeneration}`)}`) },
               { label: 'View in observe', disabled: !hasTraffic, title: hasTraffic ? undefined : NO_TRAFFIC_HINT, onClick: () => onOpen(`/observe?session=${encodeURIComponent(trafficSession)}`) },
-              ...(canMutate && !session.historical ? [{ label: 'Release', onClick: onRelease }] : []),
+              ...(!session.historical ? [{ label: 'Release', onClick: onRelease }] : []),
             ]}
           />
         </td>

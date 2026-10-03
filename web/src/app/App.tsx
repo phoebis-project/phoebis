@@ -3,7 +3,6 @@ import { createBrowserRouter, Navigate, RouterProvider } from 'react-router-dom'
 import { Shell } from '@/components/shell/Shell';
 import { Skeleton } from '@/components/ui/primitives';
 import { reloadOnChunkFailure } from '@/lib/chunks';
-import { AlertsPage } from '@/pages/AlertsPage';
 import { DashboardPage } from '@/pages/DashboardPage';
 import { KeysPage } from '@/pages/KeysPage';
 import { ModelsPage } from '@/pages/ModelsPage';
@@ -34,7 +33,6 @@ export const routes = [
       { index: true, element: <DashboardPage /> },
       { path: 'accounts', element: lazily(<AccountsPage />) },
       { path: 'accounts/:accountId', element: lazily(<AccountsPage />) },
-      { path: 'alerts', element: <AlertsPage /> },
       { path: 'analytics', element: lazily(<AnalyticsPage />) },
       // Bookmarks and links out there still point at the old path.
       { path: 'keepalive', element: <Navigate to="/sessions" replace /> },

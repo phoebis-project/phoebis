@@ -1,22 +1,23 @@
-//! `phoebis check-config` warns about a wide key file mode, refuses a file that sets an unknown key, names the routing
-//! keys in its summary, and passes every shipped deploy config.
+//! `phoebis check-config` warns about a wide key file mode, refuses a file that sets an unknown or removed key,
+//! names the routing keys in its summary, and passes every shipped deploy config. It reads the key file as the start
+//! does and proves the key against the registry's canary, or against the sealed rows of a registry from before the
+//! canary, and warns about an unset secret variable while refusing a set one the start refuses.
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Output};
+
+use phoebis_store::{AccountKind, AccountRow, AccountState, NewBundle, Secret, StorageKey, Store};
+
+const HEX_KEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
 fn config_file(dir: &Path, name: &str, extra: &str) -> PathBuf {
     let key = dir.join("storage.key");
-    std::fs::write(
-        &key,
-        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-    )
-    .unwrap();
+    std::fs::write(&key, HEX_KEY).unwrap();
     let yaml = format!(
         "admin:\n  listen: 127.0.0.1:0\n  plain_http: true\n  secret_env: TEST_CHECK_CONFIG_ADMIN\n\
-         compatibility:\n  profile: claude-code-2.1.269-linux-x64\nproxy:\n  listen: 127.0.0.1:0\n\
-         storage:\n  encryption_key_file: {}\n  path: {}\nusage:\n  cache_ttl_seconds: 60\n  \
-         refresh_concurrency: 2\n{extra}",
+         proxy:\n  listen: 127.0.0.1:0\n\
+         storage:\n  encryption_key_file: {}\n  path: {}\n{extra}",
         key.display(),
         dir.join("router.sqlite").display()
     );
@@ -31,6 +32,78 @@ fn phoebis() -> Command {
         .env("TEST_CHECK_CONFIG_ADMIN", "admin-secret-checkconfig")
         .env_remove("PHOEBIS_CONFIG");
     command
+}
+
+fn check_config(command: &mut Command, config: &Path) -> Output {
+    command
+        .args(["check-config", "--config"])
+        .arg(config)
+        .output()
+        .unwrap()
+}
+
+fn printed(out: &Output) -> String {
+    format!(
+        "exit {:?}\nstdout:\n{}\nstderr:\n{}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    )
+}
+
+fn mismatch_line(registry: &Path) -> String {
+    format!(
+        "the storage key does not match the registry at {}",
+        registry.display()
+    )
+}
+
+/// The mismatch is the whole finding, so it stands on the `Error:` line itself rather than under a context line.
+fn assert_refused_as_a_mismatch(out: &Output, registry: &Path) {
+    assert_eq!(out.status.code(), Some(1), "{}", printed(out));
+    assert_eq!(
+        String::from_utf8_lossy(&out.stderr).lines().next(),
+        Some(format!("Error: {}", mismatch_line(registry)).as_str()),
+        "{}",
+        printed(out)
+    );
+}
+
+/// A registry holding one committed credential bundle and no canary, the shape a registry sealed before the canary
+/// existed has.
+fn registry_from_before_the_canary(registry: &Path, key: &StorageKey) {
+    let store = Store::open(registry, key).unwrap();
+    store
+        .insert_account(&AccountRow {
+            id: "a".into(),
+            kind: AccountKind::Oauth,
+            label: "a".into(),
+            enabled: true,
+            identity: None,
+            lifecycle_generation: 1,
+            incarnation: 1,
+            revision: 1,
+            state: AccountState::Unpaired,
+        })
+        .unwrap();
+    store
+        .commit_credentials(
+            "a",
+            1,
+            1,
+            None,
+            None,
+            &NewBundle {
+                access_token: Secret::new("at-test-not-a-token"),
+                refresh_token: Some(Secret::new("rt-test-not-a-token")),
+                issued_at: 1_799_996_400_000,
+                expires_at: 1_800_000_000_000,
+                refresh_expires_at: None,
+                scopes: "user:profile user:inference".into(),
+            },
+        )
+        .unwrap();
+    store.debug_drop_canary().unwrap();
 }
 
 #[test]
@@ -75,9 +148,40 @@ fn the_summary_names_the_routing_keys() {
         String::from_utf8_lossy(&out.stderr)
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(
-        stdout.contains("catalog refresh 21600s, startup fetch 5s"),
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        lines.get(4..10),
+        Some(
+            &[
+                "proxy: body budget 536870912 bytes, body read 60s, key body reads 128, max request 33554432 bytes, \
+                 sign cch placeholder off, upstream gzip auto",
+                "profile claude-code-2.1.269-linux-x64",
+                "routing: cooldown_fallback 60s, model_rejection 3600s, catalog refresh 21600s, startup fetch 30s",
+                "ledger at ./data/ledger.sqlite",
+                "retention 90 days, rollups 400 days",
+                "keepalive: 128 sessions, 1024 agents, 256 MiB retained",
+            ][..]
+        ),
         "{stdout}"
+    );
+}
+
+const REMOVED_KEY: &str = "routing:\n  catalog_cache_seconds: 60\n"; // removed name
+
+#[test]
+fn a_removed_key_fails_check_config_as_invalid_yaml() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_file(dir.path(), "removed-key", REMOVED_KEY);
+    let out = phoebis()
+        .args(["check-config", "--config"])
+        .arg(&config)
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("the configuration is not valid YAML") && stderr.contains("unknown field"),
+        "{stderr}"
     );
 }
 
@@ -98,24 +202,216 @@ fn an_unknown_upstream_key_fails_check_config() {
     );
 }
 
+/// The shipped key paths do not exist on a test host and an absent key file refuses the check, so each file is
+/// copied with its two `storage` members pointed into the temp directory and nothing else changed.
 #[test]
 fn every_shipped_deploy_config_passes_check_config() {
     let deploy = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../deploy");
+    let dir = tempfile::tempdir().unwrap();
+    let key = dir.path().join("storage.key");
+    std::fs::write(&key, HEX_KEY).unwrap();
     for name in [
         "config.container.yaml",
         "config.example.yaml",
     ] {
-        let out = phoebis()
-            .env("PHOEBIS_ADMIN_SECRET", "deploy-check-admin-secret")
-            .env("PHOEBIS_VIEWER_SECRET", "deploy-check-viewer-secret")
-            .args(["check-config", "--config"])
-            .arg(deploy.join(name))
-            .output()
-            .unwrap();
+        let registry = dir.path().join(format!("{name}.sqlite"));
+        let shipped = std::fs::read_to_string(deploy.join(name)).unwrap();
+        let mut in_storage = false;
+        let mut replaced = 0;
+        let mut copy = String::new();
+        for line in shipped.lines() {
+            if !line.starts_with(' ') {
+                in_storage = line == "storage:";
+            }
+            let member = line.trim_start();
+            let indent = &line[..line.len() - member.len()];
+            let line = if in_storage && member.starts_with("encryption_key_file:") {
+                replaced += 1;
+                format!("{indent}encryption_key_file: {}", key.display())
+            } else if in_storage && member.starts_with("path:") {
+                replaced += 1;
+                format!("{indent}path: {}", registry.display())
+            } else {
+                line.to_string()
+            };
+            copy.push_str(&line);
+            copy.push('\n');
+        }
+        assert_eq!(replaced, 2, "{name}: the storage block's two members");
+        let config = dir.path().join(name);
+        std::fs::write(&config, copy).unwrap();
+        let out = check_config(
+            phoebis().env("PHOEBIS_ADMIN_SECRET", "deploy-check-admin-secret"),
+            &config,
+        );
+        assert!(out.status.success(), "{name}: {}", printed(&out));
         assert!(
-            out.status.success(),
+            String::from_utf8_lossy(&out.stdout).contains(&format!(
+                "registry at {} does not exist yet; the first start creates it",
+                registry.display()
+            )),
             "{name}: {}",
-            String::from_utf8_lossy(&out.stderr)
+            printed(&out)
         );
     }
+}
+
+#[test]
+fn a_registry_sealed_under_another_key_fails_check_config_naming_the_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_file(dir.path(), "mismatch", "");
+    let registry = dir.path().join("router.sqlite");
+    drop(Store::open(&registry, &StorageKey::generate()).unwrap());
+    let out = check_config(&mut phoebis(), &config);
+    assert_refused_as_a_mismatch(&out, &registry);
+}
+
+#[test]
+fn a_registry_from_before_the_canary_passes_under_its_key_and_names_the_sealing_to_come() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_file(dir.path(), "legacy", "");
+    let registry = dir.path().join("router.sqlite");
+    let key = StorageKey::from_file(&dir.path().join("storage.key")).unwrap();
+    registry_from_before_the_canary(&registry, &key);
+    let out = check_config(&mut phoebis(), &config);
+    assert!(out.status.success(), "{}", printed(&out));
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains(&format!(
+            "registry at {} has no key canary yet; a sealed row opens under the key, and the next start \
+             seals one",
+            registry.display()
+        )),
+        "{}",
+        printed(&out)
+    );
+}
+
+#[test]
+fn a_registry_from_before_the_canary_fails_check_config_under_another_key() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_file(dir.path(), "legacy-mismatch", "");
+    let registry = dir.path().join("router.sqlite");
+    registry_from_before_the_canary(&registry, &StorageKey::generate());
+    let out = check_config(&mut phoebis(), &config);
+    assert_refused_as_a_mismatch(&out, &registry);
+}
+
+#[test]
+fn a_registry_that_cannot_be_read_fails_check_config_naming_the_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_file(dir.path(), "not-a-database", "");
+    let registry = dir.path().join("router.sqlite");
+    std::fs::write(&registry, "this text is not a SQLite database\n".repeat(8)).unwrap();
+    let out = check_config(&mut phoebis(), &config);
+    assert_eq!(out.status.code(), Some(1), "{}", printed(&out));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        stderr.lines().next(),
+        Some(format!("Error: reading the registry at {}", registry.display()).as_str()),
+        "{}",
+        printed(&out)
+    );
+    assert!(stderr.contains("not a database"), "{}", printed(&out));
+}
+
+#[test]
+fn a_key_file_with_a_trailing_newline_passes() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_file(dir.path(), "newline", "");
+    let key = dir.path().join("storage.key");
+    std::fs::write(&key, format!("{HEX_KEY}\n")).unwrap();
+    assert_eq!(std::fs::metadata(&key).unwrap().len(), 65);
+    let out = check_config(&mut phoebis(), &config);
+    assert!(out.status.success(), "{}", printed(&out));
+    // The registry line follows the key file's read, so it proves the key was read and accepted.
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("does not exist yet"),
+        "{}",
+        printed(&out)
+    );
+}
+
+#[test]
+fn an_absent_key_file_fails_check_config_as_the_start_does() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_file(dir.path(), "no-key", "");
+    let key = dir.path().join("storage.key");
+    std::fs::remove_file(&key).unwrap();
+    let out = check_config(&mut phoebis(), &config);
+    assert_eq!(out.status.code(), Some(1), "{}", printed(&out));
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains(&format!(
+            "reading storage.encryption_key_file {}",
+            key.display()
+        )),
+        "{}",
+        printed(&out)
+    );
+}
+
+#[test]
+fn an_absent_registry_prints_that_the_first_start_creates_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_file(dir.path(), "fresh", "");
+    let out = check_config(&mut phoebis(), &config);
+    assert!(out.status.success(), "{}", printed(&out));
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains(&format!(
+            "registry at {} does not exist yet; the first start creates it",
+            dir.path().join("router.sqlite").display()
+        )),
+        "{}",
+        printed(&out)
+    );
+}
+
+#[test]
+fn unset_secret_variables_warn_and_the_file_still_passes() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_file(dir.path(), "unset", "");
+    let out = check_config(phoebis().env_remove("TEST_CHECK_CONFIG_ADMIN"), &config);
+    assert!(out.status.success(), "{}", printed(&out));
+    assert!(
+        String::from_utf8_lossy(&out.stdout)
+            .contains("warning: environment variable TEST_CHECK_CONFIG_ADMIN is unset or empty"),
+        "{}",
+        printed(&out)
+    );
+}
+
+/// A guard: the start's refusal of a short secret holds in `check-config` too.
+#[test]
+fn a_set_secret_shorter_than_sixteen_characters_fails_check_config() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_file(dir.path(), "short", "");
+    let out = check_config(phoebis().env("TEST_CHECK_CONFIG_ADMIN", "short"), &config);
+    assert_eq!(out.status.code(), Some(1), "{}", printed(&out));
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains(
+            "environment variable TEST_CHECK_CONFIG_ADMIN holds a secret shorter than 16 characters"
+        ),
+        "{}",
+        printed(&out)
+    );
+}
+
+#[test]
+fn a_set_secret_holding_the_example_placeholder_fails_check_config() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_file(dir.path(), "placeholder", "");
+    let out = check_config(
+        phoebis().env(
+            "TEST_CHECK_CONFIG_ADMIN",
+            "replace-with-a-long-random-string",
+        ),
+        &config,
+    );
+    assert_eq!(out.status.code(), Some(1), "{}", printed(&out));
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains(
+            "environment variable TEST_CHECK_CONFIG_ADMIN still holds the example placeholder"
+        ),
+        "{}",
+        printed(&out)
+    );
 }

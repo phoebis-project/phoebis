@@ -15,7 +15,7 @@ API with the embedded console, and a metrics endpoint in Prometheus text format.
 | [Pairing an account](pairing.md) | Pairing an OAuth account through the console or with `curl`. |
 | [Pools, keys, and routing](routing.md) | Pace, load shedding, cooldowns, failover, and overage. |
 | [Keepalive](keepalive.md) | Keeping prompt caches warm: the companion, the gates, the tuning fields, the cost. |
-| [Statistics and alerts](statistics.md) | The ledger, the plan meter, the views, metrics, the live feed, and alerts. |
+| [Statistics](statistics.md) | The ledger, the plan meter, the views, metrics, the live feed, and the gauges. |
 | [Operations](operations.md) | Backup, the storage key, upgrades, re-pinning a client build, publishing. |
 | [Changelog](changelog.md) | What changed for an operator, by date. |
 
@@ -37,40 +37,42 @@ sibling inside the same call. The request, each attempt, and the usage land in t
 | Admin | `admin.listen` | The console and `/admin/*` |
 | Metrics | `stats.metrics_listen` | `/metrics` in Prometheus text format, no credential, plain HTTP |
 
-The proxy listener answers `HEAD /api/hello`, `POST /v1/messages`, `POST /v1/messages/count_tokens`, `GET
-/v1/usage` for the key's own usage, the two keepalive companion routes, and `GET /v1/models` with the caller's
-own routable models ([models listing](client.md#the-models-listing)).
+The proxy listener answers `HEAD /api/hello`, `HEAD` and `GET /api/ready`, `POST /v1/messages`, `POST
+/v1/messages/count_tokens`, `GET /v1/usage` for the key's own usage, the two keepalive companion routes, and `GET
+/v1/models` with the caller's own routable models ([models listing](client.md#the-models-listing)).
 
 ## The console
 
 The admin listener serves a React console over the same routes as the admin API. The top bar carries the theme
-toggle and the role badge, and the sidebar carries twelve views.
+toggle, and the sidebar carries eleven views.
 
-![The dashboard: four tiles, the capacity-left rings, recent requests](assets/dashboard-light.png#only-light)
-![The dashboard: four tiles, the capacity-left rings, recent requests](assets/dashboard-dark.png#only-dark)
+![The dashboard: the attention line, four tiles, the capacity-left rings, recent requests][dl]
+![The dashboard: the attention line, four tiles, the capacity-left rings, recent requests][dd]
+
+[dl]: assets/dashboard-light.png#only-light
+[dd]: assets/dashboard-dark.png#only-dark
 
 The sidebar shows the views in this order:
 
 | View | Describes |
 | --- | --- |
-| Dashboard | 24-hour tiles, the pooled subscription capacity left weighed by tier, and recent requests and sessions. |
-| Observe | The live feed (see [Statistics and alerts](statistics.md)). |
-| Quota | Each account's usage windows and reset timing (see [Statistics and alerts](statistics.md)). |
+| Dashboard | The attention line, 24-hour tiles, pooled capacity left weighed by tier, recent requests and sessions. |
+| Observe | The live feed (see [Statistics](statistics.md)). |
+| Quota | Each account's usage windows and reset timing (see [Statistics](statistics.md)). |
 | Accounts | Accounts and their credentials (see [Pairing an account](pairing.md)). |
 | Pools | Pools and their members (see [Pools, keys, and routing](routing.md)). |
 | Keys | Downstream keys and the pool each routes into (see [Pools, keys, and routing](routing.md)). |
 | Models | A key's model rules, cooldowns, and rejections (see [Pools, keys, and routing](routing.md)). |
-| Requests | Individual relayed requests (see [Statistics and alerts](statistics.md)). |
-| Analytics | Hourly rollups and cost (see [Statistics and alerts](statistics.md)). |
+| Requests | Individual relayed requests (see [Statistics](statistics.md)). |
+| Analytics | Hourly rollups and cost (see [Statistics](statistics.md)). |
 | Sessions | Session pins and keepalive recipes (see [Keepalive](keepalive.md)). |
-| Alerts | Webhook alert rules and their events (see [Statistics and alerts](statistics.md)). |
-| Settings | The effective bootstrap values (see [Installation](installation.md)). |
+| Settings | Client setup, the price table, and the router's version and paths (see [Installation](installation.md)). |
 
 The console, the API, the bootstrap file and this site call what the router holds an account and a key the router
 issues a key. The console and this site call the account kind whose credential is an Anthropic API key an Anthropic key;
 the API's kind value is `api_key`. "Upstream" names the provider's host and the party that answered a request (the
-bootstrap file's `upstream` block, the `upstream_error` and `upstream_unreachable` codes, the `upstream_request_id` and
-`upstream_status` fields, the `phoebis_upstream_ttfb_seconds` metric).
+bootstrap file's `upstream` block, the `upstream_error` and `upstream_unreachable` codes, the `upstream_message_id`,
+`upstream_request_id` and `upstream_status` fields, the `phoebis_upstream_ttfb_seconds` metric).
 
 ## What this build does not do
 

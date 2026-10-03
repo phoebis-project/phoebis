@@ -444,6 +444,7 @@ async fn migration_five_adds_the_skipped_column_and_the_marks_table_to_a_version
             "stop_reason",
             "stop_sequence",
             "thinking_tokens",
+            "upstream_message_id",
             "web_fetch_requests",
             "web_search_requests",
         ] {
@@ -492,7 +493,7 @@ async fn migration_five_adds_the_skipped_column_and_the_marks_table_to_a_version
         .unwrap();
     }
     let db = std::sync::Arc::new(LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 25);
+    assert_eq!(db.schema_version().await.unwrap(), 26);
     let (_, attempts) = db.request("r0").await.unwrap().unwrap();
     assert_eq!(
         attempts.len(),

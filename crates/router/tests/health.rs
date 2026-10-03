@@ -14,7 +14,7 @@ fn config_file(dir: &Path, name: &str, proxy: SocketAddr) -> PathBuf {
     )
     .unwrap();
     let yaml = format!(
-        "admin:\n  listen: 127.0.0.1:0\n  plain_http: true\n  secret_env: TEST_HEALTH_ADMIN\ncompatibility:\n  profile: claude-code-2.1.269-linux-x64\nproxy:\n  listen: {proxy}\nstorage:\n  encryption_key_file: {}\n  path: {}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
+        "admin:\n  listen: 127.0.0.1:0\n  plain_http: true\n  secret_env: TEST_HEALTH_ADMIN\nproxy:\n  listen: {proxy}\nstorage:\n  encryption_key_file: {}\n  path: {}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
         key.display(),
         dir.join("router.sqlite").display()
     );
@@ -54,7 +54,7 @@ fn answering(status: &'static str) -> (SocketAddr, std::thread::JoinHandle<Strin
 }
 
 #[test]
-fn a_listener_answering_200_passes_and_is_asked_for_hello_by_head() {
+fn a_listener_answering_200_passes_and_is_asked_for_ready_by_head() {
     let (addr, served) = answering("200 OK");
     assert_eq!(
         phoebis_router::health::probe(addr, phoebis_router::health::TIMEOUT),
@@ -62,7 +62,7 @@ fn a_listener_answering_200_passes_and_is_asked_for_hello_by_head() {
     );
     let request = served.join().unwrap();
     assert!(
-        request.starts_with("HEAD /api/hello HTTP/1.1\r\n"),
+        request.starts_with("HEAD /api/ready HTTP/1.1\r\n"),
         "{request}"
     );
     assert!(

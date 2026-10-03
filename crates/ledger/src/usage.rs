@@ -36,8 +36,11 @@ pub struct KeyUsageWindow {
     pub to: i64,
     pub requests: u64,
     pub succeeded: u64,
-    /// Everything that was not a success: failed, rate limited, exhausted, and rejected.
+    /// Every request that was neither a success nor incomplete: failed, rate limited, exhausted, and rejected.
     pub failed: u64,
+    /// The committed answers whose body ended before its end, counted apart from `failed` since the client
+    /// received part of the answer.
+    pub incomplete: u64,
     pub tokens: UsageTokens,
     pub cost_usd: f64,
     /// Per canonical model, sorted by model id.
@@ -111,6 +114,7 @@ fn window<'a>(
         out.requests += row.requests;
         out.succeeded += row.succeeded;
         out.failed += row.failed + row.rate_limited + row.exhausted + row.rejected;
+        out.incomplete += row.incomplete;
         out.cost_usd += row.estimated_usd;
         add(&mut out.tokens, row);
         let model = row.canonical_model.clone();
@@ -316,10 +320,10 @@ fn window_html(title: &str, w: &KeyUsageWindow) -> String {
         ));
     }
     format!(
-        "<section><h2>{title}</h2><p class=\"sum\">{} requests, {} succeeded, {} failed, ${:.4}</p>\
+        "<section><h2>{title}</h2><p class=\"sum\">{} requests, {} succeeded, {} failed, {} incomplete, ${:.4}</p>\
          <table><thead><tr><th>Model</th><th>Requests</th><th>Input</th><th>Output</th><th>Cache read</th><th>Cache write</th><th>Cost</th></tr></thead>\
          <tbody>{rows}</tbody></table></section>",
-        w.requests, w.succeeded, w.failed, w.cost_usd
+        w.requests, w.succeeded, w.failed, w.incomplete, w.cost_usd
     )
 }
 
@@ -353,7 +357,26 @@ fn render_html(answer: &UsageAnswer) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::wants_html;
+    use super::{wants_html, window_html, KeyUsageWindow};
+
+    #[test]
+    fn a_windows_sum_line_names_its_incomplete_count_beside_failed() {
+        let window = KeyUsageWindow {
+            requests: 6,
+            succeeded: 3,
+            failed: 2,
+            incomplete: 1,
+            cost_usd: 0.25,
+            ..KeyUsageWindow::default()
+        };
+        let html = window_html("Last 24 hours", &window);
+        assert!(
+            html.contains(
+                "<p class=\"sum\">6 requests, 3 succeeded, 2 failed, 1 incomplete, $0.2500</p>"
+            ),
+            "{html}"
+        );
+    }
 
     #[test]
     fn wants_html_weighs_the_accept_headers_media_ranges() {

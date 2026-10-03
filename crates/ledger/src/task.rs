@@ -35,7 +35,6 @@ const TASKS_POISONED: &str = "ledger background-task list poisoned by a prior pa
 pub struct LedgerConfig {
     pub retention_days: u32,
     pub rollup_retention_days: u32,
-    pub sample_retention_days: u32,
     pub purge_interval: Duration,
     pub event_poll: Duration,
     /// How often the assembler ages out entries whose completion never arrived.
@@ -47,7 +46,6 @@ impl Default for LedgerConfig {
         LedgerConfig {
             retention_days: 90,
             rollup_retention_days: 400,
-            sample_retention_days: 30,
             purge_interval: Duration::from_secs(3_600),
             event_poll: Duration::from_secs(5),
             expire_interval: EXPIRE_INTERVAL,
@@ -95,6 +93,11 @@ impl Ledger {
 
     pub fn dropped(&self) -> u64 {
         self.stats.dropped.load(Ordering::Relaxed)
+    }
+
+    /// Whether the writer still takes records; false once it closed its receiver, at a shutdown or a panic.
+    pub fn is_alive(&self) -> bool {
+        !self.tx.is_closed()
     }
 
     /// Registers a task the ledger owns beyond the writer, so `shutdown` aborts it before the channel closes:
@@ -684,10 +687,9 @@ mod tests {
                     shedding: phoebis_store::Shedding::default(),
                     failover: phoebis_store::Failover::default(),
                     cache_ttl_json: "{}".into(),
-                    cache_diagnostics: None,
+                    cache_diagnostics: false,
                     auto_mode_server: true,
                     affinity: phoebis_store::Affinity::default(),
-                    quota_headers: phoebis_store::QuotaHeaders::Pass,
                     created_at: 0,
                     updated_at: 0,
                 },

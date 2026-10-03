@@ -99,10 +99,7 @@ impl Default for RigSpec {
             accounts: vec![api_key("a", A, 0), api_key("b", B, 1)],
             catalog: Vec::new(),
             lifecycle: None,
-            limits: KeepaliveLimits {
-                lease_seconds: 3_600,
-                ..KeepaliveLimits::default()
-            },
+            limits: KeepaliveLimits::default(),
             // The Go rig's 90 percent deadline: a five-minute entry is probed at 270 s, and no jitter, so the
             // parity cases assert exact times.
             policy: KeepalivePolicy {
@@ -184,6 +181,7 @@ pub async fn rig(spec: RigSpec) -> Rig {
         ledger: ledger.clone(),
         lifecycle: spec.lifecycle,
         limits: spec.limits.clone(),
+        max_request_bytes: 32 << 20,
         metrics: metrics.clone(),
         pricing,
         relay: h.relay.clone(),
@@ -280,6 +278,7 @@ impl Rig {
             ledger: self.ledger.clone(),
             lifecycle: None,
             limits: self.limits.clone(),
+            max_request_bytes: 32 << 20,
             metrics: Arc::new(Metrics::new()),
             pricing: Arc::new(Pricing::new(PriceTable::shipped())),
             relay: self.h.relay.clone(),
@@ -296,6 +295,22 @@ impl Rig {
 
     pub fn advance(&self, ms: i64) {
         self.clock.fetch_add(ms, Ordering::SeqCst);
+    }
+
+    /// `advance` in steps inside the companion's lease, each followed by a heartbeat, as an attending companion
+    /// renews it: for a test that moves the clock past the lease and then reports on the session.
+    pub fn advance_attended(&mut self, ms: i64) {
+        let mut left = ms;
+        while left > 0 {
+            let step = left.min(phoebis_keepalive::LEASE_MS / 2);
+            self.advance(step);
+            left -= step;
+            self.event(Event {
+                event: "heartbeat".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        }
     }
 
     /// The generation the store stamped for `key_id`: a companion session belongs to the pair, so every call
@@ -340,9 +355,9 @@ impl Rig {
         self.engine.snapshot("desktop", self.generation("desktop"))
     }
 
-    /// The lease the rig's limits carry, so a test that waits one out never repeats the number.
+    /// The companion's lease, so a test that waits one out never repeats the number.
     pub fn lease_ms(&self) -> i64 {
-        self.engine.limits().lease_ms()
+        phoebis_keepalive::LEASE_MS
     }
 
     pub fn state(&mut self, agent: &str, state: &str) {
@@ -593,6 +608,7 @@ impl Rig {
             response_bytes: None,
             response_chunks: None,
             held: None,
+            message_id: None,
             finished_at: self.now(),
         })
     }

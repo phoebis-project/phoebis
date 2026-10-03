@@ -1,5 +1,8 @@
 //! The limits the bootstrap file carries and the policy a pool row carries, with the bounds of each.
-use phoebis_keepalive::{KeepaliveLimits, KeepalivePolicy, LimitsError, PolicyError};
+use phoebis_keepalive::{
+    KeepaliveLimits, KeepalivePolicy, LimitsError, PolicyError, LEASE_MS, LEASE_SECONDS,
+    MAX_WORKERS,
+};
 use serde_json::json;
 
 #[test]
@@ -7,17 +10,18 @@ fn the_default_limits_are_the_specs() {
     let limits = KeepaliveLimits::default();
     assert_eq!(
         (
-            limits.lease_seconds,
             limits.max_agents,
-            limits.max_request_bytes,
             limits.max_retained_bytes,
-            limits.max_sessions,
-            limits.max_workers,
-            limits.oauth_prewarm_verified
+            limits.max_sessions
         ),
-        (90, 1_024, 8 << 20, 256 << 20, 128, 4, false)
+        (1_024, 256 << 20, 128)
     );
-    assert_eq!(limits.validate(), Ok(()));
+    assert_eq!(limits.validate(RELAY_BOUND), Ok(()));
+    assert_eq!(
+        (LEASE_SECONDS, LEASE_MS, MAX_WORKERS),
+        (90, 90_000, 4),
+        "the lease and the worker count are fixed"
+    );
     let policy = KeepalivePolicy::default();
     assert_eq!(
         (
@@ -77,29 +81,47 @@ fn the_default_limits_are_the_specs() {
     );
 }
 
+/// The relay's per-body bound, which `validate` takes as the retained budget's floor.
+const RELAY_BOUND: usize = 32 << 20;
+
+#[test]
+fn the_retained_budget_accepts_the_relays_body_bound_to_512_mib() {
+    let with = |retained: usize| {
+        KeepaliveLimits {
+            max_retained_bytes: retained,
+            ..KeepaliveLimits::default()
+        }
+        .validate(RELAY_BOUND)
+    };
+    assert_eq!(with(RELAY_BOUND), Ok(()));
+    assert_eq!(with(512 << 20), Ok(()));
+    for value in [RELAY_BOUND - 1, (512 << 20) + 1] {
+        let refused = with(value).unwrap_err();
+        assert_eq!(
+            refused,
+            LimitsError::OutOfRange {
+                field: "max_retained_bytes",
+                min: 33_554_432,
+                max: 536_870_912,
+                value: value as u64
+            }
+        );
+        assert_eq!(
+            refused.to_string(),
+            format!(
+                "keepalive.max_retained_bytes must be between 33554432 and 536870912, not {value}"
+            )
+        );
+    }
+}
+
 #[test]
 fn limits_and_policies_outside_their_bounds_are_refused() {
     let with = |f: fn(&mut KeepaliveLimits)| {
         let mut l = KeepaliveLimits::default();
         f(&mut l);
-        l.validate()
+        l.validate(RELAY_BOUND)
     };
-    assert_eq!(
-        with(|l| l.lease_seconds = 9),
-        Err(LimitsError::OutOfRange {
-            field: "lease_seconds",
-            min: 10,
-            max: 3_600,
-            value: 9
-        })
-    );
-    assert!(matches!(
-        with(|l| l.lease_seconds = 3_601),
-        Err(LimitsError::OutOfRange {
-            field: "lease_seconds",
-            ..
-        })
-    ));
     assert!(matches!(
         with(|l| l.max_agents = 0),
         Err(LimitsError::OutOfRange {
@@ -121,41 +143,6 @@ fn limits_and_policies_outside_their_bounds_are_refused() {
             ..
         })
     ));
-    assert!(matches!(
-        with(|l| l.max_workers = 65),
-        Err(LimitsError::OutOfRange {
-            field: "max_workers",
-            ..
-        })
-    ));
-    assert!(matches!(
-        with(|l| l.max_request_bytes = 1_023),
-        Err(LimitsError::OutOfRange {
-            field: "max_request_bytes",
-            ..
-        })
-    ));
-    assert!(matches!(
-        with(|l| l.max_request_bytes = (8 << 20) + 1),
-        Err(LimitsError::OutOfRange {
-            field: "max_request_bytes",
-            ..
-        })
-    ));
-    assert!(matches!(
-        with(|l| l.max_retained_bytes = (512 << 20) + 1),
-        Err(LimitsError::OutOfRange {
-            field: "max_retained_bytes",
-            ..
-        })
-    ));
-    assert_eq!(
-        with(|l| {
-            l.max_request_bytes = 4 << 20;
-            l.max_retained_bytes = 2 << 20;
-        }),
-        Err(LimitsError::RetainedBelowRequest)
-    );
     assert!(
         serde_json::from_str::<KeepaliveLimits>(r#"{"probe_enabled":true}"#).is_err(),
         "unknown fields reject the block"

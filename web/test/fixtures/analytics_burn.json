@@ -263,12 +263,12 @@
         "at": -3600000,
         "group": "business",
         "unit": "window_share",
-        "usd": 0.0,
-        "five_hour_share": 0.0000175925,
+        "usd": 0.0072,
+        "five_hour_share": 0.000035185,
         "seven_day_share": null,
-        "cached_tokens": 1000,
-        "tokens": 3600,
-        "uncached_tokens": 2000
+        "cached_tokens": 1500,
+        "tokens": 5400,
+        "uncached_tokens": 3000
       },
       {
         "at": 0,

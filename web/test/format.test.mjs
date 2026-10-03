@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { earlierHolderLabel, fmtAbsolute, fmtDayShort, fmtEndsIn, fmtHourTick, fmtShare, fmtShortTime, fmtTime, fmtUsd, fmtUsdTick, placementHit, setTimeFormat, shortModel, undatedModel, usdTickDigits } from './dist/api.js';
+import { earlierHolderLabel, fmtAbsolute, fmtDayShort, fmtEndsIn, fmtHourTick, fmtMiB, fmtShare, fmtShortTime, fmtTime, fmtUsd, fmtUsdTick, placementHit, setTimeFormat, shortModel, undatedModel, usdTickDigits } from './dist/api.js';
 
 test('a placement is a hit when the cache read what it promised: a content one its prefix, any other one anything', () => {
   const content = { depth: 3, prefixTokens: 130_000, rung: 'content' };
@@ -129,4 +129,10 @@ test('a negative dollar tick puts its sign before the currency, and a tick at ze
   assert.equal(fmtUsdTick(-12, 0), '-$12');
   assert.equal(fmtUsdTick(-0, 2), '$0.00');
   assert.equal(fmtUsdTick(-0.001, 2), '$0.00', 'a figure that rounds to zero reads as zero');
+});
+
+test('a byte count reads in MiB, a whole number without decimals and any other to one decimal', () => {
+  assert.equal(fmtMiB(268_435_456), '256 MiB');
+  assert.equal(fmtMiB(1_572_864), '1.5 MiB');
+  assert.equal(fmtMiB(0), '0 MiB');
 });

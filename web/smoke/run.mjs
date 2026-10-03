@@ -65,7 +65,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { api, AttemptTrail, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, emitLive, failCalls, failNextCall, Field, fmtPct, fmtWindows, GroupedDialog, GroupLink, Input, MOCK_VERSION, mount, mountNode, PageLink, React, requestEvents, requests, ringFigures, rollups, SessionNotKept, SETTINGS_WIRE, shortModel, stallLive, SwitchedNumber, tick } = await import('./dist/entry.js');
+const { api, ATTENTION_REFRESH_MS, AttemptTrail, AttentionRows, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, emitLive, Expert, failCalls, failNextCall, Field, fmtPct, fmtWindows, GroupedDialog, GroupLink, Input, MOCK_VERSION, mount, mountNode, PageLink, React, requestEvents, requests, ringFigures, rollups, SessionNotKept, SETTINGS_WIRE, shortModel, stallLive, SwitchedNumber, tick } = await import('./dist/entry.js');
 
 const results = [];
 /**
@@ -143,9 +143,47 @@ const failoverRow = requests.find((r) => r.attempts.length > 1 && r.attempts.som
 }
 
 {
+  // The attention poll is one per page load and keeps its last list through a failed read, so a first read that fails
+  // can only be met here, before any page has read the conditions.
+  const { getAttention } = api;
+  const failing = () => Promise.reject(new Error('the store is unavailable'));
+  api.getAttention = failing;
+  const held = deferNextCall('listPools');
+  const p = await mount('/pools');
+  const line = () => p.container.querySelector('.attention-line');
+  const unavailable = () => line()?.textContent?.trim() === 'Attention unavailable: the store is unavailable' && line()?.nextElementSibling?.classList.contains('pool-grid') === true;
+  const rows = () => JSON.stringify([...p.container.querySelectorAll('.pool')].map((c) => c.querySelectorAll('ul.attention > li.attention__row').length));
+  const loading = [unavailable(), p.container.querySelectorAll('.pool').length];
+  held.release();
+  held.restore();
+  await p.settle(300);
+  results.push({
+    name: '/pools a first attention read that fails draws the unavailable line above the grid, while the pools load and over cards without a badge',
+    ok: loading[0] === true && loading[1] === 0 && unavailable() && rows() === '[0,0,0]',
+    missing: [JSON.stringify(loading), line()?.outerHTML.slice(0, 200) ?? 'no line', rows()],
+  });
+  api.getAttention = getAttention;
+  window.dispatchEvent(new window.Event('focus'));
+  await p.settle(300);
+  const healthy = [line() === null, rows()];
+  api.getAttention = failing;
+  window.dispatchEvent(new window.Event('focus'));
+  await p.settle(300);
+  api.getAttention = getAttention;
+  results.push({
+    name: "/pools a refresh that fails after a read answered draws the unavailable line and the cards keep the last read's badges",
+    ok: healthy[0] === true && healthy[1] !== '[0,0,0]' && unavailable() && rows() === healthy[1],
+    missing: [...healthy.map(String), line()?.outerHTML.slice(0, 200) ?? 'no line', rows()],
+  });
+  window.dispatchEvent(new window.Event('focus'));
+  await p.settle(300);
+  p.unmount();
+}
+
+{
   localStorage.removeItem('phoebis.mockSession');
   const login = await mount('/');
-  expect('login screen without a session', login.text(), ['Admin or viewer secret', 'Log in']);
+  expect('login screen without a session', login.text(), ['Admin secret', 'Log in']);
   // Counted by fill, so a cell drawn in a fixed colour (which the theme toggle would not reach) or a dropped body
   // square fails the check.
   const markCells = login.container.querySelectorAll('.brand__mark svg rect[fill="var(--mark-cell)"]').length;
@@ -153,14 +191,17 @@ const failoverRow = requests.find((r) => r.attempts.length > 1 && r.attempts.som
   results.push({ name: 'the login view carries the mark, 26 cells and 5 body squares on the theme tokens, and the couplet', ok: markCells === 26 && markBody === 5 && login.text().includes('Place every request. Keep every session.'), missing: [`cells ${markCells}`, `body ${markBody}`] });
   const input = login.container.querySelector('input[type="password"]');
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-  setter.call(input, 'viewer');
+  setter.call(input, 'admin');
   input.dispatchEvent(new window.Event('input', { bubbles: true }));
   [...login.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Log in')?.click();
   await login.settle(500);
-  results.push({ name: 'a viewer login lands on the dashboard with the viewer badge', ok: login.text().includes('Requests, 24h') && login.text().includes('viewer') && !login.text().includes('Log in'), missing: [] });
+  // The bar must exist, or a renamed class would pass the count by matching nothing.
+  const topbarRight = login.container.querySelector('.topbar__right');
+  const topbarBadges = login.container.querySelectorAll('.topbar__right .badge').length;
+  results.push({ name: 'a login lands on the dashboard with no badge in the top bar', ok: login.text().includes('Requests, 24h') && topbarRight !== null && topbarBadges === 0 && !login.text().includes('Log in'), missing: [`top bar ${topbarRight === null ? 'absent' : 'drawn'}`, `top bar badges ${topbarBadges}`] });
   [...login.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Log out')?.click();
   await login.settle(400);
-  results.push({ name: 'Log out returns to the login screen', ok: login.text().includes('Admin or viewer secret'), missing: [] });
+  results.push({ name: 'Log out returns to the login screen', ok: login.text().includes('Admin secret'), missing: [] });
   login.unmount();
   localStorage.setItem('phoebis.mockSession', 'admin');
 }
@@ -187,8 +228,97 @@ const failoverRow = requests.find((r) => r.attempts.length > 1 && r.attempts.som
   reset.unmount();
 }
 
+{
+  // The line reads one shared poll whose schedule is the interval it registers at ATTENTION_REFRESH_MS. The check
+  // records that callback as the poll starts and fires it by hand, a refresh tick without the half-minute wait.
+  const ticks = [];
+  const realSetInterval = globalThis.setInterval;
+  globalThis.setInterval = (fn, ms, ...rest) => {
+    if (ms === ATTENTION_REFRESH_MS) ticks.push(fn);
+    return realSetInterval(fn, ms, ...rest);
+  };
+  const dash = await mount('/');
+  globalThis.setInterval = realSetInterval;
+  const line = () => dash.container.querySelector('.attention-line');
+  const lead = () => line()?.querySelector('.attention-line__lead')?.textContent?.trim() ?? null;
+  const badges = () =>
+    [...(line()?.querySelectorAll('.badge') ?? [])].map((b) => ({ href: b.getAttribute('href'), text: b.textContent?.trim() ?? '', title: b.getAttribute('title') ?? '', tone: [...b.classList].find((c) => c.startsWith('badge--')) ?? 'none' }));
+  const tick = async () => {
+    ticks[0]?.();
+    await dash.settle(300);
+  };
+  results.push({ name: '/ the attention line runs on one schedule, registered as the dashboard mounts', ok: ticks.length === 1, missing: [`intervals at ${ATTENTION_REFRESH_MS} ms: ${ticks.length}`] });
+  // An instant member reads as a date rather than the route's milliseconds, so the check accepts any value but digits.
+  const members = (title) => title.split('\n').slice(0, -1).map((l) => l.replace(/^(backoff_since|next_attempt_at): (?!\d+$).+$/, '$1: <instant>'));
+  const read = badges().map((b) => [b.text, b.tone, b.href, members(b.title)]);
+  const want = [
+    ['Pool exhausted: codex', 'badge--critical', '/pools#codex', ['key: ci', 'pool: codex']],
+    ['Client drift: 2.1.271', 'badge--serious', '/keys#laptop', ['client_version: 2.1.271', 'key: laptop', 'trigger: hash']],
+    ['Re-auth required: team', 'badge--critical', '/accounts/team', ['account: team', 'label: team']],
+    ['Funding required: Console workspace', 'badge--serious', '/accounts/console', ['account: console', 'label: Console workspace']],
+    ['Credential refresh failed: team', 'badge--critical', '/accounts/team', ['account: team', 'failures: 5', 'last_error: refresh_token rejected: invalid_grant', 'outcome: failed']],
+    ['Usage poll backing off: mail', 'badge--warning', '/accounts/mail', ['account: mail', 'backoff_since: <instant>', 'next_attempt_at: <instant>', 'rate_limited_in_a_row: 6']],
+  ];
+  const ages = badges().map((b) => b.title.split('\n').pop());
+  results.push({
+    name: '/ the attention line names what needs attention above the tiles, worst first, each badge in its tone opening where it is fixed and titled with its detail and age',
+    ok:
+      lead() === '6 need attention' &&
+      JSON.stringify(read) === JSON.stringify(want) &&
+      ages[0] === 'started 2d 0h ago' &&
+      /^started 4[23]m ago$/.test(ages[5] ?? '') &&
+      ages.every((a) => /^started (\d+[dhm] ?)+ ago$/.test(a ?? '')) &&
+      line()?.nextElementSibling?.classList.contains('stat-grid') === true,
+    missing: [lead() ?? 'no lead', ...read.map((r) => JSON.stringify(r)), ...ages],
+  });
+  localStorage.setItem('phoebis.mockEmpty', '1');
+  await tick();
+  const quiet = () => line()?.textContent?.trim() === 'Nothing needs attention' && line()?.querySelector('.badge--good') !== null && line()?.querySelector('a') === null;
+  results.push({ name: '/ with nothing held the attention line reads the quiet state in the good tone', ok: quiet(), missing: [line()?.outerHTML.slice(0, 200) ?? 'no line'] });
+  const { getAttention } = api;
+  const exhausted = { detail: { key: 'desktop', pool: 'all' }, kind: 'pool_exhausted', link: { id: 'all', page: 'pools' }, pools: ['all'], since: new Date(Date.now() - 5 * 60_000).toISOString(), subject: { id: 'all', label: 'all', type: 'pool' } };
+  // A drift refusal that carried no key has nowhere to be fixed, so the route sends it without a link.
+  const keyless = { detail: { client_version: '2.1.272', trigger: 'hash' }, kind: 'client_drift', link: null, pools: [], since: new Date(Date.now() - 2 * 60_000).toISOString(), subject: { id: '2.1.272', label: '2.1.272', type: 'client' } };
+  api.getAttention = async () => [exhausted, keyless];
+  await tick();
+  const gained = [lead(), JSON.stringify(badges().map((b) => [b.text, b.tone, b.href])), line()?.querySelectorAll('a').length];
+  api.getAttention = getAttention;
+  await tick();
+  const lost = quiet();
+  results.push({
+    name: '/ with the dashboard open, a refresh tick draws the items the route gains, an item without a link as a badge that opens nothing, and the next one the quiet state once they clear',
+    ok: gained[0] === '2 need attention' && gained[1] === JSON.stringify([['Pool exhausted: all', 'badge--critical', '/pools#all'], ['Client drift: 2.1.272', 'badge--serious', null]]) && gained[2] === 1 && lost,
+    missing: [...gained.map(String), `quiet after the clear: ${lost}`],
+  });
+  api.getAttention = () => Promise.reject(new Error('the store is unavailable'));
+  await tick();
+  api.getAttention = getAttention;
+  const failedLine = line();
+  results.push({
+    name: '/ a failed attention read draws the unavailable line in the warning tone, never the quiet state, the last read in its title',
+    ok:
+      failedLine?.textContent?.trim() === 'Attention unavailable: the store is unavailable' &&
+      failedLine.querySelector('.badge--warning') !== null &&
+      /^the store is unavailable\nLast read: (now|\d+s ago)$/.test(failedLine.querySelector('.badge')?.getAttribute('title') ?? ''),
+    missing: [failedLine?.outerHTML.slice(0, 240) ?? 'no line'],
+  });
+  let reads = 0;
+  api.getAttention = (...args) => {
+    reads += 1;
+    return getAttention.apply(api, args);
+  };
+  window.dispatchEvent(new window.Event('focus'));
+  await dash.settle(300);
+  api.getAttention = getAttention;
+  results.push({ name: '/ the window regaining focus reads the attention list again, and an answer clears the failure', ok: reads === 1 && quiet(), missing: [`reads ${reads}`, line()?.textContent ?? 'no line'] });
+  localStorage.removeItem('phoebis.mockEmpty');
+  await tick();
+  results.push({ name: '/ the story back, the next tick draws its six items again', ok: lead() === '6 need attention', missing: [lead() ?? 'no lead'] });
+  dash.unmount();
+}
+
 let m = await mount('/');
-expect('/ dashboard', m.text(), ['Requests, 24h', 'Tokens, 24h', 'Estimated cost, 24h', 'Error rate, 24h', '5h remaining', '7d remaining', 'remaining', 'business', 'personal', 'Cooling down', 'Overage active', 'Needs re-auth', 'Recent requests', 'Sticky pins and cache-warming agents', 'active pins', 'admin', 'Fable', 'n/a']);
+expect('/ dashboard', m.text(), ['Requests, 24h', 'Tokens, 24h', 'Estimated cost, 24h', 'Error rate, 24h', '5h remaining', '7d remaining', 'remaining', 'business', 'personal', 'Cooling down', 'Overage active', 'Needs re-auth', 'Recent requests', 'Sticky pins and cache-warming agents', 'active pins', 'Fable', 'n/a']);
 results.push({ name: 'data-theme set', ok: document.documentElement.getAttribute('data-theme') === 'light', missing: [document.documentElement.getAttribute('data-theme')] });
 results.push({ name: 'the shell carries the mark beside the name and no couplet', ok: m.container.querySelector('.sidebar .brand__mark svg rect') !== null && m.container.querySelector('.sidebar .brand__name')?.textContent === 'Phoebis Router' && m.container.querySelector('.sidebar .brand__couplet') === null, missing: [] });
 {
@@ -330,6 +460,15 @@ m = await mount('/observe');
   await m.settle(300);
   const detailText = m.container.querySelector('.observe__detail')?.textContent ?? '';
   results.push({ name: '/observe the detail pane names the error of a stream that failed after its head', ok: failedAfterHead !== undefined && detailText.includes('Erroroverloaded_error'), missing: [detailText.slice(0, 160)] });
+  const badFinished = [...m.container.querySelectorAll('.live-table tbody tr')].filter((tr) => tr.children[9]?.textContent === '200' && tr.querySelector('.ldot--bad') !== null);
+  let cutDetail = '';
+  for (const tr of badFinished) {
+    tr.click();
+    await m.settle(300);
+    cutDetail = m.container.querySelector('.observe__detail')?.textContent ?? '';
+    if (cutDetail.includes('Errorstream_incomplete')) break;
+  }
+  results.push({ name: '/observe a finished 200 that ended before its end draws the failure dot', ok: cutDetail.includes('Errorstream_incomplete'), missing: [`${badFinished.length} 200 rows with ldot--bad`, cutDetail.slice(0, 160)] });
   const streamsBtn = [...m.container.querySelectorAll('.segmented button')].find((b) => b.textContent?.trim() === 'Streams');
   streamsBtn?.click();
   await m.settle(300);
@@ -557,13 +696,28 @@ expect('/quota', m.text(), ['7 accounts', '3 need attention', 'Refresh all', 'Pl
   results.push({
     name: '/quota each subscription card says when the poll last asked and how it answered, then when its snapshot was read',
     ok:
-      /^polled (now|\d+s ago): clean$/.test(drawn.business[0] ?? '') &&
-      /^checked (now|\d+s ago)$/.test(drawn.business[1] ?? '') &&
+      /^polled (now|\d+s ago|1m ago): clean$/.test(drawn.business[0] ?? '') &&
+      /^checked (now|\d+s ago|1m ago)$/.test(drawn.business[1] ?? '') &&
       /^polled 1[12]m ago: rate limited$/.test(drawn.mail[0] ?? '') &&
-      /^polled [34]m ago: failed$/.test(drawn.team[0] ?? '') &&
+      /^polled [34]m ago: failed: usage request rejected with status 503$/.test(drawn.team[0] ?? '') &&
       drawn.team[1] === 'checked 2d 3h ago' &&
       JSON.stringify(drawn.spare) === JSON.stringify(['not yet polled']),
     missing: [JSON.stringify(drawn)],
+  });
+  // The reason is cut to the line's width on screen, so the line's title carries it whole, under the poll's time.
+  const failedLine = cardOf('team')?.querySelector('.qcard__status > span');
+  const title = (failedLine?.getAttribute('title') ?? '').split('\n');
+  const cleanTitle = cardOf('business')?.querySelector('.qcard__status > span')?.getAttribute('title') ?? '';
+  results.push({
+    name: "/quota a failed poll's line names its reason in a span of its own, the whole message under the poll's time in the title",
+    ok:
+      failedLine?.querySelector('.qcard__reason')?.textContent === 'usage request rejected with status 503' &&
+      title.length === 2 &&
+      /\d{4}/.test(title[0]) &&
+      title[1] === 'usage request rejected with status 503' &&
+      !cleanTitle.includes('\n') &&
+      cardOf('mail')?.querySelector('.qcard__reason') === null,
+    missing: [failedLine?.outerHTML.slice(0, 200) ?? 'no line on team', cleanTitle],
   });
   const backoff = [...m.container.querySelectorAll('.qcard__backoff')];
   results.push({
@@ -730,6 +884,10 @@ m = await mount('/accounts');
   });
 }
 results.push({ name: 'nav calls the pages Accounts and Keys, and no text names the old page', ok: [...m.container.querySelectorAll('.nav__link')].some((a) => a.textContent?.trim() === 'Accounts') && [...m.container.querySelectorAll('.nav__link')].some((a) => a.textContent?.trim() === 'Keys') && !/\bupstreams\b/i.test(m.text()), missing: [...m.container.querySelectorAll('.nav__link')].map((a) => a.textContent?.trim() ?? '') });
+{
+  const nav = [...m.container.querySelectorAll('.nav__link')].map((a) => a.textContent?.trim());
+  results.push({ name: 'nav has Observe and Sessions, no Keepalive or Plugins', ok: nav.includes('Observe') && nav.includes('Sessions') && !nav.includes('Keepalive') && !nav.includes('Plugins') && nav.indexOf('Observe') === nav.indexOf('Dashboard') + 1, missing: nav });
+}
 expect('/accounts (lands on the first)', m.text(), ['business@example.com', 'Identity', 'OAuth login', 'Max since', 'default_claude_max_20x', 'Billing type', 'Organization', 'Renewal date is not reported by the provider', 'Usage', 'Fable', '7-day trend', 'Pools', 'priority 0', 'Credential', 'Requests', 'Re-pair', 'Pause', 'Disconnect', 'Delete account', 'Extra usage this month', 'Add account']);
 await emailLines('/accounts each row reads its email under the name, and draws no line without one', [...m.container.querySelectorAll('a.account-row')].map((r) => [idOf(r), r.querySelector('.account-row__sub')?.textContent ?? null]));
 await emailLines('/accounts/business the head reads the email under the name', [['business', m.container.querySelector('.detail__ident > .detail__sub.mono')?.textContent ?? null]]);
@@ -1081,7 +1239,13 @@ expect('/accounts/mail', m.text(), [
   });
 }
 await m.navigate('/accounts/personal');
-expect('/accounts/personal', m.text(), ['in use', 'Clear funding flag', 'Payment method declined', 'Overage since 3h']);
+expect('/accounts/personal', m.text(), ['in use', 'Payment method declined', 'Overage since 3h']);
+{
+  // The funding flag is an Anthropic key's state, so this OAuth account in overage reads ready and offers no clear.
+  const badges = [...m.container.querySelectorAll('.detail__badges .badge')].map((b) => b.textContent?.trim() ?? '');
+  const head = [...(m.container.querySelector('.detail__head')?.querySelectorAll('button') ?? [])].map((b) => b.textContent?.trim() ?? '');
+  results.push({ name: '/accounts/personal an OAuth account in overage reads ready and offers no funding clear', ok: badges[0] === 'Ready' && !head.includes('Clear funding flag'), missing: [...badges, ...head] });
+}
 {
   const openCatalog = async () => {
     [...(m.container.querySelector('.detail__head')?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Catalog')?.click();
@@ -1150,6 +1314,8 @@ expect('/accounts/personal', m.text(), ['in use', 'Clear funding flag', 'Payment
     missing: [coolingSubtitle],
   });
 }
+await m.navigate('/accounts/console');
+expect('/accounts/console', m.text(), ['Verify', 'does not report quota windows', 'Clear funding flag']);
 {
   // A funding-flagged account never reads 'paused', so the header has to take the pause state off routing instead.
   const headButton = (name) => [...(m.container.querySelector('.detail__head')?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === name);
@@ -1160,7 +1326,7 @@ expect('/accounts/personal', m.text(), ['in use', 'Clear funding flag', 'Payment
     await m.settle(600);
   };
   await confirmAction('Pause');
-  const offersResume = headButton('Resume') !== undefined && m.text().includes('Needs funding');
+  const offersResume = headButton('Resume') !== undefined && [...m.container.querySelectorAll('.detail__badges .badge')].some((b) => b.textContent?.trim() === 'Needs funding');
   // Back to routing, since the pools and the later account checks read this account as the fixture left it.
   await confirmAction('Resume');
   results.push({
@@ -1169,8 +1335,6 @@ expect('/accounts/personal', m.text(), ['in use', 'Clear funding flag', 'Payment
     missing: [offersResume ? 'resume offered' : 'no Resume while paused', ...[...(m.container.querySelector('.detail__head')?.querySelectorAll('button') ?? [])].map((b) => b.textContent?.trim() ?? '')],
   });
 }
-await m.navigate('/accounts/console');
-expect('/accounts/console', m.text(), ['Verify', 'does not report quota windows']);
 {
   const verify = [...(m.container.querySelector('.detail__head')?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Verify');
   results.push({ name: '/accounts/console Verify stays primary', ok: verify?.classList.contains('btn--primary') === true, missing: [verify?.className ?? 'no Verify'] });
@@ -1343,10 +1507,17 @@ m.unmount();
 }
 await readsAgain('/accounts', 'listAccounts');
 
+// Picks an Analytics tab on the given mount and lets its section's reads land; a check reads its counts afterwards.
+const tab = async (page, label) => {
+  [...page.container.querySelectorAll('.section-bar [role="tab"]')].find((b) => b.textContent?.trim() === label)?.click();
+  await page.settle(700);
+};
+
 {
   // Read while the story stands: the pool checks below write both budgeted pools, and a write answers no spend until
-  // the ledger reports again, which would leave no figure for the word to qualify.
+  // the ledger reports again, which would leave no figure for the word to qualify. The card sits on the Burn tab.
   const early = await mount('/analytics');
+  await tab(early, 'Burn');
   const card = [...early.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Member budgets');
   const spentOf = (account) => [...(card?.querySelectorAll('tbody tr') ?? [])].find((tr) => tr.children[1]?.textContent?.trim() === account)?.children[2];
   const metered = spentOf('business');
@@ -1365,125 +1536,265 @@ await readsAgain('/accounts', 'listAccounts');
   early.unmount();
 }
 
+// The pool dialog checks below read every field, the expert ones included; the plain view's checks come further on.
+localStorage.setItem('phoebis.expertView', 'on');
 m = await mount('/pools');
-expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace', 'Round robin', 'subscription first', 'Within the first priority tier that has an eligible account, the one with the most weekly allowance left per hour until its window resets or its subscription ends; an unsampled account counts as untouched, and ties are random.', 'Within the first priority tier that has an eligible account, each in turn; a restart starts the round again.', 'Prefer plan quota', 'Allow overage', 'Migrate off', 'Select-below off', 'Affinity 10m', 'Affinity off', 'Keep prompt caches warm', 'cold limit 2', 'idle 1h', 'net-negative stop 2', '$4.00/day cap', 'Traffic, 24h', 'Requests per hour', '3-hour average', 'Members', 'eligible', 'cooldown ends', 'overage', 'P1', 'Console workspace', 'codex', 'Evals workspace', 'desktop', 'laptop', 'ci', 'Active pins', 'Edit']);
+expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, subscription accounts first', 'Round robin', 'Priority, then random; subscription accounts first', 'Traffic, 24h', 'Requests per hour', '3-hour average', 'Members', 'Console workspace', 'codex', 'Evals workspace', 'Active pins', 'Moves in the last hour', 'Edit']);
 {
-  const badged = [...m.container.querySelectorAll('.pool')]
-    .filter((card) => [...card.querySelectorAll('.badge')].some((b) => b.textContent?.trim() === 'server-side auto mode off'))
-    .map((card) => card.querySelector('.card__title')?.textContent?.trim());
+  const cards = new Map([...m.container.querySelectorAll('.pool')].map((c) => [c.querySelector('.card__title')?.textContent?.trim(), c]));
+  const card = (name) => cards.get(name);
+  // The counts come from the key list itself, so a key the story adds or moves never breaks the check.
+  const keyCount = new Map();
+  for (const k of await api.listKeys()) keyCount.set(k.poolId, (keyCount.get(k.poolId) ?? 0) + 1);
+  const countWord = (n) => (n === 0 ? 'No keys yet' : n === 1 ? '1 key' : `${n} keys`);
+  const keyLink = (name) => card(name)?.querySelector('.pool__keys');
+  const links = ['all', 'codex', 'studio'].map((name) => [keyLink(name)?.textContent?.trim(), keyLink(name)?.getAttribute('href')]);
+  const wanted = ['all', 'codex', 'studio'].map((id) => [countWord(keyCount.get(id) ?? 0), `/keys?pool=${id}`]);
+  const none = [...cards.entries()].filter(([, c]) => c.querySelector('.pool__keys--none')).map(([name]) => name);
+  results.push({
+    name: '/pools each card links its key count to the Keys page filtered to the pool',
+    ok: JSON.stringify(links) === JSON.stringify(wanted) && JSON.stringify(none) === JSON.stringify(['all', 'codex', 'studio'].filter((id) => !keyCount.get(id))),
+    missing: [...links.flat().map(String), ...wanted.flat(), ...none],
+  });
+  const strip = (name) => [...(card(name)?.querySelectorAll('.pool__features .badge') ?? [])].map((b) => [b.textContent?.trim(), b.getAttribute('href'), b.getAttribute('title')]);
+  results.push({
+    name: '/pools the strip badges the features a pool has on and opens the dialog on their groups',
+    ok:
+      JSON.stringify(strip('all')) === JSON.stringify([['cache TTL', '/pools?edit=all&group=cacheTtl', 'Opens the pool dialog on Cache TTL'], ['keepalive', '/pools?edit=all&group=keepalive', 'Opens the pool dialog on Keepalive']]) &&
+      JSON.stringify(strip('codex')) === JSON.stringify([['load shedding', '/pools?edit=codex&group=shedding', 'Opens the pool dialog on Load shedding']]) &&
+      JSON.stringify(strip('studio')) === JSON.stringify([['server-side auto mode off', '/pools?edit=studio&group=autoMode', 'Opens the pool dialog on Auto mode']]),
+    missing: [...strip('all'), ...strip('codex'), ...strip('studio')].map((b) => b.join(' | ')),
+  });
+  const badged = [...cards.entries()].filter(([, c]) => [...c.querySelectorAll('.badge')].some((b) => b.textContent?.trim() === 'server-side auto mode off')).map(([name]) => name);
   results.push({ name: '/pools the card of a pool with server-side auto mode off carries the badge, and no other card does', ok: JSON.stringify(badged) === '["studio"]', missing: badged });
-  const rowOf = (card, label) => [...card.querySelectorAll('.pool__policy > div')].find((row) => row.querySelector('dt')?.textContent?.trim() === label);
-  const studio = [...m.container.querySelectorAll('.pool')].find((card) => card.querySelector('.card__title')?.textContent?.trim() === 'studio');
-  const autoRows = [...m.container.querySelectorAll('.pool')].map((card) => rowOf(card, 'Auto mode')).filter(Boolean);
-  const ttlChips = [...m.container.querySelectorAll('.pool')].flatMap((card) => [...(rowOf(card, 'Cache TTL')?.querySelectorAll('.badge') ?? [])].map((b) => b.textContent?.trim()));
-  results.push({
-    name: '/pools the auto-mode badge sits on an Auto mode row of its own, drawn only on the card whose check is off',
-    ok: autoRows.length === 1 && studio !== undefined && autoRows[0] === rowOf(studio, 'Auto mode') && autoRows[0]?.querySelector('dd .badge')?.textContent?.trim() === 'server-side auto mode off' && !ttlChips.includes('server-side auto mode off'),
-    missing: [`${autoRows.length} Auto mode rows`, autoRows[0]?.textContent ?? 'no row', ...ttlChips],
-  });
-}
-{
-  const cardMembers = [...(m.container.querySelector('.pool__members ul')?.querySelectorAll('li') ?? [])].map((li) => `${li.children[0]?.textContent?.trim()} ${li.children[1]?.textContent?.trim()}`);
-  results.push({ name: '/pools card orders members by priority then label', ok: JSON.stringify(cardMembers) === JSON.stringify(['P0 business', 'P0 mail', 'P0 personal', 'P1 Console workspace']), missing: cardMembers });
-  // The route's verdict per member, which the selection-order strip beside it reads too: personal is in overage on
-  // an account that needs funding, which the route answers unavailable, not overage.
-  const badges = [...(m.container.querySelector('.pool__members ul')?.querySelectorAll('li .pool__eligibility .badge') ?? [])].map((b) => [b.textContent?.trim(), b.className.replace('badge ', ''), b.getAttribute('title') ?? '']);
-  results.push({
-    name: '/pools card badges each member from the route verdict',
-    ok: badges.length === 4 && badges[0][0] === 'eligible' && badges[1][0].startsWith('cooldown ends') && badges[1][1] === 'badge--warning' && JSON.stringify(badges[2]) === JSON.stringify(['unavailable', 'badge--critical', 'funding required']) && badges[3][0] === 'eligible',
-    missing: badges.map((b) => b.join(' | ')),
-  });
-}
-{
-  const cards = new Map([...m.container.querySelectorAll('.pool')].map((c) => [c.querySelector('.card__title')?.textContent?.trim(), c]));
-  const row = (pool, label) => [...(cards.get(pool)?.querySelectorAll('.pool__policy > div') ?? [])].find((d) => d.querySelector('dt')?.textContent?.trim() === label)?.querySelector('dd')?.textContent?.trim();
-  const rows = [row('all', 'Migration'), row('all', 'Failover'), row('all', 'Moves'), row('codex', 'Migration'), row('codex', 'Failover'), row('codex', 'Moves')];
-  results.push({
-    name: '/pools the card names the shedding and failover presets and lists the moves per hour by reason',
-    ok: JSON.stringify(rows) === JSON.stringify(['Migrate off', 'balanced', '0.5/h overage, 2.0/h spent', 'Shed above 85%, custom', 'custom', 'none in the last hour']),
-    missing: rows.map(String),
-  });
-}
-{
-  const order = m.container.querySelector('.pool .selection-order');
-  const tiers = [...(order?.querySelectorAll('.selection-order__tier') ?? [])].map((t) => t.children[0]?.textContent?.trim());
-  results.push({ name: '/pools the card draws the selection order by tier', ok: JSON.stringify(tiers) === JSON.stringify(['plan P0', 'overage P0', 'Anthropic keys P1']), missing: tiers });
-  const next = [...(order?.querySelectorAll('.badge--accent') ?? [])].map((b) => b.textContent?.trim());
-  results.push({ name: '/pools the next account is marked', ok: next.length >= 1 && next.every((t) => t.startsWith('next')), missing: next });
-  const cooled = [...(order?.querySelectorAll('.badge') ?? [])].find((b) => (b.getAttribute('title') ?? '').includes('cooldown'));
-  results.push({ name: '/pools an ineligible member says why', ok: cooled !== undefined && cooled.textContent.includes('mail'), missing: [cooled?.textContent ?? 'absent'] });
-  expect('/pools the card states the strategy rule', order?.textContent ?? '', ['Within the first priority tier that has an eligible account, the one with the most weekly allowance left per hour until its window resets or its subscription ends; an unsampled account counts as untouched, and ties are random.']);
-}
-{
-  // The card reads the pin mode beside the affinity, both placements, the quota header setting when it hides, and
-  // the marker toggle; a pool with affinity off has no pin mode to read.
-  const cards = new Map([...m.container.querySelectorAll('.pool')].map((c) => [c.querySelector('.card__title')?.textContent?.trim(), c]));
-  const dd = (pool, label) => [...(cards.get(pool)?.querySelectorAll('.pool__policy > div') ?? [])].find((d) => d.querySelector('dt')?.textContent?.trim() === label)?.querySelector('dd');
-  const row = (pool, label) => dd(pool, label)?.textContent?.replace(/\s+/g, ' ').trim() ?? null;
-  const rows = [row('all', 'Sessions'), row('all', 'Placement'), row('all', 'Quota headers'), row('codex', 'Sessions'), row('codex', 'Placement'), row('codex', 'Quota headers')];
-  results.push({
-    name: '/pools the card reads the pin mode, both placements and a hidden quota header family',
-    ok: JSON.stringify(rows) === JSON.stringify(['Affinity 10m, when cached', 'subagents by cohort, sessions by warm prefix from 20k tokens', 'hidden', 'Affinity off', 'subagents by cohort, sessions by strategy', null]),
-    missing: rows.map(String),
-  });
-  const ttl = dd('all', 'Cache TTL');
-  const ttlBadges = [...(ttl?.querySelectorAll('.badge') ?? [])].map((b) => b.textContent?.trim());
-  results.push({
-    name: '/pools the card reads both cache TTL rule sets and badges a pool that adds markers',
-    ok: (ttl?.textContent ?? '').startsWith('plan 1h / 5m, metered 5m / 5m') && ttlBadges.includes('adds markers') && !(dd('codex', 'Cache TTL')?.textContent ?? '').includes('adds markers'),
-    missing: [ttl?.textContent ?? 'no Cache TTL row', ...ttlBadges],
-  });
-  // Each member reads its spend against each budget it carries, the day's before the month's, a subscription
-  // member's as metered spend; the route's budget verdict is the label beside the spend, and the selection order
-  // names it as the reason the member is skipped.
-  const member = (pool, label) => {
-    const li = [...(cards.get(pool)?.querySelectorAll('.pool__members ul li') ?? [])].find((x) => x.children[1]?.textContent?.trim() === label);
-    const cell = li?.querySelector('.pool__eligibility');
-    return {
-      badges: [...(cell?.querySelectorAll('.badge') ?? [])].map((b) => `${b.textContent?.trim()}|${b.className}`),
-      lines: [...(cell?.children ?? [])].filter((c) => c.classList.contains('num')).map((c) => c.textContent?.replace(/\s+/g, ' ').trim()),
-      text: cell?.textContent?.replace(/\s+/g, ' ').trim() ?? 'absent',
-    };
-  };
   const origin = new Date(CLOCK_ORIGIN);
   const dayEnd = new Date(Date.UTC(origin.getUTCFullYear(), origin.getUTCMonth(), origin.getUTCDate() + 1)).toLocaleString('en-US', { day: '2-digit', hour: '2-digit', hourCycle: 'h23', minute: '2-digit', month: 'short' });
-  const half = member('all', 'Console workspace');
-  const metered = member('all', 'business');
-  const none = member('all', 'mail');
-  const spent = member('codex', 'Evals workspace');
+  const status = (name) => card(name)?.querySelector('.pool__status');
+  const sentence = (name) => status(name)?.textContent?.replace(/\s+/g, ' ').trim();
+  const linked = (name) => [...(status(name)?.querySelectorAll('a') ?? [])].map((a) => a.getAttribute('href'));
   results.push({
-    name: '/pools an Anthropic-key member reads its spend against each budget, the day before the month',
-    ok: JSON.stringify(half.lines) === '["$1.10 of $5.00 today","$25.00 of $50.00 this month"]' && JSON.stringify(half.badges) === '["eligible|badge badge--good"]',
-    missing: [...half.lines, ...half.badges],
+    name: '/pools the status sentence says what the badge means for each pool, its accounts linked',
+    ok:
+      sentence('all') === 'Degraded: 2 of 4 members take fresh sessions; the next one goes to business.' &&
+      JSON.stringify(linked('all')) === '["/accounts/business"]' &&
+      sentence('codex') === `Exhausted: no member can take a request until Evals workspace's daily budget resets at ${dayEnd}.` &&
+      JSON.stringify(linked('codex')) === '["/accounts/evals"]' &&
+      sentence('studio') === 'Active: business takes every fresh session.',
+    missing: [sentence('all'), sentence('codex'), sentence('studio')].map(String),
   });
+  {
+    // Without the accounts the order has no members to place, so until they land the sentence says what the pool's
+    // own verdicts carry, the serving table's word for it, and names no account.
+    const held = deferNextCall('listAccounts');
+    const d = await mount('/pools');
+    const read = () =>
+      ['all', 'codex', 'studio'].map((name) => {
+        const line = [...d.container.querySelectorAll('.pool')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === name)?.querySelector('.pool__status');
+        return [line?.textContent?.replace(/\s+/g, ' ').trim() ?? 'no sentence', line?.querySelectorAll('a').length ?? 0];
+      });
+    const waiting = read();
+    held.release();
+    held.restore();
+    await d.settle(300);
+    const landed = read();
+    d.unmount();
+    results.push({
+      name: '/pools while the accounts load the status sentence counts the members that take fresh sessions, then names the next one',
+      ok:
+        held.calls.length > 0 &&
+        JSON.stringify(waiting) === JSON.stringify([['Degraded: 2 of 4 members take fresh sessions.', 0], ['Exhausted: no member can take a request.', 0], ["Active: the pool's one member takes every fresh session.", 0]]) &&
+        JSON.stringify(landed) === JSON.stringify([[sentence('all'), 1], [sentence('codex'), 1], [sentence('studio'), 1]]),
+      missing: [`held ${held.calls.length}`, ...waiting, ...landed].map((x) => JSON.stringify(x)),
+    });
+  }
+  const attentionRows = (name) =>
+    [...(card(name)?.querySelectorAll('ul.attention > li.attention__row') ?? [])].map((li) => [li.querySelector('.badge')?.textContent?.trim(), li.children[1]?.textContent?.trim(), li.children[1]?.getAttribute('href') ?? null]);
+  // The story's items: codex exhausted; the laptop key's client drift, the Console workspace out of funding and
+  // mail's poll backoff in all; and nothing on studio, whose one member and one key carry no item.
   results.push({
-    name: '/pools a subscription member reads its metered spend against its budget, and a member without one says so',
-    ok: metered.lines.length === 1 && (metered.lines[0] ?? '').startsWith('metered $12.50 of $30.00 this month') && JSON.stringify(metered.badges) === '["eligible|badge badge--good"]' && none.text.startsWith('no budget'),
-    missing: [...metered.lines, ...metered.badges, none.text],
+    name: "/pools each card draws the dashboard's items that belong to it, the pool's own row unlinked, and a card with none draws no list",
+    ok:
+      JSON.stringify(attentionRows('codex')) === JSON.stringify([['Pool exhausted', 'codex', null]]) &&
+      JSON.stringify(attentionRows('all')) === JSON.stringify([['Client drift', '2.1.271', '/keys#laptop'], ['Funding required', 'Console workspace', '/accounts/console'], ['Usage poll backing off', 'mail', '/accounts/mail']]) &&
+      card('studio')?.querySelector('.attention') === null,
+    missing: ['codex', 'all', 'studio'].map((name) => `${name}: ${JSON.stringify(attentionRows(name))}`),
   });
+  const caption = (name) => card(name)?.querySelector('.serving caption');
+  const captions = ['all', 'codex', 'studio'].map((name) => [caption(name)?.textContent?.trim(), caption(name)?.getAttribute('title')]);
+  const fable = 'A request for a Fable model is placed on the Fable window instead, which this card does not draw.';
+  results.push({
+    name: '/pools each serving table names its strategy in a caption titled with the Fable caveat',
+    ok: JSON.stringify(captions) === JSON.stringify([['Pace, subscription accounts first', fable], ['Round robin', fable], ['Priority, then random; subscription accounts first', fable]]),
+    missing: captions.flat().map(String),
+  });
+  const rows = (name) => [...(card(name)?.querySelectorAll('.serving tbody tr') ?? [])];
+  const cell = (tr, i) => tr.children[i];
+  const accountsOf = (name) => rows(name).map((tr) => cell(tr, 1).querySelector('a')?.textContent?.trim());
+  results.push({ name: '/pools the serving table lists the members in selection order', ok: JSON.stringify(accountsOf('all')) === JSON.stringify(['business', 'mail', 'personal', 'Console workspace']), missing: accountsOf('all') });
+  const tiers = rows('all').map((tr) => cell(tr, 0).textContent?.trim());
+  results.push({ name: '/pools the card draws the selection order by tier', ok: JSON.stringify(tiers) === JSON.stringify(['plan P0', 'plan P0', 'overage P0', 'Anthropic keys P1']), missing: tiers });
+  const standing = (name, label) => {
+    const tr = rows(name).find((r) => cell(r, 1).querySelector('a')?.textContent?.trim() === label);
+    const td = tr ? cell(tr, 2) : null;
+    return {
+      badges: [...(td?.querySelectorAll('.badge') ?? [])].map((b) => [b.textContent?.trim(), b.className.replace('badge ', ''), b.getAttribute('title') ?? '']),
+      next: tr?.classList.contains('is-next') ?? false,
+      why: document.getElementById(td?.getAttribute('aria-describedby') ?? '')?.textContent ?? '',
+    };
+  };
+  const verdicts = ['business', 'mail', 'personal', 'Console workspace'].map((l) => standing('all', l));
+  results.push({
+    name: '/pools card badges each member from the route verdict, the next one marked',
+    ok:
+      JSON.stringify(verdicts[0].badges) === '[["next","badge--accent",""]]' &&
+      verdicts[0].next &&
+      verdicts[0].why === 'business: where the next fresh session lands' &&
+      verdicts[1].badges[0]?.[0]?.startsWith('cooldown ends') &&
+      verdicts[1].badges[0]?.[1] === 'badge--warning' &&
+      verdicts[2].badges[0]?.[0] === 'eligible' &&
+      JSON.stringify(verdicts[3].badges) === JSON.stringify([['unavailable', 'badge--critical', 'funding required']]) &&
+      verdicts.slice(1).every((v) => !v.next),
+    missing: verdicts.map((v) => JSON.stringify(v)),
+  });
+  results.push({ name: '/pools an ineligible member says why', ok: standing('all', 'mail').why === 'mail: in cooldown, skipped by selection', missing: [standing('all', 'mail').why] });
+  const spend = (name, label) =>
+    [...(rows(name).find((r) => cell(r, 1).querySelector('a')?.textContent?.trim() === label)?.querySelectorAll('td:nth-child(2) .num') ?? [])].map((s) => s.textContent?.replace(/\s+/g, ' ').trim());
+  results.push({ name: '/pools an Anthropic-key member reads its spend against each budget, the day before the month', ok: JSON.stringify(spend('all', 'Console workspace')) === '["$1.10 of $5.00 today","$25.00 of $50.00 this month"]', missing: spend('all', 'Console workspace') });
+  results.push({
+    name: '/pools a subscription member reads its metered spend against its budget, and a member without one draws no spend line',
+    ok: spend('all', 'business').length === 1 && spend('all', 'business')[0].startsWith('metered $12.50 of $30.00 this month') && spend('all', 'mail').length === 0,
+    missing: [...spend('all', 'business'), String(spend('all', 'mail').length)],
+  });
+  const evals = standing('codex', 'Evals workspace');
   results.push({
     name: "/pools a member at its budget reads the route's verdict beside its spend, until the day ends",
-    ok: JSON.stringify(spent.lines) === '["$20.40 of $20.00 today"]' && JSON.stringify(spent.badges) === JSON.stringify([`at budget until ${dayEnd}|badge badge--warning`]),
-    missing: [...spent.lines, ...spent.badges, dayEnd],
+    ok: JSON.stringify(spend('codex', 'Evals workspace')) === '["$20.40 of $20.00 today"]' && JSON.stringify(evals.badges) === JSON.stringify([[`at budget until ${dayEnd}`, 'badge--warning', '']]) && evals.why === 'Evals workspace: at budget, skipped by selection',
+    missing: [...spend('codex', 'Evals workspace'), ...evals.badges.map((b) => b.join(' | ')), evals.why],
   });
-  const codexOrder = cards.get('codex')?.querySelector('.selection-order')?.textContent ?? '';
-  results.push({ name: '/pools the selection order names the budget as the reason a member is skipped', ok: codexOrder.includes('Evals workspace (at budget)'), missing: [codexOrder.slice(0, 160)] });
-  // The card's lines take the dialog's words, without the links a title attribute cannot hold.
-  const lines = [
-    cards.get('all')?.querySelector('.selection-order__rule')?.textContent ?? '',
-    dd('all', 'Sessions')?.getAttribute('title') ?? null,
-    dd('all', 'Quota headers')?.getAttribute('title') ?? null,
-    dd('all', 'Keep prompt caches warm')?.querySelector('.chips')?.getAttribute('title') ?? null,
+  const tiles = (name) => [...(card(name)?.querySelectorAll('.pool__stats > div') ?? [])].map((d) => [d.querySelector('dt')?.textContent?.trim(), d.querySelector('dd')?.textContent?.trim(), d.querySelector('dd')?.getAttribute('title')]);
+  results.push({
+    name: '/pools six tiles per card, the sixth the count of moves in the last hour split by reason in its title',
+    ok: tiles('all').length === 6 && JSON.stringify(tiles('all')[5]) === JSON.stringify(['Moves in the last hour', '3', 'window spent 2, overage 1']) && JSON.stringify(tiles('codex')[5]) === JSON.stringify(['Moves in the last hour', '0', 'No session moved in the last hour.']),
+    missing: [...(tiles('all')[5] ?? []), ...(tiles('codex')[5] ?? [])].map(String),
+  });
+  results.push({ name: '/pools nothing of the recap, the selection-order strip, the member list or the key chips is left', ok: m.container.querySelector('.pool .pool__policy, .pool .selection-order, .pool .pool__members, .pool .pool__eligibility, .pool a.badge[href="/keys"]') === null, missing: [] });
+}
+{
+  // The rows mounted on their own over every kind, in the route's order, which is the ranking: the tones do not group
+  // it. Each condition started a whole number of hours before the instant the rows are drawn at, so its age reads
+  // exactly.
+  const { createElement: h } = React;
+  const now = Date.now();
+  const at = (hours) => new Date(now - hours * 3_600_000).toISOString();
+  const account = (id, label) => ({ link: { id, page: 'accounts' }, subject: { id, label, type: 'account' } });
+  const items = [
+    { detail: { key: 'ci', pool: 'codex' }, kind: 'pool_exhausted', link: { id: 'codex', page: 'pools' }, pools: ['codex'], since: at(1), subject: { id: 'codex', label: 'codex', type: 'pool' } },
+    { detail: { client_version: '2.1.271', key: 'laptop', trigger: 'hash' }, kind: 'client_drift', link: { id: 'laptop', page: 'keys' }, pools: ['all'], since: at(3), subject: { id: '2.1.271', label: '2.1.271', type: 'client' } },
+    { detail: { client_version: '2.1.272', key: null, trigger: 'version_suffix' }, kind: 'client_drift', link: null, pools: [], since: at(2), subject: { id: '2.1.272', label: '2.1.272', type: 'client' } },
+    { ...account('team', 'team'), detail: { account: 'team', label: 'team' }, kind: 'reauth_required', pools: [], since: at(5) },
+    { ...account('evals', 'Evals workspace'), detail: { account: 'evals', label: 'Evals workspace' }, kind: 'funding_required', pools: ['codex'], since: at(4) },
+    { ...account('team', 'team'), detail: { account: 'team', failures: 3, last_error: 'invalid_grant', outcome: 'failed' }, kind: 'refresh_failed', pools: [], since: at(6) },
+    { ...account('mail', 'mail'), detail: { account: 'mail', backoff_since: now - 2 * 3_600_000, next_attempt_at: null, rate_limited_in_a_row: 6 }, kind: 'poll_backoff', pools: ['all'], since: at(2) },
+  ];
+  const a = await mountNode(h(AttentionRows, { items, now }));
+  const rows = [...a.container.querySelectorAll('ul.attention > li.attention__row')].map((li) => [
+    li.querySelector('.badge')?.textContent?.trim(),
+    li.querySelector('.badge')?.className.replace('badge ', ''),
+    li.children[1]?.textContent?.trim(),
+    li.children[1]?.tagName,
+    li.querySelector('a')?.getAttribute('href') ?? null,
+    li.querySelector('.attention__detail')?.textContent,
+    li.getAttribute('title'),
+  ]);
+  const row = (label, tone, subject, href, detail, age) => [label, tone, subject, href ? 'A' : 'SPAN', href, detail, `${detail} (${age})`];
+  const want = [
+    row('Pool exhausted', 'badge--critical', 'codex', null, 'no member could take a request from key ci', '1h 0m ago'),
+    row('Client drift', 'badge--serious', '2.1.271', '/keys#laptop', 'its billing hash differs from the pinned build, newest refusal from key laptop', '3h 0m ago'),
+    row('Client drift', 'badge--serious', '2.1.272', null, 'its version suffix differs from the pinned build', '2h 0m ago'),
+    row('Re-auth required', 'badge--critical', 'team', '/accounts/team', 'serves nothing until its credential is renewed', '5h 0m ago'),
+    row('Funding required', 'badge--serious', 'Evals workspace', '/accounts/evals', 'serves nothing until its organization is funded again', '4h 0m ago'),
+    row('Credential refresh failed', 'badge--critical', 'team', '/accounts/team', '3 refreshes failed in a row: invalid_grant', '6h 0m ago'),
+    row('Usage poll backing off', 'badge--warning', 'mail', '/accounts/mail', '6 rate-limited answers in a row', '2h 0m ago'),
   ];
   results.push({
-    name: "/pools the pool card's lines read the dialog's words",
-    ok:
-      lines[0] === 'Within the first priority tier that has an eligible account, the one with the most weekly allowance left per hour until its window resets or its subscription ends; an unsampled account counts as untouched, and ties are random.' &&
-      lines[1] === 'How long a session stays on its account after its last request; off keeps no pins, and a custom value is at least 60 seconds.' &&
-      lines[2] === "Hide drops the anthropic-ratelimit-unified-* headers from every answer but a 429, so an organization's quota never reads as the key holder's own; a 429 keeps them so the client can resume after the reset. request-id passes either way." &&
-      lines[3] === "Cold limit: probes in a row that find the cache already gone, after which the session's probes pause until its next real request. Idle: how long, or how many probes, without a real request before probing stops. Net-negative stop: probes a session still gets after its probes have cost more than the cache reads they saved.",
-    missing: lines.map(String),
+    name: "the attention rows keep the route's order, link a subject through the item's link, name the pool's own row and a keyless drift alone, and read each detail as one sentence titled with its age",
+    ok: JSON.stringify(rows) === JSON.stringify(want),
+    missing: rows.map((r) => r.join(' | ')),
   });
+  a.unmount();
+  const empty = await mountNode(h(AttentionRows, { items: [], now }));
+  results.push({ name: 'an empty attention list draws nothing', ok: empty.container.innerHTML === '', missing: [empty.container.innerHTML.slice(0, 120)] });
+  empty.unmount();
+}
+{
+  // jsdom implements no scrollIntoView, so the check stands one in that records each element it was asked to bring
+  // into view and how.
+  const proto = window.Element.prototype;
+  const had = Object.prototype.hasOwnProperty.call(proto, 'scrollIntoView');
+  const original = proto.scrollIntoView;
+  const scrolls = [];
+  proto.scrollIntoView = function (options) {
+    scrolls.push([this.tagName, this.id, options?.behavior ?? null]);
+  };
+  /** Mounts `path`, with `held` answered only after the mount when named, and reads where the page scrolled and focused. */
+  const arrive = async (path, held, target) => {
+    scrolls.length = 0;
+    const late = held ? deferNextCall(held) : null;
+    const page = await mount(path);
+    const early = scrolls.length;
+    if (late) {
+      late.release();
+      late.restore();
+      await page.settle(300);
+    }
+    const el = [...page.container.querySelectorAll(target.selector)].find((e) => e.id === target.id) ?? null;
+    return { early, focused: el !== null && document.activeElement === el, page, scrolled: JSON.stringify(scrolls) };
+  };
+  const card = { id: 'codex', selector: '.pool' };
+  const row = { id: 'laptop', selector: 'tbody tr' };
+  const pool = await arrive('/pools#codex', null, card);
+  await pool.page.navigate('/pools?edit=codex#codex');
+  const rewritten = pool.page.location();
+  results.push({
+    name: "/pools#<pool id> scrolls the card into view and focuses it, and the dialog query's rewrite that keeps the hash scrolls nothing more",
+    ok: pool.scrolled === JSON.stringify([['SECTION', 'codex', 'smooth']]) && pool.focused && JSON.stringify(scrolls) === pool.scrolled && rewritten.search === '' && rewritten.hash === '#codex',
+    missing: [pool.scrolled, `focused ${pool.focused}`, JSON.stringify(scrolls), JSON.stringify(rewritten)],
+  });
+  pool.page.unmount();
+  const latePool = await arrive('/pools#codex', 'listPools', card);
+  results.push({
+    name: '/pools#<pool id> still lands on the card when the pools answer after the page has mounted',
+    ok: latePool.early === 0 && latePool.scrolled === JSON.stringify([['SECTION', 'codex', 'smooth']]) && latePool.focused,
+    missing: [`before the answer ${latePool.early}`, latePool.scrolled, `focused ${latePool.focused}`],
+  });
+  latePool.page.unmount();
+  const key = await arrive('/keys#laptop', null, row);
+  results.push({ name: '/keys#<key id> scrolls the row into view and focuses it', ok: key.scrolled === JSON.stringify([['TR', 'laptop', 'smooth']]) && key.focused, missing: [key.scrolled, `focused ${key.focused}`] });
+  key.page.unmount();
+  const lateKey = await arrive('/keys#laptop', 'listKeys', row);
+  results.push({
+    name: '/keys#<key id> still lands on the row when the keys answer after the page has mounted',
+    ok: lateKey.early === 0 && lateKey.scrolled === JSON.stringify([['TR', 'laptop', 'smooth']]) && lateKey.focused,
+    missing: [`before the answer ${lateKey.early}`, lateKey.scrolled, `focused ${lateKey.focused}`],
+  });
+  lateKey.page.unmount();
+  const { matchMedia } = window;
+  window.matchMedia = (query) => ({ ...matchMedia(query), matches: query === '(prefers-reduced-motion: reduce)' });
+  const reduced = await arrive('/keys#laptop', null, row);
+  window.matchMedia = matchMedia;
+  results.push({ name: '/keys#<key id> under reduced motion brings the row into view without the smooth scroll', ok: reduced.scrolled === JSON.stringify([['TR', 'laptop', 'auto']]) && reduced.focused, missing: [reduced.scrolled, `focused ${reduced.focused}`] });
+  reduced.page.unmount();
+  // laptop is all's key, so a filter to codex would hide its row.
+  const filtered = await arrive('/keys?pool=codex#laptop', null, row);
+  const cleared = filtered.page.location();
+  results.push({
+    name: '/keys#<key id> clears a pool filter that hides the row, then lands on it',
+    ok: cleared.search === '' && cleared.hash === '#laptop' && filtered.scrolled === JSON.stringify([['TR', 'laptop', 'smooth']]) && filtered.focused,
+    missing: [JSON.stringify(cleared), filtered.scrolled, `focused ${filtered.focused}`],
+  });
+  filtered.page.unmount();
+  if (had) proto.scrollIntoView = original;
+  else delete proto.scrollIntoView;
 }
 {
   const del = [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Delete pool all');
@@ -1512,11 +1823,11 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace',
   results.push({ name: '/pools keys section is not a multi-select', ok: keysMulti.length === 0, missing: keysMulti });
 
   // Grouped dialog: a two-level rail beside one group at a time, one heading per group.
-  const groupLabels = ['Identity', 'Members', 'Keys', 'Models', 'Auto mode', 'Selection', 'Placement', 'Pinning', 'Utilization thresholds', 'Load shedding', 'Failover', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Probe tuning', 'Response headers', 'Body capture', 'Cache diagnostics'];
+  const groupLabels = ['Identity', 'Members', 'Keys', 'Models', 'Auto mode', 'Selection', 'Placement', 'Pinning', 'Utilization thresholds', 'Load shedding', 'Failover', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Probe tuning', 'Body capture', 'Cache diagnostics'];
   const railParents = [...(dlg?.querySelectorAll('.dialog-rail__parent .dialog-rail__label') ?? [])].map((s) => s.textContent?.trim());
   const railGroups = [...(dlg?.querySelectorAll('.dialog-rail__group .dialog-rail__label') ?? [])].map((s) => s.textContent?.trim());
   results.push({
-    name: '/pools dialog rail lists the five parents and the eighteen groups in order',
+    name: '/pools dialog rail lists the five parents and the seventeen groups in order',
     ok: JSON.stringify(railParents) === JSON.stringify(['Pool', 'Routing', 'Load', 'Caching', 'Visibility']) && JSON.stringify(railGroups) === JSON.stringify(groupLabels),
     missing: [...railParents, ...railGroups],
   });
@@ -1538,7 +1849,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace',
     const members = group(dlg, 'Members');
     results.push({
       name: '/pools choosing a group hides every other group and marks its rail entry',
-      ok: (dlg?.querySelectorAll('section.dialog-group[hidden]').length ?? 0) === 17 && members?.hidden === false && rail(dlg, 'members')?.getAttribute('aria-current') === 'true',
+      ok: (dlg?.querySelectorAll('section.dialog-group[hidden]').length ?? 0) === 16 && members?.hidden === false && rail(dlg, 'members')?.getAttribute('aria-current') === 'true',
       missing: shown(),
     });
     results.push({ name: "/pools focus lands on the group's heading", ok: !!members && document.activeElement === members.querySelector('h3'), missing: [document.activeElement?.outerHTML.slice(0, 80) ?? 'nothing focused'] });
@@ -1655,20 +1966,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace',
       strategy.dispatchEvent(new window.Event('change', { bubbles: true }));
       await m.settle(150);
     };
-    // The card's rule line is the first sentence of the dialog's Strategy hint, so the two cannot drift apart. Each
-    // strategy is read on the card of a pool that holds it.
-    const hint = () => [...(selection?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === 'Strategy')?.querySelector('.field__hint')?.textContent ?? '';
-    const cardRule = (label) =>
-      [...m.container.querySelectorAll('.pool')]
-        .find((c) => [...c.querySelectorAll('.pool__policy > div')].some((d) => d.querySelector('dt')?.textContent?.trim() === 'Strategy' && (d.querySelector('dd')?.textContent ?? '').trim().startsWith(label)))
-        ?.querySelector('.selection-order__rule')?.textContent ?? null;
-    const drift = [];
-    for (const option of [...(strategy?.options ?? [])]) {
-      await choose(option.value);
-      const rule = cardRule(option.textContent?.trim() ?? '');
-      if (!rule || !hint().startsWith(rule)) drift.push(`${option.value}: card ${JSON.stringify(rule)}, hint ${JSON.stringify(hint().slice(0, 80))}`);
-    }
-    results.push({ name: "/pools the Strategy hint opens with the card's rule for each strategy", ok: (strategy?.options.length ?? 0) === 3 && drift.length === 0, missing: drift });
+    for (const option of [...(strategy?.options ?? [])]) await choose(option.value);
     await choose('round_robin');
     results.push({ name: '/pools switching strategies leaves the toggle enabled', ok: toggle?.disabled === false, missing: [toggle?.outerHTML.slice(0, 120) ?? 'absent'] });
     // Back to the stored strategy: this dialog stays open for the checks below, which read the pool as it is saved.
@@ -1954,11 +2252,11 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace',
 
   {
     const visibility = [...(dlg?.querySelector('.dialog-rail__parent[data-parent="Visibility"]')?.parentElement?.querySelectorAll('.dialog-rail__group .dialog-rail__label') ?? [])].map((s) => s.textContent?.trim());
-    results.push({ name: '/pools dialog lists Response headers, Body capture and Cache diagnostics under Visibility, in that order', ok: JSON.stringify(visibility) === '["Response headers","Body capture","Cache diagnostics"]', missing: visibility });
+    results.push({ name: '/pools dialog lists Body capture and Cache diagnostics under Visibility, in that order', ok: JSON.stringify(visibility) === '["Body capture","Cache diagnostics"]', missing: visibility });
     expect('/pools capture section', group(dlg, 'Body capture')?.textContent ?? '', [
       'Capture request and response bodies',
       "Keeps the request and response bodies of this pool's keys for the request drawer on the Requests page",
-      'A key can override it, and only admins read bodies.',
+      'A key can override it, and only the admin secret can read them.',
       'Retention (hours)',
       "At most the bootstrap's body capture limit, 72 hours here, shown on the Settings page",
     ]);
@@ -2197,17 +2495,6 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace',
       name: '/pools a threshold that is not a whole number holds the save while either placement reads it, and with neither it is disabled and frees the save',
       ok: stored === '20000' && refused[0] === true && refused[1] === 'The minimum shared prefix is a whole number of tokens, 0 or more.' && JSON.stringify(cohortOnly) === '[false,true]' && JSON.stringify(neither) === '[true,true,false]' && save()?.disabled === false,
       missing: [String(stored), ...refused.map(String), JSON.stringify(cohortOnly), JSON.stringify(neither)],
-    });
-    const quota = select('Quota headers');
-    results.push({
-      name: '/pools the Response headers group offers the quota headers, at the stored setting',
-      ok:
-        JSON.stringify(options(quota)) === '["Pass through","Hide on committed answers"]' &&
-        quota?.value === 'hide' &&
-        (group(dlg, 'Response headers')?.textContent ?? '').includes(
-          "Hide drops the anthropic-ratelimit-unified-* headers from every answer but a 429, so an organization's quota never reads as the key holder's own; a 429 keeps them so the client can resume after the reset. request-id passes either way.",
-        ),
-      missing: [JSON.stringify(options(quota)), String(quota?.value)],
     });
     // Every member row carries a daily and a monthly budget, a subscription member's as an Anthropic-key member's; a
     // budget the member write refuses holds the save.
@@ -2504,12 +2791,32 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace',
   await m.settle(300);
   const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
   const ttlToggle = [...(group(dlg, 'Cache TTL')?.querySelectorAll('button[role="switch"]') ?? [])].find((b) => b.getAttribute('aria-label') === 'Set the cache TTL for this pool');
-  const diagnostics = [...(group(dlg, 'Cache diagnostics')?.querySelectorAll('select') ?? [])].find((s) => [...s.options].map((o) => o.textContent?.trim()).join('|') === 'Inherit the bootstrap setting|On|Off');
+  const diagnostics = () => group(dlg, 'Cache diagnostics')?.querySelector('button[role="switch"][aria-label="Cache diagnostics"]');
   results.push({
-    name: '/pools a pool that rewrites no breakpoint still offers the TTL block and the diagnostics override',
-    ok: ttlToggle?.getAttribute('aria-checked') === 'false' && diagnostics?.value === 'inherit',
-    missing: [ttlToggle ? '' : 'no cache TTL toggle', String(ttlToggle?.getAttribute('aria-checked')), diagnostics ? '' : 'no diagnostics select', String(diagnostics?.value)],
+    name: '/pools a pool that rewrites no breakpoint still offers the TTL block and the diagnostics switch',
+    ok: ttlToggle?.getAttribute('aria-checked') === 'false' && diagnostics()?.getAttribute('aria-checked') === 'false',
+    missing: [ttlToggle ? '' : 'no cache TTL toggle', String(ttlToggle?.getAttribute('aria-checked')), diagnostics() ? '' : 'no diagnostics switch', String(diagnostics()?.getAttribute('aria-checked'))],
   });
+  {
+    const states = [diagnostics()?.getAttribute('aria-checked')];
+    diagnostics()?.click();
+    await m.settle(120);
+    states.push(diagnostics()?.getAttribute('aria-checked'));
+    diagnostics()?.click();
+    await m.settle(120);
+    states.push(diagnostics()?.getAttribute('aria-checked'));
+    const section = group(dlg, 'Cache diagnostics');
+    const hint = diagnostics()?.closest('.field')?.querySelector('.field__hint')?.textContent?.trim();
+    results.push({
+      name: '/pools the Cache diagnostics switch has two states, off and on, and no inherit choice',
+      ok:
+        JSON.stringify(states) === '["false","true","false"]' &&
+        section?.querySelector('select') === null &&
+        !(section?.textContent ?? '').includes('Inherit') &&
+        hint === 'On asks the upstream why a cache read missed, on every account of this pool, and the reason lands in the request log (opens in a new tab).',
+      missing: [JSON.stringify(states), section?.querySelector('select') ? 'a select is left' : '', hint ?? 'no hint'],
+    });
+  }
   // Subagents by cohort read the threshold too, so it is enabled with sessions by strategy.
   const placements = [dlg?.querySelector('select[aria-label="Subagent placement"]')?.value, dlg?.querySelector('select[aria-label="Session placement"]')?.value];
   const threshold = dlg?.querySelector('input[aria-label="Minimum shared prefix, tokens"]');
@@ -2551,8 +2858,10 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace',
   const card = [...m.container.querySelectorAll('.pool')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'codex');
   results.push({
     name: '/pools tuning left in a block whose warming is off is not sent and holds nothing',
-    ok: heldWhileOn && freedWhenOff && !(open?.textContent ?? '').includes('Edit pool codex') && (card?.textContent ?? '').includes('Affinity off'),
-    missing: [String(heldWhileOn), String(freedWhenOff), open?.querySelector('.callout--critical')?.textContent ?? 'no callout', card ? '' : 'no codex card'],
+    // The dialog offers active and disabled alone, so the save turns the exhausted pool active, and the write clears
+    // the spend that held its member: the sentence reads what the save left.
+    ok: heldWhileOn && freedWhenOff && !(open?.textContent ?? '').includes('Edit pool codex') && card?.querySelector('.pool__status')?.textContent?.replace(/\s+/g, ' ').trim() === 'Active: Evals workspace takes every fresh session.',
+    missing: [String(heldWhileOn), String(freedWhenOff), open?.querySelector('.callout--critical')?.textContent ?? 'no callout', card?.querySelector('.pool__status')?.textContent ?? 'no codex card'],
   });
   if ((open?.textContent ?? '').includes('Edit pool codex')) {
     [...(open?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
@@ -2591,8 +2900,9 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace',
   m.unmount();
   m = await mount('/pools');
   const card = [...m.container.querySelectorAll('.pool')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'studio');
-  const cell = card?.querySelector('.pool__members ul li .pool__eligibility');
-  const lines = [...(cell?.children ?? [])].map((c) => c.textContent?.replace(/\s+/g, ' ').trim());
+  const row = [...(card?.querySelectorAll('.serving tbody tr') ?? [])].find((tr) => tr.children[1]?.querySelector('a')?.textContent?.trim() === 'business');
+  const lines = [...(row?.querySelectorAll('td:nth-child(2) .num') ?? [])].map((c) => c.textContent?.replace(/\s+/g, ' ').trim());
+  const standingBadges = [...(row?.querySelectorAll('td:nth-child(3) .badge') ?? [])].map((b) => b.textContent?.trim());
   [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool studio')?.click();
   await m.settle(300);
   const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
@@ -2603,12 +2913,13 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace',
   results.push({
     name: '/pools a budget on a subscription member draws its two fields and a save keeps it',
     ok:
-      JSON.stringify(lines) === '["metered - of $30.00 today","metered - of $300.00 this month","eligible"]' &&
+      JSON.stringify(lines) === '["metered - of $30.00 today","metered - of $300.00 this month"]' &&
+      JSON.stringify(standingBadges) === '["next"]' &&
       JSON.stringify(fields) === '["30","300"]' &&
       stored?.budgetDailyUsd === 30 &&
       stored?.budgetMonthlyUsd === 300 &&
       !m.container.querySelector('dialog[open]'),
-    missing: [...lines, ...fields.map((f) => (f === null ? 'no field' : `field ${f}`)), JSON.stringify(stored ?? null)],
+    missing: [...lines, ...standingBadges, ...fields.map((f) => (f === null ? 'no field' : `field ${f}`)), JSON.stringify(stored ?? null)],
   });
   // The story's membership back, so the budgets card below reads the rows the fixture holds.
   await api.updatePool('studio', studio);
@@ -2839,7 +3150,657 @@ m.unmount();
   await m.settle(200);
 }
 m.unmount();
+localStorage.removeItem('phoebis.expertView');
 
+// Until the key list is read, an empty list says nothing about a pool's keys: the count line and the Keys tile wait
+// while the read is out, and a failed read says the list is unavailable rather than "No keys yet" in the warning ink.
+{
+  const lineOf = (page) => [...page.container.querySelectorAll('.pool')].map((c) => {
+    const line = c.querySelector('.pool__keys');
+    return line ? [line.tagName, line.className.trim(), line.textContent?.trim()] : null;
+  });
+  const tileOf = (page) => [...page.container.querySelectorAll('.pool')].map((c) => {
+    const dd = [...c.querySelectorAll('.pool__stats > div')].find((d) => d.querySelector('dt')?.textContent?.trim() === 'Keys')?.querySelector('dd');
+    return dd ? [dd.textContent?.trim(), dd.querySelector('.muted')?.textContent?.trim() ?? null] : ['no tile'];
+  });
+  const headTile = (page) => {
+    const value = [...page.container.querySelectorAll('.stat-grid .stat')].find((t) => t.querySelector('.stat__label')?.textContent === 'Keys')?.querySelector('.stat__value');
+    return value ? [value.textContent?.trim(), value.querySelector('.skeleton') !== null, value.querySelector('.muted')?.textContent?.trim() ?? null] : ['no tile'];
+  };
+  const total = (await api.listKeys()).length;
+  const held = deferNextCall('listKeys');
+  let p = await mount('/pools');
+  const waiting = lineOf(p);
+  const waitingTiles = tileOf(p);
+  const waitingHead = headTile(p);
+  held.release();
+  held.restore();
+  await p.settle(300);
+  const loaded = lineOf(p);
+  const loadedTiles = tileOf(p);
+  const loadedHead = headTile(p);
+  results.push({
+    name: "/pools the page's Keys tile waits while the key list loads, then counts every key",
+    ok: total > 0 && JSON.stringify(waitingHead) === '["",true,null]' && JSON.stringify(loadedHead) === JSON.stringify([String(total), false, null]),
+    missing: [JSON.stringify(waitingHead), JSON.stringify(loadedHead), `${total} keys`],
+  });
+  results.push({
+    name: '/pools the key count line and the Keys tile draw nothing while the key list loads, then the count',
+    ok:
+      waiting.length > 0 &&
+      waiting.every((l) => l === null) &&
+      waitingTiles.every((t) => JSON.stringify(t) === '["",null]') &&
+      loaded.length === waiting.length &&
+      loaded.every((l) => l?.[0] === 'A') &&
+      loadedTiles.every((t) => /^[0-9]+$/.test(t[0] ?? '') && t[1] === null) &&
+      loaded.every((l, i) => l?.[2] === (loadedTiles[i][0] === '1' ? '1 key' : loadedTiles[i][0] === '0' ? 'No keys yet' : `${loadedTiles[i][0]} keys`)),
+    missing: [...waiting, ...waitingTiles, ...loaded, ...loadedTiles].map((l) => JSON.stringify(l)),
+  });
+  p.unmount();
+  failNextCall('listKeys', '/admin/keys', 'the key store is unavailable');
+  p = await mount('/pools');
+  const failed = lineOf(p);
+  const failedTiles = tileOf(p);
+  const failedHead = headTile(p);
+  results.push({ name: "/pools a failed key read leaves the page's Keys tile at n/a in the muted ink, never 0", ok: JSON.stringify(failedHead) === '["n/a",false,"n/a"]', missing: [JSON.stringify(failedHead)] });
+  results.push({
+    name: '/pools a failed key read says the keys are unavailable in the muted ink, never "No keys yet", and the Keys tile reads n/a',
+    ok:
+      failed.length > 0 &&
+      failed.every((l) => JSON.stringify(l) === JSON.stringify(['SPAN', 'pool__keys pool__keys--unread', 'Keys unavailable'])) &&
+      failedTiles.length === failed.length &&
+      failedTiles.every((t) => JSON.stringify(t) === '["n/a","n/a"]') &&
+      !p.text().includes('No keys yet') &&
+      p.container.querySelector('.pool__keys--none') === null,
+    missing: [...failed, ...failedTiles].map((l) => JSON.stringify(l)),
+  });
+  p.unmount();
+}
+
+// The page keeps the old key list through a refresh and after a failed one, so after the first key of a pool the count
+// line and the Keys tiles wait for the refresh rather than read "No keys yet" and 0, and a failed refresh reads
+// unavailable rather than the list from before it.
+{
+  const studio = (await api.listPools()).find((p) => p.id === 'studio');
+  await api.createPool({ ...studio, members: studio.members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })), name: 'keyless' });
+  const read = (page) => {
+    const card = [...page.container.querySelectorAll('.pool')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'keyless');
+    const tile = [...(card?.querySelectorAll('.pool__stats > div') ?? [])].find((d) => d.querySelector('dt')?.textContent?.trim() === 'Keys')?.querySelector('dd');
+    const head = [...page.container.querySelectorAll('.stat-grid .stat')].find((t) => t.querySelector('.stat__label')?.textContent === 'Keys')?.querySelector('.stat__value');
+    return [card?.querySelector('.pool__keys')?.textContent?.trim() ?? null, tile?.textContent?.trim() ?? 'no tile', head?.textContent?.trim() ?? 'no tile', head?.querySelector('.skeleton') !== null];
+  };
+  const createKey = async (page, name) => {
+    [...page.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool keyless')?.click();
+    await page.settle(300);
+    const dlg = [...page.container.querySelectorAll('dialog[open]')].pop();
+    [...(dlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Create key')?.click();
+    await page.settle(300);
+    const keyDlg = [...page.container.querySelectorAll('dialog[open]')].pop();
+    const input = keyDlg?.querySelector('input[placeholder="workstation"]');
+    if (input) {
+      Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(input, name);
+      input.dispatchEvent(new window.Event('input', { bubbles: true }));
+      await page.settle(100);
+    }
+    [...(keyDlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Create')?.click();
+    await page.settle(700);
+  };
+  const dropKeys = async () => {
+    for (const key of (await api.listKeys()).filter((k) => k.poolId === 'keyless')) await api.deleteKey(key.id);
+  };
+  let p = await mount('/pools');
+  const before = read(p);
+  const held = deferNextCall('listKeys');
+  await createKey(p, 'first');
+  const waiting = read(p);
+  held.release();
+  held.restore();
+  await p.settle(400);
+  const landed = read(p);
+  p.unmount();
+  const total = (await api.listKeys()).length;
+  results.push({
+    name: "/pools after a pool's first key the count line and the Keys tiles wait for the refresh, then count the key",
+    ok:
+      JSON.stringify(before) === JSON.stringify(['No keys yet', '0', String(total - 1), false]) &&
+      held.calls.length > 0 &&
+      JSON.stringify(waiting) === JSON.stringify([null, '', '', true]) &&
+      JSON.stringify(landed) === JSON.stringify(['1 key', '1', String(total), false]),
+    missing: [before, waiting, landed].map((x) => JSON.stringify(x)),
+  });
+  await dropKeys();
+  p = await mount('/pools');
+  failNextCall('listKeys', '/admin/keys', 'the key store is unavailable');
+  await createKey(p, 'first');
+  const failed = read(p);
+  p.unmount();
+  results.push({
+    name: '/pools a failed refresh after the first key reads Keys unavailable and n/a, never the list from before it',
+    ok: JSON.stringify(failed) === JSON.stringify(['Keys unavailable', 'n/a', 'n/a', false]),
+    missing: [JSON.stringify(failed)],
+  });
+  await dropKeys();
+  await api.deletePool('keyless');
+}
+
+// A member the accounts list does not carry still gets a row after the tiers, its verdict in the chips the listed rows
+// use and a sentence saying why selection passes it over.
+{
+  const listAccounts = api.listAccounts;
+  api.listAccounts = () => listAccounts.call(api).then((list) => list.filter((a) => a.id !== 'mail'));
+  let p;
+  try {
+    p = await mount('/pools');
+  } finally {
+    api.listAccounts = listAccounts;
+  }
+  const all = [...p.container.querySelectorAll('.pool')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'all');
+  const row = [...(all?.querySelectorAll('.serving tbody tr') ?? [])].find((tr) => tr.children[1]?.textContent?.trim() === 'mail' && tr.children[1].querySelector('a') === null);
+  const td = row?.children[2];
+  const chips = td?.querySelector(':scope > .chips');
+  const why = document.getElementById(td?.getAttribute('aria-describedby') ?? '')?.textContent ?? '';
+  results.push({
+    name: '/pools a member the accounts list lacks reads its verdict in chips and says it is not a known account',
+    ok: !!row && !!chips && chips.querySelectorAll('.badge').length > 0 && td.querySelectorAll('.badge').length === chips.querySelectorAll('.badge').length && why === 'mail: not a known account',
+    missing: [row ? 'row' : 'no row', chips ? 'chips' : 'no chips', why],
+  });
+  p.unmount();
+}
+
+// The address opens a dialog on a named group: a link, a reload or a typed address lands on the group, and the
+// entry is replaced by the bare route.
+{
+  const dialogOf = (page) => page.container.querySelector('dialog[open]');
+  const titleOf = (page) => dialogOf(page)?.querySelector('.dialog__title')?.textContent?.trim() ?? 'no dialog';
+  const shown = (page) => [...(dialogOf(page)?.querySelectorAll('section.dialog-group:not([hidden])') ?? [])].map((s) => s.getAttribute('aria-label')).join();
+  const focused = () => document.activeElement?.outerHTML.slice(0, 80) ?? 'nothing focused';
+  let q = await mount('/pools?edit=all&group=cacheTtl');
+  await q.settle(200);
+  const cacheTtl = group(dialogOf(q), 'Cache TTL');
+  results.push({
+    name: '/pools?edit=all&group=cacheTtl opens Edit pool all on Cache TTL, focuses its heading and leaves the address at /pools',
+    ok: titleOf(q) === 'Edit pool all' && shown(q) === 'Cache TTL' && rail(dialogOf(q), 'cacheTtl')?.getAttribute('aria-current') === 'true' && !!cacheTtl && document.activeElement === cacheTtl.querySelector('h3') && q.location().pathname === '/pools' && q.location().search === '',
+    missing: [titleOf(q), shown(q), focused(), JSON.stringify(q.location())],
+  });
+  dialogOf(q)?.querySelector('button[aria-label="Close"]')?.click();
+  await q.settle(200);
+  await q.navigate('/pools?edit=codex&group=shedding');
+  await q.settle(200);
+  results.push({ name: '/pools a search change on the mounted page opens the dialog on its group', ok: titleOf(q) === 'Edit pool codex' && shown(q) === 'Load shedding' && q.location().search === '', missing: [titleOf(q), shown(q), q.location().search] });
+  q.unmount();
+  // The card's strip writes the same address, and the page reads it on every change, so a second badge opens too.
+  q = await mount('/pools');
+  const poolCard = (name) => [...q.container.querySelectorAll('.pool')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === name);
+  poolCard('all')?.querySelector('.pool__features a[href="/pools?edit=all&group=cacheTtl"]')?.click();
+  await q.settle(300);
+  results.push({ name: "/pools the all card's cache TTL badge opens Edit pool all on Cache TTL and leaves the address at /pools", ok: titleOf(q) === 'Edit pool all' && shown(q) === 'Cache TTL' && q.location().pathname === '/pools' && q.location().search === '', missing: [titleOf(q), shown(q), JSON.stringify(q.location())] });
+  dialogOf(q)?.querySelector('button[aria-label="Close"]')?.click();
+  await q.settle(200);
+  poolCard('codex')?.querySelector('.pool__features a[href="/pools?edit=codex&group=shedding"]')?.click();
+  await q.settle(300);
+  results.push({ name: "/pools the strip's badges open the dialog twice in a row", ok: titleOf(q) === 'Edit pool codex' && shown(q) === 'Load shedding' && q.location().search === '', missing: [titleOf(q), shown(q), q.location().search] });
+  q.unmount();
+  q = await mount('/pools?edit=nope');
+  await q.settle(200);
+  results.push({ name: '/pools?edit=nope opens nothing, toasts and clears the address', ok: dialogOf(q) === null && q.text().includes('Pool nope not found') && q.location().search === '', missing: [titleOf(q), q.location().search] });
+  q.unmount();
+  q = await mount('/pools?edit=all&group=nope');
+  await q.settle(200);
+  results.push({ name: '/pools?edit=all&group=nope opens on Identity', ok: titleOf(q) === 'Edit pool all' && shown(q) === 'Identity', missing: [titleOf(q), shown(q)] });
+  q.unmount();
+  const desktop = (await api.listKeys()).find((k) => k.id === 'desktop')?.name ?? 'desktop';
+  q = await mount('/keys?edit=desktop&group=models');
+  await q.settle(200);
+  const models = group(dialogOf(q), 'Models');
+  results.push({
+    name: '/keys?edit=desktop&group=models opens the key dialog on Models, focuses its heading and leaves the address at /keys',
+    ok: titleOf(q) === `Edit ${desktop}` && shown(q) === 'Models' && !!models && document.activeElement === models.querySelector('h3') && q.location().pathname === '/keys' && q.location().search === '',
+    missing: [titleOf(q), shown(q), focused(), JSON.stringify(q.location())],
+  });
+  q.unmount();
+  // The address opens the dialog once the keys are read, which can be before the pools land; their arrival leaves the
+  // edit made meanwhile, the group and the focus as they stand.
+  // The pools checks above revoke desktop, so the edit lands on laptop, which is still active here.
+  const heldPools = deferNextCall('listPools');
+  q = await mount('/keys?edit=laptop&group=access');
+  await q.settle(200);
+  const enabled = () => group(dialogOf(q), 'Access')?.querySelector('button[role="switch"][aria-label="Enabled"]');
+  const opened = [enabled()?.getAttribute('aria-checked') ?? 'no switch', q.container.querySelectorAll('.table-toolbar select[aria-label="Pool"] option').length];
+  enabled()?.click();
+  await q.settle(100);
+  const switched = enabled()?.getAttribute('aria-checked') ?? 'no switch';
+  heldPools.release();
+  heldPools.restore();
+  await q.settle(300);
+  const visible = dialogOf(q)?.querySelector('section.dialog-group:not([hidden])');
+  results.push({
+    name: '/keys a pool list that lands after the dialog query opened the dialog keeps the edit, the group and the focus',
+    ok: heldPools.calls.length > 0 && JSON.stringify(opened) === '["true",1]' && switched === 'false' && enabled()?.getAttribute('aria-checked') === 'false' && shown(q) === 'Access' && !!visible && visible.contains(document.activeElement),
+    missing: [`held ${heldPools.calls.length}`, `opened ${JSON.stringify(opened)}`, `switched ${switched}`, `after release ${enabled()?.getAttribute('aria-checked') ?? 'no switch'}`, shown(q), focused()],
+  });
+  q.unmount();
+  q = await mount('/keys?edit=nope');
+  await q.settle(200);
+  results.push({ name: '/keys?edit=nope opens nothing, toasts and clears the address', ok: dialogOf(q) === null && q.text().includes('Key nope not found') && q.location().search === '', missing: [titleOf(q), q.location().search] });
+  q.unmount();
+}
+
+// On create the rail marks what a first pool needs; the marks are decoration with a hidden description, so an entry's
+// name stays its label, and they stay while the refusal dots come and go.
+{
+  const c = await mount('/pools');
+  [...c.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Create pool')?.click();
+  await c.settle(300);
+  const dlg = [...c.container.querySelectorAll('dialog[open]')].pop();
+  const markOf = (id) => rail(dlg, id)?.querySelector('.dialog-rail__mark');
+  const described = (id) =>
+    (rail(dlg, id)?.getAttribute('aria-describedby') ?? '')
+      .split(' ')
+      .filter(Boolean)
+      .map((ref) => document.getElementById(ref)?.textContent?.trim());
+  const marks = ['identity', 'members', 'keys', 'models'].map((id) => markOf(id)?.textContent?.trim() ?? null);
+  results.push({
+    name: '/pools Create pool marks Identity and Members needed and Keys after saving, each hidden from the name and read in the description',
+    ok:
+      JSON.stringify(marks) === '["needed","needed","after saving",null]' &&
+      markOf('identity')?.getAttribute('aria-hidden') === 'true' &&
+      JSON.stringify(described('identity')) === '["needed","holds a refusal"]' &&
+      JSON.stringify(described('keys')) === '["after saving"]' &&
+      rail(dlg, 'identity')?.querySelector('.dialog-rail__label')?.textContent === 'Identity' &&
+      (dlg?.querySelectorAll('.dialog-rail__mark').length ?? 0) === 3,
+    missing: [...marks.map(String), ...described('identity'), ...described('keys')],
+  });
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  const name = dlg?.querySelector('input[placeholder="research"]');
+  if (name) {
+    setter.call(name, 'first');
+    name.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await c.settle(150);
+  }
+  results.push({
+    name: '/pools a named pool reads Identity needed without the dot',
+    ok: markOf('identity')?.textContent?.trim() === 'needed' && rail(dlg, 'identity')?.querySelector('.dialog-rail__dot') === null && JSON.stringify(described('identity')) === '["needed"]',
+    missing: described('identity'),
+  });
+  dlg?.querySelector('button[aria-label="Close"]')?.click();
+  await c.settle(200);
+  [...c.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool all')?.click();
+  await c.settle(300);
+  const edit = [...c.container.querySelectorAll('dialog[open]')].pop();
+  results.push({ name: '/pools Edit pool all carries no mark', ok: (edit?.querySelector('.dialog__title')?.textContent ?? '') === 'Edit pool all' && edit?.querySelector('.dialog-rail__mark') === null, missing: [] });
+  c.unmount();
+  const k = await mount('/keys');
+  [...k.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Create key')?.click();
+  await k.settle(300);
+  results.push({ name: '/keys Create key carries no mark', ok: [...k.container.querySelectorAll('dialog[open]')].pop()?.querySelector('.dialog-rail__mark') === null, missing: [] });
+  k.unmount();
+}
+
+// The expert view: a browser preference switched from the sidebar, read by the dialogs alone.
+{
+  const sw = (page) => page.container.querySelector('.sidebar__status button[role="switch"][aria-label="Expert view"]');
+  localStorage.removeItem('phoebis.expertView');
+  let x = await mount('/pools');
+  const version = x.container.querySelector('.sidebar__status .sidebar__row.mono');
+  const row = sw(x)?.closest('.sidebar__row');
+  results.push({
+    name: 'the sidebar holds an Expert view switch above the version line, off on a fresh browser',
+    ok: !!row && !!version && row !== version && Boolean(row.compareDocumentPosition(version) & window.Node.DOCUMENT_POSITION_FOLLOWING) && sw(x)?.getAttribute('aria-checked') === 'false' && row.getAttribute('title') === 'Shows every field of the pool and key dialogs, the advanced ones included.',
+    missing: [row?.outerHTML.slice(0, 120) ?? 'no row', sw(x)?.getAttribute('aria-checked') ?? 'no switch'],
+  });
+  sw(x)?.click();
+  await x.settle(100);
+  const stored = localStorage.getItem('phoebis.expertView');
+  x.unmount();
+  x = await mount('/keys');
+  results.push({ name: 'the Expert view switch stores on and survives a remount', ok: stored === 'on' && sw(x)?.getAttribute('aria-checked') === 'true', missing: [stored, sw(x)?.getAttribute('aria-checked') ?? 'no switch'] });
+  x.unmount();
+  localStorage.setItem('phoebis.expertView', 'yes');
+  x = await mount('/pools');
+  results.push({ name: 'a stored value other than on reads as off', ok: sw(x)?.getAttribute('aria-checked') === 'false', missing: [sw(x)?.getAttribute('aria-checked') ?? 'no switch'] });
+  x.unmount();
+  localStorage.removeItem('phoebis.expertView');
+  const line = (section) => section?.querySelector('.dialog-group__more');
+  const dialogOf = (page) => page.container.querySelector('dialog[open]');
+  x = await mount('/fixtures/grouped-dialog?expert=identity,members');
+  let identity = group(dialogOf(x), 'Identity');
+  const members = group(dialogOf(x), 'Members');
+  const lineReads = (section) =>
+    (line(section)?.firstChild?.textContent ?? '') === '1 more setting in the ' &&
+    line(section)?.querySelector('button.link-btn')?.textContent?.trim() === 'expert view' &&
+    line(section)?.querySelector('button.link-btn')?.getAttribute('aria-label') === 'Turn on the expert view';
+  results.push({
+    name: 'with the mode off each group with an expert field ends with the line and hides the field',
+    ok: lineReads(identity) && lineReads(members) && identity?.querySelector('input[aria-label="Identity expert"]') === null && members?.lastElementChild === line(members),
+    missing: [line(identity)?.textContent ?? 'no line', line(members)?.textContent ?? 'no line'],
+  });
+  line(identity)?.querySelector('button')?.click();
+  await x.settle(150);
+  identity = group(dialogOf(x), 'Identity');
+  const field = identity?.querySelector('input[aria-label="Identity expert"]');
+  // Read through Boolean, so a missing sibling fails rather than passing as `undefined !== null`.
+  results.push({
+    name: 'the line turns the mode on, shows the field in place, leaves, and focuses the field',
+    ok: localStorage.getItem('phoebis.expertView') === 'on' && !!field && Boolean(field.closest('.expert')?.previousElementSibling?.querySelector('input[aria-label="Identity"]')) && line(identity) === null && line(group(dialogOf(x), 'Members')) === null && document.activeElement === field,
+    missing: [localStorage.getItem('phoebis.expertView'), document.activeElement?.outerHTML.slice(0, 80) ?? 'nothing focused'],
+  });
+  x.unmount();
+  x = await mount('/fixtures/grouped-dialog?expert=identity');
+  results.push({ name: 'with the mode on no line draws', ok: line(group(dialogOf(x), 'Identity')) === null && group(dialogOf(x), 'Identity')?.querySelector('input[aria-label="Identity expert"]') !== null, missing: [] });
+  x.unmount();
+  localStorage.removeItem('phoebis.expertView');
+  x = await mount('/fixtures/grouped-dialog?expert=identity&refused=identity');
+  results.push({ name: 'a wrapped field marked refused shows with the mode off, and the line does not count it', ok: group(dialogOf(x), 'Identity')?.querySelector('input[aria-label="Identity expert"]') !== null && line(group(dialogOf(x), 'Identity')) === null, missing: [] });
+  x.unmount();
+  const labels = (page) => [...(dialogOf(page)?.querySelectorAll('.dialog-rail__group .dialog-rail__label') ?? [])].map((s) => s.textContent?.trim());
+  const parents = (page) => [...(dialogOf(page)?.querySelectorAll('.dialog-rail__parent .dialog-rail__label') ?? [])].map((s) => s.textContent?.trim());
+  x = await mount('/fixtures/grouped-dialog?expertOnly=autoMode');
+  results.push({ name: 'an expert-only group leaves the rail while the mode is off', ok: !labels(x).includes('Auto mode') && labels(x).length === 16 && parents(x).join() === 'Pool,Routing,Load,Caching,Visibility', missing: labels(x) });
+  [...(group(dialogOf(x), 'Identity')?.querySelectorAll('button.link-btn') ?? [])].find((b) => b.textContent?.trim() === 'Auto mode')?.click();
+  await x.settle(150);
+  results.push({
+    name: 'a group link to an expert-only group turns the mode on, then opens it',
+    ok: localStorage.getItem('phoebis.expertView') === 'on' && rail(dialogOf(x), 'autoMode')?.getAttribute('aria-current') === 'true' && group(dialogOf(x), 'Auto mode')?.hidden === false && document.activeElement === group(dialogOf(x), 'Auto mode')?.querySelector('h3'),
+    missing: [localStorage.getItem('phoebis.expertView'), ...labels(x)],
+  });
+  x.unmount();
+  localStorage.removeItem('phoebis.expertView');
+  x = await mount('/fixtures/grouped-dialog?expertOnly=identity,members,keys,models,autoMode');
+  await x.settle(100);
+  const panel = (page) => [...(dialogOf(page)?.querySelectorAll('section.dialog-group:not([hidden])') ?? [])].map((s) => s.getAttribute('aria-label')).join();
+  results.push({ name: 'an expert-only run leaves with its parent heading', ok: parents(x).join() === 'Routing,Load,Caching,Visibility' && labels(x).length === 12, missing: parents(x) });
+  results.push({
+    name: 'a chosen group the filter takes off gives way to the first shown group',
+    ok: panel(x) === 'Selection' && rail(dialogOf(x), 'selection')?.getAttribute('aria-current') === 'true' && localStorage.getItem('phoebis.expertView') === null,
+    missing: [panel(x) || 'no panel shown', rail(dialogOf(x), 'selection')?.getAttribute('aria-current') ?? 'not current'],
+  });
+  x.unmount();
+  x = await mount('/fixtures/grouped-dialog?expertOnly=autoMode&refused=autoMode');
+  results.push({ name: 'a refused expert-only group stays on the rail', ok: labels(x).includes('Auto mode') && rail(dialogOf(x), 'autoMode')?.querySelector('.dialog-rail__dot') !== null, missing: labels(x) });
+  x.unmount();
+  localStorage.removeItem('phoebis.expertView');
+}
+
+// The plain view of the two dialogs: each group draws its plain fields and ends with the line where the expert view
+// adds some, the groups whose every field is expert leave the rail, a hidden field keeps its value through a save, and
+// a refusal on a hidden field shows it whatever the mode.
+{
+  localStorage.removeItem('phoebis.expertView');
+  const sw = (page) => page.container.querySelector('.sidebar__status button[role="switch"][aria-label="Expert view"]');
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  const labelsIn = (section) => [...(section?.querySelectorAll('.field__label') ?? [])].map((l) => l.textContent?.trim());
+  const lineIn = (section) => section?.querySelector('.dialog-group__more')?.firstChild?.textContent ?? null;
+  const parentsOf = (dlg) => [...(dlg?.querySelectorAll('.dialog-rail__parent .dialog-rail__label') ?? [])].map((s) => s.textContent?.trim());
+  const railOf = (dlg) => [...(dlg?.querySelectorAll('.dialog-rail__group .dialog-rail__label') ?? [])].map((s) => s.textContent?.trim());
+  const headingsOf = (dlg) => [...(dlg?.querySelectorAll('.dialog-group__title') ?? [])].map((h) => h.textContent?.trim());
+  const foot = (dlg, label) => [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === label);
+  const PARENTS = ['Pool', 'Routing', 'Load', 'Caching', 'Visibility'];
+  const PLAIN_GROUPS = ['Identity', 'Members', 'Keys', 'Models', 'Selection', 'Pinning', 'Utilization thresholds', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Probe tuning', 'Body capture'];
+  const EVERY_GROUP = ['Identity', 'Members', 'Keys', 'Models', 'Auto mode', 'Selection', 'Placement', 'Pinning', 'Utilization thresholds', 'Load shedding', 'Failover', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Probe tuning', 'Body capture', 'Cache diagnostics'];
+  const KEEPALIVE = ['Keep prompt caches warm', 'Also warm subagent caches', 'Stop when probes cost more than they save', 'Grace probes after the net turns negative', 'Daily probe cost cap ($)'];
+  const TUNING = ['Lead time, 5m cache (s)', 'Lead time, 1h cache (s)', 'Jitter, 5m cache (s)', 'Jitter, 1h cache (s)', 'Cold probe limit', 'Retry backoff base (s)', 'Retry backoff max (s)', 'Max idle seconds', 'Max idle ticks'];
+  // Each group's labels and line with the mode off, the Interfaces' plain fields; the line is null where none draws.
+  const PLAIN_FIELDS = {
+    Identity: [['Name', 'Status'], null],
+    Members: [[], null],
+    Keys: [[], null],
+    Models: [['Model rules'], null],
+    Selection: [['Strategy', 'Prioritize subscription accounts'], null],
+    Pinning: [['Session affinity'], '1 more setting in the '],
+    'Utilization thresholds': [['Migrate above utilization', 'Utilization (%)', 'Member utilization'], '1 more setting in the '],
+    'Overage and plan end': [['Overage policy'], '2 more settings in the '],
+    'Cache TTL': [['Set the cache TTL for this pool', 'Write cost'], '3 more settings in the '],
+    Keepalive: [KEEPALIVE, null],
+    'Probe tuning': [TUNING, null],
+    'Body capture': [['Capture request and response bodies', 'Retention (hours)'], null],
+  };
+  // With the mode on, the groups that hold an expert field read every one of them.
+  const EXPERT_FIELDS = {
+    'Auto mode': ['Support server-side auto mode'],
+    Placement: ['Subagent placement', 'Session placement', 'Minimum shared prefix, tokens'],
+    Pinning: ['Session affinity', 'Pin sessions'],
+    'Utilization thresholds': ['Migrate above utilization', 'Utilization (%)', 'Select below utilization', 'Utilization (%)', 'Member utilization'],
+    'Load shedding': ['Preset', 'Share (%)', 'Burn window (s)', 'Source dwell (s)', 'Migrate when spent', 'Warm sessions', 'Preview'],
+    Failover: ['Preset', 'In flight', 'Retry in place (s)', 'Pace floor (%)'],
+    'Overage and plan end': ['Overage policy', 'Overage grace (min)', 'Wind down (min)'],
+    'Cache TTL': ['Set the cache TTL for this pool', 'Add a cache marker to a request without one', 'Write cost', 'Plan writes', 'Metered writes'],
+    'Cache diagnostics': ['Cache diagnostics'],
+  };
+
+  let p = await mount('/pools');
+  const open = async (name) => {
+    [...p.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === `Edit pool ${name}`)?.click();
+    await p.settle(300);
+    return [...p.container.querySelectorAll('dialog[open]')].pop();
+  };
+  const flip = async () => {
+    sw(p)?.click();
+    await p.settle(150);
+  };
+  let dlg = await open('all');
+  const plainRail = [parentsOf(dlg), railOf(dlg), headingsOf(dlg)];
+  results.push({
+    name: '/pools with the mode off the rail and the body hold twelve groups under the five parents, the five expert-only groups gone',
+    ok: JSON.stringify(plainRail) === JSON.stringify([PARENTS, PLAIN_GROUPS, PLAIN_GROUPS]) && (dlg?.querySelectorAll('.dialog-rail__parent, .dialog-rail__group').length ?? 0) === 17,
+    missing: plainRail.map((x) => JSON.stringify(x)),
+  });
+  const plainRead = Object.fromEntries(PLAIN_GROUPS.map((label) => [label, [labelsIn(group(dlg, label)), lineIn(group(dlg, label))]]));
+  results.push({
+    name: "/pools with the mode off each group reads its plain fields, and the line counts the expert ones where a group holds some",
+    ok: JSON.stringify(plainRead) === JSON.stringify(PLAIN_FIELDS),
+    missing: Object.entries(plainRead)
+      .filter(([label, read]) => JSON.stringify(read) !== JSON.stringify(PLAIN_FIELDS[label]))
+      .map(([label, read]) => `${label}: ${JSON.stringify(read)}`),
+  });
+  const drawnExpert = ['input[aria-label="Select below utilization (%)"]', 'select[aria-label="Pin sessions"]', '[aria-label="Load shedding preset"]', '[aria-label="Failover preset"]', '[data-rule-set]', 'button[role="switch"][aria-label="Add a cache marker to a request without one"]', 'button[role="switch"][aria-label="Cache diagnostics"]', '[role="slider"][aria-label="Select-below threshold"]'].filter((s) => dlg?.querySelector(s) !== null);
+  results.push({ name: '/pools with the mode off no expert control is drawn', ok: drawnExpert.length === 0, missing: drawnExpert });
+  group(dlg, 'Pinning')?.querySelector('.dialog-group__more button')?.click();
+  await p.settle(150);
+  const expertRail = [parentsOf(dlg), railOf(dlg), headingsOf(dlg)];
+  const expertRead = Object.fromEntries(Object.keys(EXPERT_FIELDS).map((label) => [label, labelsIn(group(dlg, label))]));
+  results.push({
+    name: '/pools the line turns the mode on: the rail holds all 22 entries, every group draws its expert fields, and no line is left',
+    ok:
+      localStorage.getItem('phoebis.expertView') === 'on' &&
+      JSON.stringify(expertRail) === JSON.stringify([PARENTS, EVERY_GROUP, EVERY_GROUP]) &&
+      (dlg?.querySelectorAll('.dialog-rail__parent, .dialog-rail__group').length ?? 0) === 22 &&
+      JSON.stringify(expertRead) === JSON.stringify(EXPERT_FIELDS) &&
+      dlg?.querySelector('.dialog-group__more') === null,
+    missing: [localStorage.getItem('phoebis.expertView'), ...expertRail.map((x) => JSON.stringify(x)), ...Object.entries(expertRead).filter(([label, read]) => JSON.stringify(read) !== JSON.stringify(EXPERT_FIELDS[label])).map(([label, read]) => `${label}: ${JSON.stringify(read)}`)],
+  });
+  foot(dlg, 'Cancel')?.click();
+  await p.settle(200);
+
+  // Set in the expert view: a select-below, a failover floor and a plan override per model; then saved in the plain
+  // view, where none of the three is drawn.
+  const story = (await api.listPools()).find((x) => x.id === 'all');
+  dlg = await open('all');
+  rail(dlg, 'utilization')?.click();
+  await p.settle(120);
+  dlg?.querySelector('button[role="switch"][aria-label="Select below utilization"]')?.click();
+  await p.settle(120);
+  const selectBelow = dlg?.querySelector('input[aria-label="Select below utilization (%)"]');
+  if (selectBelow) {
+    setter.call(selectBelow, '70');
+    selectBelow.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await p.settle(120);
+  }
+  [...(dlg?.querySelectorAll('[aria-label="Failover preset"] .pill') ?? [])].find((b) => b.textContent?.trim() === 'Custom')?.click();
+  await p.settle(120);
+  const floor = [...(group(dlg, 'Failover')?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === 'Pace floor (%)')?.querySelector('input');
+  if (floor) {
+    setter.call(floor, '12');
+    floor.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await p.settle(120);
+  }
+  const picker = dlg?.querySelector('[data-rule-set="plan"] select[aria-label^="Model to add"]');
+  const added = [...(picker?.querySelectorAll('option') ?? [])].map((o) => o.value).find(Boolean);
+  if (picker && added) {
+    Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set.call(picker, added);
+    picker.dispatchEvent(new window.Event('change', { bubbles: true }));
+    await p.settle(120);
+    [...(dlg?.querySelector('[data-rule-set="plan"]')?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Add')?.click();
+    await p.settle(120);
+  }
+  foot(dlg, 'Save pool')?.click();
+  await p.settle(700);
+  const stored = (await api.listPools()).find((x) => x.id === 'all');
+  const kept = (pool) => [pool?.selectBelowUtilization, pool?.paceFloor, pool?.cacheTtl.plan.models.map((x) => x.model)];
+  const typed = kept(stored);
+  await flip();
+  dlg = await open('all');
+  const hidden = [
+    dlg?.querySelector('input[aria-label="Select below utilization (%)"]') ?? null,
+    dlg?.querySelector('[role="slider"][aria-label="Select-below threshold"]') ?? null,
+    group(dlg, 'Failover') ?? null,
+    dlg?.querySelector('[data-rule-set="plan"]') ?? null,
+  ];
+  const updatePool = api.updatePool;
+  const sent = [];
+  api.updatePool = (id, input) => {
+    sent.push(input);
+    return updatePool.call(api, id, input);
+  };
+  try {
+    foot(dlg, 'Save pool')?.click();
+    await p.settle(700);
+  } finally {
+    api.updatePool = updatePool;
+  }
+  const reread = (await api.listPools()).find((x) => x.id === 'all');
+  results.push({
+    name: '/pools a pool saved in the plain view keeps the select-below, the pace floor and the plan overrides the expert view set, none of them drawn',
+    ok:
+      JSON.stringify(typed) === JSON.stringify([0.7, 0.12, ['claude-haiku-4-5-20251001', added]]) &&
+      hidden.every((x) => x === null) &&
+      sent.length === 1 &&
+      JSON.stringify(kept(sent[0])) === JSON.stringify(typed) &&
+      JSON.stringify(kept(reread)) === JSON.stringify(typed) &&
+      !p.container.querySelector('dialog[open]'),
+    missing: [JSON.stringify(typed), ...hidden.map((x) => (x === null ? 'hidden' : `drawn: ${x.tagName}`)), `${sent.length} saves`, JSON.stringify(kept(sent[0])), JSON.stringify(kept(reread))],
+  });
+  await api.updatePool('all', { ...story, members: story.members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })) });
+  p.unmount();
+
+  // A select-below past 100 typed in the expert view, then the mode turned off: the refused field stays drawn and the
+  // footer's Go to reaches it. The field is read hidden first, so the check fails where nothing hides it.
+  localStorage.removeItem('phoebis.expertView');
+  p = await mount('/pools');
+  dlg = await open('all');
+  rail(dlg, 'utilization')?.click();
+  await p.settle(120);
+  const util = () => group(dlg, 'Utilization thresholds');
+  const percent = () => dlg?.querySelector('input[aria-label="Select below utilization (%)"]');
+  const before = [percent() ? 'drawn' : 'hidden', lineIn(util())];
+  util()?.querySelector('.dialog-group__more button')?.click();
+  await p.settle(150);
+  dlg?.querySelector('button[role="switch"][aria-label="Select below utilization"]')?.click();
+  await p.settle(120);
+  if (percent()) {
+    setter.call(percent(), '120');
+    percent().dispatchEvent(new window.Event('input', { bubbles: true }));
+    await p.settle(120);
+  }
+  await flip();
+  const status = () => dlg?.querySelector('.dialog__status');
+  const refused = [localStorage.getItem('phoebis.expertView'), percent()?.getAttribute('aria-invalid') ?? 'absent', status()?.textContent ?? '', !!rail(dlg, 'utilization')?.querySelector('.dialog-rail__dot'), lineIn(util())];
+  rail(dlg, 'identity')?.click();
+  await p.settle(120);
+  [...(status()?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Go to Utilization thresholds')?.click();
+  await p.settle(120);
+  results.push({
+    name: '/pools a refusal on a field the plain view hides shows the field, and the footer names it and reaches it with the mode still off',
+    ok:
+      JSON.stringify(before) === '["hidden","1 more setting in the "]' &&
+      JSON.stringify(refused) === JSON.stringify(['off', 'true', 'Save is held: Select below utilization is from 0 to 100.Go to Utilization thresholds', true, null]) &&
+      util()?.hidden === false &&
+      !!percent() &&
+      document.activeElement === percent() &&
+      util()?.querySelector('[role="slider"][aria-label="Select-below threshold"]') != null &&
+      localStorage.getItem('phoebis.expertView') === 'off',
+    missing: [JSON.stringify(before), JSON.stringify(refused), document.activeElement?.outerHTML.slice(0, 80) ?? 'nothing focused', util()?.querySelector('[role="slider"][aria-label="Select-below threshold"]') ? 'handle drawn' : 'no select-below handle'],
+  });
+  {
+    const handle = util()?.querySelector('[role="slider"][aria-label="Select-below threshold"]');
+    const drawn = [handle?.getAttribute('aria-valuenow'), handle?.getAttribute('aria-valuemax'), handle?.style.left, handle?.getAttribute('aria-valuetext')];
+    results.push({
+      name: "/pools a refused select-below past the track draws its handle at the track's end, the field's value in its text",
+      ok: JSON.stringify(drawn) === JSON.stringify(['100', '100', '100%', '120%']),
+      missing: drawn.map(String),
+    });
+  }
+  foot(dlg, 'Cancel')?.click();
+  await p.settle(200);
+
+  // The card's badge for an expert-only group turns the mode on before it opens the dialog there.
+  localStorage.removeItem('phoebis.expertView');
+  p.unmount();
+  p = await mount('/pools');
+  [...p.container.querySelectorAll('.pool')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'codex')?.querySelector('.pool__features a[href="/pools?edit=codex&group=shedding"]')?.click();
+  await p.settle(300);
+  dlg = p.container.querySelector('dialog[open]');
+  results.push({
+    name: "/pools the load shedding badge turns the mode on and opens the dialog on its group",
+    ok: localStorage.getItem('phoebis.expertView') === 'on' && group(dlg, 'Load shedding')?.hidden === false && rail(dlg, 'shedding')?.getAttribute('aria-current') === 'true',
+    missing: [localStorage.getItem('phoebis.expertView') ?? 'unset', dlg?.querySelector('section.dialog-group:not([hidden])')?.getAttribute('aria-label') ?? 'no group shown'],
+  });
+  p.unmount();
+
+  localStorage.removeItem('phoebis.expertView');
+  const k = await mount('/keys');
+  [...k.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Create key')?.click();
+  await k.settle(300);
+  let keyDlg = [...k.container.querySelectorAll('dialog[open]')].pop();
+  const keyRead = (dlgOf) => Object.fromEntries(['Key', 'Access', 'Models', 'Sessions', 'Capture'].map((label) => [label, [labelsIn(group(dlgOf, label)), lineIn(group(dlgOf, label))]]));
+  const plainKey = keyRead(keyDlg);
+  const plainKeyWanted = {
+    Key: [['Name', 'Pool', 'Notes'], null],
+    Access: [['Expiry'], '1 more setting in the '],
+    Models: [['Model rules'], '2 more settings in the '],
+    Sessions: [['Cache warming opt-out'], null],
+    Capture: [['Capture request and response bodies'], null],
+  };
+  results.push({
+    name: '/keys with the mode off each group reads its plain fields, and the line counts the expert ones in Access and Models',
+    ok: JSON.stringify(plainKey) === JSON.stringify(plainKeyWanted) && keyDlg?.querySelector('select[aria-label="Server-side auto mode"], .segmented, button[role="switch"][aria-label="List [1m] twins in the models listing"]') === null && JSON.stringify(railOf(keyDlg)) === '["Key","Access","Models","Sessions","Capture"]',
+    missing: [JSON.stringify(plainKey), JSON.stringify(railOf(keyDlg))],
+  });
+  group(keyDlg, 'Models')?.querySelector('.dialog-group__more button')?.click();
+  await k.settle(150);
+  const expertKey = keyRead(keyDlg);
+  results.push({
+    name: '/keys with the mode on Access draws Server-side auto mode and Models the Pool rules and the twins switch, with no line',
+    ok:
+      localStorage.getItem('phoebis.expertView') === 'on' &&
+      JSON.stringify(expertKey.Access) === JSON.stringify([['Expiry', 'Server-side auto mode'], null]) &&
+      JSON.stringify(expertKey.Models) === JSON.stringify([['Model rules', 'Pool rules', 'List [1m] twins in the models listing'], null]) &&
+      keyDlg?.querySelector('.dialog-group__more') === null,
+    missing: [JSON.stringify(expertKey)],
+  });
+  foot(keyDlg, 'Cancel')?.click();
+  await k.settle(200);
+  sw(k)?.click();
+  await k.settle(150);
+  const row = [...k.container.querySelectorAll('.card--table tbody tr')].find((r) => r.children[0]?.querySelector('b')?.textContent?.trim() === 'laptop');
+  row?.querySelector('.menu__trigger')?.click();
+  await k.settle(120);
+  [...k.container.querySelectorAll('[role="menuitem"]')].find((b) => b.textContent?.trim() === 'Edit')?.click();
+  await k.settle(300);
+  keyDlg = [...k.container.querySelectorAll('dialog[open]')].pop();
+  const editAccess = [labelsIn(group(keyDlg, 'Access')), lineIn(group(keyDlg, 'Access'))];
+  results.push({
+    name: '/keys the edit dialog with the mode off reads Enabled and Expiry in Access and the line for the one more',
+    ok: localStorage.getItem('phoebis.expertView') === 'off' && JSON.stringify(editAccess) === JSON.stringify([['Enabled', 'Expiry'], '1 more setting in the ']),
+    missing: [localStorage.getItem('phoebis.expertView') ?? 'unset', JSON.stringify(editAccess)],
+  });
+  foot(keyDlg, 'Cancel')?.click();
+  await k.settle(200);
+  k.unmount();
+  localStorage.removeItem('phoebis.expertView');
+}
+
+// As on the pools, the key dialog checks below read the expert fields too.
+localStorage.setItem('phoebis.expertView', 'on');
 m = await mount('/keys');
 expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost', 'Lifetime cost by key', 'phoebis-8f2a', 'phoebis-c41d', 'phoebis-19e7', 'Pool rules', 'revoked', 'Create key', 'Never', 'still on the previous secret']);
 {
@@ -2882,6 +3843,87 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
   const select = m.container.querySelector('.table-toolbar select');
   results.push({ name: '/keys the status filter offers disabled', ok: [...(select?.options ?? [])].map((o) => o.value).includes('disabled'), missing: [...(select?.options ?? [])].map((o) => o.value) });
 }
+// The Pool select is the address: `?pool=<id>` filters the rows, All pools clears it, and an unknown id reads as All
+// pools and leaves the address.
+{
+  // The /pools checks above move a key into codex and create one in all, so every count is the store's at this point.
+  const stored = await api.listKeys();
+  const inPool = (id) => stored.filter((key) => key.poolId === id).length;
+  // A filter that keeps every row, or none, would pass the cell reads without filtering anything.
+  const narrows = (id) => inPool(id) > 0 && inPool(id) < stored.length;
+  const poolCells = (page) => [...page.container.querySelectorAll('.card--table tbody tr td:nth-child(3)')].map((td) => td.textContent?.trim());
+  const select = (page) => page.container.querySelector('.table-toolbar select[aria-label="Pool"]');
+  let k = await mount('/keys?pool=codex');
+  results.push({ name: "/keys?pool=codex lists the pool's keys alone with the Pool select on codex", ok: narrows('codex') && poolCells(k).length === inPool('codex') && poolCells(k).every((c) => c === 'codex') && select(k)?.value === 'codex', missing: [`expected ${inPool('codex')} of ${stored.length}`, ...poolCells(k), select(k)?.value ?? 'no select'] });
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
+  const choosePool = async (page, id) => {
+    const target = select(page);
+    if (!target) return;
+    setter.call(target, id);
+    target.dispatchEvent(new window.Event('change', { bubbles: true }));
+    await page.settle(200);
+  };
+  await choosePool(k, '');
+  results.push({ name: '/keys All pools lists every key and leaves /keys', ok: !!select(k) && poolCells(k).length === stored.length && k.location().pathname === '/keys' && k.location().search === '', missing: [`${poolCells(k).length} of ${stored.length}`, JSON.stringify(k.location())] });
+  await choosePool(k, 'all');
+  results.push({ name: '/keys the pool named all filters to its own keys and stays in the address', ok: narrows('all') && poolCells(k).length === inPool('all') && poolCells(k).every((c) => c === 'all') && select(k)?.value === 'all' && k.location().search === '?pool=all', missing: [`expected ${inPool('all')} of ${stored.length}`, ...poolCells(k), select(k)?.value ?? 'no select', k.location().search] });
+  k.unmount();
+  k = await mount('/keys?pool=all');
+  results.push({ name: "/keys?pool=all lists the all pool's keys alone with the Pool select on it", ok: narrows('all') && poolCells(k).length === inPool('all') && poolCells(k).every((c) => c === 'all') && select(k)?.value === 'all' && k.location().search === '?pool=all', missing: [`expected ${inPool('all')} of ${stored.length}`, ...poolCells(k), select(k)?.value ?? 'no select', k.location().search] });
+  k.unmount();
+  k = await mount('/keys?pool=nope');
+  results.push({ name: '/keys?pool=nope leaves All pools and clears the address', ok: select(k)?.value === '' && poolCells(k).length === stored.length && k.location().search === '', missing: [select(k)?.value ?? 'no select', `${poolCells(k).length} of ${stored.length}`, k.location().search] });
+  k.unmount();
+  // Until the pools land the page cannot tell a known id from an unknown one, so it takes the address at its word: the
+  // key count link lands on the pool's rows from the first render, never on every key.
+  // The select holds an option for the id meanwhile, since one it lacks would read All pools beside filtered rows.
+  const options = (page) => [...(select(page)?.options ?? [])].map((o) => [o.value, o.textContent]);
+  const codexName = (await api.listPools()).find((p) => p.id === 'codex')?.name;
+  const heldPools = deferNextCall('listPools');
+  k = await mount('/keys?pool=codex');
+  const waiting = poolCells(k);
+  const waitingSearch = k.location().search;
+  const waitingSelect = [select(k)?.value ?? 'no select', options(k)];
+  heldPools.release();
+  heldPools.restore();
+  await k.settle(300);
+  results.push({
+    name: "/keys?pool=codex lists the pool's keys alone with the Pool select on codex while the pools are still loading",
+    ok:
+      narrows('codex') &&
+      heldPools.calls.length > 0 &&
+      waiting.length === inPool('codex') &&
+      waiting.every((c) => c === 'codex') &&
+      waitingSearch === '?pool=codex' &&
+      JSON.stringify(waitingSelect) === JSON.stringify(['codex', [['', 'All pools'], ['codex', 'codex']]]) &&
+      poolCells(k).length === inPool('codex') &&
+      select(k)?.value === 'codex' &&
+      JSON.stringify(options(k).filter(([value]) => value === 'codex')) === JSON.stringify([['codex', codexName]]) &&
+      k.location().search === '?pool=codex',
+    missing: [`expected ${inPool('codex')} of ${stored.length}`, `held ${heldPools.calls.length}`, `loading ${waiting.join(',')}`, waitingSearch, JSON.stringify(waitingSelect), `loaded ${poolCells(k).join(',')}`, select(k)?.value ?? 'no select', JSON.stringify(options(k)), k.location().search],
+  });
+  k.unmount();
+  failNextCall('listPools', '/admin/pools', 'the pool store is unavailable');
+  k = await mount('/keys?pool=codex');
+  const failed = poolCells(k);
+  const failedValue = select(k)?.value ?? 'no select';
+  await choosePool(k, '');
+  results.push({
+    name: '/keys?pool=codex after a failed pool read keeps the rows filtered and the Pool select on codex, and All pools clears both',
+    ok: narrows('codex') && failed.length === inPool('codex') && failed.every((c) => c === 'codex') && failedValue === 'codex' && select(k)?.value === '' && poolCells(k).length === stored.length && k.location().search === '',
+    missing: [`expected ${inPool('codex')} of ${stored.length}`, `failed ${failed.join(',')}`, failedValue, select(k)?.value ?? 'no select', `cleared ${poolCells(k).length}`, k.location().search],
+  });
+  k.unmount();
+  k = await mount('/keys?pool=codex&edit=batch&group=models');
+  await k.settle(200);
+  const dlg = k.container.querySelector('dialog[open]');
+  results.push({
+    name: '/keys the pool filter survives the dialog query',
+    ok: [...(dlg?.querySelectorAll('section.dialog-group:not([hidden])') ?? [])].map((s) => s.getAttribute('aria-label')).join() === 'Models' && k.location().search === '?pool=codex' && narrows('codex') && poolCells(k).length === inPool('codex') && poolCells(k).every((c) => c === 'codex'),
+    missing: [k.location().search, `expected ${inPool('codex')} of ${stored.length}`, ...poolCells(k)],
+  });
+  k.unmount();
+}
 {
   const captureOf = (name) => {
     const tr = [...m.container.querySelectorAll('.card--table tbody tr')].find((row) => row.children[0]?.querySelector('b')?.textContent?.trim() === name);
@@ -2894,23 +3936,6 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
     missing: effective,
   });
   const subsOf = (name) => [...([...m.container.querySelectorAll('.card--table tbody tr')].find((row) => row.children[0]?.querySelector('b')?.textContent?.trim() === name)?.children[0]?.querySelectorAll('.sub') ?? [])].map((sub) => sub.textContent?.trim());
-  results.push({
-    name: "/keys a key's in-flight cap reads under its name, and a key without one draws no line",
-    ok: subsOf('laptop').includes('at most 8 in flight') && !subsOf('desktop').some((t) => t?.includes('in flight')),
-    missing: [JSON.stringify(subsOf('laptop')), JSON.stringify(subsOf('desktop'))],
-  });
-}
-{
-  // The key table's tooltips carry the dialog's words for the cap, less its page link.
-  const laptop = [...m.container.querySelectorAll('.card--table tbody tr')].find((row) => row.children[0]?.querySelector('b')?.textContent?.trim() === 'laptop');
-  const capTitle = [...(laptop?.children[0]?.querySelectorAll('.sub') ?? [])].find((s) => s.textContent?.trim() === 'at most 8 in flight')?.getAttribute('title');
-  results.push({
-    name: "/keys the table's tooltips read the dialog's words",
-    ok:
-      m.container.querySelector('dialog[open]') === null &&
-      capTitle === 'Past this many requests at once the key is refused with a 429 and a Retry-After until one finishes; empty means no cap.',
-    missing: [String(capTitle)],
-  });
 }
 {
   // A server refusal holds the footer until the operator edits; then the form's own next hold takes the line.
@@ -2932,17 +3957,17 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
   const refused = read();
   await type(dlg?.querySelector('input[placeholder="workstation"]'), 'taken-2');
   const corrected = read();
-  await type(group(dlg, 'Access')?.querySelector('input[aria-label="Requests in flight"]'), '0');
-  const capped = read();
+  await type(dlg?.querySelector('input[placeholder="workstation"]'), '');
+  const blank = read();
   results.push({
     name: "/keys a corrected field clears the server's refusal and the next local refusal takes the footer",
     ok:
       refused === 'held | name is taken' &&
       status() !== null &&
       corrected === 'free | Every group saves together.' &&
-      capped === 'held | Save is held: Requests in flight is a whole number of at least 1; leave it empty for no cap.Go to Access' &&
+      blank === 'held | Save is held: the key needs a name.Go to Key' &&
       (dlg?.open ?? false),
-    missing: [refused, corrected, capped],
+    missing: [refused, corrected, blank],
   });
   [...(dlg?.querySelectorAll('.dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
   await m.settle(200);
@@ -2973,9 +3998,7 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
   btn?.click();
   await m.settle(200);
   const dlg = m.container.querySelector('dialog[open]');
-  // A hint that ends in a page link is read up to the link, whose text carries a hidden "opens in a new tab".
-  const CAP_HINT = "Past this many requests at once the key is refused with a 429 and a Retry-After until one finishes; empty means no cap. The pool's cap per member is under Failover on the";
-  expect('/keys create dialog opens', dlg?.textContent ?? '', ['Create key', 'Expiry', 'Requests in flight', CAP_HINT, 'Notes', 'Capture request and response bodies', 'Cache warming opt-out', 'Model rules', 'Extend pool rules', 'Replace pool rules', 'from pool', 'List [1m] twins in the models listing', 'written with a trailing *']);
+  expect('/keys create dialog opens', dlg?.textContent ?? '', ['Create key', 'Expiry', 'Notes', 'Capture request and response bodies', 'Cache warming opt-out', 'Model rules', 'Extend pool rules', 'Replace pool rules', 'from pool', 'List [1m] twins in the models listing', 'written with a trailing *']);
   {
     // Read while the name is blank, so Key carries its refusal mark; the label span passes over the dot and the note.
     const railLabels = [...(dlg?.querySelectorAll('.dialog-rail__group .dialog-rail__label') ?? [])].map((l) => l.textContent?.trim());
@@ -3038,56 +4061,19 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
     await m.settle(100);
   }
   {
-    // Access holds who may use the key and how much at once: on create, Expiry, Server-side auto mode, then
-    // the cap.
+    // Access holds who may use the key: on create, Expiry, then Server-side auto mode.
     const access = group(dlg, 'Access');
     const labels = [...(access?.querySelectorAll('.field__label') ?? [])].map((l) => l.textContent?.trim());
-    results.push({ name: '/keys Requests in flight follows Server-side auto mode in Access', ok: JSON.stringify(labels) === JSON.stringify(['Expiry', 'Server-side auto mode', 'Requests in flight']), missing: labels });
-    // What names a conversation sits in Sessions; it keeps its options and defaults.
+    results.push({ name: '/keys Access reads Expiry and Server-side auto mode', ok: JSON.stringify(labels) === JSON.stringify(['Expiry', 'Server-side auto mode']), missing: labels });
     const sessions = group(dlg, 'Sessions');
     const selectIn = (section, label) => section?.querySelector(`select[aria-label="${label}"]`);
     const optionsOf = (section, label) => [...(selectIn(section, label)?.options ?? [])].map((o) => `${o.value}:${o.textContent?.trim()}`);
     const sessionLabels = [...(sessions?.querySelectorAll('.field__label') ?? [])].map((l) => l.textContent?.trim());
     results.push({
-      name: '/keys the Affinity source select sits in Sessions, with its options and the default',
+      name: '/keys Sessions holds Cache warming opt-out alone',
       ok:
-        JSON.stringify(sessionLabels) === JSON.stringify(['Affinity source', 'Cache warming opt-out']) &&
-        JSON.stringify(optionsOf(sessions, 'Affinity source')) === JSON.stringify(['auto:Automatic', 'session:Session id', 'user_id:User id', 'content:Conversation content', 'whole_key:Whole key']) &&
-        selectIn(sessions, 'Affinity source')?.value === 'auto',
-      missing: [JSON.stringify(labels), JSON.stringify(sessionLabels), JSON.stringify(optionsOf(sessions, 'Affinity source')), String(selectIn(sessions, 'Affinity source')?.value)],
-    });
-    expect('/keys the Affinity source select carries its hint', sessions?.textContent ?? '', [
-      "What names a conversation for pinning. Automatic takes the first of: the session id, a parent id the client sends back, the user id, the messages, the key. A fixed source uses that alone, and a request without it gets no pin. How long a pin lasts is the pool's Session affinity on the",
-    ]);
-    const cap = access?.querySelector('input[aria-label="Requests in flight"]');
-    const set = (v) => {
-      if (!cap) return;
-      Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(cap, v);
-      cap.dispatchEvent(new window.Event('input', { bubbles: true }));
-    };
-    const empty = cap?.value;
-    set('0');
-    await m.settle(80);
-    // The name is typed above, so the cap is the first hold and the footer names it.
-    const refused = access?.querySelector('[role="alert"]')?.textContent ?? '';
-    const line = dlg?.querySelector('.dialog__status')?.textContent ?? '';
-    const invalid = cap?.getAttribute('aria-invalid');
-    const accessEntry = rail(dlg, 'access');
-    const marked = Boolean(accessEntry?.querySelector('.dialog-rail__dot'));
-    set('3');
-    await m.settle(80);
-    results.push({
-      name: '/keys a cap of 0 is refused in the form, and a whole number from 1 is taken',
-      ok:
-        empty === '' &&
-        cap?.getAttribute('placeholder') === 'No cap' &&
-        refused.includes('Requests in flight is a whole number of at least 1') &&
-        line === 'Save is held: Requests in flight is a whole number of at least 1; leave it empty for no cap.Go to Access' &&
-        invalid === 'true' &&
-        marked &&
-        !access?.querySelector('[role="alert"]') &&
-        cap?.getAttribute('aria-invalid') === null,
-      missing: [String(empty), refused || 'no refusal', line, String(invalid), accessEntry ? `marked: ${marked}` : 'no rail entry', access?.querySelector('[role="alert"]')?.textContent ?? ''],
+        JSON.stringify(sessionLabels) === JSON.stringify(['Cache warming opt-out']),
+      missing: [JSON.stringify(labels), JSON.stringify(sessionLabels)],
     });
   }
   {
@@ -3100,13 +4086,26 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
     mode('Replace pool rules')?.click();
     await m.settle(120);
     const replaced = grey();
-    const hint = models?.querySelector('.field__hint')?.textContent ?? '';
+    const fieldOf = (label) => [...(models?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === label);
+    const hint = fieldOf('Pool rules')?.querySelector('.field__hint')?.textContent ?? '';
+    const rulesHint = fieldOf('Model rules')?.querySelector('.field__hint')?.textContent ?? '';
     mode('Extend pool rules')?.click();
     await m.settle(120);
+    const labels = [...(models?.querySelectorAll('.field__label') ?? [])].map((l) => l.textContent?.trim());
     results.push({
       name: "/keys the pool's rules show in grey under extend and go under replace",
-      ok: JSON.stringify(extended) === JSON.stringify(['Deny claude-3* from pool']) && mode('Extend pool rules')?.getAttribute('aria-pressed') === 'true' && twins === 'true' && replaced.length === 0 && hint.includes("Under Extend the pool's rules, in grey, apply after this key's own; under Replace they do not apply.") && grey().length === 1,
+      ok: JSON.stringify(extended) === JSON.stringify(['Deny claude-3* from pool']) && mode('Extend pool rules')?.getAttribute('aria-pressed') === 'true' && twins === 'true' && replaced.length === 0 && hint === "Extend applies the pool's rules, in grey, after this key's own; Replace applies this key's rules alone." && grey().length === 1,
       missing: [JSON.stringify(extended), String(twins), JSON.stringify(replaced), hint],
+    });
+    results.push({
+      name: '/keys Models holds the rule editor, then the Pool rules mode in a field of its own, then the twins switch',
+      ok:
+        JSON.stringify(labels) === JSON.stringify(['Model rules', 'Pool rules', 'List [1m] twins in the models listing']) &&
+        fieldOf('Model rules')?.querySelector('.segmented') === null &&
+        !!fieldOf('Pool rules')?.querySelector('.segmented') &&
+        fieldOf('Pool rules')?.querySelector('label') === null &&
+        rulesHint === 'Top to bottom, first match wins. The Models page (opens in a new tab) shows the list per key.',
+      missing: [JSON.stringify(labels), rulesHint],
     });
   }
   const nameInput = dlg?.querySelector('input[placeholder="workstation"]');
@@ -3155,7 +4154,6 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
     }
     await m.settle(200);
     expect('/keys table has new key', m.text(), ['smoke']);
-    results.push({ name: '/keys a key created with a cap stores it', ok: (await api.listKeys()).find((k) => k.id === 'smoke')?.inFlightCap === 3, missing: [String((await api.listKeys()).find((k) => k.id === 'smoke')?.inFlightCap)] });
     const done = [...m.container.querySelectorAll('dialog[open] button')].find((b) => b.textContent?.trim() === 'Done');
     done?.click();
     await m.settle(200);
@@ -3178,7 +4176,7 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
     const labels = [...(group(editDlg, 'Access')?.querySelectorAll('.field__label') ?? [])].map((l) => l.textContent?.trim());
     results.push({
       name: '/keys edit dialog draws the Enabled switch and an expiry that keeps the current one by default',
-      ok: toggle !== null && toggle?.disabled === false && group(editDlg, 'Access')?.contains(toggle) && JSON.stringify(labels) === JSON.stringify(['Enabled', 'Expiry', 'Server-side auto mode', 'Requests in flight']) && expiry?.value === 'keep' && JSON.stringify(options) === JSON.stringify(['keep', '7', '30', '60', '90', '365', 'never']),
+      ok: toggle !== null && toggle?.disabled === false && group(editDlg, 'Access')?.contains(toggle) && JSON.stringify(labels) === JSON.stringify(['Enabled', 'Expiry', 'Server-side auto mode']) && expiry?.value === 'keep' && JSON.stringify(options) === JSON.stringify(['keep', '7', '30', '60', '90', '365', 'never']),
       missing: [toggle ? String(toggle.getAttribute('aria-checked')) : 'no switch', JSON.stringify(labels), expiry?.value ?? 'no expiry select', options.join(',')],
     });
   }
@@ -3229,7 +4227,6 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
     missing: [String(off), saved ? '' : 'the dialog stayed open', rowOf('batch')?.querySelector('td:nth-child(7) .badge')?.textContent?.trim() ?? 'no batch row'],
   });
   const laptopDlg = await editOf('laptop');
-  const laptopCap = laptopDlg?.querySelector('input[aria-label="Requests in flight"]')?.value;
   const captureWarning = group(laptopDlg, 'Capture')?.querySelector('.callout--warning')?.textContent ?? '';
   results.push({
     name: "/keys the capture warning names what a session in auto mode sends with every request",
@@ -3238,7 +4235,6 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
   });
   foot(laptopDlg, 'Cancel')?.click();
   await m.settle(200);
-  results.push({ name: "/keys the edit dialog opens with the key's in-flight cap", ok: laptopCap === '8', missing: [String(laptopCap)] });
   const ci = await editOf('ci');
   const lock = ci?.querySelector('button[role="switch"][aria-label="Enabled"]');
   results.push({
@@ -3387,6 +4383,7 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
   });
 }
 m.unmount();
+localStorage.removeItem('phoebis.expertView');
 
 await readsAgain('/keys', 'listKeys');
 {
@@ -3802,6 +4799,18 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
   await m.navigate('/requests');
 }
 {
+  const cut = requests.find((r) => r.outcome === 'incomplete');
+  await m.navigate(`/requests/${cut?.id}`);
+  await m.settle(300);
+  const error = [...(m.container.querySelectorAll('.drawer .kv__row') ?? [])].find((r) => r.querySelector('dt')?.textContent?.trim() === 'Error')?.querySelector('dd');
+  results.push({
+    name: '/requests the drawer of a stream that ended short names stream_incomplete',
+    ok: cut !== undefined && error?.textContent?.trim() === 'stream_incomplete',
+    missing: [cut?.id ?? 'no incomplete row in the mock', error?.textContent ?? 'no Error row'],
+  });
+  await m.navigate('/requests');
+}
+{
   const rowsBefore = m.container.querySelectorAll('tbody tr').length;
   results.push({ name: '/requests has rows', ok: rowsBefore >= 10, missing: [String(rowsBefore)] });
   const trails = [...m.container.querySelectorAll('tbody .trail')];
@@ -3889,7 +4898,36 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
   results.push({ name: 'fixture has a three-attempt request', ok: three.length >= 1, missing: [String(three.length)] });
 }
 await m.navigate(`/requests/${laptopRow.id}`);
-expect('/requests/:laptop drawer (admin)', m.text(), ['Summary', 'Session', 'Agent', 'Attempts', 'Succeeded', 'Usage', 'Cache read', 'Cache write, 5m', 'Cache write, 1h', 'Output, thinking', 'Output, plain', 'Server tool calls', 'Estimated cost', 'Captured bodies', 'Request', 'Response', 'cache_control', 'ephemeral_5m_input_tokens']);
+expect('/requests/:laptop drawer', m.text(), ['Summary', 'Session', 'Agent', 'Attempts', 'Succeeded', 'Usage', 'Cache read', 'Cache write, 5m', 'Cache write, 1h', 'Output, thinking', 'Output, plain', 'Server tool calls', 'Estimated cost', 'Captured bodies', 'Request', 'Response', 'cache_control', 'ephemeral_5m_input_tokens']);
+{
+  // The two ids sit right under the served attempt's head, the request id first, as the drawer draws them.
+  const served = laptopRow.attempts[laptopRow.attempts.length - 1];
+  const head = [...m.container.querySelectorAll('.attempt')].at(-1)?.querySelector('.attempt__head');
+  const lines = [head?.nextElementSibling, head?.nextElementSibling?.nextElementSibling].map((e) => (e?.classList.contains('attempt__id') ? e.textContent : 'no id line'));
+  results.push({
+    name: '/requests/:laptop drawer names the upstream request id and message id under the served attempt',
+    ok: /^req_/.test(served.upstreamRequestId ?? '') && /^msg_/.test(served.upstreamMessageId ?? '') && lines[0] === `request ${served.upstreamRequestId}` && lines[1] === `message ${served.upstreamMessageId}`,
+    missing: lines,
+  });
+  await m.navigate('/requests');
+  await m.settle(300);
+  const search = m.container.querySelector('input.filters__search');
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  setter.call(search, served.upstreamMessageId ?? '');
+  search?.dispatchEvent(new window.Event('input', { bubbles: true }));
+  await m.settle(700);
+  const found = [...m.container.querySelectorAll('.requests__table tbody tr')].map((tr) => tr.querySelector('.sub.mono')?.textContent?.replace(/…$/, '') ?? '');
+  results.push({
+    name: '/requests the search by an upstream message id lists the one request that carried it',
+    ok: found.length === 1 && laptopRow.id.startsWith(found[0]) && found[0] !== '',
+    missing: found,
+  });
+  setter.call(search, '');
+  search?.dispatchEvent(new window.Event('input', { bubbles: true }));
+  await m.settle(700);
+}
+// Back on the laptop request's drawer, which the search above left for the list.
+await m.navigate(`/requests/${laptopRow.id}`);
 // A captured body is serialized once per answer: a small one is indented at once, one past 256 KiB shows compact until
 // Pretty-print is pressed, Copy takes the text on screen, and a clock tick that redraws the drawer serializes nothing.
 {
@@ -4751,7 +5789,8 @@ m.unmount();
 }
 
 // An outage of the ledger fails every analytics read at once, the section and filter-choice reads beside the three
-// the error state names, and Try again is the one control that reads again, so it has to reach all of them.
+// the error state names, and Try again is the one control that reads again, so it has to reach all of them. A section
+// whose tab is not chosen reads nothing, so Try again reads the shown one's and the next tab reads its own.
 {
   const outage = failCalls({ getAnalyticsBreakdown: '/admin/analytics/breakdown', getAnalyticsSeries: '/admin/analytics/series', listAccountRollups: '/admin/analytics/accounts' }, 'the ledger is unavailable');
   const page = await mount('/analytics');
@@ -4774,27 +5813,34 @@ m.unmount();
   await page.settle(900);
   const t = page.text();
   const upChoices = await choices();
-  const sections = ['traffic', 'latency', 'cache', 'cost', 'cache-warming', 'accounts'].filter((id) => page.container.querySelector(`section#${id}`) === null);
-  const tables = ['Cache by model', 'Cache warming by pool', 'Accounts in range'].map((title) => `${title} ${tableRows(title)}`);
+  const traffic = page.container.querySelector('section#traffic') !== null;
+  const others = ['burn', 'latency', 'cache', 'cost', 'cache-warming', 'accounts'].filter((id) => page.container.querySelector(`section#${id}`) !== null);
+  const trafficRows = tableRows('Traffic by key');
   const groupBys = outage.calls.getAnalyticsBreakdown.map(([q]) => q.groupBy).sort();
   const reads = { breakdown: groupBys.join(','), rollups: outage.calls.listAccountRollups.length, series: outage.calls.getAnalyticsSeries.length };
+  await tab(page, 'Accounts');
+  const rollupsOnAccounts = outage.calls.listAccountRollups.length;
+  const accountRows = tableRows('Accounts in range');
   outage.restore();
   results.push({
-    name: '/analytics Try again after a page-wide outage reads every section and filter choice again',
+    name: '/analytics Try again after a page-wide outage reads the shown section and every filter choice again',
     ok:
       downText.includes('Could not load the analytics for these filters') &&
       downChoices.length === 4 &&
       downChoices.every((c) => c.endsWith(' 0')) &&
       !t.includes('Could not load the analytics for these filters') &&
       !t.includes('Could not load this breakdown') &&
-      sections.length === 0 &&
-      tables.every((row) => !row.endsWith(' 0')) &&
+      traffic &&
+      others.length === 0 &&
+      trafficRows > 0 &&
       upChoices.length === 4 &&
       upChoices.every((c) => !c.endsWith(' 0')) &&
-      reads.breakdown === 'account,effort,key,key,model,model,pool,pool' &&
-      reads.rollups === 1 &&
-      reads.series === 2,
-    missing: [`down ${downChoices.join(',')}`, `up ${upChoices.join(',')}`, `sections missing ${sections.join(',')}`, ...tables, JSON.stringify(reads), t.includes('Could not load this breakdown') ? 'a breakdown still failed' : ''],
+      reads.breakdown === 'account,effort,key,model,pool' &&
+      reads.rollups === 0 &&
+      reads.series === 2 &&
+      rollupsOnAccounts === 1 &&
+      accountRows > 0,
+    missing: [`down ${downChoices.join(',')}`, `up ${upChoices.join(',')}`, `traffic ${traffic}`, `also mounted ${others.join(',')}`, `Traffic by key ${trafficRows}`, JSON.stringify(reads), `rollups on Accounts ${rollupsOnAccounts}`, `Accounts in range ${accountRows}`, t.includes('Could not load this breakdown') ? 'a breakdown still failed' : ''],
   });
   page.unmount();
 }
@@ -5033,17 +6079,36 @@ m.unmount();
 }
 
 m = await mount('/analytics');
-expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'Session', 'Traffic', 'Requests by outcome', 'Failovers', 'Errors by code', 'rate_limit_error', 'Traffic by key', 'Exhausted', 'Rejected', 'Latency', 'Time to first byte', 'Time to first content token', 'Total duration', 'Output tokens per second', 'Distribution', 'samples', 'p50', 'p90', 'p95', 'p99', 'Latency by key', 'Cache', 'Hit ratio and cached share', 'Write cost vs read cost', 'Misses by reason', 'Wasted probes', 'Idle limit ran out', 'Released by an operator', 'Replaced by a new registration', 'Session ended', "Probes on recipes that no real request ever followed, settled when the recipe stopped. A high idle-limit share means the pool's max idle time is set too high for how these sessions are used.", 'expired between turns', 'From the cache diagnostics beta: why the prefix did not hit, for requests that asked. No divergence with zero cache reads means the entry expired between turns.', 'Misses by reason by key', 'Expired between turns', 'Cache by model', 'Writes 5m', 'Writes 1h', 'Cost', 'Cost per request', 'Cost per 1k output tokens', 'Cost by key', 'Cost split', 'Cache read', 'Cache warming', 'Probes by outcome', 'Migrated', 'Gross saved', 'Probe cost', 'Net saved', 'Kept-warm requests', 'Kept-warm tokens', 'Cache warming by pool', 'Accounts', 'Peak 5-hour utilization', 'Accounts in range', 'Peak Fable 7d', 'Time in overage', 'Time in cooldown', 'Pins created', 'Migrated in', 'Migrated out', 'desktop', 'laptop', 'in range']);
+// The page opens on Traffic and shows one section at a time, so each list holds the words its own tab draws.
+expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'Session', 'Traffic', 'Requests by outcome', 'Failovers', 'Errors by code', 'rate_limit_error', 'Traffic by key', 'Exhausted', 'Rejected', 'desktop', 'laptop', 'in range']);
+await tab(m, 'Latency');
+expect('/analytics latency tab', m.text(), ['Latency', 'Time to first byte', 'Time to first content token', 'Total duration', 'Output tokens per second', 'Distribution', 'samples', 'p50', 'p90', 'p95', 'p99', 'Latency by key']);
+await tab(m, 'Cache');
+expect('/analytics cache tab', m.text(), ['Cache', 'Hit ratio and cached share', 'Write cost vs read cost', 'Misses by reason', 'expired between turns', 'From the cache diagnostics beta: why the prefix did not hit, for requests that asked. No divergence with zero cache reads means the entry expired between turns.', 'Misses by reason by key', 'Expired between turns', 'Cache by model', 'Writes 5m', 'Writes 1h']);
+await tab(m, 'Cost');
+expect('/analytics cost tab', m.text(), ['Cost', 'Cost per request', 'Cost per 1k output tokens', 'Cost by key', 'Cost split', 'Cache read']);
+await tab(m, 'Cache warming');
+expect('/analytics cache warming tab', m.text(), ['Cache warming', 'Probes by outcome', 'Migrated', 'Gross saved', 'Probe cost', 'Net saved', 'Kept-warm requests', 'Kept-warm tokens', 'Wasted probes', 'Idle limit ran out', 'Released by an operator', 'Replaced by a new registration', 'Session ended', "Probes on recipes that no real request ever followed, settled when the recipe stopped. A high idle-limit share means the pool's max idle time is set too high for how these sessions are used.", 'Cache warming by pool']);
+await tab(m, 'Accounts');
+expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilization', 'Accounts in range', 'Peak Fable 7d', 'Time in overage', 'Time in cooldown', 'Pins created', 'Migrated in', 'Migrated out']);
 {
   const card = (t) => [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === t);
   const legendOf = (t) => [...(card(t)?.querySelectorAll('.legend li') ?? [])].map((li) => [...li.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent?.trim()).join(''));
-  const burnGroup = async (label) => {
-    [...m.container.querySelectorAll('#burn .segmented button')].find((b) => b.textContent?.trim() === label)?.click();
+  const setSelect = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
+  // Takes the grouping's key, the option's value, as the page's own state holds it.
+  const burnGroup = async (value) => {
+    const select = m.container.querySelector('#burn select[aria-label="Burn group by"]');
+    if (select) {
+      setSelect.call(select, value);
+      select.dispatchEvent(new window.Event('change', { bubbles: true }));
+    }
     await m.settle(700);
   };
-  expect('/analytics burn section', m.text(), ['Burn', 'Tokens per minute', 'Spend per minute', 'Plan per hour', 'Migration rewrites', 'Moves']);
+  await tab(m, 'Burn');
+  expect('/analytics burn section', m.text(), ['Burn', 'Tokens per minute', 'Spend per minute', 'Plan per hour']);
+  await tab(m, 'Traffic');
   {
-    expect('/analytics speed and effort', m.text(), ['Requests by speed', 'Standard and fast per bucket, stacked', 'Effort levels', 'Requests per effort level in range', 'Fast mode spend', 'usage credits, at the fast cells']);
+    expect('/analytics speed and effort', m.text(), ['Requests by speed', 'Standard and fast per bucket, stacked', 'Effort levels', 'Requests per effort level in range']);
     // The two cards close the Traffic section's grid, after the rewrites card.
     const grid = card('Migration rewrites')?.parentElement;
     const titles = [...(grid?.children ?? [])].map((c) => c.querySelector('.card__title')?.textContent?.trim());
@@ -5056,9 +6121,43 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
       ok: fastDay !== undefined && fastDay.requests > 0 && speedLegend.length === 2 && speedLegend[0].startsWith('standard') && speedLegend[1] === `fast${fastDay.requests}`,
       missing: [...speedLegend, `fast ${fastDay?.requests}`],
     });
+    await tab(m, 'Cost');
+    expect('/analytics fast mode spend tile', m.text(), ['Fast mode spend', 'usage credits, at the fast cells']);
     const tile = [...m.container.querySelectorAll('#cost .stat')].find((t) => t.querySelector('.stat__label')?.textContent?.trim() === 'Fast mode spend');
     const drawn = Number((tile?.querySelector('.stat__value')?.textContent ?? '').replace(/[$,]/g, ''));
     results.push({ name: "/analytics the Fast mode spend tile reads the fast answers' dollars in range", ok: fastDay !== undefined && fastDay.costUsd > 0 && Math.abs(drawn - fastDay.costUsd) < 0.01, missing: [tile?.textContent ?? 'no tile', String(fastDay?.costUsd)] });
+    await tab(m, 'Traffic');
+  }
+  {
+    // The story's incomplete desktop stream falls inside the day, so the legend and the desktop row both count it.
+    const incompleteItem = [...(card('Requests by outcome')?.querySelectorAll('.legend li') ?? [])].find((li) => [...li.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent?.trim()).join('') === 'Incomplete');
+    const legendCount = Number(incompleteItem?.querySelector('.legend__value')?.textContent?.trim().replace(/,/g, '') ?? 0);
+    const traffic = [...m.container.querySelectorAll('.card--table')].find((c) => (c.textContent ?? '').startsWith('Traffic by key'));
+    const heads = [...(traffic?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim() ?? '');
+    const at = heads.indexOf('Incomplete');
+    const desktop = [...(traffic?.querySelectorAll('tbody tr') ?? [])].find((tr) => tr.children[0]?.textContent?.trim() === 'desktop');
+    const cell = Number(desktop?.children[at]?.textContent?.trim().replace(/,/g, '') ?? 0);
+    results.push({
+      name: '/analytics a stream that ended short counts under Incomplete in the outcome legend and in the column after Failed',
+      ok: at > 1 && heads[at - 1] === 'Failed' && cell >= 1 && legendCount >= 1,
+      missing: [heads.join(','), `desktop ${desktop ? [...desktop.children].map((td) => td.textContent?.trim()).join('|') : 'no row'}`, `legend ${incompleteItem?.textContent ?? 'no Incomplete entry'}`],
+    });
+  }
+  {
+    // The ledger files a stream that failed after its 200 head under failed, so the log-derived rollup of its lane
+    // counts it among the failures and the lane's counters still add up to its rows.
+    const failedAfterHead = requests.find((r) => r.status === 200 && r.outcome === 'failed');
+    const sameLane = (a, b) => ['accountId', 'keyId', 'kind', 'model', 'poolId', 'sessionId'].every((f) => a[f] === b[f]);
+    const hourOf = (at) => Math.floor(Date.parse(at) / 3_600_000) * 3_600_000;
+    const lane = failedAfterHead ? requests.filter((r) => sameLane(r, failedAfterHead) && hourOf(r.at) === hourOf(failedAfterHead.at)) : [];
+    const rolled = failedAfterHead ? rollups.filter((g) => sameLane(g, failedAfterHead) && Date.parse(g.hour) === hourOf(failedAfterHead.at)) : [];
+    const counts = rolled[0]?.requests ?? {};
+    const succeeded = lane.filter((r) => r.outcome === 'succeeded').length;
+    results.push({
+      name: '/analytics the rollups count a stream that failed after its 200 head as a failure rather than OK',
+      ok: rolled.length === 1 && counts.ok === succeeded && Object.values(counts).reduce((a, b) => a + b, 0) === lane.length,
+      missing: [`lane ${lane.length} rows, ${succeeded} succeeded`, JSON.stringify(rolled.map((g) => g.requests))],
+    });
   }
   const failovers = card('Failovers');
   results.push({ name: '/analytics the migration rewrites card sits beside Failovers', ok: failovers !== undefined && failovers.nextElementSibling === card('Migration rewrites'), missing: [failovers?.nextElementSibling?.querySelector('.card__title')?.textContent ?? 'no sibling'] });
@@ -5066,6 +6165,7 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
   const moveLegend = legendOf('Migration rewrites').slice(2);
   results.push({ name: '/analytics the rewrites legend names each move reason the range holds', ok: Object.keys(moves.moves).length > 1 && moveLegend.length === Object.keys(moves.moves).length && moveLegend.includes('Rate limited') && moveLegend.includes('Shed'), missing: moveLegend });
 
+  await tab(m, 'Burn');
   const planned = legendOf('Plan per hour');
   const windows = ['business', 'mail', 'personal'].flatMap((id) => [`${id} (5-hour)`, `${id} (7-day)`]);
   const planItems = [...(card('Plan per hour')?.querySelectorAll('.legend li') ?? [])];
@@ -5121,14 +6221,14 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
     missing: [...spend, ...spendDashed, `fast spenders ${fastSpenders.join(',')}`],
   });
 
-  await burnGroup('Request class');
+  await burnGroup('request_class');
   const classes = legendOf('Tokens per minute');
   results.push({ name: '/analytics the request class grouping splits conversation from overhead', ok: JSON.stringify(classes) === JSON.stringify(['conversation', 'overhead']) && card('Plan per hour') === undefined, missing: classes });
   expect('/analytics burn by request class', m.text(), ['conversation', 'overhead', 'compaction, main, subagent']);
-  await burnGroup('Key');
+  await burnGroup('key');
   const keys = legendOf('Spend per minute');
   results.push({ name: '/analytics the key grouping charts each key in dollars and draws no plan share', ok: keys.includes('desktop') && keys.includes('laptop') && card('Plan per hour') === undefined, missing: keys });
-  await burnGroup('Account');
+  await burnGroup('account');
   {
     // Past the seven lines a chart draws, subscription accounts fold into one plan line. Seven standard-only
     // accounts keep their lines, and the eighth, the smallest, spent dollars on fast mode alone: the folded rest
@@ -5136,19 +6236,19 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
     // business account, since a line's unit comes from the tier on file and its Max 20x tier is one the table sizes.
     const at = new Date(Date.now() - 3_600_000).toISOString();
     api.getAnalyticsBurn = async () => ({ bucketSeconds: 3_600, points: Array.from({ length: 8 }, (_, i) => ({ at, cachedTokens: 0, fiveHourShare: i < 7 ? 0.01 : 0, group: i < 7 ? `plan-${i}` : 'business', sevenDayShare: i < 7 ? 0.001 : 0, tokens: 1_000 * (8 - i), uncachedTokens: 1_000 * (8 - i), unit: 'window_share', usd: i < 7 ? 0 : 0.6 })) });
-    await burnGroup('Key');
-    await burnGroup('Account');
+    await burnGroup('key');
+    await burnGroup('account');
     const folded = legendOf('Spend per minute');
     const values = [...(card('Spend per minute')?.querySelectorAll('.legend li .legend__value') ?? [])].map((v) => v.textContent?.trim() ?? '');
     const said = card('Spend per minute')?.textContent ?? '';
-    const grouped = [...m.container.querySelectorAll('#burn .segmented button.is-active')].map((b) => b.textContent?.trim());
+    const grouped = m.container.querySelector('#burn select[aria-label="Burn group by"]')?.value ?? null;
     delete api.getAnalyticsBurn;
-    await burnGroup('Key');
-    await burnGroup('Account');
+    await burnGroup('key');
+    await burnGroup('account');
     results.push({
       name: "/analytics spend per minute under the account grouping draws a folded rest's fast-mode dollars under a dollar label",
-      ok: JSON.stringify(folded) === JSON.stringify(['Other (fast mode)']) && JSON.stringify(values) === JSON.stringify(['$0.01']) && grouped.includes('Account') && !said.includes('No account spent dollars in this range.'),
-      missing: [...folded, ...values, ...grouped, said.slice(0, 120)],
+      ok: JSON.stringify(folded) === JSON.stringify(['Other (fast mode)']) && JSON.stringify(values) === JSON.stringify(['$0.01']) && grouped === 'account' && !said.includes('No account spent dollars in this range.'),
+      missing: [...folded, ...values, `grouped by ${grouped}`, said.slice(0, 120)],
     });
   }
 
@@ -5163,8 +6263,8 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
     window.HTMLElement.prototype.getBoundingClientRect = function () {
       return this.classList.contains('recharts-responsive-container') ? { bottom: 220, height: 220, left: 0, right: 600, top: 0, width: 600, x: 0, y: 0 } : measure.call(this);
     };
-    await burnGroup('Key');
-    await burnGroup('Account');
+    await burnGroup('key');
+    await burnGroup('account');
     const plan = card('Plan per hour');
     const dots = [...(plan?.querySelectorAll('.recharts-line-dots .recharts-line-dot') ?? [])];
     const curves = [...(plan?.querySelectorAll('.recharts-line-curve') ?? [])].map((c) => c.getAttribute('d')).filter((d) => d !== null);
@@ -5193,8 +6293,8 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
     });
     window.HTMLElement.prototype.getBoundingClientRect = measure;
     delete api.getAnalyticsBurn;
-    await burnGroup('Key');
-    await burnGroup('Account');
+    await burnGroup('key');
+    await burnGroup('account');
   }
 
   // Placements by rung sit in the Cache section, each budgeted member's spend in the Burn section.
@@ -5202,6 +6302,7 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
     heads: [...(card(t)?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim()),
     rows: [...(card(t)?.querySelectorAll('tbody tr') ?? [])].map((tr) => [...tr.children].map((td) => td.textContent?.trim())),
   });
+  await tab(m, 'Cache');
   const placements = await api.analyticsPlacements({ from: new Date(Date.now() - 24 * 3_600_000).toISOString(), to: new Date().toISOString() });
   const placed = tableOf('Placements by rung');
   const WORDS = { content: 'by its messages', static: 'by its static prefix', with_main: 'with the main conversation' };
@@ -5220,6 +6321,7 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
     ok: card('Placements by rung')?.querySelector('.card__subtitle')?.textContent === "A placement by the conversation's own messages is a hit when the response read the prefix it was promised; one by the static prefix when it read at all",
     missing: [card('Placements by rung')?.querySelector('.card__subtitle')?.textContent ?? 'no subtitle'],
   });
+  await tab(m, 'Burn');
   const budgets = await api.analyticsBudgets();
   const budgeted = tableOf('Member budgets');
   const budgetRows = [...(card('Member budgets')?.querySelectorAll('tbody tr') ?? [])];
@@ -5250,8 +6352,10 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
 }
 {
   const cardByTitle = (t) => [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === t);
-  const missCard = cardByTitle('Misses by reason');
-  const wasteCard = cardByTitle('Wasted probes');
+  // Looked up at each read: a card exists only while its tab is chosen, so a node held across a switch is detached.
+  const missCard = () => cardByTitle('Misses by reason');
+  const wasteCard = () => cardByTitle('Wasted probes');
+  await tab(m, 'Cache');
   {
     const legend = [...(cardByTitle('Tokens')?.querySelectorAll('.legend li') ?? [])].map((li) => [...li.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent?.trim()).join(''));
     results.push({
@@ -5260,19 +6364,20 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
       missing: legend,
     });
   }
-  const bars = [...(missCard?.querySelectorAll('.hbars--reasons li') ?? [])].map((li) => li.children[0]?.textContent?.trim());
+  const bars = [...(missCard()?.querySelectorAll('.hbars--reasons li') ?? [])].map((li) => li.children[0]?.textContent?.trim());
   const labels = ['History edited', 'Model changed', 'No divergence', 'Not requested', 'Previous message not found', 'System prompt changed', 'Tools changed', 'Unavailable'];
   results.push({ name: '/analytics misses-by-reason draws a bar per reason', ok: bars.length === 8 && labels.every((l) => bars.includes(l)), missing: bars });
-  const counts = [...(missCard?.querySelectorAll('.hbars--reasons li .num') ?? [])].map((n) => Number(n.textContent?.trim().split(' ')[0].replace(/,/g, '')));
+  const counts = [...(missCard()?.querySelectorAll('.hbars--reasons li .num') ?? [])].map((n) => Number(n.textContent?.trim().split(' ')[0].replace(/,/g, '')));
   results.push({ name: '/analytics misses-by-reason sorts by count', ok: counts.length === 8 && counts.every((v, i) => i === 0 || counts[i - 1] >= v), missing: counts.map(String) });
   results.push({ name: '/analytics misses-by-reason counts something', ok: counts.some((v) => v > 0), missing: counts.map(String) });
-  const shares = [...(missCard?.querySelectorAll('.hbars--reasons li .num .muted') ?? [])].map((n) => n.textContent?.trim());
+  const shares = [...(missCard()?.querySelectorAll('.hbars--reasons li .num .muted') ?? [])].map((n) => n.textContent?.trim());
   results.push({ name: '/analytics misses-by-reason shows a share per reason', ok: shares.length === 8 && shares.every((v) => /^\d+\.\d%$/.test(v ?? '')), missing: shares });
   const cacheMeta = m.container.querySelector('#cache .analytics-section__meta')?.textContent ?? '';
   results.push({ name: '/analytics cache meta puts expired between turns next to hit ratio', ok: /hit ratio, \d[\d,]* expired between turns,/.test(cacheMeta), missing: [cacheMeta] });
-  results.push({ name: '/analytics wasted probes lives in the cache warming section', ok: wasteCard?.closest('.analytics-section')?.id === 'cache-warming' && m.container.querySelector('#cache')?.contains(wasteCard) === false, missing: [wasteCard?.closest('.analytics-section')?.id ?? 'no card'] });
+  await tab(m, 'Cache warming');
+  results.push({ name: '/analytics wasted probes lives in the cache warming section', ok: wasteCard()?.closest('.analytics-section')?.id === 'cache-warming' && m.container.querySelector('#cache') === null, missing: [wasteCard()?.closest('.analytics-section')?.id ?? 'no card', `cache mounted ${m.container.querySelector('#cache') !== null}`] });
   {
-    const reasonRows = [...(wasteCard?.querySelectorAll('.hbars--reasons li') ?? [])];
+    const reasonRows = [...(wasteCard()?.querySelectorAll('.hbars--reasons li') ?? [])];
     results.push({ name: '/analytics wasted probe rows align their label at the top', ok: reasonRows.length === 4 && reasonRows.every((li) => li.classList.contains('hbars__row--top')), missing: [] });
   }
   {
@@ -5281,6 +6386,7 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
     results.push({ name: '/analytics group-by offers the client class and the user agent', ok: offered.includes('Client') && offered.includes('User agent'), missing: offered });
     results.push({ name: '/analytics group-by offers the speed', ok: offered.includes('Speed'), missing: offered });
   }
+  await tab(m, 'Traffic');
   {
     const setArea = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
     const setSelect = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
@@ -5310,7 +6416,7 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
     const fable = trafficRows('model').find((row) => row[0] === 'claude-fable-5-1') ?? [];
     results.push({
       name: '/analytics a model whose answers reach server tools counts both calls',
-      ok: fable.length > 10 && Number(fable[9].replace(/,/g, '')) > 0 && Number(fable[10].replace(/,/g, '')) > 0,
+      ok: fable.length > 11 && Number(fable[10].replace(/,/g, '')) > 0 && Number(fable[11].replace(/,/g, '')) > 0,
       missing: fable,
     });
 
@@ -5363,6 +6469,7 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
     await m.settle(900);
     await groupBy('Key');
   }
+  await tab(m, 'Cache');
   const reasonTable = [...m.container.querySelectorAll('.card--table')].map((c) => c.textContent ?? '').find((t) => t.startsWith('Misses by reason by key')) ?? '';
   results.push({ name: '/analytics misses-by-reason table breaks down per group', ok: labels.every((l) => reasonTable.includes(l)) && reasonTable.includes('Expired between turns') && reasonTable.includes('desktop'), missing: [reasonTable.slice(0, 160)] });
   {
@@ -5371,7 +6478,7 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
     const order = ['No divergence', 'Model changed', 'System prompt changed', 'Tools changed', 'History edited', 'Previous message not found', 'Unavailable', 'Not requested'];
     const heads = [...(table?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim());
     results.push({ name: '/analytics reason columns follow the documented order', ok: JSON.stringify(heads) === JSON.stringify(['Key', ...order, 'Expired between turns']), missing: heads });
-    const panel = Object.fromEntries([...(missCard?.querySelectorAll('.hbars--reasons li') ?? [])].map((li) => [li.children[0]?.textContent?.trim(), Number(li.children[2]?.textContent?.trim().split(' ')[0].replace(/,/g, ''))]));
+    const panel = Object.fromEntries([...(missCard()?.querySelectorAll('.hbars--reasons li') ?? [])].map((li) => [li.children[0]?.textContent?.trim(), Number(li.children[2]?.textContent?.trim().split(' ')[0].replace(/,/g, ''))]));
     const columnSum = (i) => body.reduce((n, row) => n + Number(row[i + 1].replace(/,/g, '')), 0);
     results.push({ name: '/analytics panel counts equal the per-group column sums', ok: order.every((label, i) => panel[label] === columnSum(i)), missing: order.map((label, i) => `${label} ${panel[label]} vs ${columnSum(i)}`) });
     const ci = body.find((row) => row[0] === 'ci') ?? [];
@@ -5383,6 +6490,7 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
   {
     // The account rollups carry the range and the account alone, so the section takes the account selection and
     // says the other filters do not reach it.
+    await tab(m, 'Accounts');
     const accountTable = () => [...m.container.querySelectorAll('.card--table')].find((c) => (c.textContent ?? '').startsWith('Accounts in range'));
     const accountRows = () => [...(accountTable()?.querySelectorAll('tbody tr') ?? [])].map((tr) => tr.children[0]?.textContent?.trim() ?? '');
     const every = accountRows();
@@ -5437,6 +6545,7 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
       missing: [`session ${bySession}`, `rows ${sessionRows.join(',')}`, `probes ${byProbes}`, `after ${subtitle()}`],
     });
   }
+  await tab(m, 'Cache warming');
   {
     const warming = [...m.container.querySelectorAll('.card--table')].find((c) => (c.textContent ?? '').startsWith('Cache warming by pool'));
     const codex = [...(warming?.querySelectorAll('tbody tr') ?? [])].map((tr) => [...tr.children].map((td) => td.textContent?.trim() ?? '')).find((row) => row[0] === 'codex') ?? [];
@@ -5469,6 +6578,7 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
   {
     // The earlier holder of `desktop` spent its hours in the second week back, so the month is the range that
     // holds both groups; the later checks read the day, which it is put back to at the end.
+    await tab(m, 'Traffic');
     const range = (label) => [...m.container.querySelectorAll('.segmented button')].find((b) => b.textContent?.trim() === label);
     range('30d')?.click();
     await m.settle(700);
@@ -5507,6 +6617,7 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
     }
     // One hour of the month reports a reason the console has no label for; the table lists it under its own name
     // after the eight it knows, and the panel draws a bar for it.
+    await tab(m, 'Cache');
     const reasonHeads = [...([...m.container.querySelectorAll('.card--table')].find((c) => (c.textContent ?? '').startsWith('Misses by reason by key'))?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim());
     const monthBars = [...([...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Misses by reason')?.querySelectorAll('.hbars--reasons li') ?? [])].map((li) => li.children[0]?.textContent?.trim());
     results.push({
@@ -5514,6 +6625,7 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
       ok: JSON.stringify(reasonHeads.slice(-3)) === JSON.stringify(['Not requested', 'future_reason', 'Expired between turns']) && monthBars.length === 9 && monthBars.includes('future_reason'),
       missing: [...reasonHeads, ...monthBars],
     });
+    await tab(m, 'Traffic');
     const keyFilter = [...m.container.querySelectorAll('.filters .mselect')].find((d) => d.querySelector('.mselect__trigger')?.textContent?.trim().startsWith('Key'));
     const pick = async (label) => {
       keyFilter?.querySelector('.mselect__trigger')?.click();
@@ -5538,6 +6650,7 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
     range('24h')?.click();
     await m.settle(700);
   }
+  await tab(m, 'Cache warming');
   {
     const legend = [...m.container.querySelectorAll('.legend li')].map((li) => li.textContent?.trim() ?? '');
     const migrated = [...m.container.querySelectorAll('.legend li')].find((li) => (li.textContent ?? '').startsWith('Migrated'));
@@ -5548,6 +6661,7 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
     });
   }
   results.push({ name: '/analytics filter bar is sticky', ok: m.container.querySelector('.filters.filters--sticky') !== null, missing: [m.container.querySelector('.filters')?.className ?? 'no filter bar'] });
+  await tab(m, 'Latency');
   const hints = m.container.querySelectorAll('[title="±1 bucket"]').length;
   results.push({ name: '/analytics percentile labels carry the bucket hint', ok: hints >= 8, missing: [String(hints)] });
   const dims = [...m.container.querySelectorAll('.filters .mselect__trigger')].map((b) => b.textContent?.trim());
@@ -5559,15 +6673,170 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
   results.push({ name: '/analytics custom range shows from/to', ok: pickers === 2, missing: [String(pickers)] });
   const hist = m.container.querySelectorAll('.hist__bars').length;
   results.push({ name: '/analytics draws four histograms', ok: hist === 4, missing: [String(hist)] });
-  const bar = [...m.container.querySelectorAll('.section-bar__link')].map((b) => b.textContent?.trim());
-  results.push({ name: '/analytics section bar lists every section', ok: JSON.stringify(bar) === JSON.stringify(['Traffic', 'Burn', 'Latency', 'Cache', 'Cost', 'Cache warming', 'Accounts']), missing: bar });
-  const targets = [...m.container.querySelectorAll('.section-bar__link')].map((b) => b.textContent?.trim().toLowerCase().replace(/ /g, '-'));
-  results.push({ name: '/analytics each bar entry has a section to scroll to', ok: targets.every((id) => m.container.querySelector(`.analytics-section#${id}`) !== null), missing: targets });
-  results.push({ name: '/analytics marks one section active', ok: m.container.querySelectorAll('.section-bar__link.is-active').length === 1, missing: [] });
-  const cost = [...m.container.querySelectorAll('.section-bar__link')].find((b) => b.textContent?.trim() === 'Cost');
-  cost?.click();
-  await m.settle(150);
-  results.push({ name: '/analytics clicking a bar entry moves the highlight', ok: cost?.classList.contains('is-active') === true, missing: [...m.container.querySelectorAll('.section-bar__link.is-active')].map((b) => b.textContent) });
+  await tab(m, 'Traffic');
+  {
+    const strip = () => [...m.container.querySelectorAll('.section-bar [role="tab"]')];
+    results.push({ name: '/analytics the strip lists the seven tabs in order with one selected', ok: JSON.stringify(strip().map((b) => b.textContent?.trim())) === JSON.stringify(['Traffic', 'Burn', 'Latency', 'Cache', 'Cost', 'Cache warming', 'Accounts']) && strip().filter((b) => b.getAttribute('aria-selected') === 'true').map((b) => b.textContent?.trim()).join() === 'Traffic' && m.container.querySelector('.section-bar [role="tablist"]')?.getAttribute('aria-label') === 'Sections', missing: strip().map((b) => `${b.textContent} ${b.getAttribute('aria-selected')}`) });
+    const mounted = () => [...m.container.querySelectorAll('.analytics-section')].map((s) => s.id).join();
+    results.push({ name: '/analytics shows Traffic alone and mounts no other section', ok: mounted() === 'traffic' && m.container.querySelector('#traffic')?.getAttribute('role') === 'tabpanel' && m.container.querySelector('#traffic')?.getAttribute('aria-labelledby') === 'tab-traffic', missing: [mounted()] });
+    await tab(m, 'Burn');
+    results.push({ name: '/analytics a tab click writes its hash and mounts its section alone', ok: m.location().hash === '#burn' && m.location().pathname === '/analytics' && mounted() === 'burn', missing: [JSON.stringify(m.location()), mounted()] });
+    const selects = ['.filters select.groupby-select', '#burn select.groupby-select[aria-label="Burn group by"]'].map((s) => m.container.querySelector(s));
+    results.push({ name: "/analytics both group-by controls are selects of one class, Burn's named and explained beside it", ok: selects.every((s) => s !== null) && [...(selects[1]?.options ?? [])].map((o) => o.textContent).join() === 'Account,Key,Session,Request class' && (m.container.querySelector('#burn .analytics-groupby__reason')?.textContent ?? '') === "Burn groups by account, key, session or request class alone; the plan shares read under Account, since shares of different accounts' windows do not add.", missing: selects.map((s) => s?.outerHTML.slice(0, 80) ?? 'missing') });
+    await tab(m, 'Traffic');
+    m.unmount();
+    m = await mount('/analytics#burn');
+    results.push({ name: '/analytics#burn shows Burn', ok: mounted() === 'burn' && strip().find((b) => b.getAttribute('aria-selected') === 'true')?.textContent?.trim() === 'Burn', missing: [mounted()] });
+    m.unmount();
+    m = await mount('/analytics#nope');
+    results.push({ name: '/analytics an unknown hash shows Traffic', ok: mounted() === 'traffic', missing: [mounted()] });
+    m.unmount();
+    // The route paths label a failure report; the method names are what count. A side breakdown carries the page's
+    // query, `keyIds` among it, where a filter's option read carries the range alone.
+    const reads = failCalls({ analyticsBudgets: '/admin/analytics/budgets', analyticsPlacements: '/admin/analytics/placements', getAnalyticsBreakdown: '/admin/analytics/breakdown', getAnalyticsBurn: '/admin/analytics/burn', getAnalyticsRewrites: '/admin/analytics/rewrites', getSettings: '/admin/settings', listAccountRollups: '/admin/analytics/accounts' }, 'counted');
+    reads.recover();
+    const side = (groupBy) => reads.calls.getAnalyticsBreakdown.filter(([q]) => q.groupBy === groupBy && q.keyIds !== undefined).length;
+    const counted = () => ({ budgets: reads.calls.analyticsBudgets.length, burn: reads.calls.getAnalyticsBurn.length, effort: side('effort'), model: side('model'), placements: reads.calls.analyticsPlacements.length, pool: side('pool'), rewrites: reads.calls.getAnalyticsRewrites.length, rollups: reads.calls.listAccountRollups.length, settings: reads.calls.getSettings.length });
+    m = await mount('/analytics');
+    // The shell reads the settings once for every page, so the Burn tab's own read is the step it adds.
+    const { settings: shell, ...opened } = counted();
+    const steps = { traffic: JSON.stringify(opened) };
+    for (const [label, id] of [['Accounts', 'accounts'], ['Burn', 'burn'], ['Cache', 'cache'], ['Cache warming', 'cache-warming']]) {
+      const was = counted();
+      await tab(m, label);
+      const now = counted();
+      steps[id] = JSON.stringify(Object.fromEntries(Object.entries(now).filter(([k, v]) => v !== was[k]).map(([k, v]) => [k, v - was[k]])));
+    }
+    reads.restore();
+    const wanted = {
+      accounts: '{"rollups":1}',
+      burn: '{"budgets":1,"burn":1,"settings":1}',
+      cache: '{"model":1,"placements":1}',
+      'cache-warming': '{"pool":1}',
+      traffic: '{"budgets":0,"burn":0,"effort":1,"model":0,"placements":0,"pool":0,"rewrites":1,"rollups":0}',
+    };
+    results.push({ name: '/analytics a section whose tab is not chosen makes none of its own reads', ok: Object.entries(wanted).every(([id, delta]) => steps[id] === delta), missing: [`shell settings ${shell}`, ...Object.entries(steps).map(([id, delta]) => `${id} ${delta}`)] });
+    m.unmount();
+    {
+      // With no filter set, the grouped dimension's options come from the page's own breakdown, which still holds the
+      // grouping before a change until the new read lands; the reads are held here so that beat can be read.
+      m = await mount('/analytics');
+      const trigger = (label) => [...m.container.querySelectorAll('.filters .mselect')].find((d) => d.querySelector('.mselect__trigger')?.textContent?.trim().startsWith(label));
+      const listed = (label) => [...(trigger(label)?.querySelectorAll('.mselect__option') ?? [])].map((o) => o.textContent?.trim() ?? '');
+      const optionsOf = async (label) => {
+        trigger(label)?.querySelector('.mselect__trigger')?.click();
+        await m.settle(60);
+        const options = listed(label);
+        trigger(label)?.querySelector('.mselect__trigger')?.click();
+        await m.settle(60);
+        return options;
+      };
+      const keyLabels = await optionsOf('Key');
+      {
+        // The first pick filters the page, so the Key options stop sharing the breakdown and wait on their own read.
+        const breakdown = api.getAnalyticsBreakdown;
+        let open = () => {};
+        const gate = new Promise((resolve) => {
+          open = resolve;
+        });
+        trigger('Key')?.querySelector('.mselect__trigger')?.click();
+        await m.settle(60);
+        api.getAnalyticsBreakdown = (...args) => gate.then(() => breakdown.apply(api, args));
+        [...(trigger('Key')?.querySelectorAll('.mselect__option') ?? [])].find((o) => o.textContent?.trim() === 'desktop')?.click();
+        await m.settle(300);
+        const during = listed('Key');
+        const summary = trigger('Key')?.querySelector('.mselect__trigger')?.textContent?.trim() ?? '';
+        open();
+        await m.settle(300);
+        api.getAnalyticsBreakdown = breakdown;
+        results.push({ name: '/analytics the first key pick keeps the Key list while the reads it starts are out', ok: keyLabels.length > 1 && JSON.stringify(during) === JSON.stringify(keyLabels) && summary === 'Key (1)', missing: [`keys ${keyLabels.join(',')}`, `during ${during.join(',')}`, summary] });
+        // Clearing leaves the list open, so the trigger closes it.
+        trigger('Key')?.querySelector('.mselect__clear')?.click();
+        await m.settle(400);
+        trigger('Key')?.querySelector('.mselect__trigger')?.click();
+        await m.settle(60);
+      }
+      const held = deferNextCall('getAnalyticsBreakdown');
+      const select = m.container.querySelector('.filters select.groupby-select');
+      if (select) {
+        Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set.call(select, 'model');
+        select.dispatchEvent(new window.Event('change', { bubbles: true }));
+      }
+      await m.settle(300);
+      const during = await optionsOf('Model');
+      held.release();
+      await m.settle(300);
+      const after = await optionsOf('Model');
+      held.restore();
+      results.push({
+        name: "/analytics a group-by change keeps the dimension's own keys while its read is out, none of the previous grouping's",
+        // An empty key list on the held read proves the pick above was cleared, so the Model list took the shared path.
+        ok: keyLabels.length > 0 && held.calls[0]?.[0]?.groupBy === 'model' && held.calls[0]?.[0]?.keyIds?.length === 0 && during.length > 0 && JSON.stringify(during) === JSON.stringify(after) && !during.some((o) => keyLabels.includes(o)),
+        missing: [`keys ${keyLabels.join(',')}`, `held ${held.calls[0]?.[0]?.groupBy}`, `held key ids ${JSON.stringify(held.calls[0]?.[0]?.keyIds)}`, `during ${during.join(',')}`, `after ${after.join(',')}`],
+      });
+      {
+        // With a filter set every list reads its own keys, and a range change sends each read out again; a list keeps
+        // the keys it showed until its new answer lands.
+        const pool = trigger('Pool');
+        pool?.querySelector('.mselect__trigger')?.click();
+        await m.settle(60);
+        const picked = pool?.querySelector('.mselect__option');
+        const poolName = picked?.textContent?.trim() ?? '';
+        picked?.click();
+        await m.settle(700);
+        pool?.querySelector('.mselect__trigger')?.click();
+        await m.settle(60);
+        const lists = ['Account', 'Key', 'Model', 'Pool'];
+        const shown = {};
+        for (const label of lists) shown[label] = await optionsOf(label);
+        const breakdown = api.getAnalyticsBreakdown;
+        let open = () => {};
+        const gate = new Promise((resolve) => {
+          open = resolve;
+        });
+        api.getAnalyticsBreakdown = (...args) => gate.then(() => breakdown.apply(api, args));
+        [...m.container.querySelectorAll('[aria-label="Range"] button')].find((b) => b.textContent?.trim() === '7d')?.click();
+        await m.settle(300);
+        // A click that missed would send no read out, and every list would pass for keeping what it never lost.
+        const range = m.container.querySelector('[aria-label="Range"] button[aria-pressed="true"]')?.textContent?.trim() ?? '';
+        const during = {};
+        const empty = {};
+        for (const label of lists) {
+          trigger(label)?.querySelector('.mselect__trigger')?.click();
+          await m.settle(60);
+          during[label] = listed(label);
+          empty[label] = trigger(label)?.querySelector('.mselect__empty') !== null;
+          trigger(label)?.querySelector('.mselect__trigger')?.click();
+          await m.settle(60);
+        }
+        open();
+        await m.settle(300);
+        api.getAnalyticsBreakdown = breakdown;
+        results.push({
+          name: '/analytics a range change with a filter set keeps each list while its read is out',
+          ok: poolName !== '' && range === '7d' && shown.Key.length > 1 && lists.every((label) => shown[label].length > 0 && JSON.stringify(during[label]) === JSON.stringify(shown[label]) && !empty[label]),
+          missing: [`pool ${poolName}`, `range ${range}`, ...lists.flatMap((label) => [`${label} ${shown[label].join(',')}`, `${label} during ${during[label].join(',')}`, `${label} no matches ${empty[label]}`])],
+        });
+      }
+      m.unmount();
+    }
+    m = await mount(`/analytics?session=${encodeURIComponent(laptopRow.sessionId)}&key=laptop%40${laptopRow.keyGeneration}`);
+    await tab(m, 'Latency');
+    results.push({ name: '/analytics a tab change keeps the session query', ok: m.location().hash === '#latency' && m.location().search.includes('session=') && m.location().search.includes('key=laptop'), missing: [JSON.stringify(m.location())] });
+    await tab(m, 'Cache warming');
+    m.container.querySelector('.chip--removable button')?.click();
+    await m.settle(400);
+    results.push({ name: '/analytics removing a session chip clears the query and keeps the tab', ok: JSON.stringify(m.location()) === JSON.stringify({ hash: '#cache-warming', pathname: '/analytics', search: '' }) && mounted() === 'cache-warming' && m.container.querySelector('.chip--removable') === null, missing: [JSON.stringify(m.location()), mounted()] });
+    m.unmount();
+    m = await mount('/analytics');
+    // The range is the page's own state, so a fresh mount opens on the day; the session checks below read the three
+    // days the Custom range opens on, as they did before the remount.
+    [...m.container.querySelectorAll('[aria-label="Range"] button')].find((b) => b.textContent?.trim() === 'Custom')?.click();
+    await m.settle(300);
+    const range = [...m.container.querySelectorAll('[aria-label="Range"] button[aria-pressed="true"]')].map((b) => b.textContent?.trim()).join();
+    const pickers = m.container.querySelectorAll('.filters input[type="datetime-local"]').length;
+    results.push({ name: '/analytics the session checks after the remount read the Custom range', ok: range === 'Custom' && pickers === 2 && m.location().search === '', missing: [`range ${range}`, `pickers ${pickers}`, m.location().search] });
+  }
   {
     const field = () => [...m.container.querySelectorAll('.filters input')].find((i) => i.getAttribute('type') === 'search');
     const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
@@ -5578,11 +6847,14 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
       input?.dispatchEvent(new window.KeyboardEvent('keydown', { bubbles: true, key: 'Enter' }));
       await m.settle(900);
     };
+    // Cache warming is the section whose meta names the request log as a session view's source.
+    await tab(m, 'Cache warming');
     await commit(requests.find((r) => r.sessionId !== null).sessionId);
     const entered = m.text().includes('From the request log');
     await commit('');
     results.push({ name: '/analytics the session field enters and leaves the session view', ok: entered && !m.text().includes('From the request log'), missing: [`entered ${entered}`, `left ${!m.text().includes('From the request log')}`] });
   }
+  await tab(m, 'Traffic');
   {
     // A session view answers every section from the request log, so the client, user agent, and effort controls
     // have to reach the local fold exactly as they reach the routes.
@@ -5639,11 +6911,11 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
       const sums = want.get(r.model) ?? [0, 0];
       want.set(r.model, [sums[0] + r.usage.webSearch, sums[1] + r.usage.webFetch]);
     }
-    const wrong = perModel.filter((row) => { const sums = want.get(row[0]) ?? [0, 0]; return num(row[9]) !== sums[0] || num(row[10]) !== sums[1]; });
+    const wrong = perModel.filter((row) => { const sums = want.get(row[0]) ?? [0, 0]; return num(row[10]) !== sums[0] || num(row[11]) !== sums[1]; });
     results.push({
       name: '/analytics a session sums the server-tool calls per model the way the routes sum them',
       ok: perModel.length > 0 && wrong.length === 0,
-      missing: wrong.map((row) => `${row[0]} ${row[9]}/${row[10]} against ${(want.get(row[0]) ?? []).join('/')}`),
+      missing: wrong.map((row) => `${row[0]} ${row[10]}/${row[11]} against ${(want.get(row[0]) ?? []).join('/')}`),
     });
 
     const agentFold = '/analytics a user agent pattern nothing matches empties the session fold';
@@ -5682,6 +6954,7 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'S
     m.container.querySelector('.chip--removable button')?.click();
     await m.settle(900);
     await groupBy('Key');
+    await tab(m, 'Cache warming');
     results.push({ name: '/analytics removing the session chip leaves the session view', ok: !m.text().includes('From the request log'), missing: [] });
   }
 }
@@ -5853,6 +7126,22 @@ m.unmount();
 
 m = await mount('/sessions');
 expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agents', 'busy', 'idle', 'parked', 'Cache probes, 24h', 'ok (', 'migrated', 'skipped', 'failed', 'Expired between turns, 24h', 'misses cache warming exists to prevent', 'Probe cost today', 'of $4.00', 'uncapped', 'Net saved, 7d', 'Cost reference', 'Key', 'Session', 'Model', 'Account', 'Last used', 'expires in', 'Requests', 'Companion', 'Cache warming', 'Expand all', 'epoch 2', 'reporting', 'silent', 'since ', 'none', 'no recipe', 'fable-5-1']);
+{
+  const lead = m.container.querySelector('.page-head__lead');
+  const how = () => [...(lead?.querySelectorAll('button.link-btn') ?? [])].find((b) => b.textContent?.trim() === 'How pins and recipes work');
+  const para = () => document.getElementById(how()?.getAttribute('aria-controls') ?? '');
+  const words = 'Every Claude Code session the router has seen within the session expiry, and every conversation it identified without a session id, whether or not a cache-keepalive companion registered for it. A pin binds each model a session uses to one account, so subagents on another model may sit on another account, and with affinity off every request picks again; where cache warming is on, each agent carries a recipe that replays its cacheable prefix just before the prompt cache expires, so the next real turn reads the cache instead of rewriting it.';
+  results.push({ name: '/sessions the head reads the lead sentence and the closed disclosure', ok: (lead?.firstElementChild?.textContent?.replace(/\s+/g, ' ').trim() ?? '').startsWith("Every session within the session expiry, with the account each model is pinned to and each agent's cache-warming recipe.") && how()?.getAttribute('aria-expanded') === 'false', missing: [lead?.textContent?.slice(0, 160) ?? 'no lead'] });
+  // The page text keeps hidden words, so only a count of the head's paragraphs catches a leftover copy of the old one.
+  const copies = [...m.container.querySelectorAll('.page-head p')].filter((p) => p.textContent?.includes('Every Claude Code session the router has seen'));
+  results.push({ name: '/sessions the disclosure controls a paragraph that exists while closed', ok: para() !== null && para()?.hidden === true && copies.length === 1 && copies[0] === para(), missing: [how()?.getAttribute('aria-controls') ?? 'no aria-controls', `${copies.length} head paragraphs carry the words`] });
+  how()?.click();
+  await m.settle(100);
+  results.push({ name: '/sessions a click opens the paragraph word for word and says so', ok: how()?.getAttribute('aria-expanded') === 'true' && para()?.hidden === false && para()?.textContent?.replace(/\s+/g, ' ').trim() === words && how()?.textContent?.trim() === 'How pins and recipes work', missing: [para()?.textContent?.replace(/\s+/g, ' ').slice(0, 120) ?? 'no paragraph'] });
+  how()?.click();
+  await m.settle(100);
+  results.push({ name: '/sessions a second click closes the paragraph', ok: how()?.getAttribute('aria-expanded') === 'false' && para()?.hidden === true, missing: [] });
+}
 {
   const meters = m.container.querySelectorAll('.cost-caps .meter').length;
   results.push({ name: '/sessions cost meter against cap', ok: meters === 1, missing: [String(meters)] });
@@ -6365,11 +7654,13 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
   (await jump('View in analytics'))?.click();
   await m.settle(900);
   results.push({ name: '/sessions View in analytics pre-filters the session', ok: chipText().some((c) => c.startsWith('Session')) && m.text().includes('Cache warming'), missing: chipText() });
+  await tab(m, 'Cache warming');
   results.push({ name: '/analytics a session view says it reads the request log', ok: m.text().includes('From the request log'), missing: [] });
   {
     // The request log carries one cost total and no probe or kept-warm facts, so a session view draws those
     // figures as unavailable rather than as zero.
     const tiles = [...m.container.querySelectorAll('#cache-warming > .tiles-row .stat__value')].map((v) => v.textContent?.trim());
+    await tab(m, 'Cache');
     const costCard = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Write cost vs read cost');
     const costLegend = [...(costCard?.querySelectorAll('.legend__value') ?? [])].map((v) => v.textContent?.trim());
     results.push({
@@ -6378,6 +7669,7 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
       missing: [...tiles, ...costLegend],
     });
   }
+  await tab(m, 'Traffic');
   {
     // The request log takes the same four filters the rollup query does, so a model the session never used
     // empties the page instead of leaving every number where it was.
@@ -6468,346 +7760,50 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
 m.unmount();
 
 
-// The mock's default page size sits below the seed so the control renders without setup elsewhere (the mock
-// pass); this section reads the whole nine-row log unpaginated, so it asks for the route's own cap explicitly.
-api.lifecyclePageSize = 500;
-m = await mount('/alerts');
-expect('/alerts an expired question says so to an admin', m.text(), ['question expired with its captured body']);
-expect('/alerts', m.text(), ['Rules', 'Create rule', 'Re-auth required', 'Utilization above threshold', 'Pool exhausted', 'Waiting for user input', 'Client drift', 'Funding required', 'Probe cost cap reached', 'Credential refresh failed', 'Usage poll backing off', 'backing off since', 'hooks.example.com/phoebis/active', 'hooks.example.com/phoebis/subagent', 'All traffic', 'Signed', 'Unsigned', 'Events', 'Any condition', 'Any state', 'open', 'resolved', 'refused', 'asked: The ledger migration can rewrite rows in place', 'client 2.1.274, caught by the billing-hash check', 'agent main', 'Resolve', '2 in a row, the last refused: invalid_grant', 'Lifecycle', 'Any session condition', 'Session started', 'Subagent ended', 'idle for 30 min', 'parent main']);
+// A failed settings read draws About's error state with Try again rather than a skeleton for ever; the client block
+// needs no read, so it keeps its placeholder URL and only the listener hint waits for the answer.
 {
-  // An opened run and a resolve run both start at attempt 1, so a row has to say which run it belongs to.
-  const row = [...[...m.container.querySelectorAll('table')][1].querySelectorAll('tbody tr')].find((r) => r.textContent.includes('Credential refresh failed'));
-  const items = [...(row?.querySelectorAll('.deliveries li') ?? [])].map((li) => li.textContent?.trim() ?? '');
-  results.push({ name: '/alerts a delivery row names the transition it belongs to', ok: items.length === 2 && items[0].startsWith('opened') && items[1].startsWith('resolved'), missing: items });
-}
-{
-  // The lifecycle table carries no class of its own, so it is reached through the card whose title names it.
-  const lifecycleCard = () => [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Lifecycle');
-  const lifecycleTable = () => lifecycleCard()?.querySelector('table');
-  const lifecycleRows = () => [...(lifecycleTable()?.querySelectorAll('tbody tr') ?? [])].map((r) => r.textContent?.trim() ?? '');
-  const first = lifecycleRows()[0] ?? '';
+  failNextCall('getSettings', '/admin/settings', 'the configuration store is unavailable');
+  const failed = await mount('/settings');
+  const about = () => [...failed.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'About');
+  const error = about()?.querySelector('.empty--error');
+  const retry = [...(error?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Try again');
+  const block = failed.container.querySelector('pre.snippet');
   results.push({
-    name: '/alerts the lifecycle log lists the newest event first, with its failed delivery',
-    ok: /^\d+m ago/.test(first) && first.includes('Session started') && first.includes('refused'),
-    missing: [first.slice(0, 120)],
+    name: "/settings a failed read draws About's error state with Try again and keeps the client block's placeholder",
+    ok: error?.querySelector('.empty__title')?.textContent === 'Could not load the settings' && (error?.textContent ?? '').includes('the configuration store is unavailable') && retry !== undefined && about()?.querySelector('.skeleton') === null && (block?.textContent ?? '').split('\n')[0] === 'ANTHROPIC_BASE_URL=https://router.example.com' && failed.container.querySelector('.snippet__hint') === null,
+    missing: [about()?.textContent?.slice(0, 160) ?? 'no About card', (block?.textContent ?? 'no block').split('\n')[0], failed.container.querySelector('.snippet__hint')?.textContent?.slice(0, 60) ?? 'no hint'],
   });
-  const lifecycleLoadMore = () => [...(lifecycleCard()?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Load more');
+  retry?.click();
+  await failed.settle(400);
+  const rows = [...(about()?.querySelectorAll('.kv__row dt') ?? [])].map((dt) => dt.textContent?.trim());
   results.push({
-    name: '/alerts the load-more control never shows while the whole log fits on one page',
-    ok: lifecycleLoadMore() === undefined,
-    missing: [String(lifecycleLoadMore() !== undefined)],
-  });
-  // The router always writes idle_minutes; the type leaves it optional, so one row has to read without it.
-  const idleSubs = [...(lifecycleTable()?.querySelectorAll('tbody tr') ?? [])]
-    .filter((r) => (r.children[1]?.textContent ?? '').startsWith('Session idle'))
-    .map((r) => r.children[1].querySelector('.sub')?.textContent?.trim() ?? '');
-  results.push({
-    name: '/alerts an idle event without a minute count reads idle, never a blank count',
-    ok: idleSubs.length === 2 && idleSubs.includes('idle for 30 min') && idleSubs.includes('idle'),
-    missing: idleSubs,
-  });
-  const eventsText = [...m.container.querySelectorAll('table')][1].textContent ?? '';
-  const strayed = ['Session active', 'Session idle', 'Session parked', 'Subagent active'].filter((label) => eventsText.includes(label));
-  results.push({ name: '/alerts no lifecycle kind sits in the events table', ok: strayed.length === 0, missing: strayed });
-  const lifecycleFilter = [...m.container.querySelectorAll('select')].find((el) => el.getAttribute('aria-label') === 'Filter lifecycle by condition');
-  const setValue = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
-  setValue.call(lifecycleFilter, 'session_parked');
-  lifecycleFilter.dispatchEvent(new window.Event('change', { bubbles: true }));
-  await m.settle(300);
-  const parked = lifecycleRows();
-  results.push({
-    name: '/alerts the lifecycle condition filter narrows to one session kind',
-    ok: parked.length === 2 && parked.every((r) => r.includes('Session parked') || r.includes('Session resumed')),
-    missing: parked.map((r) => r.slice(0, 60)),
-  });
-  setValue.call(lifecycleFilter, 'all');
-  lifecycleFilter.dispatchEvent(new window.Event('change', { bubbles: true }));
-  await m.settle(300);
-}
-{
-  // The seed's own size, so the first page is exactly full and carries a cursor with nothing beyond it: the one
-  // click that answers no rows has to take the control away rather than fall back to the first page's cursor.
-  api.lifecyclePageSize = 9;
-  const fm = await mount('/alerts');
-  const card = () => [...fm.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Lifecycle');
-  const rowKeys = () => [...(card()?.querySelectorAll('tbody tr') ?? [])].map((r) => r.querySelector('td')?.getAttribute('title') ?? '');
-  const loadMore = () => [...(card()?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Load more');
-  results.push({
-    name: '/alerts an exactly full first page shows the load-more control',
-    ok: rowKeys().length === 9 && loadMore() !== undefined,
-    missing: [String(rowKeys().length), String(loadMore() !== undefined)],
-  });
-  loadMore()?.click();
-  await fm.settle();
-  const after = rowKeys();
-  results.push({
-    name: '/alerts a click past an exactly full first page answers no rows and the control disappears',
-    ok: after.length === 9 && new Set(after).size === 9 && loadMore() === undefined,
-    missing: [String(after.length), String(new Set(after).size), String(loadMore() !== undefined)],
-  });
-  fm.unmount();
-  api.lifecyclePageSize = 500;
-}
-{
-  // A small page size the seed alone never reaches, so a click has somewhere to grow the log; the nine-row seed
-  // divides evenly by three, so the third page is exactly full too and still carries a cursor (the route's own
-  // rule), and a call counter proves the fourth click's empty answer is the one that stops the growth.
-  api.lifecyclePageSize = 3;
-  let calls = 0;
-  const original = api.listLifecycleDeliveries.bind(api);
-  api.listLifecycleDeliveries = (...args) => {
-    calls += 1;
-    return original(...args);
-  };
-  const lm = await mount('/alerts');
-  const card = () => [...lm.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Lifecycle');
-  const rowKeys = () => [...(card()?.querySelectorAll('tbody tr') ?? [])].map((r) => r.querySelector('td')?.getAttribute('title') ?? '');
-  const loadMore = () => [...(card()?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Load more');
-  results.push({
-    name: '/alerts a small page size shows one page of the log and the load-more control',
-    ok: rowKeys().length === 3 && loadMore() !== undefined,
-    missing: [String(rowKeys().length), String(loadMore() !== undefined)],
-  });
-  const firstRow = rowKeys()[0];
-  loadMore()?.click();
-  await lm.settle();
-  const afterOne = rowKeys();
-  results.push({
-    name: '/alerts a load-more click appends the next rows below, with none repeated',
-    ok: afterOne.length === 6 && new Set(afterOne).size === 6 && afterOne[0] === firstRow && loadMore() !== undefined,
-    missing: [String(afterOne.length), String(new Set(afterOne).size), String(afterOne[0] === firstRow)],
-  });
-  loadMore()?.click();
-  await lm.settle();
-  const afterTwo = rowKeys();
-  results.push({
-    name: '/alerts an exactly full last page still carries a cursor, so the control stays up',
-    ok: afterTwo.length === 9 && new Set(afterTwo).size === 9 && afterTwo[0] === firstRow && loadMore() !== undefined,
-    missing: [String(afterTwo.length), String(new Set(afterTwo).size), String(loadMore() !== undefined)],
-  });
-  const callsBeforeLast = calls;
-  loadMore()?.click();
-  await lm.settle();
-  const afterThree = rowKeys();
-  results.push({
-    name: '/alerts a click past the exactly-full boundary answers no rows and the control disappears',
-    ok: afterThree.length === 9 && new Set(afterThree).size === 9 && loadMore() === undefined && calls === callsBeforeLast + 1,
-    missing: [String(afterThree.length), String(loadMore() !== undefined), String(calls), String(callsBeforeLast)],
-  });
-  const callsAfterGone = calls;
-  loadMore()?.click();
-  await lm.settle();
-  results.push({
-    name: '/alerts once the control is gone, calls stop growing',
-    ok: calls === callsAfterGone && rowKeys().length === 9,
-    missing: [String(calls), String(callsAfterGone), String(rowKeys().length)],
-  });
-  api.listLifecycleDeliveries = original;
-  lm.unmount();
-  api.lifecyclePageSize = 500;
-}
-{
-  // A page size of one, so the first "Load more" click is easy to hold behind a promise and the kind switch
-  // that follows is easy to tell apart from it by the row it lands.
-  api.lifecyclePageSize = 1;
-  const dm = await mount('/alerts');
-  const card = () => [...dm.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Lifecycle');
-  const rowTexts = () => [...(card()?.querySelectorAll('tbody tr') ?? [])].map((r) => r.textContent?.trim() ?? '');
-  const loadMore = () => [...(card()?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Load more');
-  // Read directly, before deferNextCall intercepts the method, so a later comparison never touches held.calls.
-  const allFirstPage = await api.listLifecycleDeliveries();
-  const idleFirstPage = await api.listLifecycleDeliveries('session_idle');
-  results.push({
-    name: '/alerts a page size of one still shows a row and the load-more control',
-    ok: rowTexts().length === 1 && loadMore() !== undefined,
-    missing: [String(rowTexts().length), String(loadMore() !== undefined)],
-  });
-  const held = deferNextCall('listLifecycleDeliveries');
-  loadMore()?.click();
-  const lifecycleFilter2 = [...dm.container.querySelectorAll('select')].find((el) => el.getAttribute('aria-label') === 'Filter lifecycle by condition');
-  const setValue2 = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
-  setValue2.call(lifecycleFilter2, 'session_idle');
-  lifecycleFilter2.dispatchEvent(new window.Event('change', { bubbles: true }));
-  await dm.settle();
-  const switched = rowTexts();
-  results.push({
-    name: '/alerts switching kind while a load-more reply is held shows only the new kinds first page',
-    ok: JSON.stringify(held.calls[0]) === JSON.stringify([undefined, allFirstPage.nextCursor]) && switched.length === 1 && switched[0].includes('Session idle') && loadMore() !== undefined,
-    missing: [JSON.stringify(held.calls[0]), ...switched],
-  });
-  held.release();
-  await dm.settle();
-  const stillOneRow = rowTexts();
-  results.push({
-    name: '/alerts the held reply from the kind before the switch lands nowhere once it resolves',
-    ok: stillOneRow.length === 1 && stillOneRow[0].includes('Session idle'),
-    missing: stillOneRow,
-  });
-  loadMore()?.click();
-  await dm.settle();
-  const bothRows = rowTexts();
-  results.push({
-    name: '/alerts a load-more click after the switch asks the new kind with its own cursor',
-    ok: JSON.stringify(held.calls.at(-1)) === JSON.stringify(['session_idle', idleFirstPage.nextCursor]) && bothRows.length === 2 && bothRows.every((r) => r.includes('Session idle')) && new Set(bothRows).size === 2,
-    missing: [JSON.stringify(held.calls.at(-1)), JSON.stringify(['session_idle', idleFirstPage.nextCursor]), String(bothRows.length)],
-  });
-  held.restore();
-  dm.unmount();
-  api.lifecyclePageSize = 500;
-}
-{
-  const stateFilter = [...m.container.querySelectorAll('select')].find((el) => el.getAttribute('aria-label') === 'Filter by state');
-  const setValue = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
-  setValue.call(stateFilter, 'resolved');
-  stateFilter.dispatchEvent(new window.Event('change', { bubbles: true }));
-  await m.settle(300);
-  const rows = [...m.container.querySelectorAll('table')][1]?.querySelectorAll('tbody tr') ?? [];
-  results.push({ name: '/alerts state filter narrows to resolved events', ok: rows.length >= 2 && [...rows].every((r) => r.textContent.includes('resolved')), missing: [String(rows.length)] });
-  setValue.call(stateFilter, 'all');
-  stateFilter.dispatchEvent(new window.Event('change', { bubbles: true }));
-  await m.settle(300);
-}
-{
-  const menu = [...m.container.querySelectorAll('.menu__trigger')].find((b) => (b.getAttribute('aria-label') ?? '').startsWith('Actions for rule'));
-  menu?.click();
-  await m.settle(150);
-  const items = [...m.container.querySelectorAll('.menu__list button')].map((b) => b.textContent?.trim());
-  results.push({ name: '/alerts a rule row offers Edit, Test, and Delete', ok: items.join('|') === 'Edit|Test|Delete', missing: items });
-  [...m.container.querySelectorAll('.menu__list button')].find((b) => b.textContent?.trim() === 'Edit')?.click();
-  await m.settle(300);
-  const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
-  expect('/alerts edit dialog is prefilled', dlg?.textContent ?? '', ['Edit alert rule', 'Leave empty to keep the stored secret', 'X-Phoebis-Signature', 'Enabled', 'Save rule']);
-  const titles = [...(dlg?.querySelectorAll('.dialog-group__title') ?? [])];
-  const first = dlg?.querySelector('.field__label')?.textContent?.trim() ?? null;
-  const delivery = titles.find((t) => t.textContent?.trim() === 'Delivery');
-  const webhook = [...(dlg?.querySelectorAll('.field__label') ?? [])].find((l) => l.textContent?.trim() === 'Webhook URL');
-  const after = Boolean(delivery && webhook && delivery.compareDocumentPosition(webhook) & window.Node.DOCUMENT_POSITION_FOLLOWING);
-  // The first label alone passes with Enabled above every heading, so its place between Rule and Condition is read.
-  const ruleTitle = titles.find((t) => t.textContent?.trim() === 'Rule');
-  const conditionTitle = titles.find((t) => t.textContent?.trim() === 'Condition');
-  const enabled = [...(dlg?.querySelectorAll('.field__label') ?? [])].find((l) => l.textContent?.trim() === 'Enabled');
-  const underRule = Boolean(ruleTitle && enabled && ruleTitle.compareDocumentPosition(enabled) & window.Node.DOCUMENT_POSITION_FOLLOWING);
-  const beforeCondition = Boolean(enabled && conditionTitle && conditionTitle.compareDocumentPosition(enabled) & window.Node.DOCUMENT_POSITION_PRECEDING);
-  const read = titles.map((t) => t.textContent?.trim() ?? '');
-  results.push({
-    name: '/alerts the rule dialog reads Enabled first under Rule, then the Condition and Delivery headings',
-    ok: JSON.stringify(read) === JSON.stringify(['Rule', 'Condition', 'Delivery']) && first === 'Enabled' && underRule && beforeCondition && after,
-    missing: [...read, `first ${first}`, underRule ? '' : 'Enabled not after Rule', beforeCondition ? '' : 'Condition not after Enabled', after ? '' : 'Webhook URL not after Delivery'],
-  });
-  const url = dlg?.querySelector('input[placeholder="https://hooks.example.com/phoebis"]');
-  results.push({ name: '/alerts edit dialog carries the webhook URL', ok: (url?.value ?? '').startsWith('https://hooks.example.com/phoebis/'), missing: [url?.value ?? 'absent'] });
-  [...(dlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
-  await m.settle(200);
-  menu?.click();
-  await m.settle(150);
-  [...m.container.querySelectorAll('.menu__list button')].find((b) => b.textContent?.trim() === 'Test')?.click();
-  await m.settle(500);
-  results.push({ name: '/alerts Test toasts the delivery answer', ok: /Test delivery answered 20\d/.test(m.text()), missing: [m.container.querySelector('.toast')?.textContent ?? 'no toast'] });
-}
-{
-  const create = [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Create rule');
-  create?.click();
-  await m.settle(350);
-  const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
-  const kindSelect = dlg?.querySelector('select');
-  const setValue = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
-  const scopesFor = async (kind) => { setValue.call(kindSelect, kind); kindSelect.dispatchEvent(new window.Event('change', { bubbles: true })); await m.settle(150); return [...(dlg?.querySelectorAll('select')[1]?.options ?? [])].map((o) => o.textContent?.trim()); };
-  results.push({ name: '/alerts client_drift scopes to all traffic only', ok: JSON.stringify(await scopesFor('client_drift')) === JSON.stringify(['All traffic']), missing: [] });
-  const reauth = await scopesFor('reauth_required');
-  results.push({ name: '/alerts reauth_required scopes by any account or one account', ok: reauth[0] === 'Any account' && reauth.some((o) => o.startsWith('Account ')) && !reauth.includes('All traffic'), missing: reauth });
-  const cap = await scopesFor('keepalive_cost_cap');
-  results.push({ name: '/alerts keepalive_cost_cap scopes by pool or all', ok: cap.includes('All traffic') && cap.some((o) => o.startsWith('Pool ')) && !cap.some((o) => o.startsWith('Key ')), missing: cap });
-  const backoff = await scopesFor('poll_backoff');
-  results.push({ name: '/alerts poll_backoff scopes by any account or one account', ok: backoff[0] === 'Any account' && backoff.some((o) => o.startsWith('Account ')) && !backoff.includes('All traffic') && !backoff.some((o) => o.startsWith('Pool ')), missing: backoff });
-  await scopesFor('utilization_above');
-  const windows = [...(dlg?.querySelectorAll('select')[2]?.options ?? [])].map((o) => o.textContent?.trim());
-  results.push({ name: '/alerts utilization windows include the Fable window under the shared label', ok: JSON.stringify(windows) === JSON.stringify(['5-hour', '7-day', '7-day Fable']), missing: windows });
-  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-  const url = dlg?.querySelector('input[placeholder="https://hooks.example.com/phoebis"]');
-  setter.call(url, 'https://hooks.example.com/phoebis/new');
-  url.dispatchEvent(new window.Event('input', { bubbles: true }));
-  await m.settle(100);
-  [...(dlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Create rule')?.click();
-  await m.settle(500);
-  results.push({ name: '/alerts a created rule joins the table', ok: m.text().includes('hooks.example.com/phoebis/new') && m.text().includes('Rule created'), missing: [] });
-}
-{
-  // The drift event by name rather than by position: every open event offers Resolve, and this check is about
-  // the confirmation naming the subject it was opened for.
-  const eventRows = () => [...[...m.container.querySelectorAll('table')][1].querySelectorAll('tbody tr')];
-  const resolve = [...(eventRows().find((r) => r.textContent.includes('client 2.1.274'))?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Resolve');
-  resolve?.click();
-  await m.settle(250);
-  const confirm = [...m.container.querySelectorAll('dialog[open]')].pop();
-  expect('/alerts Resolve confirms with the subject', confirm?.textContent ?? '', ['Resolve event', 'client 2.1.274']);
-  [...(confirm?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Resolve')?.click();
-  await m.settle(500);
-  const drift = eventRows().find((r) => r.textContent.includes('client 2.1.274'));
-  results.push({ name: '/alerts a resolved event reads resolved and loses its button', ok: Boolean(drift) && drift.textContent.includes('resolved') && !drift.querySelector('button'), missing: [drift?.textContent?.slice(0, 80) ?? 'row missing'] });
-}
-{
-  const signedRow = () => [...[...m.container.querySelectorAll('table')][0].querySelectorAll('tbody tr')].find((r) => r.textContent.includes('hooks.example.com/phoebis/refresh'));
-  signedRow()?.querySelector('.menu__trigger')?.click();
-  await m.settle(150);
-  [...m.container.querySelectorAll('.menu__list button')].find((b) => b.textContent?.trim() === 'Edit')?.click();
-  await m.settle(300);
-  const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
-  expect('/alerts the edit hint names all three secret outcomes', dlg?.textContent ?? '', ['Leave empty to keep the stored secret; a new value replaces it; the box below removes it.']);
-  const box = [...(dlg?.querySelectorAll('label.row') ?? [])].find((l) => l.textContent?.includes('Remove the stored secret'))?.querySelector('input[type=checkbox]');
-  box?.click();
-  await m.settle(100);
-  const secret = dlg?.querySelector('input[type=password]');
-  const disabled = secret?.disabled === true;
-  [...(dlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Save rule')?.click();
-  await m.settle(600);
-  results.push({
-    name: '/alerts removing the stored secret disables the field and saves the rule unsigned',
-    ok: box !== undefined && disabled && (signedRow()?.textContent ?? '').includes('Unsigned'),
-    missing: [box ? '' : 'no checkbox', `field disabled ${disabled}`, signedRow()?.textContent?.slice(0, 120) ?? 'row missing'],
-  });
-}
-m.unmount();
-
-// A failed read draws the error state where the rules are, and the shell's toast names the route.
-{
-  failNextCall('listAlertRules', '/admin/alerts/rules', 'the registry is unavailable');
-  const failed = await mount('/alerts');
-  const t = failed.text();
-  const toast = failed.container.querySelector('.toast')?.textContent ?? 'no toast';
-  results.push({
-    name: '/alerts a failed rules read draws the error state and toasts the route',
-    ok: t.includes('Could not load the alert rules') && t.includes('the registry is unavailable') && toast.includes('/admin/alerts/rules') && toast.includes('the registry is unavailable'),
-    missing: [toast, t.slice(0, 160)],
+    name: '/settings Try again reads the settings into About and the hint beside the block',
+    ok: JSON.stringify(rows) === JSON.stringify(['Version', 'Profile', 'Metrics listener', 'Ledger path', 'Pricing path', 'Storage path', 'Keepalive sessions', 'Keepalive agents', 'Keepalive retained bytes', 'Admin secret']) && about()?.querySelector('.empty--error') === null && failed.container.querySelector('pre.snippet + p.snippet__hint') !== null,
+    missing: rows,
   });
   failed.unmount();
 }
-
 {
-  failNextCall('listLifecycleDeliveries', '/admin/alerts/deliveries', 'the registry is unavailable');
-  const failed = await mount('/alerts');
-  const t = failed.text();
+  failNextCall('getSettings', '/admin/settings', 'the configuration store is unavailable');
+  const failed = await mount('/settings');
+  const pricing = () => [...failed.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Pricing');
+  const error = pricing()?.querySelector('.empty--error');
+  const retry = [...(error?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Try again');
   results.push({
-    name: '/alerts a failed lifecycle read draws the error state where the log is',
-    ok: t.includes('Could not load the lifecycle log') && t.includes('Rules'),
-    missing: [t.slice(0, 160)],
+    name: "/settings a failed read draws Pricing's error state with Try again",
+    ok: error?.querySelector('.empty__title')?.textContent === 'Could not load the price table' && (error?.textContent ?? '').includes('the configuration store is unavailable') && retry !== undefined,
+    missing: [pricing()?.textContent?.slice(0, 160) ?? 'no Pricing card'],
+  });
+  retry?.click();
+  await failed.settle(400);
+  const models = [...(pricing()?.querySelectorAll('tbody tr') ?? [])].map((tr) => tr.children[0]?.textContent?.trim());
+  results.push({
+    name: "/settings Pricing's Try again reads the price table",
+    ok: models.includes('claude-fable-5-1') && pricing()?.querySelector('.empty--error') === null,
+    missing: models,
   });
   failed.unmount();
-}
-
-// A fresh installation: zero rules, zero events, and a filter that matches nothing must render, not throw.
-{
-  localStorage.setItem('phoebis.mockEmpty', '1');
-  const empty = await mount('/alerts');
-  expect('/alerts renders on an empty store', empty.text(), ['Rules', 'Create rule', 'Events', 'No events.', 'Lifecycle', 'No session events.']);
-  results.push({ name: '/alerts an empty store raises no console error', ok: !problems.some((p) => p.includes('toLowerCase')), missing: problems.filter((p) => p.includes('toLowerCase')) });
-  const filter = [...empty.container.querySelectorAll('select')].find((el) => el.getAttribute('aria-label') === 'Filter by condition');
-  const setValue = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
-  setValue.call(filter, 'client_drift');
-  filter.dispatchEvent(new window.Event('change', { bubbles: true }));
-  await empty.settle(250);
-  expect('/alerts an empty filtered result names the condition', empty.text(), ['No client drift events.']);
-  empty.unmount();
-  localStorage.removeItem('phoebis.mockEmpty');
 }
 
 // Every registry list and ledger read answers nothing under the switch, so each view meets the store a fresh
@@ -6830,7 +7826,6 @@ m.unmount();
     ['/requests', (c, t) => t.includes('No requests match'), 'No requests match'],
     ['/analytics', (c, t) => t.includes('No traffic in this range.'), 'No traffic in this range.'],
     ['/sessions', (c, t) => t.includes('No live sessions'), 'No live sessions'],
-    ['/alerts', (c, t) => t.includes('No events.') && t.includes('No session events.'), 'No events., No session events.'],
     ['/settings', (c, t) => t.includes('Pricing'), 'Pricing'],
   ];
   for (const [path, drawn, needle] of views) {
@@ -6891,37 +7886,35 @@ m.unmount();
 }
 
 m = await mount('/settings');
-expect('/settings', m.text(), ['Appearance', 'Theme', 'Time format', 'Access', 'Admin secret', 'Viewer secret', 'except captured bodies, live previews, question text, and webhook URLs beyond their host', 'Preview as viewer', 'Pricing', 'claude-fable-5-1', 'Sessions', 'Session expiry', '24h', 'Retention', 'deleted by the hourly purge', 'Ledger (days)', 'Rollups (days)', 'Quota samples (days)', 'Body capture, max hours', 'stats.rollup_retention_days', 'Downstream client configuration', 'ANTHROPIC_BASE_URL=https://router.example.com', 'inference is served on 127.0.0.1:8080', 'CC_KEEPALIVE_OWNER_ID=$(uuidgen)', 'About', 'claude-code-2.1.269-linux-x64', MOCK_VERSION]);
+expect('/settings', m.text(), ['Downstream client configuration', 'Pricing', 'Appearance', 'About', 'Theme', 'Time format', 'Admin secret', 'claude-fable-5-1', 'ANTHROPIC_BASE_URL=https://router.example.com', 'CLAUDE_CODE_OAUTH_TOKEN=<key>', '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1', 'CLAUDE_CODE_GATEWAY_HINT_HEADERS=1', 'DISABLE_TELEMETRY=1', 'CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1', 'Inference is served on 127.0.0.1:8080', 'Version', 'Profile', 'Metrics listener', 'Ledger path', 'Pricing path', 'Storage path', "prints this router's"]);
 results.push({ name: '/settings has no statusline mention', ok: !/statusline/i.test(m.text()), missing: [] });
-{
-  // Each row names its bootstrap key the way the compatibility card does, since the route reads these and never writes them.
-  const card = (title) => [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === title);
-  const rows = (title) => [...(card(title)?.querySelectorAll('.kv__row') ?? [])].map((r) => [`${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.textContent?.trim()}`, r.querySelector('dd')?.getAttribute('title') ?? '']);
-  const want = {
-    Compatibility: [['Cache diagnostics=off', 'compatibility.cache_diagnostics'], ['Profile=claude-code-2.1.269-linux-x64', '']],
-    Quota: [['Sample retention (days)=30', 'quota.sample_retention_days']],
-    Routing: [['Catalog cache (seconds)=60', 'routing.catalog_cache_seconds'], ['Catalog refresh (seconds)=21,600', 'routing.catalog_refresh_seconds'], ['Cooldown fallback (seconds)=60', 'routing.cooldown_fallback_seconds'], ['Model rejection (seconds)=3,600', 'routing.model_rejection_seconds'], ['Max attempts=3', 'routing.max_attempts'], ['Startup fetch (seconds)=5', 'routing.startup_fetch_seconds']],
-    Storage: [['Ledger path=./data/ledger.sqlite', 'stats.ledger_path'], ['Pricing path=./pricing.yaml', 'stats.pricing_path'], ['Storage path=./data/router.sqlite', 'storage.path']],
-    Usage: [['Cache TTL (seconds)=60', 'usage.cache_ttl_seconds'], ['Refresh concurrency=2', 'usage.refresh_concurrency']],
-  };
-  for (const [title, expected] of Object.entries(want)) {
-    const got = rows(title);
-    const ok = got.length === expected.length && expected.every(([row, key], i) => got[i][0] === row && (key === '' ? got[i][1] === '' : got[i][1] === `Set by ${key} in the bootstrap file`));
-    results.push({ name: `/settings the ${title} card reads the route's block with its bootstrap keys`, ok, missing: got.map((g) => g.join(' | ')) });
-  }
-}
-// The label and its value run together in textContent, which is what pins the URL to the About row.
-expect('/settings read-only bootstrap values', m.text(), ['Set by sessions.expire_after_seconds in the bootstrap file', 'Max retained bytes', 'Max workers', 'Listeners', 'HTTP/1.1', 'Public URLhttps://router.home.example']);
-{
-  const t = m.text();
-  results.push({ name: '/settings has no BoringSSL line', ok: !t.includes('BoringSSL') && t.includes('Transport'), missing: [`BoringSSL absent ${!t.includes('BoringSSL')}`, `Transport present ${t.includes('Transport')}`] });
-}
 results.push({ name: '/settings has no retention save button', ok: ![...m.container.querySelectorAll('button')].some((b) => b.textContent?.trim() === 'Save retention'), missing: [] });
 {
-  // The 24h needle above also matches the time-format control, so the expiry is read off its own card.
-  const card = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Sessions');
-  const rows = [...(card?.querySelectorAll('.kv__row') ?? [])].map((r) => `${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.textContent?.trim()}`);
-  results.push({ name: '/settings reads the session expiry as a value, not a control', ok: rows.join('|') === 'Session expiry=24h' && card?.querySelector('button') === null, missing: rows });
+  const titles = [...m.container.querySelectorAll('.settings > .card .card__title')].map((t) => t.textContent?.trim());
+  results.push({ name: '/settings the cards run client block, Pricing, Appearance, About', ok: JSON.stringify(titles) === JSON.stringify(['Downstream client configuration', 'Pricing', 'Appearance', 'About']), missing: titles });
+  const subtitle = m.container.querySelector('.settings > .card')?.querySelector('.card__subtitle')?.textContent;
+  results.push({ name: "/settings the client block's subtitle names the settings file and the shell", ok: subtitle === "Put it in the env block of the client's settings file or export it in the shell that launches the client, and replace the token with a key from the Keys page.", missing: [subtitle ?? 'no subtitle'] });
+  const about = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'About');
+  const rows = [...(about?.querySelectorAll('.kv__row') ?? [])].map((r) => `${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.textContent?.trim()}`);
+  // The mock stores 268435456 retained bytes, which is 256 MiB.
+  results.push({ name: '/settings About lists the version, the profile, the metrics listener, the three paths, the three keepalive limits and the admin secret, then the installation sentence', ok: JSON.stringify(rows) === JSON.stringify([`Version=${MOCK_VERSION}`, 'Profile=claude-code-2.1.269-linux-x64', 'Metrics listener=127.0.0.1:9464', 'Ledger path=./data/ledger.sqlite', 'Pricing path=./pricing.yaml', 'Storage path=./data/router.sqlite', 'Keepalive sessions=128', 'Keepalive agents=1024', 'Keepalive retained bytes=256 MiB', 'Admin secret=configured']) && (about?.textContent ?? '').includes("The values the configuration file sets are on the installation page; phoebis check-config prints this router's.") && !(about?.textContent ?? '').includes('Public URL'), missing: rows });
+  const titled = [...(about?.querySelectorAll('.kv__row') ?? [])].slice(3).map((r) => `${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.getAttribute('title')}`);
+  const restart = 'Set in the configuration file; a change takes a restart.';
+  results.push({
+    name: '/settings each path and keepalive line names its key in the configuration file, each keepalive line the restart, and the admin secret line its variable',
+    ok: JSON.stringify(titled) === JSON.stringify(['Ledger path=Set by stats.ledger_path in the configuration file', 'Pricing path=Set by stats.pricing_path in the configuration file', 'Storage path=Set by storage.path in the configuration file', `Keepalive sessions=keepalive.max_sessions\n${restart}`, `Keepalive agents=keepalive.max_agents\n${restart}`, `Keepalive retained bytes=keepalive.max_retained_bytes\n${restart}`, 'Admin secret=The secret the variable admin.secret_env names; it reaches every route.']) && about?.querySelector('.kv__row:last-child dd .badge.badge--good') !== null,
+    missing: titled,
+  });
+  const mirrored = ['Body capture, max hours', 'Cache TTL (seconds)', 'Catalog refresh (seconds)', 'Max workers', 'Sample retention (days)'].filter((w) => m.text().includes(w));
+  results.push({ name: '/settings carries no mirror words', ok: mirrored.length === 0, missing: mirrored });
+  results.push({ name: '/settings no card reads a configuration mirror', ok: ['Sessions', 'Retention', 'Keepalive', 'Listeners', 'Compatibility', 'Quota', 'Routing', 'Storage', 'Usage'].every((t) => !titles.includes(t)) && !m.text().includes('Session expiry') && !m.text().includes('HTTP/1.1'), missing: titles });
+  const block = m.container.querySelector('pre.snippet');
+  const hint = block?.nextElementSibling;
+  results.push({
+    name: '/settings the client block keeps the placeholder and names the proxy listener beside it with why',
+    ok: (block?.textContent ?? '').split('\n')[0] === 'ANTHROPIC_BASE_URL=https://router.example.com' && !(block?.textContent ?? '').includes('127.0.0.1') && hint?.matches('p.snippet__hint') === true && hint.querySelector('code')?.textContent === '127.0.0.1:8080' && hint.textContent?.replace(/\s+/g, ' ').trim() === 'Inference is served on 127.0.0.1:8080, the address the proxy listener binds. Replace the placeholder with the URL that reaches it: a bind address cannot name the public endpoint, since a TLS proxy, a port mapping or another host name can stand between Claude Code and the listener.',
+    missing: [block?.textContent?.split('\n')[0] ?? 'no block', hint?.outerHTML.slice(0, 160) ?? 'no hint'],
+  });
 }
 {
   expect('/settings pricing meta', m.text(), ['Effective Sep 30, 2026', 'source: shipped']);
@@ -6942,6 +7935,24 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
   }
   const shippedModels = [...m.container.querySelectorAll('tbody tr')].map((row) => row.children[0]?.textContent?.trim() ?? '').filter((n) => n.includes('-'));
   results.push({ name: '/settings price table is the shipped Anthropic table', ok: shippedModels.length === 10 && shippedModels.every((n) => n.startsWith('claude-')), missing: shippedModels });
+  {
+    const card = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Pricing');
+    const rows = card?.querySelectorAll('.price-table tbody tr:not(.price-table__fast)').length ?? 0;
+    const edits = card?.querySelectorAll('.price-cell__btn, input, .save-bar').length ?? 0;
+    const buttons = [...(card?.querySelectorAll('button') ?? [])].map((b) => b.textContent?.trim() || b.getAttribute('aria-label'));
+    results.push({
+      name: '/settings the Pricing card is read-only: the rows, no editable cell, no Add model and no button',
+      ok: card !== undefined && rows === 10 && edits === 0 && buttons.length === 0,
+      missing: [`rows ${rows}`, `editable parts ${edits}`, ...buttons],
+    });
+    const opus = [...(card?.querySelectorAll('.price-table tbody tr') ?? [])].find((tr) => tr.children[0]?.textContent?.trim() === 'claude-opus-5-5');
+    const fast = opus?.nextElementSibling?.classList.contains('price-table__fast') ? [...opus.nextElementSibling.children].map((td) => td.textContent?.trim()) : null;
+    results.push({
+      name: '/settings the fast-mode row sits under Opus 5.5',
+      ok: fast !== null && fast[0] === 'fast mode' && fast[1] === '$8.00' && fast[5] === '$40.00',
+      missing: fast ?? ['no fast-mode row under claude-opus-5-5'],
+    });
+  }
   results.push({
     name: '/settings no longer carries the other upstream prices section',
     ok: !m.text().includes('Other upstream prices') && !/gpt-\d/.test(m.text()) && m.container.querySelectorAll('.price-extra').length === 0,
@@ -6949,66 +7960,12 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
   });
 }
 
-// Editing a price by hand: cell, Save bar, validation, Discard.
-{
-  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-  m.container.querySelector('.price-cell__btn')?.click();
-  await m.settle(150);
-  const cell = m.container.querySelector('input.input--price');
-  results.push({
-    name: '/settings a price cell turns into a numeric input',
-    ok: cell !== null && cell.type === 'number' && cell.min === '0' && cell.step === '0.0001',
-    missing: [cell ? `${cell.type} min=${cell.min} step=${cell.step}` : 'no input'],
-  });
-  results.push({ name: '/settings the table is clean until a price changes', ok: m.container.querySelector('.save-bar') === null, missing: [] });
-  setter.call(cell, '11.5');
-  cell.dispatchEvent(new window.Event('input', { bubbles: true }));
-  await m.settle(200);
-  results.push({ name: '/settings an edited price raises the Save bar', ok: m.container.querySelector('.save-bar') !== null && m.text().includes('Unsaved price edits.'), missing: [] });
-  [...m.container.querySelectorAll('.save-bar button')].find((b) => b.textContent?.trim() === 'Save')?.click();
-  await m.settle(250);
-  results.push({
-    name: '/settings Save stamps the table as edited by hand',
-    ok: m.text().includes('source: edited by hand') && m.text().includes('$11.50') && m.container.querySelector('.save-bar') === null,
-    missing: [m.container.querySelector('.card__subtitle')?.textContent ?? 'absent'],
-  });
-  {
-    const opus = [...m.container.querySelectorAll('.price-table tbody tr')].find((tr) => tr.children[0]?.textContent?.trim() === 'claude-opus-5-5');
-    const fast = opus?.nextElementSibling?.classList.contains('price-table__fast') ? [...opus.nextElementSibling.children].map((td) => td.textContent?.trim()) : null;
-    results.push({
-      name: '/settings a hand edit keeps the read-only fast-mode row under Opus 5.5',
-      ok: fast !== null && fast[0] === 'fast mode' && fast[1] === '$8.00' && fast[5] === '$40.00' && opus?.nextElementSibling?.querySelector('button') === null,
-      missing: fast ?? ['no fast-mode row under claude-opus-5-5'],
-    });
-  }
-  [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Add model')?.click();
-  await m.settle(200);
-  results.push({ name: '/settings Add model appends a row with an empty model id', ok: m.container.querySelector('input[aria-label="Model id"]') !== null, missing: [] });
-  [...m.container.querySelectorAll('.save-bar button')].find((b) => b.textContent?.trim() === 'Save')?.click();
-  await m.settle(200);
-  results.push({ name: '/settings Save refuses a row without a model id', ok: m.text().includes('Every row needs a model id.') && m.container.querySelector('.save-bar__msg.is-error') !== null, missing: [] });
-  [...m.container.querySelectorAll('.save-bar button')].find((b) => b.textContent?.trim() === 'Discard')?.click();
-  await m.settle(200);
-  results.push({
-    name: '/settings Discard drops the edit and the Save bar',
-    ok: m.container.querySelector('input[aria-label="Model id"]') === null && m.container.querySelector('.save-bar') === null,
-    missing: [],
-  });
-  const remove = [...m.container.querySelectorAll('.price-table button')].find((b) => (b.getAttribute('title') ?? '').startsWith('Remove claude-fable-5-1'));
-  remove?.click();
-  await m.settle(250);
-  const confirmDlg = [...m.container.querySelectorAll('dialog[open]')].pop();
-  results.push({ name: '/settings Remove asks before dropping a model', ok: (confirmDlg?.textContent ?? '').includes('Remove model') && (confirmDlg?.textContent ?? '').includes('loses its prices'), missing: [confirmDlg?.textContent?.slice(0, 80) ?? 'absent'] });
-  [...(confirmDlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
-  await m.settle(200);
-}
-
 // The downstream client configuration card: two snippets and one definition per variable.
 {
   const snippets = [...m.container.querySelectorAll('.snippet')].map((pre) => pre.textContent?.trim() ?? '');
   results.push({
-    name: '/settings main snippet is the three required lines under the listener hint',
-    ok: snippets[0]?.split('\n').length === 4 && snippets[0].startsWith('# inference is served on 127.0.0.1:8080') && snippets[0].includes('ANTHROPIC_BASE_URL=https://router.example.com') && !snippets[0].includes('CC_KEEPALIVE_OWNER_ID'),
+    name: '/settings the main snippet is the six recommended lines',
+    ok: JSON.stringify(snippets[0]?.split('\n')) === JSON.stringify(['ANTHROPIC_BASE_URL=https://router.example.com', 'CLAUDE_CODE_OAUTH_TOKEN=<key>', '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1', 'CLAUDE_CODE_GATEWAY_HINT_HEADERS=1', 'DISABLE_TELEMETRY=1', 'CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1']) && !snippets[0].split('\n').some((l) => l.startsWith('#')),
     missing: [snippets[0] ?? 'absent'],
   });
   results.push({
@@ -7024,17 +7981,23 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
     'ANTHROPIC_BASE_URL',
     'CLAUDE_CODE_OAUTH_TOKEN',
     '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1',
+    'CLAUDE_CODE_GATEWAY_HINT_HEADERS=1',
+    'DISABLE_TELEMETRY=1',
+    'CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1',
     'CC_KEEPALIVE_OWNER_ID and ANTHROPIC_CUSTOM_HEADERS',
     'CC_KEEPALIVE_MANAGEMENT_URL and CC_KEEPALIVE_TOKEN',
     'CLAUDE_CODE_PROMPT_CACHE_TTL=5m',
   ];
   results.push({ name: '/settings defines every environment variable in order', ok: JSON.stringify(terms) === JSON.stringify(want), missing: terms });
   expect('/settings variable definitions', m.text(), [
-    "Points Claude Code at the router. Every model request and the cache-keepalive companion's reports go here.",
+    "Points Claude Code at the router's proxy listener, at the URL that reaches it from the client's machine; the address under the block is where the router binds it. Every model request and the cache-keepalive companion's reports go here.",
     'Holds the router key. Claude Code treats it as a subscription credential',
     'an ANTHROPIC_API_KEY would switch those off.',
     'Makes Claude Code send its first-party request shape to the router',
     'It also switches off gateway model discovery, and being an internal variable a future build may drop it.',
+    'Makes the client send its gateway hint headers (the agent type, the compaction marks and the tool durations), which the request log and the analytics read; under the first-party flag above they arrive anyway.',
+    "Stops the client's telemetry batches, which it posts to api.anthropic.com with the credential it holds, behind the router the key's secret.",
+    'Lets fast mode work behind the router: without it the client asks api.anthropic.com whether the organization has fast mode, the check fails with a router key, and fast mode stays off.',
     'Optional hardening.',
     'They need a wrapper script, since the env block of Claude Code',
     'Not needed. The companion defaults them to ANTHROPIC_BASE_URL and CLAUDE_CODE_OAUTH_TOKEN.',
@@ -7042,31 +8005,28 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
     'Leave it unset without warming.',
   ]);
 }
-// The preview outlives a mount, so the viewer pass below puts this back when it ends.
-const roleBeforePreview = localStorage.getItem('phoebis.role');
 {
   const dark = [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Dark');
   dark?.click();
   await m.settle(100);
   results.push({ name: 'theme toggle -> dark', ok: document.documentElement.getAttribute('data-theme') === 'dark' && localStorage.getItem('phoebis.theme') === 'dark', missing: [document.documentElement.getAttribute('data-theme'), localStorage.getItem('phoebis.theme')] });
-  const sw = m.container.querySelector('button[role="switch"][aria-label="Preview as viewer"]');
-  sw?.click();
-  await m.settle(100);
-  results.push({ name: 'viewer toggle persisted', ok: localStorage.getItem('phoebis.role') === 'viewer', missing: [localStorage.getItem('phoebis.role')] });
 }
 m.unmount();
 
 // Fixtures mounted alone pin the grouped dialog's contract apart from any one page's form.
 {
   const { createElement: h, Fragment, useEffect, useState } = React;
-  function Fixture({ held, hold = null, refused = false, status = 'Every group saves together.' }) {
-    const [chosen, setChosen] = useState('one');
+  function Fixture({ expertOnly = false, held, hold = null, initialGroup = null, refused = false, start = 'one', status = 'Every group saves together.' }) {
+    const [chosen, setChosen] = useState(start);
+    // The page's reset, which React runs after the dialog's open effect.
+    useEffect(() => setChosen(initialGroup ?? start), []);
+    const b = h(Field, { label: 'B' }, h(Input, { 'aria-label': 'B', 'aria-invalid': refused ? true : undefined }));
     const groups = [
       { id: 'one', label: 'One', parent: 'First', body: h(Field, { label: 'A' }, h(Input, { 'aria-label': 'A' })) },
-      { id: 'two', label: 'Two', parent: 'First', refused, body: h(Field, { label: 'B' }, h(Input, { 'aria-label': 'B', 'aria-invalid': refused ? true : undefined })) },
+      { id: 'two', label: 'Two', parent: 'First', refused, expertOnly, body: expertOnly ? h(Expert, { refused }, b) : b },
       { id: 'three', label: 'Three', parent: 'Second', body: h('p', { className: 'field__hint' }, h(GroupLink, { id: 'one' }, 'One'), ' ', h(PageLink, { to: '/pools' }, 'Pools page')) },
     ];
-    return h(GroupedDialog, { chosen, footer: h('button', { type: 'button' }, 'Save'), groups, held, hold, onChoose: setChosen, onClose() {}, open: true, railLabel: 'Fixture settings', status, title: 'Fixture' });
+    return h(GroupedDialog, { chosen, footer: h('button', { type: 'button' }, 'Save'), groups, held, hold, initialGroup, onChoose: setChosen, onClose() {}, open: true, railLabel: 'Fixture settings', status, title: 'Fixture' });
   }
   const texts = (root, selector) => [...root.querySelectorAll(selector)].map((el) => el.textContent?.trim() ?? '');
   const attrs = (root, selector, name) => [...root.querySelectorAll(selector)].map((el) => el.getAttribute(name));
@@ -7135,6 +8095,50 @@ m.unmount();
     });
   }
   f.unmount();
+
+  // Two is expert only: while the mode is off it leaves the rail, and an address that names it turns the mode on first.
+  localStorage.removeItem('phoebis.expertView');
+  f = await mountNode(h(Fixture, { expertOnly: true }));
+  {
+    const c = f.container;
+    const read = [texts(c, '.dialog-rail__group .dialog-rail__label').join(), shown(c), String(localStorage.getItem('phoebis.expertView'))];
+    results.push({ name: 'grouped dialog: an expert-only group leaves the rail while the mode is off', ok: JSON.stringify(read) === JSON.stringify(['One,Three', 'One', 'null']), missing: read });
+  }
+  f.unmount();
+  // The reset names Two again after the dialog has handed the page One, which leaves the page's state as it was.
+  f = await mountNode(h(Fixture, { expertOnly: true, start: 'two' }));
+  {
+    const c = f.container;
+    const read = [texts(c, '.dialog-rail__group .dialog-rail__label').join(), shown(c), attrs(c, '[aria-current="true"]', 'data-group').join(), String(localStorage.getItem('phoebis.expertView'))];
+    results.push({ name: 'grouped dialog: a reset to an expert-only group while the mode is off shows the first shown group', ok: JSON.stringify(read) === JSON.stringify(['One,Three', 'One', 'one', 'null']), missing: read });
+  }
+  f.unmount();
+  // The page already holds Two when the address names it, so the heading can take focus only once the mode is on and
+  // Two's section has mounted.
+  f = await mountNode(h(Fixture, { expertOnly: true, initialGroup: 'two', start: 'two' }));
+  {
+    const c = f.container;
+    const read = [texts(c, '.dialog-rail__group .dialog-rail__label').join(), shown(c), String(localStorage.getItem('phoebis.expertView'))];
+    results.push({
+      name: 'grouped dialog: opening on the expert-only group the page already holds turns the mode on and focuses its heading',
+      ok: JSON.stringify(read) === JSON.stringify(['One,Two,Three', 'Two', 'on']) && heading(c, 'Two') !== null && document.activeElement === heading(c, 'Two'),
+      missing: [...read, `focus ${focused()}`],
+    });
+  }
+  f.unmount();
+  localStorage.removeItem('phoebis.expertView');
+  f = await mountNode(h(Fixture, { expertOnly: true, initialGroup: 'two' }));
+  {
+    const c = f.container;
+    const read = [texts(c, '.dialog-rail__group .dialog-rail__label').join(), shown(c), String(localStorage.getItem('phoebis.expertView'))];
+    results.push({
+      name: 'grouped dialog: opening on an expert-only group turns the mode on, then shows the group with its wrapped field',
+      ok: JSON.stringify(read) === JSON.stringify(['One,Two,Three', 'Two', 'on']) && c.querySelector('section.dialog-group[aria-label="Two"] .expert input[aria-label="B"]') !== null && document.activeElement === heading(c, 'Two'),
+      missing: [...read, `focus ${focused()}`],
+    });
+  }
+  f.unmount();
+  localStorage.removeItem('phoebis.expertView');
 
   f = await mountNode(h(Fixture, { held: true, status: 'The server refused the save.' }));
   {
@@ -7224,136 +8228,6 @@ m.unmount();
   f.unmount();
 }
 
-// Viewer mode: no mutating controls, no bodies.
-m = await mount('/keys');
-{
-  const t = m.text();
-  const heading = m.container.querySelector('.topbar__title')?.textContent ?? '';
-  results.push({ name: 'viewer: /keys is the Keys page and hides Create key', ok: heading === 'Keys' && !t.includes('Create key'), missing: [heading] });
-  results.push({ name: 'viewer: role badge', ok: t.includes('viewer'), missing: [] });
-  // A control a page forgets to hide would still reach the router's gate, so the mock answers it the same way.
-  const refused = await api.createKey({ bodyCaptureHours: null, enabled: true, expiresInDays: null, keepaliveOptOut: false, longContextTwins: true, modelRules: [], modelRulesMode: 'extend', name: 'viewer-write', notes: null, poolId: 'all' }).then(() => null, (e) => e);
-  results.push({
-    name: 'viewer: a write through the mock is refused with the gate\'s 403',
-    ok: refused?.status === 403 && refused.message === 'the viewer role cannot change anything' && refused.code === null && !(await api.listKeys()).some((k) => k.id === 'viewer-write'),
-    missing: [refused ? `${refused.status} ${refused.message} ${refused.code}` : 'the write went through'],
-  });
-}
-// Every control named here is a button, and a label is matched against the buttons rather than against the page
-// text because the copy carries the same words: the accounts status filter alone offers "Paused". A closed
-// dialog's own markup is in the DOM on every page and reaches nobody, so it is filtered out.
-for (const [path, absent, present, heading] of [
-  ['/', [], ['viewer'], 'Dashboard'],
-  ['/accounts/business', ['Add account', 'Clear', 'Clear funding flag', 'Delete account', 'Disconnect', 'Pause', 'Re-pair', 'Resume', 'Verify'], ['Catalog', 'Identity'], 'Accounts'],
-  ['/alerts', ['Create rule', 'Resolve'], ['Rules', 'Events', 'Lifecycle'], 'Alerts'],
-  ['/analytics', [], ['Traffic', 'Latency'], 'Analytics'],
-  ['/keys', ['Create key'], ['Lifetime cost by key'], 'Keys'],
-  ['/pools', ['Create pool', 'Delete', 'Edit'], ['Selection order'], 'Pools'],
-  ['/sessions', ['Release'], ['Cache warming'], 'Sessions'],
-  ['/settings', ['Add model'], ['Keepalive', 'Pricing'], 'Settings'],
-]) {
-  await m.navigate(path);
-  const t = m.text();
-  const reachable = (selector) => [...m.container.querySelectorAll(selector)].filter((e) => e.closest('dialog') === null);
-  const labels = reachable('button').map((b) => b.textContent?.trim());
-  const title = m.container.querySelector('.topbar__title')?.textContent ?? '';
-  results.push({
-    name: `viewer: ${path} hides every mutating control`,
-    ok: title === heading && absent.every((a) => !labels.includes(a)) && present.every((p) => t.includes(p)),
-    missing: [...(title === heading ? [] : [`titled ${title}`]), ...absent.filter((a) => labels.includes(a)).map((a) => `offers ${a}`), ...present.filter((p) => !t.includes(p)).map((p) => `lacks ${p}`)],
-  });
-  // The sessions row keeps its menu for the two jumps that only read.
-  results.push({ name: `viewer: ${path} has no row menu`, ok: path === '/sessions' || reachable('.menu__trigger').length === 0, missing: [] });
-}
-await m.navigate('/accounts/business');
-results.push({ name: 'viewer: /accounts has no Edit label button', ok: m.container.querySelector('button[aria-label="Edit label"]') === null, missing: [] });
-await m.navigate(`/requests/${laptopRow.id}`);
-{
-  const t = m.text();
-  results.push({ name: 'viewer: bodies hidden', ok: t.includes('only the admin secret can read bodies') && !t.includes('cache_control'), missing: [] });
-}
-await m.navigate('/accounts/business');
-{
-  const t = m.text();
-  const at = accountsInPlace(m);
-  results.push({ name: 'viewer: /accounts/business stays at its path on the Accounts page and hides actions', ok: at.heading === 'Accounts' && at.nav === '/accounts' && at.row === '/accounts/business' && !t.includes('Disconnect') && !t.includes('Add account'), missing: [JSON.stringify(at)] });
-}
-await m.navigate('/alerts');
-{
-  // Loaded rows only: a table still drawing its skeletons would otherwise stand in for the lists.
-  const rows = [...m.container.querySelectorAll('tbody tr')].filter((r) => r.querySelector('.skeleton') === null).length;
-  // Buttons outside the dialogs: a closed dialog's own footer is in the DOM on every page and reaches nobody.
-  const buttons = [...m.container.querySelectorAll('button')].filter((b) => b.closest('dialog') === null).map((b) => b.textContent?.trim());
-  results.push({
-    name: 'viewer: /alerts lists rules and events without a control that writes',
-    ok:
-      rows > 2 &&
-      m.text().includes('hooks.example.com') &&
-      !buttons.includes('Create rule') &&
-      !buttons.includes('Resolve') &&
-      m.container.querySelector('.menu__trigger') === null &&
-      m.container.querySelector('dialog[open]') === null,
-    missing: [String(rows), ...buttons],
-  });
-  // A webhook URL may carry its token in the path, so a viewer is given the host and nothing else.
-  results.push({
-    name: 'viewer: /alerts gives the webhook host without the path a token could sit in',
-    ok: m.text().includes('hooks.example.com') && !m.text().includes('/phoebis/question') && !m.text().includes('https://hooks.example.com'),
-    missing: [[...m.container.querySelectorAll('td.mono')].map((td) => td.textContent).slice(0, 3).join(' | ')],
-  });
-  // The route blanks a question's text for a viewer, and the page has to say who may read it rather than
-  // report a capture that never failed.
-  results.push({
-    name: 'viewer: /alerts draws the redaction the route applies to a question',
-    ok: m.text().includes('question is for administrators') && !m.text().includes('question not captured') && !m.text().includes('The ledger migration'),
-    missing: [],
-  });
-  const badge = m.container.querySelector('.topbar__right .badge');
-  results.push({
-    name: 'viewer: the role badge names every redaction the viewer secret carries',
-    ok: badge?.getAttribute('title') === 'Viewer secret: read everything except captured bodies, live previews, question text, and webhook URLs beyond their host',
-    missing: [badge?.getAttribute('title') ?? 'no role badge'],
-  });
-}
-await m.navigate('/settings');
-results.push({
-  name: 'viewer: /settings price table is the plain one',
-  ok: m.container.querySelector('.price-cell__btn') === null && !m.text().includes('Add model') && m.text().includes('claude-fable-5-1'),
-  missing: [],
-});
-await m.navigate('/sessions');
-{
-  const row = m.container.querySelector('tbody tr.srow');
-  row?.querySelector('.menu__trigger')?.click();
-  await m.settle(150);
-  const items = [...(row?.querySelectorAll('.menu__list button') ?? [])].map((b) => b.textContent?.trim());
-  results.push({ name: 'viewer: /sessions hides Release', ok: !items.includes('Release'), missing: items });
-  results.push({ name: 'viewer: /sessions keeps both read-only jumps', ok: items.includes('View in analytics') && items.includes('View in observe'), missing: items });
-}
-await m.navigate('/models');
-{
-  // The confirm dialog is mounted closed on every page, so only a button outside a closed dialog counts.
-  const clears = [...m.container.querySelectorAll('button')].filter((b) => b.textContent?.trim() === 'Clear' && !b.closest('dialog:not([open])')).length;
-  const blocks = [...m.container.querySelectorAll('.card__title')].filter((t) => t.textContent?.startsWith('claude-')).length;
-  results.push({ name: 'viewer: /models reads every block and offers no Clear', ok: clears === 0 && blocks > 0 && m.text().includes('Processed rules for') && m.text().includes('Recent permits'), missing: [`${clears} Clear buttons`, `${blocks} model blocks`] });
-}
-await m.navigate('/quota');
-results.push({ name: 'viewer: /quota keeps Refresh all', ok: m.text().includes('Refresh all'), missing: [] });
-await m.navigate('/observe');
-{
-  // The feed runs laptop streams for the whole run, so a missing row is a failure rather than nothing to check.
-  const laptopRow = [...m.container.querySelectorAll('.live-table tbody tr')].find((tr) => liveCell(m, tr, 'Key')?.textContent === 'laptop');
-  laptopRow?.click();
-  await m.settle(300);
-  results.push({ name: 'viewer: /observe preview gated', ok: laptopRow !== undefined && m.text().includes('Preview is available to admin sessions'), missing: [laptopRow ? 'no gated preview' : 'no laptop row'] });
-}
-{
-  const nav = [...m.container.querySelectorAll('.nav__link')].map((a) => a.textContent?.trim());
-  results.push({ name: 'nav has Observe and Sessions, no Keepalive or Plugins', ok: nav.includes('Observe') && nav.includes('Sessions') && !nav.includes('Keepalive') && !nav.includes('Plugins') && nav.indexOf('Observe') === nav.indexOf('Dashboard') + 1, missing: nav });
-}
-m.unmount();
-if (roleBeforePreview === null) localStorage.removeItem('phoebis.role');
-else localStorage.setItem('phoebis.role', roleBeforePreview);
 
 {
   // The popups from the keyboard, late in the run like the checks after them, so the real time their mounts take moves
@@ -7751,16 +8625,15 @@ else localStorage.setItem('phoebis.role', roleBeforePreview);
 
   const page = await mount(`/requests/${laptopRow.id}`);
   await page.settle(300);
-  const four = {
+  const three = {
     badge: page.container.querySelector('.drawer .badge[title]'),
     row: page.container.querySelector('.drawer dd[title]'),
     trail: page.container.querySelector('.trail[title]'),
-    role: page.container.querySelector('.topbar__right .badge'),
   };
   results.push({
-    name: 'a titled badge, a key-value row, an attempt trail and the role badge describe themselves',
-    ok: Object.values(four).every(describes),
-    missing: Object.entries(four)
+    name: 'a titled badge, a key-value row and an attempt trail describe themselves',
+    ok: Object.values(three).every(describes),
+    missing: Object.entries(three)
       .filter(([, el]) => !describes(el))
       .map(([kind, el]) => `${kind}: ${why(el)}`),
   });
@@ -7794,14 +8667,14 @@ else localStorage.setItem('phoebis.role', roleBeforePreview);
     for (const badge of badges) if (!describes(badge)) loose.push(`${where}: ${why(badge)}`);
     counts.push({ onPage: badges.filter((b) => !b.closest('.topbar')).length, seen: badges.length, where });
   };
-  for (const path of ['/', '/accounts', '/alerts', '/analytics', '/keys', '/models', '/observe', '/pools', '/quota', '/requests', `/requests/${laptopRow.id}`, '/sessions', '/settings']) {
+  for (const path of ['/', '/accounts', '/analytics', '/keys', '/models', '/observe', '/pools', '/quota', '/requests', `/requests/${laptopRow.id}`, '/sessions', '/settings']) {
     await page.navigate(path);
     if (path === '/sessions') await expandAll();
     sweep(path);
   }
-  // A navigation that drew nothing would pass the sweep empty: the role badge is on every route, and these pages
-  // draw titled badges of their own in the story.
-  const thin = counts.filter((c) => c.seen === 0 || (['/accounts', '/observe', '/pools', '/requests', '/sessions'].includes(c.where) && c.onPage === 0));
+  // A navigation that drew nothing would pass the sweep empty, and these pages draw titled badges of their own in the
+  // story.
+  const thin = counts.filter((c) => ['/accounts', '/observe', '/pools', '/requests', '/sessions'].includes(c.where) && c.onPage === 0);
   await page.navigate('/keys');
   [...page.container.querySelectorAll('.card--table tbody tr')].find((r) => r.children[0]?.querySelector('b')?.textContent?.trim() === 'laptop')?.querySelector('.menu__trigger')?.click();
   await page.settle(120);

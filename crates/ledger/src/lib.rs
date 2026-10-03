@@ -26,7 +26,8 @@ pub use events::{event_of, spawn_event_mirror};
 pub use generations::{reconcile_key_generations, LiveKeyLifetime, GENERATIONS_RECONCILED_KEY};
 pub use histogram::{bucket_edges, bucket_index, Histogram, BUCKET_COUNT};
 pub use metrics::{
-    gather, metrics_router, KeepaliveAgents, KeepaliveGaugeSource, Metrics, RoutingGauges, FAMILIES,
+    gather, metrics_router, AttentionGaugeSource, AttentionGauges, KeepaliveAgents,
+    KeepaliveGaugeSource, Metrics, RoutingGauges, FAMILIES,
 };
 pub use pattern::{
     matches as pattern_matches, to_like as pattern_to_like,

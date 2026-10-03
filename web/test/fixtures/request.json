@@ -6,7 +6,7 @@
       "at": -2600000,
       "finished_at": -2599100,
       "key_id": "desktop",
-      "key_generation": 1790825302587,
+      "key_generation": 1790987341276,
       "pool_id": "main",
       "account_id": "business",
       "session_id": "s1",
@@ -66,7 +66,7 @@
         "web_fetch": 0,
         "web_search": 0
       },
-      "cost_usd": 0.0,
+      "cost_usd": 0.0072,
       "attempts": [
         {
           "index": 1,
@@ -74,7 +74,8 @@
           "account_kind": "api_key",
           "outcome": "rate_limited",
           "upstream_status": 429,
-          "upstream_request_id": null,
+          "upstream_request_id": "req_r-failover_1",
+          "upstream_message_id": null,
           "started_at": -2600000,
           "duration_ms": 400,
           "ttfb_ms": 120,
@@ -94,8 +95,8 @@
             }
           ],
           "overage_in_use": null,
-          "estimated_usd": null,
-          "pricing_version": null,
+          "estimated_usd": 0.0036,
+          "pricing_version": "2026-10-01",
           "selection": {
             "strategy": "pace",
             "tier": null,
@@ -132,7 +133,8 @@
           "account_kind": "oauth",
           "outcome": "succeeded",
           "upstream_status": 200,
-          "upstream_request_id": null,
+          "upstream_request_id": "req_r-failover_2",
+          "upstream_message_id": "msg_r-failover_2",
           "started_at": -2599600,
           "duration_ms": 400,
           "ttfb_ms": 120,
@@ -149,8 +151,8 @@
             }
           ],
           "overage_in_use": null,
-          "estimated_usd": null,
-          "pricing_version": null,
+          "estimated_usd": 0.0036,
+          "pricing_version": "2026-10-01",
           "selection": {
             "strategy": "pace",
             "tier": [

@@ -62,7 +62,6 @@ async fn a_real_request_through_the_relay_arms_a_recipe_and_a_probe_is_ignored()
         r.h.relay
             .probe(
                 phoebis_keepalive::probe_marker(
-                    &r.engine,
                     "desktop",
                     r.h.store.api_key("desktop").unwrap().unwrap().created_at,
                 ),
@@ -146,39 +145,34 @@ async fn admission_needs_the_pool_toggle_and_no_key_opt_out() {
 }
 
 #[tokio::test]
-async fn an_unverified_oauth_account_waits_but_a_measured_one_retains() {
-    let oauth_spec = || RigSpec {
+async fn an_oauth_account_on_an_enabled_pool_retains_its_recipe() {
+    let mut r = rig(RigSpec {
         accounts: vec![oauth("o", "sk-ant-oat01-OOOO", 0)],
         ..RigSpec::default()
-    };
-    let mut r = rig(oauth_spec()).await;
-    r.observe("main").await;
-    assert_eq!(r.status("main").reason, Reason::OauthUnverified);
-    let mut r = rig(RigSpec {
-        limits: KeepaliveLimits {
-            oauth_prewarm_verified: true,
-            ..oauth_spec().limits
-        },
-        ..oauth_spec()
     })
     .await;
     r.observe("main").await;
-    assert_eq!(r.status("main").reason, Reason::Scheduled);
+    let status = r.status("main");
+    assert_eq!(
+        (status.reason, status.account_id.as_deref()),
+        (Reason::Scheduled, Some("o"))
+    );
+    assert!(r.engine.stats().retained_bytes > 0);
 }
 
-/// The selection sets `OauthUnverified` and returns before the observation is ever marked ready; a title
-/// request the guard sets aside in that window must leave it for the completion to read back unchanged.
+/// The selection sets `OptedOut` and returns before the observation is ever marked ready; a title request the
+/// guard sets aside in that window must leave it for the completion to read back unchanged.
 #[tokio::test]
-async fn a_title_request_between_an_oauth_unverified_selection_and_its_completion_leaves_the_reason_alone(
-) {
-    let r = rig(RigSpec {
-        accounts: vec![oauth("o", "sk-ant-oat01-OOOO", 0)],
-        ..RigSpec::default()
-    })
-    .await;
+async fn a_title_request_between_an_opted_out_selection_and_its_completion_leaves_the_reason_alone()
+{
+    let r = rig(RigSpec::default()).await;
+    let mut key = r.h.store.api_key("desktop").unwrap().unwrap();
+    key.keepalive_opt_out = true;
+    r.h.store.update_api_key(&key, "test").unwrap();
+    r.h.router.reload().await.unwrap();
     r.engine.observe(r.observed("req", "main", BODY));
-    r.engine.observe(r.selected("req", "o"));
-    assert_eq!(r.status("main").reason, Reason::OauthUnverified);
+    r.engine.observe(r.selected("req", "a"));
+    assert_eq!(r.status("main").reason, Reason::OptedOut);
     r.engine.observe(r.observed_with(
         "aux",
         "main",
@@ -190,14 +184,14 @@ async fn a_title_request_between_an_oauth_unverified_selection_and_its_completio
     ));
     assert_eq!(
         r.status("main").reason,
-        Reason::OauthUnverified,
+        Reason::OptedOut,
         "the title request left the selection's reason alone"
     );
     r.engine
         .observe(r.complete("req", Outcome::Succeeded, None));
     assert_eq!(
         r.status("main").reason,
-        Reason::OauthUnverified,
+        Reason::OptedOut,
         "the completion read the reason the selection set, not the guard's own auxiliary note"
     );
 }
@@ -431,6 +425,8 @@ async fn a_stream_arms_before_completion_and_a_cancel_discards() {
     for (outcome, reason) in [
         (Outcome::Failed, Reason::RequestFailed),
         (Outcome::Rejected, Reason::RequestRejected),
+        (Outcome::Incomplete, Reason::RequestFailed),
+        (Outcome::Canceled, Reason::RequestCanceled),
         (Outcome::Exhausted, Reason::RequestFailed),
     ] {
         r.engine.observe(r.observed("again", "main", BODY));
@@ -445,10 +441,7 @@ async fn storage_bounds_hold_and_the_status_carries_no_prompt() {
         limits: KeepaliveLimits {
             max_agents: 1,
             max_sessions: 1,
-            max_request_bytes: 1_024,
-            max_retained_bytes: 1_024,
-            lease_seconds: 3_600,
-            ..KeepaliveLimits::default()
+            max_retained_bytes: 32 << 20,
         },
         ..RigSpec::default()
     })
@@ -478,9 +471,10 @@ async fn storage_bounds_hold_and_the_status_carries_no_prompt() {
     );
     let held = r.engine.stats().retained_bytes;
     assert!(held > 0);
+    // Past the relay's 32 MiB body bound, which is the largest body a recipe may retain.
     let large = format!(
         r#"{{"model":"m","max_tokens":10,"messages":[{{"role":"user","content":"{}"}}]}}"#,
-        "x".repeat(1_025)
+        "x".repeat(32 << 20)
     );
     r.engine.observe(r.observed("large", "main", &large));
     assert_eq!(
@@ -490,9 +484,7 @@ async fn storage_bounds_hold_and_the_status_carries_no_prompt() {
     );
     let mut r2 = rig(RigSpec {
         limits: KeepaliveLimits {
-            max_request_bytes: 8 << 20,
-            max_retained_bytes: 1_024,
-            lease_seconds: 3_600,
+            max_retained_bytes: 32 << 20,
             ..KeepaliveLimits::default()
         },
         ..RigSpec::default()
@@ -504,9 +496,10 @@ async fn storage_bounds_hold_and_the_status_carries_no_prompt() {
         ..Default::default()
     })
     .unwrap();
+    // Two recipes over 16 MiB each pass the 32 MiB budget together.
     let mid = format!(
         r#"{{"model":"m","max_tokens":10,"messages":[{{"role":"user","content":"{}"}}]}}"#,
-        "y".repeat(600)
+        "y".repeat(17 << 20)
     );
     r2.engine.observe(r2.observed("one", "main", &mid));
     r2.engine.observe(r2.observed("two", "worker", &mid));
@@ -515,7 +508,11 @@ async fn storage_bounds_hold_and_the_status_carries_no_prompt() {
         Reason::StorageLimit,
         "the second recipe would pass the retained bound"
     );
-    assert_eq!(r2.status("main").reason, Reason::AwaitingSelection);
+    assert_eq!(
+        r2.status("main").reason,
+        Reason::AwaitingSelection,
+        "at the bound the newest recipe is refused and the one already held stays"
+    );
 }
 
 #[tokio::test]
@@ -523,8 +520,7 @@ async fn an_oversized_request_invalidates_only_its_own_agent() {
     for child in [false, true] {
         let mut r = rig(RigSpec {
             limits: KeepaliveLimits {
-                max_request_bytes: 1_024,
-                lease_seconds: 3_600,
+                max_retained_bytes: 32 << 20,
                 ..KeepaliveLimits::default()
             },
             ..RigSpec::default()
@@ -547,7 +543,7 @@ async fn an_oversized_request_invalidates_only_its_own_agent() {
         let old = r.status(agent).request_generation;
         let large = format!(
             r#"{{"model":"m","max_tokens":10,"messages":[{{"role":"user","content":"{}"}}]}}"#,
-            "x".repeat(2_048)
+            "x".repeat(32 << 20)
         );
         r.engine.observe(r.observed("oversized", agent, &large));
         let status = r.status(agent);
@@ -654,7 +650,8 @@ async fn a_bus_gap_discards_the_pending_observation_and_keeps_an_armed_recipe() 
 #[tokio::test]
 async fn reason_counters_measure_the_gates_and_survive_close() {
     let mut r = rig(RigSpec::default()).await;
-    let oversized = format!(r#"{{"pad":"{}"}}"#, "x".repeat(8 << 20));
+    // Past the relay's 32 MiB body bound, the largest body a recipe may retain.
+    let oversized = format!(r#"{{"pad":"{}"}}"#, "x".repeat(32 << 20));
     r.engine
         .observe(r.observed("oversized", "main", &oversized));
     assert_eq!(

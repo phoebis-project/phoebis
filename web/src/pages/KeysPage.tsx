@@ -1,20 +1,23 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { api } from '@/api';
 import { slug } from '@/api/http';
-import type { AffinitySource, ApiKey, CreatedApiKey, KeyModels, KeyStatus, ModelRule, ModelRulesMode, Pool } from '@/api/types';
+import type { ApiKey, CreatedApiKey, KeyModels, KeyStatus, ModelRule, ModelRulesMode, Pool } from '@/api/types';
 import { useSession } from '@/app/session';
-import { useAppSettings } from '@/app/settings';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { PatternEditor, useCatalogSuggestions } from '@/components/PatternEditor';
 import { Tile } from '@/components/ui/Tile';
 import { IconInfo, IconPlus, IconWarning } from '@/components/ui/icons';
-import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, EmptyState, ErrorState, Field, GroupedDialog, Input, Menu, PageLink, SearchInput, Segmented, Select, Skeleton, Toggle, type DialogGroup } from '@/components/ui/primitives';
+import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, EmptyState, ErrorState, Expert, Field, GroupedDialog, Input, Menu, PageLink, SearchInput, Segmented, Select, Skeleton, Toggle, type DialogGroup } from '@/components/ui/primitives';
+import { anchorOf } from '@/lib/attention';
 import { clock } from '@/lib/clock';
 import { fmtAbsolute, fmtCompact, fmtDate, fmtInt, fmtRelative, fmtUsd } from '@/lib/format';
 import { KEY_GROUPS, keyFormOf, keyInputOf, keyRefusals, type AutoModeOverride, type CaptureMode, type KeyGroup } from '@/lib/forms';
 import { useAsync, useNow, type Loaded } from '@/lib/hooks';
+import { scrollToElement } from '@/lib/scroll';
 
 const STATUS_TONE: Record<KeyStatus, 'critical' | 'good' | 'neutral' | 'warning'> = { active: 'good', disabled: 'warning', expired: 'neutral', revoked: 'critical' };
+const isKeyGroup = (value: string | null): value is KeyGroup => value !== null && (KEY_GROUPS as readonly string[]).includes(value);
 /** A key with no override of its own captures for as long as its pool says. */
 export const effectiveCaptureHours = (key: Pick<ApiKey, 'bodyCaptureHours'>, pool: Pick<Pool, 'bodyCaptureHours'> | null): number => key.bodyCaptureHours ?? pool?.bodyCaptureHours ?? 0;
 const captureLabel = (hours: number) => (hours > 0 ? `bodies captured, ${hours}h` : 'bodies not captured');
@@ -24,24 +27,17 @@ const MODES: { label: string; value: ModelRulesMode }[] = [
   { label: 'Replace pool rules', value: 'replace' },
 ];
 const RETIRED_SECRET_HINT = 'Sessions whose newest request presented the previous secret; a session that registered a companion and sent no request since counts as switched.';
-// The dialog's hint for the cap, less its page link, so the table's tooltip says the same.
-const IN_FLIGHT_CAP_HINT = 'Past this many requests at once the key is refused with a 429 and a Retry-After until one finishes; empty means no cap.';
-// The climb's own order, which Automatic runs.
-const AFFINITY_SOURCES: { label: string; value: AffinitySource }[] = [
-  { label: 'Automatic', value: 'auto' },
-  { label: 'Session id', value: 'session' },
-  { label: 'User id', value: 'user_id' },
-  { label: 'Conversation content', value: 'content' },
-  { label: 'Whole key', value: 'whole_key' },
-];
 
 export function KeysPage() {
   const now = useNow();
   const ink = useChartInk();
-  const { canMutate } = useAppSettings();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const pageRef = useRef<HTMLDivElement>(null);
+  const landed = useRef<string | null>(null);
   const [query, setQuery] = useState('');
   const [status, setStatus] = useState<'all' | KeyStatus>('all');
-  const [dialog, setDialog] = useState<{ key: ApiKey | null } | null>(null);
+  const [dialog, setDialog] = useState<{ initialGroup: KeyGroup | null; key: ApiKey | null } | null>(null);
   // Held only while the dialog that shows it is open, because the router keeps no copy of a secret.
   const [created, setCreated] = useState<{ key: CreatedApiKey; title: string } | null>(null);
   const [confirm, setConfirm] = useState<{ body: string; danger?: boolean; label: string; onConfirm: () => void; title: string } | null>(null);
@@ -53,17 +49,90 @@ export function KeysPage() {
   const keys = useAsync(() => api.listKeys(), [], { paused, refreshMs: 30_000 });
   const pools = useAsync(() => api.listPools(), [], { paused, refreshMs: 30_000 });
 
+  // The address opens the dialog on a named group once the key list has loaded; the entry is then replaced by the
+  // bare route, so closing the dialog, a reload or Back does not open it again.
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const edit = params.get('edit');
+    if (edit === null || !keys.data) return;
+    const group = params.get('group');
+    params.delete('edit');
+    params.delete('group');
+    const search = params.toString();
+    navigate({ hash: location.hash, pathname: location.pathname, search: search ? `?${search}` : '' }, { replace: true });
+    const key = keys.data.find((k) => k.id === edit);
+    if (!key) {
+      notify(`Key ${edit} not found`);
+      return;
+    }
+    setDialog({ initialGroup: isKeyGroup(group) ? group : 'key', key });
+  }, [keys.data, location, navigate, notify]);
+
   const poolList = useMemo(() => pools.data ?? [], [pools.data]);
   const poolById = useMemo(() => new Map(poolList.map((p) => [p.id, p])), [poolList]);
+  // The pool filter is the address: the select reads `?pool=<id>` and writes it back, so a reload keeps the filter and
+  // the pool card's key count link lands on it. Until the pools are read the address filters as written, so the rows
+  // match it during the read and after a failed one, and the select holds an option for the id: without one it would
+  // read All pools beside the filtered rows, and choosing All pools would change nothing. An id no pool carries reads
+  // as All pools and leaves the address once the pools have loaded; while a dialog query is still in the address, its
+  // own effect goes first. All pools is the empty string, which no pool id can be, since `all` is a real pool's id.
+  const poolParam = useMemo(() => new URLSearchParams(location.search).get('pool'), [location.search]);
+  const poolFilter = poolParam !== null && (pools.data === null || poolById.has(poolParam)) ? poolParam : '';
+  const writePool = (id: string) => {
+    const params = new URLSearchParams(location.search);
+    if (id === '') params.delete('pool');
+    else params.set('pool', id);
+    const search = params.toString();
+    navigate({ hash: location.hash, pathname: location.pathname, search: search ? `?${search}` : '' }, { replace: true });
+  };
+  useEffect(() => {
+    if (poolParam === null || !pools.data || poolById.has(poolParam)) return;
+    const params = new URLSearchParams(location.search);
+    if (params.has('edit')) return;
+    params.delete('pool');
+    const search = params.toString();
+    navigate({ hash: location.hash, pathname: location.pathname, search: search ? `?${search}` : '' }, { replace: true });
+  }, [location, navigate, poolById, poolParam, pools.data]);
   const rows = useMemo(
     () =>
       (keys.data ?? []).filter((k) => {
+        if (poolFilter !== '' && k.poolId !== poolFilter) return false;
         if (status !== 'all' && k.status !== status) return false;
         const q = query.trim().toLowerCase();
         return !q || k.name.toLowerCase().includes(q) || k.prefix.includes(q) || k.poolId.includes(q);
       }),
-    [keys.data, query, status],
+    [keys.data, poolFilter, query, status],
   );
+
+  // `/keys#<key id>` lands on the row once the keys have drawn it, whenever the list arrives after the mount, and once
+  // per arrival, since the page's own address rewrites keep the hash. A filter that would hide the row is cleared
+  // first, and the next run finds the row drawn. The row is looked up inside this page, so an id such as `root` cannot
+  // name the app's container.
+  useEffect(() => {
+    if (location.hash === landed.current) return;
+    const id = anchorOf(location.hash);
+    if (id === null) {
+      landed.current = location.hash;
+      return;
+    }
+    if (!keys.data?.some((k) => k.id === id)) return;
+    if (!rows.some((k) => k.id === id)) {
+      setQuery('');
+      setStatus('all');
+      if (poolParam !== null) {
+        const params = new URLSearchParams(location.search);
+        params.delete('pool');
+        const search = params.toString();
+        navigate({ hash: location.hash, pathname: location.pathname, search: search ? `?${search}` : '' }, { replace: true });
+      }
+      return;
+    }
+    const row = [...(pageRef.current?.querySelectorAll<HTMLElement>('tbody tr') ?? [])].find((el) => el.id === id);
+    if (!row) return;
+    landed.current = location.hash;
+    scrollToElement(row);
+    row.focus({ preventScroll: true });
+  }, [keys.data, location.hash, location.pathname, location.search, navigate, poolParam, rows]);
 
   const totals = keys.data
     ? {
@@ -87,7 +156,7 @@ export function KeysPage() {
   };
 
   return (
-    <div className="stack">
+    <div className="stack" ref={pageRef}>
       <div className="stat-grid">
         <Tile label="Keys" value={totals ? fmtInt(totals.keys) : null} />
         <Tile label="Active" value={totals ? fmtInt(totals.active) : null} />
@@ -132,11 +201,18 @@ export function KeysPage() {
               <option value="expired">Expired</option>
               <option value="revoked">Revoked</option>
             </Select>
-            {canMutate && (
-              <Button variant="primary" icon={<IconPlus size={14} />} onClick={() => setDialog({ key: null })} style={{ marginLeft: 'auto' }}>
-                Create key
-              </Button>
-            )}
+            <Select value={poolFilter} onChange={(e) => writePool(e.target.value)} aria-label="Pool">
+              <option value="">All pools</option>
+              {pools.data === null && poolFilter !== '' && <option value={poolFilter}>{poolFilter}</option>}
+              {poolList.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </Select>
+            <Button variant="primary" icon={<IconPlus size={14} />} onClick={() => setDialog({ initialGroup: null, key: null })} style={{ marginLeft: 'auto' }}>
+              Create key
+            </Button>
           </div>
           <div className="table-wrap">
             <table className="table">
@@ -149,7 +225,7 @@ export function KeysPage() {
                   <th className="right">Usage, 7d</th>
                   <th>Expiry</th>
                   <th>Status</th>
-                  {canMutate && <th />}
+                  <th />
                 </tr>
               </thead>
               <tbody>
@@ -170,7 +246,7 @@ export function KeysPage() {
                         </tr>
                       ))
                   : rows.map((k) => (
-                      <tr key={k.id}>
+                      <tr key={k.id} id={k.id} tabIndex={-1} className="key-row">
                         <td>
                           <b>{k.name}</b>
                           <span className="sub">
@@ -183,11 +259,6 @@ export function KeysPage() {
                             )}
                           </span>
                           {k.keepaliveOptOut && <span className="sub">keepalive off</span>}
-                          {k.inFlightCap !== null && (
-                            <span className="sub" title={IN_FLIGHT_CAP_HINT}>
-                              at most {fmtInt(k.inFlightCap)} in flight
-                            </span>
-                          )}
                         </td>
                         <td className="mono">{k.prefix}…</td>
                         <td className="mono">{k.poolId}</td>
@@ -209,68 +280,66 @@ export function KeysPage() {
                             </span>
                           )}
                         </td>
-                        {canMutate && (
-                          <td className="right">
-                            <Menu
-                              onOpenChange={(open) =>
-                                setOpenMenus((s) => {
-                                  const next = new Set(s);
-                                  if (open) next.add(k.id);
-                                  else next.delete(k.id);
-                                  return next;
-                                })
-                              }
-                              items={[
-                                { label: 'Edit', onClick: () => setDialog({ key: k }) },
-                                {
-                                  label: 'Rotate',
-                                  onClick: () =>
-                                    setConfirm({
-                                      title: `Rotate ${k.name}`,
-                                      body: 'A new secret is issued and shown once. The old secret keeps working for 15 minutes so running sessions can switch.',
-                                      label: 'Rotate',
-                                      onConfirm: () =>
-                                        void run(async () => {
-                                          setCreated({ key: await api.rotateKey(k.id), title: 'Key rotated' });
-                                        }),
-                                    }),
-                                },
-                                {
-                                  label: 'Revoke',
-                                  disabled: k.status !== 'active',
-                                  onClick: () =>
-                                    setConfirm({
-                                      title: `Revoke ${k.name}`,
-                                      body: 'Requests with this key are rejected immediately. Its history stays in the ledger.',
-                                      label: 'Revoke',
-                                      danger: true,
-                                      onConfirm: () =>
-                                        void run(async () => {
-                                          await api.revokeKey(k.id);
-                                          notify('Key revoked');
-                                        }),
-                                    }),
-                                },
-                                {
-                                  label: 'Delete',
-                                  danger: true,
-                                  onClick: () =>
-                                    setConfirm({
-                                      title: `Delete ${k.name}`,
-                                      body: 'Removes the key and detaches its request history from the key name. This cannot be undone.',
-                                      label: 'Delete',
-                                      danger: true,
-                                      onConfirm: () =>
-                                        void run(async () => {
-                                          await api.deleteKey(k.id);
-                                          notify('Key deleted');
-                                        }),
-                                    }),
-                                },
-                              ]}
-                            />
-                          </td>
-                        )}
+                        <td className="right">
+                          <Menu
+                            onOpenChange={(open) =>
+                              setOpenMenus((s) => {
+                                const next = new Set(s);
+                                if (open) next.add(k.id);
+                                else next.delete(k.id);
+                                return next;
+                              })
+                            }
+                            items={[
+                              { label: 'Edit', onClick: () => setDialog({ initialGroup: null, key: k }) },
+                              {
+                                label: 'Rotate',
+                                onClick: () =>
+                                  setConfirm({
+                                    title: `Rotate ${k.name}`,
+                                    body: 'A new secret is issued and shown once. The old secret keeps working for 15 minutes so running sessions can switch.',
+                                    label: 'Rotate',
+                                    onConfirm: () =>
+                                      void run(async () => {
+                                        setCreated({ key: await api.rotateKey(k.id), title: 'Key rotated' });
+                                      }),
+                                  }),
+                              },
+                              {
+                                label: 'Revoke',
+                                disabled: k.status !== 'active',
+                                onClick: () =>
+                                  setConfirm({
+                                    title: `Revoke ${k.name}`,
+                                    body: 'Requests with this key are rejected immediately. Its history stays in the ledger.',
+                                    label: 'Revoke',
+                                    danger: true,
+                                    onConfirm: () =>
+                                      void run(async () => {
+                                        await api.revokeKey(k.id);
+                                        notify('Key revoked');
+                                      }),
+                                  }),
+                              },
+                              {
+                                label: 'Delete',
+                                danger: true,
+                                onClick: () =>
+                                  setConfirm({
+                                    title: `Delete ${k.name}`,
+                                    body: 'Removes the key and detaches its request history from the key name. This cannot be undone.',
+                                    label: 'Delete',
+                                    danger: true,
+                                    onConfirm: () =>
+                                      void run(async () => {
+                                        await api.deleteKey(k.id);
+                                        notify('Key deleted');
+                                      }),
+                                  }),
+                              },
+                            ]}
+                          />
+                        </td>
                       </tr>
                     ))}
                 {keys.data?.length === 0 && (
@@ -280,11 +349,9 @@ export function KeysPage() {
                       <EmptyState
                         title="No keys yet"
                         action={
-                          canMutate && (
-                            <Button size="sm" onClick={() => setDialog({ key: null })}>
-                              Create key
-                            </Button>
-                          )
+                          <Button size="sm" onClick={() => setDialog({ initialGroup: null, key: null })}>
+                            Create key
+                          </Button>
                         }
                       />
                     </td>
@@ -299,6 +366,7 @@ export function KeysPage() {
       <KeyDialog
         open={dialog !== null}
         existing={dialog?.key ?? null}
+        initialGroup={dialog?.initialGroup ?? null}
         onClose={() => setDialog(null)}
         pools={poolList}
         existingIds={new Set((keys.data ?? []).map((k) => k.id))}
@@ -352,7 +420,7 @@ const KEY_GROUP_LABEL: Record<KeyGroup, string> = { access: 'Access', capture: '
  * inside a pool's own dialog. `existingIds` are the listed keys' ids, which a new
  * key's derived id is checked against before the create.
  */
-export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing = null, existingIds, initialPoolId, lockPool = false }: { existing?: ApiKey | null; existingIds: ReadonlySet<string>; initialPoolId?: string; lockPool?: boolean; onClose: () => void; onCreated: (c: CreatedApiKey) => void; onUpdated?: (k: ApiKey) => void; open: boolean; pools: KeyDialogPool[] }) {
+export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing = null, existingIds, initialGroup = null, initialPoolId, lockPool = false }: { existing?: ApiKey | null; existingIds: ReadonlySet<string>; initialGroup?: KeyGroup | null; initialPoolId?: string; lockPool?: boolean; onClose: () => void; onCreated: (c: CreatedApiKey) => void; onUpdated?: (k: ApiKey) => void; open: boolean; pools: KeyDialogPool[] }) {
   const [chosen, setChosen] = useState<KeyGroup>('key');
   const [name, setName] = useState('');
   const [poolId, setPoolId] = useState('all');
@@ -360,8 +428,6 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing
   const [modelRules, setModelRules] = useState<ModelRule[]>([]);
   const [modelRulesMode, setModelRulesMode] = useState<ModelRulesMode>('extend');
   const [expiry, setExpiry] = useState('never');
-  const [inFlightCap, setInFlightCap] = useState('');
-  const [affinitySource, setAffinitySource] = useState<AffinitySource>('auto');
   const [autoModeServer, setAutoModeServer] = useState<AutoModeOverride>('inherit');
   const [notes, setNotes] = useState('');
   const [captureMode, setCaptureMode] = useState<CaptureMode>('inherit');
@@ -377,29 +443,28 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing
   const maxHours = settings.data?.retention.bodyCaptureMaxHours ?? 72;
   const effectiveHours = captureMode === 'inherit' ? poolHours : captureMode === 'off' ? 0 : Number(captureHours);
   const suggestions = useCatalogSuggestions(pool?.members.map((m) => m.accountId) ?? [], open);
-  const refusals = keyRefusals({ captureHours, captureMode, inFlightCap, modelRules, name, poolId }, { identity: { existingIds, isNew: existing === null }, maxHours });
+  const refusals = keyRefusals({ captureHours, captureMode, modelRules, name, poolId }, { identity: { existingIds, isNew: existing === null }, maxHours });
   const refusedFields = new Set(refusals.map((r) => r.field));
   const refusedGroups = new Set<KeyGroup>(refusals.map((r) => r.group));
   const invalid = (field: string) => (refusedFields.has(field) ? true : undefined);
   const refusalOf = (field: string) => refusals.find((r) => r.field === field)?.text ?? null;
   const first = refusals[0] ?? null;
   const rulesRefusal = refusalOf('Model rules');
-  const capRefusal = refusalOf('Requests in flight');
   const processed = useAsync(() => (open && existing ? api.getKeyModels(existing.id) : Promise.resolve(null)), [open, existing?.id]);
 
+  // Once per opening: the address can open the dialog before the pool list lands, and a reset on its arrival would
+  // discard every edit made meanwhile and put back the group the dialog opened on, the focus left in a hidden one.
   useEffect(() => {
     if (!open) return;
     // A key cannot exist without a pool, so the first pool stands in until one is picked.
     const form = keyFormOf(existing, initialPoolId ?? pools[0]?.id ?? '');
-    setChosen('key');
+    setChosen(initialGroup ?? 'key');
     setName(form.name);
     setPoolId(form.poolId);
     setLongContextTwins(form.longContextTwins);
     setModelRules(form.modelRules);
     setModelRulesMode(form.modelRulesMode);
     setExpiry(form.expiry);
-    setInFlightCap(form.inFlightCap);
-    setAffinitySource(form.affinitySource);
     setAutoModeServer(form.autoModeServer);
     setNotes(form.notes);
     setCaptureMode(form.captureMode);
@@ -408,17 +473,21 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing
     setEnabled(form.enabled);
     setBusy(false);
     setError(null);
-  }, [open, existing, initialPoolId, pools]);
+  }, [open, existing, initialPoolId, initialGroup]);
+  // A new key opened before the pools landed has no pool yet; the first one fills it once they do.
+  useEffect(() => {
+    if (open && existing === null && poolId === '' && pools.length > 0) setPoolId(pools[0].id);
+  }, [existing, open, poolId, pools]);
 
   // The server's words leave with the next edit to any field; a failed save changes none, so they stand until then.
-  useEffect(() => setError(null), [affinitySource, autoModeServer, captureHours, captureMode, enabled, expiry, inFlightCap, longContextTwins, modelRules, modelRulesMode, name, notes, optOut, poolId]);
+  useEffect(() => setError(null), [autoModeServer, captureHours, captureMode, enabled, expiry, longContextTwins, modelRules, modelRulesMode, name, notes, optOut, poolId]);
 
   const moving = existing !== null && poolId !== existing.poolId;
 
   const submit = async () => {
     setBusy(true);
     setError(null);
-    const form = { affinitySource, autoModeServer, captureHours, captureMode, enabled, expiry, inFlightCap, longContextTwins, modelRules, modelRulesMode, name, notes, optOut, poolId };
+    const form = { autoModeServer, captureHours, captureMode, enabled, expiry, longContextTwins, modelRules, modelRulesMode, name, notes, optOut, poolId };
     const input = keyInputOf(form, clock.now());
     try {
       if (existing) {
@@ -507,71 +576,53 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing
             {existing && <option value="never">No expiration</option>}
           </Select>
         </Field>
-        <Field label="Server-side auto mode" hint="Inherit follows the pool. Off drops the client's server-side tool-use checks on this key, so the client reviews with classifier requests of its own; On keeps them whatever the pool says.">
-          <Select value={autoModeServer} onChange={(e) => setAutoModeServer(e.target.value as AutoModeOverride)} aria-label="Server-side auto mode">
-            <option value="inherit">Inherit ({pool?.autoModeServer === false ? 'off' : 'on'}, the pool&apos;s setting)</option>
-            <option value="on">On</option>
-            <option value="off">Off</option>
-          </Select>
-        </Field>
-        <Field
-          label="Requests in flight"
-          hint={
-            <>
-              {IN_FLIGHT_CAP_HINT} The pool&apos;s cap per member is under Failover on the <PageLink to="/pools">Pools page</PageLink>.
-            </>
-          }
-        >
-          <Input type="number" min={1} step={1} value={inFlightCap} onChange={(e) => setInFlightCap(e.target.value)} placeholder="No cap" aria-label="Requests in flight" aria-invalid={invalid('Requests in flight')} />
-        </Field>
-        {capRefusal && refusalCallout(capRefusal)}
+        <Expert>
+          <Field label="Server-side auto mode" hint="Inherit follows the pool. Off drops the client's server-side tool-use checks on this key, so the client reviews with classifier requests of its own; On keeps them whatever the pool says.">
+            <Select value={autoModeServer} onChange={(e) => setAutoModeServer(e.target.value as AutoModeOverride)} aria-label="Server-side auto mode">
+              <option value="inherit">Inherit ({pool?.autoModeServer === false ? 'off' : 'on'}, the pool&apos;s setting)</option>
+              <option value="on">On</option>
+              <option value="off">Off</option>
+            </Select>
+          </Field>
+        </Expert>
       </div>
     ),
     models: (
       <div className="cells">
         {/* Field's frame without its label element: a label forwards a click on its text to the first control
-            inside, which here would flip the mode. */}
+            inside, which here would press Add rule or flip the first row. */}
         <Field
           label="Model rules"
           plain
           hint={
             <>
-              Top to bottom, first match wins. Under Extend the pool&apos;s rules, in grey, apply after this key&apos;s own; under Replace they do not apply. The <PageLink to="/models">Models page</PageLink> shows the list per key.
+              Top to bottom, first match wins. The <PageLink to="/models">Models page</PageLink> shows the list per key.
             </>
           }
         >
-          {/* Its own block, so the segmented control keeps its content width. */}
-          <div>
-            <Segmented<ModelRulesMode> ariaLabel="How this key's rules meet the pool's" value={modelRulesMode} options={MODES} onChange={setModelRulesMode} />
-          </div>
           <PatternEditor label="Model rules" value={modelRules} onChange={setModelRules} inherited={modelRulesMode === 'extend' ? (pool?.modelRules ?? []) : []} suggestions={suggestions} />
         </Field>
         {rulesRefusal && refusalCallout(rulesRefusal)}
-        <Field label="List [1m] twins in the models listing" beside hint="Claude Code sizes its context window by the id; the twin lets it use the long-context window the upstream reports.">
-          <Toggle checked={longContextTwins} onChange={setLongContextTwins} label="List [1m] twins in the models listing" />
-        </Field>
+        <Expert>
+          {/* Field's frame without its label element: a label forwards a click on its text to the first control
+              inside, which here would flip the mode. */}
+          <Field label="Pool rules" plain hint="Extend applies the pool's rules, in grey, after this key's own; Replace applies this key's rules alone.">
+            {/* Its own block, so the segmented control keeps its content width. */}
+            <div>
+              <Segmented<ModelRulesMode> ariaLabel="How this key's rules meet the pool's" value={modelRulesMode} options={MODES} onChange={setModelRulesMode} />
+            </div>
+          </Field>
+        </Expert>
+        <Expert>
+          <Field label="List [1m] twins in the models listing" beside hint="Claude Code sizes its context window by the id; the twin lets it use the long-context window the upstream reports.">
+            <Toggle checked={longContextTwins} onChange={setLongContextTwins} label="List [1m] twins in the models listing" />
+          </Field>
+        </Expert>
         {existing && <EffectiveList processed={processed} />}
       </div>
     ),
     sessions: (
       <div className="cells">
-        <Field
-          label="Affinity source"
-          hint={
-            <>
-              What names a conversation for pinning. Automatic takes the first of: the session id, a parent id the client sends back, the user id, the messages, the key. A fixed source uses that alone, and a request without it gets no pin. How long a pin lasts is the pool&apos;s Session affinity on the{' '}
-              <PageLink to="/pools">Pools page</PageLink>.
-            </>
-          }
-        >
-          <Select value={affinitySource} onChange={(e) => setAffinitySource(e.target.value as AffinitySource)} aria-label="Affinity source">
-            {AFFINITY_SOURCES.map((s) => (
-              <option key={s.value} value={s.value}>
-                {s.label}
-              </option>
-            ))}
-          </Select>
-        </Field>
         <Field
           label="Cache warming opt-out"
           beside
@@ -647,6 +698,7 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing
       railLabel="Key settings"
       groups={groups}
       chosen={chosen}
+      initialGroup={initialGroup}
       onChoose={(id) => setChosen(id as KeyGroup)}
       // The line always explains the current hold: a refusal of the form's own beats a server message left from
       // before the edit.

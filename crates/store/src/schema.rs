@@ -72,11 +72,12 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
     (40, V40),
     (41, V41),
     (42, V42),
+    (43, V43),
 ];
 
 /// The newest schema version this build knows how to read. `prepare` refuses a registry stamped past it
 /// rather than skip migrations it does not carry and misread the tables that follow.
-pub const SCHEMA_VERSION: u32 = 42;
+pub const SCHEMA_VERSION: u32 = 43;
 
 const V2: &str = r#"
 CREATE TABLE IF NOT EXISTS account_models (
@@ -615,4 +616,23 @@ ALTER TABLE pool_members DROP COLUMN budget_period;
 const V42: &str = r#"
 DROP INDEX IF EXISTS alert_deliveries_event;
 CREATE INDEX alert_deliveries_event ON alert_deliveries (event_id, id) WHERE event_id IS NOT NULL;
+"#;
+
+// The relay hides the rate-limit header families on every committed answer and keeps them on a rate limit, so no
+// pool chooses; the switch's column goes with the choice. A pool's diagnostics switch has no option left to inherit,
+// so an unset one is stored off and every read finds a bool. A key bounds none of its requests and every key climbs
+// the whole conversation climb, so the key's cap and its affinity source go the same way. Nothing configures, delivers or
+// records an alert, so its three tables go, the deliveries first since they reference the events and the events the
+// rules. The attention reader reads every account's newest settled attempts on each scrape, and the resolved index
+// leads with the time, so the holder's own index keeps that read off a table nothing prunes.
+const V43: &str = r#"
+ALTER TABLE pools DROP COLUMN quota_headers;
+UPDATE pools SET cache_diagnostics = 0 WHERE cache_diagnostics IS NULL;
+ALTER TABLE api_keys DROP COLUMN in_flight_cap;
+ALTER TABLE api_keys DROP COLUMN affinity_source;
+DROP TABLE alert_deliveries;
+DROP TABLE alert_events;
+DROP TABLE alert_rules;
+CREATE INDEX refresh_attempts_holder_resolved ON refresh_attempts (account_id, incarnation, resolved_at, id)
+  WHERE outcome IS NOT NULL;
 "#;

@@ -111,6 +111,13 @@ pub enum Respond {
         events: Vec<SseEvent>,
         delay_between: Duration,
     },
+    /// Writes the head and the events, then closes the connection without the chunked body's terminator: a stream
+    /// cut mid-body, whatever its status.
+    SseCut {
+        status: u16,
+        headers: Vec<(String, String)>,
+        events: Vec<SseEvent>,
+    },
     SseGated {
         status: u16,
         headers: Vec<(String, String)>,
@@ -719,6 +726,27 @@ async fn serve_requests<S: AsyncRead + AsyncWrite + Unpin>(
                 delay_between,
             } => {
                 let _ = write_sse(&mut stream, status, headers, events, delay_between).await;
+                return;
+            }
+            Respond::SseCut {
+                status,
+                headers,
+                events,
+            } => {
+                if write_sse_head(&mut stream, status, event_stream_headers(headers))
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+                for e in &events {
+                    if write_chunk(&mut stream, render_event(e).as_bytes())
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
                 return;
             }
             Respond::SseGated {

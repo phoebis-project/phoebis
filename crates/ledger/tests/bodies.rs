@@ -227,7 +227,7 @@ async fn a_key_override_of_zero_stores_nothing_and_an_override_of_six_captures_o
 }
 
 #[tokio::test]
-async fn retention_purges_requests_events_and_samples_by_their_own_windows_and_rollups_by_theirs() {
+async fn retention_purges_requests_events_and_samples_by_the_raw_window_and_rollups_by_theirs() {
     let up = FakeUpstream::start(vec![]).await;
     let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
     let day = 86_400_000i64;
@@ -280,9 +280,10 @@ async fn retention_purges_requests_events_and_samples_by_their_own_windows_and_r
                 source: "poll".into(),
                 ..Default::default()
             },
+            // Older than thirty days and younger than `retention_days`: the samples follow the requests' window.
             phoebis_ledger::QuotaSampleRecord {
                 account_id: "a".into(),
-                bucket: 89 * 86_400,
+                bucket: 30 * 86_400,
                 window: "5h".into(),
                 source: "poll".into(),
                 ..Default::default()
@@ -291,8 +292,9 @@ async fn retention_purges_requests_events_and_samples_by_their_own_windows_and_r
         None,
     )
     .unwrap();
-    // One past the 90-day cutoff, so the row received at 0 is older than the window and the one at day 89 is not.
-    let now = 90 * day + 1;
+    // One second past the 90-day cutoff, so the row received at 0 and the sample at bucket 0 are older than the
+    // window, and the day-89 row and the day-30 sample are not.
+    let now = 90 * day + 1_000;
     let purged = run_retention(&h.db, &LedgerConfig::default(), now, &[]).unwrap();
     assert_eq!(
         purged,
@@ -322,7 +324,8 @@ async fn retention_purges_requests_events_and_samples_by_their_own_windows_and_r
     up.shutdown().await;
 }
 
-/// Zero on either key means forever: the purge of that family is skipped, the other families run as before.
+/// Zero on either key means forever: the purge of that family is skipped, the other families run as before. The
+/// samples are raw rows, so a zero `retention_days` keeps them too.
 #[tokio::test]
 async fn a_zero_retention_keeps_the_raw_rows_and_a_zero_rollup_retention_keeps_the_rollups() {
     let up = FakeUpstream::start(vec![]).await;
@@ -347,6 +350,22 @@ async fn a_zero_retention_keeps_the_raw_rows_and_a_zero_rollup_retention_keeps_t
     };
     h.db.insert_request(&old("r1"), &[attempt("r1")], None)
         .unwrap();
+    h.db.insert_samples(
+        &[phoebis_ledger::QuotaSampleRecord {
+            account_id: "a".into(),
+            bucket: 0,
+            window: "5h".into(),
+            source: "poll".into(),
+            ..Default::default()
+        }],
+        Some(&phoebis_ledger::ExtraUsageSampleRecord {
+            account_id: "a".into(),
+            bucket: 0,
+            source: "poll".into(),
+            ..Default::default()
+        }),
+    )
+    .unwrap();
     let forever_raw = LedgerConfig {
         retention_days: 0,
         rollup_retention_days: 400,
@@ -354,9 +373,15 @@ async fn a_zero_retention_keeps_the_raw_rows_and_a_zero_rollup_retention_keeps_t
     };
     let purged = run_retention(&h.db, &forever_raw, 402 * day, &[]).unwrap();
     assert_eq!(
-        (purged.requests, purged.attempts, purged.events),
-        (0, 0, 0),
-        "nothing raw goes under 0"
+        (
+            purged.requests,
+            purged.attempts,
+            purged.events,
+            purged.quota_samples,
+            purged.extra_usage_samples
+        ),
+        (0, 0, 0, 0, 0),
+        "nothing raw goes under 0, the samples included"
     );
     assert_eq!(purged.rollups, 1, "the hour's rollup row is past 400 days");
     h.db.insert_request(&old("r2"), &[attempt("r2")], None)

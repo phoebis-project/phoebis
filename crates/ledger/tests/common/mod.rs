@@ -15,12 +15,12 @@ use phoebis_profile::{
     claude_code_2_1_269_linux_x64,
     fixtures::{body, inference_head, BodyFixture, FixtureKind},
 };
-use phoebis_relay::{router, CatalogService, Limits, Relay};
+use phoebis_relay::{router, CatalogService, Limits, Relay, UpstreamGzip};
 use phoebis_routing::{spawn as spawn_router, RouterConfig, RouterHandle};
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, Affinity, AffinitySource, ApiKeyRow,
-    Failover, Identity, MemberWrite, NewBundle, OveragePolicy, PoolRow, QuotaHeaders, RulesMode,
-    Secret, Shedding, StorageKey, Store, Strategy,
+    AccountKind, AccountRow, AccountState, Affinity, ApiKeyRow, Failover, Identity,
+    MemberWrite, NewBundle, OveragePolicy, PoolRow, RulesMode, Secret, Shedding, StorageKey, Store,
+    Strategy,
 };
 use phoebis_transport::request::parse_head;
 // The polls live with the fake so every integration suite has them; only some of them are used here.
@@ -183,10 +183,9 @@ pub async fn harness_on(
                     shedding: Shedding::default(),
                     failover: Failover::default(),
                     cache_ttl_json: "{}".into(),
-                    cache_diagnostics: None,
+                    cache_diagnostics: false,
                     auto_mode_server: true,
                     affinity: Affinity::default(),
-                    quota_headers: QuotaHeaders::Pass,
                     created_at: NOW,
                     updated_at: NOW,
                 },
@@ -229,8 +228,6 @@ pub async fn harness_on(
                     rotated_at: None,
                     last_used_at: None,
                     retired_secret_last_used_at: None,
-                    in_flight_cap: None,
-                    affinity_source: AffinitySource::Auto,
                     auto_mode_server: None,
                 },
                 "test",
@@ -299,7 +296,6 @@ pub async fn harness_on(
         router_handle.clone(),
         clock.clone(),
         Duration::from_secs(10),
-        Duration::from_secs(60),
         Duration::from_secs(5),
     ));
     let bus = Bus::new();
@@ -316,14 +312,17 @@ pub async fn harness_on(
         config,
     );
     let limits = Limits {
+        body_budget_bytes: 512 << 20,
         body_capture_max_hours: 72,
+        body_read_timeout: Duration::from_secs(60),
         cooldown_fallback: Duration::from_secs(60),
         head_timeout: Duration::from_secs(10),
         hold_timeout: Duration::from_secs(30),
         idle_timeout: Duration::from_secs(600),
-        max_attempts: 3,
+        key_body_reads: 128,
         max_request_bytes: 32 << 20,
         model_rejection: Duration::from_secs(3_600),
+        upstream_gzip: UpstreamGzip::Auto,
     };
     let relay = Arc::new(
         Relay::new(

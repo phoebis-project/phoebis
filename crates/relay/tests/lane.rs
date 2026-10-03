@@ -75,7 +75,6 @@ async fn a_speed_switch_reads_the_pin_cold_and_stamps_the_lane_on_the_pin_and_th
         catalog_up,
         &[oauth("a", A, 0)],
         PoolSpec::default(),
-        CATALOG_WINDOW,
     )
     .await;
     // Every profile body carries `thinking` with a budget and no `output_config`.

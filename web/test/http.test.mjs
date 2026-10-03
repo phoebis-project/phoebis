@@ -30,7 +30,7 @@ test('a 401 outside the login runs the unauthorized hook and the login 401 does 
   await assert.rejects(call('GET', '/admin/keys'));
   await assert.rejects(call('POST', '/admin/session', { secret: 'x' }));
   assert.equal(unauthorized, 1);
-  stub(() => answer(403, { error: 'the viewer role cannot change anything' }));
+  stub(() => answer(403, { error: 'origin is not allowed' }));
   await assert.rejects(new HttpApi().pauseAccount('a'));
   assert.equal(forbidden, 1);
 });
@@ -211,8 +211,8 @@ test('getSession answers null on 401 without running the hook', async () => {
   stub(() => answer(401, { error: 'no admin session' }));
   assert.equal(await new HttpApi().getSession(), null);
   assert.equal(unauthorized, 0);
-  stub(() => answer(200, { role: 'viewer', session_id: 's' }));
-  assert.deepEqual(await new HttpApi().getSession(), { role: 'viewer', sessionId: 's' });
+  stub(() => answer(200, { session_id: 's' }));
+  assert.deepEqual(await new HttpApi().getSession(), { sessionId: 's' });
 });
 
 test('the session probe raises the status it got and 0 for no answer', async () => {
@@ -253,7 +253,7 @@ test('the live feed reconnects behind a live session and stops once it is gone',
   setHooks({ onFailure: () => undefined, onForbidden: () => undefined, onUnauthorized: () => { unauthorized += 1; } });
   const settle = () => new Promise((r) => setTimeout(r, 1_200));
 
-  stub(() => answer(200, { role: 'admin', session_id: 's' }));
+  stub(() => answer(200, { session_id: 's' }));
   const live = new HttpApi().subscribeLive(() => undefined);
   assert.equal(sockets[0].url, 'ws://router.test/admin/live');
   sockets[0].onclose();
@@ -313,16 +313,16 @@ test('the request detail reads the row and its events from one GET, and a purged
   assert.equal(await api.getRequest('gone'), null);
 });
 
-test('a key create and a key edit send the affinity source and the auto mode override in snake_case', async () => {
+test('a key create and a key edit send the auto mode override in snake_case', async () => {
   const row = JSON.parse(readFileSync(new URL('./fixtures/keys.json', import.meta.url), 'utf8')).body.keys[0];
-  const input = { affinitySource: 'user_id', autoModeServer: null, bodyCaptureHours: null, enabled: true, keepaliveOptOut: false, longContextTwins: true, modelRules: [], modelRulesMode: 'extend', name: 'Desktop', notes: null, poolId: 'main' };
+  const input = { autoModeServer: null, bodyCaptureHours: null, enabled: true, keepaliveOptOut: false, longContextTwins: true, modelRules: [], modelRulesMode: 'extend', name: 'Desktop', notes: null, poolId: 'main' };
   const calls = stub((url, init) => answer(200, { ...row, ...JSON.parse(init.body), ...(init.method === 'POST' ? { secret: 'phoebis-fixture' } : {}) }));
   const api = new HttpApi();
   const created = await api.createKey({ ...input, expiresInDays: null });
-  const edited = await api.updateKey('desktop', { ...input, affinitySource: 'content', autoModeServer: false });
-  const sent = calls.map((c) => [c.init.method, c.url, JSON.parse(c.init.body).affinity_source, JSON.parse(c.init.body).auto_mode_server]);
-  assert.deepEqual(sent, [['POST', '/admin/keys', 'user_id', null], ['PATCH', '/admin/keys/desktop', 'content', false]]);
-  assert.deepEqual([created.key.affinitySource, created.key.autoModeServer, edited.affinitySource, edited.autoModeServer], ['user_id', null, 'content', false]);
+  const edited = await api.updateKey('desktop', { ...input, autoModeServer: false });
+  const sent = calls.map((c) => [c.init.method, c.url, JSON.parse(c.init.body).auto_mode_server]);
+  assert.deepEqual(sent, [['POST', '/admin/keys', null], ['PATCH', '/admin/keys/desktop', false]]);
+  assert.deepEqual([created.key.autoModeServer, edited.autoModeServer], [null, false]);
 });
 
 test('a pool save is one PATCH that carries the members with the settings', async () => {
@@ -331,7 +331,7 @@ test('a pool save is one PATCH that carries the members with the settings', asyn
   await new HttpApi().updatePool('main', {
     affinityTtlSeconds: 600,
     bodyCaptureHours: 0,
-    cacheDiagnostics: null,
+    cacheDiagnostics: false,
     cacheTtl: { enabled: false, injectWhenAbsent: false, metered: { main: '5m', models: [], subagent: '5m' }, plan: { main: '1h', models: [], subagent: '5m' } },
     keepalive: { coldProbeLimit: 2, costCapUsdPerDay: null, enabled: false, jitterSeconds1h: 30, jitterSeconds5m: 5, leadSeconds1h: 360, leadSeconds5m: 60, maxIdleSeconds: 3_600, maxIdleTicks: 0, netNegativeGraceProbes: 2, retryMaxSeconds: 300, retrySeconds: 30, stopWhenNetNegative: true, warmSubagents: true },
     affinityMode: 'when_cached',
@@ -342,7 +342,6 @@ test('a pool save is one PATCH that carries the members with the settings', asyn
     name: row.label,
     overagePolicy: 'prefer_plan',
     preferSubscription: false,
-    quotaHeaders: 'hide',
     selectBelowUtilization: 0.4,
     sessionPlacement: 'by_warm_prefix',
     status: 'active',
@@ -356,9 +355,10 @@ test('a pool save is one PATCH that carries the members with the settings', asyn
     { account_id: 'direct', budget_daily_usd: 12.5, budget_monthly_usd: 50, priority: 1 },
   ], 'a member without a budget sends null, which clears a stored one');
   assert.equal(body.select_below_utilization, 0.4);
+  assert.equal(body.cache_diagnostics, false, 'the switch is sent off as it is sent on');
   assert.deepEqual(
-    [body.affinity_mode, body.subagent_placement, body.session_placement, body.min_shared_prefix_tokens, body.quota_headers],
-    ['when_cached', 'with_main', 'by_warm_prefix', 30_000, 'hide'],
+    [body.affinity_mode, body.subagent_placement, body.session_placement, body.min_shared_prefix_tokens],
+    ['when_cached', 'with_main', 'by_warm_prefix', 30_000],
   );
 });
 
@@ -388,4 +388,26 @@ test('listCatalogOf reads each named catalog once and answers the union by id, a
   const none = stub(() => answer(500));
   assert.deepEqual(await new HttpApi().listCatalogOf([]), []);
   assert.equal(none.length, 0, 'no account named, no read');
+});
+
+test('the attention read is one GET, and its failures reach no toast, since the line draws its own', async () => {
+  let failures = 0;
+  let unauthorized = 0;
+  setHooks({ onFailure: () => { failures += 1; }, onForbidden: () => undefined, onUnauthorized: () => { unauthorized += 1; } });
+  const body = JSON.parse(readFileSync(new URL('./fixtures/attention.json', import.meta.url), 'utf8')).body;
+  const calls = stub(() => answer(200, body));
+  const items = await new HttpApi().getAttention();
+  assert.deepEqual(calls.map((c) => [c.init.method, c.url]), [['GET', '/admin/attention']]);
+  assert.deepEqual(items.map((i) => [i.kind, i.subject.id, i.link]), [['pool_exhausted', 'main', { id: 'main', page: 'pools' }]]);
+  stub(() => answer(500, { error: 'the store is unavailable' }));
+  await assert.rejects(new HttpApi().getAttention(), (e) => e instanceof ApiError && e.status === 500 && e.message === 'the store is unavailable');
+  stub(() => Promise.reject(new TypeError('fetch failed')));
+  await assert.rejects(new HttpApi().getAttention(), (e) => e instanceof ApiError && e.status === 0);
+  assert.equal(failures, 0, 'a failed attention read is drawn by the line, not toasted on every poll');
+  stub(() => answer(401, { error: 'no admin session' }));
+  await assert.rejects(new HttpApi().getAttention());
+  assert.equal(unauthorized, 1, 'a lapsed session still returns the console to the login');
+  stub(() => answer(500, { error: 'the store is unavailable' }));
+  await assert.rejects(call('GET', '/admin/keys'));
+  assert.equal(failures, 1, 'the same failure on any other read still reaches the toast');
 });

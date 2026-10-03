@@ -1,5 +1,7 @@
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent } from 'react';
+import { api } from '@/api';
 import { ApiError, quietly, reportRecovery } from '@/api/http';
+import { createAttentionPoll, type AttentionRead } from './attention';
 import { clock } from './clock';
 
 export interface Loaded<T> {
@@ -173,6 +175,17 @@ export function useCommittedText(value: string, onCommit: (next: string) => void
       if (e.key === 'Enter') commit(draft);
     },
   };
+}
+
+const attention = createAttentionPoll(() => api.getAttention());
+
+/**
+ * The conditions that need attention, from one poll however many readers a page mounts: the dashboard's line and
+ * every pool card's rows read the same answer. `useAsync`'s single load would never show a pool exhausting, or a
+ * failure clearing, while the page stays open.
+ */
+export function useAttention(): AttentionRead {
+  return useSyncExternalStore(attention.subscribe, attention.snapshot);
 }
 
 /** A shared clock so every countdown on a page advances in the same tick. */

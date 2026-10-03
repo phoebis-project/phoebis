@@ -3,7 +3,7 @@
 mod common;
 use std::path::PathBuf;
 
-use common::{delete, deltas_until, get, json, login, next_text, patch, post, serve, wait_json};
+use common::{deltas_until, get, json, login, next_text, patch, post, serve, wait_json};
 use phoebis_bus::{
     AccountSelected, AttemptOutcome, Event, Kind, Origin, Phase, RequestComplete, RequestObserved,
     RequestShape, ResponseChunk, ResponseFacts, ResponseHead, Usage,
@@ -31,21 +31,15 @@ fn shape(v: &Value) -> Value {
 }
 
 /// Every secret this capture plants or the router mints for it, bound where it is created so a seed that
-/// grows a new one has to name it here as well. The three literals are the harness's own configuration.
-fn planted(
-    access_token: &str,
-    refresh_token: &str,
-    key_secret: &str,
-    rule_secret: &str,
-) -> Vec<String> {
-    let mut needles: Vec<String> = ["admin-secret", "viewer-secret", "sk-ant-"]
+/// grows a new one has to name it here as well. The two literals are the harness's own configuration.
+fn planted(access_token: &str, refresh_token: &str, key_secret: &str) -> Vec<String> {
+    let mut needles: Vec<String> = ["admin-secret", "sk-ant-"]
         .into_iter()
         .map(str::to_string)
         .collect();
     needles.push(access_token.into());
     needles.push(refresh_token.into());
     needles.push(key_secret.into());
-    needles.push(rule_secret.into());
     needles
 }
 
@@ -85,13 +79,12 @@ fn hold(planted: &[String], name: &str, route: &str, body: Value) {
 /// its status alone.
 const UNPARSED: &str = "body must be a JSON object";
 const POOL_ROUTE: &str = "PATCH /admin/pools/{id}";
-const KEY_ROUTE: &str = "PATCH /admin/keys/{id}";
 
 /// The route's answer to every bound the console holds and to one past it: the keepalive policy's, the pool
-/// engine's, the model rule count's and both caps'. The burn window and the source dwell have no ceiling at the
-/// route, so the form's open maximum on each has no answer to mirror and only their floors are probed. An admitted
-/// probe is written back at once from the list read taken before the probes, so each probe meets the seeded pool
-/// and key, as the captures after these do.
+/// engine's with its in-flight cap, and the model rule count's. The burn window and the source dwell have no ceiling
+/// at the route, so the form's open maximum on each has no answer to mirror and only their floors are probed. An
+/// admitted probe is written back at once from the list read taken before the probes, so each probe meets the seeded
+/// pool, as the captures after these do.
 async fn bound_probes(app: &axum::Router, cookie: &str) -> Value {
     let pools = json(get(app, "/admin/pools", Some(cookie)).await).await;
     let pool = pools["pools"]
@@ -100,14 +93,6 @@ async fn bound_probes(app: &axum::Router, cookie: &str) -> Value {
         .iter()
         .find(|p| p["id"] == "main")
         .expect("the seeded pool is listed")
-        .clone();
-    let keys = json(get(app, "/admin/keys", Some(cookie)).await).await;
-    let key = keys["keys"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|k| k["id"] == "desktop")
-        .expect("the seeded key is listed")
         .clone();
 
     // Each row: the path, the route, the field as the route names it, the value, the body and its restore.
@@ -183,16 +168,6 @@ async fn bound_probes(app: &axum::Router, cookie: &str) -> Value {
             j!({ "model_rules": pool["model_rules"] }),
         ));
     }
-    for value in [1, 0, 4_294_967_295, 4_294_967_296] {
-        table.push((
-            "/admin/keys/desktop",
-            KEY_ROUTE,
-            "in_flight_cap".into(),
-            value,
-            j!({ "in_flight_cap": value }),
-            j!({ "in_flight_cap": key["in_flight_cap"] }),
-        ));
-    }
 
     let mut probes = Vec::new();
     for (path, route, field, value, body, restore) in table {
@@ -231,14 +206,6 @@ async fn bound_probes(app: &axum::Router, cookie: &str) -> Value {
         unstamped(pool),
         "the probes leave the pool as seeded"
     );
-    let after = json(get(app, "/admin/keys", Some(cookie)).await).await;
-    let restored = after["keys"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|k| k["id"] == "desktop")
-        .unwrap();
-    assert_eq!(restored, &key, "the probes leave the key as seeded");
     Value::Array(probes)
 }
 
@@ -296,6 +263,8 @@ fn attempt(id: &str, n: u32, account: &str, status: u16, outcome: &str, at: i64)
         finished_at: Some(at + 400),
         ttfb_ms: Some(120),
         upstream_status: Some(status),
+        upstream_request_id: Some(format!("req_{id}_{n}")),
+        upstream_message_id: (status == 200).then(|| format!("msg_{id}_{n}")),
         outcome: outcome.into(),
         input_tokens: Some(1_000),
         output_tokens: Some(100),
@@ -379,9 +348,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
         .to_string();
     // The store stamps the key from the wall clock, so the live generation is read back rather than assumed.
     let key_generation = parts.store.api_key("desktop").unwrap().unwrap().created_at;
-    // The alert rule seeded below signs with this, and the guard reads every planted secret from here on.
-    let rule_secret = "s3cret";
-    let planted = planted(access_token, refresh_token, &key_secret, rule_secret);
+    let planted = planted(access_token, refresh_token, &key_secret);
     let mut key_created = created.clone();
     // The minted secret is random, so the fixture carries a stable stand-in rather than the capture's own.
     key_created["secret"] = j!("phoebis-fixture");
@@ -754,6 +721,31 @@ async fn every_route_is_captured_and_holds_its_shape() {
         )],
         bodies: None,
     });
+    // A committed stream whose body ended before its `message_stop`, so the requests route answers the sixth
+    // outcome and the analytics groups count it in their own column.
+    parts.ledger.record(Record::Request {
+        request: RequestRecord {
+            error_code: Some("stream_incomplete".into()),
+            ..request(
+                key_generation,
+                "r-incomplete",
+                hour_ago + 600,
+                "desktop",
+                "s1",
+                200,
+                "incomplete",
+            )
+        },
+        attempts: vec![attempt(
+            "r-incomplete",
+            1,
+            "business",
+            200,
+            "upstream_error",
+            hour_ago + 600,
+        )],
+        bodies: None,
+    });
     // A row whose serving attempt carries a placement, so the placements route has a rung to answer rather
     // than an empty list. It stays on a model the price table lists, since its API-key upstream spends dollars the
     // spend fixtures read.
@@ -850,64 +842,67 @@ async fn every_route_is_captured_and_holds_its_shape() {
             response_bytes: None,
             response_chunks: None,
             held: None,
+            message_id: Some("msg_k1_1".into()),
             finished_at: now,
         }));
     let ready = wait_json(app, "/admin/requests", &cookie, |v| {
-        v["requests"].as_array().unwrap().len() == 5
+        v["requests"].as_array().unwrap().len() == 6
     })
     .await;
     hold(&planted, "requests", "GET /admin/requests", ready);
-    // One rule per shape the page draws: an enabled one with a secret and a threshold, a disabled one, and one on
-    // an account. The drift rule is turned off only after its event opened, since a disabled rule matches no signal.
-    post(app, "/admin/alerts/rules", &format!(r#"{{"kind":"utilization_above","scope":{{"type":"pool","id":"main"}},"threshold":0.9,"window":"7d_oi","webhook_url":"http://127.0.0.1:1/hook","secret":"{rule_secret}"}}"#), Some(&cookie)).await;
-    post(app, "/admin/alerts/rules", r#"{"kind":"poll_backoff","scope":{"type":"account","id":"business"},"webhook_url":"http://127.0.0.1:1/backoff"}"#, Some(&cookie)).await;
-    let drift = json(post(app, "/admin/alerts/rules", r#"{"kind":"client_drift","scope":{"type":"all"},"webhook_url":"http://127.0.0.1:1/drift"}"#, Some(&cookie)).await).await;
-    // A refusal, then a 500, then the 200 that ends it: the event carries all three attempts.
-    parts.webhook.answer(Err("refused".into()));
-    parts.webhook.answer(Ok(500));
-    parts.webhook.answer(Ok(200));
-    parts.alerts.signal(&phoebis_alerts::Signal {
-        kind: phoebis_alerts::Kind::ClientDrift,
-        account_id: None,
-        key_id: Some("desktop".into()),
-        pool_id: None,
-        subject: "client 2.1.274".into(),
-        detail: j!({ "client_version": "2.1.274", "key": "desktop", "trigger": "hash" }),
-    });
-    parts.alerts.wait_idle().await;
-    patch(
-        app,
-        &format!("/admin/alerts/rules/{}", drift["id"].as_str().unwrap()),
-        r#"{"enabled":false}"#,
-        Some(&cookie),
-    )
-    .await;
-    // A lifecycle rule is written, fired, and taken away again: the deliveries route needs a row of its own to
-    // capture, while the rules answer above stays the three rows the page is drawn from. The delivery outlives its
-    // rule, since a lifecycle row hangs off no event and holds the rule id as plain text.
-    let lifecycle = json(post(app, "/admin/alerts/rules", r#"{"kind":"session_active","scope":{"type":"all"},"webhook_url":"http://127.0.0.1:1/life"}"#, Some(&cookie)).await).await;
-    parts.alerts.deliver_event(
-        &phoebis_alerts::Signal {
-            kind: phoebis_alerts::Kind::SessionActive,
-            account_id: None,
+    // One exhaustion on the harness's pool, fed to the reader as the bus would, so the attention capture carries an
+    // item of the shape the console decodes.
+    parts
+        .attention
+        .observe(&Event::RequestObserved(RequestObserved {
+            request_id: "x1".into(),
+            origin: Origin::Client,
+            kind: Kind::Inference,
             key_id: Some("desktop".into()),
+            key_generation,
             pool_id: Some("main".into()),
-            subject: "desktop, session e2e-ui".into(),
-            detail: j!({ "key": "desktop", "pool": "main", "session": "e2e-ui", "source": "request" }),
-        },
-        phoebis_alerts::LifecycleEvent::SessionStarted,
-    );
-    parts.alerts.wait_idle().await;
-    assert_eq!(
-        delete(
-            app,
-            &format!("/admin/alerts/rules/{}", lifecycle["id"].as_str().unwrap()),
-            Some(&cookie),
-        )
-        .await
-        .status(),
-        204
-    );
+            session_id: Some("s1".into()),
+            agent_id: Some("main".into()),
+            parent_agent_id: None,
+            owner_id: None,
+            model: "claude-sonnet-5".into(),
+            canonical_model: "claude-sonnet-5".into(),
+            wire_model: "claude-sonnet-5".into(),
+            stream: false,
+            headers: vec![],
+            body: bytes::Bytes::from_static(b"{}"),
+            body_capture_hours: 0,
+            shape: RequestShape::default(),
+            static_hash: None,
+            boundaries: Vec::new(),
+            client: phoebis_bus::ClientFacts::default(),
+            auto_mode: None,
+            fork: phoebis_bus::Fork::default(),
+            presented_retired: false,
+            rotation_at: None,
+            received_at: now,
+        }));
+    parts
+        .attention
+        .observe(&Event::RequestComplete(RequestComplete {
+            request_id: "x1".into(),
+            attempt: 0,
+            account_id: None,
+            outcome: phoebis_bus::Outcome::Exhausted,
+            status: 429,
+            usage: None,
+            response: ResponseFacts::default(),
+            ttfb_ms: None,
+            ttfc_ms: None,
+            error_code: Some("accounts_exhausted".into()),
+            client_drift: None,
+            client_version: None,
+            response_bytes: None,
+            response_chunks: None,
+            held: None,
+            message_id: None,
+            finished_at: now,
+        }));
     // The GET reads no endpoint of its own, so the capture reads a clean poll's snapshot and standing.
     parts.usage.poll("business").await.unwrap();
     for (name, route) in [
@@ -916,9 +911,6 @@ async fn every_route_is_captured_and_holds_its_shape() {
         ("account_quota", "/admin/accounts/business/quota?range=7d"),
         ("account_usage", "/admin/accounts/business/usage"),
         ("accounts", "/admin/accounts"),
-        ("alert_events", "/admin/alerts/events"),
-        ("alert_lifecycle", "/admin/alerts/deliveries"),
-        ("alert_rules", "/admin/alerts/rules"),
         ("analytics_accounts", "/admin/analytics/accounts?range=24h"),
         (
             "analytics_breakdown",
@@ -942,6 +934,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             "analytics_series",
             "/admin/analytics/series?range=24h&group_by=key",
         ),
+        ("attention", "/admin/attention"),
         ("dashboard", "/admin/dashboard"),
         ("keepalive_overview", "/admin/keepalive/overview"),
         ("keepalive_recipes", "/admin/keepalive/recipes"),
@@ -973,7 +966,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
     hold(
         &planted,
         "bound_refusals",
-        "PATCH /admin/pools/{id}, PATCH /admin/keys/{id}",
+        "PATCH /admin/pools/{id}",
         j!({ "probes": probes.clone() }),
     );
     // `hold` compares shapes, which a moved bound or sentence keeps; the web tests hold the form and the mock to
@@ -988,26 +981,6 @@ async fn every_route_is_captured_and_holds_its_shape() {
             "a route answers a bound probe differently; re-capture and move the console's copy with it"
         );
     }
-    // The deliveries route needs the id the events answer carries, so it is captured after the loop.
-    let events = json(get(app, "/admin/alerts/events", Some(&cookie)).await).await;
-    let event = events["events"][0]["id"]
-        .as_str()
-        .expect("the seeded signal opened an event")
-        .to_string();
-    hold(
-        &planted,
-        "alert_deliveries",
-        "GET /admin/alerts/events/{id}/deliveries",
-        json(
-            get(
-                app,
-                &format!("/admin/alerts/events/{event}/deliveries"),
-                Some(&cookie),
-            )
-            .await,
-        )
-        .await,
-    );
     hold(
         &planted,
         "pairing_started",
@@ -1122,6 +1095,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
         response_bytes: Some(5),
         response_chunks: None,
         held: None,
+        message_id: Some("msg_live-1_1".into()),
         finished_at: now + 900,
     }));
     let deltas = deltas_until(&mut ws, "finished").await;

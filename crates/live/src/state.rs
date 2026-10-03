@@ -606,18 +606,12 @@ impl LiveState {
         deltas
     }
 
-    /// The table and the ring as the socket's role may see them: without `preview`, no output text anywhere.
-    pub fn snapshot(&mut self, preview: bool) -> LiveSnapshot {
+    pub fn snapshot(&mut self) -> LiveSnapshot {
         let now = (self.clock)();
         self.trim_ring(now);
         let mut in_flight: Vec<LiveRequest> =
             self.in_flight.values().map(|t| t.entry.clone()).collect();
         in_flight.sort_by_key(|r| std::cmp::Reverse(r.phases.received_at));
-        if !preview {
-            for r in &mut in_flight {
-                r.preview = None;
-            }
-        }
         let streams = in_flight
             .iter()
             .filter(|r| r.transport == "sse" && r.phases.head_at.is_some())
@@ -821,6 +815,7 @@ mod tests {
             response_bytes: Some(10),
             response_chunks: None,
             held: None,
+            message_id: None,
             finished_at: 1_500,
         })
     }
@@ -942,7 +937,7 @@ mod tests {
         state.apply(chunk("a", 0, first));
         state.apply(chunk("a", 1, second));
         assert_eq!(
-            state.snapshot(true).in_flight[0].preview.as_deref(),
+            state.snapshot().in_flight[0].preview.as_deref(),
             Some("hello world")
         );
     }
@@ -965,7 +960,7 @@ mod tests {
             b"event: content_block_delta\ndata: {\"delta\":{\"text\":\"hello\"}}\n\n",
         ));
         assert_eq!(
-            state.snapshot(true).in_flight[0].preview.as_deref(),
+            state.snapshot().in_flight[0].preview.as_deref(),
             Some("hello"),
             "and the preview resumes at the next event boundary"
         );
@@ -1002,7 +997,7 @@ mod tests {
         request.headers = vec![("user-agent".into(), "a".repeat(300))];
         state.apply(Event::RequestObserved(request));
         let entry = state
-            .snapshot(false)
+            .snapshot()
             .in_flight
             .into_iter()
             .find(|r| r.id == "a")

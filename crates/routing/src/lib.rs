@@ -34,10 +34,10 @@ pub use state::{
     UtilizationSample, WindowReading, BUCKET_LIFE_MS, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS, SEVEN_DAY,
     SEVEN_DAY_FABLE, WEEK_MS,
 };
-#[cfg(any(test, feature = "debug-hooks"))]
-pub use task::ReportHold;
 pub use task::{
     credits_from_usage, sample_from_usage, spawn, BandWeight, BurnRates, ReloadError, Report,
-    RouterConfig, RouterEvent, RouterGone, RouterHandle, SelectAnswer,
+    RouterConfig, RouterEvent, RouterGone, RouterHandle, SelectAnswer, COMMANDS,
 };
+#[cfg(any(test, feature = "debug-hooks"))]
+pub use task::{LoopPark, ReportHold};
 pub use windows::window_for;

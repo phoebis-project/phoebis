@@ -180,7 +180,7 @@ fn an_attempt_carries_the_incarnation_it_began_under() {
 }
 
 #[test]
-fn an_uncertain_attempt_blocks_new_attempts() {
+fn an_in_flight_attempt_blocks_a_new_one_and_an_uncertain_one_does_not() {
     let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
     store.insert_account(&account("a")).unwrap();
     let g = store
@@ -190,10 +190,17 @@ fn an_uncertain_attempt_blocks_new_attempts() {
     store
         .resolve_refresh_attempt(id, 1, AttemptOutcome::Uncertain("response lost".into()))
         .unwrap();
-    assert!(matches!(
-        store.open_refresh_attempt("a", 1, 1, g),
-        Err(StoreError::AttemptPending)
-    ));
+    assert!(
+        store.open_refresh_attempt("a", 1, 1, g).is_ok(),
+        "the manager's floor spaces the retry, not the store"
+    );
+    assert!(
+        matches!(
+            store.open_refresh_attempt("a", 1, 1, g),
+            Err(StoreError::AttemptPending)
+        ),
+        "the retry still in flight blocks a third"
+    );
 }
 
 #[test]
@@ -623,6 +630,115 @@ fn the_resolved_cursor_query_reads_through_its_index() {
     assert!(
         plan.contains("refresh_attempts_resolved"),
         "the 5 s poll must not scan the table: {plan}"
+    );
+    assert!(
+        !plan.contains("TEMP B-TREE"),
+        "and the index supplies the order rather than a sort: {plan}"
+    );
+}
+
+#[test]
+fn a_holders_newest_settled_attempts_read_newest_first_within_the_bound_and_its_incarnation() {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    store.insert_account(&account("a")).unwrap();
+    let mut settled = Vec::new();
+    for outcome in [
+        AttemptOutcome::Failed("first".into()),
+        AttemptOutcome::Committed,
+        AttemptOutcome::Failed("third".into()),
+    ] {
+        let id = store.open_refresh_attempt("a", 1, 1, 1).unwrap();
+        store.resolve_refresh_attempt(id, 1, outcome).unwrap();
+        settled.push(id);
+    }
+    let open = store.open_refresh_attempt("a", 1, 1, 1).unwrap();
+    let read = |incarnation: u64, limit: usize| {
+        store
+            .newest_resolved_refresh_attempts("a", incarnation, limit)
+            .unwrap()
+            .into_iter()
+            .map(|a| (a.id, a.outcome, a.detail))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        read(1, 16),
+        [
+            (settled[2], "failed".to_string(), Some("third".to_string())),
+            (settled[1], "committed".to_string(), None),
+            (settled[0], "failed".to_string(), Some("first".to_string())),
+        ],
+        "an unresolved attempt (outcome null) is left out, and the rest come newest first"
+    );
+    store
+        .resolve_refresh_attempt(open, 1, AttemptOutcome::Uncertain("lost".into()))
+        .unwrap();
+    assert_eq!(
+        read(1, 2),
+        [
+            (open, "uncertain".to_string(), Some("lost".to_string())),
+            (settled[2], "failed".to_string(), Some("third".to_string())),
+        ],
+        "an uncertain one is read, and the bound keeps the newest"
+    );
+    store.delete_account("a", "test").unwrap();
+    store.insert_account(&account("a")).unwrap();
+    assert!(
+        read(2, 16).is_empty(),
+        "the holder that took the id has no history of its own yet"
+    );
+    let fresh = store.open_refresh_attempt("a", 2, 1, 1).unwrap();
+    store
+        .resolve_refresh_attempt(fresh, 2, AttemptOutcome::Failed("fresh".into()))
+        .unwrap();
+    assert_eq!(
+        read(2, 16),
+        [(fresh, "failed".to_string(), Some("fresh".to_string()))],
+        "a previous holder's attempts are not this one's"
+    );
+    assert_eq!(
+        read(1, 16).len(),
+        3,
+        "and the previous holder keeps its own"
+    );
+}
+
+#[test]
+fn a_failed_holder_read_answers_an_error_once() {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    store.insert_account(&account("a")).unwrap();
+    store.debug_fail_next_refresh_read();
+    assert!(store.newest_resolved_refresh_attempts("a", 1, 16).is_err());
+    assert!(store
+        .newest_resolved_refresh_attempts("a", 1, 16)
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn the_holders_newest_attempts_read_through_their_own_index() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("router.sqlite");
+    // Opened and dropped so the migrations run and the process lock is free for the plain reader below.
+    drop(Store::open(&path, &StorageKey::generate()).unwrap());
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    let mut stmt = conn
+        .prepare(
+            "EXPLAIN QUERY PLAN SELECT id, account_id, started_at, resolved_at, outcome, detail \
+             FROM refresh_attempts WHERE account_id = ?1 AND incarnation = ?2 AND outcome IS NOT NULL \
+             ORDER BY resolved_at DESC, id DESC LIMIT ?3",
+        )
+        .unwrap();
+    let plan: String = stmt
+        .query_map(rusqlite::params!["a", 1i64, 16i64], |r| {
+            r.get::<_, String>(3)
+        })
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap()
+        .join("\n");
+    assert!(
+        plan.contains("refresh_attempts_holder_resolved"),
+        "every scrape reads every account's run, so the read must not scan the table: {plan}"
     );
     assert!(
         !plan.contains("TEMP B-TREE"),

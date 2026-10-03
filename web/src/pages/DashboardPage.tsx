@@ -6,10 +6,11 @@ import { Donut } from '@/components/charts/Donut';
 import { Sparkline } from '@/components/charts/Sparkline';
 import { accountColor } from '@/components/charts/theme';
 import { useChartInk } from '@/components/charts/useChartInk';
+import { AttentionLine } from '@/components/ui/AttentionLine';
 import { Badge, Button, Card, EmptyState, ErrorState, Skeleton } from '@/components/ui/primitives';
 import { WindowTriple } from '@/components/ui/QuotaBars';
 import { fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortId, shortModel, tokensTotal } from '@/lib/format';
-import { useAsync, useNow, type Loaded } from '@/lib/hooks';
+import { useAsync, useAttention, useNow, type Loaded } from '@/lib/hooks';
 import { STATUS_LABEL, STATUS_TONE, isFastScope } from '@/lib/quota';
 import { fmtWindows, ringFigures, type RingFigures, type RingLeftOut, type RingRow } from '@/lib/rings';
 
@@ -29,6 +30,7 @@ export function DashboardPage() {
   const requests = useAsync(() => api.listRequests({ limit: 10 }), [], { refreshMs: 30_000 });
   const sessions = useAsync(() => api.listSessions(), [], { refreshMs: 30_000 });
   const settings = useAsync(() => api.getSettings(), [], { refreshMs: 30_000 });
+  const attention = useAttention();
   const now = useNow();
   const ink = useChartInk();
 
@@ -47,6 +49,7 @@ export function DashboardPage() {
 
   return (
     <div className="stack">
+      <AttentionLine items={attention.items} error={attention.error} loadedAt={attention.loadedAt} now={now} />
       {failedFirst(overview) ? (
         <ReadFailed title="Could not load the 24-hour figures" error={overview.error} retry={overview.reload} />
       ) : (

@@ -21,24 +21,22 @@
         "keepalive_opt_out": false,
         "body_capture_hours": null,
         "effective_body_capture_hours": 24,
-        "in_flight_cap": null,
-        "affinity_source": "auto",
         "auto_mode_server": null,
         "effective_auto_mode_server": true,
-        "prefix": "T5R8yG7v",
-        "created_at": 1790825302587,
+        "prefix": "LGWWN5RB",
+        "created_at": 1790987341276,
         "rotated_at": null,
         "last_used_at": null,
         "retired_secret_last_used_at": null,
         "sessions_on_retired_secret": 0,
         "usage_7d": {
-          "cost_usd": 0.0036,
-          "requests": 4,
-          "tokens": 7200
+          "cost_usd": 0.0216,
+          "requests": 5,
+          "tokens": 9000
         },
         "lifetime": {
-          "cost_usd": 0.0036,
-          "requests": 4
+          "cost_usd": 0.0216,
+          "requests": 5
         }
       }
     ]

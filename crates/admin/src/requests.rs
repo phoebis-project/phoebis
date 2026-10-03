@@ -1,5 +1,5 @@
 //! The request log: one row per client request with its attempt trail, the detail with its events, and the
-//! captured bodies for administrators.
+//! captured bodies.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -7,7 +7,7 @@ use std::sync::Arc;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::{Extension, Json};
+use axum::Json;
 use phoebis_ledger::{
     list_requests, request_by_id, request_events, AttemptRecord, LiveKeys, RequestFilter,
     RequestRecord,
@@ -15,8 +15,8 @@ use phoebis_ledger::{
 use serde_json::{json, Value};
 
 use crate::analytics::ledger_failure;
-use crate::routes::{failure, Caller};
-use crate::{AdminState, Role};
+use crate::routes::failure;
+use crate::AdminState;
 
 const DEFAULT_LIMIT: usize = 50;
 const MAX_LIMIT: usize = 500;
@@ -89,7 +89,8 @@ fn attempt_json(a: &AttemptRecord) -> Value {
     .collect();
     json!({
         "index": a.attempt, "account_id": a.account_id, "account_kind": a.account_kind, "outcome": a.outcome,
-        "upstream_status": a.upstream_status, "upstream_request_id": a.upstream_request_id, "started_at": a.started_at,
+        "upstream_status": a.upstream_status, "upstream_request_id": a.upstream_request_id,
+        "upstream_message_id": a.upstream_message_id, "started_at": a.started_at,
         "duration_ms": a.finished_at.map(|f| f - a.started_at), "ttfb_ms": a.ttfb_ms, "ttft_ms": a.ttfc_ms,
         "cache_miss_reason": a.cache_miss_reason, "service_tier": a.service_tier, "client_drift": a.client_drift,
         "cooldown_set": a.cooldown_scope.as_ref().map(|scope| json!({ "reason": scope, "until": a.cooldown_until })),
@@ -229,16 +230,8 @@ pub(crate) fn event_json(e: &phoebis_ledger::EventRecord) -> Value {
 
 pub(crate) async fn bodies(
     State(state): State<Arc<AdminState>>,
-    Extension(caller): Extension<Caller>,
     Path(id): Path<String>,
 ) -> Response {
-    // The gate lets a viewer through on every GET; bodies are prompts, so this one route checks the role itself.
-    if caller.role != Role::Admin {
-        return failure(
-            StatusCode::FORBIDDEN,
-            "captured bodies are for administrators",
-        );
-    }
     let as_json_or_text = |bytes: &[u8]| {
         serde_json::from_slice::<Value>(bytes)
             .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(bytes).into_owned()))

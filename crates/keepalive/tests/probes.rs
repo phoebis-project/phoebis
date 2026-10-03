@@ -5,7 +5,7 @@ use std::str::FromStr;
 
 use common::*;
 use fake_upstream::{Respond, SseEvent};
-use phoebis_keepalive::{Event, KeepaliveLimits, KeepalivePolicy, Reason};
+use phoebis_keepalive::{Event, KeepalivePolicy, Reason, MAIN_AGENT, MAX_WORKERS};
 use phoebis_store::AccountState;
 
 fn json(status: u16, body: &str) -> Respond {
@@ -95,13 +95,64 @@ async fn a_probe_replays_every_published_header_and_none_of_the_denied_ones() {
     );
 }
 
+/// The relay inflated the request before the bus saw it, so the recipe holds the plain body with no
+/// `content-encoding` line and the probe replays it plain.
+#[tokio::test]
+async fn a_gzip_request_observed_is_replayed_plain_by_its_probe() {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    let compressed = phoebis_transport::encode::gzip(BODY.as_bytes());
+    let (parts, _) = r.request("main").into_parts();
+    let mut req =
+        axum::http::Request::from_parts(parts, axum::body::Body::from(compressed.clone()));
+    relay_common::set_header(&mut req, "content-encoding", "gzip");
+    relay_common::set_header(&mut req, "content-length", &compressed.len().to_string());
+    let resp = r.h.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), 200, "the gzip request is admitted");
+    let id = relay_common::outcome(&resp).request_id;
+    let _ = resp.into_body().collect().await.unwrap();
+    r.pump(Some(&id)).await;
+    r.advance(270_000);
+    r.step().await;
+    let sent = r.up.requests();
+    assert_eq!(sent.len(), 2, "the real request and one probe");
+    let probe = &sent[1];
+    assert!(
+        !probe
+            .headers
+            .iter()
+            .any(|(n, _)| n.eq_ignore_ascii_case("content-encoding")),
+        "{:?}",
+        probe.headers
+    );
+    let replayed: serde_json::Value =
+        serde_json::from_slice(&probe.body).expect("the probe carries the plain body");
+    assert_eq!(
+        (
+            replayed["messages"][0]["content"].as_str(),
+            replayed["max_tokens"].as_u64()
+        ),
+        (Some("hello"), Some(0)),
+        "the recipe's own body, edited for a probe"
+    );
+    let status = r.status("main");
+    assert_eq!(
+        (status.probes, status.failures, status.probe_usage.read),
+        (1, 0, 2_000),
+        "the probe was answered 200 and its usage read"
+    );
+}
+
 #[tokio::test]
 async fn a_probe_preserves_routing_and_constraints() {
     let mut r = rig(RigSpec::default()).await;
     r.observe("main").await;
     r.state("main", "idle");
-    let lease_before = r.now() + 3_600_000;
-    r.advance(270_000);
+    let lease_before = r.now() + r.lease_ms();
+    r.advance_attended(270_000);
     r.step().await;
     let sent = r.up.requests();
     let probe = sent.last().unwrap();
@@ -165,7 +216,7 @@ async fn a_probe_preserves_routing_and_constraints() {
             .unwrap()
             .as_millisecond()
             > lease_before,
-        "only the heartbeat renewed the lease"
+        "the heartbeats carried the lease past the one the session started with"
     );
     // The ledger has the probe under kind probe with the same session, and the pin is the real request's.
     let rows = wait_for(std::time::Duration::from_secs(5), || {
@@ -207,6 +258,98 @@ async fn a_probe_preserves_routing_and_constraints() {
     );
 }
 
+/// The rig's request with a reduced-shape billing line ahead of the system prompt, carrying the placeholder the
+/// client sends wherever its native patch does not run. `2.1.269.2b2` is the suffix the client computes for
+/// `hello` under 2.1.269 (units 4, 7 and 20: `o` and two padding zeros), so the version check passes.
+fn placeholder_body() -> String {
+    BODY.replacen(
+        r#""system":[{"type":"text","text":"private prompt""#,
+        r#""system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.269.2b2; cc_entrypoint=sdk-cli; cch=00000;"},{"type":"text","text":"private prompt""#,
+        1,
+    )
+}
+
+/// Observes `placeholder_body()` on the main agent, runs the probe its recipe schedules, and returns the probe's
+/// body as the fake upstream received it.
+async fn probe_of_a_placeholder_request(r: &mut Rig) -> Vec<u8> {
+    r.observe_with("main", &placeholder_body()).await;
+    r.state("main", "idle");
+    r.advance(270_000);
+    r.step().await;
+    let sent = r.up.requests();
+    assert_eq!(sent.len(), 2, "the real request and one probe");
+    sent.last().unwrap().body.clone()
+}
+
+fn cch_digits(body: &[u8]) -> Option<&[u8]> {
+    phoebis_cch::find_cch(body).map(|l| &body[l.digits_start..l.digits_start + 5])
+}
+
+/// The recipe keeps the client's placeholder rather than signing it, so the probe reaches the relay as the
+/// request did and the relay relays it unsigned, never reading a recipe's hash as the client's.
+#[tokio::test]
+async fn a_probe_built_from_a_placeholder_request_carries_the_placeholder_and_the_relay_relays_it()
+{
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    let probe = probe_of_a_placeholder_request(&mut r).await;
+    assert_eq!(
+        cch_digits(&probe),
+        Some(&b"00000"[..]),
+        "the probe carries the placeholder: {}",
+        String::from_utf8_lossy(&probe)
+    );
+    let status = r.status("main");
+    assert_eq!((status.probes, status.reason), (1, Reason::Scheduled));
+    let rows = wait_for(std::time::Duration::from_secs(5), || {
+        let (rows, _) =
+            r.db.read_blocking(|c| {
+                phoebis_ledger::list_requests(
+                    c,
+                    &phoebis_ledger::RequestFilter {
+                        include_probes: true,
+                        ..Default::default()
+                    },
+                    &phoebis_ledger::LiveKeys::default(),
+                    None,
+                    10,
+                )
+            })
+            .unwrap();
+        (rows.len() == 2).then_some(rows)
+    })
+    .await;
+    let (probe_row, _) = rows.iter().find(|(row, _)| row.kind == "probe").unwrap();
+    assert_eq!(
+        (probe_row.status, probe_row.client_drift.as_deref()),
+        (Some(200), None)
+    );
+}
+
+/// The decoded `system[0].text` of `body`, its billing line.
+fn billing_line(body: &[u8]) -> String {
+    let root: serde_json::Value = serde_json::from_slice(body).unwrap();
+    root["system"][0]["text"].as_str().unwrap().to_string()
+}
+
+/// Signing a placeholder is the relay's call over a line it restored, never the recipe's, so the recipe keeps a
+/// client-sent placeholder line as the client wrote it. The relay's side is
+/// `a_client_sent_placeholder_on_a_full_shape_line_is_relayed_intact` in the relay's restoration suite.
+#[test]
+fn the_recipe_keeps_a_client_sent_placeholder_line() {
+    let body = placeholder_body();
+    let recipe =
+        phoebis_keepalive::make_recipe(&[], body.as_bytes(), "claude-sonnet-4-5", 1 << 20).unwrap();
+    assert_eq!(
+        billing_line(&recipe.body),
+        billing_line(body.as_bytes()),
+        "the recipe keeps the client's line"
+    );
+}
+
 #[tokio::test]
 async fn a_heartbeat_does_not_reset_idle_or_refresh() {
     let mut r = rig(RigSpec {
@@ -220,14 +363,14 @@ async fn a_heartbeat_does_not_reset_idle_or_refresh() {
     r.observe("main").await;
     r.state("main", "idle");
     let original = r.status("main");
-    r.advance(270_000);
+    r.advance_attended(270_000);
     r.step().await;
     r.event(Event {
         event: "heartbeat".into(),
         ..Default::default()
     })
     .unwrap();
-    r.advance(270_000);
+    r.advance_attended(270_000);
     r.step().await;
     let status = r.status("main");
     assert_eq!(
@@ -263,7 +406,7 @@ async fn idle_seconds_include_parked_time_and_exclude_subagents() {
     r.observe("worker").await;
     r.state("main", "parked");
     r.state("worker", "idle");
-    r.advance(270_000);
+    r.advance_attended(270_000);
     r.step().await;
     assert_eq!(
         r.status("main").probes,
@@ -271,7 +414,7 @@ async fn idle_seconds_include_parked_time_and_exclude_subagents() {
         "a parked main is not under the idle budget"
     );
     r.state("main", "idle");
-    r.advance(270_000);
+    r.advance_attended(270_000);
     r.step().await;
     assert_eq!(
         (r.status("main").probes, r.status("worker").probes),
@@ -285,10 +428,6 @@ async fn a_lapsed_lease_keeps_probing_under_the_idle_limit_and_a_release_discard
     // The lapse case: the recipe stays, the probe at 270 s still runs, a heartbeat is refused, and the idle
     // limit counted from the last real request ends it with the wasted label idle_limit.
     let mut r = rig(RigSpec {
-        limits: KeepaliveLimits {
-            lease_seconds: 90,
-            ..KeepaliveLimits::default()
-        },
         policy: KeepalivePolicy {
             max_idle_seconds: 500,
             ..RigSpec::default().policy
@@ -369,7 +508,7 @@ async fn a_late_probe_cannot_revive_a_new_generation() {
             "/v1/messages",
             Respond::Gated(Box::new(probe_answer(2_000, 0))),
         );
-        r.advance(270_000);
+        r.advance_attended(270_000);
         r.engine.step().await;
         wait_for(std::time::Duration::from_secs(5), || {
             (r.up.requests().len() == 2).then_some(())
@@ -575,51 +714,51 @@ async fn an_oversized_or_stalled_probe_body_releases_the_worker_and_shutdown_fin
 
 #[tokio::test]
 async fn concurrency_is_bounded_by_max_workers_alone() {
-    let mut r = rig(RigSpec {
-        limits: KeepaliveLimits {
-            max_workers: 1,
-            lease_seconds: 3_600,
-            ..KeepaliveLimits::default()
-        },
-        ..RigSpec::default()
-    })
-    .await;
-    r.event(Event {
-        event: "agent_start".into(),
-        agent_id: Some("worker".into()),
-        ..Default::default()
-    })
-    .unwrap();
-    r.observe("main").await;
-    r.observe("worker").await;
-    r.up.push_credential_rule(
-        A,
-        "/v1/messages",
-        Respond::Gated(Box::new(probe_answer(2_000, 0))),
-    );
+    let mut r = rig(RigSpec::default()).await;
+    // One due agent more than there are workers.
+    let mut agents = vec![MAIN_AGENT.to_string()];
+    for n in 1..=MAX_WORKERS {
+        let agent = format!("worker-{n}");
+        r.event(Event {
+            event: "agent_start".into(),
+            agent_id: Some(agent.clone()),
+            ..Default::default()
+        })
+        .unwrap();
+        agents.push(agent);
+    }
+    for agent in &agents {
+        r.observe(agent).await;
+    }
+    for _ in 0..MAX_WORKERS {
+        r.up.push_credential_rule(
+            A,
+            "/v1/messages",
+            Respond::Gated(Box::new(probe_answer(2_000, 0))),
+        );
+    }
+    let probes = |r: &Rig| {
+        agents
+            .iter()
+            .map(|agent| r.status(agent).probes)
+            .sum::<u64>()
+    };
     r.advance(270_000);
     r.engine.step().await;
     wait_for(std::time::Duration::from_secs(5), || {
-        (r.up.requests().len() == 3).then_some(())
+        (r.up.requests().len() == agents.len() + MAX_WORKERS).then_some(())
     })
     .await;
     r.engine.step().await;
     assert_eq!(
-        (
-            r.engine.stats().running_probes,
-            r.status("main").probes + r.status("worker").probes
-        ),
-        (1, 1),
-        "one worker, one probe in flight, the other waits"
+        (r.engine.stats().running_probes, probes(&r)),
+        (MAX_WORKERS, MAX_WORKERS as u64),
+        "every worker holds a probe in flight, and the fifth due agent waits"
     );
     r.up.release();
     r.engine.wait_idle().await;
     r.step().await;
-    assert_eq!(
-        r.status("main").probes + r.status("worker").probes,
-        2,
-        "the capacity recovered"
-    );
+    assert_eq!(probes(&r), agents.len() as u64, "the capacity recovered");
 }
 
 #[tokio::test]
@@ -750,9 +889,9 @@ async fn probe_outcomes_are_classified() {
             "{status:?}"
         );
     }
-    // An upstream 401 never reaches the engine as a 401: the relay marks the account and fails over, and with
-    // no account left answers the untimed exhaustion 503, which pauses under its own reason whatever marked
-    // the account.
+    // An upstream 401 never reaches the engine as a 401: the relay marks the account, fails over, and with no
+    // account left answers the untimed exhaustion 503 naming the mark, which pauses under the authentication
+    // reason.
     let mut r = rig(RigSpec {
         accounts: vec![api_key("a", A, 0)],
         ..RigSpec::default()
@@ -771,7 +910,7 @@ async fn probe_outcomes_are_classified() {
     r.step().await;
     assert_eq!(
         (r.status("main").reason, r.status("main").next_probe_at),
-        (Reason::ProbePoolExhausted, None)
+        (Reason::ProbeAuthenticationError, None)
     );
     // A 429 on every account is the relay's exhaustion 429: the same pause a single 429 after failover gets.
     let mut r = rig(RigSpec::default()).await;
@@ -1113,10 +1252,6 @@ const FAST_PRICED: &str = "claude-opus-5";
 fn plan_funded_spec() -> RigSpec {
     RigSpec {
         accounts: vec![oauth("o", OAUTH_SECRET, 0)],
-        limits: KeepaliveLimits {
-            oauth_prewarm_verified: true,
-            ..KeepaliveLimits::default()
-        },
         pool: PoolSpec {
             overage_policy: phoebis_store::OveragePolicy::Allow,
             ..PoolSpec::default()

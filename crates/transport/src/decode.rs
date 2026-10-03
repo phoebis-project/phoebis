@@ -5,6 +5,7 @@ use std::io::{self, Write};
 use crate::response::ResponseHead;
 use crate::TransportError;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Encoding {
     Identity,
     Gzip,
@@ -27,6 +28,23 @@ pub fn encoding(head: &ResponseHead) -> Result<Encoding, TransportError> {
         "zstd" => Ok(Encoding::Zstd),
         _ => Err(TransportError::Response(format!(
             "unsupported content-encoding: {raw}"
+        ))),
+    }
+}
+
+/// The request side of `encoding`: the caller's `content-encoding` token, with the same refusal of an unknown
+/// one; `None` and `identity` read `Identity`. Only `gzip` is accepted beside it: the relay inflates a request
+/// body through the gzip decoder alone, so `deflate`, `br` and `zstd`, which a response may carry, are refused
+/// here as an unknown token is.
+pub fn request_encoding(value: Option<&str>) -> Result<Encoding, TransportError> {
+    let Some(raw) = value else {
+        return Ok(Encoding::Identity);
+    };
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "identity" => Ok(Encoding::Identity),
+        "gzip" => Ok(Encoding::Gzip),
+        _ => Err(TransportError::Response(format!(
+            "unsupported request content-encoding: {raw}"
         ))),
     }
 }
@@ -286,6 +304,31 @@ mod tests {
     #[test]
     fn unknown_token_is_rejected() {
         assert!(encoding(&head(vec![("Content-Encoding", "gzip, br")])).is_err());
+    }
+
+    #[test]
+    fn a_request_with_no_coding_or_identity_reads_identity() {
+        assert_eq!(request_encoding(None).unwrap(), Encoding::Identity);
+        assert_eq!(
+            request_encoding(Some("Identity")).unwrap(),
+            Encoding::Identity
+        );
+    }
+
+    #[test]
+    fn a_gzip_request_coding_reads_gzip_in_any_case() {
+        assert_eq!(request_encoding(Some("gzip")).unwrap(), Encoding::Gzip);
+        assert_eq!(request_encoding(Some(" GZIP ")).unwrap(), Encoding::Gzip);
+    }
+
+    /// The response side decodes these, but a request body is inflated through the gzip decoder alone.
+    #[test]
+    fn every_request_coding_but_gzip_and_identity_is_refused() {
+        for token in [
+            "br", "compress", "deflate", "gzip, br", "x-gzip", "zstd", "",
+        ] {
+            assert!(request_encoding(Some(token)).is_err(), "{token:?}");
+        }
     }
 
     /// A few KB of repetitive-but-not-trivial text, long enough to span many 7-byte feed pieces.

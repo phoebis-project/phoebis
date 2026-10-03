@@ -1,20 +1,8 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { api, MOCK, type Role, type SessionInfo } from '@/api';
+import { api, type SessionInfo } from '@/api';
 import { ApiError, SessionNotKept, setHooks } from '@/api/http';
 import { Button, Input } from '@/components/ui/primitives';
 import { Mark } from '@/components/ui/Mark';
-
-/** Only the mock build previews a role, and the smoke runner remounts between checks, so the choice outlives a mount. */
-const PREVIEW_KEY = 'phoebis.role';
-const storedPreview = (): Role | null => {
-  if (!MOCK) return null;
-  try {
-    const v = localStorage.getItem(PREVIEW_KEY);
-    return v === 'admin' || v === 'viewer' ? v : null;
-  } catch {
-    return null;
-  }
-};
 
 export interface SessionState {
   /** Ends the dwell of the toast with this id, so the next one in the queue shows. */
@@ -22,13 +10,9 @@ export interface SessionState {
   logout: () => Promise<void>;
   /** Puts a page's confirmation or refusal on the shell's queue. */
   notify: (message: string) => void;
-  /** Mock builds may preview the viewer role; the served app reads the role from the session alone. */
-  previewRole: Role | null;
   /** The toasts waiting, the first one on screen: the transport's failures and refusals and the pages' messages. */
   queue: ToastItem[];
-  role: Role;
   sessionId: string;
-  setPreviewRole: (role: Role | null) => void;
 }
 
 const Ctx = createContext<SessionState | null>(null);
@@ -69,7 +53,6 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [notice, setNotice] = useState<string | null>(null);
   const [queue, setQueue] = useState<ToastItem[]>([]);
   const lastId = useRef(0);
-  const [previewRole, setStoredPreviewRole] = useState<Role | null>(storedPreview);
 
   const push = useCallback((message: string, dwellMs: number, path: string | null) => {
     lastId.current += 1;
@@ -93,8 +76,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     setHooks({
       // The route is named because a page draws several lists, and the operator has to know which one is gone.
       onFailure: ({ message, path, status }) => push(`${path} failed: ${message ?? (status === 0 ? 'the router did not answer' : `the router answered ${status}`)}`, FAILURE_MS, path),
-      // The server's own wording: the gate refuses a viewer's write and a request from an unconfigured
-      // origin with the same status, and only it knows which one this was.
+      // The server's own wording: the origin check is what answers this status, and its message names the cause.
       onForbidden: (message) => push(message, FAILURE_MS, null),
       onRecovered: dismiss,
       onUnauthorized: () => {
@@ -114,21 +96,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const setPreviewRole = useCallback((role: Role | null) => {
-    setStoredPreviewRole(role);
-    if (!MOCK) return;
-    try {
-      if (role) localStorage.setItem(PREVIEW_KEY, role);
-      else localStorage.removeItem(PREVIEW_KEY);
-    } catch {
-      // Private mode or blocked storage: the preview still applies to this mount.
-    }
-  }, []);
-
   const session = sessionOf(probe);
   const value = useMemo<SessionState | null>(
-    () => (session ? { done, logout, notify, previewRole, queue, role: (MOCK && previewRole) || session.role, sessionId: session.sessionId, setPreviewRole } : null),
-    [done, logout, notify, previewRole, queue, session, setPreviewRole],
+    () => (session ? { done, logout, notify, queue, sessionId: session.sessionId } : null),
+    [done, logout, notify, queue, session],
   );
 
   if (probe === 'pending')
@@ -209,7 +180,7 @@ export function LoginScreen({ notice, onLoggedIn, onRetry, outage }: { notice: s
       >
         <Brand />
         <label className="field">
-          <span className="field__label">Admin or viewer secret</span>
+          <span className="field__label">Admin secret</span>
           <Input type="password" autoComplete="current-password" autoFocus value={secret} onChange={(e) => setSecret(e.target.value)} />
         </label>
         {notice && (

@@ -734,6 +734,25 @@ fn a_rekey_read_back_after_a_reopen_carries_the_moved_rows_and_the_spelling_row_
     assert_eq!(load.resolutions, vec![rekey.resolution]);
 }
 
+#[test]
+fn write_routing_rolls_back_the_whole_batch_on_a_refused_write() {
+    let store = store_with(&["a"]);
+    let refused = store.write_routing(|tx| {
+        tx.upsert_pin(&pin("k", "s", "claude-sonnet-5", "a"))?;
+        tx.upsert_cooldown(&cooldown("ghost", "account", 10_000))
+    });
+    assert!(
+        refused.is_err(),
+        "`cooldowns.account_id REFERENCES accounts(id)` refuses the unknown account's row"
+    );
+    let load = store.load_routing().unwrap();
+    assert!(
+        load.pins.is_empty(),
+        "the pin written ahead of the refusal rolled back with it"
+    );
+    assert!(load.cooldowns.is_empty());
+}
+
 fn affinity_row(model: &str, hash: &str, account_id: &str) -> AffinityRow {
     AffinityRow {
         model: model.into(),

@@ -10,8 +10,8 @@ use common::*;
 use fake_upstream::{FakeUpstream, Rule};
 use phoebis_bus::SubscriberStats;
 use phoebis_ledger::{
-    AttemptRecord, LedgerConfig, Metrics, PriceTable, QuotaSampleRecord, RequestRecord,
-    RoutingGauges,
+    AttemptRecord, AttentionGaugeSource, AttentionGauges, LedgerConfig, Metrics, PriceTable,
+    Pricing, QuotaSampleRecord, RequestRecord, RoutingGauges,
 };
 use tower::ServiceExt;
 
@@ -220,6 +220,70 @@ fn gauges_come_from_the_routing_state_and_drops_are_counted_per_table() {
     );
 }
 
+#[test]
+fn the_routers_drop_counters_render_one_series_per_kind() {
+    let gauges = RoutingGauges {
+        dropped_reports: vec![("cooldown", 2), ("usage", 0)],
+        ..RoutingGauges::default()
+    };
+    let text = Metrics::new().render(&gauges, &[], 0);
+    assert!(
+        text.contains("# TYPE phoebis_router_dropped_reports_total counter"),
+        "{text}"
+    );
+    for line in [
+        r#"phoebis_router_dropped_reports_total{kind="cooldown"} 2"#,
+        r#"phoebis_router_dropped_reports_total{kind="usage"} 0"#,
+    ] {
+        assert!(text.contains(line), "missing {line} in:\n{text}");
+    }
+    assert_eq!(
+        text.matches("phoebis_router_dropped_reports_total{")
+            .count(),
+        2,
+        "one series per kind the table carries: {text}"
+    );
+}
+
+#[tokio::test]
+async fn a_scrape_reads_the_routers_drop_counters_at_gather() {
+    use phoebis_store::{StorageKey, Store};
+    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+    let router = phoebis_routing::spawn(
+        store,
+        Arc::new(|| 1_000),
+        phoebis_routing::RouterConfig::default(),
+    )
+    .unwrap();
+    router.shutdown().await.unwrap();
+    router.report(phoebis_routing::Report::MemberSpend(Vec::new()));
+    let gauges = phoebis_ledger::gather(
+        &router,
+        &PriceTable::shipped(),
+        1_000,
+        60_000,
+        None,
+        AttentionGauges::default(),
+    )
+    .await;
+    assert_eq!(
+        gauges
+            .dropped_reports
+            .iter()
+            .map(|(kind, _)| *kind)
+            .collect::<Vec<_>>(),
+        phoebis_routing::Report::KINDS,
+        "every kind of the router's table is copied"
+    );
+    let text = Metrics::new().render(&gauges, &[], 0);
+    for line in [
+        r#"phoebis_router_dropped_reports_total{kind="member_spend"} 1"#,
+        r#"phoebis_router_dropped_reports_total{kind="usage"} 0"#,
+    ] {
+        assert!(text.contains(line), "missing {line} in:\n{text}");
+    }
+}
+
 #[tokio::test]
 async fn cooldowns_on_two_unpriced_models_render_as_one_other_sample_with_the_longer_wait() {
     use phoebis_store::{AccountKind, AccountRow, AccountState, CooldownRow, StorageKey, Store};
@@ -257,7 +321,15 @@ async fn cooldowns_on_two_unpriced_models_render_as_one_other_sample_with_the_lo
         phoebis_routing::RouterConfig::default(),
     )
     .unwrap();
-    let gauges = phoebis_ledger::gather(&router, &PriceTable::shipped(), 1_000, 60_000, None).await;
+    let gauges = phoebis_ledger::gather(
+        &router,
+        &PriceTable::shipped(),
+        1_000,
+        60_000,
+        None,
+        AttentionGauges::default(),
+    )
+    .await;
     assert_eq!(
         gauges.cooldowns,
         vec![("a".into(), "model:other".into(), 120)],
@@ -314,7 +386,15 @@ async fn an_overage_observations_reset_decides_the_gauge_rather_than_the_raw_fla
         evidence: evidence(Some(9_000)),
         incarnation: 1,
     });
-    let gauges = phoebis_ledger::gather(&router, &PriceTable::shipped(), 2_000, 60_000, None).await;
+    let gauges = phoebis_ledger::gather(
+        &router,
+        &PriceTable::shipped(),
+        2_000,
+        60_000,
+        None,
+        AttentionGauges::default(),
+    )
+    .await;
     let text = Metrics::new().render(&gauges, &[], 0);
     assert!(
         text.contains(r#"phoebis_account_overage_in_use{account="past"} 0"#),
@@ -450,21 +530,83 @@ fn a_deleted_accounts_utilization_series_leaves_the_gauge() {
 }
 
 #[test]
-fn alert_deliveries_are_counted_per_rule_and_outcome() {
-    let metrics = Metrics::new();
-    metrics.observe_alert_delivery("rule_reauth", "delivered");
-    metrics.observe_alert_delivery("rule_reauth", "failed");
-    metrics.observe_alert_delivery("rule_reauth", "failed");
-    let text = metrics.render(&RoutingGauges::default(), &[], 0);
-    assert!(text.contains("# TYPE phoebis_alert_deliveries_total counter"));
+fn the_attention_gauge_reads_one_series_per_condition_with_its_labels_escaped() {
+    let gauges = RoutingGauges {
+        attention: AttentionGauges {
+            conditions: vec![
+                ("pool_exhausted", "main".into(), true),
+                ("client_drift", "2.1.274".into(), false),
+                ("pool_exhausted", "odd\"pool".into(), false),
+            ],
+        },
+        ..RoutingGauges::default()
+    };
+    let text = Metrics::new().render(&gauges, &[], 0);
+    for line in [
+        "# TYPE phoebis_attention gauge",
+        r#"phoebis_attention{kind="pool_exhausted",subject="main"} 1"#,
+        r#"phoebis_attention{kind="client_drift",subject="2.1.274"} 0"#,
+        r#"phoebis_attention{kind="pool_exhausted",subject="odd\"pool"} 0"#,
+    ] {
+        assert!(text.contains(line), "missing {line} in:\n{text}");
+    }
+}
+
+#[tokio::test]
+async fn an_attention_read_that_fails_answers_the_scrape_500_with_no_family() {
+    use axum::body::Body;
+    use axum::http::Request;
+    use http_body_util::BodyExt;
+    use phoebis_store::{StorageKey, Store, StoreError};
+    let router = phoebis_routing::spawn(
+        Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap()),
+        Arc::new(|| 1_000),
+        phoebis_routing::RouterConfig::default(),
+    )
+    .unwrap();
+    let scrape = |attention: AttentionGaugeSource| {
+        let app = phoebis_ledger::metrics_router(
+            Arc::new(Metrics::new()),
+            router.clone(),
+            Arc::new(Pricing::new(PriceTable::shipped())),
+            phoebis_bus::Bus::new(),
+            Arc::new(|| 1_000),
+            Duration::from_secs(60),
+            None,
+            Some(attention),
+        );
+        async move {
+            let resp = app
+                .oneshot(Request::get("/metrics").body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            let status = resp.status();
+            let body = resp.into_body().collect().await.unwrap().to_bytes();
+            (status, String::from_utf8(body.to_vec()).unwrap())
+        }
+    };
+    let (status, text) = scrape(Arc::new(|| {
+        Ok(AttentionGauges {
+            conditions: vec![("poll_backoff", "a".into(), true)],
+        })
+    }))
+    .await;
+    assert_eq!(status, 200);
     assert!(
-        text.contains(
-            r#"phoebis_alert_deliveries_total{outcome="delivered",rule="rule_reauth"} 1"#
-        ),
+        text.contains(r#"phoebis_attention{kind="poll_backoff",subject="a"} 1"#),
         "{text}"
     );
+    let (status, text) = scrape(Arc::new(|| {
+        Err(StoreError::Io(std::io::Error::other("disk gone")))
+    }))
+    .await;
+    assert_eq!(
+        status, 500,
+        "a scrape that cannot read the conditions fails rather than reading 0 for a held one"
+    );
+    assert_eq!(text, "attention read failed");
     assert!(
-        text.contains(r#"phoebis_alert_deliveries_total{outcome="failed",rule="rule_reauth"} 2"#),
-        "{text}"
+        !text.contains("disk gone"),
+        "the listener asks for no credential, so the store's words stay in the log"
     );
 }

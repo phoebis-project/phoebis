@@ -499,21 +499,17 @@ impl InFlightShared {
 }
 
 /// Requests in flight per key and per account, counted from the relay's synchronous calls; shared by the
-/// handle and the task. A key permit is one per request, reserved before selection and held across every
-/// attempt; an account ticket is one per wire attempt, a token count's excepted (it is bound to no cap), a leg's
-/// first taken by the selection that chose the account and each later one at its dial. Each is released exactly
-/// once, by its guard's drop, when the response it counts ends.
+/// handle and the task. A key permit is one per request, taken before selection and held across every attempt;
+/// it counts the key's requests and bounds nothing. An account ticket is one per wire attempt, a token count's
+/// excepted (it is bound to no cap), a leg's first taken by the selection that chose the account and each later
+/// one at its dial. Each is released exactly once, by its guard's drop, when the response it counts ends.
 #[derive(Clone, Default)]
 pub struct InFlight(Arc<InFlightShared>);
 
 impl InFlight {
-    /// Check and increment under the one lock: the permit, or `None` when `cap` is reached (`None` is no cap).
-    pub fn try_acquire_key(&self, key_id: &str, cap: Option<u32>, now: i64) -> Option<KeyPermit> {
+    /// Counts one more request on the key; a key has no cap, so the permit is never refused.
+    pub fn try_acquire_key(&self, key_id: &str, now: i64) -> KeyPermit {
         let mut table = self.0.table();
-        let held = table.keys.get(key_id).map(HashMap::len).unwrap_or(0) as u32;
-        if cap.is_some_and(|cap| held >= cap) {
-            return None;
-        }
         let id = table.next_id;
         table.next_id += 1;
         table
@@ -521,11 +517,11 @@ impl InFlight {
             .entry(key_id.to_string())
             .or_default()
             .insert(id, now);
-        Some(KeyPermit {
+        KeyPermit {
             shared: self.0.clone(),
             key_id: key_id.to_string(),
             id,
-        })
+        }
     }
 
     pub fn dispatched(&self, account_id: &str, now: i64) -> AccountTicket {

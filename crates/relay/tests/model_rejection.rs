@@ -7,7 +7,6 @@ use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule};
 use http_body_util::BodyExt;
 use phoebis_bus::{Bus, Event};
-use phoebis_relay::Limits;
 use tower::ServiceExt;
 
 const A: &str = "sk-ant-oat01-AAAA";
@@ -182,23 +181,14 @@ async fn a_404_naming_no_model_or_another_model_a_400_and_a_422_reach_the_client
 }
 
 #[tokio::test]
-async fn a_rejection_on_the_last_attempt_answers_404_model_rejected() {
+async fn a_rejection_with_no_account_left_answers_404_model_rejected() {
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
         respond: json_200(),
     }])
     .await;
     up.add_credential_rule(A, "/v1/messages", json_404_model("claude-sonnet-4-5"));
-    let h = harness_with_limits(
-        &up,
-        &[oauth("a", A, 0)],
-        PoolSpec::default(),
-        Limits {
-            max_attempts: 1,
-            ..default_limits()
-        },
-    )
-    .await;
+    let h = harness(&up, &[oauth("a", A, 0)], PoolSpec::default()).await;
     let resp = h
         .app
         .clone()
@@ -225,8 +215,8 @@ async fn a_rejection_on_the_last_attempt_answers_404_model_rejected() {
     assert!(!h.router.cooldowns().await.unwrap().is_empty());
     up.shutdown().await;
 
-    // Two accounts, both rejecting: the budget spends itself failing over between them, and every member's
-    // cooldown row still lands.
+    // Two accounts, both rejecting: the request fails over between them and every member's cooldown row
+    // still lands.
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
         respond: json_200(),

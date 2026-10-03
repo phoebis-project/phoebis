@@ -21,7 +21,7 @@ hyper = { workspace = true }
 hyper-util = { workspace = true }
 jiff = { workspace = true }
 phoebis-admin = { path = "../admin" }
-phoebis-alerts = { path = "../alerts" }
+phoebis-attention = { path = "../attention" }
 phoebis-bus = { path = "../bus" }
 phoebis-cch = { path = "../cch" }
 phoebis-keepalive = { path = "../keepalive" }
@@ -43,6 +43,7 @@ tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
 fake-upstream = { path = "../../tests/fake_upstream" }
+phoebis-store = { path = "../store", features = ["debug-hooks"] }
 reqwest = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }

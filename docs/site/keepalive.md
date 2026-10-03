@@ -61,11 +61,10 @@ session lifecycle to two routes on the proxy listener, `GET /v0/resource/plugins
 session is scoped to the key that reports it, and to the generation that key was created under: an id deleted
 and created again reads and drives none of the previous holder's sessions.
 
-The companion holds a lease over the session, `keepalive.lease_seconds` long (90 seconds by default). Once the
-lease lapses, the session keeps being probed under the pool's idle limits until they run out. A `session_end`
-event, a replacement registration, the deletion of the key that registered it, the session's own expiry, or an
-operator's release discards its recipes at once; a deleted key's sessions end within a second of the deletion
-rather than at their expiry.
+The companion holds a lease over the session, 90 seconds long. Once the lease lapses, the session keeps being probed
+under the pool's idle limits until they run out. A `session_end` event, a replacement registration, the deletion of the
+key that registered it, the session's own expiry, or an operator's release discards its recipes at once; a deleted key's
+sessions end within a second of the deletion rather than at their expiry.
 
 The Sessions view names the companion's state two ways for a session it is watching: reporting, meaning "a
 cache-keepalive companion is registered for this session and its agents are reporting their lifecycle," and
@@ -74,18 +73,16 @@ under the pool's idle limits, counted from the last real request, until the comp
 limits run out. A session the router saw but no companion ever reported for shows none: the router still pins it
 and still sees its requests.
 
-The bootstrap file's `keepalive` block holds the process-wide limits alone (the lease, the record and byte
-bounds, the worker cap) and is read once at start; changing it takes a restart. See
+The bootstrap file's `keepalive` block holds the process-wide record and byte bounds alone and is read once at start;
+changing it takes a restart. The lease and the four probe workers are fixed. See
 [the bootstrap file](installation.md#the-bootstrap-file).
 
 ## Turning it on
 
-Enabling `keepalive.enabled` on a pool needs `affinity_ttl_seconds` of at least 300 seconds, refused otherwise
-with "keepalive.enabled requires affinity_ttl_seconds of at least 300: a probe follows the session pin, and a pin
-shorter than the shortest cache TTL cannot keep the session on the account it warmed." Probes on `oauth` accounts
-stay off until `keepalive.oauth_prewarm_verified` is set in the bootstrap file, the operator's statement that the
-expiry-crossing keepalive experiment (see [Operations](operations.md)) passed for the combinations in use. A key
-with `keepalive_opt_out` is never retained.
+Enabling `keepalive.enabled` on a pool needs `affinity_ttl_seconds` of at least 300 seconds, refused otherwise with
+"keepalive.enabled requires affinity_ttl_seconds of at least 300: a probe follows the session pin, and a pin shorter
+than the shortest cache TTL cannot keep the session on the account it warmed." A probe follows the session's pin to a
+subscription account as to an Anthropic-key one. A key with `keepalive_opt_out` is never retained.
 
 In the console: Pools, Edit, the Keepalive group under Caching for "Keep prompt caches warm" and the daily probe cost
 cap, and the Probe tuning group beside it.
@@ -240,7 +237,6 @@ probe that made its net negative, not a contradiction.
 | `cooled` | cooled down | The pinned account is under a cooldown; the probe waits for it to end. |
 | `idle_limit` | idle limit | The pool's idle time or idle probe budget ran out since the last real request. |
 | `net_negative` | net negative | Probes have cost more than they saved; held until a request lands warm. |
-| `oauth_unverified` | subscription probes off | Off until the account's expiry-crossing experiment passes. |
 | `overage` | overage | The account is on extra usage and the pool policy skips probes there. |
 | `paused` | paused | The account is paused or its subscription has ended, the pool is disabled, or the key opted out. |
 | `pool_exhausted` | pool exhausted | Every account of the pool was exhausted or cooled when the probe was selected. |
@@ -302,14 +298,15 @@ analytics" and "View in observe"; the analytics view opens on the requests of th
 view reads its sessions again every 15 seconds, so a session that keeps sending requests stays on it, and its tiles once
 a minute.
 
-A session whose first request branched from another conversation carries a `fork at 3` badge beside its id, 3 being
-the depth where the two part; following the badge scrolls to the row of the session it branched from and marks that row,
-and where that session is not listed the badge names it instead, as `fork of 4ef130f1-90e0…`.
+A session whose first request
+branched from another conversation carries a `fork at 3` badge beside its id, 3 being the depth where the two part;
+following the badge scrolls to the row of the session it branched from and marks that row, and where that session is
+not listed the badge names it instead, as `fork of 4ef130f1-90e0…`.
 
-![The Analytics view; the Cache warming section draws probes by outcome, savings, wasted probes, and kept-warm
-requests](assets/analytics-light.png#only-light)
-![The Analytics view; the Cache warming section draws probes by outcome, savings, wasted probes, and kept-warm
-requests](assets/analytics-dark.png#only-dark)
+![The Analytics view's Cache warming tab: probes by outcome, savings, wasted probes, and kept-warm
+requests](assets/analytics-cache-warming-light.png#only-light)
+![The Analytics view's Cache warming tab: probes by outcome, savings, wasted probes, and kept-warm
+requests](assets/analytics-cache-warming-dark.png#only-dark)
 
 The Analytics view's Cache warming section draws probes by outcome, savings (the gross saved and the probe cost
 per bucket, with their difference as the line), wasted probes by reason, kept-warm requests and tokens, and cache

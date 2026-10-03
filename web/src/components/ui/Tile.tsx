@@ -6,7 +6,7 @@ import { Skeleton } from './primitives';
  * draws a dash with its message in the tile's title. A text note draws in the note's type; any other node draws as it
  * is, so a tile can carry markup of its own, such as a bar or a list, in its own type.
  */
-export function Tile({ error, label, note, tone, value }: { error?: string | null; label: string; note?: ReactNode | null; tone?: 'critical' | 'warning'; value: string | null }) {
+export function Tile({ error, label, note, tone, value }: { error?: string | null; label: string; note?: ReactNode | null; tone?: 'critical' | 'warning'; value: ReactNode }) {
   return (
     <div className="stat stat--compact" title={error ?? undefined}>
       <span className="stat__label">{label}</span>

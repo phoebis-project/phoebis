@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use axum::body::Body;
 use axum::extract::ws::WebSocketUpgrade;
-use axum::extract::{Query, State};
+use axum::extract::State;
 use axum::http::Request;
 use axum::routing::get;
 use axum::Router;
@@ -21,12 +21,12 @@ use phoebis_profile::{
     claude_code_2_1_269_linux_x64,
     fixtures::{body, inference_head, BodyFixture, FixtureKind},
 };
-use phoebis_relay::{router, CatalogService, Limits, Relay};
+use phoebis_relay::{router, CatalogService, Limits, Relay, UpstreamGzip};
 use phoebis_routing::{spawn as spawn_router, RouterConfig, RouterHandle};
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, Affinity, AffinitySource, ApiKeyRow,
-    Failover, Identity, MemberWrite, NewBundle, OveragePolicy, PoolRow, QuotaHeaders, RulesMode,
-    Secret, Shedding, StorageKey, Store, Strategy,
+    AccountKind, AccountRow, AccountState, Affinity, ApiKeyRow, Failover, Identity,
+    MemberWrite, NewBundle, OveragePolicy, PoolRow, RulesMode, Secret, Shedding, StorageKey, Store,
+    Strategy,
 };
 use phoebis_transport::request::parse_head;
 // The polls live with the fake so every integration suite has them; only some of them are used here.
@@ -50,11 +50,6 @@ pub struct Harness {
     pub router: RouterHandle,
     pub store: Arc<Store>,
     pub ws_addr: std::net::SocketAddr,
-}
-
-#[derive(serde::Deserialize)]
-struct Preview {
-    preview: Option<bool>,
 }
 
 /// One OAuth account `a` serving `claude-sonnet-4-5` in pool `main` with `capture_hours`; the key is `KEY`.
@@ -113,10 +108,9 @@ pub async fn harness(up: &FakeUpstream, capture_hours: u32) -> Harness {
                 shedding: Shedding::default(),
                 failover: Failover::default(),
                 cache_ttl_json: "{}".into(),
-                cache_diagnostics: None,
+                cache_diagnostics: false,
                 auto_mode_server: true,
                 affinity: Affinity::default(),
-                quota_headers: QuotaHeaders::Pass,
                 created_at: NOW,
                 updated_at: NOW,
             },
@@ -156,8 +150,6 @@ pub async fn harness(up: &FakeUpstream, capture_hours: u32) -> Harness {
                 rotated_at: None,
                 last_used_at: None,
                 retired_secret_last_used_at: None,
-                in_flight_cap: None,
-                affinity_source: AffinitySource::Auto,
                 auto_mode_server: None,
             },
             "test",
@@ -204,7 +196,6 @@ pub async fn harness(up: &FakeUpstream, capture_hours: u32) -> Harness {
         router_handle.clone(),
         clock.clone(),
         Duration::from_secs(10),
-        Duration::from_secs(60),
         Duration::from_secs(5),
     ));
     let bus = Bus::new();
@@ -223,14 +214,17 @@ pub async fn harness(up: &FakeUpstream, capture_hours: u32) -> Harness {
         },
     );
     let limits = Limits {
+        body_budget_bytes: 512 << 20,
         body_capture_max_hours: 72,
+        body_read_timeout: Duration::from_secs(60),
         cooldown_fallback: Duration::from_secs(60),
         head_timeout: Duration::from_secs(10),
         hold_timeout: Duration::from_secs(30),
         idle_timeout: Duration::from_secs(600),
-        max_attempts: 3,
+        key_body_reads: 128,
         max_request_bytes: 32 << 20,
         model_rejection: Duration::from_secs(3_600),
+        upstream_gzip: UpstreamGzip::Auto,
     };
     let relay = Arc::new(
         Relay::new(
@@ -251,21 +245,16 @@ pub async fn harness(up: &FakeUpstream, capture_hours: u32) -> Harness {
     let ws_app = Router::new()
         .route(
             "/live",
-            get(
-                move |State(feed): State<LiveFeed>,
-                      Query(q): Query<Preview>,
-                      ws: WebSocketUpgrade| {
-                    let alive = route_alive.clone();
-                    async move {
-                        let slot = feed.slot().expect("room");
-                        let check: SessionCheck = Box::new(move || alive.load(Ordering::SeqCst));
-                        ws.on_upgrade(move |socket| async move {
-                            feed.attach(socket, q.preview.unwrap_or(true), check, slot)
-                                .await
-                        })
-                    }
-                },
-            ),
+            get(move |State(feed): State<LiveFeed>, ws: WebSocketUpgrade| {
+                let alive = route_alive.clone();
+                async move {
+                    let slot = feed.slot().expect("room");
+                    let check: SessionCheck = Box::new(move || alive.load(Ordering::SeqCst));
+                    ws.on_upgrade(
+                        move |socket| async move { feed.attach(socket, check, slot).await },
+                    )
+                }
+            }),
         )
         .with_state(ws_feed);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -309,11 +298,10 @@ pub fn request_for(key: &str, model: &str, session: &str) -> Request<Body> {
 pub type Client =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
-pub async fn connect(h: &Harness, preview: bool) -> Client {
-    let (client, _) =
-        tokio_tungstenite::connect_async(format!("ws://{}/live?preview={preview}", h.ws_addr))
-            .await
-            .unwrap();
+pub async fn connect(h: &Harness) -> Client {
+    let (client, _) = tokio_tungstenite::connect_async(format!("ws://{}/live", h.ws_addr))
+        .await
+        .unwrap();
     client
 }
 

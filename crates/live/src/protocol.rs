@@ -93,10 +93,6 @@ impl Delta {
             | Delta::Tick { cursor, .. } => *cursor,
         }
     }
-
-    pub fn is_preview(&self) -> bool {
-        matches!(self, Delta::Preview { .. })
-    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]

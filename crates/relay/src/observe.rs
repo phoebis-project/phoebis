@@ -2,16 +2,18 @@
 //! the usage block and the answer's own facts, and the shape of a content delta. Nothing here changes what
 //! is relayed.
 
-use axum::http::HeaderMap;
+use axum::http::{header, HeaderMap};
 use phoebis_bus::{header_published, ResponseFacts, Usage};
 use serde_json::Value;
 
 /// The caller's headers as the bus carries them: everything the denylist does not name, which is what a
-/// keepalive recipe replays.
-pub(crate) fn published_headers(headers: &HeaderMap) -> Vec<(String, String)> {
+/// keepalive recipe replays. A request the relay inflated is published as the plain body it holds, so a recipe
+/// replays plain: with `inflated` its `content-encoding` line is left out.
+pub(crate) fn published_headers(headers: &HeaderMap, inflated: bool) -> Vec<(String, String)> {
     headers
         .iter()
         .filter(|(name, _)| header_published(name.as_str()))
+        .filter(|(name, _)| !(inflated && *name == header::CONTENT_ENCODING))
         .filter_map(|(name, value)| {
             Some((name.as_str().to_string(), value.to_str().ok()?.to_string()))
         })

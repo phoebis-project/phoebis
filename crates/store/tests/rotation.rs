@@ -1,7 +1,6 @@
 use phoebis_store::{
-    Affinity, AffinitySource, ApiKeyRow, Failover, OveragePolicy, PoolRow,
-    QuotaHeaders, RetiredSecret, RulesMode, Shedding, StorageKey, Store, Strategy,
-    ROTATION_GRACE_MS,
+    Affinity, ApiKeyRow, Failover, OveragePolicy, PoolRow, RetiredSecret, RulesMode,
+    Shedding, StorageKey, Store, Strategy, ROTATION_GRACE_MS,
 };
 
 fn pool(id: &str) -> PoolRow {
@@ -21,10 +20,9 @@ fn pool(id: &str) -> PoolRow {
         shedding: Shedding::default(),
         failover: Failover::default(),
         cache_ttl_json: "{}".into(),
-        cache_diagnostics: None,
+        cache_diagnostics: false,
         auto_mode_server: true,
         affinity: Affinity::default(),
-        quota_headers: QuotaHeaders::Pass,
         created_at: 1,
         updated_at: 1,
     }
@@ -50,8 +48,6 @@ fn key(store: &Store, id: &str, pool_id: &str, secret: &str) -> ApiKeyRow {
         rotated_at: None,
         last_used_at: None,
         retired_secret_last_used_at: None,
-        in_flight_cap: None,
-        affinity_source: AffinitySource::Auto,
         auto_mode_server: None,
     }
 }

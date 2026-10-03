@@ -98,9 +98,9 @@
           }
         ],
         "requests": {
-          "last_24h": 4,
-          "last_7d": 4,
-          "lifetime": 4
+          "last_24h": 5,
+          "last_7d": 5,
+          "lifetime": 5
         },
         "usage": {
           "error": null,
@@ -109,6 +109,7 @@
             "backoff_since": null,
             "last_attempt_at": 1000000,
             "last_clean_at": 1000000,
+            "last_error": null,
             "last_outcome": "clean",
             "next_attempt_at": null,
             "rate_limited_in_a_row": 0

@@ -401,8 +401,9 @@ fn fill_head(
     Some((unified, wire))
 }
 
-/// The attempt outcome a request's terminal cause implies for the attempt that served it, once the head's own
-/// classification is known to have been overtaken.
+/// The attempt outcome a request's terminal cause implies for the attempt that served it, once the head's
+/// own classification is known to have been overtaken; an `incomplete` body is the attempt's failure as a failed
+/// body is.
 fn terminal_outcome(complete: &RequestComplete) -> Option<&'static str> {
     match complete.outcome {
         Outcome::Canceled => Some("canceled"),
@@ -410,6 +411,7 @@ fn terminal_outcome(complete: &RequestComplete) -> Option<&'static str> {
             Some("rate_limited")
         }
         Outcome::Failed => Some("upstream_error"),
+        Outcome::Incomplete => Some("upstream_error"),
         _ => None,
     }
 }
@@ -496,6 +498,10 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
             && complete.error_code.as_deref() == Some("account_cancelled")
         {
             last.outcome = "canceled".into();
+        }
+        // Only the committed answer has a message; an earlier attempt of the request never carries one.
+        if last.upstream_status.is_some() {
+            last.upstream_message_id = complete.message_id.clone();
         }
         // A head classified as succeeded whose body then failed: the request's terminal cause wins for this
         // attempt alone; a failover classification on an earlier attempt is left as it was.
@@ -824,6 +830,7 @@ mod tests {
             response_bytes: Some(20),
             response_chunks: None,
             held: None,
+            message_id: None,
             finished_at: 1_500,
         })
     }
@@ -851,6 +858,7 @@ mod tests {
             response_bytes,
             response_chunks,
             held: None,
+            message_id: None,
             finished_at: 1_500,
         }
     }
@@ -1066,6 +1074,41 @@ mod tests {
     }
 
     #[test]
+    fn the_completions_message_id_lands_on_the_serving_attempt_and_stays_null_on_a_failover_attempt(
+    ) {
+        let mut a = Assembler::new(clock());
+        a.observe(observed("r13", Some("k")));
+        a.observe(selected("r13", 1, "a", 1_010));
+        a.observe(head("r13", 1, 429, AttemptOutcome::RateLimited, 1_060));
+        a.observe(selected("r13", 2, "b", 1_100));
+        a.observe(head("r13", 2, 200, AttemptOutcome::Succeeded, 1_250));
+        let Event::RequestComplete(mut done) =
+            complete("r13", 2, Some("b"), Outcome::Succeeded, 200, None)
+        else {
+            panic!()
+        };
+        done.message_id = Some("msg_01abc".into());
+        let Some(Record::Request { attempts, .. }) = a.observe(Event::RequestComplete(done)).pop()
+        else {
+            panic!()
+        };
+        assert_eq!(
+            attempts
+                .iter()
+                .map(|a| (
+                    a.upstream_request_id.as_deref(),
+                    a.upstream_message_id.as_deref()
+                ))
+                .collect::<Vec<_>>(),
+            [
+                (Some("req_up_1"), None),
+                (Some("req_up_2"), Some("msg_01abc"))
+            ],
+            "the 429 carries its own request id and no message; the 200 carries both"
+        );
+    }
+
+    #[test]
     fn refusals_have_a_row_and_no_attempt_and_a_headless_attempt_is_a_transport_error() {
         let mut a = Assembler::new(clock());
         a.observe(observed("r2", None));
@@ -1221,6 +1264,49 @@ mod tests {
             attempts[0].outcome.as_str(),
             "canceled",
             "cancelled after the head"
+        );
+    }
+
+    #[test]
+    fn an_incomplete_completion_turns_the_serving_attempt_to_upstream_error_and_leaves_an_earlier_attempt(
+    ) {
+        let mut a = Assembler::new(clock());
+        a.observe(observed("r9", Some("k")));
+        a.observe(selected("r9", 1, "a", 1_010));
+        a.observe(head("r9", 1, 429, AttemptOutcome::RateLimited, 1_060));
+        a.observe(selected("r9", 2, "b", 1_100));
+        a.observe(head("r9", 2, 200, AttemptOutcome::Succeeded, 1_250));
+        let Some(Record::Request {
+            request, attempts, ..
+        }) = a
+            .observe(complete(
+                "r9",
+                2,
+                Some("b"),
+                Outcome::Incomplete,
+                200,
+                Some("stream_cut"),
+            ))
+            .pop()
+        else {
+            panic!()
+        };
+        assert_eq!(
+            (
+                request.outcome.as_str(),
+                request.status,
+                request.error_code.as_deref()
+            ),
+            ("incomplete", Some(200), Some("stream_cut"))
+        );
+        assert_eq!(
+            (
+                attempts[0].outcome.as_str(),
+                attempts[1].outcome.as_str(),
+                attempts[1].upstream_status
+            ),
+            ("rate_limited", "upstream_error", Some(200)),
+            "the body the head promised never ended, so the serving attempt failed; the failover keeps its own"
         );
     }
 
