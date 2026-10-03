@@ -375,16 +375,17 @@ the cost split, the cache write and read costs, and the Cache warming figures re
 log does not carry them; the Accounts section keeps reading the rollups for the range, since they carry no session, and
 its subtitle says so.
 
-![The Analytics view: the range and group-by controls over seven report sections](assets/analytics-light.png#only-light)
-![The Analytics view: the range and group-by controls over seven report sections](assets/analytics-dark.png#only-dark)
+![The Analytics view: range and group-by controls over seven tabs, Traffic shown](assets/analytics-light.png#only-light)
+![The Analytics view: range and group-by controls over seven tabs, Traffic shown](assets/analytics-dark.png#only-dark)
 
 ### Settings
 
-Settings covers appearance, access (the admin and viewer secrets and what each may do), pricing, sessions, retention,
-keepalive, listeners, the downstream client block, compatibility, and an about panel. Four more cards show the
-bootstrap file's quota, routing, storage, and usage blocks: the sample retention, the catalog cache window, the
-cooldown fallback and the model rejection window, the ledger, pricing, and storage paths, and the usage cache TTL and
-refresh concurrency.
+Settings opens on the downstream client configuration, the six-line environment block that points Claude Code at the
+router with a reason under each line. Its base URL is a placeholder for the URL that reaches the proxy listener, and
+the address the listener binds shows beside the block. Then come the price table, the appearance and time-format
+choices, the access secrets and what each may do, and an About card with the version, the profile, the metrics
+listener and the three storage paths. The values the configuration file sets are on the [installation
+page](installation.md) and `phoebis check-config` prints them.
 
 ## Alerts
 

@@ -551,9 +551,9 @@ which makes it as sensitive as the registry even though it holds no credential, 
 
 No script in this repository backs these files up; [Operations](operations.md) says how.
 
-![The Settings view: the effective bootstrap values, the listeners, retention, and the price table
+![The Settings view: the downstream client block, the price table, Appearance, Access and About
 ](assets/settings-light.png#only-light)
-![The Settings view: the effective bootstrap values, the listeners, retention, and the price table
+![The Settings view: the downstream client block, the price table, Appearance, Access and About
 ](assets/settings-dark.png#only-dark)
 
 ## Compiled-in limits

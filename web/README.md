@@ -93,14 +93,14 @@ the fixture that lacks one), and back it in `MockApi` from a story row that spre
   the ring filtered to the span.
 - The attempts column in the request log and in observe is a trail of badges, one per attempt, reading "account
   status" in the order the router tried them.
-- Long forms open as a sectioned dialog: a section rail beside one scrolling body, with the rail tracking the scroll
-  position. The pool and key dialogs use it; small dialogs keep the plain `Dialog`.
+- Long forms open as a sectioned dialog: a rail of groups beside one group's body, one group shown at a time. The pool
+  and key dialogs use it; small dialogs keep the plain `Dialog`.
 - A key always belongs to a pool: the key dialog preselects one and locks it when opened from a pool, and the pool
   dialog's key rows offer "Move to…" and "Revoke" rather than a plain remove.
 - Analytics percentiles are read from per-hour latency histograms (64 log-spaced buckets, `src/lib/histogram.ts`)
   merged over the selected range, so every percentile label carries a "±1 bucket" hint.
-- The analytics view carries a sticky filter bar and, under it, a sticky section bar driven by the same scroll-spy as
-  the sectioned dialog (`src/lib/scroll.ts`). The filter bar's height is measured, so the section bar docks against it
-  and a jump clears both.
+- The analytics view carries a sticky filter bar and, under it, a sticky tab strip that shows one section at a time.
+  The URL hash names the chosen section (`/analytics#cache-warming`), and an address with no hash, or one naming no
+  section, opens on Traffic. The filter bar's height is measured, so the strip docks against it.
 - The live feed behind the observe view is `subscribeLive` on the `Api` interface; the mock emits a snapshot and then
   timed deltas from `src/mock/live.ts`.

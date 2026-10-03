@@ -119,8 +119,8 @@ that period ends.
 Anthropic keys) before priority; it is the operator's answer alone, on by default, and no strategy overrides it. A pool
 with keys cannot be deleted: `409 pool still has keys`.
 
-Each strategy's rule, as the console states it on the pool card (the pool dialog's "Prioritize subscription
-accounts" toggle sets `prefer_subscription`):
+Each strategy's rule, as the pool dialog's Strategy hint states it (the pool dialog's "Prioritize subscription accounts"
+toggle sets `prefer_subscription`):
 
 **`pace`**: Within the first priority tier that has an eligible account, the one with the most weekly allowance left
 per hour until its window resets or its subscription ends; an unsampled account counts as untouched, and ties are
@@ -154,10 +154,12 @@ The TTL is priced per attempt, so a request that fails over reads its destinatio
 requests are fine: the cache is keyed on the prefix, and the TTL sets an entry's lifetime and price alone. The cost of
 each choice is on the [keepalive page](keepalive.md#the-cost-reference).
 
-![The Pools view: one card per pool with its strategy, affinity, overage policy, keepalive state, members, and keys;
-the codex pool reads exhausted because its one member is at its daily budget][pl]
-![The Pools view: one card per pool with its strategy, affinity, overage policy, keepalive state, members, and keys;
-the codex pool reads exhausted because its one member is at its daily budget][pd]
+![The Pools view: one card per pool with its status badge and key count, the features it has on, one sentence on what
+the status means, what needs attention and a table of who serves next; the codex pool reads exhausted because its one
+member is at its daily budget][pl]
+![The Pools view: one card per pool with its status badge and key count, the features it has on, one sentence on what
+the status means, what needs attention and a table of who serves next; the codex pool reads exhausted because its one
+member is at its daily budget][pd]
 
 [pl]: assets/pools-light.png#only-light
 [pd]: assets/pools-dark.png#only-dark

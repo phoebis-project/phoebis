@@ -1,11 +1,6 @@
-import type { Account, MemberEligibility, Pool, PoolStrategy, Session } from '@/api/types';
+import type { Account, MemberEligibility, Pool, PoolMember, PoolStrategy, Session } from '@/api/types';
+import { fmtPeriodEnd, fmtRelative } from './format';
 
-/** One sentence per strategy, the card's rule line and the first sentence of the dialog's Strategy hint; a later strategy adds its entry here. */
-export const STRATEGY_RULE: Record<PoolStrategy, string> = {
-  pace: 'Within the first priority tier that has an eligible account, the one with the most weekly allowance left per hour until its window resets or its subscription ends; an unsampled account counts as untouched, and ties are random.',
-  priority: 'Within the first priority tier that has an eligible account, any of them at random.',
-  round_robin: 'Within the first priority tier that has an eligible account, each in turn; a restart starts the round again.',
-};
 export const STRATEGY_LABEL: Record<PoolStrategy, string> = { pace: 'Pace', priority: 'Priority, then random', round_robin: 'Round robin' };
 /** The kind tiers, in the order selection walks them. */
 export const GROUP_LABEL = ['plan', 'overage', 'Anthropic keys'] as const;
@@ -171,4 +166,89 @@ export function selectionOrder(pool: Pool, accounts: Account[], sessions: Sessio
     if (next.length) nextFound = true;
     return { group, next, placements: ordered, priority };
   });
+}
+
+export type StatusPart = { text: string } | { accountId: string; label: string };
+export interface PoolStatusSentence {
+  /** The parts after "<Word>: "; an account part draws as a link to /accounts/<id>. */
+  parts: StatusPart[];
+  status: Pool['status'];
+  /** Active, Degraded, Disabled or Exhausted. */
+  word: string;
+}
+const STATUS_WORD: Record<Pool['status'], string> = { active: 'Active', degraded: 'Degraded', disabled: 'Disabled', exhausted: 'Exhausted' };
+
+/** "a", "a or b", "a, b or c". */
+const listOf = (names: StatusPart[]): StatusPart[] => names.flatMap((name, i) => (i === 0 ? [name] : [{ text: i === names.length - 1 ? ' or ' : ', ' }, name]));
+
+/**
+ * When a skipped member returns, as the card already writes it: once every blocker the route reports has ended. The
+ * verdict names the first blocker alone (unavailable, cooldown, budget, overage), while `budgetUntil` is set whenever
+ * a budget holds the member, and under a pool's `never` overage policy the account's overage holds it until its window
+ * resets. So a member in cooldown can sit at its budget and in overage too, and it returns at the latest of its
+ * budget's period end (daily, monthly, or plain "budget" when no spend report names the period), its latest
+ * account-scope cooldown end and its overage window's reset. A blocker without an end (unavailable, overage, a cooldown
+ * without an account-scope row, an overage window without a reset) gives no return, and so does a budget verdict
+ * without an end.
+ */
+function returnOf(pool: Pool, member: PoolMember, name: StatusPart, account: Account | undefined, now: number): { at: number; parts: StatusPart[] } | null {
+  const ends: { at: number; parts: StatusPart[] }[] = [];
+  if (member.budgetUntil) {
+    const period = member.spends.find((s) => s.periodEnd === member.budgetUntil)?.period;
+    const which = period === 'day' ? 'daily budget' : period === 'month' ? 'monthly budget' : 'budget';
+    ends.push({ at: Date.parse(member.budgetUntil), parts: [name, { text: `'s ${which} resets at ${fmtPeriodEnd(member.budgetUntil)}` }] });
+  }
+  if (member.eligible === 'cooldown') {
+    const until = (account?.cooldowns ?? [])
+      .filter((c) => c.scope === 'account')
+      .map((c) => c.until)
+      .sort((a, b) => Date.parse(a) - Date.parse(b))
+      .pop();
+    if (!until) return null;
+    ends.push({ at: Date.parse(until), parts: [name, { text: `'s cooldown ends ${fmtRelative(until, now)}` }] });
+  } else if (member.eligible !== 'budget') {
+    return null;
+  }
+  if (ends.length > 0 && pool.overagePolicy === 'never' && account?.overage?.inUse) {
+    const { reset } = account.overage;
+    if (reset === null) return null;
+    ends.push({ at: Date.parse(reset), parts: [name, { text: `'s overage window resets ${fmtRelative(reset, now)}` }] });
+  }
+  return ends.sort((a, b) => b.at - a.at)[0] ?? null;
+}
+
+/**
+ * One sentence on what the status badge means for this pool, from the verdicts and the order the card already reads.
+ * `accounts` is null until the account list is read: without it the order places no member and no return or name can
+ * be read, so the sentence says what the pool's own verdicts carry and names no account.
+ */
+export function poolStatusSentence(pool: Pool, accounts: Account[] | null, sessions: Session[], now: number = Date.now()): PoolStatusSentence {
+  const { status } = pool;
+  const word = STATUS_WORD[status];
+  const byId = new Map((accounts ?? []).map((a) => [a.id, a]));
+  const nameOf = (id: string): StatusPart => {
+    const account = byId.get(id);
+    return account ? { accountId: account.id, label: account.label } : { text: id };
+  };
+  const say = (parts: StatusPart[]): PoolStatusSentence => ({ parts, status, word });
+  if (status === 'disabled') return say([{ text: 'the pool accepts no requests; its keys and members stay.' }]);
+  if (status === 'exhausted') {
+    if (accounts === null) return say([{ text: 'no member can take a request.' }]);
+    const first = pool.members
+      .map((m) => returnOf(pool, m, nameOf(m.accountId), byId.get(m.accountId), now))
+      .filter((r): r is { at: number; parts: StatusPart[] } => r !== null)
+      .sort((a, b) => a.at - b.at)[0];
+    if (!first) return say([{ text: 'no member can take a request, and none reports when it returns.' }]);
+    return say([{ text: 'no member can take a request until ' }, ...first.parts, { text: '.' }]);
+  }
+  const members = pool.members.length;
+  const eligible = pool.members.filter((m) => m.eligible === 'eligible');
+  if (members === 0) return say([{ text: 'the pool has no members yet.' }]);
+  if (eligible.length === 0) return say([{ text: 'no member takes a fresh session right now.' }]);
+  const count = eligible.length === members ? `all ${members} members take fresh sessions` : `${eligible.length} of ${members} members ${eligible.length === 1 ? 'takes' : 'take'} fresh sessions`;
+  if (accounts === null) return say([{ text: members === 1 ? "the pool's one member takes every fresh session." : `${count}.` }]);
+  if (members === 1) return say([nameOf(eligible[0].accountId), { text: ' takes every fresh session.' }]);
+  const next = selectionOrder(pool, accounts, sessions, now).find((tier) => tier.next.length > 0)?.next ?? [];
+  if (next.length === 0) return say([{ text: 'no listed member takes fresh sessions.' }]);
+  return say([{ text: `${count}; the next one goes to ` }, ...listOf(next.map(nameOf)), { text: '.' }]);
 }

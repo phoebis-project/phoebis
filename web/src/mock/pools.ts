@@ -96,7 +96,7 @@ const POOL_ROWS: PoolSeed[] = [
     activePins: 10,
     // The sample's shedding and failover settings are the store's defaults, so this pool reads balanced on both.
     // With migration off no round runs, so every move comes from the rules that need no threshold.
-    movesPerHour: { overage: 0.5, spent: 2 },
+    movesPerHour: { overage: 1, spent: 2 },
   },
   {
     ...POOL_SAMPLE,
