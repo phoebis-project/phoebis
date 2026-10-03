@@ -13,7 +13,7 @@ import { PatternInput } from '@/components/ui/PatternInput';
 import { Tile } from '@/components/ui/Tile';
 import { IconX } from '@/components/ui/icons';
 import { Badge, Button, Card, ErrorState, Input, Meter, Segmented, Select, Skeleton, Toggle } from '@/components/ui/primitives';
-import { CONVERSATION_CLASSES, foldBurn, isolatedSlots, moveLabel, placementCells, placementRungLabel, readBurn, sizedAccounts, slotUnpriced, type BurnLine, type BurnLineUnit, type BurnRow } from '@/lib/analytics';
+import { CONVERSATION_CLASSES, MAX_BURN_LINES, foldBurn, isolatedSlots, moveLabel, placementCells, placementRungLabel, readBurn, sizedAccounts, slotUnpriced, type BurnLine, type BurnLineUnit, type BurnRow } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missCount, missLabel, missReasonOrder } from '@/lib/cache';
 import { clock } from '@/lib/clock';
@@ -263,7 +263,8 @@ export function AnalyticsPage() {
     [classPattern, userAgentPattern, filters, fromIso, includeProbes, sessionId, sessionKey, toIso, generation],
   );
   const accountRollups = useAsync(() => api.listAccountRollups(fromIso, toIso), [fromIso, toIso, generation]);
-  const burn = useAsync(() => readBurn(api, { from: fromIso, to: toIso }, burnGroup), [fromIso, toIso, burnGroup, generation]);
+  // The fold rates the hour still running over the part of it this read saw, so the answer keeps its end and instant.
+  const burn = useAsync(() => readBurn(api, { from: fromIso, to: toIso }, burnGroup).then((read) => ({ ...read, endMs: span.toMs, readAt: now })), [fromIso, toIso, burnGroup, generation]);
   // The plan chart's line category reads each account's stored tier against the cost table's tiers.
   const burnSettings = useAsync(() => api.getSettings(), []);
   const sized = useMemo(() => (burn.data && burnSettings.data ? sizedAccounts(burn.data.accounts, burnSettings.data.planTables.cost.tiers) : null), [burn.data, burnSettings.data]);
@@ -533,7 +534,7 @@ export function AnalyticsPage() {
           <span className="muted">Group by</span>
           <Segmented<BurnGroup> ariaLabel="Burn group by" value={burnGroup} onChange={changeBurnGroup} options={BURN_GROUPS.map((g) => ({ label: BURN_GROUP_LABEL[g], value: g }))} />
         </div>
-        <BurnCharts answer={burn.stale ? null : (burn.data?.answer ?? null)} error={burn.error ?? burnSettings.error} groupBy={burnGroup} loading={burn.data === null || burn.stale || sized === null} sized={sized} />
+        <BurnCharts answer={burn.stale ? null : (burn.data?.answer ?? null)} error={burn.error ?? burnSettings.error} groupBy={burnGroup} loading={burn.data === null || burn.stale || sized === null} rangeEndMs={burn.data?.endMs} readAt={burn.data?.readAt} sized={sized} />
         <BudgetTable budgets={budgets.data} error={budgets.error} now={now} />
       </Section>
 
@@ -1374,9 +1375,28 @@ const isolatedDot = (values: (number | null)[], color: string) => {
  * its rank, so a range that reorders the groups does not repaint them; the account grouping keeps each account's
  * page-wide colour.
  */
-function BurnCharts({ answer, error, groupBy, loading, sized }: { answer: { bucketSeconds: number; points: BurnPoint[] } | null; error: string | null; groupBy: BurnGroup; loading: boolean; sized: ReadonlySet<string> | null }) {
+function BurnCharts({
+  answer,
+  error,
+  groupBy,
+  loading,
+  rangeEndMs,
+  readAt,
+  sized,
+}: {
+  answer: { bucketSeconds: number; points: BurnPoint[] } | null;
+  error: string | null;
+  groupBy: BurnGroup;
+  loading: boolean;
+  rangeEndMs: number | undefined;
+  readAt: number | undefined;
+  sized: ReadonlySet<string> | null;
+}) {
   const ink = useChartInk();
-  const { lines, rows } = useMemo(() => (answer === null ? { lines: [] as BurnLine[], rows: [] as BurnRow[] } : foldBurn(answer.points, groupBy, answer.bucketSeconds, sized ?? NO_ACCOUNT)), [answer, groupBy, sized]);
+  const { lines, rows } = useMemo(
+    () => (answer === null ? { lines: [] as BurnLine[], rows: [] as BurnRow[] } : foldBurn(answer.points, groupBy, answer.bucketSeconds, sized ?? NO_ACCOUNT, MAX_BURN_LINES, rangeEndMs, readAt)),
+    [answer, groupBy, rangeEndMs, readAt, sized],
+  );
   const named = useMemo(() => lines.filter((l) => !l.other).map((l) => l.key).sort(), [lines]);
   const colorOf = (l: BurnLine) => (l.other ? ink.muted : groupBy === 'account' ? accountColor(ink, l.key) : ink.series[Math.min(7, named.indexOf(l.key))]);
   // A session id runs past any legend, so it shows cut the way the session filter's chip cuts it, whole on hover.

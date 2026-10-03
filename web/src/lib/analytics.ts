@@ -65,8 +65,8 @@ export interface BurnLine {
 }
 
 /**
- * One bucket, indexed like the lines: the cached and uncached tokens and the dollars per minute of the bucket, its raw
- * token count, and the shares per hour.
+ * One bucket, indexed like the lines: the cached and uncached tokens and the dollars per minute of the time it covers,
+ * its raw token count, and the shares per hour.
  */
 export interface BurnRow {
   at: number;
@@ -76,6 +76,11 @@ export interface BurnRow {
    * on a window the line priced.
    */
   fiveHour: (number | null)[];
+  /**
+   * The seconds the bucket's rollups cover: its full width, but for an hour still running when the range was read,
+   * which holds only the part of it that had run.
+   */
+  seconds: number;
   sevenDay: (number | null)[];
   /**
    * Every token of the slot, all five types, as the route counts them: zero for a slot with no traffic the ledger can
@@ -149,7 +154,9 @@ export function sizedAccounts(accounts: Account[], tiers: CostTable['tiers']): S
   return new Set(accounts.filter((a) => a.subscription !== null && tierFactors(tiers, a.subscription.rateLimitTier) !== undefined).map((a) => a.id));
 }
 
-const meanOf = (values: number[]) => values.reduce((n, v) => n + v, 0) / values.length;
+/** Each value weighed by its weight, so a bucket counts for the part of its width it covers. */
+const weighedMean = (pairs: { value: number; weight: number }[]) => pairs.reduce((n, p) => n + p.value * p.weight, 0) / pairs.reduce((n, p) => n + p.weight, 0);
+const hourCeil = (ms: number) => Math.ceil(ms / 3_600_000) * 3_600_000;
 
 const LEGEND_ORDER: ClassLegend[] = ['conversation', 'overhead'];
 
@@ -159,8 +166,20 @@ const LEGEND_ORDER: ClassLegend[] = ['conversation', 'overhead'];
  * since shares of different windows do not add up. Under the account grouping the rest folds once per unit, since
  * a subscription account's window share and an Anthropic-key account's dollars chart on different axes. `sized` names
  * the accounts whose tier the cost table sizes, which chart in window share whatever their buckets priced.
+ *
+ * `rangeEndMs` is the end of the range the points were read for and `nowMs` the instant of that read, the end when
+ * absent. The route reads whole hours through the hour ceiling of the end, so a bucket covers its full width but for the
+ * hour still running at the read, which covers the part of it that had run; without an end every bucket is full.
  */
-export function foldBurn(points: BurnPoint[], groupBy: BurnGroup, bucketSeconds: number, sized: ReadonlySet<string>, max = MAX_BURN_LINES): { lines: BurnLine[]; rows: BurnRow[] } {
+export function foldBurn(
+  points: BurnPoint[],
+  groupBy: BurnGroup,
+  bucketSeconds: number,
+  sized: ReadonlySet<string>,
+  max = MAX_BURN_LINES,
+  rangeEndMs?: number,
+  nowMs = rangeEndMs,
+): { lines: BurnLine[]; rows: BurnRow[] } {
   const lineOf = (group: string) => (groupBy === 'request_class' ? classLegendOf(group) : group);
   const tokens = new Map<string, number>();
   for (const p of points) tokens.set(lineOf(p.group), (tokens.get(lineOf(p.group)) ?? 0) + p.cachedTokens + p.uncachedTokens);
@@ -192,21 +211,33 @@ export function foldBurn(points: BurnPoint[], groupBy: BurnGroup, bucketSeconds:
     if (p.fiveHourShare !== null) s.fiveHour = (s.fiveHour ?? 0) + p.fiveHourShare;
     if (p.sevenDayShare !== null) s.sevenDay = (s.sevenDay ?? 0) + p.sevenDayShare;
   }
-  const minutes = bucketSeconds / 60;
-  const hours = bucketSeconds / 3_600;
+  const secondsOf = (at: number) => {
+    if (rangeEndMs === undefined) return bucketSeconds;
+    const covered = Math.min(at + bucketSeconds * 1_000, hourCeil(rangeEndMs), nowMs ?? rangeEndMs);
+    return Math.max(1, (covered - at) / 1_000);
+  };
   const rows = [...byAt.entries()]
     .sort((a, b) => a[0] - b[0])
-    .map(([at, sums]) => ({
-      at,
-      cached: sums.map((s) => s.cached / minutes),
-      fiveHour: sums.map((s) => (s.fiveHour === null ? null : s.fiveHour / hours)),
-      sevenDay: sums.map((s) => (s.sevenDay === null ? null : s.sevenDay / hours)),
-      tokens: sums.map((s) => s.tokens),
-      uncached: sums.map((s) => s.uncached / minutes),
-      usd: sums.map((s) => s.usd / minutes),
-    }));
+    .map(([at, sums]): BurnRow => {
+      const seconds = secondsOf(at);
+      const minutes = seconds / 60;
+      const hours = seconds / 3_600;
+      return {
+        at,
+        cached: sums.map((s) => s.cached / minutes),
+        fiveHour: sums.map((s) => (s.fiveHour === null ? null : s.fiveHour / hours)),
+        seconds,
+        sevenDay: sums.map((s) => (s.sevenDay === null ? null : s.sevenDay / hours)),
+        tokens: sums.map((s) => s.tokens),
+        uncached: sums.map((s) => s.uncached / minutes),
+        usd: sums.map((s) => s.usd / minutes),
+      };
+    });
+  // Weighed by the share of its width a bucket covers rather than its seconds: the same mean, and a range of full buckets
+  // reads the plain mean to the last bit.
+  const weightOf = (r: BurnRow) => r.seconds / bucketSeconds;
 
-  const mean = (read: (r: BurnRow) => number) => (rows.length ? rows.reduce((n, r) => n + read(r), 0) / rows.length : 0);
+  const mean = (read: (r: BurnRow) => number) => (rows.length ? weighedMean(rows.map((r) => ({ value: read(r), weight: weightOf(r) }))) : 0);
   const lines = Array.from({ length: slots }, (_, i): BurnLine => {
     const rest = i >= kept.length ? rests[i - kept.length] : null;
     // A window the line never priced traffic on stays null in every slot, idle ones included, so its legend reads a
@@ -216,7 +247,8 @@ export function foldBurn(points: BurnPoint[], groupBy: BurnGroup, bucketSeconds:
     const foldWindow = (read: (r: BurnRow) => (number | null)[]) => {
       const priced = rows.some((r) => r.tokens[i] > 0 && read(r)[i] !== null);
       for (const r of rows) if (r.tokens[i] === 0) read(r)[i] = priced ? 0 : null;
-      return { perHour: priced ? meanOf(rows.map((r) => read(r)[i]).filter((v): v is number => v !== null)) : null, unpriced: rows.some((r) => slotUnpriced(read(r)[i], r.tokens[i])) };
+      const shares = rows.flatMap((r) => (read(r)[i] === null ? [] : [{ value: read(r)[i] as number, weight: weightOf(r) }]));
+      return { perHour: priced ? weighedMean(shares) : null, unpriced: rows.some((r) => slotUnpriced(read(r)[i], r.tokens[i])) };
     };
     const fiveHour = foldWindow((r) => r.fiveHour);
     const sevenDay = foldWindow((r) => r.sevenDay);
