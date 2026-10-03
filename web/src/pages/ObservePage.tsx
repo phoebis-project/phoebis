@@ -543,6 +543,7 @@ const DOT_TITLE = { 'ldot--bad': 'failed', 'ldot--inflight': 'in flight', 'ldot-
 
 const LiveRow = memo(function LiveRow({ r, selected, onSelect, frozenAt }: { frozenAt: number | null; onSelect: (id: string, opener: HTMLElement | null) => void; r: LiveRequest; selected: boolean }) {
   const model = undatedModel(r.model);
+  const time = fmtTime(r.phases.receivedAt);
   return (
     <tr className={selected ? 'is-selected' : ''} onClick={() => onSelect(r.id, null)} aria-selected={selected} data-kind={r.kind}>
       <td className="num" title={fmtAbsolute(r.phases.receivedAt)}>
@@ -552,12 +553,13 @@ const LiveRow = memo(function LiveRow({ r, selected, onSelect, frozenAt }: { fro
         <button
           type="button"
           className="live-row__open"
+          aria-label={`Open request at ${time}`}
           onClick={(e) => {
             e.stopPropagation();
             onSelect(r.id, e.currentTarget);
           }}
         >
-          {fmtTime(r.phases.receivedAt)}
+          {time}
         </button>
       </td>
       <td>{r.status === null ? <span className="muted">pending</span> : <Badge tone={statusTone(r)} title={r.errorCode ?? undefined}>{r.status}</Badge>}</td>
@@ -569,8 +571,8 @@ const LiveRow = memo(function LiveRow({ r, selected, onSelect, frozenAt }: { fro
       <td className="mono nowrap" title={model !== r.model ? r.model : undefined}>
         {model}
       </td>
-      <td className="mono live-table__client" title={r.userAgent ?? undefined}>
-        {r.userAgent === null ? <span className="muted">none</span> : shortAgent(r.userAgent)}
+      <td className="mono" title={r.userAgent ?? undefined}>
+        {r.userAgent === null ? <span className="muted">none</span> : <span className="live-table__client">{shortAgent(r.userAgent)}</span>}
       </td>
       <td>{r.accountId ?? <span className="muted">selecting</span>}</td>
       <td>

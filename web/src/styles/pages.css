@@ -291,11 +291,13 @@
   padding-right: 12px;
 }
 
-/* The page caps the cell's width in characters, so the box leaves the padding out of that count. */
+/* The cap sits on the text's own box: Firefox applies no max-width to a table cell. */
 .dash__model {
-  box-sizing: content-box;
+  display: inline-block;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
 }
 
 .remaining {
@@ -2738,9 +2740,8 @@
   gap: 10px;
 }
 
-/* The widest value a tile draws, a four-decimal cost beside its "estimated" tag, needs a strip of about 710px to stay on
-   one line in a quarter of it, so a column under 760px, whether the window is narrow or the detail pane is open, holds
-   the tiles two to a row. */
+/* The widest value a tile draws, a four-decimal cost beside its "estimated" tag, stays on one line in a quarter of a
+   710px strip in Chromium's fonts; 760px leaves about 12px a tile for a host whose fonts run wider. */
 @container (max-width: 760px) {
   .metric-strip {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -3062,12 +3063,14 @@
   padding-right: 12px;
 }
 
-/* The cap counts characters, so the box leaves the padding out of it. */
+/* The cap sits on the text's own box: Firefox applies no max-width to a table cell. */
 .live-table__client {
-  box-sizing: content-box;
+  display: inline-block;
   max-width: 12ch;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
 }
 
 .live-row__open {

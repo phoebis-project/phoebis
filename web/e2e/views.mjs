@@ -1496,9 +1496,11 @@ async function recentRowsOneLine(theme) {
       // A placeholder or error row is one cell across the table.
       const cell = tr.children.length > 3 ? tr.children[3] : null;
       if (!cell) return [];
+      // The cap sits on the text's own box inside the cell, so that box is the one the ellipsis cuts.
+      const capped = cell.querySelector('.dash__model') ?? cell;
       const range = document.createRange();
-      range.selectNodeContents(cell);
-      return [{ cut: cell.scrollWidth > cell.clientWidth, lines: new Set([...range.getClientRects()].map((r) => Math.round(r.top))).size, text: cell.textContent?.trim() ?? '', title: cell.getAttribute('title') ?? '' }];
+      range.selectNodeContents(capped);
+      return [{ cut: capped.scrollWidth > capped.clientWidth, lines: new Set([...range.getClientRects()].map((r) => Math.round(r.top))).size, text: cell.textContent?.trim() ?? '', title: cell.getAttribute('title') ?? '' }];
     });
     // The table stretches to its wrap whenever it fits, so its narrowest layout is what tells the room it has left.
     const table = wrap?.querySelector('table');
@@ -1594,10 +1596,6 @@ async function liveFeed(theme) {
       });
       return { columns: new Set(chips.map((c) => Math.round(c.getBoundingClientRect().left))).size, cut, width: Math.round(document.querySelector('.metric-strip')?.getBoundingClientRect().width ?? 0) };
     });
-  const closedStrip = await strip();
-  measurements.push(`${theme} /observe metric strip with the pane closed ${JSON.stringify(closedStrip)}`);
-  if (closedStrip.columns !== 4) say(`with the pane closed the metric strip draws ${closedStrip.columns} columns, not four`);
-  for (const c of closedStrip.cut) say(`with the pane closed the metric tile ${c}`);
   const drawn = () => page.evaluate(() => document.querySelector('.card--table .live-table, .card--table .empty') !== null);
   const deadline = Date.now() + 15_000;
   while (!(await drawn()) && Date.now() < deadline) await advance(CLOCK_STEP_MS);
@@ -1605,6 +1603,11 @@ async function liveFeed(theme) {
     say('no snapshot arrived, so the live feed never connected');
     return;
   }
+  // Read once the feed has drawn, so the tiles hold values rather than their placeholders.
+  const closedStrip = await strip();
+  measurements.push(`${theme} /observe metric strip with the pane closed ${JSON.stringify(closedStrip)}`);
+  if (closedStrip.columns !== 4) say(`with the pane closed the metric strip draws ${closedStrip.columns} columns, not four`);
+  for (const c of closedStrip.cut) say(`with the pane closed the metric tile ${c}`);
   const banner = await page.evaluate(() => [...document.querySelectorAll('.observe__banner')].map((b) => b.textContent ?? '').join(' | '));
   if (banner.includes('Reconnecting')) say(`the feed is reconnecting (${banner})`);
   const table = await page.evaluate(() => {

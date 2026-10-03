@@ -108,6 +108,8 @@ const liveCell = (m, tr, header) => {
   const i = [...m.container.querySelectorAll('.live-table thead th')].findIndex((th) => th.textContent?.trim() === header);
   return i < 0 ? undefined : tr.children[i];
 };
+/** The state each live status dot's class stands for, as its title names it. */
+const DOT_TITLES = { 'ldot--bad': 'failed', 'ldot--inflight': 'in flight', 'ldot--ok': 'succeeded', 'ldot--warn': 'rate limited' };
 
 // The generator skips overnight rows by wall-clock hour, so pick rows by the
 // shape each check needs rather than by position.
@@ -252,11 +254,10 @@ m = await mount('/observe');
   {
     // The dot is drawn hidden from a screen reader beside the Status badge, so its title is for a pointer alone; each
     // one names the state its colour stands for.
-    const named = { 'ldot--bad': 'failed', 'ldot--inflight': 'in flight', 'ldot--ok': 'succeeded', 'ldot--warn': 'rate limited' };
     const dots = [...m.container.querySelectorAll('.live-table .ldot')];
     const wrong = dots.filter((d) => {
-      const state = [...d.classList].find((c) => c in named);
-      return state === undefined || d.getAttribute('title') !== named[state];
+      const state = [...d.classList].find((c) => c in DOT_TITLES);
+      return state === undefined || d.getAttribute('title') !== DOT_TITLES[state];
     });
     results.push({ name: '/observe every status dot names its state in a title', ok: dots.length > 0 && wrong.length === 0, missing: dots.length === 0 ? ['no dot'] : wrong.slice(0, 4).map((d) => `${d.className}: ${d.getAttribute('title')}`) });
   }
@@ -6132,12 +6133,13 @@ else localStorage.setItem('phoebis.role', roleBeforePreview);
     const cell = tr.children[3];
     if (!request || !cell) return [];
     // The column counts characters of the monospace face, so a shown id longer than its cap is the one the ellipsis cuts.
-    const cap = Number.parseFloat(cell.style.maxWidth);
+    const capped = cell.querySelector('.dash__model');
+    const cap = Number.parseFloat(capped?.style.maxWidth ?? '');
     const shown = shortModel(request.model);
-    return [{ cap, cell, cut: shown.length > cap, model: request.model, shown, title: shown !== request.model || shown.length > cap ? request.model : null }];
+    return [{ cap, capped, cell, cut: shown.length > cap, model: request.model, shown, title: shown !== request.model || shown.length > cap ? request.model : null }];
   });
   page.unmount();
-  const said = (c) => `${c.model}: ${JSON.stringify(c.cell.textContent)} titled ${JSON.stringify(c.cell.getAttribute('title'))} under a ${c.cell.style.maxWidth || 'missing'} cap`;
+  const said = (c) => `${c.model}: ${JSON.stringify(c.cell.textContent)} titled ${JSON.stringify(c.cell.getAttribute('title'))} under a ${c.capped?.style.maxWidth || 'missing'} cap`;
   const wrong = (c) => !(c.cap > 0) || c.cell.textContent !== c.shown || c.cell.getAttribute('title') !== c.title;
   const datedCells = modelCells.filter((c) => DATED.test(c.model));
   results.push({
@@ -6155,7 +6157,7 @@ else localStorage.setItem('phoebis.role', roleBeforePreview);
   const whole = modelCells.filter((c) => c.shown === c.model && !c.cut);
   results.push({
     name: '/ a model id the Model column cuts carries the whole id in its title, and one shown as sent carries none',
-    ok: cut.length > 0 && whole.length > 0 && [...cut, ...whole].every((c) => !wrong(c)) && new Set(modelCells.map((c) => c.cell.style.maxWidth)).size === 1,
+    ok: cut.length > 0 && whole.length > 0 && [...cut, ...whole].every((c) => !wrong(c)) && new Set(modelCells.map((c) => c.capped?.style.maxWidth)).size === 1,
     missing: [`${cut.length} cut, ${whole.length} shown as sent`, ...[...cut, ...whole].filter(wrong).map(said)],
   });
 }
@@ -6314,11 +6316,12 @@ else localStorage.setItem('phoebis.role', roleBeforePreview);
   let shownPaused = true;
   let afterClick = [];
   let shownResumed = false;
+  const started = (request) => emitLive({ delta: { cursor: Number.MAX_SAFE_INTEGER, request, type: 'started' }, kind: 'delta' });
+  const base = { accountId: null, agentId: 'main', attempts: [], costUsd: 0, errorCode: null, kind: 'inference', model: 'claude-sonnet-5', outputTps: null, poolId: null, preview: null, sessionId: null, transport: 'sse', usage: null, userAgent: null };
   try {
     await live.settle(100);
-    const request = { accountId: null, agentId: 'main', attempts: [], costUsd: 0, errorCode: null, id: 'smoke-pause-gap', keyId: 'pause-gap', kind: 'inference', model: 'claude-sonnet-5', outputTps: null, phases: { receivedAt: new Date().toISOString() }, poolId: null, preview: null, sessionId: null, state: 'in_flight', status: null, transport: 'sse', usage: null, userAgent: null };
     // One synchronous turn from the event to the click: an await between them would let a frame draw the row first.
-    emitLive({ delta: { cursor: Number.MAX_SAFE_INTEGER, request, type: 'started' }, kind: 'delta' });
+    started({ ...base, id: 'smoke-pause-gap', keyId: 'pause-gap', phases: { receivedAt: new Date().toISOString() }, state: 'in_flight', status: null });
     button('Pause')?.click();
     afterClick = drawn();
     for (const h of held.splice(0)) h.cb(performance.now());
@@ -6326,20 +6329,28 @@ else localStorage.setItem('phoebis.role', roleBeforePreview);
     frozen = drawn();
     shownPaused = frozen.some((r) => r.endsWith(' pause-gap'));
   } finally {
+    // A frame asked for after the held ones ran still belongs to the page, so jsdom runs it.
+    for (const h of held.splice(0)) realFrame(h.cb);
     globalThis.requestAnimationFrame = realFrame;
     globalThis.cancelAnimationFrame = realCancel;
   }
   button('Resume')?.click();
+  // React commits a click's update in a microtask, ahead of any frame or timer, so this read sees what Resume drew at
+  // once and nothing a later frame would have drawn.
+  await Promise.resolve();
+  const resumedAtOnce = drawn().some((r) => r.endsWith(' pause-gap'));
   await live.settle(150);
   shownResumed = drawn().some((r) => r.endsWith(' pause-gap'));
   results.push({
     name: '/observe a pause between a queued event and its frame keeps the view frozen',
-    ok: afterClick.length > 0 && JSON.stringify(frozen) === JSON.stringify(afterClick) && !shownPaused && shownResumed,
-    missing: [`${afterClick.length} rows after the click, ${frozen.length} after the held frames`, shownPaused ? 'the row drew while paused' : '', shownResumed ? '' : 'Resume did not draw the row'].filter(Boolean),
+    ok: afterClick.length > 0 && JSON.stringify(frozen) === JSON.stringify(afterClick) && !shownPaused && resumedAtOnce && shownResumed,
+    missing: [`${afterClick.length} rows after the click, ${frozen.length} after the held frames`, shownPaused ? 'the row drew while paused' : '', resumedAtOnce ? '' : 'Resume waited for a frame to draw the row', shownResumed ? '' : 'Resume did not draw the row'].filter(Boolean),
   });
 
   // jsdom runs no activation for a key press on a button, so the keyboard path is a focus and then the button's click.
   const opener = live.container.querySelector('.live-table tbody tr .live-row__open');
+  // The visible text is the time alone, so the name says what the button does.
+  const named = opener !== null && opener.getAttribute('aria-label') === `Open request at ${opener.textContent}`;
   opener?.focus();
   opener?.click();
   await live.settle(150);
@@ -6350,8 +6361,21 @@ else localStorage.setItem('phoebis.role', roleBeforePreview);
   const returned = opener !== null && opener.isConnected && document.activeElement === opener;
   results.push({
     name: '/observe a row opens its pane from the keyboard and focus returns on close',
-    ok: onClose && returned && live.container.querySelector('.observe__detail') === null,
-    missing: [opener ? '' : 'no row button', close ? '' : 'no pane', onClose ? '' : `focus on ${document.activeElement?.outerHTML.slice(0, 80)} after opening`, returned ? '' : `focus on ${document.activeElement?.outerHTML.slice(0, 80)} after closing`].filter(Boolean),
+    ok: named && onClose && returned && live.container.querySelector('.observe__detail') === null,
+    missing: [opener ? '' : 'no row button', named ? '' : `the button is named ${JSON.stringify(opener?.getAttribute('aria-label') ?? null)}`, close ? '' : 'no pane', onClose ? '' : `focus on ${document.activeElement?.outerHTML.slice(0, 80)} after opening`, returned ? '' : `focus on ${document.activeElement?.outerHTML.slice(0, 80)} after closing`].filter(Boolean),
+  });
+
+  // The story draws no rate-limited row while these checks read, so a finished 429 joins the feed on a key of its own
+  // and every state a dot stands for is drawn at least once.
+  const now = new Date().toISOString();
+  started({ ...base, errorCode: 'rate_limit_error', id: 'smoke-rate-limited', keyId: 'rate-limited', phases: { finishedAt: now, receivedAt: now }, state: 'finished', status: 429 });
+  await live.settle(150);
+  const dots = [...live.container.querySelectorAll('.live-table .ldot')];
+  const states = Object.entries(DOT_TITLES).map(([cls, title]) => ({ cls, dots: dots.filter((d) => d.classList.contains(cls)), title }));
+  results.push({
+    name: '/observe each of the four dot states is drawn with the title that names it',
+    ok: states.every((s) => s.dots.length > 0 && s.dots.every((d) => d.getAttribute('title') === s.title)),
+    missing: states.flatMap((s) => (s.dots.length === 0 ? [`no ${s.cls}`] : s.dots.filter((d) => d.getAttribute('title') !== s.title).slice(0, 2).map((d) => `${s.cls}: ${d.getAttribute('title')}`))),
   });
   live.unmount();
 }

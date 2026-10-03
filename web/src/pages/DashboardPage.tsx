@@ -263,8 +263,10 @@ function RecentTable({ rows, error }: { error: string | null; rows: RequestLog[]
                     </td>
                     <td className="mono">{r.keyId}</td>
                     <td>{r.accountId}</td>
-                    <td className="mono nowrap dash__model" style={{ maxWidth: `${MODEL_CHARS}ch` }} title={shown !== r.model || shown.length > MODEL_CHARS ? r.model : undefined}>
-                      {shown}
+                    <td className="mono nowrap" title={shown !== r.model || shown.length > MODEL_CHARS ? r.model : undefined}>
+                      <span className="dash__model" style={{ maxWidth: `${MODEL_CHARS}ch` }}>
+                        {shown}
+                      </span>
                     </td>
                     <td>
                       <StatusBadge status={r.status} attempts={r.attempts.length} />
