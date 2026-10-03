@@ -1271,6 +1271,57 @@ m.unmount();
   await page.settle(100);
   page.unmount();
 }
+{
+  // The mock stamps the link's expiry off its load-time anchor, a moment past CLOCK_ORIGIN, while the page reads the
+  // frozen clock, so the remaining time at the mount sits just past a whole minute. The first step leaves it 30 s short
+  // of one, and no later step crosses a boundary it does not mean to.
+  const page = await mount('/accounts/business', { now: CLOCK_ORIGIN });
+  let session = null;
+  const start = api.startPairing;
+  api.startPairing = (...args) =>
+    start.apply(api, args).then((s) => {
+      session = s;
+      return s;
+    });
+  [...(page.container.querySelector('.detail__head')?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Re-pair')?.click();
+  await page.settle(500);
+  delete api.startPairing;
+  const dlg = [...page.container.querySelectorAll('dialog[open]')].pop();
+  const read = () => ({
+    line: dlg?.querySelector('.row .num, .row .pairing__expired')?.textContent ?? '',
+    region: dlg?.querySelector('.sr-only[aria-live="polite"]')?.textContent ?? '',
+  });
+  let elapsed = 0;
+  const step = async (ms) => {
+    tick(ms);
+    elapsed += ms;
+    await page.settle(100);
+    return read();
+  };
+  const r0 = session ? Date.parse(session.expiresAt) - CLOCK_ORIGIN : 0;
+  const k = Math.floor(r0 / 60_000);
+  const reads = [await step((r0 % 60_000) + 30_000), await step(10_000), await step(60_000)];
+  // The dialog's one-second clock reads the last whole second a step passed, and under a minute the line rounds to the
+  // second, so this step lands on the whole second that reads 45s.
+  const left = r0 - Math.floor(elapsed / 1000) * 1000;
+  reads.push(await step(Math.round((left - 45_000) / 1000) * 1000), await step(10_000), await step(60_000));
+  const expected = [
+    { line: `Link expires in ${k - 1}m`, region: `Link expires in ${k} minutes` },
+    { line: `Link expires in ${k - 1}m`, region: `Link expires in ${k} minutes` },
+    { line: `Link expires in ${k - 2}m`, region: `Link expires in ${k - 1} minutes` },
+    { line: 'Link expires in 45s', region: 'Link expires in 1 minute' },
+    { line: 'Link expires in 35s', region: 'Link expires in 1 minute' },
+    { line: 'This link has expired. Close the dialog and start again.', region: 'This link has expired.' },
+  ];
+  results.push({
+    name: '/accounts the pairing countdown announces whole minutes only',
+    ok: session !== null && k > 2 && JSON.stringify(reads) === JSON.stringify(expected),
+    missing: [session ? `r0 ${r0}` : 'no pairing started', ...reads.map((r) => `${r.line} | ${r.region}`)],
+  });
+  [...(dlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
+  await page.settle(200);
+  page.unmount();
+}
 await readsAgain('/accounts', 'listAccounts');
 
 {

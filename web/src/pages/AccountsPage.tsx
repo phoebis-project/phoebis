@@ -17,6 +17,7 @@ import { fmtAbsolute, fmtCredits, fmtDate, fmtDayShort, fmtDuration, fmtEndsIn, 
 import { accountPatchOf, subscriptionEndFormOf, subscriptionEndRefusal, tickCancelled, type SubscriptionEndForm } from '@/lib/forms';
 import { useAsync, useNow } from '@/lib/hooks';
 import { STATUS_LABEL, STATUS_TONE, isFastScope } from '@/lib/quota';
+import { joinTrend } from '@/lib/trend';
 
 type SortKey = 'name' | 'reset' | 'status' | 'usage';
 const END_HINT = "Prefilled from the plan's start and its monthly renewal; correct it from the date the plan's billing settings show. An annual plan is marked cancelled in its final month only.";
@@ -619,14 +620,7 @@ function AccountDetail({ account, now, onBusyChange, onToast, onPair, onChanged 
 
 function TrendChart({ history, loading, hasFable }: { hasFable: boolean; history: QuotaHistory[] | null; loading: boolean }) {
   const ink = useChartInk();
-  const data = useMemo(() => {
-    if (!history) return [];
-    const h5 = history.find((h) => h.windowId === '5h')?.samples ?? [];
-    const by7 = new Map((history.find((h) => h.windowId === '7d')?.samples ?? []).map((s) => [s.at, s.utilization]));
-    const byF = new Map((history.find((h) => h.windowId === '7d_fable')?.samples ?? []).map((s) => [s.at, s.utilization]));
-    // 5-minute samples over 7 days is 2,016 points; every third is plenty for a 900px plot.
-    return h5.filter((_, i) => i % 3 === 0).map((s) => ({ at: Date.parse(s.at), u5: s.utilization * 100, u7: (by7.get(s.at) ?? 0) * 100, uf: hasFable ? (byF.get(s.at) ?? 0) * 100 : null }));
-  }, [history, hasFable]);
+  const data = useMemo(() => (history ? joinTrend(history, hasFable) : []), [history, hasFable]);
   if (loading || !history) return <Skeleton height={220} />;
   if (data.length === 0) return <EmptyState title="No samples yet" body="Quota samples appear after the first successful quota fetch." />;
   return (
@@ -646,8 +640,8 @@ function TrendChart({ history, loading, hasFable }: { hasFable: boolean; history
                   title={fmtAbsolute(new Date(p.at).toISOString())}
                   rows={[
                     { color: ink.series[0], label: '5-hour used', value: `${p.u5.toFixed(0)}%` },
-                    { color: ink.series[1], label: '7-day used', value: `${p.u7.toFixed(0)}%` },
-                    ...(hasFable ? [{ color: ink.series[2], label: 'Fable 7-day used', value: `${(p.uf ?? 0).toFixed(0)}%` }] : []),
+                    { color: ink.series[1], label: '7-day used', value: p.u7 === null ? 'no sample yet' : `${p.u7.toFixed(0)}%` },
+                    ...(hasFable ? [{ color: ink.series[2], label: 'Fable 7-day used', value: p.uf === null ? 'no sample yet' : `${p.uf.toFixed(0)}%` }] : []),
                   ]}
                 />
               );
@@ -938,10 +932,14 @@ function PairingDialog({ open, accountId, label, repair, onClose, onPaired }: { 
 
 function PairingExpiry({ remaining, expired, ready }: { expired: boolean; ready: boolean; remaining: number }) {
   if (!ready) return <span className="muted">Preparing the login link…</span>;
-  if (expired) return <span className="pairing__expired">This link has expired. Close the dialog and start again.</span>;
+  // The visible line ticks every second under a minute; a screen reader hears the time in whole minutes alone.
+  const minutes = Math.ceil(remaining / 60_000);
   return (
-    <span className="muted num" aria-live="polite">
-      Link expires in {fmtDuration(remaining)}
-    </span>
+    <>
+      {expired ? <span className="pairing__expired">This link has expired. Close the dialog and start again.</span> : <span className="muted num">Link expires in {fmtDuration(remaining)}</span>}
+      <span className="sr-only" aria-live="polite">
+        {expired ? 'This link has expired.' : `Link expires in ${minutes} ${minutes === 1 ? 'minute' : 'minutes'}`}
+      </span>
+    </>
   );
 }
