@@ -61,7 +61,8 @@ pub(crate) struct ProbeResult {
     /// The `Retry-After` header's seconds, on a pool-at-its-cap 429; `None` otherwise.
     pub retry_after_secs: Option<u64>,
     /// The relay's `RelayOutcome::obstacle`: `budget` for a probe the selector refused on the pinned member's
-    /// spend, `operator`, `subscription_ended` or `attempted` for one it answered on the pinned member's standing.
+    /// spend, `operator`, `subscription_ended` or `attempted` for one it answered on the pinned member's standing,
+    /// `reauth_required` for one whose leg marked the account for re-authentication.
     pub obstacle: Option<&'static str>,
 }
 
@@ -687,9 +688,11 @@ impl Inner {
     /// `budget` without a pause, since only a raised budget or the period's end clears it, never a wait; a probe
     /// the selector answered on its pinned member's standing holds under that standing: `Paused` for the
     /// operator's pause, `IneligibleCredential` for an ended subscription (both read `paused` in the console), a
-    /// retry for a member this probe already tried; the untimed exhaustion 503, when every account of the pool was
-    /// unusable at selection, pauses under its own reason; a 5xx forwarded from upstream retries; any other 4xx is
-    /// a shape the upstream refuses; a cancelled, timed-out, or lost exchange (status 0) is a transport error.
+    /// retry for a member this probe already tried; a pinned member a leg of the probe marked for
+    /// re-authentication pauses under the authentication reason; the untimed exhaustion 503, when every account of
+    /// the pool was unusable at selection, pauses under its own reason; a 5xx forwarded from upstream retries; any
+    /// other 4xx is a shape the upstream refuses; a cancelled, timed-out, or lost exchange (status 0) is a
+    /// transport error.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn probe_error(
         &mut self,
@@ -715,6 +718,11 @@ impl Inner {
             }
             (true, Some("attempted")) => {
                 return self.retry(key, agent_id, Reason::RetryableProbeError, now, None)
+            }
+            (true, Some("reauth_required")) => {
+                self.set_reason(key, agent_id, Reason::ProbeAuthenticationError);
+                self.pause(key, agent_id);
+                return;
             }
             _ => {}
         }

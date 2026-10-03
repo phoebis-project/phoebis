@@ -31,10 +31,16 @@ use crate::sse::{SseEvent, SseParser};
 /// the upstream instead of letting the response pile up in memory.
 const CHANNEL_DEPTH: usize = 64;
 
-/// Cap on a response the relay reads before it can decide what to do with it. Only an authentication failure
-/// takes that path and those bodies are a few hundred bytes, so a larger one is simply forwarded unread. The
-/// same cap bounds the decoded copy a compressed rejection is classified from.
+/// Cap on a response the relay reads before it can decide what to do with it, and on the decoded copy a
+/// compressed rejection is classified from. Only a 400, 401, 403, 404 or 429 takes that path and those bodies are a
+/// few hundred bytes, so a larger one goes unread: a 401 is never forwarded, and any other status is.
 pub(crate) const MAX_BUFFERED_BODY: usize = 64 * 1024;
+
+/// The three ways a body ends short, the request row's `error_code`: under `incomplete` on a 200, and a cut or a
+/// stall under `failed` on any other status.
+pub const STREAM_CUT: &str = "stream_cut";
+pub const STREAM_INCOMPLETE: &str = "stream_incomplete";
+pub const STREAM_STALLED: &str = "stream_stalled";
 
 /// Per-chunk bound on what a decoder may hand back for one upstream chunk: an 8 KiB compressed chunk can
 /// expand into hundreds of MiB in a single call without this, whatever the caller does with the result after.
@@ -69,9 +75,11 @@ pub(crate) struct Publish {
     /// Parses the decoded copy for phases on an event stream; `None` for any other body, and dropped on
     /// overflow so a malformed stream costs a bounded buffer and no phases rather than the chunks.
     pub parser: Option<SseParser>,
-    /// The decoded copy of a committed body that is not an event stream, kept up to `MAX_BUFFERED_BODY` so its
+    /// The decoded copy of a committed body that is not an event stream, kept up to the request bound so its
     /// usage block can be read at the end; `None` for a stream or once the bound is passed.
     pub json: Option<Vec<u8>>,
+    /// `Limits.max_request_bytes`, so the usage of any answer the router would accept as a request is read.
+    pub json_bound: usize,
     pub usage: Usage,
     pub response: ResponseFacts,
     pub index: u32,
@@ -80,6 +88,8 @@ pub(crate) struct Publish {
     pub saw_tool_use: bool,
     /// The error type of an SSE `error` event seen after the head, which turns a clean end into a failure.
     pub stream_error: Option<String>,
+    /// Whether the parser saw `message_stop`, without which a clean end of a stream is one the upstream cut short.
+    pub saw_stop: bool,
     /// The status the client was answered with, for the completion.
     pub status: u16,
     /// The id of the message this response carries, once `message_start` or the JSON answer named it.
@@ -286,7 +296,7 @@ impl Publish {
             },
         };
         if let Some(json) = self.json.as_mut() {
-            if json.len() + text.len() > MAX_BUFFERED_BODY {
+            if json.len() + text.len() > self.json_bound {
                 // Past the bound nothing is read; the usage stays unknown rather than half parsed.
                 self.json = None;
             } else {
@@ -368,7 +378,10 @@ impl Publish {
                     usage: answer.usage,
                 })
             }
-            Some(b"message_stop") => Some(Phase::MessageStop),
+            Some(b"message_stop") => {
+                self.saw_stop = true;
+                Some(Phase::MessageStop)
+            }
             // The post-commit observer already acts on this event for routing; here it only decides how the
             // request is accounted, so the bytes the client sees are untouched.
             Some(b"error") => {
@@ -408,15 +421,24 @@ impl Publish {
             }
         }
         self.fire_pending_hook().await;
+        // `incomplete` is a 200 whose message ended short: a cut, a stall, or a clean end before which a live
+        // parser saw no stop and no error, which a success count would hide. A dropped parser proves nothing and
+        // keeps the head's word. Any other status answered no message to cut short, so it stays `failed`, and a cut
+        // or a stall still names its cause.
+        let committed = self.status == 200;
         let outcome = match (end, self.stream_error.take()) {
+            (BodyEnd::Complete, None) if committed && self.parser.is_some() && !self.saw_stop => {
+                Some((Outcome::Incomplete, Some(STREAM_INCOMPLETE.into())))
+            }
             (BodyEnd::Complete, None) => None,
             (BodyEnd::Complete, Some(error)) => Some((Outcome::Failed, Some(error))),
             (BodyEnd::Cancelled, _) => Some((Outcome::Canceled, Some("account_cancelled".into()))),
             (BodyEnd::ClientGone, _) => Some((Outcome::Canceled, Some("client_gone".into()))),
-            (BodyEnd::Failed, error) => Some((
-                Outcome::Failed,
-                error.or_else(|| Some("upstream_unreachable".into())),
-            )),
+            (BodyEnd::Failed(_), Some(error)) => Some((Outcome::Failed, Some(error))),
+            (BodyEnd::Failed(cut), None) if committed => {
+                Some((Outcome::Incomplete, Some(cut.code().into())))
+            }
+            (BodyEnd::Failed(cut), None) => Some((Outcome::Failed, Some(cut.code().into()))),
         };
         let ttfc_ms = self
             .first_content_at
@@ -445,6 +467,7 @@ impl Publish {
                 Some(self.bytes),
                 Some(self.index),
                 outcome,
+                self.message_id.clone(),
                 (self.clock)(),
             )
             .await;
@@ -555,7 +578,7 @@ pub(crate) fn relay_body<C: AsyncRead + ReturnToPool + Unpin + Send + 'static>(
                     }
                     Err(error) => {
                         let _ = send(&tx, &cancel, Err(error)).await;
-                        break 'body BodyEnd::Failed;
+                        break 'body BodyEnd::Failed(Cut::Transport);
                     }
                 }
             }
@@ -572,11 +595,11 @@ pub(crate) fn relay_body<C: AsyncRead + ReturnToPool + Unpin + Send + 'static>(
                 let next = match read {
                     Err(_) => {
                         let _ = send(&tx, &cancel, Err(stalled())).await;
-                        break 'body BodyEnd::Failed;
+                        break 'body BodyEnd::Failed(Cut::Stalled);
                     }
                     Ok(Err(error)) => {
                         let _ = send(&tx, &cancel, Err(error)).await;
-                        break 'body BodyEnd::Failed;
+                        break 'body BodyEnd::Failed(Cut::Transport);
                     }
                     Ok(Ok(next)) => next,
                 };
@@ -592,7 +615,7 @@ pub(crate) fn relay_body<C: AsyncRead + ReturnToPool + Unpin + Send + 'static>(
                     Ok(piece) => piece,
                     Err(error) => {
                         let _ = send(&tx, &cancel, Err(error)).await;
-                        break 'body BodyEnd::Failed;
+                        break 'body BodyEnd::Failed(Cut::Transport);
                     }
                 };
                 publish_piece(&mut publish, &chunk, &piece).await;
@@ -621,7 +644,7 @@ pub(crate) fn relay_body<C: AsyncRead + ReturnToPool + Unpin + Send + 'static>(
                     }
                     Err(error) => {
                         let _ = send(&tx, &cancel, Err(error)).await;
-                        break 'body BodyEnd::Failed;
+                        break 'body BodyEnd::Failed(Cut::Transport);
                     }
                     Ok(_) => {}
                 }
@@ -636,7 +659,7 @@ pub(crate) fn relay_body<C: AsyncRead + ReturnToPool + Unpin + Send + 'static>(
                 drop(reader);
                 let _ = tx.try_send(Err(cancelled()));
             }
-            BodyEnd::ClientGone | BodyEnd::Failed => {}
+            BodyEnd::ClientGone | BodyEnd::Failed(_) => {}
             // Checking in before the sender drops is what makes the connection available again by the time the
             // caller sees the end of the body, which is the only ordering a sequential caller can observe.
             BodyEnd::Complete => {
@@ -662,8 +685,23 @@ enum BodyEnd {
     /// The caller is no longer listening.
     ClientGone,
     Complete,
-    /// The body ended in an error the caller has already been sent.
-    Failed,
+    /// The body ended in an error the caller has already been sent; `Cut` is the cause the completion names.
+    Failed(Cut),
+}
+
+#[derive(Clone, Copy)]
+enum Cut {
+    Stalled,
+    Transport,
+}
+
+impl Cut {
+    fn code(self) -> &'static str {
+        match self {
+            Cut::Stalled => STREAM_STALLED,
+            Cut::Transport => STREAM_CUT,
+        }
+    }
 }
 
 enum Delivery {

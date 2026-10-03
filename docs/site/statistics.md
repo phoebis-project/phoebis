@@ -24,25 +24,29 @@ A `ledger_gap` event names one of these reasons:
 | `chunk_skipped` | An interior chunk of a capture was dropped at the bus; the capture is truncated from there on. |
 | `in_flight_cap` | The 16,384 requests in flight was reached; the oldest entry was evicted to make room. |
 
-The request row names the key, the pool, the session, the agent, and the model; the kind and transport of the
-call; the status and outcome; the error code; the time to first byte and to first token; the duration; the bytes
-sent and received; whether the response was served kept warm; whether its body was captured; and the client's
-user agent and class (`claude-code/<entrypoint>` or `other`), the gateway hints it sent (the agent
-type, the compaction and context-compacted markers, and the summed tool durations of the turn before), the turn origin
-off its attribution line, its auto-mode standing (as admission read it, a server-side check asked for under an on
-setting or the `safeguards` member carried under an off setting, which the dispatch drops; or a refusal for the body's
-shape before any upstream saw it), and the request's shape: the effort, the thinking mode and budget, the output limit,
-the tool, system-block, and message counts, the context edits, the temperature, and the requested speed and service
-tier.
-A session that branched from another conversation carries that conversation's root and
-the matched depth as well. The session it names is the client's own,
+The request row names the key, the pool, the session, the agent, and the model; the kind and transport of the call; the
+status and outcome (`canceled`, `exhausted`, `failed`, `incomplete` for a 200 answer whose body ended before its end,
+`rejected`, `succeeded`); the error code (`stream_cut`, `stream_incomplete` or `stream_stalled` under `incomplete`, and
+`stream_cut` or `stream_stalled` under `failed` for a forwarded answer of another status whose body was cut or went
+silent); the time to first byte and to first token; the duration; the bytes sent and received; whether the response was
+served kept warm; whether its body was captured; and the client's user agent and class (`claude-code/<entrypoint>`
+or `other`), the gateway hints it sent (the agent type, the compaction and context-compacted markers, and
+the summed tool durations of the turn before), the turn origin off its attribution line, its auto-mode standing (as
+admission read it, a server-side check asked for under an on setting or the `safeguards` member carried under an off
+setting, which the dispatch drops; or a refusal for the body's shape before any upstream saw it), and the request's
+shape: the effort, the thinking mode and budget, the output limit, the tool, system-block, and message counts, the
+context edits, the temperature, and the requested speed and service tier.
+A session that
+branched from another conversation carries that conversation's root and the matched depth as well. The session it names
+is the client's own,
 and the Sessions view groups a row by it.
-The attempt row names the account and its kind; the upstream status and request id; the outcome;
-the cooldown the attempt set; the stop reason, the model the answer names when it differs from the one the router
-resolved, the speed, the region inference ran in, the tokens a context edit cleared, and a refusal's category and
-recommended model; the five token counts, with the thinking share of the output and the web search and fetch calls the
-answer made; the cache miss reason the diagnostics beta reports; the unified rate-limit window readings; overage; the
-cost split across input, cache read, cache write, and output; and the pricing version the estimate used.
+The attempt row names the
+account and its kind; the upstream status, request id and message id; the outcome; the cooldown the attempt set; the
+stop reason, the model the answer names when it differs from the one the router resolved, the speed, the region
+inference ran in, the tokens a context edit cleared, and a refusal's category and recommended model; the five token
+counts, with the thinking share of the output and the web search and fetch calls the answer made; the cache miss reason
+the diagnostics beta reports; the unified rate-limit window readings; overage; the cost split across input, cache read,
+cache write, and output; and the pricing version the estimate used.
 
 Placements are counted by rung, with a hit share from the trace and the response's cache-read tokens: a
 placement by the conversation's own messages is a hit when the response read the prefix the entry promised; one
@@ -177,7 +181,7 @@ The purge that enforces these runs once an hour. Every five-minute poll's readin
 ## Metrics
 
 `stats.metrics_listen` serves `/metrics` in Prometheus text format and nothing else; it speaks plain HTTP and
-asks for no credential, so it belongs behind a network only the scraper can reach. Sixteen families are
+asks for no credential, so it belongs behind a network only the scraper can reach. Seventeen families are
 rendered:
 
 | Metric | Type | Labels |
@@ -196,6 +200,7 @@ rendered:
 | `phoebis_pins_active` | gauge | `pool` |
 | `phoebis_pricing_unknown_model_total` | counter | none |
 | `phoebis_requests_total` | counter | `key`, `kind`, `outcome` |
+| `phoebis_router_dropped_reports_total` | counter | `kind` |
 | `phoebis_tokens_total` | counter | `account`, `kind`, `model` |
 | `phoebis_upstream_ttfb_seconds` | histogram | `model` |
 
@@ -267,41 +272,47 @@ model-scoped cooldown grouped by model with a clear button per row, and the newe
 ### Requests
 
 The table lists thirteen columns: time, key, pool, account, model, client, kind, transport, status,
-attempts, TTFB, tokens, and cost. The client column shows the class the router derived from the user agent
-(`claude-code/<entrypoint>` or `other`), with the agent type beneath it on a subagent's turn.
-One row is one client request however many attempts it took, and
-the attempt trail reads as "mail 429, business 200" when a 429 on the first account failed over to a 200 on the second.
-A request that waited for a slot while every account was at its cap carries a held marker beside its attempts with the
-time it waited. Filters narrow the table: the user agent filter takes a pattern (`claude-cli/2.1.*`, `*sdk-cli*`; `*`
-for any run of characters, `?` for one, a backslash quoting either, and a value with no wildcard matching in full), the
-client filter takes a pattern over the class (`claude-code/*`), the agent type and turn origin filters pick from the
-values the client's hint headers and attribution line carry, the speed filter picks `fast` or `standard` by the speed
-the answer reported, and the held toggle keeps the requests that waited for a slot. Selecting a row opens a drawer with
-the request's detail, which shows the user agent, the model as the
-client spelled it and, when it differs, the canonical id the router recorded, its auto-mode standing (asked for a
-server-side check under an on setting; carried the safeguards member under an off setting, which the dispatch drops;
-refused for its body shape; or not requested), and the client hints: the agent type, the compaction and
-context-compacted markers, the turn origin, and the tool time before the turn; the trail names an account the model was
-rejected on and the one that served it. The drawer's effort is the level the upstream applies: when the client sends a
-per-turn control entry, the last entry's level, else the request's top-level `output_config.effort`; a turn that ends
-with such an entry still counts as the user's turn, so it starts its own prompt. The table holds the requests up to the
-moment you opened it, so paging does not shift as new ones arrive; Refresh brings it up to now. When the session moved
-during the request, the drawer says from which account to which and why: rate limited, wound down, account marked,
-over its plan, back to plan, load shed, or window spent. When its pin was released without a move, the drawer says from
-which account and every reason the router found, among: already tried this request, the account at its spend budget,
-the creating request's own client error, an account cooldown, the account deleted, disconnected, idle past the affinity
-window, funding required, in overage, paused, needing reauthorization, released outright, window spent, the subscription
-ended, never paired, or no longer serving the model. The drawer also shows the strategy the selection used, the tier it
-drew from, whether the pin continued and was renewed, moved (naming the rule), or was placed afresh, whether the cache
-answered the request and by how many of its input tokens, and every candidate the selection passed over with the
-obstacle in its way: already tried, above the ceiling, at its in-flight cap, at its spend budget, an account cooldown,
-at the pace floor, an operator hold, in overage, ranked behind another candidate, its subscription ended, its window
-spent, or winding down. A placement names where it landed: by its messages or by its static prefix at the depth that
-matched, or with the main conversation. A request held while every account was at its cap names the account it was
-held on: its cohort's, or else the last one it waited on, and how long it waited. The cache line reads a placement as a
-hit or a miss against the prefix it was promised: a placement by its messages is a hit when the response read at least
-that prefix, one by its static prefix when it read anything, and one with the main conversation keeps the plain cache
-line.
+attempts, TTFB, tokens, and cost. A request whose 200 answer ended short reads `incomplete` with the code that says how:
+`stream_cut` when the connection or the decoder failed mid-body, `stream_incomplete` when the stream closed without its
+`message_stop`, `stream_stalled` when the upstream went silent past the idle bound. The client column shows the class
+the router derived from the user agent (`claude-code/<entrypoint>` or `other`), with the agent type
+beneath it on a subagent's turn.
+One row is one
+client request however many attempts it took, and the attempt trail reads as "mail 429, business 200" when a 429 on the
+first account failed over to a 200 on the second. A request that waited for a slot while every account was at its cap
+carries a held marker beside its attempts with the time it waited. The search matches the request id, the session, the
+key, the model, the error code, and an attempt's account, upstream request id or upstream message id. Filters narrow the
+table: the user agent filter takes a pattern (`claude-cli/2.1.*`, `*sdk-cli*`; `*` for any run of characters, `?` for
+one, a backslash quoting either, and a value with no wildcard matching in full), the client filter takes a pattern over
+the class (`claude-code/*`), the agent type and turn origin filters pick from the values the client's hint headers and
+attribution line carry, the speed filter picks `fast` or `standard` by the speed the answer reported, and the held
+toggle keeps the requests that waited for a slot. Selecting a row opens a drawer with the request's detail, which shows
+how the request was identified beneath the client, the user agent, the model as the client spelled it and, when it
+differs, the canonical id the router recorded, its auto-mode standing (asked for a server-side check under an on
+setting; carried the safeguards member under an off setting, which the dispatch drops; refused for its body shape; or
+not requested), and the client hints: the agent type, the compaction and context-compacted markers, the turn origin, and
+the tool time before the turn; the trail names an account the model was rejected on and the one that served it, and each
+attempt names the upstream's request id under its head and, on the answer that served, the message id a Claude Code
+transcript's assistant entry carries. The drawer's effort is the level the upstream applies:
+when the client sends a per-turn control entry, the last entry's level, else the request's top-level
+`output_config.effort`; a turn that ends with such an entry still counts as the user's turn, so it starts its own
+prompt. The table holds the requests up to the moment you opened it, so paging does not shift as new ones arrive;
+Refresh brings it up to now. When the session moved during the request, the drawer says from which account to which and
+why: rate limited, wound down, account marked, over its plan, back to plan, load shed, or window spent. When its pin was
+released without a move, the drawer says from which account and every reason the router found, among: already tried this
+request, the account at its spend budget, the creating request's own client error, an account cooldown, the account
+deleted, disconnected, idle past the affinity window, funding required, in overage, paused, needing reauthorization,
+released outright, window spent, the subscription ended, never paired, or no longer serving the model. The drawer also
+shows the strategy the selection used, the tier it drew from, whether the pin continued and was renewed, moved (naming
+the rule), or was placed afresh, whether the cache answered the request and by how many of its input tokens, and every
+candidate the selection passed over with the obstacle in its way: already tried, above the ceiling, at its in-flight
+cap, at its spend budget, an account cooldown, at the pace floor, an operator hold, in overage, ranked behind another
+candidate, its subscription ended, its window spent, or winding down. A placement names where it landed: by its messages
+or by its static prefix at the depth that matched, or with the main conversation. A request held while every account was
+at its cap names the account it was held on: its cohort's, or else the last one it waited on, and how long it waited.
+The cache line reads a placement as a hit or a miss against the prefix it was promised: a placement by its messages is a
+hit when the response read at least that prefix, one by its static prefix when it read anything, and one with the main
+conversation keeps the plain cache line.
 
 ![The Requests view: the filterable table with its client column](assets/requests-light.png#only-light)
 ![The Requests view: the filterable table with its client column](assets/requests-dark.png#only-dark)
@@ -320,28 +331,29 @@ key grouping, since its figures stay with the key that spent them. The earlier h
 as the request log's, and under the user agent grouping a pattern list names the groups: `claude-cli/2.1.*` and
 `claude-cli/2.0.*` as two groups, every other agent under `other`.
 
-Traffic reports request volume by outcome and the error rate, with a Failovers chart and a Migration rewrites card
-beside it: the cache-write tokens the first request after a move paid to warm its new account, and the moves the range
-counted, by reason; then a Requests by speed chart, standard and fast per bucket, and an Effort levels card with a bar
-per level the requests asked for. Burn reports a subscription account's spend as the share of its own 5-hour and 7-day
-window and an Anthropic-key account's in dollars, side by side and each split into cached and uncached tokens, grouped
-by account, key, request class, or session; the 5-hour share carries the peak band's weight, the 7-day share none. The
-shares read under the account grouping alone, since shares of different accounts' windows do not add, and the Spend
-per minute chart draws dollars alone, a subscription account's among them only for its fast-mode answers; past the
-seven lines a chart draws, the subscription accounts folded into the rest draw their fast-mode dollars as Other (fast
-mode), or Other (fast mode, tier unknown) for those whose tier the cost table does not size. The account, key and
-request class groupings read the hourly rollups, which fold a request under the hour it arrived in and weigh it by that
-hour's band rather than at its completion, where the meter charges it. Grouped by account, it adds a Plan per hour
-chart: the share of each subscription account's 5-hour window, solid, and of its 7-day window, dashed, that its traffic
-used per hour, a bucket the table cannot price (a model it has no row for, or a cell it leaves unmeasured) listed under
-one model unlisted legend entry and drawn as a gap, a priced hour with a gap or the range's edge on both sides marked
-with a dot, an hour with no traffic counted as zero on a window the account priced in the range, a window with no
-priced bucket shown as a dash, and an account whose tier the table does not size listed as tier unknown. Latency
-reports percentiles read from the merged per-hour histograms; Cache reports the hit ratio, tokens that expired between
-turns, the share of input served from cache, and the output split into thinking and plain output; Cost reports the
-estimated spend for the range and a Fast mode spend tile, the dollars fast-mode answers drew from usage credits; Cache
-warming reports what probes cost against what they saved, where a fast-mode session's probes and credits read as dollars
-and file under speed `fast`; and Accounts reports peak utilization, ineligible time, and pin churn per account.
+Traffic reports request volume by outcome (the chart's OK, Rate limited, Failed, Incomplete and Exhausted, and the
+per-group table's Rejected beside them) and the error rate, with a Failovers chart and a Migration rewrites card beside
+it: the cache-write tokens the first request after a move paid to warm its new account, and the moves the range counted,
+by reason; then a Requests by speed chart, standard and fast per bucket, and an Effort levels card with a bar per level
+the requests asked for. Burn reports a subscription account's spend as the share of its own 5-hour and 7-day window and
+an Anthropic-key account's in dollars, side by side and each split into cached and uncached tokens, grouped by account,
+key, request class, or session; the 5-hour share carries the peak band's weight, the 7-day share none. The shares read
+under the account grouping alone, since shares of different accounts' windows do not add, and the Spend per minute chart
+draws dollars alone, a subscription account's among them only for its fast-mode answers; past the seven lines a chart
+draws, the subscription accounts folded into the rest draw their fast-mode dollars as Other (fast mode), or Other (fast
+mode, tier unknown) for those whose tier the cost table does not size. The account, key and request class groupings read
+the hourly rollups, which fold a request under the hour it arrived in and weigh it by that hour's band rather than at
+its completion, where the meter charges it. Grouped by account, it adds a Plan per hour chart: the share of each
+subscription account's 5-hour window, solid, and of its 7-day window, dashed, that its traffic used per hour, a bucket
+the table cannot price (a model it has no row for, or a cell it leaves unmeasured) listed under one model unlisted
+legend entry and drawn as a gap, a priced hour with a gap or the range's edge on both sides marked with a dot, an hour
+with no traffic counted as zero on a window the account priced in the range, a window with no priced bucket shown as a
+dash, and an account whose tier the table does not size listed as tier unknown. Latency reports percentiles read from
+the merged per-hour histograms; Cache reports the hit ratio, tokens that expired between turns, the share of input
+served from cache, and the output split into thinking and plain output; Cost reports the estimated spend for the range
+and a Fast mode spend tile, the dollars fast-mode answers drew from usage credits; Cache warming reports what probes
+cost against what they saved, where a fast-mode session's probes and credits read as dollars and file under speed
+`fast`; and Accounts reports peak utilization, ineligible time, and pin churn per account.
 
 The Cache section closes with Placements by rung: the attempts in the range the router placed by a warm prefix or beside
 the main conversation rather than by its strategy, counted by rung (by the conversation's own messages, by its static
@@ -361,12 +373,14 @@ the cost split, the cache write and read costs, and the Cache warming figures re
 log does not carry them; the Accounts section keeps reading the rollups for the range, since they carry no session, and
 its subtitle says so.
 
-![The Analytics view: the range and group-by controls over seven report sections](assets/analytics-light.png#only-light)
-![The Analytics view: the range and group-by controls over seven report sections](assets/analytics-dark.png#only-dark)
+![The Analytics view: range and group-by controls over seven tabs, Traffic shown](assets/analytics-light.png#only-light)
+![The Analytics view: range and group-by controls over seven tabs, Traffic shown](assets/analytics-dark.png#only-dark)
 
 ### Settings
 
-Settings covers appearance, access (the admin secret's status), pricing, sessions, retention, keepalive, listeners, the
-downstream client block, compatibility, and an about panel. Four more cards show the bootstrap file's quota, routing,
-storage, and usage blocks: the sample retention, the catalog cache window, the cooldown fallback, the model rejection
-window, and the attempt limit, the ledger, pricing, and storage paths, and the usage cache TTL and refresh concurrency.
+Settings opens on the downstream client configuration, the six-line environment block that points Claude Code at the
+router with a reason under each line. Its base URL is a placeholder for the URL that reaches the proxy listener, and
+the address the listener binds shows beside the block. Then come the price table, the appearance and time-format
+choices, the admin secret's status, and an About card with the version, the profile, the metrics listener and the three
+storage paths. The values the configuration file sets are on the [installation page](installation.md) and
+`phoebis check-config` prints them.

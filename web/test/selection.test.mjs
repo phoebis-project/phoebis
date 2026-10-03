@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { INELIGIBLE_LABEL, selectionOrder } from './dist/api.js';
+import { fmtPeriodEnd, fmtRelative, INELIGIBLE_LABEL, poolStatusSentence, selectionOrder } from './dist/api.js';
 
 const HOUR = 3_600_000;
 const MINUTE = 60_000;
@@ -264,9 +264,101 @@ test('pace places the floor group and a winding-down member last', () => {
   );
 });
 
-test('a member at its budget is skipped with the reason the strip names', () => {
+test('a member at its budget is skipped with the reason the serving table names', () => {
   const tiers = selectionOrder(pool('priority', 'allow', [member('plan', 0, 'budget'), member('over', 0)]), accounts, [], NOW);
   assert.deepEqual(tiers[0].next, ['over'], 'the router passes over a member whose spend reached its budget');
   const skipped = tiers[0].placements.find((p) => p.account.id === 'plan');
   assert.deepEqual([skipped.ineligible, skipped.rank, INELIGIBLE_LABEL[skipped.ineligible]], ['budget', null, 'at budget']);
+});
+
+const labelOf = (id) => accounts.find((a) => a.id === id)?.label ?? id;
+const read = (p, accs = accounts, sessions = []) => {
+  const s = poolStatusSentence(p, accs, sessions, NOW);
+  return `${s.word}: ${s.parts.map((part) => ('text' in part ? part.text : part.label)).join('')}`;
+};
+const linked = (p, accs = accounts) => poolStatusSentence(p, accs, [], NOW).parts.filter((part) => 'accountId' in part).map((part) => part.accountId);
+const at = (p, status) => ({ ...p, status });
+
+test('the status sentence reads one row of the table per pool state', () => {
+  assert.equal(read(at(pool('pace', 'allow', [member('plan', 0)]), 'disabled')), 'Disabled: the pool accepts no requests; its keys and members stay.');
+  assert.equal(read(at(pool('pace', 'allow', []), 'active')), 'Active: the pool has no members yet.');
+  assert.equal(read(at(pool('pace', 'allow', [member('plan', 0, 'cooldown')]), 'degraded')), 'Degraded: no member takes a fresh session right now.');
+  assert.equal(read(at(pool('pace', 'allow', [member('plan', 0)]), 'active')), `Active: ${labelOf('plan')} takes every fresh session.`);
+  assert.deepEqual(linked(at(pool('pace', 'allow', [member('plan', 0)]), 'active')), ['plan']);
+  assert.equal(read(at(pool('priority', 'allow', [member('plan', 0), member('over', 1)]), 'degraded')), `Degraded: all 2 members take fresh sessions; the next one goes to ${labelOf('plan')}.`);
+  assert.equal(
+    read(at(pool('priority', 'allow', [member('plan', 0), member('over', 0, 'cooldown'), member('key', 1, 'budget'), member('fresh', 1, 'overage')]), 'degraded')),
+    `Degraded: 1 of 4 members takes fresh sessions; the next one goes to ${labelOf('plan')}.`,
+  );
+});
+
+test('the status sentence names several next accounts and the earliest return', () => {
+  const two = at(pool('priority', 'allow', [member('plan', 0), member('over', 0)]), 'active');
+  const names = [...selectionOrder(two, accounts, [], NOW)[0].next].map(labelOf);
+  assert.equal(read(two), `Active: all 2 members take fresh sessions; the next one goes to ${names[0]} or ${names[1]}.`);
+  const withFresh = [...accounts, account('fresh')];
+  const three = at(pool('priority', 'allow', [member('plan', 0), member('over', 0), member('fresh', 0)]), 'active');
+  const trio = [...selectionOrder(three, withFresh, [], NOW)[0].next].map(labelOf);
+  assert.equal(trio.length, 3);
+  assert.equal(read(three, withFresh), `Active: all 3 members take fresh sessions; the next one goes to ${trio[0]}, ${trio[1]} or ${trio[2]}.`);
+  const daily = { ...member('key', 0, 'budget'), budgetUntil: hoursFromNow(5), spends: [{ period: 'day', periodEnd: hoursFromNow(5), spentUsd: 20 }] };
+  const monthly = { ...member('plan', 0, 'budget'), budgetUntil: hoursFromNow(9), spends: [{ period: 'month', periodEnd: hoursFromNow(9), spentUsd: 300 }] };
+  assert.equal(read(at(pool('pace', 'allow', [monthly, daily]), 'exhausted')), `Exhausted: no member can take a request until ${labelOf('key')}'s daily budget resets at ${fmtPeriodEnd(hoursFromNow(5))}.`);
+  assert.equal(read(at(pool('pace', 'allow', [monthly]), 'exhausted')), `Exhausted: no member can take a request until ${labelOf('plan')}'s monthly budget resets at ${fmtPeriodEnd(hoursFromNow(9))}.`);
+  const plain = { ...daily, spends: [] };
+  assert.equal(read(at(pool('pace', 'allow', [plain]), 'exhausted')), `Exhausted: no member can take a request until ${labelOf('key')}'s budget resets at ${fmtPeriodEnd(hoursFromNow(5))}.`);
+  const cooled = accounts.map((a) => (a.id === 'over' ? { ...a, cooldowns: [{ reason: 'rate_limited', scope: 'account', setAt: hoursFromNow(-1), until: hoursFromNow(1), windowId: null }] } : a));
+  assert.equal(read(at(pool('pace', 'allow', [member('over', 0, 'cooldown'), daily]), 'exhausted'), cooled), `Exhausted: no member can take a request until ${labelOf('over')}'s cooldown ends ${fmtRelative(hoursFromNow(1), NOW)}.`);
+  assert.equal(read(at(pool('pace', 'allow', [member('over', 0, 'cooldown'), member('fresh', 0, 'overage')]), 'exhausted')), 'Exhausted: no member can take a request, and none reports when it returns.');
+});
+
+test('the earliest return waits for every blocker a member reports', () => {
+  const cooledFor = (h) => accounts.map((a) => (a.id === 'over' ? { ...a, cooldowns: [{ reason: 'rate_limited', scope: 'account', setAt: hoursFromNow(-1), until: hoursFromNow(h), windowId: null }] } : a));
+  const both = { ...member('over', 0, 'cooldown'), budgetUntil: hoursFromNow(5), spends: [{ period: 'day', periodEnd: hoursFromNow(5), spentUsd: 20 }] };
+  const monthly = { ...member('plan', 0, 'budget'), budgetUntil: hoursFromNow(9), spends: [{ period: 'month', periodEnd: hoursFromNow(9), spentUsd: 300 }] };
+  assert.equal(read(at(pool('pace', 'allow', [monthly, both]), 'exhausted'), cooledFor(1)), `Exhausted: no member can take a request until ${labelOf('over')}'s daily budget resets at ${fmtPeriodEnd(hoursFromNow(5))}.`);
+  assert.equal(read(at(pool('pace', 'allow', [monthly, both]), 'exhausted'), cooledFor(7)), `Exhausted: no member can take a request until ${labelOf('over')}'s cooldown ends ${fmtRelative(hoursFromNow(7), NOW)}.`);
+  assert.equal(read(at(pool('pace', 'allow', [both]), 'exhausted')), 'Exhausted: no member can take a request, and none reports when it returns.');
+});
+
+test('the status sentence covers a member without an account and an order without a next', () => {
+  assert.equal(read(at(pool('pace', 'allow', [member('ghost', 0)]), 'active')), 'Active: ghost takes every fresh session.');
+  assert.deepEqual(linked(at(pool('pace', 'allow', [member('ghost', 0)]), 'active')), []);
+  assert.equal(read(at(pool('pace', 'allow', [member('ghost', 0), member('plan', 0, 'cooldown')]), 'degraded')), 'Degraded: no listed member takes fresh sessions.');
+});
+
+test('under never an overage window holds a member past its cooldown or budget', () => {
+  const overageUntil = (h) => ({ inUse: true, observedAt: hoursFromNow(-1), reset: h === null ? null : hoursFromNow(h), since: hoursFromNow(-2) });
+  const cooledFor = (h) => [{ reason: 'rate_limited', scope: 'account', setAt: hoursFromNow(-1), until: hoursFromNow(h), windowId: null }];
+  const pair = [account('held', { cooldowns: cooledFor(1), overage: overageUntil(3) }), account('cooled', { cooldowns: cooledFor(2) })];
+  const both = [member('held', 0, 'cooldown'), member('cooled', 0, 'cooldown')];
+  assert.equal(
+    read(at(pool('pace', 'never', both), 'exhausted'), pair),
+    `Exhausted: no member can take a request until cooled's cooldown ends ${fmtRelative(hoursFromNow(2), NOW)}.`,
+    'the overage window outlasts the cooldown, so the member with a plain cooldown returns first',
+  );
+  assert.equal(read(at(pool('pace', 'never', [both[0]]), 'exhausted'), pair), `Exhausted: no member can take a request until held's overage window resets ${fmtRelative(hoursFromNow(3), NOW)}.`);
+  const unknown = [account('held', { cooldowns: cooledFor(1), overage: overageUntil(null) })];
+  assert.equal(read(at(pool('pace', 'never', [both[0]]), 'exhausted'), unknown), 'Exhausted: no member can take a request, and none reports when it returns.', 'an overage window without a reset gives no return');
+  const budgeted = { ...member('held', 0, 'budget'), budgetUntil: hoursFromNow(5), spends: [{ period: 'day', periodEnd: hoursFromNow(5), spentUsd: 20 }] };
+  assert.equal(read(at(pool('pace', 'never', [budgeted]), 'exhausted'), [account('held', { overage: overageUntil(7) })]), `Exhausted: no member can take a request until held's overage window resets ${fmtRelative(hoursFromNow(7), NOW)}.`);
+  assert.equal(read(at(pool('pace', 'allow', both), 'exhausted'), pair), `Exhausted: no member can take a request until held's cooldown ends ${fmtRelative(hoursFromNow(1), NOW)}.`, 'under allow the overage window holds nobody');
+});
+
+test('while the accounts are unread the status sentence says only what the verdicts carry', () => {
+  const degraded = at(pool('priority', 'allow', [member('plan', 0), member('over', 0, 'cooldown')]), 'degraded');
+  const active = at(pool('priority', 'allow', [member('plan', 0), member('over', 1)]), 'active');
+  const single = at(pool('pace', 'allow', [member('plan', 0)]), 'active');
+  const exhausted = at(pool('pace', 'allow', [member('over', 0, 'cooldown')]), 'exhausted');
+  const cooled = accounts.map((a) => (a.id === 'over' ? { ...a, cooldowns: [{ reason: 'rate_limited', scope: 'account', setAt: hoursFromNow(-1), until: hoursFromNow(1), windowId: null }] } : a));
+  const unread = [degraded, active, single, exhausted].map((p) => read(p, null));
+  assert.deepEqual(unread, ['Degraded: 1 of 2 members takes fresh sessions.', 'Active: all 2 members take fresh sessions.', "Active: the pool's one member takes every fresh session.", 'Exhausted: no member can take a request.']);
+  assert.deepEqual(
+    [degraded, active, single, exhausted].flatMap((p) => poolStatusSentence(p, null, [], NOW).parts.filter((part) => !('text' in part) || /\b(over|plan)\b/.test(part.text))),
+    [],
+    'no account part and no raw account id',
+  );
+  assert.equal(read(degraded), `Degraded: 1 of 2 members takes fresh sessions; the next one goes to ${labelOf('plan')}.`);
+  assert.equal(read(single), `Active: ${labelOf('plan')} takes every fresh session.`);
+  assert.equal(read(exhausted, cooled), `Exhausted: no member can take a request until ${labelOf('over')}'s cooldown ends ${fmtRelative(hoursFromNow(1), NOW)}.`);
 });

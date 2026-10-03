@@ -114,8 +114,8 @@ that period ends.
 Anthropic keys) before priority; it is the operator's answer alone, on by default, and no strategy overrides it. A pool
 with keys cannot be deleted: `409 pool still has keys`.
 
-Each strategy's rule, as the console states it on the pool card (the pool dialog's "Prioritize subscription
-accounts" toggle sets `prefer_subscription`):
+Each strategy's rule, as the pool dialog's Strategy hint states it (the pool dialog's "Prioritize subscription accounts"
+toggle sets `prefer_subscription`):
 
 **`pace`**: Within the first priority tier that has an eligible account, the one with the most weekly allowance left
 per hour until its window resets or its subscription ends; an unsampled account counts as untouched, and ties are
@@ -136,7 +136,8 @@ canonical ids. `plan` defaults to one hour throughout and `metered` to five minu
 metered account 2x base input against 1.25x for five minutes, and a plan-funded account the same window share either
 way. With the policy on, every `cache_control` marker in the body is rewritten to the TTL the request's set and branch
 choose, the ones inside a tool result's own content included, the `extended-cache-ttl-2025-04-11` beta travels exactly
-when the body is one hour, and the `cch` hash is restamped. A body whose marker the relay's cache TTL guard cannot reach
+when the body is one hour, and the `cch` hash is restamped when the client sent one; a restored placeholder `cch=00000`
+stays unsigned unless `proxy.sign_cch_placeholder` is on. A body whose marker the relay's cache TTL guard cannot reach
 (a key on the marker's path spelled with an escape) is refused `400` with the error code `body_shape`, so a TTL the
 policy could not enforce never travels unreported. On every other body the client's own `CLAUDE_CODE_PROMPT_CACHE_TTL`
 has no effect through the pool. A body that carries no marker is left as it came unless `inject_when_absent` is on, in
@@ -148,10 +149,12 @@ The TTL is priced per attempt, so a request that fails over reads its destinatio
 requests are fine: the cache is keyed on the prefix, and the TTL sets an entry's lifetime and price alone. The cost of
 each choice is on the [keepalive page](keepalive.md#the-cost-reference).
 
-![The Pools view: one card per pool with its strategy, affinity, overage policy, keepalive state, members, and keys;
-the codex pool reads exhausted because its one member is at its daily budget][pl]
-![The Pools view: one card per pool with its strategy, affinity, overage policy, keepalive state, members, and keys;
-the codex pool reads exhausted because its one member is at its daily budget][pd]
+![The Pools view: one card per pool with its status badge and key count, the features it has on, one sentence on what
+the status means, what needs attention and a table of who serves next; the codex pool reads exhausted because its one
+member is at its daily budget][pl]
+![The Pools view: one card per pool with its status badge and key count, the features it has on, one sentence on what
+the status means, what needs attention and a table of who serves next; the codex pool reads exhausted because its one
+member is at its daily budget][pd]
 
 [pl]: assets/pools-light.png#only-light
 [pd]: assets/pools-dark.png#only-dark
@@ -454,10 +457,11 @@ fast request's pinned account whose `fast_credits` row stands or whose usage cre
 `fast_rate_limit` (one whose `fast` row is the blocking row that stands latest), `overage`, `paused`, `spent`,
 `subscription_ended`, `unserved`, the account's state when it cannot serve (`disconnected`, `funding_required`,
 `reauth_required`, `unpaired`), or `released` when the selection found nothing else against the account, as with a move
-whose destination emptied. A pin whose creating request was answered 400, 401, 403, or 404, with no cooldown or mark on
-the account and no other turn of the session renewing it meanwhile, records the single reason `client_error`: it never
-served, so the session's next request is placed afresh rather than moved. Releasing a session by hand, from the Sessions
-view or `POST /admin/sessions/{key}/{session}/release`, expires its pin the same way.
+whose destination emptied. A pin whose creating request was answered 400, 403, or 404, or was bound to its account and
+ended at an authentication failure that marked nothing, with no cooldown or mark on the account and no other turn of the
+session renewing it meanwhile, records the single reason `client_error`: it never served, so the session's next request
+is placed afresh rather than moved. Releasing a session by hand, from the Sessions view or
+`POST /admin/sessions/{key}/{session}/release`, expires its pin the same way.
 
 ## Cooldowns and failover
 
@@ -512,14 +516,23 @@ auxiliary class, or a request foreign to the conversation) moves that pin too.
 
 | Upstream result | Cooldown | Failover |
 | --- | --- | --- |
-| 401, or 403 with `authentication_error`, Oauth | Refresh once, else `reauth_required` | Yes, post-refresh |
-| 401, or 403 with `authentication_error`, api_key | `reauth_required` now | Yes |
+| 401, or 403 `authentication_error`, Oauth | Refresh; `reauth_required` if conclusive | Yes; never forwarded |
+| 401, or 403 `authentication_error`, api_key | `reauth_required` now | Yes; never forwarded |
 | 403 `permission_error` | Model-scoped, one hour, reason permission; credential stays valid | Yes |
 | 404 `not_found_error` naming a model | Model-scoped, `routing.model_rejection_seconds`, reason model_rejected | Yes |
 | 529 | None | No; forwarded, retries |
 | Other 5xx | None | No; forwarded |
 | Transport failure before fully written | None | Yes, once, same account |
 | Transport failure after fully written, no head | None | No; 502 `upstream_unreachable`, client retries |
+| 200 head, body ends before its end | None | No; the request reads `incomplete` |
+
+A `401` whose body is too large to classify fails over unread, while a `403` whose body is too large to classify is
+forwarded as it came, since it cannot be told from a `permission_error`.
+
+An `incomplete` request's error code says how its body ended: `stream_cut` when the connection or the decoder failed
+mid-body, `stream_incomplete` when an event stream closed without its `message_stop`, and `stream_stalled` when the
+upstream went silent past the idle bound. A forwarded answer with any other status stays `failed`, and its error code
+reads `stream_cut` or `stream_stalled` when its body was cut or went silent.
 
 `Retry-After` parsing is case-insensitive and accepts integer seconds or an HTTP date, rounding fractional
 seconds up; anything non-finite, negative, malformed, or absent is invalid, and an api_key row then takes the
@@ -543,9 +556,9 @@ the account is skipped for that model for `routing.model_rejection_seconds` (an 
 to the next member, and the ledger records `model_rejected` for the refusing account and `model_permitted` for the
 one that served it. A 404 naming no model, and every 400 and 422, reach the client as they came.
 
-Each client request runs at most `routing.max_attempts` wire submissions; a same-account retry after a transport
-failure before the request was written counts, and the strip-and-retry does not, as the paragraph after the steps
-says. Each attempt goes through these steps:
+Each client request visits every eligible account of the pool at most once; a same-account retry after a transport
+failure before the request was written, the one refresh replay, the one strip retry and the one retry in place keep
+their own bounds, as the paragraph after the steps says. Each attempt goes through these steps:
 
 1. Ask the router. `timed` answers `429` with `Retry-After: ceil(deadline - now)` and the three unified rate-limit
    headers the client's automatic continue reads; `untimed` answers `503` with error code `accounts_unavailable` and no
@@ -556,18 +569,38 @@ says. Each attempt goes through these steps:
 3. Classify the head. A short throttle on a portable request is waited out on the same account
    ([retry in place](#retry-in-place)). Any other failover row on a portable request records the cooldown, invalidates
    the matching pin, and returns to step 1; on a non-portable request it records the cooldown and commits the failed
-   response instead. Any other row commits and relays the response.
+   response instead. An authentication failure is the exception: it is never committed (see the paragraph after these
+   steps), and the failover leaves the pin of an account it marks for the next selection to end. Any other row commits
+   and relays the response.
 4. Once the committed response ends, renew the pin with the usage it carried: the served account is final for this
-   request. A pin this request created and whose answer is `400`, `401`, `403`, or `404` is released instead, since
-   it never served, unless another turn of the session renewed it meanwhile; a `429` keeps the cooldown path of step 3.
+   request. A pin this request created and whose answer is `400`, `403`, or `404` is released instead, since it never
+   served, unless another turn of the session renewed it meanwhile, and so is one a non-portable request created
+   before an authentication failure that marked nothing; a `429` keeps the cooldown path of step 3.
+
+An upstream `401`, or a `403` whose body is an `authentication_error`, never reaches the client. On an OAuth account the
+router refreshes the token and replays the request on a new token. A refresh the token endpoint refused without rotating
+anything is tried a second time within the transient backoff, about five seconds unless the endpoint asked for longer;
+after a token endpoint's `5xx` or a lost answer the request is held on the same account for up to a minute, then
+refreshed a second time, so a session keeps its warm account through the endpoint's bad minute, which is waited out once
+per request; a refusal whose `Retry-After` is over five seconds and within the minute counts as that minute, so a
+request that already held its minute on another account fails over at once. A `Retry-After` past that minute, a second
+failure, or an Anthropic-key account's failure fails the request over to the next eligible account, and a request bound
+to its account, or one with no account left, is answered the router's own `503 accounts_unavailable` with no account
+named. An account the failover marks, or finds disconnected, keeps its pin until the reselect expires it and places a
+fresh one; any other failover moves the pin. The failover, its waits included, starts no new leg past the request's own
+deadline, ten minutes less a margin: past it the request is answered `503 accounts_unavailable` rather than tried on
+another account. The attempt rows read `auth_failed` with the upstream status, and the account reads `reauth_required`
+after a conclusive failure (a rejected replay, an `invalid_grant`, a token endpoint's `401`), which the Accounts view
+and the `reauth_required` alert show.
 
 A stream commits at its `message_start` event or its first `error` event, whichever comes first; earlier events
 are buffered, up to 64 KiB, and relayed after commit in order; a stream that exceeds the buffer or sends no
-committing event within 30 seconds commits as received. Every wire submission counts against
-`routing.max_attempts`, including the one same-account retry after a transport failure that happened before the
-request was fully written, with one exception: when an upstream answers 400 naming a beta or field the router
-itself added, the router strips it and retries once on the same account, and that retry costs no attempt, since
-it corrects the router's own edit rather than trying another account.
+committing event within 30 seconds commits as received. The failover visits every eligible account once per request,
+since every failover row (a credit-balance 400, a 401, a 403, a model 404, a 429) refuses before any inference and a
+visit costs no tokens; the same-account retries keep their bounds: one transport retry after a failure that happened
+before the request was fully written, one refresh replay, one strip retry when an upstream answers 400 naming a beta or
+field the router itself added (the router strips it and retries once on the same account, correcting its own edit), and
+one retry in place for a short throttle.
 
 The Accounts view shows what an account is cooling under in a cooling-down block: one line per scope, the whole
 account or one model, with the reason, the deadline, and a clear button; the Models view lists the same rows grouped
@@ -582,9 +615,9 @@ presets beside custom: balanced (16, 10 s, 5 %, the default), fast (8, 5 s, 10 %
 A throttle on a portable request whose `Retry-After` is at or under the pool's `retry_in_place_seconds` (default 10) is
 waited out on the same account and retried there once, with the same credential. The cooldown row is still recorded, so
 a sibling request selecting meanwhile skips the account, and the session's pin stays where it is. The retry is a wire
-submission like any other and costs one attempt of `routing.max_attempts`, so it runs only while the budget has one
-left; without one, the throttle is the client's answer. A second throttle on the retry, a `Retry-After` past the bound,
-a throttle that names no `Retry-After`, and a request bound to its account all take the failover path above.
+submission like any other and runs once per leg. A second throttle on the retry, a `Retry-After` past the bound or past
+the request's deadline, a throttle that names no `Retry-After`, and a request bound to its account all take the failover
+path above.
 
 ### In-flight caps
 
@@ -600,11 +633,12 @@ lands there when one frees; past the bound it is selected again with that accoun
 passed over it is answered `429` with the error type `rate_limit_error`, the error code `accounts_at_cap`, the message
 `every account in this pool is at its in-flight cap`, and a `Retry-After` of the pool's `retry_in_place_seconds` held
 between 1 and 19 seconds: the client waits out a `Retry-After` under 20 seconds and treats a longer one as a block it
-does not retry. A hold costs one attempt of `routing.max_attempts`, and a hold that would leave none for the dial is
-answered the same `429` at once. A request that dialled an account before its holds ran out, and a pool with no account
-to hold for, keep the `503 accounts_unavailable` below. A request whose session already holds a pin under any agent is
-never held, and a move whose every destination is at its cap is not made: the pin renews in place and the next request
-judges the move again; a held subagent waits where its cohort is.
+does not retry. A request is held at most once per account: a hold that runs out, or whose freed slot another request
+takes first, adds the account to the request's attempted set and the selection runs again; with every account held for
+and passed over, the answer is the `429` above. A request that dialled an account before its holds ran out, and a pool
+with no account to hold for, keep the `503 accounts_unavailable` below. A request whose session already holds a pin
+under any agent is never held, and a move whose every destination is at its cap is not made: the pin renews in place and
+the next request judges the move again; a held subagent waits where its cohort is.
 
 ### When nothing can serve
 

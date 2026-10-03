@@ -3,6 +3,7 @@
 
 use std::path::PathBuf;
 
+use anyhow::Context;
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
@@ -27,15 +28,18 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Validate the configuration and list what it binds, without opening the store or a listener.
+    /// Validate the configuration, the key file and the registry's key canary, taking no lock and opening no socket.
     CheckConfig,
-    /// Probe the proxy listener's `/api/hello`: exit 0 when it answers 200, 1 otherwise.
+    /// Probe the proxy listener's `/api/ready`: exit 0 when it answers 200, 1 otherwise.
     Health,
 }
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
-    let config = phoebis_router::config::load(&cli.config)?;
+    let mut config = match cli.command {
+        Some(Command::CheckConfig) => phoebis_router::config::load_unresolved(&cli.config)?,
+        _ => phoebis_router::config::load(&cli.config)?,
+    };
     match cli.command {
         Some(Command::CheckConfig) => {
             println!("{} is valid", cli.config.display());
@@ -43,13 +47,21 @@ fn main() -> anyhow::Result<()> {
             println!("admin listens on {}", config.admin.listen);
             println!("metrics listens on {}", config.stats.metrics_listen);
             println!(
+                "proxy: body budget {} bytes, body read {}s, key body reads {}, max request {} bytes, \
+                 sign cch placeholder {}, upstream gzip {}",
+                config.proxy.body_budget_bytes,
+                config.proxy.body_read_seconds,
+                config.proxy.key_body_reads,
+                config.proxy.max_request_bytes,
+                if config.proxy.sign_cch_placeholder { "on" } else { "off" },
+                config.proxy.upstream_gzip
+            );
+            println!(
                 "profile {}",
                 phoebis_profile::claude_code_2_1_269_linux_x64().name
             );
             println!(
-                "routing: max_attempts {}, cooldown_fallback {}s, model_rejection {}s, catalog refresh {}s, \
-                 startup fetch {}s",
-                config.routing.max_attempts,
+                "routing: cooldown_fallback {}s, model_rejection {}s, catalog refresh {}s, startup fetch {}s",
                 config.routing.cooldown_fallback_seconds,
                 config.routing.model_rejection_seconds,
                 config.routing.catalog_refresh_seconds,
@@ -68,6 +80,40 @@ fn main() -> anyhow::Result<()> {
                 config.keepalive.max_agents,
                 config.keepalive.max_retained_bytes >> 20
             );
+            let key_file = &config.storage.encryption_key_file;
+            let key = phoebis_store::StorageKey::from_file(key_file).with_context(|| {
+                format!("reading storage.encryption_key_file {}", key_file.display())
+            })?;
+            let registry = &config.storage.path;
+            // The mismatch names the registry itself and is the whole finding; any other failure (an unreadable
+            // directory, a file that is not a database) says nothing of which file it met.
+            let canary = phoebis_store::Store::read_canary(registry, &key).map_err(|error| match error {
+                phoebis_store::StoreError::KeyMismatch { .. } => anyhow::Error::new(error),
+                error => anyhow::Error::new(error)
+                    .context(format!("reading the registry at {}", registry.display())),
+            })?;
+            match canary {
+                phoebis_store::CanaryRead::NoRegistry => println!(
+                    "registry at {} does not exist yet; the first start creates it",
+                    registry.display()
+                ),
+                phoebis_store::CanaryRead::SealedRowMatches => println!(
+                    "registry at {} has no key canary yet; a sealed row opens under the key, and the next \
+                     start seals one",
+                    registry.display()
+                ),
+                phoebis_store::CanaryRead::Absent | phoebis_store::CanaryRead::Matches => {}
+            }
+            let name = &config.admin.secret_env;
+            if phoebis_router::config::secret_is_unset(name) {
+                println!("warning: environment variable {name} is unset or empty");
+            }
+            match phoebis_router::config::resolve_secrets(&mut config) {
+                // An unset variable was warned about above: the file is checked without the unit's environment.
+                // A set one the start refuses (too short, the example's placeholder) is the same finding here.
+                Ok(()) | Err(phoebis_router::config::ConfigError::MissingSecret { .. }) => {}
+                Err(error) => return Err(error.into()),
+            }
             for warning in phoebis_store::permissions::check_private_file(&config.storage.encryption_key_file, 0o600) {
                 println!("warning: {warning}");
             }

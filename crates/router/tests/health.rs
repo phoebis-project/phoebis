@@ -54,7 +54,7 @@ fn answering(status: &'static str) -> (SocketAddr, std::thread::JoinHandle<Strin
 }
 
 #[test]
-fn a_listener_answering_200_passes_and_is_asked_for_hello_by_head() {
+fn a_listener_answering_200_passes_and_is_asked_for_ready_by_head() {
     let (addr, served) = answering("200 OK");
     assert_eq!(
         phoebis_router::health::probe(addr, phoebis_router::health::TIMEOUT),
@@ -62,7 +62,7 @@ fn a_listener_answering_200_passes_and_is_asked_for_hello_by_head() {
     );
     let request = served.join().unwrap();
     assert!(
-        request.starts_with("HEAD /api/hello HTTP/1.1\r\n"),
+        request.starts_with("HEAD /api/ready HTTP/1.1\r\n"),
         "{request}"
     );
     assert!(

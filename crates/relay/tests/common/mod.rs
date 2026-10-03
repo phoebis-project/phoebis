@@ -17,7 +17,9 @@ use phoebis_profile::{
     claude_code_2_1_269_linux_x64,
     fixtures::{body, inference_head, BodyFixture, FixtureKind},
 };
-use phoebis_relay::{router, CatalogService, Limits, OriginalHead, Relay, RelayOutcome};
+use phoebis_relay::{
+    router, CatalogService, Limits, OriginalHead, Relay, RelayOutcome, UpstreamGzip,
+};
 use phoebis_routing::{spawn, RouterConfig, RouterHandle};
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, Affinity, ApiKeyRow, Failover, Identity,
@@ -167,6 +169,8 @@ pub struct Harness {
     /// with no address, so a shared pool would hand either fake the other's connection.
     pub catalog_up: FakeUpstream,
     pub clock: Arc<AtomicI64>,
+    /// The manager the relay was built with, so a test reads `backoff_until` before it steps the clock.
+    pub manager: Arc<phoebis_oauth::CredentialManager>,
     /// The relay behind `app`, for the suites that serve it on a real socket instead of calling it in process.
     pub relay: Arc<Relay>,
     pub router: RouterHandle,
@@ -311,6 +315,7 @@ pub async fn harness_with_router_config(
         pool,
         default_limits(),
         None,
+        false,
         None,
         None,
         config,
@@ -374,6 +379,7 @@ pub async fn harness_on(
         pool,
         limits,
         None,
+        false,
         None,
         None,
         RouterConfig::default(),
@@ -396,6 +402,7 @@ pub async fn harness_on_with_bus(
         pool,
         default_limits(),
         Some(bus),
+        false,
         None,
         None,
         RouterConfig::default(),
@@ -419,7 +426,31 @@ pub async fn harness_with_memory_cap(
         pool,
         default_limits(),
         None,
+        false,
         Some(cap),
+        None,
+        RouterConfig::default(),
+    )
+    .await
+}
+
+/// The default harness with `proxy.sign_cch_placeholder` on, for the cases about the restored placeholder's
+/// signature.
+pub async fn harness_with_signed_placeholder(
+    up: &FakeUpstream,
+    accounts: &[TestAccount],
+    pool: PoolSpec,
+) -> Harness {
+    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+    build(
+        store,
+        up,
+        accounts,
+        pool,
+        default_limits(),
+        None,
+        true,
+        None,
         None,
         RouterConfig::default(),
     )
@@ -452,6 +483,7 @@ pub async fn harness_with_bus_limits(
         pool,
         limits,
         Some(bus),
+        false,
         None,
         None,
         RouterConfig::default(),
@@ -475,6 +507,7 @@ pub async fn harness_with_catalog(
         pool,
         default_limits(),
         None,
+        false,
         None,
         Some(catalog_up),
         RouterConfig::default(),
@@ -500,6 +533,7 @@ pub async fn harness_with_bus_and_catalog(
         pool,
         default_limits(),
         Some(bus),
+        false,
         None,
         Some(catalog_up),
         RouterConfig::default(),
@@ -523,6 +557,7 @@ pub async fn harness_with_store_and_catalog(
         pool,
         default_limits(),
         None,
+        false,
         None,
         Some(catalog_up),
         RouterConfig::default(),
@@ -538,6 +573,7 @@ async fn build(
     pool: PoolSpec,
     limits: Limits,
     bus: Option<Bus>,
+    sign_placeholder: bool,
     memory_cap: Option<usize>,
     catalog_up: Option<FakeUpstream>,
     router_config: RouterConfig,
@@ -738,7 +774,7 @@ async fn build(
     ));
     let relay = Relay::new(
         store.clone(),
-        manager,
+        manager.clone(),
         pool,
         router_handle.clone(),
         resolver,
@@ -752,6 +788,7 @@ async fn build(
     // A tick fast enough for a test to step the clock and wait on it in real time, rather than the production
     // default's six-hour interval.
     let refresh = catalog.spawn_refresh(Duration::from_secs(21_600), Duration::from_millis(20));
+    let relay = relay.with_signed_placeholder(sign_placeholder);
     // Before the store is attached, which rebuilds the memory around whatever cap it finds.
     let relay = match memory_cap {
         // The idle bound the relay's own default carries, so the cap is the only thing that differs.
@@ -769,12 +806,34 @@ async fn build(
         catalog: catalog.clone(),
         catalog_up,
         clock: clock_cell,
+        manager,
         relay,
         router: router_handle,
         _refresh: RefreshGuard(refresh),
         _stop: CatalogGuard(catalog),
         store,
     }
+}
+
+/// Moves the shared clock to the backoff the manager armed on `account` after a failed refresh, so a request held
+/// on the account through that backoff goes on. The fake records a token `POST` before it answers and the manager
+/// arms the backoff after the answer, so the step waits for the armed instant itself: a step taken as soon as the
+/// `POST` shows could land before the arming and leave the hold waiting on a clock nothing moves.
+pub async fn step_to_backoff(h: &Harness, up: &FakeUpstream, account: &str) {
+    wait_for(Duration::from_secs(5), || {
+        up.requests()
+            .iter()
+            .any(|r| r.line.starts_with("POST /v1/oauth/token"))
+            .then_some(())
+    })
+    .await;
+    let until = wait_for(Duration::from_secs(5), || {
+        h.manager
+            .backoff_until(account)
+            .filter(|until| *until > h.clock.load(Ordering::SeqCst))
+    })
+    .await;
+    h.clock.store(until, Ordering::SeqCst);
 }
 
 /// A fake serving plain HTTP has no certificate to trust, and `X509::from_pem` refuses the empty string.
@@ -787,15 +846,18 @@ fn trust_fake_ca(builder: &mut boring::ssl::SslConnectorBuilder, up: &FakeUpstre
 /// Bounds no test is meant to reach unless it asks for them.
 pub fn default_limits() -> Limits {
     Limits {
+        body_budget_bytes: 512 << 20,
         // The configuration's own default, so a test that wants the cap to bite asks for it.
         body_capture_max_hours: 72,
+        body_read_timeout: Duration::from_secs(60),
         cooldown_fallback: Duration::from_secs(60),
         head_timeout: Duration::from_secs(10),
         hold_timeout: Duration::from_secs(30),
         idle_timeout: Duration::from_secs(600),
-        max_attempts: 3,
+        key_body_reads: 128,
         max_request_bytes: 32 << 20,
         model_rejection: Duration::from_secs(3_600),
+        upstream_gzip: UpstreamGzip::Auto,
     }
 }
 

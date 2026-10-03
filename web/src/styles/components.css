@@ -16,23 +16,29 @@
   border-right: 1px solid var(--hairline);
 }
 
+/* No right padding: the name at 17 px needs the row's whole width on a wide system font. */
 .brand {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 2px 8px 18px;
+  gap: 12px;
+  padding: 2px 0 18px 8px;
 }
 
 .brand__mark {
   display: grid;
   place-items: center;
-  width: 28px;
-  height: 28px;
+  width: 36px;
+  height: 36px;
 }
 
+/* On DejaVu Sans Bold, about the widest system font a browser picks, the name ends 6.7 px inside the row. A wider font
+   then shrinks the mark's box to the 26 px logo (10 px more) and runs into the sidebar's 12 px padding; the name never
+   wraps under the mark, and it reaches the border only on a font about 29 px wider. */
 .brand__name {
+  font-size: 17px;
   font-weight: 600;
   letter-spacing: -0.01em;
+  white-space: nowrap;
 }
 
 .login .brand {
@@ -97,6 +103,10 @@
   align-items: center;
   gap: 8px;
   padding: 3px 0;
+}
+
+.sidebar__expert {
+  cursor: pointer;
 }
 
 .status-dot {
@@ -319,8 +329,10 @@
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
 }
 
+/* A strip wider than a narrow viewport wraps, so its last tabs stay on screen. */
 .tabs {
   display: flex;
+  flex-wrap: wrap;
   gap: 2px;
   border-bottom: 1px solid var(--hairline);
 }
@@ -932,8 +944,9 @@ textarea.input {
   max-height: none;
 }
 
-/* The rail's 220 px, less its border, its 9 px sides and a row's 10 px sides, leave a group label 181 px: room for
-   the widest label chosen at weight 600 with its refusal dot, so no rail row wraps. */
+/* The rail's 220 px, less its border, its 9 px sides and a row's 20 px left and 10 px right, leave a group label
+   171 px. The longest, Overage and plan end, takes 161.7 px chosen at weight 600 in DejaVu Sans, the face system-ui
+   falls back to on a stock Linux host; the refusal dot sits outside the label's flow and takes none of it. */
 .dialog__rail-split {
   display: grid;
   flex: 1 1 auto;
@@ -943,14 +956,14 @@ textarea.input {
   border-top: 1px solid var(--hairline);
 }
 
-/* Sized so the pool dialog's 23 entries fit the rail's 623 px at 1280 by 800 with room: 18 group rows of 24.25 px,
-   5 parent rows of 19.75 px, 2 px inside a run, 8 px between runs and 8 px of padding sum to 619.25 px. Past that, or
-   on a shorter viewport, the rail scrolls and each run's parent heading holds the top until the next run's heading
+/* Sized so the pool dialog's 23 entries fit the rail's 623 px at 1280 by 800 with room: 18 group rows of 22.25 px,
+   5 parent rows of 19.75 px, 2 px inside a run, 14 px between runs and 8 px of padding sum to 607.25 px. Past that,
+   or on a shorter viewport, the rail scrolls and each run's parent heading holds the top until the next run's heading
    pushes it off. */
 .dialog-rail {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 14px;
   padding: 8px 9px;
   overflow-y: auto;
   background: var(--surface-2);
@@ -958,31 +971,52 @@ textarea.input {
 }
 
 .dialog-rail__run {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 2px;
 }
 
+/* A hairline centred in the gap above every run after the first, so the parents read as headings; absolute, so it
+   adds no height to the rail's fit. */
+.dialog-rail__run + .dialog-rail__run::before {
+  position: absolute;
+  top: -7px;
+  right: 0;
+  left: 0;
+  height: 1px;
+  content: '';
+  background: var(--hairline);
+}
+
+/* A flat rail makes every group a run of its own, so it takes back the gap and drops the line the parents' runs get. */
+.dialog-rail--flat {
+  gap: 8px;
+}
+
+.dialog-rail--flat .dialog-rail__run::before {
+  content: none;
+}
+
 /* A sticky edge sits inside the scroller's padding, so the heading takes back the rail's 8 px to hold flush at its top,
-   where no group shows above it. */
+   where no group shows above it. The eyebrow keeps its ink under the pointer: position, not color, tells a parent
+   from its groups. */
 .dialog-rail__parent {
   position: sticky;
   top: -8px;
   z-index: 1;
+  display: flex;
+  align-items: baseline;
   padding: 3px 10px;
   font-size: 11px;
   font-weight: 600;
   line-height: 1.25;
-  color: var(--ink-3);
+  color: var(--ink-2);
   text-align: left;
   text-transform: uppercase;
   letter-spacing: 0.04em;
   background: var(--surface-2);
   border: 0;
-}
-
-.dialog-rail__parent:hover {
-  color: var(--ink);
 }
 
 .dialog-rail__group {
@@ -996,6 +1030,15 @@ textarea.input {
   border-radius: var(--radius-sm);
 }
 
+/* Under a parent a group indents 10 px past the parent's label and gives up 1 px of vertical padding a side, which is
+   what keeps the rail inside its height once the runs stand 14 px apart. A flat rail has no parent and keeps 4 px. */
+.dialog-rail__run.has-parent .dialog-rail__group {
+  position: relative;
+  display: flex;
+  align-items: baseline;
+  padding: 3px 10px 3px 20px;
+}
+
 .dialog-rail__group:hover {
   color: var(--ink);
   background: var(--surface-3);
@@ -1007,7 +1050,7 @@ textarea.input {
   background: var(--accent-soft);
 }
 
-/* The dot follows its label, so nothing on the rail sits at the right edge. */
+/* The dot follows its label, so nothing on the flat rail sits at the right edge. */
 .dialog-rail__dot {
   display: inline-block;
   width: 6px;
@@ -1016,6 +1059,40 @@ textarea.input {
   vertical-align: middle;
   background: var(--critical-ink);
   border-radius: 50%;
+}
+
+/* A mark says what a first pool needs: the eyebrow's size and a resting parent's ink set it apart from the label, and a
+   weight of its own keeps a chosen entry's 600 off it. It follows its label by the gap the flat rail's dot takes. */
+.dialog-rail__mark {
+  margin-left: 6px;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--ink-2);
+}
+
+/* Under a parent a row is one flex line: a mark after the label keeps its width, and the label gives way to an
+   ellipsis on a face wider than the one the rail is sized for, where a wrap would grow the row and push the rail past
+   its height. */
+.dialog-rail__run.has-parent .dialog-rail__label {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dialog-rail__run.has-parent .dialog-rail__mark {
+  flex: none;
+}
+
+/* In the row's right padding, so a refusal costs the label no width; a parent's sticky box anchors it as a group's
+   relative one does. */
+.dialog-rail__run.has-parent .dialog-rail__dot {
+  position: absolute;
+  top: 50%;
+  right: 2px;
+  margin-left: 0;
+  transform: translateY(-50%);
 }
 
 .dialog-rail__break {
@@ -1083,6 +1160,22 @@ textarea.input {
   padding: 0;
 }
 
+/* The discovery line reads in the hint's type and the readable ink, and its link keeps the side padding a sentence's
+   link gives up, so the words stand off the count. */
+.dialog-group__more {
+  color: var(--ink-2);
+}
+
+.dialog-group .dialog-group__more-link {
+  padding: 0 4px;
+}
+
+/* A wrapped field keeps its own place in the cell grid: the wrapper draws no box, and the grid's child rules reach
+   through it below. */
+.expert {
+  display: contents;
+}
+
 /* A scrolling wrapper clips on both axes, and the key table's row menu must extend below its last row. The members
    table draws nothing outside itself, so it keeps its sideways scroll for a frame too narrow for it. The child
    combinators leave a dialog opened from a group, such as the cost reference, scrolling its own table. */
@@ -1097,12 +1190,14 @@ textarea.input {
   gap: 14px 32px;
 }
 
-.cells > * {
+.cells > *,
+.cells > .expert > * {
   grid-column: 1 / -1;
   min-width: 0;
 }
 
-.cells > .cell--half {
+.cells > .cell--half,
+.cells > .expert > .cell--half {
   grid-column: span 1;
 }
 
@@ -1157,7 +1252,8 @@ textarea.input {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .cells > .cell--half {
+  .cells > .cell--half,
+  .cells > .expert > .cell--half {
     grid-column: 1 / -1;
   }
 }
@@ -1400,6 +1496,21 @@ textarea.input {
   color: var(--ink-2);
 }
 
+/* The lead and the paragraph it discloses stack beside the head's action; the paragraph's own 4 px top margin makes
+   the 2 px gap read as 6 px. */
+.page-head__lead {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+/* The head's action keeps the top right on one line, so opening the paragraph neither drops nor wraps it. */
+.page-head__lead + .link-btn {
+  flex-shrink: 0;
+  align-self: flex-start;
+}
+
 .stack {
   display: flex;
   flex-direction: column;
@@ -1458,6 +1569,26 @@ textarea.input {
   }
 
   .dialog-rail__run.is-chosen .dialog-rail__parent {
+    color: var(--ink);
+  }
+
+  /* A strip has no indent and no hairline, and a parent is the one way to reach its run, so it answers the pointer. */
+  .dialog-rail__run.has-parent .dialog-rail__group {
+    padding: 4px 10px;
+  }
+
+  /* A strip's entry shrinks to its words, so a dot kept in its right padding would sit 2 px after them. */
+  .dialog-rail__run.has-parent .dialog-rail__dot {
+    position: static;
+    margin-left: 6px;
+    transform: none;
+  }
+
+  .dialog-rail__run + .dialog-rail__run::before {
+    content: none;
+  }
+
+  .dialog-rail__parent:hover {
     color: var(--ink);
   }
 

@@ -11,8 +11,9 @@ import { ALL_ROLLUPS, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, REQUEST_EVE
 import { SETTINGS_SAMPLE } from '@/mock/samples';
 
 export { api, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION };
+export { AttentionRows } from '@/components/AttentionRows';
 export { default as React } from 'react';
-export { Field, GroupedDialog, GroupLink, Input, PageLink, SwitchedNumber, Toggle } from '@/components/ui/primitives';
+export { Expert, Field, GroupedDialog, GroupLink, Input, PageLink, SwitchedNumber, Toggle } from '@/components/ui/primitives';
 export const MOCK_VERSION = SETTINGS_SAMPLE.about.version;
 export const requestEvents = REQUEST_EVENTS;
 export const requests = REQUESTS;
@@ -80,11 +81,45 @@ export const failCalls = (routes: Record<string, string>, message: string) => {
   };
 };
 
+/**
+ * Holds the next call to the named mock method behind a promise until `release()` resolves it, the way a slow
+ * upstream answer lands after the caller has moved on. A recording pass-through replaces the method as soon as
+ * the held call is made, so a later call is never blocked behind it; every call from then on, the held one
+ * included, is recorded with its arguments in the returned `calls` list, as `failCalls`'s `recover` records them,
+ * until `restore()` puts the original method back.
+ */
+export const deferNextCall = (name: string) => {
+  const mock = api as unknown as Record<string, (...args: unknown[]) => unknown>;
+  const original = mock[name].bind(api);
+  const calls: unknown[][] = [];
+  let fire: () => void = () => {};
+  const gate = new Promise<void>((resolve) => {
+    fire = resolve;
+  });
+  mock[name] = (...args: unknown[]) => {
+    mock[name] = (...rest: unknown[]) => {
+      calls.push(rest);
+      return original(...rest);
+    };
+    calls.push(args);
+    return gate.then(() => original(...args));
+  };
+  return {
+    calls,
+    release: () => fire(),
+    restore: () => {
+      mock[name] = original;
+    },
+  };
+};
+
 // Set once at load so every mount starts signed in; the login checks clear it and put it back themselves.
 localStorage.setItem('phoebis.mockSession', 'admin');
 
 export interface Mounted {
   container: HTMLElement;
+  /** The memory router's address, so a check reads what a page wrote without a window location. */
+  location: () => { hash: string; pathname: string; search: string };
   navigate: (path: string) => Promise<void>;
   settle: (ms?: number) => Promise<void>;
   text: () => string;
@@ -93,9 +128,10 @@ export interface Mounted {
 
 const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-function mounted(container: HTMLElement, root: Root, navigate: Mounted['navigate']): Mounted {
+function mounted(container: HTMLElement, root: Root, navigate: Mounted['navigate'], location: Mounted['location']): Mounted {
   return {
     container,
+    location,
     navigate,
     settle: (ms = 400) => wait(ms),
     text: () => {
@@ -124,20 +160,44 @@ export async function mount(path: string): Promise<Mounted> {
     </SessionProvider>,
   );
   await wait(600);
-  return mounted(container, root, async (p) => {
-    await router.navigate(p);
-    await wait(600);
-  });
+  return mounted(
+    container,
+    root,
+    async (p) => {
+      await router.navigate(p);
+      await wait(600);
+    },
+    () => {
+      const { hash, pathname, search } = router.state.location;
+      return { hash, pathname, search };
+    },
+  );
 }
 
-/** Mounts one element under a memory router, for a check over a component the pages do not reach alone. */
+/**
+ * Mounts one element under a memory router, for a check over a component the pages do not reach alone. The providers
+ * a page has are there too, so a dialog reads the stored expert view as a page's does.
+ */
 export async function mountNode(node: ReactNode): Promise<Mounted> {
   const container = document.createElement('div');
   document.body.appendChild(container);
   const root = createRoot(container);
-  root.render(<MemoryRouter>{node}</MemoryRouter>);
+  root.render(
+    <SessionProvider>
+      <AppSettingsProvider>
+        <MemoryRouter>{node}</MemoryRouter>
+      </AppSettingsProvider>
+    </SessionProvider>,
+  );
   await wait(600);
-  return mounted(container, root, () => {
-    throw new Error('a mounted node has no routes to navigate');
-  });
+  return mounted(
+    container,
+    root,
+    () => {
+      throw new Error('a mounted node has no routes to navigate');
+    },
+    () => {
+      throw new Error('a mounted node has no address');
+    },
+  );
 }

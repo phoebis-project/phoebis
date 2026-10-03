@@ -30,7 +30,7 @@ test('an account decodes with its windows, plan, pools, and models', () => {
   assert.equal(a.windows[0].utilization, 0.62, 'the five_hour sample is the 5h window');
   assert.deepEqual(a.pools, [{ poolId: 'main', priority: 0 }]);
   assert.equal(a.extraUsage.monthlyLimitCredits, 5000);
-  assert.equal(a.requests.lifetime, 4);
+  assert.equal(a.requests.lifetime, 5);
   // The fixture seeds one live model-scoped cooldown so the key-models and models-state fixtures have a row.
   assert.equal(a.status, 'cooldown');
   assert.equal(a.email, 'test@example.invalid');
@@ -166,7 +166,7 @@ test('keys carry status, totals, and the created secret stays out of the row', (
   assert.deepEqual(k.modelRules, [{ not: true, pattern: 'claude-opus-*' }]);
   assert.equal(k.modelRulesMode, 'extend');
   assert.equal(k.longContextTwins, true);
-  assert.equal(k.lifetime.requests, 4);
+  assert.equal(k.lifetime.requests, 5);
   assert.equal(k.usage7d.tokens > 0, true);
   assert.equal(typeof k.sessionsOnRetiredSecret, 'number');
   assert.equal(k.retiredSecretLastUsedAt, null, 'a key whose retired secret never authenticated carries no time');
@@ -503,6 +503,26 @@ test('a request page carries the trail with zero-based attempt indexes and the c
   assert.equal(d.decodeRequest(fixture('request').request).canonicalModel, 'claude-sonnet-5-5');
 });
 
+test("an attempt reads the upstream's request id, and its message id only on the answer that served", () => {
+  const failover = d.decodeRequestPage(fixture('requests')).requests.find((r) => r.id === 'r-failover');
+  assert.deepEqual(
+    failover.attempts.map((a) => [a.upstreamStatus, a.upstreamRequestId, a.upstreamMessageId]),
+    [[429, 'req_r-failover_1', null], [200, 'req_r-failover_2', 'msg_r-failover_2']],
+  );
+  const missing = d.decodeRequest({ attempts: [{ index: 1 }] }).attempts[0];
+  assert.deepEqual([missing.upstreamRequestId, missing.upstreamMessageId], [null, null], 'an attempt with no head names neither');
+});
+
+test('a stream that ended before its end decodes as incomplete and a group reads its own counter', () => {
+  const cut = d.decodeRequestPage(fixture('requests')).requests.find((r) => r.id === 'r-incomplete');
+  assert.deepEqual([cut.outcome, cut.status, cut.errorCode, cut.transport], ['incomplete', 200, 'stream_incomplete', 'sse'], 'the sixth outcome reads as itself, not the failed fallback');
+  assert.equal(cut.attempts.at(-1).outcome, 'upstream_error', 'the serving attempt reads as failed');
+  assert.equal(d.decodeRequest({ ...fixture('request').request, outcome: 'incomplete' }).outcome, 'incomplete');
+  assert.equal(d.decodeAnalyticsGroup({ incomplete: 3 }).incomplete, 3);
+  const desktop = fixture('analytics_breakdown').rows.map(d.decodeAnalyticsGroup).find((g) => g.key === 'desktop');
+  assert.equal(desktop.incomplete, 1, 'the route counts the row in the group\'s own column');
+});
+
 test('a request reads its auto-mode standing, and a spelling the console does not know reads as none', () => {
   const captured = d.decodeRequestPage(fixture('requests')).requests.find((r) => r.id === 'r-captured');
   assert.equal(captured.autoMode, null, 'a request that asked for nothing');
@@ -566,14 +586,14 @@ test('a captured body carries the bytes the route counted, never the bytes the d
 test('analytics groups and points keep the histograms and reasons whole', () => {
   const rows = fixture('analytics_breakdown').rows.map(d.decodeAnalyticsGroup);
   const desktop = rows.find((g) => g.key === 'desktop');
-  assert.equal(desktop.requests, 4);
+  assert.equal(desktop.requests, 5);
   const earlier = rows.find((g) => g.key.startsWith('desktop@'));
   assert.equal(earlier.label, 'desktop (deleted, created 1970-01-01 00:15 UTC)');
   assert.equal(earlier.requests, 1);
   assert.equal(desktop.histograms.ttfbMs.length, 64);
   assert.equal(typeof desktop.percentiles.ttfbMs.p50, 'number');
-  assert.equal(desktop.cacheMissReasons.none, 4);
-  assert.equal(desktop.tokens.thinking, 160);
+  assert.equal(desktop.cacheMissReasons.none, 5);
+  assert.equal(desktop.tokens.thinking, 200);
   assert.equal(desktop.savings.wastedProbeReasons.idle_limit, 0);
   assert.equal(desktop.errors.upstream_error, 1);
   const points = fixture('analytics_series').points.map(d.decodeAnalyticsPoint);
@@ -699,14 +719,15 @@ test('a budget reads as a skip obstacle and as a pin release reason', () => {
 test('request rows fold into analytics groups with the same sums the routes answer', () => {
   const page = d.decodeRequestPage(fixture('requests'));
   const [all] = d.foldGroups(page.requests, 'all');
-  assert.equal(all.requests, 5);
+  assert.equal(all.requests, 6);
   assert.equal(all.succeeded, 4);
-  assert.equal(all.failed, 1);
-  assert.equal(all.attempts, 6);
+  assert.equal(all.failed, 1, 'a stream that ended short is not a failure');
+  assert.equal(all.incomplete, 1);
+  assert.equal(all.attempts, 7);
   assert.equal(all.failovers, 1);
-  assert.equal(all.tokens.cacheRead, 2500);
-  assert.equal(all.histograms.ttfbMs.reduce((a, b) => a + b, 0), 5);
-  assert.equal(all.cacheMissReasons.none, 5);
+  assert.equal(all.tokens.cacheRead, 3000);
+  assert.equal(all.histograms.ttfbMs.reduce((a, b) => a + b, 0), 6);
+  assert.equal(all.cacheMissReasons.none, 6);
   assert.equal(all.probes.ok, 0);
   const captured = page.requests.find((r) => r.id === 'r-captured');
   const busy = d.foldGroups([{ ...captured, usage: { ...captured.usage, webSearch: 3, webFetch: 1 } }, captured], 'all')[0].tokens;
@@ -851,13 +872,9 @@ test('a recipe held because every account of its pool was exhausted keeps that r
   assert.equal(recipe.state, 'held');
 });
 
-test('the downstream snippet keeps the placeholder and names the inference listener when it is known', () => {
-  const known = d.snippetFor('127.0.0.1:8080').split('\n');
-  assert.equal(known.length, 4);
-  assert.equal(known[0], '# inference is served on 127.0.0.1:8080; use the URL that reaches that listener');
-  assert.equal(known[1], `ANTHROPIC_BASE_URL=${d.PLACEHOLDER_URL}`, 'the admin origin is never substituted here');
-  const unknown = d.snippetFor(null).split('\n');
-  assert.deepEqual(unknown, [`ANTHROPIC_BASE_URL=${d.PLACEHOLDER_URL}`, 'CLAUDE_CODE_OAUTH_TOKEN=<key>', '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1']);
+test('the downstream snippet is the six recommended lines with the public URL left to the operator', () => {
+  assert.equal(d.PLACEHOLDER_URL, 'https://router.example.com');
+  assert.deepEqual(d.snippetFor().split('\n'), [`ANTHROPIC_BASE_URL=${d.PLACEHOLDER_URL}`, 'CLAUDE_CODE_OAUTH_TOKEN=<key>', '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1', 'CLAUDE_CODE_GATEWAY_HINT_HEADERS=1', 'DISABLE_TELEMETRY=1', 'CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1']);
 });
 
 test('a session fold groups on the client each row named', () => {
@@ -898,7 +915,7 @@ test('a session fold keeps two holders of one key id apart and labels the earlie
   const groups = d.foldGroups(rows, 'key');
   assert.deepEqual(
     groups.map((g) => [g.key, g.label, g.requests]),
-    [[`desktop@${live.keyGeneration}`, 'desktop', 4], [`desktop@${earlier.keyGeneration}`, 'desktop (deleted, created 1970-01-01 00:15 UTC)', 1]],
+    [[`desktop@${live.keyGeneration}`, 'desktop', 5], [`desktop@${earlier.keyGeneration}`, 'desktop (deleted, created 1970-01-01 00:15 UTC)', 1]],
     'the key a group carries is the lifetime the requests route selects by',
   );
   assert.deepEqual(d.foldGroups([{ ...live, keyGeneration: 0, keyId: null }], 'key').map((g) => [g.key, g.label]), [['-@0', 'unattributed']]);
@@ -924,12 +941,12 @@ test('a session view folds every page the cursor names', () => {
   const load = async (cursor) => { calls += 1; return cursor === undefined ? pages[0] : pages[1]; };
   return d.loadSessionRequests(load, 20).then(({ partial, requests }) => {
     assert.equal(calls, 2);
-    assert.equal(requests.length, 5, 'both pages folded');
+    assert.equal(requests.length, 6, 'both pages folded');
     assert.equal(partial, false);
     return d.loadSessionRequests(async () => ({ nextCursor: 'more', requests: page.requests }), 2);
   }).then(({ partial, requests }) => {
     assert.equal(partial, true, 'the page bound marks the result partial');
-    assert.equal(requests.length, 10);
+    assert.equal(requests.length, 12);
   });
 });
 
@@ -942,7 +959,7 @@ test('the dashboard reads the live pin count the route answers beside the rollup
 test('the dashboard, sessions, recipes, and overview decode', () => {
   const o = d.decodeDashboard(fixture('dashboard'));
   assert.equal(o.hourly.length, 24);
-  assert.equal(o.requests24h, 5);
+  assert.equal(o.requests24h, 6);
   const sessions = fixture('sessions').sessions.map(d.decodeSession);
   const s1 = sessions.find((s) => s.sessionId === 's1');
   assert.ok(sessions.every((s) => typeof s.keyGeneration === 'number' && typeof s.historical === 'boolean'), 'every session says which generation of its key owns it and whether that holder is gone');
@@ -952,7 +969,7 @@ test('the dashboard, sessions, recipes, and overview decode', () => {
   assert.equal(s1.keyGeneration, fixture('sessions').sessions.find((s) => s.session_id === 's1').key_generation, 'the live holder names the generation its key row carries');
   assert.equal(s1.companion, 'reporting');
   assert.equal(s1.keepalive.state, 'busy');
-  assert.equal(s1.requests, 2);
+  assert.equal(s1.requests, 3);
   assert.ok(isIso(s1.lastUsedAt));
   const [recipe] = fixture('keepalive_recipes').recipes.map(d.decodeRecipe);
   assert.equal(recipe.state, 'armed');
@@ -1004,7 +1021,7 @@ test('settings decode the quota, routing, storage, and usage blocks the route an
   const s = d.decodeSettings(wire);
   assert.deepEqual(s.quota, { sampleRetentionDays: 0 }, 'the route answers no quota block, which reads as zero');
   assert.equal(s.retention.quotaSamplesDays, 0, 'the samples follow the ledger window, so the route answers no member of their own');
-  assert.deepEqual(s.routing, { catalogCacheSeconds: 0, catalogRefreshSeconds: wire.routing.catalog_refresh_seconds, cooldownFallbackSeconds: wire.routing.cooldown_fallback_seconds, maxAttempts: wire.routing.max_attempts, modelRejectionSeconds: wire.routing.model_rejection_seconds, startupFetchSeconds: wire.routing.startup_fetch_seconds });
+  assert.deepEqual(s.routing, { catalogCacheSeconds: 0, catalogRefreshSeconds: wire.routing.catalog_refresh_seconds, cooldownFallbackSeconds: wire.routing.cooldown_fallback_seconds, modelRejectionSeconds: wire.routing.model_rejection_seconds, startupFetchSeconds: wire.routing.startup_fetch_seconds });
   assert.deepEqual(s.storage, { ledgerPath: wire.storage.ledger_path, path: wire.storage.path, pricingPath: null }, 'no override file is a null path, never an empty one');
   assert.deepEqual(s.usage, { cacheTtlSeconds: wire.usage.cache_ttl_seconds, refreshConcurrency: wire.usage.refresh_concurrency });
   assert.equal(d.decodeSettings({ ...wire, storage: { ...wire.storage, pricing_path: './pricing.yaml' } }).storage.pricingPath, './pricing.yaml');

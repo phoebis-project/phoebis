@@ -5,6 +5,9 @@ mod common;
 
 use std::time::{Duration, Instant};
 
+use axum::body::Body;
+use axum::http::Request;
+use bytes::Bytes;
 use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
 use http_body_util::BodyExt;
@@ -79,6 +82,69 @@ async fn drain(resp: axum::http::Response<axum::body::Body>) -> Vec<u8> {
         .unwrap()
         .to_bytes()
         .to_vec()
+}
+
+/// The sender a channel body is fed through; dropping it ends the body.
+type BodySender = tokio::sync::mpsc::Sender<Result<Bytes, std::io::Error>>;
+
+/// A Messages request on the harness key whose body arrives through a channel the test holds, with
+/// `content-length` set when `declared` names one. The channel holds one chunk at a time.
+fn channel_request(declared: Option<usize>) -> (Request<Body>, BodySender) {
+    let (tx, rx) = tokio::sync::mpsc::channel(1);
+    let mut request = Request::post("/v1/messages")
+        .header("authorization", format!("Bearer {KEY}"))
+        .header("content-type", "application/json");
+    if let Some(length) = declared {
+        request = request.header("content-length", length);
+    }
+    let body = Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx));
+    (request.body(body).unwrap(), tx)
+}
+
+/// A request whose body has started arriving and stays open: the relay has taken the first chunk when this
+/// returns, since the channel holds one and the second send waits for room.
+async fn reading(
+    h: &Harness,
+) -> (
+    tokio::task::JoinHandle<axum::http::Response<Body>>,
+    BodySender,
+) {
+    let (request, tx) = channel_request(None);
+    let app = h.app.clone();
+    let task = tokio::spawn(async move { app.oneshot(request).await.unwrap() });
+    for chunk in [&b"{\"model\":"[..], b" "] {
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            tx.send(Ok(Bytes::from_static(chunk))),
+        )
+        .await
+        .expect("the relay takes the chunk")
+        .expect("the relay reads the body rather than refusing it");
+    }
+    (task, tx)
+}
+
+/// What the bus carried for `request_id`: its observation and its completion.
+async fn observed_and_completed(
+    sub: &mut phoebis_bus::Subscriber,
+    request_id: &str,
+) -> (phoebis_bus::RequestObserved, phoebis_bus::RequestComplete) {
+    let mut events = Vec::new();
+    wait_for(Duration::from_secs(5), || {
+        while let Ok(e) = sub.events.try_recv() {
+            events.push(e);
+        }
+        let observed = events.iter().find_map(|e| match e {
+            Event::RequestObserved(o) if o.request_id == request_id => Some(o.clone()),
+            _ => None,
+        })?;
+        let complete = events.iter().find_map(|e| match e {
+            Event::RequestComplete(c) if c.request_id == request_id => Some(c.clone()),
+            _ => None,
+        })?;
+        Some((observed, complete))
+    })
+    .await
 }
 
 fn json_429_retry_after(seconds: &str) -> Respond {
@@ -338,98 +404,6 @@ async fn past_the_bound_a_held_request_re_selects_with_the_account_attempted() {
     up.shutdown().await;
 }
 
-#[tokio::test]
-async fn a_hold_that_would_leave_no_attempt_for_a_dial_answers_the_exhaustion_at_once() {
-    let up = FakeUpstream::start(messages(held_stream())).await;
-    let bus = Bus::new();
-    let mut sub = bus.subscribe("test");
-    let h = harness_with_bus_limits(
-        &up,
-        &[oauth("a", A, 0)],
-        PoolSpec {
-            failover: account_cap(1, 2),
-            ..PoolSpec::default()
-        },
-        bus,
-        phoebis_relay::Limits {
-            max_attempts: 1,
-            ..default_limits()
-        },
-    )
-    .await;
-    let first = h
-        .app
-        .clone()
-        .oneshot(request_for(KEY, MODEL, "s1"))
-        .await
-        .unwrap();
-    assert_eq!(h.router.in_flight().account("a"), 1, "a is at its cap");
-    let app = h.app.clone();
-    let held = tokio::spawn(async move {
-        let started = Instant::now();
-        let resp = app.oneshot(request_for(KEY, MODEL, "s2")).await.unwrap();
-        (resp, started.elapsed())
-    });
-    // A slot frees inside the bound: a request that waited would find it and still have no attempt to dial.
-    tokio::time::sleep(HELD_FOR).await;
-    up.release_one().await;
-    let (resp, waited) = tokio::time::timeout(Duration::from_secs(5), held)
-        .await
-        .expect("answered")
-        .unwrap();
-    assert_eq!(
-        (
-            resp.status().as_u16(),
-            resp.headers()["x-phoebis-error-code"].to_str().unwrap(),
-            resp.headers()["retry-after"].to_str().unwrap()
-        ),
-        (429, "accounts_at_cap", "2"),
-        "the pool at its cap answers with the hold's bound, not the budget's refusal"
-    );
-    assert_eq!(
-        outcome(&resp).error_code.as_deref(),
-        Some("accounts_at_cap"),
-        "the row names the code"
-    );
-    let at_cap_id = outcome(&resp).request_id;
-    let body: serde_json::Value = serde_json::from_slice(&drain(resp).await).unwrap();
-    assert_eq!(
-        (&body["error"]["type"], &body["error"]["message"]),
-        (
-            &serde_json::json!("rate_limit_error"),
-            &serde_json::json!("every account in this pool is at its in-flight cap")
-        )
-    );
-    let mut events = Vec::new();
-    let complete = wait_for(Duration::from_secs(5), || {
-        while let Ok(e) = sub.events.try_recv() {
-            events.push(e);
-        }
-        events.iter().find_map(|e| match e {
-            Event::RequestComplete(c) if c.request_id == at_cap_id => Some(c.clone()),
-            _ => None,
-        })
-    })
-    .await;
-    assert_eq!(
-        (
-            complete.outcome,
-            complete.status,
-            complete.error_code.as_deref()
-        ),
-        (
-            phoebis_bus::Outcome::Exhausted,
-            429,
-            Some("accounts_at_cap")
-        ),
-        "a pool at its cap is an exhausted pool to the ledger and the attention gauge"
-    );
-    assert!(waited < HELD_FOR, "answered without waiting: {waited:?}");
-    assert_eq!(posts(&up), 1, "nothing was dialled for the held request");
-    drain(first).await;
-    up.shutdown().await;
-}
-
 /// The completion the bus carried for `request_id`, read off `sub` as it arrives.
 async fn completion_of(
     sub: &mut phoebis_bus::Subscriber,
@@ -513,11 +487,11 @@ async fn a_hold_that_times_out_with_no_dispatch_names_its_wait_on_the_completion
 }
 
 #[tokio::test]
-async fn a_hold_whose_next_selection_finds_no_attempt_left_names_its_wait_on_the_completion() {
+async fn a_request_whose_every_hold_ran_out_answers_at_cap_naming_both_waits_on_the_completion() {
     let up = FakeUpstream::start(messages(held_stream())).await;
     let bus = Bus::new();
     let mut sub = bus.subscribe("test");
-    let h = harness_with_bus_limits(
+    let h = harness_with_bus(
         &up,
         &[oauth("a", A, 0), oauth("b", B, 1)],
         PoolSpec {
@@ -525,10 +499,6 @@ async fn a_hold_whose_next_selection_finds_no_attempt_left_names_its_wait_on_the
             ..PoolSpec::default()
         },
         bus,
-        phoebis_relay::Limits {
-            max_attempts: 2,
-            ..default_limits()
-        },
     )
     .await;
     let on_a = h
@@ -565,20 +535,16 @@ async fn a_hold_whose_next_selection_finds_no_attempt_left_names_its_wait_on_the
             resp.headers()["x-phoebis-error-code"].to_str().unwrap()
         ),
         (429, "accounts_at_cap"),
-        "the hold on b would leave no slot of the budget for a dial"
+        "every account was held for and ran out"
     );
     assert_eq!(posts(&up), 2, "nothing was dialled for the held request");
     let held = outcome(&resp)
         .held
-        .expect("the outcome names the hold it waited through");
-    assert_eq!(
-        held.waited_on,
-        ["a"],
-        "the hold on b answered at once and was never waited through"
-    );
+        .expect("the outcome names the holds it waited through");
+    assert_eq!(held.waited_on, ["a", "b"]);
     assert!(
-        (900..=2_000).contains(&held.held_ms),
-        "the first wait ran the one-second bound out: {}",
+        (1_900..=4_000).contains(&held.held_ms),
+        "both waits ran the one-second bound out: {}",
         held.held_ms
     );
     let complete = completion_of(&mut sub, &outcome(&resp).request_id).await;
@@ -588,7 +554,28 @@ async fn a_hold_whose_next_selection_finds_no_attempt_left_names_its_wait_on_the
             .as_deref()
             .map(|h| serde_json::from_str::<serde_json::Value>(h).unwrap()),
         Some(serde_json::to_value(&held).unwrap()),
-        "the completion carries the first wait"
+        "the completion carries both waits"
+    );
+    assert_eq!(
+        (
+            complete.outcome,
+            complete.status,
+            complete.error_code.as_deref()
+        ),
+        (
+            phoebis_bus::Outcome::Exhausted,
+            429,
+            Some("accounts_at_cap")
+        ),
+        "a pool at its cap is an exhausted pool to the ledger and the alerts"
+    );
+    let body: serde_json::Value = serde_json::from_slice(&drain(resp).await).unwrap();
+    assert_eq!(
+        (&body["error"]["type"], &body["error"]["message"]),
+        (
+            &serde_json::json!("rate_limit_error"),
+            &serde_json::json!("every account in this pool is at its in-flight cap")
+        )
     );
     drop((on_a, on_b));
     up.release();
@@ -691,7 +678,7 @@ async fn two_placements_woken_by_one_freed_slot_never_pass_the_accounts_cap() {
     assert_eq!(
         statuses,
         [200, 429],
-        "one takes the freed slot; the other, held again past the bound, is answered at the cap"
+        "one takes the freed slot; the other, already held for on a, passes it over and is answered at the cap"
     );
     let at_cap = if two.status() == 429 { &two } else { &three };
     assert_eq!(
@@ -705,6 +692,80 @@ async fn two_placements_woken_by_one_freed_slot_never_pass_the_accounts_cap() {
         (posts(&up), h.router.in_flight().account("a")),
         (2, 1),
         "the cap held: one stream open on a"
+    );
+    drop((first, two, three));
+    up.release();
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_freed_slot_another_request_takes_passes_the_account_over_instead_of_a_second_hold() {
+    let up = FakeUpstream::start(messages(held_stream())).await;
+    let h = harness(
+        &up,
+        &[oauth("a", A, 0)],
+        PoolSpec {
+            failover: account_cap(1, 2),
+            ..PoolSpec::default()
+        },
+    )
+    .await;
+    let first = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, MODEL, "s1"))
+        .await
+        .unwrap();
+    assert_eq!(h.router.in_flight().account("a"), 1, "a is at its cap");
+    // Both placements wait on a. Ending the one stream wakes both in the same turn; a freed slot is read, not
+    // reserved, so the placement whose selection runs second finds it taken by the first.
+    let (two, three, ()) = tokio::join!(
+        h.app.clone().oneshot(request_for(KEY, MODEL, "s2")),
+        h.app.clone().oneshot(request_for(KEY, MODEL, "s3")),
+        async {
+            tokio::time::sleep(HELD_FOR).await;
+            assert_eq!(posts(&up), 1, "both placements are held");
+            up.release_one().await;
+        },
+    );
+    let (two, three) = (two.unwrap(), three.unwrap());
+    let (landed, passed_over) = if two.status() == 200 {
+        (&two, &three)
+    } else {
+        (&three, &two)
+    };
+    assert_eq!(
+        (
+            landed.status().as_u16(),
+            outcome(landed).account_id.as_str()
+        ),
+        (200, "a"),
+        "one placement takes the freed slot"
+    );
+    assert_eq!(
+        (
+            passed_over.status().as_u16(),
+            passed_over.headers()["x-phoebis-error-code"]
+                .to_str()
+                .unwrap(),
+            passed_over.headers()["retry-after"].to_str().unwrap()
+        ),
+        (429, "accounts_at_cap", "2"),
+        "a was held for once, so the other passes it over, and with every leg a hold the pool is at its cap"
+    );
+    let held = outcome(passed_over)
+        .held
+        .expect("the outcome names the hold it waited through");
+    assert_eq!(held.waited_on, ["a"], "one hold per account per request");
+    assert!(
+        held.held_ms < 2_000,
+        "the one wait ended at the release, and no second wait ran the bound out: {}",
+        held.held_ms
+    );
+    assert_eq!(
+        posts(&up),
+        2,
+        "nothing was dialled for the placement passed over"
     );
     drop((first, two, three));
     up.release();
@@ -841,6 +902,211 @@ async fn a_probe_and_a_count_take_no_key_permit() {
     );
     drop(held);
     up.release();
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_probe_takes_no_read_permit_and_no_budget() {
+    let up = FakeUpstream::start(messages(json_200())).await;
+    // Neither bound admits a body: no key may have one arriving, and the budget holds a single byte.
+    let h = harness_with(
+        &up,
+        &[oauth("a", A, 0)],
+        PoolSpec::default(),
+        phoebis_relay::Limits {
+            body_budget_bytes: 1,
+            key_body_reads: 0,
+            ..default_limits()
+        },
+    )
+    .await;
+    let refused = tokio::time::timeout(
+        Duration::from_secs(5),
+        h.app.clone().oneshot(request_for(KEY, MODEL, "s1")),
+    )
+    .await
+    .expect("refused at once")
+    .unwrap();
+    assert_eq!(
+        (
+            refused.status().as_u16(),
+            refused.headers()["x-phoebis-error-code"].to_str().unwrap()
+        ),
+        (429, "key_body_reads"),
+        "a request from a socket meets the bounds"
+    );
+
+    let mut probe = request_for(KEY, MODEL, "s2");
+    probe.headers_mut().remove("authorization");
+    probe
+        .extensions_mut()
+        .remove::<phoebis_relay::OriginalHead>();
+    let probed = h
+        .relay
+        .probe(
+            phoebis_relay::Probe {
+                key_id: "desktop".into(),
+                key_generation: h.store.api_key("desktop").unwrap().unwrap().created_at,
+            },
+            probe,
+        )
+        .await;
+    assert_eq!(
+        probed.status().as_u16(),
+        200,
+        "the probe's body is the router's own and already in memory, so it takes neither"
+    );
+    drain(probed).await;
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_declared_body_past_the_budget_is_refused_503_before_a_byte_is_read() {
+    let up = FakeUpstream::start(messages(json_200())).await;
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test");
+    let h = harness_with_bus_limits(
+        &up,
+        &[oauth("a", A, 0)],
+        PoolSpec::default(),
+        bus,
+        phoebis_relay::Limits {
+            body_budget_bytes: 4096,
+            ..default_limits()
+        },
+    )
+    .await;
+    let (request, tx) = channel_request(Some(8192));
+    let refused = tokio::time::timeout(Duration::from_secs(5), h.app.clone().oneshot(request))
+        .await
+        .expect("refused before the body that never comes")
+        .unwrap();
+    assert_eq!(refused.status().as_u16(), 503);
+    assert_eq!(
+        refused.headers()["x-phoebis-error-code"],
+        "body_budget_exhausted"
+    );
+    assert!(
+        refused.headers().get("retry-after").is_none(),
+        "a freed body says nothing about when"
+    );
+    let refused_id = outcome(&refused).request_id;
+    let body = drain(refused).await;
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        (
+            json["error"]["type"].as_str(),
+            json["error"]["message"].as_str()
+        ),
+        (
+            Some("api_error"),
+            Some("the router holds as many request bytes as it allows")
+        )
+    );
+    let (observed, complete) = observed_and_completed(&mut sub, &refused_id).await;
+    assert!(observed.body.is_empty(), "no byte of the body was read");
+    assert_eq!(
+        (complete.status, complete.error_code.as_deref()),
+        (503, Some("body_budget_exhausted"))
+    );
+    assert_eq!(posts(&up), 0);
+    drop(tx);
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn the_bodies_arriving_on_one_key_are_bounded_by_key_body_reads_with_retry_after_1() {
+    let up = FakeUpstream::start(messages(json_200())).await;
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test");
+    let h = harness_with_bus_limits(
+        &up,
+        &[oauth("a", A, 0)],
+        PoolSpec::default(),
+        bus,
+        phoebis_relay::Limits {
+            key_body_reads: 2,
+            ..default_limits()
+        },
+    )
+    .await;
+    let (first, first_tx) = reading(&h).await;
+    let (second, second_tx) = reading(&h).await;
+    let (request, third_tx) = channel_request(None);
+    let refused = tokio::time::timeout(Duration::from_secs(5), h.app.clone().oneshot(request))
+        .await
+        .expect("refused at once")
+        .unwrap();
+    assert_eq!(refused.status().as_u16(), 429);
+    assert_eq!(refused.headers()["x-phoebis-error-code"], "key_body_reads");
+    assert_eq!(refused.headers()["retry-after"], "1");
+    let refused_id = outcome(&refused).request_id;
+    let json: serde_json::Value = serde_json::from_slice(&drain(refused).await).unwrap();
+    assert_eq!(
+        (
+            json["error"]["type"].as_str(),
+            json["error"]["message"].as_str()
+        ),
+        (
+            Some("rate_limit_error"),
+            Some("this key has as many request bodies arriving as it allows")
+        )
+    );
+    let (observed, complete) = observed_and_completed(&mut sub, &refused_id).await;
+    assert!(
+        observed.body.is_empty(),
+        "the bound is met before the read, so the refusal carries no body"
+    );
+    assert_eq!(
+        (complete.status, complete.error_code.as_deref()),
+        (429, Some("key_body_reads"))
+    );
+    drop(third_tx);
+
+    drop(first_tx);
+    tokio::time::timeout(Duration::from_secs(5), first)
+        .await
+        .expect("the ended body is answered")
+        .unwrap();
+    let fourth = tokio::time::timeout(
+        Duration::from_secs(5),
+        h.app.clone().oneshot(request_for(KEY, MODEL, "s4")),
+    )
+    .await
+    .expect("admitted once a read ended")
+    .unwrap();
+    assert_eq!(fourth.status().as_u16(), 200, "the freed read let it in");
+    drain(fourth).await;
+    drop(second_tx);
+    second.await.unwrap();
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_declared_length_past_the_per_body_bound_is_413_without_a_read() {
+    let up = FakeUpstream::start(messages(json_200())).await;
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test");
+    let h = harness_with_bus(&up, &[oauth("a", A, 0)], PoolSpec::default(), bus).await;
+    let (request, tx) = channel_request(Some((32 << 20) + 1));
+    let refused = tokio::time::timeout(Duration::from_secs(5), h.app.clone().oneshot(request))
+        .await
+        .expect("refused before the body that never comes")
+        .unwrap();
+    assert_eq!(refused.status().as_u16(), 413);
+    assert_eq!(
+        refused.headers()["x-phoebis-error-code"],
+        "request_too_large"
+    );
+    let refused_id = outcome(&refused).request_id;
+    let (observed, complete) = observed_and_completed(&mut sub, &refused_id).await;
+    assert!(observed.body.is_empty(), "no byte of the body was read");
+    assert_eq!(
+        (complete.status, complete.error_code.as_deref()),
+        (413, Some("request_too_large"))
+    );
+    assert_eq!(posts(&up), 0);
+    drop(tx);
     up.shutdown().await;
 }
 

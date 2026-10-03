@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use phoebis_oauth::{Clock, UsageSnapshot};
 use phoebis_store::{
-    AccountState, CooldownRow, PinBurn, PinKey, PinRow, RekeyWrite, Store, StoreError,
+    AccountState, CooldownRow, PinBurn, PinKey, PinRow, RekeyWrite, RoutingTx, Store, StoreError,
 };
 use tokio::sync::{broadcast, mpsc, oneshot, Notify};
 use tokio::time::Instant;
@@ -26,7 +26,9 @@ use crate::state::{
 };
 use crate::{resolve, window_for, KeyRefusal, Presented, RegistrySnapshot};
 
-const COMMANDS: usize = 4_096;
+/// The router loop's command queue size, which `/admin/system` reports; a report that finds the queue full is
+/// dropped and counted under its kind.
+pub const COMMANDS: usize = 4_096;
 
 const EVENTS: usize = 1_024;
 
@@ -284,6 +286,41 @@ pub enum Report {
     },
 }
 
+impl Report {
+    /// Every kind, alphabetical, so a reader sees the whole set at zero.
+    pub const KINDS: &'static [&'static str] = &[
+        "account_state",
+        "affinity",
+        "cooldown",
+        "credits",
+        "member_spend",
+        "overage",
+        "pin_invalidated",
+        "pin_released",
+        "pin_renewed",
+        "sample",
+        "usage",
+    ];
+
+    /// The kind's name, the label of its drop counter.
+    pub fn kind(&self) -> &'static str {
+        // No wildcard, so a new variant fails to compile until it is named here; `sent` expects the name in `KINDS`.
+        match self {
+            Report::AccountState { .. } => "account_state",
+            Report::Affinity(_) => "affinity",
+            Report::Cooldown { .. } => "cooldown",
+            Report::Credits { .. } => "credits",
+            Report::MemberSpend(_) => "member_spend",
+            Report::Overage { .. } => "overage",
+            Report::PinInvalidated { .. } => "pin_invalidated",
+            Report::PinReleased { .. } => "pin_released",
+            Report::PinRenewed { .. } => "pin_renewed",
+            Report::Sample { .. } => "sample",
+            Report::Usage { .. } => "usage",
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 #[error("the router task has stopped")]
 pub struct RouterGone;
@@ -337,6 +374,11 @@ enum Command {
         reply: oneshot::Sender<()>,
     },
     #[cfg(any(test, feature = "debug-hooks"))]
+    Park {
+        release: oneshot::Receiver<()>,
+        reply: oneshot::Sender<()>,
+    },
+    #[cfg(any(test, feature = "debug-hooks"))]
     ReleaseReports {
         reply: oneshot::Sender<()>,
     },
@@ -386,6 +428,9 @@ impl ReportSequence {
 #[derive(Clone)]
 pub struct RouterHandle {
     affinity: Arc<RwLock<AffinityMap>>,
+    /// The reports the queue refused, one counter per kind at its position in `Report::KINDS`; the process's
+    /// alone, zero at start.
+    dropped: Arc<[AtomicU64; Report::KINDS.len()]>,
     events: broadcast::Sender<RouterEvent>,
     in_flight: InFlight,
     reports: Arc<ReportSequence>,
@@ -424,12 +469,21 @@ impl RouterHandle {
     }
 
     /// Never waits: a report is a fact about the past, and a relay holding a client stream must not block on
-    /// the task's queue. A full queue is logged and the report dropped, which delays a state change by one
-    /// request rather than stalling one. For `Report::Affinity` the sequence number the report took at enqueue,
-    /// `None` for every other report and for a report the full or closed queue dropped.
+    /// the task's queue. A full queue is counted under the report's kind, logged and the report dropped: a pin
+    /// change delays by one request, a cooldown or a usage reading is re-learned by the next request on that
+    /// account. For `Report::Affinity` the sequence number the report took at enqueue, `None` for every other
+    /// report and for a report the full or closed queue dropped.
     pub fn report(&self, report: Report) -> Option<u64> {
+        // Read before the send moves the report into the command.
+        let kind = report.kind();
+        // `sent` finds the kind's counter only on a drop, so a kind missing from the list would otherwise pass
+        // every test that never fills the queue.
+        debug_assert!(
+            Report::KINDS.contains(&kind),
+            "the report kind `{kind}` is missing from Report::KINDS"
+        );
         if !matches!(report, Report::Affinity(_)) {
-            Self::sent(self.tx.try_send(Command::Report(report, None)));
+            self.sent(kind, self.tx.try_send(Command::Report(report, None)));
             return None;
         }
         // Held across the send, so a later number never enters the queue ahead of an earlier one and the
@@ -440,24 +494,50 @@ impl RouterHandle {
             .lock()
             .expect("report sequence lock poisoned");
         let seq = *next + 1;
-        Self::sent(self.tx.try_send(Command::Report(report, Some(seq)))).then(|| {
-            *next = seq;
-            seq
-        })
+        self.sent(kind, self.tx.try_send(Command::Report(report, Some(seq))))
+            .then(|| {
+                *next = seq;
+                seq
+            })
     }
 
-    fn sent(result: Result<(), mpsc::error::TrySendError<Command>>) -> bool {
+    fn sent(
+        &self,
+        kind: &'static str,
+        result: Result<(), mpsc::error::TrySendError<Command>>,
+    ) -> bool {
+        let dropped = |handle: &Self| {
+            let index = Report::KINDS
+                .iter()
+                .position(|k| *k == kind)
+                .expect("every kind is listed");
+            handle.dropped[index].fetch_add(1, Ordering::Relaxed);
+        };
         match result {
             Ok(()) => true,
             Err(mpsc::error::TrySendError::Full(_)) => {
-                tracing::warn!("the router task's queue is full, a report was dropped");
+                dropped(self);
+                tracing::warn!(
+                    kind,
+                    "the router task's queue is full, a report was dropped"
+                );
                 false
             }
             Err(mpsc::error::TrySendError::Closed(_)) => {
-                tracing::warn!("the router task has stopped, a report was dropped");
+                dropped(self);
+                tracing::warn!(kind, "the router task has stopped, a report was dropped");
                 false
             }
         }
+    }
+
+    /// The reports the queue refused since start, per kind in `Report::KINDS` order; never persisted.
+    pub fn dropped_reports(&self) -> Vec<(&'static str, u64)> {
+        Report::KINDS
+            .iter()
+            .zip(self.dropped.iter())
+            .map(|(kind, count)| (*kind, count.load(Ordering::Relaxed)))
+            .collect()
     }
 
     /// The sequence of the last affinity report the task applied.
@@ -515,6 +595,11 @@ impl RouterHandle {
     /// `Err(RouterGone)`, because the task it would ask has already stopped.
     pub async fn shutdown(&self) -> Result<(), RouterGone> {
         self.ask(|reply| Command::Shutdown { reply }).await
+    }
+    /// Whether the router loop still receives commands; false once the task ended, which is the condition every
+    /// `ask` reports as `RouterGone`.
+    pub fn is_alive(&self) -> bool {
+        !self.tx.is_closed()
     }
     pub async fn release_session(
         &self,
@@ -598,6 +683,36 @@ impl RouterHandle {
             .expect("the router task is running");
         ReportHold {
             handle: self.clone(),
+        }
+    }
+
+    /// Parks the loop before its next command until the guard drops, so a test can fill the queue.
+    pub async fn park_loop(&self) -> LoopPark {
+        let (release, parked) = oneshot::channel();
+        // Answered once the loop has taken the park off the queue, so the parked command holds no slot.
+        self.ask(|reply| Command::Park {
+            release: parked,
+            reply,
+        })
+        .await
+        .expect("the router task is running");
+        LoopPark {
+            release: Some(release),
+        }
+    }
+}
+
+/// The router loop parked from `RouterHandle::park_loop` until this drops.
+#[cfg(any(test, feature = "debug-hooks"))]
+pub struct LoopPark {
+    release: Option<oneshot::Sender<()>>,
+}
+
+#[cfg(any(test, feature = "debug-hooks"))]
+impl Drop for LoopPark {
+    fn drop(&mut self) {
+        if let Some(release) = self.release.take() {
+            let _ = release.send(());
         }
     }
 }
@@ -700,6 +815,7 @@ pub fn spawn(
     let reports = Arc::new(ReportSequence::default());
     let handle = RouterHandle {
         affinity,
+        dropped: Arc::default(),
         events: events.clone(),
         in_flight,
         reports: reports.clone(),
@@ -717,26 +833,54 @@ pub fn spawn(
         let mut retry: Option<Box<RekeyWrite>> = None;
         // One batch at a time, in order: two blocking writes racing on separate threads could land a delete
         // before the upsert it was meant to follow.
-        while let Some(batch) = writes.recv().await {
+        while let Some(first) = writes.recv().await {
             if let Some(rekey) = retry.take() {
                 retry_rekey(&writer_store, rekey).await;
             }
+            // Everything queued since the last wake lands in one commit, so the registry pays one commit per
+            // wake, and wakes coalesce under load.
+            let mut batch = first;
+            while let Ok(more) = writes.try_recv() {
+                batch.extend(more);
+            }
             let store = writer_store.clone();
             let size = batch.len();
-            match tokio::task::spawn_blocking(move || apply(&store, batch)).await {
-                // An account-state mark that moved the row changes what the snapshot has to say, so the
-                // loop is asked for a reload once the write is on disk rather than before.
-                Ok(Ok(moved)) => {
+            match tokio::task::spawn_blocking(move || land(&store, batch)).await {
+                Ok(Landed {
+                    moved,
+                    refused,
+                    skipped,
+                    stopped,
+                    left,
+                    rekey,
+                }) => {
+                    if let Some(stopped) = stopped {
+                        tracing::error!(
+                            error = %stopped,
+                            refused = refused.as_ref().map(tracing::field::display),
+                            batch = size,
+                            skipped,
+                            left,
+                            "a database-wide failure left {left} of {size} routing state writes unapplied, \
+                             after {skipped} refused"
+                        );
+                    } else if let Some(refused) = refused {
+                        tracing::error!(
+                            error = %refused,
+                            batch = size,
+                            skipped,
+                            "{skipped} of {size} routing state writes failed and were skipped"
+                        );
+                    }
+                    retry = rekey;
+                    // An account-state mark that moved the row changes what the snapshot has to say, so the
+                    // loop is asked for a reload once the write is on disk rather than before.
                     if moved {
                         if let Some(tx) = writer_tx.upgrade() {
                             let (reply, _rx) = oneshot::channel();
                             let _ = tx.send(Command::Reload { reply }).await;
                         }
                     }
-                }
-                Ok(Err(failed)) => {
-                    tracing::error!(error = %failed.error, batch = size, "a routing state write failed");
-                    retry = failed.rekey;
                 }
                 Err(error) => {
                     tracing::error!(%error, batch = size, "a routing state write panicked, its batch is lost")
@@ -814,17 +958,18 @@ pub fn spawn(
     Ok(handle)
 }
 
-/// A batch that stopped at a failed write, carrying that write when it was a rekey: the one write the writer
-/// tries again.
-struct Failed {
-    error: StoreError,
+/// What one wake landed, all of it routing state the store commits at `NORMAL`: a power loss may take the last of
+/// it, which the next requests rebuild, and an operator's cooldown clear or session release among it is made again.
+/// `refused` is the first refusal's error and `skipped` how many writes the store refused on their own; `stopped` is
+/// the database-wide failure that gave up the rest of the wake and `left` how many writes it left unapplied,
+/// counting the one it met; `rekey` is the refused rekey the writer tries once more.
+struct Landed {
+    moved: bool,
+    refused: Option<StoreError>,
+    skipped: usize,
+    stopped: Option<StoreError>,
+    left: usize,
     rekey: Option<Box<RekeyWrite>>,
-}
-
-impl From<StoreError> for Failed {
-    fn from(error: StoreError) -> Failed {
-        Failed { error, rekey: None }
-    }
 }
 
 async fn retry_rekey(store: &Arc<Store>, rekey: Box<RekeyWrite>) {
@@ -841,9 +986,107 @@ async fn retry_rekey(store: &Arc<Store>, rekey: Box<RekeyWrite>) {
     }
 }
 
+/// One transaction for the wake's batch. A refusal rolls the whole of it back, and the batch is replayed one write
+/// per commit, so the refused write is the only one lost.
+fn land(store: &Store, batch: Vec<StateWrite>) -> Landed {
+    let size = batch.len();
+    match store.write_routing(|tx| apply_in(tx, &batch)) {
+        Ok(moved) => Landed {
+            moved,
+            refused: None,
+            skipped: 0,
+            stopped: None,
+            left: 0,
+            rekey: None,
+        },
+        Err(error) => {
+            let landed = replay(store, batch);
+            // A replay that met no refusal says nothing about why the transaction failed: an outside holder of
+            // the file's lock or a disk that failed once.
+            if landed.refused.is_none() && landed.stopped.is_none() {
+                tracing::warn!(
+                    %error,
+                    batch = size,
+                    "a wake's routing state transaction failed and its replay landed every write"
+                );
+            }
+            landed
+        }
+    }
+}
+
+fn replay(store: &Store, batch: Vec<StateWrite>) -> Landed {
+    let size = batch.len();
+    let mut moved = false;
+    let mut refused = None;
+    let mut skipped = 0;
+    let mut stopped = None;
+    let mut left = 0;
+    let mut refused_rekeys = Vec::new();
+    let mut writes = batch.into_iter().enumerate();
+    while let Some((index, write)) = writes.next() {
+        match apply_one(store, &write) {
+            Ok(mark_moved) => {
+                moved |= mark_moved;
+                // The rekey's upsert carries no generation check, so retrying a refused one after a later rekey
+                // of its spelling landed would put the older mapping back and restore the rows the later one moved.
+                if let StateWrite::Rekey(landed) = &write {
+                    let spelling = &landed.resolution.spelling;
+                    refused_rekeys.retain(|refused: &RekeyWrite| {
+                        let superseded = &refused.resolution.spelling == spelling;
+                        if superseded {
+                            tracing::info!(
+                                %spelling,
+                                "a refused model resolution's rekey is dropped: a later one of its spelling landed"
+                            );
+                        }
+                        !superseded
+                    });
+                }
+            }
+            // Every write after this one would wait out the same lock or meet the same disk, so the rest of the
+            // wake is given up at once; its rekeys still join the one retry.
+            Err(failure) if failure.is_database_wide() => {
+                left = size - index;
+                stopped = Some(failure);
+                for write in std::iter::once(write).chain(writes.map(|(_, write)| write)) {
+                    if let StateWrite::Rekey(rekey) = write {
+                        refuse_rekey(&mut refused_rekeys, rekey);
+                    }
+                }
+                break;
+            }
+            Err(refusal) => {
+                skipped += 1;
+                refused.get_or_insert(refusal);
+                if let StateWrite::Rekey(rekey) = write {
+                    refuse_rekey(&mut refused_rekeys, rekey);
+                }
+            }
+        }
+    }
+    Landed {
+        moved,
+        refused,
+        skipped,
+        stopped,
+        left,
+        // One retry per wake, as the loop's `retry` holds: the first refused rekey still standing; any after it
+        // is dropped.
+        rekey: refused_rekeys.into_iter().next().map(Box::new),
+    }
+}
+
+/// The newest refused rekey of a spelling is the latest resolution, so it replaces an earlier refused one rather
+/// than queueing behind it.
+fn refuse_rekey(refused_rekeys: &mut Vec<RekeyWrite>, rekey: RekeyWrite) {
+    refused_rekeys.retain(|earlier| earlier.resolution.spelling != rekey.resolution.spelling);
+    refused_rekeys.push(rekey);
+}
+
 /// Reports whether any account-state mark in the batch actually moved its row, which is the one write here
 /// that the registry snapshot has to be rebuilt from.
-fn apply(store: &Store, batch: Vec<StateWrite>) -> Result<bool, Failed> {
+fn apply_in(tx: &mut RoutingTx<'_>, batch: &[StateWrite]) -> Result<bool, StoreError> {
     let mut moved = false;
     for write in batch {
         match write {
@@ -854,49 +1097,75 @@ fn apply(store: &Store, batch: Vec<StateWrite>) -> Result<bool, Failed> {
                 lifecycle_generation,
                 credential_generation,
             } => {
-                moved |= store.set_state_if_generations(
-                    &account_id,
-                    state,
-                    incarnation,
-                    lifecycle_generation,
-                    credential_generation,
+                moved |= tx.set_state_if_generations(
+                    account_id,
+                    *state,
+                    *incarnation,
+                    *lifecycle_generation,
+                    *credential_generation,
                 )?;
             }
             StateWrite::DeleteAffinity(keys) => {
-                store.delete_affinity(&keys)?;
+                tx.delete_affinity(keys)?;
             }
             StateWrite::DeleteCooldown(account_id, scope) => {
-                store.delete_cooldown(&account_id, &scope)?;
+                tx.delete_cooldown(account_id, scope)?;
             }
             StateWrite::DeletePin(key) => {
-                store.delete_pin(&key)?;
+                tx.delete_pin(key)?;
             }
             StateWrite::PurgeStaleWindows => {
-                store.purge_stale_windows()?;
+                tx.purge_stale_windows()?;
             }
-            StateWrite::Rekey(rekey) => {
-                if let Err(error) = store.rekey_resolution(&rekey) {
-                    return Err(Failed {
-                        error,
-                        rekey: Some(Box::new(rekey)),
-                    });
-                }
-            }
-            StateWrite::UpsertAffinity(rows) => store.upsert_affinity(&rows)?,
-            StateWrite::UpsertCooldown(row) => store.upsert_cooldown(&row)?,
+            StateWrite::Rekey(rekey) => tx.rekey_resolution(rekey)?,
+            StateWrite::UpsertAffinity(rows) => tx.upsert_affinity(rows)?,
+            StateWrite::UpsertCooldown(row) => tx.upsert_cooldown(row)?,
             StateWrite::UpsertCredits(row) => {
-                store.upsert_credits(&row)?;
+                tx.upsert_credits(row)?;
             }
             StateWrite::UpsertOverage(row) => {
-                store.upsert_overage(&row)?;
+                tx.upsert_overage(row)?;
             }
-            StateWrite::UpsertPin(row) => store.upsert_pin(&row)?,
+            StateWrite::UpsertPin(row) => tx.upsert_pin(row)?,
             StateWrite::UpsertWindow(row) => {
-                store.upsert_window(&row)?;
+                tx.upsert_window(row)?;
             }
         }
     }
     Ok(moved)
+}
+
+/// One write through the store's own method for it, its own commit; answers whether an account-state mark moved
+/// its row.
+fn apply_one(store: &Store, write: &StateWrite) -> Result<bool, StoreError> {
+    match write {
+        StateWrite::AccountState {
+            account_id,
+            state,
+            incarnation,
+            lifecycle_generation,
+            credential_generation,
+        } => store.set_state_if_generations(
+            account_id,
+            *state,
+            *incarnation,
+            *lifecycle_generation,
+            *credential_generation,
+        ),
+        StateWrite::DeleteAffinity(keys) => store.delete_affinity(keys).map(|_| false),
+        StateWrite::DeleteCooldown(account_id, scope) => {
+            store.delete_cooldown(account_id, scope).map(|_| false)
+        }
+        StateWrite::DeletePin(key) => store.delete_pin(key).map(|_| false),
+        StateWrite::PurgeStaleWindows => store.purge_stale_windows().map(|_| false),
+        StateWrite::Rekey(rekey) => store.rekey_resolution(rekey).map(|()| false),
+        StateWrite::UpsertAffinity(rows) => store.upsert_affinity(rows).map(|()| false),
+        StateWrite::UpsertCooldown(row) => store.upsert_cooldown(row).map(|()| false),
+        StateWrite::UpsertCredits(row) => store.upsert_credits(row).map(|_| false),
+        StateWrite::UpsertOverage(row) => store.upsert_overage(row).map(|_| false),
+        StateWrite::UpsertPin(row) => store.upsert_pin(row).map(|()| false),
+        StateWrite::UpsertWindow(row) => store.upsert_window(row).map(|_| false),
+    }
 }
 
 impl Task {
@@ -1124,6 +1393,12 @@ impl Task {
             Command::ReleaseReports { reply } => {
                 self.release_reports();
                 let _ = reply.send(());
+            }
+            #[cfg(any(test, feature = "debug-hooks"))]
+            Command::Park { release, reply } => {
+                let _ = reply.send(());
+                // Awaited inside the loop, so no command is taken until the guard drops.
+                let _ = release.await;
             }
             Command::Resolve {
                 spelling,
@@ -2067,4 +2342,147 @@ pub fn sample_from_usage(
         }
     };
     (sample, overage)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+    use std::sync::mpsc;
+
+    use phoebis_store::{AccountKind, AccountRow, ResolutionRow, StorageKey};
+
+    use super::*;
+
+    fn cooldown(account_id: &str, scope: &str) -> CooldownRow {
+        CooldownRow {
+            account_id: account_id.into(),
+            scope: scope.into(),
+            until: 10_000,
+            set_at: 0,
+            reason: "rate_limit".into(),
+            window: "five_hour".into(),
+            source_request_id: None,
+            incarnation: 1,
+        }
+    }
+
+    /// A rekey whose moved cooldown names an account the store does not hold, which
+    /// `cooldowns.account_id REFERENCES accounts(id)` refuses.
+    fn refused_rekey(spelling: &str, dated_id: &str) -> StateWrite {
+        StateWrite::Rekey(RekeyWrite {
+            resolution: ResolutionRow {
+                spelling: spelling.into(),
+                dated_id: dated_id.into(),
+                resolved_at: 1_000,
+            },
+            delete_pins: Vec::new(),
+            upsert_pins: Vec::new(),
+            delete_cooldowns: Vec::new(),
+            upsert_cooldowns: vec![cooldown("ghost", &format!("model:{dated_id}"))],
+        })
+    }
+
+    #[test]
+    fn of_two_refused_rekeys_of_one_spelling_the_newer_is_the_one_retried() {
+        let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+        let landed = replay(
+            &store,
+            vec![
+                refused_rekey("claude-sonnet-4-5", "claude-sonnet-4-5-20250929"),
+                refused_rekey("claude-sonnet-4-5", "claude-sonnet-4-5-20251001"),
+            ],
+        );
+        assert_eq!(landed.skipped, 2);
+        let carried = landed.rekey.expect("a rekey to retry");
+        assert_eq!(
+            carried.resolution.dated_id, "claude-sonnet-4-5-20251001",
+            "the latest resolution of the spelling"
+        );
+    }
+
+    /// A directory under the system's temporary one, removed on drop.
+    struct Scratch(PathBuf);
+
+    impl Scratch {
+        fn new(name: &str) -> Scratch {
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            Scratch(
+                std::env::temp_dir().join(format!("phoebis-{name}-{}-{nanos}", std::process::id())),
+            )
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn a_lock_held_past_the_busy_timeout_stops_the_replay_at_its_first_write() {
+        let scratch = Scratch::new("replay-busy");
+        let key = StorageKey::generate();
+        let path = scratch.path().join("store").join("router.sqlite");
+        let store = Store::open(&path, &key).unwrap();
+        store
+            .insert_account(&AccountRow {
+                id: "a".into(),
+                kind: AccountKind::ApiKey,
+                label: "a".into(),
+                enabled: true,
+                identity: None,
+                lifecycle_generation: 1,
+                incarnation: 1,
+                revision: 1,
+                state: AccountState::Ready,
+            })
+            .unwrap();
+        // A second store on the same file, as a backup or an operator's `sqlite3` would hold it: the process lock
+        // is per directory, and SQLite resolves the link to the one file and its one WAL.
+        let linked = scratch.path().join("holder").join("router.sqlite");
+        std::fs::create_dir_all(linked.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&path, &linked).unwrap();
+        let holder = Store::open(&linked, &key).unwrap();
+        let (locked, held) = mpsc::channel();
+        let (release, released) = mpsc::channel::<()>();
+        let holding = std::thread::spawn(move || {
+            holder
+                .write_routing(|_| {
+                    locked.send(()).unwrap();
+                    let _ = released.recv();
+                    Ok(())
+                })
+                .unwrap();
+        });
+        held.recv().unwrap();
+
+        let landed = replay(
+            &store,
+            [
+                "model:claude-haiku-4-5",
+                "model:claude-opus-5",
+                "model:claude-sonnet-5",
+            ]
+            .map(|scope| StateWrite::UpsertCooldown(cooldown("a", scope)))
+            .into(),
+        );
+        release.send(()).unwrap();
+        holding.join().unwrap();
+
+        assert_eq!(
+            (landed.skipped, landed.left),
+            (0, 3),
+            "the first write's busy answer gave up the wake rather than waiting it out once per write"
+        );
+        assert!(landed.stopped.expect("the busy store").is_database_wide());
+        assert!(landed.refused.is_none());
+        assert!(store.load_routing().unwrap().cooldowns.is_empty());
+    }
 }

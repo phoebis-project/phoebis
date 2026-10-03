@@ -71,9 +71,10 @@ tunnel. Then validate it before enabling the service:
 sudo bash -c 'set -a; . /etc/phoebis/phoebis.env; set +a; exec phoebis check-config --config /etc/phoebis/config.yaml'
 ```
 
-`check-config` resolves `admin.secret_env` from the process environment like every other invocation, so the env file has
-to be sourced into this one shell first; plain `sudo phoebis check-config --config /etc/phoebis/config.yaml` fails with
-`environment variable PHOEBIS_ADMIN_SECRET is unset or empty`. Once it is clean, `sudo systemctl enable --now phoebis`.
+`check-config` reads `admin.secret_env` from the process environment when it is set and prints
+`warning: environment variable PHOEBIS_ADMIN_SECRET is unset or empty` when it is not, so sourcing the env file is
+optional for it; the service and `phoebis health` still refuse an unset secret. Once it is clean,
+`sudo systemctl enable --now phoebis`.
 
 ## Run the container
 
@@ -102,20 +103,20 @@ mounts a file secret with the host file's owner and mode, and that uid is the on
 
 ```sh title="Start, watch, and stop"
 docker compose up -d
-docker compose ps            # "healthy" once phoebis health has answered
+docker compose ps            # "healthy" once phoebis health reads the router as ready
 docker compose logs -f phoebis
 docker compose down          # SIGTERM, then up to 40 seconds for the 30-second drain
 ```
 
 The health check runs `phoebis health`, which loads and validates the configuration, secrets included, from the
-container's own environment before it probes the proxy listener. A file it cannot read, a value it refuses, or an
-unset secret variable therefore reads as `unhealthy` rather than as a passing check, with the reason in `docker
-inspect`.
+container's own environment and then asks the proxy listener whether the router is ready: a file it cannot read, a value
+it refuses, an unset secret variable, or a router loop, ledger consumer or store that died therefore reads as
+`unhealthy` rather than as a passing check, with the reason in `docker inspect`.
 
 A ledger writer that stops draining leaves every request that publishes a fact waiting for room in its queue,
 which over time fills the proxy listener's connection slots with requests that never finish. `phoebis health`
-connects to that same listener, so it queues behind them too, and the container reads `unhealthy` for a cause
-the probe itself never touches.
+connects to that same listener, so it queues behind them too, and the container reads `unhealthy`; a ledger consumer
+that stopped outright reads `unhealthy` through the readiness answer itself.
 
 The console answers at `http://localhost:8081`: the example publishes the admin port on the host's loopback alone,
 so it is reached from the host's own browser or through an SSH tunnel whose local end is loopback, and nobody else.
@@ -137,23 +138,30 @@ needs `docker login ghcr.io` with a token carrying `read:packages` while the rep
 | Command | Effect |
 | --- | --- |
 | `phoebis --config ./config.yaml` | Serves the three listeners until Ctrl-C or SIGTERM, then drains up to 30 seconds. |
-| `phoebis check-config --config ./config.yaml` | Validates the file, prints the listeners and routing, and exits. |
-| `phoebis health --config ./config.yaml` | Probes the proxy listener and exits 0 when it answers, 1 otherwise. |
+| `phoebis check-config --config ./config.yaml` | Validates the file, the key file and the registry's key canary. |
+| `phoebis health --config ./config.yaml` | Probes the proxy listener's readiness: exit 0 when ready, 1 otherwise. |
 | `phoebis --version` | Prints the version. |
 
 `--config` defaults to `./config.yaml`; when the flag is absent and `PHOEBIS_CONFIG` is set, every subcommand reads
-that path instead, and the flag wins when both are given. `check-config` opens neither the store nor a socket,
-so it is safe to run against a production file while the router is up. It prints, in order:
+that path instead, and the flag wins when both are given. `check-config` takes no lock, runs no migration and opens
+no socket; it reads the key file and the registry's canary read-only, so it is safe to run against a production file
+while the router is up. It prints, in order:
 
 1. `{config path} is valid`
 2. `proxy listens on {config.proxy.listen}`
 3. `admin listens on {config.admin.listen}`
 4. `metrics listens on {config.stats.metrics_listen}`
-5. `profile {the build's profile}`
-6. `routing: max_attempts {n}, cooldown_fallback {n}s, model_rejection {n}s, catalog refresh {n}s, startup fetch {n}s`
-7. `ledger at {config.stats.ledger_path}`
-8. `retention {n days|forever}, rollups {n days|forever}`
-9. `keepalive: {n} sessions, {n} agents, {n} MiB retained`
+5. `proxy: body budget {n} bytes, body read {n}s, key body reads {n}, max request {n} bytes, sign cch placeholder
+   {on|off}, upstream gzip {auto|on|off}`
+6. `profile {the build's profile}`
+7. `routing: cooldown_fallback {n}s, model_rejection {n}s, catalog refresh {n}s, startup fetch {n}s`
+8. `ledger at {config.stats.ledger_path}`
+9. `retention {n days|forever}, rollups {n days|forever}`
+10. `keepalive: {n} sessions, {n} agents, {n} MiB retained`
+11. the registry line, `registry at {config.storage.path} does not exist yet; the first start creates it` when the
+    registry is not there yet, or `registry at {config.storage.path} has no key canary yet; a sealed row opens under
+    the key, and the next start seals one` for a registry from before the canary
+12. `warning: environment variable {name} is unset or empty`, when the secret variable is unset
 
 Further warning lines name a storage key file, data directory or database whose mode or owner is wider than the router
 expects; the router starts either way and logs the same warnings.
@@ -162,11 +170,12 @@ On shutdown, Ctrl-C or SIGTERM, the router drains in-flight requests for up to 3
 still running. That 30 seconds also covers the keepalive shutdown ahead of it, so a slow keepalive shutdown leaves the
 listeners whatever is left of the one budget rather than a fresh 30 seconds of their own.
 
-`health` loads the file the way `check-config` does, so it needs the same environment. It connects to
-`proxy.listen`, or to the loopback address of the same family when the listener is bound on every interface,
-sends `HEAD /api/hello`, and prints `proxy answers on {addr}` on a `200` or one line saying why not; the whole
-probe, connect included, is bounded by three seconds. The container image runs it as its health check every 30
-seconds ([the container](#run-the-container)).
+`health` loads the file the way the service does, so it needs the same environment. It connects to `proxy.listen`, or to
+the loopback address of the same family when the listener is bound on every interface, sends `HEAD /api/ready`, and
+prints `proxy answers on {addr}` on a `200` or one line saying why not (`proxy on {addr} answered 503, not 200` when the
+router loop, the ledger consumer or the store is dead); the whole probe, connect included, is bounded by three seconds.
+`/api/hello` stays the liveness answer the client itself probes. The container image runs `health` as its health check
+every 30 seconds ([the container](#run-the-container)).
 
 ## Environment variables
 
@@ -200,19 +209,26 @@ admin:
   secret_env: PHOEBIS_ADMIN_SECRET
 keepalive:
   # Process-wide limits only. Whether a pool's sessions are probed, and the probe tuning, are pool settings in
-  # the registry. The largest retained recipe follows the relay's 32 MiB request body bound.
+  # the registry. The largest retained recipe follows proxy.max_request_bytes, the relay's request body bound.
   max_agents: 1024
   max_retained_bytes: 268435456
   max_sessions: 128
 proxy:
   listen: 127.0.0.1:8317
+  # The bounds on the request bodies the proxy holds, at their defaults; uncomment a key to change it.
+  # body_budget_bytes: 536870912
+  # body_read_seconds: 60
+  # key_body_reads: 128
+  # max_request_bytes: 33554432
+  # Signs a restored cch=00000 with this build's formula; off until a server rejects the placeholder.
+  # sign_cch_placeholder: false
+  # How the edited body leaves: auto mirrors the client, on always gzip, off always identity.
+  # upstream_gzip: auto
 routing:
   # How often every enabled account's model listing is read again.
   catalog_refresh_seconds: 21600
   # How long an account is cooled when the upstream rejected it without saying for how long, 1 to 3600.
   cooldown_fallback_seconds: 60
-  # Upstream attempts per client request across distinct accounts, 1 to 8.
-  max_attempts: 3
   # How long an account whose upstream answered 404 for a model is skipped for that model.
   model_rejection_seconds: 3600
   # How long the proxy listener waits at startup for the model listings and the usage snapshots.
@@ -294,7 +310,7 @@ between {min} and {max}, not {value}`.
 | Key | Default | Accepts |
 | --- | --- | --- |
 | `max_agents` | `1024` | 1 to 16384 |
-| `max_retained_bytes` | `268435456` | 33554432 (the relay's request body bound, which a recipe follows) to 536870912 |
+| `max_retained_bytes` | `268435456` | `proxy.max_request_bytes` (the body bound a recipe follows) to 536870912 |
 | `max_sessions` | `128` | 1 to 4096 |
 
 `max_sessions` counts live sessions only: an ended session frees its slot at once, though its tombstone stays until
@@ -302,7 +318,48 @@ the session expiry sweeps it. The companion's lease is 90 seconds and four probe
 
 ### proxy
 
-Required: `listen`, a socket address, refused with a YAML error.
+Required: `listen`, a socket address, refused with a YAML error. Four keys bound the request bodies the proxy holds;
+`sign_cch_placeholder` decides whether a restored billing placeholder is signed, and `upstream_gzip` how the edited body
+leaves toward the upstream. All six are tunable in the file for power users and have no console control.
+
+| Key | Default | Accepts |
+| --- | --- | --- |
+| `body_budget_bytes` | `536870912` | `max_request_bytes` to 2^40 |
+| `body_read_seconds` | `60` | 1 to 599 |
+| `key_body_reads` | `128` | 1 to 4096 |
+| `max_request_bytes` | `33554432` | 1024 to 33554432 |
+| `sign_cch_placeholder` | `false` | `true` or `false` |
+| `upstream_gzip` | `auto` | `auto`, `on` or `off` |
+
+Refused with:
+
+- `body_budget_bytes`: `proxy.body_budget_bytes must be at least proxy.max_request_bytes ({minimum}), not {value}`;
+  and `proxy.body_budget_bytes must be at most 1099511627776, not {value}` past 2^40
+- `body_read_seconds`: `proxy.body_read_seconds must be between 1 and 599, not {value}`
+- `key_body_reads`: `proxy.key_body_reads must be between 1 and 4096, not {value}`
+- `max_request_bytes`: `proxy.max_request_bytes must be between 1024 and 33554432, not {value}`
+- `sign_cch_placeholder`: a YAML error for anything but a boolean
+- `upstream_gzip`: `proxy.upstream_gzip must be auto, on or off, not {value}`
+
+`max_request_bytes` is the per-body bound, the Messages API's own request limit, so the router never refuses what the
+upstream accepts, and a value above it is refused as pointless. `body_budget_bytes` is the bytes of bodies the whole
+process holds at once, sized for a household whose keys carry agent tools that fan out (512 one-MiB bodies, or sixteen
+at the per-body bound); a request that would pass it is refused with the router's own `503 body_budget_exhausted`. The
+budget counts each body as received; the edited copy and the wire copy a pass holds beside it can take up to twice that
+again, so size the process's memory at three times `body_budget_bytes`. `key_body_reads` bounds the bodies one key has
+arriving at once; a request past it is refused `429 key_body_reads` with `Retry-After: 1`. `body_read_seconds` is how
+long a body may take to arrive after authentication, under the stream's idle bound of 600 seconds; a body that takes
+longer is answered `408 request_timeout`.
+
+`sign_cch_placeholder` signs a restored `cch=00000` with this build's formula instead of sending the placeholder; off
+until a server rejection of the placeholder proves it necessary.
+
+The router accepts a request body sent with `content-encoding: gzip`: it inflates the body before reading it, within
+`max_request_bytes`, so the inflated size is what the per-body bound and `body_budget_bytes` measure (the inflated
+worst case is reserved against `body_budget_bytes` before the body is inflated); every other request encoding is
+refused. `upstream_gzip` says how the edited body leaves toward the upstream: `auto` sends gzip when the client sent
+gzip and identity otherwise, `on` always gzip, `off` always identity; the `content-encoding` and `content-length` toward
+the upstream follow the bytes actually sent.
 
 ### routing
 
@@ -312,7 +369,6 @@ Defaults whole.
 | --- | --- | --- |
 | `catalog_refresh_seconds` | `21600` | 60 to 604800 |
 | `cooldown_fallback_seconds` | `60` | 1 to 3600 |
-| `max_attempts` | `3` | 1 to 8 |
 | `model_rejection_seconds` | `3600` | 1 to 604800 |
 | `startup_fetch_seconds` | `30` | 1 to 60 |
 
@@ -320,9 +376,12 @@ Refused with:
 
 - `catalog_refresh_seconds`: `routing.catalog_refresh_seconds must be between 60 and 604800, not {value}`
 - `cooldown_fallback_seconds`: `routing.cooldown_fallback_seconds must be between 1 and 3600, not {value}`
-- `max_attempts`: `routing.max_attempts must be between 1 and 8, not {value}`
 - `model_rejection_seconds`: `routing.model_rejection_seconds must be between 1 and 604800, not {value}`
 - `startup_fetch_seconds`: `routing.startup_fetch_seconds must be between 1 and 60, not {value}`
+
+The failover visits every eligible account of the pool once per request, so the pool's size bounds a request's
+attempts and no key sets a limit; a key the block does not list is refused at start and by `check-config` as an
+unknown field, named in the error.
 
 ### sessions
 
@@ -409,7 +468,7 @@ Refused with:
 - `refresh_concurrency`: `usage.refresh_concurrency must be between 1 and 16, not {value}`
 
 The checks above run in a fixed order at load, not block by block: `admin`'s loopback-or-origin rule, then
-`usage.cache_ttl_seconds`, `usage.refresh_concurrency`, `storage.path`, `routing.max_attempts`,
+`usage.cache_ttl_seconds`, `usage.refresh_concurrency`, `storage.path`, the `proxy` bounds,
 `routing.model_rejection_seconds`, `routing.cooldown_fallback_seconds`, the `keepalive` bounds,
 `routing.startup_fetch_seconds`, `routing.catalog_refresh_seconds`, the four `sessions` keys,
 `stats.body_capture_max_hours`, `stats.rollup_retention_days`, `stats.ledger_path`, and last whether
@@ -440,7 +499,7 @@ its next request, and rows older than `sessions.memory_retention_days` are dropp
 
 `stats.ledger_path` names a second SQLite file, the statistics ledger, under the same rules: the name is used
 as given, the parent directory is created at mode 0700 and the file at 0600. It runs in WAL mode with
-`synchronous = NORMAL`, so a crash loses at most the last transactions before a checkpoint. A request's facts
+`synchronous = NORMAL`, so a power loss may lose the last transactions before a checkpoint. A request's facts
 are never dropped: a request record waits for room in the ledger's channel, so a ledger writer that stalls
 holds the request path rather than losing request facts; only captured bodies stay best-effort, since a stream
 may outrun its recorder, and a `ledger_gap` event records what was lost. Captured bodies live in this file,
@@ -448,9 +507,9 @@ which makes it as sensitive as the registry even though it holds no credential, 
 
 No script in this repository backs these files up; [Operations](operations.md) says how.
 
-![The Settings view: the effective bootstrap values, the listeners, retention, and the price table
+![The Settings view: the downstream client block, the price table, Appearance, Access and About
 ](assets/settings-light.png#only-light)
-![The Settings view: the effective bootstrap values, the listeners, retention, and the price table
+![The Settings view: the downstream client block, the price table, Appearance, Access and About
 ](assets/settings-dark.png#only-dark)
 
 ## Compiled-in limits
@@ -461,7 +520,6 @@ Rows in alphabetical order of the limit's name. None of these has a bootstrap ke
 | --- | --- |
 | Admin login throttle | Five failed logins per minute, then `too many failed logins, try again in a minute`. |
 | Admin session lifetime | 15 minutes idle, 12 hours absolute. |
-| Body read timeout | 600 seconds for a request body to arrive after authentication, the same as the stream idle wait. |
 | Chunk framing | 1 KiB per chunk-size line and 16 KiB of trailers from an upstream. |
 | Connection cap | 4,096 on the proxy listener, 256 on the admin listener, 64 on the metrics listener. |
 | Cooldown booking | Seven days ahead of each announcement; a later announcement books the next stretch. |
@@ -473,7 +531,7 @@ Rows in alphabetical order of the limit's name. None of these has a bootstrap ke
 | Ledger channel | 4,096 records; a request waits for room, an event or sample past it drops as a `ledger_gap`. |
 | Live feed | 30 minutes or 2,048 finished requests kept; a client behind by 1,024 messages is disconnected. |
 | Name resolution | 5 seconds per lookup of an upstream or catalog host. |
-| Relay waits | 600 seconds for a response head, 600 seconds between stream events, a 32 MiB request cap. |
+| Relay waits | 600 seconds for a response head, 600 seconds between stream events. |
 | Stream hold before commit | 30 seconds or 64 KiB, whichever comes first. |
 | Upstream connection pool | 8 idle connections per account and host pair, discarded after 60 seconds idle. |
 | User agent | 256 bytes kept on a request row and a live entry; a longer value is cut. |

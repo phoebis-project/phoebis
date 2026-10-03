@@ -129,6 +129,8 @@ fn attempt(id: &str, n: u32, account: &str, status: u16, outcome: &str, at: i64)
         finished_at: Some(at + 400),
         ttfb_ms: Some(120),
         upstream_status: Some(status),
+        upstream_request_id: Some(format!("req_{id}_{n}")),
+        upstream_message_id: (status == 200).then(|| format!("msg_{id}_{n}")),
         outcome: outcome.into(),
         input_tokens: Some(1_000),
         output_tokens: Some(100),
@@ -585,6 +587,31 @@ async fn every_route_is_captured_and_holds_its_shape() {
         )],
         bodies: None,
     });
+    // A committed stream whose body ended before its `message_stop`, so the requests route answers the sixth
+    // outcome and the analytics groups count it in their own column.
+    parts.ledger.record(Record::Request {
+        request: RequestRecord {
+            error_code: Some("stream_incomplete".into()),
+            ..request(
+                key_generation,
+                "r-incomplete",
+                hour_ago + 600,
+                "desktop",
+                "s1",
+                200,
+                "incomplete",
+            )
+        },
+        attempts: vec![attempt(
+            "r-incomplete",
+            1,
+            "business",
+            200,
+            "upstream_error",
+            hour_ago + 600,
+        )],
+        bodies: None,
+    });
     // A row whose serving attempt carries a placement, so the placements route has a rung to answer rather
     // than an empty list. It stays on a model the price table lists, since its API-key upstream spends dollars the
     // spend fixtures read.
@@ -681,10 +708,11 @@ async fn every_route_is_captured_and_holds_its_shape() {
             response_bytes: None,
             response_chunks: None,
             held: None,
+            message_id: Some("msg_k1_1".into()),
             finished_at: now,
         }));
     let ready = wait_json(app, "/admin/requests", &cookie, |v| {
-        v["requests"].as_array().unwrap().len() == 5
+        v["requests"].as_array().unwrap().len() == 6
     })
     .await;
     hold(&planted, "requests", "GET /admin/requests", ready);
@@ -913,6 +941,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
         response_bytes: Some(5),
         response_chunks: None,
         held: None,
+        message_id: Some("msg_live-1_1".into()),
         finished_at: now + 900,
     }));
     let deltas = deltas_until(&mut ws, "finished").await;

@@ -164,6 +164,9 @@ pub fn make_recipe(
     if !valid_opaque(model) {
         return Err("invalid_model");
     }
+    // The relay's own rule for what counts as a client hash, so a probe is re-signed exactly where its request was.
+    let client_hash =
+        phoebis_cch::find_cch(body).is_some() && !phoebis_cch::carries_only_the_placeholder(body);
     let mut edited = body.to_vec();
     let (start, end) =
         phoebis_cch::number_member_span(&edited, &["max_tokens"]).ok_or("invalid_request")?;
@@ -192,9 +195,16 @@ pub fn make_recipe(
     if spellings > 1 || (spellings == 1 && !cut) {
         return Err("invalid_request");
     }
-    // `stream` is inside the billing hash view and `max_tokens` outside it: the client's stamp no longer
-    // matches the edited body, and the relay would refuse it as drift. A body without a stamp is left alone.
-    phoebis_cch::restamp_if_present(&mut edited).map_err(|_| "invalid_request")?;
+    // `stream` is inside the billing hash view and `max_tokens` outside it: a client-stamped body is re-signed
+    // over the edited bytes, since the relay would refuse the client's hash as drift. The body is the one the bus
+    // published, the client's bytes before any edit, so a placeholder here is one the client sent, and it stays:
+    // the relay relays a client-sent placeholder unsigned whatever `proxy.sign_cch_placeholder` says, and a probe
+    // signed here would travel signed where the request it replays went out unsigned. A reduced-shape line
+    // carries no stamp to touch, since the relay restores its fields on the request's way out, after the bus
+    // published the body, and never on a probe's; a body without a stamp is left alone.
+    if client_hash {
+        phoebis_cch::restamp_if_present(&mut edited).map_err(|_| "invalid_request")?;
+    }
     // Everything the bus published, in the order it published it: the denylist there is the one gate, so a
     // header the client starts sending reaches the upstream on a probe as it does on the request. The relay's
     // outbound builder places the account credential after `anthropic-version`, so this order is the wire's.

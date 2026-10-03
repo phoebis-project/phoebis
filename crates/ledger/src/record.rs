@@ -92,6 +92,8 @@ pub struct AttemptRecord {
     pub ttfc_ms: Option<i64>,
     pub upstream_status: Option<u16>,
     pub upstream_request_id: Option<String>,
+    /// The `id` of the message the serving attempt's answer carried; `None` on every other attempt.
+    pub upstream_message_id: Option<String>,
     pub outcome: String,
     pub cooldown_scope: Option<String>,
     pub cooldown_until: Option<i64>,

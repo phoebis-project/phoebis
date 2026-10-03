@@ -180,7 +180,7 @@ fn an_attempt_carries_the_incarnation_it_began_under() {
 }
 
 #[test]
-fn an_uncertain_attempt_blocks_new_attempts() {
+fn an_in_flight_attempt_blocks_a_new_one_and_an_uncertain_one_does_not() {
     let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
     store.insert_account(&account("a")).unwrap();
     let g = store
@@ -190,10 +190,17 @@ fn an_uncertain_attempt_blocks_new_attempts() {
     store
         .resolve_refresh_attempt(id, 1, AttemptOutcome::Uncertain("response lost".into()))
         .unwrap();
-    assert!(matches!(
-        store.open_refresh_attempt("a", 1, 1, g),
-        Err(StoreError::AttemptPending)
-    ));
+    assert!(
+        store.open_refresh_attempt("a", 1, 1, g).is_ok(),
+        "the manager's floor spaces the retry, not the store"
+    );
+    assert!(
+        matches!(
+            store.open_refresh_attempt("a", 1, 1, g),
+            Err(StoreError::AttemptPending)
+        ),
+        "the retry still in flight blocks a third"
+    );
 }
 
 #[test]

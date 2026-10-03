@@ -37,9 +37,9 @@ sibling inside the same call. The request, each attempt, and the usage land in t
 | Admin | `admin.listen` | The console and `/admin/*` |
 | Metrics | `stats.metrics_listen` | `/metrics` in Prometheus text format, no credential, plain HTTP |
 
-The proxy listener answers `HEAD /api/hello`, `POST /v1/messages`, `POST /v1/messages/count_tokens`, `GET
-/v1/usage` for the key's own usage, the two keepalive companion routes, and `GET /v1/models` with the caller's
-own routable models ([models listing](client.md#the-models-listing)).
+The proxy listener answers `HEAD /api/hello`, `HEAD` and `GET /api/ready`, `POST /v1/messages`, `POST
+/v1/messages/count_tokens`, `GET /v1/usage` for the key's own usage, the two keepalive companion routes, and `GET
+/v1/models` with the caller's own routable models ([models listing](client.md#the-models-listing)).
 
 ## The console
 
@@ -63,13 +63,13 @@ The sidebar shows the views in this order:
 | Requests | Individual relayed requests (see [Statistics and alerts](statistics.md)). |
 | Analytics | Hourly rollups and cost (see [Statistics and alerts](statistics.md)). |
 | Sessions | Session pins and keepalive recipes (see [Keepalive](keepalive.md)). |
-| Settings | The effective bootstrap values (see [Installation](installation.md)). |
+| Settings | Client setup, the price table, and the router's version and paths (see [Installation](installation.md)). |
 
 The console, the API, the bootstrap file and this site call what the router holds an account and a key the router
 issues a key. The console and this site call the account kind whose credential is an Anthropic API key an Anthropic key;
 the API's kind value is `api_key`. "Upstream" names the provider's host and the party that answered a request (the
-bootstrap file's `upstream` block, the `upstream_error` and `upstream_unreachable` codes, the `upstream_request_id` and
-`upstream_status` fields, the `phoebis_upstream_ttfb_seconds` metric).
+bootstrap file's `upstream` block, the `upstream_error` and `upstream_unreachable` codes, the `upstream_message_id`,
+`upstream_request_id` and `upstream_status` fields, the `phoebis_upstream_ttfb_seconds` metric).
 
 ## What this build does not do
 

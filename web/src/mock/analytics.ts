@@ -55,7 +55,7 @@ export interface HourlyRollup {
   probes: { failed: number; ok: number; skipped: number };
   /** The class the lane's requests sent; the rollups file a row with none, a probe's among them, under `-`. */
   requestClass: string;
-  requests: { ok: number; overloaded: number; rate_limited: number; upstream_error: number };
+  requests: { incomplete: number; ok: number; overloaded: number; rate_limited: number; upstream_error: number };
   savings: { grossUsd: number; probeCostUsd: number };
   /** The fixture rolls up per session, which keeps its lanes as fine as the ledger's; no route groups on one. */
   sessionId: string;
@@ -141,13 +141,15 @@ function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes
   const rateLimited = sum(counted, (r) => r.requests.rate_limited);
   const overloaded = sum(counted, (r) => r.requests.overloaded);
   const upstreamError = sum(counted, (r) => r.requests.upstream_error);
+  const incomplete = sum(counted, (r) => r.requests.incomplete);
   const succeeded = sum(counted, (r) => r.requests.ok);
-  const requests = succeeded + rateLimited + overloaded + upstreamError;
+  const requests = succeeded + rateLimited + overloaded + upstreamError + incomplete;
   const failovers = sum(counted, (r) => r.failovers);
   const errors = emptyCounts();
   if (rateLimited) errors.rate_limit_error = rateLimited;
   if (overloaded) errors.overloaded_error = overloaded;
   if (upstreamError) errors.api_error = upstreamError;
+  if (incomplete) errors.stream_incomplete = incomplete;
 
   return {
     // Every attempt past the first on a request is a failover, so the two together are what the accounts saw.
@@ -164,6 +166,7 @@ function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes
     failed: overloaded + upstreamError,
     failovers,
     histograms,
+    incomplete,
     keptWarm: { requests: sum(counted, (r) => r.keptWarm.requests), tokens: sum(counted, (r) => r.keptWarm.tokens) },
     key,
     label,

@@ -14,6 +14,7 @@ mod live;
 mod models;
 mod pools;
 mod pricing;
+mod readiness;
 mod requests;
 mod routes;
 mod rules;
@@ -38,6 +39,7 @@ use phoebis_routing::RouterHandle;
 use phoebis_store::{NewBundle, Store};
 use phoebis_transport::control::ControlClient;
 
+pub use readiness::{Readiness, ReadinessSource};
 pub use routes::router;
 pub use session::{AdminSecrets, LoginError, Sessions};
 
@@ -81,6 +83,8 @@ pub struct AdminState {
     pub keepalive: Arc<Engine>,
     /// The condition reader the metrics listener scrapes too, so the attention route and a scrape never disagree.
     pub attention: Arc<phoebis_attention::Attention>,
+    /// The same reads `/api/ready` answers from, so `GET /admin/system` and the proxy listener agree.
+    pub readiness: Arc<Readiness>,
 }
 
 /// The running configuration an operator reads back from the admin API. Every secret is left out, and so is
@@ -95,7 +99,6 @@ pub struct SettingsView {
     pub cooldown_fallback_seconds: u64,
     pub keepalive: KeepaliveLimits,
     pub ledger_path: String,
-    pub max_attempts: u8,
     pub metrics_listen: String,
     pub model_rejection_seconds: u64,
     pub pricing_path: Option<String>,

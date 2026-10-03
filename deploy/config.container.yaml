@@ -16,10 +16,17 @@ keepalive:
   max_sessions: 128
 proxy:
   listen: 0.0.0.0:8317
+  # The bounds on the request bodies the proxy holds, at their defaults; uncomment a key to change it.
+  # body_budget_bytes: 536870912
+  # body_read_seconds: 60
+  # key_body_reads: 128
+  # max_request_bytes: 33554432
+  # Signs a restored cch=00000 with this build's formula; off until a server rejects the placeholder.
+  # sign_cch_placeholder: false
+  # How the edited body leaves: auto mirrors the client, on always gzip, off always identity.
+  # upstream_gzip: auto
 routing:
   cooldown_fallback_seconds: 60
-  # Upstream attempts per client request across distinct accounts, 1 to 8.
-  max_attempts: 3
 sessions:
   expire_after_seconds: 86400
   # The relay's memory of a session's previous request id and prompt id: entries held in process, how long one

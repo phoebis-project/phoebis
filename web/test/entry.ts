@@ -2,6 +2,7 @@ export * from '@/api/decode';
 export * from '@/api/fold';
 export * from '@/api/http';
 export * from '@/lib/analytics';
+export * from '@/lib/attention';
 export * from '@/lib/autoMode';
 export * from '@/lib/buckets';
 export * from '@/lib/cache';

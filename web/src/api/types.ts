@@ -514,6 +514,9 @@ export interface Attempt {
   /** Null for an attempt the router stored no trace for. */
   selection: SelectionTrace | null;
   startedAt: string;
+  /** The `id` of the message the answer carried, the join to a transcript's assistant entry; null without one. */
+  upstreamMessageId: string | null;
+  upstreamRequestId: string | null;
   upstreamStatus: number | null;
   windows: AttemptWindow[];
 }
@@ -579,7 +582,7 @@ export interface RequestLog {
   kind: RequestKind;
   model: string;
   /** How the request ended, once every attempt is in. */
-  outcome: 'canceled' | 'exhausted' | 'failed' | 'rejected' | 'succeeded';
+  outcome: 'canceled' | 'exhausted' | 'failed' | 'incomplete' | 'rejected' | 'succeeded';
   poolId: string | null;
   /** The sum of the client's `x-claude-code-prev-tool-durations`, in milliseconds. */
   prevToolMs: number | null;
@@ -755,6 +758,7 @@ export interface AnalyticsGroup {
    */
   fromRequests?: true;
   histograms: LatencyHistograms;
+  incomplete: number;
   keptWarm: { requests: number; tokens: number } | null;
   key: string;
   label: string;
@@ -993,7 +997,7 @@ export interface Settings {
   pricing: { effectiveDate: string; models: ModelPrice[]; source: string };
   quota: { sampleRetentionDays: number };
   retention: { bodyCaptureMaxHours: number; ledgerDays: number; quotaSamplesDays: number; rollupDays: number };
-  routing: { catalogCacheSeconds: number; catalogRefreshSeconds: number; cooldownFallbackSeconds: number; maxAttempts: number; modelRejectionSeconds: number; startupFetchSeconds: number };
+  routing: { catalogCacheSeconds: number; catalogRefreshSeconds: number; cooldownFallbackSeconds: number; modelRejectionSeconds: number; startupFetchSeconds: number };
   /** How long a session stays listed after its last activity. */
   sessions: { expireAfterSeconds: number };
   /** `pricingPath` is null when no override file is configured. */

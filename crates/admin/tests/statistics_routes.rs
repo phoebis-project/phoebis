@@ -128,8 +128,31 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
             system["ledger"]["dropped"].as_u64(),
             system["ledger"]["channel_depth"].as_u64()
         ),
-        (Some(25), Some(0), Some(4_096)),
-        "the ledger schema is at the migration that keeps a request's holds on its row"
+        (Some(26), Some(0), Some(4_096)),
+        "the ledger schema is at the migration that counts an incomplete answer and keeps the upstream message id"
+    );
+    assert_eq!(system["router"]["command_depth"].as_u64(), Some(4_096));
+    let dropped = system["router"]["dropped_reports"].as_object().unwrap();
+    assert_eq!(
+        dropped.keys().map(String::as_str).collect::<Vec<_>>(),
+        [
+            "account_state",
+            "affinity",
+            "cooldown",
+            "credits",
+            "member_spend",
+            "overage",
+            "pin_invalidated",
+            "pin_released",
+            "pin_renewed",
+            "sample",
+            "usage",
+        ],
+        "every kind of routing report, in name order"
+    );
+    assert!(
+        dropped.values().all(|n| n.as_u64() == Some(0)),
+        "nothing refused by a router that kept up: {dropped:?}"
     );
     assert_eq!(system["gaps"][0]["detail"]["dropped"].as_u64(), Some(7));
     assert!(
@@ -146,6 +169,92 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
     );
     assert_eq!(system["live"]["clients"].as_u64(), Some(0));
     assert_eq!(system["storage_ok"], true);
+    assert_eq!(
+        (&system["ready"], &system["dead"]),
+        (&serde_json::json!(true), &serde_json::json!([])),
+        "the harness's router task, ledger consumer and store are all alive"
+    );
+}
+
+#[tokio::test]
+async fn a_stopped_ledger_reads_not_ready_on_the_system_document() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    parts.ledger.clone().shutdown().await.unwrap();
+    let system = json(get(&parts.app, "/admin/system", Some(&cookie)).await).await;
+    assert_eq!(
+        (&system["ready"], &system["dead"], &system["storage_ok"]),
+        (
+            &serde_json::json!(false),
+            &serde_json::json!(["ledger"]),
+            &serde_json::json!(true)
+        ),
+        "the writer closed its channel while the router task and the store still answer: {system}"
+    );
+}
+
+#[tokio::test]
+async fn a_store_whose_read_fails_reads_not_ready_on_the_system_document_until_it_answers_again() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    parts.store.debug_fail_next_schema_version();
+    let system = json(get(&parts.app, "/admin/system", Some(&cookie)).await).await;
+    assert_eq!(
+        (&system["ready"], &system["dead"], &system["storage_ok"]),
+        (
+            &serde_json::json!(false),
+            &serde_json::json!(["store"]),
+            &serde_json::json!(false)
+        ),
+        "the store's read failed while the ledger and the router task still answer: {system}"
+    );
+    let system = json(get(&parts.app, "/admin/system", Some(&cookie)).await).await;
+    assert_eq!(
+        (&system["ready"], &system["dead"], &system["storage_ok"]),
+        (
+            &serde_json::json!(true),
+            &serde_json::json!([]),
+            &serde_json::json!(true)
+        ),
+        "each answer reads the store afresh, so the next one is ready again: {system}"
+    );
+}
+
+#[tokio::test]
+async fn readiness_reads_the_ledger_dead_when_its_bus_subscriber_is_absent_or_panicked() {
+    let parts = common::admin_parts_full().await;
+    let readiness = |bus: phoebis_bus::Bus| phoebis_admin::Readiness {
+        bus,
+        ledger: parts.ledger.clone(),
+        router: parts.router.clone(),
+        store: parts.store.clone(),
+    };
+    assert_eq!(
+        readiness(parts.bus.clone()).dead(),
+        Vec::<&str>::new(),
+        "the harness's own bus carries the ledger's live subscriber"
+    );
+    let bus = phoebis_bus::Bus::new();
+    let _live = bus.subscribe("live");
+    assert_eq!(
+        readiness(bus.clone()).dead(),
+        vec!["ledger"],
+        "a bus the ledger never subscribed to"
+    );
+    let assembler = bus.subscribe("ledger");
+    assert_eq!(
+        readiness(bus.clone()).dead(),
+        Vec::<&str>::new(),
+        "a `ledger` subscriber with no panic counted"
+    );
+    phoebis_bus::spawn_subscriber(assembler, |_| async { panic!("the assembler died") })
+        .await
+        .unwrap();
+    assert_eq!(
+        readiness(bus).dead(),
+        vec!["ledger"],
+        "a `ledger` subscriber whose task panicked, while the writer's channel stays open"
+    );
 }
 
 #[tokio::test]

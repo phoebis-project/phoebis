@@ -40,13 +40,14 @@ The key is created once and never replaced: every stored credential is sealed un
 `PHOEBIS_CONFIG` names the file for every `phoebis` call in that shell, so nothing host-specific lands in the checkout.
 That runs the proxy on `127.0.0.1:8317`, the admin listener with the console on `127.0.0.1:8081`, and metrics on
 `127.0.0.1:9464`, with both databases under `./data/`. The build embeds the console and needs Node 20.19 or a later 20,
-or 22.12 or later; `PHOEBIS_SKIP_UI_BUILD=1` builds without it. `phoebis check-config` validates the file without
-opening the store or a socket. Installing as a service, and every setting of the file, is on the
-[installation page](docs/site/installation.md).
+or 22.12 or later; `PHOEBIS_SKIP_UI_BUILD=1` builds without it. `phoebis check-config` validates the file, the key
+file and the registry's key canary, taking no lock and opening no socket. Installing as a service, and every setting
+of the file, is on the [installation page](docs/site/installation.md).
 
 The same binary is published as a container image, `ghcr.io/daystrom-labs/phoebis`, for amd64 and arm64
 with every release; `deploy/compose.yaml` and `deploy/config.container.yaml` run it under bridge networking, and
-the image's `HEALTHCHECK` runs `phoebis health` ([how](docs/site/installation.md#run-the-container)).
+the image's `HEALTHCHECK` runs `phoebis health`, which reads not-ready when the router loop, the ledger consumer or the
+store is dead ([how](docs/site/installation.md#run-the-container)).
 
 ## Where things are
 

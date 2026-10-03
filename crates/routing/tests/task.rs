@@ -9,8 +9,8 @@ use phoebis_routing::{
     BurnRates, ClientClass, CreditsState, Exhaustion, KeyRefusal, MemberSpend, PinRef,
     PinUsage, Presented, RateTable, Rates, Refusal, ReloadError, Report, ResolveError,
     RouterConfig, RouterHandle, RoutingState, SelectRequest, SelectResult, SharePricer,
-    UtilizationSample, WindowReading, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR,
-    SEVEN_DAY, SEVEN_DAY_FABLE,
+    UtilizationSample, WindowReading, COMMANDS, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON,
+    FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
 };
 use phoebis_store::{
     key_prefix, AccountKind, AccountRow, AccountState, Affinity, ApiKeyRow,
@@ -458,6 +458,150 @@ async fn shutdown_lands_every_acknowledged_write_before_it_returns() {
 }
 
 #[tokio::test]
+async fn a_router_handle_reads_alive_until_its_task_has_shut_down() {
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(seeded(&["a"]), clock(&now), RouterConfig::default()).unwrap();
+    // The readiness answer reads a clone, so the clone must see the end the shutting handle caused.
+    let held = handle.clone();
+    assert!(held.is_alive(), "a running task takes commands");
+    handle.shutdown().await.unwrap();
+    assert!(
+        !held.is_alive(),
+        "a task that shut down takes none, the condition every ask reports as RouterGone"
+    );
+}
+
+/// Asserts the drop table reads `count` under `kind` and zero under every other kind, every kind present in the
+/// listed order.
+fn assert_dropped(handle: &RouterHandle, kind: &str, count: u64) {
+    let dropped = handle.dropped_reports();
+    assert_eq!(
+        dropped.iter().map(|(k, _)| *k).collect::<Vec<_>>(),
+        Report::KINDS,
+        "every kind is read, in the listed order"
+    );
+    for (k, n) in dropped {
+        let expected = if k == kind { count } else { 0 };
+        assert_eq!(n, expected, "the drops counted under {k}");
+    }
+}
+
+#[tokio::test]
+async fn a_report_the_stopped_task_cannot_take_counts_one_drop_under_its_kind_and_nothing_under_the_others(
+) {
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(seeded(&["a"]), clock(&now), RouterConfig::default()).unwrap();
+    assert_dropped(&handle, "cooldown", 0);
+    handle.shutdown().await.unwrap();
+    assert_eq!(
+        handle.report(model_cooldown("a", "model:claude-sonnet-5", 1_000)),
+        None
+    );
+    assert_dropped(&handle, "cooldown", 1);
+}
+
+#[tokio::test]
+async fn a_full_command_queue_counts_the_dropped_report_under_its_kind() {
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(seeded(&["a"]), clock(&now), RouterConfig::default()).unwrap();
+    let park = handle.park_loop().await;
+    // The loop took its own park command off the queue, so every slot is free and only the last report is refused.
+    for _ in 0..COMMANDS + 1 {
+        handle.report(model_cooldown("a", "model:claude-sonnet-5", 1_000));
+    }
+    assert_dropped(&handle, "cooldown", 1);
+    drop(park);
+    // Queued behind the reports, so it answers once every one of them has landed.
+    let cooldowns = handle.cooldowns().await.unwrap();
+    assert!(
+        cooldowns
+            .iter()
+            .any(|c| c.account_id == "a" && c.scope == "model:claude-sonnet-5"),
+        "the queued reports land once the loop runs again: {cooldowns:?}"
+    );
+    assert_dropped(&handle, "cooldown", 1);
+}
+
+/// The handle counts a dropped report by looking its kind up in `Report::KINDS` and panics on a name the list lacks,
+/// so one report of every variant pins `kind()` against the list.
+#[tokio::test]
+async fn every_report_kind_is_named_in_the_drop_counters_list_in_its_order() {
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(seeded(&["a"]), clock(&now), RouterConfig::default()).unwrap();
+    let pin = PinRef {
+        key_id: "k".into(),
+        session_id: "s1".into(),
+        agent_id: "main".into(),
+        model: "claude-sonnet-5".into(),
+        epoch: 1,
+        lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
+    };
+    let reports = [
+        Report::AccountState {
+            account_id: "a".into(),
+            state: AccountState::ReauthRequired,
+            incarnation: 1,
+            lifecycle_generation: 1,
+            credential_generation: 1,
+        },
+        Report::Affinity(affinity_report(&handle, "a", 1_000)),
+        model_cooldown("a", "model:claude-sonnet-5", 1_000),
+        credits_at(true, None, None, 1_000),
+        Report::MemberSpend(Vec::new()),
+        Report::Overage {
+            account_id: "a".into(),
+            evidence: phoebis_routing::OverageEvidence {
+                in_use: true,
+                since: None,
+                reset: None,
+                observed_at: 1_000,
+                source: phoebis_routing::EvidenceSource::Head,
+                incarnation: 1,
+            },
+            incarnation: 1,
+        },
+        Report::PinInvalidated {
+            account_id: "a".into(),
+            pin: pin.clone(),
+            incarnation: 1,
+            lifecycle_generation: 1,
+            credential_generation: 1,
+        },
+        Report::PinReleased {
+            pin: pin.clone(),
+            incarnation: 1,
+            lifecycle_generation: 1,
+            credential_generation: 1,
+        },
+        renewal(pin, 1_000, PinUsage::default(), "client", 0),
+        observed("a", sample(1_000)),
+        a_million_input("a", 1_000),
+    ];
+    for report in &reports {
+        // No wildcard, so a new variant fails to compile here until it is named; it also needs a report above and a
+        // name in `KINDS`.
+        match report {
+            Report::AccountState { .. }
+            | Report::Affinity(_)
+            | Report::Cooldown { .. }
+            | Report::Credits { .. }
+            | Report::MemberSpend(_)
+            | Report::Overage { .. }
+            | Report::PinInvalidated { .. }
+            | Report::PinReleased { .. }
+            | Report::PinRenewed { .. }
+            | Report::Sample { .. }
+            | Report::Usage { .. } => {}
+        }
+    }
+    assert_eq!(
+        reports.iter().map(Report::kind).collect::<Vec<_>>(),
+        Report::KINDS,
+        "every variant's kind is listed under the same spelling, in order, and the list names nothing else"
+    );
+}
+
+#[tokio::test]
 async fn a_state_verdict_about_a_replaced_credential_changes_nothing() {
     let store = seeded(&["a"]);
     let now = Arc::new(AtomicI64::new(1_000));
@@ -860,6 +1004,147 @@ async fn a_rekey_the_store_refused_is_retried_once_at_the_next_write_and_then_dr
     assert!(
         store.load_routing().unwrap().resolutions.is_empty(),
         "a rekey that failed its one retry is dropped, not retried at every later write"
+    );
+}
+
+/// Waits until the router's memory holds `b`'s cooldown under every scope: the loop has handled each report and
+/// queued its write by then.
+async fn queued(handle: &RouterHandle, scopes: &[String]) {
+    wait_for_async(WRITTEN, || async {
+        let cooldowns = handle.cooldowns().await.unwrap();
+        scopes
+            .iter()
+            .all(|scope| {
+                cooldowns
+                    .iter()
+                    .any(|c| c.account_id == "b" && &c.scope == scope)
+            })
+            .then_some(())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_burst_of_reports_queued_behind_one_wake_lands_in_one_commit() {
+    let store = seeded(&["a", "b"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    // Read and armed before the task first runs, so the batch the purge tick queues at the start lands in one of
+    // the two wakes counted below.
+    let before = store.debug_routing_commits();
+    let hold = store.debug_hold_next_routing_write();
+    handle.report(model_cooldown("a", "model:claude-opus-5", 1_000));
+    wait_for(WRITTEN, || hold.is_parked().then_some(())).await;
+    let scopes: Vec<String> = (0..20).map(|i| format!("model:claude-burst-{i}")).collect();
+    for scope in &scopes {
+        handle.report(model_cooldown("b", scope, 1_000));
+    }
+    // Released before this, a report still in the command queue would land in a wake of its own.
+    queued(&handle, &scopes).await;
+    hold.release();
+    wait_for(WRITTEN, || {
+        (store.debug_routing_commits() >= before + 2).then_some(())
+    })
+    .await;
+    assert_eq!(
+        store.load_routing().unwrap().cooldowns.len(),
+        21,
+        "every report landed"
+    );
+    assert_eq!(
+        store.debug_routing_commits() - before,
+        2,
+        "the parked wake and one wake for everything queued behind it"
+    );
+}
+
+/// `a_refused_rekey`'s shape with the writer parked on an earlier write before the resolution, so the refused
+/// rekey and whatever the test queues next share the wake after the release.
+async fn a_refused_rekey_behind_a_hold(
+) -> (Arc<Store>, RouterHandle, phoebis_store::RoutingWriteHold) {
+    let store = seeded(&["a", "b"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    handle.report(model_cooldown("a", "model:claude-sonnet-4-5", 1_000));
+    wait_for(WRITTEN, || {
+        (!store.load_routing().unwrap().cooldowns.is_empty()).then_some(())
+    })
+    .await;
+    store.delete_account("a", "test").unwrap();
+    let hold = store.debug_hold_next_routing_write();
+    handle.report(model_cooldown("b", "model:claude-opus-5", 1_000));
+    wait_for(WRITTEN, || hold.is_parked().then_some(())).await;
+    handle
+        .resolve("claude-sonnet-4-5", "claude-sonnet-4-5-20250929", 1_500)
+        .await
+        .unwrap();
+    (store, handle, hold)
+}
+
+fn resolutions(store: &Store) -> Vec<(String, String)> {
+    store
+        .load_routing()
+        .unwrap()
+        .resolutions
+        .into_iter()
+        .map(|r| (r.spelling, r.dated_id))
+        .collect()
+}
+
+#[tokio::test]
+async fn a_batch_with_one_refused_write_lands_every_other_write() {
+    let (store, handle, hold) = a_refused_rekey_behind_a_hold().await;
+    let behind = ["model:claude-haiku-4-5", "model:claude-sonnet-5"].map(String::from);
+    for scope in &behind {
+        handle.report(model_cooldown("b", scope, 1_000));
+    }
+    queued(&handle, &behind).await;
+    hold.release();
+    for scope in &behind {
+        landed(&store, scope).await;
+    }
+    assert!(
+        resolutions(&store).is_empty(),
+        "the rekey the store refused was skipped"
+    );
+
+    restore_a(&store);
+    handle.report(model_cooldown("b", "model:claude-fable-5", 1_000));
+    landed(&store, "model:claude-fable-5").await;
+    assert_eq!(
+        resolutions(&store),
+        [(
+            "claude-sonnet-4-5".to_string(),
+            "claude-sonnet-4-5-20250929".to_string()
+        )],
+        "and carried to its one retry at the next wake"
+    );
+}
+
+#[tokio::test]
+async fn a_refused_rekey_superseded_by_a_later_rekey_of_its_spelling_in_the_batch_is_dropped_not_retried(
+) {
+    let (store, handle, hold) = a_refused_rekey_behind_a_hold().await;
+    // The router's memory moved `a`'s cooldown under the first dated id, so this rekey carries no row of `a`.
+    handle
+        .resolve("claude-sonnet-4-5", "claude-sonnet-4-5-20251001", 1_600)
+        .await
+        .unwrap();
+    hold.release();
+    let later = [(
+        "claude-sonnet-4-5".to_string(),
+        "claude-sonnet-4-5-20251001".to_string(),
+    )];
+    wait_for(WRITTEN, || (resolutions(&store) == later).then_some(())).await;
+
+    // With `a` back, a retry of the first rekey would land and put its dated id back.
+    restore_a(&store);
+    handle.report(model_cooldown("b", "model:claude-haiku-4-5", 1_000));
+    landed(&store, "model:claude-haiku-4-5").await;
+    assert_eq!(
+        resolutions(&store),
+        later,
+        "the superseded rekey was dropped, not retried"
     );
 }
 

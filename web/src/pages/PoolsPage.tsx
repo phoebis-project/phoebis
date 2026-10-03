@@ -1,5 +1,5 @@
-import { Fragment, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Link } from 'react-router-dom';
+import { Fragment, useEffect, useId, useMemo, useState, type ReactNode } from 'react';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { Bar, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { api, ApiError, CACHE_TTL_DEFAULTS, KEEPALIVE_TUNING_DEFAULTS, type PoolInput } from '@/api';
 import { POOL_AFFINITY_DEFAULTS, POOL_ENGINE_DEFAULTS, type PoolEngineFields } from '@/api/client';
@@ -8,27 +8,37 @@ import type {
   SubagentPlacement, TtlRules, WarmSessions,
 } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
+import { AttentionRows } from '@/components/AttentionRows';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { ChartTooltip, Legend } from '@/components/charts/Tooltip';
 import { PatternEditor, useCatalogSuggestions } from '@/components/PatternEditor';
 import { CostReferenceLink } from '@/components/ui/CostReference';
-import { SelectionOrder } from '@/components/ui/SelectionOrder';
 import { UtilizationBar } from '@/components/UtilizationBar';
 import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, CopyButton, Dialog, ErrorState, Field, GroupedDialog, GroupLink, Input, Menu, PageLink, Select, Skeleton, SwitchedNumber, Toast, Toggle, type DialogGroup } from '@/components/ui/primitives';
-import { sizedAccounts } from '@/lib/analytics';
-import { fmtAbsolute, fmtCompact, fmtHourTick, fmtInt, fmtPct, fmtPeriodEnd, fmtRelative, fmtUsd } from '@/lib/format';
+import { moveLabel, sizedAccounts } from '@/lib/analytics';
+import type { AttentionItem } from '@/lib/attention';
+import { fmtAbsolute, fmtCompact, fmtHourTick, fmtInt, fmtPeriodEnd, fmtRelative, fmtUsd } from '@/lib/format';
 import { ENGINE_BOUNDS, ENGINE_FIELD_LABELS, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_LABELS, POOL_GROUPS, PROBE_TUNING_ROWS, bandRefusal, poolRefusals, type PoolGroup } from '@/lib/forms';
 import { useAsync, useNow } from '@/lib/hooks';
 import { POOL_RAIL } from '@/lib/poolRail';
 import { FAILOVER_PRESETS, SHEDDING_PRESETS, failoverPresetOf, sheddingPresetOf, shedPreview, shedPreviewLine, type FailoverPreset, type SheddingPreset } from '@/lib/presets';
 import { windowOf } from '@/lib/quota';
-import { STRATEGY_LABEL, kindOrdered } from '@/lib/selection';
+import { GROUP_LABEL, INELIGIBLE_LABEL, LAST_RESORT_LABEL, RULE_NOTE, STRATEGY_LABEL, kindOrdered, poolStatusSentence, selectionOrder } from '@/lib/selection';
 import { KeyDialog } from './KeysPage';
 
-export const OVERAGE_LABEL: Record<OveragePolicy, string> = { allow: 'Allow overage', never: 'Never use overage', prefer_plan: 'Prefer plan quota' };
 const KEY_STATUS_TONE: Record<KeyStatus, 'critical' | 'good' | 'neutral' | 'warning'> = { active: 'good', disabled: 'warning', expired: 'neutral', revoked: 'critical' };
 const POOL_STATUS_TONE = { active: 'good', degraded: 'warning', disabled: 'neutral', exhausted: 'critical' } as const;
+// What a first pool needs, said on the create dialog's rail; the words stay while the refusal dots come and go.
+const CREATE_MARKS: Partial<Record<PoolGroup, string>> = { identity: 'needed', keys: 'after saving', members: 'needed' };
+const isPoolGroup = (value: string | null): value is PoolGroup => value !== null && (POOL_GROUPS as readonly string[]).includes(value);
+/** The strip: a feature the pool has on, in the rail's order, each opening the dialog on the group that edits it. */
+const FEATURES: { group: PoolGroup; on: (pool: Pool) => boolean; word: string }[] = [
+  { group: 'autoMode', on: (p) => !p.autoModeServer, word: 'server-side auto mode off' },
+  { group: 'shedding', on: (p) => p.migrateAboveUtilization !== null, word: 'load shedding' },
+  { group: 'cacheTtl', on: (p) => p.cacheTtl.enabled, word: 'cache TTL' },
+  { group: 'keepalive', on: (p) => p.keepalive.enabled, word: 'keepalive' },
+];
 const fmtAffinity = (seconds: number) => (seconds === 0 ? 'off' : seconds % 3_600 === 0 ? `${seconds / 3_600}h` : seconds % 60 === 0 ? `${seconds / 60}m` : `${seconds}s`);
 // A scale rather than an alphabetical list.
 const AFFINITY_PICKS = [
@@ -60,7 +70,6 @@ const PROBE_HINT: Record<(typeof PROBE_TUNING_ROWS)[number][0], ReactNode> = {
   ),
   retrySeconds: 'After a failed probe the wait starts at the base and doubles up to the max, so a long outage settles into a steady retry.',
 };
-const labelOf = (accountById: Map<string, Account>, id: string) => accountById.get(id)?.label ?? id;
 /** Members first, lowest priority number first, then alphabetically; non-members trail alphabetically. */
 const orderedAccountIds = (accounts: Account[], members: Record<string, number>): string[] =>
   [...accounts]
@@ -72,9 +81,6 @@ const orderedAccountIds = (accounts: Account[], members: Record<string, number>)
       return a.label.localeCompare(b.label);
     })
     .map((a) => a.id);
-// The card's tooltips carry the dialog's words; a title attribute holds no link, so they read without them.
-const KEEPALIVE_SUMMARY_HINT =
-  "Cold limit: probes in a row that find the cache already gone, after which the session's probes pause until its next real request. Idle: how long, or how many probes, without a real request before probing stops. Net-negative stop: probes a session still gets after its probes have cost more than the cache reads they saved.";
 const AFFINITY_HINT = 'How long a session stays on its account after its last request; off keeps no pins, and a custom value is at least 60 seconds.';
 const QUOTA_HEADERS_HINT =
   "Hide drops the anthropic-ratelimit-unified-* headers from every answer but a 429, so an organization's quota never reads as the key holder's own; a 429 keeps them so the client can resume after the reset. request-id passes either way.";
@@ -113,10 +119,7 @@ function PresetPills({ label, value, onPick, hints }: { hints: Record<SheddingPr
     </span>
   );
 }
-const AFFINITY_MODE_LABEL: Record<AffinityMode, string> = { always: 'always', when_cached: 'when cached' };
-const SUBAGENT_PLACEMENT_LABEL: Record<SubagentPlacement, string> = { by_cohort: 'by cohort', by_strategy: 'by strategy', with_main: 'with the main conversation' };
-const fmtTokens = (n: number) => fmtCompact(n).toLowerCase();
-/** The Strategy hint follows the chosen strategy; its first sentence is the card's rule, `STRATEGY_RULE`. */
+/** The Strategy hint follows the chosen strategy. */
 const STRATEGY_HINT: Record<PoolStrategy, ReactNode> = {
   pace: (
     <>
@@ -144,9 +147,32 @@ export function PoolsPage() {
   const sessions = useAsync(() => api.listSessions(), []);
   const now = useNow();
   const { canMutate } = useAppSettings();
-  const [dialog, setDialog] = useState<{ pool: Pool | null } | null>(null);
+  const location = useLocation();
+  const navigate = useNavigate();
+  const [dialog, setDialog] = useState<{ initialGroup: PoolGroup | null; pool: Pool | null } | null>(null);
   const [deleting, setDeleting] = useState<Pool | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+
+  // The address opens the dialog on a named group once both lists the dialog reads have loaded; the entry is then
+  // replaced by the bare route, so closing the dialog, a reload or Back does not open it again. A viewer's address is
+  // cleared without a dialog or a toast, since the Edit action it stands in for is admin-only.
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const edit = params.get('edit');
+    if (edit === null || !pools.data || !accounts.data) return;
+    const group = params.get('group');
+    params.delete('edit');
+    params.delete('group');
+    const search = params.toString();
+    navigate({ hash: location.hash, pathname: location.pathname, search: search ? `?${search}` : '' }, { replace: true });
+    if (!canMutate) return;
+    const pool = pools.data.find((p) => p.id === edit);
+    if (!pool) {
+      setToast(`Pool ${edit} not found`);
+      return;
+    }
+    setDialog({ initialGroup: isPoolGroup(group) ? group : 'identity', pool });
+  }, [accounts.data, canMutate, location, navigate, pools.data]);
 
   const accountById = useMemo(() => new Map((accounts.data ?? []).map((a) => [a.id, a])), [accounts.data]);
   const keysByPool = useMemo(() => {
@@ -175,11 +201,15 @@ export function PoolsPage() {
     pools.reload();
     keys.reload();
   };
+  // `useAsync` keeps the last list through a reload and after a failed one, so the read's state decides rather than the
+  // list: during a refresh the old list lacks the key just created, and a failed refresh leaves it standing.
+  const keysRead = keys.loading ? 'loading' : keys.error ? 'failed' : 'loaded';
   const totals = pools.data
     ? {
         pools: pools.data.length,
         accounts: new Set(pools.data.flatMap((p) => p.members.map((m) => m.accountId))).size,
-        keys: (keys.data ?? []).length,
+        // Null until the key list is read, so the tile waits as the cards' Keys tiles do rather than reading 0.
+        keys: keysRead === 'loaded' && keys.data ? keys.data.length : null,
         requests: pools.data.reduce((s, p) => s + p.requests24h, 0),
         cost: pools.data.reduce((s, p) => s + p.cost24h, 0),
       }
@@ -190,7 +220,7 @@ export function PoolsPage() {
       <div className="page-head">
         <p className="page-head__meta">A pool groups accounts behind a set of keys. Requests pick a member by priority, stick to it per session, and fail over when a member hits a rate limit.</p>
         {canMutate && (
-          <Button variant="primary" icon={<IconPlus size={14} />} onClick={() => setDialog({ pool: null })}>
+          <Button variant="primary" icon={<IconPlus size={14} />} onClick={() => setDialog({ initialGroup: null, pool: null })}>
             Create pool
           </Button>
         )}
@@ -198,7 +228,7 @@ export function PoolsPage() {
       <div className="stat-grid stat-grid--5">
         <Tile label="Pools" value={totals ? fmtInt(totals.pools) : null} />
         <Tile label="Accounts in pools" value={totals ? fmtInt(totals.accounts) : null} />
-        <Tile label="Keys" value={totals ? fmtInt(totals.keys) : null} />
+        <Tile label="Keys" value={totals && totals.keys !== null ? fmtInt(totals.keys) : keysRead === 'failed' ? <span className="muted">n/a</span> : null} />
         <Tile label="Requests, 24h" value={totals ? fmtInt(totals.requests) : null} />
         <Tile label="Cost, 24h" value={totals ? fmtUsd(totals.cost) : null} />
       </div>
@@ -209,12 +239,15 @@ export function PoolsPage() {
                 key={p.id}
                 pool={p}
                 keys={keysByPool.get(p.id) ?? []}
-                accounts={accounts.data ?? []}
+                keysRead={keysRead}
+                accounts={accounts.data}
                 accountById={accountById}
+                // No route answers the attention list yet, so the card draws no row.
+                attention={[]}
                 sessions={sessionsByPool.get(p.id) ?? []}
                 now={now}
                 canMutate={canMutate}
-                onEdit={() => setDialog({ pool: p })}
+                onEdit={() => setDialog({ initialGroup: null, pool: p })}
                 onDelete={() => setDeleting(p)}
               />
             ))
@@ -225,6 +258,7 @@ export function PoolsPage() {
       <PoolDialog
         open={dialog !== null}
         pool={dialog?.pool ?? null}
+        initialGroup={dialog?.initialGroup ?? null}
         onClose={() => setDialog(null)}
         accounts={accounts.data ?? []}
         keys={keys.data ?? []}
@@ -264,7 +298,7 @@ export function PoolsPage() {
   );
 }
 
-function Tile({ label, value }: { label: string; value: string | null }) {
+function Tile({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div className="stat stat--compact">
       <span className="stat__label">{label}</span>
@@ -404,8 +438,10 @@ function CacheTtlOverrides({
 function PoolCard({
   pool,
   keys,
+  keysRead,
   accounts,
   accountById,
+  attention,
   sessions,
   now,
   canMutate,
@@ -413,9 +449,13 @@ function PoolCard({
   onDelete,
 }: {
   accountById: Map<string, Account>;
-  accounts: Account[];
+  /** Null until the account list is read; the status sentence then says only what the pool's verdicts carry. */
+  accounts: Account[] | null;
+  attention: AttentionItem[];
   canMutate: boolean;
   keys: ApiKey[];
+  /** Until the key list has loaded, `keys` says nothing about the pool's keys, so the count line and the tile wait. */
+  keysRead: 'failed' | 'loaded' | 'loading';
   now: number;
   onDelete: () => void;
   onEdit: () => void;
@@ -423,14 +463,27 @@ function PoolCard({
   sessions: Session[];
 }) {
   const ink = useChartInk();
+  const standingId = useId();
   const data = pool.traffic24h.map((b, i, all) => {
     const window = all.slice(Math.max(0, i - 2), i + 1);
     return { at: Date.parse(b.at), requests: b.requests, tokens: b.tokens, average: window.reduce((s, x) => s + x.requests, 0) / window.length };
   });
   const tokens24h = pool.traffic24h.reduce((s, b) => s + b.tokens, 0);
-  const moves = Object.entries(pool.movesPerHour)
-    .filter(([, rate]) => rate > 0)
-    .sort(([a], [b]) => a.localeCompare(b));
+  const tiers = selectionOrder(pool, accounts ?? [], sessions, now);
+  const grouped = kindOrdered(pool);
+  const sentence = poolStatusSentence(pool, accounts, sessions, now);
+  const features = FEATURES.filter((f) => f.on(pool));
+  const caption = `${STRATEGY_LABEL[pool.strategy]}${grouped ? `${pool.strategy === 'priority' ? ';' : ','} subscription accounts first` : ''}`;
+  const memberOf = (id: string) => pool.members.find((m) => m.accountId === id);
+  // The selection order skips a member the accounts list does not carry, so the table lists it after the tiers.
+  const unlisted = pool.members.filter((m) => !accountById.has(m.accountId));
+  const pinsOf = (id: string) => sessions.filter((s) => s.pinned && s.accountId === id).length;
+  // The route counts the moves of the last hour by reason, so every figure is a whole number.
+  const moveCounts = Object.entries(pool.movesPerHour)
+    .filter(([, count]) => count > 0)
+    .sort(([, a], [, b]) => b - a);
+  const movesTotal = moveCounts.reduce((s, [, count]) => s + count, 0);
+  const movesTitle = moveCounts.length === 0 ? 'No session moved in the last hour.' : moveCounts.map(([reason, count]) => `${moveLabel(reason)} ${fmtInt(count)}`).join(', ');
   return (
     <Card padded={false} className="pool">
       <header className="pool__head">
@@ -439,6 +492,13 @@ function PoolCard({
           <Badge tone={POOL_STATUS_TONE[pool.status]} dot>
             {pool.status}
           </Badge>
+          {keysRead === 'loaded' ? (
+            <Link to={`/keys?pool=${pool.id}`} className={`pool__keys ${keys.length === 0 ? 'pool__keys--none' : ''}`}>
+              {keys.length === 0 ? 'No keys yet' : keys.length === 1 ? '1 key' : `${keys.length} keys`}
+            </Link>
+          ) : (
+            keysRead === 'failed' && <span className="pool__keys pool__keys--unread">Keys unavailable</span>
+          )}
           {canMutate && (
             <>
               <Button size="sm" variant="ghost" icon={<IconPencil size={13} />} onClick={onEdit} className="pool__edit" aria-label={`Edit pool ${pool.name}`}>
@@ -450,104 +510,108 @@ function PoolCard({
             </>
           )}
         </div>
-        <dl className="pool__policy">
-          <div>
-            <dt>Strategy</dt>
-            <dd>
-              {STRATEGY_LABEL[pool.strategy]}
-              {kindOrdered(pool) && ' · subscription first'}
-            </dd>
-          </div>
-          <div>
-            <dt>Sessions</dt>
-            <dd className="num" title={AFFINITY_HINT}>
-              Affinity {fmtAffinity(pool.affinityTtlSeconds)}
-              {pool.affinityTtlSeconds > 0 && `, ${AFFINITY_MODE_LABEL[pool.affinityMode]}`}
-            </dd>
-          </div>
-          <div>
-            <dt>Overage</dt>
-            <dd>{OVERAGE_LABEL[pool.overagePolicy]}</dd>
-          </div>
-          <div>
-            <dt>Migration</dt>
-            <dd className="num" title={`Share ${fmtPct(pool.shedShare)}, burn window ${pool.burnWindowSeconds} s, source dwell ${pool.sourceDwellSeconds} s`}>
-              {pool.migrateAboveUtilization === null ? <span className="muted">Migrate off</span> : `Shed above ${fmtPct(pool.migrateAboveUtilization)}, ${sheddingPresetOf(pool)}`}
-            </dd>
-          </div>
-          <div>
-            <dt>Selection</dt>
-            <dd className="num">{pool.selectBelowUtilization === null ? <span className="muted">Select-below off</span> : `Select below ${fmtPct(pool.selectBelowUtilization)} utilization`}</dd>
-          </div>
-          <div>
-            <dt>Failover</dt>
-            <dd title={`In flight ${pool.inFlightCap}, retry in place ${pool.retryInPlaceSeconds} s, Pace floor ${fmtPct(pool.paceFloor)}`}>{failoverPresetOf(pool)}</dd>
-          </div>
-          {/* The badge is wider than any column's value, so on a column of its own it would push the grid past a
-              narrow card. */}
-          {!pool.autoModeServer && (
-            <div className="pool__policy-wide">
-              <dt>Auto mode</dt>
-              <dd>
-                <Badge tone="neutral">server-side auto mode off</Badge>
-              </dd>
-            </div>
-          )}
-          <div className="pool__policy-wide">
-            <dt>Placement</dt>
-            <dd>
-              subagents {SUBAGENT_PLACEMENT_LABEL[pool.subagentPlacement]}, sessions{' '}
-              {pool.sessionPlacement === 'by_warm_prefix' ? `by warm prefix from ${fmtTokens(pool.minSharedPrefixTokens)} tokens` : 'by strategy'}
-            </dd>
-          </div>
-          {/* A list of rates, one per reason, so it takes a row of its own rather than wrapping in a column. */}
-          <div className="pool__policy-wide">
-            <dt>Moves</dt>
-            <dd className="num">{moves.length === 0 ? <span className="muted">none in the last hour</span> : moves.map(([reason, rate]) => `${rate.toFixed(1)}/h ${reason.replace(/_/g, ' ')}`).join(', ')}</dd>
-          </div>
-          <div className="pool__policy-wide">
-            <dt>Keep prompt caches warm</dt>
-            <dd>
-              {pool.keepalive.enabled ? (
-                <span className="chips" title={KEEPALIVE_SUMMARY_HINT}>
-                  <Badge tone="good">on</Badge>
-                  <Badge tone="neutral">cold limit {pool.keepalive.coldProbeLimit}</Badge>
-                  <Badge tone="neutral">{pool.keepalive.maxIdleSeconds === 0 ? 'no idle limit' : `idle ${fmtAffinity(pool.keepalive.maxIdleSeconds)}`}</Badge>
-                  <Badge tone="neutral">{pool.keepalive.stopWhenNetNegative ? `net-negative stop ${pool.keepalive.netNegativeGraceProbes}` : 'no net-negative stop'}</Badge>
-                  <Badge tone="neutral">{pool.keepalive.costCapUsdPerDay !== null ? `${fmtUsd(pool.keepalive.costCapUsdPerDay)}/day cap` : 'uncapped'}</Badge>
-                </span>
+        {features.length > 0 && (
+          <div className="pool__features chips">
+            {features.map((f) =>
+              canMutate ? (
+                <Link key={f.group} to={`/pools?edit=${pool.id}&group=${f.group}`} className="badge badge--neutral" title={`Opens the pool dialog on ${POOL_RAIL[f.group].label}`}>
+                  {f.word}
+                </Link>
               ) : (
-                <span className="muted">off</span>
-              )}
-            </dd>
+                <Badge key={f.group} tone="neutral">
+                  {f.word}
+                </Badge>
+              ),
+            )}
           </div>
-          <div className="pool__policy-wide">
-            <dt>Cache TTL</dt>
-            <dd>
-              <span className="chips">
-                {pool.cacheTtl.enabled ? (
-                  <>
-                    <span className="mono">
-                      plan {pool.cacheTtl.plan.main} / {pool.cacheTtl.plan.subagent}, metered {pool.cacheTtl.metered.main} / {pool.cacheTtl.metered.subagent}
-                    </span>
-                    {pool.cacheTtl.injectWhenAbsent && <Badge tone="neutral">adds markers</Badge>}
-                    {(pool.cacheTtl.plan.models.length + pool.cacheTtl.metered.models.length) > 0 && (
-                      <Badge tone="neutral">
-                        {pool.cacheTtl.plan.models.length + pool.cacheTtl.metered.models.length} model override
-                        {pool.cacheTtl.plan.models.length + pool.cacheTtl.metered.models.length === 1 ? '' : 's'}
-                      </Badge>
-                    )}
-                  </>
-                ) : (
-                  <span className="muted">off</span>
-                )}
-                {/* Outside the branch above: a pool that rewrites no breakpoint can still force diagnostics. */}
-                {pool.cacheDiagnostics && <Badge tone="neutral">diagnostics on</Badge>}
-              </span>
-            </dd>
-          </div>
-        </dl>
+        )}
+        <p className="pool__status">
+          <b>{sentence.word}:</b>{' '}
+          {sentence.parts.map((part, i) =>
+            'text' in part ? (
+              <Fragment key={i}>{part.text}</Fragment>
+            ) : (
+              <Link key={i} to={`/accounts/${part.accountId}`}>
+                {part.label}
+              </Link>
+            ),
+          )}
+        </p>
+        <AttentionRows items={attention} now={now} />
       </header>
+
+      <div className="pool__serving">
+        <table className="table serving">
+          <caption title={RULE_NOTE}>{caption}</caption>
+          <thead>
+            <tr>
+              <th>Tier</th>
+              <th>Account</th>
+              <th>Standing</th>
+              <th className="right">Pins</th>
+            </tr>
+          </thead>
+          <tbody>
+            {tiers.flatMap((tier) =>
+              tier.placements.map((p) => {
+                const m = memberOf(p.account.id);
+                const isNext = tier.next.includes(p.account.id);
+                const why = p.ineligible
+                  ? `${p.account.label}: ${INELIGIBLE_LABEL[p.ineligible]}, skipped by selection`
+                  : isNext
+                    ? `${p.account.label}: where the next fresh session lands`
+                    : p.lastResort
+                      ? `${p.account.label}: ${LAST_RESORT_LABEL[p.lastResort]}, taken only once no other account can take a fresh session`
+                      : p.deferred
+                        ? `${p.account.label}: in overage, taken after the plan-funded members of this tier`
+                        : `${p.account.label}: rank ${p.rank} in this tier`;
+                const whyId = `${standingId}-${p.account.id}`;
+                return (
+                  <tr key={p.account.id} className={isNext ? 'is-next' : undefined}>
+                    <td className="pool__prio num">{grouped ? `${GROUP_LABEL[tier.group]} P${tier.priority}` : `P${tier.priority}`}</td>
+                    <td>
+                      <Link to={`/accounts/${p.account.id}`}>{p.account.label}</Link>
+                      {m && <MemberBudget member={m} />}
+                    </td>
+                    <td className="serving__standing" aria-describedby={whyId}>
+                      <span className="chips">
+                        {isNext ? <Badge tone="accent">next</Badge> : m && <Eligibility verdict={m.eligible} account={p.account} now={now} periodEnd={m.budgetUntil} />}
+                        {!isNext && p.lastResort && <Badge tone="warning">{LAST_RESORT_LABEL[p.lastResort]}</Badge>}
+                        {!isNext && p.deferred && <Badge tone="neutral">after plan quota</Badge>}
+                        {/* The route's budget verdict says this itself; the badge stands for a member the route names
+                            an earlier obstacle for. */}
+                        {!isNext && m && m.budgetUntil !== null && m.eligible !== 'budget' && <AtBudget periodEnd={m.budgetUntil} />}
+                      </span>
+                      <span id={whyId} className="sr-only">
+                        {why}
+                      </span>
+                    </td>
+                    <td className="right num">{p.pins === 0 ? <span className="muted">0</span> : p.pins}</td>
+                  </tr>
+                );
+              }),
+            )}
+            {unlisted.map((m) => {
+              const whyId = `${standingId}-${m.accountId}`;
+              return (
+                <tr key={m.accountId}>
+                  <td className="pool__prio num">P{m.priority}</td>
+                  <td className="mono">{m.accountId}</td>
+                  <td className="serving__standing" aria-describedby={whyId}>
+                    <span className="chips">
+                      <Eligibility verdict={m.eligible} account={undefined} now={now} periodEnd={m.budgetUntil} />
+                    </span>
+                    <span id={whyId} className="sr-only">
+                      {`${m.accountId}: not a known account`}
+                    </span>
+                  </td>
+                  <td className="right num">{pinsOf(m.accountId) === 0 ? <span className="muted">0</span> : pinsOf(m.accountId)}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
 
       <div className="pool__chart">
         <div className="pool__chart-head">
@@ -602,7 +666,7 @@ function PoolCard({
         </div>
         <div>
           <dt>Keys</dt>
-          <dd className="num">{keys.length}</dd>
+          <dd className="num">{keysRead === 'loaded' ? keys.length : keysRead === 'failed' && <span className="muted">n/a</span>}</dd>
         </div>
         <div>
           <dt>Requests 24h</dt>
@@ -616,53 +680,20 @@ function PoolCard({
           <dt>Active pins</dt>
           <dd className="num">{pool.activePins}</dd>
         </div>
-      </dl>
-
-      <div className="pool__members">
-        <h3 className="section-title">Members</h3>
-        <ul>
-          {pool.members
-            .slice()
-            .sort((a, b) => a.priority - b.priority || labelOf(accountById, a.accountId).localeCompare(labelOf(accountById, b.accountId)))
-            .map((m) => {
-              const a = accountById.get(m.accountId);
-              return (
-                <li key={m.accountId}>
-                  <span className="pool__prio num" title="Priority">
-                    P{m.priority}
-                  </span>
-                  <Link to={`/accounts/${m.accountId}`}>{a?.label ?? m.accountId}</Link>
-                  <span className="pool__eligibility">
-                    <MemberBudget member={m} />
-                    <Eligibility verdict={m.eligible} account={a} now={now} periodEnd={m.budgetUntil} />
-                  </span>
-                </li>
-              );
-            })}
-        </ul>
-        <h3 className="section-title" style={{ marginTop: 12 }}>
-          Selection order
-        </h3>
-        <SelectionOrder pool={pool} accounts={accounts} sessions={sessions} />
-        <h3 className="section-title" style={{ marginTop: 12 }}>
-          Keys
-        </h3>
-        <div className="row">
-          {keys.map((k) => (
-            <Link key={k.id} to="/keys" className="badge badge--neutral mono">
-              {k.name}
-            </Link>
-          ))}
-          {keys.length === 0 && <span className="muted">No keys yet</span>}
+        <div>
+          <dt>Moves in the last hour</dt>
+          <dd className="num" title={movesTitle}>
+            {fmtInt(movesTotal)}
+          </dd>
         </div>
-      </div>
+      </dl>
     </Card>
   );
 }
 
 /**
  * A member's spend against each budget it carries, an Anthropic-key member's whole spend and a subscription member's
- * metered spend (overage and fast answers), or that it has none.
+ * metered spend (overage and fast answers), one line each under its name; a member without a budget draws none.
  */
 function MemberBudget({ member }: { member: PoolMember }) {
   // The word leads, so the operator reads at once that the plan's own traffic is not in the figure.
@@ -673,21 +704,18 @@ function MemberBudget({ member }: { member: PoolMember }) {
       ['month', member.budgetMonthlyUsd],
     ] as const
   ).flatMap(([period, budget]) => (budget === null ? [] : [{ budget, period }]));
-  if (budgets.length === 0) return <span className="muted">no budget</span>;
+  if (budgets.length === 0) return null;
   return (
     <>
       {budgets.map(({ budget, period }) => {
         const spent = member.spends.find((s) => s.period === period)?.spentUsd;
         return (
-          <span key={period} className="num">
+          <span key={period} className="sub num">
             {metered}
             {spent === undefined ? '-' : fmtUsd(spent)} of {fmtUsd(budget)} {period === 'day' ? 'today' : 'this month'}
           </span>
         );
       })}
-      {/* The route's budget verdict says this itself; the badge stands for a member the route names an earlier
-          obstacle for. */}
-      {member.budgetUntil !== null && member.eligible !== 'budget' && <AtBudget periodEnd={member.budgetUntil} />}
     </>
   );
 }
@@ -696,7 +724,7 @@ function AtBudget({ periodEnd }: { periodEnd: string | null }) {
   return <Badge tone="warning">{periodEnd ? `at budget until ${fmtPeriodEnd(periodEnd)}` : 'at budget'}</Badge>;
 }
 
-/** The route's verdict, the one the selection-order strip reads; the account only adds when and why. */
+/** The route's verdict, as the serving table's Standing cell reads it; the account only adds when and why. */
 function Eligibility({ verdict, account, now, periodEnd }: { account: Account | undefined; now: number; periodEnd: string | null; verdict: MemberEligibility }) {
   if (verdict === 'eligible') return <Badge tone="good">eligible</Badge>;
   if (verdict === 'budget') return <AtBudget periodEnd={periodEnd} />;
@@ -861,6 +889,7 @@ const formFrom = (pool: Pool): PoolForm => ({
 export function PoolDialog({
   open,
   pool,
+  initialGroup = null,
   onClose,
   onSaved,
   onKeyCreated,
@@ -872,6 +901,8 @@ export function PoolDialog({
   sessions,
 }: {
   accounts: Account[];
+  /** The group the address named; the reset opens on it, Identity otherwise. */
+  initialGroup?: PoolGroup | null;
   keys: ApiKey[];
   models: { label: string; value: string }[];
   onClose: () => void;
@@ -912,11 +943,10 @@ export function PoolDialog({
     setRevoked(new Set());
     setBusy(false);
     setError(null);
-    setChosen('identity');
-    // `accounts` is read but not tracked: the parent hands down a fresh array on
-    // every render, and reacting to that would wipe the form mid-edit.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, pool]);
+    setChosen(initialGroup ?? 'identity');
+    // `accounts` is read but not tracked: the parent hands down a fresh array on every render, and reacting to
+    // that would wipe the form mid-edit.
+  }, [open, pool, initialGroup]);
   // The server's refusal describes the form it was sent; every control writes through `setForm`, so the next edit
   // takes it away, while a failed save changes no field and leaves it standing.
   useEffect(() => setError(null), [form]);
@@ -927,7 +957,7 @@ export function PoolDialog({
   // Keys created before the pool is saved use the id the pool will get from its name.
   const draftPoolId = form.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-') || 'new';
   const draftName = form.name.trim() || 'new pool';
-  // Memoized so the key dialog's reset effect does not fire on every keystroke in this form.
+  // Memoized so a keystroke in this form hands the key dialog the same list, sparing its first-pool fill a run.
   const draftCaptureHours = form.capture ? form.captureHours : 0;
   const keyDialogPools = useMemo(
     () =>
@@ -1842,7 +1872,7 @@ export function PoolDialog({
       </div>
     ),
   };
-  const groups: DialogGroup[] = POOL_GROUPS.map((id) => ({ ...POOL_RAIL[id], body: bodies[id], id, refused: refusedGroups.has(id) }));
+  const groups: DialogGroup[] = POOL_GROUPS.map((id) => ({ ...POOL_RAIL[id], body: bodies[id], id, mark: pool ? undefined : CREATE_MARKS[id], refused: refusedGroups.has(id) }));
 
   return (
     <>
@@ -1853,6 +1883,7 @@ export function PoolDialog({
         railLabel="Pool settings"
         groups={groups}
         chosen={chosen}
+        initialGroup={initialGroup}
         onChoose={(id) => setChosen(id as PoolGroup)}
         // The line always explains the current hold: a refusal of the form's own beats a server message left from
         // before the edit.

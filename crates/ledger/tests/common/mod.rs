@@ -15,7 +15,7 @@ use phoebis_profile::{
     claude_code_2_1_269_linux_x64,
     fixtures::{body, inference_head, BodyFixture, FixtureKind},
 };
-use phoebis_relay::{router, CatalogService, Limits, Relay};
+use phoebis_relay::{router, CatalogService, Limits, Relay, UpstreamGzip};
 use phoebis_routing::{spawn as spawn_router, RouterConfig, RouterHandle};
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, Affinity, ApiKeyRow, Failover, Identity,
@@ -312,14 +312,17 @@ pub async fn harness_on(
         config,
     );
     let limits = Limits {
+        body_budget_bytes: 512 << 20,
         body_capture_max_hours: 72,
+        body_read_timeout: Duration::from_secs(60),
         cooldown_fallback: Duration::from_secs(60),
         head_timeout: Duration::from_secs(10),
         hold_timeout: Duration::from_secs(30),
         idle_timeout: Duration::from_secs(600),
-        max_attempts: 3,
+        key_body_reads: 128,
         max_request_bytes: 32 << 20,
         model_rejection: Duration::from_secs(3_600),
+        upstream_gzip: UpstreamGzip::Auto,
     };
     let relay = Arc::new(
         Relay::new(

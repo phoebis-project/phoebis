@@ -663,6 +663,7 @@ pub fn select(
     if request.probe {
         if let Some(current) = pin.as_ref() {
             let pinned = obstacles.iter().find(|(id, _)| id == &current.account_id);
+            let tried = request.attempted.iter().any(|a| a == &current.account_id);
             match pinned.map(|(_, o)| o) {
                 // The window names the obstacle for the relay, which renders it on the wire as the overage claim.
                 Some(Obstacle::Budget { until }) => {
@@ -677,6 +678,23 @@ pub fn select(
                 // An attempt of the probe's own hides nothing when no sibling could take it: no pin can move,
                 // and the pool's exhaustion (a cooldown's deadline among it) is the truer answer.
                 Some(Obstacle::Attempted) if eligible.is_empty() => {}
+                // A member this probe tried whose state moved since, as when the attempt's own mark reached the
+                // snapshot before this selection, is still the member the probe tried: with a sibling free, a
+                // placement there would move the pin all the same.
+                Some(Obstacle::Operator)
+                    if tried
+                        && !eligible.is_empty()
+                        && snapshot
+                            .account(&current.account_id)
+                            .is_some_and(|a| a.enabled) =>
+                {
+                    return (
+                        SelectResult::Exhausted(Exhaustion::Pinned {
+                            obstacle: obstacle_name(&Obstacle::Attempted),
+                        }),
+                        writes,
+                    );
+                }
                 // `Operator` also covers a deleted account and a state other than ready; those keep the answer
                 // they get under their own reason, and only the operator's pause holds the pin.
                 Some(Obstacle::Operator)

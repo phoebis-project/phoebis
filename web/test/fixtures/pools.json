@@ -69,8 +69,8 @@
         "cache_diagnostics": false,
         "auto_mode_server": true,
         "body_capture_hours": 24,
-        "created_at": 1790980211538,
-        "updated_at": 1790980211538,
+        "created_at": 1790987341272,
+        "updated_at": 1790987341272,
         "members": [
           {
             "account_id": "business",
@@ -109,13 +109,13 @@
           {
             "id": "desktop",
             "label": "Desktop",
-            "prefix": "w60V8RQt",
+            "prefix": "LGWWN5RB",
             "enabled": true
           }
         ],
         "status": "active",
-        "requests_24h": 5,
-        "cost_24h": 0.0216,
+        "requests_24h": 6,
+        "cost_24h": 0.0252,
         "active_pins": 1,
         "traffic_24h": [
           {
@@ -274,10 +274,10 @@
           },
           {
             "at": -3600000,
-            "requests": 2,
-            "failed": 0,
-            "tokens": 3600,
-            "cost_usd": 0.0108
+            "requests": 3,
+            "failed": 1,
+            "tokens": 5400,
+            "cost_usd": 0.0144
           },
           {
             "at": 0,

@@ -2,6 +2,7 @@
 
 pub mod control;
 pub mod decode;
+pub mod encode;
 pub mod hello;
 pub mod pool;
 pub mod request;

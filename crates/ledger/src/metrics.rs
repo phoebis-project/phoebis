@@ -237,6 +237,13 @@ impl Metrics {
                         ));
                     }
                 }
+                "phoebis_router_dropped_reports_total" => {
+                    for (kind, dropped) in &gauges.dropped_reports {
+                        out.push_str(&format!(
+                            "phoebis_router_dropped_reports_total{{kind=\"{kind}\"}} {dropped}\n"
+                        ));
+                    }
+                }
                 "phoebis_bus_subscriber_panics_total" => {
                     for (subscriber, stats) in bus {
                         out.push_str(&format!(
@@ -391,6 +398,7 @@ pub const FAMILIES: &[(&str, &str)] = &[
     ("phoebis_pins_active", "gauge"),
     ("phoebis_pricing_unknown_model_total", "counter"),
     ("phoebis_requests_total", "counter"),
+    ("phoebis_router_dropped_reports_total", "counter"),
     ("phoebis_tokens_total", "counter"),
     ("phoebis_upstream_ttfb_seconds", "histogram"),
 ];
@@ -426,6 +434,8 @@ pub struct RoutingGauges {
     /// The accounts the registry still holds, for `render` to drop a deleted account's stale utilization
     /// reading rather than scrape it forever.
     pub live_accounts: BTreeSet<String>,
+    /// The router's drop counters at scrape, per report kind, from `RouterHandle::dropped_reports`.
+    pub dropped_reports: Vec<(&'static str, u64)>,
 }
 
 pub async fn gather(
@@ -440,6 +450,7 @@ pub async fn gather(
     let mut gauges = RoutingGauges {
         keepalive_agents: keepalive.map(|k| k()).unwrap_or_default(),
         attention,
+        dropped_reports: router.dropped_reports(),
         ..RoutingGauges::default()
     };
     if let Ok(cooldowns) = router.cooldowns().await {

@@ -161,11 +161,16 @@ fn ok_answer() -> Vec<u8> {
 
 #[tokio::test]
 async fn the_default_passes_the_member_and_the_beta_through_unchanged() {
-    for (kind, sent_body) in [
-        (FixtureKind::OauthFirstParty, first_party_with_safeguards()),
+    for (kind, sent_body, client_hash) in [
+        (
+            FixtureKind::OauthFirstParty,
+            first_party_with_safeguards(),
+            true,
+        ),
         (
             FixtureKind::OauthNonFirstParty,
             with_safeguards(body(BodyFixture::Oauth)),
+            false,
         ),
     ] {
         let head = head_with_beta(kind);
@@ -195,7 +200,13 @@ async fn the_default_passes_the_member_and_the_beta_through_unchanged() {
             Some(DANGEROUS_TOOL_USE_BETA),
             "the beta stays where the caller put it"
         );
-        assert_eq!(&phoebis_cch::sign(received).unwrap(), received);
+        // The first-party hash is re-signed over the edited bytes; the reduced line's restored `cch` is the
+        // client's placeholder, unsigned.
+        if client_hash {
+            assert_eq!(&phoebis_cch::sign(received).unwrap(), received);
+        } else {
+            assert_eq!(stamp(received), b"00000");
+        }
     }
 }
 

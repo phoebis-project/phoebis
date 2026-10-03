@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { api } from '@/api';
 import type { ApiKey, CreatedApiKey, KeyModels, KeyStatus, ModelRule, ModelRulesMode, Pool } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
@@ -11,6 +12,7 @@ import { KEY_GROUPS, keyFormOf, keyInputOf, keyRefusals, type AutoModeOverride, 
 import { useAsync, useNow, type Loaded } from '@/lib/hooks';
 
 const STATUS_TONE: Record<KeyStatus, 'critical' | 'good' | 'neutral' | 'warning'> = { active: 'good', disabled: 'warning', expired: 'neutral', revoked: 'critical' };
+const isKeyGroup = (value: string | null): value is KeyGroup => value !== null && (KEY_GROUPS as readonly string[]).includes(value);
 /** A key with no override of its own captures for as long as its pool says. */
 export const effectiveCaptureHours = (key: Pick<ApiKey, 'bodyCaptureHours'>, pool: Pick<Pool, 'bodyCaptureHours'> | null): number => key.bodyCaptureHours ?? pool?.bodyCaptureHours ?? 0;
 const captureLabel = (hours: number) => (hours > 0 ? `bodies captured, ${hours}h` : 'bodies not captured');
@@ -37,24 +39,71 @@ export function KeysPage() {
   const now = useNow();
   const ink = useChartInk();
   const { canMutate } = useAppSettings();
+  const location = useLocation();
+  const navigate = useNavigate();
   const [query, setQuery] = useState('');
   const [status, setStatus] = useState<'all' | KeyStatus>('all');
-  const [dialog, setDialog] = useState<{ key: ApiKey | null } | null>(null);
+  const [dialog, setDialog] = useState<{ initialGroup: KeyGroup | null; key: ApiKey | null } | null>(null);
   // Held only while the dialog that shows it is open, because the router keeps no copy of a secret.
   const [created, setCreated] = useState<{ key: CreatedApiKey; title: string } | null>(null);
   const [confirm, setConfirm] = useState<{ body: string; danger?: boolean; label: string; onConfirm: () => void; title: string } | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
+  // The address opens the dialog on a named group once the key list has loaded; the entry is then replaced by the
+  // bare route, so closing the dialog, a reload or Back does not open it again. A viewer's address is cleared without
+  // a dialog or a toast, since the Edit action it stands in for is admin-only.
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const edit = params.get('edit');
+    if (edit === null || !keys.data) return;
+    const group = params.get('group');
+    params.delete('edit');
+    params.delete('group');
+    const search = params.toString();
+    navigate({ hash: location.hash, pathname: location.pathname, search: search ? `?${search}` : '' }, { replace: true });
+    if (!canMutate) return;
+    const key = keys.data.find((k) => k.id === edit);
+    if (!key) {
+      setToast(`Key ${edit} not found`);
+      return;
+    }
+    setDialog({ initialGroup: isKeyGroup(group) ? group : 'key', key });
+  }, [canMutate, keys.data, location, navigate]);
+
   const poolList = useMemo(() => pools.data ?? [], [pools.data]);
   const poolById = useMemo(() => new Map(poolList.map((p) => [p.id, p])), [poolList]);
+  // The pool filter is the address: the select reads `?pool=<id>` and writes it back, so a reload keeps the filter and
+  // the pool card's key count link lands on it. Until the pools are read the address filters as written, so the rows
+  // match it during the read and after a failed one, and the select holds an option for the id: without one it would
+  // read All pools beside the filtered rows, and choosing All pools would change nothing. An id no pool carries reads
+  // as All pools and leaves the address once the pools have loaded; while a dialog query is still in the address, its
+  // own effect goes first. All pools is the empty string, which no pool id can be, since `all` is a real pool's id.
+  const poolParam = useMemo(() => new URLSearchParams(location.search).get('pool'), [location.search]);
+  const poolFilter = poolParam !== null && (pools.data === null || poolById.has(poolParam)) ? poolParam : '';
+  const writePool = (id: string) => {
+    const params = new URLSearchParams(location.search);
+    if (id === '') params.delete('pool');
+    else params.set('pool', id);
+    const search = params.toString();
+    navigate({ hash: location.hash, pathname: location.pathname, search: search ? `?${search}` : '' }, { replace: true });
+  };
+  useEffect(() => {
+    if (poolParam === null || !pools.data || poolById.has(poolParam)) return;
+    const params = new URLSearchParams(location.search);
+    if (params.has('edit')) return;
+    params.delete('pool');
+    const search = params.toString();
+    navigate({ hash: location.hash, pathname: location.pathname, search: search ? `?${search}` : '' }, { replace: true });
+  }, [location, navigate, poolById, poolParam, pools.data]);
   const rows = useMemo(
     () =>
       (keys.data ?? []).filter((k) => {
+        if (poolFilter !== '' && k.poolId !== poolFilter) return false;
         if (status !== 'all' && k.status !== status) return false;
         const q = query.trim().toLowerCase();
         return !q || k.name.toLowerCase().includes(q) || k.prefix.includes(q) || k.poolId.includes(q);
       }),
-    [keys.data, query, status],
+    [keys.data, poolFilter, query, status],
   );
 
   const totals = keys.data
@@ -124,8 +173,17 @@ export function KeysPage() {
               <option value="expired">Expired</option>
               <option value="revoked">Revoked</option>
             </Select>
+            <Select value={poolFilter} onChange={(e) => writePool(e.target.value)} aria-label="Pool">
+              <option value="">All pools</option>
+              {pools.data === null && poolFilter !== '' && <option value={poolFilter}>{poolFilter}</option>}
+              {poolList.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </Select>
             {canMutate && (
-              <Button variant="primary" icon={<IconPlus size={14} />} onClick={() => setDialog({ key: null })} style={{ marginLeft: 'auto' }}>
+              <Button variant="primary" icon={<IconPlus size={14} />} onClick={() => setDialog({ initialGroup: null, key: null })} style={{ marginLeft: 'auto' }}>
                 Create key
               </Button>
             )}
@@ -200,7 +258,7 @@ export function KeysPage() {
                           <td className="right">
                             <Menu
                               items={[
-                                { label: 'Edit', onClick: () => setDialog({ key: k }) },
+                                { label: 'Edit', onClick: () => setDialog({ initialGroup: null, key: k }) },
                                 {
                                   label: 'Rotate',
                                   onClick: () =>
@@ -261,6 +319,7 @@ export function KeysPage() {
       <KeyDialog
         open={dialog !== null}
         existing={dialog?.key ?? null}
+        initialGroup={dialog?.initialGroup ?? null}
         onClose={() => setDialog(null)}
         pools={poolList}
         onCreated={(c) => {
@@ -322,7 +381,7 @@ const KEY_GROUP_LABEL: Record<KeyGroup, string> = { access: 'Access', capture: '
  * `initialPoolId` with `lockPool` pins the pool when the dialog is opened from
  * inside a pool's own dialog.
  */
-export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing = null, initialPoolId, lockPool = false }: { existing?: ApiKey | null; initialPoolId?: string; lockPool?: boolean; onClose: () => void; onCreated: (c: CreatedApiKey) => void; onUpdated?: (k: ApiKey) => void; open: boolean; pools: KeyDialogPool[] }) {
+export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing = null, initialGroup = null, initialPoolId, lockPool = false }: { existing?: ApiKey | null; initialGroup?: KeyGroup | null; initialPoolId?: string; lockPool?: boolean; onClose: () => void; onCreated: (c: CreatedApiKey) => void; onUpdated?: (k: ApiKey) => void; open: boolean; pools: KeyDialogPool[] }) {
   const [chosen, setChosen] = useState<KeyGroup>('key');
   const [name, setName] = useState('');
   const [poolId, setPoolId] = useState('all');
@@ -357,11 +416,13 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing
   const capRefusal = refusalOf('Requests in flight');
   const processed = useAsync(() => (open && existing ? api.getKeyModels(existing.id) : Promise.resolve(null)), [open, existing?.id]);
 
+  // Once per opening: the address can open the dialog before the pool list lands, and a reset on its arrival would
+  // discard every edit made meanwhile and put back the group the dialog opened on, the focus left in a hidden one.
   useEffect(() => {
     if (!open) return;
     // A key cannot exist without a pool, so the first pool stands in until one is picked.
     const form = keyFormOf(existing, initialPoolId ?? pools[0]?.id ?? '');
-    setChosen('key');
+    setChosen(initialGroup ?? 'key');
     setName(form.name);
     setPoolId(form.poolId);
     setLongContextTwins(form.longContextTwins);
@@ -378,7 +439,11 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing
     setEnabled(form.enabled);
     setBusy(false);
     setError(null);
-  }, [open, existing, initialPoolId, pools]);
+  }, [open, existing, initialPoolId, initialGroup]);
+  // A new key opened before the pools landed has no pool yet; the first one fills it once they do.
+  useEffect(() => {
+    if (open && existing === null && poolId === '' && pools.length > 0) setPoolId(pools[0].id);
+  }, [existing, open, poolId, pools]);
 
   // The server's words leave with the next edit to any field; a failed save changes none, so they stand until then.
   useEffect(() => setError(null), [affinitySource, autoModeServer, captureHours, captureMode, enabled, expiry, inFlightCap, longContextTwins, modelRules, modelRulesMode, name, notes, optOut, poolId]);
@@ -616,6 +681,7 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing
       railLabel="Key settings"
       groups={groups}
       chosen={chosen}
+      initialGroup={initialGroup}
       onChoose={(id) => setChosen(id as KeyGroup)}
       // The line always explains the current hold: a refusal of the form's own beats a server message left from
       // before the edit.

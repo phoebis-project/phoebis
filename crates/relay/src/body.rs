@@ -43,6 +43,9 @@ pub struct NativeEdit<'a> {
     /// version-suffix check; `None` for a caller the check does not apply to.
     pub version_check: Option<VersionCheck<'a>>,
     pub safeguards: SafeguardsEdit,
+    /// Whether a restored `cch=00000` is signed with this build's formula; off, the placeholder travels as the
+    /// client's own unpatched paths send it.
+    pub sign_placeholder: bool,
 }
 
 /// What the edit does to the client's `safeguards` member under the pool's or key's auto-mode setting.
@@ -83,8 +86,8 @@ pub enum BodyMember {
     CacheControl,
     MetadataUserId,
     Model,
-    /// A top-level member the caller's body carries more than once, raw or escaped; the name is one of the
-    /// members admission and the body edit act on.
+    /// A member the caller's body carries more than once, raw or escaped: one of the top-level members admission
+    /// and the body edit act on, or `BILLING_LINE_PATH`, whose first spelling alone the drift check reads.
     Repeated(&'static str),
     /// A `safeguards` member the decoded top-level key count finds and the raw walk cannot reach.
     Safeguards,
@@ -93,7 +96,7 @@ pub enum BodyMember {
 impl BodyMember {
     pub fn path(self) -> &'static str {
         match self {
-            BodyMember::BillingStamp => "system[0].text",
+            BodyMember::BillingStamp => BILLING_LINE_PATH,
             BodyMember::CacheControl => "cache_control",
             BodyMember::MetadataUserId => "metadata.user_id",
             BodyMember::Model => "model",
@@ -112,6 +115,9 @@ impl BodyMember {
             }
             BodyMember::CacheControl => {
                 "request body carries a cache_control marker the router cannot place".into()
+            }
+            BodyMember::Repeated(BILLING_LINE_PATH) => {
+                format!("request body carries the member \"{BILLING_LINE_PATH}\" more than once")
             }
             BodyMember::Repeated(name) => {
                 format!("request body carries the top-level member \"{name}\" more than once")
@@ -141,6 +147,8 @@ const ESCAPED_QUOTE: &[u8] = br#"\""#;
 /// Opening quote and prefix of the billing block as it appears in `system[0].text`.
 pub(crate) const BILLING_BLOCK: &[u8] = br#""x-anthropic-billing-header:"#;
 
+pub(crate) const BILLING_LINE_PATH: &str = "system[0].text";
+
 /// Length of the hash after `cch=`, the only bytes `phoebis_cch::sign` rewrites.
 const CCH_DIGITS: usize = 5;
 
@@ -150,10 +158,15 @@ pub fn edit_body(body: &mut Vec<u8>, edit: &NativeEdit<'_>) -> Result<BodyEdits,
     if !starts_with_object(body) {
         return Err(RelayError::NotAnObject);
     }
+    // Read before any edit moves the line: a client hash is checked and re-signed, the client's own placeholder
+    // (its unpatched paths send `00000`, which the server accepts) is neither.
+    let client_hash = carries_a_stamp(body) && !phoebis_cch::carries_only_the_placeholder(body);
     if let Some(client_drift) = drift(body)? {
-        // The client hashes by rules this build no longer shares. Neither a restamp by the old rules nor the
-        // client's own hash over an edited body is known to satisfy the upstream, so nothing is sent until the
-        // router is re-pinned; the caller still learns which kind of drift it was.
+        // The client hashes by rules this build no longer shares. A stamp the router cannot verify never travels
+        // under an account's credential, edited or not: a wrong hash is indistinguishable from tampering and the
+        // cost falls on the account, not on the request; relaying the body unedited under the client's stamp, or
+        // stripping the stamp, would both put that cost on the account, so nothing is sent until the router is
+        // re-pinned, and the caller learns which kind of drift it was.
         return Err(RelayError::ClientDrift { kind: client_drift });
     }
     if let Some(check) = edit.version_check {
@@ -230,7 +243,15 @@ pub fn edit_body(body: &mut Vec<u8>, edit: &NativeEdit<'_>) -> Result<BodyEdits,
     if unreachable_stamp.is_some_and(|sent| *body != sent) {
         return Err(RelayError::BodyShape(BodyMember::BillingStamp));
     }
-    let cch_restamped = phoebis_cch::restamp_if_present(body)?;
+    // A client hash is re-signed over the edited bytes it no longer covers. The placeholder, restored or sent by
+    // the client, travels unsigned, as the client's unpatched paths send it and the server accepts it; the switch
+    // signs a restored one with this build's formula, for a server that rejects the placeholder.
+    let cch_restamped =
+        if client_hash || (edit.sign_placeholder && restored.contains(&Injected::Cch)) {
+            phoebis_cch::restamp_if_present(body)?
+        } else {
+            false
+        };
     Ok(BodyEdits {
         account_uuid_replaced,
         attribution_stripped: false,
@@ -494,7 +515,11 @@ fn insert_diagnostics(body: &mut Vec<u8>, previous: Option<&str>) -> bool {
 }
 
 /// Whether the hash the client stamped differs from the one this build computes over the body as received.
-/// A body that stamped no hash has nothing to protect and never drifts.
+/// A body that stamped no hash has nothing to protect and never drifts, and the client's placeholder is no hash
+/// to check while it is the line's only `cch=`. A stamp the router cannot verify never travels under an account's
+/// credential, edited or not: a wrong hash is indistinguishable from tampering and the cost falls on the account
+/// rather than on the request, so a drifted one is refused rather than relayed under the client's stamp or
+/// stripped.
 ///
 /// `find_cch` reads lowercase hex only, so a client stamping uppercase digits leaves a stamp that scanner
 /// cannot read at all; that counts as drift rather than as a body carrying no hash.
@@ -505,6 +530,9 @@ fn drift(body: &[u8]) -> Result<Option<&'static str>, RelayError> {
     let Some(location) = phoebis_cch::find_cch(body) else {
         return Ok(Some("hash"));
     };
+    if phoebis_cch::carries_only_the_placeholder(body) {
+        return Ok(None);
+    }
     let digits = location.digits_start..location.digits_start + CCH_DIGITS;
     let signed = phoebis_cch::sign(body)?;
     Ok((signed[digits.clone()] != body[digits]).then_some("hash"))
@@ -611,6 +639,7 @@ mod tests {
                 markerless: Markerless::TakesTheMember,
                 version_check: None,
                 safeguards: SafeguardsEdit::Keep,
+                sign_placeholder: false,
             },
         )
         .expect("a JSON object is editable");
@@ -635,6 +664,7 @@ mod tests {
                     markerless: Markerless::TakesTheMember,
                     version_check: None,
                     safeguards: SafeguardsEdit::Keep,
+                    sign_placeholder: false,
                 },
             ),
             Err(RelayError::BodyShape(BodyMember::MetadataUserId))
@@ -656,6 +686,7 @@ mod tests {
                     markerless: Markerless::TakesTheMember,
                     version_check: None,
                     safeguards: SafeguardsEdit::Keep,
+                    sign_placeholder: false,
                 },
             ),
             Err(RelayError::BodyShape(BodyMember::Model))
@@ -676,6 +707,7 @@ mod tests {
                     markerless: Markerless::TakesTheMember,
                     version_check: None,
                     safeguards: SafeguardsEdit::Keep,
+                    sign_placeholder: false,
                 },
             ),
             Err(RelayError::BodyShape(BodyMember::Model))
@@ -696,6 +728,7 @@ mod tests {
                 markerless: Markerless::TakesTheMember,
                 version_check: None,
                 safeguards: SafeguardsEdit::Keep,
+                sign_placeholder: false,
             },
         )
         .expect("an api-key account never carried an identity");
@@ -716,6 +749,7 @@ mod tests {
                 markerless: Markerless::TakesTheMember,
                 version_check: None,
                 safeguards: SafeguardsEdit::Keep,
+                sign_placeholder: false,
             },
         )
         .expect("a JSON object is editable");
@@ -741,6 +775,7 @@ mod tests {
                     markerless: Markerless::TakesTheMember,
                     version_check: None,
                     safeguards: SafeguardsEdit::Keep,
+                    sign_placeholder: false,
                 },
             ),
             Err(RelayError::NotAnObject)
@@ -1032,6 +1067,7 @@ mod tests {
             markerless: Markerless::TakesTheMember,
             version_check: None,
             safeguards,
+            sign_placeholder: false,
         }
     }
 
@@ -1226,11 +1262,45 @@ mod tests {
         );
     }
 
+    /// The recorded first-party body with `stamps` in place of its one `cch=9b244;` field.
+    fn a_line_stamped(stamps: &str) -> Vec<u8> {
+        String::from_utf8(fixture_body(BodyFixture::FirstParty9b244).to_vec())
+            .unwrap()
+            .replacen("cch=9b244;", stamps, 1)
+            .into_bytes()
+    }
+
+    /// `find_cch` skips the uppercase stamp and reads the placeholder behind it, which vouches for nothing the
+    /// first one claims.
+    #[test]
+    fn a_placeholder_behind_a_stamp_find_cch_cannot_read_is_drift() {
+        let mut body = a_line_stamped("cch=9B244; cch=00000;");
+        assert!(matches!(
+            edit_body(&mut body, &drop_edit(SafeguardsEdit::Keep)),
+            Err(RelayError::ClientDrift { kind: "hash" })
+        ));
+    }
+
+    /// The second stamp would travel unverified behind a placeholder honoured as the line's only one.
+    #[test]
+    fn a_placeholder_ahead_of_a_second_stamp_is_drift() {
+        let mut body = a_line_stamped("cch=00000; cch=abcde;");
+        assert!(matches!(
+            edit_body(&mut body, &drop_edit(SafeguardsEdit::Keep)),
+            Err(RelayError::ClientDrift { kind: "hash" })
+        ));
+    }
+
     #[test]
     fn body_shapes_display_names_a_repeated_member_rather_than_an_absent_one() {
         assert_eq!(
             RelayError::BodyShape(BodyMember::Repeated("model")).to_string(),
             "request body carries the top-level member \"model\" more than once"
+        );
+        assert_eq!(
+            RelayError::BodyShape(BodyMember::Repeated("system[0].text")).to_string(),
+            "request body carries the member \"system[0].text\" more than once",
+            "the billing line is no top-level member"
         );
         assert_eq!(
             RelayError::BodyShape(BodyMember::Model).to_string(),

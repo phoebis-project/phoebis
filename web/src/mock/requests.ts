@@ -15,6 +15,9 @@ import { ACCOUNT_ROLLUP_SAMPLE, REQUEST_SAMPLE } from './samples';
 import { DAY, HOUR, MINUTE, NOW, daysAgo, iso, startOfHour } from './time';
 
 const rng = createRng(7_331);
+// The upstream's own ids draw from a stream of their own, so they move no draw of the rows.
+const upstreamIds = createRng(9_191);
+const upstreamId = (prefix: string) => `${prefix}${upstreamIds.uuid().replace(/-/g, '').slice(0, 22)}`;
 
 export const SESSION_IDS = Array.from({ length: 14 }, () => rng.uuid());
 
@@ -236,6 +239,9 @@ function buildAttempts(lane: Lane, atMs: number, finalStatus: number, attemptsWa
       // Drawn once the events exist, since a trace names the move an event records.
       selection: null,
       startedAt: iso(cursor),
+      // The upstream names its request on every answer, an error document included, and a message on a 200 alone.
+      upstreamMessageId: upstreamStatus === 200 ? upstreamId('msg_01') : null,
+      upstreamRequestId: upstreamId('req_011C'),
       upstreamStatus,
       windows: rateLimitHit ? windows.map((w) => (w.id === '5h' ? { ...w, utilization: 1 } : w)) : windows,
     });
@@ -380,6 +386,14 @@ function buildRequests(): RequestLog[] {
     failedAfterHead.outcome = 'failed';
     failedAfterHead.attempts = failedAfterHead.attempts.map((a, i, all) => (i === all.length - 1 ? { ...a, outcome: 'upstream_error' as const } : a));
   }
+  // The newest desktop stream after that one ended before its `message_stop`: the row Observe draws as a failure
+  // and the drawer names.
+  const incompleteStream = rows.find((r) => r !== failedAfterHead && r.keyId === 'desktop' && r.kind === 'inference' && r.transport === 'sse' && r.status === 200);
+  if (incompleteStream) {
+    incompleteStream.errorCode = 'stream_incomplete';
+    incompleteStream.outcome = 'incomplete';
+    incompleteStream.attempts = incompleteStream.attempts.map((a, i, all) => (i === all.length - 1 ? { ...a, outcome: 'upstream_error' as const } : a));
+  }
   // A header sample can carry a window's reset without its utilization; the oldest row that reported the 7-day
   // window stands in for one, so the drawer has a window to read as not reported.
   const unsampled = [...rows].reverse().find((r) => r.attempts.some((a) => a.windows.some((w) => w.id === '7d')));
@@ -413,6 +427,8 @@ function buildRequests(): RequestLog[] {
       response: { clearedInputTokens: null, inferenceGeo: null, refusalCategory: null, refusalRecommendedModel: null, servedModel: null, speed: null, stopReason: null, stopSequence: null },
       selection: null,
       startedAt: story.at,
+      upstreamMessageId: null,
+      upstreamRequestId: upstreamId('req_011C'),
       upstreamStatus: 404,
       windows: [],
     };
@@ -799,9 +815,12 @@ function rollups(): HourlyRollup[] {
       // A lane's rows share its key, model and kind, which is what decides fast mode in this story.
       speed: list[0].attempts[list[0].attempts.length - 1]?.response.speed === 'fast' ? 'fast' : 'standard',
       requests: {
-        ok: okRows.length,
+        // A stream that ended short committed its 200 and still is no success, so it counts on its own.
+        incomplete: list.filter((r) => r.outcome === 'incomplete').length,
+        ok: okRows.filter((r) => r.outcome === 'succeeded').length,
         rate_limited: list.filter((r) => r.status === 429).length,
-        overloaded: list.filter((r) => r.status === 529).length,
+        // A stream that failed after its 200 head is a failure, as the ledger files it, under the error it carried.
+        overloaded: list.filter((r) => r.status === 529 || (r.status === 200 && r.errorCode === 'overloaded_error')).length,
         upstream_error: list.filter((r) => r.status !== 200 && r.status !== 429 && r.status !== 529).length,
       },
       // Every attempt but the last one moved the request to another member.
@@ -946,7 +965,7 @@ function historicalRollups(): HourlyRollup[] {
         requestClass: classOfHour(`${t}|${lane.keyId}|${sessionId}`),
         sessionId,
         speed: fast ? 'fast' : 'standard',
-        requests: { ok, rate_limited: err > 0 && h.chance(0.6) ? err : 0, overloaded: err > 0 && h.chance(0.3) ? 1 : 0, upstream_error: 0 },
+        requests: { incomplete: 0, ok, rate_limited: err > 0 && h.chance(0.6) ? err : 0, overloaded: err > 0 && h.chance(0.3) ? 1 : 0, upstream_error: 0 },
         failovers: err > 0 ? h.int(1, 3) : h.chance(0.12) ? 1 : 0,
         migrations: h.chance(0.08) ? 1 : 0,
         tokens,
@@ -994,7 +1013,7 @@ function historicalRollups(): HourlyRollup[] {
           requestClass: '-',
           sessionId,
           speed: 'standard',
-          requests: { ok: probes, rate_limited: 0, overloaded: 0, upstream_error: failed },
+          requests: { incomplete: 0, ok: probes, rate_limited: 0, overloaded: 0, upstream_error: failed },
           failovers: 0,
           migrations: 0,
           tokens: { uncachedInput: 0, cacheRead: probeUsage.cacheRead, cacheWrite5m: 0, cacheWrite1h: 0, output: probes, ...NO_ANSWER_FACTS },

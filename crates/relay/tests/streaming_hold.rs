@@ -220,14 +220,17 @@ async fn a_stream_that_never_commits_is_relayed_as_received_after_the_hold_timeo
         },
     );
     let limits = phoebis_relay::Limits {
+        body_budget_bytes: 512 << 20,
         body_capture_max_hours: 72,
+        body_read_timeout: Duration::from_secs(60),
         hold_timeout: Duration::from_millis(200),
         cooldown_fallback: Duration::from_secs(60),
         head_timeout: Duration::from_secs(10),
         idle_timeout: Duration::from_secs(600),
-        max_attempts: 3,
+        key_body_reads: 128,
         max_request_bytes: 32 << 20,
         model_rejection: Duration::from_secs(3_600),
+        upstream_gzip: phoebis_relay::UpstreamGzip::Auto,
     };
     let h = harness_with(&up, &[oauth("a", A, 0)], PoolSpec::default(), limits).await;
     let started = std::time::Instant::now();
@@ -277,9 +280,13 @@ async fn mixed_429_and_sse_rate_limit_errors_across_three_accounts_produce_at_mo
         .unwrap();
     assert_eq!(outcome(&resp).attempt, 3);
     assert_eq!(credentials_seen(&up).len(), 3);
-    assert!(
-        matches!(resp.status().as_u16(), 200 | 429),
-        "the last failed answer is committed, whichever shape it had"
+    assert_eq!(
+        (
+            resp.status().as_u16(),
+            resp.headers()["x-phoebis-error-code"].to_str().unwrap()
+        ),
+        (429, "accounts_exhausted"),
+        "every account failed over, so the pool's own answer is committed after the last one"
     );
     assert_eq!(h.router.cooldowns().await.unwrap().len(), 3);
     up.shutdown().await;
@@ -602,7 +609,7 @@ async fn a_post_commit_cooldown_is_measured_from_the_error_events_arrival() {
 }
 
 #[tokio::test]
-async fn a_pre_write_retry_counts_against_the_attempt_budget() {
+async fn a_pre_write_retry_adds_one_submission_and_every_account_is_dialled_once() {
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
         respond: Respond::CloseImmediately,
@@ -623,13 +630,21 @@ async fn a_pre_write_retry_counts_against_the_attempt_budget() {
         .unwrap();
     assert_eq!(
         outcome(&resp).attempt,
-        3,
-        "one dead connection, then two wire submissions"
+        4,
+        "one dead connection, then one wire submission per account"
     );
     assert_eq!(
         credentials_seen(&up).len(),
-        2,
+        3,
         "the dead connection never carried a request"
+    );
+    assert_eq!(
+        (
+            resp.status().as_u16(),
+            resp.headers()["x-phoebis-error-code"].to_str().unwrap()
+        ),
+        (429, "accounts_exhausted"),
+        "every account cooled, so the pool answers its own exhaustion"
     );
     up.shutdown().await;
 }

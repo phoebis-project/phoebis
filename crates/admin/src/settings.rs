@@ -22,7 +22,7 @@ pub(crate) async fn show(State(state): State<Arc<AdminState>>) -> Response {
         "plan_tables": { "cost": tables.cost },
         "pricing": crate::pricing::table_json(&table),
         "retention": { "body_capture_max_hours": s.body_capture_max_hours, "ledger_days": s.retention_days, "rollup_days": s.rollup_retention_days },
-        "routing": { "catalog_refresh_seconds": s.catalog_refresh_seconds, "cooldown_fallback_seconds": s.cooldown_fallback_seconds, "max_attempts": s.max_attempts, "model_rejection_seconds": s.model_rejection_seconds, "startup_fetch_seconds": s.startup_fetch_seconds },
+        "routing": { "catalog_refresh_seconds": s.catalog_refresh_seconds, "cooldown_fallback_seconds": s.cooldown_fallback_seconds, "model_rejection_seconds": s.model_rejection_seconds, "startup_fetch_seconds": s.startup_fetch_seconds },
         "sessions": { "expire_after_seconds": s.session_expire_after_seconds },
         "storage": { "ledger_path": s.ledger_path, "path": s.storage_path, "pricing_path": s.pricing_path },
         "usage": { "cache_ttl_seconds": s.usage_cache_ttl_seconds, "refresh_concurrency": s.usage_refresh_concurrency },

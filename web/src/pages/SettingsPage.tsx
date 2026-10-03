@@ -5,7 +5,7 @@ import { useSession } from '@/app/session';
 import { useAppSettings, type ThemeChoice } from '@/app/settings';
 import { IconMonitor, IconMoon, IconSun, IconX } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, CopyButton, ErrorState, Input, KeyValue, Segmented, Skeleton, Toast, Toggle } from '@/components/ui/primitives';
-import { fmtDate, fmtInt } from '@/lib/format';
+import { fmtDate } from '@/lib/format';
 import type { TimeFormat } from '@/lib/format';
 import { useAsync } from '@/lib/hooks';
 import { snippetFor } from '@/lib/snippet';
@@ -16,7 +16,7 @@ ANTHROPIC_CUSTOM_HEADERS="X-Keepalive-Owner-Id: $CC_KEEPALIVE_OWNER_ID"`;
 const ENV_TERMS: { body: string; term: string }[] = [
   {
     term: 'ANTHROPIC_BASE_URL',
-    body: "Points Claude Code at the router. Every model request and the cache-keepalive companion's reports go here.",
+    body: "Points Claude Code at the router's proxy listener, at the URL that reaches it from the client's machine; the address under the block is where the router binds it. Every model request and the cache-keepalive companion's reports go here.",
   },
   {
     term: 'CLAUDE_CODE_OAUTH_TOKEN',
@@ -25,6 +25,18 @@ const ENV_TERMS: { body: string; term: string }[] = [
   {
     term: '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1',
     body: 'Makes Claude Code send its first-party request shape to the router: the billing hash, the cache diagnostics beta, and the first-party betas. Without it the router relays the reduced shape as is. It also switches off gateway model discovery, and being an internal variable a future build may drop it.',
+  },
+  {
+    term: 'CLAUDE_CODE_GATEWAY_HINT_HEADERS=1',
+    body: 'Makes the client send its gateway hint headers (the agent type, the compaction marks and the tool durations), which the request log and the analytics read; under the first-party flag above they arrive anyway.',
+  },
+  {
+    term: 'DISABLE_TELEMETRY=1',
+    body: "Stops the client's telemetry batches, which it posts to api.anthropic.com with the credential it holds, behind the router the key's secret.",
+  },
+  {
+    term: 'CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1',
+    body: 'Lets fast mode work behind the router: without it the client asks api.anthropic.com whether the organization has fast mode, the check fails with a router key, and fast mode stays off.',
   },
   {
     term: 'CC_KEEPALIVE_OWNER_ID and ANTHROPIC_CUSTOM_HEADERS',
@@ -40,18 +52,8 @@ const ENV_TERMS: { body: string; term: string }[] = [
   },
 ];
 
-const EXPIRY_PRESETS: { label: string; seconds: number }[] = [
-  { label: '1h', seconds: 3_600 },
-  { label: '6h', seconds: 21_600 },
-  { label: '24h', seconds: 86_400 },
-  { label: '7d', seconds: 604_800 },
-];
-
-const expiryLabel = (seconds: number) => EXPIRY_PRESETS.find((p) => p.seconds === seconds)?.label ?? `${seconds}s`;
-
 /** These come from the bootstrap file and the admin API only reads them, so each says where it is set. */
 const bootstrapNote = (setting: string) => `Set by ${setting} in the bootstrap file`;
-const EXPIRY_NOTE = bootstrapNote('sessions.expire_after_seconds');
 
 type PriceField = 'cacheReadPerM' | 'cacheWrite1hPerM' | 'cacheWrite5mPerM' | 'inputPerM' | 'outputPerM';
 
@@ -107,10 +109,44 @@ export function SettingsPage() {
   const { setPreviewRole } = useSession();
   const [toast, setToast] = useState<string | null>(null);
   const s = settings.data;
-  const snippet = snippetFor(s?.listeners.proxy ?? null);
+  const snippet = snippetFor();
 
   return (
     <div className="settings">
+      <Card
+        title="Downstream client configuration"
+        subtitle="Put it in the env block of the client's settings file or export it in the shell that launches the client, and replace the token with a key from the Keys page."
+        actions={<CopyButton text={snippet} label="Copy snippet" size="md" />}
+      >
+        <pre className="snippet">{snippet}</pre>
+        {s && (
+          <p className="muted snippet__hint">
+            Inference is served on <code>{s.listeners.proxy}</code>, the address the proxy listener binds. Replace the
+            placeholder with the URL that reaches it: a bind address cannot name the public endpoint, since a TLS proxy,
+            a port mapping or another host name can stand between Claude Code and the listener.
+          </p>
+        )}
+        <div className="snippet-group">
+          <div className="snippet-group__head">
+            <h3 className="section-title">Optional</h3>
+            <CopyButton text={OPTIONAL_SNIPPET} label="Copy" />
+          </div>
+          <pre className="snippet snippet--sm">{OPTIONAL_SNIPPET}</pre>
+        </div>
+        <dl className="envdl">
+          {ENV_TERMS.map((t) => (
+            <div className="envdl__row" key={t.term}>
+              <dt>
+                <code>{t.term}</code>
+              </dt>
+              <dd>{t.body}</dd>
+            </div>
+          ))}
+        </dl>
+      </Card>
+
+      <PricingCard canMutate={canMutate} error={settings.error} pricing={s ? s.pricing : null} onRetry={settings.reload} onToast={setToast} />
+
       <Card title="Appearance" subtitle="Stored in this browser only.">
         <div className="setting-row">
           <div>
@@ -178,190 +214,25 @@ export function SettingsPage() {
         )}
       </Card>
 
-      <PricingCard canMutate={canMutate} error={settings.error} pricing={s ? s.pricing : null} onToast={setToast} />
-
-      <Card title="Sessions" subtitle="A session leaves the Sessions view once it has gone this long without a request. Its pin and any cache-warming recipe expire with it, so the next request picks an account afresh.">
-        {s ? (
-          <>
-            <KeyValue rows={[{ label: 'Session expiry', value: expiryLabel(s.sessions.expireAfterSeconds), mono: true, title: EXPIRY_NOTE }]} />
-            <p className="muted" style={{ marginTop: 10 }}>
-              {EXPIRY_NOTE}
-            </p>
-          </>
-        ) : (
-          <Skeleton height={60} />
-        )}
-      </Card>
-
-      <Card title="Retention" subtitle="Older rows are deleted by the hourly purge.">
-        {s ? (
-          <>
-            <KeyValue
-              rows={[
-                { label: 'Ledger (days)', value: s.retention.ledgerDays === 0 ? 'forever' : fmtInt(s.retention.ledgerDays), mono: true, title: 'Per-request rows, attempts, and events; 0 keeps them forever.' },
-                { label: 'Rollups (days)', value: s.retention.rollupDays === 0 ? 'forever' : fmtInt(s.retention.rollupDays), mono: true, title: 'Hourly rollups; 0 keeps them forever.' },
-                { label: 'Quota samples (days)', value: fmtInt(s.retention.quotaSamplesDays), mono: true, title: '5-minute utilization samples per account.' },
-                { label: 'Body capture, max hours', value: fmtInt(s.retention.bodyCaptureMaxHours), mono: true, title: "Upper bound for any pool's or key's capture retention." },
-              ]}
-            />
-            <p className="muted" style={{ marginTop: 10 }}>
-              {bootstrapNote('stats.retention_days, stats.rollup_retention_days, quota.sample_retention_days, and stats.body_capture_max_hours')}
-            </p>
-          </>
-        ) : (
-          <Skeleton height={60} />
-        )}
-      </Card>
-
-      <Card title="Keepalive" subtitle="Ceilings the router holds cache warming to, whatever a pool asks for.">
-        {s ? (
-          <>
-            <KeyValue
-              rows={[
-                { label: 'Lease (seconds)', value: fmtInt(s.keepalive.leaseSeconds), mono: true, title: 'How long a companion registration stands without a report.' },
-                { label: 'Max agents', value: fmtInt(s.keepalive.maxAgents), mono: true, title: 'Recipes the router holds across every session.' },
-                { label: 'Max request bytes', value: fmtInt(s.keepalive.maxRequestBytes), mono: true, title: 'Largest body a companion may report.' },
-                { label: 'Max retained bytes', value: fmtInt(s.keepalive.maxRetainedBytes), mono: true, title: 'Total size of the prefixes held for replay.' },
-                { label: 'Max sessions', value: fmtInt(s.keepalive.maxSessions), mono: true, title: 'Sessions that may carry a recipe at once.' },
-                { label: 'Max workers', value: fmtInt(s.keepalive.maxWorkers), mono: true, title: 'Probes the router runs in parallel.' },
-                { label: 'OAuth prewarm verified', value: s.keepalive.oauthPrewarmVerified ? 'yes' : 'no', mono: true, title: 'Whether a subscription account has been checked to accept a prewarm probe.' },
-              ]}
-            />
-            <p className="muted" style={{ marginTop: 10 }}>
-              {bootstrapNote('the keepalive block')}
-            </p>
-          </>
-        ) : (
-          <Skeleton height={60} />
-        )}
-      </Card>
-
-      <Card title="Listeners" subtitle="Addresses the router binds at startup.">
-        {s ? (
-          <>
-            <KeyValue
-              rows={[
-                { label: 'Admin', value: s.listeners.admin, mono: true, title: 'This interface and the admin API.' },
-                { label: 'Metrics', value: s.listeners.metrics, mono: true, title: 'The Prometheus scrape endpoint.' },
-                { label: 'Proxy', value: s.listeners.proxy, mono: true, title: 'Where Claude Code sends its model requests.' },
-              ]}
-            />
-            <p className="muted" style={{ marginTop: 10 }}>
-              {bootstrapNote('admin.listen, proxy.listen, and stats.metrics_listen')}
-            </p>
-            <h3 className="section-title" style={{ marginTop: 14 }}>
-              Transport
-            </h3>
-            <p className="muted">The proxy and admin listeners speak HTTP/1.1 only.</p>
-          </>
-        ) : (
-          <Skeleton height={60} />
-        )}
-      </Card>
-
-      <Card
-        title="Downstream client configuration"
-        subtitle="Export these in the shell that launches Claude Code. Replace the token with a key from the Keys page."
-        actions={<CopyButton text={snippet} label="Copy snippet" size="md" />}
-      >
-        <pre className="snippet">{snippet}</pre>
-        <div className="snippet-group">
-          <div className="snippet-group__head">
-            <h3 className="section-title">Optional</h3>
-            <CopyButton text={OPTIONAL_SNIPPET} label="Copy" />
-          </div>
-          <pre className="snippet snippet--sm">{OPTIONAL_SNIPPET}</pre>
-        </div>
-        <dl className="envdl">
-          {ENV_TERMS.map((t) => (
-            <div className="envdl__row" key={t.term}>
-              <dt>
-                <code>{t.term}</code>
-              </dt>
-              <dd>{t.body}</dd>
-            </div>
-          ))}
-        </dl>
-      </Card>
-
-      <Card title="Compatibility" subtitle="What the bootstrap file's compatibility block sets; a restart applies a change.">
-        {s ? (
-          <KeyValue
-            rows={[
-              { label: 'Cache diagnostics', value: s.compatibility.cacheDiagnostics ? 'on' : 'off', title: bootstrapNote('compatibility.cache_diagnostics') },
-              { label: 'Profile', value: s.compatibility.profile, mono: true },
-            ]}
-          />
-        ) : (
-          <Skeleton height={60} />
-        )}
-      </Card>
-
-      <Card title="Quota" subtitle="What the bootstrap file's quota block sets; a restart applies a change.">
-        {s ? (
-          <KeyValue
-            rows={[
-              { label: 'Sample retention (days)', value: fmtInt(s.quota.sampleRetentionDays), mono: true, title: bootstrapNote('quota.sample_retention_days') },
-            ]}
-          />
-        ) : (
-          <Skeleton height={60} />
-        )}
-      </Card>
-
-      <Card title="Routing" subtitle="What the bootstrap file's routing block sets; a restart applies a change.">
-        {s ? (
-          <KeyValue
-            rows={[
-              { label: 'Catalog cache (seconds)', value: fmtInt(s.routing.catalogCacheSeconds), mono: true, title: bootstrapNote('routing.catalog_cache_seconds') },
-              { label: 'Catalog refresh (seconds)', value: fmtInt(s.routing.catalogRefreshSeconds), mono: true, title: bootstrapNote('routing.catalog_refresh_seconds') },
-              { label: 'Cooldown fallback (seconds)', value: fmtInt(s.routing.cooldownFallbackSeconds), mono: true, title: bootstrapNote('routing.cooldown_fallback_seconds') },
-              { label: 'Model rejection (seconds)', value: fmtInt(s.routing.modelRejectionSeconds), mono: true, title: bootstrapNote('routing.model_rejection_seconds') },
-              { label: 'Max attempts', value: fmtInt(s.routing.maxAttempts), mono: true, title: bootstrapNote('routing.max_attempts') },
-              { label: 'Startup fetch (seconds)', value: fmtInt(s.routing.startupFetchSeconds), mono: true, title: bootstrapNote('routing.startup_fetch_seconds') },
-            ]}
-          />
-        ) : (
-          <Skeleton height={60} />
-        )}
-      </Card>
-
-      <Card title="Storage" subtitle="The files the bootstrap file points the router at; a restart applies a change.">
-        {s ? (
-          <KeyValue
-            rows={[
-              { label: 'Ledger path', value: s.storage.ledgerPath, mono: true, title: bootstrapNote('stats.ledger_path') },
-              { label: 'Pricing path', value: s.storage.pricingPath ?? 'not configured', mono: s.storage.pricingPath !== null, title: bootstrapNote('stats.pricing_path') },
-              { label: 'Storage path', value: s.storage.path, mono: true, title: bootstrapNote('storage.path') },
-            ]}
-          />
-        ) : (
-          <Skeleton height={60} />
-        )}
-      </Card>
-
-      <Card title="Usage" subtitle="What the bootstrap file's usage block sets; a restart applies a change.">
-        {s ? (
-          <KeyValue
-            rows={[
-              { label: 'Cache TTL (seconds)', value: fmtInt(s.usage.cacheTtlSeconds), mono: true, title: bootstrapNote('usage.cache_ttl_seconds') },
-              { label: 'Refresh concurrency', value: fmtInt(s.usage.refreshConcurrency), mono: true, title: bootstrapNote('usage.refresh_concurrency') },
-            ]}
-          />
-        ) : (
-          <Skeleton height={60} />
-        )}
-      </Card>
-
       <Card title="About">
         {s ? (
-          <KeyValue
-            rows={[
-              { label: 'Version', value: s.about.version, mono: true },
-              { label: 'Profile', value: s.about.profile, mono: true },
-              { label: 'Public URL', value: s.about.publicUrl ?? 'not configured', mono: true },
-            ]}
-          />
+          <>
+            <KeyValue
+              rows={[
+                { label: 'Version', value: s.about.version, mono: true },
+                { label: 'Profile', value: s.about.profile, mono: true },
+                { label: 'Metrics listener', value: s.listeners.metrics, mono: true, title: 'The Prometheus scrape endpoint.' },
+                { label: 'Ledger path', value: s.storage.ledgerPath, mono: true, title: bootstrapNote('stats.ledger_path') },
+                { label: 'Pricing path', value: s.storage.pricingPath ?? 'not configured', mono: s.storage.pricingPath !== null, title: bootstrapNote('stats.pricing_path') },
+                { label: 'Storage path', value: s.storage.path, mono: true, title: bootstrapNote('storage.path') },
+              ]}
+            />
+            <p className="muted" style={{ marginTop: 10 }}>
+              The values the configuration file sets are on the installation page; <code>phoebis check-config</code> prints this router&apos;s.
+            </p>
+          </>
+        ) : settings.error ? (
+          <ErrorState title="Could not load the settings" body={settings.error} action={<Button size="sm" onClick={settings.reload}>Try again</Button>} />
         ) : (
           <Skeleton height={60} />
         )}
@@ -371,7 +242,7 @@ export function SettingsPage() {
   );
 }
 
-function PricingCard({ canMutate, error: failed, onToast, pricing: served }: { canMutate: boolean; error: string | null; onToast: (message: string) => void; pricing: Pricing | null }) {
+function PricingCard({ canMutate, error: failed, onRetry, onToast, pricing: served }: { canMutate: boolean; error: string | null; onRetry: () => void; onToast: (message: string) => void; pricing: Pricing | null }) {
   const [applied, setApplied] = useState<Pricing | null>(null);
   const [draft, setDraft] = useState<PriceDraft[] | null>(null);
   const [editing, setEditing] = useState<{ field: PriceField; id: string } | null>(null);
@@ -511,7 +382,7 @@ function PricingCard({ canMutate, error: failed, onToast, pricing: served }: { c
             ) : (
               <tr>
                 <td colSpan={6}>
-                  {failed ? <ErrorState title="Could not load the price table" body={failed} /> : <Skeleton />}
+                  {failed ? <ErrorState title="Could not load the price table" body={failed} action={<Button size="sm" onClick={onRetry}>Try again</Button>} /> : <Skeleton />}
                 </td>
               </tr>
             )}

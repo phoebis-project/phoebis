@@ -277,7 +277,7 @@ function matchesQuery(r: RequestLog, q: RequestQuery, live: Map<string, number>)
   if (q.to && Date.parse(r.at) > Date.parse(q.to)) return false;
   if (q.search) {
     const needle = q.search.toLowerCase();
-    const hay = [r.id, r.sessionId ?? '', r.keyId ?? '', r.accountId ?? '', r.model, r.errorCode ?? '', r.agentId ?? ''].join(' ').toLowerCase();
+    const hay = [r.id, r.sessionId ?? '', r.keyId ?? '', r.accountId ?? '', r.model, r.errorCode ?? '', r.agentId ?? '', ...r.attempts.flatMap((a) => [a.upstreamRequestId ?? '', a.upstreamMessageId ?? ''])].join(' ').toLowerCase();
     if (!hay.includes(needle)) return false;
   }
   // The route matches the same wildcard grammar through `LIKE ... ESCAPE`, so a row with no user agent matches none.

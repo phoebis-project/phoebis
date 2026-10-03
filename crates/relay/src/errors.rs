@@ -66,6 +66,36 @@ impl Failure {
     }
 }
 
+/// The error code of a request refused because the bodies in flight already hold the process's byte budget.
+pub const BODY_BUDGET_EXHAUSTED: &str = "body_budget_exhausted";
+
+/// 503 `api_error`, the message `the router holds as many request bytes as it allows`, no `Retry-After`: the
+/// router refuses rather than queues, and a body freeing room says nothing about when.
+pub(crate) fn body_budget_exhausted() -> Failure {
+    Failure {
+        status: StatusCode::SERVICE_UNAVAILABLE,
+        error_type: "api_error",
+        code: BODY_BUDGET_EXHAUSTED,
+        message: "the router holds as many request bytes as it allows",
+        retry_after: None,
+    }
+}
+
+/// The error code of a request refused because its key already has as many bodies arriving as it may.
+pub const KEY_BODY_READS: &str = "key_body_reads";
+
+/// 429 `rate_limit_error`, the message `this key has as many request bodies arriving as it allows`,
+/// `Retry-After: 1`: a slot frees as soon as one of the key's bodies has arrived.
+pub(crate) fn key_body_reads() -> Failure {
+    Failure {
+        status: StatusCode::TOO_MANY_REQUESTS,
+        error_type: "rate_limit_error",
+        code: KEY_BODY_READS,
+        message: "this key has as many request bodies arriving as it allows",
+        retry_after: Some(1),
+    }
+}
+
 /// The error code of a pool whose every account was held at its in-flight cap until the hold ran out.
 pub const ACCOUNTS_AT_CAP: &str = "accounts_at_cap";
 
@@ -103,8 +133,10 @@ pub(crate) fn auth_failure(error: &AuthError) -> Failure {
     }
 }
 
-/// `Failure.message` is `&'static str`, so the four spellings `BodyMember::Repeated` names are constants
-/// rather than a formatted string.
+/// `Failure.message` is `&'static str`, so the spellings `BodyMember::Repeated` names are constants rather than
+/// a formatted string.
+const REPEATED_BILLING_LINE: &str =
+    "the request body carries the member \"system[0].text\" more than once";
 const REPEATED_METADATA: &str =
     "the request body carries the top-level member \"metadata\" more than once";
 const REPEATED_MODEL: &str =
@@ -113,6 +145,8 @@ const REPEATED_SAFEGUARDS: &str =
     "the request body carries the top-level member \"safeguards\" more than once";
 const REPEATED_STREAM: &str =
     "the request body carries the top-level member \"stream\" more than once";
+const REPEATED_SYSTEM: &str =
+    "the request body carries the top-level member \"system\" more than once";
 
 pub(crate) fn relay_failure(error: &RelayError) -> Failure {
     match error {
@@ -129,6 +163,13 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
             error_type: "invalid_request_error",
             code: "request_incomplete",
             message: "the request body ended before it was complete",
+            retry_after: None,
+        },
+        RelayError::BodyNotGzip => Failure {
+            status: StatusCode::BAD_REQUEST,
+            error_type: "invalid_request_error",
+            code: "invalid_body",
+            message: "the request body is not valid gzip",
             retry_after: None,
         },
         // Naming the member is what lets a client author see which part of its body the relay has to find;
@@ -149,12 +190,14 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
                 }
                 BodyMember::Model => "the request body has no top-level model to resolve",
                 BodyMember::Repeated(name) => match *name {
+                    crate::body::BILLING_LINE_PATH => REPEATED_BILLING_LINE,
                     "metadata" => REPEATED_METADATA,
                     "model" => REPEATED_MODEL,
                     "safeguards" => REPEATED_SAFEGUARDS,
                     "stream" => REPEATED_STREAM,
+                    "system" => REPEATED_SYSTEM,
                     _ => unreachable!(
-                        "BodyMember::Repeated only ever names metadata, model, safeguards or stream"
+                        "BodyMember::Repeated only ever names metadata, model, safeguards, stream, system or the billing line"
                     ),
                 },
                 BodyMember::Safeguards => {
@@ -194,7 +237,8 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
             retry_after: None,
         },
         // Fail closed: a hash or a version suffix the pinned rules cannot reproduce means the client moved past
-        // the profile, and the operator re-pins rather than the relay guessing what the upstream now expects.
+        // the profile. A stamp the router cannot verify never travels under an account's credential, so the
+        // operator re-pins rather than the relay guessing what the upstream now expects.
         RelayError::ClientDrift { kind: "version_suffix" } => Failure {
             status: StatusCode::BAD_REQUEST,
             error_type: "invalid_request_error",
@@ -221,6 +265,15 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
             error_type: "invalid_request_error",
             code: "missing_model",
             message: "the request body has no model",
+            retry_after: None,
+        },
+        // Relaying a body the relay cannot inflate would carry bytes it can neither read nor edit under an
+        // account's credential, so it is refused from the head instead.
+        RelayError::UnsupportedEncoding => Failure {
+            status: StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            error_type: "invalid_request_error",
+            code: "unsupported_content_encoding",
+            message: "the request body's content-encoding is not supported; send gzip or identity",
             retry_after: None,
         },
     }
@@ -341,6 +394,8 @@ mod tests {
             BodyMember::Repeated("model"),
             BodyMember::Repeated("safeguards"),
             BodyMember::Repeated("stream"),
+            BodyMember::Repeated("system"),
+            BodyMember::Repeated("system[0].text"),
             BodyMember::Safeguards,
         ] {
             let failure = relay_failure(&RelayError::BodyShape(member));

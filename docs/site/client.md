@@ -35,9 +35,10 @@ field, `x-client-request-id`, and the gateway hint headers, all by default, so t
 request log reads the turn origin and the hints as the client sent them. It also stops the client reading the router's
 models listing, which it otherwise uses to size its context window by the id. Without it the client sends the reduced
 shape, and the router restores, toward `api.anthropic.com`, the fields the reduced shape lacks on the attribution line
-the client sent: the `cch` billing hash, `x-client-request-id`, `cc_prev_req`, and `cc_prompt_id`, each only when
-absent. A request that carries no attribution line, as under `CLAUDE_CODE_ATTRIBUTION_HEADER=0`, is relayed as sent: the
-router never writes a line the client did not. The auto-mode classifier requests are the client's own: they keep the
+the client sent: the `cch` billing hash (the placeholder `cch=00000`, which stays unsigned unless
+`proxy.sign_cch_placeholder` is on), `x-client-request-id`, `cc_prev_req`, and `cc_prompt_id`, each only when absent. A
+request that carries no attribution line, as under `CLAUDE_CODE_ATTRIBUTION_HEADER=0`, is relayed as sent: the router
+never writes a line the client did not. The auto-mode classifier requests are the client's own: they keep the
 attribution block and the router fills them like any other line; in first-party mode only they carry the
 `auto-mode-classifier-2026-07-16` beta and the `auxiliary` request class in `x-claude-code-request-class`, and behind a
 plain base URL neither appears, so the router records and pins them as ordinary requests of their session ([Auto mode
@@ -55,8 +56,13 @@ suffix of letters, digits, dots, and hyphens) and to the client's own inference 
 a keepalive probe replays a request as the client sent it. Two self-checks guard the
 restoration against a client build the router was not pinned to: a stamped `cch` hash the router cannot reproduce, and a
 `cc_version` suffix that does not reproduce from the prompt and the client's version. Either refuses the request as
-client drift before anything is sent, and the request log names which (`hash` or `version_suffix`). The variable is an
-internal one that a later client build may drop.
+client drift before anything is sent, and the request log names which (`hash` or `version_suffix`). A stamp the router
+cannot verify never travels under an account's credential, edited or not: a wrong hash is indistinguishable from
+tampering and the cost falls on the account rather than on the request, which is why neither relaying the body unedited
+under the client's stamp nor stripping the stamp is an answer. A reduced-shape line, which carries no stamp, is restored
+with the placeholder `cch=00000` and not signed: that placeholder is what the client itself sends wherever its native
+patch does not run, and the server accepts it; `proxy.sign_cch_placeholder` signs it instead, off until a server
+rejection proves it necessary. The variable is an internal one that a later client build may drop.
 
 The router also reads two cumulative boundary-hash chains off every request's body: a static chain over the
 tools array and the system blocks, and a message chain with one boundary per entry of `messages`, both computed
@@ -171,6 +177,8 @@ proxy accepts](#what-the-proxy-accepts) says.
 | Method | Path | Credential | Answer |
 | --- | --- | --- | --- |
 | HEAD | `/api/hello` | none | `200 OK` |
+| HEAD | `/api/ready` | none | `200` while the router loop, the ledger consumer and the store are alive, else `503` |
+| GET | `/api/ready` | none | the same status, with `{"ready": true}` or `{"ready": false, "dead": [...]}` |
 | POST | `/v1/messages` | router key | relayed to the selected account |
 | POST | `/v1/messages/count_tokens` | router key | relayed, same failover loop; travels as sent |
 | GET | `/v1/usage` | router key | that key's own usage for the last 24 hours and 7 days, JSON or HTML by `Accept` |
@@ -184,11 +192,17 @@ proxy accepts](#what-the-proxy-accepts) says.
 The query string of a request to either Messages route travels as the client sent it, `?beta=true` included; the router
 routes on the path alone.
 
-The client probes `/api/hello` before it sends anything, and ignores the answer. The two `/v1/models` routes
-answer the [models listing](#the-models-listing) below. Every refusal above, including the wrong-method and
-unknown-path answers, carries an Anthropic-shaped error body. The two keepalive companion routes are covered on
-the [Keepalive](keepalive.md) page; each session they report belongs to the key generation that registered it,
-so a key id created again reaches none of the sessions its previous holder left behind.
+The client probes `/api/hello` before it sends anything, and ignores the answer. `phoebis health` and the image's health
+check read `/api/ready` instead: `/api/hello` and `/api/ready` differ when the router loop, the ledger consumer or the
+store died while the listener stays up, and `dead` names each one that died as `ledger`, `router` or `store`. The two
+`/v1/models` routes answer the [models listing](#the-models-listing) below. Every refusal above, including the
+wrong-method and unknown-path answers, carries an Anthropic-shaped error body; the not-ready `503` of `/api/ready`
+reports the router's state and carries the readiness body instead. The two keepalive companion routes are covered on the
+[Keepalive](keepalive.md) page; each session they report belongs to the key generation that registered it, so a key id
+created again reaches none of the sessions its previous holder left behind.
+
+pool's members are unusable for the moment, and the answer when an account's authentication failure is the request's
+last word: the router never forwards an upstream `401`, and the answer names no account and no reason.
 
 A token count (`POST /v1/messages/count_tokens`) is relayed through the same selection and failover loop as a
 message and travels as the client sent it under every policy: the markers it carries keep their TTLs, no
@@ -216,22 +230,37 @@ A well-formed but unrecognized key is refused too, again in an Anthropic-shaped 
 The same answer meets a request or a keepalive probe whose key was deleted, or deleted and created again under its
 id, between admission and routing.
 
-A request body whose top-level object carries `model`, `metadata` or `stream` more than once, raw or escaped, whose
-`safeguards` member cannot be cut while its key's server-side auto mode is off (carried twice, or spelled with an
-escape), whose `cache_control` marker the pool's cache TTL policy cannot reach (a key on the marker's path spelled with
-an escape), or whose billing stamp the router cannot restamp after an edit (a key on its path, the billing line's header
-name or its `cch=` spelled with an escape, or a key on its path carried more than once), is refused before anything
-reaches the upstream: `400` with the error code `body_shape` and a message naming the member. A body whose top-level
-object nests deeper than the relay reads is refused `400` with the error code `invalid_body`.
+A request body whose top-level object carries `metadata`, `model`, `stream` or `system` more than once, or whose first
+`system` block carries `text` more than once, raw or escaped, whose `safeguards` member cannot be cut while its key's
+server-side auto mode is off (carried twice, or spelled with an escape), whose `cache_control` marker the pool's cache
+TTL policy cannot reach (a key on the marker's path spelled with an escape), or whose billing stamp the router cannot
+restamp after an edit (a key on its path, the billing line's header name or its `cch=` spelled with an escape), is
+refused before anything reaches the upstream: `400` with the error code `body_shape` and a message naming the member. A
+body whose top-level object nests deeper than the relay reads is refused `400` with the error code `invalid_body`.
 
-A request body that does not finish arriving within the compiled-in wait after authentication is refused `408`
-with the error code `request_timeout` and the message `the request body did not arrive in time`.
+A request body that does not finish arriving within `proxy.body_read_seconds` (60 by default) after authentication is
+refused `408` with the error code `request_timeout` and the message `the request body did not arrive in time`.
 
 A caller that stops sending before its body is complete is refused `400` with the error code
 `request_incomplete` and the message `the request body ended before it was complete`.
 
 A `count_tokens` request takes no slot of the pool's per-account [in-flight cap](routing.md#in-flight-caps) and is
-never held or refused for want of one.
+never held or refused for want of one, though it takes one of its key's body-read slots, bounded by
+`proxy.key_body_reads`, and can be refused `429 key_body_reads`.
+
+A request body larger than `proxy.max_request_bytes` (32 MiB by default), declared or arriving, is refused `413` with
+the error code `request_too_large`. A request whose body would take the router past `proxy.body_budget_bytes` of bodies
+in flight is refused `503` `api_error` with the error code `body_budget_exhausted` and the message `the router holds as
+many request bytes as it allows`, with no `Retry-After`; a request past the key's bound on bodies arriving at once
+(`proxy.key_body_reads`) is refused `429 rate_limit_error` `key_body_reads` with `Retry-After: 1`. Each of these is
+refused before its body is read and observed without one.
+
+A request body sent with `content-encoding: gzip` is inflated within the body bound before it is read, so a body that
+inflates past `proxy.max_request_bytes` is the same `413`, and a body that is not valid gzip is refused `400` with the
+error code `invalid_body` and the message `the request body is not valid gzip`. Any other request encoding (`br`,
+`deflate`, `zstd` or an unknown token), and a head carrying more than one `content-encoding` line, is refused before
+its body is read with `415` `invalid_request_error`, the error code `unsupported_content_encoding` and the message
+`the request body's content-encoding is not supported; send gzip or identity`.
 
 ### How a request is identified
 

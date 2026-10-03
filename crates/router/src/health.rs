@@ -1,4 +1,4 @@
-//! The health probe behind the image's `HEALTHCHECK`: one `HEAD /api/hello` on the proxy listener over
+//! The health probe behind the image's `HEALTHCHECK`: one `HEAD /api/ready` on the proxy listener over
 //! `std::net`, so the runtime image needs no shell and no HTTP client.
 
 use std::io::{Read, Write};
@@ -39,7 +39,7 @@ pub fn probe(listen: SocketAddr, timeout: Duration) -> Result<SocketAddr, String
     stream
         .set_write_timeout(Some(remaining(deadline)?))
         .map_err(|error| format!("proxy probe on {addr} could not be timed: {error}"))?;
-    let request = format!("HEAD /api/hello HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n");
+    let request = format!("HEAD /api/ready HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n");
     stream
         .write_all(request.as_bytes())
         .map_err(|error| format!("proxy on {addr} took no request: {error}"))?;

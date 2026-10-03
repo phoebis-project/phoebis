@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Context};
 use axum::Router;
-use phoebis_admin::{AdminSecrets, AdminState, PairingVault, Sessions, SettingsView};
+use phoebis_admin::{AdminSecrets, AdminState, PairingVault, Readiness, Sessions, SettingsView};
 use phoebis_bus::Bus;
 use phoebis_keepalive::{companion_router, spawn_observer, Engine, EngineParts};
 use phoebis_ledger::{
@@ -15,7 +15,7 @@ use phoebis_ledger::{
 };
 use phoebis_live::{LiveConfig, LiveFeed};
 use phoebis_oauth::{Clock, CredentialManager, PairingSessions, UsageService};
-use phoebis_relay::{CatalogService, Limits, ListenLimits, Relay, REFRESH_TICK};
+use phoebis_relay::{CatalogService, Limits, ListenLimits, Relay, UpstreamGzip, REFRESH_TICK};
 use phoebis_store::{Secret, StorageKey, Store};
 use phoebis_transport::control::{ControlClient, ResolveFuture, Resolver};
 use phoebis_transport::pool::Pool;
@@ -32,7 +32,7 @@ const DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
 /// The native client gives a request ten minutes (`X-Stainless-Timeout: 600`), so neither the wait for the
 /// response head nor the wait between stream events gives up before the caller itself would.
 const HEAD_TIMEOUT: Duration = Duration::from_secs(600);
-const IDLE_TIMEOUT: Duration = Duration::from_secs(600);
+pub const IDLE_TIMEOUT: Duration = Duration::from_secs(600);
 
 // A completion is never dropped now, so an in-flight entry silent this long belongs to a stream the relay
 // itself ended at its idle timeout: the assembler's TTL must outwait it, or a still-open stream would be aged
@@ -51,9 +51,6 @@ const HEADER_READ_TIMEOUT: Duration = Duration::from_secs(30);
 const PROXY_MAX_CONNECTIONS: usize = 4_096;
 const ADMIN_MAX_CONNECTIONS: usize = 256;
 const METRICS_MAX_CONNECTIONS: usize = 64;
-
-/// Well past the largest measured request; a body beyond it is refused rather than buffered.
-pub(crate) const MAX_REQUEST_BYTES: usize = 32 << 20;
 
 /// An upstream connection idle for longer than this is likely to have been closed at the other end already,
 /// and reusing it costs a failed write and a retry.
@@ -212,6 +209,14 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             expire_interval: Duration::from_secs(60),
         },
     );
+    // Moved into the admin state below rather than kept here: a local holding its `Bus` clone to the end of
+    // `run` would keep the subscribers' queues open past the shutdown's `drop(bus)`.
+    let readiness = Arc::new(Readiness {
+        bus: bus.clone(),
+        ledger: ledger.clone(),
+        router: router_task.clone(),
+        store: store.clone(),
+    });
     let live = LiveFeed::spawn(&bus, pricing.clone(), clock.clone(), LiveConfig::default());
     let catalog = Arc::new(CatalogService::new(
         store.clone(),
@@ -232,18 +237,32 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             resolver.clone(),
             clock.clone(),
             Limits {
+                body_budget_bytes: config.proxy.body_budget_bytes,
                 body_capture_max_hours: config.stats.body_capture_max_hours,
+                body_read_timeout: Duration::from_secs(config.proxy.body_read_seconds),
                 cooldown_fallback: Duration::from_secs(config.routing.cooldown_fallback_seconds),
                 head_timeout: HEAD_TIMEOUT,
                 hold_timeout: HOLD_TIMEOUT,
                 idle_timeout: IDLE_TIMEOUT,
-                max_attempts: config.routing.max_attempts,
-                max_request_bytes: MAX_REQUEST_BYTES,
+                key_body_reads: config.proxy.key_body_reads,
+                max_request_bytes: config.proxy.max_request_bytes,
                 model_rejection: Duration::from_secs(config.routing.model_rejection_seconds),
+                // The load refused every other spelling, so anything past the two named is `auto`.
+                upstream_gzip: match config.proxy.upstream_gzip.as_str() {
+                    "off" => UpstreamGzip::Off,
+                    "on" => UpstreamGzip::On,
+                    _ => UpstreamGzip::Auto,
+                },
             },
             catalog.clone(),
         )
         .with_bus(bus.clone())
+        .with_readiness({
+            let readiness = readiness.clone();
+            Arc::new(move || readiness.dead())
+        })
+        .with_signed_placeholder(config.proxy.sign_cch_placeholder)
+        .with_profile_name(profile.name)
         .with_session_memory(
             config.sessions.memory_cap,
             Duration::from_secs(config.sessions.memory_idle_seconds),
@@ -263,7 +282,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         ledger: ledger.clone(),
         lifecycle: None,
         limits: config.keepalive.clone(),
-        max_request_bytes: MAX_REQUEST_BYTES,
+        max_request_bytes: config.proxy.max_request_bytes,
         metrics: metrics.clone(),
         pricing: pricing.clone(),
         relay: relay.clone(),
@@ -322,7 +341,6 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             cooldown_fallback_seconds: config.routing.cooldown_fallback_seconds,
             keepalive: config.keepalive.clone(),
             ledger_path: config.stats.ledger_path.display().to_string(),
-            max_attempts: config.routing.max_attempts,
             metrics_listen: config.stats.metrics_listen.to_string(),
             model_rejection_seconds: config.routing.model_rejection_seconds,
             pricing_path: config
@@ -344,6 +362,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         // sequence below.
         keepalive: keepalive.clone(),
         attention: attention.clone(),
+        readiness,
     });
 
     // Before the proxy listener binds, so the first request finds the dated ids and the samples in place; each

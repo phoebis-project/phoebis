@@ -180,7 +180,7 @@ export function RequestsPage() {
     <div className={`requests ${requestId ? 'has-drawer' : ''}`}>
       <div className="stack">
         <div className="filters">
-          <SearchInput placeholder="Search id, session, key, account, model, error" value={search} onChange={(e) => setSearch(e.target.value)} className="filters__search" />
+          <SearchInput placeholder="Search id, session, key, account, model, error, message id" value={search} onChange={(e) => setSearch(e.target.value)} className="filters__search" />
           <Select value={range} onChange={(e) => setRange(e.target.value)} aria-label="Date range">
             {RANGES.map((r) => (
               <option key={r.value} value={r.value}>
@@ -520,6 +520,8 @@ function RequestDrawer({ request, requestId, now, onClose }: { now: number; onCl
                       {fmtMs(a.durationMs)}
                     </span>
                   </div>
+                  {a.upstreamRequestId !== null && <div className="attempt__id mono secondary">request {a.upstreamRequestId}</div>}
+                  {a.upstreamMessageId !== null && <div className="attempt__id mono secondary">message {a.upstreamMessageId}</div>}
                   <ul className="attempt__windows">
                     {a.windows.length > 0 &&
                       ATTEMPT_WINDOWS.map(({ id, label }) => {

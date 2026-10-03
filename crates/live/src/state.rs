@@ -815,6 +815,7 @@ mod tests {
             response_bytes: Some(10),
             response_chunks: None,
             held: None,
+            message_id: None,
             finished_at: 1_500,
         })
     }

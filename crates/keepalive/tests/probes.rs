@@ -95,6 +95,57 @@ async fn a_probe_replays_every_published_header_and_none_of_the_denied_ones() {
     );
 }
 
+/// The relay inflated the request before the bus saw it, so the recipe holds the plain body with no
+/// `content-encoding` line and the probe replays it plain.
+#[tokio::test]
+async fn a_gzip_request_observed_is_replayed_plain_by_its_probe() {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    let compressed = phoebis_transport::encode::gzip(BODY.as_bytes());
+    let (parts, _) = r.request("main").into_parts();
+    let mut req =
+        axum::http::Request::from_parts(parts, axum::body::Body::from(compressed.clone()));
+    relay_common::set_header(&mut req, "content-encoding", "gzip");
+    relay_common::set_header(&mut req, "content-length", &compressed.len().to_string());
+    let resp = r.h.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), 200, "the gzip request is admitted");
+    let id = relay_common::outcome(&resp).request_id;
+    let _ = resp.into_body().collect().await.unwrap();
+    r.pump(Some(&id)).await;
+    r.advance(270_000);
+    r.step().await;
+    let sent = r.up.requests();
+    assert_eq!(sent.len(), 2, "the real request and one probe");
+    let probe = &sent[1];
+    assert!(
+        !probe
+            .headers
+            .iter()
+            .any(|(n, _)| n.eq_ignore_ascii_case("content-encoding")),
+        "{:?}",
+        probe.headers
+    );
+    let replayed: serde_json::Value =
+        serde_json::from_slice(&probe.body).expect("the probe carries the plain body");
+    assert_eq!(
+        (
+            replayed["messages"][0]["content"].as_str(),
+            replayed["max_tokens"].as_u64()
+        ),
+        (Some("hello"), Some(0)),
+        "the recipe's own body, edited for a probe"
+    );
+    let status = r.status("main");
+    assert_eq!(
+        (status.probes, status.failures, status.probe_usage.read),
+        (1, 0, 2_000),
+        "the probe was answered 200 and its usage read"
+    );
+}
+
 #[tokio::test]
 async fn a_probe_preserves_routing_and_constraints() {
     let mut r = rig(RigSpec::default()).await;
@@ -204,6 +255,98 @@ async fn a_probe_preserves_routing_and_constraints() {
         ),
         (1, "a", r.now()),
         "the probe renewed the pin"
+    );
+}
+
+/// The rig's request with a reduced-shape billing line ahead of the system prompt, carrying the placeholder the
+/// client sends wherever its native patch does not run. `2.1.269.2b2` is the suffix the client computes for
+/// `hello` under 2.1.269 (units 4, 7 and 20: `o` and two padding zeros), so the version check passes.
+fn placeholder_body() -> String {
+    BODY.replacen(
+        r#""system":[{"type":"text","text":"private prompt""#,
+        r#""system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.269.2b2; cc_entrypoint=sdk-cli; cch=00000;"},{"type":"text","text":"private prompt""#,
+        1,
+    )
+}
+
+/// Observes `placeholder_body()` on the main agent, runs the probe its recipe schedules, and returns the probe's
+/// body as the fake upstream received it.
+async fn probe_of_a_placeholder_request(r: &mut Rig) -> Vec<u8> {
+    r.observe_with("main", &placeholder_body()).await;
+    r.state("main", "idle");
+    r.advance(270_000);
+    r.step().await;
+    let sent = r.up.requests();
+    assert_eq!(sent.len(), 2, "the real request and one probe");
+    sent.last().unwrap().body.clone()
+}
+
+fn cch_digits(body: &[u8]) -> Option<&[u8]> {
+    phoebis_cch::find_cch(body).map(|l| &body[l.digits_start..l.digits_start + 5])
+}
+
+/// The recipe keeps the client's placeholder rather than signing it, so the probe reaches the relay as the
+/// request did and the relay relays it unsigned, never reading a recipe's hash as the client's.
+#[tokio::test]
+async fn a_probe_built_from_a_placeholder_request_carries_the_placeholder_and_the_relay_relays_it()
+{
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    let probe = probe_of_a_placeholder_request(&mut r).await;
+    assert_eq!(
+        cch_digits(&probe),
+        Some(&b"00000"[..]),
+        "the probe carries the placeholder: {}",
+        String::from_utf8_lossy(&probe)
+    );
+    let status = r.status("main");
+    assert_eq!((status.probes, status.reason), (1, Reason::Scheduled));
+    let rows = wait_for(std::time::Duration::from_secs(5), || {
+        let (rows, _) =
+            r.db.read_blocking(|c| {
+                phoebis_ledger::list_requests(
+                    c,
+                    &phoebis_ledger::RequestFilter {
+                        include_probes: true,
+                        ..Default::default()
+                    },
+                    &phoebis_ledger::LiveKeys::default(),
+                    None,
+                    10,
+                )
+            })
+            .unwrap();
+        (rows.len() == 2).then_some(rows)
+    })
+    .await;
+    let (probe_row, _) = rows.iter().find(|(row, _)| row.kind == "probe").unwrap();
+    assert_eq!(
+        (probe_row.status, probe_row.client_drift.as_deref()),
+        (Some(200), None)
+    );
+}
+
+/// The decoded `system[0].text` of `body`, its billing line.
+fn billing_line(body: &[u8]) -> String {
+    let root: serde_json::Value = serde_json::from_slice(body).unwrap();
+    root["system"][0]["text"].as_str().unwrap().to_string()
+}
+
+/// Signing a placeholder is the relay's call over a line it restored, never the recipe's, so the recipe keeps a
+/// client-sent placeholder line as the client wrote it. The relay's side is
+/// `a_client_sent_placeholder_on_a_full_shape_line_is_relayed_intact` in the relay's restoration suite.
+#[test]
+fn the_recipe_keeps_a_client_sent_placeholder_line() {
+    let body = placeholder_body();
+    let recipe =
+        phoebis_keepalive::make_recipe(&[], body.as_bytes(), "claude-sonnet-4-5", 1 << 20).unwrap();
+    assert_eq!(
+        billing_line(&recipe.body),
+        billing_line(body.as_bytes()),
+        "the recipe keeps the client's line"
     );
 }
 
@@ -746,9 +889,9 @@ async fn probe_outcomes_are_classified() {
             "{status:?}"
         );
     }
-    // An upstream 401 never reaches the engine as a 401: the relay marks the account and fails over, and with
-    // no account left answers the untimed exhaustion 503, which pauses under its own reason whatever marked
-    // the account.
+    // An upstream 401 never reaches the engine as a 401: the relay marks the account, fails over, and with no
+    // account left answers the untimed exhaustion 503 naming the mark, which pauses under the authentication
+    // reason.
     let mut r = rig(RigSpec {
         accounts: vec![api_key("a", A, 0)],
         ..RigSpec::default()
@@ -767,7 +910,7 @@ async fn probe_outcomes_are_classified() {
     r.step().await;
     assert_eq!(
         (r.status("main").reason, r.status("main").next_probe_at),
-        (Reason::ProbePoolExhausted, None)
+        (Reason::ProbeAuthenticationError, None)
     );
     // A 429 on every account is the relay's exhaustion 429: the same pause a single 429 after failover gets.
     let mut r = rig(RigSpec::default()).await;

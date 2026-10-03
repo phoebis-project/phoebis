@@ -1833,6 +1833,7 @@ name = "phoebis-store"
 version = "0.1.0"
 dependencies = [
  "aes-gcm",
+ "base64",
  "fd-lock",
  "hmac",
  "jiff",

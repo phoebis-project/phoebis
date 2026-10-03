@@ -298,10 +298,10 @@ conversation carries a `fork at 3` badge beside its id, 3 being the depth where 
 scrolls to the row of the session it branched from and marks that row, and where that session is not listed the badge
 names it instead, as `fork of 4ef130f1-90e0…`.
 
-![The Analytics view; the Cache warming section draws probes by outcome, savings, wasted probes, and kept-warm
-requests](assets/analytics-light.png#only-light)
-![The Analytics view; the Cache warming section draws probes by outcome, savings, wasted probes, and kept-warm
-requests](assets/analytics-dark.png#only-dark)
+![The Analytics view's Cache warming tab: probes by outcome, savings, wasted probes, and kept-warm
+requests](assets/analytics-cache-warming-light.png#only-light)
+![The Analytics view's Cache warming tab: probes by outcome, savings, wasted probes, and kept-warm
+requests](assets/analytics-cache-warming-dark.png#only-dark)
 
 The Analytics view's Cache warming section draws probes by outcome, savings (the gross saved and the probe cost
 per bucket, with their difference as the line), wasted probes by reason, kept-warm requests and tokens, and cache

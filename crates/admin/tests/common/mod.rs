@@ -10,7 +10,9 @@ use axum::Router;
 use fake_upstream::{FakeUpstream, Respond, Rule};
 use futures::StreamExt;
 use http_body_util::BodyExt;
-use phoebis_admin::{router, AdminSecrets, AdminState, PairingVault, Sessions, SettingsView};
+use phoebis_admin::{
+    router, AdminSecrets, AdminState, PairingVault, Readiness, Sessions, SettingsView,
+};
 use phoebis_attention::{Attention, AttentionHandles, AttentionParts};
 use phoebis_bus::Bus;
 use phoebis_keepalive::{Engine, EngineParts, KeepaliveLimits};
@@ -23,7 +25,7 @@ use phoebis_profile::{
     claude_code_2_1_269_linux_x64,
     fixtures::{control_response, ControlFixture},
 };
-use phoebis_relay::{CatalogService, Limits, Relay};
+use phoebis_relay::{CatalogService, Limits, Relay, UpstreamGzip};
 use phoebis_routing::{spawn, RouterConfig, RouterHandle};
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, AttemptOutcome, Identity, NewBundle, Secret, StorageKey,
@@ -770,14 +772,17 @@ async fn build_app(
     // The admin harness had no relay before this task; keepalive needs one to probe through, even though
     // nothing here drives its scheduler.
     let limits = Limits {
+        body_budget_bytes: 512 << 20,
         body_capture_max_hours: BODY_CAPTURE_MAX_HOURS,
+        body_read_timeout: Duration::from_secs(60),
         cooldown_fallback: Duration::from_secs(60),
         head_timeout: Duration::from_secs(10),
         hold_timeout: Duration::from_secs(30),
         idle_timeout: Duration::from_secs(600),
-        max_attempts: 3,
+        key_body_reads: 128,
         max_request_bytes: 32 << 20,
         model_rejection: Duration::from_secs(3_600),
+        upstream_gzip: UpstreamGzip::Auto,
     };
     let relay = Arc::new(
         Relay::new(
@@ -824,7 +829,6 @@ async fn build_app(
         cooldown_fallback_seconds: 60,
         keepalive: KeepaliveLimits::default(),
         ledger_path: "test".into(),
-        max_attempts: 3,
         metrics_listen: "127.0.0.1:9464".into(),
         model_rejection_seconds: 3_600,
         pricing_path: None,
@@ -871,6 +875,12 @@ async fn build_app(
         settings,
         keepalive: keepalive.clone(),
         attention: attention.clone(),
+        readiness: Arc::new(Readiness {
+            bus: bus.clone(),
+            ledger: ledger.clone(),
+            router: router_handle.clone(),
+            store: store.clone(),
+        }),
     });
     Parts {
         app: router(state),

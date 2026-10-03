@@ -54,6 +54,26 @@ pub fn find_cch(body: &[u8]) -> Option<CchLocation> {
     None
 }
 
+/// The digits the client writes after `cch=` wherever its native patch does not run.
+const PLACEHOLDER: &[u8; LEN] = b"00000";
+
+/// Whether the billing line's one and only `cch=` field is the client's unsigned placeholder, which claims no
+/// hash to verify or re-sign.
+pub fn carries_only_the_placeholder(body: &[u8]) -> bool {
+    let Some(location) = find_cch(body) else {
+        return false;
+    };
+    if body[location.digits_start..location.digits_start + LEN] != *PLACEHOLDER {
+        return false;
+    }
+    // Beside a second `cch=`, which `find_cch` may have skipped or not reached, the placeholder vouches for
+    // nothing: the line claims a hash. Counted over the decoded line, so a field spelled with an escape counts as
+    // the server reads it, and a line that does not decode is not taken for the placeholder.
+    string_member_span(body, &["system", "0", "text"])
+        .and_then(|(start, end)| serde_json::from_slice::<String>(&body[start..end]).ok())
+        .is_some_and(|line| line.matches("cch=").count() == 1)
+}
+
 /// The array and object walk every span helper needs before reading its own terminal value; kept in one place
 /// so a fix to array indexing or member matching (an escaped key, say) lands once instead of once per helper.
 /// `Some(true)` once `s` sits at the last segment's value, `Some(false)` for an empty path, `None` on mismatch.
@@ -596,13 +616,44 @@ pub fn decoded_stamp_count(body: &[u8]) -> usize {
     let mut count = 0;
     s.ws();
     let _ = each_decoded_member(&mut s, |s, key| {
-        if key == b"system" {
-            first_block_stamps(s, &mut count)
-        } else {
-            s.value(false)
+        if key != b"system" {
+            return s.value(false);
         }
+        each_first_block_member(s, |s, key| {
+            if key == b"text" && s.body.get(s.pos) == Some(&b'"') {
+                let (start, end) = s.string()?;
+                count += usize::from(reads_as_a_stamp(&s.body[start..end]));
+                Ok(())
+            } else {
+                s.value(false)
+            }
+        })
     });
     count
+}
+
+/// How many members of the first `system` block carry `name` once their keys are decoded, the first block of every
+/// top-level spelling of `system` walked. An error means the scan stopped before the body's end, so a caller
+/// refusing on the count does not admit a body on what was read ahead of the stop.
+pub fn first_system_block_member_count(body: &[u8], name: &str) -> Result<usize, CchError> {
+    let mut s = Scanner {
+        body,
+        pos: 0,
+        depth: 0,
+        edits: Vec::new(),
+    };
+    let mut count = 0;
+    s.ws();
+    each_decoded_member(&mut s, |s, key| {
+        if key != b"system" {
+            return s.value(false);
+        }
+        each_first_block_member(s, |s, key| {
+            count += usize::from(key == name.as_bytes());
+            s.value(false)
+        })
+    })?;
+    Ok(count)
 }
 
 /// Walks the object at `s` (its `{` not yet eaten), handing `member` each member's decoded key with `s` at the
@@ -639,10 +690,13 @@ fn each_decoded_member<'a>(
     }
 }
 
-/// A `system` value: when it is an array whose first element is an object, each of that object's `text` members
-/// that reads as a stamp is counted; every other element and member, and a `system` of another shape, is skipped
+/// A `system` value: when it is an array whose first element is an object, `member` is handed each of that object's
+/// members as `each_decoded_member` hands them; every other element, and a `system` of another shape, is skipped
 /// whole.
-fn first_block_stamps(s: &mut Scanner<'_>, count: &mut usize) -> Result<(), CchError> {
+fn each_first_block_member<'a>(
+    s: &mut Scanner<'a>,
+    member: impl FnMut(&mut Scanner<'a>, &[u8]) -> Result<(), CchError>,
+) -> Result<(), CchError> {
     s.ws();
     if s.body.get(s.pos) != Some(&b'[') {
         return s.value(false);
@@ -653,15 +707,7 @@ fn first_block_stamps(s: &mut Scanner<'_>, count: &mut usize) -> Result<(), CchE
         return Ok(());
     }
     if s.body.get(s.pos) == Some(&b'{') {
-        each_decoded_member(s, |s, key| {
-            if key == b"text" && s.body.get(s.pos) == Some(&b'"') {
-                let (start, end) = s.string()?;
-                *count += usize::from(reads_as_a_stamp(&s.body[start..end]));
-                Ok(())
-            } else {
-                s.value(false)
-            }
-        })?;
+        each_decoded_member(s, member)?;
     } else {
         s.value(false)?;
     }
@@ -1283,6 +1329,28 @@ mod tests {
             1,
             "a line a strict decoder refuses is read by its bytes, as the raw walk reads it"
         );
+    }
+
+    #[test]
+    fn a_placeholder_beside_an_escaped_second_cch_field_is_not_the_placeholder_alone() {
+        let body = br#"{"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.220.test; cch=00000; c\u0063h=12345;"}],"model":"m"}"#;
+        assert_eq!(
+            String::from_utf8_lossy(body).matches("cch=").count(),
+            1,
+            "the raw line spells its second field with an escape"
+        );
+        assert!(!carries_only_the_placeholder(body));
+    }
+
+    #[test]
+    fn a_placeholder_on_a_line_that_does_not_decode_is_not_the_placeholder_alone() {
+        // A lone surrogate escape: the scanner walks it, a strict decoder refuses the line.
+        let body = br#"{"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.220.test; cch=00000; \ud800"}],"model":"m"}"#;
+        assert!(
+            find_cch(body).is_some(),
+            "the raw walk reads the placeholder"
+        );
+        assert!(!carries_only_the_placeholder(body));
     }
 
     #[test]

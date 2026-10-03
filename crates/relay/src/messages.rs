@@ -2,16 +2,19 @@
 //! across accounts, and the response the caller gets.
 
 use std::collections::BTreeSet;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use axum::body::Body;
 use axum::extract::{Request, State};
 use axum::http::response::Builder;
-use axum::http::{header, HeaderMap, HeaderName, HeaderValue, StatusCode};
-use axum::response::Response;
+use axum::http::{
+    header, header::CONTENT_ENCODING, HeaderMap, HeaderName, HeaderValue, StatusCode,
+};
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, head, post};
-use axum::Router;
+use axum::{Json, Router};
 use bytes::Bytes;
 use futures::future::BoxFuture;
 use phoebis_bus::{
@@ -24,23 +27,25 @@ use phoebis_routing::{
     cohort_hold, resolve, AccountTicket, ClientClass, CohortHold, EvidenceSource, Exhaustion,
     HoldFacts, KeyPermit, KeyRefusal, OverageEvidence, PinRef, Presented,
     Refusal, Report, ResolveError, RouterHandle, SelectRequest, SelectResult, Selection,
-    SelectionTrace, BUDGET_WINDOW, MODEL_REJECTED_REASON,
+    SelectionTrace, BUDGET_WINDOW,
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, MemoryStore, Store,
 };
 use phoebis_transport::control::Resolver;
-use phoebis_transport::decode::{decoder, encoding, Decoder, Encoding};
+use phoebis_transport::decode::{decoder, encoding, request_encoding, Decoder, Encoding};
 use phoebis_transport::pool::{Pool, PoolKey};
 use phoebis_transport::request::RawRequest;
 use phoebis_transport::response::{framing, keep_alive, BodyReader, ResponseHead};
 use phoebis_transport::TransportError;
+use serde_json::json;
 use tokio::io::AsyncRead;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
 use crate::billing::{restorable_version, Restore};
-use crate::body::{tier_ttls, uniform_ttl};
+use crate::body::{tier_ttls, uniform_ttl, BILLING_LINE_PATH};
+use crate::budget::{BodyBudget, BodyReads};
 use crate::casing::OriginalHead;
 use crate::catalog::CatalogService;
 use crate::chains::Chains;
@@ -49,9 +54,9 @@ use crate::classify::{
 };
 use crate::dispatch::{self, until_cancelled, AttemptFailure, Sent};
 use crate::errors::{
-    accounts_at_cap, auth_failure, key_refusal, relay_failure, Failure, ACCOUNTS_AT_CAP,
-    ACCOUNT_CANCELLED, METHOD_NOT_ALLOWED, MODEL_NOT_ALLOWED, MODEL_REJECTED, NOT_FOUND,
-    ROUTER_UNAVAILABLE, UPSTREAM_UNREACHABLE,
+    accounts_at_cap, auth_failure, body_budget_exhausted, key_body_reads, key_refusal,
+    relay_failure, Failure, ACCOUNTS_AT_CAP, ACCOUNT_CANCELLED, METHOD_NOT_ALLOWED,
+    MODEL_NOT_ALLOWED, MODEL_REJECTED, NOT_FOUND, ROUTER_UNAVAILABLE, UPSTREAM_UNREACHABLE,
 };
 use crate::exhaustion::exhaustion_response;
 use crate::facts::{BodyFacts, ClientHints};
@@ -72,13 +77,29 @@ use crate::stream::{
 };
 use crate::{
     edit_body, is_portable, presented_key, BodyEdits, BodyMember, CacheTtl, CacheTtlPolicy,
-    DriftGuard, Markerless, NativeEdit, RelayError, SafeguardsEdit, TtlBranch, VersionCheck,
-    DANGEROUS_TOOL_USE_BETA, EXTENDED_TTL_BETA,
+    DriftGuard, Markerless, NativeEdit, RelayError, SafeguardsEdit, TtlBranch, UpstreamGzip,
+    VersionCheck, DANGEROUS_TOOL_USE_BETA, EXTENDED_TTL_BETA,
 };
 
 /// How often the session memory's changes reach the store; a crash loses at most this much of it, and the
 /// shutdown flushes the rest.
 pub const MEMORY_FLUSH_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Taken off `head_timeout` for the one deadline the attempt loop runs under, so the exhaustion answer leaves
+/// before the native client's own ten minutes run out.
+const ATTEMPT_DEADLINE_MARGIN: Duration = Duration::from_secs(30);
+
+/// The slice a held request sleeps between reads of the clock while it waits out an account's backoff.
+const HOLD_TICK: Duration = Duration::from_millis(250);
+
+/// How a wait on an account's backoff ended.
+enum Waited {
+    /// The account left the router meanwhile.
+    Cancelled,
+    Cleared,
+    /// The request's deadline came before the backoff cleared.
+    Deadline,
+}
 
 /// Upstream response headers the relay keeps to itself: the connection and framing ones describe the upstream
 /// hop, and the framing no longer matches the body the caller is sent; the upstream's own identity and cookies
@@ -105,21 +126,25 @@ const RATE_LIMIT_FAMILY_PREFIXES: [&str; 2] = ["anthropic-ratelimit-", "anthropi
 
 #[derive(Clone, Copy, Debug)]
 pub struct Limits {
+    /// The bytes of request bodies the process holds at once, across every connection.
+    pub body_budget_bytes: u64,
     /// The longest a request's bodies may be kept, whatever a key or pool was left holding: an operator who
     /// lowers the global maximum means it from the next request, not from the next write of every stored row.
     pub body_capture_max_hours: u32,
+    /// How long a request body may take to arrive after authentication.
+    pub body_read_timeout: Duration,
     /// How long an account is cooled when the upstream rejected it without saying for how long.
     pub cooldown_fallback: Duration,
     pub head_timeout: Duration,
     pub hold_timeout: Duration,
-    /// The longest an upstream may go silent mid-stream before the relay gives up, and the longest a request
-    /// body may take to arrive after authentication.
+    /// The longest an upstream may go silent mid-stream before the relay gives up.
     pub idle_timeout: Duration,
-    /// Upstream submissions one caller request may cost across every account it tries.
-    pub max_attempts: u8,
+    /// The bodies one key may have arriving at once.
+    pub key_body_reads: u32,
     pub max_request_bytes: usize,
     /// How long an account is skipped for a model it answered 404 for.
     pub model_rejection: Duration,
+    pub upstream_gzip: UpstreamGzip,
 }
 
 /// What one relayed request cost and how it ended, attached to the response for the accounting layer that
@@ -155,12 +180,17 @@ pub struct RelayOutcome {
     pub cache_ttl_ms: Option<i64>,
     /// `budget` when the selector answered a probe pinned to a member at its spend budget, `operator`,
     /// `subscription_ended` or `attempted` when it answered one on its pinned member's standing
-    /// (`Exhaustion::Pinned`): the obstacles the keepalive holds on rather than pauses as an exhausted pool; `None`
+    /// (`Exhaustion::Pinned`), `reauth_required` when a leg of the probe marked its account for re-authentication
+    /// (`REAUTH_OBSTACLE`): the obstacles the keepalive holds on rather than pauses as an exhausted pool; `None`
     /// otherwise.
     pub obstacle: Option<&'static str>,
     /// The holds this request waited through, the summary `phoebis_routing::cohort_hold` gives; `None` for none.
     pub held: Option<CohortHold>,
 }
+
+/// On `RelayOutcome`: the obstacle a probe's exhaustion carries when a leg of the request marked the pinned
+/// account `reauth_required`; the keepalive pauses under `ProbeAuthenticationError` on it.
+pub const REAUTH_OBSTACLE: &str = "reauth_required";
 
 /// Which side funded the account a request served under, on the response's extensions beside `RelayOutcome`.
 /// The keepalive's probe path is the one reader today: a probe's cost and the credit it later earns price
@@ -185,6 +215,8 @@ pub struct Relay {
     /// Every body task `relay_body` spawns runs under this, so a shutdown can wait for the completion a body
     /// task publishes after its connection was cut.
     bodies: TaskTracker,
+    body_budget: Arc<BodyBudget>,
+    body_reads: BodyReads,
     bus: Option<Bus>,
     catalog: Arc<CatalogService>,
     pub(crate) clock: Clock,
@@ -196,10 +228,19 @@ pub struct Relay {
     /// climb waits on.
     pending_reports: Arc<PendingReports>,
     pub(crate) pool: Arc<Pool>,
+    /// The pinned profile's name, for the drift warn the operator reads; empty where nothing names one.
+    profile_name: String,
+    readiness: Option<ReadinessSource>,
     resolver: Resolver,
     router: RouterHandle,
+    /// `proxy.sign_cch_placeholder`: whether a restored `cch=00000` is signed rather than sent as the placeholder.
+    sign_cch_placeholder: bool,
     store: Arc<Store>,
 }
+
+/// The components `/api/ready` names dead, read on every ask. A closure rather than the handles themselves, so
+/// the relay needs no dependency on the crate that composes them.
+pub type ReadinessSource = Arc<dyn Fn() -> Vec<&'static str> + Send + Sync>;
 
 impl Relay {
     #[allow(clippy::too_many_arguments)]
@@ -215,6 +256,8 @@ impl Relay {
     ) -> Relay {
         Relay {
             bodies: TaskTracker::new(),
+            body_budget: BodyBudget::new(limits.body_budget_bytes),
+            body_reads: BodyReads::default(),
             bus: None,
             catalog,
             clock,
@@ -224,8 +267,11 @@ impl Relay {
             memory: Arc::new(SessionMemory::new(MEMORY_CAP, MEMORY_IDLE_MS)),
             pending_reports: Arc::new(PendingReports::default()),
             pool,
+            profile_name: String::new(),
+            readiness: None,
             resolver,
             router,
+            sign_cch_placeholder: false,
             store,
         }
     }
@@ -242,6 +288,30 @@ impl Relay {
     pub fn with_bus(self, bus: Bus) -> Relay {
         Relay {
             bus: Some(bus),
+            ..self
+        }
+    }
+
+    /// What `/api/ready` reads; without it the route answers ready, which the relay's own tests rely on.
+    pub fn with_readiness(self, source: ReadinessSource) -> Relay {
+        Relay {
+            readiness: Some(source),
+            ..self
+        }
+    }
+
+    /// `proxy.sign_cch_placeholder`.
+    pub fn with_signed_placeholder(self, on: bool) -> Relay {
+        Relay {
+            sign_cch_placeholder: on,
+            ..self
+        }
+    }
+
+    /// The pinned profile's name, for the drift warn the operator reads.
+    pub fn with_profile_name(self, name: &str) -> Relay {
+        Relay {
+            profile_name: name.to_string(),
             ..self
         }
     }
@@ -372,13 +442,16 @@ impl Trace {
     }
 
     /// Published exactly once per request by the handler, as soon as it knows as much of the identity as the
-    /// request will ever yield. A refusal before the key was read publishes with nothing but the id.
+    /// request will ever yield. A refusal before the key was read publishes with nothing but the id. `inflated`
+    /// marks a body past the read, which is plaintext whatever coding the caller's `content-encoding` named, so
+    /// that line is not published beside it.
     #[allow(clippy::too_many_arguments)]
     async fn observed(
         &self,
         key: Option<&ApiKeyRow>,
         identity: Option<&RequestIdentity>,
         headers: &HeaderMap,
+        inflated: bool,
         body: Bytes,
         stream: bool,
         body_capture_hours: u32,
@@ -414,7 +487,7 @@ impl Trace {
                 .unwrap_or_default(),
             wire_model: identity.map(|i| i.folded_model.clone()).unwrap_or_default(),
             stream,
-            headers: published_headers(headers),
+            headers: published_headers(headers, inflated),
             body,
             body_capture_hours,
             shape,
@@ -501,6 +574,7 @@ impl Trace {
         response_bytes: Option<u64>,
         response_chunks: Option<u32>,
         end: Option<(Outcome, Option<String>)>,
+        message_id: Option<String>,
         finished_at: i64,
     ) {
         let (final_outcome, error_code) = match end {
@@ -526,6 +600,7 @@ impl Trace {
                 .held
                 .as_ref()
                 .and_then(|h| serde_json::to_string(h).ok()),
+            message_id,
             finished_at,
         }))
         .await;
@@ -552,6 +627,45 @@ fn client_facts(
     }
 }
 
+/// The declared body length, when the caller sent one the relay can read; a chunked body has none.
+fn content_length(headers: &HeaderMap) -> Option<usize> {
+    headers
+        .get(header::CONTENT_LENGTH)?
+        .to_str()
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
+}
+
+/// The coding of the caller's body, `None` for one the relay refuses: a token other than `gzip` or `identity`, a
+/// value that is not visible ASCII, or more than one line, which leaves the coding ambiguous.
+fn request_coding(headers: &HeaderMap) -> Option<Encoding> {
+    let mut lines = headers.get_all(CONTENT_ENCODING).iter();
+    match (lines.next(), lines.next()) {
+        (None, _) => Some(Encoding::Identity),
+        (Some(line), None) => request_encoding(Some(line.to_str().ok()?)).ok(),
+        (Some(_), Some(_)) => None,
+    }
+}
+
+/// A gzip request body inflated within `bound`, the per-body bound the read held the compressed bytes to: past
+/// it is the 413 an oversize body is, and anything else the decoder refuses is a body that is not gzip.
+fn inflate_request(raw: &[u8], bound: usize) -> Result<Vec<u8>, RelayError> {
+    let refused = |error: TransportError| match error {
+        TransportError::TooLarge(_) => RelayError::BodyTooLarge,
+        _ => RelayError::BodyNotGzip,
+    };
+    let mut decoder = decoder(Encoding::Gzip);
+    let mut plain = decoder.feed_bounded(raw, bound).map_err(refused)?;
+    plain.extend(
+        decoder
+            .finish_bounded(bound - plain.len())
+            .map_err(refused)?,
+    );
+    Ok(plain)
+}
+
 /// The request outcome a local answer implies; a body that ends badly overrides it at the end of the body.
 fn outcome_of(outcome: &RelayOutcome) -> Outcome {
     match outcome.error_code.as_deref() {
@@ -566,8 +680,9 @@ fn outcome_of(outcome: &RelayOutcome) -> Outcome {
             Outcome::Exhausted
         }
         // A model rejection is a refusal whether it is caught before any attempt (an obstacle at
-        // selection) or after the last one (the budget's end): the account that answered it is
-        // conclusive either way, not a transport or upstream failure.
+        // selection) or after one, where a portable rejection fails over and ends at the selector's
+        // exhaustion: the account that answered it is conclusive either way, not a transport or upstream
+        // failure.
         Some("model_rejected") => Outcome::Rejected,
         // A key or policy refusal is conclusive whether it is caught at admission or at the reselect after an
         // attempt, so the ledger row reads rejected rather than failed.
@@ -594,7 +709,10 @@ fn attempt_outcome(verdict: &Verdict, status: u16, first_event: Option<&[u8]>) -
         {
             AttemptOutcome::RateLimited
         }
-        Verdict::FailOver { .. } if status == 401 => AttemptOutcome::AuthFailed,
+        Verdict::FailOver {
+            mark: Some(AccountState::ReauthRequired),
+            ..
+        } => AttemptOutcome::AuthFailed,
         Verdict::FailOver { .. } => AttemptOutcome::UpstreamError,
         Verdict::StripInjected(_) => AttemptOutcome::UpstreamError,
     }
@@ -668,6 +786,7 @@ fn cooldown_set(cooldown: Option<&Cooldown>, canonical_model: &str) -> Option<Co
 pub fn router(relay: Arc<Relay>) -> Router {
     Router::new()
         .route("/api/hello", head(hello))
+        .route("/api/ready", get(ready).head(ready))
         .route("/v1/messages", post(messages))
         .route("/v1/messages/count_tokens", post(messages))
         // The listing answers the caller's key with what its pool may route to, so a client that sizes its
@@ -682,6 +801,23 @@ pub fn router(relay: Arc<Relay>) -> Router {
 /// The native client probes this before it sends anything and ignores the answer.
 async fn hello() -> StatusCode {
     StatusCode::OK
+}
+
+/// Readiness, as the image's health check and an orchestrator read it: 200 while the router task, the ledger
+/// consumer and the store are alive, 503 naming what died. `/api/hello` stays the liveness answer.
+async fn ready(State(relay): State<Arc<Relay>>) -> Response {
+    let dead = relay
+        .readiness
+        .as_ref()
+        .map_or_else(Vec::new, |source| source());
+    if dead.is_empty() {
+        return (StatusCode::OK, Json(json!({ "ready": true }))).into_response();
+    }
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(json!({ "ready": false, "dead": dead })),
+    )
+        .into_response()
 }
 
 async fn unknown_route() -> Response {
@@ -761,6 +897,7 @@ impl Relay {
                             None,
                             None,
                             &parts.headers,
+                            false,
                             Bytes::new(),
                             false,
                             0,
@@ -786,6 +923,7 @@ impl Relay {
                             None,
                             None,
                             &parts.headers,
+                            false,
                             Bytes::new(),
                             false,
                             0,
@@ -812,6 +950,7 @@ impl Relay {
                                 None,
                                 None,
                                 &parts.headers,
+                                false,
                                 Bytes::new(),
                                 false,
                                 0,
@@ -838,6 +977,7 @@ impl Relay {
                                 None,
                                 None,
                                 &parts.headers,
+                                false,
                                 Bytes::new(),
                                 false,
                                 0,
@@ -865,14 +1005,102 @@ impl Relay {
             .body_capture_hours(&key)
             .min(self.limits.body_capture_max_hours);
         let client_version = self.drift.check(&parts.headers);
-        // A caller that stops sending holds a task and a buffer for nothing; the idle bound the stream side
-        // already gives an upstream is the fair one here too.
-        let body_read = match tokio::time::timeout(
-            self.limits.idle_timeout,
-            axum::body::to_bytes(body, self.limits.max_request_bytes),
-        )
-        .await
-        {
+        let retired = presented == Presented::Retired;
+        let pool = snapshot.pool(&key.pool_id);
+        let failover = pool.map(|p| p.failover).unwrap_or_default();
+        // One permit for the whole request, held across every attempt, retry in place and hold until the
+        // response ends; it counts the key's requests and bounds nothing. Taken from the head, before a body byte
+        // is buffered. A keepalive probe is the router's own traffic and a token count is no turn, so neither
+        // takes a slot.
+        let mut key_permit = match trace.kind {
+            Kind::Inference => Some(
+                self.router
+                    .in_flight()
+                    .try_acquire_key(&key.id, (self.clock)()),
+            ),
+            Kind::CountTokens | Kind::Probe => None,
+        };
+        let Some(coding) = request_coding(&parts.headers) else {
+            return self
+                .refused_before_body(
+                    &trace,
+                    &key,
+                    &parts.headers,
+                    capture_hours,
+                    retired,
+                    relay_failure(&RelayError::UnsupportedEncoding),
+                    client_version.as_deref(),
+                )
+                .await;
+        };
+        let client_gzip = coding == Encoding::Gzip;
+        // The bodies arriving on a key and the bytes of them the process holds are bounded before the read, so a
+        // flood of slow or large bodies is refused rather than buffered. A probe's body is the router's own and
+        // already in memory, so it takes neither and has no deadline to keep.
+        let (read_permit, mut reservation) = match trace.kind {
+            Kind::Probe => (None, None),
+            Kind::CountTokens | Kind::Inference => {
+                let Some(read_permit) = self
+                    .body_reads
+                    .try_acquire(&key.id, self.limits.key_body_reads)
+                else {
+                    return self
+                        .refused_before_body(
+                            &trace,
+                            &key,
+                            &parts.headers,
+                            capture_hours,
+                            retired,
+                            key_body_reads(),
+                            client_version.as_deref(),
+                        )
+                        .await;
+                };
+                let declared = content_length(&parts.headers);
+                if declared.is_some_and(|n| n > self.limits.max_request_bytes) {
+                    return self
+                        .refused_before_body(
+                            &trace,
+                            &key,
+                            &parts.headers,
+                            capture_hours,
+                            retired,
+                            relay_failure(&RelayError::BodyTooLarge),
+                            client_version.as_deref(),
+                        )
+                        .await;
+                }
+                // A chunked body may run to the per-body bound, so it holds that much until it has been read.
+                let Some(reservation) = self
+                    .body_budget
+                    .try_reserve(declared.unwrap_or(self.limits.max_request_bytes) as u64)
+                else {
+                    return self
+                        .refused_before_body(
+                            &trace,
+                            &key,
+                            &parts.headers,
+                            capture_hours,
+                            retired,
+                            body_budget_exhausted(),
+                            client_version.as_deref(),
+                        )
+                        .await;
+                };
+                (Some(read_permit), Some(reservation))
+            }
+        };
+        // A caller that stops sending holds a task and a buffer for nothing; the read has its own deadline, under
+        // the stream's idle bound.
+        let read = axum::body::to_bytes(body, self.limits.max_request_bytes);
+        let read = match trace.kind {
+            Kind::Probe => Ok(read.await),
+            Kind::CountTokens | Kind::Inference => {
+                tokio::time::timeout(self.limits.body_read_timeout, read).await
+            }
+        };
+        drop(read_permit);
+        let body_read = match read {
             Ok(Ok(raw)) => Ok(raw),
             Err(_) => Err(RelayError::BodyTimeout),
             Ok(Err(error)) => {
@@ -892,34 +1120,73 @@ impl Relay {
         let raw = match body_read {
             Ok(raw) => raw,
             Err(error) => {
-                trace
-                    .observed(
-                        Some(&key),
-                        None,
-                        &parts.headers,
-                        Bytes::new(),
-                        false,
-                        capture_hours,
-                        RequestShape::default(),
-                        None,
-                        Vec::new(),
-                        client_facts(&parts.headers, None, None),
-                        None,
-                        presented == Presented::Retired,
-                        key.rotated_at,
-                    )
-                    .await;
                 return self
-                    .refused(
+                    .refused_before_body(
                         &trace,
-                        0,
+                        &key,
+                        &parts.headers,
+                        capture_hours,
+                        retired,
                         relay_failure(&error),
-                        Some(&key),
-                        None,
                         client_version.as_deref(),
                     )
                     .await;
             }
+        };
+        if let Some(reservation) = &mut reservation {
+            // The declared length frames the body and the per-body bound caps a chunked one, so the read never
+            // holds more than was reserved: this only shrinks, and a shrink never fails.
+            let shrunk = reservation.resize(raw.len() as u64);
+            debug_assert!(shrunk.is_ok(), "the read outgrew its reservation");
+        }
+        // Every read below, the edits and the stamp included, sees the plaintext with the client's tail after the
+        // JSON in place, as an identity body is seen.
+        let raw = if client_gzip {
+            let bound = self.limits.max_request_bytes;
+            if let Some(reservation) = &mut reservation {
+                // The inflated worst case is reserved before a byte is inflated: a budget that cannot grant it
+                // refuses here, never after the decoder has already allocated it.
+                if reservation.resize(bound as u64).is_err() {
+                    return self
+                        .refused_before_body(
+                            &trace,
+                            &key,
+                            &parts.headers,
+                            capture_hours,
+                            retired,
+                            body_budget_exhausted(),
+                            client_version.as_deref(),
+                        )
+                        .await;
+                }
+            }
+            let plain = match inflate_request(&raw, bound) {
+                Ok(plain) => plain,
+                Err(error) => {
+                    return self
+                        .refused_before_body(
+                            &trace,
+                            &key,
+                            &parts.headers,
+                            capture_hours,
+                            retired,
+                            relay_failure(&error),
+                            client_version.as_deref(),
+                        )
+                        .await;
+                }
+            };
+            // Once the shrink below counts the inflated bytes alone, the compressed copy kept to the end of the
+            // request would hold up to the per-body bound the budget no longer sees.
+            drop(raw);
+            if let Some(reservation) = &mut reservation {
+                // The inflated bytes are what the bound and the budget measure from here; a shrink never fails.
+                let shrunk = reservation.resize(plain.len() as u64);
+                debug_assert!(shrunk.is_ok(), "the inflated body outgrew its reservation");
+            }
+            Bytes::from(plain)
+        } else {
+            raw
         };
         let facts = BodyFacts::read(&raw);
         let auto_mode_server = snapshot.auto_mode_server(&key);
@@ -930,11 +1197,20 @@ impl Relay {
         });
         let stream = wants_stream(&raw);
         // Admission and the body edit both act on the first spelling of a member; a second one would reach
-        // the wire untouched and a last-wins parser upstream would act on it instead. Refused whole rather
-        // than repaired: the caller's body is not edited on its way through. A scan that could not finish
-        // proves nothing about the members past where it stopped, so it refuses as well.
-        let repeated =
-            phoebis_cch::repeated_top_level_member(&raw, &["model", "metadata", "stream"]);
+        // the wire untouched and a last-wins parser upstream would act on it instead. The billing line's path
+        // counts as well: the drift check and its placeholder exemption read the first `system` and the first
+        // `text` of its first block, so a second spelling would carry a hash nothing verified. Refused whole
+        // rather than repaired: the caller's body is not edited on its way through. A scan that could not
+        // finish proves nothing about the members past where it stopped, so it refuses as well.
+        let repeated = phoebis_cch::repeated_top_level_member(
+            &raw,
+            &["metadata", "model", "stream", "system"],
+        )
+        .and_then(|repeated| match repeated {
+            Some(name) => Ok(Some(name)),
+            None => phoebis_cch::first_system_block_member_count(&raw, "text")
+                .map(|texts| (texts > 1).then_some(BILLING_LINE_PATH)),
+        });
         let refusal = match repeated {
             Ok(None) => None,
             Ok(Some(name)) => Some(RelayError::BodyShape(BodyMember::Repeated(name))),
@@ -947,6 +1223,7 @@ impl Relay {
                     Some(&key),
                     None,
                     &parts.headers,
+                    true,
                     raw.clone(),
                     stream,
                     capture_hours,
@@ -970,19 +1247,6 @@ impl Relay {
                 )
                 .await;
         }
-        let pool = snapshot.pool(&key.pool_id);
-        let failover = pool.map(|p| p.failover).unwrap_or_default();
-        // One permit for the whole request, held across every attempt, retry in place and hold until the
-        // response ends; it counts the key's requests and bounds nothing. A keepalive probe is the router's own
-        // traffic and a token count is no turn, so neither takes a slot.
-        let mut key_permit = match trace.kind {
-            Kind::Inference => Some(
-                self.router
-                    .in_flight()
-                    .try_acquire_key(&key.id, (self.clock)()),
-            ),
-            Kind::CountTokens | Kind::Probe => None,
-        };
         let mut identity = match identify(&parts.headers, &raw) {
             Ok(identity) => identity,
             Err(error) => {
@@ -991,6 +1255,7 @@ impl Relay {
                         Some(&key),
                         None,
                         &parts.headers,
+                        true,
                         raw.clone(),
                         stream,
                         capture_hours,
@@ -1043,6 +1308,7 @@ impl Relay {
                 Some(&key),
                 Some(&identity),
                 &parts.headers,
+                true,
                 raw.clone(),
                 stream,
                 capture_hours,
@@ -1174,10 +1440,16 @@ impl Relay {
             cache_ttl_policy,
             caller: &parts.headers,
             chains: facts.chains.as_ref(),
+            client_gzip,
             client_version,
+            deadline: (self.limits.head_timeout > ATTEMPT_DEADLINE_MARGIN).then(|| {
+                received_at
+                    + (self.limits.head_timeout - ATTEMPT_DEADLINE_MARGIN).as_millis() as i64
+            }),
             diagnostics,
             fallback_ms,
             fast: facts.shape.speed.as_deref() == Some("fast"),
+            floor_held: AtomicBool::new(false),
             identity: &identity,
             key: &key,
             lane,
@@ -1197,28 +1469,35 @@ impl Relay {
         // attempt that follows names the wait on its trace.
         let mut holds: Vec<HoldFacts> = Vec::new();
         let mut attempt: u8 = 0;
-        let mut spent: u8 = 0;
+        // The accounts this request was held for once already. A freed slot is read, not reserved, so another
+        // request can take it before the next selection; without this the same account could hold the request
+        // again on every pass.
+        let mut held_for: Vec<String> = Vec::new();
         // Whether a hold ran out, and whether any leg dialled: an untimed exhaustion reached through holds alone
         // is a pool at its cap, which frees on its own, not one only an operator can clear.
         let mut held_out = false;
         let mut dialed = false;
+        // Whether a leg of this request marked its account for re-authentication, which a probe's exhaustion
+        // answer names so the keepalive pauses under the authentication reason. Never cleared: a later leg's
+        // failover of another kind does not undo the mark.
+        let mut auth_marked = false;
 
         loop {
-            // A backstop: every failover point already checks the budget before it comes back here, and
-            // `attempted` grows each pass, so the loop is bounded by the pool even without this.
-            if spent >= self.limits.max_attempts {
+            let now = (self.clock)();
+            // One deadline for the whole request, the climb's waits included: past it the pool is answered as
+            // exhausted rather than selected again.
+            if admitted.deadline.is_some_and(|deadline| now >= deadline) {
                 return self
-                    .refused(
-                        &trace,
+                    .exhausted(
+                        &admitted,
                         attempt,
-                        UPSTREAM_UNREACHABLE,
-                        Some(&key),
-                        Some(&identity),
-                        admitted.client_version.as_deref(),
+                        &Exhaustion::Untimed,
+                        now,
+                        false,
+                        auth_marked,
                     )
                     .await;
             }
-            let now = (self.clock)();
             let answer = match self
                 .router
                 .select(SelectRequest {
@@ -1312,23 +1591,29 @@ impl Relay {
                 }
                 SelectResult::Exhausted(exhaustion) => {
                     return self
-                        .exhausted(&admitted, attempt, &exhaustion, now, held_out && !dialed)
+                        .exhausted(
+                            &admitted,
+                            attempt,
+                            &exhaustion,
+                            now,
+                            held_out && !dialed,
+                            auth_marked,
+                        )
                         .await;
                 }
-                // A hold spends a slot of the budget like an attempt. A slot freed within the bound lets the next
-                // selection place there; past it the account is attempted and the next selection looks elsewhere.
+                // A slot freed within the bound lets the next selection place there; past it the account is
+                // attempted and the next selection looks elsewhere.
                 SelectResult::Held {
                     account_id,
                     mut hold,
                 } => {
-                    // With no slot left for a dial after this one, the wait could only end in the budget's refusal,
-                    // so the pool answers as the exhausted one it is, at once: at its cap, unless a leg dialled.
-                    if spent + 1 >= self.limits.max_attempts {
-                        return self
-                            .exhausted(&admitted, attempt, &Exhaustion::Untimed, now, !dialed)
-                            .await;
+                    // The account had its one hold of this request, so at its cap it is passed over as one whose
+                    // wait ran out.
+                    if held_for.contains(&account_id) {
+                        held_out = true;
+                        attempted.push(account_id);
+                        continue;
                     }
-                    spent += 1;
                     let started = tokio::time::Instant::now();
                     let deadline = started + admitted.retry_in_place;
                     let freed = self
@@ -1341,6 +1626,7 @@ impl Relay {
                     hold.held_ms = started.elapsed().as_millis() as u64;
                     holds.push(hold);
                     trace.waited(&holds);
+                    held_for.push(account_id.clone());
                     if !freed {
                         held_out = true;
                         attempted.push(account_id);
@@ -1357,12 +1643,28 @@ impl Relay {
                     &answer.cancel,
                     answer.ticket,
                     &mut attempt,
-                    &mut spent,
                     &mut key_permit,
                 )
                 .await
             {
-                Leg::FailOver => continue,
+                Leg::AtCap => {
+                    return self
+                        .exhausted(
+                            &admitted,
+                            attempt,
+                            &Exhaustion::Untimed,
+                            now,
+                            false,
+                            auth_marked,
+                        )
+                        .await;
+                }
+                Leg::FailOver {
+                    auth_marked: marked,
+                } => {
+                    auth_marked |= marked;
+                    continue;
+                }
                 Leg::Respond(mut response) => {
                     // Every kind rides this, not the probe path alone: the keepalive's is the only reader
                     // today, but a request's own funding is a fact of its selection, not of who asked for it.
@@ -1376,7 +1678,8 @@ impl Relay {
     }
 
     /// The answer for a pool with nothing to select, the outcome carrying the exhaustion's code. `at_cap` answers
-    /// an untimed exhaustion as a pool whose accounts are all at their in-flight cap.
+    /// an untimed exhaustion as a pool whose accounts are all at their in-flight cap; `auth_marked` is whether a
+    /// leg of this request marked its account for re-authentication.
     async fn exhausted(
         &self,
         admitted: &Admitted<'_>,
@@ -1384,6 +1687,7 @@ impl Relay {
         exhaustion: &Exhaustion,
         now: i64,
         at_cap: bool,
+        auth_marked: bool,
     ) -> Response {
         let (code, response) = match exhaustion {
             Exhaustion::Untimed if at_cap => {
@@ -1434,6 +1738,18 @@ impl Relay {
         if let Exhaustion::Pinned { obstacle } = exhaustion {
             outcome.obstacle = Some(*obstacle);
         }
+        // Read last, so it overrides `attempted` alone: a probe that tried its marked member is not one to retry,
+        // and no wait clears the mark. A timed answer keeps the quota pause its 429 gets, a budget hold stays
+        // one, and a pinned member's other standings keep their own reasons.
+        if admitted.trace.kind == Kind::Probe
+            && auth_marked
+            && code == "accounts_unavailable"
+            && outcome
+                .obstacle
+                .is_none_or(|obstacle| obstacle == "attempted")
+        {
+            outcome.obstacle = Some(REAUTH_OBSTACLE);
+        }
         self.answer(
             admitted.trace,
             response,
@@ -1446,10 +1762,14 @@ impl Relay {
     }
 
     /// One account's leg of the request. `attempt` is the wire-submission index every bus event and attempt row
-    /// carries; `spent` is the budget under `max_attempts`, which a strip retry leaves alone. `key_permit` is the
-    /// request's own, which a committed stream takes into its body; `selected` is the ticket the selection charged
-    /// for the leg's first pass.
-    #[allow(clippy::too_many_arguments)]
+    /// carries. `key_permit` is the request's own, which a committed stream takes into its body; `selected` is the
+    /// ticket the selection charged for the leg's first pass.
+    ///
+    /// An OAuth 401 runs the refresh ladder on this account: a refresh, and after one that failed without a
+    /// conclusive answer a second once the account's backoff clears, the key's permit and the ticket held through
+    /// the wait. The token endpoint's floor is waited out once per request, through `Admitted::floor_held`, since a
+    /// second account's bad minute is the same minute. Every wait ends at `Admitted::deadline`, past which the
+    /// attempt loop answers the exhaustion.
     async fn dispatch_to(
         &self,
         admitted: &Admitted<'_>,
@@ -1457,19 +1777,18 @@ impl Relay {
         cancel: &CancellationToken,
         mut selected: Option<AccountTicket>,
         attempt: &mut u8,
-        spent: &mut u8,
         key_permit: &mut Option<KeyPermit>,
     ) -> Leg {
         // The row the router selected, not one looked up again in the admission snapshot: the endpoint a
         // request goes out to and the credential it carries have to be the pair one snapshot held.
         let account = &selection.account;
         let pin_epoch = selection.pin.as_ref().map(|pin| pin.epoch);
-        // No wire submission, so no attempt is spent: the account is already in `attempted`, and the next
+        // No wire submission, so the index does not move: the account is already in `attempted`, and the next
         // selection skips it. The outer loop is bounded by the pool size, because each account is selected
         // at most once per request.
         let mut credential = match self.credential(account).await {
             Ok(credential) => credential,
-            Err(_) => return Leg::FailOver,
+            Err(_) => return Leg::FailOver { auth_marked: false },
         };
         // Stable across a same-account replay: an OAuth refresh replaces the token, never the account identity
         // it names, so this is read once rather than through the closure below.
@@ -1572,6 +1891,7 @@ impl Relay {
                     } else {
                         SafeguardsEdit::Drop
                     },
+                    sign_placeholder: self.sign_cch_placeholder,
                 },
             )?;
             if !claims_its_ttl(&edits) {
@@ -1598,10 +1918,15 @@ impl Relay {
                 if let RelayError::ClientDrift { kind } = &error {
                     // Drift depends on the body alone, so it is found on the first account before any wire
                     // submission: nothing is sent until the router is re-pinned, and the outcome carries the tag.
+                    // A stamp the router cannot verify never travels under an account's credential, edited or
+                    // not: a wrong hash is indistinguishable from tampering and the cost falls on the account
+                    // rather than on the request, so a drifted one is refused rather than relayed unedited under
+                    // the client's stamp or stripped.
                     tracing::warn!(
                         account = %account.id,
                         drift = %kind,
                         user_agent = %user_agent(admitted.caller),
+                        profile = %self.profile_name,
                         "a caller stamped a billing line this build cannot reproduce; re-pin the router to that client",
                     );
                     let outcome = self.outcome(
@@ -1647,7 +1972,7 @@ impl Relay {
         let authority = dispatch::UPSTREAM_AUTHORITY;
         let Some(addr) = (self.resolver)(authority).await else {
             tracing::warn!(host = %authority, "the upstream host does not resolve");
-            return Leg::FailOver;
+            return Leg::FailOver { auth_marked: false };
         };
         let pool_key = PoolKey {
             account_id: account.id.clone(),
@@ -1658,16 +1983,14 @@ impl Relay {
         let mut retried_in_place = false;
         let mut replayed = false;
         let mut stripped_once = false;
-        let mut stripping = false;
 
         loop {
-            *attempt += 1;
-            // The strip retry is the router correcting its own edit on the account that refused it, not a
-            // failover and not a transport retry: it spends no slot of the budget. Every other pass does.
-            if !stripping {
-                *spent += 1;
+            // The wire-submission index is a u8 on the bus and the attempt row, so 255 submissions per request
+            // is the technical bound; the pool's size is the practical one, and no pool approaches it.
+            if *attempt == u8::MAX {
+                return Leg::AtCap;
             }
-            stripping = false;
+            *attempt += 1;
             // One per wire attempt. The first pass's was charged by its selection, so the count the selector read
             // is the one it charged; a later pass takes its own before the dial. A pass that ends without
             // committing a stream drops it with its response half, before the next pass or leg takes one. A
@@ -1714,12 +2037,23 @@ impl Relay {
                 .as_ref()
                 .filter(|_| !skip.contains(&Injected::ClientRequestId))
                 .map(|_| uuid_v4());
+            let gzip_out = match self.limits.upstream_gzip {
+                UpstreamGzip::On => true,
+                UpstreamGzip::Off => false,
+                UpstreamGzip::Auto => admitted.client_gzip,
+            };
+            let wire_body = if gzip_out {
+                phoebis_transport::encode::gzip(&edited)
+            } else {
+                edited.clone()
+            };
             let head = outbound_headers(
                 admitted.caller,
                 admitted.original,
                 &credential.kind,
                 authority,
-                edited.len(),
+                wire_body.len(),
+                gzip_out.then_some("gzip"),
                 client_request_id.as_deref(),
                 &inject_betas,
                 &drop_betas,
@@ -1732,6 +2066,7 @@ impl Relay {
             let responding = Responding {
                 account,
                 attempt: *attempt,
+                auth_marked: false,
                 cache_ttl_ms: cache_ttl_ms(ttl),
                 caller: admitted.caller,
                 can_retry_in_place: !retried_in_place,
@@ -1740,8 +2075,10 @@ impl Relay {
                 chains: admitted.chains,
                 client_version: admitted.client_version.clone(),
                 credential_generation: credential.generation,
+                deadline: admitted.deadline,
                 fallback_ms: admitted.fallback_ms,
                 fast: admitted.fast,
+                floor_held: &admitted.floor_held,
                 fresh_pin: selection.pin.is_some() && !selection.trace.renewed,
                 identity: admitted.identity,
                 injected: &injected,
@@ -1761,7 +2098,6 @@ impl Relay {
                 replayed,
                 request_id: admitted.request_id,
                 retry_in_place: admitted.retry_in_place,
-                spent: *spent,
                 ticket,
                 tier_ttls: tier_ttls(&edited),
                 trace: admitted.trace,
@@ -1771,7 +2107,7 @@ impl Relay {
                 method: "POST",
                 target: admitted.target.to_string(),
                 headers: head.headers,
-                body: Bytes::from(edited.clone()),
+                body: Bytes::from(wire_body),
             };
             let dispatched =
                 match dispatch::attempt(self, &request, &pool_key, authority, addr, fresh, cancel)
@@ -1791,9 +2127,7 @@ impl Relay {
                 };
             let next = match dispatched {
                 Ok(next) => next,
-                Err(AttemptFailure::Unsent(detail))
-                    if !retried && *spent < self.limits.max_attempts =>
-                {
+                Err(AttemptFailure::Unsent(detail)) if !retried => {
                     tracing::debug!(account = %account.id, %detail, "retrying a request that never reached the upstream");
                     fresh = true;
                     retried = true;
@@ -1864,10 +2198,9 @@ impl Relay {
                     replayed = true;
                     fresh = false;
                 }
-                Next::FailOver => return Leg::FailOver,
+                Next::FailOver { auth_marked } => return Leg::FailOver { auth_marked },
                 Next::Respond(response) => return Leg::Respond(response),
-                // The same account and the same credential once the throttle has passed; the loop top spends the
-                // slot for the next pass as it does for every pass that is not a strip.
+                // The same account and the same credential once the throttle has passed.
                 Next::RetryInPlace(delay) => {
                     if until_cancelled(tokio::time::sleep(delay), cancel)
                         .await
@@ -1931,10 +2264,9 @@ impl Relay {
                             );
                         }
                     }
-                    // The next pass submits the corrected body on this account; the loop top spends no slot
-                    // for it, and `stripped_once` keeps the strip to one round per leg.
+                    // The next pass submits the corrected body on this account, and `stripped_once` keeps the
+                    // strip to one round per leg.
                     stripped_once = true;
-                    stripping = true;
                     fresh = false;
                     continue;
                 }
@@ -1999,6 +2331,48 @@ impl Relay {
                         reader.into_inner().return_to(checkin.clone());
                     }
                     (Some(buffered), None)
+                }
+                // The body is past the buffer bound, so nothing can be read that would justify a refresh or a
+                // mark: the leg fails over once, unmarked, rather than act on a head nobody classified, and the
+                // 401 never reaches the client.
+                Ok(Drained::TooLarge(_)) if head.status == 401 => {
+                    tracing::debug!(account = %ctx.account.id, "failing over from a 401 too large to inspect");
+                    drop(reader);
+                    ctx.trace
+                        .head(
+                            ctx.attempt,
+                            &head,
+                            None,
+                            AttemptOutcome::AuthFailed,
+                            None,
+                            written_at,
+                            head_at,
+                        )
+                        .await;
+                    let generations = (
+                        ctx.account.incarnation,
+                        ctx.account.lifecycle_generation,
+                        ctx.credential_generation,
+                    );
+                    report_failover(
+                        &self.router,
+                        &ctx.account.id,
+                        &ctx.identity.canonical_model,
+                        None,
+                        None,
+                        ctx.portable.then(|| ctx.pin.cloned()).flatten(),
+                        ctx.request_id,
+                        generations,
+                        (self.clock)(),
+                    );
+                    if ctx.portable {
+                        return Next::FailOver { auth_marked: false };
+                    }
+                    let release = self.release_on(&ctx, head.status);
+                    return Next::Respond(
+                        self.authentication_exhausted(&ctx, &head, outcome, release)
+                            .await,
+                    );
                 }
                 Ok(Drained::TooLarge(prefix)) => {
                     tracing::debug!(account = %ctx.account.id, "forwarding a rejection too large to inspect");
@@ -2125,6 +2499,14 @@ impl Relay {
             Verdict::FailOver { cooldown, .. } => cooldown.as_ref(),
             _ => None,
         };
+        let auth_failed = matches!(
+            verdict,
+            Verdict::Refresh
+                | Verdict::FailOver {
+                    mark: Some(AccountState::ReauthRequired),
+                    ..
+                }
+        );
         ctx.trace
             .head(
                 ctx.attempt,
@@ -2142,65 +2524,71 @@ impl Relay {
             ctx.credential_generation,
         );
 
-        let (cooldown, mark) = match verdict {
+        let (cooldown, mark, moves_pin) = match verdict {
             // A rejected replay is conclusive: the refreshed token was refused too.
-            Verdict::Refresh if ctx.replayed => (None, Some(AccountState::ReauthRequired)),
-            Verdict::Refresh if ctx.spent < self.limits.max_attempts => {
-                match self
-                    .manager
-                    .refresh_now(&ctx.account.id, ctx.credential_generation)
-                    .await
-                {
-                    Ok(token) => return Next::Replay(Credential::from(token)),
-                    // Nothing was replaced, so nothing conclusive happened: the upstream's 401 goes back as
-                    // it came, and the account keeps its state and a pin that already served. Failing over
-                    // would spend another account on a request whose own credential may work again in a
-                    // minute, and invalidating the pin would move a session that has no reason to move; a pin
-                    // this request created is released as any client error's is. An account the refresh found
-                    // marked, by its own invalid_grant or by a disconnect meanwhile, is left to the next selection,
-                    // which ends the pin under the account's state.
-                    Err(error) => {
-                        tracing::warn!(account = %ctx.account.id, %error, "the rejected token could not be refreshed");
-                        let marked = matches!(
-                            error,
-                            AcquireError::Disconnected
-                                | AcquireError::ReauthRequired
-                                | AcquireError::Unpaired
-                        );
-                        let release = (!marked)
-                            .then(|| self.release_on(&ctx, head.status))
-                            .flatten();
-                        return Next::Respond(
-                            self.forward_buffered(
-                                ctx.trace,
-                                &head,
-                                buffered.unwrap_or_default(),
-                                ctx.caller,
-                                outcome,
-                                release,
-                                None,
-                            )
-                            .await,
-                        );
+            Verdict::Refresh if ctx.replayed => (None, Some(AccountState::ReauthRequired), false),
+            Verdict::Refresh => {
+                let mut tries = 0u8;
+                loop {
+                    tries += 1;
+                    match self
+                        .manager
+                        .refresh_now(&ctx.account.id, ctx.credential_generation)
+                        .await
+                    {
+                        Ok(token) => return Next::Replay(Credential::from(token)),
+                        // Once the ladder ends nothing was replaced, so the account is finished for this request
+                        // and nothing of the upstream's 401 goes back: the request fails over, and a request with
+                        // no account left, or one bound to this account, is answered the router's own exhaustion.
+                        // An account the refresh found marked, by its own invalid_grant or by a disconnect
+                        // meanwhile, keeps its pin for the next selection to end under the account's state; any
+                        // other failure moves the pin.
+                        Err(error) => {
+                            tracing::warn!(account = %ctx.account.id, %error, "the rejected token could not be refreshed");
+                            let marked = matches!(
+                                error,
+                                AcquireError::Disconnected
+                                    | AcquireError::ReauthRequired
+                                    | AcquireError::Unpaired
+                            );
+                            if matches!(error, AcquireError::ReauthRequired) {
+                                ctx.auth_marked = true;
+                            }
+                            if marked || tries == 2 {
+                                break (None, None, !marked);
+                            }
+                            // One wait on the same account, bounded by the manager's own rule: a short refusal
+                            // clears in seconds and a token endpoint's bad minute in a minute, both cheaper than
+                            // moving a warm session; a backoff asked for past the floor is not waited out, and
+                            // the minute is waited out once per request, since a second account's bad minute is
+                            // the same minute. The armed length tells the two apart, not the time left, which a
+                            // clock that moved since the arming would misread.
+                            let Some(backoff) = self.manager.backoff(&ctx.account.id) else {
+                                break (None, None, true);
+                            };
+                            let floor = backoff.length_ms > phoebis_oauth::TRANSIENT_BACKOFF_MS;
+                            if backoff.length_ms > phoebis_oauth::SERVER_ERROR_BACKOFF_MS
+                                || (floor && ctx.floor_held.load(Ordering::Relaxed))
+                            {
+                                break (None, None, true);
+                            }
+                            if floor {
+                                ctx.floor_held.store(true, Ordering::Relaxed);
+                            }
+                            match self.wait_out(backoff.until, ctx.deadline, ctx.cancel).await {
+                                Waited::Cleared => {}
+                                // The loop head answers the exhaustion past the deadline; this account is done.
+                                Waited::Deadline => break (None, None, true),
+                                // The 401's head is this attempt's, published before the verdict.
+                                Waited::Cancelled => {
+                                    return Next::Respond(
+                                        self.cancelled_after_head(&ctx, head.status).await,
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
-            }
-            // The budget does not allow a refresh and a replay, so nothing conclusive can happen: the 401
-            // is forwarded as it came and the account keeps its state and a pin that already served.
-            Verdict::Refresh => {
-                let release = self.release_on(&ctx, head.status);
-                return Next::Respond(
-                    self.forward_buffered(
-                        ctx.trace,
-                        &head,
-                        buffered.unwrap_or_default(),
-                        ctx.caller,
-                        outcome,
-                        release,
-                        None,
-                    )
-                    .await,
-                );
             }
             // `classify` only returns this under `can_strip`, so the one-round rule is already applied; without
             // it the same 400 classifies as `Commit` and is forwarded as any other.
@@ -2213,7 +2601,11 @@ impl Relay {
                 }
                 return Next::Strip(items);
             }
-            Verdict::FailOver { cooldown, mark } => (cooldown, mark),
+            // An account marked for re-authentication keeps its pin, as a refresh's own mark does: the next
+            // selection moves the session off it under the account's state.
+            Verdict::FailOver { cooldown, mark } => {
+                (cooldown, mark, mark != Some(AccountState::ReauthRequired))
+            }
             Verdict::Commit => {
                 // The key may have been evicted and its record saved while this request was upstream. The
                 // writes below would then build a fresh entry, with no prompt id and none of the session's
@@ -2362,24 +2754,22 @@ impl Relay {
                 return Next::Respond(responded);
             }
         };
-        // Read before `report_failover` moves `cooldown` below.
-        let rejected = cooldown
-            .as_ref()
-            .is_some_and(|c| c.reason == MODEL_REJECTED_REASON);
+        if mark == Some(AccountState::ReauthRequired) {
+            ctx.auth_marked = true;
+        }
         let retry_in_place = self.retry_in_place(&ctx, &head, cooldown.as_ref(), mark, arrived);
-        // A non-portable request keeps its pin: the failed response goes back to the client on the
-        // account that holds its state, and only the cooldown is recorded. So does one about to retry in place:
-        // the row is there for the siblings, and the pin stays where the retry lands.
+        // A non-portable request keeps its pin: the answer goes back to the client on the account that holds
+        // its state, and only the cooldown is recorded. So does one about to retry in place: the row is there
+        // for the siblings, and the pin stays where the retry lands.
         report_failover(
             &self.router,
             &ctx.account.id,
             &ctx.identity.canonical_model,
             cooldown,
             mark,
-            ctx.portable
+            (ctx.portable && moves_pin && retry_in_place.is_none())
                 .then(|| ctx.pin.cloned())
-                .flatten()
-                .filter(|_| retry_in_place.is_none()),
+                .flatten(),
             ctx.request_id,
             generations,
             arrived,
@@ -2388,12 +2778,14 @@ impl Relay {
             drop(reader);
             return Next::RetryInPlace(delay);
         }
-        // A held stream cannot be rewound onto another connection, so the only way not to commit it is
-        // to drop it unread; once the budget is spent it goes to the caller as it came.
+        // A held stream cannot be rewound onto another connection, so the only way not to commit it is to drop
+        // it unread; a request bound to its account takes it as it came.
         if let Some(held) = held {
-            if ctx.portable && ctx.spent < self.limits.max_attempts {
+            if ctx.portable {
                 drop(reader);
-                return Next::FailOver;
+                return Next::FailOver {
+                    auth_marked: ctx.auth_marked,
+                };
             }
             let guards = ctx.guards();
             return Next::Respond(
@@ -2424,30 +2816,54 @@ impl Relay {
         // drained above, so the default here is the empty body of a head that carried none. A row
         // added for a status outside that set would forward nothing instead of its own body.
         let buffered = buffered.unwrap_or_default();
-        if ctx.portable && ctx.spent < self.limits.max_attempts {
-            return Next::FailOver;
+        if ctx.portable {
+            return Next::FailOver {
+                auth_marked: ctx.auth_marked,
+            };
         }
-        // The budget is spent and this account's rejection was the last word: the caller gets the router's
-        // own refusal rather than a 404 that names an account it can never retry.
-        if ctx.portable && rejected {
-            let mut outcome = outcome;
-            outcome.error_code = Some(MODEL_REJECTED.code.to_string());
+        if auth_failed {
+            // A non-portable request keeps its account, so its authentication failure is the last word here.
+            let release = moves_pin
+                .then(|| self.release_on(&ctx, head.status))
+                .flatten();
             return Next::Respond(
-                self.answer(
-                    ctx.trace,
-                    MODEL_REJECTED.response(ctx.request_id),
-                    outcome,
-                    None,
-                    ResponseFacts::default(),
-                    None,
-                )
-                .await,
+                self.authentication_exhausted(&ctx, &head, outcome, release)
+                    .await,
             );
         }
         Next::Respond(
             self.forward_buffered(ctx.trace, &head, buffered, ctx.caller, outcome, None, None)
                 .await,
         )
+    }
+
+    /// The router's own answer when an account's authentication failure is the request's last word: the
+    /// untimed exhaustion body, so the client sees no account and no reason. `release` is the fresh pin this
+    /// request created, sent before the answer as the forwarded error would have sent it.
+    async fn authentication_exhausted(
+        &self,
+        ctx: &Responding<'_>,
+        head: &ResponseHead,
+        mut outcome: RelayOutcome,
+        release: Option<Renewal>,
+    ) -> Response {
+        if let Some(release) = release {
+            release.send((self.clock)(), head.status, None, false);
+        }
+        outcome.error_code = Some("accounts_unavailable".to_string());
+        // A probe bound to its account never reaches the selector's exhaustion, so its own answer names the mark.
+        if ctx.trace.kind == Kind::Probe && ctx.auth_marked {
+            outcome.obstacle = Some(REAUTH_OBSTACLE);
+        }
+        self.answer(
+            ctx.trace,
+            exhaustion_response(&Exhaustion::Untimed, (self.clock)(), ctx.request_id),
+            outcome,
+            None,
+            ResponseFacts::default(),
+            None,
+        )
+        .await
     }
 
     /// The report a pinned answer sends at its end: a renewal, or the release of a pin this request created and
@@ -2519,9 +2935,9 @@ impl Relay {
     }
 
     /// How long to wait before trying the same account again, for a fail-over this leg can wait out instead: a
-    /// portable request, a throttle the upstream timed with a `Retry-After` at or under the pool's bound, no
-    /// mark on the account, no retry in place on this leg yet, and a slot of the budget for the retry. Anything
-    /// else fails over.
+    /// portable request, a throttle the upstream timed with a `Retry-After` at or under the pool's bound that
+    /// ends before the request's deadline, no mark on the account, and no retry in place on this leg yet.
+    /// Anything else fails over.
     fn retry_in_place(
         &self,
         ctx: &Responding<'_>,
@@ -2534,7 +2950,6 @@ impl Relay {
         if !ctx.portable
             || mark.is_some()
             || !ctx.can_retry_in_place
-            || ctx.spent >= self.limits.max_attempts
             || cooldown.window != "retry_after"
             || retry_after(head, now).is_none()
         {
@@ -2542,7 +2957,13 @@ impl Relay {
         }
         let delay = cooldown.until.saturating_sub(now).saturating_sub(MARGIN_MS);
         let delay = Duration::from_millis(u64::try_from(delay).unwrap_or(0));
-        (delay <= ctx.retry_in_place).then_some(delay)
+        // The deadline bounds this wait as it bounds the refresh ladder's: the retry a longer wait leads to would
+        // be submitted after the request is due its answer, with its permits and buffers held all the while, so
+        // the request moves on at once instead.
+        let left = ctx.deadline.map(|deadline| {
+            Duration::from_millis(u64::try_from(deadline.saturating_sub(now)).unwrap_or(0))
+        });
+        (delay <= ctx.retry_in_place && left.is_none_or(|left| delay < left)).then_some(delay)
     }
 
     /// The credential to dispatch with, fenced by the revision of the row the selection handed over:
@@ -2588,6 +3009,41 @@ impl Relay {
                 Err(NoCredential::Stale)
             }
         }
+    }
+
+    /// A refusal with no body to observe: decided on the head before the read, or on a read that ended without
+    /// a whole body. The observation carries the client facts the head alone gives.
+    #[allow(clippy::too_many_arguments)]
+    async fn refused_before_body(
+        &self,
+        trace: &Trace,
+        key: &ApiKeyRow,
+        headers: &HeaderMap,
+        capture_hours: u32,
+        presented_retired: bool,
+        failure: Failure,
+        client_version: Option<&str>,
+    ) -> Response {
+        trace
+            .observed(
+                Some(key),
+                None,
+                headers,
+                false,
+                Bytes::new(),
+                false,
+                capture_hours,
+                RequestShape::default(),
+                None,
+                Vec::new(),
+                client_facts(headers, None, None),
+                None,
+                presented_retired,
+                key.rotated_at,
+            )
+            .await;
+        self.refused(trace, 0, failure, Some(key), None, client_version)
+            .await
     }
 
     async fn refused(
@@ -2647,10 +3103,40 @@ impl Relay {
                 response_bytes,
                 None,
                 None,
+                None,
                 (self.clock)(),
             )
             .await;
         with_outcome(response, outcome)
+    }
+
+    /// Sleeps until the relay's clock reaches `until`, or `deadline` when that comes first. The clock is read again
+    /// after every `HOLD_TICK` rather than slept against once, so a clock a test steps is noticed within a tick and
+    /// production time passes as it does.
+    async fn wait_out(
+        &self,
+        until: i64,
+        deadline: Option<i64>,
+        cancel: &CancellationToken,
+    ) -> Waited {
+        let end = deadline.map_or(until, |deadline| deadline.min(until));
+        loop {
+            let now = (self.clock)();
+            if now >= end {
+                return if deadline.is_some_and(|deadline| deadline < until) {
+                    Waited::Deadline
+                } else {
+                    Waited::Cleared
+                };
+            }
+            let slice = HOLD_TICK.min(Duration::from_millis((end - now) as u64));
+            if until_cancelled(tokio::time::sleep(slice), cancel)
+                .await
+                .is_none()
+            {
+                return Waited::Cancelled;
+            }
+        }
     }
 
     /// The answer to a response that arrived for an account that is no longer there.
@@ -2671,12 +3157,19 @@ impl Relay {
                 (self.clock)(),
             )
             .await;
+        self.cancelled_after_head(ctx, head.status).await
+    }
+
+    /// The caller's answer once the account left the router after this attempt's head was published: the request
+    /// completes `canceled` and the attempt keeps the outcome its head recorded, since a second head for the same
+    /// attempt would overwrite that outcome in the ledger.
+    async fn cancelled_after_head(&self, ctx: &Responding<'_>, status: u16) -> Response {
         let outcome = self.outcome(
             ctx.trace,
             Some(ctx.key),
             Some(ctx.identity),
             &ctx.account.id,
-            head.status,
+            status,
             ctx.attempt,
             true,
             None,
@@ -2866,6 +3359,7 @@ impl Relay {
                 parser: event_stream.then(|| SseParser::new(INSPECT_BUFFER)),
                 // A committed JSON answer is inspected for its usage block; a rejection or a stream is not.
                 json: (!event_stream && head.status == 200).then(Vec::new),
+                json_bound: self.limits.max_request_bytes,
                 usage: Usage::default(),
                 response: ResponseFacts::default(),
                 index: 0,
@@ -2873,6 +3367,7 @@ impl Relay {
                 first_content_at: None,
                 saw_tool_use: false,
                 stream_error: None,
+                saw_stop: false,
                 status: head.status,
                 message_id: None,
                 pending_message_id: None,
@@ -2964,8 +3459,8 @@ impl Relay {
                 });
                 chunk_published = true;
                 message_id = message_id_from_json(&text, &[]);
-                // Only the refresh path reaches here with a 200; the ordinary JSON answer is inspected by the
-                // body task.
+                // Only the error statuses `respond` drains (400, 401, 403, 404, 429) reach here, a 200 being read
+                // by the body task; the 200 arm guards a caller that would buffer one, whose usage still counts.
                 (head.status == 200).then(|| answer_from_json(&text, &[]))
             }
         };
@@ -2998,6 +3493,8 @@ impl Relay {
                 None,
                 Some(payload.len() as u64),
                 chunk_published.then_some(1),
+                None,
+                // An error document carries no message `id`.
                 None,
                 (self.clock)(),
             )
@@ -3042,7 +3539,7 @@ struct Forward<'a, C> {
 }
 
 /// Why a selected account produced nothing to dispatch with. Neither answer reaches the caller: the account
-/// is already in `attempted`, so both send the loop back to select without spending an attempt.
+/// is already in `attempted`, so both send the loop back to select without a wire submission.
 enum NoCredential {
     /// The account row moved between the selection and the acquisition.
     Stale,
@@ -3054,13 +3551,16 @@ enum NoCredential {
 struct Responding<'a> {
     account: &'a AccountRow,
     attempt: u8,
+    /// Whether this pass marked the account `reauth_required`, carried back to the attempt loop through
+    /// `Next::FailOver` and read by a probe's own answer.
+    auth_marked: bool,
     /// The TTL this pass's body was coupled to, for the outcome the response half builds; `None` off the policy.
     cache_ttl_ms: Option<i64>,
     caller: &'a HeaderMap,
     /// Whether this leg has not retried in place yet: one retry per leg.
     can_retry_in_place: bool,
-    /// Whether this leg has not stripped yet. A strip retry spends no slot of `max_attempts`, so the budget is
-    /// not read here; the one-round rule is the only gate.
+    /// Whether this leg has not stripped yet. A strip retry is the router correcting its own edit on the same
+    /// account, never a failover; the one-round rule is the only gate.
     can_strip: bool,
     cancel: &'a CancellationToken,
     /// The two boundary chains the client's body hashed, for the affinity report; `None` for a body with no
@@ -3068,9 +3568,13 @@ struct Responding<'a> {
     chains: Option<&'a Chains>,
     client_version: Option<String>,
     credential_generation: u64,
+    /// `Admitted::deadline`, which ends the refresh ladder's wait.
+    deadline: Option<i64>,
     fallback_ms: i64,
     /// The request carried `speed: "fast"`, which a throttle's classification reads.
     fast: bool,
+    /// `Admitted::floor_held`, which the refresh ladder reads and sets.
+    floor_held: &'a AtomicBool,
     /// Whether this selection created `pin` rather than renewing one that already served.
     fresh_pin: bool,
     identity: &'a RequestIdentity,
@@ -3089,8 +3593,6 @@ struct Responding<'a> {
     replayed: bool,
     request_id: &'a str,
     retry_in_place: Duration,
-    /// The budget slots spent so far, which the failover and the refresh replay read; a strip retry spends none.
-    spent: u8,
     /// This pass's account ticket, which a committed stream takes into its body.
     ticket: Option<AccountTicket>,
     /// `tier_ttls` of the body as this pass sends it upstream, after the TTL rewrite.
@@ -3119,8 +3621,11 @@ pub(crate) struct Guards {
 
 /// What the response half decided the account loop should do next.
 enum Next {
-    /// This account is finished; another one takes the request.
-    FailOver,
+    /// This account is finished; another one takes the request. `auth_marked` is whether this leg marked the
+    /// account `reauth_required`.
+    FailOver {
+        auth_marked: bool,
+    },
     /// The refreshed token goes back to the same account.
     Replay(Credential),
     Respond(Response),
@@ -3151,7 +3656,13 @@ struct Admitted<'a> {
     /// The two boundary chains the client's body hashed, for the affinity report; `None` for a body with no
     /// chain.
     chains: Option<&'a Chains>,
+    /// The client sent its body gzip, which `upstream_gzip: auto` mirrors toward the upstream.
+    client_gzip: bool,
     client_version: Option<String>,
+    /// The relay's clock past which the attempt loop answers the exhaustion rather than selecting again, and at
+    /// which a wait on an account's backoff ends: admission plus `head_timeout` less `ATTEMPT_DEADLINE_MARGIN`.
+    /// `None` when `head_timeout` is no longer than the margin.
+    deadline: Option<i64>,
     /// The pool's `cache_diagnostics` switch, resolved at admission and never for a `count_tokens` request: the
     /// public schema refuses an unknown top-level member and the beta names nothing there, and a 400 on that path
     /// must never latch the account for its inference requests.
@@ -3160,6 +3671,10 @@ struct Admitted<'a> {
     /// The request carried `speed: "fast"`: fast eligibility applies to its selections and its throttles cool the
     /// fast lane.
     fast: bool,
+    /// Whether this request already waited out the token endpoint's floor on some account. Set through the shared
+    /// reference, so no leg needs a parameter for it; atomic because `Admitted` is borrowed across the handler's
+    /// awaits and that future has to be `Send`.
+    floor_held: AtomicBool,
     identity: &'a RequestIdentity,
     key: &'a ApiKeyRow,
     /// The cache lane the request writes to, composed once at admission since no failover changes the body.
@@ -3184,10 +3699,15 @@ struct Admitted<'a> {
     trace: &'a Trace,
 }
 
-/// What one selected account produced: an answer for the caller, or nothing, in which case the loop selects
-/// the next account. The account is already in `attempted` either way.
+/// What one selected account produced: an answer for the caller; nothing, in which case the loop selects the
+/// next account; or the end of the wire-submission index, which the loop answers as the pool's untimed
+/// exhaustion. The account is already in `attempted` in every case.
 enum Leg {
-    FailOver,
+    AtCap,
+    /// `auth_marked` is whether the leg marked its account `reauth_required`.
+    FailOver {
+        auth_marked: bool,
+    },
     Respond(Response),
 }
 
@@ -3415,5 +3935,49 @@ mod tests {
         assert!(!caller_accepts(&caller, "gzip"));
         assert!(caller_accepts(&caller, "br"));
         assert!(!caller_accepts(&HeaderMap::new(), "gzip"));
+    }
+
+    #[test]
+    fn a_request_with_no_content_encoding_line_is_identity() {
+        assert_eq!(request_coding(&HeaderMap::new()), Some(Encoding::Identity));
+    }
+
+    #[test]
+    fn two_content_encoding_lines_leave_the_coding_ambiguous_and_are_refused() {
+        let mut headers = HeaderMap::new();
+        headers.append(CONTENT_ENCODING, HeaderValue::from_static("gzip"));
+        headers.append(CONTENT_ENCODING, HeaderValue::from_static("gzip"));
+        assert_eq!(request_coding(&headers), None);
+    }
+
+    #[test]
+    fn a_content_encoding_value_that_is_not_visible_ascii_is_refused() {
+        // A no-break space after `gzip` decodes as UTF-8 and trims away, so only the visible-ASCII rule refuses
+        // it.
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            CONTENT_ENCODING,
+            HeaderValue::from_bytes(b"gzip\xc2\xa0").unwrap(),
+        );
+        assert_eq!(request_coding(&headers), None);
+    }
+
+    #[test]
+    fn a_plain_body_labelled_gzip_is_not_gzip() {
+        assert!(matches!(
+            inflate_request(br#"{"model":"claude-sonnet-4-5"}"#, 1 << 20),
+            Err(RelayError::BodyNotGzip)
+        ));
+    }
+
+    #[test]
+    fn a_truncated_gzip_stream_is_not_gzip() {
+        let plain = vec![b'x'; 8 << 10];
+        let whole = phoebis_transport::encode::gzip(&plain);
+        assert_eq!(inflate_request(&whole, 1 << 20).unwrap(), plain);
+        assert!(matches!(
+            inflate_request(&whole[..whole.len() - 4], 1 << 20),
+            Err(RelayError::BodyNotGzip)
+        ));
     }
 }

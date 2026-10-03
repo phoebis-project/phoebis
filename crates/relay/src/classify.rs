@@ -81,8 +81,8 @@ pub struct HeadContext<'a> {
     pub body_prefix: Option<&'a [u8]>,
     /// The attempt's own additions, body and head, that a 400 might name.
     pub injected: &'a [Injected],
-    /// Whether this leg has not stripped yet. A strip retry spends no slot of `max_attempts`, so the budget is
-    /// not read here; the one-round rule is the only gate.
+    /// Whether this leg has not stripped yet. A strip retry is the router correcting its own edit on the same
+    /// account, never a failover; the one-round rule is the only gate.
     pub can_strip: bool,
     /// The spelling the body carried upstream, which a rejection's message names.
     pub wire_model: &'a str,

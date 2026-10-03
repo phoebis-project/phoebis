@@ -122,6 +122,12 @@
   text-decoration: underline;
 }
 
+/* The head's disclosure wraps to a line of its own at narrower widths, where it starts under the sentence's first
+   word; on the sentence's line the space before it is the gap. */
+.page-head__lead .link-btn {
+  padding-inline: 0;
+}
+
 .icon-btn {
   display: inline-grid;
   place-items: center;
@@ -320,15 +326,13 @@
 }
 
 .sess-summary__grid dt,
-.pool__stats dt,
-.pool__policy dt {
+.pool__stats dt {
   font-size: 12px;
   color: var(--ink-3);
 }
 
 .sess-summary__grid dd,
-.pool__stats dd,
-.pool__policy dd {
+.pool__stats dd {
   margin: 0;
   font-weight: 600;
 }
@@ -1163,15 +1167,78 @@
   font-size: 16px;
 }
 
-.pool__policy {
-  display: grid;
-  grid-template-columns: repeat(3, auto);
-  gap: 18px;
-  margin: 0;
+/*
+ * The key count stands beside the status badge; without a key it reads in the warning ink, still a link. A failed
+ * read takes the muted ink, since it says nothing about the pool's keys.
+ */
+.pool__keys {
+  font-size: 12.5px;
+  color: var(--ink-2);
 }
 
-.pool__policy dd {
-  font-weight: 500;
+.pool__keys--none {
+  color: var(--warning-ink);
+}
+
+.pool__keys--unread {
+  color: var(--ink-3);
+}
+
+.pool__status {
+  margin: 0;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
+.attention {
+  display: grid;
+  gap: 6px;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+/* The detail takes the rest of the row and cuts; the whole of it sits in the row's title with its age. */
+.attention__row {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  font-size: 12.5px;
+}
+
+.attention__detail {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-2);
+}
+
+/* The serving table: the caption names the strategy, the next account's row takes the accent tint. */
+.serving caption {
+  padding: 0 0 8px;
+  font-size: 12.5px;
+  color: var(--ink-2);
+  text-align: left;
+  caption-side: top;
+}
+
+.serving tr.is-next td {
+  background: var(--accent-soft);
+}
+
+/* The badge's own fill is the row's tint, which would leave the word without its pill. */
+.serving tr.is-next .badge--accent {
+  background: var(--surface);
+}
+
+/* A badge's box is taller than a line of text, so top-aligned it would sit below the name beside it. */
+.serving td {
+  vertical-align: middle;
+}
+
+.serving .chips {
+  gap: 6px;
 }
 
 .pool__chart {
@@ -1185,9 +1252,10 @@
   font-size: 13px;
 }
 
+/* Six tiles on two rows of three; the hairline between tiles runs between the rows too. */
 .pool__stats {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   margin: 0;
   border-top: 1px solid var(--hairline);
   border-bottom: 1px solid var(--hairline);
@@ -1197,66 +1265,25 @@
   padding: 10px 18px;
 }
 
-.pool__stats > div + div {
+.pool__stats > div:not(:nth-child(3n + 1)) {
   border-left: 1px solid var(--hairline);
 }
 
-.pool__members {
+.pool__stats > div:nth-child(n + 4) {
+  border-top: 1px solid var(--hairline);
+}
+
+/* Two card columns just above 1100 px and a phone's width leave a card narrower than its table, which then scrolls
+   inside the card as `.table-wrap` scrolls the other tables. */
+.pool__serving {
   padding: 14px 18px 16px;
-}
-
-.pool__members ul {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 0;
-  margin: 0;
-  list-style: none;
-}
-
-.pool__members li {
-  display: grid;
-  grid-template-columns: 30px 1fr auto;
-  gap: 10px;
-  align-items: center;
-}
-
-/* Wraps the badge under the spend on a narrow card rather than breaking the spend across lines. */
-.pool__eligibility {
-  display: inline-flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  align-items: center;
-  justify-content: flex-end;
+  overflow-x: auto;
 }
 
 .pool__prio {
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--ink-3);
-}
-
-.selection-order {
-  display: grid;
-  gap: 6px;
-}
-
-/* The same 30px lead column as a member row, so a tier's badges line up under the member above it. */
-.selection-order__tier {
-  display: grid;
-  grid-template-columns: 30px 1fr;
-  gap: 10px;
-  align-items: center;
-}
-
-/* The kind order names a tier's group beside its priority, which outgrows the lead column a plain pool needs. */
-.selection-order--grouped .selection-order__tier {
-  grid-template-columns: 118px 1fr;
-}
-
-.selection-order__rule {
-  margin: 4px 0 0;
-  font-size: 12px;
 }
 
 /* A member's name lines up with the inputs of its row rather than with their top edge. */
@@ -1733,6 +1760,11 @@
   border-radius: 50%;
 }
 
+/* An upstream id is one unbroken token; without this a long one would scroll the drawer sideways. */
+.attempt__id {
+  overflow-wrap: anywhere;
+}
+
 .attempt__windows {
   display: flex;
   flex-direction: column;
@@ -1824,6 +1856,11 @@
 .snippet {
   max-height: none;
   margin-bottom: 10px;
+}
+
+.snippet__hint {
+  margin-bottom: 10px;
+  font-size: 12.5px;
 }
 
 .probe-bar {
@@ -2024,12 +2061,21 @@
     grid-template-columns: 110px 1fr;
   }
 
+  /* Two columns of three rows: the base rule's left hairline would land on the first column's third and fifth tile. */
   .pool__stats {
     grid-template-columns: repeat(2, 1fr);
   }
 
-  .pool__stats > div + div {
+  .pool__stats > div:nth-child(2n + 1) {
     border-left: 0;
+  }
+
+  .pool__stats > div:not(:nth-child(2n + 1)) {
+    border-left: 1px solid var(--hairline);
+  }
+
+  .pool__stats > div:nth-child(n + 3) {
+    border-top: 1px solid var(--hairline);
   }
 }
 
@@ -2170,16 +2216,6 @@
 /* Pool card additions */
 .pool__edit {
   margin-left: auto;
-}
-
-.pool__policy {
-  grid-template-columns: repeat(5, auto);
-  gap: 14px 18px;
-}
-
-/* The keepalive summary lists several limits, so it takes a row of its own. */
-.pool__policy-wide {
-  grid-column: 1 / -1;
 }
 
 /* The processed list of a saved key, one line per entry with the level it came from. */
@@ -2465,33 +2501,21 @@
   position: sticky;
   top: 52px;
   z-index: 4;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 2px;
   padding: 8px 0;
   background: color-mix(in srgb, var(--page) 92%, transparent);
   backdrop-filter: blur(8px);
-  border-bottom: 1px solid var(--hairline);
 }
 
-.section-bar__link {
-  padding: 5px 12px;
-  font-size: 13px;
-  color: var(--ink-2);
-  background: none;
-  border: 0;
-  border-radius: var(--radius-sm);
+/* One shape for the page's and Burn's group-by: a 160 px select after its label. */
+.groupby-select {
+  width: 160px;
 }
 
-.section-bar__link:hover {
-  color: var(--ink);
-  background: var(--surface-2);
-}
-
-.section-bar__link.is-active {
-  font-weight: 600;
-  color: var(--accent-ink);
-  background: var(--accent-soft);
+/* Burn's reason takes the rest of the select's line, two lines of text at 1280 and 1440, and drops under the select
+   once less than 360 px is left there. */
+.analytics-groupby__reason {
+  flex: 1 1 360px;
+  font-size: 12.5px;
 }
 
 .analytics-section {
@@ -3193,10 +3217,6 @@
   .streams--2,
   .streams--3 {
     grid-template-columns: 1fr;
-  }
-
-  .pool__policy {
-    grid-template-columns: repeat(2, auto);
   }
 
   .detail__head {

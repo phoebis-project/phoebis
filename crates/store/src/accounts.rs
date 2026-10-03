@@ -295,22 +295,16 @@ impl Store {
         lifecycle_generation: u64,
         credential_generation: u64,
     ) -> Result<bool, StoreError> {
-        let conn = self.conn.lock().expect(LOCK_POISONED);
-        let updated = conn.execute(
-            "UPDATE accounts SET state = ?2, revision = revision + 1, updated_at = ?3 \
-             WHERE id = ?1 AND lifecycle_generation = ?4 AND incarnation = ?6 \
-             AND (EXISTS (SELECT 1 FROM credentials WHERE account_id = ?1 AND generation = ?5) \
-                  OR EXISTS (SELECT 1 FROM api_key_secrets WHERE account_id = ?1 AND generation = ?5))",
-            params![
+        self.routing_commit(|conn| {
+            set_state_if_generations_on(
+                conn,
                 id,
                 state,
-                jiff::Timestamp::now().as_millisecond(),
-                lifecycle_generation as i64,
-                credential_generation as i64,
-                incarnation as i64
-            ],
-        )?;
-        Ok(updated > 0)
+                incarnation,
+                lifecycle_generation,
+                credential_generation,
+            )
+        })
     }
 
     /// Disconnects the account: the new lifecycle generation invalidates any refresh in flight for the
@@ -337,8 +331,8 @@ impl Store {
             "DELETE FROM api_key_secrets WHERE account_id = ?1",
             params![id],
         )?;
-        // A disconnect must also clear the refresh gate: otherwise a pending or uncertain attempt from
-        // before the disconnect keeps blocking every refresh after re-pairing, until the process restarts.
+        // A disconnect settles every open attempt: one still in flight from before the disconnect would block
+        // every refresh after re-pairing, and an uncertain one would quarantine the re-paired account at start.
         tx.execute(
             &format!(
                 "UPDATE refresh_attempts SET resolved_at = ?2, outcome = 'failed', detail = 'disconnected' \
@@ -562,6 +556,31 @@ pub(crate) fn next_incarnation(conn: &rusqlite::Connection, id: &str) -> Result<
         )
         .optional()?;
     Ok(buried.unwrap_or(0) as u64 + 1)
+}
+
+pub(crate) fn set_state_if_generations_on(
+    conn: &rusqlite::Connection,
+    id: &str,
+    state: AccountState,
+    incarnation: u64,
+    lifecycle_generation: u64,
+    credential_generation: u64,
+) -> Result<bool, StoreError> {
+    let updated = conn.execute(
+        "UPDATE accounts SET state = ?2, revision = revision + 1, updated_at = ?3 \
+         WHERE id = ?1 AND lifecycle_generation = ?4 AND incarnation = ?6 \
+         AND (EXISTS (SELECT 1 FROM credentials WHERE account_id = ?1 AND generation = ?5) \
+              OR EXISTS (SELECT 1 FROM api_key_secrets WHERE account_id = ?1 AND generation = ?5))",
+        params![
+            id,
+            state,
+            jiff::Timestamp::now().as_millisecond(),
+            lifecycle_generation as i64,
+            credential_generation as i64,
+            incarnation as i64
+        ],
+    )?;
+    Ok(updated > 0)
 }
 
 /// The revision bump for a write that changes a dispatch input without touching the account row itself.
