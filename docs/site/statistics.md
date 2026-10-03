@@ -363,8 +363,8 @@ the cost split, the cache write and read costs, and the Cache warming figures re
 log does not carry them; the Accounts section keeps reading the rollups for the range, since they carry no session, and
 its subtitle says so.
 
-![The Analytics view: the range and group-by controls over seven report sections](assets/analytics-light.png#only-light)
-![The Analytics view: the range and group-by controls over seven report sections](assets/analytics-dark.png#only-dark)
+![The Analytics view: range and group-by controls over seven tabs, Traffic shown](assets/analytics-light.png#only-light)
+![The Analytics view: range and group-by controls over seven tabs, Traffic shown](assets/analytics-dark.png#only-dark)
 
 ### Settings
 
