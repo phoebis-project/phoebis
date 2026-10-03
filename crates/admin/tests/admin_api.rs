@@ -1107,8 +1107,11 @@ async fn a_rejected_token_exchange_ends_the_session_and_frees_the_account() {
 
     let shown = json(get(&app, &format!("/admin/oauth/sessions/{id}"), Some(&cookie)).await).await;
     assert_eq!(shown["status"], "failed");
+    // The owner's own start would replace a pairing that still held the slot, so only another admin
+    // session's start shows the slot was handed back.
+    let other = login(&app, "admin-secret").await;
     assert_eq!(
-        post(&app, "/admin/oauth/sessions", start, Some(&cookie))
+        post(&app, "/admin/oauth/sessions", start, Some(&other))
             .await
             .status(),
         201,

@@ -120,15 +120,15 @@ pub enum PairingError {
     Invalid(String),
 }
 
-pub struct PairingSessions {
-    sessions: Mutex<HashMap<String, PairingSession>>,
-}
-
 #[derive(Debug, Clone)]
 pub struct Started {
     pub session: PairingSession,
     /// The id of the caller's own pairing this start cancelled, so the route can discard its vault record.
     pub superseded: Option<String>,
+}
+
+pub struct PairingSessions {
+    sessions: Mutex<HashMap<String, PairingSession>>,
 }
 
 impl Default for PairingSessions {
@@ -161,6 +161,8 @@ impl PairingSessions {
             expire_if_stale(session, now);
         }
         let mut superseded = None;
+        // Cancelling inside the scan is safe only because this is the one insert and it leaves an account at
+        // most one pairing in flight, so no refusal can follow a cancel made earlier in the same loop.
         for standing in sessions
             .values_mut()
             .filter(|s| s.account_id == account_id && is_in_flight(&s.status))

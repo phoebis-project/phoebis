@@ -279,9 +279,10 @@ fn a_session_walks_from_a_code_through_the_exchange_to_confirmed() {
         s.confirm(&sess.id, "admin-1", 1_003),
         Err(PairingError::AlreadyConsumed)
     ));
+    let restarted = s.start("business", "admin-1", redirect, 1_003).unwrap();
     assert!(
-        s.start("business", "admin-1", redirect, 1_003).is_ok(),
-        "a confirmed session hands the account's slot back"
+        restarted.superseded.is_none(),
+        "a confirmed session hands the account's slot back, so the next start replaces nothing"
     );
 }
 
@@ -398,6 +399,57 @@ fn a_start_by_the_owner_supersedes_its_exchanged_pairing() {
 }
 
 #[test]
+fn a_start_by_the_owner_supersedes_its_pairing_that_holds_a_code() {
+    let s = PairingSessions::new();
+    let redirect = "http://localhost:4567/callback";
+    let sess = s
+        .start("business", "admin-1", redirect, 1_000)
+        .unwrap()
+        .session;
+    let url = format!("{redirect}?code=CODE123&state={}", sess.state);
+    s.accept_callback(&sess.id, "admin-1", CallbackInput::Url(url), 1_001)
+        .unwrap();
+    let started = s.start("business", "admin-1", redirect, 1_002).unwrap();
+    assert_eq!(started.superseded.as_deref(), Some(sess.id.as_str()));
+    assert!(matches!(
+        s.get(&sess.id, "admin-1", 1_002).unwrap().status,
+        PairingStatus::Cancelled
+    ));
+    let pending = PendingIdentity {
+        account_uuid: "00000000-0000-4000-8000-000000000001".into(),
+        email: "test@example.invalid".into(),
+        organization_name: None,
+        organization_uuid: None,
+    };
+    assert!(
+        matches!(
+            s.mark_exchanged(&sess.id, "admin-1", pending, 1_002),
+            Err(PairingError::AlreadyConsumed)
+        ),
+        "an exchange that lands for the replaced pairing is not recorded"
+    );
+}
+
+#[test]
+fn a_start_on_one_account_leaves_the_owners_pairing_on_another_alone() {
+    let s = PairingSessions::new();
+    let redirect = "http://localhost:4567/callback";
+    let business = s
+        .start("business", "admin-1", redirect, 1_000)
+        .unwrap()
+        .session;
+    let team = s.start("team", "admin-1", redirect, 1_001).unwrap();
+    assert!(
+        team.superseded.is_none(),
+        "a pairing on another account is not the one this start replaces"
+    );
+    assert!(matches!(
+        s.get(&business.id, "admin-1", 1_001).unwrap().status,
+        PairingStatus::Pending
+    ));
+}
+
+#[test]
 fn another_admin_sessions_start_is_refused_while_a_pairing_stands() {
     let s = PairingSessions::new();
     let redirect = "http://localhost:4567/callback";
@@ -430,9 +482,10 @@ fn a_commit_that_failed_ends_the_session_and_frees_the_account() {
         matches!(&status, PairingStatus::Failed(reason) if reason == "storage failure"),
         "the operator is told why, in the same words the response carried"
     );
+    let restarted = s.start("business", "admin-1", redirect, 1_003).unwrap();
     assert!(
-        s.start("business", "admin-1", redirect, 1_003).is_ok(),
-        "a failed session hands the account's slot back"
+        restarted.superseded.is_none(),
+        "a failed session hands the account's slot back, so the next start replaces nothing"
     );
     assert!(matches!(
         s.confirm(&id, "admin-1", 1_004),
