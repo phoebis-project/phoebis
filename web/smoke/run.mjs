@@ -4229,6 +4229,49 @@ if (failoverRow) {
 }
 m.unmount();
 
+// The search commits as the pattern fields do: once typing pauses, or at once on Enter. The clock stands still, so only
+// a tick fires the pause's timer and a commit without one can only come from the key.
+{
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  const typeInto = (input, text) => {
+    setter.call(input, text);
+    input.dispatchEvent(new window.Event('input', { bubbles: true }));
+  };
+  const searched = (spy) => spy.calls.map(([q]) => q?.search);
+
+  const tenCheck = '/requests ten keystrokes into the search issue one list read';
+  const typing = await mount('/requests', { now: CLOCK_ORIGIN });
+  const typed = typing.container.querySelector('input.filters__search');
+  if (!typed) controlMissing(tenCheck, 'the search');
+  else {
+    const spy = countCalls('listRequests');
+    for (let i = 1; i <= 10; i++) typeInto(typed, 'abcdefghij'.slice(0, i));
+    await typing.settle(100);
+    const beforePause = spy.calls.length;
+    tick(400);
+    await typing.settle();
+    results.push({ name: tenCheck, ok: beforePause === 0 && JSON.stringify(searched(spy)) === JSON.stringify(['abcdefghij']), missing: [`${beforePause} reads while typing`, JSON.stringify(searched(spy))] });
+    spy.restore();
+  }
+  typing.unmount();
+
+  const enterCheck = '/requests Enter commits the search at once';
+  const pressing = await mount('/requests', { now: CLOCK_ORIGIN });
+  const pressed = pressing.container.querySelector('input.filters__search');
+  if (!pressed) controlMissing(enterCheck, 'the search');
+  else {
+    const spy = countCalls('listRequests');
+    for (const text of ['a', 'ab', 'abc']) typeInto(pressed, text);
+    await pressing.settle(100);
+    const beforeEnter = spy.calls.length;
+    pressed.dispatchEvent(new window.KeyboardEvent('keydown', { bubbles: true, key: 'Enter' }));
+    await pressing.settle();
+    results.push({ name: enterCheck, ok: beforeEnter === 0 && JSON.stringify(searched(spy)) === JSON.stringify(['abc']), missing: [`${beforeEnter} reads before Enter`, JSON.stringify(searched(spy))] });
+    spy.restore();
+  }
+  pressing.unmount();
+}
+
 // A read that fails for new filters draws the error state alone, none of the sections and none of the rows the filters before
 // the change read; Try again reads the new filters again.
 {

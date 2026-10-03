@@ -8,15 +8,16 @@ import { SelectionTrace } from '@/components/SelectionTrace';
 import { AttemptTrail } from '@/components/ui/AttemptTrail';
 import { ColumnsControl } from '@/components/ui/ColumnsControl';
 import { MultiSelect } from '@/components/ui/MultiSelect';
+import { PatternInput } from '@/components/ui/PatternInput';
 import { IconChevronLeft, IconChevronRight, IconChevronsLeft, IconRefresh, IconX } from '@/components/ui/icons';
-import { Badge, Button, Card, CopyButton, Descriptions, EmptyState, ErrorState, Input, KeyValue, SearchInput, Select, Skeleton, Toggle } from '@/components/ui/primitives';
+import { Badge, Button, Card, CopyButton, Descriptions, EmptyState, ErrorState, KeyValue, SearchInput, Select, Skeleton, Toggle } from '@/components/ui/primitives';
 import { moveLabel } from '@/lib/analytics';
 import { autoModeLabel } from '@/lib/autoMode';
 import { isDivergence, missLabel } from '@/lib/cache';
 import { AGENT_TYPES, TURN_ORIGINS } from '@/lib/client';
 import { clock } from '@/lib/clock';
 import { bytesDropped, fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortAgent, shortId, tokensTotal, undatedModel } from '@/lib/format';
-import { useAsync, useNow } from '@/lib/hooks';
+import { useAsync, useCommittedText, useNow } from '@/lib/hooks';
 import { requestTrail } from '@/lib/trail';
 import { StatusBadge } from './DashboardPage';
 
@@ -125,6 +126,7 @@ export function RequestsPage() {
   // The range ends where the list was loaded, so a cursor page is read against the window its cursor came from;
   // Refresh moves the end to now.
   const [loadedAt, setLoadedAt] = useState(() => clock.now());
+  const searchField = useCommittedText(search, setSearch);
 
   const query = useMemo<RequestQuery>(() => {
     const r = RANGES.find((x) => x.value === range) ?? RANGES[2];
@@ -179,7 +181,7 @@ export function RequestsPage() {
     <div className={`requests ${requestId ? 'has-drawer' : ''}`}>
       <div className="stack">
         <div className="filters">
-          <SearchInput placeholder="Search id, session, key, account, model, error" value={search} onChange={(e) => setSearch(e.target.value)} className="filters__search" />
+          <SearchInput placeholder="Search id, session, key, account, model, error" value={searchField.draft} onChange={(e) => searchField.onChange(e.target.value)} onBlur={searchField.onBlur} onKeyDown={searchField.onKeyDown} className="filters__search" />
           <Select value={range} onChange={(e) => setRange(e.target.value)} aria-label="Date range">
             {RANGES.map((r) => (
               <option key={r.value} value={r.value}>
@@ -191,9 +193,8 @@ export function RequestsPage() {
           <MultiSelect label="Pools" options={(pools.data ?? []).map((p) => ({ label: p.name, value: p.id }))} value={poolIds} onChange={setPoolIds} mono />
           <MultiSelect label="Accounts" options={(accounts.data ?? []).map((a) => ({ label: a.label, value: a.id }))} value={accountIds} onChange={setAccountIds} />
           <MultiSelect label="Models" options={(catalog.data ?? []).map((m) => ({ label: m.id, value: m.id }))} value={models} onChange={setModels} searchable mono />
-          {/* `.mono` shrinks the text to 0.92em, which would leave these controls shorter than the rest of the bar. */}
-          <Input value={clientPattern} onChange={(e) => setClientPattern(e.target.value)} placeholder="Client pattern" aria-label="Client pattern" title="* matches any run of characters, ? one; a backslash quotes either" className="mono" style={{ fontSize: 'inherit', width: 180 }} />
-          <Input value={userAgent} onChange={(e) => setUserAgent(e.target.value)} placeholder="User agent pattern" aria-label="User agent pattern" title="* matches any run of characters, ? one; a backslash quotes either" className="mono" style={{ fontSize: 'inherit', width: 180 }} />
+          <PatternInput label="Client pattern" value={clientPattern} onCommit={setClientPattern} />
+          <PatternInput label="User agent pattern" value={userAgent} onCommit={setUserAgent} />
           <MultiSelect
             label="Status"
             options={[

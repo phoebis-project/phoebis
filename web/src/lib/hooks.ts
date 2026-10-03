@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { ApiError, quietly, reportRecovery } from '@/api/http';
 import { clock } from './clock';
 
@@ -125,6 +125,54 @@ export function useAsync<T>(load: () => Promise<T>, deps: readonly unknown[] = [
   }, [refreshMs, paused]);
 
   return { data, error, fetchedAt, loading, reload: () => setNonce((n) => n + 1), stale: error !== null || (loadedFor !== null && !sameDeps(loadedFor, deps)) };
+}
+
+/**
+ * A text field's draft that commits `delayMs` after the last keystroke, at once on Enter and on blur; an outside change
+ * replaces the draft and cancels its pending commit.
+ */
+export function useCommittedText(value: string, onCommit: (next: string) => void, delayMs = 400): { draft: string; onBlur: () => void; onChange: (next: string) => void; onKeyDown: (e: KeyboardEvent<HTMLInputElement>) => void } {
+  const [draft, setDraft] = useState(value);
+  const committed = useRef(value);
+  const timer = useRef<number | null>(null);
+  // A pending commit fires after later renders, so it reads the caller's latest handler, never the one its keystroke saw.
+  const latest = useRef(onCommit);
+  useLayoutEffect(() => {
+    latest.current = onCommit;
+  });
+  const clear = () => {
+    if (timer.current !== null) clock.clearTimeout(timer.current);
+    timer.current = null;
+  };
+  // An outside change (a reset, the URL) replaces the draft and drops the old draft's pending commit, which would
+  // otherwise restore the value the caller just replaced; the caller echoing a commit back does not, so typing is never
+  // undone mid-word. It runs before paint, so the field never shows the replaced draft for a frame.
+  useLayoutEffect(() => {
+    if (value !== committed.current) {
+      clear();
+      committed.current = value;
+      setDraft(value);
+    }
+  }, [value]);
+  const commit = (next: string) => {
+    clear();
+    if (next === committed.current) return;
+    committed.current = next;
+    latest.current(next);
+  };
+  useEffect(() => clear, []);
+  return {
+    draft,
+    onBlur: () => commit(draft),
+    onChange: (next) => {
+      setDraft(next);
+      clear();
+      timer.current = clock.setTimeout(() => commit(next), delayMs);
+    },
+    onKeyDown: (e) => {
+      if (e.key === 'Enter') commit(draft);
+    },
+  };
 }
 
 /** A shared clock so every countdown on a page advances in the same tick. */
