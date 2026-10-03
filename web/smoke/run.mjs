@@ -4871,6 +4871,148 @@ m.unmount();
   failed.unmount();
 }
 
+// Every filter control moves the window's end, and a custom range that has ended keeps its window while the clock runs
+// on, so there only the retry's generation sends the reads again. The account rollups read the window alone, so a read
+// of them is a moved end.
+{
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  const typeInto = (input, text) => {
+    setter.call(input, text);
+    input?.dispatchEvent(new window.Event('input', { bubbles: true }));
+  };
+  const at14 = Date.UTC(2026, 8, 16, 14);
+  // 12:00 to the default end, the instant the range turned custom: an hour bucket at 14:00 holds the end.
+  const customRange = async (page) => {
+    [...page.container.querySelectorAll('.segmented[aria-label="Range"] button')].find((b) => b.textContent?.trim() === 'Custom')?.click();
+    await page.settle(100);
+    typeInto(page.container.querySelector('input[aria-label="From"]'), '2026-09-16T12:00');
+    await page.settle();
+  };
+
+  const handlersCheck = '/analytics every filter control reads the window up to the instant it changed';
+  const page = await mount('/analytics', { now: CLOCK_ORIGIN });
+  const spy = countCalls('listAccountRollups');
+  let at = CLOCK_ORIGIN;
+  const moved = [];
+  const act = async (name, change) => {
+    tick(5_000);
+    at += 5_000;
+    const before = spy.calls.length;
+    await change();
+    await page.settle();
+    const ends = spy.calls.slice(before).map(([, to]) => to);
+    if (JSON.stringify(ends) !== JSON.stringify([new Date(at).toISOString()])) moved.push(`${name}: ${ends.join(',') || 'no read'}`);
+  };
+  await act('a Key pick', async () => {
+    const trigger = [...page.container.querySelectorAll('.filters .mselect__trigger')].find((t) => t.textContent?.trim().startsWith('Key'));
+    trigger?.click();
+    await page.settle(150);
+    [...(trigger?.parentElement?.querySelectorAll('.mselect__option') ?? [])].find((o) => o.textContent?.trim() === 'desktop')?.click();
+    await page.settle(150);
+    trigger?.click();
+  });
+  await act('Group by', async () => {
+    const select = [...page.container.querySelectorAll('.filters select')].find((s) => [...s.options].some((o) => o.textContent === 'Client'));
+    Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set.call(select, 'model');
+    select?.dispatchEvent(new window.Event('change', { bubbles: true }));
+  });
+  await act('Burn group by', async () => [...page.container.querySelectorAll('#burn .segmented button')].find((b) => b.textContent?.trim() === 'Key')?.click());
+  await act('Include probes', async () => page.container.querySelector('button[role="switch"][aria-label="Include probes"]')?.click());
+  await act('the session field', async () => {
+    const field = page.container.querySelector('input[aria-label="Session id"]');
+    typeInto(field, requests.find((r) => r.sessionId !== null)?.sessionId ?? '');
+    field?.dispatchEvent(new window.KeyboardEvent('keydown', { bubbles: true, key: 'Enter' }));
+  });
+  results.push({ name: handlersCheck, ok: moved.length === 0, missing: moved });
+  spy.restore();
+  page.unmount();
+
+  const retryCheck = '/analytics Try again on a custom range that has ended reads the same window again';
+  const failing = failCalls({ getAnalyticsSeries: '/admin/analytics/series' }, 'ledger locked');
+  const ended = await mount('/analytics', { now: at14 + 20 * 60_000 });
+  await customRange(ended);
+  tick(10 * 60_000);
+  failing.recover();
+  [...ended.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Try again')?.click();
+  await ended.settle();
+  const retried = failing.calls.getAnalyticsSeries.map(([q]) => `${q?.groupBy} ${q?.from} ${q?.to}`).sort();
+  failing.restore();
+  results.push({
+    name: retryCheck,
+    ok: JSON.stringify(retried) === JSON.stringify(['key 2026-09-16T12:00:00.000Z 2026-09-16T14:20:00.000Z', 'speed 2026-09-16T12:00:00.000Z 2026-09-16T14:20:00.000Z']),
+    missing: retried.length ? retried : ['no series read'],
+  });
+  ended.unmount();
+
+  // One bucket at 14:00 holding 18,000 tokens: its rate is 18,000 over the minutes the read saw of it.
+  const wiringCheck = "/analytics the burn charts rate the last bucket up to the instant its read was made";
+  api.getAnalyticsBurn = async () => ({ bucketSeconds: 3_600, points: [{ at: new Date(at14).toISOString(), cachedTokens: 0, fiveHourShare: null, group: 'console', sevenDayShare: null, tokens: 18_000, uncachedTokens: 18_000, unit: 'usd', usd: 0 }] });
+  const burnPage = await mount('/analytics', { now: at14 + 20 * 60_000 });
+  const rate = () => {
+    const card = [...burnPage.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Tokens per minute');
+    return card?.querySelector('.legend li .legend__value')?.textContent?.trim() ?? 'no legend';
+  };
+  const regroup = async (label) => {
+    [...burnPage.container.querySelectorAll('#burn .segmented button')].find((b) => b.textContent?.trim() === label)?.click();
+    await burnPage.settle();
+  };
+  await customRange(burnPage);
+  // Read at the range's end, 20 minutes into the hour.
+  const atEnd = rate();
+  tick(10 * 60_000);
+  await regroup('Key');
+  await regroup('Account');
+  // Read again ten minutes past the end: the route answered 30 minutes of the hour.
+  const later = rate();
+  tick(31 * 60_000);
+  await burnPage.settle();
+  // Past 15:00 the page's instant moves, the custom window and its answer stay.
+  const pastBoundary = rate();
+  delete api.getAnalyticsBurn;
+  results.push({ name: wiringCheck, ok: JSON.stringify([atEnd, later, pastBoundary]) === JSON.stringify(['900', '600', '600']), missing: [`at the end ${atEnd}`, `ten minutes on ${later}`, `past 15:00 ${pastBoundary}`] });
+  burnPage.unmount();
+}
+
+// The running burn bucket keeps its rate but draws lighter and says so, and until it covers a tenth of its width it
+// does not set the axis. jsdom lays nothing out, so the chart containers read a browser's size here.
+{
+  const at13 = Date.UTC(2026, 8, 16, 13);
+  const burnAt = (tokens) => async () => ({
+    bucketSeconds: 3_600,
+    points: [at13, at13 + 3_600_000].map((t, i) => ({ at: new Date(t).toISOString(), cachedTokens: 0, fiveHourShare: null, group: 'console', sevenDayShare: null, tokens: tokens[i], uncachedTokens: tokens[i], unit: 'usd', usd: 0 })),
+  });
+  const measure = window.HTMLElement.prototype.getBoundingClientRect;
+  window.HTMLElement.prototype.getBoundingClientRect = function () {
+    return this.classList.contains('recharts-responsive-container') ? { bottom: 220, height: 220, left: 0, right: 600, top: 0, width: 600, x: 0, y: 0 } : measure.call(this);
+  };
+  const tokensCard = (page) => [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Tokens per minute');
+
+  const partialCheck = '/analytics the running burn bucket draws in the partial tone and the note names it';
+  api.getAnalyticsBurn = burnAt([60_000, 30_000]);
+  const running = await mount('/analytics', { now: CLOCK_ORIGIN });
+  const card = tokensCard(running);
+  const bars = [...(card?.querySelectorAll('.recharts-bar-rectangle path') ?? [])];
+  const partial = bars.filter((b) => b.classList.contains('is-partial'));
+  const subtitle = card?.querySelector('.card__subtitle')?.textContent ?? '';
+  results.push({
+    name: partialCheck,
+    ok: bars.length === 2 && partial.length === 1 && partial[0] === bars[1] && subtitle.includes('The last bucket is partial'),
+    missing: [`${bars.length} bars, ${partial.length} partial`, subtitle],
+  });
+  running.unmount();
+
+  // 20 seconds into 14:00, 1,000 tokens read as 3,000 a minute against the full hour's 1,000.
+  const floorCheck = '/analytics a running bucket under a tenth of its width does not set the axis';
+  api.getAnalyticsBurn = burnAt([60_000, 1_000]);
+  const early = await mount('/analytics', { now: at13 + 3_600_000 + 20_000 });
+  const ticks = [...(tokensCard(early)?.querySelectorAll('.recharts-yAxis .recharts-cartesian-axis-tick text') ?? [])].map((t) => t.textContent?.trim() ?? '');
+  const valueOf = (label) => Number.parseFloat(label) * (label.endsWith('K') ? 1_000 : 1);
+  results.push({ name: floorCheck, ok: ticks.length > 1 && Math.max(...ticks.map(valueOf)) <= 1_000, missing: ticks });
+  early.unmount();
+  delete api.getAnalyticsBurn;
+  window.HTMLElement.prototype.getBoundingClientRect = measure;
+}
+
 m = await mount('/analytics');
 expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'Session', 'Traffic', 'Requests by outcome', 'Failovers', 'Errors by code', 'rate_limit_error', 'Traffic by key', 'Exhausted', 'Rejected', 'Latency', 'Time to first byte', 'Time to first content token', 'Total duration', 'Output tokens per second', 'Distribution', 'samples', 'p50', 'p90', 'p95', 'p99', 'Latency by key', 'Cache', 'Hit ratio and cached share', 'Write cost vs read cost', 'Misses by reason', 'Wasted probes', 'Idle limit ran out', 'Released by an operator', 'Replaced by a new registration', 'Session ended', "Probes on recipes that no real request ever followed, settled when the recipe stopped. A high idle-limit share means the pool's max idle time is set too high for how these sessions are used.", 'expired between turns', 'From the cache diagnostics beta: why the prefix did not hit, for requests that asked. No divergence with zero cache reads means the entry expired between turns.', 'Misses by reason by key', 'Expired between turns', 'Cache by model', 'Writes 5m', 'Writes 1h', 'Cost', 'Cost per request', 'Cost per 1k output tokens', 'Cost by key', 'Cost split', 'Cache read', 'Cache warming', 'Probes by outcome', 'Migrated', 'Gross saved', 'Probe cost', 'Net saved', 'Kept-warm requests', 'Kept-warm tokens', 'Cache warming by pool', 'Accounts', 'Peak 5-hour utilization', 'Accounts in range', 'Peak Fable 7d', 'Time in overage', 'Time in cooldown', 'Pins created', 'Migrated in', 'Migrated out', 'desktop', 'laptop', 'in range']);
 {

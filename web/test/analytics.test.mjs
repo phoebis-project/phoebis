@@ -100,6 +100,28 @@ test('a range ending on a bucket boundary rates every bucket over the full width
   assert.deepEqual(ended, d.foldBurn(points, 'account', 3_600, sized), 'the same figures as a fold with no end');
 });
 
+test('a range that ended inside the running hour, read ten minutes later, rates that hour up to the read', () => {
+  const at14 = Date.UTC(2026, 8, 16, 14);
+  const { rows } = d.foldBurn([point(at14, 'console', { uncachedTokens: 1_800 })], 'key', 3_600, NONE, d.MAX_BURN_LINES, at14 + 20 * 60_000, at14 + 30 * 60_000);
+  assert.deepEqual([rows[0].seconds, rows[0].uncached[0]], [1_800, 60], 'the route answered the hour as it stood at the read, 14:00 to 14:30');
+});
+
+test('a running bucket sets the peak and the axis only once it covers a tenth of its width', () => {
+  const at13 = Date.UTC(2026, 8, 16, 13);
+  const points = [point(at13, 'business', { fiveHourShare: 0.06, uncachedTokens: 600, unit: 'window_share' }), point(at13 + HOUR, 'business', { fiveHourShare: 0.02, uncachedTokens: 100, unit: 'window_share' })];
+  const sized = new Set(['business']);
+  const fold = (seconds) => d.foldBurn(points, 'account', 3_600, sized, d.MAX_BURN_LINES, at13 + HOUR + seconds * 1_000, at13 + HOUR + seconds * 1_000);
+
+  const early = fold(20);
+  assert.deepEqual(early.rows.map((r) => [r.seconds, r.partial, r.setsScale]), [[3_600, false, true], [20, true, false]]);
+  assert.ok(Math.abs(early.rows[1].fiveHour[0] - 3.6) < 1e-12, 'the running bucket keeps its rate: 2% over 20 seconds');
+  assert.equal(early.lines[0].fiveHourPeak, early.rows[0].fiveHour[0], 'twenty seconds in, the peak is the full hour');
+
+  const later = fold(7 * 60);
+  assert.deepEqual(later.rows.map((r) => [r.seconds, r.partial, r.setsScale]), [[3_600, false, true], [420, true, true]]);
+  assert.equal(later.lines[0].fiveHourPeak, later.rows[1].fiveHour[0], 'seven minutes in, the running hour sets the peak');
+});
+
 test('an account burns in the unit its figures come in, a subscription whose tier the cost table does not size in none, and every other grouping in dollars', () => {
   const answered = [
     point(0, 'console', { unit: 'usd', usd: 1.2 }),

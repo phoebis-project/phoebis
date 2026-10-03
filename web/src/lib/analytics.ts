@@ -76,11 +76,18 @@ export interface BurnRow {
    * on a window the line priced.
    */
   fiveHour: (number | null)[];
+  /** The bucket covers less than its width, so its rate rests on that part alone. */
+  partial: boolean;
   /**
-   * The seconds the bucket's rollups cover: its full width, but for an hour still running when the range was read,
-   * which holds only the part of it that had run.
+   * The seconds the bucket's rollups cover: the bucket's width up to the hour ceiling of the range's end, no later than
+   * the read's instant; the full width without an end.
    */
   seconds: number;
+  /**
+   * Whether the bucket sets the chart's axis and the line's peak: one covering less than a tenth of its width rates a few
+   * seconds of traffic as if they ran the whole bucket.
+   */
+  setsScale: boolean;
   sevenDay: (number | null)[];
   /**
    * Every token of the slot, all five types, as the route counts them: zero for a slot with no traffic the ledger can
@@ -157,6 +164,8 @@ export function sizedAccounts(accounts: Account[], tiers: CostTable['tiers']): S
 /** Each value weighed by its weight, so a bucket counts for the part of its width it covers. */
 const weighedMean = (pairs: { value: number; weight: number }[]) => pairs.reduce((n, p) => n + p.value * p.weight, 0) / pairs.reduce((n, p) => n + p.weight, 0);
 const hourCeil = (ms: number) => Math.ceil(ms / 3_600_000) * 3_600_000;
+/** The share of its width a bucket covers before it sets the axis and the peak: 6 minutes of an hour, 36 of six. */
+const SCALE_FLOOR = 0.1;
 
 const LEGEND_ORDER: ClassLegend[] = ['conversation', 'overhead'];
 
@@ -168,8 +177,8 @@ const LEGEND_ORDER: ClassLegend[] = ['conversation', 'overhead'];
  * the accounts whose tier the cost table sizes, which chart in window share whatever their buckets priced.
  *
  * `rangeEndMs` is the end of the range the points were read for and `nowMs` the instant of that read, the end when
- * absent. The route reads whole hours through the hour ceiling of the end, so a bucket covers its full width but for the
- * hour still running at the read, which covers the part of it that had run; without an end every bucket is full.
+ * absent. The route reads whole hours through the hour ceiling of the end, so a bucket covers its width up to the hour
+ * ceiling of the range's end, no later than the read's instant; the full width without an end.
  */
 export function foldBurn(
   points: BurnPoint[],
@@ -226,7 +235,9 @@ export function foldBurn(
         at,
         cached: sums.map((s) => s.cached / minutes),
         fiveHour: sums.map((s) => (s.fiveHour === null ? null : s.fiveHour / hours)),
+        partial: seconds < bucketSeconds,
         seconds,
+        setsScale: seconds >= bucketSeconds * SCALE_FLOOR,
         sevenDay: sums.map((s) => (s.sevenDay === null ? null : s.sevenDay / hours)),
         tokens: sums.map((s) => s.tokens),
         uncached: sums.map((s) => s.uncached / minutes),
@@ -252,7 +263,7 @@ export function foldBurn(
     };
     const fiveHour = foldWindow((r) => r.fiveHour);
     const sevenDay = foldWindow((r) => r.sevenDay);
-    const shares = rows.map((r) => r.fiveHour[i]).filter((v): v is number => v !== null);
+    const shares = rows.filter((r) => r.setsScale).map((r) => r.fiveHour[i]).filter((v): v is number => v !== null);
     // Only a window-share line lacks a share for want of a row; every other line's slots read null by construction.
     const plan = rest === null && unitOf(kept[i]) === 'window_share';
     const figures = {

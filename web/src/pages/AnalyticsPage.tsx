@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
-import { Area, AreaChart, Bar, BarChart, CartesianGrid, ComposedChart, Dot, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, ComposedChart, Dot, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { Link, useSearchParams } from 'react-router-dom';
 import { api } from '@/api';
 import { foldGroups, foldRequests, loadSessionRequests, sumGroups } from '@/api/fold';
@@ -1359,6 +1359,9 @@ const PLAN_NOTE =
 const TIER_UNKNOWN_HINT = 'No tier on file, or one the cost table does not size, so no share of its windows is priced';
 const MODEL_UNLISTED_HINT = 'A bucket whose traffic ran on a model the cost table has no row for, or on a cell it leaves unmeasured, prices no share on that window and draws no point';
 const NO_ACCOUNT: ReadonlySet<string> = new Set();
+const PARTIAL_NOTE = 'The last bucket is partial, rated over the part of its width it covers';
+/** A partial bucket's bars draw at this share of their series' opacity. */
+const PARTIAL_TONE = 0.5;
 
 /**
  * A plan line's dot, drawn on the slots `isolatedSlots` names alone: the line leaves its null slots unconnected, so a
@@ -1415,11 +1418,22 @@ function BurnCharts({
   const planned = lines.map((l, i) => ({ i, l })).filter(({ l }) => byAccount && !l.other && l.unit === 'window_share');
   const unpriced = lines.filter((l) => byAccount && !l.other && l.unit === 'unknown');
   const shareOf = (share: number | null) => (share === null ? '-' : fmtShare(share));
+  const partial = rows[rows.length - 1]?.partial === true;
+  const partialCells = (opacity: number) => rows.map((r) => <Cell key={r.at} {...(r.partial ? { className: 'is-partial', fillOpacity: opacity * PARTIAL_TONE } : {})} />);
+  // A bucket too short to set the scale would stretch the axis over a few seconds' rate, so the axis stops at the
+  // buckets that set it and the short one runs past the top.
+  const scaled = rows.filter((r) => r.setsScale);
+  const scaleTo = (values: number[]) => {
+    const top = Math.max(0, ...values);
+    return scaled.length > 0 && scaled.length < rows.length && top > 0 ? { allowDataOverflow: true, domain: [0, top] as [number, number] } : {};
+  };
+  const sum = (values: number[]) => values.reduce((n, v) => n + v, 0);
+  const spentValues = scaled.flatMap((r) => spent.map(({ i }) => r.usd[i]));
   return (
     <div className="grid-2">
       <ChartCard
         title="Tokens per minute"
-        subtitle={`Uncached input and cache reads per minute, stacked by ${label}; the fainter part of each is the cache read${groupBy === 'request_class' ? `. ${upperFirst(CLASS_NOTE)}` : ''}`}
+        subtitle={`Uncached input and cache reads per minute, stacked by ${label}; the fainter part of each is the cache read${groupBy === 'request_class' ? `. ${upperFirst(CLASS_NOTE)}` : ''}${partial ? `. ${PARTIAL_NOTE}, and drawn lighter` : ''}`}
         error={error}
         loading={loading}
         empty={empty}
@@ -1428,7 +1442,7 @@ function BurnCharts({
         <BarChart data={rows} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} barCategoryGap={2}>
           <CartesianGrid vertical={false} stroke={ink.grid} />
           <XAxis dataKey="at" {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
-          <YAxis tickFormatter={(v: number) => fmtCompact(v)} tickLine={false} axisLine={false} width={44} />
+          <YAxis tickFormatter={(v: number) => fmtCompact(v)} tickLine={false} axisLine={false} width={44} {...scaleTo(scaled.map((r) => sum(r.uncached) + sum(r.cached)))} />
           <Tooltip
             cursor={{ fill: ink.grid, opacity: 0.6 }}
             content={timeTip<BurnRow>((r) => [
@@ -1437,15 +1451,19 @@ function BurnCharts({
             ])}
           />
           {lines.flatMap((l, i) => [
-            <Bar key={`${i}-uncached`} dataKey={(r: BurnRow) => r.uncached[i]} stackId="a" fill={colorOf(l)} stroke={ink.surface} strokeWidth={1} maxBarSize={22} isAnimationActive={false} />,
-            <Bar key={`${i}-cached`} dataKey={(r: BurnRow) => r.cached[i]} stackId="a" fill={colorOf(l)} fillOpacity={0.45} stroke={ink.surface} strokeWidth={1} maxBarSize={22} radius={i === lines.length - 1 ? [3, 3, 0, 0] : 0} isAnimationActive={false} />,
+            <Bar key={`${i}-uncached`} dataKey={(r: BurnRow) => r.uncached[i]} stackId="a" fill={colorOf(l)} stroke={ink.surface} strokeWidth={1} maxBarSize={22} isAnimationActive={false}>
+              {partialCells(1)}
+            </Bar>,
+            <Bar key={`${i}-cached`} dataKey={(r: BurnRow) => r.cached[i]} stackId="a" fill={colorOf(l)} fillOpacity={0.45} stroke={ink.surface} strokeWidth={1} maxBarSize={22} radius={i === lines.length - 1 ? [3, 3, 0, 0] : 0} isAnimationActive={false}>
+              {partialCells(0.45)}
+            </Bar>,
           ])}
         </BarChart>
       </ChartCard>
 
       <ChartCard
         title="Spend per minute"
-        subtitle={byAccount ? SPEND_NOTE : `${SPEND_NOTE} when grouped by account`}
+        subtitle={`${byAccount ? SPEND_NOTE : `${SPEND_NOTE} when grouped by account`}${partial ? `. ${PARTIAL_NOTE}` : ''}`}
         error={error}
         loading={loading}
         empty={empty ?? (spent.length === 0 ? 'No account spent dollars in this range.' : undefined)}
@@ -1454,7 +1472,7 @@ function BurnCharts({
         <LineChart data={rows} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
           <CartesianGrid vertical={false} stroke={ink.grid} />
           <XAxis dataKey="at" {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
-          <YAxis {...usdAxis(rows.flatMap((r) => spent.map(({ i }) => r.usd[i])))} tickLine={false} axisLine={false} />
+          <YAxis {...usdAxis(spentValues)} tickLine={false} axisLine={false} {...scaleTo(spentValues)} />
           <Tooltip cursor={{ stroke: ink.axis }} content={timeTip<BurnRow>((r) => spent.map(({ i, l }) => ({ color: colorOf(l), label: spendNameOf(l), title: titleOf(l), value: fmtUsd(r.usd[i]) })))} />
           {spent.map(({ i, l }) => (
             <Line key={i} type="monotone" dataKey={(r: BurnRow) => r.usd[i]} stroke={colorOf(l)} strokeWidth={2} dot={false} isAnimationActive={false} />
@@ -1465,7 +1483,7 @@ function BurnCharts({
       {byAccount && (
         <ChartCard
           title="Plan per hour"
-          subtitle={PLAN_NOTE}
+          subtitle={partial ? `${PLAN_NOTE}. ${PARTIAL_NOTE}` : PLAN_NOTE}
           error={error}
           loading={loading}
           empty={
@@ -1513,7 +1531,7 @@ function BurnCharts({
           <LineChart data={rows} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
             <CartesianGrid vertical={false} stroke={ink.grid} />
             <XAxis dataKey="at" {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
-            <YAxis tickFormatter={(v: number) => fmtShare(v)} tickLine={false} axisLine={false} width={52} />
+            <YAxis tickFormatter={(v: number) => fmtShare(v)} tickLine={false} axisLine={false} width={52} {...scaleTo(scaled.flatMap((r) => planned.flatMap(({ i }) => [r.fiveHour[i] ?? 0, r.sevenDay[i] ?? 0])))} />
             {/* Recharts drops null entries by default, and a bucket whose every share is null would lose its date, its dashes and the unpriced hint. */}
             <Tooltip
               cursor={{ stroke: ink.axis }}
