@@ -129,6 +129,8 @@ const listed = (label: string) => `${label} is one of its listed choices.`;
 export interface PoolChecks {
   /** The input sends 0 for an emptied retention as for capture off, so the field is read as typed while capture is on. */
   capture?: { maxHours: number; on: boolean; typed: string };
+  /** Whether the operator wrote the migrate threshold in this dialog: the form's floor binds a typed value alone. */
+  migrateChanged?: boolean;
 }
 
 /**
@@ -166,8 +168,8 @@ export function poolRefusals(input: PoolInput, accountIds: ReadonlySet<string> |
   refuse('pinning', 'Session affinity in seconds', whole(affinity, 0, Number.MAX_SAFE_INTEGER) && (affinity === 0 || affinity >= 60) ? null : 'Session affinity is off or at least 60 whole seconds.');
   refuse('pinning', 'Pin sessions', AFFINITY_MODE_VALUES.some((mode) => mode === input.affinityMode) ? null : listed('Pin sessions'));
 
-  // Migration keeps the form's floor of 50 %, above the route's 0.
-  refuse('utilization', 'Migrate above utilization (%)', ratio(input.migrateAboveUtilization, 0.5) ? null : 'Migrate above utilization is from 50 to 100.');
+  // The form's floor of 50 % sits above the route's 0; a stored value under it that nobody touched saves as stored.
+  refuse('utilization', 'Migrate above utilization (%)', ratio(input.migrateAboveUtilization, checks.migrateChanged ? 0.5 : 0) ? null : 'Migrate above utilization is from 50 to 100.');
   refuse('utilization', 'Select below utilization (%)', ratio(input.selectBelowUtilization, 0) ? null : 'Select below utilization is from 0 to 100.');
   refuse('utilization', 'Select below utilization (%)', bandRefusal(input));
 

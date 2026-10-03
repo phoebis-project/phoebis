@@ -829,7 +829,8 @@ const formFrom = (pool: Pool): PoolForm => ({
   failoverCustom: failoverPresetOf(pool) === 'custom',
   keepalive: pool.keepalive.enabled,
   members: Object.fromEntries(pool.members.map((m) => [m.accountId, m.priority])),
-  migrate: pool.migrateAboveUtilization === null ? 90 : Math.round(pool.migrateAboveUtilization * 100),
+  // Two decimals, as select-below keeps, so a threshold the API set finer than a percent survives an unrelated edit.
+  migrate: pool.migrateAboveUtilization === null ? 90 : Math.round(pool.migrateAboveUtilization * 10_000) / 100,
   migrateOn: pool.migrateAboveUtilization !== null,
   modelRules: pool.modelRules,
   name: pool.name,
@@ -905,6 +906,8 @@ export function PoolDialog({
   const [error, setError] = useState<string | null>(null);
   const [attempted, setAttempted] = useState(false);
   const [chosen, setChosen] = useState<PoolGroup>('identity');
+  // Set by the percent field and the bar's handle alone, so the form's floor never holds a stored value back.
+  const [migrateChanged, setMigrateChanged] = useState(false);
   const settings = useAsync(() => api.getSettings(), []);
   const captureMaxHours = settings.data?.retention.bodyCaptureMaxHours ?? 72;
   const [keyOpen, setKeyOpen] = useState(false);
@@ -932,6 +935,7 @@ export function PoolDialog({
     setError(null);
     setAttempted(false);
     setChosen('identity');
+    setMigrateChanged(false);
     // `accounts` is read but not tracked: the parent hands down a fresh array on
     // every render, and reacting to that would wipe the form mid-edit.
   }, [open, pool]);
@@ -947,6 +951,10 @@ export function PoolDialog({
   }, [open, accounts]);
 
   const set = <K extends keyof PoolForm>(key: K, value: PoolForm[K]) => setForm((f) => ({ ...f, [key]: value }));
+  const setMigrate = (value: number) => {
+    set('migrate', value);
+    setMigrateChanged(true);
+  };
   const poolKeys = (pool ? [...localKeys, ...keys.filter((k) => k.poolId === pool.id && !localKeys.some((l) => l.id === k.id))] : localKeys).filter((k) => !moved.has(k.id));
   const otherPools = pools.filter((p) => p.id !== pool?.id);
   // Keys created before the pool is saved use the id the pool will get from its name.
@@ -1008,6 +1016,7 @@ export function PoolDialog({
   // Until the list answers every stored member stands, so nothing is refused for an id the list may yet hold.
   const refusals = poolRefusals(input, accountsFailed !== null ? null : accountsLoaded ? listed : new Set(Object.keys(form.members)), {
     capture: { maxHours: captureMaxHours, on: form.capture, typed: form.captureHours },
+    migrateChanged,
   });
   const refusedFields = new Set(refusals.map((r) => r.field));
   const refusedGroups = new Set<PoolGroup>(refusals.map((r) => r.group));
@@ -1507,7 +1516,7 @@ export function PoolDialog({
             numberLabel="Utilization (%)"
             checked={form.migrateOn}
             onChange={(v) => set('migrateOn', v)}
-            input={{ min: 50, max: 100, value: form.migrate, onChange: (e) => set('migrate', Number(e.target.value)), 'aria-label': 'Migrate above utilization (%)', 'aria-invalid': invalid('Migrate above utilization (%)') }}
+            input={{ min: 50, max: 100, value: form.migrate, onChange: (e) => setMigrate(Number(e.target.value)), 'aria-label': 'Migrate above utilization (%)', 'aria-invalid': invalid('Migrate above utilization (%)') }}
             hint={
               <>
                 A member at or above this line on its 5-hour or 7-day window starts a <GroupLink id="shedding">shedding round</GroupLink>; a sibling counts as cool below the line minus 5%.
@@ -1540,7 +1549,7 @@ export function PoolDialog({
         >
           <UtilizationBar
             readings={readings}
-            migrate={form.migrateOn ? { onChange: (v) => set('migrate', v), value: form.migrate } : null}
+            migrate={form.migrateOn ? { onChange: setMigrate, value: form.migrate } : null}
             migrateMin={50}
             selectBelow={form.selectBelowOn ? { onChange: (v) => set('selectBelow', v), value: form.selectBelow } : null}
           />

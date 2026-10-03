@@ -2573,6 +2573,74 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace',
   // The story's membership back, so the budgets card below reads the rows the fixture holds.
   await api.updatePool('studio', studio);
 }
+{
+  // A threshold the API stored finer than a percent reopens as stored and survives a save of another field, and the
+  // form's floor of 50 % binds a value typed in this dialog alone, so a stored 0.3 saves as the route took it.
+  const story = (await api.listPools()).find((p) => p.id === 'all');
+  const written = { ...story, members: story.members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })) };
+  const openAll = async () => {
+    [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool all')?.click();
+    await m.settle(300);
+    return [...m.container.querySelectorAll('dialog[open]')].pop();
+  };
+  const percent = (dlg) => dlg?.querySelector('input[aria-label="Migrate above utilization (%)"]');
+  const footButton = (dlg, label) => [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === label);
+  // An edit of another field, so the threshold goes out as the dialog read it from the stored pool.
+  const disable = async (dlg) => {
+    const status = [...(group(dlg, 'Identity')?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === 'Status')?.querySelector('select');
+    if (status) Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set.call(status, 'disabled');
+    status?.dispatchEvent(new window.Event('change', { bubbles: true }));
+    await m.settle(120);
+  };
+  const savedMigrate = async (dlg) => {
+    const spy = countCalls('updatePool');
+    footButton(dlg, 'Save pool')?.click();
+    await m.settle(700);
+    spy.restore();
+    return spy.calls[0]?.[1]?.migrateAboveUtilization;
+  };
+
+  // The page reads the pools once at mount, so a pool written through the API reaches the card after a remount.
+  await api.updatePool('all', { ...written, migrateAboveUtilization: 0.875 });
+  m.unmount();
+  m = await mount('/pools');
+  let dlg = await openAll();
+  const fine = percent(dlg)?.value;
+  await disable(dlg);
+  const fineSaved = await savedMigrate(dlg);
+  results.push({
+    name: '/pools a stored migrate of 0.875 reopens as 87.5 and saves unchanged after another edit',
+    ok: fine === '87.5' && fineSaved === 0.875 && !m.container.querySelector('dialog[open]'),
+    missing: [String(fine), String(fineSaved), m.container.querySelector('dialog[open] .dialog__status')?.textContent ?? 'closed'],
+  });
+
+  await api.updatePool('all', { ...written, migrateAboveUtilization: 0.3 });
+  m.unmount();
+  m = await mount('/pools');
+  dlg = await openAll();
+  const low = percent(dlg)?.value;
+  await disable(dlg);
+  const lowSaved = await savedMigrate(dlg);
+  const closed = !m.container.querySelector('dialog[open]');
+  dlg = await openAll();
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  // A value the field does not already show first, so the second keystroke changes the form too.
+  for (const typed of ['31', '30']) {
+    setter.call(percent(dlg), typed);
+    percent(dlg)?.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await m.settle(120);
+  }
+  const typed = [footButton(dlg, 'Save pool')?.disabled, dlg?.querySelector('.dialog__status')?.textContent ?? '', percent(dlg)?.getAttribute('aria-invalid')];
+  results.push({
+    name: '/pools a stored migrate of 0.3 saves untouched and is refused once typed to 30',
+    ok: low === '30' && lowSaved === 0.3 && closed && typed[0] === true && typed[1] === 'Save is held: Migrate above utilization is from 50 to 100.Go to Utilization thresholds' && typed[2] === 'true',
+    missing: [String(low), String(lowSaved), closed ? 'closed' : 'open', ...typed.map(String)],
+  });
+  footButton(dlg, 'Cancel')?.click();
+  await m.settle(200);
+  // The story's pool back, so the checks below read the pool the fixture holds.
+  await api.updatePool('all', written);
+}
 m.unmount();
 {
   // Members cannot be checked against a list the dialog does not hold, so a failed read is named once, in the Members

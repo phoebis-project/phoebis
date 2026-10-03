@@ -107,7 +107,9 @@ test('a pool input refuses thresholds outside their range and an empty name', ()
   assert.equal(d.validatePoolInput({ ...input, selectBelowUtilization: -0.1 }, accounts), false);
   assert.equal(d.validatePoolInput({ ...input, selectBelowUtilization: 0 }, accounts), true);
   assert.equal(d.validatePoolInput({ ...input, selectBelowUtilization: 1 }, accounts), true);
-  assert.equal(d.validatePoolInput({ ...input, migrateAboveUtilization: 0.4 }, accounts), false, 'the form migrates from 50 %');
+  assert.equal(d.validatePoolInput({ ...input, migrateAboveUtilization: 0.4 }, accounts), true, 'a stored threshold under 50 % the operator left alone saves as stored');
+  assert.equal(d.validatePoolInput({ ...input, migrateAboveUtilization: 0.4 }, accounts, { migrateChanged: true }), false, 'a typed threshold migrates from 50 %');
+  assert.equal(d.validatePoolInput({ ...input, migrateAboveUtilization: 1.2 }, accounts), false, 'the route bounds every value to 0 to 1');
   assert.equal(d.validatePoolInput({ ...input, migrateAboveUtilization: 0.9 }, accounts), true);
 });
 
@@ -320,7 +322,7 @@ test('a pool refusal names the group its control sits in', () => {
       ],
     ],
     [{ affinityMode: 'sometimes' }, refused('Pin sessions', 'pinning', 'Pin sessions is one of its listed choices.')],
-    [{ migrateAboveUtilization: 0.4 }, refused('Migrate above utilization (%)', 'utilization', 'Migrate above utilization is from 50 to 100.')],
+    [{ migrateAboveUtilization: 0.4 }, refused('Migrate above utilization (%)', 'utilization', 'Migrate above utilization is from 50 to 100.'), { migrateChanged: true }],
     [{ selectBelowUtilization: 1.2 }, refused('Select below utilization (%)', 'utilization', 'Select below utilization is from 0 to 100.')],
     [
       { migrateAboveUtilization: 0.9, selectBelowUtilization: 0.86 },
@@ -351,7 +353,7 @@ test('a pool refusal names the group its control sits in', () => {
     ],
     [{ quotaHeaders: 'strip' }, refused('Quota headers', 'responseHeaders', 'Quota headers is one of its listed choices.')],
   ];
-  for (const [patch, expected] of cases) assert.deepEqual(d.poolRefusals({ ...input, ...patch }, accounts), expected, JSON.stringify(patch));
+  for (const [patch, expected, checks] of cases) assert.deepEqual(d.poolRefusals({ ...input, ...patch }, accounts, checks), expected, JSON.stringify(patch));
 });
 
 test('a retention while capture is on must be a whole number of hours inside the limit', () => {
