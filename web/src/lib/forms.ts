@@ -125,12 +125,18 @@ const boundText = (label: string, { max, min }: { max: number; min: number }) =>
   max === Number.MAX_SAFE_INTEGER ? `${label} is a whole number of at least ${fmtInt(min)}.` : `${label} is a whole number from ${fmtInt(min)} to ${fmtInt(max)}.`;
 const listed = (label: string) => `${label} is one of its listed choices.`;
 
+/** What the pool dialog knows beyond the input it sends. */
+export interface PoolChecks {
+  /** The input sends 0 for an emptied retention as for capture off, so the field is read as typed while capture is on. */
+  capture?: { maxHours: number; on: boolean; typed: string };
+}
+
 /**
  * Every check of the pool routes the input fails, in rail order and in each group's order below; empty when the routes
  * would take it. `accountIds` null means the account list did not load: one refusal holds the save, and no member is
  * refused for an id the list might hold.
  */
-export function poolRefusals(input: PoolInput, accountIds: ReadonlySet<string> | null): PoolRefusal[] {
+export function poolRefusals(input: PoolInput, accountIds: ReadonlySet<string> | null, checks: PoolChecks = {}): PoolRefusal[] {
   const out: PoolRefusal[] = [];
   const refuse = (group: PoolGroup, field: string, text: string | null) => {
     if (text !== null) out.push({ field, group, text });
@@ -189,12 +195,13 @@ export function poolRefusals(input: PoolInput, accountIds: ReadonlySet<string> |
   refuse('probeTuning', KEEPALIVE_FIELD_LABELS.retryMaxSeconds, k.retryMaxSeconds >= k.retrySeconds ? null : 'Retry backoff max (s) is at or above Retry backoff base (s).');
 
   refuse('responseHeaders', 'Quota headers', QUOTA_HEADERS_VALUES.some((headers) => headers === input.quotaHeaders) ? null : listed('Quota headers'));
+  refuse('bodyCapture', 'Capture retention in hours', checks.capture?.on && !whole(Number(checks.capture.typed), 1, checks.capture.maxHours) ? `Retention is a whole number of hours from 1 to ${checks.capture.maxHours}.` : null);
   return out;
 }
 
 /** Whether the pool routes would take `input` as it stands, with every member one of `accountIds`; null holds it. */
-export function validatePoolInput(input: PoolInput, accountIds: ReadonlySet<string> | null): boolean {
-  return poolRefusals(input, accountIds).length === 0;
+export function validatePoolInput(input: PoolInput, accountIds: ReadonlySet<string> | null, checks: PoolChecks = {}): boolean {
+  return poolRefusals(input, accountIds, checks).length === 0;
 }
 
 export type AutoModeOverride = 'inherit' | 'off' | 'on';

@@ -354,6 +354,17 @@ test('a pool refusal names the group its control sits in', () => {
   for (const [patch, expected] of cases) assert.deepEqual(d.poolRefusals({ ...input, ...patch }, accounts), expected, JSON.stringify(patch));
 });
 
+test('a retention while capture is on must be a whole number of hours inside the limit', () => {
+  const retention = (typed, on = true, maxHours = 72) => d.poolRefusals(input, accounts, { capture: { maxHours, on, typed } });
+  const refused = (maxHours) => [{ field: 'Capture retention in hours', group: 'bodyCapture', text: `Retention is a whole number of hours from 1 to ${maxHours}.` }];
+  for (const typed of ['', '0', '1.5', '-1', '73']) assert.deepEqual(retention(typed), refused(72), `${JSON.stringify(typed)} is refused`);
+  for (const typed of ['1', '72']) assert.deepEqual(retention(typed), [], `${typed} is inside`);
+  assert.deepEqual(retention('', false), [], 'with capture off the field is not read');
+  assert.deepEqual(retention('48', true, 24), refused(24), 'the limit is the one passed in');
+  assert.equal(d.validatePoolInput(input, accounts, { capture: { maxHours: 72, on: true, typed: '' } }), false);
+  assert.equal(d.validatePoolInput(input, accounts, { capture: { maxHours: 72, on: true, typed: '24' } }), true);
+});
+
 test('the Probe tuning rows lay out every numeric keepalive bound but the grace count, in the order the refusals read', () => {
   assert.deepEqual(d.PROBE_TUNING_ROWS, [['leadSeconds5m', 'leadSeconds1h'], ['jitterSeconds5m', 'jitterSeconds1h'], ['coldProbeLimit'], ['retrySeconds', 'retryMaxSeconds'], ['maxIdleSeconds', 'maxIdleTicks']]);
   assert.deepEqual(d.PROBE_TUNING_KEYS, d.PROBE_TUNING_ROWS.flat(), 'the refusals walk the fields in the order the group draws them');
@@ -362,10 +373,10 @@ test('the Probe tuning rows lay out every numeric keepalive bound but the grace 
 });
 
 test("refusals come in rail order, a new pool's first two the name and the member", () => {
-  const refusals = d.poolRefusals({ ...input, name: '', members: [], modelRules: rules('a***'), quotaHeaders: 'strip' }, accounts);
+  const refusals = d.poolRefusals({ ...input, name: '', members: [], modelRules: rules('a***'), quotaHeaders: 'strip' }, accounts, { capture: { maxHours: 72, on: true, typed: '' } });
   assert.deepEqual(
     refusals.map((r) => r.group),
-    ['identity', 'members', 'models', 'responseHeaders'],
+    ['identity', 'members', 'models', 'responseHeaders', 'bodyCapture'],
   );
   assert.deepEqual(
     refusals.slice(0, 2).map((r) => r.text),

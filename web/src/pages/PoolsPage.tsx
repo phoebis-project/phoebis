@@ -732,7 +732,8 @@ interface PoolForm {
   cacheTtl: PoolCacheTtl;
   capEnabled: boolean;
   capture: boolean;
-  captureHours: number;
+  /** The retention field as typed, so an emptied field stays empty rather than reading as 0. */
+  captureHours: string;
   capUsd: number;
   customAffinity: boolean;
   engine: PoolEngineFields;
@@ -771,7 +772,7 @@ const blankForm = (): PoolForm => ({
   cacheTtl: { ...CACHE_TTL_DEFAULTS },
   capEnabled: false,
   capture: false,
-  captureHours: 24,
+  captureHours: '24',
   capUsd: 5,
   customAffinity: false,
   engine: { ...POOL_ENGINE_DEFAULTS },
@@ -810,7 +811,7 @@ const formFrom = (pool: Pool): PoolForm => ({
   },
   capEnabled: pool.keepalive.costCapUsdPerDay !== null,
   capture: pool.bodyCaptureHours > 0,
-  captureHours: pool.bodyCaptureHours || 24,
+  captureHours: String(pool.bodyCaptureHours || 24),
   capUsd: pool.keepalive.costCapUsdPerDay ?? 5,
   customAffinity: !isPreset(pool.affinityTtlSeconds),
   engine: {
@@ -952,7 +953,7 @@ export function PoolDialog({
   const draftPoolId = form.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-') || 'new';
   const draftName = form.name.trim() || 'new pool';
   // Memoized so the key dialog's reset effect does not fire on every keystroke in this form.
-  const draftCaptureHours = form.capture ? form.captureHours : 0;
+  const draftCaptureHours = form.capture ? Number(form.captureHours) || 0 : 0;
   const keyDialogPools = useMemo(
     () =>
       pool || pools.some((p) => p.id === draftPoolId)
@@ -973,7 +974,7 @@ export function PoolDialog({
     affinityMode: form.affinityMode,
     affinityTtlSeconds: form.affinity,
     autoModeServer: form.autoModeServer,
-    bodyCaptureHours: form.capture ? form.captureHours : 0,
+    bodyCaptureHours: form.capture ? Number(form.captureHours) : 0,
     cacheDiagnostics: form.cacheDiagnostics,
     cacheTtl: form.cacheTtl,
     // With warming off the block is disabled, so what it holds goes back as stored: an edit left in it can
@@ -1005,7 +1006,9 @@ export function PoolDialog({
   };
   const listed = new Set(accounts.map((a) => a.id));
   // Until the list answers every stored member stands, so nothing is refused for an id the list may yet hold.
-  const refusals = poolRefusals(input, accountsFailed !== null ? null : accountsLoaded ? listed : new Set(Object.keys(form.members)));
+  const refusals = poolRefusals(input, accountsFailed !== null ? null : accountsLoaded ? listed : new Set(Object.keys(form.members)), {
+    capture: { maxHours: captureMaxHours, on: form.capture, typed: form.captureHours },
+  });
   const refusedFields = new Set(refusals.map((r) => r.field));
   const refusedGroups = new Set<PoolGroup>(refusals.map((r) => r.group));
   const invalid = (field: string) => (refusedFields.has(field) ? true : undefined);
@@ -1899,7 +1902,16 @@ export function PoolDialog({
             </>
           }
         >
-          <Input type="number" min={1} max={captureMaxHours} value={form.captureHours} onChange={(e) => set('captureHours', Number(e.target.value))} disabled={!form.capture} aria-label="Capture retention in hours" />
+          <Input
+            type="number"
+            min={1}
+            max={captureMaxHours}
+            value={form.captureHours}
+            onChange={(e) => set('captureHours', e.target.value)}
+            disabled={!form.capture}
+            aria-label="Capture retention in hours"
+            aria-invalid={invalid('Capture retention in hours')}
+          />
         </Field>
       </div>
     ),

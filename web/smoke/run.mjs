@@ -2256,14 +2256,31 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace',
     missing: [cacheTtlHint ?? 'no hint found'],
   });
 
-  // A retention over the router's cap is refused, and the refusal has to reach the operator inside the dialog:
-  // the dialog sits in the browser's top layer, where a toast behind its backdrop would never be seen.
+  // An emptied retention would go out as 0, which the route reads as capture off, so the dialog holds the save itself.
   {
     const hours = dlg?.querySelector('input[aria-label="Capture retention in hours"]');
     const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-    if (hours) setter.call(hours, '999');
+    const save = () => [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Save pool');
+    if (hours) setter.call(hours, '');
     hours?.dispatchEvent(new window.Event('input', { bubbles: true }));
     await m.settle(150);
+    const emptied = [save()?.disabled, dlg?.querySelector('.dialog__status')?.textContent ?? '', rail(dlg, 'bodyCapture')?.querySelector('.dialog-rail__dot') ? 'marked' : 'unmarked', hours?.getAttribute('aria-invalid')];
+    results.push({
+      name: '/pools an emptied retention holds Save with its sentence on the Body capture rail entry',
+      ok: emptied[0] === true && emptied[1] === 'Save is held: Retention is a whole number of hours from 1 to 72.Go to Body capture' && emptied[2] === 'marked' && emptied[3] === 'true',
+      missing: emptied.map(String),
+    });
+    // Restored to a value other than the one the follow-on types, so its edit changes the form.
+    if (hours) setter.call(hours, '48');
+    hours?.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await m.settle(150);
+  }
+  // A save the router refuses has to reach the operator inside the dialog: the dialog sits in the browser's top layer,
+  // where a toast behind its backdrop would never be seen.
+  {
+    const hours = dlg?.querySelector('input[aria-label="Capture retention in hours"]');
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+    failNextCall('updatePool', '/admin/pools/all', 'body_capture_hours exceeds stats.body_capture_max_hours');
     [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Save pool')?.click();
     await m.settle(600);
     const open = [...m.container.querySelectorAll('dialog[open]')].pop();
