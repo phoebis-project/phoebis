@@ -3816,6 +3816,40 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
   results.push({ name: '/requests Previous returns to the earlier page', ok: back[0] === firstPage[0], missing: [String(back[0])] });
   results.push({ name: '/requests the pager says more rows are available', ok: m.text().includes('more available'), missing: [] });
 }
+// The ledger's own tests prove the route answers no cursor for an exact page; this guards the pager over the mock's
+// answer. The counts come from the mock itself under the page's own range, so a row the page's window or key
+// selector leaves out never counts.
+{
+  const exactCheck = '/requests a filter that matches exactly one page reads no more available and a disabled Next';
+  const spy = countCalls('listRequests');
+  const plain = await mount('/requests', { now: CLOCK_ORIGIN });
+  const read = spy.calls[0]?.[0];
+  spy.restore();
+  plain.unmount();
+  const distinct = (pick) => [...new Set(requests.map(pick).filter((v) => v !== null && v !== undefined))].sort();
+  const bases = [
+    ...distinct((r) => r.keyId).map((v) => ({ params: { keys: v }, query: { keyIds: [v] } })),
+    ...distinct((r) => r.accountId).map((v) => ({ params: { accounts: v }, query: { accountIds: [v] } })),
+    ...distinct((r) => r.model).map((v) => ({ params: { models: v }, query: { models: [v] } })),
+    ...distinct((r) => r.kind).map((v) => ({ params: { kind: v }, query: { includeProbes: v === 'probe', kind: v } })),
+  ];
+  const candidates = bases.flatMap((b) => [b, ...distinct((r) => r.status).map((s) => ({ params: { ...b.params, statuses: String(s) }, query: { ...b.query, statuses: [s] } }))]);
+  const counted = read ? await Promise.all(candidates.map(async (c) => ({ ...c, count: (await api.listRequests({ ...c.query, from: read.from, limit: 500, to: read.to })).requests.length }))) : [];
+  const hit = counted.find((c) => [10, 25, 50, 100].includes(c.count));
+  if (!hit) results.push({ name: exactCheck, ok: false, missing: ['fixture'] });
+  else {
+    const exact = await mount(`/requests?${new URLSearchParams({ ...hit.params, rows: String(hit.count) })}`, { now: CLOCK_ORIGIN });
+    const shown = exact.container.querySelectorAll('.requests__table tbody tr').length;
+    const pager = exact.container.querySelector('.pager')?.textContent ?? '';
+    const next = exact.container.querySelector('button[aria-label="Next page"]');
+    results.push({
+      name: exactCheck,
+      ok: shown === hit.count && !pager.includes('more available') && next?.disabled === true,
+      missing: [JSON.stringify(hit.params), `${shown} of ${hit.count} rows`, pager, `Next disabled ${next?.disabled}`],
+    });
+    exact.unmount();
+  }
+}
 {
   // The row's age is taken from the pinned origin and the needle is that origin moved back by it, rendered with
   // fmtAbsolute's own options (24h, restored above): a story anchored anywhere but the pinned clock fails the

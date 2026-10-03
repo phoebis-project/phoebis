@@ -349,18 +349,22 @@ pub fn list_requests(
     } else {
         format!(" WHERE {}", clauses.join(" AND "))
     };
-    args.push(Box::new(limit as i64));
+    // One row past the page says whether a next page exists, so a page of exactly `limit` rows offers no
+    // cursor that would only lead to an empty page.
+    args.push(Box::new((limit + 1) as i64));
     let sql = format!(
         "{REQUEST_SELECT}{where} ORDER BY received_at DESC, id DESC LIMIT ?{}",
         args.len()
     );
     let mut stmt = conn.prepare(&sql)?;
-    let requests = stmt
+    let mut requests = stmt
         .query_map(
             params_from_iter(args.iter().map(|a| a.as_ref())),
             row_to_request,
         )?
         .collect::<rusqlite::Result<Vec<_>>>()?;
+    let more = requests.len() > limit;
+    requests.truncate(limit);
     let mut out = Vec::with_capacity(requests.len());
     let mut attempts_stmt = conn.prepare(&format!(
         "{ATTEMPT_SELECT} WHERE request_id = ?1 ORDER BY attempt"
@@ -371,7 +375,7 @@ pub fn list_requests(
             .collect::<rusqlite::Result<Vec<_>>>()?;
         out.push((request, attempts));
     }
-    let next = (out.len() == limit)
+    let next = more
         .then(|| {
             out.last()
                 .map(|(r, _)| format!("{}:{}", r.received_at, r.id))

@@ -1250,6 +1250,83 @@ async fn the_held_filter_keeps_the_requests_that_waited_for_a_slot() {
     up.shutdown().await;
 }
 
+/// A ledger holding `matching` rows under one model, a millisecond apart, and one newer row under another model,
+/// so a page reads the model filter rather than the whole table.
+fn paging_ledger(matching: usize) -> phoebis_ledger::LedgerDb {
+    let db = phoebis_ledger::LedgerDb::open_in_memory().unwrap();
+    let row = |id: String, received_at: i64, model: &str| RequestRecord {
+        id,
+        received_at,
+        canonical_model: model.into(),
+        model: model.into(),
+        kind: "inference".into(),
+        origin: "client".into(),
+        status: Some(200),
+        outcome: "succeeded".into(),
+        ..Default::default()
+    };
+    for n in 0..matching {
+        db.insert_request(
+            &row(format!("r{n:02}"), n as i64, "claude-sonnet-5"),
+            &[],
+            None,
+        )
+        .unwrap();
+    }
+    db.insert_request(
+        &row("other".into(), matching as i64, "claude-opus-5"),
+        &[],
+        None,
+    )
+    .unwrap();
+    db
+}
+
+fn sonnet_page(
+    db: &phoebis_ledger::LedgerDb,
+    cursor: Option<&str>,
+    limit: usize,
+) -> (Vec<String>, Option<String>) {
+    let filter = RequestFilter {
+        models: vec!["claude-sonnet-5".into()],
+        ..Default::default()
+    };
+    let (rows, next) = db
+        .read_blocking(|c| list_requests(c, &filter, &LiveKeys::default(), cursor, limit))
+        .unwrap();
+    (rows.into_iter().map(|(r, _)| r.id).collect(), next)
+}
+
+#[test]
+fn a_page_of_exactly_limit_rows_answers_no_cursor() {
+    let db = paging_ledger(5);
+    let (ids, next) = sonnet_page(&db, None, 5);
+    assert_eq!(ids, ["r04", "r03", "r02", "r01", "r00"]);
+    assert_eq!(
+        next, None,
+        "no row lies beyond the page, so there is no next page to offer"
+    );
+}
+
+#[test]
+fn a_page_with_one_row_beyond_it_answers_a_cursor_whose_next_page_holds_that_row() {
+    let db = paging_ledger(5);
+    let (ids, next) = sonnet_page(&db, None, 4);
+    assert_eq!(ids, ["r04", "r03", "r02", "r01"]);
+    assert_eq!(
+        next.as_deref(),
+        Some("1:r01"),
+        "the cursor names the last row of the page, never the row beyond it"
+    );
+    let (ids, next) = sonnet_page(&db, next.as_deref(), 4);
+    assert_eq!(
+        ids,
+        ["r00"],
+        "the next page holds the one row beyond the first"
+    );
+    assert_eq!(next, None);
+}
+
 /// Held on a slow `land`, `CHANNEL_DEPTH + 8` requests offered through `record_request` all wait for room
 /// rather than dropping.
 #[tokio::test]
