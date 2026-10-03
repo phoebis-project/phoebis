@@ -1831,7 +1831,7 @@ async function analyticsTables(theme) {
 /**
  * The request list's default columns fit its card with the drawer closed: the table needs no more than its wrap's
  * width, so nothing scrolls sideways at the pass's 1280 by 800. The Client text gives up its room behind an ellipsis,
- * the whole class on the cell's title.
+ * the whole class on the cell's title, and a TTFB figure never parts from its unit to make the room.
  */
 async function requestsTableFits(theme) {
   const read = await page.evaluate(() => {
@@ -1845,6 +1845,14 @@ async function requestsTableFits(theme) {
     const columns = [...table.querySelectorAll('thead th')].map((th) => [th.textContent?.trim() ?? '', Math.round(th.getBoundingClientRect().width)]);
     const classes = [...table.querySelectorAll('tbody .requests__client-text')];
     const cut = classes.filter((c) => c.scrollWidth > c.clientWidth);
+    const lines = (el) => {
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      return new Set([...range.getClientRects()].map((r) => Math.round(r.top))).size;
+    };
+    const ttfbAt = [...table.querySelectorAll('thead th')].findIndex((th) => th.textContent?.trim() === 'TTFB');
+    // A placeholder row is one cell across the table, so it has no TTFB cell.
+    const ttfb = ttfbAt < 0 ? [] : [...table.querySelectorAll('tbody tr')].map((tr) => (tr.children.length > ttfbAt ? tr.children[ttfbAt] : null)).filter((td) => td !== null);
     return {
       classes: { cut: cut.length, ellipsis: [...new Set(classes.map((c) => getComputedStyle(c).textOverflow))], shown: classes.length, untitled: cut.filter((c) => c.closest('td')?.getAttribute('title') !== c.textContent).map((c) => c.textContent) },
       client: wrap.clientWidth,
@@ -1853,9 +1861,10 @@ async function requestsTableFits(theme) {
       least,
       rows: table.querySelectorAll('tbody tr').length,
       scroll: table.scrollWidth,
+      ttfb: { cells: ttfb.length, split: ttfb.filter((td) => lines(td) > 1).map((td) => td.textContent?.trim() ?? '') },
     };
   });
-  measurements.push(`${theme} /requests table ${read === null ? 'not drawn' : `${read.scroll} of ${read.client}px, at least ${read.least}px (slack ${read.client - read.least}px), ${read.rows} rows, columns ${JSON.stringify(read.columns)}, client text ${JSON.stringify(read.classes)}`}`);
+  measurements.push(`${theme} /requests table ${read === null ? 'not drawn' : `${read.scroll} of ${read.client}px, at least ${read.least}px (slack ${read.client - read.least}px), ${read.rows} rows, columns ${JSON.stringify(read.columns)}, client text ${JSON.stringify(read.classes)}, TTFB ${JSON.stringify(read.ttfb)}`}`);
   if (read === null) {
     failures.push(`${theme} /requests: no request table to measure`);
     return;
@@ -1864,6 +1873,8 @@ async function requestsTableFits(theme) {
   if (read.scroll > read.client) failures.push(`${theme} /requests: the request table needs ${read.scroll}px of its card's ${read.client}px`);
   if (read.classes.shown > 0 && JSON.stringify(read.classes.ellipsis) !== JSON.stringify(['ellipsis'])) failures.push(`${theme} /requests: the Client text overflows as ${read.classes.ellipsis.join(', ')}, not behind an ellipsis`);
   for (const text of read.classes.untitled) failures.push(`${theme} /requests: the cut Client text "${text}" does not carry its whole class on the cell's title`);
+  if (read.rows > 0 && read.ttfb.cells === 0) failures.push(`${theme} /requests: no TTFB cell to measure`);
+  for (const text of read.ttfb.split) failures.push(`${theme} /requests: the TTFB cell "${text}" draws its figure and its unit on two lines`);
 }
 
 /**
