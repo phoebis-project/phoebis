@@ -262,6 +262,12 @@ m = await mount('/observe');
   }
   const chips = m.container.querySelectorAll('.mchip[title*="last minute"]').length;
   results.push({ name: '/observe chips carry quality in title', ok: chips === 8, missing: [String(chips)] });
+  {
+    const note = m.container.querySelector('.metric-strip__note')?.textContent ?? '';
+    const sentences = ['Measured: read directly from the router over the last minute.', 'Derived: computed from other measured values over the last minute.', 'Estimated: priced at the effective list from token counts, not billed.'];
+    const at = sentences.map((s) => note.indexOf(s));
+    results.push({ name: "/observe the strip's footnote explains the three quality words", ok: at.every((i, n) => i >= 0 && (n === 0 || i > at[n - 1])), missing: [note || 'no footnote'] });
+  }
   const tickLabels = [...m.container.querySelectorAll('.range__tick-label')].map((e) => e.textContent ?? '');
   results.push({ name: '/observe range axis labels every 5 minutes', ok: tickLabels.length >= 6 && tickLabels.every((l) => /^\d{2}:\d{2}$/.test(l)), missing: tickLabels.slice(0, 8) });
   const minorTicks = m.container.querySelectorAll('.range__tick:not(.is-major)').length;

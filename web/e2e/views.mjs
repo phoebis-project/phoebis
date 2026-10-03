@@ -1563,10 +1563,14 @@ async function costCapRows(theme) {
  * WebSocket, so a policy that refused the handshake would leave it there and the banner would show instead. The page
  * draws what the feed sent on its next animation frame, which the paused clock fires only inside a step, so the wait
  * steps the clock until the table or the empty state is drawn. With the detail pane closed, the table's columns end
- * inside its card.
+ * inside its card, and the eight metric tiles above it stand in two full rows of four.
  */
 async function liveFeed(theme) {
   const say = (what) => failures.push(`${theme} /observe: ${what}`);
+  const tops = await page.evaluate(() => [...document.querySelectorAll('.mchip')].map((c) => Math.round(c.getBoundingClientRect().top)));
+  const rows = [...new Set(tops)].map((top) => tops.filter((t) => t === top).length);
+  measurements.push(`${theme} /observe metric tiles per row ${JSON.stringify(rows)}`);
+  if (tops.length !== 8 || JSON.stringify(rows) !== '[4,4]') say(`the ${tops.length} metric tiles stand in rows of ${JSON.stringify(rows)}, not two rows of four`);
   const drawn = () => page.evaluate(() => document.querySelector('.card--table .live-table, .card--table .empty') !== null);
   const deadline = Date.now() + 15_000;
   while (!(await drawn()) && Date.now() < deadline) await advance(CLOCK_STEP_MS);

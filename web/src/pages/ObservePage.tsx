@@ -479,25 +479,31 @@ const QUALITY_HINT: Record<MetricQuality, string> = {
 
 function MetricStrip({ tick }: { tick: LiveTick | null }) {
   const ink = useChartInk();
+  // One flex item with its footnote, so the page's gap between sections does not open between the two.
   return (
-    <div className="metric-strip">
-      {METRICS.map((m) => {
-        const metric: LiveMetric | undefined = tick?.metrics[m.key];
-        return (
-          <div key={m.key} className="mchip" title={metric ? `${m.label}, last minute. ${QUALITY_HINT[metric.quality]}${m.title ? ` ${m.title}.` : ''}` : undefined}>
-            <span className="mchip__label">{m.label}</span>
-            <span className="mchip__value">
-              {metric ? m.format(metric.value) : <Skeleton width={56} height={20} />}
-              {metric && (
-                <span className="mchip__quality" title={QUALITY_HINT[metric.quality]}>
-                  {metric.quality}
-                </span>
-              )}
-            </span>
-            <div className="mchip__spark">{metric ? <Sparkline values={metric.series.map((v) => v ?? 0)} color={m.key === 'errorRate' ? ink.series[7] : ink.series[0]} height={26} /> : <Skeleton height={26} />}</div>
-          </div>
-        );
-      })}
+    <div>
+      <div className="metric-strip">
+        {METRICS.map((m) => {
+          const metric: LiveMetric | undefined = tick?.metrics[m.key];
+          return (
+            <div key={m.key} className="mchip" title={metric ? `${m.label}, last minute. ${QUALITY_HINT[metric.quality]}${m.title ? ` ${m.title}.` : ''}` : undefined}>
+              <span className="mchip__label">{m.label}</span>
+              <span className="mchip__value">
+                {metric ? m.format(metric.value) : <Skeleton width={56} height={20} />}
+                {metric && (
+                  <span className="mchip__quality" title={QUALITY_HINT[metric.quality]}>
+                    {metric.quality}
+                  </span>
+                )}
+              </span>
+              <div className="mchip__spark">{metric ? <Sparkline values={metric.series.map((v) => v ?? 0)} color={m.key === 'errorRate' ? ink.series[7] : ink.series[0]} height={26} /> : <Skeleton height={26} />}</div>
+            </div>
+          );
+        })}
+      </div>
+      <p className="metric-strip__note muted">
+        {QUALITY_HINT.measured} {QUALITY_HINT.derived} {QUALITY_HINT.estimated}
+      </p>
     </div>
   );
 }
