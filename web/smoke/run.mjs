@@ -775,12 +775,43 @@ await emailLines('/accounts/business the head reads the email under the name', [
   const head = m.container.querySelector('.detail__head');
   const headButtons = [...(head?.querySelectorAll('button') ?? [])].map((b) => b.textContent?.trim());
   results.push({ name: '/accounts header holds every action', ok: ['Re-pair', 'Pause', 'Disconnect', 'Delete account'].every((l) => headButtons.includes(l)), missing: headButtons });
+  {
+    // business is paired and cooling, so Re-pair is one action among the others and draws as Pause does.
+    const repair = [...(head?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Re-pair');
+    const pause = [...(head?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Pause');
+    results.push({
+      name: '/accounts/business Re-pair is a plain button on a paired account',
+      ok: repair !== undefined && !repair.classList.contains('btn--primary') && repair.className === pause?.className,
+      missing: [repair?.className ?? 'no Re-pair', pause?.className ?? 'no Pause'],
+    });
+  }
   const below = [...m.container.querySelectorAll('.detail > *:not(.detail__head) button')].map((b) => b.textContent?.trim()).filter((t) => ['Re-pair', 'Pair', 'Verify', 'Pause', 'Resume', 'Catalog', 'Clear funding flag', 'Disconnect', 'Delete account'].includes(t ?? ''));
   results.push({ name: '/accounts no action buttons below header', ok: below.length === 0, missing: below });
   const dangers = [...(head?.querySelectorAll('.btn--danger') ?? [])].map((b) => b.textContent?.trim());
   results.push({ name: '/accounts Disconnect and Delete account are danger, and Delete account is last', ok: dangers.join('|') === 'Disconnect|Delete account' && head?.querySelector('.detail__actions')?.lastElementChild?.textContent?.trim() === 'Delete account', missing: dangers });
   const statuses = [...(m.container.querySelector('select[aria-label="Status filter"]')?.options ?? [])].map((o) => o.value);
   results.push({ name: '/accounts the status filter offers only the statuses the router reports', ok: statuses.length > 1 && !statuses.includes('disabled'), missing: statuses });
+  {
+    // The filters can hide every account the router holds, which is not the empty registry and says so.
+    const search = m.container.querySelector('input[placeholder="Search accounts"]');
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+    const type = async (value) => {
+      setter.call(search, value);
+      search?.dispatchEvent(new window.Event('input', { bubbles: true }));
+      await m.settle(150);
+    };
+    await type('zzzz');
+    const list = m.container.querySelector('.account-rows');
+    const titles = [...(list?.querySelectorAll('.empty__title') ?? [])].map((t) => t.textContent ?? '');
+    const rows = list?.querySelectorAll('a.account-row').length ?? 0;
+    results.push({
+      name: '/accounts a search that hides every row reads No accounts match',
+      ok: JSON.stringify(titles) === JSON.stringify(['No accounts match']) && rows === 0,
+      missing: [...titles, `${rows} rows`],
+    });
+    // The later checks read the rows, so the search goes back to empty.
+    await type('');
+  }
   {
     const identity = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Identity');
     const labels = [...(identity?.querySelectorAll('.kv__row dt') ?? [])].map((d) => d.textContent?.trim() ?? '');
@@ -982,6 +1013,8 @@ expect('/accounts/team renders the team account', m.text(), ['Routing is off', '
 {
   const at = accountsInPlace(m);
   results.push({ name: '/accounts/team stays at its path on the Accounts page', ok: at.heading === 'Accounts' && at.nav === '/accounts' && at.row === '/accounts/team', missing: [JSON.stringify(at)] });
+  const repair = [...(m.container.querySelector('.detail__head')?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Re-pair');
+  results.push({ name: '/accounts/team Re-pair is primary while re-auth is required', ok: repair?.classList.contains('btn--primary') === true, missing: [repair?.className ?? 'no Re-pair'] });
   const absent = m.container.querySelectorAll('.detail .wbar--absent[title="no Fable window"]').length;
   results.push({ name: '/accounts/team greys the Fable bar', ok: absent === 1, missing: [String(absent)] });
 }
@@ -1119,6 +1152,10 @@ expect('/accounts/personal', m.text(), ['in use', 'Clear funding flag', 'Payment
 }
 await m.navigate('/accounts/console');
 expect('/accounts/console', m.text(), ['Verify', 'does not report quota windows']);
+{
+  const verify = [...(m.container.querySelector('.detail__head')?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Verify');
+  results.push({ name: '/accounts/console Verify stays primary', ok: verify?.classList.contains('btn--primary') === true, missing: [verify?.className ?? 'no Verify'] });
+}
 await emailLines('/accounts/console the head draws no line under the name of an account without an email', [['console', m.container.querySelector('.detail__ident > .detail__sub.mono')?.textContent ?? null]]);
 {
   const identity = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Identity');
@@ -5297,10 +5334,13 @@ m.unmount();
 {
   localStorage.setItem('phoebis.mockEmpty', '1');
   const zeroTiles = (c) => [...c.querySelectorAll('.stat-grid .stat__value')].map((v) => v.textContent);
+  // A closed dialog keeps its markup in the DOM and reaches nobody, so the pairing dialog's link placeholder is no wait.
+  const skeletonIn = (c) => [...c.querySelectorAll('.skeleton')].some((s) => s.closest('dialog:not([open])') === null);
   const views = [
     ['/', (c, t) => t.includes('No subscription accounts') && t.includes('No requests'), 'No subscription accounts, No requests'],
     ['/observe', (c, t) => t.includes('Nothing matches'), 'Nothing matches'],
     ['/quota', (c, t) => t.includes('0 accounts') && c.querySelector('.qcard') === null, '0 accounts, no account card'],
+    ['/accounts', (c, t) => t.includes('The router holds no account yet'), 'The router holds no account yet'],
     ['/pools', (c) => c.querySelector('.pool-grid')?.childElementCount === 0 && zeroTiles(c).join(' ') === '0 0 0 0 $0.00', 'no pool card, tiles 0 0 0 0 $0.00'],
     ['/keys', (c, t) => t.includes('No keys yet'), 'No keys yet'],
     ['/models', (c, t) => t.includes("No keys: a key's processed rules show here once one exists."), 'No keys: ...'],
@@ -5314,7 +5354,7 @@ m.unmount();
     const before = problems.length;
     const page = await mount(path);
     await page.settle(1200);
-    const skeleton = page.container.querySelector('.skeleton') !== null;
+    const skeleton = skeletonIn(page.container);
     const raised = problems.slice(before);
     const shown = drawn(page.container, page.text());
     const name = path === '/settings' ? 'empty store: /settings settles with no skeleton and no error' : `empty store: ${path} settles on its empty state with no skeleton and no error`;
@@ -5331,6 +5371,25 @@ m.unmount();
   const opened = [...keys.container.querySelectorAll('dialog[open]')].some((d) => d.textContent?.includes('Create key'));
   results.push({ name: '/keys an empty registry says no key exists and offers Create key', ok: titled && !!create && opened, missing: [`title ${titled}`, `button ${!!create}`, `dialog ${opened}`] });
   keys.unmount();
+  {
+    const accounts = await mount('/accounts');
+    await accounts.settle(400);
+    const empty = accounts.container.querySelector('.account-rows .empty');
+    const add = [...(empty?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Add account');
+    const title = empty?.querySelector('.empty__title')?.textContent ?? '';
+    const detail = accounts.container.querySelector('.accounts__detail .empty__title')?.textContent ?? '';
+    const skeleton = skeletonIn(accounts.container);
+    const unmatched = accounts.text().includes('No accounts match');
+    add?.click();
+    await accounts.settle(250);
+    const opened = [...accounts.container.querySelectorAll('dialog[open]')].some((d) => d.textContent?.includes('Start pairing'));
+    results.push({
+      name: '/accounts an empty registry offers Add account, draws no skeleton and no "No accounts match"',
+      ok: title === 'The router holds no account yet' && !!add && opened && detail === 'No account to show' && !skeleton && !unmatched,
+      missing: [`title ${title || 'none'}`, `button ${!!add}`, `dialog ${opened}`, `detail ${detail || 'none'}`, ...(skeleton ? ['a .skeleton is drawn'] : []), ...(unmatched ? ['No accounts match'] : [])],
+    });
+    accounts.unmount();
+  }
   localStorage.removeItem('phoebis.mockEmpty');
 }
 

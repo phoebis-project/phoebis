@@ -97,8 +97,24 @@ export function AccountsPage() {
                     <Skeleton height={4} />
                   </li>
                 ))
-            : list.map((a) => <AccountRow key={a.id} account={a} active={a.id === accountId} now={now} />)}
-          {accounts.data && list.length === 0 && (
+            : accounts.data.length === 0
+              ? (
+                  <li>
+                    <EmptyState
+                      title="The router holds no account yet"
+                      body="Add an account to route requests."
+                      action={
+                        canMutate && (
+                          <Button size="sm" variant="primary" onClick={() => setAddOpen(true)}>
+                            Add account
+                          </Button>
+                        )
+                      }
+                    />
+                  </li>
+                )
+              : list.map((a) => <AccountRow key={a.id} account={a} active={a.id === accountId} now={now} />)}
+          {accounts.data && accounts.data.length > 0 && list.length === 0 && (
             <li>
               <EmptyState title="No accounts match" body="Clear the search or the status filter." />
             </li>
@@ -106,13 +122,16 @@ export function AccountsPage() {
         </ul>
       </aside>
       <section className="accounts__detail">
+        {/* Accounts with none selected is a bare or stale URL the redirect above is about to replace, so nothing draws. */}
         {selected ? (
           <Descriptions>
             <AccountDetail account={selected} now={now} onBusyChange={setDetailBusy} onToast={notify} onPair={(repair) => setPairing({ accountId: selected.id, label: selected.label, repair })} onChanged={accounts.reload} />
           </Descriptions>
-        ) : (
+        ) : accounts.data === null ? (
           <Skeleton height={400} />
-        )}
+        ) : accounts.data.length === 0 ? (
+          <EmptyState title="No account to show" body="Add an account to see its detail here." />
+        ) : null}
       </section>
       <AddAccountDialog
         open={addOpen}
@@ -276,7 +295,7 @@ function AccountDetail({ account, now, onBusyChange, onToast, onPair, onChanged 
           {canMutate && (
             <>
               {isOauth ? (
-                <Button variant="primary" disabled={busy} onClick={() => onPair(Boolean(account.credential.refreshTokenExpiresAt))}>
+                <Button variant={account.status === 'unpaired' || account.status === 'reauth_required' ? 'primary' : undefined} disabled={busy} onClick={() => onPair(Boolean(account.credential.refreshTokenExpiresAt))}>
                   {account.credential.refreshTokenExpiresAt ? 'Re-pair' : 'Pair'}
                 </Button>
               ) : (
