@@ -4780,6 +4780,57 @@ m.unmount();
   page.unmount();
 }
 
+// The pattern fields commit once typing pauses, or at once on Enter. The clock stands still, so only a tick fires the
+// pause's timer and a commit without one can only come from the key.
+{
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  const typeInto = (input, text) => {
+    setter.call(input, text);
+    input.dispatchEvent(new window.Event('input', { bubbles: true }));
+  };
+  const seriesReads = (spy) => spy.calls.map(([q]) => ({ clients: q?.clients, from: q?.from, groupBy: q?.groupBy, to: q?.to }));
+
+  const tenCheck = '/analytics typing claude-cli one character at a time issues one series read per grouping';
+  const typing = await mount('/analytics', { now: CLOCK_ORIGIN });
+  const typed = typing.container.querySelector('input[aria-label="Client pattern"]');
+  if (!typed) controlMissing(tenCheck, 'Client pattern');
+  else {
+    const spy = countCalls('getAnalyticsSeries');
+    for (let i = 1; i <= 10; i++) typeInto(typed, 'claude-cli'.slice(0, i));
+    await typing.settle(100);
+    const beforePause = spy.calls.length;
+    tick(400);
+    await typing.settle();
+    const reads = seriesReads(spy);
+    // The selected grouping's read and the speed card's, both on the committed pattern and one window.
+    const groupings = reads.map((r) => r.groupBy).sort();
+    results.push({
+      name: tenCheck,
+      ok: beforePause === 0 && reads.length === 2 && JSON.stringify(groupings) === JSON.stringify(['key', 'speed']) && reads.every((r) => JSON.stringify(r.clients) === '["claude-cli"]' && r.from === reads[0].from && r.to === reads[0].to),
+      missing: [`${beforePause} reads while typing`, JSON.stringify(reads)],
+    });
+    spy.restore();
+  }
+  typing.unmount();
+
+  const enterCheck = '/analytics Enter commits a pattern at once';
+  const pressing = await mount('/analytics', { now: CLOCK_ORIGIN });
+  const pressed = pressing.container.querySelector('input[aria-label="Client pattern"]');
+  if (!pressed) controlMissing(enterCheck, 'Client pattern');
+  else {
+    const spy = countCalls('getAnalyticsSeries');
+    for (const text of ['c', 'cl', 'cla']) typeInto(pressed, text);
+    await pressing.settle(100);
+    const beforeEnter = spy.calls.length;
+    pressed.dispatchEvent(new window.KeyboardEvent('keydown', { bubbles: true, key: 'Enter' }));
+    await pressing.settle();
+    const clients = seriesReads(spy).map((r) => JSON.stringify(r.clients));
+    results.push({ name: enterCheck, ok: beforeEnter === 0 && clients.length === 2 && clients.every((c) => c === '["cla"]'), missing: [`${beforeEnter} reads before Enter`, ...clients] });
+    spy.restore();
+  }
+  pressing.unmount();
+}
+
 m = await mount('/analytics');
 expect('/analytics', m.text(), ['Custom', 'Group by', 'Include cache probes', 'Session', 'Traffic', 'Requests by outcome', 'Failovers', 'Errors by code', 'rate_limit_error', 'Traffic by key', 'Exhausted', 'Rejected', 'Latency', 'Time to first byte', 'Time to first content token', 'Total duration', 'Output tokens per second', 'Distribution', 'samples', 'p50', 'p90', 'p95', 'p99', 'Latency by key', 'Cache', 'Hit ratio and cached share', 'Write cost vs read cost', 'Misses by reason', 'Wasted probes', 'Idle limit ran out', 'Released by an operator', 'Replaced by a new registration', 'Session ended', "Probes on recipes that no real request ever followed, settled when the recipe stopped. A high idle-limit share means the pool's max idle time is set too high for how these sessions are used.", 'expired between turns', 'From the cache diagnostics beta: why the prefix did not hit, for requests that asked. No divergence with zero cache reads means the entry expired between turns.', 'Misses by reason by key', 'Expired between turns', 'Cache by model', 'Writes 5m', 'Writes 1h', 'Cost', 'Cost per request', 'Cost per 1k output tokens', 'Cost by key', 'Cost split', 'Cache read', 'Cache warming', 'Probes by outcome', 'Migrated', 'Gross saved', 'Probe cost', 'Net saved', 'Kept-warm requests', 'Kept-warm tokens', 'Cache warming by pool', 'Accounts', 'Peak 5-hour utilization', 'Accounts in range', 'Peak Fable 7d', 'Time in overage', 'Time in cooldown', 'Pins created', 'Migrated in', 'Migrated out', 'desktop', 'laptop', 'in range']);
 {

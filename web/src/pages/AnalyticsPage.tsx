@@ -9,6 +9,7 @@ import { OUTCOME_SERIES, PERCENTILES, PROBE_SERIES, TOKEN_SERIES, accountColor }
 import { useChartInk } from '@/components/charts/useChartInk';
 import { ChartTooltip, Legend, type TooltipRow } from '@/components/charts/Tooltip';
 import { MultiSelect, type Option } from '@/components/ui/MultiSelect';
+import { PatternInput } from '@/components/ui/PatternInput';
 import { Tile } from '@/components/ui/Tile';
 import { IconX } from '@/components/ui/icons';
 import { Badge, Button, Card, ErrorState, Input, Meter, Segmented, Select, Skeleton, Toggle } from '@/components/ui/primitives';
@@ -18,7 +19,7 @@ import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missCount, missLabel, missRea
 import { clock } from '@/lib/clock';
 import { fmtAbsolute, fmtCompact, fmtDayShort, fmtDuration, fmtHourTick, fmtInt, fmtMs, fmtPct, fmtPeriodEnd, fmtShare, fmtUsd, fmtUsdTick, shortId, toLocalInput, upperFirst, usdTickDigits } from '@/lib/format';
 import { BUCKET_COUNT, BUCKET_EDGES, PERCENTILE_HINT, histogramCount } from '@/lib/histogram';
-import { useAsync } from '@/lib/hooks';
+import { useAsync, useCommittedText } from '@/lib/hooks';
 import { scrollToSection, useScrollSpy } from '@/lib/scroll';
 
 type Range = '1h' | '24h' | '30d' | '7d' | 'custom';
@@ -156,6 +157,11 @@ export function AnalyticsPage() {
   const [filters, setFilters] = useState<Record<Dim, string[]>>(() => ({ accountId: [], keyId: [], model: [], poolId: [], sessionId: sessionParam ? [sessionParam] : [] }));
   const [sessionText, setSessionText] = useState(sessionParam ?? '');
   const ink = useChartInk();
+  const commitClass = (next: string) => setClassPattern(next);
+  const commitAgent = (next: string) => setUserAgentPattern(next);
+  const commitGroups = (next: string) => setClientGroups(next);
+  // Enter inserts a line in the groups field, so it commits on the pause and on blur alone.
+  const groupsText = useCommittedText(clientGroups, commitGroups);
 
   // Arriving from a session row carries the session in the query; dropping the
   // filter clears the parameter too so this does not put it straight back.
@@ -339,17 +345,17 @@ export function AnalyticsPage() {
         {DIMS.map((dim) => (
           <MultiSelect key={dim} label={DIM_LABEL[dim]} options={options[dim]} value={filters[dim]} onChange={(v) => setFilters({ ...filters, [dim]: v })} mono />
         ))}
-        {/* `.mono` shrinks the text to 0.92em, which would leave these controls shorter than the rest of the bar. */}
-        <Input value={classPattern} onChange={(e) => setClassPattern(e.target.value)} placeholder="Client pattern" aria-label="Client pattern" title="* matches any run of characters, ? one; a backslash quotes either" className="mono" style={{ fontSize: 'inherit', width: 180 }} />
-        <Input value={userAgentPattern} onChange={(e) => setUserAgentPattern(e.target.value)} placeholder="User agent pattern" aria-label="User agent pattern" title="* matches any run of characters, ? one; a backslash quotes either" className="mono" style={{ fontSize: 'inherit', width: 180 }} />
+        <PatternInput label="Client pattern" value={classPattern} onCommit={commitClass} />
+        <PatternInput label="User agent pattern" value={userAgentPattern} onCommit={commitAgent} />
         {groupBy === 'user_agent' && (
           <>
             <textarea
-              value={clientGroups}
+              value={groupsText.draft}
               maxLength={MAX_PATTERNS * (MAX_PATTERN_CHARS + 1)}
+              onBlur={groupsText.onBlur}
               onChange={(e) => {
                 const next = boundPatterns(e.target.value);
-                setClientGroups(next.text);
+                groupsText.onChange(next.text);
                 setGroupsCut(next.cut);
               }}
               placeholder={'User agent groups, one pattern per line\nclaude-cli/2.1.*\nclaude-cli/2.0.*'}
