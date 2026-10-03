@@ -3023,6 +3023,32 @@
   white-space: nowrap;
 }
 
+/* Thirteen columns in a 990px card at 1280px: the content alone needs about 970px of it, so the cells sit 8px apart
+   and the Client cell, whose whole agent string is its title, gives up the rest. */
+.live-table th,
+.live-table td {
+  padding-left: 4px;
+  padding-right: 4px;
+}
+
+.live-table th:first-child,
+.live-table td:first-child {
+  padding-left: 12px;
+}
+
+.live-table th:last-child,
+.live-table td:last-child {
+  padding-right: 12px;
+}
+
+/* The cap counts characters, so the box leaves the padding out of it. */
+.live-table__client {
+  box-sizing: content-box;
+  max-width: 12ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .live-table .elapsed {
   min-width: 64px;
 }

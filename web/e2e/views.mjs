@@ -1560,17 +1560,38 @@ async function costCapRows(theme) {
 
 /**
  * The live feed under `connect-src 'self'`: the table keeps its placeholder until a snapshot arrives over the
- * WebSocket, so a policy that refused the handshake would leave it there and the banner would show instead.
+ * WebSocket, so a policy that refused the handshake would leave it there and the banner would show instead. The page
+ * draws what the feed sent on its next animation frame, which the paused clock fires only inside a step, so the wait
+ * steps the clock until the table or the empty state is drawn. With the detail pane closed, the table's columns end
+ * inside its card.
  */
 async function liveFeed(theme) {
-  try {
-    await page.waitForSelector('.card--table .live-table, .card--table .empty', { timeout: 15_000 });
-  } catch {
-    failures.push(`${theme} /observe: no snapshot arrived, so the live feed never connected`);
+  const say = (what) => failures.push(`${theme} /observe: ${what}`);
+  const drawn = () => page.evaluate(() => document.querySelector('.card--table .live-table, .card--table .empty') !== null);
+  const deadline = Date.now() + 15_000;
+  while (!(await drawn()) && Date.now() < deadline) await advance(CLOCK_STEP_MS);
+  if (!(await drawn())) {
+    say('no snapshot arrived, so the live feed never connected');
     return;
   }
   const banner = await page.evaluate(() => [...document.querySelectorAll('.observe__banner')].map((b) => b.textContent ?? '').join(' | '));
-  if (banner.includes('Reconnecting')) failures.push(`${theme} /observe: the feed is reconnecting (${banner})`);
+  if (banner.includes('Reconnecting')) say(`the feed is reconnecting (${banner})`);
+  const table = await page.evaluate(() => {
+    const live = document.querySelector('.card--table .live-table');
+    const wrap = live?.closest('.table-wrap');
+    if (!live || !wrap) return null;
+    // The table stretches to its wrap whenever it fits, so its narrowest layout is what tells the room it has left.
+    live.style.width = 'min-content';
+    const least = Math.ceil(live.getBoundingClientRect().width);
+    live.style.width = '';
+    const columns = [...live.querySelectorAll('thead th')].map((th) => [th.textContent?.trim() ?? '', Math.round(th.getBoundingClientRect().width)]);
+    return { client: wrap.clientWidth, columns, least, rows: live.querySelectorAll('tbody tr').length, scroll: live.scrollWidth };
+  });
+  measurements.push(`${theme} /observe live table ${table === null ? 'not drawn' : `${table.scroll} of ${table.client}px, at least ${table.least}px (slack ${table.client - table.least}px), ${table.rows} rows, columns ${JSON.stringify(table.columns)}`}`);
+  // The router's seed may hold no request inside the window; the mock's story always runs some.
+  if (table === null) {
+    if (mock) say('the story runs requests, yet no live table is drawn');
+  } else if (table.scroll > table.client) say(`the live table needs ${table.scroll}px of its card's ${table.client}px`);
 }
 
 async function wastedProbeRows(theme) {

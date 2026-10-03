@@ -103,6 +103,11 @@ async function emailLines(name, rows) {
   results.push({ name, ok: rows.length > 0 && wrong.length === 0, missing: wrong.map(([id, line]) => `${id}: ${JSON.stringify(line)}`) });
 }
 const idOf = (link) => link.getAttribute('href')?.split('/').pop() ?? '';
+/** A live row's cell under the header that reads `header` in the mount's live table, so a check names its column. */
+const liveCell = (m, tr, header) => {
+  const i = [...m.container.querySelectorAll('.live-table thead th')].findIndex((th) => th.textContent?.trim() === header);
+  return i < 0 ? undefined : tr.children[i];
+};
 
 // The generator skips overnight rows by wall-clock hour, so pick rows by the
 // shape each check needs rather than by position.
@@ -237,7 +242,24 @@ m = await mount('/observe');
   expect('/observe metric strip', t, ['Requests per second', 'Active streams', 'Error rate', 'TTFB p50', 'TTFB p95', 'TTFB p99', 'Output tokens per second', 'Estimated cost per minute', 'measured', 'derived', 'estimated']);
   const inflight = m.container.querySelectorAll('.live-table .ldot--inflight').length;
   results.push({ name: '/observe has in-flight rows', ok: inflight >= 1, missing: [String(inflight)] });
-  expect('/observe table columns', t, ['Time', 'Key', 'Session', 'Agent', 'Model', 'Client', 'Account', 'Kind', 'Transport', 'Status', 'Attempts', 'Tokens so far', 'tok/s', 'Cost', 'Elapsed', 'Pause', 'In-flight only', ' to ', 'Live']);
+  {
+    // The whole header row, in order: the detail pane names a request's kind and transport, so neither is a column.
+    const heads = [...m.container.querySelectorAll('.live-table thead th')].map((th) => th.textContent?.trim() ?? '');
+    const columns = ['Time', 'Status', 'Key', 'Session', 'Agent', 'Model', 'Client', 'Account', 'Attempts', 'Tokens so far', 'tok/s', 'Cost', 'Elapsed'];
+    const absent = ['Pause', 'In-flight only', ' to ', 'Live'].filter((n) => !t.includes(n));
+    results.push({ name: '/observe table columns', ok: JSON.stringify(heads) === JSON.stringify(columns) && absent.length === 0, missing: [JSON.stringify(heads), ...absent] });
+  }
+  {
+    // The dot is drawn hidden from a screen reader beside the Status badge, so its title is for a pointer alone; each
+    // one names the state its colour stands for.
+    const named = { 'ldot--bad': 'failed', 'ldot--inflight': 'in flight', 'ldot--ok': 'succeeded', 'ldot--warn': 'rate limited' };
+    const dots = [...m.container.querySelectorAll('.live-table .ldot')];
+    const wrong = dots.filter((d) => {
+      const state = [...d.classList].find((c) => c in named);
+      return state === undefined || d.getAttribute('title') !== named[state];
+    });
+    results.push({ name: '/observe every status dot names its state in a title', ok: dots.length > 0 && wrong.length === 0, missing: dots.length === 0 ? ['no dot'] : wrong.slice(0, 4).map((d) => `${d.className}: ${d.getAttribute('title')}`) });
+  }
   const chips = m.container.querySelectorAll('.mchip[title*="last minute"]').length;
   results.push({ name: '/observe chips carry quality in title', ok: chips === 8, missing: [String(chips)] });
   const tickLabels = [...m.container.querySelectorAll('.range__tick-label')].map((e) => e.textContent ?? '');
@@ -256,7 +278,7 @@ m = await mount('/observe');
   // The feed carries output only while a request runs, and a running 200 may not have reached its first content
   // token yet, so every running laptop stream past its head is tried until one draws its preview; the story
   // keeps one streaming at any instant this check runs.
-  const running = [...m.container.querySelectorAll('.live-table tbody tr')].filter((tr) => tr.children[1]?.textContent === 'laptop' && tr.children[7]?.textContent === 'inference' && tr.children[9]?.textContent === '200' && tr.querySelector('.ldot--inflight') !== null);
+  const running = [...m.container.querySelectorAll('.live-table tbody tr')].filter((tr) => liveCell(m, tr, 'Key')?.textContent === 'laptop' && tr.dataset.kind === 'inference' && liveCell(m, tr, 'Status')?.textContent === '200' && tr.querySelector('.ldot--inflight') !== null);
   let previewShown = false;
   for (const tr of running) {
     tr.click();
@@ -268,15 +290,15 @@ m = await mount('/observe');
     }
   }
   results.push({ name: '/observe an admin sees the preview of a running request', ok: previewShown, missing: [running.length ? 'no preview' : 'no running laptop stream'] });
-  const finishedStream = [...m.container.querySelectorAll('.live-table tbody tr')].find((tr) => tr.children[1]?.textContent === 'laptop' && tr.children[7]?.textContent === 'inference' && tr.children[9]?.textContent === '200' && tr.querySelector('.ldot--inflight') === null);
+  const finishedStream = [...m.container.querySelectorAll('.live-table tbody tr')].find((tr) => liveCell(m, tr, 'Key')?.textContent === 'laptop' && tr.dataset.kind === 'inference' && liveCell(m, tr, 'Status')?.textContent === '200' && tr.querySelector('.ldot--inflight') === null);
   finishedStream?.click();
   await m.settle(300);
   results.push({ name: '/observe a finished stream keeps no preview, as the feed drops it', ok: finishedStream !== undefined && m.container.querySelector('.observe__detail')?.textContent?.includes('No captured output for this request') === true, missing: [finishedStream ? 'a preview is still drawn' : 'no finished laptop stream'] });
-  const plainRow = [...m.container.querySelectorAll('.live-table tbody tr')].find((tr) => tr.children[1]?.textContent !== 'laptop' && tr.querySelector('.ldot--inflight') === null);
+  const plainRow = [...m.container.querySelectorAll('.live-table tbody tr')].find((tr) => liveCell(m, tr, 'Key')?.textContent !== 'laptop' && tr.querySelector('.ldot--inflight') === null);
   plainRow?.click();
   await m.settle(300);
   results.push({ name: '/observe a request the feed sent no output for says so', ok: m.container.querySelector('.observe__detail')?.textContent?.includes('No captured output for this request') === true, missing: [plainRow ? 'no empty-preview note' : 'no finished non-laptop row'] });
-  const failedAfterHead = [...m.container.querySelectorAll('.live-table tbody tr')].find((tr) => tr.children[9]?.textContent === '200' && tr.querySelector('.ldot--bad') !== null);
+  const failedAfterHead = [...m.container.querySelectorAll('.live-table tbody tr')].find((tr) => liveCell(m, tr, 'Status')?.textContent === '200' && tr.querySelector('.ldot--bad') !== null);
   results.push({ name: '/observe a finished 200 with an error code draws the failure dot', ok: failedAfterHead !== undefined, missing: ['no 200 row with ldot--bad'] });
   failedAfterHead?.click();
   await m.settle(300);
@@ -330,8 +352,8 @@ m = await mount('/observe');
       const pane = m.container.querySelector('.observe__detail')?.textContent ?? '';
       results.push({
         name: '/observe a request running at the end of a past span reads its usage as not reconstructed',
-        ok: running !== undefined && pane.includes('Usage (not reconstructed for this instant)') && !pane.includes('Usage so far') && running.children[11]?.textContent?.trim() === '-' && running.children[12]?.textContent?.trim() === '-',
-        missing: running === undefined ? ['no row runs at the end of any span'] : [pane.slice(0, 240), running.children[11]?.textContent ?? '', running.children[12]?.textContent ?? ''],
+        ok: running !== undefined && pane.includes('Usage (not reconstructed for this instant)') && !pane.includes('Usage so far') && liveCell(m, running, 'Tokens so far')?.textContent?.trim() === '-' && liveCell(m, running, 'tok/s')?.textContent?.trim() === '-',
+        missing: running === undefined ? ['no row runs at the end of any span'] : [pane.slice(0, 240), liveCell(m, running, 'Tokens so far')?.textContent ?? '', liveCell(m, running, 'tok/s')?.textContent ?? ''],
       });
     }
     const liveBtn = [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Live');
@@ -4875,7 +4897,7 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
   {
     const chip = m.container.querySelector('.chip--removable');
     results.push({ name: '/observe session chip names the session', ok: chip?.getAttribute('title') === sessionId, missing: [chip?.getAttribute('title') ?? 'no chip', sessionId] });
-    const sessions = [...m.container.querySelectorAll('.live-table tbody tr')].map((tr) => tr.children[2]?.getAttribute('title'));
+    const sessions = [...m.container.querySelectorAll('.live-table tbody tr')].map((tr) => liveCell(m, tr, 'Session')?.getAttribute('title'));
     results.push({ name: '/observe feed holds only the filtered session', ok: sessions.length > 0 && sessions.every((v) => v === sessionId), missing: [...new Set(sessions)].map(String) });
     chip?.querySelector('button')?.click();
     await m.settle(400);
@@ -5770,10 +5792,11 @@ await m.navigate('/quota');
 results.push({ name: 'viewer: /quota keeps Refresh all', ok: m.text().includes('Refresh all'), missing: [] });
 await m.navigate('/observe');
 {
-  const laptopRow = [...m.container.querySelectorAll('.live-table tbody tr')].find((tr) => tr.children[1]?.textContent === 'laptop');
+  // The feed runs laptop streams for the whole run, so a missing row is a failure rather than nothing to check.
+  const laptopRow = [...m.container.querySelectorAll('.live-table tbody tr')].find((tr) => liveCell(m, tr, 'Key')?.textContent === 'laptop');
   laptopRow?.click();
   await m.settle(300);
-  results.push({ name: 'viewer: /observe preview gated', ok: laptopRow ? m.text().includes('Preview is available to admin sessions') : true, missing: [laptopRow ? '' : 'no laptop row'] });
+  results.push({ name: 'viewer: /observe preview gated', ok: laptopRow !== undefined && m.text().includes('Preview is available to admin sessions'), missing: [laptopRow ? 'no gated preview' : 'no laptop row'] });
 }
 {
   const nav = [...m.container.querySelectorAll('.nav__link')].map((a) => a.textContent?.trim());

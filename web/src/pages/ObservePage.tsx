@@ -10,7 +10,7 @@ import { MultiSelect } from '@/components/ui/MultiSelect';
 import { IconExpand, IconPause, IconPlay, IconWarning, IconX } from '@/components/ui/icons';
 import { Badge, Button, Card, EmptyState, KeyValue, Meter, Segmented, Select, Skeleton, Toggle } from '@/components/ui/primitives';
 import { clock } from '@/lib/clock';
-import { fmtAbsolute, fmtCompact, fmtDuration, fmtInt, fmtMs, fmtPct, fmtShortTime, fmtTime, fmtUsd, shortAgent, shortId, tokensTotal } from '@/lib/format';
+import { fmtAbsolute, fmtCompact, fmtDuration, fmtInt, fmtMs, fmtPct, fmtShortTime, fmtTime, fmtUsd, shortAgent, shortId, tokensTotal, undatedModel } from '@/lib/format';
 import { PERCENTILE_HINT } from '@/lib/histogram';
 import { useNow } from '@/lib/hooks';
 import { projectAt } from '@/lib/projection';
@@ -294,15 +294,13 @@ export function ObservePage() {
                   <thead>
                     <tr>
                       <th>Time</th>
+                      <th>Status</th>
                       <th>Key</th>
                       <th>Session</th>
                       <th>Agent</th>
                       <th>Model</th>
                       <th>Client</th>
                       <th>Account</th>
-                      <th>Kind</th>
-                      <th>Transport</th>
-                      <th>Status</th>
                       <th>Attempts</th>
                       <th className="right">Tokens so far</th>
                       <th className="right">tok/s</th>
@@ -509,27 +507,30 @@ function MetricStrip({ tick }: { tick: LiveTick | null }) {
 // A stream can commit its 200 head and fail after it, so a finished 200 reads as a success only without an error.
 const statusDot = (r: LiveRequest) => (r.state === 'in_flight' ? 'ldot--inflight' : r.status === 200 && r.errorCode === null ? 'ldot--ok' : r.status === 429 ? 'ldot--warn' : 'ldot--bad');
 const statusTone = (r: LiveRequest) => (r.status === 200 && r.errorCode === null ? 'good' : r.status === 429 ? 'warning' : r.status === 529 ? 'serious' : 'critical');
+// The Status badge is the readable signal; the dot only repeats it in colour, so its name is for a pointer's hover.
+const DOT_TITLE = { 'ldot--bad': 'failed', 'ldot--inflight': 'in flight', 'ldot--ok': 'succeeded', 'ldot--warn': 'rate limited' };
 
 const LiveRow = memo(function LiveRow({ r, selected, onSelect, frozenAt }: { frozenAt: number | null; onSelect: (id: string) => void; r: LiveRequest; selected: boolean }) {
+  const model = undatedModel(r.model);
   return (
-    <tr className={selected ? 'is-selected' : ''} onClick={() => onSelect(r.id)} aria-selected={selected}>
+    <tr className={selected ? 'is-selected' : ''} onClick={() => onSelect(r.id)} aria-selected={selected} data-kind={r.kind}>
       <td className="num" title={fmtAbsolute(r.phases.receivedAt)}>
-        <span className={`ldot ${statusDot(r)}`} aria-hidden />
+        <span className={`ldot ${statusDot(r)}`} aria-hidden title={DOT_TITLE[statusDot(r)]} />
         {fmtTime(r.phases.receivedAt)}
       </td>
+      <td>{r.status === null ? <span className="muted">pending</span> : <Badge tone={statusTone(r)} title={r.errorCode ?? undefined}>{r.status}</Badge>}</td>
       <td className="mono">{r.keyId}</td>
       <td className="mono" title={r.sessionId ?? undefined}>
         {r.sessionId === null ? <span className="muted">none</span> : shortId(r.sessionId, 8)}
       </td>
       <td className="mono">{r.agentId}</td>
-      <td className="mono">{r.model}</td>
-      <td className="mono" title={r.userAgent ?? undefined}>
+      <td className="mono nowrap" title={model !== r.model ? r.model : undefined}>
+        {model}
+      </td>
+      <td className="mono live-table__client" title={r.userAgent ?? undefined}>
         {r.userAgent === null ? <span className="muted">none</span> : shortAgent(r.userAgent)}
       </td>
       <td>{r.accountId ?? <span className="muted">selecting</span>}</td>
-      <td>{r.kind}</td>
-      <td>{r.transport === 'sse' ? 'SSE' : 'JSON'}</td>
-      <td>{r.status === null ? <span className="muted">pending</span> : <Badge tone={statusTone(r)} title={r.errorCode ?? undefined}>{r.status}</Badge>}</td>
       <td>
         <AttemptTrail attempts={r.attempts} />
       </td>
