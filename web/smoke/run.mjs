@@ -4371,6 +4371,30 @@ m.unmount();
   replaced.unmount();
 }
 
+// A filter fed by a list that did not load offers nothing to pick, so it is disabled and says why where a pointer and a
+// screen reader both find it; the filters beside it stay as they are.
+{
+  const sentence = 'The key list did not load: the registry is unavailable';
+  failNextCall('listKeys', '/admin/keys', 'the registry is unavailable');
+  const page = await mount('/requests');
+  const triggerOf = (label) => [...page.container.querySelectorAll('.filters .mselect__trigger')].find((t) => t.textContent?.trim().startsWith(label));
+  const describedBy = (el) => {
+    const id = el?.getAttribute('aria-describedby');
+    return id ? (document.getElementById(id)?.textContent ?? `no node ${id}`) : null;
+  };
+  const keysFilter = triggerOf('Keys');
+  const poolsFilter = triggerOf('Pools');
+  keysFilter?.click();
+  await page.settle(100);
+  const opened = page.container.querySelector('.mselect__list') !== null;
+  results.push({
+    name: '/requests a failed keys read disables the Keys filter and names the failure',
+    ok: keysFilter?.disabled === true && keysFilter.getAttribute('title') === sentence && describedBy(keysFilter) === sentence && !opened && poolsFilter?.disabled === false && poolsFilter.getAttribute('title') === null && describedBy(poolsFilter) === null,
+    missing: [`disabled ${keysFilter?.disabled}`, `title ${keysFilter?.getAttribute('title')}`, `description ${describedBy(keysFilter)}`, `opened ${opened}`, `Pools disabled ${poolsFilter?.disabled}, titled ${poolsFilter?.getAttribute('title')}, described ${describedBy(poolsFilter)}`],
+  });
+  page.unmount();
+}
+
 // A read that fails for new filters draws the error state alone, none of the sections and none of the rows the filters before
 // the change read; Try again reads the new filters again.
 {

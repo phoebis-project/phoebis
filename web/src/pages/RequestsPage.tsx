@@ -239,10 +239,42 @@ export function RequestsPage() {
               </option>
             ))}
           </Select>
-          <MultiSelect label="Keys" options={(keys.data ?? []).map((k) => ({ label: k.name, value: k.id }))} value={filters.keys} onChange={(v) => update({ keys: v })} mono />
-          <MultiSelect label="Pools" options={(pools.data ?? []).map((p) => ({ label: p.name, value: p.id }))} value={filters.pools} onChange={(v) => update({ pools: v })} mono />
-          <MultiSelect label="Accounts" options={(accounts.data ?? []).map((a) => ({ label: a.label, value: a.id }))} value={filters.accounts} onChange={(v) => update({ accounts: v })} />
-          <MultiSelect label="Models" options={(catalog.data ?? []).map((m) => ({ label: m.id, value: m.id }))} value={filters.models} onChange={(v) => update({ models: v })} searchable mono />
+          <MultiSelect
+            label="Keys"
+            options={(keys.data ?? []).map((k) => ({ label: k.name, value: k.id }))}
+            value={filters.keys}
+            onChange={(v) => update({ keys: v })}
+            disabled={keys.data === null && keys.error !== null}
+            description={keys.error ? `The key list did not load: ${keys.error}` : undefined}
+            mono
+          />
+          <MultiSelect
+            label="Pools"
+            options={(pools.data ?? []).map((p) => ({ label: p.name, value: p.id }))}
+            value={filters.pools}
+            onChange={(v) => update({ pools: v })}
+            disabled={pools.data === null && pools.error !== null}
+            description={pools.error ? `The pool list did not load: ${pools.error}` : undefined}
+            mono
+          />
+          <MultiSelect
+            label="Accounts"
+            options={(accounts.data ?? []).map((a) => ({ label: a.label, value: a.id }))}
+            value={filters.accounts}
+            onChange={(v) => update({ accounts: v })}
+            disabled={accounts.data === null && accounts.error !== null}
+            description={accounts.error ? `The account list did not load: ${accounts.error}` : undefined}
+          />
+          <MultiSelect
+            label="Models"
+            options={(catalog.data ?? []).map((m) => ({ label: m.id, value: m.id }))}
+            value={filters.models}
+            onChange={(v) => update({ models: v })}
+            disabled={catalog.data === null && catalog.error !== null}
+            description={catalog.error ? `The model list did not load: ${catalog.error}` : undefined}
+            searchable
+            mono
+          />
           <PatternInput label="Client pattern" value={filters.client} onCommit={(v) => update({ client: v })} />
           <PatternInput label="User agent pattern" value={filters.agent} onCommit={(v) => update({ agent: v })} />
           <MultiSelect

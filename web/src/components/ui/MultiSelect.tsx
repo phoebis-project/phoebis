@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type FocusEvent, type KeyboardEvent } from 'react';
+import { useEffect, useId, useMemo, useRef, useState, type FocusEvent, type KeyboardEvent } from 'react';
 import { IconCheck, IconChevron, IconX } from './icons';
 
 export interface Option {
@@ -6,8 +6,13 @@ export interface Option {
   value: string;
 }
 
-export function MultiSelect({ label, options, value, onChange, searchable = false, mono = false }: { label: string; mono?: boolean; onChange: (v: string[]) => void; options: Option[]; searchable?: boolean; value: string[] }) {
+/**
+ * `disabled` holds the trigger shut, for a filter whose options did not load; `description` says why, in the trigger's
+ * title for a pointer and in a hidden node the trigger points at for a screen reader.
+ */
+export function MultiSelect({ label, options, value, onChange, searchable = false, mono = false, disabled = false, description }: { description?: string; disabled?: boolean; label: string; mono?: boolean; onChange: (v: string[]) => void; options: Option[]; searchable?: boolean; value: string[] }) {
   const [open, setOpen] = useState(false);
+  const descriptionId = useId();
   const [query, setQuery] = useState('');
   const ref = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -65,7 +70,17 @@ export function MultiSelect({ label, options, value, onChange, searchable = fals
   };
   return (
     <div className={`mselect ${value.length ? 'has-value' : ''}`} ref={ref} onBlur={closeOnLeave} onKeyDown={onKeys}>
-      <button type="button" ref={triggerRef} className="mselect__trigger" aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
+      <button
+        type="button"
+        ref={triggerRef}
+        className="mselect__trigger"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        disabled={disabled}
+        title={description}
+        aria-describedby={description ? descriptionId : undefined}
+        onClick={() => setOpen((v) => !v)}
+      >
         <span>{summary}</span>
         {value.length === 0 && <IconChevron size={14} />}
       </button>
@@ -97,6 +112,12 @@ export function MultiSelect({ label, options, value, onChange, searchable = fals
             );
           })}
         </div>
+      )}
+      {/* Last, so the clear button stays the trigger's next sibling. */}
+      {description && (
+        <span id={descriptionId} className="sr-only">
+          {description}
+        </span>
       )}
     </div>
   );

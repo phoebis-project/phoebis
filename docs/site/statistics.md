@@ -289,7 +289,8 @@ client filter takes a pattern over the class (`claude-code/*`), the agent type a
 values the client's hint headers and attribution line carry, the speed filter picks `fast` or `standard` by the speed
 the answer reported, and the held toggle keeps the requests that waited for a slot. The search and the two pattern
 fields apply 400 milliseconds after the last keystroke, on Enter, or when the field loses focus. Every filter, the range
-and the page size live in the page's address, so a reload or a shared link keeps them. Selecting a row opens a drawer
+and the page size live in the page's address, so a reload or a shared link keeps them. A filter whose list did not load
+is disabled and says why. Selecting a row opens a drawer
 with the request's detail, which shows the user agent, the model as
 the client spelled it and, when it differs, the canonical id the router recorded, its auto-mode standing (asked for a
 server-side check under an on setting; carried the safeguards member under an off setting, which the dispatch drops;
