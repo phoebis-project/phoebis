@@ -495,6 +495,43 @@ async function groupedDialogFixture(theme) {
   await page.setViewportSize({ height: 800, width: 1280 });
 }
 
+/**
+ * The sidebar's brand row: the mark's box 36 px square with the logo drawn 26 px square in it, the name 17 px at
+ * weight 600 on one line, and the name's last glyph inside the sidebar's content box. The name's width is the system
+ * font's to decide, so the numbers go to the measurements whatever the outcome.
+ */
+async function sidebarBrand(theme) {
+  const say = (what) => failures.push(`${theme} /: the sidebar brand ${what}`);
+  const read = await page.evaluate(() => {
+    const sidebar = document.querySelector('.sidebar');
+    const mark = sidebar?.querySelector('.brand__mark');
+    const logo = mark?.querySelector('svg');
+    const name = sidebar?.querySelector('.brand__name');
+    if (!sidebar || !mark || !logo || !name) return null;
+    const words = document.createRange();
+    words.selectNodeContents(name);
+    const style = getComputedStyle(sidebar);
+    const box = mark.getBoundingClientRect();
+    const drawn = logo.getBoundingClientRect();
+    return {
+      contentRight: sidebar.getBoundingClientRect().right - parseFloat(style.borderRightWidth) - parseFloat(style.paddingRight),
+      font: { size: getComputedStyle(name).fontSize, weight: getComputedStyle(name).fontWeight },
+      lines: words.getClientRects().length,
+      logo: { height: drawn.height, width: drawn.width },
+      mark: { height: box.height, width: box.width },
+      right: Math.max(box.right, words.getBoundingClientRect().right),
+    };
+  });
+  measurements.push(`${theme} / sidebar brand ${JSON.stringify(read)}`);
+  if (!read) return say('is missing its mark, its logo or its name');
+  const square = (size, side) => Math.abs(size.width - side) <= 0.5 && Math.abs(size.height - side) <= 0.5;
+  if (!square(read.mark, 36)) say(`mark is ${read.mark.width} by ${read.mark.height}, not 36 by 36`);
+  if (!square(read.logo, 26)) say(`logo is drawn ${read.logo.width} by ${read.logo.height}, not 26 by 26`);
+  if (read.font.size !== '17px' || read.font.weight !== '600') say(`name is ${read.font.size} at weight ${read.font.weight}, not 17px at 600`);
+  if (read.lines !== 1) say(`name runs over ${read.lines} lines, not one`);
+  if (read.right > read.contentRight) say(`row ends at ${read.right}, past the sidebar's content box at ${read.contentRight}`);
+}
+
 /** The sidebar's Expert view row stands above the version line in the status block, the two rows clear of each other. */
 async function expertRow(theme) {
   const read = await page.evaluate(() => {
@@ -2754,6 +2791,7 @@ try {
       if (title !== `${view.title} - Phoebis Router`) failures.push(`${theme} ${view.path}: title is ${JSON.stringify(title)}`);
       const applied = await page.evaluate(() => document.documentElement.getAttribute('data-theme'));
       if (applied !== theme) failures.push(`${theme} ${view.path}: data-theme is ${applied}`);
+      if (view.path === '/') await sidebarBrand(theme);
       if (view.path === '/' && !mock) {
         await remainingCards(theme);
         await errorStateBox(theme);

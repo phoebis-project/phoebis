@@ -57,7 +57,7 @@ export function Shell() {
       <aside className="sidebar">
         <div className="brand">
           <span className="brand__mark" aria-hidden>
-            <Mark size={20} />
+            <Mark size={26} />
           </span>
           <span className="brand__name">Phoebis Router</span>
         </div>
