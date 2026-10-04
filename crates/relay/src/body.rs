@@ -56,7 +56,7 @@ pub enum SafeguardsEdit {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct VersionCheck<'a> {
+pub(crate) struct VersionCheck<'a> {
     pub client_version: &'a str,
     pub prompt_units: [u16; 3],
 }

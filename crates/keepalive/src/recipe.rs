@@ -120,10 +120,10 @@ pub fn make_recipe(
     {
         return Err("unsupported_shape");
     }
-    // The edits below and the restamp walk raw keys; a member only the decoded walk reaches would be missed
-    // (a second `stream` inserted beside an escaped one) or left under a stale hash (a stamp the restamp
-    // never rewrites), so such a body is refused rather than retained. Read after the shape check, so a
-    // `max_tokens` that is no positive number stays an unsupported shape.
+    // The edits below and the restamp read raw keys and values; a member the decoded walk finds and the raw edits
+    // cannot read (an escaped key, a stamp `find_cch` cannot parse, a `stream` that is no boolean) would gain a
+    // second `stream` beside it or keep a stale hash, so such a body is refused rather than retained. Read after the
+    // shape check, so a `max_tokens` that is no positive number stays an unsupported shape.
     let decoded =
         |name: &str| phoebis_cch::top_level_member_count(body, name).map_err(|_| "invalid_request");
     let stamp_hidden =

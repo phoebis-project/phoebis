@@ -2277,3 +2277,60 @@ async fn a_billing_line_with_no_stamp_is_not_refused_for_its_version_suffix() {
     assert_eq!(credentials_seen(&up), [A]);
     up.shutdown().await;
 }
+
+#[tokio::test]
+async fn a_drifted_stamp_under_a_key_that_refuses_the_model_gets_the_model_refusal() {
+    use phoebis_profile::fixtures::{body, inference_head, BodyFixture, FixtureKind};
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let h = harness(
+        &up,
+        &[oauth("a", A, 0)],
+        PoolSpec {
+            model_rules: rules(&["claude-opus-5", "NOT *"]),
+            ..PoolSpec::default()
+        },
+    )
+    .await;
+    let fixture = String::from_utf8(body(BodyFixture::FirstParty9b244).to_vec()).unwrap();
+    // A stamp this build does not compute, and one only the decoded walk reaches.
+    let drifted = fixture.replacen("cch=9b244", "cch=9b245", 1);
+    let escaped = fixture.replacen(
+        r#""text":"x-anthropic-billing-header"#,
+        r#""te\u0078t":"x-anthropic-billing-header"#,
+        1,
+    );
+    let mut answers = Vec::new();
+    for sent in [drifted, escaped] {
+        let resp = h
+            .app
+            .clone()
+            .oneshot(request_from_fixture(
+                inference_head(FixtureKind::OauthFirstParty),
+                sent.as_bytes(),
+                KEY,
+            ))
+            .await
+            .unwrap();
+        answers.push((
+            resp.status().as_u16(),
+            resp.headers()["x-phoebis-error-code"]
+                .to_str()
+                .unwrap()
+                .to_string(),
+        ));
+    }
+    assert_eq!(
+        answers,
+        [
+            (404, "model_not_allowed".to_string()),
+            (404, "model_not_allowed".to_string())
+        ],
+        "the key's model check answers ahead of the stamp check"
+    );
+    assert!(up.requests().is_empty());
+    up.shutdown().await;
+}

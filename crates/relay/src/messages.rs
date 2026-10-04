@@ -44,7 +44,7 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
 use crate::billing::{restorable_version, Restore};
-use crate::body::{tier_ttls, uniform_ttl, BILLING_LINE_PATH};
+use crate::body::{tier_ttls, uniform_ttl, VersionCheck, BILLING_LINE_PATH};
 use crate::budget::{BodyBudget, BodyReads};
 use crate::casing::OriginalHead;
 use crate::catalog::CatalogService;
@@ -78,7 +78,7 @@ use crate::stream::{
 use crate::{
     edit_body, is_portable, presented_key, BodyEdits, BodyMember, CacheTtl, CacheTtlPolicy,
     DriftGuard, Markerless, NativeEdit, RelayError, SafeguardsEdit, TtlBranch, UpstreamGzip,
-    VersionCheck, DANGEROUS_TOOL_USE_BETA, EXTENDED_TTL_BETA,
+    DANGEROUS_TOOL_USE_BETA, EXTENDED_TTL_BETA,
 };
 
 /// How often the session memory's changes reach the store; a crash loses at most this much of it, and the
@@ -1329,26 +1329,6 @@ impl Relay {
                 key.rotated_at,
             )
             .await;
-        // The stamp depends on the body alone, so it is judged once here, before any account is selected, and a
-        // leg never meets it; after the identity is read, so the refusal's row keeps the model, the session and
-        // the agent.
-        let stamp = match crate::body::drift(&raw) {
-            Ok(None) => None,
-            Ok(Some(kind)) => Some(self.drift_refusal(kind, &parts.headers)),
-            Err(error) => Some(LocalRefusal::from(relay_failure(&error))),
-        };
-        if let Some(refusal) = stamp {
-            return self
-                .refused(
-                    &trace,
-                    0,
-                    refusal,
-                    Some(&key),
-                    Some(&identity),
-                    client_version.as_deref(),
-                )
-                .await;
-        }
         let client_class = identity.class;
         let candidates = match resolve(
             &snapshot,
@@ -1426,9 +1406,28 @@ impl Relay {
             }
             _ => None,
         };
-        // The suffix check needs the client's version and the prompt units and nothing an account would add, so it
-        // runs here, with the hash check's standing, rather than on a leg. Only a stamped line is judged, as for the
-        // hash: a reduced-shape line has its missing fields restored and is never refused for its suffix.
+        // The stamp and the suffix depend on the body, the client's version and the prompt units alone, so both are
+        // judged once here, after the key's client and model checks and before any account is selected; a leg never
+        // meets them, and the refusal's row keeps the model, the session and the agent. The hash goes first, so a
+        // stamp only the decoded walk reaches is refused before the suffix's stamp gate reads past it. Only a
+        // stamped line is judged for its suffix; a reduced-shape line has its missing fields restored instead.
+        let stamp = match crate::body::drift(&raw) {
+            Ok(None) => None,
+            Ok(Some(kind)) => Some(self.drift_refusal(kind, &parts.headers)),
+            Err(error) => Some(LocalRefusal::from(relay_failure(&error))),
+        };
+        if let Some(refusal) = stamp {
+            return self
+                .refused(
+                    &trace,
+                    0,
+                    refusal,
+                    Some(&key),
+                    Some(&identity),
+                    client_version.as_deref(),
+                )
+                .await;
+        }
         if let Some(context) = &restore {
             let check = VersionCheck {
                 client_version: &context.cli_version,
